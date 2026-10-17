@@ -8,7 +8,11 @@ import {
   useAppContainerSelection,
   type AppContainerTarget,
 } from "@/components/app/app-container-selection"
-import { appContainers, type App } from "@/components/app/app-presentation"
+import {
+  appContainers,
+  appRelayAvailable,
+  type App,
+} from "@/components/app/app-presentation"
 import {
   InfoCopyValue,
   InfoDetails,
@@ -101,6 +105,16 @@ function AppContainerCard({ app }: { app: App }) {
     if (next) selection?.select({ containerId: next.id, service: next.service })
   }
 
+  if (!appRelayAvailable(app))
+    return (
+      <InfoRailCard icon={<Container />} title="Container">
+        <p className="py-3 text-[0.8125rem] text-muted-foreground">
+          {app.runtimeStatus?.phase === "checking"
+            ? "Checking containers…"
+            : "Container state is unavailable"}
+        </p>
+      </InfoRailCard>
+    )
   if (!container) {
     return (
       <InfoRailCard icon={<Container />} title="Container">

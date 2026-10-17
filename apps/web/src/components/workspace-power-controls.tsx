@@ -56,7 +56,7 @@ export function WorkspacePowerControls({
   primaryAction?: WorkspacePrimaryAction
   target: {
     name: string
-    observedState: RelayObservedState
+    observedState: RelayObservedState | undefined
     provisioning?: { phase: string } | null
   }
   onAction: (action: ServerAction) => Promise<void>
@@ -73,7 +73,8 @@ export function WorkspacePowerControls({
   const isStarting = target.observedState === "starting"
   const isStopping = target.observedState === "stopping"
   const isProvisioning =
-    Boolean(target.provisioning) || isPowerControlLocked(target.observedState)
+    Boolean(target.provisioning) ||
+    Boolean(target.observedState && isPowerControlLocked(target.observedState))
   const provisioningFailed = target.provisioning?.phase === "failed"
   const powerIsOn = isRunning || isStarting
   const powerIsTransitioning =
@@ -83,7 +84,10 @@ export function WorkspacePowerControls({
     isStopping ||
     isProvisioning
   const controlsUnavailable =
-    !relayConnected || action !== null || isProvisioning
+    target.observedState === undefined ||
+    !relayConnected ||
+    action !== null ||
+    isProvisioning
   const startUnavailable =
     !powerPermissions.start || controlsUnavailable || powerIsOn || isStopping
   const stopUnavailable =

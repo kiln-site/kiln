@@ -1,3 +1,4 @@
+import type { AppTableInventory, InstanceInventory } from "@workspace/contracts"
 import type { getAppDirectory } from "@/server/apps"
 import * as React from "react"
 import { useDbClient, useLiveQuery } from "@tanstack/react-db"
@@ -88,7 +89,6 @@ import {
 import {
   loadingInfraTableSource,
   useInfraTableSource,
-  useInfraDetails,
   type InfraInstanceRow,
 } from "@/lib/infra-table-source"
 import {
@@ -97,13 +97,18 @@ import {
 } from "@/lib/infra-directory"
 import type { DataTableSource } from "@/lib/data-table-source"
 import type { InstanceFavorite } from "@/lib/instance-favorites"
-import { appsQueryOptions, queryKeys } from "@/lib/query-options"
+import { queryKeys } from "@/lib/query-options"
 import { createApp, deployApp, runAppAction } from "@/server/apps"
 
 type AppRelay = AppOverview["relays"][number]
 
 type AppDirectory = Awaited<ReturnType<typeof getAppDirectory>>[number]
-type AppDirectoryRow = InfraInstanceRow<AppDirectory, App>
+type AppDirectoryRow = InfraInstanceRow<AppDirectory, AppTableInventory>
+type AppDeleteTarget = Pick<App, "id" | "name" | "relayId">
+const appTableInventory = (inventory: InstanceInventory) =>
+  inventory.kind === "app" && inventory.view === "table"
+    ? (inventory.data ?? undefined)
+    : undefined
 const appReference = (row: AppDirectory) => ({
   kind: "app" as const,
   id: row.id,
@@ -120,12 +125,7 @@ const appTableSearchFields = [
   (row: AppDirectoryRow) => row.relayId,
   (row: AppDirectoryRow) => row.relayName,
   (row: AppDirectoryRow) => row.instanceStatus,
-  (row: AppDirectoryRow) =>
-    row.detailPhase === "ready"
-      ? row.detail?.containers
-          .map((container) => `${container.name} ${container.image}`)
-          .join(" ")
-      : undefined,
+  (row: AppDirectoryRow) => row.detail?.containerSearchText,
 ] as const
 
 export const AppsPage = React.memo(function AppsPage({
@@ -138,7 +138,7 @@ export const AppsPage = React.memo(function AppsPage({
     enabled: typeof window !== "undefined",
   })
   const [createOpen, setCreateOpen] = React.useState(false)
-  const [deleting, setDeleting] = React.useState<App | null>(null)
+  const [deleting, setDeleting] = React.useState<AppDeleteTarget | null>(null)
   const openCreate = React.useCallback(() => setCreateOpen(true), [])
   const canCreate = data?.relays.some((relay) => relay.canCreate)
 
@@ -284,7 +284,7 @@ const AppSyncButton = React.memo(function AppSyncButton() {
 interface AppTableProps {
   canCreate: boolean
   onCreate: () => void
-  onDelete: (app: App) => void
+  onDelete: (app: AppDeleteTarget) => void
   searchStore: DataTableSearchStore
 }
 
@@ -295,20 +295,13 @@ const AppTableData = React.memo(function AppTableData(props: AppTableProps) {
   const retry = React.useCallback(() => {
     forkPromise(() => collection.utils.refetch({ throwOnError: true }))
   }, [collection])
-  const detailQuery = useQuery({
-    ...appsQueryOptions(),
-    enabled: Boolean(result.data?.length) && typeof window !== "undefined",
-    staleTime: 0,
-    gcTime: 0,
-    refetchOnMount: "always",
-  })
-  const details = useInfraDetails(detailQuery, detailQuery.data?.apps)
   const source = useInfraTableSource({
     directory: result,
     reference: appReference,
     error: appInventoryError,
     retry,
-    details,
+    view: "table",
+    selectDetail: appTableInventory,
   })
   return <AppTable {...props} source={source} />
 })
@@ -427,20 +420,13 @@ const AppTable = React.memo(function AppTable({
         id: "actions",
         header: () => <span className="sr-only">Actions</span>,
         enableSorting: false,
-        cell: ({ row }) =>
-          row.original.detailPhase === "ready" && row.original.detail ? (
-            <AppActions
-              app={row.original.detail}
-              state={row.original.instanceState}
-              onDelete={onDelete}
-            />
-          ) : (
-            <span className="type-meta text-muted-foreground">
-              {row.original.detailPhase === "error"
-                ? "Unavailable"
-                : "Checking"}
-            </span>
-          ),
+        cell: ({ row }) => (
+          <AppActions
+            app={row.original}
+            state={row.original.instanceState}
+            onDelete={onDelete}
+          />
+        ),
         meta: dataTableColumnMeta(
           { width: { base: "6.5rem", sm: "7.5rem" } },
           { cellClassName: "px-1 sm:px-3", headerClassName: "px-1 sm:px-3" }
@@ -486,9 +472,9 @@ const AppActions = React.memo(function AppActions({
   state,
   onDelete,
 }: {
-  app: App
+  app: AppDirectoryRow
   state: import("@/lib/instance-state").InstanceState
-  onDelete: (app: App) => void
+  onDelete: (app: AppDeleteTarget) => void
 }) {
   const queryClient = useQueryClient()
   const invalidate = () =>
@@ -511,8 +497,8 @@ const AppActions = React.memo(function AppActions({
     state.phase === "ready" &&
     state.observation.reachability === "connected" &&
     state.observation.inventory === "available"
-  const canManage = available && app.permissions.includes("app.manage")
-  const deploying = app.deployment?.state === "running"
+  const canManage = app.permissions.includes("app.manage")
+  const deploying = app.detail?.deploying === true
   const running =
     state.phase === "ready" && state.observation.runtime === "running"
   const busy = deploy.isPending || action.isPending
@@ -525,7 +511,7 @@ const AppActions = React.memo(function AppActions({
             <Button
               aria-label={`Deploy ${app.name}`}
               className="text-muted-foreground hover:text-primary"
-              disabled={busy || deploying}
+              disabled={!available || !app.detail || busy || deploying}
               size="icon-sm"
               type="button"
               variant="ghost"
@@ -587,7 +573,7 @@ const AppActions = React.memo(function AppActions({
             favorite={{ id: app.id, kind: "app", relayId: app.relayId }}
           />
           <DropdownMenuSeparator />
-          {canManage && app.containers.length > 0 ? (
+          {canManage && available && (app.detail?.containerCount ?? 0) > 0 ? (
             <>
               <DropdownMenuItem
                 disabled={deploying}
@@ -791,12 +777,6 @@ function EmptyAppTable({
   )
 }
 
-function appContainersLabel(app: Pick<App, "containers">): string {
-  if (app.containers.length === 0) return "Not deployed"
-  const running = app.containers.filter((container) => container.running)
-  return `${running.length} of ${app.containers.length} running`
-}
-
 function appRowKey(app: { id: string; relayId: string }): string {
   return `${app.relayId}:${app.id}`
 }
@@ -807,11 +787,8 @@ function appFavorite(app: { id: string; relayId: string }): InstanceFavorite {
 
 function appRowContainersLabel(row: AppDirectoryRow): string {
   if (row.detailPhase === "checking") return "Checking"
-  if (
-    row.detailPhase === "error" ||
-    !row.detail ||
-    row.detail.inventoryStatus === "unavailable"
-  )
-    return "Unavailable"
-  return appContainersLabel(row.detail)
+  if (row.detailPhase === "error" || !row.detail) return "Unavailable"
+  return row.detail.containerCount === 0
+    ? "Not deployed"
+    : `${row.detail.runningContainerCount} of ${row.detail.containerCount} running`
 }

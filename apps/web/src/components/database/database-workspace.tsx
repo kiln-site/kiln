@@ -1,3 +1,6 @@
+import { instanceInventoryQueryOptions } from "@/lib/instance-inventory"
+import { useInstanceInventoryState } from "@/lib/instance-state"
+import { instanceStatePresentation } from "@/lib/instance-state-presentation"
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Database } from "lucide-react"
@@ -6,7 +9,6 @@ import {
   databaseRelayAvailable,
   engineLabel,
   showDatabaseOperationError,
-  type ManagedDatabaseOverview,
 } from "@/components/database/database-presentation"
 import {
   DatabaseWorkspaceContext,
@@ -35,7 +37,10 @@ import {
 } from "@/lib/database-route"
 import type { ServerAction } from "@/lib/instance-power-state"
 import { databaseDestinations } from "@/lib/navigation-destinations"
-import { managedDatabasesQueryOptions, queryKeys } from "@/lib/query-options"
+import {
+  managedDatabaseDirectoryQueryOptions,
+  queryKeys,
+} from "@/lib/query-options"
 import { runManagedDatabaseAction } from "@/server/databases"
 
 export const DatabaseWorkspaceShell = React.memo(
@@ -67,23 +72,78 @@ function useDatabaseWorkspaceQuery(
   routeId: string | undefined
 ): ResourceWorkspaceQuery<DatabaseWorkspaceDatabase> {
   const select = React.useMemo(
-    () => (overview: ManagedDatabaseOverview) => {
-      const resolution = resolveDatabaseRoute(overview.databases, routeId)
-      return resolution.status === "found"
-        ? {
-            database: resolution.resource,
-            routeId: databaseRouteIdentifier(
-              overview.databases,
-              resolution.resource
-            ),
-          }
-        : null
-    },
+    () =>
+      (
+        rows: Awaited<
+          ReturnType<
+            typeof import("@/server/databases").getManagedDatabaseDirectory
+          >
+        >
+      ) => {
+        const resolution = resolveDatabaseRoute(rows, routeId)
+        return resolution.status === "found"
+          ? {
+              directory: resolution.resource,
+              routeId: databaseRouteIdentifier(rows, resolution.resource),
+            }
+          : null
+      },
     [routeId]
   )
-  return useResourceWorkspaceQuery(
-    useQuery({ ...managedDatabasesQueryOptions(), select })
-  )
+  const directory = useQuery({
+    ...managedDatabaseDirectoryQueryOptions(),
+    select,
+  })
+  const selected = directory.data
+  const inventory = useQuery({
+    ...instanceInventoryQueryOptions(
+      {
+        kind: "database",
+        id: selected?.directory.id ?? "",
+        relayId: selected?.directory.relayId ?? "",
+      },
+      "detail"
+    ),
+    enabled: Boolean(selected) && typeof window !== "undefined",
+  })
+  const state = useInstanceInventoryState(inventory)
+  const data = React.useMemo(() => {
+    const value = inventory.data
+    if (
+      !selected ||
+      value?.kind !== "database" ||
+      value.view !== "detail" ||
+      !value.data
+    )
+      return null
+    const observation = state.phase === "ready" ? state.observation : undefined
+    return {
+      database: {
+        ...value.data,
+        ...selected.directory,
+        runtimeStatus: state,
+        observedState: observation?.runtime ?? undefined,
+        inventoryStatus: observation?.inventory ?? ("unavailable" as const),
+        relayStatus:
+          observation?.reachability === "connected"
+            ? ("connected" as const)
+            : ("unreachable" as const),
+        relayUpdating: observation?.updating ?? false,
+        status: instanceStatePresentation(state).label,
+      },
+      routeId: selected.routeId,
+    }
+  }, [selected, inventory.data, state])
+  return useResourceWorkspaceQuery({
+    data,
+    isPending: directory.isPending || Boolean(selected && inventory.isPending),
+    isError:
+      directory.isError ||
+      inventory.isError ||
+      Boolean(
+        selected && inventory.data?.observation.inventory === "unavailable"
+      ),
+  })
 }
 
 const DatabaseWorkspaceHeader = React.memo(function DatabaseWorkspaceHeader({

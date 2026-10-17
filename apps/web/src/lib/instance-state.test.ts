@@ -2,16 +2,18 @@ import { QueryClient, QueryObserver } from "@tanstack/react-query"
 import type {
   InstanceObservation,
   InstanceReference,
-  InstanceStateResult,
+  InstanceInventoryResult,
+  InstanceInventoryRequest,
 } from "@workspace/contracts"
 import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 
 const endpoint = vi.hoisted(() => ({ read: vi.fn() }))
-vi.mock("@/server/instance-states", () => ({
-  getInstanceStates: endpoint.read,
+vi.mock("@/server/instance-inventory", () => ({
+  getInstanceInventory: endpoint.read,
 }))
 
 import { instanceStateQueryOptions } from "./instance-state"
+import { instanceInventoryQueryOptions } from "./instance-inventory"
 
 const reference = (id: string): InstanceReference => ({
   kind: "database",
@@ -37,17 +39,135 @@ afterEach(() => {
 })
 
 describe("instance status queries", () => {
+  it("preserves workspace detail through an outage while clearing live status", async () => {
+    const ref = { ...reference("first"), kind: "app" as const }
+    endpoint.read.mockImplementation(
+      async ({ data }: { data: Array<InstanceInventoryRequest> }) =>
+        data.map((request) => ({
+          request,
+          value: {
+            kind: "app",
+            view: "detail",
+            data: {
+              id: ref.id,
+              shortId: "first",
+              hostname: "app-first",
+              network: "app-first",
+              connectedDatabaseIds: [],
+              containers: [],
+              dataDirectory: "/apps/first",
+              deployment: null,
+              observedState: "running",
+              status: "Running",
+            },
+            observation: observation(ref),
+          },
+        }))
+    )
+    const observer = new QueryObserver(client(), {
+      ...instanceInventoryQueryOptions(ref, "detail"),
+      enabled: false,
+    })
+    const unsubscribe = observer.subscribe(() => {})
+    try {
+      await observer.refetch()
+      endpoint.read.mockImplementation(
+        async ({ data }: { data: Array<InstanceInventoryRequest> }) =>
+          data.map((request) => ({
+            request,
+            value: {
+              kind: "app",
+              view: "detail",
+              data: null,
+              observation: {
+                ...observation(ref),
+                inventory: "unavailable",
+                reachability: "unreachable",
+                runtime: null,
+              },
+            },
+          }))
+      )
+      await observer.refetch()
+      expect(observer.getCurrentResult().data).toMatchObject({
+        data: { hostname: "app-first" },
+        observation: {
+          inventory: "unavailable",
+          reachability: "unreachable",
+          runtime: null,
+        },
+      })
+    } finally {
+      unsubscribe()
+    }
+  })
+
+  it("resolves mixed status/table views with the data belonging to each view", async () => {
+    endpoint.read.mockImplementation(
+      async ({
+        data,
+      }: {
+        data: Array<InstanceInventoryRequest>
+      }): Promise<Array<InstanceInventoryResult>> =>
+        data.map((request) => ({
+          request,
+          value:
+            request.view === "table"
+              ? {
+                  kind: "app",
+                  view: "table",
+                  data: {
+                    containerSearchText: "web nginx:latest",
+                    containerCount: 2,
+                    runningContainerCount: 1,
+                    deploying: false,
+                  },
+                  observation: observation(request.reference),
+                }
+              : {
+                  kind: "app",
+                  view: "status",
+                  data: null,
+                  observation: observation(request.reference),
+                },
+        }))
+    )
+    const ref = { ...reference("first"), kind: "app" as const }
+    const queryClient = client()
+    const [status, table] = await Promise.all([
+      queryClient.fetchQuery(instanceInventoryQueryOptions(ref, "status")),
+      queryClient.fetchQuery(instanceInventoryQueryOptions(ref, "table")),
+    ])
+    expect(status).toMatchObject({
+      view: "status",
+      data: null,
+      observation: { id: "first" },
+    })
+    expect(table).toMatchObject({
+      view: "table",
+      data: { containerCount: 2, runningContainerCount: 1 },
+      observation: { id: "first" },
+    })
+  })
   it("resolves simultaneous identities independently from a shared batch", async () => {
     endpoint.read.mockImplementation(
       async ({
         data,
       }: {
-        data: Array<InstanceReference>
-      }): Promise<Array<InstanceStateResult>> =>
-        data.map((ref) =>
-          ref.id === "missing"
-            ? { reference: ref, error: "Resource unavailable" }
-            : { reference: ref, observation: observation(ref) }
+        data: Array<InstanceInventoryRequest>
+      }): Promise<Array<InstanceInventoryResult>> =>
+        data.map((request) =>
+          request.reference.id === "missing"
+            ? { request, error: "unavailable" }
+            : {
+                request,
+                value: {
+                  kind: request.reference.kind,
+                  view: "status",
+                  data: null,
+                  observation: observation(request.reference),
+                },
+              }
         )
     )
     const queryClient = client()
@@ -58,7 +178,7 @@ describe("instance status queries", () => {
     )
     expect(results[0]).toMatchObject({
       status: "fulfilled",
-      value: { id: "first", runtime: "running" },
+      value: { observation: { id: "first", runtime: "running" } },
     })
     expect(results[1]).toMatchObject({
       status: "rejected",
@@ -66,7 +186,7 @@ describe("instance status queries", () => {
     })
     expect(results[2]).toMatchObject({
       status: "fulfilled",
-      value: { id: "second", runtime: "running" },
+      value: { observation: { id: "second", runtime: "running" } },
     })
   })
 
@@ -106,14 +226,14 @@ describe("instance status queries", () => {
 
   it("keeps a shared batch alive while another identity is still observed", async () => {
     let started!: () => void
-    let finish!: (result: Array<InstanceStateResult>) => void
+    let finish!: (result: Array<InstanceInventoryResult>) => void
     let signal!: AbortSignal
     const start = new Promise<void>((resolve) => {
       started = resolve
     })
     endpoint.read.mockImplementation((request: { signal: AbortSignal }) => {
       signal = request.signal
-      return new Promise<Array<InstanceStateResult>>((resolve) => {
+      return new Promise<Array<InstanceInventoryResult>>((resolve) => {
         finish = resolve
         started()
       })
@@ -140,8 +260,13 @@ describe("instance status queries", () => {
     expect(signal.aborted).toBe(false)
     finish([
       {
-        reference: reference("second"),
-        observation: observation(reference("second")),
+        request: { reference: reference("second"), view: "status" },
+        value: {
+          kind: "database",
+          view: "status",
+          data: null,
+          observation: observation(reference("second")),
+        },
       },
     ])
     await completed

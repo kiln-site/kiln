@@ -16,6 +16,8 @@ import type {
   RelayDeleteApp,
   RelayDeployApp,
   InstanceRuntimeState,
+  RelayInventoryLookup,
+  RelayInventoryItem,
 } from "@workspace/contracts"
 import { appServiceNameSchema, relayAppSchema } from "@workspace/contracts"
 import { Effect, Result, Semaphore } from "effect"
@@ -226,6 +228,62 @@ export class AppDriver {
         )
         return { id, observedState: app.observedState }
       })
+  }
+
+  async inventory(
+    requests: RelayInventoryLookup["requests"],
+    signal: AbortSignal
+  ): Promise<Array<RelayInventoryItem>> {
+    const ids = [...new Set(requests.map((request) => request.id))]
+    const containers = await this.#containers(undefined, ids, signal)
+    const byId = new Map(
+      ids.map((id) => [
+        id,
+        containers.filter((container) => container.appId === id),
+      ])
+    )
+    const networks = ids.some((id) => !byId.get(id)!.length)
+      ? await this.#networks(signal)
+      : []
+    await runRelayReadEffect(
+      "Apps.inventory.restoreDeployments",
+      Effect.forEach(
+        ids,
+        (id) => promiseEffect(() => this.#restoreDeployment(id, signal)),
+        { concurrency: 4 }
+      ),
+      { signal }
+    )
+    const host = requests.some((request) => request.view === "detail")
+      ? await runRelayReadEffect(
+          "Apps.inventory.hostDirectory",
+          promiseEffect(() => this.#hostDataDirectory()),
+          { signal }
+        )
+      : ""
+    return requests.flatMap(({ id, view }): Array<RelayInventoryItem> => {
+      const owned = byId.get(id)!
+      if (!owned.length && !networks.includes(id)) return []
+      const { observedState } = this.#runtimeState(id, owned)
+      const common = { id, view, observedState }
+      if (view === "detail")
+        return [{ ...common, app: this.#toApp(id, owned, host) }]
+      if (view === "table")
+        return [
+          {
+            ...common,
+            table: {
+              containerSearchText: owned.map((container) => `${container.name} ${container.image}`).join(" "),
+              containerCount: owned.length,
+              runningContainerCount: owned.filter(
+                (container) => container.running
+              ).length,
+              deploying: this.#deployments.get(id)?.state === "running",
+            },
+          },
+        ]
+      return [common]
+    })
   }
 
   async get(appId: string): Promise<RelayApp> {
@@ -607,16 +665,15 @@ export class AppDriver {
   }
 
   // The latest deployment from before the Relay restarted, if any.
-  async #restoreDeployment(appId: string) {
+  async #restoreDeployment(appId: string, signal?: AbortSignal) {
     if (this.#restored.has(appId) || this.#deployments.has(appId)) return
-    this.#restored.add(appId)
     const directory = this.#deploymentDirectory(appId)
     const restored = await Effect.runPromise(
       promiseEffect(async () => {
         const [latest] = await deploymentFiles(directory)
         if (!latest) return null
         const saved = JSON.parse(
-          await readFile(join(directory, latest), "utf8")
+          await readFile(join(directory, latest), { encoding: "utf8", signal })
         ) as Omit<Deployment, "abort" | "characters">
         const deployment: Deployment = {
           ...saved,
@@ -628,8 +685,10 @@ export class AppDriver {
         }
         trimDeploymentLog(deployment)
         return deployment
-      }).pipe(Effect.orElseSucceed(() => null))
+      }).pipe(Effect.orElseSucceed(() => null)),
+      { signal }
     )
+    this.#restored.add(appId)
     if (restored && !this.#deployments.has(appId)) {
       this.#deployments.set(appId, restored)
     }

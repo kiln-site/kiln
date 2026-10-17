@@ -52,7 +52,10 @@ export function DatabaseViewerPage() {
     [database.databaseName]
   )
 
-  if (database.observedState !== "running") {
+  if (
+    database.observedState !== undefined &&
+    database.observedState !== "running"
+  ) {
     return (
       <div className="grid min-h-0 flex-1 place-items-center bg-card px-6 text-center">
         <div className="max-w-sm">

@@ -89,6 +89,14 @@ function applyRealtimeEvent(input: ApplyRealtimeEventInput): void {
     ]) {
       void queryClient.invalidateQueries({
         queryKey: [
+          "instance-inventory",
+          "server",
+          reference.relayId,
+          reference.id,
+        ],
+      })
+      void queryClient.invalidateQueries({
+        queryKey: [
           "instance-states",
           "server",
           reference.relayId,
@@ -141,7 +149,8 @@ function applyRealtimeEvent(input: ApplyRealtimeEventInput): void {
   if (event.type === "relay.status") {
     void queryClient.invalidateQueries({
       predicate: (query) =>
-        query.queryKey[0] === "instance-states" &&
+        (query.queryKey[0] === "instance-states" ||
+          query.queryKey[0] === "instance-inventory") &&
         query.queryKey[2] === event.relayId,
     })
     const staleTopics = [

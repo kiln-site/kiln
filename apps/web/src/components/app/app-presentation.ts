@@ -1,3 +1,4 @@
+import { instanceStatePresentation } from "@/lib/instance-state-presentation"
 import type { AppSourceType } from "@workspace/contracts"
 
 import { showToast } from "@workspace/ui/components/sonner"
@@ -6,7 +7,11 @@ import { instanceStatusPresentation } from "@/components/instance-name-presentat
 import type { getApps } from "@/server/apps"
 
 export type AppOverview = Awaited<ReturnType<typeof getApps>>
-export type App = AppOverview["apps"][number]
+type InventoryApp = AppOverview["apps"][number]
+export type App = Omit<InventoryApp, "observedState"> & {
+  observedState: import("@workspace/contracts").RelayObservedState | undefined
+  runtimeStatus?: import("@/lib/instance-state").InstanceState
+}
 
 export const sourceTypeLabels: Record<AppSourceType, string> = {
   compose: "Compose",
@@ -23,16 +28,26 @@ export function appStatusPresentation(
     | "relayId"
     | "relayStatus"
     | "relayUpdating"
-  >
+  > & { runtimeStatus?: import("@/lib/instance-state").InstanceState }
 ) {
+  if (app.runtimeStatus) return instanceStatePresentation(app.runtimeStatus)
   return instanceStatusPresentation({ ...app, kind: "app" })
 }
 
 // Inventory says whether the app exists on its Relay; relayStatus follows
 // live Relay reachability between inventory refreshes.
 export function appRelayAvailable(
-  app: Pick<App, "inventoryStatus" | "relayStatus">
+  app: Pick<App, "inventoryStatus" | "relayStatus"> & {
+    runtimeStatus?: import("@/lib/instance-state").InstanceState
+  }
 ): boolean {
+  const state = app.runtimeStatus
+  if (state)
+    return (
+      state.phase === "ready" &&
+      state.observation.reachability === "connected" &&
+      state.observation.inventory === "available"
+    )
   return app.inventoryStatus === "available" && app.relayStatus === "connected"
 }
 

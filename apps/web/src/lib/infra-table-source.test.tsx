@@ -3,7 +3,9 @@ import { renderToString } from "react-dom/server"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { expect, it, vi } from "vite-plus/test"
 
-vi.mock("@/server/instance-states", () => ({ getInstanceStates: vi.fn() }))
+vi.mock("@/server/instance-inventory", () => ({
+  getInstanceInventory: vi.fn(),
+}))
 
 import { useInfraTableSource } from "@/lib/infra-table-source"
 import { instanceStateQueryKey } from "@/lib/instance-state"
@@ -12,11 +14,16 @@ it("renders directory rows before live data without presenting cached runtime st
   const client = new QueryClient()
   const reference = { kind: "app" as const, id: "app-a", relayId: "relay-a" }
   client.setQueryData(instanceStateQueryKey(reference), {
-    ...reference,
-    reachability: "connected",
-    inventory: "available",
-    runtime: "running",
-    updating: false,
+    kind: "app",
+    view: "status",
+    data: null,
+    observation: {
+      ...reference,
+      reachability: "connected",
+      inventory: "available",
+      runtime: "running",
+      updating: false,
+    },
   })
   function Table() {
     const source = useInfraTableSource({
@@ -28,7 +35,6 @@ it("renders directory rows before live data without presenting cached runtime st
       reference: (row) => row,
       error: new Error("Directory unavailable"),
       retry: () => {},
-      details: { byKey: new Map(), phase: "checking" },
     })
     return (
       <>

@@ -4,10 +4,8 @@ import { InstanceReferenceSchema } from "@workspace/contracts"
 import { Effect, Schema } from "effect"
 
 import { runAppEffect } from "@/effect/runtime"
-import {
-  InstanceStateSourceLive,
-  readInstanceStates,
-} from "@/server/instance-states.server"
+import { readInstanceStates } from "@/server/instance-states.server"
+import { InstanceInventorySourceLive } from "@/server/instance-inventory.server"
 import { requireEligibleResourceUser } from "@/server/auth"
 
 export const getInstanceStates = createServerFn({ method: "POST" })
@@ -25,7 +23,7 @@ export const getInstanceStates = createServerFn({ method: "POST" })
     return runAppEffect(
       "Instances.readStates",
       readInstanceStates(user, data).pipe(
-        Effect.provide(InstanceStateSourceLive)
+        Effect.provide(InstanceInventorySourceLive)
       ),
       {
         signal: getRequest().signal,

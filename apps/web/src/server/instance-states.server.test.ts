@@ -1,12 +1,10 @@
+import { InstanceInventorySource } from "@/server/instance-inventory.server"
 import { assert, layer } from "@effect/vitest"
 import { Effect } from "effect"
-import type { InstanceStateResult } from "@workspace/contracts"
+import type { InstanceInventoryResult } from "@workspace/contracts"
 
 import type { AuthenticatedUser } from "@/lib/auth-session"
-import {
-  InstanceStateSource,
-  readInstanceStates,
-} from "@/server/instance-states.server"
+import { readInstanceStates } from "@/server/instance-states.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertGrant, insertRelay, insertRows, insertUser } from "@/test/seed"
 
@@ -54,17 +52,22 @@ describeMysql("instance status authorization", () => {
             { kind: "app", relayId, id },
             { kind: "relay", relayId, id: relayId },
           ]).pipe(
-            Effect.provideService(InstanceStateSource, {
+            Effect.provideService(InstanceInventorySource, {
               read: (_, references) =>
                 Effect.succeed(
-                  references.map((reference): InstanceStateResult => ({
-                    reference,
-                    observation: {
-                      ...reference,
-                      reachability: "connected",
-                      runtime: "running",
-                      inventory: "available",
-                      updating: false,
+                  references.map((request): InstanceInventoryResult => ({
+                    request,
+                    value: {
+                      kind: request.reference.kind,
+                      view: "status",
+                      data: null,
+                      observation: {
+                        ...request.reference,
+                        reachability: "connected",
+                        runtime: "running",
+                        inventory: "available",
+                        updating: false,
+                      },
                     },
                   }))
                 ),

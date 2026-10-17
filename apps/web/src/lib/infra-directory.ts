@@ -28,6 +28,7 @@ export function refreshInfraTable(
       queryClient.invalidateQueries({ queryKey, exact: true })
     ),
     queryClient.invalidateQueries({ queryKey: ["instance-states", kind] }),
+    queryClient.invalidateQueries({ queryKey: ["instance-inventory", kind] }),
     queryClient.invalidateQueries({
       queryKey: ["infra-directory", "relays", kind],
     }),

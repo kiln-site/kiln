@@ -32,8 +32,11 @@ const prefix = (queryKey: QueryKey): HearthRealtimeQueryScope => ({
 
 const hearthRealtimeQueryScopes = {
   access: [
+    exact(queryKeys.apps.directory),
+    exact(queryKeys.databases.directory),
     prefix(["infra-directory"]),
     prefix(["instance-states"]),
+    prefix(["instance-inventory"]),
     exact(queryKeys.access.capabilities),
     prefix(["resource-access"]),
     prefix(["access-resources"]),
@@ -44,7 +47,11 @@ const hearthRealtimeQueryScopes = {
   ],
   activity: [prefix(["activity"])],
   "app-directory": [exact(queryKeys.apps.directory)],
-  apps: [prefix(["apps"]), prefix(["instance-states", "app"])],
+  apps: [
+    prefix(["apps"]),
+    prefix(["instance-states", "app"]),
+    prefix(["instance-inventory", "app"]),
+  ],
   "backup-settings": [
     prefix(["backups", "policy"]),
     prefix(["backups", "usage"]),
@@ -59,6 +66,7 @@ const hearthRealtimeQueryScopes = {
   databases: [
     exact(queryKeys.databases.list),
     prefix(["instance-states", "database"]),
+    prefix(["instance-inventory", "database"]),
   ],
   domains: [prefix(["domains"])],
   favorites: [exact(queryKeys.instanceFavorites)],
@@ -75,6 +83,7 @@ const hearthRealtimeQueryScopes = {
   relays: [
     prefix(["infra-directory"]),
     prefix(["instance-states"]),
+    prefix(["instance-inventory"]),
     exact(queryKeys.relays),
     exact(queryKeys.databases.list),
     exact(queryKeys.databases.directory),
@@ -102,8 +111,11 @@ function queryScopes(
     // One Relay's access edit: refresh that Relay's records and what the
     // viewer can reach, never the platform user or invitation lists.
     return [
+      exact(queryKeys.apps.directory),
+      exact(queryKeys.databases.directory),
       prefix(["infra-directory"]),
       prefix(["instance-states"]),
+      prefix(["instance-inventory"]),
       exact(queryKeys.access.capabilities),
       prefix(["resource-access", scope.relayId]),
       prefix(["access-resources"]),

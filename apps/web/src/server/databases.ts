@@ -178,6 +178,19 @@ export const getManagedDatabaseDirectory = createServerFn({
     return [
       {
         engine: record.engine,
+        databaseName: record.databaseName,
+        hostname: `database-${record.databaseId}`,
+        internalPort: databaseEngineDetails[record.engine].internalPort,
+        hasCredentials: true,
+        permissions: databasePermissions.filter((permission) =>
+          hasDatabasePermission(
+            user,
+            grants,
+            record.relayId,
+            record.databaseId,
+            permission
+          )
+        ),
         id: record.databaseId,
         name: record.name,
         relayId: record.relayId,
@@ -381,6 +394,8 @@ export const getManagedDatabaseCredential = createServerFn({ method: "GET" })
     if (!credential) throw new Error("Database credentials are unavailable")
     return {
       databaseName: credential.databaseName,
+      hostname: `database-${credential.databaseId}`,
+      internalPort: databaseEngineDetails[credential.engine].internalPort,
       password: credential.password,
       username: credential.username,
     }

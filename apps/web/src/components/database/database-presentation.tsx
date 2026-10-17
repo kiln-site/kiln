@@ -1,3 +1,4 @@
+import { instanceStatePresentation } from "@/lib/instance-state-presentation"
 import type { DatabaseEngine } from "@workspace/contracts"
 
 import { showToast } from "@workspace/ui/components/sonner"
@@ -8,7 +9,14 @@ import type { getManagedDatabases } from "@/server/databases"
 export type ManagedDatabaseOverview = Awaited<
   ReturnType<typeof getManagedDatabases>
 >
-export type ManagedDatabase = ManagedDatabaseOverview["databases"][number]
+type InventoryManagedDatabase = ManagedDatabaseOverview["databases"][number]
+export type ManagedDatabase = Omit<
+  InventoryManagedDatabase,
+  "observedState"
+> & {
+  observedState: import("@workspace/contracts").RelayObservedState | undefined
+  runtimeStatus?: import("@/lib/instance-state").InstanceState
+}
 
 export const DATABASE_DUMP_LIMIT_BYTES = 700_000
 
@@ -39,8 +47,10 @@ export function databaseStatusPresentation(
   database: Pick<
     ManagedDatabase,
     "inventoryStatus" | "observedState" | "relayStatus" | "relayUpdating"
-  >
+  > & { runtimeStatus?: import("@/lib/instance-state").InstanceState }
 ) {
+  if (database.runtimeStatus)
+    return instanceStatePresentation(database.runtimeStatus)
   return instanceStatusPresentation({
     id: "status-presentation",
     inventoryStatus: database.inventoryStatus,
@@ -55,8 +65,17 @@ export function databaseStatusPresentation(
 // Inventory says whether the database exists; relayStatus follows live Relay
 // reachability between inventory refreshes.
 export function databaseRelayAvailable(
-  database: Pick<ManagedDatabase, "inventoryStatus" | "relayStatus">
+  database: Pick<ManagedDatabase, "inventoryStatus" | "relayStatus"> & {
+    runtimeStatus?: import("@/lib/instance-state").InstanceState
+  }
 ): boolean {
+  const state = database.runtimeStatus
+  if (state)
+    return (
+      state.phase === "ready" &&
+      state.observation.reachability === "connected" &&
+      state.observation.inventory === "available"
+    )
   return (
     database.inventoryStatus === "available" &&
     database.relayStatus === "connected"

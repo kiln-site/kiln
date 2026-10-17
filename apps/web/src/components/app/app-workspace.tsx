@@ -1,3 +1,6 @@
+import { instanceInventoryQueryOptions } from "@/lib/instance-inventory"
+import { useInstanceInventoryState } from "@/lib/instance-state"
+import { instanceStatePresentation } from "@/lib/instance-state-presentation"
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
@@ -6,7 +9,6 @@ import { Boxes, Rocket } from "lucide-react"
 import {
   appRelayAvailable,
   showAppOperationError,
-  type AppOverview,
 } from "@/components/app/app-presentation"
 import {
   AppWorkspaceContext,
@@ -32,7 +34,7 @@ import { recoverPromise } from "@/effect/promise"
 import { appRouteIdentifier, resolveAppRoute } from "@/lib/app-route"
 import type { ServerAction } from "@/lib/instance-power-state"
 import { appDestinations } from "@/lib/navigation-destinations"
-import { appsQueryOptions, queryKeys } from "@/lib/query-options"
+import { appDirectoryQueryOptions, queryKeys } from "@/lib/query-options"
 import { deployApp, runAppAction } from "@/server/apps"
 
 export const AppWorkspaceShell = React.memo(function AppWorkspaceShell({
@@ -64,18 +66,73 @@ function useAppWorkspaceQuery(
   routeId: string | undefined
 ): ResourceWorkspaceQuery<AppWorkspaceApp> {
   const select = React.useMemo(
-    () => (overview: AppOverview) => {
-      const resolution = resolveAppRoute(overview.apps, routeId)
-      return resolution.status === "found"
-        ? {
-            app: resolution.resource,
-            routeId: appRouteIdentifier(overview.apps, resolution.resource),
-          }
-        : null
-    },
+    () =>
+      (
+        rows: Awaited<
+          ReturnType<typeof import("@/server/apps").getAppDirectory>
+        >
+      ) => {
+        const resolution = resolveAppRoute(rows, routeId)
+        return resolution.status === "found"
+          ? {
+              directory: resolution.resource,
+              routeId: appRouteIdentifier(rows, resolution.resource),
+            }
+          : null
+      },
     [routeId]
   )
-  return useResourceWorkspaceQuery(useQuery({ ...appsQueryOptions(), select }))
+  const directory = useQuery({ ...appDirectoryQueryOptions(), select })
+  const selected = directory.data
+  const inventory = useQuery({
+    ...instanceInventoryQueryOptions(
+      {
+        kind: "app",
+        id: selected?.directory.id ?? "",
+        relayId: selected?.directory.relayId ?? "",
+      },
+      "detail"
+    ),
+    enabled: Boolean(selected) && typeof window !== "undefined",
+  })
+  const state = useInstanceInventoryState(inventory)
+  const data = React.useMemo(() => {
+    const value = inventory.data
+    if (
+      !selected ||
+      value?.kind !== "app" ||
+      value.view !== "detail" ||
+      !value.data
+    )
+      return null
+    const observation = state.phase === "ready" ? state.observation : undefined
+    return {
+      app: {
+        ...value.data,
+        ...selected.directory,
+        runtimeStatus: state,
+        observedState: observation?.runtime ?? undefined,
+        inventoryStatus: observation?.inventory ?? ("unavailable" as const),
+        relayStatus:
+          observation?.reachability === "connected"
+            ? ("connected" as const)
+            : ("unreachable" as const),
+        relayUpdating: observation?.updating ?? false,
+        status: instanceStatePresentation(state).label,
+      },
+      routeId: selected.routeId,
+    }
+  }, [selected, inventory.data, state])
+  return useResourceWorkspaceQuery({
+    data,
+    isPending: directory.isPending || Boolean(selected && inventory.isPending),
+    isError:
+      directory.isError ||
+      inventory.isError ||
+      Boolean(
+        selected && inventory.data?.observation.inventory === "unavailable"
+      ),
+  })
 }
 
 const AppWorkspaceHeader = React.memo(function AppWorkspaceHeader({
@@ -197,8 +254,8 @@ function AppPowerControls({
     },
     [runAction]
   )
-  const deploying = app.deployment?.state === "running"
   const relayConnected = appRelayAvailable(app)
+  const deploying = relayConnected && app.deployment?.state === "running"
 
   if (!canManage) return null
   return (

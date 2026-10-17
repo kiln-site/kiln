@@ -54,7 +54,7 @@ import {
   accessCapabilitiesQueryOptions,
   appConfigQueryOptions,
   appWebRoutesQueryOptions,
-  managedDatabasesQueryOptions,
+  managedDatabaseDirectoryQueryOptions,
   queryKeys,
 } from "@/lib/query-options"
 import {
@@ -708,9 +708,9 @@ function ConnectedDatabases({
 }) {
   const queryClient = useQueryClient()
   const databases = useQuery({
-    ...managedDatabasesQueryOptions(),
+    ...managedDatabaseDirectoryQueryOptions(),
     select: (overview) =>
-      overview.databases.filter((database) => database.relayId === app.relayId),
+      overview.filter((database) => database.relayId === app.relayId),
   })
   const [adding, setAdding] = React.useState("")
   const network = useMutation({

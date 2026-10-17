@@ -13,6 +13,8 @@ import type {
   RelayManagedDatabase,
   RelayRotateDatabaseCredentials,
   InstanceRuntimeState,
+  RelayInventoryLookup,
+  RelayInventoryItem,
 } from "@workspace/contracts"
 import {
   databaseEngineSupportsLogicalBackups,
@@ -201,6 +203,45 @@ export class DatabaseDriver {
       id: requiredLabel(container.Config.Labels ?? {}, "kiln.database.id"),
       observedState: databaseObservedState(container),
     }))
+  }
+
+  async inventory(
+    requests: RelayInventoryLookup["requests"],
+    signal: AbortSignal
+  ): Promise<Array<RelayInventoryItem>> {
+    const containers = await this.#discover(
+      [...new Set(requests.map((request) => request.id))],
+      signal
+    )
+    const byId = new Map(
+      containers.map((container) => [
+        requiredLabel(container.Config.Labels ?? {}, "kiln.database.id"),
+        container,
+      ])
+    )
+    const toDetail = (container: DatabaseContainerInspect) =>
+      this.#toManagedDatabase(container, signal)
+    return runRelayReadEffect(
+      "Databases.inventory",
+      Effect.forEach(
+        requests,
+        ({ id, view }) =>
+          Effect.gen(function* () {
+            const container = byId.get(id)
+            if (!container) return []
+            const item: RelayInventoryItem = {
+              id,
+              view,
+              observedState: databaseObservedState(container),
+            }
+            if (view === "detail")
+              item.database = yield* promiseEffect(() => toDetail(container))
+            return [item]
+          }),
+        { concurrency: 4 }
+      ).pipe(Effect.map((items) => items.flat())),
+      { signal }
+    )
   }
 
   // The database as Docker reports it, for work that runs inside it.
@@ -644,7 +685,8 @@ export class DatabaseDriver {
   }
 
   async #toManagedDatabase(
-    container: DatabaseContainerInspect
+    container: DatabaseContainerInspect,
+    signal?: AbortSignal
   ): Promise<RelayManagedDatabase> {
     const labels = container.Config.Labels ?? {}
     const id = requiredLabel(labels, "kiln.database.id")
@@ -652,7 +694,7 @@ export class DatabaseDriver {
       requiredLabel(labels, "kiln.database.engine")
     )
     const network = requiredLabel(labels, "kiln.database.network")
-    const attached = await this.#attachedContainers(network)
+    const attached = await this.#attachedContainers(network, signal)
     const connectedInstanceIds = attached.flatMap((candidate) => {
       const instanceId = candidate.Labels?.[this.#config.serverIdLabel]
       return instanceId?.match(/^[a-f0-9]{40}$/iu)
@@ -690,13 +732,15 @@ export class DatabaseDriver {
 
   // Listed containers carry their labels, so none is inspected.
   async #attachedContainers(
-    network: string
+    network: string,
+    signal?: AbortSignal
   ): Promise<ReadonlyArray<DockerContainerSummary>> {
     return Effect.runPromise(
       this.#engine.listContainers({
         all: true,
         filters: { network: [network] },
-      })
+      }),
+      { signal }
     )
   }
 

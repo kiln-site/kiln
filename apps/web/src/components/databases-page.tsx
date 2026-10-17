@@ -74,7 +74,6 @@ import {
   engineLabel,
   engineOptions,
   showDatabaseOperationError,
-  type ManagedDatabase,
   type ManagedDatabaseOverview,
 } from "@/components/database/database-presentation"
 import {
@@ -108,14 +107,13 @@ import {
 import {
   loadingInfraTableSource,
   useInfraTableSource,
-  useInfraDetails,
   type InfraInstanceRow,
 } from "@/lib/infra-table-source"
 import {
   infraRelayOptionsQueryOptions,
   refreshInfraTable,
 } from "@/lib/infra-directory"
-import { managedDatabasesQueryOptions, queryKeys } from "@/lib/query-options"
+import { queryKeys } from "@/lib/query-options"
 import { ensuringPromise, forkPromise } from "@/effect/promise"
 import {
   createManagedDatabase,
@@ -124,15 +122,15 @@ import {
 
 type ManagedRelay = ManagedDatabaseOverview["relays"][number]
 type DatabaseDialog =
-  | { kind: "credentials"; database: ManagedDatabase }
-  | { kind: "delete"; database: ManagedDatabase }
-  | { kind: "import"; database: ManagedDatabase }
+  | { kind: "credentials"; database: DatabaseDirectory }
+  | { kind: "delete"; database: DatabaseDirectory }
+  | { kind: "import"; database: DatabaseDirectory }
   | null
 
 type DatabaseDirectory = Awaited<
   ReturnType<typeof getManagedDatabaseDirectory>
 >[number]
-type DatabaseDirectoryRow = InfraInstanceRow<DatabaseDirectory, ManagedDatabase>
+type DatabaseDirectoryRow = InfraInstanceRow<DatabaseDirectory>
 const databaseReference = (row: DatabaseDirectory) => ({
   kind: "database" as const,
   id: row.id,
@@ -151,10 +149,8 @@ const databaseTableSearchFields = [
   (row: DatabaseDirectoryRow) => row.relayName,
   (row: DatabaseDirectoryRow) => row.engine,
   (row: DatabaseDirectoryRow) => row.instanceStatus,
-  (row: DatabaseDirectoryRow) =>
-    row.detailPhase === "ready" ? row.detail?.databaseName : undefined,
-  (row: DatabaseDirectoryRow) =>
-    row.detailPhase === "ready" ? row.detail?.hostname : undefined,
+  (row: DatabaseDirectoryRow) => row.databaseName,
+  (row: DatabaseDirectoryRow) => `database-${row.id}`,
 ] as const
 
 export const DatabasesPage = React.memo(function DatabasesPage({
@@ -354,20 +350,11 @@ const DatabaseTableData = React.memo(function DatabaseTableData(
   const retry = React.useCallback(() => {
     forkPromise(() => collection.utils.refetch({ throwOnError: true }))
   }, [collection])
-  const detailQuery = useQuery({
-    ...managedDatabasesQueryOptions(),
-    enabled: Boolean(result.data?.length) && typeof window !== "undefined",
-    staleTime: 0,
-    gcTime: 0,
-    refetchOnMount: "always",
-  })
-  const details = useInfraDetails(detailQuery, detailQuery.data?.databases)
   const source = useInfraTableSource({
     directory: result,
     reference: databaseReference,
     error: databaseInventoryError,
     retry,
-    details,
   })
   return <DatabaseTable {...props} source={source} />
 })
@@ -517,20 +504,13 @@ const DatabaseTable = React.memo(function DatabaseTable({
         id: "actions",
         header: () => <span className="sr-only">Actions</span>,
         enableSorting: false,
-        cell: ({ row }) =>
-          row.original.detailPhase === "ready" && row.original.detail ? (
-            <DatabaseActions
-              database={row.original.detail}
-              state={row.original.instanceState}
-              onDialog={onDialog}
-            />
-          ) : (
-            <span className="type-meta text-muted-foreground">
-              {row.original.detailPhase === "error"
-                ? "Unavailable"
-                : "Checking"}
-            </span>
-          ),
+        cell: ({ row }) => (
+          <DatabaseActions
+            database={row.original}
+            state={row.original.instanceState}
+            onDialog={onDialog}
+          />
+        ),
         meta: dataTableColumnMeta(
           { width: { base: "8.5rem", sm: "9.5rem" } },
           {
@@ -588,7 +568,7 @@ const DatabaseActions = React.memo(function DatabaseActions({
   state,
   onDialog,
 }: {
-  database: ManagedDatabase
+  database: DatabaseDirectory
   state: import("@/lib/instance-state").InstanceState
   onDialog: (dialog: DatabaseDialog) => void
 }) {
@@ -647,7 +627,7 @@ const DatabaseActions = React.memo(function DatabaseActions({
           onClick={() => onDialog({ kind: "credentials", database })}
         />
       ) : null}
-      {available && can("database.network.write") ? (
+      {can("database.network.write") ? (
         <DatabaseNetworkPicker database={database} />
       ) : null}
       {canDelete ? (

@@ -13,6 +13,7 @@ import { Effect, Schema, Semaphore } from "effect"
 
 import {
   InstanceStateLookupSchema,
+  RelayInventoryLookupSchema,
   backupTaskIdSchema,
   backupTaskInputSchema,
   redactRelayBackupTask,
@@ -1664,6 +1665,12 @@ async function executeControlRequest(
       }
     }
     case "database.list": {
+      if ("requests" in payload)
+        return databases.inventory(
+          Schema.decodeUnknownSync(RelayInventoryLookupSchema)(payload)
+            .requests,
+          signal
+        )
       const input = Schema.decodeUnknownSync(InstanceStateLookupSchema)(payload)
       if (input.stateOnly) {
         if (!input.ids) throw new Error("State lookups require resource IDs")
@@ -1776,6 +1783,12 @@ async function executeControlRequest(
       )
     }
     case "app.list": {
+      if ("requests" in payload)
+        return apps.inventory(
+          Schema.decodeUnknownSync(RelayInventoryLookupSchema)(payload)
+            .requests,
+          signal
+        )
       const input = Schema.decodeUnknownSync(InstanceStateLookupSchema)(payload)
       if (input.stateOnly) {
         if (!input.ids) throw new Error("State lookups require resource IDs")

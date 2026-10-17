@@ -2,7 +2,8 @@ import * as React from "react"
 import { useQueries, type UseQueryResult } from "@tanstack/react-query"
 import type {
   InstanceReference,
-  InstanceObservation,
+  InstanceInventory,
+  InstanceInventoryView,
 } from "@workspace/contracts"
 
 import {
@@ -11,9 +12,9 @@ import {
 } from "@/lib/data-table-source"
 import {
   instanceStateFromQuery,
-  instanceStateQueryOptions,
   type InstanceState,
 } from "@/lib/instance-state"
+import { instanceInventoryQueryOptions } from "@/lib/instance-inventory"
 import { instanceStatePresentation } from "@/lib/instance-state-presentation"
 
 export type InfraInstanceRow<T extends object, D = never> = T & {
@@ -29,30 +30,19 @@ export const loadingInfraTableSource: DataTableSource<never> = {
   body: { kind: "loading" },
   refreshing: false,
 }
-const combineStates = (
-  queries: Array<UseQueryResult<InstanceObservation, Error>>
-) => queries.map(instanceStateFromQuery)
 
-export function useInfraDetails<T extends { id: string; relayId: string }>(
-  query: Pick<
-    UseQueryResult,
-    "fetchStatus" | "isFetchedAfterMount" | "isError"
-  >,
-  rows: ReadonlyArray<T> | undefined
-) {
-  return React.useMemo(
-    () => ({
-      byKey: new Map(rows?.map((row) => [`${row.relayId}:${row.id}`, row])),
-      phase:
-        query.fetchStatus !== "idle" || !query.isFetchedAfterMount
-          ? ("checking" as const)
-          : query.isError
-            ? ("error" as const)
-            : ("ready" as const),
-    }),
-    [rows, query.fetchStatus, query.isFetchedAfterMount, query.isError]
-  )
-}
+const combineInventory = (
+  queries: Array<UseQueryResult<InstanceInventory, Error>>
+) =>
+  queries.map((query) => ({
+    state: instanceStateFromQuery({ ...query, data: query.data?.observation }),
+    inventory:
+      query.fetchStatus === "idle" &&
+      query.isFetchedAfterMount &&
+      !query.isError
+        ? query.data
+        : undefined,
+  }))
 
 /** Directory rows own existence. Live lookups enrich them without gating them. */
 export function useInfraTableSource<T extends object, D = never>({
@@ -60,30 +50,38 @@ export function useInfraTableSource<T extends object, D = never>({
   reference,
   error,
   retry,
-  details,
+  view = "status",
+  selectDetail,
 }: {
   directory: { data?: Array<T>; isLoading: boolean; isError: boolean }
   reference: (row: T) => InstanceReference
   error: Error
   retry: () => void
-  details?: {
-    byKey: ReadonlyMap<string, D>
-    phase: "checking" | "ready" | "error"
-  }
+  view?: InstanceInventoryView
+  selectDetail?: (inventory: InstanceInventory) => D | undefined
 }) {
   const rows = directory.data ?? emptyRows
   const states = useQueries({
-    queries: rows.map((row) => instanceStateQueryOptions(reference(row))),
-    combine: combineStates,
+    queries: rows.map((row) =>
+      instanceInventoryQueryOptions(reference(row), view)
+    ),
+    combine: combineInventory,
   })
   const [cache] = React.useState(() => new WeakMap<T, InfraInstanceRow<T, D>>())
   const enriched = React.useMemo(
     () =>
       rows.map((row, index) => {
-        const next = states[index]!
-        const ref = reference(row)
-        const detail = details?.byKey.get(`${ref.relayId}:${ref.id}`)
-        const detailPhase = details?.phase ?? "ready"
+        const entry = states[index]!
+        const next = entry.state
+        const detail = entry.inventory
+          ? selectDetail?.(entry.inventory)
+          : undefined
+        const detailPhase =
+          next.phase === "ready"
+            ? "ready"
+            : next.phase === "error"
+              ? "error"
+              : "checking"
         const previous = cache.get(row)
         const before = previous?.instanceState
         // Preserve unchanged row identities so TanStack Table's memoized rows
@@ -114,7 +112,7 @@ export function useInfraTableSource<T extends object, D = never>({
         cache.set(row, result)
         return result
       }),
-    [rows, states, details, reference, cache]
+    [rows, states, selectDetail, cache]
   )
   const source = useLiveDataTableSource({
     data: directory.data ? enriched : undefined,
