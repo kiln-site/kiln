@@ -3,6 +3,7 @@ import { z } from "zod"
 
 import { DatabasesPage } from "@/components/databases-page"
 import { getInfraDatabasesCollection } from "@/lib/collections/infra-directories"
+import { forkPromise } from "@/effect/promise"
 import {
   DATA_TABLE_SEARCH_MAX_LENGTH,
   useDataTableSearchStore,
@@ -15,15 +16,15 @@ export const Route = createFileRoute("/_app/infra/databases")({
     invitation: z.uuid().optional(),
     search: z.string().max(DATA_TABLE_SEARCH_MAX_LENGTH).optional(),
   }),
-  ssr: false,
   beforeLoad: async ({ context }) => {
     await requireInfrastructureDestinationAccess(
       context.queryClient,
       "/infra/databases"
     )
   },
-  loader: async ({ context }) => {
-    await getInfraDatabasesCollection(context.dbClient).preload()
+  loader: ({ context }) => {
+    if (typeof window !== "undefined")
+      forkPromise(() => getInfraDatabasesCollection(context.dbClient).preload())
   },
   head: () => ({ meta: [{ title: pageTitle("Databases") }] }),
   component: InfraDatabasesRoute,

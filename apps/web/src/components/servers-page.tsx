@@ -1,4 +1,5 @@
 import {
+  loadingInfraTableSource,
   useInfraTableSource,
   type InfraInstanceRow,
 } from "@/lib/infra-table-source"
@@ -15,7 +16,7 @@ import {
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query"
-import { Link } from "@tanstack/react-router"
+import { ClientOnly, Link } from "@tanstack/react-router"
 import { ensuringPromise, forkPromise } from "@/effect/promise"
 import {
   EllipsisVertical,
@@ -213,14 +214,27 @@ export const ServersPage = React.memo(function ServersPage({
           />
         }
       >
-        <FilteredServerTableBoundary
-          canProvision={canProvision}
-          deleteAccess={deleteAccess}
-          dialogStore={dialogStore}
-          onDelete={openDelete}
-          relayConfigured={relayConfigured}
-          searchStore={searchStore}
-        />
+        <ClientOnly
+          fallback={
+            <ServerDataTable
+              canProvision={canProvision}
+              deleteAccess={deleteAccess}
+              dialogStore={dialogStore}
+              onDelete={openDelete}
+              searchStore={searchStore}
+              source={loadingInfraTableSource}
+            />
+          }
+        >
+          <FilteredServerTableBoundary
+            canProvision={canProvision}
+            deleteAccess={deleteAccess}
+            dialogStore={dialogStore}
+            onDelete={openDelete}
+            relayConfigured={relayConfigured}
+            searchStore={searchStore}
+          />
+        </ClientOnly>
       </DataTableWorkspace>
       {canProvision ? <AddServerDialogHost store={dialogStore} /> : null}
       {deleteTarget ? (
@@ -244,7 +258,6 @@ const ServerSyncButton = React.memo(function ServerSyncButton({
   disabled: boolean
 }) {
   const dbClient = useDbClient()
-  const instances = getRelayInstancesCollection(dbClient)
   const [manualSyncing, setManualSyncing] = React.useState(false)
   const manualSyncingRef = React.useRef(false)
   const feedbackTimeoutRef = React.useRef<number>(undefined)
@@ -269,7 +282,10 @@ const ServerSyncButton = React.memo(function ServerSyncButton({
 
     forkPromise(() =>
       ensuringPromise(
-        () => instances.utils.refetch({ throwOnError: true }),
+        () =>
+          getRelayInstancesCollection(dbClient).utils.refetch({
+            throwOnError: true,
+          }),
         () => {
           if (!mountedRef.current) return
           const elapsed = performance.now() - startedAt
@@ -282,7 +298,7 @@ const ServerSyncButton = React.memo(function ServerSyncButton({
         }
       )
     )
-  }, [disabled, instances])
+  }, [disabled, dbClient])
 
   return (
     <Tooltip>

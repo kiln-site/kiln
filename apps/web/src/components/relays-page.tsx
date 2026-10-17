@@ -11,7 +11,7 @@ import {
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query"
-import { Link, useNavigate } from "@tanstack/react-router"
+import { ClientOnly, Link, useNavigate } from "@tanstack/react-router"
 import { Effect } from "effect"
 import {
   Check,
@@ -132,6 +132,7 @@ import {
   updateRelayProxy,
 } from "@/server/relays"
 import {
+  loadingInfraTableSource,
   useInfraTableSource,
   type InfraInstanceRow,
 } from "@/lib/infra-table-source"
@@ -207,11 +208,22 @@ export const RelaysPage = React.memo(function RelaysPage({
           <RelayToolbar searchStore={searchStore} onAdd={dialogStore.openAdd} />
         }
       >
-        <FilteredRelayTable
-          searchStore={searchStore}
-          onAdd={dialogStore.openAdd}
-          onEdit={dialogStore.openEdit}
-        />
+        <ClientOnly
+          fallback={
+            <RelayTable
+              searchStore={searchStore}
+              onAdd={dialogStore.openAdd}
+              onEdit={dialogStore.openEdit}
+              source={loadingInfraTableSource}
+            />
+          }
+        >
+          <FilteredRelayTable
+            searchStore={searchStore}
+            onAdd={dialogStore.openAdd}
+            onEdit={dialogStore.openEdit}
+          />
+        </ClientOnly>
       </DataTableWorkspace>
 
       <RelayDialogHost store={dialogStore} />
@@ -453,9 +465,10 @@ const RelaySyncButton = React.memo(function RelaySyncButton() {
   const manualSyncingRef = React.useRef(false)
   const feedbackTimeoutRef = React.useRef<number>(undefined)
   const mountedRef = React.useRef(true)
-  const { data: hasEnabledRelay } = useSuspenseQuery({
+  const { data: hasEnabledRelay } = useQuery({
     ...relaysQueryOptions(),
     select: selectHasEnabledRelay,
+    enabled: typeof window !== "undefined",
   })
   const syncRelays = useMutation({
     mutationFn: async () => {

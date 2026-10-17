@@ -6,13 +6,8 @@ import {
 } from "@/components/pending-resource-invitations"
 import * as React from "react"
 import { useDbClient, useLiveQuery } from "@tanstack/react-db"
-import {
-  useQuery,
-  useMutation,
-  useQueryClient,
-  useSuspenseQuery,
-} from "@tanstack/react-query"
-import { Link, useNavigate } from "@tanstack/react-router"
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
+import { ClientOnly, Link, useNavigate } from "@tanstack/react-router"
 import type { DatabaseEngine } from "@workspace/contracts"
 import {
   Database,
@@ -98,6 +93,7 @@ import {
 import { InstanceCard, InstanceStatus } from "@/components/instance-card"
 import { statusColumnWidth } from "@/components/instance-name-presentation"
 import { getInfraDatabasesCollection } from "@/lib/collections/infra-directories"
+import type { DataTableSource } from "@/lib/data-table-source"
 import type { InstanceFavorite } from "@/lib/instance-favorites"
 import type { AccessPermission } from "@/lib/permissions"
 import {
@@ -110,6 +106,7 @@ import {
   type DataTableSearchStore,
 } from "@/lib/data-table-search"
 import {
+  loadingInfraTableSource,
   useInfraTableSource,
   useInfraDetails,
   type InfraInstanceRow,
@@ -165,14 +162,17 @@ export const DatabasesPage = React.memo(function DatabasesPage({
 }: {
   searchStore: DataTableSearchStore
 }) {
-  const { data } = useSuspenseQuery(infraRelayOptionsQueryOptions("database"))
+  const { data } = useQuery({
+    ...infraRelayOptionsQueryOptions("database"),
+    enabled: typeof window !== "undefined",
+  })
   const [createOpen, setCreateOpen] = React.useState(false)
   const [dialog, setDialog] = React.useState<DatabaseDialog>(null)
   const openCreate = React.useCallback(() => setCreateOpen(true), [])
   const openDialog = React.useCallback((next: DatabaseDialog) => {
     setDialog(next)
   }, [])
-  const canCreate = data.relays.some((relay) => relay.canCreate)
+  const canCreate = data?.relays.some((relay) => relay.canCreate)
 
   return (
     <div className="mx-auto flex h-full min-h-[34rem] w-full max-w-[90rem] flex-col px-3 pb-3 sm:px-5 sm:pb-5">
@@ -185,15 +185,27 @@ export const DatabasesPage = React.memo(function DatabasesPage({
           />
         }
       >
-        <DatabaseTable
-          canCreate={canCreate}
-          searchStore={searchStore}
-          onCreate={openCreate}
-          onDialog={openDialog}
-        />
+        <ClientOnly
+          fallback={
+            <DatabaseTable
+              source={loadingInfraTableSource}
+              canCreate={canCreate === true}
+              searchStore={searchStore}
+              onCreate={openCreate}
+              onDialog={openDialog}
+            />
+          }
+        >
+          <DatabaseTableData
+            canCreate={canCreate === true}
+            searchStore={searchStore}
+            onCreate={openCreate}
+            onDialog={openDialog}
+          />
+        </ClientOnly>
       </DataTableWorkspace>
 
-      {createOpen ? (
+      {createOpen && data ? (
         <CreateDatabaseDialog
           open
           relays={data.relays}
@@ -239,15 +251,15 @@ const DatabaseToolbar = React.memo(function DatabaseToolbar({
   onCreate,
   searchStore,
 }: {
-  canCreate: boolean
+  canCreate: boolean | undefined
   onCreate: () => void
   searchStore: DataTableSearchStore
 }) {
   return (
     <DataTableToolbar
       actions={
-        canCreate ? (
-          <Button type="button" onClick={onCreate}>
+        canCreate !== false ? (
+          <Button type="button" disabled={!canCreate} onClick={onCreate}>
             <Plus /> Add Database
           </Button>
         ) : null
@@ -326,17 +338,16 @@ const DatabaseSyncButton = React.memo(function DatabaseSyncButton() {
   )
 })
 
-const DatabaseTable = React.memo(function DatabaseTable({
-  canCreate,
-  onCreate,
-  onDialog,
-  searchStore,
-}: {
+interface DatabaseTableProps {
   canCreate: boolean
   onCreate: () => void
   onDialog: (dialog: DatabaseDialog) => void
   searchStore: DataTableSearchStore
-}) {
+}
+
+const DatabaseTableData = React.memo(function DatabaseTableData(
+  props: DatabaseTableProps
+) {
   const dbClient = useDbClient()
   const collection = getInfraDatabasesCollection(dbClient)
   const result = useLiveQuery(collection)
@@ -358,6 +369,16 @@ const DatabaseTable = React.memo(function DatabaseTable({
     retry,
     details,
   })
+  return <DatabaseTable {...props} source={source} />
+})
+
+const DatabaseTable = React.memo(function DatabaseTable({
+  canCreate,
+  onCreate,
+  onDialog,
+  searchStore,
+  source,
+}: DatabaseTableProps & { source: DataTableSource<DatabaseDirectoryRow> }) {
   const [favoritesOnly] = useFavoritesOnly("databases")
   const visibleSource = useFavoritesOnlySource(
     source,

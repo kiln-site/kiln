@@ -5,7 +5,10 @@ import type {
   InstanceObservation,
 } from "@workspace/contracts"
 
-import { useLiveDataTableSource } from "@/lib/data-table-source"
+import {
+  useLiveDataTableSource,
+  type DataTableSource,
+} from "@/lib/data-table-source"
 import {
   instanceStateFromQuery,
   instanceStateQueryOptions,
@@ -21,6 +24,11 @@ export type InfraInstanceRow<T extends object, D = never> = T & {
 }
 
 const emptyRows: Array<never> = []
+export const loadingInfraTableSource: DataTableSource<never> = {
+  rows: emptyRows,
+  body: { kind: "loading" },
+  refreshing: false,
+}
 const combineStates = (
   queries: Array<UseQueryResult<InstanceObservation, Error>>
 ) => queries.map(instanceStateFromQuery)

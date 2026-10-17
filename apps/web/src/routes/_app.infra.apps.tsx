@@ -3,6 +3,7 @@ import { z } from "zod"
 
 import { AppsPage } from "@/components/apps-page"
 import { getInfraAppsCollection } from "@/lib/collections/infra-directories"
+import { forkPromise } from "@/effect/promise"
 import {
   DATA_TABLE_SEARCH_MAX_LENGTH,
   useDataTableSearchStore,
@@ -14,15 +15,15 @@ export const Route = createFileRoute("/_app/infra/apps")({
   validateSearch: z.object({
     search: z.string().max(DATA_TABLE_SEARCH_MAX_LENGTH).optional(),
   }),
-  ssr: false,
   beforeLoad: async ({ context }) => {
     await requireInfrastructureDestinationAccess(
       context.queryClient,
       "/infra/apps"
     )
   },
-  loader: async ({ context }) => {
-    await getInfraAppsCollection(context.dbClient).preload()
+  loader: ({ context }) => {
+    if (typeof window !== "undefined")
+      forkPromise(() => getInfraAppsCollection(context.dbClient).preload())
   },
   head: () => ({ meta: [{ title: pageTitle("Apps") }] }),
   component: InfraAppsRoute,

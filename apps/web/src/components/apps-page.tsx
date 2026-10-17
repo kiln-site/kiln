@@ -1,13 +1,8 @@
 import type { getAppDirectory } from "@/server/apps"
 import * as React from "react"
 import { useDbClient, useLiveQuery } from "@tanstack/react-db"
-import {
-  useQuery,
-  useMutation,
-  useQueryClient,
-  useSuspenseQuery,
-} from "@tanstack/react-query"
-import { Link, useNavigate } from "@tanstack/react-router"
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
+import { ClientOnly, Link, useNavigate } from "@tanstack/react-router"
 import {
   Boxes,
   Container,
@@ -91,6 +86,7 @@ import {
   type DataTableSearchStore,
 } from "@/lib/data-table-search"
 import {
+  loadingInfraTableSource,
   useInfraTableSource,
   useInfraDetails,
   type InfraInstanceRow,
@@ -99,6 +95,7 @@ import {
   infraRelayOptionsQueryOptions,
   refreshInfraTable,
 } from "@/lib/infra-directory"
+import type { DataTableSource } from "@/lib/data-table-source"
 import type { InstanceFavorite } from "@/lib/instance-favorites"
 import { appsQueryOptions, queryKeys } from "@/lib/query-options"
 import { createApp, deployApp, runAppAction } from "@/server/apps"
@@ -136,11 +133,14 @@ export const AppsPage = React.memo(function AppsPage({
 }: {
   searchStore: DataTableSearchStore
 }) {
-  const { data } = useSuspenseQuery(infraRelayOptionsQueryOptions("app"))
+  const { data } = useQuery({
+    ...infraRelayOptionsQueryOptions("app"),
+    enabled: typeof window !== "undefined",
+  })
   const [createOpen, setCreateOpen] = React.useState(false)
   const [deleting, setDeleting] = React.useState<App | null>(null)
   const openCreate = React.useCallback(() => setCreateOpen(true), [])
-  const canCreate = data.relays.some((relay) => relay.canCreate)
+  const canCreate = data?.relays.some((relay) => relay.canCreate)
 
   return (
     <div className="mx-auto flex h-full min-h-[34rem] w-full max-w-[90rem] flex-col px-3 pb-3 sm:px-5 sm:pb-5">
@@ -153,15 +153,27 @@ export const AppsPage = React.memo(function AppsPage({
           />
         }
       >
-        <AppTable
-          canCreate={canCreate}
-          searchStore={searchStore}
-          onCreate={openCreate}
-          onDelete={setDeleting}
-        />
+        <ClientOnly
+          fallback={
+            <AppTable
+              source={loadingInfraTableSource}
+              canCreate={canCreate === true}
+              searchStore={searchStore}
+              onCreate={openCreate}
+              onDelete={setDeleting}
+            />
+          }
+        >
+          <AppTableData
+            canCreate={canCreate === true}
+            searchStore={searchStore}
+            onCreate={openCreate}
+            onDelete={setDeleting}
+          />
+        </ClientOnly>
       </DataTableWorkspace>
 
-      {createOpen ? (
+      {createOpen && data ? (
         <CreateAppDialog relays={data.relays} onOpenChange={setCreateOpen} />
       ) : null}
       {deleting ? (
@@ -183,15 +195,15 @@ const AppToolbar = React.memo(function AppToolbar({
   onCreate,
   searchStore,
 }: {
-  canCreate: boolean
+  canCreate: boolean | undefined
   onCreate: () => void
   searchStore: DataTableSearchStore
 }) {
   return (
     <DataTableToolbar
       actions={
-        canCreate ? (
-          <Button type="button" onClick={onCreate}>
+        canCreate !== false ? (
+          <Button type="button" disabled={!canCreate} onClick={onCreate}>
             <Plus /> Add App
           </Button>
         ) : null
@@ -269,17 +281,14 @@ const AppSyncButton = React.memo(function AppSyncButton() {
   )
 })
 
-const AppTable = React.memo(function AppTable({
-  canCreate,
-  onCreate,
-  onDelete,
-  searchStore,
-}: {
+interface AppTableProps {
   canCreate: boolean
   onCreate: () => void
   onDelete: (app: App) => void
   searchStore: DataTableSearchStore
-}) {
+}
+
+const AppTableData = React.memo(function AppTableData(props: AppTableProps) {
   const dbClient = useDbClient()
   const collection = getInfraAppsCollection(dbClient)
   const result = useLiveQuery(collection)
@@ -301,6 +310,16 @@ const AppTable = React.memo(function AppTable({
     retry,
     details,
   })
+  return <AppTable {...props} source={source} />
+})
+
+const AppTable = React.memo(function AppTable({
+  canCreate,
+  onCreate,
+  onDelete,
+  searchStore,
+  source,
+}: AppTableProps & { source: DataTableSource<AppDirectoryRow> }) {
   const [favoritesOnly] = useFavoritesOnly("apps")
   const visibleSource = useFavoritesOnlySource(
     source,

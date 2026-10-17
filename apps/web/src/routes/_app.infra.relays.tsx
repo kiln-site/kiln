@@ -3,6 +3,7 @@ import { createFileRoute } from "@tanstack/react-router"
 
 import { RelaysPage } from "@/components/relays-page"
 import { getRelaysCollection } from "@/lib/collections/relays"
+import { forkPromise } from "@/effect/promise"
 import {
   DATA_TABLE_SEARCH_MAX_LENGTH,
   useDataTableSearchStore,
@@ -21,7 +22,10 @@ export const Route = createFileRoute("/_app/infra/relays")({
       "/infra/relays"
     )
   },
-  loader: ({ context }) => getRelaysCollection(context.dbClient).preload(),
+  loader: ({ context }) => {
+    if (typeof window !== "undefined")
+      forkPromise(() => getRelaysCollection(context.dbClient).preload())
+  },
   head: () => ({ meta: [{ title: pageTitle("Relays") }] }),
   component: InfraRelaysRoute,
 })
