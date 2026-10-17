@@ -1,23 +1,45 @@
 import { Effect, Schema } from "effect"
 
 import { ExternalServiceError } from "@/effect/errors"
+import { readThroughCache } from "@/lib/cache"
 
 const headers = {
   Accept: "application/json",
   "User-Agent": "kiln-hearth",
 }
 
+const VersionCatalogSchema = Schema.Struct({
+  versions: Schema.Array(Schema.String),
+})
+const decodeCachedVersionCatalog =
+  Schema.decodeUnknownSync(VersionCatalogSchema)
+
+// The Startup page lists versions on every open, and mcjarfiles answers in
+// 300-650 ms, so Hearth keeps the list as long as browsers do. A last-known
+// list covers an mcjarfiles outage.
 export const listMcJarVersionsEffect = Effect.fn("mcjarfiles.versions")(
   function* (type: string, variant: string) {
-    const versions = yield* requestJson(
+    const load = requestJson(
       `https://mcjarfiles.com/api/get-versions/${encodeURIComponent(type)}/${encodeURIComponent(variant)}`,
       Schema.Array(Schema.String)
+    ).pipe(
+      Effect.map((versions) => ({
+        versions: [
+          ...new Set(versions.map((version) => version.trim()).filter(Boolean)),
+        ],
+      }))
     )
-    return {
-      versions: [
-        ...new Set(versions.map((version) => version.trim()).filter(Boolean)),
-      ],
-    }
+    return yield* readThroughCache({
+      decode: decodeCachedVersionCatalog,
+      fallbackOnError: true,
+      load,
+      policy: {
+        fallbackTtlMs: 7 * 24 * 60 * 60_000,
+        key: `mcjarfiles:versions:${type}:${variant}`,
+        name: "Minecraft versions",
+        ttlMs: 30 * 60_000,
+      },
+    })
   }
 )
 
