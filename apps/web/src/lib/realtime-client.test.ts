@@ -14,7 +14,11 @@ import type {
 import { getRelayInstancesCollection } from "@/lib/collections/relay-instances"
 import { instanceStateQueryOptions } from "@/lib/instance-state"
 import { createAppClients, type AppRouterContext } from "@/lib/query-client"
-import { queryKeys, type RelayConnection } from "@/lib/query-options"
+import {
+  queryKeys,
+  type RelayConnection,
+  type RelayReachability,
+} from "@/lib/query-options"
 import { getInstanceInventory } from "@/server/instance-inventory"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 import type {
@@ -405,6 +409,26 @@ describe("realtime event application", () => {
       a.unsubscribe()
       b.unsubscribe()
     }
+  })
+
+  it("keeps a pushed Relay status over a reachability read that sampled before it", async () => {
+    const clients = fleet()
+    let resolveRead!: (relays: RelayReachability) => void
+    const read = clients.queryClient.fetchQuery({
+      queryKey: queryKeys.relay.reachability,
+      queryFn: () =>
+        new Promise<RelayReachability>((resolve) => {
+          resolveRead = resolve
+        }),
+    })
+
+    applyEvent(clients, relayStatus("relay-a", "unreachable"))
+    resolveRead([{ id: "relay-a", name: "Relay A", status: "connected" }])
+    await read
+
+    expect(
+      clients.queryClient.getQueryData(queryKeys.relay.reachability)
+    ).toEqual([{ id: "relay-a", name: "Relay A", status: "unreachable" }])
   })
 
   it("tells connection toasts when a Relay drops and returns", () => {

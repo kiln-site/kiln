@@ -127,15 +127,32 @@ function applyRealtimeEvent(input: ApplyRealtimeEventInput): void {
     return
   }
   if (event.type === "relay.status") {
-    queryClient.setQueryData<RelayReachability>(
-      queryKeys.relay.reachability,
-      (relays) =>
-        relays?.map((relay) =>
-          relay.id === event.relayId && relay.status !== event.status
-            ? { ...relay, status: event.status }
-            : relay
-        )
-    )
+    const patchReachability = () =>
+      queryClient.setQueryData<RelayReachability>(
+        queryKeys.relay.reachability,
+        (relays) =>
+          relays?.map((relay) =>
+            relay.id === event.relayId && relay.status !== event.status
+              ? { ...relay, status: event.status }
+              : relay
+          )
+      )
+    patchReachability()
+    // A read in flight may have sampled the Relay before this change, so
+    // apply it again as that read lands, before its observers are notified.
+    const cache = queryClient.getQueryCache()
+    const reading = cache.find({
+      queryKey: queryKeys.relay.reachability,
+      exact: true,
+    })
+    if (reading && reading.state.fetchStatus !== "idle") {
+      const unsubscribe = cache.subscribe((change) => {
+        if (change.query !== reading || change.type !== "updated") return
+        if (reading.state.fetchStatus !== "idle") return
+        unsubscribe()
+        if (change.action.type === "success") patchReachability()
+      })
+    }
     // Every observation on this Relay depends on its reachability.
     void recheckInstanceObservations(queryClient, {
       predicate: ({ queryKey }) =>
