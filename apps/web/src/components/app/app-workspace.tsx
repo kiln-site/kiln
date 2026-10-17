@@ -154,6 +154,10 @@ const AppWorkspaceHeader = React.memo(function AppWorkspaceHeader({
         <WorkspaceIdentity
           error={error}
           name={app.name}
+          statusConfirmed={
+            app.runtimeStatus !== undefined &&
+            app.runtimeStatus.phase !== "checking"
+          }
           title={
             <WorkspaceRouteTitle
               destinations={appDestinations}

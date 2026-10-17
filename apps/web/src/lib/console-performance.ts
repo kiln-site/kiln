@@ -2,6 +2,7 @@ import { Effect } from "effect"
 
 import type { BrowserSpan } from "@/lib/browser-telemetry"
 import { startBrowserSpan } from "@/lib/browser-telemetry"
+import { markPageMilestone } from "@/lib/page-timing"
 
 type ConsoleSpan = BrowserSpan
 
@@ -39,6 +40,7 @@ export function createConsoleLoadTiming(): ConsoleLoadTiming {
     if (!open || !ready || rowsPending) return
     open = false
     openSpan?.end()
+    markPageMilestone("content")
   }
   const finishRows = (
     result: "cached" | "empty" | "stream",

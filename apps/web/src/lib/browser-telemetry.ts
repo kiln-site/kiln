@@ -127,6 +127,9 @@ export function startBrowserSpan(
   options?: {
     readonly attributes?: Record<string, unknown>
     readonly parent?: BrowserSpan | undefined
+    // A `performance.now()` time the span began at, for work that started
+    // before anything could start a span, such as a navigation.
+    readonly startedAt?: number
   }
 ): BrowserSpan {
   const tracer = telemetry?.tracer
@@ -137,7 +140,7 @@ export function startBrowserSpan(
     parent: parent ? Option.some(parent) : Option.none(),
     annotations: Context.empty(),
     links: [],
-    startTime: nowNanos(),
+    startTime: nowNanos(options?.startedAt),
     kind: "internal",
     root: parent === undefined,
     sampled: true,
@@ -173,6 +176,6 @@ export async function traceBrowser<TResult>(
   )
 }
 
-function nowNanos(): bigint {
-  return BigInt(Math.round((performance.timeOrigin + performance.now()) * 1e6))
+function nowNanos(at = performance.now()): bigint {
+  return BigInt(Math.round((performance.timeOrigin + at) * 1e6))
 }

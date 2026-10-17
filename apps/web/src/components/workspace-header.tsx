@@ -9,6 +9,7 @@ import {
 } from "@workspace/ui/components/tooltip"
 
 import { ToolbarSidebarTrigger } from "@/components/global-page-toolbar"
+import { usePageMilestone } from "@/lib/page-timing"
 
 // Shared header for instance workspaces (servers, databases, and later
 // kinds). Each kind supplies its own identity line, center, and actions.
@@ -40,18 +41,24 @@ export function WorkspaceIdentity({
   children,
   error,
   name,
+  statusConfirmed,
   title,
 }: {
   // The meta line under the name; separate items with WorkspaceMetaSeparator.
   children?: React.ReactNode
   error?: string | null
   name: string
+  // Whether the instance's live status is known, for page timing.
+  statusConfirmed?: boolean
   title: React.ReactNode
 }) {
+  usePageMilestone("identity", true)
+  usePageMilestone("status", statusConfirmed === true)
   return (
     <div className="@container min-w-0 flex-1">
       <h1
         className="flex min-w-0 items-baseline gap-1.5 font-heading tracking-[-0.03em]"
+        data-page-identity=""
         title={name}
       >
         <span className="min-w-0 truncate text-lg font-semibold text-foreground sm:text-xl">
