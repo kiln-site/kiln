@@ -97,11 +97,7 @@ import {
   resolveRelayRoute,
   type RelayDirectoryEntry,
 } from "@/lib/relay-route"
-import {
-  findFirstCanonicalRelayInstance,
-  relayInstanceRouteIdentifier,
-  resolveCanonicalRelayInstance,
-} from "@/lib/relay-selectors"
+import { relayInstanceRouteIdentifier } from "@/lib/relay-selectors"
 import type { SidebarInstance } from "@/lib/relay-selectors"
 import { globalSectionFromRouteId } from "@/lib/route-sections"
 import type { GlobalSection } from "@/lib/route-sections"
@@ -127,6 +123,7 @@ import {
   persistSelectedInstanceRouteId,
   readSelectedInstanceRouteId,
 } from "@/lib/ui-preference-cookies"
+import { useSidebarServerNavigation } from "@/lib/use-server-navigation"
 import { warmFileWorkspaceModule } from "@/lib/workspace-module-preloads"
 
 export type InstanceTab = ServerDestinationId
@@ -137,8 +134,6 @@ interface AppSidebarViewProps {
   initialSelectedInstanceRouteId: string | null
   relayConfigured: boolean
 }
-
-const emptyInstances: Array<SidebarInstance> = []
 
 export const AppSidebar = React.memo(function AppSidebar({
   initialSelectedInstanceRouteId,
@@ -200,6 +195,7 @@ const AppSidebarView = React.memo(function AppSidebarView({
         <SidebarContent>
           <InfrastructureNavigation
             capabilities={capabilities}
+            initialSelectedInstanceRouteId={initialSelectedInstanceRouteId}
             relayConfigured={relayConfigured}
           />
 
@@ -231,9 +227,11 @@ function HeaderNotificationsBell() {
 
 function InfrastructureNavigation({
   capabilities,
+  initialSelectedInstanceRouteId,
   relayConfigured,
 }: {
   capabilities: NavigationAccessCapabilities
+  initialSelectedInstanceRouteId: string | null
   relayConfigured: boolean
 }) {
   const destinations = accessibleInfrastructureDestinations(capabilities)
@@ -256,7 +254,10 @@ function InfrastructureNavigation({
       <SidebarGroupContent>
         <SidebarMenu>
           {showServers ? (
-            <ServersNavigationItem relayConfigured={relayConfigured} />
+            <ServersNavigationItem
+              initialSelectedInstanceRouteId={initialSelectedInstanceRouteId}
+              relayConfigured={relayConfigured}
+            />
           ) : null}
           {showDatabases ? (
             <DatabasesNavigationItem relayConfigured={relayConfigured} />
@@ -345,8 +346,10 @@ const AppCount = React.memo(function AppCount({
 })
 
 function ServersNavigationItem({
+  initialSelectedInstanceRouteId,
   relayConfigured,
 }: {
+  initialSelectedInstanceRouteId: string | null
   relayConfigured: boolean
 }) {
   return (
@@ -363,7 +366,10 @@ function ServersNavigationItem({
         </Link>
       </SidebarMenuButton>
       <SidebarMenuBadge className="text-sidebar-muted-foreground">
-        <InfrastructureInstanceCount relayConfigured={relayConfigured} />
+        <InfrastructureInstanceCount
+          initialSelectedInstanceRouteId={initialSelectedInstanceRouteId}
+          relayConfigured={relayConfigured}
+        />
       </SidebarMenuBadge>
     </SidebarMenuItem>
   )
@@ -371,17 +377,18 @@ function ServersNavigationItem({
 
 const InfrastructureInstanceCount = React.memo(
   function InfrastructureInstanceCount({
+    initialSelectedInstanceRouteId,
     relayConfigured,
   }: {
+    initialSelectedInstanceRouteId: string | null
     relayConfigured: boolean
   }) {
-    const { data: instanceCount = 0 } = useQuery({
-      ...serverDirectoryQueryOptions(),
-      enabled: relayConfigured,
-      select: countDirectoryRows,
-    })
+    const { data } = useSidebarServerNavigation(
+      initialSelectedInstanceRouteId,
+      relayConfigured
+    )
 
-    return instanceCount
+    return data?.serverCount ?? 0
   }
 )
 
@@ -796,36 +803,11 @@ function SidebarServerNavigation({
   initialSelectedInstanceRouteId: string | null
   relayConfigured: boolean
 }) {
-  const { data: instances = emptyInstances, isPending } = useQuery({
-    ...serverDirectoryQueryOptions(),
-    enabled: relayConfigured,
-  })
-  const serverId = useRouterState({
-    select: (state) =>
-      (state.matches.at(-1)?.params as { serverId?: string } | undefined)
-        ?.serverId,
-  })
-  const selectedInstanceRouteId = React.useMemo(
-    () =>
-      serverId ??
-      readSelectedInstanceRouteId() ??
-      initialSelectedInstanceRouteId,
-    [initialSelectedInstanceRouteId, serverId]
-  )
-  const preferredResolution = resolveCanonicalRelayInstance(
-    instances,
-    selectedInstanceRouteId
-  )
-  const instance =
-    preferredResolution.status === "found"
-      ? preferredResolution.instance
-      : serverId || preferredResolution.status === "ambiguous"
-        ? null
-        : (findFirstCanonicalRelayInstance(instances) ?? null)
-  const instanceRouteId = instance
-    ? (relayInstanceRouteIdentifier(instances, instance) ?? null)
-    : null
-  if (instances.length === 0) return isPending ? null : emptyFallback
+  const { data, isPending, selectedRouteId, serverId } =
+    useSidebarServerNavigation(initialSelectedInstanceRouteId, relayConfigured)
+  if (!data || data.serverCount === 0)
+    return isPending ? null : emptyFallback
+  const { instance, routeId: instanceRouteId } = data
 
   return (
     <>
@@ -837,12 +819,10 @@ function SidebarServerNavigation({
         capabilities={capabilities}
         instance={instance}
         instanceRouteId={instanceRouteId}
-        instances={instances}
+        serverCount={data.serverCount}
         unresolvedServerId={
           serverId ??
-          (preferredResolution.status === "ambiguous"
-            ? (selectedInstanceRouteId ?? undefined)
-            : undefined)
+          (data.ambiguous ? (selectedRouteId ?? undefined) : undefined)
         }
       />
     </>
@@ -865,13 +845,13 @@ const InstanceNavigation = React.memo(function InstanceNavigation({
   capabilities,
   instance,
   instanceRouteId,
-  instances,
+  serverCount,
   unresolvedServerId,
 }: {
   capabilities: NavigationAccessCapabilities
   instance: SidebarInstance | null
   instanceRouteId: string | null
-  instances: Array<SidebarInstance>
+  serverCount: number
   unresolvedServerId: string | undefined
 }) {
   const navigate = useNavigate()
@@ -928,7 +908,7 @@ const InstanceNavigation = React.memo(function InstanceNavigation({
             selection={
               instance
                 ? { kind: "server", instance }
-                : { kind: "none", serverCount: instances.length }
+                : { kind: "none", serverCount }
             }
           />
           <InstanceTabNavigation
@@ -972,6 +952,11 @@ const InstanceSelector = React.memo(function InstanceSelector({
     setOpen(nextOpen)
   }, [])
   const closePicker = React.useCallback(() => setOpen(false), [])
+  // The picker lists every instance; fetch the lists as the pointer arrives
+  // so it opens filled.
+  const warmPicker = React.useCallback(() => {
+    void queryClient.prefetchQuery(serverDirectoryQueryOptions())
+  }, [queryClient])
   const selectInstance = React.useCallback(
     (item: InstancePickerItem) => {
       handleOpenChange(false)
@@ -1111,6 +1096,8 @@ const InstanceSelector = React.memo(function InstanceSelector({
             aria-label={
               selection.kind === "none" ? "Choose a game server" : undefined
             }
+            onFocus={warmPicker}
+            onPointerEnter={warmPicker}
             className="mb-1.5 h-auto border border-sidebar-border/75 bg-background/35 px-2 py-2 group-data-[collapsible=icon]:h-[32px]! group-data-[collapsible=icon]:overflow-visible group-data-[collapsible=icon]:bg-black/10 hover:border-sidebar-border hover:bg-sidebar-accent group-data-[collapsible=icon]:hover:bg-black/15 data-[state=open]:border-sidebar-border data-[state=open]:bg-sidebar-accent dark:group-data-[collapsible=icon]:bg-black/25 dark:group-data-[collapsible=icon]:hover:bg-black/35"
           >
             {instance ? (
@@ -1325,10 +1312,6 @@ function sidebarPickerKey(
   id: string
 ) {
   return `${kind}:${relayId}:${id}`
-}
-
-function countDirectoryRows(rows: ReadonlyArray<unknown>): number {
-  return rows.length
 }
 
 function selectSidebarServerPickerItems(

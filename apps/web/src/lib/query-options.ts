@@ -86,7 +86,11 @@ import {
 import { getScheduleOptions, getSchedules } from "@/server/schedules"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 import { readRelayReachability } from "@/lib/relay-reachability"
-import { getInfraServerDirectory } from "@/server/infra-directory"
+import type { ServerNavigationInput } from "@/lib/server-navigation"
+import {
+  getInfraServerDirectory,
+  getServerNavigation,
+} from "@/server/infra-directory"
 import {
   getAppConfig,
   getAppDirectory,
@@ -148,7 +152,10 @@ export const queryKeys = {
       ["domains", "instances", relayId, instanceId] as const,
     settings: ["domains", "settings"] as const,
   },
-  servers: { directory: ["servers", "directory"] as const },
+  servers: {
+    directory: ["servers", "directory"] as const,
+    navigation: ["servers", "navigation"] as const,
+  },
   apps: {
     all: ["apps"] as const,
     config: (relayId: string, appId: string) =>
@@ -585,6 +592,19 @@ export function serverDirectoryQueryOptions() {
   return queryOptions({
     queryKey: queryKeys.servers.directory,
     queryFn: ({ signal }) => getInfraServerDirectory({ signal }),
+    refetchOnWindowFocus: false,
+    staleTime: 30_000,
+  })
+}
+
+export function serverNavigationQueryOptions(input: ServerNavigationInput) {
+  return queryOptions({
+    queryKey: [
+      ...queryKeys.servers.navigation,
+      "serverId" in input ? input.serverId : null,
+      "selectedRouteId" in input ? input.selectedRouteId : null,
+    ],
+    queryFn: ({ signal }) => getServerNavigation({ data: input, signal }),
     refetchOnWindowFocus: false,
     staleTime: 30_000,
   })

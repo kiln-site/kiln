@@ -35,6 +35,7 @@ const hearthRealtimeQueryScopes = {
   access: [
     exact(queryKeys.relay.reachability),
     exact(queryKeys.servers.directory),
+    prefix(queryKeys.servers.navigation),
     exact(queryKeys.apps.directory),
     exact(queryKeys.databases.directory),
     prefix(["infra-directory"]),
@@ -62,11 +63,16 @@ const hearthRealtimeQueryScopes = {
     exact(queryKeys.schedules.options),
   ],
   databases: [prefix(["instance-inventory", "database"])],
-  domains: [exact(queryKeys.servers.directory), prefix(["domains"])],
+  domains: [
+    exact(queryKeys.servers.directory),
+    prefix(queryKeys.servers.navigation),
+    prefix(["domains"]),
+  ],
   favorites: [exact(queryKeys.instanceFavorites)],
   "file-activity": [prefix(["file-activity"])],
   "instance-directory": [
     exact(queryKeys.servers.directory),
+    prefix(queryKeys.servers.navigation),
     exact(queryKeys.schedules.options),
   ],
   "instance-web-routes": [prefix(["web-routes"])],
@@ -85,6 +91,7 @@ const hearthRealtimeQueryScopes = {
     exact(queryKeys.relays),
     exact(queryKeys.databases.directory),
     exact(queryKeys.servers.directory),
+    prefix(queryKeys.servers.navigation),
     exact(queryKeys.apps.directory),
     exact(queryKeys.domains.settings),
     exact(queryKeys.schedules.all),
@@ -110,6 +117,7 @@ function queryScopes(
     return [
       exact(queryKeys.relay.reachability),
       exact(queryKeys.servers.directory),
+      prefix(queryKeys.servers.navigation),
       exact(queryKeys.apps.directory),
       exact(queryKeys.databases.directory),
       prefix(["infra-directory"]),
@@ -135,6 +143,7 @@ function queryScopes(
   if (topic === "domains" && scope?.instanceId) {
     return [
       exact(queryKeys.servers.directory),
+      prefix(queryKeys.servers.navigation),
       exact(queryKeys.domains.instance(scope.relayId, scope.instanceId)),
     ]
   }

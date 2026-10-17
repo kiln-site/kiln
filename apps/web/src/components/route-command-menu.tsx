@@ -1,6 +1,5 @@
 import * as React from "react"
-import { useQuery } from "@tanstack/react-query"
-import { useNavigate, useRouterState } from "@tanstack/react-router"
+import { useNavigate } from "@tanstack/react-router"
 import {
   Command as CommandIcon,
   ListTodo,
@@ -27,14 +26,8 @@ import { Kbd } from "@workspace/ui/components/kbd"
 
 import { BackupIcon } from "@/components/backup-icon"
 import { filterRoutes } from "@/components/route-command-filter"
-import { serverDirectoryQueryOptions } from "@/lib/query-options"
-import {
-  findFirstCanonicalRelayInstance,
-  relayInstanceRouteIdentifier,
-  resolveCanonicalRelayInstance,
-} from "@/lib/relay-selectors"
+import { useSidebarServerNavigation } from "@/lib/use-server-navigation"
 import type { SidebarInstance } from "@/lib/relay-selectors"
-import { readSelectedInstanceRouteId } from "@/lib/ui-preference-cookies"
 import {
   accessibleDestinationsForServer,
   accessibleInfrastructureDestinations,
@@ -77,8 +70,6 @@ const accessRoute: NavigationDestination = {
   to: "/access",
 }
 
-const emptyInstances: Array<SidebarInstance> = []
-
 function serverRoutes(
   instance: SidebarInstance,
   routeId: string,
@@ -118,30 +109,12 @@ export function RouteCommandMenuProvider({
 }: RouteCommandMenuProviderProps) {
   const navigate = useNavigate()
   const [open, setOpen] = React.useState(false)
-  const { data: instances = emptyInstances } = useQuery({
-    ...serverDirectoryQueryOptions(),
-    enabled: relayConfigured,
-  })
-  const serverId = useRouterState({
-    select: (state) =>
-      (state.matches.at(-1)?.params as { serverId?: string } | undefined)
-        ?.serverId,
-  })
-  const selectedInstanceRouteId =
-    serverId ?? readSelectedInstanceRouteId() ?? initialSelectedInstanceRouteId
-  const preferredResolution = resolveCanonicalRelayInstance(
-    instances,
-    selectedInstanceRouteId
+  const { data: navigation } = useSidebarServerNavigation(
+    initialSelectedInstanceRouteId,
+    relayConfigured
   )
-  const selectedInstance =
-    preferredResolution.status === "found"
-      ? preferredResolution.instance
-      : serverId || preferredResolution.status === "ambiguous"
-        ? null
-        : (findFirstCanonicalRelayInstance(instances) ?? null)
-  const selectedInstanceRouteIdentifier = selectedInstance
-    ? (relayInstanceRouteIdentifier(instances, selectedInstance) ?? null)
-    : null
+  const selectedInstance = navigation?.instance ?? null
+  const selectedInstanceRouteIdentifier = navigation?.routeId ?? null
   const selectedServerRoutes = React.useMemo(
     () =>
       selectedInstance && selectedInstanceRouteIdentifier

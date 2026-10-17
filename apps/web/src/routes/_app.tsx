@@ -9,7 +9,7 @@ import {
   instanceFavoritesQueryOptions,
   managedDatabaseDirectoryQueryOptions,
   relaysQueryOptions,
-  serverDirectoryQueryOptions,
+  serverNavigationQueryOptions,
   uiPreferencesQueryOptions,
 } from "@/lib/query-options"
 
@@ -36,11 +36,20 @@ export const Route = createFileRoute("/_app")({
   },
   // The sidebar and command menu list and count what the user can reach
   // from Hearth's own records. Load them with the frame so it renders
-  // complete in the first HTML, without asking any Relay.
+  // complete in the first HTML, without asking any Relay. Game servers can
+  // number in the thousands, so the frame loads only the one it opens and
+  // their count; the picker loads the rest when opened.
   loader: async ({ context }) => {
     await Promise.all([
-      context.queryClient.ensureQueryData(uiPreferencesQueryOptions()),
-      context.queryClient.ensureQueryData(serverDirectoryQueryOptions()),
+      context.queryClient
+        .ensureQueryData(uiPreferencesQueryOptions())
+        .then((preferences) =>
+          context.queryClient.ensureQueryData(
+            serverNavigationQueryOptions({
+              selectedRouteId: preferences.selectedInstanceRouteId,
+            })
+          )
+        ),
       context.queryClient.ensureQueryData(appDirectoryQueryOptions()),
       context.queryClient.ensureQueryData(
         managedDatabaseDirectoryQueryOptions()
