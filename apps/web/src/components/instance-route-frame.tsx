@@ -1,21 +1,17 @@
 import * as React from "react"
-import {
-  useQuery,
-  useQueryClient,
-  useSuspenseQuery,
-} from "@tanstack/react-query"
+import { useQueryClient, useSuspenseQuery } from "@tanstack/react-query"
 
 import { InstanceWorkspace } from "@/components/instance-workspace"
 import { ensuringPromise, recoverPromise } from "@/effect/promise"
 import { canAccessInstancePermission } from "@/lib/navigation-destinations"
 import {
   accessCapabilitiesQueryOptions,
-  relaySnapshotQueryOptions,
   uiPreferencesQueryOptions,
 } from "@/lib/query-options"
 import type { UiPreferences } from "@/lib/query-options"
 import { applyProvisioningInstance } from "@/lib/realtime-client"
 import { selectInstanceWorkspaceInstance } from "@/lib/relay-selectors"
+import { useServerSnapshot } from "@/lib/use-server-workspace"
 import { getFreshRelayInstance } from "@/server/relay"
 
 const initialProvisioningReconciliationDelayMs = 1_000
@@ -39,10 +35,7 @@ export const InstanceRouteFrame = React.memo(function InstanceRouteFrame({
     () => selectInstanceWorkspaceInstance(serverId),
     [serverId]
   )
-  const { data: instance } = useQuery({
-    ...relaySnapshotQueryOptions(),
-    select: selectInstance,
-  })
+  const { data: instance } = useServerSnapshot(selectInstance)
   const { data: capabilities } = useSuspenseQuery(
     accessCapabilitiesQueryOptions()
   )

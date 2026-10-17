@@ -5,7 +5,10 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 vi.mock("@/server/instance-inventory", () => ({
   getInstanceInventory: vi.fn(),
 }))
-const relayServer = vi.hoisted(() => ({ getRelayReachability: vi.fn() }))
+const relayServer = vi.hoisted(() => ({
+  getRelayReachability: vi.fn(),
+  getServerWorkspace: vi.fn(),
+}))
 vi.mock("@/server/relay", () => relayServer)
 
 import { QueryObserver } from "@tanstack/react-query"
@@ -39,6 +42,10 @@ import {
   recheckPushedState,
   resetRealtimeEpoch,
 } from "@/lib/realtime-client"
+import {
+  serverWorkspaceQueryOptions,
+  type ServerWorkspace,
+} from "@/lib/server-workspace"
 
 const epoch = "00000000-0000-4000-8000-000000000001"
 const defaultBackupRunsKey = queryKeys.backups.runs({
@@ -991,5 +998,119 @@ describe("mutation responses", () => {
         queryKeys.relay.connection
       )?.snapshot.instances
     ).toEqual([beta])
+  })
+})
+
+describe("game server pages", () => {
+  const relayAState = {
+    browserOrigin: "https://relay-a.example.test",
+    consoleTransport: "direct",
+    id: "relay-a",
+    name: "Relay A",
+    status: "connected",
+    updating: false,
+  } as const
+
+  function foundPage(instance: FleetInstance): ServerWorkspace {
+    return {
+      relay: relayAState,
+      routeIdentifier: instance.shortId,
+      snapshot: { instances: [instance], nodes: [node] },
+      status: "found",
+    } as ServerWorkspace
+  }
+
+  // A page that has loaded its server, as its route leaves it.
+  function openPage(clients: ReturnType<typeof fleet>) {
+    const { queryKey } = serverWorkspaceQueryOptions(alpha.shortId)
+    clients.queryClient.setQueryData(queryKey, foundPage(alpha))
+    return () => clients.queryClient.getQueryData<ServerWorkspace>(queryKey)
+  }
+
+  it("keeps a page on its own server as pushed changes arrive", () => {
+    const clients = fleet()
+    const page = openPage(clients)
+
+    applyEvent(clients, instancesDelta([{ ...alpha, name: "Alpha 2" }, beta]))
+
+    expect(page()).toEqual(foundPage({ ...alpha, name: "Alpha 2" }))
+  })
+
+  it("learns that its server was deleted", () => {
+    const clients = fleet()
+    const page = openPage(clients)
+
+    applyEvent(clients, instancesDelta([], [alpha]))
+
+    expect(page()).toEqual({ status: "not-found" })
+  })
+
+  it("follows its Relay's reachability", () => {
+    const clients = fleet()
+    const page = openPage(clients)
+
+    applyEvent(clients, relayStatus("relay-a", "unreachable"))
+
+    expect(page()).toMatchObject({
+      relay: { status: "unreachable" },
+      snapshot: { instances: [{ relayStatus: "unreachable" }] },
+    })
+  })
+
+  it("writes a mutation response to the page", () => {
+    const clients = fleet()
+    const page = openPage(clients)
+
+    applyUpdatedInstance(clients.queryClient, { ...alpha, name: "Renamed" })
+
+    expect(page()).toMatchObject({
+      snapshot: { instances: [{ id: alpha.id, name: "Renamed" }] },
+    })
+  })
+
+  it("reads a page again when a change is pushed during its read", async () => {
+    const clients = fleet()
+    const reads: Array<(workspace: ServerWorkspace) => void> = []
+    relayServer.getServerWorkspace.mockImplementation(
+      () =>
+        new Promise<ServerWorkspace>((resolve) => {
+          reads.push(resolve)
+        })
+    )
+    // The route waits on this read, so it must settle, not be cancelled.
+    const read = clients.queryClient.fetchQuery(
+      serverWorkspaceQueryOptions(alpha.shortId)
+    )
+    await vi.waitFor(() => expect(reads).toHaveLength(1))
+
+    applyEvent(clients, instancesDelta([{ ...alpha, name: "Alpha 2" }]))
+    // Hearth answered from before the push.
+    reads[0]!(foundPage(alpha))
+    await vi.waitFor(() => expect(reads).toHaveLength(2))
+    reads[1]!(foundPage({ ...alpha, name: "Alpha 2" }))
+
+    await expect(read).resolves.toEqual(
+      foundPage({ ...alpha, name: "Alpha 2" })
+    )
+  })
+
+  it("rereads a mounted page after a gap in pushed changes", async () => {
+    const clients = fleet()
+    const page = openPage(clients)
+    const observer = new QueryObserver(
+      clients.queryClient,
+      serverWorkspaceQueryOptions(alpha.shortId)
+    )
+    const unsubscribe = observer.subscribe(() => undefined)
+    relayServer.getServerWorkspace.mockResolvedValue(
+      foundPage({ ...alpha, name: "Missed rename" })
+    )
+
+    recheckPushedState(clients.queryClient)
+
+    await vi.waitFor(() =>
+      expect(page()).toEqual(foundPage({ ...alpha, name: "Missed rename" }))
+    )
+    unsubscribe()
   })
 })

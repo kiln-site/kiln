@@ -83,6 +83,10 @@ import {
 } from "@/lib/query-options"
 import { instanceInventoryScope } from "@/lib/instance-inventory"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
+import {
+  invalidateRelaySnapshots,
+  updateRelaySnapshots,
+} from "@/lib/server-workspace"
 import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
 import {
   performRelayAction,
@@ -162,15 +166,12 @@ function WebRoutesNetworkPage({
         },
       }),
     onSuccess: async (updated) => {
-      queryClient.setQueryData<RelayFleetSnapshot>(
-        queryKeys.relay.snapshot,
-        (snapshot) => replaceRelaySnapshotInstance(snapshot, updated)
+      updateRelaySnapshots(queryClient, (snapshot) =>
+        replaceRelaySnapshotInstance(snapshot, updated)
       )
       await Promise.all([
         queryClient.invalidateQueries({ queryKey }),
-        queryClient.invalidateQueries({
-          queryKey: queryKeys.relay.snapshot,
-        }),
+        invalidateRelaySnapshots(queryClient),
       ])
     },
   })
@@ -326,9 +327,8 @@ function SavedDatabaseConnections() {
         },
       }),
     onSuccess: (updated) => {
-      queryClient.setQueryData<RelayFleetSnapshot>(
-        queryKeys.relay.snapshot,
-        (snapshot) => replaceRelaySnapshotInstance(snapshot, updated)
+      updateRelaySnapshots(queryClient, (snapshot) =>
+        replaceRelaySnapshotInstance(snapshot, updated)
       )
       forkPromise(() =>
         queryClient.invalidateQueries({
@@ -532,9 +532,8 @@ const ConfiguredRoutesSection = React.memo(function ConfiguredRoutesSection({
         },
       }),
     onSuccess: async (updated) => {
-      queryClient.setQueryData<RelayFleetSnapshot>(
-        queryKeys.relay.snapshot,
-        (snapshot) => replaceRelaySnapshotInstance(snapshot, updated)
+      updateRelaySnapshots(queryClient, (snapshot) =>
+        replaceRelaySnapshotInstance(snapshot, updated)
       )
       setDialog(null)
       clearEditGamePortIntent()
@@ -542,9 +541,7 @@ const ConfiguredRoutesSection = React.memo(function ConfiguredRoutesSection({
         queryClient.invalidateQueries({
           queryKey: queryKeys.relay.connection,
         }),
-        queryClient.invalidateQueries({
-          queryKey: queryKeys.relay.snapshot,
-        }),
+        invalidateRelaySnapshots(queryClient),
       ])
       showToast({
         description: updated.pendingPrimaryPort

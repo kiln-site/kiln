@@ -22,19 +22,15 @@ import { WorkspaceFrame } from "@/components/workspace-frame"
 import {
   accessCapabilitiesQueryOptions,
   relayConnectionQueryOptions,
-  relaySnapshotQueryOptions,
 } from "@/lib/query-options"
+import { selectRelayConnectionSummary } from "@/lib/relay-selectors"
 import {
-  findRelayInstance,
-  selectRelayConfigured,
-  selectRelayConnectionSummary,
-  selectSidebarInstances,
-} from "@/lib/relay-selectors"
-import type { SidebarInstance } from "@/lib/relay-selectors"
+  serverWorkspaceQueryOptions,
+  type ServerWorkspace,
+} from "@/lib/server-workspace"
+import { useRouteServerId } from "@/lib/use-server-workspace"
 import { globalSectionFromRouteId } from "@/lib/route-sections"
 import type { GlobalSection } from "@/lib/route-sections"
-
-const emptyInstances: Array<SidebarInstance> = []
 
 export function AppRouteContent({ children }: { children: React.ReactNode }) {
   return <AppRouteViewport>{children}</AppRouteViewport>
@@ -127,34 +123,34 @@ const InstanceRouteViewport = React.memo(function InstanceRouteViewport({
 })
 
 function InstanceRouteBoundary({ children }: { children: React.ReactNode }) {
-  const queryClient = useQueryClient()
-  const { data: configured } = useSuspenseQuery({
-    ...relayConnectionQueryOptions(queryClient),
-    select: selectRelayConfigured,
-  })
-  const snapshotQuery = useQuery({
-    ...relaySnapshotQueryOptions(),
-    enabled: configured,
-    select: selectSidebarInstances,
-  })
-  const serverId = useRouterState({
-    select: (state) =>
-      (state.matches.at(-1)?.params as { serverId?: string } | undefined)
-        ?.serverId,
-  })
+  const serverId = useRouteServerId()
+  if (!serverId || serverId === "unavailable") return <RouteEmptyState />
+  return (
+    <ServerRouteBoundary serverId={serverId}>{children}</ServerRouteBoundary>
+  )
+}
 
-  if (!configured) return <RouteEmptyState />
-  if (!snapshotQuery.data)
+// The route loads the server's own workspace before it renders; the fleet is
+// read only to explain an empty state.
+function ServerRouteBoundary({
+  children,
+  serverId,
+}: {
+  children: React.ReactNode
+  serverId: string
+}) {
+  const { data: found } = useQuery({
+    ...serverWorkspaceQueryOptions(serverId),
+    select: selectServerFound,
+  })
+  if (found === undefined)
     return <div className="min-h-0 flex-1 bg-background" />
-  if (
-    serverId &&
-    findRelayInstance(snapshotQuery.data ?? emptyInstances, serverId)
-  ) {
-    return (
-      <InstanceRouteFrame serverId={serverId}>{children}</InstanceRouteFrame>
-    )
-  }
-  return <RouteEmptyState />
+  if (!found) return <RouteEmptyState />
+  return <InstanceRouteFrame serverId={serverId}>{children}</InstanceRouteFrame>
+}
+
+function selectServerFound(workspace: ServerWorkspace) {
+  return workspace.status === "found"
 }
 
 function RouteEmptyState() {

@@ -202,6 +202,9 @@ export const queryKeys = {
     recipe: (relayId: string, instanceId: string) =>
       ["relay", relayId, "instances", instanceId, "recipe"] as const,
     snapshot: ["relay", "snapshot"] as const,
+    // One game server's page: its server and node, and its Relay.
+    servers: ["relay", "server"] as const,
+    server: (serverId: string) => ["relay", "server", serverId] as const,
     instances: ["relay", "instances"] as const,
     nodeReadings: ["relay", "node-readings"] as const,
     resources: (relayId: string) => ["relay", "resources", relayId] as const,

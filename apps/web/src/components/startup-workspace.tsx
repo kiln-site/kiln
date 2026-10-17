@@ -62,10 +62,12 @@ import {
 import {
   brickCatalogQueryOptions,
   instanceStartupQueryOptions,
-  queryKeys,
   replaceRelaySnapshotInstance,
 } from "@/lib/query-options"
-import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
+import {
+  invalidateRelaySnapshots,
+  updateRelaySnapshots,
+} from "@/lib/server-workspace"
 import { updateInstanceStartup } from "@/server/bricks"
 
 const emptyBricks: Array<Brick> = []
@@ -218,24 +220,21 @@ const StartupForm = React.memo(function StartupForm({
   const saveMutation = useMutation({
     mutationFn: updateInstanceStartup,
     onSuccess: async (updated) => {
-      queryClient.setQueryData<RelayFleetSnapshot>(
-        queryKeys.relay.snapshot,
-        (current) => {
-          const previous = current?.instances.find(
-            (item) => item.id === updated.id && item.relayId === relayId
-          )
-          return replaceRelaySnapshotInstance(current, {
-            ...updated,
-            name: previous?.name ?? updated.name,
-            relayId,
-          })
-        }
-      )
+      updateRelaySnapshots(queryClient, (current) => {
+        const previous = current?.instances.find(
+          (item) => item.id === updated.id && item.relayId === relayId
+        )
+        return replaceRelaySnapshotInstance(current, {
+          ...updated,
+          name: previous?.name ?? updated.name,
+          relayId,
+        })
+      })
       await Promise.all([
         queryClient.invalidateQueries({
           queryKey: ["relay", relayId, "instances", instanceId, "startup"],
         }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.relay.snapshot }),
+        invalidateRelaySnapshots(queryClient),
       ])
       setSaved(true)
       window.setTimeout(() => setSaved(false), 2_000)
@@ -244,24 +243,21 @@ const StartupForm = React.memo(function StartupForm({
   const reinstallMutation = useMutation({
     mutationFn: updateInstanceStartup,
     onSuccess: async (updated) => {
-      queryClient.setQueryData<RelayFleetSnapshot>(
-        queryKeys.relay.snapshot,
-        (current) => {
-          const previous = current?.instances.find(
-            (item) => item.id === updated.id && item.relayId === relayId
-          )
-          return replaceRelaySnapshotInstance(current, {
-            ...updated,
-            name: previous?.name ?? updated.name,
-            relayId,
-          })
-        }
-      )
+      updateRelaySnapshots(queryClient, (current) => {
+        const previous = current?.instances.find(
+          (item) => item.id === updated.id && item.relayId === relayId
+        )
+        return replaceRelaySnapshotInstance(current, {
+          ...updated,
+          name: previous?.name ?? updated.name,
+          relayId,
+        })
+      })
       await Promise.all([
         queryClient.invalidateQueries({
           queryKey: ["relay", relayId, "instances", instanceId, "startup"],
         }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.relay.snapshot }),
+        invalidateRelaySnapshots(queryClient),
       ])
       setReinstallOpen(false)
       showToast({

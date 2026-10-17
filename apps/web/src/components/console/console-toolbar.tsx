@@ -1,5 +1,4 @@
 import * as React from "react"
-import { useQuery } from "@tanstack/react-query"
 import {
   formatRelayInstanceStateReason,
   type RelayInstanceStateReason,
@@ -24,7 +23,7 @@ import {
 } from "@/components/console/console-toolbar-actions"
 import { ConsoleWarning } from "@/components/console/console-warning"
 import { ConsoleRetryButton } from "@/components/console/console-retry-button"
-import { relaySnapshotQueryOptions } from "@/lib/query-options"
+import { useServerSnapshot } from "@/lib/use-server-workspace"
 import {
   selectInstanceLifecycleStartedAt,
   selectInstanceStateReason,
@@ -92,14 +91,8 @@ const ConsoleRuntimeReason = React.memo(function ConsoleRuntimeReason({
     () => selectInstanceLifecycleStartedAt(instanceId, relayId),
     [instanceId, relayId]
   )
-  const { data: reason } = useQuery({
-    ...relaySnapshotQueryOptions(),
-    select: selectReason,
-  })
-  const { data: startedAt = null } = useQuery({
-    ...relaySnapshotQueryOptions(),
-    select: selectStartedAt,
-  })
+  const { data: reason } = useServerSnapshot(selectReason)
+  const { data: startedAt = null } = useServerSnapshot(selectStartedAt)
   if (!reason) return null
   return reason.code === "waiting_for_readiness" ? (
     <DelayedConsoleRuntimeReasonContent

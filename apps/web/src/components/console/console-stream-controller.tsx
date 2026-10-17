@@ -19,9 +19,19 @@ import {
   selectRelayConsoleTransport,
 } from "@/lib/relay-selectors"
 import type { ConsoleLoadTiming } from "@/lib/console-performance"
+import type { ServerWorkspaceRelay } from "@/lib/server-workspace"
+import { useServerRelay, useServerSnapshot } from "@/lib/use-server-workspace"
 import type { TailscaleStackOverview } from "@/server/tailscale"
 
 const emptyTailscaleStacks: Array<TailscaleStackOverview> = []
+
+function selectBrowserOrigin(relay: ServerWorkspaceRelay | undefined) {
+  return relay?.browserOrigin ?? null
+}
+
+function selectConsoleTransport(relay: ServerWorkspaceRelay | undefined) {
+  return relay?.consoleTransport ?? null
+}
 
 export function ConsoleStreamController({
   instanceId,
@@ -42,16 +52,15 @@ export function ConsoleStreamController({
     streamStore.getRetrySnapshot,
     streamStore.getRetrySnapshot
   )
-  const browserOrigin = useRelayBrowserOrigin(relayId)
-  const consoleTransport = useRelayConsoleTransport(relayId)
+  const { data: browserOrigin = null } = useServerRelay(selectBrowserOrigin)
+  const { data: consoleTransport = null } = useServerRelay(
+    selectConsoleTransport
+  )
   const selectRuntime = React.useMemo(
     () => selectInstanceConsoleRuntime(instanceId, relayId),
     [instanceId, relayId]
   )
-  const { data: runtime } = useQuery({
-    ...relaySnapshotQueryOptions(),
-    select: selectRuntime,
-  })
+  const { data: runtime } = useServerSnapshot(selectRuntime)
   const snapshot = useRelayConsoleStream(
     relayId,
     { id: instanceId, kind: "instance" },

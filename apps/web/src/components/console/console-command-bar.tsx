@@ -1,5 +1,4 @@
 import * as React from "react"
-import { useQuery } from "@tanstack/react-query"
 import { CornerDownLeft, EyeOff, LoaderCircle } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
@@ -12,7 +11,7 @@ import {
 
 import { useConsoleCommand } from "@/components/console/use-console-command"
 import { useInstanceRelayConnected } from "@/components/instance-workspace-context"
-import { relaySnapshotQueryOptions } from "@/lib/query-options"
+import { useServerSnapshot } from "@/lib/use-server-workspace"
 import {
   selectInstanceContainerRunning,
   type InstanceWorkspaceInstance,
@@ -32,10 +31,9 @@ export const ConsoleCommandBar = React.memo(function ConsoleCommandBar({
     () => selectInstanceContainerRunning(instance.id, instance.relayId),
     [instance.id, instance.relayId]
   )
-  const { data: containerRunning = false } = useQuery({
-    ...relaySnapshotQueryOptions(),
-    select: selectContainerRunning,
-  })
+  const { data: containerRunning = false } = useServerSnapshot(
+    selectContainerRunning
+  )
   const command = useConsoleCommand(
     instance.id,
     instance.relayId,

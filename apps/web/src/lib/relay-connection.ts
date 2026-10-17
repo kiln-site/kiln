@@ -264,6 +264,15 @@ export function relayConnectionInstances(
   return connections.get(relayId)?.pushedInstances ?? null
 }
 
+/**
+ * The snapshot the Relay last pushed over this Hearth process's own control
+ * socket, kept current by its deltas. Null until this process has
+ * authenticated with the Relay. Callers must authorize the reader first.
+ */
+export function relayConnectionSnapshot(relayId: string): RelaySnapshot | null {
+  return connections.get(relayId)?.pushedSnapshot ?? null
+}
+
 export function relayConnectionBrowserMetadata(
   relayId: string
 ): RelayProxyBrowserMetadata | null {
@@ -346,6 +355,10 @@ class RelayConnection {
     return this.#state.status === "authenticated"
       ? (this.#pushedSnapshot?.node ?? null)
       : null
+  }
+
+  get pushedSnapshot(): RelaySnapshot | null {
+    return this.#state.status === "authenticated" ? this.#pushedSnapshot : null
   }
 
   get pushedInstances(): ReadonlyArray<
