@@ -88,13 +88,14 @@ function applyRealtimeEvent(input: ApplyRealtimeEventInput): void {
       const snapshot = queryClient.getQueryData<RelayFleetSnapshot>(
         queryKeys.relay.snapshot
       )
+      // With no fleet loaded there is nothing to patch; its first reader
+      // fetches it fresh.
       queryClient.setQueryData<Array<FleetInstance>>(
         queryKeys.relay.instances,
-        (current) =>
-          applyRealtimeInstancesEvent(
-            current ?? snapshot?.instances ?? [],
-            event
-          )
+        (current) => {
+          const rows = current ?? snapshot?.instances
+          return rows && applyRealtimeInstancesEvent(rows, event)
+        }
       )
       if (instanceIdentityChanged) {
         void invalidateNameDependentBackupRuns(queryClient)
@@ -404,6 +405,32 @@ export function fleetCacheInUse(
       (query.state.data !== undefined ||
         query.getObserversCount() > 0 ||
         query.state.fetchStatus !== "idle")
+    )
+  })
+}
+
+/**
+ * Whether a pushed fleet change arrived while the fleet's first read is in
+ * flight. That read would overwrite the change when it lands, so the stream
+ * recovers with an authoritative read instead.
+ */
+export function fleetEventNeedsRecovery(
+  queryClient: QueryClient,
+  instances: RelayInstancesCollection,
+  event: Exclude<RealtimeClientEvent, { type: "relay.invalidate" | "reset" }>
+): boolean {
+  if (event.type === "collections.invalidate") return false
+  if (instances.status === "loading") return true
+  return [
+    queryKeys.relay.connection,
+    queryKeys.relay.snapshot,
+    queryKeys.relay.instances,
+  ].some((queryKey) => {
+    const query = queryClient.getQueryCache().find({ queryKey, exact: true })
+    return (
+      query !== undefined &&
+      query.state.data === undefined &&
+      query.state.fetchStatus !== "idle"
     )
   })
 }

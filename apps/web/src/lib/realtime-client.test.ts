@@ -28,6 +28,7 @@ import {
   applyRecoveredRelayConnection,
   applyRealtimeEventSafely,
   applyUpdatedInstance,
+  fleetEventNeedsRecovery,
   resetRealtimeEpoch,
 } from "@/lib/realtime-client"
 
@@ -182,6 +183,47 @@ describe("realtime event application", () => {
         queryKeys.relay.instances
       )
     ).toEqual([beta])
+  })
+
+  it("leaves the fleet unloaded when nothing on the page reads it", () => {
+    const clients = fleet()
+
+    applyEvent(clients, instancesDelta([beta]))
+
+    expect(
+      clients.queryClient.getQueryData(queryKeys.relay.instances)
+    ).toBeUndefined()
+  })
+
+  it("recovers a push that arrives while the fleet's first read is in flight", async () => {
+    const clients = fleet()
+    let resolveFirstRead!: (instances: Array<FleetInstance>) => void
+    const firstRead = clients.queryClient.fetchQuery({
+      queryKey: queryKeys.relay.instances,
+      queryFn: () =>
+        new Promise<Array<FleetInstance>>((resolve) => {
+          resolveFirstRead = resolve
+        }),
+    })
+
+    // The read began before this push, so it would overwrite the change.
+    expect(
+      fleetEventNeedsRecovery(
+        clients.queryClient,
+        clients.instances,
+        instancesDelta([beta])
+      )
+    ).toBe(true)
+
+    resolveFirstRead([alpha])
+    await firstRead
+    expect(
+      fleetEventNeedsRecovery(
+        clients.queryClient,
+        clients.instances,
+        instancesDelta([beta])
+      )
+    ).toBe(false)
   })
 
   it("reports collection write failures so the stream can recover", async () => {

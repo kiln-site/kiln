@@ -18,6 +18,7 @@ import {
   applyRecoveredRelayConnection,
   applyRealtimeEventSafely,
   fleetCacheInUse,
+  fleetEventNeedsRecovery,
   recheckPushedState,
   parseRealtimeEventData,
   resetRealtimeEpoch,
@@ -251,6 +252,13 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
                   await requestHearthRefresh(hearthRealtimeTopics)
                 }
                 activeRecoveryHearth = false
+                // A page may have started reading the fleet while this
+                // recovery skipped it. Read it authoritatively before replay
+                // so that first read cannot overwrite the replayed changes.
+                if (!connection && fleetCacheInUse(queryClient, instances)) {
+                  resetRequested = true
+                  continue
+                }
                 // A newer reset supersedes events captured while this snapshot
                 // was loading. Otherwise replay later deltas after the
                 // authoritative snapshot so a slow response cannot overwrite
@@ -371,6 +379,10 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
         }
         bufferedEvents.push(event)
         if (epochChanged) requestReset(0, !initialEpoch)
+        return
+      }
+      if (fleetEventNeedsRecovery(queryClient, instances, event)) {
+        requestReset(event.sequence)
         return
       }
       applyEventOrRecover(event)
