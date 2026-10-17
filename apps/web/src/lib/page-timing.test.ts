@@ -38,6 +38,16 @@ function measured(milestone: string) {
     .map((entry) => ({ start: entry.startTime, duration: entry.duration }))
 }
 
+it("never records a milestone before it was requested", () => {
+  timing.startClientNavigation("/db/d9f9f0d6/info", "/_app/db/$databaseId/info")
+  now = 1_035
+  timing.resolveClientNavigation("/db/d9f9f0d6/info")
+  // A busy frame began before the route resolved.
+  flushFrame(1_002)
+
+  expect(measured("route")).toEqual([{ start: 1_000, duration: 35 }])
+})
+
 it("finishes a client open only once its route, name, and status painted", () => {
   timing.startClientNavigation("/db/d9f9f0d6/info", "/_app/db/$databaseId/info")
   now = 1_040

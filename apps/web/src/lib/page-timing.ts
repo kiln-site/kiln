@@ -158,9 +158,11 @@ export function markPageMilestone(
   const open = current
   if (!open || open.id !== openId || open.marked.has(milestone)) return
   open.marked.add(milestone)
-  requestAnimationFrame((frame) => {
+  requestAnimationFrame(() => {
     if (current !== open) return
-    record(open, milestone, paintedTime(open, milestone, frame))
+    // The frame's own timestamp can precede the request in a busy frame;
+    // the time the callback runs, just before the paint, cannot.
+    record(open, milestone, paintedTime(open, milestone, performance.now()))
     open.recorded.add(milestone)
     finishIfReady(open)
   })
