@@ -190,9 +190,8 @@ const AuthorizedInfraUpdatesDialogHost = React.memo(
     React.useEffect(() => {
       const idle =
         "requestIdleCallback" in window
-          ? window.requestIdleCallback(() => forkPromise(loadDialogModule), {
-              timeout: 5_000,
-            })
+          ? // No timeout: forcing it during a busy startup would defeat it.
+            window.requestIdleCallback(() => forkPromise(loadDialogModule))
           : undefined
       return () => {
         if (idle !== undefined) window.cancelIdleCallback(idle)
