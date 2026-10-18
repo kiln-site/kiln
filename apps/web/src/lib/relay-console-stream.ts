@@ -6,7 +6,7 @@ import type {
   RelayConsoleResource,
   RelayConsoleStreamEvent,
 } from "@workspace/contracts"
-import { Effect, Exit, Fiber, Result, Scope, Stream } from "effect"
+import { Cause, Effect, Exit, Fiber, Result, Scope, Stream } from "effect"
 
 import { consoleCopy } from "@/lib/console-copy"
 import { browserTraceparent, startBrowserSpan } from "@/lib/browser-telemetry"
@@ -156,18 +156,55 @@ function openDirectRelayConsoleStream(
         write
       )
       // Taken and handed its cleanup in one step that cannot be interrupted:
-      // the prewarm's connection is now this console's, and closes with it.
-      const prewarmed = instance
-        ? yield* Effect.acquireRelease(
-            Effect.sync(() =>
-              takeConsolePrewarm(instance, browserOrigin, write)
-            ),
-            (prewarm) => (prewarm ? closeConsolePrewarm(prewarm) : Effect.void)
-          )
-        : undefined
-      const { adopted, connection } = prewarmed
-        ? yield* adoptConsolePrewarm(prewarmed, connect, timing)
-        : { adopted: false, connection: yield* connect }
+      // a prewarm's connection is now this console's. One this console
+      // leaves while still connected is kept a while for it to come back
+      // to; any other closes with it.
+      const held = yield* Effect.acquireRelease(
+        Effect.sync(() => {
+          const prewarm = instance
+            ? takeConsolePrewarm(instance, browserOrigin, write)
+            : undefined
+          return {
+            connected: undefined as ConnectedConsole | undefined,
+            owned: prewarm ?? ownConsoleConnection(),
+            prewarm,
+          }
+        }),
+        ({ connected, owned }, exit) =>
+          instance &&
+          browserOrigin &&
+          connected?.socket.readyState === WebSocket.OPEN &&
+          (Exit.isSuccess(exit) || Cause.hasInterruptsOnly(exit.cause))
+            ? keepConsoleConnection({
+                browserOrigin,
+                connected,
+                instance,
+                owned,
+                relayId,
+                resource,
+                write,
+              })
+            : owned.close
+      )
+      let reused: "kept" | "prewarmed" | undefined
+      if (held.prewarm) {
+        const connected = yield* held.prewarm.connection
+        if (connected?.socket.readyState === WebSocket.OPEN) {
+          held.connected = connected
+          reused = held.prewarm.kept ? "kept" : "prewarmed"
+          timing?.markReused(reused)
+        } else {
+          // A prewarm that failed, or whose socket has closed since, such as
+          // when a busy console filled its inbox before anyone read it,
+          // connects again.
+          yield* held.owned.close
+          held.owned = ownConsoleConnection()
+        }
+      }
+      if (!held.connected) {
+        held.connected = yield* connect.pipe(Scope.provide(held.owned.scope))
+      }
+      const connection = held.connected
       const { inbox, socket } = connection
 
       // Commands and completions go to servers only.
@@ -183,7 +220,15 @@ function openDirectRelayConsoleStream(
         )
       }
 
+      // A kept connection has been sent output since its console left. It
+      // subscribes again for a fresh session, and what came before goes.
+      if (reused === "kept") yield* Effect.sync(connection.subscribe)
       const events = inbox.stream.pipe(
+        reused === "kept"
+          ? Stream.dropWhile(
+              (message) => message.type !== "reset" && message.type !== "ready"
+            )
+          : (messages) => messages,
         Stream.mapEffect((message) =>
           Effect.try({
             try: () => relayConsoleStreamEventSchema.parse(message),
@@ -194,7 +239,7 @@ function openDirectRelayConsoleStream(
           timing,
           "Receive initial Relay console snapshot",
           "websocket.console.snapshot",
-          { "kiln.console.prewarmed": adopted }
+          { "kiln.console.connection": reused ?? "new" }
         )
       )
       return events.pipe(
@@ -342,23 +387,44 @@ function connectDirectRelayConsole(
     // An older Relay takes the subscription only once authenticated.
     if (!ready.sentAfterAuth)
       yield* Effect.sync(() => socket.send(JSON.stringify(subscription)))
-    return relaySocket
+    return {
+      ...relaySocket,
+      // Subscribes again, for the console's session afresh.
+      subscribe: () => {
+        const { traceparent: _, ...again } = subscription
+        socket.send(JSON.stringify(again))
+      },
+    }
   })
 }
 
 // A prewarm nobody opens within a few seconds is closed, along with the
 // console it subscribed to on the Relay.
 const consolePrewarmLifetimeMs = 8_000
+// How long a console the user left stays connected, for coming back to.
+const keptConsoleLifetimeMs = 60_000
 // Hovering down a list prewarms each server; keep only the latest few.
 const maximumConsolePrewarms = 2
 
-interface ConsolePrewarm {
+// A console connection, in a scope of its own so that it can outlive the
+// console that opened it.
+interface OwnedConsoleConnection {
+  // Closes the connection and all it holds.
+  close: Effect.Effect<void>
+  scope: Scope.Closeable
+}
+
+// A connection waiting for a console to open: prewarmed from a link, or
+// kept from a console the user left.
+interface ConsolePrewarm extends OwnedConsoleConnection {
   // Hands the prewarm to a console: it no longer expires on its own.
   adopt: () => void
   browserOrigin: string
-  connection: Fiber.Fiber<Result.Result<ConnectedConsole, Error>>
+  // The connection, once made, unless it failed.
+  connection: Effect.Effect<ConnectedConsole | undefined>
   discard: () => void
-  scope: Scope.Closeable
+  // Kept from a console that left, rather than prewarmed.
+  kept: boolean
 }
 
 // By `${relayId}:${instanceId}`, then by whether they can write.
@@ -381,14 +447,6 @@ export function prewarmRelayConsole(input: {
   if (openConsoles.has(instance)) return
   const key = consolePrewarmKey(instance, input.write)
   if (consolePrewarms.has(key)) return
-  // One prewarm per server: the Relay would take either of two as replacing
-  // the other.
-  consolePrewarms.get(consolePrewarmKey(instance, !input.write))?.discard()
-  for (const [oldest, prewarm] of consolePrewarms) {
-    if (consolePrewarms.size < maximumConsolePrewarms) break
-    consolePrewarms.delete(oldest)
-    prewarm.discard()
-  }
 
   const scope = Scope.makeUnsafe()
   // Its own trace, which the connection's spans and the Relay's nest under,
@@ -424,28 +482,120 @@ export function prewarmRelayConsole(input: {
       Scope.provide(scope)
     )
   )
+  waitForConsole(
+    key,
+    input,
+    {
+      close: Fiber.interrupt(connection).pipe(
+        Effect.andThen(Scope.close(scope, Exit.void))
+      ),
+      connection: Fiber.await(connection).pipe(
+        Effect.map((exit) =>
+          Exit.isSuccess(exit) && Result.isSuccess(exit.value)
+            ? exit.value.success
+            : undefined
+        )
+      ),
+      kept: false,
+      scope,
+    },
+    consolePrewarmLifetimeMs
+  )
+}
+
+// Keeps the connection of a console the user left, for when they come back.
+// The output it's still sent is dropped as it comes, so that it can't fill
+// the inbox. One whose socket closes, or with another console of the server
+// open beside it, closes.
+function keepConsoleConnection(input: {
+  browserOrigin: string
+  connected: ConnectedConsole
+  instance: string
+  owned: OwnedConsoleConnection
+  relayId: string
+  resource: RelayConsoleResource
+  write: boolean
+}): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    const { connected, instance, owned } = input
+    if ((openConsoles.get(instance) ?? 0) > 1) return yield* owned.close
+    const { inbox, socket } = connected
+    const resume = yield* inbox.discard
+    const forgetSocket = () => socket.removeEventListener("close", closed)
+    const kept = waitForConsole(
+      consolePrewarmKey(instance, input.write),
+      {
+        browserOrigin: input.browserOrigin,
+        instanceId: input.resource.id,
+        relayId: input.relayId,
+        write: input.write,
+      },
+      {
+        close: Effect.sync(forgetSocket).pipe(Effect.andThen(owned.close)),
+        connection: Effect.sync(() => {
+          forgetSocket()
+          resume()
+          return connected
+        }),
+        kept: true,
+        scope: owned.scope,
+      },
+      keptConsoleLifetimeMs
+    )
+    const closed = () => kept.discard()
+    socket.addEventListener("close", closed)
+  })
+}
+
+// Holds a connection for the server's next console for `lifetimeMs`, in
+// place of any other for the server: the Relay would take either of two as
+// replacing the other.
+function waitForConsole(
+  key: string,
+  input: {
+    browserOrigin: string
+    instanceId: string
+    relayId: string
+    write: boolean
+  },
+  connection: Omit<ConsolePrewarm, "adopt" | "browserOrigin" | "discard">,
+  lifetimeMs: number
+): ConsolePrewarm {
+  const instance = `${input.relayId}:${input.instanceId}`
+  consolePrewarms.get(key)?.discard()
+  consolePrewarms.get(consolePrewarmKey(instance, !input.write))?.discard()
+  for (const [oldest, prewarm] of consolePrewarms) {
+    if (consolePrewarms.size < maximumConsolePrewarms) break
+    consolePrewarms.delete(oldest)
+    prewarm.discard()
+  }
   const forget = () => {
     clearTimeout(expiry)
     unsubscribe()
     if (consolePrewarms.get(key) === prewarm) consolePrewarms.delete(key)
   }
   const prewarm: ConsolePrewarm = {
+    ...connection,
     adopt: forget,
     browserOrigin: input.browserOrigin,
-    connection,
     discard: () => {
       forget()
-      Effect.runFork(closeConsolePrewarm(prewarm))
+      Effect.runFork(prewarm.close)
     },
-    scope,
   }
   // A capability issued before an authorization change may no longer hold.
   const unsubscribe = relayBrowserAuthorizationSignal(
     input.relayId,
     input.instanceId
   ).subscribe(() => prewarm.discard())
-  const expiry = setTimeout(() => prewarm.discard(), consolePrewarmLifetimeMs)
+  const expiry = setTimeout(() => prewarm.discard(), lifetimeMs)
   consolePrewarms.set(key, prewarm)
+  return prewarm
+}
+
+function ownConsoleConnection(): OwnedConsoleConnection {
+  const scope = Scope.makeUnsafe()
+  return { close: Scope.close(scope, Exit.void), scope }
 }
 
 // The prewarm for the console about to open. Any other for the same server,
@@ -471,28 +621,6 @@ function takeConsolePrewarm(
   return prewarm
 }
 
-function adoptConsolePrewarm(
-  prewarm: ConsolePrewarm,
-  connect: ReturnType<typeof connectDirectRelayConsole>,
-  timing: ConsoleLoadTiming | undefined
-) {
-  return Effect.gen(function* () {
-    const exit = yield* Fiber.await(prewarm.connection)
-    if (
-      Exit.isSuccess(exit) &&
-      Result.isSuccess(exit.value) &&
-      exit.value.success.socket.readyState === WebSocket.OPEN
-    ) {
-      timing?.markPrewarmed()
-      return { adopted: true, connection: exit.value.success }
-    }
-    // A prewarm that failed, or whose socket has closed since, such as when
-    // a busy console filled its inbox before anyone read it, connects again.
-    yield* closeConsolePrewarm(prewarm)
-    return { adopted: false, connection: yield* connect }
-  })
-}
-
 // Only a game server's own console is prewarmed.
 function prewarmedConsoleInstance(
   relayId: string,
@@ -505,12 +633,6 @@ function prewarmedConsoleInstance(
 
 function consolePrewarmKey(instance: string, write: boolean) {
   return `${instance}:${write ? "write" : "read"}`
-}
-
-function closeConsolePrewarm(prewarm: ConsolePrewarm) {
-  return Fiber.interrupt(prewarm.connection).pipe(
-    Effect.andThen(Scope.close(prewarm.scope, Exit.void))
-  )
 }
 
 function forkRelayConsoleSocket(

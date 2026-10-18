@@ -2822,13 +2822,16 @@ class ConsoleHub {
       return
     }
 
-    const reset = encodeNewestConsoleBatch({
-      type: "reset",
-      instanceId: this.#resourceId,
-      lifecycle,
-      lines: this.#recent.slice(snapshotStart),
-      truncated: this.#truncated || snapshotStart > 0,
-    })
+    const reset = encodeNewestConsoleBatch(
+      {
+        type: "reset",
+        instanceId: this.#resourceId,
+        lifecycle,
+        lines: this.#recent.slice(snapshotStart),
+        truncated: this.#truncated || snapshotStart > 0,
+      },
+      RESET_FRAME_BYTES
+    )
     this.#deliver(socket, reset.encoded, "console", this.#source.readAction)
     this.#deliver(
       socket,
@@ -2941,6 +2944,11 @@ class ConsoleHub {
     this.#historyFrameCharacters = 0
   }
 }
+
+// The most a console's first frame holds, in bytes. A new connection sends
+// about 14 KB before the browser's first acknowledgement, so a larger frame
+// takes a round trip more to arrive; older lines follow it as history.
+const RESET_FRAME_BYTES = 10 * 1024
 
 // Recently encoded history frames a console keeps for browsers being sent
 // the same history, in characters: up to 32 full frames.

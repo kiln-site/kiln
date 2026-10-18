@@ -393,6 +393,29 @@ describe("relay browser socket integration", () => {
     expect(closedEarly).toBe(false)
   })
 
+  it("sends a console's newest lines first, in a frame that arrives in one round trip", async () => {
+    const live = new LiveConsole("first-frame-console")
+    live.start("2026-01-01T00:00:00.000Z", 200, 100)
+    const relay = await startRelay({}, [live])
+    const { messages, socket } = await authenticate(relay, {
+      instanceId: live.id,
+    })
+
+    socket.send(
+      JSON.stringify({ instanceId: live.id, type: "console.subscribe", v: 1 })
+    )
+    const reset = await messages.next("reset")
+    const shown = lineTexts(reset)
+    while (shown.length < live.lines.length) {
+      shown.unshift(...lineTexts(await messages.next("history")))
+    }
+
+    // What a new connection sends before the browser first acknowledges.
+    expect(Buffer.byteLength(JSON.stringify(reset))).toBeLessThan(14_000)
+    expect(lineTexts(reset).at(-1)).toBe(live.lines.at(-1)?.text)
+    expect(shown).toEqual(live.lines.map((line) => line.text))
+  })
+
   it("gives every browser joining a busy console its whole log", async () => {
     const live = new LiveConsole("busy-console")
     live.start("2026-01-01T00:00:00.000Z", 5_000, 1_000)

@@ -21,10 +21,18 @@ export interface EncodedConsoleBatch {
 
 const TRUNCATED_LINE_SUFFIX = "… [line truncated]"
 
+// The newest lines that fit in `maxBytes`, and where those lines start. A
+// line too long for it on its own still comes, cut to fit a frame.
 export function encodeNewestConsoleBatch(
-  input: ConsoleBatchInput
+  input: ConsoleBatchInput,
+  maxBytes = relayBrowserMaxFrameBytes
 ): EncodedConsoleBatch {
-  return encodeNewestBatch(input, batchEnvelope(input), input.lines.length)
+  return encodeNewestBatch(
+    input,
+    batchEnvelope(input),
+    input.lines.length,
+    maxBytes
+  )
 }
 
 // The history frame of the newest lines before `end` that fit in one, and
@@ -34,7 +42,12 @@ export function encodeConsoleHistoryFrame(
   end: number
 ): EncodedConsoleBatch {
   const history = { ...input, type: "history" as const }
-  return encodeNewestBatch(history, batchEnvelope(history), end)
+  return encodeNewestBatch(
+    history,
+    batchEnvelope(history),
+    end,
+    relayBrowserMaxFrameBytes
+  )
 }
 
 // About what a line holds in memory, in characters, for budgets on the
@@ -54,12 +67,13 @@ export function encodeConsoleLineFrame(line: RelayConsoleLine): string {
   return JSON.stringify({ type: "line", line: fitted })
 }
 
-// The newest of the lines before `end` that fit in one frame, encoding only
+// The newest of the lines before `end` that fit in `maxBytes`, encoding only
 // those, so a whole history encodes in one pass over its lines.
 function encodeNewestBatch(
   input: ConsoleBatchInput,
   envelope: BatchEnvelope,
-  end: number
+  end: number,
+  maxBytes: number
 ): EncodedConsoleBatch {
   let start = end
   const selectedNewestFirst: Array<string> = []
@@ -75,12 +89,7 @@ function encodeNewestBatch(
       Buffer.byteLength(originalJson) +
       selectedNewestFirst.length +
       Buffer.byteLength(envelope.suffix(nextStart))
-    if (
-      candidateBytes > relayBrowserMaxFrameBytes &&
-      selectedNewestFirst.length > 0
-    ) {
-      break
-    }
+    if (candidateBytes > maxBytes && selectedNewestFirst.length > 0) break
     const lineJson =
       candidateBytes > relayBrowserMaxFrameBytes
         ? JSON.stringify(

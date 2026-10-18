@@ -102,6 +102,10 @@ export interface OpenRelayBrowserSocket {
 }
 
 export interface RelayBrowserSocketInbox {
+  // Drops the messages waiting and any that come until the returned function
+  // is called, such as while nothing reads them. Replies to requests and
+  // control messages still arrive.
+  discard: Effect.Effect<() => void>
   messages: Queue.Dequeue<
     { bytes: number; value: Record<string, unknown> },
     Error
@@ -439,6 +443,7 @@ export function createRelayBrowserSocketInbox(
         { bytes: number; value: Record<string, unknown> },
         Error
       >(channel === "console" ? CONSOLE_MESSAGES_MAX : CONTROL_MESSAGES_MAX)
+      let discarding = false
       let queuedBytes = 0
       let terminal = false
       let pendingResource: {
@@ -531,6 +536,7 @@ export function createRelayBrowserSocketInbox(
             }
             return
           }
+          if (discarding) return
           if (channel === "resources" && message.type === "resource") {
             if (pendingResource) {
               // Retain the first authoritative history and all control frames.
@@ -603,6 +609,21 @@ export function createRelayBrowserSocketInbox(
         queuedBytes = Math.max(0, queuedBytes - message.bytes)
         return message.value
       }
+      const discard = Effect.suspend(() => {
+        discarding = true
+        return Queue.clear(messages).pipe(
+          Effect.ignore,
+          Effect.andThen(
+            Effect.sync(() => {
+              pendingResource = null
+              queuedBytes = 0
+              return () => {
+                discarding = false
+              }
+            })
+          )
+        )
+      })
       const take = Queue.take(messages).pipe(Effect.map(unwrap))
       const stream = Stream.fromQueue(messages).pipe(Stream.map(unwrap))
       const request: RelayBrowserSocketInbox["request"] = (
@@ -682,6 +703,7 @@ export function createRelayBrowserSocketInbox(
           signal?.addEventListener("abort", onAbort, { once: true })
         })
       return {
+        discard,
         messages,
         onClose,
         onError,
