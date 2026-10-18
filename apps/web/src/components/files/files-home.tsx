@@ -1,11 +1,11 @@
 import { useFileRootPath } from "@/components/files/file-root-context"
+import { FilePageContent } from "@/components/files/file-page-content"
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
 import type { RelayFileActivityEntry } from "@workspace/contracts"
 import { Clock3, Folder, LoaderCircle, Pin } from "lucide-react"
 
 import { RootDirectoryList } from "@/components/files/file-directory-view"
-import { PageContentMilestone } from "@/components/page-content-milestone"
 import { FileTypeIcon } from "@/components/files/file-type-icon"
 import type { FileActionsController } from "@/components/files/file-tree-utils"
 import {
@@ -181,7 +181,7 @@ export function FilesHome({
       className="group/drop relative flex min-h-[360px] min-w-0 flex-1 flex-col bg-card"
       {...dropTarget}
     >
-      <PageContentMilestone reached={!loading} view="home" />
+      <FilePageContent path="" reached={!loading} view="home" />
       <FileDropOverlay directory="" />
       <div className={fileEditorHeaderClassName}>
         {treeCollapsed ? <FileTreeRevealButton onClick={onTreeExpand} /> : null}

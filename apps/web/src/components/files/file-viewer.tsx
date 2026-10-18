@@ -1,10 +1,10 @@
 import { useFileRootPath } from "@/components/files/file-root-context"
+import { FilePageContent } from "@/components/files/file-page-content"
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { HardDriveDownload } from "lucide-react"
 
 import { FileWorkspaceLoadingState } from "@/components/file-tree-loading-panel"
-import { PageContentMilestone } from "@/components/page-content-milestone"
 import { DirectoryView } from "@/components/files/file-directory-view"
 import { FileEditor } from "@/components/files/file-editor"
 import { FilesHome } from "@/components/files/files-home"
@@ -115,7 +115,7 @@ function UnavailablePreview({
         treeCollapsed={treeCollapsed}
         onTreeExpand={onTreeExpand}
       />
-      <PageContentMilestone key={path} reached={!loading} view="unavailable" />
+      <FilePageContent path={path} reached={!loading} view="unavailable" />
       {loading ? (
         <div className="flex min-h-0 flex-1">
           <div
@@ -365,7 +365,7 @@ export function FileViewer({
             onTreeExpand={onTreeExpand}
           />
           {/* The viewer is on screen; its tables load after. */}
-          <PageContentMilestone view="database" />
+          <FilePageContent path={selectedPath} view="database" />
         </React.Suspense>
       </>
     )

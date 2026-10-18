@@ -24,6 +24,8 @@ type Navigation = "hard" | "client"
 interface PageOpen {
   id: number
   routeId: string
+  // The URL path the open is for.
+  path: string
   navigation: Navigation
   startedAt: number
   // The name was in the server's HTML, so it painted with the first paint.
@@ -88,13 +90,15 @@ export function startPageOpen(
   routeId: string,
   navigation: Navigation,
   startedAt: number,
-  attributes: Record<string, unknown> = {}
+  attributes: Record<string, unknown> = {},
+  path = typeof window === "undefined" ? "" : window.location.pathname
 ): void {
   finishPageOpen("replaced")
   if (!isInstanceRoute(routeId)) return
   const open: PageOpen = {
     id: nextId++,
     routeId,
+    path,
     navigation,
     startedAt,
     identityServerRendered:
@@ -138,9 +142,13 @@ export function startClientNavigation(
     finishPageOpen("left")
     return
   }
-  startPageOpen(routeId, "client", startedAt, {
-    "kiln.page.chain_before_ms": Math.round(startedAt - chainStartedAt),
-  })
+  startPageOpen(
+    routeId,
+    "client",
+    startedAt,
+    { "kiln.page.chain_before_ms": Math.round(startedAt - chainStartedAt) },
+    path
+  )
   if (current) current.chainStartedAt = chainStartedAt
 }
 
@@ -218,18 +226,21 @@ export function usePageMilestone(milestone: PageMilestone, reached: boolean) {
 }
 
 /**
- * Marks the open page's content once `reached`, as `view`. Content shows one
- * path, so a view still on screen when the next open begins doesn't mark
- * that open; only views mounted since it began do.
+ * Marks the open page's content once `reached`, as `view`, if the open is
+ * for a URL path the content `shows`. A view still on screen when an open
+ * for another path begins, such as the file being left, can't mark it.
  */
-export function usePageContent(reached: boolean, view: string) {
+export function usePageContent(
+  reached: boolean,
+  view: string,
+  shows: (path: string) => boolean
+) {
   const openId = usePageOpenId()
-  const [mountedAt] = React.useState(() => performance.now())
   React.useEffect(() => {
-    if (!reached || !openId) return
-    if (current?.id !== openId || current.startedAt > mountedAt) return
+    if (!reached || !openId || current?.id !== openId) return
+    if (!shows(current.path)) return
     markPageMilestone("content", openId, { "kiln.page.content_view": view })
-  }, [mountedAt, openId, reached, view])
+  }, [openId, reached, shows, view])
 }
 
 /** Declares, while `skipped`, that this page reports no content milestone. */
