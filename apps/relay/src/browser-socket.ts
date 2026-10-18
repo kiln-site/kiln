@@ -2126,6 +2126,9 @@ class ConsoleHubRegistry {
   readonly #pendingHubs = new Map<string, Fiber.Fiber<ConsoleHub, Error>>()
   readonly #subscribeSnapshots: BrowserSocketOptions["subscribeSnapshots"]
   readonly #subscriptions = new Map<WebSocket, string>()
+  // Each socket's latest subscription. One it replaced while its hub was
+  // still starting is settled as left instead of joining the hub.
+  readonly #subscriptionTokens = new Map<WebSocket, symbol>()
 
   constructor(
     subscribeSnapshots: BrowserSocketOptions["subscribeSnapshots"],
@@ -2145,8 +2148,10 @@ class ConsoleHubRegistry {
     span?: Tracer.Span
   ): Promise<void> {
     const key = `${resource.kind}:${resource.id}:${resource.stream ?? ""}`
+    const token = Symbol(key)
     this.remove(socket)
     this.#subscriptions.set(socket, key)
+    this.#subscriptionTokens.set(socket, token)
     let hubEffect: Effect.Effect<ConsoleHub, Error>
     const existingHub = this.#hubs.get(key)
     if (existingHub) {
@@ -2176,7 +2181,7 @@ class ConsoleHubRegistry {
         Effect.flatMap((hub) =>
           Effect.callback<void>((resume) => {
             if (
-              this.#subscriptions.get(socket) !== key ||
+              this.#subscriptionTokens.get(socket) !== token ||
               socket.readyState !== WebSocket.OPEN
             ) {
               const hasWaitingSubscriber = [
@@ -2203,6 +2208,7 @@ class ConsoleHubRegistry {
     const key = this.#subscriptions.get(socket)
     if (!key) return
     this.#subscriptions.delete(socket)
+    this.#subscriptionTokens.delete(socket)
     this.#hubs.get(key)?.remove(socket)
   }
 
@@ -2214,6 +2220,7 @@ class ConsoleHubRegistry {
     for (const hub of this.#hubs.values()) hub.close()
     this.#hubs.clear()
     this.#subscriptions.clear()
+    this.#subscriptionTokens.clear()
   }
 
   // `span` is the subscription that asked for the hub, which its discovery
@@ -2419,7 +2426,10 @@ class ConsoleHub {
     this.#graceFiber?.interruptUnsafe()
     this.#graceFiber = null
     this.#subscribers.add(socket)
-    if (onSession) this.#sessionWaiters.set(socket, onSession)
+    if (onSession) {
+      this.#notifySession(socket, false)
+      this.#sessionWaiters.set(socket, onSession)
+    }
     if (this.#sessionLifecycle !== undefined) this.#sendSession(socket)
     this.#startStream()
   }
