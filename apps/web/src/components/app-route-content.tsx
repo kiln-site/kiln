@@ -145,6 +145,12 @@ function ServerRouteBoundary({
   children: React.ReactNode
   serverId: string
 }) {
+  const opened = useMatch({
+    from: "/_app/server/$serverId",
+    select: selectOpenedServer,
+    shouldThrow: false,
+    structuralSharing: true,
+  })
   const {
     data: route,
     error,
@@ -152,44 +158,75 @@ function ServerRouteBoundary({
   } = useQuery({
     ...serverWorkspaceQueryOptions(serverId),
     select: React.useCallback(
-      (workspace: ServerWorkspace) => routeVerdict(workspace, serverId),
-      [serverId]
+      (workspace: ServerWorkspace) => routeVerdict(workspace, serverId, opened),
+      [opened, serverId]
     ),
-  })
-  const verified = useMatch({
-    from: "/_app/server/$serverId",
-    select: (match) => match.context.serverVerified,
-    shouldThrow: false,
   })
   const router = useRouter()
   // An open the read disagrees with resolves again, which redirects as a
   // navigation would have: to the list, an invitation, or the canonical URL.
   const misrouted =
-    verified === false && route !== undefined && route !== "open"
+    opened?.verified === false && route !== undefined && route !== "open"
   React.useEffect(() => {
     if (misrouted) void router.invalidate()
   }, [misrouted, router])
 
-  // A route that opened before its read fails as the awaited route would
-  // have, through the route's error handling.
-  if (route === undefined && isError) throw error
+  // A route whose resolution failed shows the route's error page, with its
+  // retry, as the awaited route would have.
+  if (opened?.status === "error") return children
+  if (isError && (route === undefined || misrouted)) throw error
   if (route === undefined || misrouted)
     return <div className="min-h-0 flex-1 bg-background" />
   if (route === "missing") return <RouteEmptyState />
   return <InstanceRouteFrame serverId={serverId}>{children}</InstanceRouteFrame>
 }
 
-// What the server's own read says about the route that opened it.
+interface OpenedServer {
+  brickId?: string | null
+  id: string
+  relayId: string
+  status: string
+  verified: boolean
+}
+
+function selectOpenedServer(match: {
+  context: {
+    instance: { brickId?: string | null; id: string; relayId: string } | null
+    serverVerified: boolean
+  }
+  status: string
+}): OpenedServer | undefined {
+  const { instance, serverVerified } = match.context
+  return instance
+    ? {
+        brickId: instance.brickId ?? null,
+        id: instance.id,
+        relayId: instance.relayId,
+        status: match.status,
+        verified: serverVerified,
+      }
+    : undefined
+}
+
+// What the server's own read says about the route that opened it. A route
+// that opened on a known server, before its read, is confirmed only by the
+// same server: its access checks ran for that one.
 function routeVerdict(
   workspace: ServerWorkspace,
-  serverId: string
+  serverId: string,
+  opened: OpenedServer | undefined
 ): "missing" | "moved" | "open" {
   if (workspace.status !== "found") return "missing"
   const [instance] = workspace.snapshot.instances
-  return serverId === workspace.routeIdentifier ||
-    serverId === instance?.routeId
-    ? "open"
-    : "moved"
+  const canonical =
+    serverId === workspace.routeIdentifier || serverId === instance?.routeId
+  const sameServer =
+    !opened ||
+    opened.verified ||
+    (instance?.id === opened.id &&
+      instance.relayId === opened.relayId &&
+      (instance.brickId ?? null) === opened.brickId)
+  return canonical && sameServer ? "open" : "moved"
 }
 
 function RouteEmptyState() {
