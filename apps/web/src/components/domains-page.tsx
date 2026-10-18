@@ -26,7 +26,6 @@ import {
   Trash2,
 } from "lucide-react"
 
-import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import {
   Dialog,
@@ -61,7 +60,6 @@ import {
 import {
   DataTableActionGroup,
   DataTableEmptyState,
-  DataTableTextCell,
 } from "@/components/data-table"
 import { DataTable } from "@/components/data-table-view"
 import {
@@ -69,7 +67,12 @@ import {
   DataTableWorkspace,
 } from "@/components/data-table-workspace"
 import type { IdentityStatusPresentation } from "@/components/identity-name"
-import { InfoCopyValue } from "@/components/info-page"
+import {
+  InfoCopyValue,
+  InfoFact,
+  InfoRailCard,
+  InfoRailGroup,
+} from "@/components/info-page"
 import { InfraSyncButton } from "@/components/infra-sync-button"
 import { InstanceCard } from "@/components/instance-card"
 import { statusColumnWidth } from "@/components/instance-name-presentation"
@@ -77,10 +80,13 @@ import {
   InstancePickerContent,
   type InstancePickerItem,
 } from "@/components/instance-picker"
+import {
+  ServerScopePicker,
+  type ServerPickerOption,
+} from "@/components/server-scope-picker"
 import { StatusIndicator } from "@/components/status-indicator"
 import { WorkspaceCopyValueButton } from "@/components/workspace-header"
 import { WorkspacePage } from "@/components/workspace-page"
-import { WorkspaceSummaryCard } from "@/components/workspace-summary-card"
 import type {
   DomainAssignmentStrategy,
   DomainIntegration,
@@ -165,13 +171,40 @@ const domainTableSearchFields = [
   (row: ManagedDomainOverview) => srvRecordLabel(row),
 ] as const
 
+/** The game server the table is filtered to. */
+interface DomainScope {
+  instanceId: string
+  /** Missing when a link names only the game server. */
+  relayId: string | undefined
+}
+
 export const DomainsPage = React.memo(function DomainsPage({
+  initialScope,
   searchStore,
 }: {
+  initialScope: DomainScope | null
   searchStore: DataTableSearchStore
 }) {
   const { data } = useSuspenseQuery(domainSettingsQueryOptions())
   const [dialog, setDialog] = React.useState<DomainDialog>(null)
+  const [scope, setScope] = React.useState(initialScope)
+  const selectScope = React.useCallback((next: DomainScope | null) => {
+    setScope(next)
+    // Like the table search, the URL follows without a router render.
+    replaceDataTableUrlSearch(next?.instanceId ?? "", "server")
+    replaceDataTableUrlSearch(next?.relayId ?? "", "relay")
+  }, [])
+  const scopedDomains = React.useMemo(
+    () =>
+      scope
+        ? data.managedDomains.filter(
+            (domain) =>
+              domain.instanceId === scope.instanceId &&
+              (!scope.relayId || domain.relayId === scope.relayId)
+          )
+        : data.managedDomains,
+    [data.managedDomains, scope]
+  )
   const openConfiguration = React.useCallback(
     () => setDialog({ kind: "configure" }),
     []
@@ -195,13 +228,14 @@ export const DomainsPage = React.memo(function DomainsPage({
 
   return (
     <WorkspacePage
-      summary={
-        <DomainSummaryCard
+      rail={
+        <DomainsRail
           domainUsage={domainUsage}
           integration={data.integration}
           onConfigure={openConfiguration}
         />
       }
+      summary={<DomainScopePicker scope={scope} onSelect={selectScope} />}
     >
       <DataTableWorkspace
         toolbar={
@@ -214,7 +248,7 @@ export const DomainsPage = React.memo(function DomainsPage({
         }
       >
         <ManagedDomainsTable
-          domains={data.managedDomains}
+          domains={scopedDomains}
           searchStore={searchStore}
           onDialog={setDialog}
         />
@@ -231,6 +265,9 @@ export const DomainsPage = React.memo(function DomainsPage({
       {dialog?.kind === "create" ? (
         <CreateDomainDialog
           domains={enabledDomains}
+          initialServerKey={
+            scope?.relayId ? serverKey(scope.relayId, scope.instanceId) : null
+          }
           managedDomains={data.managedDomains}
           onOpenChange={closeDialog}
         />
@@ -254,7 +291,57 @@ export const DomainsPage = React.memo(function DomainsPage({
   )
 })
 
-const DomainSummaryCard = React.memo(function DomainSummaryCard({
+/** Filters the table to one game server, as Backups and Activity do. */
+const DomainScopePicker = React.memo(function DomainScopePicker({
+  onSelect,
+  scope,
+}: {
+  onSelect: (scope: DomainScope | null) => void
+  scope: DomainScope | null
+}) {
+  const { data: servers = emptyScopeServers } = useQuery({
+    ...serverDirectoryQueryOptions(),
+    select: selectScopeServers,
+  })
+  const selectedServer =
+    (scope &&
+      servers.find(
+        (server) =>
+          server.id === scope.instanceId &&
+          (!scope.relayId || server.relayId === scope.relayId)
+      )) ||
+    null
+  const select = React.useCallback(
+    (server: ServerPickerOption | null) =>
+      onSelect(
+        server ? { instanceId: server.id, relayId: server.relayId } : null
+      ),
+    [onSelect]
+  )
+  return (
+    <ServerScopePicker
+      selectedServer={selectedServer}
+      servers={servers}
+      onSelect={select}
+    />
+  )
+})
+
+const emptyScopeServers: Array<ServerPickerOption> = []
+
+function selectScopeServers(
+  servers: ReadonlyArray<DirectoryServer>
+): Array<ServerPickerOption> {
+  return servers.map((server) => ({
+    id: server.id,
+    name: server.name,
+    relayId: server.relayId,
+    relayName: server.relayName,
+  }))
+}
+
+/** What vanity is set up to do, beside the table. */
+const DomainsRail = React.memo(function DomainsRail({
   domainUsage,
   integration,
   onConfigure,
@@ -263,106 +350,113 @@ const DomainSummaryCard = React.memo(function DomainSummaryCard({
   integration: DomainIntegration | null
   onConfigure: () => void
 }) {
-  const domains = integration?.domains ?? []
   const strategy = strategyOptions.find(
     (option) => option.value === integration?.strategy
   )
+  const defaultDomain = integration?.domains.find((domain) => domain.isDefault)
 
   return (
-    <WorkspaceSummaryCard
-      action={
-        <div className="flex shrink-0 items-center gap-2">
-          {domains.length > 0 ? (
-            <DomainListPopover domainUsage={domainUsage} domains={domains} />
-          ) : null}
+    <>
+      <InfoRailCard
+        action={
           <Button
-            className="shrink-0"
-            size="sm"
+            size="xs"
             type="button"
-            variant="outline"
+            variant="ghost"
             onClick={onConfigure}
           >
             <Settings2 />
-            Configure Vanity
+            Configure
           </Button>
-        </div>
-      }
-      icon={<Globe2 className="size-5" />}
-      title="Vanity domains"
-      titleAccessory={
-        integration ? (
-          <Badge variant="outline">
-            {integration.enabled
-              ? (strategy?.label ?? "Default only")
-              : "Manual only"}
-          </Badge>
-        ) : undefined
-      }
-    >
-      <p className="type-meta mt-1 truncate text-muted-foreground">
-        {domains.length > 0 ? (
-          <span className="type-code">
-            {domains
-              .filter((domain) => domain.enabled)
-              .map((domain) => `<vanity>.${domain.domain}`)
-              .join(", ") || "No domains take new game servers"}
-          </span>
-        ) : (
-          "Connect Cloudflare to give game servers vanity addresses."
-        )}
-      </p>
-    </WorkspaceSummaryCard>
-  )
-})
+        }
+        icon={<Globe2 />}
+        title="Vanity"
+      >
+        <InfoFact label="Provider">
+          {integration ? (
+            "Cloudflare"
+          ) : (
+            <span className="text-muted-foreground">Not connected</span>
+          )}
+        </InfoFact>
+        {integration ? (
+          <>
+            <InfoFact label="Auto provisioning">
+              {integration.enabled ? "On" : "Off"}
+            </InfoFact>
+            {integration.enabled ? (
+              <InfoFact label="New game servers">
+                {strategy?.label ?? "Default only"}
+              </InfoFact>
+            ) : null}
+            {defaultDomain ? (
+              <InfoFact label="Default">
+                <span className="truncate font-mono">
+                  {defaultDomain.domain}
+                </span>
+              </InfoFact>
+            ) : null}
+          </>
+        ) : null}
+      </InfoRailCard>
 
-/** Every configured domain, collapsed behind a count. */
-const DomainListPopover = React.memo(function DomainListPopover({
-  domainUsage,
-  domains,
-}: {
-  domainUsage: ReadonlyMap<string, number>
-  domains: ReadonlyArray<ManagedDomain>
-}) {
-  return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <Button size="sm" type="button" variant="outline">
-          {domains.length} {domains.length === 1 ? "domain" : "domains"}
-          <ChevronDown />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent align="end" className="w-80 p-0">
-        <ul
-          aria-label="Vanity domains"
-          className="max-h-72 divide-y divide-border/60 overflow-y-auto"
-        >
-          {domains.map((domain) => {
-            const usage = domainUsage.get(domain.domain) ?? 0
-            return (
-              <li
-                key={domain.domain}
-                className="flex items-center gap-3 px-3 py-2"
-              >
-                <span className="type-code min-w-0 flex-1 truncate">
-                  <span className="text-muted-foreground">{"<vanity>."}</span>
-                  {domain.domain}
-                </span>
-                {domain.isDefault ? (
-                  <Badge variant="outline">Default</Badge>
-                ) : !domain.enabled ? (
-                  <Badge className="text-muted-foreground" variant="outline">
-                    Disabled
-                  </Badge>
-                ) : null}
-                <span className="type-meta shrink-0 text-muted-foreground tabular-nums">
-                  {usage} in use
-                </span>
-              </li>
-            )
-          })}
-        </ul>
-      </PopoverContent>
-    </Popover>
+      {integration && integration.domains.length > 0 ? (
+        <InfoRailGroup title="Domains">
+          <table className="w-full table-fixed border bg-background/45 text-[0.8125rem]">
+            <thead>
+              <tr className="type-technical-label border-b text-left text-muted-foreground/80">
+                <th className="px-3 py-2 font-normal">Domain</th>
+                <th className="w-20 px-2 py-2 text-right font-normal whitespace-nowrap">
+                  In use
+                </th>
+                <th className="w-9">
+                  <span className="sr-only">Cloudflare</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border/60">
+              {integration.domains.map((domain) => (
+                <tr
+                  key={domain.domain}
+                  className={domain.enabled ? undefined : "text-muted-foreground"}
+                >
+                  <td className="truncate px-3 py-2 font-mono">
+                    {domain.domain}
+                  </td>
+                  <td className="px-2 py-2 text-right font-semibold tabular-nums">
+                    {domainUsage.get(domain.domain) ?? 0}
+                  </td>
+                  <td className="pr-1.5 text-right">
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          asChild
+                          className="text-muted-foreground hover:text-primary"
+                          size="icon-xs"
+                          variant="ghost"
+                        >
+                          <a
+                            aria-label={`View ${domain.domain} on Cloudflare`}
+                            href={cloudflareDnsRecordsUrl(domain.zoneName)}
+                            rel="noreferrer"
+                            target="_blank"
+                          >
+                            <ExternalLink />
+                          </a>
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="left">
+                        View on Cloudflare
+                      </TooltipContent>
+                    </Tooltip>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </InfoRailGroup>
+      ) : null}
+    </>
   )
 })
 
@@ -492,15 +586,15 @@ const ManagedDomainsTable = React.memo(function ManagedDomainsTable({
         ),
       }),
       domainTableColumnHelper.accessor((domain) => domain.server.name, {
-        id: "server",
-        header: "Game Server",
+        id: "instance",
+        header: "Instance",
         sortFn: "text",
         cell: ({ row }) => <DomainServerCell domain={row.original} />,
         meta: dataTableColumnMeta(
           {
             // Phones keep the domain, which this table is about.
             hideBelow: "sm",
-            width: { base: "minmax(0,1fr)", md: "minmax(0,1.1fr)" },
+            width: "minmax(8rem,0.55fr)",
           },
           { cellClassName: "px-0" }
         ),
@@ -510,35 +604,14 @@ const ManagedDomainsTable = React.memo(function ManagedDomainsTable({
         header: "Domain",
         sortFn: "text",
         cell: ({ row }) => <DomainHostnameCell domain={row.original} />,
-        meta: dataTableColumnMeta({
-          width: { base: "minmax(0,1fr)", md: "minmax(0,1.2fr)" },
-        }),
+        meta: dataTableColumnMeta({ width: "minmax(0,1.4fr)" }),
       }),
       domainTableColumnHelper.accessor((domain) => domain.port, {
         id: "port",
         header: "Port",
         sortFn: (left, right) => left.original.port - right.original.port,
-        cell: ({ row }) => (
-          <InfoCopyValue label="port" value={String(row.original.port)} />
-        ),
-        meta: dataTableColumnMeta({ hideBelow: "sm", width: "6.5rem" }),
-      }),
-      domainTableColumnHelper.accessor((domain) => srvRecordLabel(domain), {
-        id: "srv",
-        header: "SRV",
-        sortFn: "text",
-        cell: ({ row }) => <SrvRecordCell domain={row.original} />,
-        meta: dataTableColumnMeta({ hideBelow: "md", width: "7.5rem" }),
-      }),
-      domainTableColumnHelper.accessor((domain) => domain.relayName, {
-        id: "relay",
-        header: "Relay",
-        sortFn: "text",
-        cell: ({ row }) => <DataTableTextCell value={row.original.relayName} />,
-        meta: dataTableColumnMeta({
-          hideBelow: "lg",
-          width: "minmax(0,0.7fr)",
-        }),
+        cell: ({ row }) => <DomainPortCell domain={row.original} />,
+        meta: dataTableColumnMeta({ hideBelow: "sm", width: "7.75rem" }),
       }),
       domainTableColumnHelper.display({
         id: "actions",
@@ -548,8 +621,8 @@ const ManagedDomainsTable = React.memo(function ManagedDomainsTable({
           <DomainActions domain={row.original} onDialog={onDialog} />
         ),
         meta: dataTableColumnMeta(
-          { width: "7rem" },
-          { cellClassName: "px-1 sm:px-3", headerClassName: "px-1 sm:px-3" }
+          { width: "6.5rem" },
+          { cellClassName: "px-1 sm:px-2", headerClassName: "px-1 sm:px-2" }
         ),
       }),
     ])
@@ -611,33 +684,30 @@ const DomainServerCell = React.memo(function DomainServerCell({
 
 function DomainHostnameCell({ domain }: { domain: ManagedDomainOverview }) {
   return (
-    <div className="flex w-full min-w-0 flex-col">
-      <div className="type-meta flex min-w-0">
-        <WorkspaceCopyValueButton
-          label="domain"
-          value={domainHostname(domain)}
-        />
-      </div>
-      {/* Only worth saying when the game server has a choice. */}
-      {domain.primary && domain.domainCount > 1 ? (
-        <span className="type-meta truncate text-muted-foreground">
-          Connect address
-        </span>
-      ) : null}
+    <div className="type-meta flex w-full min-w-0">
+      <WorkspaceCopyValueButton label="domain" value={domainHostname(domain)} />
     </div>
   )
 }
 
-function SrvRecordCell({ domain }: { domain: ManagedDomainOverview }) {
-  return domain.srvActive ? (
-    <span className="type-meta inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-300">
-      <Check aria-hidden className="size-3" />
-      Active
-    </span>
-  ) : (
-    <span className="type-meta text-muted-foreground">
-      {srvRecordLabel(domain)}
-    </span>
+// With an SRV record, players join by the hostname alone.
+function DomainPortCell({ domain }: { domain: ManagedDomainOverview }) {
+  return (
+    <div className="flex min-w-0 items-center gap-1.5">
+      <InfoCopyValue label="port" value={String(domain.port)} />
+      {domain.srvActive ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="type-technical-label shrink-0 rounded-sm border border-emerald-500/30 px-1 text-emerald-700 dark:text-emerald-300">
+              SRV
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            Players can join with just the domain
+          </TooltipContent>
+        </Tooltip>
+      ) : null}
+    </div>
   )
 }
 
@@ -728,10 +798,13 @@ function renderEmptyDomains({ searchActive }: { searchActive: boolean }) {
 
 function CreateDomainDialog({
   domains,
+  initialServerKey,
   managedDomains,
   onOpenChange,
 }: {
   domains: Array<ManagedDomain>
+  /** The game server the table is filtered to. */
+  initialServerKey: string | null
   managedDomains: Array<ManagedDomainOverview>
   onOpenChange: (open: boolean) => void
 }) {
@@ -747,7 +820,7 @@ function CreateDomainDialog({
     }
     return counts
   }, [managedDomains])
-  const [selectedKey, setSelectedKey] = React.useState<string | null>(null)
+  const [selectedKey, setSelectedKey] = React.useState(initialServerKey)
   const [domain, setDomain] = React.useState(domains[0]?.domain ?? "")
   const [vanityLabel, setVanityLabel] = React.useState("")
   const [primary, setPrimary] = React.useState(false)

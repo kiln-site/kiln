@@ -1,3 +1,4 @@
+import * as React from "react"
 import { createFileRoute } from "@tanstack/react-router"
 import { z } from "zod"
 
@@ -12,7 +13,9 @@ import { requireInfrastructureDestinationAccess } from "@/lib/route-access"
 
 export const Route = createFileRoute("/_app/infra/domains")({
   validateSearch: z.object({
+    relay: z.string().max(64).optional(),
     search: z.string().max(DATA_TABLE_SEARCH_MAX_LENGTH).optional(),
+    server: z.string().max(64).optional(),
   }),
   beforeLoad: async ({ context }) => {
     await requireInfrastructureDestinationAccess(
@@ -27,8 +30,12 @@ export const Route = createFileRoute("/_app/infra/domains")({
 })
 
 function InfraDomainsRoute() {
-  const { search = "" } = Route.useSearch()
+  const { relay, search = "", server } = Route.useSearch()
   const searchStore = useDataTableSearchStore(search)
+  // Read once: the page keeps the filter and writes the URL itself.
+  const [initialScope] = React.useState(() =>
+    server ? { instanceId: server, relayId: relay } : null
+  )
 
-  return <DomainsPage searchStore={searchStore} />
+  return <DomainsPage initialScope={initialScope} searchStore={searchStore} />
 }
