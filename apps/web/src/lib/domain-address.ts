@@ -2,7 +2,7 @@ interface ManagedDomainAddress {
   domain: string
   publicPort: number
   srvRecordId: string | null
-  status: "active" | "error" | "pending"
+  status: "active" | "error" | "pending" | "removing"
   supportsSrv: boolean
   vanityLabel: string
 }

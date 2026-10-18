@@ -37,6 +37,7 @@ import {
   loadInstanceDomainOptOutEffect,
   loadRelayInstanceDomainAssignmentsEffect,
   loadUsedVanityLabelsEffect,
+  markInstanceDomainRemovingEffect,
   recordInstanceDomainErrorEffect,
   recordInstanceDomainSyncErrorEffect,
   reserveInstanceDomainAssignmentEffect,
@@ -555,24 +556,14 @@ export const removeInstanceDomainEffect = Effect.fn("domains.instance.remove")(
     )
     const assignment = assignments.find((item) => item.id === id)
     if (!assignment) return
-    const remaining = assignments.filter((item) => item.id !== id)
+    const remaining = assignments.filter(
+      (item) => item.id !== id && item.status !== "removing"
+    )
     if (remaining.length === 0) {
       yield* setInstanceDomainOptOutEffect(relayId, instanceId, true)
     }
-    yield* deleteAssignmentRecordsEffect(assignment).pipe(
-      // Keep the removal. Cloudflare deletes are idempotent, so deleting
-      // again finishes it; until then the domain shows as failed and Hearth
-      // stops advertising it.
-      Effect.tapError((error) =>
-        recordInstanceDomainErrorEffect(
-          id,
-          `Delete failed: ${error.message}`
-        ).pipe(
-          Effect.andThen(invalidateManagedDomainAddressesEffect),
-          Effect.ignore
-        )
-      )
-    )
+    // Another domain takes over as the connect address before Cloudflare is
+    // touched, so it moves even if the delete fails.
     const successor =
       remaining.find((item) => item.status === "active") ?? remaining[0]
     if (assignment.primary && successor) {
@@ -581,8 +572,20 @@ export const removeInstanceDomainEffect = Effect.fn("domains.instance.remove")(
         instanceId,
         relayId,
       })
-      yield* invalidateManagedDomainAddressesEffect
     }
+    // Keep the removal. Cloudflare deletes are idempotent, so deleting again
+    // finishes it; until then the domain shows as failing to delete, Hearth
+    // stops advertising it, and nothing re-creates it.
+    yield* markInstanceDomainRemovingEffect(id)
+    yield* invalidateManagedDomainAddressesEffect
+    yield* deleteAssignmentRecordsEffect(assignment).pipe(
+      Effect.tapError((error) =>
+        recordInstanceDomainSyncErrorEffect(
+          id,
+          `Delete failed: ${error.message}`
+        ).pipe(Effect.ignore)
+      )
+    )
   },
   (effect, relayId, instanceId) =>
     withInstanceDomainLock(relayId, instanceId, effect)
@@ -722,6 +725,8 @@ const provisionInstanceDomainEffect = Effect.fn("domains.instance.provision")(
     const reconcileOne = Effect.fnUntraced(function* (
       assignment: InstanceDomainAssignment
     ) {
+      // Left to its delete, which a retry finishes.
+      if (assignment.status === "removing") return false
       if (assignment.status === "active") {
         if (
           managedDomainEndpointMatches(assignment, instance) &&
@@ -768,7 +773,9 @@ const provisionInstanceDomainEffect = Effect.fn("domains.instance.provision")(
     })
     const reconcile = Effect.gen(function* () {
       if (!assignments.some((assignment) => assignment.primary)) {
-        const [first] = assignments
+        const first = assignments.find(
+          (assignment) => assignment.status !== "removing"
+        )
         if (first) {
           yield* setInstanceDomainPrimaryEffect({
             id: first.id,
@@ -877,6 +884,11 @@ const updateInstanceDomainEffect = Effect.fn("domains.instance.update")(
       assignment.instanceId !== instance.id
     ) {
       return yield* domainFailure("Domain not found")
+    }
+    if (assignment.status === "removing") {
+      return yield* domainFailure(
+        "Finish deleting this domain before editing it"
+      )
     }
     const credential = yield* loadCloudflareIntegrationCredentialEffect()
     // Renaming within a disabled domain is fine; moving onto one isn't.
@@ -1011,6 +1023,7 @@ const provisionVanityRecordsEffect = Effect.fn(
   const reservation = {
     domain: domain.domain,
     id,
+    zoneId: domain.zoneId,
     publicHost,
     publicPort,
     srvProtocol,

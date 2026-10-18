@@ -66,7 +66,7 @@ export interface InstanceDomainAssignment {
   srvProtocol: "tcp" | "udp" | null
   srvRecordId: string | null
   srvService: string | null
-  status: "active" | "error" | "pending"
+  status: "active" | "error" | "pending" | "removing"
   supportsSrv: boolean
   vanityLabel: string
   /** Null only if the domain is no longer configured. */
@@ -107,7 +107,7 @@ interface InstanceDomainRow extends RowDataPacket {
   srv_protocol: "tcp" | "udp" | null
   srv_record_id: string | null
   srv_service: string | null
-  status: "active" | "error" | "pending"
+  status: "active" | "error" | "pending" | "removing"
   supports_srv: boolean | number
   vanity_label: string
   zone_id: string | null
@@ -502,6 +502,8 @@ interface DomainReservation {
   srvService: string | null
   supportsSrv: boolean
   vanityLabel: string
+  /** The zone its records go in, as the domain was loaded. */
+  zoneId: string
 }
 
 /**
@@ -513,8 +515,9 @@ export const insertInstanceDomainAssignmentEffect = Effect.fn(
 )(function* (input: DomainReservation) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
-  // Only into an enabled domain still configured: a save that removes it
-  // either waits for this row or this insert finds nothing.
+  // Only into an enabled domain still in the zone its records will go in: a
+  // save that removes or moves it either waits for this row or this insert
+  // finds nothing.
   const result = yield* database.execute(
     "domains.assignment.insert",
     `INSERT INTO ${databaseTable("instance_domain")}
@@ -523,7 +526,7 @@ export const insertInstanceDomainAssignmentEffect = Effect.fn(
         srv_protocol, status, last_error, created_at, updated_at)
      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, ?, ?
        FROM ${databaseTable("domain_zone")}
-      WHERE domain = ? AND enabled = 1`,
+      WHERE domain = ? AND zone_id = ? AND enabled = 1`,
     [
       input.id,
       input.relayId,
@@ -540,6 +543,7 @@ export const insertInstanceDomainAssignmentEffect = Effect.fn(
       now,
       now,
       input.domain,
+      input.zoneId,
     ]
   )
   if (result.affectedRows === 0) {
@@ -549,50 +553,79 @@ export const insertInstanceDomainAssignmentEffect = Effect.fn(
   }
 })
 
-/** Holds a new name for a domain whose records were released. */
+/**
+ * Holds a new name for a domain whose records were released. Locks its
+ * domain's row before the assignment's, the order a save takes them in, and
+ * only while the domain is still in the zone its records will go in.
+ */
 export const reserveInstanceDomainAssignmentEffect = Effect.fn(
   "domains.assignment.reserve"
-)(function* (input: Omit<DomainReservation, "instanceId" | "primary" | "relayId">) {
+)(function* (
+  input: Omit<DomainReservation, "instanceId" | "primary" | "relayId">
+) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
-  const result = yield* database.execute(
-    "domains.assignment.reserve",
-    `UPDATE ${databaseTable("instance_domain")}
-        SET vanity_label = ?,
-            domain = ?,
-            public_host = ?,
-            public_port = ?,
-            supports_srv = ?,
-            srv_service = ?,
-            srv_protocol = ?,
-            address_record_id = NULL,
-            address_record_type = NULL,
-            srv_record_id = NULL,
-            status = 'pending',
-            last_error = NULL,
-            updated_at = ?
-      WHERE id = ?
-        AND EXISTS (
-          SELECT 1 FROM ${databaseTable("domain_zone")} WHERE domain = ?
-        )`,
-    [
-      input.vanityLabel,
-      input.domain,
-      input.publicHost,
-      input.publicPort,
-      input.supportsSrv,
-      input.srvService,
-      input.srvProtocol,
-      now,
-      input.id,
-      input.domain,
-    ]
-  )
-  if (result.affectedRows === 0) {
-    return yield* DomainConfigurationError.make({
-      message: `${input.domain} is no longer a configured vanity domain`,
+  yield* database.transaction("domains.assignment.reserve", (transaction) =>
+    Effect.gen(function* () {
+      const zones = yield* transaction.queryRows<RowDataPacket>(
+        `SELECT 1 FROM ${databaseTable("domain_zone")}
+          WHERE domain = ? AND zone_id = ?
+          FOR SHARE`,
+        [input.domain, input.zoneId]
+      )
+      if (zones.length === 0) {
+        return yield* DomainConfigurationError.make({
+          message: `${input.domain} is no longer a configured vanity domain`,
+        })
+      }
+      yield* transaction.execute(
+        `UPDATE ${databaseTable("instance_domain")}
+            SET vanity_label = ?,
+                domain = ?,
+                public_host = ?,
+                public_port = ?,
+                supports_srv = ?,
+                srv_service = ?,
+                srv_protocol = ?,
+                address_record_id = NULL,
+                address_record_type = NULL,
+                srv_record_id = NULL,
+                status = 'pending',
+                last_error = NULL,
+                updated_at = ?
+          WHERE id = ?`,
+        [
+          input.vanityLabel,
+          input.domain,
+          input.publicHost,
+          input.publicPort,
+          input.supportsSrv,
+          input.srvService,
+          input.srvProtocol,
+          now,
+          input.id,
+        ]
+      )
     })
-  }
+  )
+})
+
+/**
+ * Marks a domain as being deleted. It keeps its row, and records Kiln
+ * couldn't delete yet, until a delete finishes, and nothing re-creates it.
+ */
+export const markInstanceDomainRemovingEffect = Effect.fn(
+  "domains.assignment.markRemoving"
+)(function* (id: string) {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  yield* database.execute(
+    "domains.assignment.markRemoving",
+    `UPDATE ${databaseTable("instance_domain")}
+        SET status = 'removing', is_primary = 0, updated_at = ?
+      WHERE id = ?`,
+    [now, id]
+  )
 })
 
 /** Forgets records Kiln has deleted from Cloudflare. */

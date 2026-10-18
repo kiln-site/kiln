@@ -80,7 +80,7 @@ export interface InstanceDomainOverview {
   domain: string
   lastError: string | null
   srvActive: boolean
-  status: "active" | "error" | "pending"
+  status: "active" | "error" | "pending" | "removing"
   supportsSrv: boolean
   vanityLabel: string
 }
@@ -107,7 +107,7 @@ export interface ManagedDomainOverview {
     routeId: string
   }
   srvActive: boolean
-  status: "active" | "error" | "pending"
+  status: "active" | "error" | "pending" | "removing"
   supportsSrv: boolean
   vanityLabel: string
   /** The Cloudflare zone, for its dashboard link. */

@@ -717,6 +717,8 @@ const DomainActions = React.memo(function DomainActions({
           <Button
             aria-label={`Edit ${hostname}`}
             className="text-muted-foreground hover:text-primary"
+            // A domain being deleted can only be deleted again.
+            disabled={domain.status === "removing"}
             size="icon-sm"
             type="button"
             variant="ghost"
@@ -801,6 +803,12 @@ function domainStatusPresentation(
   if (domain.status === "active") return { label: "Active", tone: "success" }
   if (domain.status === "pending") {
     return { label: "Pending", pulse: true, tone: "warning" }
+  }
+  // Only stays deleting when Cloudflare refused; deleting again finishes it.
+  if (domain.status === "removing") {
+    return domain.lastError
+      ? { detail: domain.lastError, label: "Delete failed", tone: "danger" }
+      : { label: "Deleting", pulse: true, tone: "warning" }
   }
   return {
     detail: domain.lastError ?? undefined,

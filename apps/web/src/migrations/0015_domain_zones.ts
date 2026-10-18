@@ -88,6 +88,21 @@ export const domainZones: Migration = {
   ADD KEY \`${assignment}_instance_idx\` (\`relay_id\`,\`instance_id\`)`)
     }
 
+    // A domain being deleted keeps its row until Cloudflare confirms, so a
+    // Sync doesn't recreate it.
+    const [status] = yield* sql<{ columnType: string }>`
+      SELECT column_type AS columnType
+      FROM information_schema.columns
+      WHERE table_schema = DATABASE()
+        AND table_name = ${assignment}
+        AND column_name = 'status'
+    `
+    if (status && !status.columnType.includes("'removing'")) {
+      yield* sql.unsafe(
+        `ALTER TABLE \`${assignment}\` MODIFY \`status\` enum('pending','active','error','removing') NOT NULL DEFAULT 'pending'`
+      )
+    }
+
     // Last, so a retry can still copy the domain above.
     if (integrationColumns.has("domain")) {
       yield* sql.unsafe(`ALTER TABLE \`${integration}\`

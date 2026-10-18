@@ -209,6 +209,7 @@ function fakeCloudflare(
     })
   )
   return {
+    names: () => [...records.values()].sort(),
     records: () => [...records.keys()].sort(),
     refuseDelete,
   }
@@ -377,7 +378,7 @@ describeMysql("removing a game server's domain", () => {
 
         assert.strictEqual(failure._tag, "ExternalServiceError")
         assert.deepEqual(dns.records(), ["srv-record"])
-        assert.deepEqual(yield* assignmentStatuses, ["error"])
+        assert.deepEqual(yield* assignmentStatuses, ["removing"])
         assert.deepEqual(yield* optOutKeys, [`${relayId}:${instanceId}`])
 
         // A start or Sync before the retry doesn't bring the address back.
@@ -385,7 +386,7 @@ describeMysql("removing a game server's domain", () => {
           provisionInstanceDomain(testInstance(), relayId)
         )
         assert.deepEqual(dns.records(), ["srv-record"])
-        assert.deepEqual(yield* assignmentStatuses, ["error"])
+        assert.deepEqual(yield* assignmentStatuses, ["removing"])
 
         dns.refuseDelete.clear()
         yield* removeInstanceDomainEffect(
@@ -522,6 +523,40 @@ describeMysql("a game server with several domains", () => {
           rows.map((row) => row.public_host),
           ["new-relay.example.com", "new-relay.example.com"]
         )
+      }).pipe(Effect.provide(disabledCache))
+    )
+
+    it.effect("keeps a domain whose delete failed from coming back", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        const dns = fakeCloudflare({
+          records: ["address-record", "srv-record", "alias-record"],
+        })
+        dns.refuseDelete.add("alias-record")
+        yield* insertCredential()
+        yield* insertAssignment(testAssignment())
+        yield* insertAssignment(testAlias())
+
+        yield* removeInstanceDomainEffect(relayId, instanceId, aliasId).pipe(
+          Effect.flip
+        )
+        // The game server keeps its primary, so starts and Sync still run.
+        yield* Effect.promise(() =>
+          provisionInstanceDomain(testInstance(), relayId)
+        )
+
+        const rows = yield* selectRows<{ id: string; status: string }>(
+          "instance_domain"
+        )
+        assert.strictEqual(
+          rows.find((row) => row.id === aliasId)?.status,
+          "removing"
+        )
+        assert.notInclude(dns.names(), "alias.kiln.site")
+
+        dns.refuseDelete.clear()
+        yield* removeInstanceDomainEffect(relayId, instanceId, aliasId)
+        assert.deepEqual(yield* assignmentKeys, [`${relayId}:${instanceId}`])
       }).pipe(Effect.provide(disabledCache))
     )
 
@@ -718,8 +753,38 @@ describeMysql("saving vanity domains", () => {
             srvService: null,
             supportsSrv: false,
             vanityLabel: "fresh",
+            zoneId: "zone-1",
           }).pipe(Effect.flip)
           assert.strictEqual(refused._tag, "DomainConfigurationError")
+        })
+    )
+
+    it.effect(
+      "refuses a new game server domain in the zone its domain moved from",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* insertCredential()
+
+          // Loaded before the domain moved zones, so its records would land
+          // in the old zone.
+          const refused = yield* insertInstanceDomainAssignmentEffect({
+            domain: "kiln.site",
+            id: aliasId,
+            instanceId,
+            primary: true,
+            publicHost: "203.0.113.10",
+            publicPort: 25_565,
+            relayId,
+            srvProtocol: null,
+            srvService: null,
+            supportsSrv: false,
+            vanityLabel: "fresh",
+            zoneId: "previous-zone-id",
+          }).pipe(Effect.flip)
+
+          assert.strictEqual(refused._tag, "DomainConfigurationError")
+          assert.deepEqual(yield* assignmentKeys, [])
         })
     )
 
