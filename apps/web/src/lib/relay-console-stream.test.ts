@@ -121,6 +121,41 @@ describe("Relay console connection setup", () => {
     ])
   })
 
+  it("subscribes right behind its auth when the Relay handles it", async () => {
+    const capability = deferredCapability()
+    vi.stubGlobal("navigator", { onLine: true })
+    vi.stubGlobal("WebSocket", FakeWebSocket)
+
+    const running = Effect.runPromise(
+      openRelayConsoleStream(
+        "relay-one",
+        { id: "instance-one", kind: "instance" },
+        "https://relay.example.com"
+      ).pipe(Stream.runHead)
+    )
+    await capability.requested
+    const socket = await FakeWebSocket.opened(0)
+    socket.receive({
+      expiresAt: Date.now() + 30_000,
+      features: ["early-messages"],
+      nonce: "nonce-one",
+      relayId: "relay-one",
+      sessionId: "session-one",
+      type: "auth.challenge",
+    })
+    capability.resolve(consoleCapability())
+
+    // Both are sent before the Relay confirms the auth.
+    await socket.sentFrames(2)
+    expect(socket.sent).toEqual([
+      expect.objectContaining({ type: "auth" }),
+      { instanceId: "instance-one", type: "console.subscribe", v: 1 },
+    ])
+    socket.receive({ instanceId: "instance-one", type: "auth.ready" })
+    await running
+    expect(socket.sent).toHaveLength(2)
+  })
+
   it("closes the unauthenticated socket without proxying a permission denial", async () => {
     const capability = deferredCapability()
     const fetchFallback = vi

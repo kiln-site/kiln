@@ -279,11 +279,18 @@ function connectDirectRelayConsole(
       }
     }
     const { socket } = relaySocket
+    const subscription = {
+      instanceId: resource.id,
+      ...(resource.stream ? { stream: resource.stream } : {}),
+      type: "console.subscribe",
+      v: 1,
+    }
     const ready = yield* withConsoleTimingSpan(
       timing,
       "Authenticate Relay WebSocket",
       "websocket.console.authenticate",
       authenticateRelayBrowserSocket(relaySocket, {
+        afterAuth: subscription,
         capability: capability.capability,
         channel: "console",
         credentials: { keys, publicKeyJwk },
@@ -322,16 +329,9 @@ function connectDirectRelayConsole(
         (unsubscribe) => Effect.sync(unsubscribe)
       )
     }
-    yield* Effect.sync(() => {
-      socket.send(
-        JSON.stringify({
-          instanceId: resource.id,
-          ...(resource.stream ? { stream: resource.stream } : {}),
-          type: "console.subscribe",
-          v: 1,
-        })
-      )
-    })
+    // An older Relay takes the subscription only once authenticated.
+    if (!ready.sentAfterAuth)
+      yield* Effect.sync(() => socket.send(JSON.stringify(subscription)))
     return relaySocket
   })
 }

@@ -148,6 +148,50 @@ describe("relay browser socket integration", () => {
     expect(result.closed.code).toBe(4401)
   })
 
+  it("takes a console subscription sent right behind the auth", async () => {
+    const relay = await startRelay()
+    const socket = relay.connect(origin)
+    const messages = messageCollector(socket)
+    const challenge = await messages.next("auth.challenge")
+    expect(challenge.features).toContain("early-messages")
+
+    sendAuth(socket, relay, challenge, databaseCapability)
+    // Without waiting for `auth.ready`.
+    socket.send(
+      JSON.stringify({ instanceId: sharedId, type: "console.subscribe", v: 1 })
+    )
+
+    await messages.next("auth.ready")
+    const reset = await messages.next("reset")
+    expect(reset.instanceId).toBe(sharedId)
+    expect(lineTexts(reset)).toEqual([`container container-${sharedId} output`])
+  })
+
+  it("drops what follows an auth the Relay rejects", async () => {
+    const relay = await startRelay()
+    const socket = relay.connect(origin)
+    const messages = messageCollector(socket)
+    const received: Array<string> = []
+    socket.on("message", (data) => {
+      received.push(
+        String((JSON.parse(data.toString()) as { type: unknown }).type)
+      )
+    })
+    const challenge = await messages.next("auth.challenge")
+    const closed = messages.closed()
+
+    sendAuth(socket, relay, challenge, databaseCapability, {
+      issuerPrivateKey: generateKeyPairSync("ed25519").privateKey,
+    })
+    socket.send(
+      JSON.stringify({ instanceId: sharedId, type: "console.subscribe", v: 1 })
+    )
+
+    await expect(closed).resolves.toMatchObject({ code: 4401 })
+    expect(received).not.toContain("reset")
+    expect(received).not.toContain("auth.ready")
+  })
+
   it("streams a database's console to a capability for that database", async () => {
     const relay = await startRelay()
     const { messages, socket } = await authenticate(relay, databaseCapability)
@@ -787,6 +831,41 @@ async function authenticate(
   )
   await messages.next("auth.ready")
   return { messages, socket }
+}
+
+// Sends a browser's auth for `overrides`, as `authenticate` does, without
+// waiting for the Relay's answer.
+function sendAuth(
+  socket: WebSocket,
+  relay: TestRelay,
+  challenge: Record<string, unknown>,
+  overrides: Partial<RelayBrowserCapabilityV2>,
+  keys: { issuerPrivateKey?: KeyObject } = {}
+): void {
+  const authCapability = {
+    ...capability({
+      capabilityId: "capability-1",
+      keyThumbprint: relay.browser.keyThumbprint,
+      revision: 1,
+    }),
+    ...overrides,
+  }
+  socket.send(
+    JSON.stringify({
+      capability: encodeCapability(
+        authCapability,
+        keys.issuerPrivateKey ?? relay.issuerPrivateKey
+      ),
+      publicKeyJwk: relay.browser.jwk,
+      signature: browserProof(
+        relay.browser.privateKey,
+        challenge,
+        authCapability.capabilityId
+      ),
+      type: "auth",
+      v: 1,
+    })
+  )
 }
 
 const databaseCapability = {

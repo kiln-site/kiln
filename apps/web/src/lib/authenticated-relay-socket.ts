@@ -91,6 +91,9 @@ export const relayBrowserReconnectSchedule = Schedule.spaced(250).pipe(
 export interface OpenRelayBrowserSocket {
   challenge: {
     expiresAt: number
+    // Whether the Relay handles a message sent right behind the auth, such
+    // as a console subscription, once the auth is accepted.
+    earlyMessages: boolean
     nonce: string
     sessionId: string
   }
@@ -332,6 +335,9 @@ export function openRelayBrowserSocket(input: {
     }
     return {
       challenge: {
+        earlyMessages:
+          Array.isArray(challenge.features) &&
+          challenge.features.includes(relayBrowserEarlyMessagesFeature),
         expiresAt: challenge.expiresAt,
         nonce: challenge.nonce,
         sessionId: challenge.sessionId,
@@ -342,6 +348,9 @@ export function openRelayBrowserSocket(input: {
   })
 }
 
+/** Advertised in a Relay's browser challenge; see `earlyMessages`. */
+export const relayBrowserEarlyMessagesFeature = "early-messages"
+
 export function authenticateRelayBrowserSocket(
   opened: OpenRelayBrowserSocket,
   input: {
@@ -349,6 +358,9 @@ export function authenticateRelayBrowserSocket(
     channel: "console" | "resources"
     credentials: RelayBrowserCredentials
     instanceId: string
+    // Sent right behind the auth when the Relay handles it, saving the round
+    // trip of waiting for `auth.ready` first. Returned as sent, or not.
+    afterAuth?: Record<string, unknown>
     relayId: string
   }
 ) {
@@ -392,6 +404,10 @@ export function authenticateRelayBrowserSocket(
         v: 1,
       })
     )
+    const sentAfterAuth = Boolean(
+      input.afterAuth && opened.challenge.earlyMessages
+    )
+    if (sentAfterAuth) opened.socket.send(JSON.stringify(input.afterAuth))
     const ready = yield* authenticationMessage(opened.inbox, "confirmation")
     if (ready.type !== "auth.ready" || ready.instanceId !== input.instanceId) {
       opened.socket.close(4401, "Relay authentication failed")
@@ -399,7 +415,7 @@ export function authenticateRelayBrowserSocket(
         new RelayBrowserProtocolError("Relay browser authentication failed")
       )
     }
-    return ready
+    return Object.assign(ready, { sentAfterAuth })
   })
 }
 

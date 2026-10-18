@@ -92,6 +92,10 @@ import type { Server } from "node:http"
 import type { IncomingMessage, ServerResponse } from "node:http"
 
 const AUTHENTICATION_WINDOW_MS = 10_000
+// Advertised in the browser challenge: messages may follow the auth at once.
+export const BROWSER_EARLY_MESSAGES_FEATURE = "early-messages"
+// A browser has one message to send behind its auth; a few are tolerated.
+const MAX_EARLY_BROWSER_MESSAGES = 4
 const HTTP_PROOF_WINDOW_MS = 30_000
 const HEARTBEAT_INTERVAL_MS = 15_000
 const MAX_DIRECT_TRANSFERS = 32
@@ -171,6 +175,7 @@ const BrowserConsoleCompleteSchema = Schema.Struct({
 const decodeBrowserMessage = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Unknown)
 )
+type BrowserMessage = unknown
 const decodeBrowserSubscription = Schema.decodeUnknownOption(
   BrowserSubscribeSchema
 )
@@ -386,6 +391,9 @@ function authenticateBrowser(
 ): void {
   const challenge = {
     expiresAt: Date.now() + AUTHENTICATION_WINDOW_MS,
+    // Browsers that see this may send their next message, such as a console
+    // subscription, right behind their auth instead of waiting for it.
+    features: [BROWSER_EARLY_MESSAGES_FEATURE],
     nonce: randomBytes(32).toString("base64url"),
     relayId: options.identity.fingerprint,
     sessionId: randomUUID(),
@@ -397,6 +405,9 @@ function authenticateBrowser(
   let browserKey: ReturnType<typeof createPublicKey> | null = null
   let capability: RelayBrowserCapability | null = null
   let pendingConsoleOperations = 0
+  // Messages that arrived while the auth was being checked, handled once it
+  // is accepted with the same checks as if they had arrived after it.
+  let earlyMessages: Array<BrowserMessage> = []
   const timer = setTimeout(() => {
     if (!capability) socket.close(4401, "Browser authentication timed out")
   }, AUTHENTICATION_WINDOW_MS)
@@ -412,9 +423,17 @@ function authenticateBrowser(
       socket.close(4400, "Invalid browser message")
       return
     }
+    handleMessage(input.value)
+  })
+
+  function handleMessage(value: BrowserMessage): void {
     if (!capability) {
       if (authenticationAttempt) {
-        socket.close(4401, "Browser authentication is already in progress")
+        if (earlyMessages.length >= MAX_EARLY_BROWSER_MESSAGES) {
+          socket.close(4401, "Browser authentication is already in progress")
+          return
+        }
+        earlyMessages.push(value)
         return
       }
       authenticationAttempt = true
@@ -423,17 +442,22 @@ function authenticateBrowser(
           ensuringPromise(
             () =>
               traceRelayPromise("relay.browser.auth", () =>
-                authenticate(input.value)
+                authenticate(value)
               ),
             () => {
               authenticationAttempt = false
+              const early = earlyMessages
+              earlyMessages = []
+              // A rejected auth has already closed the socket.
+              if (capability)
+                for (const message of early) handleMessage(message)
             }
           ),
         () => socket.close(4401, "Browser authentication failed")
       )
       return
     }
-    const renewal = decodeBrowserRenew(input.value)
+    const renewal = decodeBrowserRenew(value)
     if (Option.isSome(renewal)) {
       if (authenticationAttempt || capability.version !== 2) {
         socket.close(4400, "Browser renewal is not available")
@@ -455,7 +479,7 @@ function authenticateBrowser(
       )
       return
     }
-    const consoleSubscription = decodeBrowserSubscription(input.value)
+    const consoleSubscription = decodeBrowserSubscription(value)
     if (Option.isSome(consoleSubscription)) {
       const subscription = consoleSubscription.value
       // The capability decides the resource's kind; the subscription only
@@ -484,7 +508,7 @@ function authenticateBrowser(
       )
       return
     }
-    const resourceSubscription = decodeBrowserResourceSubscription(input.value)
+    const resourceSubscription = decodeBrowserResourceSubscription(value)
     if (Option.isSome(resourceSubscription)) {
       const subscription = resourceSubscription.value
       if (
@@ -499,7 +523,7 @@ function authenticateBrowser(
       resourceHubs.subscribe(socket, subscription.instanceId)
       return
     }
-    const consoleWrite = decodeBrowserConsoleWrite(input.value)
+    const consoleWrite = decodeBrowserConsoleWrite(value)
     if (Option.isSome(consoleWrite)) {
       const request = consoleWrite.value
       if (
@@ -527,7 +551,7 @@ function authenticateBrowser(
       )
       return
     }
-    const consoleCompletion = decodeBrowserConsoleComplete(input.value)
+    const consoleCompletion = decodeBrowserConsoleComplete(value)
     if (Option.isSome(consoleCompletion)) {
       const request = consoleCompletion.value
       if (
@@ -555,7 +579,7 @@ function authenticateBrowser(
       return
     }
     socket.close(4400, "Invalid browser operation")
-  })
+  }
 
   socket.once("close", () => {
     clearTimeout(timer)

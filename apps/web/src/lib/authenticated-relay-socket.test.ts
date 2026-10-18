@@ -288,6 +288,7 @@ describe("Relay browser lease renewal", () => {
           const lease = yield* maintainRelayBrowserLease(
             {
               challenge: {
+                earlyMessages: false,
                 expiresAt: Date.now() + 30_000,
                 nonce: "challenge",
                 sessionId: "session-one",
@@ -350,6 +351,7 @@ describe("Relay browser lease renewal", () => {
           const lease = yield* maintainRelayBrowserLease(
             {
               challenge: {
+                earlyMessages: false,
                 expiresAt: Date.now() + 30_000,
                 nonce: "challenge",
                 sessionId: "session-one",
