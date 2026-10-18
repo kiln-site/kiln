@@ -165,9 +165,10 @@ function openDirectRelayConsoleStream(
             (prewarm) => (prewarm ? closeConsolePrewarm(prewarm) : Effect.void)
           )
         : undefined
-      const { inbox, socket } = prewarmed
+      const { adopted, connection } = prewarmed
         ? yield* adoptConsolePrewarm(prewarmed, connect, timing)
-        : yield* connect
+        : { adopted: false, connection: yield* connect }
+      const { inbox, socket } = connection
 
       // Commands and completions go to servers only.
       if (resource.kind === "instance") {
@@ -193,7 +194,7 @@ function openDirectRelayConsoleStream(
           timing,
           "Receive initial Relay console snapshot",
           "websocket.console.snapshot",
-          { "kiln.console.prewarmed": Boolean(prewarmed) }
+          { "kiln.console.prewarmed": adopted }
         )
       )
       return events.pipe(
@@ -483,12 +484,12 @@ function adoptConsolePrewarm(
       exit.value.success.socket.readyState === WebSocket.OPEN
     ) {
       timing?.markPrewarmed()
-      return exit.value.success
+      return { adopted: true, connection: exit.value.success }
     }
     // A prewarm that failed, or whose socket has closed since, such as when
     // a busy console filled its inbox before anyone read it, connects again.
     yield* closeConsolePrewarm(prewarm)
-    return yield* connect
+    return { adopted: false, connection: yield* connect }
   })
 }
 
