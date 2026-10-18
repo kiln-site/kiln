@@ -1,7 +1,7 @@
 import { Effect, Schema } from "effect"
 
 import { ExternalServiceError } from "@/effect/errors"
-import { readThroughCache } from "@/lib/cache"
+import { readWarmCache } from "@/lib/cache"
 
 const headers = {
   Accept: "application/json",
@@ -17,8 +17,9 @@ const decodeCachedVersionCatalog =
   Schema.decodeUnknownSync(VersionCatalogSchema)
 
 // The Startup page lists versions on every open, and mcjarfiles answers in
-// 300-650 ms, so Hearth keeps the list as long as browsers do. A last-known
-// list covers an mcjarfiles outage.
+// 300-2,000 ms, so Hearth keeps the list warm: it serves the cached list at
+// once and refreshes it in the background after 30 minutes. A failed or empty
+// answer keeps the list it would have replaced.
 export const listMcJarVersionsEffect = Effect.fn("mcjarfiles.versions")(
   function* (type: string, variant: string) {
     const load = requestJson(
@@ -39,15 +40,14 @@ export const listMcJarVersionsEffect = Effect.fn("mcjarfiles.versions")(
           : Effect.succeed({ versions: [first, ...rest] as const })
       })
     )
-    return yield* readThroughCache({
+    return yield* readWarmCache({
       decode: decodeCachedVersionCatalog,
-      fallbackOnError: true,
       load,
       policy: {
-        fallbackTtlMs: 7 * 24 * 60 * 60_000,
-        key: `mcjarfiles:versions:${type}:${variant}`,
+        freshMs: 30 * 60_000,
+        key: `mcjarfiles:versions:v2:${type}:${variant}`,
         name: "Minecraft versions",
-        ttlMs: 30 * 60_000,
+        ttlMs: 7 * 24 * 60 * 60_000,
       },
     })
   }

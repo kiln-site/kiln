@@ -120,12 +120,15 @@ export const BrickVersionPicker = React.memo(function BrickVersionPicker({
     setSide("bottom")
   }, [])
 
-  const keepMenuForAnchor = React.useCallback((event: { target: EventTarget | null; preventDefault: () => void }) => {
-    const target = event.target
-    if (target instanceof Node && anchorRef.current?.contains(target)) {
-      event.preventDefault()
-    }
-  }, [])
+  const keepMenuForAnchor = React.useCallback(
+    (event: { target: EventTarget | null; preventDefault: () => void }) => {
+      const target = event.target
+      if (target instanceof Node && anchorRef.current?.contains(target)) {
+        event.preventDefault()
+      }
+    },
+    []
+  )
 
   return (
     <Popover
@@ -193,7 +196,9 @@ export const BrickVersionPicker = React.memo(function BrickVersionPicker({
               }
             }}
           />
-          {loading ? (
+          {/* A prefilled version needs no list to show, so only an empty
+              field shows that versions are loading. */}
+          {loading && !value ? (
             <LoaderCircle className="pointer-events-none absolute top-1/2 right-2.5 size-3.5 -translate-y-1/2 animate-spin text-muted-foreground" />
           ) : (
             <ChevronDown className="pointer-events-none absolute top-1/2 right-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -220,61 +225,61 @@ export const BrickVersionPicker = React.memo(function BrickVersionPicker({
           aria-label="Supported versions"
           className="no-scrollbar max-h-52 space-y-0.5 overflow-y-auto overscroll-contain"
         >
-            {loading && versions.length === 0 && !customVersion ? (
-              <p className="px-2.5 py-4 text-center text-xs text-muted-foreground">
-                Loading versions…
-              </p>
-            ) : visibleVersions.length === 0 && !customVersion ? (
-              <p className="px-2.5 py-4 text-center text-xs text-muted-foreground">
-                {emptyMessage}
-              </p>
-            ) : (
-              <>
-                {visibleVersions.map((version) => {
-                  const selected = version === value
-                  return (
-                    <button
-                      key={version}
-                      type="button"
-                      role="option"
-                      aria-selected={selected}
-                      className={cn(
-                        "flex w-full items-center justify-between gap-3 rounded-md px-2.5 py-1.5 text-left transition-colors duration-150",
-                        selected
-                          ? "bg-primary/14 ring-1 ring-primary/35"
-                          : "hover:bg-accent/55"
-                      )}
-                      onClick={() => selectVersion(version)}
-                    >
-                      <span className="truncate font-mono text-xs tabular-nums">
-                        {version}
-                      </span>
-                      {selected ? (
-                        <Check className="size-3.5 shrink-0 text-primary" />
-                      ) : null}
-                    </button>
-                  )
-                })}
-                {customVersion ? (
+          {loading && versions.length === 0 && !customVersion ? (
+            <p className="px-2.5 py-4 text-center text-xs text-muted-foreground">
+              Loading versions…
+            </p>
+          ) : visibleVersions.length === 0 && !customVersion ? (
+            <p className="px-2.5 py-4 text-center text-xs text-muted-foreground">
+              {emptyMessage}
+            </p>
+          ) : (
+            <>
+              {visibleVersions.map((version) => {
+                const selected = version === value
+                return (
                   <button
+                    key={version}
                     type="button"
                     role="option"
-                    aria-selected={customVersion === value}
-                    className="flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-xs hover:bg-accent/55"
-                    onClick={() => selectVersion(customVersion)}
+                    aria-selected={selected}
+                    className={cn(
+                      "flex w-full items-center justify-between gap-3 rounded-md px-2.5 py-1.5 text-left transition-colors duration-150",
+                      selected
+                        ? "bg-primary/14 ring-1 ring-primary/35"
+                        : "hover:bg-accent/55"
+                    )}
+                    onClick={() => selectVersion(version)}
                   >
-                    <span className="min-w-0 truncate">
-                      <span className="font-mono tabular-nums">
-                        '{customVersion}'
-                      </span>{" "}
-                      <span className="text-muted-foreground">not found</span>
+                    <span className="truncate font-mono text-xs tabular-nums">
+                      {version}
                     </span>
+                    {selected ? (
+                      <Check className="size-3.5 shrink-0 text-primary" />
+                    ) : null}
                   </button>
-                ) : null}
-              </>
-            )}
-          </div>
-        </PopoverContent>
+                )
+              })}
+              {customVersion ? (
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={customVersion === value}
+                  className="flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-xs hover:bg-accent/55"
+                  onClick={() => selectVersion(customVersion)}
+                >
+                  <span className="min-w-0 truncate">
+                    <span className="font-mono tabular-nums">
+                      '{customVersion}'
+                    </span>{" "}
+                    <span className="text-muted-foreground">not found</span>
+                  </span>
+                </button>
+              ) : null}
+            </>
+          )}
+        </div>
+      </PopoverContent>
     </Popover>
   )
 })
