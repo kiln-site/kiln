@@ -1224,6 +1224,8 @@ describe("game server pages", () => {
     unsubscribe()
   })
 
+  const settleReads = () => new Promise((resolve) => setTimeout(resolve, 20))
+
   // Each read Hearth receives, answered by the test. `answered` settles
   // after the read's own code has seen the answer, before the query stores it.
   function stagedPageReads() {
@@ -1385,6 +1387,34 @@ describe("game server pages", () => {
 
     await vi.waitFor(() => expect(page()).toEqual(foundPage(alpha)))
     unsubscribe()
+  })
+
+  it("does not reread a page named by any of its IDs on unrelated pushes", async () => {
+    const clients = fleet()
+    relayServer.getServerWorkspace.mockResolvedValue(foundPage(alpha))
+    const unsubscribes = await Promise.all(
+      [
+        alpha.shortId,
+        alpha.routeId,
+        alpha.id,
+        `${alpha.relayId}-${alpha.id}`,
+      ].map(async (serverId) => {
+        const options = serverWorkspaceQueryOptions(serverId)
+        clients.queryClient.setQueryData(options.queryKey, foundPage(alpha))
+        return new QueryObserver(clients.queryClient, options).subscribe(
+          () => undefined
+        )
+      })
+    )
+    relayServer.getServerWorkspace.mockClear()
+
+    applyEvent(clients, instancesDelta([beta]))
+    applyEvent(clients, instancesDelta([{ ...alpha, status: "stopped" }]))
+    applyEvent(clients, relayStatus("relay-b", "unreachable"))
+    await settleReads()
+
+    expect(relayServer.getServerWorkspace).not.toHaveBeenCalled()
+    for (const unsubscribe of unsubscribes) unsubscribe()
   })
 
   it("rereads a mounted page after a gap in pushed changes", async () => {

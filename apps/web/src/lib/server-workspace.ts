@@ -125,9 +125,7 @@ export async function ensureServerWorkspace(
     query !== undefined &&
     instance !== undefined &&
     !readState(queryClient).unresolvedSince.has(query.queryHash) &&
-    (serverId === instance.shortId ||
-      serverId === instance.routeId ||
-      serverId === instance.id)
+    namesById(serverId, instance)
   if (reusable && cached) return cached
   // A change during the read may leave its route needing resolution again.
   for (let attempt = 1; ; attempt += 1) {
@@ -345,11 +343,17 @@ function renamedAway(serverId: string, workspace: ServerWorkspace) {
 
 function foundByName(serverId: string, workspace: FoundServerWorkspace) {
   const [instance] = workspace.snapshot.instances
+  return instance !== undefined && !namesById(serverId, instance)
+}
+
+// Whether `serverId` is one of the server's IDs: short, Relay-qualified
+// short or full, or full.
+function namesById(serverId: string, instance: ServerInstance) {
   return (
-    instance !== undefined &&
-    serverId !== instance.shortId &&
-    serverId !== instance.routeId &&
-    serverId !== instance.id
+    serverId === instance.shortId ||
+    serverId === instance.routeId ||
+    serverId === instance.id ||
+    serverId === `${instance.relayId}-${instance.id}`
   )
 }
 
