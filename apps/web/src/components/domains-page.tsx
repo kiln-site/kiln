@@ -18,6 +18,7 @@ import {
   ExternalLink,
   Globe2,
   KeyRound,
+  Link2,
   LoaderCircle,
   Pencil,
   Plus,
@@ -71,7 +72,6 @@ import {
   InfoCopyValue,
   InfoFact,
   InfoRailCard,
-  InfoRailGroup,
 } from "@/components/info-page"
 import { InfraSyncButton } from "@/components/infra-sync-button"
 import { InstanceCard } from "@/components/instance-card"
@@ -230,7 +230,6 @@ export const DomainsPage = React.memo(function DomainsPage({
     <WorkspacePage
       rail={
         <DomainsRail
-          domainUsage={domainUsage}
           integration={data.integration}
           onConfigure={openConfiguration}
         />
@@ -342,11 +341,9 @@ function selectScopeServers(
 
 /** What vanity is set up to do, beside the table. */
 const DomainsRail = React.memo(function DomainsRail({
-  domainUsage,
   integration,
   onConfigure,
 }: {
-  domainUsage: ReadonlyMap<string, number>
   integration: DomainIntegration | null
   onConfigure: () => void
 }) {
@@ -401,60 +398,42 @@ const DomainsRail = React.memo(function DomainsRail({
       </InfoRailCard>
 
       {integration && integration.domains.length > 0 ? (
-        <InfoRailGroup title="Domains">
-          <table className="w-full table-fixed border bg-background/45 text-[0.8125rem]">
-            <thead>
-              <tr className="type-technical-label border-b text-left text-muted-foreground/80">
-                <th className="px-3 py-2 font-normal">Domain</th>
-                <th className="w-20 px-2 py-2 text-right font-normal whitespace-nowrap">
-                  In use
-                </th>
-                <th className="w-9">
-                  <span className="sr-only">Cloudflare</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border/60">
-              {integration.domains.map((domain) => (
-                <tr
-                  key={domain.domain}
-                  className={domain.enabled ? undefined : "text-muted-foreground"}
-                >
-                  <td className="truncate px-3 py-2 font-mono">
-                    {domain.domain}
-                  </td>
-                  <td className="px-2 py-2 text-right font-semibold tabular-nums">
-                    {domainUsage.get(domain.domain) ?? 0}
-                  </td>
-                  <td className="pr-1.5 text-right">
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          asChild
-                          className="text-muted-foreground hover:text-primary"
-                          size="icon-xs"
-                          variant="ghost"
-                        >
-                          <a
-                            aria-label={`View ${domain.domain} on Cloudflare`}
-                            href={cloudflareDnsRecordsUrl(domain.zoneName)}
-                            rel="noreferrer"
-                            target="_blank"
-                          >
-                            <ExternalLink />
-                          </a>
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent side="left">
-                        View on Cloudflare
-                      </TooltipContent>
-                    </Tooltip>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </InfoRailGroup>
+        <InfoRailCard icon={<Link2 />} title="Domains">
+          {integration.domains.map((domain) => (
+            <div
+              key={domain.domain}
+              className={`flex min-h-10 items-center gap-2 border-b border-border/60 py-1.5 text-[0.8125rem] last:border-b-0 ${
+                domain.enabled ? "" : "text-muted-foreground"
+              }`}
+            >
+              <dt className="min-w-0 flex-1 truncate font-mono">
+                {domain.domain}
+              </dt>
+              <dd className="-mr-1.5 shrink-0">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      asChild
+                      className="text-muted-foreground hover:text-primary"
+                      size="icon-xs"
+                      variant="ghost"
+                    >
+                      <a
+                        aria-label={`View ${domain.domain} on Cloudflare`}
+                        href={cloudflareDnsRecordsUrl(domain.zoneName)}
+                        rel="noreferrer"
+                        target="_blank"
+                      >
+                        <ExternalLink />
+                      </a>
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="left">View on Cloudflare</TooltipContent>
+                </Tooltip>
+              </dd>
+            </div>
+          ))}
+        </InfoRailCard>
       ) : null}
     </>
   )
