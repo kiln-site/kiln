@@ -1077,7 +1077,11 @@ describeMysql("backup reconciliation", () => {
             input: {
               artifactKind: "restic_snapshot",
               backupId: "backup-one",
-              destination: { artifactId: "backup-one", kind: "restic" },
+              destination: {
+                artifactId: "backup-one",
+                kind: "restic",
+                repository: { kind: "local" },
+              },
               exclude: [],
               kind: "create",
               maxBytes: null,
