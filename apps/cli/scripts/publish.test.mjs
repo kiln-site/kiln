@@ -168,20 +168,18 @@ it.each(["missing versions", "stalled registry reads"])(
     vi.useFakeTimers()
     let launcherPublished = false
     const conflict = new Error("Cannot publish over previously staged version")
+    const registryRecovery = Date.now() + 6 * 60_000
     const publishing = publishPackages(async ([command, source], options) => {
       if (command === "view") {
-        if (outcome === "stalled registry reads")
-          await new Promise((_, reject) =>
-            setTimeout(
-              () =>
-                reject(
-                  new Error(
-                    "npm view terminated while waiting for the registry"
-                  )
-                ),
-              options.timeout
-            )
+        if (outcome === "stalled registry reads") {
+          // Model a slow registry that eventually recovers, even if the caller
+          // forgets to bound reads. Recovery must not extend the publish budget.
+          await new Promise((resolve) =>
+            setTimeout(resolve, Math.min(30_000, options?.timeout ?? 30_000))
           )
+          if (Date.now() >= registryRecovery) return `${version}\n`
+          throw new Error("npm view terminated while waiting for the registry")
+        }
         return ""
       }
       if (source === join(dist, "npm")) launcherPublished = true
@@ -196,8 +194,7 @@ it.each(["missing versions", "stalled registry reads"])(
       return true
     })
 
-    await vi.runAllTimersAsync()
-    await rejected
+    await Promise.all([vi.runAllTimersAsync(), rejected])
     assert.equal(launcherPublished, false)
   }
 )
