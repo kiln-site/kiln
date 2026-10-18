@@ -419,6 +419,35 @@ describe("Relay console prewarm", () => {
     ])
   })
 
+  it("subscribes a hovered link's connection right behind its auth", async () => {
+    deferredCapability().resolve(consoleCapability())
+    vi.stubGlobal("navigator", { onLine: true })
+    vi.stubGlobal("WebSocket", FakeWebSocket)
+
+    prewarmRelayConsole(prewarm)
+    const socket = await FakeWebSocket.opened(0)
+    dispatchChallenge(socket, { features: ["early-messages"] })
+    // Both go out before the Relay confirms the auth.
+    await socket.sentFrames(2)
+    socket.receive({ instanceId: "instance-one", type: "auth.ready" })
+    socket.receive({ instanceId: "instance-one", lifecycle: [], type: "ready" })
+
+    const events = await Effect.runPromise(
+      openConsole().pipe(Stream.take(2), Stream.runCollect)
+    )
+
+    expect(events).toContainEqual({
+      instanceId: "instance-one",
+      lifecycle: [],
+      type: "ready",
+    })
+    expect(FakeWebSocket.instances).toHaveLength(1)
+    expect(socket.sent).toEqual([
+      expect.objectContaining({ type: "auth" }),
+      { instanceId: "instance-one", type: "console.subscribe", v: 1 },
+    ])
+  })
+
   it("closes a read-only prewarm when a console that can write opens", async () => {
     deferredCapability().resolve(consoleCapability())
     vi.stubGlobal("navigator", { onLine: true })
@@ -881,6 +910,7 @@ function dispatchChallenge(
   socket: FakeWebSocket,
   overrides: Partial<{
     expiresAt: number
+    features: Array<string>
     nonce: string
     relayId: string
     sessionId: string
