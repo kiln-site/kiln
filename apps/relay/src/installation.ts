@@ -52,7 +52,7 @@ export const adoptInstallationId = Effect.fn("Relay.installation.adopt")(
     }
     if (!isKilnInstallationId(installationId)) {
       yield* Effect.logWarning(
-        "Ignoring Hearth's installation ID: it must use 1-128 letters, numbers, dots, underscores, or hyphens"
+        "Ignoring Hearth's installation ID: it must use 1-120 letters, numbers, dots, underscores, or hyphens"
       )
       return
     }

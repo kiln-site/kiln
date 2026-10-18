@@ -389,7 +389,7 @@ function optionalInstallationId(environment: NodeJS.ProcessEnv): string | null {
   if (!value) return null
   if (!isKilnInstallationId(value)) {
     throw new Error(
-      "KILN_INSTALLATION_ID must use 1-128 letters, numbers, dots, underscores, or hyphens"
+      "KILN_INSTALLATION_ID must use 1-120 letters, numbers, dots, underscores, or hyphens"
     )
   }
   return value

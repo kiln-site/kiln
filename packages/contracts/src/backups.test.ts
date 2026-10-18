@@ -2,8 +2,10 @@ import { describe, expect, it } from "vite-plus/test"
 
 import {
   backupArchiveManifestSchema,
+  backupTargetSchema,
   relayBackupTaskSchema,
 } from "./backups.js"
+import { isKilnInstallationId } from "./installation-id.js"
 
 const createInput = {
   artifactKind: "archive",
@@ -44,6 +46,16 @@ const succeededCreateTask = {
 } as const
 
 describe("backup contracts", () => {
+  it("takes any installation ID as a platform backup target", () => {
+    const longest = "a".repeat(120)
+
+    expect(isKilnInstallationId(longest)).toBe(true)
+    expect(isKilnInstallationId(`${longest}a`)).toBe(false)
+    expect(
+      backupTargetSchema.safeParse({ id: longest, kind: "platform" }).success
+    ).toBe(true)
+  })
+
   it("keeps v1 archive manifests readable", () => {
     expect(
       backupArchiveManifestSchema.safeParse({

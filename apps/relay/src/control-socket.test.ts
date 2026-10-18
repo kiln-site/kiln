@@ -97,7 +97,7 @@ describe("Relay control socket", () => {
 
   it("adopts Hearth's installation ID before the session accepts requests", async () => {
     // The longest ID Hearth accepts from KILN_INSTALLATION_ID.
-    const hearthInstallationId = `Kiln.Production_${"a".repeat(112)}`
+    const hearthInstallationId = `Kiln.Production_${"a".repeat(104)}`
     const installation = {
       installationId: "previous-installation",
       installationIdConfigured: false,
