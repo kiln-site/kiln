@@ -55,9 +55,9 @@ import { Route as AppInfraIndexRouteImport } from './routes/_app.infra.index'
 import { Route as AppInfraAppsRouteImport } from './routes/_app.infra.apps'
 import { Route as AppInfraDatabasesRouteImport } from './routes/_app.infra.databases'
 import { Route as AppInfraDomainsRouteImport } from './routes/_app.infra.domains'
+import { Route as AppInfraOverviewRouteImport } from './routes/_app.infra.overview'
 import { Route as AppInfraRelaysRouteImport } from './routes/_app.infra.relays'
 import { Route as AppInfraServersRouteImport } from './routes/_app.infra.servers'
-import { Route as AppInfraSetupRouteImport } from './routes/_app.infra.setup'
 import { Route as AppInfraTailscaleRouteImport } from './routes/_app.infra.tailscale'
 import { Route as AppRelayRelayIdRouteImport } from './routes/_app/relay/$relayId'
 import { Route as AppServerServerIdRouteImport } from './routes/_app/server/$serverId'
@@ -341,6 +341,11 @@ const AppInfraDomainsRoute = AppInfraDomainsRouteImport.update({
   path: '/domains',
   getParentRoute: () => AppInfraRoute,
 } as any)
+const AppInfraOverviewRoute = AppInfraOverviewRouteImport.update({
+  id: '/overview',
+  path: '/overview',
+  getParentRoute: () => AppInfraRoute,
+} as any)
 const AppInfraRelaysRoute = AppInfraRelaysRouteImport.update({
   id: '/relays',
   path: '/relays',
@@ -349,11 +354,6 @@ const AppInfraRelaysRoute = AppInfraRelaysRouteImport.update({
 const AppInfraServersRoute = AppInfraServersRouteImport.update({
   id: '/servers',
   path: '/servers',
-  getParentRoute: () => AppInfraRoute,
-} as any)
-const AppInfraSetupRoute = AppInfraSetupRouteImport.update({
-  id: '/setup',
-  path: '/setup',
   getParentRoute: () => AppInfraRoute,
 } as any)
 const AppInfraTailscaleRoute = AppInfraTailscaleRouteImport.update({
@@ -672,9 +672,9 @@ export interface FileRoutesByFullPath {
   '/infra/apps': typeof AppInfraAppsRoute
   '/infra/databases': typeof AppInfraDatabasesRoute
   '/infra/domains': typeof AppInfraDomainsRoute
+  '/infra/overview': typeof AppInfraOverviewRoute
   '/infra/relays': typeof AppInfraRelaysRoute
   '/infra/servers': typeof AppInfraServersRoute
-  '/infra/setup': typeof AppInfraSetupRoute
   '/infra/tailscale': typeof AppInfraTailscaleRoute
   '/relay/$relayId': typeof AppRelayRelayIdRouteWithChildren
   '/server/$serverId': typeof AppServerServerIdRouteWithChildren
@@ -769,9 +769,9 @@ export interface FileRoutesByTo {
   '/infra/apps': typeof AppInfraAppsRoute
   '/infra/databases': typeof AppInfraDatabasesRoute
   '/infra/domains': typeof AppInfraDomainsRoute
+  '/infra/overview': typeof AppInfraOverviewRoute
   '/infra/relays': typeof AppInfraRelaysRoute
   '/infra/servers': typeof AppInfraServersRoute
-  '/infra/setup': typeof AppInfraSetupRoute
   '/infra/tailscale': typeof AppInfraTailscaleRoute
   '/settings/account': typeof AppSettingsAccountRoute
   '/settings/appearance': typeof AppSettingsAppearanceRoute
@@ -872,9 +872,9 @@ export interface FileRoutesById {
   '/_app/infra/apps': typeof AppInfraAppsRoute
   '/_app/infra/databases': typeof AppInfraDatabasesRoute
   '/_app/infra/domains': typeof AppInfraDomainsRoute
+  '/_app/infra/overview': typeof AppInfraOverviewRoute
   '/_app/infra/relays': typeof AppInfraRelaysRoute
   '/_app/infra/servers': typeof AppInfraServersRoute
-  '/_app/infra/setup': typeof AppInfraSetupRoute
   '/_app/infra/tailscale': typeof AppInfraTailscaleRoute
   '/_app/relay/$relayId': typeof AppRelayRelayIdRouteWithChildren
   '/_app/server/$serverId': typeof AppServerServerIdRouteWithChildren
@@ -977,9 +977,9 @@ export interface FileRouteTypes {
     | '/infra/apps'
     | '/infra/databases'
     | '/infra/domains'
+    | '/infra/overview'
     | '/infra/relays'
     | '/infra/servers'
-    | '/infra/setup'
     | '/infra/tailscale'
     | '/relay/$relayId'
     | '/server/$serverId'
@@ -1074,9 +1074,9 @@ export interface FileRouteTypes {
     | '/infra/apps'
     | '/infra/databases'
     | '/infra/domains'
+    | '/infra/overview'
     | '/infra/relays'
     | '/infra/servers'
-    | '/infra/setup'
     | '/infra/tailscale'
     | '/settings/account'
     | '/settings/appearance'
@@ -1176,9 +1176,9 @@ export interface FileRouteTypes {
     | '/_app/infra/apps'
     | '/_app/infra/databases'
     | '/_app/infra/domains'
+    | '/_app/infra/overview'
     | '/_app/infra/relays'
     | '/_app/infra/servers'
-    | '/_app/infra/setup'
     | '/_app/infra/tailscale'
     | '/_app/relay/$relayId'
     | '/_app/server/$serverId'
@@ -1594,6 +1594,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppInfraDomainsRouteImport
       parentRoute: typeof AppInfraRoute
     }
+    '/_app/infra/overview': {
+      id: '/_app/infra/overview'
+      path: '/overview'
+      fullPath: '/infra/overview'
+      preLoaderRoute: typeof AppInfraOverviewRouteImport
+      parentRoute: typeof AppInfraRoute
+    }
     '/_app/infra/relays': {
       id: '/_app/infra/relays'
       path: '/relays'
@@ -1606,13 +1613,6 @@ declare module '@tanstack/react-router' {
       path: '/servers'
       fullPath: '/infra/servers'
       preLoaderRoute: typeof AppInfraServersRouteImport
-      parentRoute: typeof AppInfraRoute
-    }
-    '/_app/infra/setup': {
-      id: '/_app/infra/setup'
-      path: '/setup'
-      fullPath: '/infra/setup'
-      preLoaderRoute: typeof AppInfraSetupRouteImport
       parentRoute: typeof AppInfraRoute
     }
     '/_app/infra/tailscale': {
@@ -2031,9 +2031,9 @@ interface AppInfraRouteChildren {
   AppInfraAppsRoute: typeof AppInfraAppsRoute
   AppInfraDatabasesRoute: typeof AppInfraDatabasesRoute
   AppInfraDomainsRoute: typeof AppInfraDomainsRoute
+  AppInfraOverviewRoute: typeof AppInfraOverviewRoute
   AppInfraRelaysRoute: typeof AppInfraRelaysRoute
   AppInfraServersRoute: typeof AppInfraServersRoute
-  AppInfraSetupRoute: typeof AppInfraSetupRoute
   AppInfraTailscaleRoute: typeof AppInfraTailscaleRoute
   AppInfraIndexRoute: typeof AppInfraIndexRoute
   AppInfraUpdatesChangelogRoute: typeof AppInfraUpdatesChangelogRoute
@@ -2044,9 +2044,9 @@ const AppInfraRouteChildren: AppInfraRouteChildren = {
   AppInfraAppsRoute: AppInfraAppsRoute,
   AppInfraDatabasesRoute: AppInfraDatabasesRoute,
   AppInfraDomainsRoute: AppInfraDomainsRoute,
+  AppInfraOverviewRoute: AppInfraOverviewRoute,
   AppInfraRelaysRoute: AppInfraRelaysRoute,
   AppInfraServersRoute: AppInfraServersRoute,
-  AppInfraSetupRoute: AppInfraSetupRoute,
   AppInfraTailscaleRoute: AppInfraTailscaleRoute,
   AppInfraIndexRoute: AppInfraIndexRoute,
   AppInfraUpdatesChangelogRoute: AppInfraUpdatesChangelogRoute,

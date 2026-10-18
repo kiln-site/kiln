@@ -9,6 +9,7 @@ import {
   FolderDown,
   Globe2,
   History,
+  LayoutDashboard,
   ListTodo,
   Network,
   Palette,
@@ -21,7 +22,6 @@ import {
   Table2,
   TerminalSquare,
   Waypoints,
-  Wrench,
 } from "lucide-react"
 import {
   builtinTailscaleBrickId,
@@ -66,37 +66,35 @@ export interface NavigationAccessCapabilities {
   isPlatformAdmin: boolean
 }
 
+// Tabs render in this order, with a divider wherever `group` changes.
 export const infrastructureDestinations = [
   {
     access: "manage-relays",
-    icon: Wrench,
-    keywords: ["infrastructure", "configure"],
-    label: "Setup",
-    to: "/infra/setup",
+    group: "overview",
+    icon: LayoutDashboard,
+    keywords: ["infrastructure", "summary", "setup"],
+    label: "Overview",
+    to: "/infra/overview",
   },
   {
     access: "manage-relays",
+    group: "resources",
     icon: RadioTower,
     keywords: ["infrastructure", "nodes"],
     label: "Relays",
     to: "/infra/relays",
   },
   {
-    access: "platform-admin",
-    icon: Waypoints,
-    keywords: ["infrastructure", "network"],
-    label: "Tailscale",
-    to: "/infra/tailscale",
-  },
-  {
-    access: "platform-admin",
-    icon: Globe2,
-    keywords: ["infrastructure", "cloudflare", "urls"],
-    label: "Domains",
-    to: "/infra/domains",
+    access: "database-read",
+    group: "resources",
+    icon: Database,
+    keywords: ["infrastructure", "mysql"],
+    label: "Databases",
+    to: "/infra/databases",
   },
   {
     access: "instance-read",
+    group: "resources",
     icon: Server,
     keywords: ["infrastructure", "instances", "servers"],
     // Users see "Game Servers"; the code keeps "servers". See AGENTS.md Naming.
@@ -104,21 +102,34 @@ export const infrastructureDestinations = [
     to: "/infra/servers",
   },
   {
-    access: "database-read",
-    icon: Database,
-    keywords: ["infrastructure", "mysql"],
-    label: "Databases",
-    to: "/infra/databases",
-  },
-  {
     access: "app-read",
+    group: "resources",
     icon: Boxes,
     keywords: ["infrastructure", "docker", "compose", "containers"],
     label: "Apps",
     to: "/infra/apps",
   },
+  {
+    access: "platform-admin",
+    group: "network",
+    icon: Waypoints,
+    keywords: ["infrastructure", "network"],
+    label: "Tailscale",
+    to: "/infra/tailscale",
+  },
+  {
+    access: "platform-admin",
+    group: "network",
+    icon: Globe2,
+    keywords: ["infrastructure", "cloudflare", "urls"],
+    label: "Domains",
+    to: "/infra/domains",
+  },
 ] as const satisfies ReadonlyArray<
-  NavigationDestination & { access: InfrastructureDestinationAccess }
+  NavigationDestination & {
+    access: InfrastructureDestinationAccess
+    group: "network" | "overview" | "resources"
+  }
 >
 
 export const automationDestinations = [
