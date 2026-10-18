@@ -10,6 +10,9 @@ export interface ConsoleLoadTiming {
   cancel: () => void
   markCache: (cacheHit: boolean) => void
   markFirstRowsPainted: (lineCount: number) => void
+  // The console took over a connection opened before it rendered, such as
+  // by hovering its link.
+  markPrewarmed: () => void
   markReady: (transport: "direct" | "hearth" | null, lineCount: number) => void
   markRetryableFailure: (cause: unknown) => void
   markTransport: (transport: "direct" | "hearth") => void
@@ -90,6 +93,11 @@ export function createConsoleLoadTiming(): ConsoleLoadTiming {
     },
     markFirstRowsPainted: (lineCount) => {
       finishRows(cacheHit ? "cached" : "stream", lineCount)
+    },
+    markPrewarmed: () => {
+      if (!open) return
+      start()
+      openSpan?.setAttribute("kiln.console.prewarmed", true)
     },
     markReady: (transport, lineCount) => {
       if (!open) return

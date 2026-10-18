@@ -22,11 +22,11 @@ export const Route = createFileRoute("/_app/server/$serverId/console")({
       params.serverId
     )
   },
-  loader: ({ context, params, preload }) => {
-    // Hovering a console link starts its connection; a navigation opens the
-    // console itself at once, so it does not prewarm a second one.
+  loader: ({ context, params }) => {
+    // Hovering a console link opens its connection, and so does following
+    // one, before the page renders. The console adopts it.
     const { instance, queryClient } = context
-    if (!preload || typeof window === "undefined" || !instance) return
+    if (typeof window === "undefined" || !instance) return
     forkPromise(async () => {
       const workspace = await ensureServerWorkspace(
         queryClient,
