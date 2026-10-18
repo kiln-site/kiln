@@ -29,6 +29,7 @@ import type {
   RelayControlRequest,
   RelayNode,
   RelayProxyBrowserMetadata,
+  RelayProxyMode,
   RelaySnapshot,
   RelaySnapshotDelta,
   RelaySystemUpdate,
@@ -253,6 +254,13 @@ export function relayConnectionState(relayId: string): RelayConnectionState {
  */
 export function relayConnectionNode(relayId: string): RelayNode | null {
   return connections.get(relayId)?.pushedNode ?? null
+}
+
+/** The proxy mode from the snapshot this Relay last pushed, if any. */
+export function relayConnectionProxyMode(
+  relayId: string
+): RelayProxyMode | null {
+  return connections.get(relayId)?.pushedSnapshot?.relay?.proxyMode ?? null
 }
 
 export function relayConnectionIds(): ReadonlyArray<string> {

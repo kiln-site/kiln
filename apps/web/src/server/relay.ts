@@ -113,6 +113,7 @@ import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import {
   isRelayUpdating,
   relayConnectionNode,
+  relayConnectionProxyMode,
   relayConnectionFailing,
   relayConnectionSnapshot,
   relayConnectionState,
@@ -300,6 +301,26 @@ export const getRelayNodeReadings = createServerFn({
       : []
   })
 })
+
+/**
+ * Each readable Relay's proxy mode, from the snapshot its connection last
+ * pushed, so the infrastructure map can show which Relays run Traefik
+ * without a Relay round trip. Null while this process has no connection.
+ */
+export const getRelayProxyModes = createServerFn({ method: "GET" }).handler(
+  async () => {
+    const user = await requireEligibleResourceUser()
+    const { grants, relays } = await authorizedRelays(
+      user,
+      await listPersistedRelays()
+    )
+    return relays.flatMap((relay) =>
+      relay.enabled && canReadRelayNode(user, relay.id, grants)
+        ? [{ mode: relayConnectionProxyMode(relay.id), relayId: relay.id }]
+        : []
+    )
+  }
+)
 
 export const getFreshRelayConnectionState = createServerFn({
   method: "POST",

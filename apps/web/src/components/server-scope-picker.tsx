@@ -1,5 +1,5 @@
 import * as React from "react"
-import { ArrowLeftRight, Database, Network, Server } from "lucide-react"
+import { ArrowLeftRight, Boxes, Database, Network, Server } from "lucide-react"
 
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
@@ -21,28 +21,36 @@ import {
 } from "@/components/instance-picker"
 import { WorkspaceSummaryCard } from "@/components/workspace-summary-card"
 
-/** A scope target: one server, database, or Relay. */
-export interface ServerPickerOption {
+type ScopeKind = "app" | "database" | "relay" | "server"
+
+/**
+ * A scope target: one server, database, or Relay. Pages that can scope to an
+ * app opt in through the kind parameter.
+ */
+export interface ServerPickerOption<
+  K extends ScopeKind = Exclude<ScopeKind, "app">,
+> {
   description?: string
   disabled?: boolean
   id: string
-  kind?: "database" | "relay" | "server"
+  kind?: K
   name: string
   relayId: string
   relayName: string
 }
 
-export const serverPickerOptionKey = (server: ServerPickerOption) =>
+export const serverPickerOptionKey = (
+  server: ServerPickerOption<ScopeKind>
+) =>
   server.kind
     ? `${server.kind}:${server.relayId}:${server.id}`
     : `${server.relayId}:${server.id}`
-
-type ScopeKind = NonNullable<ServerPickerOption["kind"]>
 
 const scopeKindPresentation: Record<
   ScopeKind,
   { Icon: typeof Server; label: string; one: string; other: string }
 > = {
+  app: { Icon: Boxes, label: "All apps", one: "app", other: "apps" },
   database: {
     Icon: Database,
     label: "All databases",
@@ -58,7 +66,32 @@ const scopeKindPresentation: Record<
   },
 }
 
-export const ServerScopePicker = React.memo(function ServerScopePicker({
+interface ServerScopePickerProps<K extends ScopeKind> {
+  allLabel?: string
+  /** Offers "All instances", which selects `null`. */
+  allowAll?: boolean
+  ariaLabel?: string
+  changeLabel?: string
+  chooseLabel?: string
+  emptyMessage?: string
+  manageSettingsControl?: React.ReactNode
+  manageSettingsTooltip?: string
+  onSelect: (server: ServerPickerOption<K> | null) => void
+  /** Enables whole-type scopes such as "All databases". */
+  onSelectKind?: (kind: Exclude<K, "app">) => void
+  selectedKind?: K | null
+  selectedRelayName?: string
+  selectedServer: ServerPickerOption<K> | null
+  servers: ReadonlyArray<ServerPickerOption<K>>
+}
+
+export const ServerScopePicker = React.memo(ServerScopePickerView) as <
+  K extends ScopeKind = Exclude<ScopeKind, "app">,
+>(
+  props: ServerScopePickerProps<K>
+) => React.ReactElement
+
+function ServerScopePickerView<K extends ScopeKind>({
   allLabel = "All game servers",
   allowAll = true,
   ariaLabel = "Accessible game servers",
@@ -73,24 +106,7 @@ export const ServerScopePicker = React.memo(function ServerScopePicker({
   selectedRelayName,
   selectedServer,
   servers,
-}: {
-  allLabel?: string
-  /** Offers "All instances", which selects `null`. */
-  allowAll?: boolean
-  ariaLabel?: string
-  changeLabel?: string
-  chooseLabel?: string
-  emptyMessage?: string
-  manageSettingsControl?: React.ReactNode
-  manageSettingsTooltip?: string
-  onSelect: (server: ServerPickerOption | null) => void
-  /** Enables whole-type scopes such as "All databases". */
-  onSelectKind?: (kind: ScopeKind) => void
-  selectedKind?: ScopeKind | null
-  selectedRelayName?: string
-  selectedServer: ServerPickerOption | null
-  servers: ReadonlyArray<ServerPickerOption>
-}) {
+}: ServerScopePickerProps<K>) {
   const [pickerOpen, setPickerOpen] = React.useState(false)
   const optionsByKey = React.useMemo(
     () =>
@@ -124,7 +140,7 @@ export const ServerScopePicker = React.memo(function ServerScopePicker({
     (group: InstancePickerGroup) => {
       if (group === "all") onSelect(null)
       // Apps have no backups or activity to scope to.
-      else if (group !== "app") onSelectKind?.(group)
+      else if (group !== "app") onSelectKind?.(group as Exclude<K, "app">)
       setPickerOpen(false)
     },
     [onSelect, onSelectKind]
@@ -143,11 +159,8 @@ export const ServerScopePicker = React.memo(function ServerScopePicker({
       ? `${kindCount} accessible ${kindCount === 1 ? kindScope.one : kindScope.other}, including new ones`
       : `${servers.length} accessible ${servers.length === 1 ? "instance" : "instances"}`
   const ScopeIcon =
-    (selectedServer?.kind ?? selectedKind) === "database"
-      ? Database
-      : (selectedServer?.kind ?? selectedKind) === "relay"
-        ? Network
-        : Server
+    scopeKindPresentation[selectedServer?.kind ?? selectedKind ?? "server"]
+      .Icon
 
   return (
     <div className="mb-3">
@@ -213,9 +226,11 @@ export const ServerScopePicker = React.memo(function ServerScopePicker({
       </Popover>
     </div>
   )
-})
+}
 
-function serverScopePickerItem(server: ServerPickerOption): InstancePickerItem {
+function serverScopePickerItem(
+  server: ServerPickerOption<ScopeKind>
+): InstancePickerItem {
   const kind = server.kind ?? "server"
   return {
     disabled: server.disabled,
