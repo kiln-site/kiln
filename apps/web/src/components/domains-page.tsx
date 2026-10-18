@@ -583,7 +583,8 @@ const ManagedDomainsTable = React.memo(function ManagedDomainsTable({
           {
             // Phones keep the domain, which this table is about.
             hideBelow: "sm",
-            width: "minmax(8rem,0.55fr)",
+            // Keep the game and Brick readable; leave extra space for domains.
+            width: "clamp(13rem,18vw,15rem)",
           },
           { cellClassName: "px-0" }
         ),
