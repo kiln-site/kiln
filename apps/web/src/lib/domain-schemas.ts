@@ -31,6 +31,17 @@ export const vanityLabelSchema = z
       )
   )
 
+export const domainAssignmentStrategySchema = z.enum([
+  "default",
+  "random",
+  "balanced",
+])
+
+/** Whether `domain` is `zoneName` or a name inside it. */
+export function domainInZone(domain: string, zoneName: string): boolean {
+  return domain === zoneName || domain.endsWith(`.${zoneName}`)
+}
+
 export const domainBlacklistPatternsSchema = z
   .array(z.string().trim().min(1).max(128))
   .max(32)

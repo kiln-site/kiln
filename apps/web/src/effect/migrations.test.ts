@@ -7,6 +7,7 @@ import { migrations } from "@/migrations"
 import { baseline } from "@/migrations/0001_baseline"
 import { fileActivityRoots } from "@/migrations/0009_file_activity_roots"
 import { incrementalBackupArtifacts } from "@/migrations/0013_incremental_backup_artifacts"
+import { domainZones } from "@/migrations/0015_domain_zones"
 import { baselineTables } from "@/migrations/baseline-schema"
 import { describeMysql, testDatabaseClient } from "@/test/database"
 import {
@@ -70,8 +71,9 @@ describeMysql("database migrations", () => {
             WHERE table_schema = DATABASE()
           `
           // Baseline, the migration ledger, instance favorites, notifications,
-          // Kiln releases with component versions, apps, and domain opt-outs.
-          expect(count).toBe(baselineTables.length + 7)
+          // Kiln releases with component versions, apps, domain opt-outs, and
+          // vanity domain zones.
+          expect(count).toBe(baselineTables.length + 8)
           expect(yield* ledger).toEqual(migrationIds)
           // Only better-auth keeps dates, as DATETIME.
           expect((yield* columnTypes).map((row) => row.dataType)).toEqual([
@@ -358,6 +360,82 @@ describeMysql("database migrations", () => {
               [ids.full, ["local", "available", 0]],
             ])
           )
+        }),
+      120_000
+    )
+
+    it.effect(
+      "keeps a single-domain vanity setup and its game server domains",
+      () =>
+        Effect.gen(function* () {
+          yield* dropAllTables
+          yield* applyMigrations(
+            migrations.filter((migration) => migration.id < domainZones.id)
+          )
+          yield* insertRows("domain_integration", {
+            id: "cloudflare",
+            provider: "cloudflare",
+            domain: "play.kiln.site",
+            zone_id: "a".repeat(32),
+            zone_name: "kiln.site",
+            api_token_ciphertext: "ciphertext",
+            blacklist_patterns: "[]",
+            enabled: true,
+            created_at: 0,
+            updated_at: 0,
+          })
+          yield* insertRows("instance_domain", {
+            relay_id: "relay-one",
+            instance_id: "b".repeat(40),
+            integration_id: "cloudflare",
+            vanity_label: "amber-anvil",
+            domain: "play.kiln.site",
+            public_host: "203.0.113.10",
+            public_port: 25_565,
+            address_record_id: "c".repeat(32),
+            address_record_type: "A",
+            status: "active",
+            created_at: 0,
+            updated_at: 0,
+          })
+
+          yield* applyMigrations(migrations)
+
+          expect(
+            yield* selectRows<{
+              domain: string
+              is_default: number
+              zone_id: string
+              zone_name: string
+            }>("domain_zone")
+          ).toMatchObject([
+            {
+              domain: "play.kiln.site",
+              is_default: 1,
+              zone_id: "a".repeat(32),
+              zone_name: "kiln.site",
+            },
+          ])
+          expect(
+            yield* selectRows<{ assignment_strategy: string }>(
+              "domain_integration"
+            )
+          ).toMatchObject([
+            { api_token_ciphertext: "ciphertext", assignment_strategy: "default" },
+          ])
+          const [assignment] = yield* selectRows<{
+            address_record_id: string
+            id: string
+            is_primary: number
+            vanity_label: string
+          }>("instance_domain")
+          expect(assignment).toMatchObject({
+            address_record_id: "c".repeat(32),
+            is_primary: 1,
+            vanity_label: "amber-anvil",
+          })
+          expect(assignment?.id).toMatch(/^[0-9a-f-]{36}$/u)
+          expect(yield* ledger).toEqual(migrationIds)
         }),
       120_000
     )

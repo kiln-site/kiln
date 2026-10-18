@@ -14,6 +14,7 @@ import { scheduleContinueOnFailure } from "./0011_schedule_continue_on_failure"
 import { instanceDirectory } from "./0012_instance_directory"
 import { incrementalBackupArtifacts } from "./0013_incremental_backup_artifacts"
 import { instanceDomainOptOut } from "./0014_instance_domain_opt_out"
+import { domainZones } from "./0015_domain_zones"
 
 // Append new migrations with the next id. Never edit or reorder applied ones.
 export const migrations: ReadonlyArray<Migration> = [
@@ -31,4 +32,5 @@ export const migrations: ReadonlyArray<Migration> = [
   instanceDirectory,
   incrementalBackupArtifacts,
   instanceDomainOptOut,
+  domainZones,
 ]

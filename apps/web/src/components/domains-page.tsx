@@ -1,27 +1,34 @@
 import * as React from "react"
 import {
   useMutation,
+  useQuery,
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
-import { Effect, Result } from "effect"
+import { Effect, Fiber, Result } from "effect"
 import {
   ArrowLeft,
   Check,
   ChevronDown,
   ChevronRight,
+  ChevronsUpDown,
   CircleAlert,
   CircleHelp,
+  Dices,
   ExternalLink,
   Globe2,
   KeyRound,
   LoaderCircle,
   Pencil,
+  Plus,
+  Scale,
   Settings2,
+  Star,
   Trash2,
 } from "lucide-react"
 
+import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import {
   Dialog,
@@ -32,6 +39,18 @@ import {
   DialogTitle,
 } from "@workspace/ui/components/dialog"
 import { Input } from "@workspace/ui/components/input"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@workspace/ui/components/popover"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@workspace/ui/components/select"
 import { Switch } from "@workspace/ui/components/switch"
 import { Textarea } from "@workspace/ui/components/textarea"
 import { showToast } from "@workspace/ui/components/sonner"
@@ -56,9 +75,19 @@ import { InfoCopyValue } from "@/components/info-page"
 import { InfraSyncButton } from "@/components/infra-sync-button"
 import { InstanceCard } from "@/components/instance-card"
 import { statusColumnWidth } from "@/components/instance-name-presentation"
+import {
+  InstancePickerContent,
+  type InstancePickerItem,
+} from "@/components/instance-picker"
 import { StatusIndicator } from "@/components/status-indicator"
 import { WorkspaceCopyValueButton } from "@/components/workspace-header"
 import { WorkspaceSummaryCard } from "@/components/workspace-summary-card"
+import type {
+  DomainAssignmentStrategy,
+  DomainIntegration,
+  ManagedDomain,
+} from "@/effect/domains"
+import { ensuringPromise, promiseEffect } from "@/effect/promise"
 import {
   createDataTableColumnHelper,
   dataTableColumnMeta,
@@ -71,31 +100,64 @@ import {
 import type { DataTableSource } from "@/lib/data-table-source"
 import {
   defaultDomainBlacklistPatterns,
+  domainInZone,
   domainNameSchema,
   validateBlacklistPatterns,
   vanityLabelSchema,
 } from "@/lib/domain-schemas"
-import { domainSettingsQueryOptions, queryKeys } from "@/lib/query-options"
-import { ensuringPromise } from "@/effect/promise"
+import {
+  domainSettingsQueryOptions,
+  queryKeys,
+  serverDirectoryQueryOptions,
+} from "@/lib/query-options"
 import {
   configureDomainIntegration,
+  createInstanceDomain,
+  discoverCloudflareDomains,
   removeInstanceDomain,
   resyncDomainAssignments,
-  setInstanceVanity,
+  updateInstanceDomain,
+  type DiscoveredCloudflareZone,
   type ManagedDomainOverview,
 } from "@/server/domains"
+import type { getInfraServerDirectory } from "@/server/infra-directory"
 
-interface DomainIntegrationView {
-  blacklistPatterns: Array<string>
-  domain: string
-  enabled: boolean
-  zoneName: string
-}
+type DirectoryServer = Awaited<
+  ReturnType<typeof getInfraServerDirectory>
+>[number]
 
 type DomainDialog =
+  | { kind: "configure" }
+  | { kind: "create" }
   | { kind: "delete"; domain: ManagedDomainOverview }
   | { kind: "edit"; domain: ManagedDomainOverview }
   | null
+
+const strategyOptions: ReadonlyArray<{
+  description: string
+  Icon: typeof Star
+  label: string
+  value: DomainAssignmentStrategy
+}> = [
+  {
+    description: "New game servers use the default domain.",
+    Icon: Star,
+    label: "Default only",
+    value: "default",
+  },
+  {
+    description: "Each new game server gets a random domain.",
+    Icon: Dices,
+    label: "Random",
+    value: "random",
+  },
+  {
+    description: "New game servers go to the domain with the fewest.",
+    Icon: Scale,
+    label: "Spread evenly",
+    value: "balanced",
+  },
+]
 
 const domainTableColumnHelper =
   createDataTableColumnHelper<ManagedDomainOverview>()
@@ -118,15 +180,16 @@ export const DomainsPage = React.memo(function DomainsPage({
   searchStore: DataTableSearchStore
 }) {
   const { data } = useSuspenseQuery(domainSettingsQueryOptions())
-  const [configurationOpen, setConfigurationOpen] = React.useState(false)
   const [dialog, setDialog] = React.useState<DomainDialog>(null)
   const openConfiguration = React.useCallback(
-    () => setConfigurationOpen(true),
+    () => setDialog({ kind: "configure" }),
     []
   )
+  const openCreate = React.useCallback(() => setDialog({ kind: "create" }), [])
   const closeDialog = React.useCallback((open: boolean) => {
     if (!open) setDialog(null)
   }, [])
+  const domains = data.integration?.domains
 
   return (
     <div className="mx-auto flex h-full min-h-[34rem] w-full max-w-[90rem] flex-col gap-3 px-3 pb-3 sm:px-5 sm:pb-5">
@@ -138,38 +201,45 @@ export const DomainsPage = React.memo(function DomainsPage({
       <DataTableWorkspace
         toolbar={
           <DomainsToolbar
-            syncEnabled={data.integration?.enabled === true}
+            canCreate={(domains?.length ?? 0) > 0}
+            syncEnabled={data.integration !== null}
             searchStore={searchStore}
+            onCreate={openCreate}
           />
         }
       >
         <ManagedDomainsTable
           domains={data.managedDomains}
           searchStore={searchStore}
-          zoneName={data.integration?.zoneName}
           onDialog={setDialog}
         />
       </DataTableWorkspace>
 
-      {configurationOpen ? (
+      {dialog?.kind === "configure" ? (
         <DomainConfigurationDialog
-          key={domainIntegrationKey(data.integration)}
           hearthDomain={data.hearthDomain}
           integration={data.integration}
-          open
-          onOpenChange={setConfigurationOpen}
+          onOpenChange={closeDialog}
+        />
+      ) : null}
+      {dialog?.kind === "create" && domains ? (
+        <CreateDomainDialog
+          domains={domains}
+          managedDomains={data.managedDomains}
+          onOpenChange={closeDialog}
         />
       ) : null}
       {dialog?.kind === "edit" ? (
         <EditDomainDialog
-          key={managedDomainRowKey(dialog.domain)}
+          key={dialog.domain.id}
           domain={dialog.domain}
+          domains={domains ?? []}
           onOpenChange={closeDialog}
         />
       ) : null}
       {dialog?.kind === "delete" ? (
         <DeleteDomainDialog
-          key={managedDomainRowKey(dialog.domain)}
+          key={dialog.domain.id}
           domain={dialog.domain}
           onOpenChange={closeDialog}
         />
@@ -182,11 +252,12 @@ const DomainSummaryCard = React.memo(function DomainSummaryCard({
   integration,
   onConfigure,
 }: {
-  integration: DomainIntegrationView | null
+  integration: DomainIntegration | null
   onConfigure: () => void
 }) {
   const active = integration?.enabled === true
   const configured = integration !== null
+  const [primary, ...others] = integration?.domains ?? []
 
   return (
     <WorkspaceSummaryCard
@@ -213,22 +284,49 @@ const DomainSummaryCard = React.memo(function DomainSummaryCard({
       title="Vanity URL"
       titleAccessory={<DomainStatus enabled={active} verified={configured} />}
     >
-      <p className="type-code mt-1 truncate text-muted-foreground">
-        {`<vanity>.${integration?.domain ?? "example.com"}`}
+      <p className="type-code mt-1 flex min-w-0 items-center gap-2 text-muted-foreground">
+        <span className="truncate">{`<vanity>.${primary?.domain ?? "example.com"}`}</span>
+        {others.length > 0 ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Badge className="type-meta shrink-0 font-mono" variant="outline">
+                +{others.length}
+              </Badge>
+            </TooltipTrigger>
+            <TooltipContent className="font-mono" side="bottom">
+              {others.map((domain) => domain.domain).join(", ")}
+            </TooltipContent>
+          </Tooltip>
+        ) : null}
       </p>
     </WorkspaceSummaryCard>
   )
 })
 
 const DomainsToolbar = React.memo(function DomainsToolbar({
+  canCreate,
+  onCreate,
   searchStore,
   syncEnabled,
 }: {
+  canCreate: boolean
+  onCreate: () => void
   searchStore: DataTableSearchStore
   syncEnabled: boolean
 }) {
   return (
     <DataTableToolbar
+      actions={
+        <Button
+          aria-label="New domain"
+          disabled={!canCreate}
+          type="button"
+          onClick={onCreate}
+        >
+          <Plus />
+          <span className="hidden sm:inline">New domain</span>
+        </Button>
+      }
       leading={<DomainSyncButton enabled={syncEnabled} />}
       search={{
         ariaLabel: "Search domains",
@@ -284,28 +382,24 @@ const ManagedDomainsTable = React.memo(function ManagedDomainsTable({
   domains,
   onDialog,
   searchStore,
-  zoneName,
 }: {
   domains: Array<ManagedDomainOverview>
   onDialog: (dialog: DomainDialog) => void
   searchStore: DataTableSearchStore
-  zoneName: string | undefined
 }) {
   // The server sorts by domain, so a rename or delete shifts later rows.
-  // Match rows by game server instead of position, so only changed rows
-  // repaint.
+  // Match rows by ID instead of position, so only changed rows repaint.
   const [rowCache] = React.useState(
     () => new Map<string, { json: string; row: ManagedDomainOverview }>()
   )
   const source = React.useMemo<DataTableSource<ManagedDomainOverview>>(() => {
     const seen = new Set<string>()
     const rows = domains.map((domain) => {
-      const key = managedDomainRowKey(domain)
       const json = JSON.stringify(domain)
-      seen.add(key)
-      const cached = rowCache.get(key)
+      seen.add(domain.id)
+      const cached = rowCache.get(domain.id)
       if (cached?.json === json) return cached.row
-      rowCache.set(key, { json, row: domain })
+      rowCache.set(domain.id, { json, row: domain })
       return domain
     })
     for (const key of rowCache.keys()) {
@@ -352,14 +446,7 @@ const ManagedDomainsTable = React.memo(function ManagedDomainsTable({
         id: "domain",
         header: "Domain",
         sortFn: "text",
-        cell: ({ row }) => (
-          <div className="type-meta flex w-full min-w-0">
-            <WorkspaceCopyValueButton
-              label="domain"
-              value={domainHostname(row.original)}
-            />
-          </div>
-        ),
+        cell: ({ row }) => <DomainHostnameCell domain={row.original} />,
         meta: dataTableColumnMeta({
           width: { base: "minmax(0,1fr)", md: "minmax(0,1.2fr)" },
         }),
@@ -395,11 +482,7 @@ const ManagedDomainsTable = React.memo(function ManagedDomainsTable({
         header: () => <span className="sr-only">Actions</span>,
         enableSorting: false,
         cell: ({ row }) => (
-          <DomainActions
-            domain={row.original}
-            zoneName={zoneName}
-            onDialog={onDialog}
-          />
+          <DomainActions domain={row.original} onDialog={onDialog} />
         ),
         meta: dataTableColumnMeta(
           { width: "7rem" },
@@ -410,12 +493,12 @@ const ManagedDomainsTable = React.memo(function ManagedDomainsTable({
     return defineDataTable({
       ariaLabel: "Managed domains",
       columns,
-      getRowId: managedDomainRowKey,
+      getRowId: (domain) => domain.id,
       model: { initialState: initialTableState },
       search: { fields: domainTableSearchFields },
       virtualization: true,
     })
-  }, [initialTableState, onDialog, zoneName])
+  }, [initialTableState, onDialog])
 
   return (
     <DataTable
@@ -463,6 +546,31 @@ const DomainServerCell = React.memo(function DomainServerCell({
   )
 })
 
+function DomainHostnameCell({ domain }: { domain: ManagedDomainOverview }) {
+  return (
+    <div className="type-meta flex w-full min-w-0 items-center gap-2">
+      <WorkspaceCopyValueButton label="domain" value={domainHostname(domain)} />
+      {/* Only worth marking when the game server has a choice. */}
+      {domain.primary && domain.domainCount > 1 ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span
+              aria-label="Primary domain"
+              className="inline-flex shrink-0 text-amber-600 dark:text-amber-300"
+              role="img"
+            >
+              <Star aria-hidden className="size-3 fill-current" />
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            Primary: shown as {domain.server.name}&apos;s connect address
+          </TooltipContent>
+        </Tooltip>
+      ) : null}
+    </div>
+  )
+}
+
 function SrvRecordCell({ domain }: { domain: ManagedDomainOverview }) {
   return domain.srvActive ? (
     <span className="type-meta inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-300">
@@ -479,11 +587,9 @@ function SrvRecordCell({ domain }: { domain: ManagedDomainOverview }) {
 const DomainActions = React.memo(function DomainActions({
   domain,
   onDialog,
-  zoneName,
 }: {
   domain: ManagedDomainOverview
   onDialog: (dialog: DomainDialog) => void
-  zoneName: string | undefined
 }) {
   const hostname = domainHostname(domain)
 
@@ -519,7 +625,7 @@ const DomainActions = React.memo(function DomainActions({
         </TooltipTrigger>
         <TooltipContent side="bottom">Delete</TooltipContent>
       </Tooltip>
-      {zoneName ? (
+      {domain.zoneName ? (
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
@@ -530,7 +636,7 @@ const DomainActions = React.memo(function DomainActions({
             >
               <a
                 aria-label={`View ${hostname} on Cloudflare`}
-                href={cloudflareDnsRecordsUrl(zoneName)}
+                href={cloudflareDnsRecordsUrl(domain.zoneName)}
                 rel="noreferrer"
                 target="_blank"
               >
@@ -552,7 +658,7 @@ function renderEmptyDomains({ searchActive }: { searchActive: boolean }) {
         <span className="block max-w-sm">
           {searchActive
             ? "Try a vanity address, game server, Relay, port, status, or ID."
-            : "Active vanity addresses will appear here after a game server is provisioned."}
+            : "Create a domain for a game server, or turn on automatic provisioning to give new game servers one."}
         </span>
       }
       icon={<Globe2 className="size-6 text-muted-foreground/45" />}
@@ -563,25 +669,389 @@ function renderEmptyDomains({ searchActive }: { searchActive: boolean }) {
   )
 }
 
+function CreateDomainDialog({
+  domains,
+  managedDomains,
+  onOpenChange,
+}: {
+  domains: Array<ManagedDomain>
+  managedDomains: Array<ManagedDomainOverview>
+  onOpenChange: (open: boolean) => void
+}) {
+  const queryClient = useQueryClient()
+  const { data: servers = emptyServers } = useQuery(
+    serverDirectoryQueryOptions()
+  )
+  const domainCounts = React.useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const domain of managedDomains) {
+      const key = serverKey(domain.relayId, domain.instanceId)
+      counts.set(key, (counts.get(key) ?? 0) + 1)
+    }
+    return counts
+  }, [managedDomains])
+  const [selectedKey, setSelectedKey] = React.useState<string | null>(null)
+  const [domain, setDomain] = React.useState(domains[0]?.domain ?? "")
+  const [vanityLabel, setVanityLabel] = React.useState("")
+  const [primary, setPrimary] = React.useState(false)
+  const server = selectedKey
+    ? servers.find((item) => serverKey(item.relayId, item.id) === selectedKey)
+    : undefined
+  const existingCount = selectedKey ? (domainCounts.get(selectedKey) ?? 0) : 0
+  const label = vanityLabel.trim()
+  const parsed = label ? vanityLabelSchema.safeParse(label) : null
+  const create = useMutation({
+    mutationFn: (target: DirectoryServer) =>
+      createInstanceDomain({
+        data: {
+          domain,
+          instanceId: target.id,
+          primary,
+          relayId: target.relayId,
+          vanityLabel: parsed?.success ? parsed.data : undefined,
+        },
+      }),
+    // A failed create can leave a failed row to retry or delete.
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: queryKeys.domains.settings }),
+    onSuccess: (result) => {
+      showToast({ message: `Created ${result.address}`, type: "success" })
+      onOpenChange(false)
+    },
+  })
+
+  return (
+    <Dialog open onOpenChange={create.isPending ? undefined : onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>New domain</DialogTitle>
+          <DialogDescription>
+            Point a vanity address at a game server.
+          </DialogDescription>
+        </DialogHeader>
+        <form
+          className="space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault()
+            if (server && parsed?.success !== false) create.mutate(server)
+          }}
+        >
+          <div className="type-label space-y-1.5">
+            <span id="new-domain-server">Game server</span>
+            <GameServerPicker
+              domainCounts={domainCounts}
+              selectedKey={selectedKey}
+              servers={servers}
+              onSelect={setSelectedKey}
+            />
+          </div>
+
+          <VanityNameField
+            domain={domain}
+            domains={domains}
+            error={
+              parsed && !parsed.success
+                ? (parsed.error.issues[0]?.message ?? "Enter a vanity name")
+                : null
+            }
+            hint="Leave blank and Kiln picks an available name."
+            placeholder="generated"
+            value={vanityLabel}
+            onDomainChange={setDomain}
+            onValueChange={setVanityLabel}
+          />
+
+          {server && existingCount > 0 ? (
+            <PrimaryDomainSwitch
+              checked={primary}
+              serverName={server.name}
+              onCheckedChange={setPrimary}
+            />
+          ) : server ? (
+            <p className="type-meta text-muted-foreground">
+              This becomes {server.name}&apos;s connect address.
+            </p>
+          ) : null}
+
+          {create.error ? <ConfigurationError error={create.error} /> : null}
+
+          <DialogFooter>
+            <Button
+              disabled={create.isPending}
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              disabled={
+                create.isPending || !server || parsed?.success === false
+              }
+              type="submit"
+            >
+              {create.isPending ? (
+                <LoaderCircle className="animate-spin" />
+              ) : (
+                <Plus />
+              )}
+              Create domain
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+const emptyServers: Array<DirectoryServer> = []
+
+const GameServerPicker = React.memo(function GameServerPicker({
+  domainCounts,
+  onSelect,
+  selectedKey,
+  servers,
+}: {
+  domainCounts: ReadonlyMap<string, number>
+  onSelect: (key: string) => void
+  selectedKey: string | null
+  servers: ReadonlyArray<DirectoryServer>
+}) {
+  const [open, setOpen] = React.useState(false)
+  const items = React.useMemo(
+    () =>
+      servers.map((server): InstancePickerItem => {
+        const key = serverKey(server.relayId, server.id)
+        const count = domainCounts.get(key) ?? 0
+        return {
+          identity: {
+            brickId: server.brickId,
+            id: server.id,
+            implementation: server.implementation,
+            kind: "server",
+            relayId: server.relayId,
+          },
+          key,
+          meta: [
+            server.relayName,
+            server.shortId,
+            count > 0 ? `${count} ${count === 1 ? "domain" : "domains"}` : "",
+          ]
+            .filter(Boolean)
+            .join(" · "),
+          name: server.name,
+          searchText: `${server.id} ${server.relayName} ${server.game}`,
+        }
+      }),
+    [domainCounts, servers]
+  )
+  const selectedItem = selectedKey
+    ? items.find((item) => item.key === selectedKey)
+    : undefined
+  const selectedKeys = React.useMemo(
+    () => new Set(selectedKey ? [selectedKey] : []),
+    [selectedKey]
+  )
+  const selectItem = React.useCallback(
+    (item: InstancePickerItem) => {
+      onSelect(item.key)
+      setOpen(false)
+    },
+    [onSelect]
+  )
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          aria-expanded={open}
+          aria-labelledby="new-domain-server"
+          className="h-auto min-h-10 w-full justify-between gap-3 px-2 py-1.5 font-normal"
+          role="combobox"
+          type="button"
+          variant="outline"
+        >
+          {selectedItem ? (
+            <InstanceCard
+              className="min-w-0 flex-1 gap-2 text-left"
+              iconClassName="size-7 border-0 bg-muted/55"
+              instance={selectedItem.identity}
+              meta={selectedItem.meta}
+              metaClassName="font-mono"
+              name={selectedItem.name}
+              nameClassName="type-control-sm"
+              showFavorite={false}
+              statusClassName="ring-background"
+            />
+          ) : (
+            <span className="px-1 text-muted-foreground">
+              Choose a game server
+            </span>
+          )}
+          <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        className="z-[70] w-(--radix-popover-trigger-width) min-w-72 overflow-hidden p-0"
+      >
+        <InstancePickerContent
+          ariaLabel="Game servers"
+          emptyMessage="No game servers"
+          items={items}
+          selectedKeys={selectedKeys}
+          onSelect={selectItem}
+        />
+      </PopoverContent>
+    </Popover>
+  )
+})
+
+function VanityNameField({
+  autoFocus = false,
+  domain,
+  domains,
+  error,
+  hint,
+  onDomainChange,
+  onValueChange,
+  placeholder,
+  value,
+}: {
+  autoFocus?: boolean
+  domain: string
+  domains: ReadonlyArray<ManagedDomain>
+  error: string | null
+  hint: string
+  onDomainChange: (domain: string) => void
+  onValueChange: (value: string) => void
+  placeholder?: string
+  value: string
+}) {
+  return (
+    <div className="type-label space-y-1.5">
+      <label htmlFor="vanity-label">Vanity name</label>
+      <div className="flex min-w-0 items-center gap-2">
+        <Input
+          autoCapitalize="none"
+          autoCorrect="off"
+          autoFocus={autoFocus}
+          aria-invalid={error ? true : undefined}
+          className="min-w-0 flex-1 font-mono"
+          id="vanity-label"
+          maxLength={63}
+          name="vanityLabel"
+          placeholder={placeholder}
+          spellCheck={false}
+          value={value}
+          onChange={(event) => onValueChange(event.currentTarget.value)}
+        />
+        {domains.length > 1 ? (
+          <Select value={domain} onValueChange={onDomainChange}>
+            <SelectTrigger
+              aria-label="Domain"
+              className="max-w-[60%] min-w-0 gap-0.5 font-mono text-xs [&_[data-slot=select-value]]:truncate"
+            >
+              <span className="text-muted-foreground">.</span>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent className="z-[70]">
+              {domains.map((item) => (
+                <SelectItem
+                  key={item.domain}
+                  className="font-mono text-xs"
+                  value={item.domain}
+                >
+                  {item.domain}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : (
+          <span className="type-code shrink-0 text-muted-foreground">
+            .{domain}
+          </span>
+        )}
+      </div>
+      <span
+        className={
+          error
+            ? "type-meta block text-destructive"
+            : "type-meta block text-muted-foreground"
+        }
+      >
+        {error ?? hint}
+      </span>
+    </div>
+  )
+}
+
+function PrimaryDomainSwitch({
+  checked,
+  onCheckedChange,
+  serverName,
+}: {
+  checked: boolean
+  onCheckedChange: (checked: boolean) => void
+  serverName: string
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4 border border-border/75 bg-background/35 p-3">
+      <div>
+        <p className="text-xs font-medium">Use as connect address</p>
+        <p className="type-meta mt-0.5 text-muted-foreground">
+          Show this domain on {serverName}&apos;s pages instead of its current
+          one.
+        </p>
+      </div>
+      <Switch
+        aria-label="Use as connect address"
+        checked={checked}
+        onCheckedChange={onCheckedChange}
+      />
+    </div>
+  )
+}
+
 function EditDomainDialog({
   domain,
+  domains,
   onOpenChange,
 }: {
   domain: ManagedDomainOverview
+  domains: ReadonlyArray<ManagedDomain>
   onOpenChange: (open: boolean) => void
 }) {
   const queryClient = useQueryClient()
   const [vanityLabel, setVanityLabel] = React.useState(domain.vanityLabel)
+  const [suffix, setSuffix] = React.useState(domain.domain)
+  const [primary, setPrimary] = React.useState(domain.primary)
   const parsed = vanityLabelSchema.safeParse(vanityLabel)
-  const unchanged = parsed.success && parsed.data === domain.vanityLabel
+  // A domain that is no longer configured can still be renamed onto one.
+  const choices = React.useMemo(
+    () =>
+      domains.some((item) => item.domain === domain.domain)
+        ? domains
+        : [
+            ...domains,
+            {
+              domain: domain.domain,
+              isDefault: false,
+              zoneId: "",
+              zoneName: domain.zoneName ?? domain.domain,
+            },
+          ],
+    [domain.domain, domain.zoneName, domains]
+  )
+  const unchanged =
+    parsed.success &&
+    parsed.data === domain.vanityLabel &&
+    suffix === domain.domain &&
+    primary === domain.primary
   const save = useMutation({
     mutationFn: (label: string) =>
-      setInstanceVanity({
-        data: {
-          instanceId: domain.instanceId,
-          relayId: domain.relayId,
-          vanityLabel: label,
-        },
+      updateInstanceDomain({
+        data: { domain: suffix, id: domain.id, primary, vanityLabel: label },
       }),
     // A failed rename can still clear a failed domain's leftover records.
     onSettled: () =>
@@ -589,7 +1059,7 @@ function EditDomainDialog({
         queryKey: queryKeys.domains.settings,
       }),
     onSuccess: (result) => {
-      showToast({ message: `Renamed to ${result.address}`, type: "success" })
+      showToast({ message: `Saved ${result.address}`, type: "success" })
       onOpenChange(false)
     },
   })
@@ -600,7 +1070,7 @@ function EditDomainDialog({
         <DialogHeader>
           <DialogTitle>Edit domain</DialogTitle>
           <DialogDescription>
-            Choose the vanity name players use to join {domain.server.name}.
+            Choose the vanity address players use to join {domain.server.name}.
           </DialogDescription>
         </DialogHeader>
         <form
@@ -610,37 +1080,35 @@ function EditDomainDialog({
             if (parsed.success && !unchanged) save.mutate(parsed.data)
           }}
         >
-          <label className="type-label block space-y-1.5">
-            Vanity name
-            <div className="flex min-w-0 items-center gap-2">
-              <Input
-                autoCapitalize="none"
-                autoCorrect="off"
-                autoFocus
-                aria-invalid={!parsed.success || undefined}
-                className="min-w-0 flex-1 font-mono"
-                maxLength={63}
-                name="vanityLabel"
-                spellCheck={false}
-                value={vanityLabel}
-                onChange={(event) => setVanityLabel(event.currentTarget.value)}
-              />
-              <span className="type-code shrink-0 text-muted-foreground">
-                .{domain.domain}
-              </span>
-            </div>
-            <span
-              className={
-                parsed.success
-                  ? "type-meta block text-muted-foreground"
-                  : "type-meta block text-destructive"
-              }
-            >
-              {parsed.success
-                ? "Kiln updates the DNS records in Cloudflare."
-                : (parsed.error.issues[0]?.message ?? "Enter a vanity name")}
-            </span>
-          </label>
+          <VanityNameField
+            autoFocus
+            domain={suffix}
+            domains={choices}
+            error={
+              parsed.success
+                ? null
+                : (parsed.error.issues[0]?.message ?? "Enter a vanity name")
+            }
+            hint="Kiln updates the DNS records in Cloudflare."
+            value={vanityLabel}
+            onDomainChange={setSuffix}
+            onValueChange={setVanityLabel}
+          />
+
+          {domain.primary ? (
+            domain.domainCount > 1 ? (
+              <p className="type-meta text-muted-foreground">
+                This is {domain.server.name}&apos;s connect address. Make
+                another of its domains primary to change it.
+              </p>
+            ) : null
+          ) : (
+            <PrimaryDomainSwitch
+              checked={primary}
+              serverName={domain.server.name}
+              onCheckedChange={setPrimary}
+            />
+          )}
 
           {save.error ? <ConfigurationError error={save.error} /> : null}
 
@@ -681,10 +1149,7 @@ function DeleteDomainDialog({
   const queryClient = useQueryClient()
   const hostname = domainHostname(domain)
   const remove = useMutation({
-    mutationFn: () =>
-      removeInstanceDomain({
-        data: { instanceId: domain.instanceId, relayId: domain.relayId },
-      }),
+    mutationFn: () => removeInstanceDomain({ data: { id: domain.id } }),
     // A failed delete marks the domain as failed, so refresh either way.
     onSettled: () =>
       Promise.all([
@@ -706,9 +1171,12 @@ function DeleteDomainDialog({
           <DialogTitle>Delete domain</DialogTitle>
           <DialogDescription>
             Kiln deletes <span className="font-mono">{hostname}</span> from
-            Cloudflare. Players join {domain.server.name} by its Relay address
-            instead, and Kiln won&apos;t give it a new vanity domain when it
-            starts or syncs.
+            Cloudflare.{" "}
+            {domain.domainCount > 1
+              ? domain.primary
+                ? `Another of ${domain.server.name}'s domains becomes its connect address.`
+                : `${domain.server.name} keeps its other domains.`
+              : `Players join ${domain.server.name} by its Relay address instead, and Kiln won't give it a new vanity domain when it starts or syncs.`}
           </DialogDescription>
         </DialogHeader>
 
@@ -742,29 +1210,101 @@ function DeleteDomainDialog({
   )
 }
 
+/** A Cloudflare zone in the configuration list. */
+interface DomainChoice {
+  /** The suffix Kiln uses: the zone itself or a name inside it. */
+  domain: string
+  /** Configured, but the current token can't reach its zone. */
+  missing: boolean
+  selected: boolean
+  zoneId: string
+  zoneName: string
+}
+
+type TokenCheck =
+  | { status: "idle" }
+  | { status: "checking" }
+  | { count: number; status: "ready" }
+  | { message: string; status: "error" }
+
 function DomainConfigurationDialog({
   hearthDomain,
   integration,
-  open,
   onOpenChange,
 }: {
   hearthDomain: string
-  integration: DomainIntegrationView | null
-  open: boolean
+  integration: DomainIntegration | null
   onOpenChange: (open: boolean) => void
 }) {
   const queryClient = useQueryClient()
+  const hasIntegration = integration !== null
   const [mode, setMode] = React.useState<"settings" | "permissions">("settings")
-  const [domain, setDomain] = React.useState(integration?.domain ?? "")
-  const [permissionsDomain, setPermissionsDomain] = React.useState(hearthDomain)
-  const [permissionsPending, setPermissionsPending] = React.useState(false)
+  const [apiToken, setApiToken] = React.useState("")
+  const [choices, setChoices] = React.useState<Array<DomainChoice>>(
+    () =>
+      integration?.domains.map((domain) => ({
+        domain: domain.domain,
+        missing: false,
+        selected: true,
+        zoneId: domain.zoneId,
+        zoneName: domain.zoneName,
+      })) ?? []
+  )
+  const [defaultZoneId, setDefaultZoneId] = React.useState(
+    () => integration?.domains.find((domain) => domain.isDefault)?.zoneId ?? ""
+  )
+  const [strategy, setStrategy] = React.useState<DomainAssignmentStrategy>(
+    integration?.strategy ?? "default"
+  )
   const [enabled, setEnabled] = React.useState(integration?.enabled ?? true)
   const [blacklistPatterns, setBlacklistPatterns] = React.useState(() =>
     (
       integration?.blacklistPatterns ?? [...defaultDomainBlacklistPatterns]
     ).join("\n")
   )
-  const [apiToken, setApiToken] = React.useState("")
+  const [tokenCheck, setTokenCheck] = React.useState<TokenCheck>({
+    status: "idle",
+  })
+
+  // Lists the zones a pasted token, or the saved one, can manage. A newer
+  // token interrupts the check before a slow answer can overwrite it.
+  React.useEffect(() => {
+    const token = apiToken.trim()
+    if (token ? token.length < 20 : !hasIntegration) {
+      setTokenCheck({ status: "idle" })
+      return
+    }
+    const fiber = Effect.runFork(
+      Effect.sleep(token ? 400 : 0).pipe(
+        Effect.andThen(
+          Effect.sync(() => setTokenCheck({ status: "checking" }))
+        ),
+        Effect.andThen(
+          promiseEffect(() =>
+            discoverCloudflareDomains({
+              data: { apiToken: token || undefined },
+            })
+          )
+        ),
+        Effect.match({
+          onFailure: (cause) =>
+            setTokenCheck({ message: errorMessage(cause), status: "error" }),
+          onSuccess: ({ zones }) => {
+            setChoices((current) => mergeDiscoveredZones(current, zones))
+            setTokenCheck({ count: zones.length, status: "ready" })
+          },
+        })
+      )
+    )
+    return () => {
+      Effect.runFork(Fiber.interrupt(fiber))
+    }
+  }, [apiToken, hasIntegration])
+
+  const selected = choices.filter((choice) => choice.selected)
+  // The first chosen domain stands in until one is picked.
+  const effectiveDefault =
+    selected.find((choice) => choice.zoneId === defaultZoneId) ?? selected[0]
   const configure = useMutation({
     mutationFn: configureDomainIntegration,
     onSuccess: async () => {
@@ -782,14 +1322,34 @@ function DomainConfigurationDialog({
     },
   })
 
-  const save = React.useCallback(() => {
-    const parsedDomain = domainNameSchema.safeParse(domain)
-    if (!parsedDomain.success) {
-      showToast({
-        message:
-          parsedDomain.error.issues[0]?.message ?? "Enter a valid domain",
-        type: "error",
-      })
+  const updateChoice = React.useCallback(
+    (zoneId: string, change: Partial<DomainChoice>) =>
+      setChoices((current) =>
+        current.map((choice) =>
+          choice.zoneId === zoneId ? { ...choice, ...change } : choice
+        )
+      ),
+    []
+  )
+
+  const save = () => {
+    const domains: Array<{ domain: string; zoneId: string }> = []
+    for (const choice of selected) {
+      const parsed = domainNameSchema.safeParse(choice.domain)
+      if (!parsed.success || !domainInZone(parsed.data, choice.zoneName)) {
+        showToast({
+          message: `Use ${choice.zoneName} or a name ending in .${choice.zoneName}`,
+          type: "error",
+        })
+        return
+      }
+      domains.push({ domain: parsed.data, zoneId: choice.zoneId })
+    }
+    const defaultDomain = effectiveDefault
+      ? domains[selected.indexOf(effectiveDefault)]?.domain
+      : undefined
+    if (!defaultDomain) {
+      showToast({ message: "Choose at least one domain", type: "error" })
       return
     }
     const patternsResult = Result.try(() =>
@@ -808,52 +1368,23 @@ function DomainConfigurationDialog({
       return
     }
     const token = apiToken.trim()
-    if ((!integration && !token) || (token && token.length < 20)) {
-      showToast({
-        message: "Enter a valid Cloudflare API token",
-        type: "error",
-      })
-      return
-    }
     configure.mutate({
       data: {
         apiToken: token || undefined,
         blacklistPatterns: patternsResult.success,
-        domain: parsedDomain.data,
+        defaultDomain,
+        domains,
         enabled,
+        strategy,
       },
     })
-  }, [apiToken, blacklistPatterns, configure, domain, enabled, integration])
-  const openPermissions = React.useCallback(async () => {
-    setPermissionsPending(true)
-    await Effect.runPromise(
-      Effect.tryPromise({
-        try: () => import("@/lib/domain-name"),
-        catch: (cause) => cause,
-      }).pipe(
-        Effect.match({
-          onFailure: () => {
-            showToast({
-              message: "Could not load the Cloudflare permissions preview",
-              type: "error",
-            })
-          },
-          onSuccess: ({ rootDomainForHostname }) => {
-            setPermissionsDomain(rootDomainForHostname(domain) || hearthDomain)
-            setMode("permissions")
-          },
-        }),
-        Effect.ensuring(
-          Effect.sync(() => {
-            setPermissionsPending(false)
-          })
-        )
-      )
-    )
-  }, [domain, hearthDomain])
+  }
+
+  const tokenLength = apiToken.trim().length
+  const tokenInvalid = tokenLength < 20 && (!hasIntegration || tokenLength > 0)
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open onOpenChange={configure.isPending ? undefined : onOpenChange}>
       <DialogContent
         className={mode === "permissions" ? "sm:max-w-3xl" : "sm:max-w-xl"}
       >
@@ -862,7 +1393,8 @@ function DomainConfigurationDialog({
             <>
               <DialogTitle>Configure vanity URLs</DialogTitle>
               <DialogDescription>
-                Choose the suffix Kiln uses for managed game-server addresses.
+                Connect Cloudflare and choose the domains Kiln gives game
+                servers addresses under.
               </DialogDescription>
             </>
           ) : (
@@ -885,27 +1417,183 @@ function DomainConfigurationDialog({
         </DialogHeader>
 
         {mode === "settings" ? (
-          <VanitySettingsForm
-            apiToken={apiToken}
-            blacklistPatterns={blacklistPatterns}
-            domain={domain}
-            enabled={enabled}
-            error={configure.error}
-            hasIntegration={Boolean(integration)}
-            isPending={configure.isPending}
-            permissionsPending={permissionsPending}
-            onApiTokenChange={setApiToken}
-            onBlacklistPatternsChange={setBlacklistPatterns}
-            onCancel={() => onOpenChange(false)}
-            onDomainChange={setDomain}
-            onEnabledChange={setEnabled}
-            onOpenPermissions={openPermissions}
-            onSave={save}
-          />
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between gap-3">
+                <label
+                  className="type-control-sm"
+                  htmlFor="cloudflare-api-token"
+                >
+                  Cloudflare API token
+                </label>
+                <a
+                  className="type-label inline-flex items-center gap-1 text-primary hover:underline"
+                  href="https://dash.cloudflare.com/profile/api-tokens"
+                  rel="noreferrer"
+                  target="_blank"
+                >
+                  Create token <ExternalLink className="size-2.5" />
+                </a>
+              </div>
+              <div className="flex items-center gap-2">
+                <Input
+                  autoComplete="new-password"
+                  autoFocus={!hasIntegration}
+                  className="min-w-0 flex-1 font-mono"
+                  id="cloudflare-api-token"
+                  minLength={20}
+                  name="apiToken"
+                  placeholder={
+                    hasIntegration ? "Saved token" : "Paste a Cloudflare token"
+                  }
+                  required={!hasIntegration}
+                  type="password"
+                  value={apiToken}
+                  onChange={(event) => setApiToken(event.currentTarget.value)}
+                />
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      aria-label="Preview required Cloudflare permissions"
+                      size="icon"
+                      type="button"
+                      variant="outline"
+                      onClick={() => setMode("permissions")}
+                    >
+                      <CircleHelp />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="left">
+                    Preview required permissions
+                  </TooltipContent>
+                </Tooltip>
+              </div>
+              <TokenCheckStatus
+                check={tokenCheck}
+                hasIntegration={hasIntegration}
+                tokenLength={tokenLength}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <p className="type-control-sm">Domains</p>
+              {choices.length > 0 ? (
+                <div
+                  aria-label="Domains"
+                  className="max-h-56 divide-y divide-border/60 overflow-y-auto border border-border/75 bg-background/35"
+                  role="group"
+                >
+                  {choices.map((choice) => (
+                    <DomainChoiceRow
+                      key={choice.zoneId}
+                      choice={choice}
+                      isDefault={choice === effectiveDefault}
+                      onChange={updateChoice}
+                      onMakeDefault={setDefaultZoneId}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <p className="type-meta border border-dashed border-border/75 px-3 py-4 text-center text-muted-foreground">
+                  Paste a token to list the domains it can manage.
+                </p>
+              )}
+            </div>
+
+            <div className="space-y-1.5">
+              <p className="type-control-sm" id="domain-strategy">
+                New game servers
+              </p>
+              <div
+                aria-labelledby="domain-strategy"
+                className="grid grid-cols-3 gap-2"
+                role="radiogroup"
+              >
+                {strategyOptions.map((option) => (
+                  <Button
+                    key={option.value}
+                    aria-checked={strategy === option.value}
+                    className="h-auto justify-start px-2.5 py-2 text-left"
+                    role="radio"
+                    type="button"
+                    variant={strategy === option.value ? "default" : "outline"}
+                    onClick={() => setStrategy(option.value)}
+                  >
+                    <option.Icon />
+                    <span className="text-xs">{option.label}</span>
+                  </Button>
+                ))}
+              </div>
+              <p className="type-meta text-muted-foreground">
+                {
+                  strategyOptions.find((option) => option.value === strategy)
+                    ?.description
+                }
+              </p>
+            </div>
+
+            <div className="flex items-center justify-between gap-4 border border-border/75 bg-background/35 p-3">
+              <div>
+                <p className="text-xs font-medium">Automatic provisioning</p>
+                <p className="type-meta mt-0.5 text-muted-foreground">
+                  Give each new game server a domain when it&apos;s provisioned.
+                </p>
+              </div>
+              <Switch
+                aria-label="Enable automatic domain provisioning"
+                checked={enabled}
+                onCheckedChange={setEnabled}
+              />
+            </div>
+
+            <label className="type-label block space-y-1.5">
+              Blacklisted vanity names
+              <Textarea
+                aria-label="Blacklisted vanity name patterns"
+                className="min-h-24 font-mono text-xs"
+                placeholder={"^(admin|api|www)$\n^staff-"}
+                value={blacklistPatterns}
+                onChange={(event) =>
+                  setBlacklistPatterns(event.currentTarget.value)
+                }
+              />
+              <span className="type-meta block text-muted-foreground">
+                One case-insensitive regular expression per line.
+              </span>
+            </label>
+
+            {configure.error ? (
+              <ConfigurationError error={configure.error} />
+            ) : null}
+
+            <DialogFooter>
+              <Button
+                disabled={configure.isPending}
+                type="button"
+                variant="outline"
+                onClick={() => onOpenChange(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                disabled={
+                  configure.isPending || tokenInvalid || selected.length === 0
+                }
+                type="button"
+                onClick={save}
+              >
+                {configure.isPending ? (
+                  <LoaderCircle className="animate-spin" />
+                ) : (
+                  <Check />
+                )}
+                {tokenLength ? "Verify & save" : "Save configuration"}
+              </Button>
+            </DialogFooter>
+          </div>
         ) : (
           <CloudflarePermissionsPreview
-            domain={permissionsDomain}
-            error={configure.error}
+            domain={effectiveDefault?.zoneName ?? hearthDomain}
           />
         )}
       </DialogContent>
@@ -913,177 +1601,178 @@ function DomainConfigurationDialog({
   )
 }
 
-function VanitySettingsForm({
-  apiToken,
-  blacklistPatterns,
-  domain,
-  enabled,
-  error,
+function TokenCheckStatus({
+  check,
   hasIntegration,
-  isPending,
-  permissionsPending,
-  onApiTokenChange,
-  onBlacklistPatternsChange,
-  onCancel,
-  onDomainChange,
-  onEnabledChange,
-  onOpenPermissions,
-  onSave,
+  tokenLength,
 }: {
-  apiToken: string
-  blacklistPatterns: string
-  domain: string
-  enabled: boolean
-  error: Error | null
+  check: TokenCheck
   hasIntegration: boolean
-  isPending: boolean
-  permissionsPending: boolean
-  onApiTokenChange: (value: string) => void
-  onBlacklistPatternsChange: (value: string) => void
-  onCancel: () => void
-  onDomainChange: (value: string) => void
-  onEnabledChange: (enabled: boolean) => void
-  onOpenPermissions: () => void
-  onSave: () => void
+  tokenLength: number
 }) {
-  const tokenLength = apiToken.trim().length
-  const tokenInvalid = tokenLength < 20 && (!hasIntegration || tokenLength > 0)
-
+  if (tokenLength > 0 && tokenLength < 20) {
+    return (
+      <p className="type-meta text-muted-foreground">Paste the whole token.</p>
+    )
+  }
+  if (check.status === "checking") {
+    return (
+      <p className="type-meta flex items-center gap-1.5 text-muted-foreground">
+        <LoaderCircle className="size-3 animate-spin" />
+        Checking the token…
+      </p>
+    )
+  }
+  if (check.status === "error") {
+    return (
+      <p className="type-meta flex items-start gap-1.5 text-destructive">
+        <CircleAlert className="mt-0.5 size-3 shrink-0" />
+        <span>{check.message}</span>
+      </p>
+    )
+  }
+  if (check.status === "ready") {
+    return (
+      <p className="type-meta flex items-center gap-1.5 text-emerald-700 dark:text-emerald-300">
+        <Check className="size-3" />
+        {tokenLength > 0 ? "This token" : "The saved token"} can manage{" "}
+        {check.count} {check.count === 1 ? "zone" : "zones"}.
+      </p>
+    )
+  }
   return (
-    <div className="space-y-4">
-      <label className="type-label block space-y-1.5">
-        Vanity domain
-        <Input
-          autoCapitalize="none"
-          autoCorrect="off"
-          className="font-mono"
-          name="domain"
-          placeholder="example.gg"
-          required
-          value={domain}
-          onChange={(event) => onDomainChange(event.currentTarget.value)}
-        />
-        <span className="type-meta block font-mono text-muted-foreground">
-          {`<vanity>.${domain.trim() || "example.gg"}`}
-        </span>
-      </label>
-
-      <div className="space-y-1.5">
-        <div className="flex items-center justify-between gap-3">
-          <label className="type-control-sm" htmlFor="cloudflare-api-token">
-            Cloudflare API token
-          </label>
-          <a
-            className="type-label inline-flex items-center gap-1 text-primary hover:underline"
-            href="https://dash.cloudflare.com/profile/api-tokens"
-            rel="noreferrer"
-            target="_blank"
-          >
-            Create token <ExternalLink className="size-2.5" />
-          </a>
-        </div>
-        <div className="flex items-center gap-2">
-          <Input
-            autoComplete="new-password"
-            className="min-w-0 flex-1 font-mono"
-            id="cloudflare-api-token"
-            minLength={20}
-            name="apiToken"
-            placeholder="Cloudflare Token"
-            required={!hasIntegration}
-            type="password"
-            value={apiToken}
-            onChange={(event) => onApiTokenChange(event.currentTarget.value)}
-          />
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                aria-label="Preview required Cloudflare permissions"
-                aria-busy={permissionsPending}
-                disabled={permissionsPending}
-                size="icon"
-                type="button"
-                variant="outline"
-                onClick={onOpenPermissions}
-              >
-                {permissionsPending ? (
-                  <LoaderCircle className="animate-spin" />
-                ) : (
-                  <CircleHelp />
-                )}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="left">
-              Preview required permissions
-            </TooltipContent>
-          </Tooltip>
-        </div>
-        <p className="type-meta flex items-start gap-1.5 text-muted-foreground">
-          <KeyRound className="mt-0.5 size-3 shrink-0" />
-          <span>
-            {hasIntegration
-              ? "Optional. Leave blank to keep the encrypted token already on file."
-              : "Stored encrypted and restricted to the DNS zone Kiln manages."}
-          </span>
-        </p>
-      </div>
-
-      <div className="flex items-center justify-between gap-4 border border-border/75 bg-background/35 p-3">
-        <div>
-          <p className="text-xs font-medium">Automatic provisioning</p>
-          <p className="type-meta mt-0.5 text-muted-foreground">
-            Create and reconcile DNS records as servers are provisioned.
-          </p>
-        </div>
-        <Switch
-          aria-label="Enable automatic domain provisioning"
-          checked={enabled}
-          onCheckedChange={onEnabledChange}
-        />
-      </div>
-
-      <label className="type-label block space-y-1.5">
-        Blacklisted vanity names
-        <Textarea
-          aria-label="Blacklisted vanity name patterns"
-          className="min-h-36 font-mono text-xs"
-          placeholder={"^(admin|api|www)$\n^staff-"}
-          value={blacklistPatterns}
-          onChange={(event) =>
-            onBlacklistPatternsChange(event.currentTarget.value)
-          }
-        />
-        <span className="type-meta block text-muted-foreground">
-          One case-insensitive regular expression per line.
-        </span>
-      </label>
-
-      {error ? <ConfigurationError error={error} /> : null}
-
-      <DialogFooter>
-        <Button type="button" variant="outline" onClick={onCancel}>
-          Cancel
-        </Button>
-        <Button
-          disabled={isPending || tokenInvalid}
-          type="button"
-          onClick={onSave}
-        >
-          {isPending ? <LoaderCircle className="animate-spin" /> : <Check />}
-          {tokenLength ? "Verify & save" : "Save configuration"}
-        </Button>
-      </DialogFooter>
-    </div>
+    <p className="type-meta flex items-start gap-1.5 text-muted-foreground">
+      <KeyRound className="mt-0.5 size-3 shrink-0" />
+      <span>
+        {hasIntegration
+          ? "Optional. Leave blank to keep the encrypted token already on file."
+          : "Stored encrypted. Kiln lists the zones it can manage."}
+      </span>
+    </p>
   )
 }
 
-function CloudflarePermissionsPreview({
-  domain,
-  error,
+const DomainChoiceRow = React.memo(function DomainChoiceRow({
+  choice,
+  isDefault,
+  onChange,
+  onMakeDefault,
 }: {
-  domain: string
-  error: Error | null
+  choice: DomainChoice
+  isDefault: boolean
+  onChange: (zoneId: string, change: Partial<DomainChoice>) => void
+  onMakeDefault: (zoneId: string) => void
 }) {
+  return (
+    <div className="flex min-h-11 items-center gap-2.5 px-3 py-1.5">
+      <label className="flex shrink-0 cursor-pointer items-center">
+        <input
+          aria-label={`Use ${choice.zoneName}`}
+          checked={choice.selected}
+          className="peer sr-only"
+          type="checkbox"
+          onChange={(event) =>
+            onChange(choice.zoneId, { selected: event.currentTarget.checked })
+          }
+        />
+        <span
+          className={`grid size-4 place-items-center rounded-sm border peer-focus-visible:ring-2 peer-focus-visible:ring-ring/40 ${
+            choice.selected
+              ? "border-primary bg-primary text-primary-foreground"
+              : "border-input"
+          }`}
+        >
+          {choice.selected ? <Check className="size-3" /> : null}
+        </span>
+      </label>
+      {choice.selected ? (
+        <div className="flex min-w-0 flex-1 items-center gap-1">
+          <span className="type-code shrink-0 text-muted-foreground">
+            {"<vanity>."}
+          </span>
+          <Input
+            aria-label={`Domain in ${choice.zoneName}`}
+            autoCapitalize="none"
+            autoCorrect="off"
+            className="h-7 min-w-0 flex-1 font-mono text-xs"
+            spellCheck={false}
+            value={choice.domain}
+            onChange={(event) =>
+              onChange(choice.zoneId, { domain: event.currentTarget.value })
+            }
+          />
+        </div>
+      ) : (
+        <span className="type-code min-w-0 flex-1 truncate text-muted-foreground">
+          {choice.zoneName}
+        </span>
+      )}
+      {choice.missing ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <CircleAlert
+              aria-label="This token can't manage this zone"
+              className="size-3.5 shrink-0 text-amber-600 dark:text-amber-300"
+            />
+          </TooltipTrigger>
+          <TooltipContent side="left">
+            This token can&apos;t manage {choice.zoneName}
+          </TooltipContent>
+        </Tooltip>
+      ) : null}
+      {choice.selected ? (
+        isDefault ? (
+          <Badge className="type-meta shrink-0" variant="outline">
+            <Star className="size-2.5" />
+            Default
+          </Badge>
+        ) : (
+          <Button
+            className="shrink-0 text-muted-foreground"
+            size="xs"
+            type="button"
+            variant="ghost"
+            onClick={() => onMakeDefault(choice.zoneId)}
+          >
+            Make default
+          </Button>
+        )
+      ) : null}
+    </div>
+  )
+})
+
+/**
+ * Keeps choices for zones still reachable, adds new zones, and flags chosen
+ * zones the token lost. A first setup starts with every zone chosen.
+ */
+function mergeDiscoveredZones(
+  current: ReadonlyArray<DomainChoice>,
+  zones: ReadonlyArray<DiscoveredCloudflareZone>
+): Array<DomainChoice> {
+  const byZone = new Map(current.map((choice) => [choice.zoneId, choice]))
+  const selectNew = !current.some((choice) => choice.selected)
+  const reachable = new Set(zones.map((zone) => zone.id))
+  return [
+    ...zones.map((zone): DomainChoice => {
+      const existing = byZone.get(zone.id)
+      return existing
+        ? { ...existing, missing: false, zoneName: zone.name }
+        : {
+            domain: zone.name,
+            missing: false,
+            selected: selectNew,
+            zoneId: zone.id,
+            zoneName: zone.name,
+          }
+    }),
+    ...current
+      .filter((choice) => choice.selected && !reachable.has(choice.zoneId))
+      .map((choice) => ({ ...choice, missing: true })),
+  ]
+}
+
+function CloudflarePermissionsPreview({ domain }: { domain: string }) {
   return (
     <div className="space-y-4">
       <CloudflarePermissionPolicy domain={domain} />
@@ -1091,12 +1780,11 @@ function CloudflarePermissionsPreview({
       <div className="flex gap-2 border border-amber-500/25 bg-amber-400/8 p-3 text-amber-950/85 dark:border-amber-400/20 dark:bg-amber-400/5 dark:text-amber-100/85">
         <KeyRound className="mt-0.5 size-3.5 shrink-0 text-amber-700 dark:text-amber-300" />
         <p className="type-meta">
+          Add every zone Kiln should use to the token, or choose all zones.
           Kiln encrypts the token at rest, never returns it to the browser, and
           keeps every managed record DNS-only.
         </p>
       </div>
-
-      {error ? <ConfigurationError error={error} /> : null}
     </div>
   )
 }
@@ -1292,8 +1980,8 @@ function DomainStatus({
   )
 }
 
-function managedDomainRowKey(domain: ManagedDomainOverview): string {
-  return `${domain.relayId}:${domain.instanceId}`
+function serverKey(relayId: string, instanceId: string): string {
+  return `${relayId}:${instanceId}`
 }
 
 function domainHostname(domain: ManagedDomainOverview): string {
@@ -1325,12 +2013,6 @@ function domainStatusPresentation(
 // Cloudflare resolves `:account` to the signed-in account that owns the zone.
 function cloudflareDnsRecordsUrl(zoneName: string): string {
   return `https://dash.cloudflare.com/?to=/:account/${encodeURIComponent(zoneName)}/dns/records`
-}
-
-function domainIntegrationKey(integration: DomainIntegrationView | null) {
-  return integration
-    ? `${integration.domain}:${integration.enabled}:${integration.blacklistPatterns.join("|")}`
-    : "new"
 }
 
 function errorMessage(cause: unknown) {

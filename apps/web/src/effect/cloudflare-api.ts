@@ -30,10 +30,15 @@ const CloudflareErrorEnvelopeSchema = Schema.Struct({
   success: Schema.Boolean,
 })
 
+const CloudflareResultInfoSchema = Schema.Struct({
+  total_pages: Schema.optionalKey(Schema.Number),
+})
+
 const cloudflareEnvelopeSchema = <TValue>(result: Schema.Decoder<TValue>) =>
   Schema.Struct({
     errors: Schema.optionalKey(Schema.Array(CloudflareErrorSchema)),
     result: Schema.optionalKey(result),
+    result_info: Schema.optionalKey(CloudflareResultInfoSchema),
     success: Schema.Boolean,
   })
 
@@ -101,36 +106,32 @@ function ipAddressFamily(host: string): 0 | 4 | 6 {
   )
 }
 
-export const resolveCloudflareZoneEffect = Effect.fn("cloudflare.zone.resolve")(
-  function* (apiToken: string, domain: string) {
-    const labels = domain.split(".")
-    for (let index = 0; index < labels.length - 1; index += 1) {
-      const candidate = labels.slice(index).join(".")
+// Cloudflare caps zone pages at 50; more pages than this is not a real token.
+const zonePageLimit = 20
+
+/** The active zones the token can read, by name. */
+export const listCloudflareZonesEffect = Effect.fn("cloudflare.zones.list")(
+  function* (apiToken: string) {
+    const zones: Array<CloudflareZone> = []
+    for (let page = 1; page <= zonePageLimit; page += 1) {
       const query = new URLSearchParams({
-        name: candidate,
-        page: "1",
-        per_page: "1",
+        page: String(page),
+        per_page: "50",
         status: "active",
       })
-      const zones = yield* requestCloudflareResult(
+      const { result, resultInfo } = yield* requestCloudflare(
         apiToken,
         `/zones?${query}`,
         Schema.Array(CloudflareZoneSchema)
       )
-      const zone = zones.find(
-        (item) =>
-          item.name.toLowerCase() === candidate && item.status !== "pending"
-      )
-      if (zone) {
-        return {
-          id: zone.id,
-          name: zone.name.toLowerCase(),
-        } satisfies CloudflareZone
+      for (const zone of result) {
+        if (zone.status === undefined || zone.status === "active") {
+          zones.push({ id: zone.id, name: zone.name.toLowerCase() })
+        }
       }
+      if (!resultInfo?.total_pages || page >= resultInfo.total_pages) break
     }
-    return yield* cloudflareFailure(
-      "No active Cloudflare zone contains this vanity domain. The API token needs Zone Read and DNS Write access."
-    )
+    return zones.sort((left, right) => left.name.localeCompare(right.name))
   }
 )
 
@@ -328,6 +329,23 @@ function requestCloudflareResult<TValue>(
     notFoundResult: TValue
   }
 ): Effect.Effect<TValue, ExternalServiceError> {
+  return requestCloudflare(apiToken, path, resultSchema, init, options).pipe(
+    Effect.map(({ result }) => result)
+  )
+}
+
+function requestCloudflare<TValue>(
+  apiToken: string,
+  path: string,
+  resultSchema: Schema.Decoder<TValue>,
+  init?: RequestInit,
+  options?: {
+    notFoundResult: TValue
+  }
+): Effect.Effect<
+  { result: TValue; resultInfo: { total_pages?: number } | undefined },
+  ExternalServiceError
+> {
   return Effect.tryPromise({
     try: async () => {
       const response = await fetch(`${cloudflareApiBaseUrl}${path}`, {
@@ -349,7 +367,7 @@ function requestCloudflareResult<TValue>(
           (response.status === 404 ||
             payload.errors?.some((error) => error.code === 81_044))
         ) {
-          return options.notFoundResult
+          return { result: options.notFoundResult, resultInfo: undefined }
         }
         const message = payload.errors?.map((error) => error.message).join("; ")
         throw new Error(
@@ -365,7 +383,7 @@ function requestCloudflareResult<TValue>(
           message || `Cloudflare returned HTTP ${response.status}`
         )
       }
-      return payload.result
+      return { result: payload.result, resultInfo: payload.result_info }
     },
     catch: (cause) =>
       ExternalServiceError.make({

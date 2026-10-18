@@ -4,6 +4,7 @@ import { afterEach, vi } from "vite-plus/test"
 
 import {
   deleteCloudflareRecordEffect,
+  listCloudflareZonesEffect,
   replaceCloudflareAddressRecordEffect,
 } from "@/effect/cloudflare-api"
 
@@ -90,6 +91,36 @@ describe("Cloudflare DNS records", () => {
       )
 
       assert.strictEqual(fetchMock.mock.calls.length, 1)
+    })
+  })
+
+  it.effect("lists every zone the token can reach across pages", () => {
+    // A token scoped to an account can reach more zones than one page holds.
+    const pages = [
+      [{ id: "zone-b", name: "B.site", status: "active" }],
+      [
+        { id: "zone-a", name: "a.site", status: "active" },
+        { id: "zone-c", name: "c.site", status: "pending" },
+      ],
+    ]
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const page = Number(new URL(String(input)).searchParams.get("page"))
+        return Response.json({
+          errors: [],
+          result: pages[page - 1] ?? [],
+          result_info: { total_pages: pages.length },
+          success: true,
+        })
+      })
+    )
+
+    return Effect.gen(function* () {
+      assert.deepEqual(yield* listCloudflareZonesEffect("api-token"), [
+        { id: "zone-a", name: "a.site" },
+        { id: "zone-b", name: "b.site" },
+      ])
     })
   })
 })

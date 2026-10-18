@@ -3,25 +3,41 @@ import { relayIdSchema } from "@workspace/contracts"
 import { z } from "zod"
 
 import {
+  domainAssignmentStrategySchema,
   domainBlacklistPatternsSchema,
   domainNameSchema,
   vanityLabelSchema,
 } from "@/lib/domain-schemas"
 import {
   configureDomainIntegrationHandler,
+  createInstanceDomainHandler,
+  discoverCloudflareDomainsHandler,
   getDomainSettingsHandler,
   getInstanceDomainHandler,
   removeInstanceDomainHandler,
   resyncDomainAssignmentsHandler,
-  setInstanceVanityHandler,
+  updateInstanceDomainHandler,
 } from "@/server/domains.server"
 import { publishDomainChange } from "@/lib/domain-realtime.server"
 
+const apiTokenSchema = z.string().trim().min(20).max(512)
+const zoneIdSchema = z.string().regex(/^[a-f0-9]{32}$/u)
+const domainIdSchema = z.uuid()
+
 const configureDomainInputSchema = z.object({
-  apiToken: z.string().trim().min(20).max(512).optional(),
+  apiToken: apiTokenSchema.optional(),
   blacklistPatterns: domainBlacklistPatternsSchema,
-  domain: domainNameSchema,
+  defaultDomain: domainNameSchema,
+  domains: z
+    .array(z.object({ domain: domainNameSchema, zoneId: zoneIdSchema }))
+    .min(1, "Choose at least one domain")
+    .max(50),
   enabled: z.boolean().default(true),
+  strategy: domainAssignmentStrategySchema,
+})
+
+const discoverDomainsInputSchema = z.object({
+  apiToken: apiTokenSchema.optional(),
 })
 
 const instanceDomainInputSchema = z.object({
@@ -29,13 +45,34 @@ const instanceDomainInputSchema = z.object({
   relayId: relayIdSchema,
 })
 
-const setVanityInputSchema = instanceDomainInputSchema.extend({
+const createInstanceDomainInputSchema = instanceDomainInputSchema.extend({
+  domain: domainNameSchema,
+  primary: z.boolean(),
+  /** Omitted to let Kiln generate an available name. */
+  vanityLabel: vanityLabelSchema.optional(),
+})
+
+const updateInstanceDomainInputSchema = z.object({
+  domain: domainNameSchema,
+  id: domainIdSchema,
+  primary: z.boolean(),
   vanityLabel: vanityLabelSchema,
 })
 
+const removeInstanceDomainInputSchema = z.object({ id: domainIdSchema })
+
 export type ConfigureDomainInput = z.infer<typeof configureDomainInputSchema>
+export type DiscoverDomainsInput = z.infer<typeof discoverDomainsInputSchema>
 export type InstanceDomainInput = z.infer<typeof instanceDomainInputSchema>
-export type SetVanityInput = z.infer<typeof setVanityInputSchema>
+export type CreateInstanceDomainInput = z.infer<
+  typeof createInstanceDomainInputSchema
+>
+export type UpdateInstanceDomainInput = z.infer<
+  typeof updateInstanceDomainInputSchema
+>
+export type RemoveInstanceDomainInput = z.infer<
+  typeof removeInstanceDomainInputSchema
+>
 
 export interface InstanceDomainOverview {
   address: string
@@ -51,9 +88,14 @@ export interface InstanceDomainOverview {
 export interface ManagedDomainOverview {
   address: string
   domain: string
+  /** How many domains point at this row's game server. */
+  domainCount: number
+  id: string
   instanceId: string
   lastError: string | null
   port: number
+  /** The game server's connect address; one per game server. */
+  primary: boolean
   relayId: string
   relayName: string
   server: {
@@ -68,11 +110,23 @@ export interface ManagedDomainOverview {
   status: "active" | "error" | "pending"
   supportsSrv: boolean
   vanityLabel: string
+  /** The Cloudflare zone, for its dashboard link. */
+  zoneName: string | null
+}
+
+export interface DiscoveredCloudflareZone {
+  id: string
+  name: string
 }
 
 export const getDomainSettings = createServerFn({ method: "GET" }).handler(() =>
   getDomainSettingsHandler()
 )
+
+// POST, so a pasted token travels in the body rather than a URL.
+export const discoverCloudflareDomains = createServerFn({ method: "POST" })
+  .validator(discoverDomainsInputSchema)
+  .handler(({ data }) => discoverCloudflareDomainsHandler(data))
 
 export const configureDomainIntegration = createServerFn({ method: "POST" })
   .validator(configureDomainInputSchema)
@@ -94,10 +148,14 @@ export const getInstanceDomain = createServerFn({ method: "GET" })
   .validator(instanceDomainInputSchema)
   .handler(({ data }) => getInstanceDomainHandler(data))
 
-export const setInstanceVanity = createServerFn({ method: "POST" })
-  .validator(setVanityInputSchema)
-  .handler(({ data }) => setInstanceVanityHandler(data))
+export const createInstanceDomain = createServerFn({ method: "POST" })
+  .validator(createInstanceDomainInputSchema)
+  .handler(({ data }) => createInstanceDomainHandler(data))
+
+export const updateInstanceDomain = createServerFn({ method: "POST" })
+  .validator(updateInstanceDomainInputSchema)
+  .handler(({ data }) => updateInstanceDomainHandler(data))
 
 export const removeInstanceDomain = createServerFn({ method: "POST" })
-  .validator(instanceDomainInputSchema)
+  .validator(removeInstanceDomainInputSchema)
   .handler(({ data }) => removeInstanceDomainHandler(data))
