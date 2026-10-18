@@ -148,6 +148,12 @@ export class ResourceNotFoundError extends Schema.TaggedError<ResourceNotFoundEr
   }
 ) {}
 
+/** A vanity domain change that would strand game server domains' records. */
+export class DomainConfigurationError extends Schema.TaggedError<DomainConfigurationError>()(
+  "DomainConfigurationError",
+  { message: Schema.String }
+) {}
+
 export class ExternalServiceError extends Schema.TaggedError<ExternalServiceError>()(
   "ExternalServiceError",
   {

@@ -6,7 +6,7 @@ import {
   relayInstanceSchema,
   relaySnapshotSchema,
 } from "@workspace/contracts"
-import { Effect, Random, Semaphore } from "effect"
+import { Effect, Option, Random, Result, Semaphore } from "effect"
 import { z } from "zod"
 
 import {
@@ -237,16 +237,17 @@ export async function configureDomainIntegrationHandler(
   if (!requested.some((item) => item.domain === data.defaultDomain)) {
     throw new Error("Choose a default domain from the list")
   }
+  // The dialog lists one domain per zone, so its choices can't collapse.
+  const zoneIds = new Set(requested.map((item) => item.zoneId))
+  if (zoneIds.size !== requested.length) {
+    throw new Error("Choose one domain per Cloudflare zone")
+  }
   const apiToken = data.apiToken ?? (await savedApiToken())
   if (!apiToken) throw new Error("Enter a Cloudflare API token")
-  const [zones, existing, usage] = await Promise.all([
-    runAppEffect("cloudflare.zones.list", listCloudflareZonesEffect(apiToken)),
-    runAppEffect("domains.integration.load", loadDomainIntegrationEffect()),
-    runAppEffect(
-      "domains.assignments.countByDomain",
-      countInstanceDomainsByDomainEffect()
-    ),
-  ])
+  const zones = await runAppEffect(
+    "cloudflare.zones.list",
+    listCloudflareZonesEffect(apiToken)
+  )
   const zonesById = new Map(zones.map((zone) => [zone.id, zone]))
   const domains = requested.map((item): ManagedDomain => {
     const zone = zonesById.get(item.zoneId)
@@ -264,23 +265,8 @@ export async function configureDomainIntegrationHandler(
       zoneName: zone.name,
     }
   })
-  // Game server domains keep their records in their domain's zone. A domain
-  // left out while it still has some stays, disabled, so they keep working
-  // but new game servers don't get it.
-  for (const previous of existing?.domains ?? []) {
-    const total = usage.get(previous.domain) ?? 0
-    if (total === 0) continue
-    const next = domains.find((item) => item.domain === previous.domain)
-    if (!next) {
-      domains.push({ ...previous, enabled: false, isDefault: false })
-      continue
-    }
-    if (next.zoneId !== previous.zoneId) {
-      throw new Error(
-        `Delete the ${total} ${total === 1 ? "domain" : "domains"} on ${previous.domain} before moving it to another zone`
-      )
-    }
-  }
+  // Domains left out that still have game server domains stay, disabled;
+  // the save decides which under its locks.
   await runAppEffect(
     "domains.integration.save",
     saveCloudflareIntegrationEffect({
@@ -288,6 +274,7 @@ export async function configureDomainIntegrationHandler(
       blacklistPatterns,
       domains,
       enabled: data.enabled,
+      reachableZoneIds: new Set(zonesById.keys()),
       strategy: data.strategy,
     }).pipe(Effect.andThen(invalidateManagedDomainAddressesEffect))
   )
@@ -371,11 +358,13 @@ export async function getInstanceDomainHandler(data: InstanceDomainInput) {
 
 /**
  * Points a new domain at a game server. Its first domain becomes its connect
- * address; later ones do when `primary` is set.
+ * address; later ones do when `primary` is set. Administrators only: each
+ * domain is a record under the platform's zones.
  */
 export async function createInstanceDomainHandler(
   data: CreateInstanceDomainInput
 ) {
+  await requireDomainAdministrator()
   const { instance } = await loadWritableInstance(data.relayId, data.instanceId)
   // A failed create still leaves a failed row behind, so publish either way.
   return ensuringPromise(
@@ -411,6 +400,8 @@ export async function createInstanceDomainHandler(
 export async function updateInstanceDomainHandler(
   data: UpdateInstanceDomainInput
 ) {
+  // Signed in before the lookup, so an ID's existence isn't revealed.
+  await requireEligibleResourceUser()
   const assignment = await runAppEffect(
     "domains.assignment.load",
     loadInstanceDomainAssignmentEffect(data.id)
@@ -697,15 +688,17 @@ const provisionInstanceDomainEffect = Effect.fn("domains.instance.provision")(
     if (!instance.publicHost || !instance.publicPort) return false
     const integration = yield* loadDomainIntegrationEffect()
     if (!integration) return false
+    // A removed domain stays removed, even one whose deletion failed part
+    // way: retrying it would bring the address back.
+    if (yield* loadInstanceDomainOptOutEffect(instance.relayId, instance.id)) {
+      return false
+    }
     const assignments = yield* loadInstanceDomainAssignmentsForInstanceEffect(
       instance.relayId,
       instance.id
     )
     if (assignments.length === 0) {
       if (!integration.enabled) return false
-      if (yield* loadInstanceDomainOptOutEffect(instance.relayId, instance.id)) {
-        return false
-      }
       const credential = yield* loadCloudflareIntegrationCredentialEffect()
       const domain = yield* chooseDomainEffect(credential)
       const vanityLabel = yield* availableVanityLabelEffect(
@@ -725,6 +718,54 @@ const provisionInstanceDomainEffect = Effect.fn("domains.instance.provision")(
     const credential = yield* loadCloudflareIntegrationCredentialEffect()
     const srvConfiguration = managedDomainSrvConfiguration(instance)
     let changed = false
+    // Brings one domain in line with the endpoint. Reports whether it changed.
+    const reconcileOne = Effect.fnUntraced(function* (
+      assignment: InstanceDomainAssignment
+    ) {
+      if (assignment.status === "active") {
+        if (
+          managedDomainEndpointMatches(assignment, instance) &&
+          domainSrvConfigurationMatches(assignment, srvConfiguration)
+        ) {
+          return false
+        }
+        yield* syncVanityEndpointEffect(credential, assignment, instance)
+        return true
+      }
+      yield* releaseRecordsEffect(assignment, credential)
+      const domain = yield* configuredDomainEffect(
+        credential,
+        assignment.domain,
+        true
+      )
+      // The primary was likely named by Kiln, so it may take a new name;
+      // other domains were named by hand and keep theirs.
+      const candidates = assignment.primary
+        ? [
+            ...new Set([
+              assignment.vanityLabel,
+              ...generateVanityCandidates(credential.blacklistPatterns),
+            ]),
+          ]
+        : [assignment.vanityLabel]
+      const vanityLabel = yield* availableVanityLabelEffect(
+        credential,
+        domain,
+        candidates,
+        assignment.id
+      ).pipe(
+        Effect.tapError((error) =>
+          recordInstanceDomainErrorEffect(assignment.id, error.message)
+        )
+      )
+      yield* provisionVanityRecordsEffect(credential, instance, domain, {
+        id: assignment.id,
+        insert: false,
+        primary: assignment.primary,
+        vanityLabel,
+      })
+      return true
+    })
     const reconcile = Effect.gen(function* () {
       if (!assignments.some((assignment) => assignment.primary)) {
         const [first] = assignments
@@ -737,52 +778,20 @@ const provisionInstanceDomainEffect = Effect.fn("domains.instance.provision")(
           changed = true
         }
       }
+      // Each domain on its own, so one failing doesn't hold back the rest;
+      // the first failure is reported once they've all had a turn.
+      let failure: Option.Option<
+        Effect.Error<ReturnType<typeof reconcileOne>>
+      > = Option.none()
       for (const assignment of assignments) {
-        if (assignment.status === "active") {
-          if (
-            managedDomainEndpointMatches(assignment, instance) &&
-            domainSrvConfigurationMatches(assignment, srvConfiguration)
-          ) {
-            continue
-          }
-          yield* syncVanityEndpointEffect(credential, assignment, instance)
-          changed = true
-          continue
+        const outcome = yield* Effect.result(reconcileOne(assignment))
+        if (Result.isSuccess(outcome)) {
+          if (outcome.success) changed = true
+        } else if (Option.isNone(failure)) {
+          failure = Option.some(outcome.failure)
         }
-        yield* releaseRecordsEffect(assignment, credential)
-        const domain = yield* configuredDomainEffect(
-          credential,
-          assignment.domain,
-          true
-        )
-        // The primary was likely named by Kiln, so it may take a new name;
-        // other domains were named by hand and keep theirs.
-        const candidates = assignment.primary
-          ? [
-              ...new Set([
-                assignment.vanityLabel,
-                ...generateVanityCandidates(credential.blacklistPatterns),
-              ]),
-            ]
-          : [assignment.vanityLabel]
-        const vanityLabel = yield* availableVanityLabelEffect(
-          credential,
-          domain,
-          candidates,
-          assignment.id
-        ).pipe(
-          Effect.tapError((error) =>
-            recordInstanceDomainErrorEffect(assignment.id, error.message)
-          )
-        )
-        yield* provisionVanityRecordsEffect(credential, instance, domain, {
-          id: assignment.id,
-          insert: false,
-          primary: assignment.primary,
-          vanityLabel,
-        })
-        changed = true
       }
+      if (Option.isSome(failure)) return yield* Effect.fail(failure.value)
     })
     yield* reconcile.pipe(
       Effect.ensuring(

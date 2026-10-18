@@ -2,7 +2,11 @@ import type { RowDataPacket } from "mysql2/promise"
 import { Clock, Effect, Option, Schema } from "effect"
 
 import { Database } from "@/effect/database"
-import { CredentialError, ResourceNotFoundError } from "@/effect/errors"
+import {
+  CredentialError,
+  DomainConfigurationError,
+  ResourceNotFoundError,
+} from "@/effect/errors"
 import { databaseTable } from "@/lib/database-config"
 import { domainBlacklistPatternsSchema } from "@/lib/domain-schemas"
 import { betterAuthSecrets } from "@/lib/environment"
@@ -190,13 +194,22 @@ export const loadCloudflareIntegrationCredentialEffect = Effect.fn(
   } satisfies CloudflareIntegrationCredential
 })
 
+/**
+ * Saves the integration and its enabled domains. A domain left out keeps a
+ * disabled row while game server domains are on it, since their records
+ * live in its zone; otherwise it goes. Decided under locks, so a game server
+ * domain reserved meanwhile can't lose its zone.
+ */
 export const saveCloudflareIntegrationEffect = Effect.fn(
   "domains.integration.save"
 )(function* (input: {
   apiToken: string
   blacklistPatterns: Array<string>
+  /** The enabled domains, in zones the token reaches. */
   domains: ReadonlyArray<ManagedDomain>
   enabled: boolean
+  /** Zones the token can manage; kept domains must be among them. */
+  reachableZoneIds: ReadonlySet<string>
   strategy: DomainAssignmentStrategy
 }) {
   const database = yield* Database
@@ -229,12 +242,67 @@ export const saveCloudflareIntegrationEffect = Effect.fn(
           now,
         ]
       )
+      // Locking reads: a reservation waits for this save, or this save sees it.
+      const previous = yield* transaction.queryRows<DomainZoneRow>(
+        `SELECT domain, zone_id, zone_name, is_default, enabled
+           FROM ${databaseTable("domain_zone")}
+          WHERE integration_id = ?
+          FOR UPDATE`,
+        [CLOUDFLARE_INTEGRATION_ID]
+      )
+      const assigned = yield* transaction.queryRows<
+        RowDataPacket & { domain: string }
+      >(
+        `SELECT domain FROM ${databaseTable("instance_domain")} FOR SHARE`
+      )
+      const usage = new Map<string, number>()
+      for (const row of assigned) {
+        usage.set(row.domain, (usage.get(row.domain) ?? 0) + 1)
+      }
+      const requested = new Map(
+        input.domains.map((domain) => [domain.domain, domain])
+      )
+      const requestedZones = new Set(
+        input.domains.map((domain) => domain.zoneId)
+      )
+      const kept: Array<ManagedDomain> = []
+      for (const row of previous) {
+        const total = usage.get(row.domain) ?? 0
+        if (total === 0) continue
+        const count = `${total} game server ${total === 1 ? "domain" : "domains"}`
+        const next = requested.get(row.domain)
+        if (next) {
+          if (next.zoneId !== row.zone_id) {
+            return yield* DomainConfigurationError.make({
+              message: `Delete the ${count} on ${row.domain} before moving it to another zone`,
+            })
+          }
+          continue
+        }
+        if (!input.reachableZoneIds.has(row.zone_id)) {
+          return yield* DomainConfigurationError.make({
+            message: `This token can't manage ${row.domain}, which still has ${count}. Use a token that can, or delete them first.`,
+          })
+        }
+        if (requestedZones.has(row.zone_id)) {
+          return yield* DomainConfigurationError.make({
+            message: `Delete the ${count} on ${row.domain} before using another domain in its zone`,
+          })
+        }
+        kept.push({
+          domain: row.domain,
+          enabled: false,
+          isDefault: false,
+          zoneId: row.zone_id,
+          zoneName: row.zone_name,
+        })
+      }
       yield* transaction.execute(
         `DELETE FROM ${databaseTable("domain_zone")}
           WHERE integration_id = ?`,
         [CLOUDFLARE_INTEGRATION_ID]
       )
-      for (const domain of input.domains) {
+      for (const domain of [...input.domains, ...kept]) {
         yield* transaction.execute(
           `INSERT INTO ${databaseTable("domain_zone")}
              (domain, integration_id, zone_id, zone_name, is_default,
@@ -445,13 +513,17 @@ export const insertInstanceDomainAssignmentEffect = Effect.fn(
 )(function* (input: DomainReservation) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
-  yield* database.execute(
+  // Only into an enabled domain still configured: a save that removes it
+  // either waits for this row or this insert finds nothing.
+  const result = yield* database.execute(
     "domains.assignment.insert",
     `INSERT INTO ${databaseTable("instance_domain")}
        (id, relay_id, instance_id, is_primary, integration_id, vanity_label,
         domain, public_host, public_port, supports_srv, srv_service,
         srv_protocol, status, last_error, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, ?, ?)`,
+     SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, ?, ?
+       FROM ${databaseTable("domain_zone")}
+      WHERE domain = ? AND enabled = 1`,
     [
       input.id,
       input.relayId,
@@ -467,8 +539,14 @@ export const insertInstanceDomainAssignmentEffect = Effect.fn(
       input.srvProtocol,
       now,
       now,
+      input.domain,
     ]
   )
+  if (result.affectedRows === 0) {
+    return yield* DomainConfigurationError.make({
+      message: `${input.domain} isn't taking new game server domains`,
+    })
+  }
 })
 
 /** Holds a new name for a domain whose records were released. */
@@ -477,7 +555,7 @@ export const reserveInstanceDomainAssignmentEffect = Effect.fn(
 )(function* (input: Omit<DomainReservation, "instanceId" | "primary" | "relayId">) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
-  yield* database.execute(
+  const result = yield* database.execute(
     "domains.assignment.reserve",
     `UPDATE ${databaseTable("instance_domain")}
         SET vanity_label = ?,
@@ -493,7 +571,10 @@ export const reserveInstanceDomainAssignmentEffect = Effect.fn(
             status = 'pending',
             last_error = NULL,
             updated_at = ?
-      WHERE id = ?`,
+      WHERE id = ?
+        AND EXISTS (
+          SELECT 1 FROM ${databaseTable("domain_zone")} WHERE domain = ?
+        )`,
     [
       input.vanityLabel,
       input.domain,
@@ -504,8 +585,14 @@ export const reserveInstanceDomainAssignmentEffect = Effect.fn(
       input.srvProtocol,
       now,
       input.id,
+      input.domain,
     ]
   )
+  if (result.affectedRows === 0) {
+    return yield* DomainConfigurationError.make({
+      message: `${input.domain} is no longer a configured vanity domain`,
+    })
+  }
 })
 
 /** Forgets records Kiln has deleted from Cloudflare. */
