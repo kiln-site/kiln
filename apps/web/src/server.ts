@@ -8,6 +8,7 @@ import { disposeAppRuntime, reportAppError } from "./effect/runtime"
 import { forkPromise } from "./effect/promise"
 import { startAccessInvitationDelivery } from "./lib/access-invitation-delivery"
 import { scheduleBackupCopyProcessing } from "./lib/backup-copy"
+import { stopWarmCacheRefreshes } from "./lib/cache"
 import { wakePendingAuthorizationDelivery } from "./lib/authorization-delivery"
 import { scheduleInstancePostProvisionProcessing } from "./lib/instance-post-provision"
 import { startKilnUpdateNotifications } from "./lib/kiln-update-notifications"
@@ -71,7 +72,9 @@ let shutdownPromise: Promise<void> | undefined
 
 export function shutdownHearth(): Promise<void> {
   // Disposing the runtime also flushes pending telemetry.
-  shutdownPromise ??= stopInstanceDirectorySync().then(disposeAppRuntime)
+  shutdownPromise ??= stopInstanceDirectorySync()
+    .then(() => Effect.runPromise(stopWarmCacheRefreshes))
+    .then(disposeAppRuntime)
   return shutdownPromise
 }
 

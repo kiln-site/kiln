@@ -1,7 +1,7 @@
 import { Effect, Schema } from "effect"
 
 import { ExternalServiceError } from "@/effect/errors"
-import { readWarmCache } from "@/lib/cache"
+import { readCachedFallback, readWarmCache } from "@/lib/cache"
 
 const headers = {
   Accept: "application/json",
@@ -43,6 +43,16 @@ export const listMcJarVersionsEffect = Effect.fn("mcjarfiles.versions")(
     return yield* readWarmCache({
       decode: decodeCachedVersionCatalog,
       load,
+      // The last-known list kept before this cache, until it expires.
+      lastKnown: readCachedFallback(
+        {
+          fallbackTtlMs: 7 * 24 * 60 * 60_000,
+          key: `mcjarfiles:versions:${type}:${variant}`,
+          name: "Minecraft versions (previous)",
+          ttlMs: 30 * 60_000,
+        },
+        decodeCachedVersionCatalog
+      ),
       policy: {
         freshMs: 30 * 60_000,
         key: `mcjarfiles:versions:v2:${type}:${variant}`,

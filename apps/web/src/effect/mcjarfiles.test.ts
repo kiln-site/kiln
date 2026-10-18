@@ -97,27 +97,63 @@ describe("Minecraft version catalog", () => {
     }).pipe(Effect.provide(cache.layer))
   })
 
-  it.effect("keeps the cached list when a refresh lists no versions", () => {
-    const cache = memoryCache({
-      [key]: { storedAt: 0, value: { versions: ["1.21.11", "1.21.10"] } },
-    })
-    const fetch = mcjarfilesLists([" ", ""])
-    return Effect.gen(function* () {
-      yield* TestClock.adjust(freshMs)
-
-      const catalog = yield* listMcJarVersionsEffect("servers", "paper")
-      yield* Effect.promise(() =>
-        vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1))
-      )
-      const again = yield* listMcJarVersionsEffect("servers", "paper")
-
-      assert.deepStrictEqual(catalog.versions, ["1.21.11", "1.21.10"])
-      assert.deepStrictEqual(again.versions, ["1.21.11", "1.21.10"])
-      expect(cache.stored()).toMatchObject({
-        value: { versions: ["1.21.11", "1.21.10"] },
+  it.effect(
+    "keeps the list through a failed refresh, and takes a later one",
+    () => {
+      const cache = memoryCache({
+        [key]: { storedAt: 0, value: { versions: ["1.21.10"] } },
       })
-    }).pipe(Effect.provide(cache.layer))
-  })
+      // mcjarfiles first lists nothing, then recovers.
+      let answers = 0
+      vi.stubGlobal("fetch", async () =>
+        Response.json(answers++ === 0 ? [" ", ""] : ["1.21.11", "1.21.10"])
+      )
+      return Effect.gen(function* () {
+        yield* TestClock.adjust(freshMs)
+        const read = listMcJarVersionsEffect("servers", "paper")
+
+        const first = yield* read
+        let latest = first
+        for (
+          let attempt = 0;
+          attempt < 100 && latest.versions[0] !== "1.21.11";
+          attempt += 1
+        ) {
+          // The failed refresh must keep the list, and must not stop the next.
+          assert.deepStrictEqual(latest.versions, ["1.21.10"])
+          yield* Effect.promise(
+            () => new Promise((done) => setTimeout(done, 5))
+          )
+          latest = yield* read
+        }
+
+        assert.deepStrictEqual(first.versions, ["1.21.10"])
+        assert.deepStrictEqual(latest.versions, ["1.21.11", "1.21.10"])
+      }).pipe(Effect.provide(cache.layer))
+    }
+  )
+
+  it.effect(
+    "falls back to the list kept before this cache when mcjarfiles fails",
+    () => {
+      const cache = memoryCache({
+        "mcjarfiles:versions:servers:paper:last-known": {
+          versions: ["1.21.11", "1.21.10"],
+        },
+      })
+      vi.stubGlobal("fetch", async () => new Response(null, { status: 503 }))
+      return Effect.gen(function* () {
+        const catalog = yield* listMcJarVersionsEffect("servers", "paper")
+
+        assert.deepStrictEqual(catalog.versions, ["1.21.11", "1.21.10"])
+        // Stored as stale, so the next read refreshes it from mcjarfiles.
+        expect(cache.stored()).toMatchObject({
+          storedAt: 0,
+          value: { versions: ["1.21.11", "1.21.10"] },
+        })
+      }).pipe(Effect.provide(cache.layer))
+    }
+  )
 
   it.effect("refetches instead of serving a cached empty list", () => {
     const cache = memoryCache({

@@ -1,4 +1,4 @@
-import { Clock, Effect, Option, Result, Schema } from "effect"
+import { Clock, Effect, Exit, Option, Result, Schema, Scope } from "effect"
 
 import { AppCache } from "@/effect/cache"
 import type { CacheError } from "@/effect/errors"
@@ -68,6 +68,10 @@ export interface WarmCachePolicy {
 interface WarmCacheOptions<TResult, TError, TRequirements> {
   decode: (input: unknown) => TResult
   load: Effect.Effect<TResult, TError, TRequirements>
+  // A value to serve when nothing is cached and the first load fails, such
+  // as one kept under an older key. It is stored as stale, so the next read
+  // refreshes it.
+  lastKnown?: Effect.Effect<TResult | undefined, never, TRequirements>
   policy: WarmCachePolicy
 }
 
@@ -80,6 +84,15 @@ const decodeWarmEntry = Schema.decodeUnknownSync(WarmEntrySchema)
 // Keys this process is refreshing, so a refresh starts once however many
 // readers find the value stale.
 const warmRefreshes = new Set<string>()
+// Refreshes outlive the request that started them, but not Hearth: shutdown
+// closes this scope before the cache and telemetry they write through.
+const warmRefreshScope = Scope.makeUnsafe()
+
+/** Interrupts background refreshes still running, for shutdown. */
+export const stopWarmCacheRefreshes: Effect.Effect<void> = Scope.close(
+  warmRefreshScope,
+  Exit.void
+)
 
 /**
  * Serves a cached value at once, however old, and refreshes one that is past
@@ -101,7 +114,17 @@ export const readWarmCache = Effect.fn("cache.readWarm")(function* <
       return { storedAt: entry.storedAt, value: options.decode(entry.value) }
     }
   )
-  if (Option.isNone(cached)) return yield* storeWarm(options)
+  if (Option.isNone(cached)) {
+    const loaded = yield* Effect.result(storeWarm(options))
+    if (Result.isSuccess(loaded)) return loaded.success
+    const lastKnown = options.lastKnown ? yield* options.lastKnown : undefined
+    if (lastKnown === undefined) return yield* Effect.fail(loaded.failure)
+    yield* writeCachedJson(
+      { key: policy.key, name: policy.name, ttlMs: policy.ttlMs },
+      { storedAt: 0, value: lastKnown }
+    )
+    return lastKnown
+  }
 
   const now = yield* Clock.currentTimeMillis
   if (
@@ -117,7 +140,7 @@ export const readWarmCache = Effect.fn("cache.readWarm")(function* <
         })
       ),
       Effect.ensuring(Effect.sync(() => warmRefreshes.delete(policy.key))),
-      Effect.forkDetach
+      Effect.forkIn(warmRefreshScope)
     )
   }
   return cached.value.value
