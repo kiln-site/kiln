@@ -74,6 +74,7 @@ const hearthRealtimeQueryScopes = {
   ],
   favorites: [exact(queryKeys.instanceFavorites)],
   "file-activity": [prefix(["file-activity"])],
+  "github-sync": [prefix(["github-sync"])],
   "instance-directory": [
     exact(queryKeys.servers.directory),
     prefix(queryKeys.servers.navigation),

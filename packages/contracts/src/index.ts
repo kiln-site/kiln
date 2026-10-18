@@ -1790,6 +1790,20 @@ export const relayRemoteFileUploadResultSchema = z
   })
   .strict()
 
+export const relayFilePutInputSchema = z
+  .object({
+    instanceId: fileRootIdSchema,
+    path: relayFileMutationPathSchema,
+    /**
+     * The file's bytes, base64-encoded. 700 KiB of base64 (about 525 KiB of
+     * file) keeps the control frame under `relayControlMaxFrameBytes`.
+     */
+    contentBase64: z.base64().max(700 * 1024),
+  })
+  .strict()
+
+export const relayFilePutResultSchema = relayRemoteFileUploadResultSchema
+
 export const relayFileMutationInputSchema = z.discriminatedUnion("operation", [
   z.object({
     operation: z.literal("rename"),
@@ -2381,6 +2395,8 @@ export type RelayRemoteFileUpload = z.infer<typeof relayRemoteFileUploadSchema>
 export type RelayRemoteFileUploadResult = z.infer<
   typeof relayRemoteFileUploadResultSchema
 >
+export type RelayFilePutInput = z.infer<typeof relayFilePutInputSchema>
+export type RelayFilePutResult = z.infer<typeof relayFilePutResultSchema>
 export type RelayFileActivityEntry = z.infer<
   typeof relayFileActivityEntrySchema
 >

@@ -36,6 +36,8 @@ export const relayRestartV1Feature = "relay-restart-v1"
 // The Relay reports its own usage in `node.relayResources`, and its recent
 // samples through `relay.resources.read`.
 export const relayResourcesV1Feature = "relay-resources-v1"
+// The Relay answers `instance.files.put`, creating or replacing one file.
+export const relayFilePutV1Feature = "files-put-v1"
 export const relayBrowserAuthorizationReviseMaxItems = 256
 
 export const relayControlOperations = [
@@ -134,6 +136,7 @@ export const relayControlOperations = [
   "instance.files.stat",
   "instance.files.read",
   "instance.files.write",
+  "instance.files.put",
   "instance.files.upload-url",
   "instance.files.mutate",
   "instance.files.mutate.result",
@@ -184,6 +187,7 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "instance.delete",
   "instance.action",
   "instance.files.write",
+  "instance.files.put",
   "instance.files.upload-url",
   "instance.files.mutate",
   "instance.files.database.write",

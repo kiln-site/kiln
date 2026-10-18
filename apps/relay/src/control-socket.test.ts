@@ -249,6 +249,16 @@ describe("Relay control socket", () => {
       replyTo: write,
       type: "error",
     })
+    const put = sendRequest(asAppReader.socket, "instance.files.put", {
+      contentBase64: "",
+      instanceId: appFiles,
+      path: "config/new.yml",
+    })
+    expect(await asAppReader.inbox.next()).toMatchObject({
+      code: "forbidden",
+      replyTo: put,
+      type: "error",
+    })
     const forServer = sendRequest(asAppReader.socket, "instance.files.read", {
       instanceId: serverId,
       path: "server.properties",

@@ -29,6 +29,12 @@ import {
   getBrickCatalogDetails,
   listBrickCatalogs,
 } from "@/server/brick-catalogs"
+import {
+  getGitHubSyncOverview,
+  listGitHubBranches,
+  listGitHubFolders,
+  listGitHubRepositories,
+} from "@/server/github-sync"
 import { getDomainSettings, getInstanceDomain } from "@/server/domains"
 import { getHearthEdge } from "@/server/hearth-edge"
 import {
@@ -156,6 +162,15 @@ export const queryKeys = {
     instance: (relayId: string, instanceId: string) =>
       ["domains", "instances", relayId, instanceId] as const,
     settings: ["domains", "settings"] as const,
+  },
+  github: {
+    branches: (connectionId: string, repository: string) =>
+      ["github-sync", "branches", connectionId, repository] as const,
+    folders: (connectionId: string, repository: string, branch: string) =>
+      ["github-sync", "folders", connectionId, repository, branch] as const,
+    overview: ["github-sync", "overview"] as const,
+    repositories: (connectionId: string) =>
+      ["github-sync", "repositories", connectionId] as const,
   },
   hearthEdge: ["hearth", "edge"] as const,
   servers: {
@@ -950,6 +965,50 @@ export function domainSettingsQueryOptions() {
   return queryOptions({
     queryKey: queryKeys.domains.settings,
     queryFn: () => getDomainSettings(),
+  })
+}
+
+export function githubSyncOverviewQueryOptions() {
+  return queryOptions({
+    queryKey: queryKeys.github.overview,
+    queryFn: () => getGitHubSyncOverview(),
+  })
+}
+
+// What a connection can reach on GitHub changes rarely; a minute keeps the
+// sync dialog's pickers from refetching as it reopens.
+export function githubRepositoriesQueryOptions(connectionId: string) {
+  return queryOptions({
+    queryKey: queryKeys.github.repositories(connectionId),
+    queryFn: () => listGitHubRepositories({ data: { connectionId } }),
+    retry: false,
+    staleTime: 60_000,
+  })
+}
+
+export function githubBranchesQueryOptions(
+  connectionId: string,
+  repository: string
+) {
+  return queryOptions({
+    queryKey: queryKeys.github.branches(connectionId, repository),
+    queryFn: () => listGitHubBranches({ data: { connectionId, repository } }),
+    retry: false,
+    staleTime: 60_000,
+  })
+}
+
+export function githubFoldersQueryOptions(
+  connectionId: string,
+  repository: string,
+  branch: string
+) {
+  return queryOptions({
+    queryKey: queryKeys.github.folders(connectionId, repository, branch),
+    queryFn: () =>
+      listGitHubFolders({ data: { branch, connectionId, repository } }),
+    retry: false,
+    staleTime: 60_000,
   })
 }
 

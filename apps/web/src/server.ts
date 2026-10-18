@@ -17,6 +17,10 @@ import {
   startInstanceDirectorySync,
   stopInstanceDirectorySync,
 } from "./lib/instance-directory-sync"
+import {
+  startGitHubSyncPolling,
+  stopGitHubSyncPolling,
+} from "./lib/github-sync.server"
 import { scheduleTailscaleCleanupProcessing } from "./lib/tailscale-cleanup.server"
 import {
   initializeRelayFromEnvironment,
@@ -28,6 +32,7 @@ await migrateDatabase()
 // Relays connect, since Hearth sends it to them.
 await loadInstallationId()
 startInstanceDirectorySync()
+startGitHubSyncPolling()
 
 await Effect.runPromise(
   Effect.tryPromise({
@@ -76,7 +81,10 @@ let shutdownPromise: Promise<void> | undefined
 
 export function shutdownHearth(): Promise<void> {
   // Disposing the runtime also flushes pending telemetry.
-  shutdownPromise ??= stopInstanceDirectorySync()
+  shutdownPromise ??= Promise.all([
+    stopInstanceDirectorySync(),
+    stopGitHubSyncPolling(),
+  ])
     .then(() => Effect.runPromise(stopWarmCacheRefreshes))
     .then(disposeAppRuntime)
   return shutdownPromise

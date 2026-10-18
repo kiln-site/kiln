@@ -27,6 +27,7 @@ import {
   relayHostFilesV1Feature,
   relayRestartV1Feature,
   relayResourcesV1Feature,
+  relayFilePutV1Feature,
   appIdFromFileRoot,
   isRelayFileRoot,
   relayFileRequestReplayV1Feature,
@@ -688,6 +689,7 @@ function authenticateSocket(
           relayHostFilesV1Feature,
           relayRestartV1Feature,
           relayResourcesV1Feature,
+          relayFilePutV1Feature,
         ],
         protocol: relayControlProtocol,
         relayBuild: relayBuildLabel(),
@@ -1134,6 +1136,7 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "instance.files.read":
       return "instance.files.read"
     case "instance.files.write":
+    case "instance.files.put":
       return "instance.files.write"
     case "instance.files.mutate":
     case "instance.files.mutate.result":

@@ -100,6 +100,7 @@ export function activityTypeForAudit(audit: RelayAuditRecord): ActivityType {
   if (
     audit.event.startsWith("browser.file.") ||
     operation === "instance.files.write" ||
+    operation === "instance.files.put" ||
     operation === "instance.files.database.write" ||
     operation === "instance.files.upload-url"
   ) {
@@ -175,7 +176,12 @@ export function activityLabelForAudit(audit: RelayAuditRecord): string {
       ? "Reinstalled a game server Brick"
       : "Updated game server startup settings"
   }
-  if (operation === "instance.files.write") return "Saved a game server file"
+  if (
+    operation === "instance.files.write" ||
+    operation === "instance.files.put"
+  ) {
+    return "Saved a game server file"
+  }
   if (operation === "instance.files.database.write") {
     return "Edited a game server database"
   }
@@ -269,7 +275,10 @@ export function activityPermissionForAudit(
     return "instance.network.write"
   }
   if (operation === "relay.tailscale.stack.remove") return "instance.delete"
-  if (operation === "instance.files.database.write") {
+  if (
+    operation === "instance.files.database.write" ||
+    operation === "instance.files.put"
+  ) {
     return "instance.files.write"
   }
   if (

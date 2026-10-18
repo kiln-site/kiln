@@ -1,0 +1,76 @@
+# GitHub sync
+
+People keep config files in a GitHub repository and Kiln copies them into a
+game server or app. It lives under **Automations → Sync**.
+
+## Connecting GitHub
+
+Each connection is a private GitHub App that Kiln creates from a
+[manifest](https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-from-a-manifest),
+so nobody pastes keys:
+
+1. **Connect GitHub** posts the manifest to GitHub for a personal account or
+   an organization. The person confirms the app's name there.
+2. GitHub redirects to `/api/github/manifest` with a code. Hearth exchanges it
+   for the app's ID, private key, client secret, and webhook secret, stores
+   them encrypted (`kiln-github-app-credentials`), and sends the person on to
+   install the app.
+3. After installing, GitHub redirects to `/api/github/setup` with the
+   installation ID. Hearth looks it up with the app's own credentials, so an
+   installation ID from someone else's app is refused.
+
+A signed, expiring state value ties both redirects to the person who started
+the flow. Someone can connect several accounts; each is its own app. A
+connection belongs to the person who created it. Platform administrators see
+and can use every connection.
+
+The app asks for repository contents (read and write) and metadata (read).
+Kiln only reads today; write access is there so saving an edit can later
+commit it back without asking everyone to approve new permissions.
+
+### Webhooks or polling
+
+GitHub only delivers webhooks to a public HTTPS address. When `KILN_URL` is
+one, the app subscribes to `push` and `/api/github/webhook` syncs on every
+push, verifying each delivery with that app's secret. Otherwise (localhost,
+`.local`, private addresses, Tailscale) the app is created without webhooks
+and Hearth checks each automatic sync's branch for a new commit every minute.
+
+## Syncs
+
+A sync copies one folder of one branch into a folder of a game server or
+app, optionally limited to glob patterns. A pattern without a slash matches a
+file name at any depth, as in `.gitignore`. Creating or editing a sync needs
+permission to edit that game server's or app's files, and the connection's
+owner (or an administrator).
+
+Each run:
+
+1. Reads the branch head and its recursive tree.
+2. For every included file, compares its blob SHA with the one Kiln last
+   wrote to that path (`synced_files`), and writes only changed files through
+   the Relay's `instance.files.put` operation (`files-put-v1`). Files are
+   written atomically and parent folders are created.
+3. Optionally restarts a running game server when something changed.
+
+Files deleted from the repository stay on the server. Files larger than 512 KB
+are skipped with a warning, since each write is one Relay control frame. A
+sync stops at 2,000 files.
+
+Runs are serialized per sync. A trigger arriving while another waits joins
+it. A poll that fails the same way again leaves the row alone, so a broken
+sync doesn't notify every browser each minute.
+
+## Not done yet
+
+- **Saving back to GitHub.** When a synced file is saved in the editor, offer
+  to commit it to the branch (Contents API, with the blob SHA Kiln last wrote
+  as the expected base so a newer commit isn't overwritten).
+- **Drift.** A file edited on the server after it synced is only replaced
+  when GitHub's copy changes. A "Restore from GitHub" action could rewrite
+  every file.
+- **Mirroring.** Optionally delete files that were removed from the
+  repository.
+- **Sync history.** Runs could appear in Automations → History.
+- Polling issues one request per automatic sync each minute. Syncs that share
+  a repository and branch could share that request.
