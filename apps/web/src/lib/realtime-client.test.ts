@@ -1094,10 +1094,13 @@ describe("game server pages", () => {
     applyEvent(clients, instancesDelta([{ ...alpha, name: "Alpha 3" }]))
     // Hearth answered from before both pushes.
     reads[0]!(foundPage(alpha))
+    await read
 
-    await expect(read).resolves.toEqual(
-      foundPage({ ...alpha, name: "Alpha 3" })
-    )
+    expect(
+      clients.queryClient.getQueryData(
+        serverWorkspaceQueryOptions(alpha.shortId).queryKey
+      )
+    ).toEqual(foundPage({ ...alpha, name: "Alpha 3" }))
     expect(reads).toHaveLength(1)
   })
 
@@ -1112,8 +1115,13 @@ describe("game server pages", () => {
     applyEvent(clients, instancesDelta([beta]))
     applyEvent(clients, instancesDelta([], [alpha]))
     reads[0]!(foundPage(alpha))
+    await read
 
-    await expect(read).resolves.toEqual({ status: "not-found" })
+    expect(
+      clients.queryClient.getQueryData(
+        serverWorkspaceQueryOptions(alpha.shortId).queryKey
+      )
+    ).toEqual({ status: "not-found" })
   })
 
   it("reads again when its read spans a gap in pushed changes", async () => {
@@ -1134,6 +1142,88 @@ describe("game server pages", () => {
       foundPage({ ...alpha, name: "Missed rename" })
     )
     await recheck
+  })
+
+  it("keeps a deletion pushed after a read answered but before it is stored", async () => {
+    const clients = fleet()
+    let answer!: (workspace: ServerWorkspace) => void
+    const answered = new Promise<ServerWorkspace>((resolve) => {
+      answer = resolve
+    })
+    relayServer.getServerWorkspace.mockReturnValue(answered)
+    const navigation = ensureServerWorkspace(clients.queryClient, alpha.shortId)
+    await vi.waitFor(() =>
+      expect(relayServer.getServerWorkspace).toHaveBeenCalled()
+    )
+
+    answer(foundPage(alpha))
+    // Runs after the read's own code has seen the answer, before the query
+    // stores it.
+    await answered
+    applyEvent(clients, instancesDelta([], [alpha]))
+
+    await expect(navigation).resolves.toEqual({ status: "not-found" })
+    expect(
+      clients.queryClient.getQueryData(
+        serverWorkspaceQueryOptions(alpha.shortId).queryKey
+      )
+    ).toEqual({ status: "not-found" })
+  })
+
+  it("keeps a page marked for resolution through later updates", async () => {
+    const clients = fleet()
+    openPage(clients)
+    relayServer.getServerWorkspace.mockResolvedValue({ status: "not-found" })
+
+    // The gap may have hidden this server's deletion.
+    await recheckServerWorkspaces(clients.queryClient)
+    applyEvent(clients, instancesDelta([beta]))
+    applyEvent(clients, instancesDelta([{ ...alpha, name: "Alpha 2" }]))
+
+    await expect(
+      ensureServerWorkspace(clients.queryClient, alpha.shortId)
+    ).resolves.toEqual({ status: "not-found" })
+  })
+
+  it("resolves again when another server takes its short ID during the first read", async () => {
+    const clients = fleet()
+    const reads = controlledPageReads()
+    const twin = { ...beta, shortId: alpha.shortId } as FleetInstance
+    const read = clients.queryClient.fetchQuery(
+      serverWorkspaceQueryOptions(alpha.shortId)
+    )
+    await vi.waitFor(() => expect(reads).toHaveLength(1))
+
+    applyEvent(clients, instancesDelta([twin]))
+    reads[0]!(foundPage(alpha))
+    await read
+    relayServer.getServerWorkspace.mockResolvedValue({ status: "ambiguous" })
+
+    await expect(
+      ensureServerWorkspace(clients.queryClient, alpha.shortId)
+    ).resolves.toEqual({ status: "ambiguous" })
+  })
+
+  it("resolves a shown page again when another server takes its short ID mid-read", async () => {
+    const clients = fleet()
+    const page = openPage(clients)
+    const reads = controlledPageReads()
+    const twin = { ...beta, shortId: alpha.shortId } as FleetInstance
+    const observer = new QueryObserver(
+      clients.queryClient,
+      serverWorkspaceQueryOptions(alpha.shortId)
+    )
+    const unsubscribe = observer.subscribe(() => undefined)
+    void observer.refetch()
+    await vi.waitFor(() => expect(reads).toHaveLength(1))
+
+    applyEvent(clients, instancesDelta([twin]))
+    reads[0]!(foundPage(alpha))
+    await vi.waitFor(() => expect(reads).toHaveLength(2))
+    reads[1]!({ status: "ambiguous" })
+
+    await vi.waitFor(() => expect(page()).toEqual({ status: "ambiguous" }))
+    unsubscribe()
   })
 
   it("rereads a mounted page after a gap in pushed changes", async () => {

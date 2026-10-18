@@ -1,10 +1,9 @@
 import {
   queryOptions,
+  type Query,
   type QueryClient,
-  type QueryKey,
 } from "@tanstack/react-query"
 
-import { ensuringPromise } from "@/effect/promise"
 import { reconcilePendingPowerSnapshot } from "@/lib/instance-power-state"
 import { queryKeys } from "@/lib/query-options"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
@@ -24,107 +23,121 @@ type SnapshotUpdate = (
 ) => RelayFleetSnapshot | undefined
 
 type RelayState = Pick<ServerWorkspaceRelay, "id" | "status" | "updating">
+type ServerInstance = RelayFleetSnapshot["instances"][number]
 
-// Changes pushed while reads are in flight. Each read replays the ones that
-// arrived after it started onto its answer, so an answer from before a change
-// cannot overwrite it. A gap in pushed changes cannot be replayed; a read that
-// spans one reads again.
-type PushedChange =
+/*
+ * Pushed changes, mutation responses, and gaps in pushed changes, numbered in
+ * the order they reached this page. A read answers from the moment Hearth
+ * served it, so when its answer is stored every change numbered after the
+ * read began is applied to it again, in order. Each change writes a whole
+ * server, a deletion, or a Relay status, so applying one twice is harmless.
+ *
+ * A gap cannot be replayed, and neither can a change that makes a page's
+ * route mean something else, such as another server taking its short ID.
+ * Those mark the page as needing resolution. Only a read that began after the
+ * mark clears it, and a page still marked after its read is read again.
+ */
+type Change =
   | { sequence: number; type: "gap" }
   | {
       apply: (workspace: FoundServerWorkspace) => ServerWorkspace
       sequence: number
       type: "change"
+      upserted: ReadonlyArray<ServerInstance>
     }
 
 const maximumMissingRereads = 3
-let pushedSequence = 0
-let readsInFlight = 0
-let pushedDuringReads: Array<PushedChange> = []
 
-function recordPushedChange(
-  change:
-    | { type: "gap" }
-    | Omit<Extract<PushedChange, { type: "change" }>, "sequence">
-) {
-  pushedSequence += 1
-  if (readsInFlight > 0)
-    pushedDuringReads.push({ ...change, sequence: pushedSequence })
+interface ReadState {
+  changes: Array<Change>
+  // When each page's read in flight began, by query hash.
+  readsStartedAt: Map<string, number>
+  sequence: number
+  // Pages whose route must resolve again, and when they were marked.
+  unresolvedSince: Map<string, number>
+}
+
+const readStates = new WeakMap<QueryClient, ReadState>()
+
+function readState(queryClient: QueryClient): ReadState {
+  let state = readStates.get(queryClient)
+  if (!state) {
+    state = {
+      changes: [],
+      readsStartedAt: new Map(),
+      sequence: 0,
+      unresolvedSince: new Map(),
+    }
+    readStates.set(queryClient, state)
+    watchStoredReads(queryClient, state)
+  }
+  return state
 }
 
 export function serverWorkspaceQueryOptions(serverId: string) {
   return queryOptions({
     queryKey: queryKeys.relay.server(serverId),
-    queryFn: ({ signal }) => {
-      readsInFlight += 1
-      return ensuringPromise(
-        () => readServerWorkspace(serverId, signal),
-        () => {
-          readsInFlight -= 1
-          if (readsInFlight === 0) pushedDuringReads = []
+    queryFn: async ({ client, queryKey, signal }) => {
+      const state = readState(client)
+      const queryHash = client
+        .getQueryCache()
+        .find({ exact: true, queryKey })?.queryHash
+      for (let attempt = 1; ; attempt += 1) {
+        const startedAt = state.sequence
+        if (queryHash) state.readsStartedAt.set(queryHash, startedAt)
+        const read = await getServerWorkspace({ data: { serverId }, signal })
+        const missed = changesSince(state, startedAt)
+        // A read that spans a gap may be missing anything; a missing server
+        // may have been created during the read. Pushes are frequent, so a
+        // missing server is reread only a few times.
+        if (
+          missed.some(({ type }) => type === "gap") ||
+          (read.status !== "found" &&
+            missed.some(
+              (change) => change.type === "change" && change.upserted.length
+            ) &&
+            attempt < maximumMissingRereads)
+        ) {
+          continue
         }
-      )
+        return read.status === "found"
+          ? { ...read, snapshot: reconcilePendingPowerSnapshot(read.snapshot) }
+          : read
+      }
     },
     refetchOnWindowFocus: false,
     staleTime: 5_000,
   })
 }
 
-async function readServerWorkspace(
-  serverId: string,
-  signal: AbortSignal
-): Promise<ServerWorkspace> {
-  for (let attempt = 1; ; attempt += 1) {
-    const startedAt = pushedSequence
-    const read = await getServerWorkspace({ data: { serverId }, signal })
-    const missed = pushedDuringReads.filter(
-      ({ sequence }) => sequence > startedAt
-    )
-    // A server created while this read was in flight may be missing from
-    // it; pushes are frequent, so only a few rereads.
-    if (
-      missed.some(({ type }) => type === "gap") ||
-      (read.status !== "found" &&
-        missed.length > 0 &&
-        attempt < maximumMissingRereads)
-    ) {
-      continue
-    }
-    let workspace: ServerWorkspace =
-      read.status === "found"
-        ? { ...read, snapshot: reconcilePendingPowerSnapshot(read.snapshot) }
-        : read
-    for (const change of missed) {
-      if (workspace.status === "found" && change.type === "change")
-        workspace = change.apply(workspace)
-    }
-    return workspace
-  }
-}
-
 /**
  * The server a navigation to `serverId` opens. A cached answer is kept current
  * by pushed changes, so it is reused when `serverId` names that server by an
- * ID and nothing has marked it stale. A name may now mean another server, and
- * an answer that was missing or ambiguous may have changed, so those are read
- * again.
+ * ID and nothing has marked its route for resolution. A name may now mean
+ * another server, and an answer that was missing or ambiguous may have
+ * changed, so those are read again.
  */
 export async function ensureServerWorkspace(
   queryClient: QueryClient,
   serverId: string
 ): Promise<ServerWorkspace> {
   const options = serverWorkspaceQueryOptions(serverId)
-  const cached = queryClient.getQueryData(options.queryKey)
+  const query = queryClient
+    .getQueryCache()
+    .find<ServerWorkspace>({ exact: true, queryKey: options.queryKey })
+  const cached = query?.state.data
   const [instance] = cached?.status === "found" ? cached.snapshot.instances : []
   const reusable =
+    query !== undefined &&
     instance !== undefined &&
-    !queryClient.getQueryState(options.queryKey)?.isInvalidated &&
+    !readState(queryClient).unresolvedSince.has(query.queryHash) &&
     (serverId === instance.shortId ||
       serverId === instance.routeId ||
       serverId === instance.id)
-  return reusable && cached
-    ? cached
-    : queryClient.fetchQuery({ ...options, staleTime: 0 })
+  if (reusable && cached) return cached
+  const read = await queryClient.fetchQuery({ ...options, staleTime: 0 })
+  // What was stored, with any changes pushed during the read replayed.
+  return queryClient.getQueryData(options.queryKey) ?? read
 }
 
 /** Applies a fleet snapshot update to the fleet and every game server page. */
@@ -139,79 +152,166 @@ export function updateRelaySnapshots(
 /** Applies a fleet snapshot update to every game server page it touches. */
 export function updateServerWorkspaces(
   queryClient: QueryClient,
-  update: SnapshotUpdate
+  update: SnapshotUpdate,
+  upserted: ReadonlyArray<ServerInstance> = []
 ): void {
-  queryClient.setQueriesData<ServerWorkspace>(
-    { queryKey: queryKeys.relay.servers },
-    (workspace) =>
-      workspace?.status === "found"
-        ? scopeServerWorkspace(workspace, update(workspace.snapshot))
-        : workspace
+  applyChange(
+    queryClient,
+    (workspace) => scopeServerWorkspace(workspace, update(workspace.snapshot)),
+    upserted
   )
 }
 
-/**
- * Applies a pushed change to the game server pages it touches, and to reads
- * in flight when they land. A server that now shares a page's short ID makes
- * that ID ambiguous, so the page resolves again.
- */
+/** Applies a pushed change to the game server pages it touches. */
 export function applyPushedServerWorkspaceChange(
   queryClient: QueryClient,
   update: SnapshotUpdate,
   options: {
     relay?: RelayState
-    upserted?: ReadonlyArray<RelayFleetSnapshot["instances"][number]>
+    upserted?: ReadonlyArray<ServerInstance>
   } = {}
 ): void {
   const { relay, upserted = [] } = options
-  const apply = (workspace: FoundServerWorkspace): ServerWorkspace => {
-    const scoped = scopeServerWorkspace(workspace, update(workspace.snapshot))
-    return relay && scoped.status === "found"
-      ? withRelayStatus(scoped, relay)
-      : scoped
-  }
-  recordPushedChange({ apply, type: "change" })
-  const collided: Array<QueryKey> = []
-  for (const query of queryClient
-    .getQueryCache()
-    .findAll({ queryKey: queryKeys.relay.servers })) {
-    const workspace = query.state.data as ServerWorkspace | undefined
-    if (workspace?.status !== "found") continue
-    const [current] = workspace.snapshot.instances
-    if (
-      current &&
-      upserted.some(
-        (instance) =>
-          instance.shortId === current.shortId &&
-          (instance.id !== current.id || instance.relayId !== current.relayId)
-      )
-    ) {
-      collided.push(query.queryKey)
-    }
-    queryClient.setQueryData<ServerWorkspace>(query.queryKey, apply(workspace))
-  }
-  for (const queryKey of collided)
-    void queryClient.invalidateQueries(
-      { exact: true, queryKey },
-      { cancelRefetch: false }
-    )
+  applyChange(
+    queryClient,
+    (workspace) => {
+      const scoped = scopeServerWorkspace(workspace, update(workspace.snapshot))
+      return relay && scoped.status === "found"
+        ? withRelayStatus(scoped, relay)
+        : scoped
+    },
+    upserted
+  )
 }
 
 /**
- * Rereads every game server page after a gap in pushed changes, and marks the
- * rest stale so a navigation resolves them again. Fails when a reread fails,
- * so stream recovery retries.
+ * Rereads every game server page shown after a gap in pushed changes, and
+ * marks every page for resolution so a navigation reads it again. Fails when
+ * a reread fails, so stream recovery retries.
  */
 export async function recheckServerWorkspaces(
   queryClient: QueryClient
 ): Promise<void> {
-  recordPushedChange({ type: "gap" })
+  const state = readState(queryClient)
+  state.sequence += 1
+  if (state.readsStartedAt.size > 0)
+    state.changes.push({ sequence: state.sequence, type: "gap" })
+  for (const query of serverWorkspaceQueries(queryClient))
+    state.unresolvedSince.set(query.queryHash, state.sequence)
   // A read in flight reads again by itself; cancelling it would fail the
   // navigation waiting on it.
-  await queryClient.invalidateQueries(
-    { queryKey: queryKeys.relay.servers },
+  await queryClient.refetchQueries(
+    { queryKey: queryKeys.relay.servers, type: "active" },
     { cancelRefetch: false, throwOnError: true }
   )
+}
+
+function applyChange(
+  queryClient: QueryClient,
+  apply: (workspace: FoundServerWorkspace) => ServerWorkspace,
+  upserted: ReadonlyArray<ServerInstance>
+) {
+  const state = readState(queryClient)
+  state.sequence += 1
+  if (state.readsStartedAt.size > 0)
+    state.changes.push({
+      apply,
+      sequence: state.sequence,
+      type: "change",
+      upserted,
+    })
+  for (const query of serverWorkspaceQueries(queryClient)) {
+    const workspace = query.state.data
+    if (workspace?.status !== "found") continue
+    if (takesShortId(workspace, upserted)) {
+      state.unresolvedSince.set(query.queryHash, state.sequence)
+      // A read in flight answers for the old meaning; it reads again once
+      // stored.
+      void queryClient.invalidateQueries(
+        { exact: true, queryKey: query.queryKey },
+        { cancelRefetch: false }
+      )
+    }
+    const next = apply(workspace)
+    if (next !== workspace) queryClient.setQueryData(query.queryKey, next)
+  }
+}
+
+// Replays what a stored read missed, and resolves it again if its route may
+// now mean something else.
+function watchStoredReads(queryClient: QueryClient, state: ReadState) {
+  queryClient.getQueryCache().subscribe((event) => {
+    const { query } = event
+    if (event.type === "removed") {
+      state.readsStartedAt.delete(query.queryHash)
+      state.unresolvedSince.delete(query.queryHash)
+      pruneChanges(state)
+      return
+    }
+    if (event.type !== "updated") return
+    const startedAt = state.readsStartedAt.get(query.queryHash)
+    if (startedAt === undefined) return
+    const { action } = event
+    if (action.type !== "success" || action.manual) {
+      // A read that failed or was cancelled stores nothing to replay onto.
+      if (query.state.fetchStatus === "idle") {
+        state.readsStartedAt.delete(query.queryHash)
+        pruneChanges(state)
+      }
+      return
+    }
+    state.readsStartedAt.delete(query.queryHash)
+    let workspace = query.state.data as ServerWorkspace | undefined
+    for (const change of changesSince(state, startedAt)) {
+      if (workspace?.status !== "found") break
+      if (change.type === "gap" || takesShortId(workspace, change.upserted))
+        state.unresolvedSince.set(query.queryHash, change.sequence)
+      if (change.type === "change") workspace = change.apply(workspace)
+    }
+    if (workspace !== query.state.data)
+      queryClient.setQueryData(query.queryKey, workspace)
+    const markedAt = state.unresolvedSince.get(query.queryHash)
+    if (markedAt !== undefined && markedAt <= startedAt)
+      state.unresolvedSince.delete(query.queryHash)
+    pruneChanges(state)
+    if (state.unresolvedSince.has(query.queryHash))
+      void queryClient.invalidateQueries({
+        exact: true,
+        queryKey: query.queryKey,
+      })
+  })
+}
+
+// Another server taking a page's short ID makes that ID ambiguous.
+function takesShortId(
+  workspace: FoundServerWorkspace,
+  upserted: ReadonlyArray<ServerInstance>
+) {
+  const [current] = workspace.snapshot.instances
+  return (
+    current !== undefined &&
+    upserted.some(
+      (instance) =>
+        instance.shortId === current.shortId &&
+        (instance.id !== current.id || instance.relayId !== current.relayId)
+    )
+  )
+}
+
+function changesSince(state: ReadState, startedAt: number) {
+  return state.changes.filter((change) => change.sequence > startedAt)
+}
+
+function pruneChanges(state: ReadState) {
+  const oldest = Math.min(...state.readsStartedAt.values())
+  state.changes = state.changes.filter((change) => change.sequence > oldest)
+}
+
+function serverWorkspaceQueries(queryClient: QueryClient) {
+  return queryClient
+    .getQueryCache()
+    .findAll({ queryKey: queryKeys.relay.servers })
+    .map((query) => query as Query<ServerWorkspace>)
 }
 
 // An update written for the fleet may add or remove other servers; a page
