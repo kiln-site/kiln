@@ -1368,6 +1368,25 @@ describe("game server pages", () => {
     await expect(navigation).rejects.toThrow("kept changing")
   })
 
+  it("brings back a shown page whose server is replaced", async () => {
+    const clients = fleet()
+    const page = openPage(clients)
+    const observer = new QueryObserver(
+      clients.queryClient,
+      serverWorkspaceQueryOptions(alpha.shortId)
+    )
+    const unsubscribe = observer.subscribe(() => undefined)
+    relayServer.getServerWorkspace.mockResolvedValue(foundPage(alpha))
+
+    // Replacing a container deletes the server, then pushes it again.
+    applyEvent(clients, instancesDelta([], [alpha]))
+    expect(page()).toEqual({ status: "not-found" })
+    applyEvent(clients, instancesDelta([alpha]))
+
+    await vi.waitFor(() => expect(page()).toEqual(foundPage(alpha)))
+    unsubscribe()
+  })
+
   it("rereads a mounted page after a gap in pushed changes", async () => {
     const clients = fleet()
     const page = openPage(clients)

@@ -234,6 +234,24 @@ describe("Relay render selectors", () => {
     })
   })
 
+  it("resolves a Relay-qualified full ID where a Relay's short IDs collide", () => {
+    const first = snapshotWithCpu(1).instances[0]
+    if (!first) throw new Error("Expected Relay fixture")
+    const twin = {
+      ...first,
+      id: `${first.shortId}${"c".repeat(32)}`,
+      name: "Twin",
+    }
+    const instances = [first, twin]
+
+    expect(
+      resolveRelayInstance(instances, `${first.relayId}-${first.shortId}`)
+    ).toEqual({ status: "ambiguous" })
+    expect(
+      resolveRelayInstance(instances, `${first.relayId}-${twin.id}`)
+    ).toEqual({ status: "found", instance: twin })
+  })
+
   it("resolves exactly one accessible short-ID match without exposing misses", () => {
     const snapshot = snapshotWithCpu(1)
     const first = snapshot.instances[0]

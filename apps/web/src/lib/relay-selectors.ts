@@ -379,8 +379,14 @@ export function resolveRelayInstance<
     )
   }
 
+  // A Relay-qualified full ID names one server exactly, even where two on a
+  // Relay share a short ID.
   const routeIdMatches = instances.filter(
-    (instance) => instance.routeId === identifier
+    (instance) =>
+      instance.routeId === identifier ||
+      (instance.routeId !== undefined &&
+        identifier ===
+          instance.routeId.slice(0, -instance.shortId.length) + instance.id)
   )
   if (routeIdMatches.length > 0) {
     return resolveRelayInstanceMatches(routeIdMatches)

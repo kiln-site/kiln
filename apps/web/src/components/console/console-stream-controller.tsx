@@ -135,8 +135,9 @@ function TailscaleConsoleStreamSource({
     streamStore.getRetrySnapshot,
     streamStore.getRetrySnapshot
   )
-  // Each deployment is its own server on its Relay; read that one alone.
-  const serverId = relayInstanceRouteId(relayId, instanceId.slice(0, 8))
+  // Each deployment is its own server on its Relay; read that one alone, by
+  // its exact Relay-qualified ID.
+  const serverId = relayInstanceRouteId(relayId, instanceId)
   const selectRuntime = React.useMemo(
     () => selectInstanceConsoleRuntime(instanceId, relayId),
     [instanceId, relayId]

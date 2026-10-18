@@ -224,27 +224,32 @@ function applyChange(
 ) {
   const state = readState(queryClient)
   state.sequence += 1
-  if (state.readsStartedAt.size > 0)
-    state.changes.push({
-      apply,
-      removesServers,
-      sequence: state.sequence,
-      type: "change",
-      upserted,
-    })
+  const change: Change = {
+    apply,
+    removesServers,
+    sequence: state.sequence,
+    type: "change",
+    upserted,
+  }
+  if (state.readsStartedAt.size > 0) state.changes.push(change)
   for (const query of serverWorkspaceQueries(queryClient)) {
     const workspace = query.state.data
-    if (workspace?.status !== "found") continue
-    if (takesShortId(workspace, upserted)) {
+    if (!workspace) continue
+    const serverId = String(query.queryKey[2])
+    const next = workspace.status === "found" ? apply(workspace) : workspace
+    // A missing page whose server returns, or a route that now names
+    // another server, resolves again. A read in flight answers for the old
+    // meaning, so it reads again once stored.
+    if (
+      changesResolution(serverId, workspace, change) ||
+      renamedAway(serverId, next)
+    ) {
       state.unresolvedSince.set(query.queryHash, state.sequence)
-      // A read in flight answers for the old meaning; it reads again once
-      // stored.
       void queryClient.invalidateQueries(
         { exact: true, queryKey: query.queryKey },
         { cancelRefetch: false }
       )
     }
-    const next = apply(workspace)
     if (next !== workspace) queryClient.setQueryData(query.queryKey, next)
   }
 }
