@@ -26,6 +26,7 @@ import {
   Trash2,
 } from "lucide-react"
 
+import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import {
   Dialog,
@@ -78,6 +79,7 @@ import {
 } from "@/components/instance-picker"
 import { StatusIndicator } from "@/components/status-indicator"
 import { WorkspaceCopyValueButton } from "@/components/workspace-header"
+import { WorkspacePage } from "@/components/workspace-page"
 import { WorkspaceSummaryCard } from "@/components/workspace-summary-card"
 import type {
   DomainAssignmentStrategy,
@@ -192,13 +194,15 @@ export const DomainsPage = React.memo(function DomainsPage({
   }, [data.managedDomains])
 
   return (
-    <div className="mx-auto flex h-full min-h-[34rem] w-full max-w-[90rem] flex-col gap-3 px-3 pb-3 sm:px-5 sm:pb-5">
-      <DomainSummaryCard
-        domainUsage={domainUsage}
-        integration={data.integration}
-        onConfigure={openConfiguration}
-      />
-
+    <WorkspacePage
+      summary={
+        <DomainSummaryCard
+          domainUsage={domainUsage}
+          integration={data.integration}
+          onConfigure={openConfiguration}
+        />
+      }
+    >
       <DataTableWorkspace
         toolbar={
           <DomainsToolbar
@@ -246,12 +250,9 @@ export const DomainsPage = React.memo(function DomainsPage({
           onOpenChange={closeDialog}
         />
       ) : null}
-    </div>
+    </WorkspacePage>
   )
 })
-
-// More than this many domains collapse behind "+N more".
-const collapsedDomainCount = 4
 
 const DomainSummaryCard = React.memo(function DomainSummaryCard({
   domainUsage,
@@ -262,11 +263,7 @@ const DomainSummaryCard = React.memo(function DomainSummaryCard({
   integration: DomainIntegration | null
   onConfigure: () => void
 }) {
-  const [expanded, setExpanded] = React.useState(false)
   const domains = integration?.domains ?? []
-  const collapsible = domains.length > collapsedDomainCount
-  const shown =
-    collapsible && !expanded ? domains.slice(0, collapsedDomainCount - 1) : domains
   const strategy = strategyOptions.find(
     (option) => option.value === integration?.strategy
   )
@@ -274,88 +271,93 @@ const DomainSummaryCard = React.memo(function DomainSummaryCard({
   return (
     <WorkspaceSummaryCard
       action={
-        <Button
-          className="shrink-0"
-          size="sm"
-          type="button"
-          variant="outline"
-          onClick={onConfigure}
-        >
-          <Settings2 />
-          Configure Vanity
-        </Button>
+        <div className="flex shrink-0 items-center gap-2">
+          {domains.length > 0 ? (
+            <DomainListPopover domainUsage={domainUsage} domains={domains} />
+          ) : null}
+          <Button
+            className="shrink-0"
+            size="sm"
+            type="button"
+            variant="outline"
+            onClick={onConfigure}
+          >
+            <Settings2 />
+            Configure Vanity
+          </Button>
+        </div>
       }
       icon={<Globe2 className="size-5" />}
       title="Vanity domains"
       titleAccessory={
         integration ? (
-          <span className="type-meta text-muted-foreground">
+          <Badge variant="outline">
             {integration.enabled
-              ? `New game servers: ${strategy?.label.toLowerCase() ?? "default only"}`
-              : "Automatic provisioning off"}
-          </span>
-        ) : null
+              ? (strategy?.label ?? "Default only")
+              : "Manual only"}
+          </Badge>
+        ) : undefined
       }
     >
-      {integration ? (
-        <ul
-          aria-label="Vanity domains"
-          className="mt-1.5 flex flex-wrap items-center gap-1.5"
-        >
-          {shown.map((domain) => (
-            <li
-              key={domain.domain}
-              className="type-code inline-flex items-center gap-1.5 rounded-md border border-border/70 bg-background/50 px-2 py-0.5"
-            >
-              <span className="text-muted-foreground">{"<vanity>."}</span>
-              <span className="-ml-1.5">{domain.domain}</span>
-              {domain.isDefault ? (
-                <span className="type-meta text-muted-foreground">default</span>
-              ) : null}
-              <DomainUsageCount count={domainUsage.get(domain.domain) ?? 0} />
-            </li>
-          ))}
-          {collapsible ? (
-            <li>
-              <Button
-                aria-expanded={expanded}
-                className="text-muted-foreground"
-                size="xs"
-                type="button"
-                variant="ghost"
-                onClick={() => setExpanded((current) => !current)}
-              >
-                {expanded
-                  ? "Show less"
-                  : `+${domains.length - shown.length} more`}
-              </Button>
-            </li>
-          ) : null}
-        </ul>
-      ) : (
-        <p className="type-meta mt-1 text-muted-foreground">
-          Connect Cloudflare to give game servers addresses like{" "}
-          <span className="type-code">{"<vanity>.example.com"}</span>.
-        </p>
-      )}
+      <p className="type-meta mt-1 truncate text-muted-foreground">
+        {domains.length > 0 ? (
+          <span className="type-code">
+            {domains.map((domain) => `<vanity>.${domain.domain}`).join(", ")}
+          </span>
+        ) : (
+          "Connect Cloudflare to give game servers vanity addresses."
+        )}
+      </p>
     </WorkspaceSummaryCard>
   )
 })
 
-function DomainUsageCount({ count }: { count: number }) {
+/** Every configured domain, collapsed behind a count. */
+const DomainListPopover = React.memo(function DomainListPopover({
+  domainUsage,
+  domains,
+}: {
+  domainUsage: ReadonlyMap<string, number>
+  domains: ReadonlyArray<ManagedDomain>
+}) {
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span className="type-meta rounded-sm bg-muted/60 px-1 text-muted-foreground tabular-nums">
-          {count}
-        </span>
-      </TooltipTrigger>
-      <TooltipContent side="bottom">
-        {count} game server {count === 1 ? "domain" : "domains"}
-      </TooltipContent>
-    </Tooltip>
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button size="sm" type="button" variant="outline">
+          {domains.length} {domains.length === 1 ? "domain" : "domains"}
+          <ChevronDown />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-80 p-0">
+        <ul
+          aria-label="Vanity domains"
+          className="max-h-72 divide-y divide-border/60 overflow-y-auto"
+        >
+          {domains.map((domain) => {
+            const usage = domainUsage.get(domain.domain) ?? 0
+            return (
+              <li
+                key={domain.domain}
+                className="flex items-center gap-3 px-3 py-2"
+              >
+                <span className="type-code min-w-0 flex-1 truncate">
+                  <span className="text-muted-foreground">{"<vanity>."}</span>
+                  {domain.domain}
+                </span>
+                {domain.isDefault ? (
+                  <Badge variant="outline">Default</Badge>
+                ) : null}
+                <span className="type-meta shrink-0 text-muted-foreground tabular-nums">
+                  {usage} in use
+                </span>
+              </li>
+            )
+          })}
+        </ul>
+      </PopoverContent>
+    </Popover>
   )
-}
+})
 
 const DomainsToolbar = React.memo(function DomainsToolbar({
   canCreate,
@@ -1829,24 +1831,9 @@ const DomainZoneRow = React.memo(function DomainZoneRow({
       </td>
       <td className="px-1 py-1.5">
         <div className="flex min-w-0 items-center gap-1.5">
-          {choice.selected ? (
-            <Input
-              aria-label={`Domain in ${choice.zoneName}`}
-              autoCapitalize="none"
-              autoCorrect="off"
-              className="h-7 min-w-0 flex-1 font-mono text-xs"
-              disabled={locked}
-              spellCheck={false}
-              value={choice.domain}
-              onChange={(event) =>
-                onChange(choice.zoneId, { domain: event.currentTarget.value })
-              }
-            />
-          ) : (
-            <span className="type-code min-w-0 flex-1 truncate px-2.5">
-              {choice.zoneName}
-            </span>
-          )}
+          <span className="type-code min-w-0 flex-1 truncate">
+            {choice.domain}
+          </span>
           {choice.missing ? (
             <Tooltip>
               <TooltipTrigger asChild>
