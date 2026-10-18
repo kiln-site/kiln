@@ -15,20 +15,17 @@ import {
   ChevronsUpDown,
   CircleAlert,
   CircleHelp,
-  Dices,
   ExternalLink,
   Globe2,
   KeyRound,
   LoaderCircle,
   Pencil,
   Plus,
-  Scale,
+  RefreshCw,
   Settings2,
-  Star,
   Trash2,
 } from "lucide-react"
 
-import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import {
   Dialog,
@@ -135,25 +132,21 @@ type DomainDialog =
 
 const strategyOptions: ReadonlyArray<{
   description: string
-  Icon: typeof Star
   label: string
   value: DomainAssignmentStrategy
 }> = [
   {
     description: "New game servers use the default domain.",
-    Icon: Star,
     label: "Default only",
     value: "default",
   },
   {
     description: "Each new game server gets a random domain.",
-    Icon: Dices,
     label: "Random",
     value: "random",
   },
   {
     description: "New game servers go to the domain with the fewest.",
-    Icon: Scale,
     label: "Spread evenly",
     value: "balanced",
   },
@@ -190,10 +183,18 @@ export const DomainsPage = React.memo(function DomainsPage({
     if (!open) setDialog(null)
   }, [])
   const domains = data.integration?.domains
+  const domainUsage = React.useMemo(() => {
+    const usage = new Map<string, number>()
+    for (const domain of data.managedDomains) {
+      usage.set(domain.domain, (usage.get(domain.domain) ?? 0) + 1)
+    }
+    return usage
+  }, [data.managedDomains])
 
   return (
     <div className="mx-auto flex h-full min-h-[34rem] w-full max-w-[90rem] flex-col gap-3 px-3 pb-3 sm:px-5 sm:pb-5">
       <DomainSummaryCard
+        domainUsage={domainUsage}
         integration={data.integration}
         onConfigure={openConfiguration}
       />
@@ -217,6 +218,7 @@ export const DomainsPage = React.memo(function DomainsPage({
 
       {dialog?.kind === "configure" ? (
         <DomainConfigurationDialog
+          domainUsage={domainUsage}
           hearthDomain={data.hearthDomain}
           integration={data.integration}
           onOpenChange={closeDialog}
@@ -248,16 +250,26 @@ export const DomainsPage = React.memo(function DomainsPage({
   )
 })
 
+// More than this many domains collapse behind "+N more".
+const collapsedDomainCount = 4
+
 const DomainSummaryCard = React.memo(function DomainSummaryCard({
+  domainUsage,
   integration,
   onConfigure,
 }: {
+  domainUsage: ReadonlyMap<string, number>
   integration: DomainIntegration | null
   onConfigure: () => void
 }) {
-  const active = integration?.enabled === true
-  const configured = integration !== null
-  const [primary, ...others] = integration?.domains ?? []
+  const [expanded, setExpanded] = React.useState(false)
+  const domains = integration?.domains ?? []
+  const collapsible = domains.length > collapsedDomainCount
+  const shown =
+    collapsible && !expanded ? domains.slice(0, collapsedDomainCount - 1) : domains
+  const strategy = strategyOptions.find(
+    (option) => option.value === integration?.strategy
+  )
 
   return (
     <WorkspaceSummaryCard
@@ -274,34 +286,76 @@ const DomainSummaryCard = React.memo(function DomainSummaryCard({
         </Button>
       }
       icon={<Globe2 className="size-5" />}
-      iconClassName={
-        active
-          ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300"
-          : configured
-            ? "border-amber-300/25 bg-amber-300/8 text-amber-200"
-            : "border-border/80 bg-background/70 text-muted-foreground"
+      title="Vanity domains"
+      titleAccessory={
+        integration ? (
+          <span className="type-meta text-muted-foreground">
+            {integration.enabled
+              ? `New game servers: ${strategy?.label.toLowerCase() ?? "default only"}`
+              : "Automatic provisioning off"}
+          </span>
+        ) : null
       }
-      title="Vanity URL"
-      titleAccessory={<DomainStatus enabled={active} verified={configured} />}
     >
-      <p className="type-code mt-1 flex min-w-0 items-center gap-2 text-muted-foreground">
-        <span className="truncate">{`<vanity>.${primary?.domain ?? "example.com"}`}</span>
-        {others.length > 0 ? (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Badge className="type-meta shrink-0 font-mono" variant="outline">
-                +{others.length}
-              </Badge>
-            </TooltipTrigger>
-            <TooltipContent className="font-mono" side="bottom">
-              {others.map((domain) => domain.domain).join(", ")}
-            </TooltipContent>
-          </Tooltip>
-        ) : null}
-      </p>
+      {integration ? (
+        <ul
+          aria-label="Vanity domains"
+          className="mt-1.5 flex flex-wrap items-center gap-1.5"
+        >
+          {shown.map((domain) => (
+            <li
+              key={domain.domain}
+              className="type-code inline-flex items-center gap-1.5 rounded-md border border-border/70 bg-background/50 px-2 py-0.5"
+            >
+              <span className="text-muted-foreground">{"<vanity>."}</span>
+              <span className="-ml-1.5">{domain.domain}</span>
+              {domain.isDefault ? (
+                <span className="type-meta text-muted-foreground">default</span>
+              ) : null}
+              <DomainUsageCount count={domainUsage.get(domain.domain) ?? 0} />
+            </li>
+          ))}
+          {collapsible ? (
+            <li>
+              <Button
+                aria-expanded={expanded}
+                className="text-muted-foreground"
+                size="xs"
+                type="button"
+                variant="ghost"
+                onClick={() => setExpanded((current) => !current)}
+              >
+                {expanded
+                  ? "Show less"
+                  : `+${domains.length - shown.length} more`}
+              </Button>
+            </li>
+          ) : null}
+        </ul>
+      ) : (
+        <p className="type-meta mt-1 text-muted-foreground">
+          Connect Cloudflare to give game servers addresses like{" "}
+          <span className="type-code">{"<vanity>.example.com"}</span>.
+        </p>
+      )}
     </WorkspaceSummaryCard>
   )
 })
+
+function DomainUsageCount({ count }: { count: number }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="type-meta rounded-sm bg-muted/60 px-1 text-muted-foreground tabular-nums">
+          {count}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">
+        {count} game server {count === 1 ? "domain" : "domains"}
+      </TooltipContent>
+    </Tooltip>
+  )
+}
 
 const DomainsToolbar = React.memo(function DomainsToolbar({
   canCreate,
@@ -548,24 +602,18 @@ const DomainServerCell = React.memo(function DomainServerCell({
 
 function DomainHostnameCell({ domain }: { domain: ManagedDomainOverview }) {
   return (
-    <div className="type-meta flex w-full min-w-0 items-center gap-2">
-      <WorkspaceCopyValueButton label="domain" value={domainHostname(domain)} />
-      {/* Only worth marking when the game server has a choice. */}
+    <div className="flex w-full min-w-0 flex-col">
+      <div className="type-meta flex min-w-0">
+        <WorkspaceCopyValueButton
+          label="domain"
+          value={domainHostname(domain)}
+        />
+      </div>
+      {/* Only worth saying when the game server has a choice. */}
       {domain.primary && domain.domainCount > 1 ? (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span
-              aria-label="Primary domain"
-              className="inline-flex shrink-0 text-amber-600 dark:text-amber-300"
-              role="img"
-            >
-              <Star aria-hidden className="size-3 fill-current" />
-            </span>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            Primary: shown as {domain.server.name}&apos;s connect address
-          </TooltipContent>
-        </Tooltip>
+        <span className="type-meta truncate text-muted-foreground">
+          Connect address
+        </span>
       ) : null}
     </div>
   )
@@ -1228,10 +1276,12 @@ type TokenCheck =
   | { message: string; status: "error" }
 
 function DomainConfigurationDialog({
+  domainUsage,
   hearthDomain,
   integration,
   onOpenChange,
 }: {
+  domainUsage: ReadonlyMap<string, number>
   hearthDomain: string
   integration: DomainIntegration | null
   onOpenChange: (open: boolean) => void
@@ -1265,6 +1315,8 @@ function DomainConfigurationDialog({
   const [tokenCheck, setTokenCheck] = React.useState<TokenCheck>({
     status: "idle",
   })
+  // Bumped by the refresh button to list the zones again.
+  const [scan, setScan] = React.useState(0)
 
   // Lists the zones a pasted token, or the saved one, can manage. A newer
   // token interrupts the check before a slow answer can overwrite it.
@@ -1275,7 +1327,7 @@ function DomainConfigurationDialog({
       return
     }
     const fiber = Effect.runFork(
-      Effect.sleep(token ? 400 : 0).pipe(
+      Effect.sleep(token && scan === 0 ? 400 : 0).pipe(
         Effect.andThen(
           Effect.sync(() => setTokenCheck({ status: "checking" }))
         ),
@@ -1299,7 +1351,7 @@ function DomainConfigurationDialog({
     return () => {
       Effect.runFork(Fiber.interrupt(fiber))
     }
-  }, [apiToken, hasIntegration])
+  }, [apiToken, hasIntegration, scan])
 
   const selected = choices.filter((choice) => choice.selected)
   // The first chosen domain stands in until one is picked.
@@ -1476,74 +1528,139 @@ function DomainConfigurationDialog({
             </div>
 
             <div className="space-y-1.5">
-              <p className="type-control-sm">Domains</p>
-              {choices.length > 0 ? (
-                <div
-                  aria-label="Domains"
-                  className="max-h-56 divide-y divide-border/60 overflow-y-auto border border-border/75 bg-background/35"
-                  role="group"
-                >
-                  {choices.map((choice) => (
-                    <DomainChoiceRow
-                      key={choice.zoneId}
-                      choice={choice}
-                      isDefault={choice === effectiveDefault}
-                      onChange={updateChoice}
-                      onMakeDefault={setDefaultZoneId}
-                    />
-                  ))}
+              <div className="flex items-center justify-between gap-3">
+                <p className="type-control-sm" id="vanity-domains">
+                  Domains
+                </p>
+                <div className="flex items-center gap-2">
+                  {choices.length > 0 ? (
+                    <span className="type-meta text-muted-foreground tabular-nums">
+                      {selected.length} of {choices.length} in use
+                    </span>
+                  ) : null}
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        aria-label="Refresh domains from Cloudflare"
+                        disabled={
+                          tokenCheck.status === "checking" ||
+                          (tokenLength === 0
+                            ? !hasIntegration
+                            : tokenLength < 20)
+                        }
+                        size="icon-xs"
+                        type="button"
+                        variant="ghost"
+                        onClick={() => setScan((current) => current + 1)}
+                      >
+                        <RefreshCw
+                          className={
+                            tokenCheck.status === "checking"
+                              ? "animate-spin"
+                              : undefined
+                          }
+                        />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="left">
+                      Refresh from Cloudflare
+                    </TooltipContent>
+                  </Tooltip>
                 </div>
-              ) : (
-                <p className="type-meta border border-dashed border-border/75 px-3 py-4 text-center text-muted-foreground">
-                  Paste a token to list the domains it can manage.
-                </p>
-              )}
-            </div>
-
-            <div className="space-y-1.5">
-              <p className="type-control-sm" id="domain-strategy">
-                New game servers
-              </p>
-              <div
-                aria-labelledby="domain-strategy"
-                className="grid grid-cols-3 gap-2"
-                role="radiogroup"
-              >
-                {strategyOptions.map((option) => (
-                  <Button
-                    key={option.value}
-                    aria-checked={strategy === option.value}
-                    className="h-auto justify-start px-2.5 py-2 text-left"
-                    role="radio"
-                    type="button"
-                    variant={strategy === option.value ? "default" : "outline"}
-                    onClick={() => setStrategy(option.value)}
-                  >
-                    <option.Icon />
-                    <span className="text-xs">{option.label}</span>
-                  </Button>
-                ))}
               </div>
-              <p className="type-meta text-muted-foreground">
-                {
-                  strategyOptions.find((option) => option.value === strategy)
-                    ?.description
-                }
-              </p>
+              <div className="max-h-60 overflow-y-auto rounded-md border border-border/75 bg-background/35">
+                <table
+                  aria-labelledby="vanity-domains"
+                  className="w-full table-fixed border-collapse"
+                >
+                  <thead className="sticky top-0 z-10 bg-[color-mix(in_oklab,var(--surface-overlay)_92%,transparent)] backdrop-blur">
+                    <tr className="type-technical-label text-left text-muted-foreground">
+                      <th className="w-10 px-3 py-2 font-normal">
+                        <span className="sr-only">Use</span>
+                      </th>
+                      <th className="px-1 py-2 font-normal">Domain</th>
+                      <th className="w-20 px-2 py-2 text-right font-normal">
+                        In use
+                      </th>
+                      <th className="w-20 px-3 py-2 text-center font-normal">
+                        Default
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/60 border-t border-border/60">
+                    {choices.length > 0 ? (
+                      choices.map((choice) => (
+                        <DomainZoneRow
+                          key={choice.zoneId}
+                          choice={choice}
+                          isDefault={choice === effectiveDefault}
+                          usage={domainUsage.get(choice.domain) ?? 0}
+                          onChange={updateChoice}
+                          onMakeDefault={setDefaultZoneId}
+                        />
+                      ))
+                    ) : (
+                      <tr>
+                        <td
+                          className="type-meta px-3 py-6 text-center text-muted-foreground"
+                          colSpan={4}
+                        >
+                          {tokenCheck.status === "checking"
+                            ? "Listing the token's domains…"
+                            : "Paste a token to list the domains it can manage."}
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
 
-            <div className="flex items-center justify-between gap-4 border border-border/75 bg-background/35 p-3">
-              <div>
-                <p className="text-xs font-medium">Automatic provisioning</p>
+            <div className="flex flex-col gap-3 border border-border/75 bg-background/35 p-3 sm:flex-row sm:items-center">
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-medium" id="automatic-provisioning">
+                  Automatic provisioning
+                </p>
                 <p className="type-meta mt-0.5 text-muted-foreground">
-                  Give each new game server a domain when it&apos;s provisioned.
+                  {enabled
+                    ? strategyOptions.find(
+                        (option) => option.value === strategy
+                      )?.description
+                    : "New game servers start without a domain."}
                 </p>
               </div>
-              <Switch
-                aria-label="Enable automatic domain provisioning"
-                checked={enabled}
-                onCheckedChange={setEnabled}
-              />
+              <div className="flex shrink-0 items-center gap-3">
+                <Select
+                  disabled={!enabled}
+                  value={strategy}
+                  onValueChange={(value) =>
+                    setStrategy(value as DomainAssignmentStrategy)
+                  }
+                >
+                  <SelectTrigger
+                    aria-label="Domain for new game servers"
+                    className="w-36 text-xs"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="z-[70]">
+                    {strategyOptions.map((option) => (
+                      <SelectItem
+                        key={option.value}
+                        className="text-xs"
+                        value={option.value}
+                      >
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Switch
+                  aria-labelledby="automatic-provisioning"
+                  checked={enabled}
+                  onCheckedChange={setEnabled}
+                />
+              </div>
             </div>
 
             <label className="type-label block space-y-1.5">
@@ -1652,93 +1769,127 @@ function TokenCheckStatus({
   )
 }
 
-const DomainChoiceRow = React.memo(function DomainChoiceRow({
+const DomainZoneRow = React.memo(function DomainZoneRow({
   choice,
   isDefault,
   onChange,
   onMakeDefault,
+  usage,
 }: {
   choice: DomainChoice
   isDefault: boolean
   onChange: (zoneId: string, change: Partial<DomainChoice>) => void
   onMakeDefault: (zoneId: string) => void
+  usage: number
 }) {
+  // Its game server domains keep records in this zone until they're deleted.
+  const locked = choice.selected && usage > 0
+  const checkbox = (
+    <label
+      className={`flex items-center ${locked ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}
+    >
+      <input
+        aria-label={`Use ${choice.zoneName}`}
+        checked={choice.selected}
+        className="peer sr-only"
+        disabled={locked}
+        type="checkbox"
+        onChange={(event) =>
+          onChange(choice.zoneId, { selected: event.currentTarget.checked })
+        }
+      />
+      <span
+        className={`grid size-4 place-items-center rounded-sm border peer-focus-visible:ring-2 peer-focus-visible:ring-ring/40 ${
+          choice.selected
+            ? "border-primary bg-primary text-primary-foreground"
+            : "border-input"
+        }`}
+      >
+        {choice.selected ? <Check className="size-3" /> : null}
+      </span>
+    </label>
+  )
+
   return (
-    <div className="flex min-h-11 items-center gap-2.5 px-3 py-1.5">
-      <label className="flex shrink-0 cursor-pointer items-center">
-        <input
-          aria-label={`Use ${choice.zoneName}`}
-          checked={choice.selected}
-          className="peer sr-only"
-          type="checkbox"
-          onChange={(event) =>
-            onChange(choice.zoneId, { selected: event.currentTarget.checked })
-          }
-        />
-        <span
-          className={`grid size-4 place-items-center rounded-sm border peer-focus-visible:ring-2 peer-focus-visible:ring-ring/40 ${
-            choice.selected
-              ? "border-primary bg-primary text-primary-foreground"
-              : "border-input"
-          }`}
-        >
-          {choice.selected ? <Check className="size-3" /> : null}
-        </span>
-      </label>
-      {choice.selected ? (
-        <div className="flex min-w-0 flex-1 items-center gap-1">
-          <span className="type-code shrink-0 text-muted-foreground">
-            {"<vanity>."}
-          </span>
-          <Input
-            aria-label={`Domain in ${choice.zoneName}`}
-            autoCapitalize="none"
-            autoCorrect="off"
-            className="h-7 min-w-0 flex-1 font-mono text-xs"
-            spellCheck={false}
-            value={choice.domain}
-            onChange={(event) =>
-              onChange(choice.zoneId, { domain: event.currentTarget.value })
-            }
-          />
-        </div>
-      ) : (
-        <span className="type-code min-w-0 flex-1 truncate text-muted-foreground">
-          {choice.zoneName}
-        </span>
-      )}
-      {choice.missing ? (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <CircleAlert
-              aria-label="This token can't manage this zone"
-              className="size-3.5 shrink-0 text-amber-600 dark:text-amber-300"
-            />
-          </TooltipTrigger>
-          <TooltipContent side="left">
-            This token can&apos;t manage {choice.zoneName}
-          </TooltipContent>
-        </Tooltip>
-      ) : null}
-      {choice.selected ? (
-        isDefault ? (
-          <Badge className="type-meta shrink-0" variant="outline">
-            <Star className="size-2.5" />
-            Default
-          </Badge>
+    <tr className={choice.selected ? undefined : "text-muted-foreground"}>
+      <td className="px-3 py-1.5 align-middle">
+        {locked ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="inline-flex">{checkbox}</span>
+            </TooltipTrigger>
+            <TooltipContent side="right">
+              Delete its {usage} game server{" "}
+              {usage === 1 ? "domain" : "domains"} first
+            </TooltipContent>
+          </Tooltip>
         ) : (
-          <Button
-            className="shrink-0 text-muted-foreground"
-            size="xs"
-            type="button"
-            variant="ghost"
-            onClick={() => onMakeDefault(choice.zoneId)}
+          checkbox
+        )}
+      </td>
+      <td className="px-1 py-1.5">
+        <div className="flex min-w-0 items-center gap-1.5">
+          {choice.selected ? (
+            <Input
+              aria-label={`Domain in ${choice.zoneName}`}
+              autoCapitalize="none"
+              autoCorrect="off"
+              className="h-7 min-w-0 flex-1 font-mono text-xs"
+              disabled={locked}
+              spellCheck={false}
+              value={choice.domain}
+              onChange={(event) =>
+                onChange(choice.zoneId, { domain: event.currentTarget.value })
+              }
+            />
+          ) : (
+            <span className="type-code min-w-0 flex-1 truncate px-2.5">
+              {choice.zoneName}
+            </span>
+          )}
+          {choice.missing ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <CircleAlert
+                  aria-label="This token can't manage this zone"
+                  className="size-3.5 shrink-0 text-amber-600 dark:text-amber-300"
+                />
+              </TooltipTrigger>
+              <TooltipContent side="left">
+                This token can&apos;t manage {choice.zoneName}
+              </TooltipContent>
+            </Tooltip>
+          ) : null}
+        </div>
+      </td>
+      <td className="type-meta px-2 py-1.5 text-right text-muted-foreground tabular-nums">
+        {usage > 0 ? usage : "–"}
+      </td>
+      <td className="px-3 py-1.5 text-center">
+        <label
+          className={`inline-flex ${choice.selected ? "cursor-pointer" : "cursor-not-allowed opacity-40"}`}
+        >
+          <input
+            aria-label={`Make ${choice.domain} the default`}
+            checked={isDefault}
+            className="peer sr-only"
+            disabled={!choice.selected}
+            name="default-domain"
+            type="radio"
+            onChange={() => onMakeDefault(choice.zoneId)}
+          />
+          <span
+            className={`grid size-4 place-items-center rounded-full border peer-focus-visible:ring-2 peer-focus-visible:ring-ring/40 ${
+              isDefault ? "border-primary" : "border-input"
+            }`}
           >
-            Make default
-          </Button>
-        )
-      ) : null}
-    </div>
+            {isDefault ? (
+              <span className="size-2 rounded-full bg-primary" />
+            ) : null}
+          </span>
+        </label>
+      </td>
+    </tr>
   )
 })
 
@@ -1945,38 +2096,6 @@ function ConfigurationError({ error }: { error: Error }) {
     <p className="border border-destructive/25 bg-destructive/5 px-3 py-2 text-xs text-destructive">
       {errorMessage(error)}
     </p>
-  )
-}
-
-function DomainStatus({
-  enabled,
-  verified,
-}: {
-  enabled: boolean
-  verified: boolean
-}) {
-  const active = verified && enabled
-  return (
-    <span
-      className={
-        active
-          ? "type-technical-label inline-flex items-center gap-1 text-emerald-300"
-          : "type-technical-label inline-flex items-center gap-1 text-muted-foreground"
-      }
-    >
-      {verified ? (
-        <span
-          className={
-            active
-              ? "size-1.5 rounded-full bg-emerald-400"
-              : "size-1.5 rounded-full bg-muted-foreground"
-          }
-        />
-      ) : (
-        <CircleAlert className="size-2.5" />
-      )}
-      {active ? "Active" : verified ? "Paused" : "Setup required"}
-    </span>
   )
 }
 
