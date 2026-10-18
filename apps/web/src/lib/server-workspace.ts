@@ -303,9 +303,11 @@ function watchStoredReads(queryClient: QueryClient, state: ReadState) {
 }
 
 // Whether a change a stored answer missed may change what its route names.
-// After a gap, anything may have. A server found by an ID is ambiguous once
-// another takes its short ID; one found by name, once another takes the name
-// or it is renamed away (checked after the change applies). A missing answer
+// After a gap, anything may have. A found server's route is ambiguous once
+// another server alone would match its identifier: a shared short ID, the
+// same short ID on its Relay, its full ID on another Relay, or its name; a
+// Relay-qualified full ID matches no other. A server found by name may also
+// be renamed away (checked after the change applies). A missing answer
 // changes when a server its identifier names appears. An ambiguous answer is
 // rare and changes with any server's arrival, rename, or removal.
 function changesResolution(
@@ -321,14 +323,11 @@ function changesResolution(
       resolveRelayInstance([...change.upserted], serverId).status !==
       "not-found"
     )
-  return (
-    takesShortId(workspace, change.upserted) ||
-    (foundByName(serverId, workspace) &&
-      change.upserted.some(
-        (instance) =>
-          instance.name === serverId &&
-          !sameServer(instance, workspace.snapshot.instances[0])
-      ))
+  const [current] = workspace.snapshot.instances
+  return change.upserted.some(
+    (instance) =>
+      !sameServer(instance, current) &&
+      resolveRelayInstance([instance], serverId).status !== "not-found"
   )
 }
 
@@ -369,21 +368,6 @@ function unresolved(queryClient: QueryClient, queryKey: QueryKey) {
   return (
     query !== undefined &&
     readState(queryClient).unresolvedSince.has(query.queryHash)
-  )
-}
-
-// Another server taking a page's short ID makes that ID ambiguous.
-function takesShortId(
-  workspace: FoundServerWorkspace,
-  upserted: ReadonlyArray<ServerInstance>
-) {
-  const [current] = workspace.snapshot.instances
-  return (
-    current !== undefined &&
-    upserted.some(
-      (instance) =>
-        instance.shortId === current.shortId && !sameServer(instance, current)
-    )
   )
 }
 

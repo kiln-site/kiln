@@ -1417,6 +1417,42 @@ describe("game server pages", () => {
     for (const unsubscribe of unsubscribes) unsubscribe()
   })
 
+  it("lets a sibling deployment collide only with routes it also matches", async () => {
+    const clients = fleet()
+    // A Tailscale stack runs the same server ID on each Relay.
+    const sibling = {
+      ...alpha,
+      relayId: "relay-b",
+      relayName: "Relay B",
+      routeId: `relay-b-${alpha.shortId}`,
+    } as FleetInstance
+    relayServer.getServerWorkspace.mockResolvedValue(foundPage(alpha))
+    const observe = (serverId: string) => {
+      const options = serverWorkspaceQueryOptions(serverId)
+      clients.queryClient.setQueryData(options.queryKey, foundPage(alpha))
+      return new QueryObserver(clients.queryClient, options).subscribe(
+        () => undefined
+      )
+    }
+    const unsubscribes = [
+      observe(alpha.routeId),
+      observe(`${alpha.relayId}-${alpha.id}`),
+    ]
+    relayServer.getServerWorkspace.mockClear()
+
+    applyEvent(clients, instancesDelta([sibling]))
+    await settleReads()
+    expect(relayServer.getServerWorkspace).not.toHaveBeenCalled()
+
+    // A bare short ID now names both deployments.
+    unsubscribes.push(observe(alpha.shortId))
+    applyEvent(clients, instancesDelta([sibling]))
+    await vi.waitFor(() =>
+      expect(relayServer.getServerWorkspace).toHaveBeenCalledTimes(1)
+    )
+    for (const unsubscribe of unsubscribes) unsubscribe()
+  })
+
   it("rereads a mounted page after a gap in pushed changes", async () => {
     const clients = fleet()
     const page = openPage(clients)
