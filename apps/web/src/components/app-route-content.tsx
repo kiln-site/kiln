@@ -4,7 +4,12 @@ import {
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query"
-import { useNavigate, useRouterState } from "@tanstack/react-router"
+import {
+  useMatch,
+  useNavigate,
+  useRouter,
+  useRouterState,
+} from "@tanstack/react-router"
 
 import { AppWorkspaceShell } from "@/components/app/app-workspace"
 import { DatabaseWorkspaceShell } from "@/components/database/database-workspace"
@@ -130,8 +135,9 @@ function InstanceRouteBoundary({ children }: { children: React.ReactNode }) {
   )
 }
 
-// The route loads the server's own workspace before it renders; the fleet is
-// read only to explain an empty state.
+// The route reads the server's own workspace, usually before it renders; a
+// server the page already knew opens at once and its read lands after. The
+// fleet is read only to explain an empty state.
 function ServerRouteBoundary({
   children,
   serverId,
@@ -139,18 +145,44 @@ function ServerRouteBoundary({
   children: React.ReactNode
   serverId: string
 }) {
-  const { data: found } = useQuery({
+  const { data: route } = useQuery({
     ...serverWorkspaceQueryOptions(serverId),
-    select: selectServerFound,
+    select: React.useCallback(
+      (workspace: ServerWorkspace) => routeVerdict(workspace, serverId),
+      [serverId]
+    ),
   })
-  if (found === undefined)
+  const verified = useMatch({
+    from: "/_app/server/$serverId",
+    select: (match) => match.context.serverVerified,
+    shouldThrow: false,
+  })
+  const router = useRouter()
+  // An open the read disagrees with resolves again, which redirects as a
+  // navigation would have: to the list, an invitation, or the canonical URL.
+  const misrouted =
+    verified === false && route !== undefined && route !== "open"
+  React.useEffect(() => {
+    if (misrouted) void router.invalidate()
+  }, [misrouted, router])
+
+  if (route === undefined || misrouted)
     return <div className="min-h-0 flex-1 bg-background" />
-  if (!found) return <RouteEmptyState />
+  if (route === "missing") return <RouteEmptyState />
   return <InstanceRouteFrame serverId={serverId}>{children}</InstanceRouteFrame>
 }
 
-function selectServerFound(workspace: ServerWorkspace) {
-  return workspace.status === "found"
+// What the server's own read says about the route that opened it.
+function routeVerdict(
+  workspace: ServerWorkspace,
+  serverId: string
+): "missing" | "moved" | "open" {
+  if (workspace.status !== "found") return "missing"
+  const [instance] = workspace.snapshot.instances
+  return serverId === workspace.routeIdentifier ||
+    serverId === instance?.routeId
+    ? "open"
+    : "moved"
 }
 
 function RouteEmptyState() {

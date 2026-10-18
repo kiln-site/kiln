@@ -8,7 +8,14 @@ import {
 import { reconcilePendingPowerSnapshot } from "@/lib/instance-power-state"
 import { queryKeys } from "@/lib/query-options"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
-import { resolveRelayInstance } from "@/lib/relay-selectors"
+import {
+  relayInstanceRouteIdentifier,
+  resolveRelayInstance,
+} from "@/lib/relay-selectors"
+import type {
+  getInfraServerDirectory,
+  getServerNavigation,
+} from "@/server/infra-directory"
 import { getServerWorkspace } from "@/server/relay"
 
 /**
@@ -105,6 +112,90 @@ export function serverWorkspaceQueryOptions(serverId: string) {
 }
 
 /**
+ * Whether a navigation to `serverId` can use its cached answer as is: one
+ * that found the server, names it by an ID, and has not been marked for
+ * resolution.
+ */
+export function serverWorkspaceReusable(
+  queryClient: QueryClient,
+  serverId: string
+): boolean {
+  const query = queryClient.getQueryCache().find<ServerWorkspace>({
+    exact: true,
+    queryKey: queryKeys.relay.server(serverId),
+  })
+  const cached = query?.state.data
+  const [instance] = cached?.status === "found" ? cached.snapshot.instances : []
+  return (
+    query !== undefined &&
+    instance !== undefined &&
+    !readState(queryClient).unresolvedSince.has(query.queryHash) &&
+    namesById(serverId, instance)
+  )
+}
+
+type DirectoryServer = Awaited<
+  ReturnType<typeof getInfraServerDirectory>
+>[number]
+type ServerNavigationAnswer = Awaited<ReturnType<typeof getServerNavigation>>
+
+/** A game server as the directory lists it: identity, no live state. */
+export type KnownServer = Pick<
+  DirectoryServer,
+  | "brickId"
+  | "connectAddress"
+  | "id"
+  | "implementation"
+  | "name"
+  | "relayId"
+  | "routeId"
+  | "shortId"
+  | "version"
+>
+
+/**
+ * The game server `serverId` names, when this page already knows it from the
+ * directory or the sidebar's navigation, with its canonical route ID. A page
+ * can open on this before its own read arrives; the read then confirms it.
+ * Undefined unless exactly one server matches.
+ */
+export function knownServer(
+  queryClient: QueryClient,
+  serverId: string
+): { routeIdentifier: string; server: KnownServer } | undefined {
+  const directory = queryClient.getQueryData<Array<DirectoryServer>>(
+    queryKeys.servers.directory
+  )
+  if (directory) {
+    const resolution = resolveRelayInstance(directory, serverId)
+    if (resolution.status !== "found") return undefined
+    const routeIdentifier = relayInstanceRouteIdentifier(
+      directory,
+      resolution.instance
+    )
+    return routeIdentifier
+      ? { routeIdentifier, server: resolution.instance }
+      : undefined
+  }
+  for (const [
+    ,
+    navigation,
+  ] of queryClient.getQueriesData<ServerNavigationAnswer>({
+    queryKey: queryKeys.servers.navigation,
+  })) {
+    const server = navigation?.instance
+    if (
+      server &&
+      navigation.routeId &&
+      !navigation.ambiguous &&
+      namesById(serverId, server)
+    )
+      return { routeIdentifier: navigation.routeId, server }
+  }
+  return undefined
+}
+
+/**
  * The server a navigation to `serverId` opens. A cached answer is kept current
  * by pushed changes, so it is reused when `serverId` names that server by an
  * ID and nothing has marked its route for resolution. A name may now mean
@@ -120,13 +211,7 @@ export async function ensureServerWorkspace(
     .getQueryCache()
     .find<ServerWorkspace>({ exact: true, queryKey: options.queryKey })
   const cached = query?.state.data
-  const [instance] = cached?.status === "found" ? cached.snapshot.instances : []
-  const reusable =
-    query !== undefined &&
-    instance !== undefined &&
-    !readState(queryClient).unresolvedSince.has(query.queryHash) &&
-    namesById(serverId, instance)
-  if (reusable && cached) return cached
+  if (cached && serverWorkspaceReusable(queryClient, serverId)) return cached
   // A change during the read may leave its route needing resolution again.
   for (let attempt = 1; ; attempt += 1) {
     const read = await queryClient.fetchQuery({ ...options, staleTime: 0 })
@@ -347,7 +432,10 @@ function foundByName(serverId: string, workspace: FoundServerWorkspace) {
 
 // Whether `serverId` is one of the server's IDs: short, Relay-qualified
 // short or full, or full.
-function namesById(serverId: string, instance: ServerInstance) {
+function namesById(
+  serverId: string,
+  instance: Pick<ServerInstance, "id" | "relayId" | "routeId" | "shortId">
+) {
   return (
     serverId === instance.shortId ||
     serverId === instance.routeId ||

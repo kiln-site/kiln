@@ -82,7 +82,9 @@ import {
 } from "@/lib/relay-selectors"
 import {
   cachedRelayInstance,
+  knownServer,
   updateRelaySnapshots,
+  type KnownServer,
 } from "@/lib/server-workspace"
 import {
   selectServerRelayConnected,
@@ -490,15 +492,36 @@ function RelayResourceStreamController({
 function InstanceWorkspaceHeader() {
   const [error, setError] = React.useState<string | null>(null)
   const instance = useRouteWorkspaceInstance()
+  const known = useKnownRouteServer(instance === undefined)
 
   return (
     <WorkspaceHeader
-      identity={<InstanceIdentityBoundary error={error} instance={instance} />}
+      identity={
+        <InstanceIdentityBoundary
+          error={error}
+          instance={instance}
+          known={known}
+        />
+      }
       center={<LiveResourceMetersBoundary instance={instance} />}
       actions={
         <InstancePowerControlsBoundary instance={instance} onError={setError} />
       }
     />
+  )
+}
+
+// A server the page knows from the directory, shown while its own read is in
+// flight after the route opened at once.
+function useKnownRouteServer(pending: boolean) {
+  const queryClient = useQueryClient()
+  const serverId = useRouteServerId()
+  return React.useMemo(
+    () =>
+      pending && serverId
+        ? knownServer(queryClient, serverId)?.server
+        : undefined,
+    [pending, queryClient, serverId]
   )
 }
 
@@ -515,15 +538,20 @@ function useRouteWorkspaceInstance() {
 const InstanceIdentityBoundary = React.memo(function InstanceIdentityBoundary({
   error,
   instance,
+  known,
 }: {
   error: string | null
   instance: InstanceWorkspaceInstance | null | undefined
+  known: KnownServer | undefined
 }) {
-  return instance ? (
+  // The same element whether known or read, so the name never remounts.
+  const shown = instance ?? known
+  return shown ? (
     <InstanceIdentity
-      key={`${instance.relayId}:${instance.id}`}
+      key={`${shown.relayId}:${shown.id}`}
       error={error}
-      instance={instance}
+      instance={shown}
+      statusConfirmed={Boolean(instance)}
     />
   ) : null
 })
@@ -611,16 +639,21 @@ function InstanceAddressControl({ address }: { address: string }) {
 function InstanceIdentity({
   error,
   instance,
+  statusConfirmed,
 }: {
   error: string | null
-  instance: InstanceWorkspaceInstance
+  instance: Pick<
+    InstanceWorkspaceInstance,
+    "connectAddress" | "id" | "implementation" | "name" | "shortId" | "version"
+  >
+  // The server's own read carries its live state; the directory does not.
+  statusConfirmed: boolean
 }) {
   return (
     <WorkspaceIdentity
       error={error}
       name={instance.name}
-      // The fleet entry carries the server's live state.
-      statusConfirmed
+      statusConfirmed={statusConfirmed}
       title={<InstanceRouteTitle />}
     >
       <span className="hidden shrink-0 items-center gap-1.5 @[30rem]:inline-flex">
