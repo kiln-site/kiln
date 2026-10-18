@@ -1,5 +1,10 @@
-import { queryOptions, type QueryClient } from "@tanstack/react-query"
+import {
+  queryOptions,
+  type QueryClient,
+  type QueryKey,
+} from "@tanstack/react-query"
 
+import { ensuringPromise } from "@/effect/promise"
 import { reconcilePendingPowerSnapshot } from "@/lib/instance-power-state"
 import { queryKeys } from "@/lib/query-options"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
@@ -18,33 +23,108 @@ type SnapshotUpdate = (
   snapshot: RelayFleetSnapshot | undefined
 ) => RelayFleetSnapshot | undefined
 
-// Changes pushed or missed since this session started. A read that spans
-// one may answer from before it, so it reads again.
-let pushedChanges = 0
-const maximumReadAttempts = 3
+type RelayState = Pick<ServerWorkspaceRelay, "id" | "status" | "updating">
+
+// Changes pushed while reads are in flight. Each read replays the ones that
+// arrived after it started onto its answer, so an answer from before a change
+// cannot overwrite it. A gap in pushed changes cannot be replayed; a read that
+// spans one reads again.
+type PushedChange =
+  | { sequence: number; type: "gap" }
+  | {
+      apply: (workspace: FoundServerWorkspace) => ServerWorkspace
+      sequence: number
+      type: "change"
+    }
+
+const maximumMissingRereads = 3
+let pushedSequence = 0
+let readsInFlight = 0
+let pushedDuringReads: Array<PushedChange> = []
+
+function recordPushedChange(
+  change:
+    | { type: "gap" }
+    | Omit<Extract<PushedChange, { type: "change" }>, "sequence">
+) {
+  pushedSequence += 1
+  if (readsInFlight > 0)
+    pushedDuringReads.push({ ...change, sequence: pushedSequence })
+}
 
 export function serverWorkspaceQueryOptions(serverId: string) {
   return queryOptions({
     queryKey: queryKeys.relay.server(serverId),
-    queryFn: async ({ signal }): Promise<ServerWorkspace> => {
-      let workspace: ServerWorkspace
-      let attempt = 0
-      let seen: number
-      do {
-        seen = pushedChanges
-        attempt += 1
-        workspace = await getServerWorkspace({ data: { serverId }, signal })
-      } while (seen !== pushedChanges && attempt < maximumReadAttempts)
-      return workspace.status === "found"
-        ? {
-            ...workspace,
-            snapshot: reconcilePendingPowerSnapshot(workspace.snapshot),
-          }
-        : workspace
+    queryFn: ({ signal }) => {
+      readsInFlight += 1
+      return ensuringPromise(
+        () => readServerWorkspace(serverId, signal),
+        () => {
+          readsInFlight -= 1
+          if (readsInFlight === 0) pushedDuringReads = []
+        }
+      )
     },
     refetchOnWindowFocus: false,
     staleTime: 5_000,
   })
+}
+
+async function readServerWorkspace(
+  serverId: string,
+  signal: AbortSignal
+): Promise<ServerWorkspace> {
+  for (let attempt = 1; ; attempt += 1) {
+    const startedAt = pushedSequence
+    const read = await getServerWorkspace({ data: { serverId }, signal })
+    const missed = pushedDuringReads.filter(
+      ({ sequence }) => sequence > startedAt
+    )
+    // A server created while this read was in flight may be missing from
+    // it; pushes are frequent, so only a few rereads.
+    if (
+      missed.some(({ type }) => type === "gap") ||
+      (read.status !== "found" &&
+        missed.length > 0 &&
+        attempt < maximumMissingRereads)
+    ) {
+      continue
+    }
+    let workspace: ServerWorkspace =
+      read.status === "found"
+        ? { ...read, snapshot: reconcilePendingPowerSnapshot(read.snapshot) }
+        : read
+    for (const change of missed) {
+      if (workspace.status === "found" && change.type === "change")
+        workspace = change.apply(workspace)
+    }
+    return workspace
+  }
+}
+
+/**
+ * The server a navigation to `serverId` opens. A cached answer is kept current
+ * by pushed changes, so it is reused when `serverId` names that server by an
+ * ID and nothing has marked it stale. A name may now mean another server, and
+ * an answer that was missing or ambiguous may have changed, so those are read
+ * again.
+ */
+export async function ensureServerWorkspace(
+  queryClient: QueryClient,
+  serverId: string
+): Promise<ServerWorkspace> {
+  const options = serverWorkspaceQueryOptions(serverId)
+  const cached = queryClient.getQueryData(options.queryKey)
+  const [instance] = cached?.status === "found" ? cached.snapshot.instances : []
+  const reusable =
+    instance !== undefined &&
+    !queryClient.getQueryState(options.queryKey)?.isInvalidated &&
+    (serverId === instance.shortId ||
+      serverId === instance.routeId ||
+      serverId === instance.id)
+  return reusable && cached
+    ? cached
+    : queryClient.fetchQuery({ ...options, staleTime: 0 })
 }
 
 /** Applies a fleet snapshot update to the fleet and every game server page. */
@@ -71,40 +151,66 @@ export function updateServerWorkspaces(
 }
 
 /**
- * Applies a pushed change to the game server pages it touches. A read in
- * flight reads again rather than land behind it.
+ * Applies a pushed change to the game server pages it touches, and to reads
+ * in flight when they land. A server that now shares a page's short ID makes
+ * that ID ambiguous, so the page resolves again.
  */
 export function applyPushedServerWorkspaceChange(
   queryClient: QueryClient,
   update: SnapshotUpdate,
   options: {
-    relay?: Pick<ServerWorkspaceRelay, "id" | "status" | "updating">
-    // Node readings change often and a later one corrects a missed one.
-    changesServers?: boolean
+    relay?: RelayState
+    upserted?: ReadonlyArray<RelayFleetSnapshot["instances"][number]>
   } = {}
 ): void {
-  const { changesServers = true, relay } = options
-  if (changesServers) pushedChanges += 1
-  queryClient.setQueriesData<ServerWorkspace>(
-    { queryKey: queryKeys.relay.servers },
-    (workspace) => {
-      if (workspace?.status !== "found") return workspace
-      const scoped = scopeServerWorkspace(workspace, update(workspace.snapshot))
-      return relay && scoped.status === "found"
-        ? withRelayStatus(scoped, relay)
-        : scoped
+  const { relay, upserted = [] } = options
+  const apply = (workspace: FoundServerWorkspace): ServerWorkspace => {
+    const scoped = scopeServerWorkspace(workspace, update(workspace.snapshot))
+    return relay && scoped.status === "found"
+      ? withRelayStatus(scoped, relay)
+      : scoped
+  }
+  recordPushedChange({ apply, type: "change" })
+  const collided: Array<QueryKey> = []
+  for (const query of queryClient
+    .getQueryCache()
+    .findAll({ queryKey: queryKeys.relay.servers })) {
+    const workspace = query.state.data as ServerWorkspace | undefined
+    if (workspace?.status !== "found") continue
+    const [current] = workspace.snapshot.instances
+    if (
+      current &&
+      upserted.some(
+        (instance) =>
+          instance.shortId === current.shortId &&
+          (instance.id !== current.id || instance.relayId !== current.relayId)
+      )
+    ) {
+      collided.push(query.queryKey)
     }
-  )
+    queryClient.setQueryData<ServerWorkspace>(query.queryKey, apply(workspace))
+  }
+  for (const queryKey of collided)
+    void queryClient.invalidateQueries(
+      { exact: true, queryKey },
+      { cancelRefetch: false }
+    )
 }
 
-/** Rereads every game server page, as after a gap in pushed changes. */
-export function recheckServerWorkspaces(queryClient: QueryClient): void {
-  pushedChanges += 1
+/**
+ * Rereads every game server page after a gap in pushed changes, and marks the
+ * rest stale so a navigation resolves them again. Fails when a reread fails,
+ * so stream recovery retries.
+ */
+export async function recheckServerWorkspaces(
+  queryClient: QueryClient
+): Promise<void> {
+  recordPushedChange({ type: "gap" })
   // A read in flight reads again by itself; cancelling it would fail the
   // navigation waiting on it.
-  void queryClient.invalidateQueries(
+  await queryClient.invalidateQueries(
     { queryKey: queryKeys.relay.servers },
-    { cancelRefetch: false }
+    { cancelRefetch: false, throwOnError: true }
   )
 }
 
@@ -135,7 +241,7 @@ function scopeServerWorkspace(
 
 function withRelayStatus(
   workspace: FoundServerWorkspace,
-  relay: Pick<ServerWorkspaceRelay, "id" | "status" | "updating">
+  relay: RelayState
 ): FoundServerWorkspace {
   if (
     workspace.relay.id !== relay.id ||

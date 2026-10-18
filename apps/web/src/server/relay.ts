@@ -79,7 +79,7 @@ import {
   ExternalServiceError,
   ResourceNotFoundError,
 } from "@/effect/errors"
-import { runAppEffect } from "@/effect/runtime"
+import { forkAppEffect, runAppEffect } from "@/effect/runtime"
 import {
   applyManagedDomainAddressesEffect,
   provisionInstanceDomainBestEffort,
@@ -96,6 +96,7 @@ import {
   relayCachePolicy,
   relayFetchEffect,
   relayJsonEffect,
+  writeRelayCache,
 } from "@/lib/relay-client"
 import { relayConsoleTransport } from "@/lib/relay-console-route"
 import type { RelayEndpoint } from "@/lib/relay-client"
@@ -346,6 +347,26 @@ export const getServerWorkspace = createServerFn({ method: "GET" })
     return readServerWorkspace(user, data.serverId)
   })
 
+// Reading pushed snapshots skips the read-through cache, which also keeps a
+// Relay's last-known snapshot for while it is offline. Keep that current, at
+// most every few seconds per Relay.
+const lastKnownSnapshotIntervalMs = 15_000
+const lastKnownSnapshotWrites = new Map<string, number>()
+
+function rememberPushedSnapshot(
+  relayId: string,
+  snapshot: NonNullable<ReturnType<typeof relayConnectionSnapshot>>
+) {
+  const now = Date.now()
+  const last = lastKnownSnapshotWrites.get(relayId)
+  if (last !== undefined && now - last < lastKnownSnapshotIntervalMs) return
+  lastKnownSnapshotWrites.set(relayId, now)
+  forkAppEffect(
+    "relay.snapshot.remember",
+    writeRelayCache(relayCachePolicy.snapshot(relayId), snapshot)
+  )
+}
+
 async function readServerWorkspace(user: AuthenticatedUser, serverId: string) {
   const { grants, relays: visibleRelays } = await authorizedRelays(
     user,
@@ -356,6 +377,7 @@ async function readServerWorkspace(user: AuthenticatedUser, serverId: string) {
       .filter((relay) => relay.enabled)
       .map(async (relay) => {
         const pushed = relayConnectionSnapshot(relay.id)
+        if (pushed) rememberPushedSnapshot(relay.id, pushed)
         return pushed
           ? {
               relay,

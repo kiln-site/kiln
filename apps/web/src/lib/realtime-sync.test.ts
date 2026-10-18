@@ -2,7 +2,10 @@ import { afterEach, expect, it, vi } from "vite-plus/test"
 
 // Hearth's server functions are the network boundary; tests decide what the
 // authoritative fleet read returns.
-const relay = vi.hoisted(() => ({ getFreshRelayConnectionState: vi.fn() }))
+const relay = vi.hoisted(() => ({
+  getFreshRelayConnectionState: vi.fn(),
+  getServerWorkspace: vi.fn(),
+}))
 vi.mock("@/server/relay", () => relay)
 vi.mock("@/server/instance-inventory", () => ({
   getInstanceInventory: vi.fn(),
@@ -13,6 +16,11 @@ import { createAppClients, type AppRouterContext } from "@/lib/query-client"
 import { queryKeys, type RelayConnection } from "@/lib/query-options"
 import type { FleetInstance } from "@/lib/realtime-events"
 import { startRealtimeSync } from "@/lib/realtime-sync"
+import {
+  serverWorkspaceQueryOptions,
+  type ServerWorkspace,
+} from "@/lib/server-workspace"
+import { QueryObserver } from "@tanstack/react-query"
 
 const epoch = "00000000-0000-4000-8000-000000000001"
 const relayId = "r".repeat(43)
@@ -68,6 +76,7 @@ afterEach(async () => {
     openClients.splice(0).map(({ dbClient }) => dbClient.cleanup())
   )
   relay.getFreshRelayConnectionState.mockReset()
+  relay.getServerWorkspace.mockReset()
 })
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 10))
@@ -147,5 +156,59 @@ it("keeps pushes, and directory changes sharing their sequence, that land while 
     ).toBe(true)
   } finally {
     stop()
+  }
+})
+
+it("retries recovery until an open game server page has been read again", async () => {
+  const clients = createAppClients()
+  openClients.push(clients)
+  const { queryClient } = clients
+  const page = (name: string) =>
+    ({
+      relay: {
+        browserOrigin: "https://relay.example.com",
+        consoleTransport: "direct",
+        id: relayId,
+        name: "Relay A",
+        status: "connected",
+        updating: false,
+      },
+      routeIdentifier: row.shortId,
+      snapshot: { instances: [{ ...row, name }], nodes: [] },
+      status: "found",
+    }) as ServerWorkspace
+  const options = { ...serverWorkspaceQueryOptions(row.shortId), retry: false }
+  queryClient.setQueryData(options.queryKey, page("Alpha"))
+  const unsubscribe = new QueryObserver(queryClient, options).subscribe(
+    () => undefined
+  )
+  // The page shows the server; a rename is missed while the stream is away.
+  relay.getServerWorkspace
+    .mockRejectedValueOnce(new Error("Hearth is restarting"))
+    .mockResolvedValue(page("Missed rename"))
+  const stop = startRealtimeSync(
+    queryClient,
+    getRelayInstancesCollection(clients.dbClient)
+  )
+  try {
+    FakeEventSource.current!.emit({
+      clear: false,
+      epoch,
+      hearth: false,
+      sequence: 1,
+      type: "reset",
+    })
+
+    await vi.waitFor(
+      () =>
+        expect(queryClient.getQueryData(options.queryKey)).toEqual(
+          page("Missed rename")
+        ),
+      { timeout: 3_000 }
+    )
+    expect(relay.getServerWorkspace).toHaveBeenCalledTimes(2)
+  } finally {
+    stop()
+    unsubscribe()
   }
 })

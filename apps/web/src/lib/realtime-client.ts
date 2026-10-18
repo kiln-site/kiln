@@ -29,7 +29,6 @@ import {
 } from "@/lib/relay-reachability"
 import {
   applyPushedServerWorkspaceChange,
-  recheckServerWorkspaces,
   updateRelaySnapshots,
   updateServerWorkspaces,
 } from "@/lib/server-workspace"
@@ -86,7 +85,7 @@ function applyRealtimeEvent(input: ApplyRealtimeEventInput): void {
     queryClient,
     (snapshot) => applyRealtimeSnapshotEvent(snapshot, event),
     {
-      changesServers: event.type !== "nodes.delta",
+      upserted: event.type === "instances.delta" ? event.upserted : undefined,
       relay:
         event.type === "relay.status"
           ? {
@@ -465,7 +464,6 @@ export function fleetEventNeedsRecovery(
  */
 export function recheckPushedState(queryClient: QueryClient): void {
   recordReachabilityGap(queryClient)
-  recheckServerWorkspaces(queryClient)
   void queryClient.invalidateQueries({
     queryKey: queryKeys.relay.reachability,
     exact: true,

@@ -1,6 +1,7 @@
 import type { QueryClient } from "@tanstack/react-query"
 
 import { ensuringPromise, recoverPromise } from "@/effect/promise"
+import { recheckServerWorkspaces } from "@/lib/server-workspace"
 import type { RelayInstancesCollection } from "@/lib/collections/relay-instances"
 import {
   authStateQueryOptions,
@@ -236,6 +237,9 @@ export function startRealtimeSync(
                 if (closed) return
                 recheckPushedState(queryClient)
               }
+              // Game server pages read their own server, not the fleet. A
+              // failed reread fails recovery, so it is retried.
+              await recheckServerWorkspaces(queryClient)
               recoveryFailures = 0
               if (resetRequested) {
                 hearthRefetchRequested ||= shouldRefetchHearth

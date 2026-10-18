@@ -4,16 +4,12 @@ import {
 } from "@/lib/resource-invitation-query"
 import { relayInstanceRouteId } from "@/lib/relay-fleet"
 import { Outlet, createFileRoute, redirect } from "@tanstack/react-router"
-import type { QueryClient } from "@tanstack/react-query"
 
 import {
   serverDirectoryQueryOptions,
   serverNavigationQueryOptions,
 } from "@/lib/query-options"
-import {
-  serverWorkspaceQueryOptions,
-  type ServerWorkspace,
-} from "@/lib/server-workspace"
+import { ensureServerWorkspace } from "@/lib/server-workspace"
 
 export const Route = createFileRoute("/_app/server/$serverId")({
   staleTime: Infinity,
@@ -96,17 +92,4 @@ function redirectToServerList(shortId: string) {
     href: `/infra/servers?search=${encodeURIComponent(shortId)}`,
     replace: true,
   })
-}
-
-// A cached server is kept current by pushed changes; one that was missing or
-// ambiguous is read again, as it may have been created or renamed since.
-async function ensureServerWorkspace(
-  queryClient: QueryClient,
-  serverId: string
-): Promise<ServerWorkspace> {
-  const options = serverWorkspaceQueryOptions(serverId)
-  const cached = queryClient.getQueryData(options.queryKey)
-  return cached?.status === "found"
-    ? cached
-    : queryClient.fetchQuery({ ...options, staleTime: 0 })
 }

@@ -43,6 +43,8 @@ import {
   resetRealtimeEpoch,
 } from "@/lib/realtime-client"
 import {
+  ensureServerWorkspace,
+  recheckServerWorkspaces,
   serverWorkspaceQueryOptions,
   type ServerWorkspace,
 } from "@/lib/server-workspace"
@@ -1068,8 +1070,8 @@ describe("game server pages", () => {
     })
   })
 
-  it("reads a page again when a change is pushed during its read", async () => {
-    const clients = fleet()
+  // Reads Hearth receives, resolved by the test.
+  function controlledPageReads() {
     const reads: Array<(workspace: ServerWorkspace) => void> = []
     relayServer.getServerWorkspace.mockImplementation(
       () =>
@@ -1077,21 +1079,61 @@ describe("game server pages", () => {
           reads.push(resolve)
         })
     )
-    // The route waits on this read, so it must settle, not be cancelled.
+    return reads
+  }
+
+  it("replays changes pushed during a read onto its answer", async () => {
+    const clients = fleet()
+    const reads = controlledPageReads()
     const read = clients.queryClient.fetchQuery(
       serverWorkspaceQueryOptions(alpha.shortId)
     )
     await vi.waitFor(() => expect(reads).toHaveLength(1))
 
     applyEvent(clients, instancesDelta([{ ...alpha, name: "Alpha 2" }]))
-    // Hearth answered from before the push.
+    applyEvent(clients, instancesDelta([{ ...alpha, name: "Alpha 3" }]))
+    // Hearth answered from before both pushes.
     reads[0]!(foundPage(alpha))
-    await vi.waitFor(() => expect(reads).toHaveLength(2))
-    reads[1]!(foundPage({ ...alpha, name: "Alpha 2" }))
 
     await expect(read).resolves.toEqual(
-      foundPage({ ...alpha, name: "Alpha 2" })
+      foundPage({ ...alpha, name: "Alpha 3" })
     )
+    expect(reads).toHaveLength(1)
+  })
+
+  it("keeps a deletion pushed during a read", async () => {
+    const clients = fleet()
+    const reads = controlledPageReads()
+    const read = clients.queryClient.fetchQuery(
+      serverWorkspaceQueryOptions(alpha.shortId)
+    )
+    await vi.waitFor(() => expect(reads).toHaveLength(1))
+
+    applyEvent(clients, instancesDelta([beta]))
+    applyEvent(clients, instancesDelta([], [alpha]))
+    reads[0]!(foundPage(alpha))
+
+    await expect(read).resolves.toEqual({ status: "not-found" })
+  })
+
+  it("reads again when its read spans a gap in pushed changes", async () => {
+    const clients = fleet()
+    const reads = controlledPageReads()
+    // The route waits on this read, so it must settle, not be cancelled.
+    const read = clients.queryClient.fetchQuery(
+      serverWorkspaceQueryOptions(alpha.shortId)
+    )
+    await vi.waitFor(() => expect(reads).toHaveLength(1))
+
+    const recheck = recheckServerWorkspaces(clients.queryClient)
+    reads[0]!(foundPage(alpha))
+    await vi.waitFor(() => expect(reads).toHaveLength(2))
+    reads[1]!(foundPage({ ...alpha, name: "Missed rename" }))
+
+    await expect(read).resolves.toEqual(
+      foundPage({ ...alpha, name: "Missed rename" })
+    )
+    await recheck
   })
 
   it("rereads a mounted page after a gap in pushed changes", async () => {
@@ -1106,11 +1148,67 @@ describe("game server pages", () => {
       foundPage({ ...alpha, name: "Missed rename" })
     )
 
-    recheckPushedState(clients.queryClient)
+    await recheckServerWorkspaces(clients.queryClient)
 
-    await vi.waitFor(() =>
-      expect(page()).toEqual(foundPage({ ...alpha, name: "Missed rename" }))
+    expect(page()).toEqual(foundPage({ ...alpha, name: "Missed rename" }))
+    unsubscribe()
+  })
+
+  it("fails a recheck whose reread fails, so recovery retries", async () => {
+    const clients = fleet()
+    openPage(clients)
+    const observer = new QueryObserver(clients.queryClient, {
+      ...serverWorkspaceQueryOptions(alpha.shortId),
+      retry: false,
+    })
+    const unsubscribe = observer.subscribe(() => undefined)
+    relayServer.getServerWorkspace.mockRejectedValue(new Error("offline"))
+
+    await expect(recheckServerWorkspaces(clients.queryClient)).rejects.toThrow(
+      "offline"
     )
     unsubscribe()
+  })
+
+  it("resolves a navigation again after a gap marked its page stale", async () => {
+    const clients = fleet()
+    openPage(clients)
+    relayServer.getServerWorkspace.mockResolvedValue({ status: "not-found" })
+
+    // Nothing shows the page, so the recheck only marks it stale.
+    await recheckServerWorkspaces(clients.queryClient)
+
+    await expect(
+      ensureServerWorkspace(clients.queryClient, alpha.shortId)
+    ).resolves.toEqual({ status: "not-found" })
+  })
+
+  it("reuses a page a navigation names by ID, but not by name", async () => {
+    const clients = fleet()
+    openPage(clients)
+    const { queryKey } = serverWorkspaceQueryOptions(alpha.name)
+    clients.queryClient.setQueryData(queryKey, foundPage(alpha))
+    relayServer.getServerWorkspace.mockResolvedValue(foundPage(beta))
+
+    await expect(
+      ensureServerWorkspace(clients.queryClient, alpha.shortId)
+    ).resolves.toEqual(foundPage(alpha))
+    // The name may belong to another server by now.
+    await expect(
+      ensureServerWorkspace(clients.queryClient, alpha.name)
+    ).resolves.toEqual(foundPage(beta))
+  })
+
+  it("resolves a page again when another server takes its short ID", async () => {
+    const clients = fleet()
+    openPage(clients)
+    const twin = { ...beta, shortId: alpha.shortId } as FleetInstance
+    relayServer.getServerWorkspace.mockResolvedValue({ status: "ambiguous" })
+
+    applyEvent(clients, instancesDelta([twin]))
+
+    await expect(
+      ensureServerWorkspace(clients.queryClient, alpha.shortId)
+    ).resolves.toEqual({ status: "ambiguous" })
   })
 })
