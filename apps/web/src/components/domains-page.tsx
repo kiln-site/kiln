@@ -72,6 +72,7 @@ import {
   InfoCopyValue,
   InfoFact,
   InfoRailCard,
+  InfoRailCardSection,
 } from "@/components/info-page"
 import { InfraSyncButton } from "@/components/infra-sync-button"
 import { InstanceCard } from "@/components/instance-card"
@@ -371,93 +372,94 @@ const DomainsRail = React.memo(function DomainsRail({
   const defaultDomain = integration?.domains.find((domain) => domain.isDefault)
 
   return (
-    <>
-      <InfoRailCard
-        action={
-          <Button
-            size="sm"
-            type="button"
-            variant="outline"
-            onClick={onConfigure}
-          >
-            <Settings2 />
-            Configure
-          </Button>
-        }
-        icon={<Globe2 />}
-        title="Vanity"
-      >
-        <InfoFact label="Provider">
-          {integration ? (
-            "Cloudflare"
-          ) : (
-            <span className="text-muted-foreground">Not connected</span>
-          )}
-        </InfoFact>
-        {integration ? (
-          <>
-            <InfoFact label="Auto provisioning">
-              {integration.enabled ? "On" : "Off"}
-            </InfoFact>
-            {integration.enabled ? (
-              <InfoFact label="New game servers">
-                {strategy?.label ?? "Default only"}
-              </InfoFact>
-            ) : null}
-            {defaultDomain ? (
-              <InfoFact label="Default">
-                <span className="truncate font-mono">
-                  {defaultDomain.domain}
+    <InfoRailCard
+      action={
+        <Button size="sm" type="button" variant="outline" onClick={onConfigure}>
+          <Settings2 />
+          Configure
+        </Button>
+      }
+      icon={<Globe2 />}
+      sections={
+        integration && integration.domains.length > 0 ? (
+          <InfoRailCardSection
+            action={
+              <div className="flex items-center gap-2">
+                <span className="type-meta text-muted-foreground tabular-nums">
+                  {integration.domains.length}
                 </span>
-              </InfoFact>
-            ) : null}
-          </>
-        ) : null}
-      </InfoRailCard>
-
-      {integration && integration.domains.length > 0 ? (
-        <InfoRailCard
-          action={<DomainsRefreshButton />}
-          icon={<Link2 />}
-          title="Domains"
-        >
-          {integration.domains.map((domain) => (
-            <div
-              key={domain.domain}
-              className={`flex min-h-10 items-center gap-2 border-b border-border/60 py-1.5 text-[0.8125rem] last:border-b-0 ${
-                domain.enabled ? "" : "text-muted-foreground"
-              }`}
-            >
-              <dt className="min-w-0 flex-1 truncate font-mono">
-                {domain.domain}
-              </dt>
-              <dd className="-mr-1.5 shrink-0">
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      asChild
-                      className="text-muted-foreground hover:text-primary"
-                      size="icon-xs"
-                      variant="ghost"
-                    >
-                      <a
-                        aria-label={`View ${domain.domain} on Cloudflare`}
-                        href={cloudflareDnsRecordsUrl(domain.zoneName)}
-                        rel="noreferrer"
-                        target="_blank"
+                <DomainsRefreshButton />
+              </div>
+            }
+            // Seven and a half rows: the cut-off row shows the list scrolls.
+            contentClassName="max-h-[calc(7.5*2.5rem)] overflow-y-auto"
+            icon={<Link2 />}
+            title="Domains"
+          >
+            {integration.domains.map((domain) => (
+              <div
+                key={domain.domain}
+                className={`flex h-10 items-center gap-2 border-b border-border/60 text-[0.8125rem] last:border-b-0 ${
+                  domain.enabled ? "" : "text-muted-foreground"
+                }`}
+              >
+                <dt className="min-w-0 flex-1 truncate font-mono">
+                  {domain.domain}
+                </dt>
+                <dd className="-mr-1.5 shrink-0">
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        asChild
+                        className="text-muted-foreground hover:text-primary"
+                        size="icon-xs"
+                        variant="ghost"
                       >
-                        <ExternalLink />
-                      </a>
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="left">View on Cloudflare</TooltipContent>
-                </Tooltip>
-              </dd>
-            </div>
-          ))}
-        </InfoRailCard>
+                        <a
+                          aria-label={`View ${domain.domain} on Cloudflare`}
+                          href={cloudflareDnsRecordsUrl(domain.zoneName)}
+                          rel="noreferrer"
+                          target="_blank"
+                        >
+                          <ExternalLink />
+                        </a>
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="left">View on Cloudflare</TooltipContent>
+                  </Tooltip>
+                </dd>
+              </div>
+            ))}
+          </InfoRailCardSection>
+        ) : null
+      }
+      title="Vanity"
+    >
+      <InfoFact label="Provider">
+        {integration ? (
+          "Cloudflare"
+        ) : (
+          <span className="text-muted-foreground">Not connected</span>
+        )}
+      </InfoFact>
+      {integration ? (
+        <>
+          <InfoFact label="Auto provisioning">
+            {integration.enabled ? "On" : "Off"}
+          </InfoFact>
+          {integration.enabled ? (
+            <InfoFact label="New game servers">
+              {strategy?.label ?? "Default only"}
+            </InfoFact>
+          ) : null}
+          {defaultDomain ? (
+            <InfoFact label="Default">
+              <span className="truncate font-mono">{defaultDomain.domain}</span>
+            </InfoFact>
+          ) : null}
+        </>
       ) : null}
-    </>
+    </InfoRailCard>
   )
 })
 

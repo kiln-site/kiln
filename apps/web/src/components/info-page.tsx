@@ -603,6 +603,7 @@ export function InfoRailCard({
   action,
   children,
   icon,
+  sections,
   summary,
   title,
 }: {
@@ -610,6 +611,8 @@ export function InfoRailCard({
   action?: React.ReactNode
   children: React.ReactNode
   icon: React.ReactNode
+  // Titled parts below the facts, such as an InfoRailCardSection.
+  sections?: React.ReactNode
   // Shown above the facts, such as usage bars.
   summary?: React.ReactNode
   title: string
@@ -629,6 +632,39 @@ export function InfoRailCard({
         <div className="border-b border-border/60 px-3">{summary}</div>
       ) : null}
       <dl className="px-3">{children}</dl>
+      {sections}
+    </section>
+  )
+}
+
+// A titled part of a rail card, set off from the facts above by its own
+// header row.
+export function InfoRailCardSection({
+  action,
+  children,
+  contentClassName,
+  icon,
+  title,
+}: {
+  action?: React.ReactNode
+  children: React.ReactNode
+  // Such as a height cap that scrolls a long list.
+  contentClassName?: string
+  icon: React.ReactNode
+  title: string
+}) {
+  return (
+    <section>
+      <div className="flex min-h-10 items-center gap-2 border-y bg-muted/30 px-3 py-1.5">
+        <h4 className="flex min-w-0 items-center gap-2 text-[0.8125rem] font-semibold [&_svg]:size-3.5 [&_svg]:shrink-0 [&_svg]:text-muted-foreground">
+          {icon}
+          <span className="truncate">{title}</span>
+        </h4>
+        {action ? (
+          <div className="ml-auto flex shrink-0 items-center">{action}</div>
+        ) : null}
+      </div>
+      <dl className={cn("px-3", contentClassName)}>{children}</dl>
     </section>
   )
 }
