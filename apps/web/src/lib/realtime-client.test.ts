@@ -1124,13 +1124,11 @@ describe("game server pages", () => {
     ).toEqual({ status: "not-found" })
   })
 
-  it("reads again when its read spans a gap in pushed changes", async () => {
+  it("reads again when a navigation's read spans a gap in pushed changes", async () => {
     const clients = fleet()
     const reads = controlledPageReads()
     // The route waits on this read, so it must settle, not be cancelled.
-    const read = clients.queryClient.fetchQuery(
-      serverWorkspaceQueryOptions(alpha.shortId)
-    )
+    const navigation = ensureServerWorkspace(clients.queryClient, alpha.shortId)
     await vi.waitFor(() => expect(reads).toHaveLength(1))
 
     const recheck = recheckServerWorkspaces(clients.queryClient)
@@ -1138,7 +1136,7 @@ describe("game server pages", () => {
     await vi.waitFor(() => expect(reads).toHaveLength(2))
     reads[1]!(foundPage({ ...alpha, name: "Missed rename" }))
 
-    await expect(read).resolves.toEqual(
+    await expect(navigation).resolves.toEqual(
       foundPage({ ...alpha, name: "Missed rename" })
     )
     await recheck
@@ -1223,6 +1221,93 @@ describe("game server pages", () => {
     reads[1]!({ status: "ambiguous" })
 
     await vi.waitFor(() => expect(page()).toEqual({ status: "ambiguous" }))
+    unsubscribe()
+  })
+
+  // Each read Hearth receives, answered by the test. `answered` settles
+  // after the read's own code has seen the answer, before the query stores it.
+  function stagedPageReads() {
+    const reads: Array<{
+      answer: (workspace: ServerWorkspace) => void
+      answered: Promise<ServerWorkspace>
+      fail: (cause: Error) => void
+    }> = []
+    relayServer.getServerWorkspace.mockImplementation(() => {
+      let answer!: (workspace: ServerWorkspace) => void
+      let fail!: (cause: Error) => void
+      const answered = new Promise<ServerWorkspace>((resolve, reject) => {
+        answer = resolve
+        fail = reject
+      })
+      reads.push({ answer, answered, fail })
+      return answered
+    })
+    return reads
+  }
+
+  it("does not open a server whose short ID another server took during the read", async () => {
+    const clients = fleet()
+    const reads = stagedPageReads()
+    const twin = { ...beta, shortId: alpha.shortId } as FleetInstance
+    const navigation = ensureServerWorkspace(clients.queryClient, alpha.shortId)
+    await vi.waitFor(() => expect(reads).toHaveLength(1))
+
+    applyEvent(clients, instancesDelta([twin]))
+    reads[0]!.answer(foundPage(alpha))
+    await vi.waitFor(() => expect(reads).toHaveLength(2))
+    reads[1]!.answer({ status: "ambiguous" })
+
+    await expect(navigation).resolves.toEqual({ status: "ambiguous" })
+  })
+
+  it("opens a server created while a missing answer is stored", async () => {
+    const clients = fleet()
+    const reads = stagedPageReads()
+    const navigation = ensureServerWorkspace(clients.queryClient, alpha.shortId)
+    await vi.waitFor(() => expect(reads).toHaveLength(1))
+
+    reads[0]!.answer({ status: "not-found" })
+    await reads[0]!.answered
+    applyEvent(clients, instancesDelta([alpha]))
+    await vi.waitFor(() => expect(reads).toHaveLength(2))
+    reads[1]!.answer(foundPage(alpha))
+
+    await expect(navigation).resolves.toEqual(foundPage(alpha))
+  })
+
+  it("keeps a missing answer when an unrelated server is pushed", async () => {
+    const clients = fleet()
+    const reads = stagedPageReads()
+    const navigation = ensureServerWorkspace(clients.queryClient, alpha.shortId)
+    await vi.waitFor(() => expect(reads).toHaveLength(1))
+
+    applyEvent(clients, instancesDelta([beta]))
+    reads[0]!.answer({ status: "not-found" })
+
+    await expect(navigation).resolves.toEqual({ status: "not-found" })
+    expect(reads).toHaveLength(1)
+  })
+
+  it("fails recovery when the reread a gap requires fails", async () => {
+    const clients = fleet()
+    openPage(clients)
+    const reads = stagedPageReads()
+    const observer = new QueryObserver(clients.queryClient, {
+      ...serverWorkspaceQueryOptions(alpha.shortId),
+      retry: false,
+    })
+    const unsubscribe = observer.subscribe(() => undefined)
+    void observer.refetch().catch(() => undefined)
+    await vi.waitFor(() => expect(reads).toHaveLength(1))
+
+    // The gap begins after Hearth answered, before the answer is stored.
+    reads[0]!.answer(foundPage(alpha))
+    await reads[0]!.answered
+    const recheck = recheckServerWorkspaces(clients.queryClient)
+    await vi.waitFor(() => expect(reads).toHaveLength(2))
+    reads[1]!.fail(new Error("Hearth is restarting"))
+
+    await expect(recheck).rejects.toThrow("Hearth is restarting")
     unsubscribe()
   })
 

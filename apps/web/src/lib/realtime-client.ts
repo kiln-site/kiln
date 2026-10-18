@@ -85,6 +85,8 @@ function applyRealtimeEvent(input: ApplyRealtimeEventInput): void {
     queryClient,
     (snapshot) => applyRealtimeSnapshotEvent(snapshot, event),
     {
+      removesServers:
+        event.type === "instances.delta" && event.deleted.length > 0,
       upserted: event.type === "instances.delta" ? event.upserted : undefined,
       relay:
         event.type === "relay.status"
@@ -305,8 +307,10 @@ export function applyProvisioningInstance(
           }
         : connection
   )
-  updateServerWorkspaces(queryClient, (snapshot) =>
-    upsertRelaySnapshotInstance(snapshot, updated)
+  updateServerWorkspaces(
+    queryClient,
+    (snapshot) => upsertRelaySnapshotInstance(snapshot, updated),
+    { upserted: [updated] }
   )
   queryClient.setQueryData<Array<FleetInstance>>(
     queryKeys.relay.instances,
@@ -336,8 +340,10 @@ export function applyUpdatedInstance(
       (instance) =>
         instance.id === updated.id && instance.relayId === updated.relayId
     )
-  updateRelaySnapshots(queryClient, (snapshot) =>
-    replaceRelaySnapshotInstance(snapshot, updated)
+  updateRelaySnapshots(
+    queryClient,
+    (snapshot) => replaceRelaySnapshotInstance(snapshot, updated),
+    { upserted: [{ ...current, ...updated } as FleetInstance] }
   )
   queryClient.setQueryData<Array<FleetInstance>>(
     queryKeys.relay.instances,
@@ -363,8 +369,13 @@ export function applyDeletedInstance(
         instance.id !== deleted.instanceId ||
         instance.relayId !== deleted.relayId
     )
-  updateRelaySnapshots(queryClient, (snapshot) =>
-    snapshot ? { ...snapshot, instances: remove(snapshot.instances) } : snapshot
+  updateRelaySnapshots(
+    queryClient,
+    (snapshot) =>
+      snapshot
+        ? { ...snapshot, instances: remove(snapshot.instances) }
+        : snapshot,
+    { removesServers: true }
   )
   queryClient.setQueryData<RelayConnection>(
     queryKeys.relay.connection,

@@ -2,11 +2,13 @@ import {
   queryOptions,
   type Query,
   type QueryClient,
+  type QueryKey,
 } from "@tanstack/react-query"
 
 import { reconcilePendingPowerSnapshot } from "@/lib/instance-power-state"
 import { queryKeys } from "@/lib/query-options"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
+import { resolveRelayInstance } from "@/lib/relay-selectors"
 import { getServerWorkspace } from "@/server/relay"
 
 /**
@@ -25,6 +27,12 @@ type SnapshotUpdate = (
 type RelayState = Pick<ServerWorkspaceRelay, "id" | "status" | "updating">
 type ServerInstance = RelayFleetSnapshot["instances"][number]
 
+// What a change does to the set of servers a route can name.
+interface ServerChanges {
+  removesServers?: boolean
+  upserted?: ReadonlyArray<ServerInstance>
+}
+
 /*
  * Pushed changes, mutation responses, and gaps in pushed changes, numbered in
  * the order they reached this page. A read answers from the moment Hearth
@@ -41,12 +49,15 @@ type Change =
   | { sequence: number; type: "gap" }
   | {
       apply: (workspace: FoundServerWorkspace) => ServerWorkspace
+      removesServers: boolean
       sequence: number
       type: "change"
       upserted: ReadonlyArray<ServerInstance>
     }
 
-const maximumMissingRereads = 3
+// Reads in a row a navigation or recovery waits for while changes keep
+// landing during them.
+const maximumReads = 10
 
 interface ReadState {
   changes: Array<Change>
@@ -82,28 +93,11 @@ export function serverWorkspaceQueryOptions(serverId: string) {
       const queryHash = client
         .getQueryCache()
         .find({ exact: true, queryKey })?.queryHash
-      for (let attempt = 1; ; attempt += 1) {
-        const startedAt = state.sequence
-        if (queryHash) state.readsStartedAt.set(queryHash, startedAt)
-        const read = await getServerWorkspace({ data: { serverId }, signal })
-        const missed = changesSince(state, startedAt)
-        // A read that spans a gap may be missing anything; a missing server
-        // may have been created during the read. Pushes are frequent, so a
-        // missing server is reread only a few times.
-        if (
-          missed.some(({ type }) => type === "gap") ||
-          (read.status !== "found" &&
-            missed.some(
-              (change) => change.type === "change" && change.upserted.length
-            ) &&
-            attempt < maximumMissingRereads)
-        ) {
-          continue
-        }
-        return read.status === "found"
-          ? { ...read, snapshot: reconcilePendingPowerSnapshot(read.snapshot) }
-          : read
-      }
+      if (queryHash) state.readsStartedAt.set(queryHash, state.sequence)
+      const read = await getServerWorkspace({ data: { serverId }, signal })
+      return read.status === "found"
+        ? { ...read, snapshot: reconcilePendingPowerSnapshot(read.snapshot) }
+        : read
     },
     refetchOnWindowFocus: false,
     staleTime: 5_000,
@@ -135,30 +129,35 @@ export async function ensureServerWorkspace(
       serverId === instance.routeId ||
       serverId === instance.id)
   if (reusable && cached) return cached
-  const read = await queryClient.fetchQuery({ ...options, staleTime: 0 })
-  // What was stored, with any changes pushed during the read replayed.
-  return queryClient.getQueryData(options.queryKey) ?? read
+  // A change during the read may leave its route needing resolution again.
+  for (let attempt = 1; ; attempt += 1) {
+    const read = await queryClient.fetchQuery({ ...options, staleTime: 0 })
+    if (!unresolved(queryClient, options.queryKey) || attempt >= maximumReads)
+      // What was stored, with any changes pushed during the read replayed.
+      return queryClient.getQueryData(options.queryKey) ?? read
+  }
 }
 
 /** Applies a fleet snapshot update to the fleet and every game server page. */
 export function updateRelaySnapshots(
   queryClient: QueryClient,
-  update: SnapshotUpdate
+  update: SnapshotUpdate,
+  changes: ServerChanges = {}
 ): void {
   queryClient.setQueryData<RelayFleetSnapshot>(queryKeys.relay.snapshot, update)
-  updateServerWorkspaces(queryClient, update)
+  updateServerWorkspaces(queryClient, update, changes)
 }
 
 /** Applies a fleet snapshot update to every game server page it touches. */
 export function updateServerWorkspaces(
   queryClient: QueryClient,
   update: SnapshotUpdate,
-  upserted: ReadonlyArray<ServerInstance> = []
+  changes: ServerChanges = {}
 ): void {
   applyChange(
     queryClient,
     (workspace) => scopeServerWorkspace(workspace, update(workspace.snapshot)),
-    upserted
+    changes
   )
 }
 
@@ -166,12 +165,9 @@ export function updateServerWorkspaces(
 export function applyPushedServerWorkspaceChange(
   queryClient: QueryClient,
   update: SnapshotUpdate,
-  options: {
-    relay?: RelayState
-    upserted?: ReadonlyArray<ServerInstance>
-  } = {}
+  options: ServerChanges & { relay?: RelayState } = {}
 ): void {
-  const { relay, upserted = [] } = options
+  const { relay, ...changes } = options
   applyChange(
     queryClient,
     (workspace) => {
@@ -180,7 +176,7 @@ export function applyPushedServerWorkspaceChange(
         ? withRelayStatus(scoped, relay)
         : scoped
     },
-    upserted
+    changes
   )
 }
 
@@ -198,24 +194,38 @@ export async function recheckServerWorkspaces(
     state.changes.push({ sequence: state.sequence, type: "gap" })
   for (const query of serverWorkspaceQueries(queryClient))
     state.unresolvedSince.set(query.queryHash, state.sequence)
-  // A read in flight reads again by itself; cancelling it would fail the
-  // navigation waiting on it.
-  await queryClient.refetchQueries(
-    { queryKey: queryKeys.relay.servers, type: "active" },
-    { cancelRefetch: false, throwOnError: true }
-  )
+  // Reread every shown page until none needs resolution. A read in flight is
+  // joined rather than cancelled, which would fail the navigation waiting on
+  // it; it reads again once stored if it began before the gap.
+  for (let attempt = 1; ; attempt += 1) {
+    const pending = serverWorkspaceQueries(queryClient).filter(
+      (query) => query.isActive() && state.unresolvedSince.has(query.queryHash)
+    )
+    if (pending.length === 0) return
+    if (attempt > maximumReads)
+      throw new Error("Game server pages kept changing during their reads")
+    await Promise.all(
+      pending.map((query) =>
+        queryClient.refetchQueries(
+          { exact: true, queryKey: query.queryKey },
+          { cancelRefetch: false, throwOnError: true }
+        )
+      )
+    )
+  }
 }
 
 function applyChange(
   queryClient: QueryClient,
   apply: (workspace: FoundServerWorkspace) => ServerWorkspace,
-  upserted: ReadonlyArray<ServerInstance>
+  { removesServers = false, upserted = [] }: ServerChanges
 ) {
   const state = readState(queryClient)
   state.sequence += 1
   if (state.readsStartedAt.size > 0)
     state.changes.push({
       apply,
+      removesServers,
       sequence: state.sequence,
       type: "change",
       upserted,
@@ -261,12 +271,14 @@ function watchStoredReads(queryClient: QueryClient, state: ReadState) {
       return
     }
     state.readsStartedAt.delete(query.queryHash)
+    const serverId = String(query.queryKey[2])
     let workspace = query.state.data as ServerWorkspace | undefined
     for (const change of changesSince(state, startedAt)) {
-      if (workspace?.status !== "found") break
-      if (change.type === "gap" || takesShortId(workspace, change.upserted))
+      if (!workspace) break
+      if (changesResolution(serverId, workspace, change))
         state.unresolvedSince.set(query.queryHash, change.sequence)
-      if (change.type === "change") workspace = change.apply(workspace)
+      if (change.type === "change" && workspace.status === "found")
+        workspace = change.apply(workspace)
     }
     if (workspace !== query.state.data)
       queryClient.setQueryData(query.queryKey, workspace)
@@ -280,6 +292,32 @@ function watchStoredReads(queryClient: QueryClient, state: ReadState) {
         queryKey: query.queryKey,
       })
   })
+}
+
+// Whether a change a stored answer missed may change what its route names:
+// anything after a gap; another server taking a found server's short ID; a
+// server a missing or ambiguous answer's identifier now names, or one removed
+// from among an ambiguous answer's matches.
+function changesResolution(
+  serverId: string,
+  workspace: ServerWorkspace,
+  change: Change
+): boolean {
+  if (change.type === "gap") return true
+  if (workspace.status === "found")
+    return takesShortId(workspace, change.upserted)
+  return (
+    (workspace.status === "ambiguous" && change.removesServers) ||
+    resolveRelayInstance([...change.upserted], serverId).status !== "not-found"
+  )
+}
+
+function unresolved(queryClient: QueryClient, queryKey: QueryKey) {
+  const query = queryClient.getQueryCache().find({ exact: true, queryKey })
+  return (
+    query !== undefined &&
+    readState(queryClient).unresolvedSince.has(query.queryHash)
+  )
 }
 
 // Another server taking a page's short ID makes that ID ambiguous.
