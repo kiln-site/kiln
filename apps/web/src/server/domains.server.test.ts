@@ -400,6 +400,33 @@ describeMysql("removing a game server's domain", () => {
       }).pipe(Effect.provide(disabledCache))
     )
 
+    it.effect(
+      "keeps a domain added after a removal in step with the game server",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          fakeCloudflare({ records: ["address-record", "srv-record"] })
+          yield* insertCredential()
+          // Its last domain was removed, then a new one was added and fixed
+          // by hand, which leaves the removal on record.
+          yield* insertRows("instance_domain_opt_out", {
+            relay_id: relayId,
+            instance_id: instanceId,
+            created_at: 0,
+          })
+          yield* insertAssignment(testAssignment())
+
+          yield* Effect.promise(() =>
+            provisionInstanceDomain(testInstance(), relayId)
+          )
+
+          const [row] = yield* selectRows<{ public_host: string }>(
+            "instance_domain"
+          )
+          assert.strictEqual(row?.public_host, "new-relay.example.com")
+        }).pipe(Effect.provide(disabledCache))
+    )
+
     it.effect("keeps the removal until the game server is gone", () =>
       Effect.gen(function* () {
         yield* resetDatabase

@@ -691,17 +691,18 @@ const provisionInstanceDomainEffect = Effect.fn("domains.instance.provision")(
     if (!instance.publicHost || !instance.publicPort) return false
     const integration = yield* loadDomainIntegrationEffect()
     if (!integration) return false
-    // A removed domain stays removed, even one whose deletion failed part
-    // way: retrying it would bring the address back.
-    if (yield* loadInstanceDomainOptOutEffect(instance.relayId, instance.id)) {
-      return false
-    }
     const assignments = yield* loadInstanceDomainAssignmentsForInstanceEffect(
       instance.relayId,
       instance.id
     )
     if (assignments.length === 0) {
       if (!integration.enabled) return false
+      // A game server whose last domain was removed doesn't get a new one.
+      // Its other domains still follow it below, since someone kept or added
+      // them, and ones being deleted are left to their delete.
+      if (yield* loadInstanceDomainOptOutEffect(instance.relayId, instance.id)) {
+        return false
+      }
       const credential = yield* loadCloudflareIntegrationCredentialEffect()
       const domain = yield* chooseDomainEffect(credential)
       const vanityLabel = yield* availableVanityLabelEffect(

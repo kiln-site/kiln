@@ -816,4 +816,3 @@ function domainStatusPresentation(
     tone: "danger",
   }
 }
-
