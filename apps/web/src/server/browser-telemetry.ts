@@ -167,10 +167,8 @@ export async function forwardBrowserTelemetry(
 }
 
 /** The share of browser traces Hearth forwards. */
-export function browserTraceSampleRatio(_target: OtlpTarget): number {
-  // Temporarily keeps every browser trace to baseline instance page opens in
-  // production; restore `_target.sampleRatio` once that is done.
-  return 1
+export function browserTraceSampleRatio(target: OtlpTarget): number {
+  return target.sampleRatio
 }
 
 async function readLimitedText(
