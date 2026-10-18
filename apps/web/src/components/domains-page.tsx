@@ -357,6 +357,53 @@ const DomainsRefreshButton = React.memo(function DomainsRefreshButton() {
   )
 })
 
+/**
+ * The configured domains, set apart from the facts above. Beside the table it
+ * fills the rail; stacked below it, it shows seven and a half rows so the
+ * cut-off row says the list scrolls.
+ */
+function VanityDomainList({
+  domains,
+}: {
+  domains: ReadonlyArray<ManagedDomain>
+}) {
+  return (
+    <InfoRailCardSection
+      action={
+        <span className="type-meta text-muted-foreground tabular-nums">
+          {domains.length}
+        </span>
+      }
+      className="xl:flex xl:min-h-0 xl:flex-1 xl:flex-col"
+      contentClassName="max-h-[calc(7.5*2.25rem)] overflow-y-auto xl:max-h-none xl:min-h-0 xl:flex-1"
+      title="Domains"
+    >
+      <ul aria-label="Vanity domains">
+        {domains.map((domain) => (
+          // Dividers span the middle 85%, centered.
+          <li
+            key={domain.domain}
+            className="relative after:absolute after:inset-x-[7.5%] after:bottom-0 after:h-px after:bg-border/60 last:after:hidden"
+          >
+            <a
+              aria-label={`View ${domain.domain} on Cloudflare`}
+              className={`group flex h-9 items-center gap-2 px-2 font-mono text-[0.8125rem] outline-none hover:bg-muted/60 focus-visible:bg-muted/60 ${
+                domain.enabled ? "" : "text-muted-foreground"
+              }`}
+              href={cloudflareDnsRecordsUrl(domain.zoneName)}
+              rel="noreferrer"
+              target="_blank"
+            >
+              <span className="min-w-0 flex-1 truncate">{domain.domain}</span>
+              <ExternalLink className="size-3 shrink-0 text-muted-foreground/40 transition-colors group-hover:text-primary group-focus-visible:text-primary" />
+            </a>
+          </li>
+        ))}
+      </ul>
+    </InfoRailCardSection>
+  )
+}
+
 /** What vanity is set up to do, beside the table. */
 const DomainsRail = React.memo(function DomainsRail({
   integration,
@@ -369,7 +416,6 @@ const DomainsRail = React.memo(function DomainsRail({
     (option) => option.value === integration?.strategy
   )
   const defaultDomain = integration?.domains.find((domain) => domain.isDefault)
-
   return (
     <InfoRailCard
       action={
@@ -393,47 +439,13 @@ const DomainsRail = React.memo(function DomainsRail({
           </Tooltip>
         </div>
       }
-      // Fills the rail beside the table, so the domain list can too.
-      className="xl:flex xl:min-h-0 xl:flex-1 xl:flex-col"
+      // Half the rail beside the table, leaving the rest for more cards. The
+      // domain list fills what's left of the card.
+      className="xl:flex xl:min-h-0 xl:flex-none xl:basis-1/2 xl:flex-col"
       icon={<Globe2 />}
       sections={
         integration && integration.domains.length > 0 ? (
-          <InfoRailCardSection
-            action={
-              <span className="type-meta text-muted-foreground tabular-nums">
-                {integration.domains.length}
-              </span>
-            }
-            className="xl:flex xl:min-h-0 xl:flex-1 xl:flex-col"
-            // Beside the table it fills the rail. Stacked below it, seven and
-            // a half rows: the cut-off row shows the list scrolls.
-            contentClassName="max-h-[calc(7.5*(2.25rem+1px))] overflow-y-auto xl:max-h-none xl:min-h-0 xl:flex-1"
-            title="Domains"
-          >
-            <ul aria-label="Vanity domains">
-              {integration.domains.map((domain) => (
-                <li
-                  key={domain.domain}
-                  className="border-b border-border/60 last:border-b-0"
-                >
-                  <a
-                    aria-label={`View ${domain.domain} on Cloudflare`}
-                    className={`group -mx-3 flex h-9 items-center gap-2 px-3 font-mono text-[0.8125rem] outline-none hover:bg-muted/60 focus-visible:bg-muted/60 ${
-                      domain.enabled ? "" : "text-muted-foreground"
-                    }`}
-                    href={cloudflareDnsRecordsUrl(domain.zoneName)}
-                    rel="noreferrer"
-                    target="_blank"
-                  >
-                    <span className="min-w-0 flex-1 truncate">
-                      {domain.domain}
-                    </span>
-                    <ExternalLink className="size-3 shrink-0 text-muted-foreground/40 transition-colors group-hover:text-primary group-focus-visible:text-primary" />
-                  </a>
-                </li>
-              ))}
-            </ul>
-          </InfoRailCardSection>
+          <VanityDomainList domains={integration.domains} />
         ) : null
       }
       title="Vanity"
@@ -608,8 +620,17 @@ const ManagedDomainsTable = React.memo(function ManagedDomainsTable({
         id: "port",
         header: "Port",
         sortFn: (left, right) => left.original.port - right.original.port,
-        cell: ({ row }) => <DomainPortCell domain={row.original} />,
-        meta: dataTableColumnMeta({ hideBelow: "sm", width: "7.75rem" }),
+        cell: ({ row }) => (
+          <InfoCopyValue label="port" value={String(row.original.port)} />
+        ),
+        meta: dataTableColumnMeta({ hideBelow: "sm", width: "5.75rem" }),
+      }),
+      domainTableColumnHelper.accessor((domain) => srvRecordLabel(domain), {
+        id: "srv",
+        header: "SRV",
+        sortFn: "text",
+        cell: ({ row }) => <SrvRecordCell domain={row.original} />,
+        meta: dataTableColumnMeta({ hideBelow: "md", width: "6.5rem" }),
       }),
       domainTableColumnHelper.display({
         id: "actions",
@@ -688,24 +709,16 @@ function DomainHostnameCell({ domain }: { domain: ManagedDomainOverview }) {
   )
 }
 
-// With an SRV record, players join by the hostname alone.
-function DomainPortCell({ domain }: { domain: ManagedDomainOverview }) {
-  return (
-    <div className="flex min-w-0 items-center gap-1.5">
-      <InfoCopyValue label="port" value={String(domain.port)} />
-      {domain.srvActive ? (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="type-technical-label shrink-0 rounded-sm border border-emerald-500/30 px-1 text-emerald-700 dark:text-emerald-300">
-              SRV
-            </span>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            Players can join with just the domain
-          </TooltipContent>
-        </Tooltip>
-      ) : null}
-    </div>
+function SrvRecordCell({ domain }: { domain: ManagedDomainOverview }) {
+  return domain.srvActive ? (
+    <span className="type-meta inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-300">
+      <Check aria-hidden className="size-3" />
+      Active
+    </span>
+  ) : (
+    <span className="type-meta text-muted-foreground">
+      {srvRecordLabel(domain)}
+    </span>
   )
 }
 

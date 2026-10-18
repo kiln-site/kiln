@@ -642,8 +642,8 @@ export function InfoRailCard({
   )
 }
 
-// A titled part of a rail card below its facts. Its title row reads like a
-// fact: a label, with a value such as a count on the right.
+// A titled part of a rail card below its facts, such as a list: a small-caps
+// label, then its content under a rule, inset by the card's padding.
 export function InfoRailCardSection({
   action,
   children,
@@ -651,6 +651,7 @@ export function InfoRailCardSection({
   contentClassName,
   title,
 }: {
+  // At the end of the label row, such as a count.
   action?: React.ReactNode
   // Its own markup, such as a list, rather than facts.
   children: React.ReactNode
@@ -660,16 +661,18 @@ export function InfoRailCardSection({
   title: string
 }) {
   return (
-    <section className={className}>
-      <div className="mx-3 flex min-h-10 shrink-0 items-center gap-3 border-y border-border/60 py-1.5 text-[0.8125rem]">
-        <h4 className="min-w-0 truncate font-normal text-muted-foreground">
+    <section className={cn("border-t px-3 pb-3", className)}>
+      <div className="flex h-9 shrink-0 items-center gap-2">
+        <h4 className="type-technical-label text-muted-foreground/80">
           {title}
         </h4>
         {action ? (
           <div className="ml-auto flex shrink-0 items-center">{action}</div>
         ) : null}
       </div>
-      <div className={cn("px-3", contentClassName)}>{children}</div>
+      <div className={cn("border-t border-border/60", contentClassName)}>
+        {children}
+      </div>
     </section>
   )
 }
