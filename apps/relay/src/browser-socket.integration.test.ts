@@ -167,6 +167,33 @@ describe("relay browser socket integration", () => {
     expect(lineTexts(reset)).toEqual([`container container-${sharedId} output`])
   })
 
+  // A browser's trace context is only telemetry; none can stop its console.
+  it.each([
+    ["a trace context", "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"],
+    ["a malformed trace context", "00-not-a-trace-01"],
+    ["an oversized trace context", `00-${"a".repeat(4_096)}`],
+    ["a trace context that is not text", { traceId: 1 }],
+  ])("serves a console whose browser sends %s", async (_, traceparent) => {
+    const relay = await startRelay()
+    const socket = relay.connect(origin)
+    const messages = messageCollector(socket)
+    const challenge = await messages.next("auth.challenge")
+
+    sendAuth(socket, relay, challenge, databaseCapability, {}, { traceparent })
+    await messages.next("auth.ready")
+    socket.send(
+      JSON.stringify({
+        instanceId: sharedId,
+        traceparent,
+        type: "console.subscribe",
+        v: 1,
+      })
+    )
+
+    const reset = await messages.next("reset")
+    expect(lineTexts(reset)).toEqual([`container container-${sharedId} output`])
+  })
+
   it("drops what follows an auth the Relay rejects", async () => {
     const relay = await startRelay()
     const socket = relay.connect(origin)
@@ -840,7 +867,9 @@ function sendAuth(
   relay: TestRelay,
   challenge: Record<string, unknown>,
   overrides: Partial<RelayBrowserCapabilityV2>,
-  keys: { issuerPrivateKey?: KeyObject } = {}
+  keys: { issuerPrivateKey?: KeyObject } = {},
+  // Further fields of the auth message, such as a trace context.
+  extra: Record<string, unknown> = {}
 ): void {
   const authCapability = {
     ...capability({
@@ -864,6 +893,7 @@ function sendAuth(
       ),
       type: "auth",
       v: 1,
+      ...extra,
     })
   )
 }

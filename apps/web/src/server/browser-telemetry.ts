@@ -1,9 +1,11 @@
 import { otlpTarget } from "@workspace/telemetry"
+import type { OtlpTarget } from "@workspace/telemetry"
 import { Effect, Option } from "effect"
 import { z } from "zod"
 
 import { telemetryDefaults } from "@/effect/runtime"
 import { getAuthenticatedRealtimeIdentityFromHeaders } from "@/lib/auth-session"
+import { keepBrowserTrace } from "@/lib/browser-trace-sampling"
 import { assertRequestRateLimit } from "@/lib/request-rate-limit"
 
 const maximumBodyBytes = 256 * 1024
@@ -107,16 +109,16 @@ export async function forwardBrowserTelemetry(
     const traces = tracesSchema.safeParse(payload)
     if (!traces.success) return status(400)
     if (Option.isNone(target)) return status(204)
-    // Temporarily keeps every browser trace to baseline instance page opens
-    // in production; restore `target.value.sampleRatio` once that is done.
-    const ratio = 1
+    const ratio = browserTraceSampleRatio(target.value)
     const resourceSpans = traces.data.resourceSpans
       .map((entry) => ({
         resource,
         scopeSpans: entry.scopeSpans
           .map((scope) => ({
             ...scope,
-            spans: scope.spans.filter((span) => keepTrace(span.traceId, ratio)),
+            spans: scope.spans.filter((span) =>
+              keepBrowserTrace(span.traceId, ratio)
+            ),
           }))
           .filter((scope) => scope.spans.length > 0),
       }))
@@ -164,10 +166,11 @@ export async function forwardBrowserTelemetry(
   return status(204)
 }
 
-// Every span of a trace shares its ID, so the decision is consistent across
-// batches without the browser knowing the ratio.
-function keepTrace(traceId: string, ratio: number): boolean {
-  return Number.parseInt(traceId.slice(0, 8), 16) / 0x1_0000_0000 < ratio
+/** The share of browser traces Hearth forwards. */
+export function browserTraceSampleRatio(_target: OtlpTarget): number {
+  // Temporarily keeps every browser trace to baseline instance page opens in
+  // production; restore `_target.sampleRatio` once that is done.
+  return 1
 }
 
 async function readLimitedText(

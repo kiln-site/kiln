@@ -60,11 +60,18 @@ export function runRelayEffectUntraced<TResult, TError>(
 export function traceRelayPromise<TResult>(
   name: string,
   run: (span: Tracer.Span) => Promise<TResult>,
-  attributes?: Record<string, unknown>
+  attributes?: Record<string, unknown>,
+  // A span to nest under instead of the active one, such as a browser's.
+  parent?: Tracer.AnySpan
 ): Promise<TResult> {
-  const traced = Telemetry.withActiveParent(
-    Telemetry.spanPromise(name, run, attributes ? { attributes } : undefined)
+  const span = Telemetry.spanPromise(
+    name,
+    run,
+    attributes ? { attributes } : undefined
   )
+  const traced = parent
+    ? Effect.withParentSpan(span, parent)
+    : Telemetry.withActiveParent(span)
   return runtime ? runtime.runPromise(traced) : Effect.runPromise(traced)
 }
 

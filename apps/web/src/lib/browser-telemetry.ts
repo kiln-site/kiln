@@ -23,6 +23,10 @@ import {
   OtlpTracer,
 } from "effect/observability"
 
+import {
+  browserTraceSampleRatioMeta,
+  keepBrowserTrace,
+} from "@/lib/browser-trace-sampling"
 import { isExpectedAppError } from "@/observability/error-policy"
 
 export interface BrowserSpan {
@@ -165,6 +169,27 @@ export function startBrowserSpan(
   }
   spans.set(browserSpan, span)
   return browserSpan
+}
+
+/**
+ * A W3C `traceparent` for work another service does within `span`, such as
+ * a Relay's. It is marked sampled only when Hearth will keep the browser's
+ * own spans of that trace, so the two halves are kept or dropped together.
+ * Undefined while Hearth forwards no browser traces.
+ */
+export function browserTraceparent(
+  span: BrowserSpan | undefined
+): string | undefined {
+  const traced = span ? spans.get(span) : undefined
+  if (!traced) return undefined
+  const ratio = Number(
+    document
+      .querySelector(`meta[name="${browserTraceSampleRatioMeta}"]`)
+      ?.getAttribute("content") ?? Number.NaN
+  )
+  if (!Number.isFinite(ratio)) return undefined
+  const sampled = keepBrowserTrace(traced.traceId, ratio)
+  return `00-${traced.traceId}-${traced.spanId}-${sampled ? "01" : "00"}`
 }
 
 /** Traces promise code, marking the span failed when it rejects. */

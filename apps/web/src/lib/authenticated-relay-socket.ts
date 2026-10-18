@@ -362,6 +362,8 @@ export function authenticateRelayBrowserSocket(
     // trip of waiting for `auth.ready` first. Returned as sent, or not.
     afterAuth?: Record<string, unknown>
     relayId: string
+    // Continues the browser's trace on the Relay; see `browserTraceparent`.
+    traceparent?: string
   }
 ) {
   return Effect.gen(function* () {
@@ -400,6 +402,7 @@ export function authenticateRelayBrowserSocket(
         capability: input.capability,
         publicKeyJwk: input.credentials.publicKeyJwk,
         signature: bytesToBase64Url(new Uint8Array(proof)),
+        ...(input.traceparent ? { traceparent: input.traceparent } : {}),
         type: "auth",
         v: 1,
       })

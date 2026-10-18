@@ -7,17 +7,26 @@ import appIcon192 from "@/assets/branding/app-icon-192.png?no-inline"
 import faviconSvg from "@/assets/branding/favicon.svg?no-inline"
 
 import { AppErrorPage, AppNotFoundPage } from "@/components/app-error-page"
+import { browserTraceSampleRatioMeta } from "@/lib/browser-trace-sampling"
 import type { AppRouterContext } from "@/lib/query-client"
 import { getPublicRuntimeConfig } from "@/server/runtime-config"
 
 export const Route = createRootRouteWithContext<AppRouterContext>()({
   loader: () => getPublicRuntimeConfig(),
   staleTime: Infinity,
-  head: () => ({
+  head: ({ loaderData }) => ({
     meta: [
       {
         charSet: "utf-8",
       },
+      ...(loaderData?.browserTraceSampleRatio == null
+        ? []
+        : [
+            {
+              name: browserTraceSampleRatioMeta,
+              content: String(loaderData.browserTraceSampleRatio),
+            },
+          ]),
       {
         name: "viewport",
         content: "width=device-width, initial-scale=1",

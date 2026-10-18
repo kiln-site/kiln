@@ -19,6 +19,9 @@ export interface ConsoleLoadTiming {
   parentSpan: () => ConsoleSpan | undefined
 }
 
+/** What a console connection's spans nest under. */
+export type ConsoleTrace = Pick<ConsoleLoadTiming, "parentSpan">
+
 export function createConsoleLoadTiming(): ConsoleLoadTiming {
   // The page open this console belongs to; a console that is leaving must
   // not report for the page replacing it.
@@ -30,21 +33,43 @@ export function createConsoleLoadTiming(): ConsoleLoadTiming {
   let retryCount = 0
   let rowsPending = true
   let rowsSpan: ConsoleSpan | undefined
+  // Main-thread work, such as rendering the page, during the open: the
+  // console's frames wait while it runs.
+  let longTaskMs = 0
+  let longTasks: PerformanceObserver | undefined
 
   const start = () => {
     if (!open || openSpan) return
     openSpan = startBrowserSpan("Console open", {
       attributes: { "kiln.operation": "ui.console.open" },
     })
+    if (
+      typeof PerformanceObserver !== "undefined" &&
+      PerformanceObserver.supportedEntryTypes.includes("longtask")
+    ) {
+      longTasks = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) longTaskMs += entry.duration
+      })
+      longTasks.observe({ type: "longtask" })
+    }
     rowsSpan = startBrowserSpan("Console first rows painted", {
       attributes: { "kiln.operation": "ui.console.paint" },
       parent: openSpan,
     })
   }
 
+  const stopLongTasks = () => {
+    if (!longTasks) return
+    for (const entry of longTasks.takeRecords()) longTaskMs += entry.duration
+    longTasks.disconnect()
+    longTasks = undefined
+    openSpan?.setAttribute("kiln.console.long_task_ms", Math.round(longTaskMs))
+  }
+
   const finishOpen = () => {
     if (!open || !ready || rowsPending) return
     open = false
+    stopLongTasks()
     openSpan?.end()
     markPageMilestone("content", pageOpenId)
   }
@@ -67,6 +92,7 @@ export function createConsoleLoadTiming(): ConsoleLoadTiming {
       if (!open) return
       open = false
       if (!openSpan) return
+      stopLongTasks()
       openSpan.setAttribute("kiln.console.result", "cancelled")
       if (rowsPending) {
         rowsPending = false
@@ -124,7 +150,7 @@ export function createConsoleLoadTiming(): ConsoleLoadTiming {
 }
 
 export function startConsoleTimingSpan(
-  timing: ConsoleLoadTiming | undefined,
+  timing: ConsoleTrace | undefined,
   name: string,
   op: string
 ): ConsoleSpan {
@@ -135,7 +161,7 @@ export function startConsoleTimingSpan(
 }
 
 export function withConsoleTimingSpan<TResult, TError, TRequirements>(
-  timing: ConsoleLoadTiming | undefined,
+  timing: ConsoleTrace | undefined,
   name: string,
   op: string,
   effect: Effect.Effect<TResult, TError, TRequirements>
