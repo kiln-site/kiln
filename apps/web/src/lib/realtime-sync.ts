@@ -19,6 +19,7 @@ import {
   fleetCacheInUse,
   fleetEventNeedsRecovery,
   recheckPushedState,
+  recheckRelayProxyState,
   parseRealtimeEventData,
   resetRealtimeEpoch,
 } from "@/lib/realtime-client"
@@ -240,6 +241,7 @@ export function startRealtimeSync(
               // Game server pages read their own server, not the fleet. A
               // failed reread fails recovery, so it is retried.
               await recheckServerWorkspaces(queryClient)
+              recheckRelayProxyState(queryClient)
               recoveryFailures = 0
               if (resetRequested) {
                 hearthRefetchRequested ||= shouldRefetchHearth

@@ -163,12 +163,6 @@ function applyRealtimeEvent(input: ApplyRealtimeEventInput): void {
         )
     )
     recordReachabilityPush(queryClient, event.relayId, event.status)
-    // A Relay that reconnects pushes a fresh snapshot with its proxy mode.
-    if (event.status === "connected")
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.relayProxyModes,
-        exact: true,
-      })
     // Every observation on this Relay depends on its reachability.
     void recheckInstanceObservations(queryClient, {
       predicate: ({ queryKey }) =>
@@ -489,6 +483,23 @@ export function recheckPushedState(queryClient: QueryClient): void {
     void recheckInstanceObservations(queryClient, {
       queryKey: instanceInventoryScope({ kind }),
     })
+}
+
+/**
+ * Rereads what the infrastructure map knows of each Relay's proxy. Recovery
+ * runs once a Relay's snapshot has landed, including after it reconnects,
+ * so a mode or route list read while it was away is replaced. Only mounted
+ * queries refetch.
+ */
+export function recheckRelayProxyState(queryClient: QueryClient): void {
+  void queryClient.invalidateQueries({
+    queryKey: queryKeys.relayProxyModes,
+    exact: true,
+  })
+  void queryClient.invalidateQueries({
+    predicate: ({ queryKey }) =>
+      queryKey.length === 2 && queryKey[0] === "web-routes",
+  })
 }
 
 function applyRealtimeRelayStatus(
