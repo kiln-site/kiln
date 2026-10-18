@@ -1,4 +1,5 @@
 import {
+  relayBrowserConsoleProtocol,
   relayBrowserConsoleProtocols,
   relayConsoleStreamEventSchema,
 } from "@workspace/contracts"
@@ -221,17 +222,18 @@ function openDirectRelayConsoleStream(
       }
 
       // A kept connection has been sent output since its console left, so it
-      // subscribes again for the session afresh. Lines before the next reset
-      // or ready are dropped, as they would follow the cached output with a
-      // gap. A reset the Relay sent before taking the new subscription is
-      // as current as the one it sends next, being the same console's on
-      // the same socket, and the output after it follows on in order.
+      // subscribes again for the session afresh. What comes before the frame
+      // a session starts with, a reset or on older Relays a ready, is
+      // dropped, as it would follow the cached output with a gap. One the
+      // Relay sent before taking the new subscription is as current as the
+      // one it sends next, being the same console's on the same socket, and
+      // the output after it follows on in order.
       if (reused === "kept") yield* Effect.sync(connection.subscribe)
+      const sessionStart =
+        socket.protocol === relayBrowserConsoleProtocol ? "reset" : "ready"
       const events = inbox.stream.pipe(
         reused === "kept"
-          ? Stream.dropWhile(
-              (message) => message.type !== "reset" && message.type !== "ready"
-            )
+          ? Stream.dropWhile((message) => message.type !== sessionStart)
           : (messages) => messages,
         Stream.mapEffect((message) =>
           Effect.try({

@@ -14,6 +14,11 @@ vi.mock("@/server/relay-capability", () => ({
       })),
 }))
 
+import {
+  relayBrowserConsoleProtocol,
+  relayBrowserProtocol,
+} from "@workspace/contracts"
+
 import { createRelayBrowserSocketInbox } from "./authenticated-relay-socket"
 import { notifyRelayBrowserAuthorizationChanged } from "./relay-browser-credentials"
 import {
@@ -671,7 +676,9 @@ describe("Relay console kept connection", () => {
       openConsole().pipe(Stream.take(2), Stream.runCollect)
     )
     await socket.sentFrames(3)
-    // Sent before the Relay took the new subscription.
+    // Sent before the Relay took the new subscription, after a reset that
+    // came while nobody read it.
+    socket.receive({ instanceId: "instance-one", lifecycle: [], type: "ready" })
     socket.receive(line("in flight"))
     socket.receive(reset("again"))
 
@@ -686,6 +693,29 @@ describe("Relay console kept connection", () => {
       type: "console.subscribe",
       v: 1,
     })
+  })
+
+  it("brings a console back from an older Relay with its session afresh", async () => {
+    deferredCapability().resolve(consoleCapability())
+    vi.stubGlobal("navigator", { onLine: true })
+    vi.stubGlobal("WebSocket", FakeWebSocket)
+    const socket = await leaveConsole()
+    // An older Relay sends a session as ready, then its lines.
+    socket.protocol = relayBrowserProtocol
+
+    const events = Effect.runPromise(
+      openConsole().pipe(Stream.take(3), Stream.runCollect)
+    )
+    await socket.sentFrames(3)
+    socket.receive(line("in flight"))
+    socket.receive({ instanceId: "instance-one", lifecycle: [], type: "ready" })
+    socket.receive(line("again"))
+
+    expect(await events).toEqual([
+      { message: null, transport: "direct", type: "transport" },
+      { instanceId: "instance-one", lifecycle: [], type: "ready" },
+      line("again"),
+    ])
   })
 
   it("keeps a busy console's connection without filling its inbox", async () => {
@@ -924,7 +954,7 @@ class FakeWebSocket extends EventTarget {
   })
   readonly listening: Promise<void>
   listenerCount = 0
-  readonly protocol = "kiln-browser-console.v1"
+  protocol: string = relayBrowserConsoleProtocol
   readyState = FakeWebSocket.OPEN
   readonly sent: Array<SentFrame> = []
   readonly url: string
