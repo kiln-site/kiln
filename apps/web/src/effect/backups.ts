@@ -958,6 +958,9 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
           ]
         )
         if (task.kind === "delete") {
+          // Once deleted, a backup stays deleted whatever an older or retried
+          // delete task reports afterwards.
+          if (knownTask.backup_status === "deleted") return
           const active = task.status === "queued" || task.status === "running"
           const outcomes =
             task.result && !("bytes" in task.result)
@@ -1116,7 +1119,12 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
           const filename = archiveResult?.filename ?? null
           const checksum = archiveResult?.checksumSha256 ?? null
           const snapshotId = resticResult?.snapshotId ?? null
-          const outcomes = task.result.artifacts ?? []
+          // A restic snapshot is one copy of the data, so every artifact of an
+          // incremental backup shares its outcome.
+          const outcomes =
+            knownTask.backup_mode === "incremental"
+              ? []
+              : (task.result.artifacts ?? [])
           if (outcomes.length === 0) {
             yield* transaction.execute(
               `UPDATE ${databaseTable("backup_artifact")}

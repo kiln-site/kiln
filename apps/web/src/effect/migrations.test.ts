@@ -266,6 +266,7 @@ describeMysql("database migrations", () => {
             forgotten: "10000000-0000-4000-8000-000000000001",
             kept: "10000000-0000-4000-8000-000000000002",
             full: "10000000-0000-4000-8000-000000000003",
+            promoted: "10000000-0000-4000-8000-000000000004",
           }
 
           yield* dropAllTables
@@ -274,23 +275,36 @@ describeMysql("database migrations", () => {
               (migration) => migration.id < incrementalBackupArtifacts.id
             )
           )
-          for (const id of [ids.forgotten, ids.kept]) {
+          // The legacy copy predates the restic artifact, so a task
+          // dispatched with it first reported only the copy.
+          const incremental = [
+            [ids.forgotten, { status: "deleted", deleted_at: 400 }, {}],
+            [ids.kept, {}, {}],
+            [
+              ids.promoted,
+              { bytes: 512, completed_at: 250 },
+              { status: "queued" },
+            ],
+          ] as const
+          for (const [id, phantom, snapshot] of incremental) {
             yield* insertBackup(id, {
               artifact_kind: "restic_snapshot",
               backup_mode: "incremental",
             })
-            // The legacy copy predates the restic artifact, so a delete
-            // dispatched and reported only it.
             yield* insertRows("backup_artifact", [
               {
                 ...artifact(id, id, "local", 1),
-                ...(id === ids.forgotten
-                  ? { status: "deleted", deleted_at: 400 }
-                  : { deleted_at: null }),
+                bytes: null,
+                completed_at: null,
+                deleted_at: null,
+                ...phantom,
               },
               {
                 ...artifact(`3${id.slice(1)}`, id, "restic", 2),
+                bytes: null,
+                completed_at: null,
                 deleted_at: null,
+                ...snapshot,
               },
             ])
           }
@@ -321,24 +335,27 @@ describeMysql("database migrations", () => {
           expect(backups.get(ids.forgotten)?.status).toBe("deleted")
           expect(Number(backups.get(ids.forgotten)?.deleted_at)).toBe(400)
           expect(backups.get(ids.kept)?.status).toBe("available")
+          expect(backups.get(ids.promoted)?.status).toBe("available")
           expect(backups.get(ids.full)?.status).toBe("available")
           const artifactRows = yield* selectRows<{
             backup_id: string
+            bytes: number | null
             destination_key: string
             status: string
           }>("backup_artifact")
-          expect(artifactRows).toHaveLength(3)
+          expect(artifactRows).toHaveLength(4)
           const artifacts = new Map(
             artifactRows.map((row) => [
               row.backup_id,
-              [row.destination_key, row.status],
+              [row.destination_key, row.status, Number(row.bytes)],
             ])
           )
           expect(artifacts).toEqual(
             new Map([
-              [ids.forgotten, ["restic", "deleted"]],
-              [ids.kept, ["restic", "available"]],
-              [ids.full, ["local", "available"]],
+              [ids.forgotten, ["restic", "deleted", 0]],
+              [ids.kept, ["restic", "available", 0]],
+              [ids.promoted, ["restic", "available", 512]],
+              [ids.full, ["local", "available", 0]],
             ])
           )
         }),

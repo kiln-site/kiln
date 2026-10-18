@@ -999,6 +999,107 @@ describeMysql("backup reconciliation", () => {
         })
     )
 
+    it.effect(
+      "keeps a deleted backup deleted when a retried delete fails",
+      () =>
+        Effect.gen(function* () {
+          yield* fresh
+          yield* insertBackup("backup-one", {
+            artifact_kind: "restic_snapshot",
+            backup_mode: "incremental",
+            status: "deleted",
+          })
+          yield* insertArtifact("artifact-one", "backup-one", {
+            destination_key: "restic",
+            status: "deleted",
+          })
+          yield* insertTask("task-one", "backup-one", {
+            task_kind: "delete",
+            status: "running",
+            relay_updated_at_ms: 100,
+          })
+
+          yield* reconcileBackupTaskEffect(
+            deleteTask({
+              error: "repository is already locked",
+              result: null,
+              status: "failed",
+            })
+          )
+
+          assert.strictEqual(
+            (yield* backups).get("backup-one")?.status,
+            "deleted"
+          )
+          assert.strictEqual(
+            (yield* artifacts).get("artifact-one")?.status,
+            "deleted"
+          )
+        })
+    )
+
+    it.effect(
+      "makes an incremental backup available whichever artifact its snapshot reports",
+      () =>
+        Effect.gen(function* () {
+          yield* fresh
+          yield* insertBackup("backup-one", {
+            artifact_kind: "restic_snapshot",
+            backup_mode: "incremental",
+            status: "running",
+          })
+          yield* insertArtifact("artifact-one", "backup-one", {
+            destination_key: "restic",
+            status: "running",
+          })
+          yield* insertTask("task-one", "backup-one", {
+            status: "running",
+            relay_updated_at_ms: 100,
+          })
+
+          // The task was dispatched with a legacy artifact since removed.
+          yield* reconcileBackupTaskEffect({
+            ...deleteTask({
+              result: {
+                artifacts: [
+                  {
+                    artifactId: "backup-one",
+                    error: null,
+                    status: "available",
+                  },
+                ],
+                bytes: 256,
+                snapshotId: "a".repeat(64),
+                warnings: [],
+              },
+              status: "succeeded",
+            }),
+            input: {
+              artifactKind: "restic_snapshot",
+              backupId: "backup-one",
+              destination: { artifactId: "backup-one", kind: "restic" },
+              exclude: [],
+              kind: "create",
+              maxBytes: null,
+              mode: "incremental",
+              reason: "manual",
+              target: { id: "instance-one", kind: "instance" },
+              taskId: "task-one",
+            },
+            kind: "create",
+          } as RelayBackupTask)
+
+          assert.strictEqual(
+            (yield* artifacts).get("artifact-one")?.status,
+            "available"
+          )
+          assert.strictEqual(
+            (yield* backups).get("backup-one")?.status,
+            "available"
+          )
+        })
+    )
+
     it.effect("reconciles delete progress one artifact at a time", () =>
       Effect.gen(function* () {
         yield* fresh

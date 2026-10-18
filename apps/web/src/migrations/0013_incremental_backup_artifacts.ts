@@ -47,6 +47,25 @@ export const incrementalBackupArtifacts: Migration = {
           WHERE backup.backup_mode = 'incremental'
             AND backup.status <> 'deleted'
         `
+        // A create dispatched with the phantom first reported only it, so it
+        // may be the one that recorded the snapshot as available.
+        yield* sql`
+          UPDATE ${sql(artifact)} snapshot
+          JOIN ${sql(backup)} backup ON backup.id = snapshot.backup_id
+          JOIN ${sql(artifact)} phantom
+            ON phantom.backup_id = snapshot.backup_id
+           AND phantom.id = phantom.backup_id
+           AND phantom.destination_key <> 'restic'
+          SET snapshot.status = phantom.status,
+              snapshot.bytes = phantom.bytes,
+              snapshot.error = NULL,
+              snapshot.completed_at = phantom.completed_at,
+              snapshot.updated_at = ${now}
+          WHERE backup.backup_mode = 'incremental'
+            AND snapshot.destination_key = 'restic'
+            AND phantom.status = 'available'
+            AND snapshot.status IN ('queued', 'running', 'failed')
+        `
         yield* sql`
           DELETE phantom
           FROM ${sql(artifact)} phantom
