@@ -151,6 +151,12 @@ function ServerRouteBoundary({
     shouldThrow: false,
     structuralSharing: true,
   })
+  // Read on its own: a failed resolution leaves the match without a server.
+  const matchStatus = useMatch({
+    from: "/_app/server/$serverId",
+    select: (match) => match.status,
+    shouldThrow: false,
+  })
   const {
     data: route,
     error,
@@ -173,7 +179,7 @@ function ServerRouteBoundary({
 
   // A route whose resolution failed shows the route's error page, with its
   // retry, as the awaited route would have.
-  if (opened?.status === "error") return children
+  if (matchStatus === "error") return children
   if (isError && (route === undefined || misrouted)) throw error
   if (route === undefined || misrouted)
     return <div className="min-h-0 flex-1 bg-background" />
@@ -185,7 +191,6 @@ interface OpenedServer {
   brickId?: string | null
   id: string
   relayId: string
-  status: string
   verified: boolean
 }
 
@@ -194,7 +199,6 @@ function selectOpenedServer(match: {
     instance: { brickId?: string | null; id: string; relayId: string } | null
     serverVerified: boolean
   }
-  status: string
 }): OpenedServer | undefined {
   const { instance, serverVerified } = match.context
   return instance
@@ -202,7 +206,6 @@ function selectOpenedServer(match: {
         brickId: instance.brickId ?? null,
         id: instance.id,
         relayId: instance.relayId,
-        status: match.status,
         verified: serverVerified,
       }
     : undefined
