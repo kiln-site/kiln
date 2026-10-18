@@ -220,8 +220,12 @@ function openDirectRelayConsoleStream(
         )
       }
 
-      // A kept connection has been sent output since its console left. It
-      // subscribes again for a fresh session, and what came before goes.
+      // A kept connection has been sent output since its console left, so it
+      // subscribes again for the session afresh. Lines before the next reset
+      // or ready are dropped, as they would follow the cached output with a
+      // gap. A reset the Relay sent before taking the new subscription is
+      // as current as the one it sends next, being the same console's on
+      // the same socket, and the output after it follows on in order.
       if (reused === "kept") yield* Effect.sync(connection.subscribe)
       const events = inbox.stream.pipe(
         reused === "kept"
