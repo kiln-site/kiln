@@ -1150,6 +1150,7 @@ export const getAccessResources = createServerFn({ method: "GET" })
       resource_type: ResourceScope["resourceType"]
       resource_id: string
       name: string
+      relay_name: string
     }
     const allowedValues: Array<string | Array<string>> = []
     const clauses: Array<string> = []
@@ -1217,10 +1218,10 @@ export const getAccessResources = createServerFn({ method: "GET" })
       ? ""
       : ` AND (${clauses.join(" OR ") || "FALSE"})`
     const [resources] = await databasePool.query<Array<ResourceRow>>(
-      `SELECT relay_id, resource_type, resource_id, name FROM (
-    SELECT id AS relay_id, 'relay' AS resource_type, id AS resource_id, name, created_by AS owner_id FROM ${databaseTable("relay")} WHERE enabled = TRUE
-    UNION ALL SELECT i.relay_id, 'instance', i.instance_id, COALESCE(i.display_name, i.source_name, i.instance_id), i.owner_id FROM ${databaseTable("instance")} i JOIN ${databaseTable("relay")} r ON r.id = i.relay_id AND r.enabled = TRUE
-    UNION ALL SELECT d.relay_id, 'database', d.database_id, d.name, d.created_by FROM ${databaseTable("database")} d JOIN ${databaseTable("relay")} r ON r.id = d.relay_id AND r.enabled = TRUE
+      `SELECT relay_id, resource_type, resource_id, name, relay_name FROM (
+    SELECT id AS relay_id, 'relay' AS resource_type, id AS resource_id, name, created_by AS owner_id, name AS relay_name FROM ${databaseTable("relay")} WHERE enabled = TRUE
+    UNION ALL SELECT i.relay_id, 'instance', i.instance_id, COALESCE(i.display_name, i.source_name, i.instance_id), i.owner_id, r.name FROM ${databaseTable("instance")} i JOIN ${databaseTable("relay")} r ON r.id = i.relay_id AND r.enabled = TRUE
+    UNION ALL SELECT d.relay_id, 'database', d.database_id, d.name, d.created_by, r.name FROM ${databaseTable("database")} d JOIN ${databaseTable("relay")} r ON r.id = d.relay_id AND r.enabled = TRUE
     ) resources WHERE (name LIKE ? OR resource_id LIKE ? OR relay_id LIKE ?)${accessFilter} ORDER BY name, resource_id LIMIT ? OFFSET ?`,
       [
         ...Array<string>(3).fill(
@@ -1232,9 +1233,11 @@ export const getAccessResources = createServerFn({ method: "GET" })
       ]
     )
     return {
-      resources: resources
-        .slice(0, data.limit)
-        .map((row) => ({ ...scopeFromRow(row), name: row.name })),
+      resources: resources.slice(0, data.limit).map((row) => ({
+        ...scopeFromRow(row),
+        name: row.name,
+        relayName: row.relay_name,
+      })),
       hasMore: resources.length > data.limit,
     }
   })

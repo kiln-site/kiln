@@ -36,7 +36,10 @@ import {
   DataTableToolbar,
   DataTableWorkspace,
 } from "@/components/data-table-workspace"
-import { PermissionEditor } from "@/components/permission-editor"
+import {
+  PermissionEditor,
+  type PermissionTarget,
+} from "@/components/permission-editor"
 import {
   createDataTableColumnHelper,
   dataTableColumnMeta,
@@ -397,16 +400,7 @@ function PersonPermissionsDialog({
                 : "Effective permissions from this assignment and its linked presets."}
             </DialogDescription>
           </DialogHeader>
-          <PermissionEditor
-            disabled
-            scopeType={person.scope.resourceType}
-            capabilities={access.supportedCapabilities}
-            selections={person.permissions.map((key) => ({
-              kind: "permission",
-              key,
-            }))}
-            onChange={ignoreSelections}
-          />
+          <PermissionEditor targets={personTargets(person, access)} presets />
           <DialogFooter>
             <Button variant="outline" onClick={() => onOpenChange(false)}>
               Close
@@ -658,11 +652,16 @@ const PresetActions = memo(function PresetActions({
               </DialogDescription>
             </DialogHeader>
             <PermissionEditor
-              disabled
-              scopeType={access.scope.resourceType}
-              capabilities={access.supportedCapabilities}
-              selections={row.builtin.selections}
-              onChange={ignoreSelections}
+              targets={[
+                {
+                  key: row.id,
+                  context: { scope: access.scope },
+                  access,
+                  selections: row.builtin.selections,
+                  presetIds: [],
+                  builtinKeys: [],
+                },
+              ]}
             />
             <DialogFooter>
               <Button variant="outline" onClick={() => setViewing(false)}>
@@ -686,4 +685,33 @@ function personStatus(person: Person) {
         ? "From Relay"
         : "Active"
 }
-function ignoreSelections() {}
+/**
+ * A person's own entries. Relay access seen from one of its resources is shown
+ * as the permissions it grants, since its presets belong to the Relay.
+ */
+function personTargets(
+  person: Person,
+  access: ScopeAccess
+): Array<PermissionTarget> {
+  return [
+    {
+      key: person.id,
+      context: { scope: person.scope },
+      access,
+      ...(person.inherited
+        ? {
+            selections: person.permissions.map((key) => ({
+              kind: "permission" as const,
+              key,
+            })),
+            presetIds: [],
+            builtinKeys: [],
+          }
+        : {
+            selections: person.selections,
+            presetIds: person.presetIds,
+            builtinKeys: person.builtinKeys,
+          }),
+    },
+  ]
+}

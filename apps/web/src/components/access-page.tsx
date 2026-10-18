@@ -7,6 +7,7 @@ import {
   Database,
   Network,
   ArrowLeftRight,
+  ChevronDown,
 } from "lucide-react"
 import {
   Popover,
@@ -33,6 +34,7 @@ import {
 import { useCursorDataTableSource } from "@/lib/data-table-source"
 import {
   memo,
+  type ReactNode,
   useState,
   useCallback,
   useMemo,
@@ -42,6 +44,7 @@ import {
 import { Result } from "effect"
 import {
   useMutation,
+  useQueries,
   useQuery,
   useQueryClient,
   useInfiniteQuery,
@@ -61,14 +64,15 @@ import {
   DialogFooter,
   DialogTitle,
 } from "@workspace/ui/components/dialog"
-import {
-  Tooltip,
-  TooltipTrigger,
-  TooltipContent,
-} from "@workspace/ui/components/tooltip"
 import { showToast } from "@workspace/ui/components/sonner"
 import { AdminUsers } from "@/components/admin-users"
-import { PermissionEditor } from "@/components/permission-editor"
+import {
+  ContextChips,
+  PermissionEditor,
+  type PermissionAssignment,
+  type PermissionContext,
+  type PermissionTarget,
+} from "@/components/permission-editor"
 import { transferInstanceOwnership } from "@/server/access"
 import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
 import type { ResourceScope } from "@/lib/resource-permissions"
@@ -86,6 +90,7 @@ type Resource = Awaited<
   ReturnType<typeof getAccessResources>
 >["resources"][number]
 const EMPTY_RESOURCES: Array<Resource> = []
+const NO_IDS: Array<string> = []
 const errorToast = (error: Error) =>
   showToast({ type: "error", message: error.message })
 
@@ -119,6 +124,7 @@ export function AccessPage() {
               selectedResource?.name ??
               search.resourceName ??
               search.resourceId,
+            relayName: selectedResource?.relayName,
           }
         : null,
     [
@@ -127,6 +133,7 @@ export function AccessPage() {
       search.resourceId,
       search.resourceName,
       selectedResource?.name,
+      selectedResource?.relayName,
     ]
   )
   const platform = !scope && admin && tab === "users"
@@ -212,7 +219,7 @@ const AccessScopeControls = memo(function AccessScopeControls({
   platform,
   select,
 }: {
-  scope: Resource | null
+  scope: (AccessScope & { name: string }) | null
   admin: boolean
   tab: "users" | "presets"
   platform: boolean
@@ -288,9 +295,10 @@ const ResourcePicker = memo(function ResourcePicker({
   onMore,
   onPrevious,
   hasPrevious,
+  trigger,
 }: {
   resources: Array<Resource>
-  selected: Resource | null
+  selected: AccessScope | null
   onSelect: (resource: Resource) => void
   onSearch: (search: string) => void
   platform?: boolean
@@ -301,16 +309,19 @@ const ResourcePicker = memo(function ResourcePicker({
   onMore?: () => void
   onPrevious?: () => void
   hasPrevious?: boolean
+  trigger?: ReactNode
 }) {
   const [open, setOpen] = useState(false)
   const [searchValue, setSearchValue] = useState("")
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button type="button" variant="outline" size="sm">
-          <ArrowLeftRight />
-          {selected ? "Change instance" : "Choose instance"}
-        </Button>
+        {trigger ?? (
+          <Button type="button" variant="outline" size="sm">
+            <ArrowLeftRight />
+            {selected ? "Change instance" : "Choose instance"}
+          </Button>
+        )}
       </PopoverTrigger>
       <PopoverContent
         align="end"
@@ -358,7 +369,9 @@ const ResourcePicker = memo(function ResourcePicker({
                 <span className="min-w-0 flex-1">
                   <span className="block truncate">{resource.name}</span>
                   <span className="block truncate font-mono text-xs text-muted-foreground">
-                    {resource.resourceId} · {resource.relayId}
+                    {resource.resourceType === "relay"
+                      ? resource.resourceId
+                      : `${resource.resourceId} · ${resource.relayName}`}
                   </span>
                 </span>
                 <span className="text-xs text-muted-foreground">
@@ -410,7 +423,7 @@ function ResourceAccessPanel({
   scope,
   tab = "users",
 }: {
-  scope: ResourceScope & { name?: string }
+  scope: AccessScope
   tab?: "users" | "presets"
 }) {
   const [inviting, setInviting] = useState(false)
@@ -715,130 +728,21 @@ function ResourceAccessPanel({
   )
 }
 
-function linkedPresetSelections(
-  access: ScopeAccess,
-  presetIds: Array<string>,
-  builtinKeys: Array<string>
-) {
-  const selectedPresets = new Set(presetIds)
-  const selectedDefaults = new Set(builtinKeys)
-  return [
-    ...access.presets.filter((preset) => selectedPresets.has(preset.id)),
-    ...access.defaults.filter((preset) => selectedDefaults.has(preset.key)),
-  ].flatMap((preset) => preset.selections)
-}
+type AccessScope = ResourceScope & { name?: string; relayName?: string }
 
-function PresetSelections({
-  access,
-  scopeType,
-  presetIds,
-  builtinKeys,
-  onChange,
-  disabled = false,
-}: {
-  access: ScopeAccess
-  scopeType: ResourceScope["resourceType"]
-  presetIds: Array<string>
-  builtinKeys: Array<string>
-  onChange: (presetIds: Array<string>, builtinKeys: Array<string>) => void
-  disabled?: boolean
-}) {
-  const selectedPresets = new Set(presetIds)
-  const selectedDefaults = new Set(builtinKeys)
-  const available = new Set(access.permissions)
-  function unavailableReason(selections: Array<PermissionSelection>) {
-    const result = Result.try(() =>
-      expandPermissionSelections(
-        selections,
-        scopeType,
-        access.supportedCapabilities
-      )
-    )
-    if (Result.isFailure(result))
-      return "This preset includes permissions unavailable for this resource."
-    if (result.success.some((permission) => !available.has(permission)))
-      return "This preset includes permissions you cannot grant."
-    return undefined
+/** The context chips for a scope, from whichever names are known. */
+function contextFor(scope: AccessScope): PermissionContext {
+  return {
+    scope: {
+      relayId: scope.relayId,
+      resourceType: scope.resourceType,
+      resourceId: scope.resourceId,
+    },
+    relayName:
+      scope.relayName ??
+      (scope.resourceType === "relay" ? scope.name : undefined),
+    resourceName: scope.resourceType === "relay" ? undefined : scope.name,
   }
-  return (
-    <fieldset disabled={disabled} className="space-y-2">
-      <legend className="mb-2 text-sm font-medium">Linked presets</legend>
-      <div className="flex flex-wrap gap-4">
-        {access.defaults.map((preset) => (
-          <PresetCheckbox
-            key={preset.key}
-            name={preset.name}
-            checked={selectedDefaults.has(preset.key)}
-            unavailable={unavailableReason(preset.selections)}
-            onChange={() =>
-              onChange(
-                presetIds,
-                selectedDefaults.has(preset.key)
-                  ? builtinKeys.filter((key) => key !== preset.key)
-                  : [...builtinKeys, preset.key]
-              )
-            }
-          />
-        ))}
-        {access.presets.map((preset) => (
-          <PresetCheckbox
-            key={preset.id}
-            name={preset.name}
-            checked={selectedPresets.has(preset.id)}
-            unavailable={unavailableReason(preset.selections)}
-            onChange={() =>
-              onChange(
-                selectedPresets.has(preset.id)
-                  ? presetIds.filter((id) => id !== preset.id)
-                  : [...presetIds, preset.id],
-                builtinKeys
-              )
-            }
-          />
-        ))}
-      </div>
-    </fieldset>
-  )
-}
-
-function PresetCheckbox({
-  name,
-  checked,
-  unavailable,
-  onChange,
-}: {
-  name: string
-  checked: boolean
-  unavailable?: string
-  onChange: () => void
-}) {
-  const label = (
-    <label
-      className={`flex gap-2 text-sm ${unavailable && !checked ? "text-muted-foreground" : ""}`}
-    >
-      <input
-        type="checkbox"
-        className="accent-primary"
-        checked={checked}
-        disabled={Boolean(unavailable) && !checked}
-        onChange={onChange}
-      />
-      {name}
-    </label>
-  )
-  return unavailable ? (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span tabIndex={0}>{label}</span>
-      </TooltipTrigger>
-      <TooltipContent>
-        {unavailable}
-        {checked ? " You can remove this linked preset." : ""}
-      </TooltipContent>
-    </Tooltip>
-  ) : (
-    label
-  )
 }
 
 function AssignmentEditor({
@@ -849,17 +753,30 @@ function AssignmentEditor({
   onSaved,
 }: {
   person: Person
-  scope: ResourceScope
+  scope: AccessScope
   access: ScopeAccess
   onClose: () => void
   onSaved: () => void
 }) {
-  const [selections, setSelections] = useState(person.selections),
-    [presetIds, setPresetIds] = useState(person.presetIds),
-    [builtinKeys, setBuiltinKeys] = useState(person.builtinKeys)
-  const inheritedSelections = useMemo(
-    () => linkedPresetSelections(access, presetIds, builtinKeys),
-    [access, presetIds, builtinKeys]
+  const [assignment, setAssignment] = useState<PermissionAssignment>({
+    selections: person.selections,
+    presetIds: person.presetIds,
+    builtinKeys: person.builtinKeys,
+  })
+  const targets = useMemo(
+    () => [
+      {
+        key: scopeKey(scope),
+        context: contextFor(scope),
+        access,
+        ...assignment,
+      },
+    ],
+    [scope, access, assignment]
+  )
+  const change = useCallback(
+    (_key: string, next: PermissionAssignment) => setAssignment(next),
+    []
   )
   const save = useMutation({
     mutationFn: updateResourceAccess,
@@ -881,29 +798,15 @@ function AssignmentEditor({
         <DialogHeader>
           <DialogTitle>Edit access for {person.name}</DialogTitle>
           <DialogDescription>
-            Preset changes remain linked. Direct permissions add to those
-            presets.
+            Linked presets stay in sync when the preset changes. Permissions add
+            to them.
           </DialogDescription>
         </DialogHeader>
-        <PresetSelections
-          access={access}
-          scopeType={scope.resourceType}
-          disabled={save.isPending}
-          presetIds={presetIds}
-          builtinKeys={builtinKeys}
-          onChange={(ids, keys) => {
-            setPresetIds(ids)
-            setBuiltinKeys(keys)
-          }}
-        />
         <PermissionEditor
-          scopeType={scope.resourceType}
-          selections={selections}
-          inheritedSelections={inheritedSelections}
+          targets={targets}
+          onChange={change}
+          presets
           disabled={save.isPending}
-          onChange={setSelections}
-          available={access.permissions}
-          capabilities={access.supportedCapabilities}
         />
         <DialogFooter>
           <Button variant="outline" disabled={save.isPending} onClick={onClose}>
@@ -914,12 +817,12 @@ function AssignmentEditor({
             onClick={() =>
               save.mutate({
                 data: {
-                  ...scope,
+                  relayId: scope.relayId,
+                  resourceType: scope.resourceType,
+                  resourceId: scope.resourceId,
                   id: person.id,
                   revision: person.revision,
-                  selections,
-                  presetIds,
-                  builtinKeys,
+                  ...assignment,
                 },
               })
             }
@@ -932,34 +835,96 @@ function AssignmentEditor({
   )
 }
 
-interface InviteDraft extends ResourceScope {
-  name?: string
-  selections: Array<PermissionSelection>
-  presetIds: Array<string>
-  builtinKeys: Array<string>
-}
+interface InviteDraft extends AccessScope, PermissionAssignment {}
 const scopeKey = (scope: ResourceScope) =>
   `${scope.relayId}:${scope.resourceType}:${scope.resourceId}`
+const hasEntries = (draft: PermissionAssignment) =>
+  draft.selections.length > 0 ||
+  draft.presetIds.length > 0 ||
+  draft.builtinKeys.length > 0
+const emptyDraft = (scope: AccessScope): InviteDraft => ({
+  ...scope,
+  selections: [],
+  presetIds: [],
+  builtinKeys: [],
+})
+function combineAccess(
+  results: Array<{
+    data?: ScopeAccess
+    error: Error | null
+    isPending: boolean
+  }>
+) {
+  return results.map(({ data, error, isPending }) => ({
+    data,
+    error,
+    isPending,
+  }))
+}
 
 function InviteEditor({
   scope,
   onClose,
   onSaved,
 }: {
-  scope: ResourceScope & { name?: string }
+  scope: AccessScope
   onClose: () => void
   onSaved: () => void
 }) {
   const [email, setEmail] = useState("")
-  const [targets, setTargets] = useState<Array<InviteDraft>>([
-    { ...scope, selections: [], presetIds: [], builtinKeys: [] },
+  const [drafts, setDrafts] = useState<Array<InviteDraft>>(() => [
+    emptyDraft(scope),
   ])
+  const [addKey, setAddKey] = useState(() => scopeKey(scope))
   const [search, setSearch] = useState("")
   const [offset, setOffset] = useState(0)
   const resources = useQuery({
     queryKey: ["access-resources", search, offset],
     queryFn: () => getAccessResources({ data: { search, offset } }),
   })
+  const access = useQueries({
+    queries: drafts.map((draft) => ({
+      queryKey: [
+        "resource-access",
+        draft.relayId,
+        draft.resourceType,
+        draft.resourceId,
+      ],
+      queryFn: () =>
+        getResourceAccess({
+          data: {
+            relayId: draft.relayId,
+            resourceType: draft.resourceType,
+            resourceId: draft.resourceId,
+          },
+        }),
+    })),
+    combine: combineAccess,
+  })
+  const targets = useMemo<Array<PermissionTarget>>(
+    () =>
+      drafts.map((draft, index) => {
+        const result = access[index]
+        return {
+          key: scopeKey(draft),
+          context: contextFor(draft),
+          access: result?.data,
+          notice:
+            !result || result.isPending
+              ? "Loading permissions…"
+              : result.error
+                ? result.error.message
+                : !result.data?.canInvite
+                  ? "You can't invite people to this resource."
+                  : undefined,
+          selections: draft.selections,
+          presetIds: draft.presetIds,
+          builtinKeys: draft.builtinKeys,
+        }
+      }),
+    [drafts, access]
+  )
+  const addTarget = targets.find((target) => target.key === addKey)
   const invite = useMutation({
     mutationFn: inviteResourceAccess,
     onError: errorToast,
@@ -975,36 +940,29 @@ function InviteEditor({
       onClose()
     },
   })
-  const changeTarget = useCallback(
-    (target: InviteDraft) =>
-      setTargets((current) =>
-        current.map((item) =>
-          scopeKey(item) === scopeKey(target) ? target : item
+  const change = useCallback(
+    (key: string, assignment: PermissionAssignment) =>
+      setDrafts((current) =>
+        current.map((draft) =>
+          scopeKey(draft) === key ? { ...draft, ...assignment } : draft
         )
       ),
     []
   )
-  const removeTarget = useCallback(
-    (target: InviteDraft) =>
-      setTargets((current) =>
-        current.filter((item) => scopeKey(item) !== scopeKey(target))
-      ),
-    []
-  )
-  const remainingResources = useMemo(() => {
-    const selected = new Set(targets.map(scopeKey))
-    return (resources.data?.resources ?? EMPTY_RESOURCES).filter(
-      (resource) => !selected.has(scopeKey(resource))
-    )
-  }, [resources.data?.resources, targets])
-  const addTarget = useCallback(
-    (resource: Resource) =>
-      setTargets((current) => [
-        ...current,
-        { ...resource, selections: [], presetIds: [], builtinKeys: [] },
-      ]),
-    []
-  )
+  // Switching context keeps every resource that has entries and drops ones
+  // that were picked but never used.
+  const pickContext = useCallback((resource: Resource) => {
+    const key = scopeKey(resource)
+    setDrafts((current) => {
+      const kept = current.filter(
+        (draft) => hasEntries(draft) || scopeKey(draft) === key
+      )
+      return kept.some((draft) => scopeKey(draft) === key) || kept.length >= 25
+        ? kept
+        : [...kept, emptyDraft(resource)]
+    })
+    setAddKey(key)
+  }, [])
   const previousResources = useCallback(
     () => setOffset((current) => Math.max(0, current - 50)),
     []
@@ -1017,6 +975,33 @@ function InviteEditor({
     setSearch(value)
     setOffset(0)
   }, [])
+  const submitted = drafts.filter(hasEntries)
+  const contextPicker = (
+    <ResourcePicker
+      resources={resources.data?.resources ?? EMPTY_RESOURCES}
+      selected={null}
+      onSelect={pickContext}
+      onSearch={searchResources}
+      loading={resources.isFetching}
+      error={resources.error?.message}
+      hasPrevious={offset > 0}
+      onPrevious={previousResources}
+      hasMore={resources.data?.hasMore}
+      onMore={nextResources}
+      trigger={
+        <Button
+          type="button"
+          variant="outline"
+          aria-label="Context for new entries"
+          className="h-10 max-w-full min-w-0 justify-start gap-2 px-2.5 sm:max-w-[24rem]"
+        >
+          <span className="type-meta shrink-0 text-muted-foreground">in</span>
+          {addTarget ? <ContextChips context={addTarget.context} /> : null}
+          <ChevronDown className="ml-auto text-muted-foreground" />
+        </Button>
+      }
+    />
+  )
   return (
     <Dialog
       open
@@ -1026,13 +1011,14 @@ function InviteEditor({
     >
       <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-5xl">
         <DialogHeader>
-          <DialogTitle>Invite to resources</DialogTitle>
+          <DialogTitle>Invite user</DialogTitle>
           <DialogDescription>
-            The user verifies their account, then accepts each invitation.
-            Existing users also accept.
+            Add permissions and presets, each on a Relay, game server, or
+            database. The user verifies their account, then accepts each
+            resource&apos;s invitation.
           </DialogDescription>
         </DialogHeader>
-        <fieldset disabled={invite.isPending} className="space-y-4">
+        <fieldset disabled={invite.isPending} className="min-w-0 space-y-4">
           <Input
             type="email"
             aria-label="Email address"
@@ -1040,32 +1026,16 @@ function InviteEditor({
             value={email}
             onChange={(event) => setEmail(event.target.value)}
           />
-          {targets.map((target) => (
-            <InviteTargetEditor
-              key={scopeKey(target)}
-              target={target}
-              disabled={invite.isPending}
-              onChange={changeTarget}
-              onRemove={removeTarget}
-            />
-          ))}
-          {targets.length < 25 ? (
-            <div className="space-y-2 rounded-lg border p-3">
-              <h3 className="text-sm font-medium">Add another resource</h3>
-              <ResourcePicker
-                resources={remainingResources}
-                selected={null}
-                onSelect={addTarget}
-                onSearch={searchResources}
-                loading={resources.isFetching}
-                error={resources.error?.message}
-                hasPrevious={offset > 0}
-                onPrevious={previousResources}
-                hasMore={resources.data?.hasMore}
-                onMore={nextResources}
-              />
-            </div>
-          ) : null}
+          <PermissionEditor
+            targets={targets}
+            onChange={change}
+            addTarget={addKey}
+            contextPicker={contextPicker}
+            showContexts
+            presets
+            disabled={invite.isPending}
+            emptyMessage="Nothing to invite to yet. Add a permission or preset above."
+          />
         </fieldset>
         <DialogFooter>
           <Button
@@ -1076,114 +1046,34 @@ function InviteEditor({
             Cancel
           </Button>
           <Button
-            disabled={
-              invite.isPending ||
-              !email.trim() ||
-              !targets.length ||
-              targets.some(
-                (target) =>
-                  !target.selections.length &&
-                  !target.presetIds.length &&
-                  !target.builtinKeys.length
-              )
+            disabled={invite.isPending || !email.trim() || !submitted.length}
+            onClick={() =>
+              invite.mutate({
+                data: {
+                  email,
+                  targets: submitted.map((draft) => ({
+                    relayId: draft.relayId,
+                    resourceType: draft.resourceType,
+                    resourceId: draft.resourceId,
+                    selections: draft.selections,
+                    presetIds: draft.presetIds,
+                    builtinKeys: draft.builtinKeys,
+                  })),
+                },
+              })
             }
-            onClick={() => invite.mutate({ data: { email, targets } })}
           >
-            {invite.isPending ? "Sending…" : "Send invitations"}
+            {invite.isPending
+              ? "Sending…"
+              : submitted.length > 1
+                ? `Send ${submitted.length} invitations`
+                : "Send invitation"}
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   )
 }
-
-const InviteTargetEditor = memo(function InviteTargetEditor({
-  target,
-  disabled = false,
-  onChange,
-  onRemove,
-}: {
-  target: InviteDraft
-  disabled?: boolean
-  onChange: (target: InviteDraft) => void
-  onRemove: (target: InviteDraft) => void
-}) {
-  const query = useQuery({
-    queryKey: [
-      "resource-access",
-      target.relayId,
-      target.resourceType,
-      target.resourceId,
-    ],
-    queryFn: () => getResourceAccess({ data: target }),
-  })
-  const inheritedSelections = useMemo(
-    () =>
-      query.data
-        ? linkedPresetSelections(
-            query.data,
-            target.presetIds,
-            target.builtinKeys
-          )
-        : [],
-    [query.data, target.presetIds, target.builtinKeys]
-  )
-  return (
-    <section className="space-y-4 rounded-lg border p-4">
-      <header className="flex items-center justify-between">
-        <div>
-          <h3 className="font-medium">{target.name ?? target.resourceId}</h3>
-          <p className="text-xs text-muted-foreground">
-            {target.resourceType === "relay"
-              ? "Relay · includes current and future resources"
-              : target.resourceType}
-          </p>
-        </div>
-        <Button
-          disabled={disabled}
-          size="sm"
-          variant="outline"
-          onClick={() => onRemove(target)}
-        >
-          Remove
-        </Button>
-      </header>
-      {query.isPending ? (
-        <p className="text-sm text-muted-foreground">Loading permissions…</p>
-      ) : query.isError ? (
-        <p role="alert" className="text-sm text-destructive">
-          {query.error.message}
-        </p>
-      ) : !query.data.canInvite ? (
-        <p className="text-sm text-muted-foreground">
-          You cannot invite users to this resource.
-        </p>
-      ) : (
-        <>
-          <PresetSelections
-            access={query.data}
-            scopeType={target.resourceType}
-            disabled={disabled}
-            presetIds={target.presetIds}
-            builtinKeys={target.builtinKeys}
-            onChange={(presetIds, builtinKeys) =>
-              onChange({ ...target, presetIds, builtinKeys })
-            }
-          />
-          <PermissionEditor
-            scopeType={target.resourceType}
-            selections={target.selections}
-            inheritedSelections={inheritedSelections}
-            disabled={disabled}
-            onChange={(selections) => onChange({ ...target, selections })}
-            available={query.data.permissions}
-            capabilities={query.data.supportedCapabilities}
-          />
-        </>
-      )}
-    </section>
-  )
-})
 
 function PresetEditor({
   preset,
@@ -1193,7 +1083,7 @@ function PresetEditor({
   onSaved,
 }: {
   preset: Preset | null
-  scope: ResourceScope
+  scope: AccessScope
   access: ScopeAccess
   onClose: () => void
   onSaved: () => void
@@ -1202,6 +1092,24 @@ function PresetEditor({
     [selections, setSelections] = useState<Array<PermissionSelection>>(
       preset?.selections ?? []
     )
+  const targets = useMemo(
+    () => [
+      {
+        key: scopeKey(scope),
+        context: contextFor(scope),
+        access,
+        selections,
+        presetIds: NO_IDS,
+        builtinKeys: NO_IDS,
+      },
+    ],
+    [scope, access, selections]
+  )
+  const changeSelections = useCallback(
+    (_key: string, next: PermissionAssignment) =>
+      setSelections(next.selections),
+    []
+  )
   const [source, setSource] = useState<Resource | null>(null)
   const [sourceSearch, setSourceSearch] = useState("")
   const [sourceOffset, setSourceOffset] = useState(0)
@@ -1339,12 +1247,9 @@ function PresetEditor({
             </div>
           ) : null}
           <PermissionEditor
-            scopeType={scope.resourceType}
-            selections={selections}
-            onChange={setSelections}
-            available={access.permissions}
-            capabilities={access.supportedCapabilities}
-            disabled={!editable || save.isPending}
+            targets={targets}
+            onChange={editable ? changeSelections : undefined}
+            disabled={save.isPending}
           />
         </fieldset>
         <DialogFooter>
@@ -1357,7 +1262,9 @@ function PresetEditor({
               onClick={() =>
                 save.mutate({
                   data: {
-                    ...scope,
+                    relayId: scope.relayId,
+                    resourceType: scope.resourceType,
+                    resourceId: scope.resourceId,
                     id: preset?.id,
                     revision: preset?.revision,
                     name,

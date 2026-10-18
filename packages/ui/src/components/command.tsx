@@ -87,6 +87,13 @@ function CommandInput({
   )
 }
 
+/** The bare cmdk input, for callers that draw their own field around it. */
+function CommandBareInput(
+  props: React.ComponentProps<typeof CommandPrimitive.Input>
+) {
+  return <CommandPrimitive.Input data-slot="command-input" {...props} />
+}
+
 function CommandList({
   className,
   ...props
@@ -188,6 +195,7 @@ export {
   Command,
   CommandDialog,
   CommandInput,
+  CommandBareInput,
   CommandList,
   CommandEmpty,
   CommandGroup,
