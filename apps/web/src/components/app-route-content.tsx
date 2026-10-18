@@ -145,7 +145,11 @@ function ServerRouteBoundary({
   children: React.ReactNode
   serverId: string
 }) {
-  const { data: route } = useQuery({
+  const {
+    data: route,
+    error,
+    isError,
+  } = useQuery({
     ...serverWorkspaceQueryOptions(serverId),
     select: React.useCallback(
       (workspace: ServerWorkspace) => routeVerdict(workspace, serverId),
@@ -166,6 +170,9 @@ function ServerRouteBoundary({
     if (misrouted) void router.invalidate()
   }, [misrouted, router])
 
+  // A route that opened before its read fails as the awaited route would
+  // have, through the route's error handling.
+  if (route === undefined && isError) throw error
   if (route === undefined || misrouted)
     return <div className="min-h-0 flex-1 bg-background" />
   if (route === "missing") return <RouteEmptyState />

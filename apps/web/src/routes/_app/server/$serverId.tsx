@@ -40,16 +40,22 @@ export const Route = createFileRoute("/_app/server/$serverId")({
           serverNavigationQueryOptions({ serverId: params.serverId })
         )
 
-    // A server this page already knows, opened for the first time, opens at
-    // once: the page reads its own server in the background, and the route
-    // resolves again if that read disagrees.
+    // A server this page already knows, opened for the first time by its
+    // canonical ID, opens at once: the page reads its own server in the
+    // background, and the route resolves again if that read disagrees. A link
+    // that would redirect waits for Hearth's answer, since a cached one may
+    // send it to the wrong server.
     const known =
       queryClient.getQueryData(
         serverWorkspaceQueryOptions(params.serverId).queryKey
       ) === undefined
         ? knownServer(queryClient, params.serverId)
         : undefined
-    if (known) {
+    if (
+      known &&
+      (params.serverId === known.routeIdentifier ||
+        params.serverId === known.server.routeId)
+    ) {
       forkPromise(() => ensureServerWorkspace(queryClient, params.serverId))
       if (navigation) forkPromise(() => navigation)
       return {
