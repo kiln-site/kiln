@@ -1,4 +1,5 @@
 import { forkPromise, tapPromiseError } from "@/effect/promise"
+import { traceFileWork } from "@/lib/file-timing"
 
 type FileWorkspaceModule = typeof import("@/components/files/file-workspace")
 
@@ -9,7 +10,9 @@ export function loadFileWorkspaceModule() {
   if (!fileWorkspaceModulePromise) {
     fileWorkspaceModulePromise = tapPromiseError(
       () =>
-        import("@/components/files/file-workspace").then((module) => {
+        traceFileWork("workspace-module", {}, () =>
+          import("@/components/files/file-workspace")
+        ).then((module) => {
           fileWorkspaceModule = module
           return module
         }),

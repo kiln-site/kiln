@@ -50,6 +50,7 @@ import {
 } from "@/lib/instance-favorites"
 import { getMinecraftProfile } from "@/server/minecraft"
 import { getRelayResources } from "@/server/relay-host"
+import { traceFileWork } from "@/lib/file-timing"
 import { reconcilePendingPowerSnapshot } from "@/lib/instance-power-state"
 import { systemUpdateOverviewRefetchPolicy } from "@/lib/system-update-presence"
 import {
@@ -982,10 +983,25 @@ export function relayDirectoryQueryOptions(
     ] as const,
     initialPageParam: undefined as string | undefined,
     queryFn: ({ pageParam, signal }) =>
-      getRelayDirectoryPage({
-        data: { instanceId, path, relayId, cursor: pageParam },
-        signal,
-      }),
+      traceFileWork(
+        "directory",
+        {
+          attributes: {
+            "kiln.files.continued": pageParam !== undefined,
+            "kiln.files.depth": path ? path.split("/").length : 0,
+          },
+          signal,
+          describe: (page) => ({
+            "kiln.files.entries": page.entries.length,
+            "kiln.files.has_more": page.cursor !== null,
+          }),
+        },
+        () =>
+          getRelayDirectoryPage({
+            data: { instanceId, path, relayId, cursor: pageParam },
+            signal,
+          })
+      ),
     getNextPageParam: (page) => page.cursor ?? undefined,
     retry: 3,
     retryDelay: (attempt) => Math.min(500 * 2 ** attempt, 2_000),
@@ -1010,7 +1026,17 @@ export function relayFileQueryOptions(
   return queryOptions({
     queryKey: queryKeys.relay.file(relayId, instanceId, path),
     queryFn: ({ signal }) =>
-      getRelayFile({ data: { instanceId, path, relayId }, signal }),
+      traceFileWork(
+        "file",
+        {
+          signal,
+          describe: (file) => ({
+            "kiln.files.bytes": file.size,
+            "kiln.files.encoding": file.encoding,
+          }),
+        },
+        () => getRelayFile({ data: { instanceId, path, relayId }, signal })
+      ),
     staleTime: 15_000,
   })
 }
@@ -1023,7 +1049,9 @@ export function relayFileEntryQueryOptions(
   return queryOptions({
     queryKey: [...queryKeys.relay.file(relayId, instanceId, path), "stat"],
     queryFn: ({ signal }) =>
-      getRelayFileEntry({ data: { instanceId, path, relayId }, signal }),
+      traceFileWork("entry", { signal }, () =>
+        getRelayFileEntry({ data: { instanceId, path, relayId }, signal })
+      ),
     retry: false,
     staleTime: 15_000,
   })
@@ -1047,7 +1075,9 @@ export function relayFileActivityQueryOptions(
   return queryOptions({
     queryKey: queryKeys.fileActivity(relayId, instanceId),
     queryFn: ({ signal }) =>
-      getRelayFileActivity({ data: { instanceId, relayId }, signal }),
+      traceFileWork("activity", { signal }, () =>
+        getRelayFileActivity({ data: { instanceId, relayId }, signal })
+      ),
     staleTime: 15_000,
   })
 }

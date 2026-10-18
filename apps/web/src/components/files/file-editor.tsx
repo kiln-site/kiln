@@ -7,6 +7,7 @@ import { PopoverAnchor } from "@workspace/ui/components/popover"
 
 import type { SyntaxCodeEditorHandle } from "@/components/syntax-code-editor"
 import { FileWorkspaceLoadingState } from "@/components/file-tree-loading-panel"
+import { PageContentMilestone } from "@/components/page-content-milestone"
 import {
   type SaveFileRevision,
   canSaveEditor,
@@ -233,6 +234,7 @@ function Editor({
             searchStore={searchStore}
             sessionStore={sessionStore}
           />
+          <PageContentMilestone view="file" />
         </React.Suspense>
         {loading ? (
           <div className="absolute inset-y-0 right-0 left-[var(--file-editor-gutter-width,3rem)] z-20 grid place-items-center bg-card/75 backdrop-blur-[2px]">

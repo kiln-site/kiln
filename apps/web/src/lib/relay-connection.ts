@@ -1,5 +1,6 @@
 import { randomUUID, sign, verify } from "node:crypto"
 import { Effect, Fiber, Option, Schema } from "effect"
+import { HttpTraceContext } from "effect/http"
 import { WebSocket } from "ws"
 
 import {
@@ -468,7 +469,8 @@ class RelayConnection {
     subject?: string
   ) {
     return this.#connectEffect().pipe(
-      Effect.flatMap(() => {
+      Effect.andThen(Effect.option(Effect.currentSpan)),
+      Effect.flatMap((span) => {
         if (operation === "relay.snapshot" && this.#hasPushedSnapshot) {
           const snapshot = this.#pushedSnapshot
           this.#hasPushedSnapshot = false
@@ -495,6 +497,13 @@ class RelayConnection {
           payload,
           ...(subject ? { subject } : {}),
           timeoutMs: duration,
+          // The Relay's work for this request joins its trace.
+          ...(Option.isSome(span)
+            ? {
+                traceparent: HttpTraceContext.toHeaders(span.value)
+                  .traceparent,
+              }
+            : {}),
           type: "request",
           v: 1,
         }

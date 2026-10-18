@@ -1,4 +1,5 @@
 import { forkPromise, tapPromiseError } from "@/effect/promise"
+import { traceFileWork } from "@/lib/file-timing"
 
 let syntaxCodeEditorModulePromise:
   | Promise<typeof import("@/components/syntax-code-editor")>
@@ -7,7 +8,10 @@ let syntaxCodeEditorModulePromise:
 export function loadSyntaxCodeEditorModule() {
   if (!syntaxCodeEditorModulePromise) {
     syntaxCodeEditorModulePromise = tapPromiseError(
-      () => import("@/components/syntax-code-editor"),
+      () =>
+        traceFileWork("editor-module", {}, () =>
+          import("@/components/syntax-code-editor")
+        ),
       (error) => {
         syntaxCodeEditorModulePromise = undefined
         throw error

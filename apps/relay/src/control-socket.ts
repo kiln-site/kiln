@@ -46,7 +46,11 @@ import type {
 } from "@workspace/contracts"
 
 import { RelayNotFoundError } from "./effect/errors.js"
-import { reportRelayError } from "./effect/runtime.js"
+import {
+  reportRelayError,
+  traceParentSpan,
+  traceRelayPromise,
+} from "./effect/runtime.js"
 import {
   actionsForRole,
   fileMutationAction,
@@ -529,17 +533,23 @@ function authenticateSocket(
             return
           }
           const payload = yield* promiseOperation(() =>
-            options.execute(
-              request,
-              currentClient,
-              controller.signal,
-              (operation, requestPayload, timeoutMs) =>
-                requestClient(
-                  operation,
-                  requestPayload,
-                  timeoutMs,
-                  request.subject
-                )
+            traceRelayPromise(
+              "relay.control.request",
+              () =>
+                options.execute(
+                  request,
+                  currentClient,
+                  controller.signal,
+                  (operation, requestPayload, timeoutMs) =>
+                    requestClient(
+                      operation,
+                      requestPayload,
+                      timeoutMs,
+                      request.subject
+                    )
+                ),
+              { "relay.operation": request.operation },
+              traceParentSpan(request.traceparent)
             )
           )
           if (isAuditedRelayControlOperation(request.operation)) {

@@ -435,6 +435,10 @@ export const RelayControlRequestSchema = Schema.Struct({
   payload: Schema.Unknown,
   subject: Schema.optionalKey(Schema.String),
   timeoutMs: Schema.optionalKey(Schema.Number),
+  // The W3C `traceparent` of the sender's span, so the receiver's work joins
+  // its trace and follows its sampling. Peers that predate it drop the key,
+  // and a value the receiver can't parse only starts a trace of its own.
+  traceparent: Schema.optionalKey(Schema.String),
   type: Schema.Literal("request"),
   v: Schema.Literal(1),
 })

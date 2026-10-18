@@ -1,6 +1,7 @@
 import * as Telemetry from "@workspace/telemetry"
-import { Effect, Layer, ManagedRuntime } from "effect"
+import { Effect, Layer, ManagedRuntime, Option } from "effect"
 import type { Fiber, Tracer } from "effect"
+import { Headers, HttpTraceContext } from "effect/http"
 
 import { makeRelayStateLayer, RelayStateStore } from "./state.js"
 import { relayBuildCommit, relayBuildVersion } from "../build-info.js"
@@ -90,6 +91,21 @@ export function traceRelayPromise<TResult>(
     ? Effect.withParentSpan(span, parent)
     : Telemetry.withActiveParent(span)
   return runtime ? runtime.runPromise(traced) : Effect.runPromise(traced)
+}
+
+/**
+ * The span a W3C `traceparent` names, such as a browser's or Hearth's, so
+ * the Relay's work joins that trace and follows its sampling.
+ */
+export function traceParentSpan(
+  traceparent: unknown
+): Tracer.ExternalSpan | undefined {
+  if (typeof traceparent !== "string" || traceparent.length > 64) {
+    return undefined
+  }
+  return Option.getOrUndefined(
+    HttpTraceContext.w3c(Headers.fromInput({ traceparent }))
+  )
 }
 
 /**

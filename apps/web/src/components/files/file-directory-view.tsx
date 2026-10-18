@@ -28,6 +28,7 @@ import {
 } from "@workspace/ui/components/tooltip"
 
 import { FileActionsMenu } from "@/components/files/file-actions-menu"
+import { PageContentMilestone } from "@/components/page-content-milestone"
 import { FileTypeIcon } from "@/components/files/file-type-icon"
 import { selectedUploadFiles } from "@/components/files/file-upload-selection"
 import {
@@ -222,6 +223,8 @@ function useFileDirectory(
     complete: !query.hasNextPage && !!query.data,
     error: query.error,
     loading: query.isPending || query.isFetchingNextPage,
+    // The first page, or the error instead of it, is on screen.
+    settled: !query.isPending,
   }
 }
 
@@ -654,6 +657,7 @@ function DirectoryViewContent({
       className="group/drop relative flex min-h-[360px] min-w-0 flex-1 flex-col bg-card"
       {...dropTarget}
     >
+      <PageContentMilestone reached={directory.settled} view="directory" />
       <FileDropOverlay directory={path} />
       <div className={fileEditorHeaderClassName}>
         {treeCollapsed ? <FileTreeRevealButton onClick={onTreeExpand} /> : null}

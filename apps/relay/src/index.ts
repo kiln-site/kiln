@@ -169,6 +169,7 @@ import {
   reportRelayError,
   runRelayEffect,
   runRelayEffectUntraced,
+  traceRelayPromise,
 } from "./effect/runtime.js"
 import { RelayStateStore } from "./effect/state.js"
 import type {
@@ -2731,31 +2732,44 @@ async function appWebRouteState(appId: string) {
 
 // A server's files, or an app's data directory (`app:<appId>`), with the
 // drivers that serve it.
+interface FileTarget {
+  databaseBrowser: DatabaseBrowser
+  filesystem: FilesystemDriver
+  root: FileRoot
+}
+
 async function withFileTarget<T>(
   payload: Readonly<Record<string, unknown>>,
-  run: (target: {
-    databaseBrowser: DatabaseBrowser
-    filesystem: FilesystemDriver
-    root: FileRoot
-  }) => Promise<T>
+  run: (target: FileTarget) => Promise<T>
 ): Promise<T> {
   const id = requiredString(payload, "instanceId")
-  if (isRelayFileRoot(id))
-    return run({
-      databaseBrowser: hostDatabaseBrowser,
-      filesystem: hostFilesystem,
-      root: await hostFileRoot(id),
-    })
   const appId = appIdFromFileRoot(id)
-  return run(
-    appId
-      ? {
-          databaseBrowser: appDatabaseBrowser,
-          filesystem: appFilesystem,
-          root: await apps.fileRoot(appId),
-        }
-      : { databaseBrowser, filesystem, root: await requiredInstance(payload) }
+  const kind = isRelayFileRoot(id) ? "relay" : appId ? "app" : "instance"
+  // Every file operation first finds its root; a game server's is found by
+  // looking up its container.
+  const target = await traceRelayPromise(
+    "relay.files.target",
+    async (): Promise<FileTarget> =>
+      kind === "relay"
+        ? {
+            databaseBrowser: hostDatabaseBrowser,
+            filesystem: hostFilesystem,
+            root: await hostFileRoot(id),
+          }
+        : appId
+          ? {
+              databaseBrowser: appDatabaseBrowser,
+              filesystem: appFilesystem,
+              root: await apps.fileRoot(appId),
+            }
+          : {
+              databaseBrowser,
+              filesystem,
+              root: await requiredInstance(payload),
+            },
+    { "kiln.files.root": kind }
   )
+  return run(target)
 }
 
 async function requiredInstance(payload: Readonly<Record<string, unknown>>) {

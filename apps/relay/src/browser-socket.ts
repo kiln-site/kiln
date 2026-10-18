@@ -17,7 +17,6 @@ import {
 } from "node:zlib"
 import { Effect, Fiber, Option, Result, Schema } from "effect"
 import type { Tracer } from "effect"
-import { Headers, HttpTraceContext } from "effect/http"
 import { WebSocket, WebSocketServer } from "ws"
 import ZipStream from "zip-stream"
 
@@ -51,7 +50,11 @@ import {
   relayConsoleCompletionInputSchema,
 } from "@workspace/contracts"
 
-import { reportRelayError, traceRelayPromise } from "./effect/runtime.js"
+import {
+  reportRelayError,
+  traceParentSpan,
+  traceRelayPromise,
+} from "./effect/runtime.js"
 import {
   MAX_CONSOLE_HISTORY_CHARACTERS,
   MAX_CONSOLE_HISTORY_LINES,
@@ -3063,20 +3066,9 @@ function timedBrowserOperation<TResult>(
 // The browser span a message continues, from its W3C `traceparent`, so the
 // Relay's work joins the browser's trace and follows its sampling.
 function browserTraceParent(value: unknown): Tracer.ExternalSpan | undefined {
-  if (
-    !value ||
-    typeof value !== "object" ||
-    !("traceparent" in value) ||
-    typeof value.traceparent !== "string" ||
-    value.traceparent.length > 64
-  ) {
-    return undefined
-  }
-  return Option.getOrUndefined(
-    HttpTraceContext.w3c(
-      Headers.fromInput({ traceparent: value.traceparent })
-    )
-  )
+  return value && typeof value === "object" && "traceparent" in value
+    ? traceParentSpan(value.traceparent)
+    : undefined
 }
 
 function asError(cause: unknown): Error {

@@ -332,6 +332,32 @@ describe("Relay control socket", () => {
     })
   })
 
+  // Hearth sends its trace context with each request. A Relay serves the
+  // request whatever it carries; trace context never decides whether it runs.
+  it.each([
+    [
+      "a sampled trace",
+      "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+    ],
+    [
+      "an unsampled trace",
+      "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00",
+    ],
+    ["a malformed trace", "00-not-a-trace"],
+    ["an oversized trace", "0".repeat(4_096)],
+  ])("serves a request carrying %s", async (_, traceparent) => {
+    const relay = await startRelay()
+    const { inbox, socket } = await relay.connect(await relay.pair())
+
+    const id = sendRequest(socket, "relay.snapshot", {}, { traceparent })
+
+    expect(await inbox.next()).toMatchObject({
+      payload: { ok: true },
+      replyTo: id,
+      type: "response",
+    })
+  })
+
   it("rejects a request whose id is already in flight", async () => {
     const release = deferred<void>()
     const relay = await startRelay({
@@ -938,6 +964,7 @@ function sendRequest(
     readonly id?: string
     readonly subject?: string
     readonly timeoutMs?: number
+    readonly traceparent?: string
   } = {}
 ): string {
   const id = overrides.id ?? randomBytes(12).toString("hex")

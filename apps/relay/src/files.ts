@@ -219,6 +219,10 @@ export class FilesystemDriver {
 
   directory(instance: FileRoot, input: RelayDirectoryPageInput) {
     return Effect.gen({ self: this }, function* () {
+      yield* Effect.annotateCurrentSpan(
+        "kiln.files.continued",
+        Boolean(input.cursor)
+      )
       const root = yield* this.#instanceRoot(instance)
       const requestedDirectory = normalizeDirectoryPath(input.path)
       let scan: DirectoryScan
@@ -267,6 +271,7 @@ export class FilesystemDriver {
           this.#armDirectoryScan(opened)
           return opened
         }).pipe(
+          Effect.withSpan("relay.files.directory.open"),
           Effect.ensuring(
             Effect.sync(() => {
               this.#openingDirectoryScans -= 1
@@ -285,9 +290,25 @@ export class FilesystemDriver {
       scan.busy = true
       this.#armDirectoryScan(scan)
 
-      return yield* filesystemOperation("directory.read", () =>
-        readDirectoryScanPage(scan)
-      ).pipe(
+      return yield* Effect.gen(function* () {
+        const { complete, entries } = yield* filesystemOperation(
+          "directory.read",
+          () => readDirectoryScanEntries(scan)
+        ).pipe(Effect.withSpan("relay.files.directory.read"))
+        const resolved = yield* filesystemOperation("directory.read", () =>
+          resolveDirectoryScanEntries(scan, entries)
+        ).pipe(Effect.withSpan("relay.files.directory.stat"))
+        yield* Effect.annotateCurrentSpan({
+          "kiln.files.entries": resolved.length,
+          "kiln.files.has_more": !complete,
+        })
+        return {
+          cursor: complete ? null : scan.id,
+          directory: scan.directory,
+          entries: resolved,
+          instanceId: scan.instanceId,
+        } satisfies RelayDirectoryPage
+      }).pipe(
         Effect.tap((page) =>
           Effect.sync(() => {
             if (!page.cursor) this.#finishDirectoryScan(scan)
@@ -464,6 +485,7 @@ export class FilesystemDriver {
     return Effect.gen({ self: this }, function* () {
       const path = yield* this.#existingFile(instance, requestedPath)
       const metadata = yield* filesystemOperation("read.stat", () => stat(path))
+      yield* Effect.annotateCurrentSpan("kiln.files.bytes", metadata.size)
       if (metadata.size > MAX_FILE_BYTES) {
         return yield* filesystemFailure(
           "file_too_large",
@@ -1265,9 +1287,10 @@ function estimatedFileEntryBytes(path: string): number {
   return Buffer.byteLength(path) + 96
 }
 
-async function readDirectoryScanPage(
+// A page of the scan's entries, stopping before one that would overflow it.
+async function readDirectoryScanEntries(
   scan: DirectoryScan
-): Promise<RelayDirectoryPage> {
+): Promise<{ complete: boolean; entries: Array<Dirent> }> {
   const entries: Array<Dirent> = []
   let estimatedBytes = 0
   let complete = false
@@ -1293,7 +1316,13 @@ async function readDirectoryScanPage(
     entries.push(entry)
     estimatedBytes += nextBytes
   }
+  return { complete, entries }
+}
 
+async function resolveDirectoryScanEntries(
+  scan: DirectoryScan,
+  entries: ReadonlyArray<Dirent>
+): Promise<Array<RelayFileEntry>> {
   const resolved: Array<RelayFileEntry> = []
   for (let offset = 0; offset < entries.length; offset += 16) {
     resolved.push(
@@ -1304,12 +1333,7 @@ async function readDirectoryScanPage(
       ))
     )
   }
-  return {
-    cursor: complete ? null : scan.id,
-    directory: scan.directory,
-    entries: resolved,
-    instanceId: scan.instanceId,
-  }
+  return resolved
 }
 
 async function readSearchScanPage(
