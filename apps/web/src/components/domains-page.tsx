@@ -339,6 +339,24 @@ function selectScopeServers(
   }))
 }
 
+/** Reloads the configured domains and the table. */
+const DomainsRefreshButton = React.memo(function DomainsRefreshButton() {
+  const queryClient = useQueryClient()
+  const refresh = React.useCallback(
+    () =>
+      queryClient.invalidateQueries({ queryKey: queryKeys.domains.settings }),
+    [queryClient]
+  )
+  return (
+    <InfraSyncButton
+      label="Refresh domains"
+      size="icon-sm"
+      sync={refresh}
+      onError={showErrorToast}
+    />
+  )
+})
+
 /** What vanity is set up to do, beside the table. */
 const DomainsRail = React.memo(function DomainsRail({
   integration,
@@ -357,9 +375,9 @@ const DomainsRail = React.memo(function DomainsRail({
       <InfoRailCard
         action={
           <Button
-            size="xs"
+            size="sm"
             type="button"
-            variant="ghost"
+            variant="outline"
             onClick={onConfigure}
           >
             <Settings2 />
@@ -398,7 +416,11 @@ const DomainsRail = React.memo(function DomainsRail({
       </InfoRailCard>
 
       {integration && integration.domains.length > 0 ? (
-        <InfoRailCard icon={<Link2 />} title="Domains">
+        <InfoRailCard
+          action={<DomainsRefreshButton />}
+          icon={<Link2 />}
+          title="Domains"
+        >
           {integration.domains.map((domain) => (
             <div
               key={domain.domain}

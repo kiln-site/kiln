@@ -16,11 +16,14 @@ export const InfraSyncButton = React.memo(function InfraSyncButton({
   disabled = false,
   label,
   onError,
+  size = "icon",
   sync,
 }: {
   disabled?: boolean
   label: string
   onError?: (cause: Error) => void
+  /** `icon-sm` fits a card header. */
+  size?: "icon" | "icon-sm"
   sync: () => Promise<unknown>
 }) {
   // oxlint-disable-next-line react-doctor/query-mutation-missing-invalidation -- `sync` is the invalidation
@@ -39,7 +42,7 @@ export const InfraSyncButton = React.memo(function InfraSyncButton({
       <TooltipTrigger asChild>
         <Button
           type="button"
-          size="icon"
+          size={size}
           variant="outline"
           aria-label={label}
           aria-busy={syncing}
