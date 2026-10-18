@@ -1,5 +1,4 @@
 import * as React from "react"
-import { useQuery } from "@tanstack/react-query"
 import { createFileRoute } from "@tanstack/react-router"
 
 import {
@@ -10,7 +9,7 @@ import {
 import { ServerInfoPage } from "@/components/server/server-info-page"
 import { isDevelopmentBypassIdentity } from "@/lib/development-bypass"
 import { pageTitle } from "@/lib/page-title"
-import { relaySnapshotQueryOptions } from "@/lib/query-options"
+import { useServerSnapshot } from "@/lib/use-server-workspace"
 import { selectInstanceSettings } from "@/lib/relay-selectors"
 import { requireServerDestinationAccess } from "@/lib/route-access"
 
@@ -38,10 +37,7 @@ function InfoRoute() {
       selectInstanceSettings(workspaceInstance.id, workspaceInstance.relayId),
     [workspaceInstance.id, workspaceInstance.relayId]
   )
-  const { data } = useQuery({
-    ...relaySnapshotQueryOptions(),
-    select: selectInfo,
-  })
+  const { data } = useServerSnapshot(selectInfo)
   const returnToServers = React.useCallback(
     () => navigate({ to: "/infra/servers" }),
     [navigate]

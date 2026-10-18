@@ -15,7 +15,6 @@ import {
   resolveRelayInstance,
   selectInstanceContainerRunning,
   selectInstanceLifecycleStartedAt,
-  selectInstanceRelayConnected,
   selectInstanceStateReason,
   selectInstanceSettings,
   selectInstanceWorkspaceInstance,
@@ -215,26 +214,6 @@ describe("Relay render selectors", () => {
       relayStatus: "connected",
       routeId: "relay-one-aaaaaaaa",
     })
-  })
-
-  it("selects connectivity from the instance's Relay when IDs collide", () => {
-    const first = snapshotWithCpu(1).instances[0]
-    if (!first) throw new Error("Expected Relay fixture")
-    const snapshot = snapshotWithCpu(1)
-    snapshot.instances.push({
-      ...first,
-      relayId: "relay-two",
-      relayName: "Relay two",
-      relayStatus: "unreachable",
-      routeId: "relay-two-aaaaaaaa",
-    })
-
-    expect(selectInstanceRelayConnected(first.id, "relay-one")(snapshot)).toBe(
-      true
-    )
-    expect(selectInstanceRelayConnected(first.id, "relay-two")(snapshot)).toBe(
-      false
-    )
   })
 
   it("does not select the first server when accessible short IDs collide", () => {

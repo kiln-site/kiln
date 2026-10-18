@@ -9,18 +9,21 @@ import { useRelayConsoleStream } from "@/components/console/use-relay-console-st
 import { useInstanceRelayConnected } from "@/components/instance-workspace-context"
 import {
   relayConnectionQueryOptions,
-  relaySnapshotQueryOptions,
   tailscaleStacksQueryOptions,
 } from "@/lib/query-options"
 import {
-  selectInstanceRelayConnected,
   selectInstanceConsoleRuntime,
   selectRelayBrowserOrigin,
   selectRelayConsoleTransport,
 } from "@/lib/relay-selectors"
 import type { ConsoleLoadTiming } from "@/lib/console-performance"
 import type { ServerWorkspaceRelay } from "@/lib/server-workspace"
-import { useServerRelay, useServerSnapshot } from "@/lib/use-server-workspace"
+import {
+  selectServerRelayConnected,
+  useServerRelay,
+  useServerSnapshot,
+} from "@/lib/use-server-workspace"
+import { relayInstanceRouteId } from "@/lib/relay-fleet"
 import type { TailscaleStackOverview } from "@/server/tailscale"
 
 const emptyTailscaleStacks: Array<TailscaleStackOverview> = []
@@ -132,24 +135,25 @@ function TailscaleConsoleStreamSource({
     streamStore.getRetrySnapshot,
     streamStore.getRetrySnapshot
   )
+  // Each deployment is its own server on its Relay; read that one alone.
+  const serverId = relayInstanceRouteId(relayId, instanceId.slice(0, 8))
   const selectRuntime = React.useMemo(
     () => selectInstanceConsoleRuntime(instanceId, relayId),
     [instanceId, relayId]
   )
-  const selectConnected = React.useMemo(
-    () => selectInstanceRelayConnected(instanceId, relayId),
-    [instanceId, relayId]
+  const { data: runtime } = useServerSnapshot(selectRuntime, serverId)
+  const { data: relayConnected = false } = useServerRelay(
+    selectServerRelayConnected,
+    serverId
   )
-  const { data: runtime } = useQuery({
-    ...relaySnapshotQueryOptions(),
-    select: selectRuntime,
-  })
-  const { data: relayConnected = false } = useQuery({
-    ...relaySnapshotQueryOptions(),
-    select: selectConnected,
-  })
-  const browserOrigin = useRelayBrowserOrigin(relayId)
-  const consoleTransport = useRelayConsoleTransport(relayId)
+  const { data: browserOrigin = null } = useServerRelay(
+    selectBrowserOrigin,
+    serverId
+  )
+  const { data: consoleTransport = null } = useServerRelay(
+    selectConsoleTransport,
+    serverId
+  )
   const snapshot = useRelayConsoleStream(
     relayId,
     { id: instanceId, kind: "instance" },

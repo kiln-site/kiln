@@ -79,7 +79,6 @@ import {
   instanceWebRoutesQueryOptions,
   queryKeys,
   replaceRelaySnapshotInstance,
-  relaySnapshotQueryOptions,
 } from "@/lib/query-options"
 import { instanceInventoryScope } from "@/lib/instance-inventory"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
@@ -87,6 +86,7 @@ import {
   invalidateRelaySnapshots,
   updateRelaySnapshots,
 } from "@/lib/server-workspace"
+import { useServerSnapshot } from "@/lib/use-server-workspace"
 import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
 import {
   performRelayAction,
@@ -270,10 +270,7 @@ function DatabaseConnectionWarnings() {
       )?.databaseConnectionWarnings ?? noDatabaseWarnings,
     [instance.id, instance.relayId]
   )
-  const { data: warnings = noDatabaseWarnings } = useQuery({
-    ...relaySnapshotQueryOptions(),
-    select,
-  })
+  const { data: warnings = noDatabaseWarnings } = useServerSnapshot(select)
   if (warnings.length === 0) return null
   return (
     <div
@@ -312,10 +309,8 @@ function SavedDatabaseConnections() {
       )?.savedDatabaseConnections ?? noSavedDatabaseConnections,
     [instance.id, instance.relayId]
   )
-  const { data: connections = noSavedDatabaseConnections } = useQuery({
-    ...relaySnapshotQueryOptions(),
-    select,
-  })
+  const { data: connections = noSavedDatabaseConnections } =
+    useServerSnapshot(select)
   const remove = useMutation({
     mutationFn: (connection: (typeof connections)[number]) =>
       removeInstanceDatabaseConnection({

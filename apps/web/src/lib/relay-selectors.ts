@@ -237,21 +237,6 @@ export function selectInstanceWorkspaceInstance(identifier: string) {
   }
 }
 
-export function selectInstanceRelayConnected(
-  identifier: string,
-  relayId?: string
-) {
-  return (snapshot: RelayFleetSnapshot): boolean =>
-    snapshot.instances.find(
-      (instance) =>
-        (!relayId || instance.relayId === relayId) &&
-        (instance.routeId === identifier ||
-          instance.shortId === identifier ||
-          instance.id === identifier ||
-          instance.name === identifier)
-    )?.relayStatus === "connected"
-}
-
 export type ConsoleInstanceRuntime = Omit<InstanceRuntime, "resources">
 
 export function selectInstanceConsoleRuntime(

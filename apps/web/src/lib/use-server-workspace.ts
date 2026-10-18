@@ -26,39 +26,43 @@ export function useRouteServerId(): string | undefined {
 }
 
 /**
- * Selects from the current game server page's own snapshot, which holds its
- * server and node in the fleet's shape. Off a game server page there is
- * nothing to select.
+ * Selects from a game server's own snapshot, which holds the server and its
+ * node in the fleet's shape: the current page's server unless `serverId` is
+ * given. Off a game server page there is nothing to select.
  */
 export function useServerSnapshot<TData>(
-  select: (snapshot: RelayFleetSnapshot) => TData
+  select: (snapshot: RelayFleetSnapshot) => TData,
+  serverId?: string
 ) {
-  const serverId = useRouteServerId()
+  const routeServerId = useRouteServerId()
+  const id = serverId ?? routeServerId
   const selectWorkspace = React.useCallback(
     (workspace: ServerWorkspace) =>
       select(workspace.status === "found" ? workspace.snapshot : noServer),
     [select]
   )
   return useQuery({
-    ...serverWorkspaceQueryOptions(serverId ?? ""),
-    enabled: serverId !== undefined,
+    ...serverWorkspaceQueryOptions(id ?? ""),
+    enabled: id !== undefined,
     select: selectWorkspace,
   })
 }
 
-/** Selects from the current game server page's Relay connection. */
+/** Selects from a game server's Relay connection, as `useServerSnapshot`. */
 export function useServerRelay<TData>(
-  select: (relay: ServerWorkspaceRelay | undefined) => TData
+  select: (relay: ServerWorkspaceRelay | undefined) => TData,
+  serverId?: string
 ) {
-  const serverId = useRouteServerId()
+  const routeServerId = useRouteServerId()
+  const id = serverId ?? routeServerId
   const selectWorkspace = React.useCallback(
     (workspace: ServerWorkspace) =>
       select(workspace.status === "found" ? workspace.relay : undefined),
     [select]
   )
   return useQuery({
-    ...serverWorkspaceQueryOptions(serverId ?? ""),
-    enabled: serverId !== undefined,
+    ...serverWorkspaceQueryOptions(id ?? ""),
+    enabled: id !== undefined,
     select: selectWorkspace,
   })
 }
