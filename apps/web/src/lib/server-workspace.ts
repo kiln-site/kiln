@@ -132,9 +132,11 @@ export async function ensureServerWorkspace(
   // A change during the read may leave its route needing resolution again.
   for (let attempt = 1; ; attempt += 1) {
     const read = await queryClient.fetchQuery({ ...options, staleTime: 0 })
-    if (!unresolved(queryClient, options.queryKey) || attempt >= maximumReads)
+    if (!unresolved(queryClient, options.queryKey))
       // What was stored, with any changes pushed during the read replayed.
       return queryClient.getQueryData(options.queryKey) ?? read
+    if (attempt >= maximumReads)
+      throw new Error("This game server kept changing while it was opened")
   }
 }
 
@@ -277,8 +279,11 @@ function watchStoredReads(queryClient: QueryClient, state: ReadState) {
       if (!workspace) break
       if (changesResolution(serverId, workspace, change))
         state.unresolvedSince.set(query.queryHash, change.sequence)
-      if (change.type === "change" && workspace.status === "found")
+      if (change.type === "change" && workspace.status === "found") {
         workspace = change.apply(workspace)
+        if (renamedAway(serverId, workspace))
+          state.unresolvedSince.set(query.queryHash, change.sequence)
+      }
     }
     if (workspace !== query.state.data)
       queryClient.setQueryData(query.queryKey, workspace)
@@ -294,22 +299,60 @@ function watchStoredReads(queryClient: QueryClient, state: ReadState) {
   })
 }
 
-// Whether a change a stored answer missed may change what its route names:
-// anything after a gap; another server taking a found server's short ID; a
-// server a missing or ambiguous answer's identifier now names, or one removed
-// from among an ambiguous answer's matches.
+// Whether a change a stored answer missed may change what its route names.
+// After a gap, anything may have. A server found by an ID is ambiguous once
+// another takes its short ID; one found by name, once another takes the name
+// or it is renamed away (checked after the change applies). A missing answer
+// changes when a server its identifier names appears. An ambiguous answer is
+// rare and changes with any server's arrival, rename, or removal.
 function changesResolution(
   serverId: string,
   workspace: ServerWorkspace,
   change: Change
 ): boolean {
   if (change.type === "gap") return true
-  if (workspace.status === "found")
-    return takesShortId(workspace, change.upserted)
+  if (workspace.status === "ambiguous")
+    return change.removesServers || change.upserted.length > 0
+  if (workspace.status === "not-found")
+    return (
+      resolveRelayInstance([...change.upserted], serverId).status !==
+      "not-found"
+    )
   return (
-    (workspace.status === "ambiguous" && change.removesServers) ||
-    resolveRelayInstance([...change.upserted], serverId).status !== "not-found"
+    takesShortId(workspace, change.upserted) ||
+    (foundByName(serverId, workspace) &&
+      change.upserted.some(
+        (instance) =>
+          instance.name === serverId &&
+          !sameServer(instance, workspace.snapshot.instances[0])
+      ))
   )
+}
+
+// A server found by name that no longer has that name.
+function renamedAway(serverId: string, workspace: ServerWorkspace) {
+  return (
+    workspace.status === "found" &&
+    foundByName(serverId, workspace) &&
+    workspace.snapshot.instances[0]?.name !== serverId
+  )
+}
+
+function foundByName(serverId: string, workspace: FoundServerWorkspace) {
+  const [instance] = workspace.snapshot.instances
+  return (
+    instance !== undefined &&
+    serverId !== instance.shortId &&
+    serverId !== instance.routeId &&
+    serverId !== instance.id
+  )
+}
+
+function sameServer(
+  instance: ServerInstance,
+  other: ServerInstance | undefined
+) {
+  return instance.id === other?.id && instance.relayId === other.relayId
 }
 
 function unresolved(queryClient: QueryClient, queryKey: QueryKey) {
@@ -330,8 +373,7 @@ function takesShortId(
     current !== undefined &&
     upserted.some(
       (instance) =>
-        instance.shortId === current.shortId &&
-        (instance.id !== current.id || instance.relayId !== current.relayId)
+        instance.shortId === current.shortId && !sameServer(instance, current)
     )
   )
 }

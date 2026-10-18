@@ -1311,6 +1311,63 @@ describe("game server pages", () => {
     unsubscribe()
   })
 
+  it("does not open a server by a name another server took during the read", async () => {
+    const clients = fleet()
+    const reads = stagedPageReads()
+    const navigation = ensureServerWorkspace(clients.queryClient, alpha.name)
+    await vi.waitFor(() => expect(reads).toHaveLength(1))
+
+    applyEvent(clients, instancesDelta([{ ...beta, name: alpha.name }]))
+    reads[0]!.answer(foundPage(alpha))
+    await vi.waitFor(() => expect(reads).toHaveLength(2))
+    reads[1]!.answer({ status: "ambiguous" })
+
+    await expect(navigation).resolves.toEqual({ status: "ambiguous" })
+  })
+
+  it("does not open a server by a name it was renamed away from during the read", async () => {
+    const clients = fleet()
+    const reads = stagedPageReads()
+    const navigation = ensureServerWorkspace(clients.queryClient, alpha.name)
+    await vi.waitFor(() => expect(reads).toHaveLength(1))
+
+    applyEvent(clients, instancesDelta([{ ...alpha, name: "Renamed" }]))
+    reads[0]!.answer(foundPage(alpha))
+    await vi.waitFor(() => expect(reads).toHaveLength(2))
+    reads[1]!.answer({ status: "not-found" })
+
+    await expect(navigation).resolves.toEqual({ status: "not-found" })
+  })
+
+  it("resolves an ambiguous name again when one match is renamed away", async () => {
+    const clients = fleet()
+    const reads = stagedPageReads()
+    const navigation = ensureServerWorkspace(clients.queryClient, alpha.name)
+    await vi.waitFor(() => expect(reads).toHaveLength(1))
+
+    applyEvent(clients, instancesDelta([{ ...beta, name: "Beta again" }]))
+    reads[0]!.answer({ status: "ambiguous" })
+    await vi.waitFor(() => expect(reads).toHaveLength(2))
+    reads[1]!.answer(foundPage(alpha))
+
+    await expect(navigation).resolves.toEqual(foundPage(alpha))
+  })
+
+  it("fails a navigation whose reads never settle rather than guess", async () => {
+    const clients = fleet()
+    const reads = stagedPageReads()
+    const navigation = ensureServerWorkspace(clients.queryClient, alpha.shortId)
+
+    for (let read = 1; read <= 10; read += 1) {
+      await vi.waitFor(() => expect(reads).toHaveLength(read))
+      // Every read spans a gap in pushed changes.
+      await recheckServerWorkspaces(clients.queryClient)
+      reads[read - 1]!.answer(foundPage(alpha))
+    }
+
+    await expect(navigation).rejects.toThrow("kept changing")
+  })
+
   it("rereads a mounted page after a gap in pushed changes", async () => {
     const clients = fleet()
     const page = openPage(clients)
