@@ -5,39 +5,48 @@ import { usePageContent } from "@/lib/page-timing"
 
 /**
  * Marks a Files page's content once `reached`, as `view`, for an open of the
- * Files URL that shows `path`. Rendered beside the content rather than inside
- * it, so a new open re-renders only this.
+ * Files URL that shows `path`, or of any Files URL when the view stands in
+ * for the whole workspace, such as a Relay's host files being off. Rendered
+ * beside the content rather than inside it, so a new open re-renders only
+ * this.
  */
 export function FilePageContent({
   path,
   reached = true,
   view,
 }: {
-  path: string
+  path?: string
   reached?: boolean
   view: string
 }) {
   const shows = React.useCallback(
-    (urlPath: string) => filesUrlPath(urlPath) === trimSlashes(path),
+    (urlPath: string) => showsFilesPath(urlPath, path),
     [path]
   )
   usePageContent(reached, view, shows)
   return null
 }
 
-// The path a Files URL shows, with or without its directory's trailing
-// slash: `/server/abc/files/plugins/` shows `plugins`.
-function filesUrlPath(urlPath: string): string | null {
-  const match = /^\/(?:server|app|relay)\/[^/]+\/files(?:\/(.*))?$/u.exec(
+// Whether `urlPath` is a Files URL showing `path`, with or without its
+// directory's trailing slash: `/server/abc/files/plugins/` shows `plugins`.
+// Client navigations give the router's decoded path and a fresh tab gives
+// the browser's encoded one, so either form matches.
+function showsFilesPath(urlPath: string, path: string | undefined): boolean {
+  // A decoded path can hold any character, including line separators.
+  const match = /^\/(?:server|app|relay)\/[^/]+\/files(?:\/(.*))?$/su.exec(
     urlPath
   )
-  if (!match) return null
-  const encoded = match[1] ?? ""
-  return trimSlashes(
-    Result.getOrElse(
-      Result.try(() => decodeURIComponent(encoded)),
-      () => encoded
-    )
+  if (!match) return false
+  if (path === undefined) return true
+  const shown = match[1] ?? ""
+  const expected = trimSlashes(path)
+  if (trimSlashes(shown) === expected) return true
+  return Result.match(
+    Result.try(() => decodeURIComponent(shown)),
+    {
+      onSuccess: (decoded) => trimSlashes(decoded) === expected,
+      onFailure: () => false,
+    }
   )
 }
 
