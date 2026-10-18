@@ -22,6 +22,7 @@ import {
   relayBrowserEndpoint,
   relayBrowserReconnectSchedule,
 } from "@/lib/authenticated-relay-socket"
+import { forkPromise } from "@/effect/promise"
 import { acquireRelayBrowserCredentials } from "@/lib/relay-browser-credentials"
 import { registerRelayConsoleOperationClient } from "@/lib/relay-console-operations"
 
@@ -125,32 +126,51 @@ function openDirectRelayConsoleStream(
 ): Stream.Stream<KilnConsoleStreamEvent, Error> {
   return Stream.unwrap(
     Effect.gen(function* () {
-      const socketAttempt = browserOrigin
-        ? yield* forkRelayConsoleSocket(browserOrigin, relayId, timing)
-        : null
+      // A console opened from a link hovered just before has its socket and
+      // capability under way already.
+      const prewarmed = browserOrigin
+        ? takeConsolePrewarm(relayId, resource, browserOrigin, write)
+        : undefined
+      const socketAttempt = prewarmed
+        ? yield* Effect.acquireRelease(
+            Effect.succeed(prewarmed.socket),
+            (attempt) => closeSocketAttempt(attempt)
+          )
+        : browserOrigin
+          ? yield* forkRelayConsoleSocket(browserOrigin, relayId, timing)
+          : null
       const credentialLease = yield* Effect.acquireRelease(
         Effect.sync(() =>
           acquireRelayBrowserCredentials(relayId, resource.id, resource.kind)
         ),
         (lease) => Effect.sync(lease.release)
       )
+      // The prewarm's lease ends with the console, so a capability it is
+      // still issuing is not cancelled.
+      if (prewarmed)
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(prewarmed.releaseCredentials)
+        )
       const { keys, publicKeyJwk } = yield* Effect.tryPromise({
         try: () => credentialLease.credentials,
         catch: asError,
       })
+      const issue = Effect.tryPromise({
+        try: () =>
+          credentialLease.issue({ kind: "console", optInV2: true, write }),
+        catch: asError,
+      })
+      // A prewarmed capability that failed is issued again for this console.
       const capability = yield* withConsoleTimingSpan(
         timing,
         "Issue console capability",
         "http.console.capability",
-        Effect.tryPromise({
-          try: () =>
-            credentialLease.issue({
-              kind: "console",
-              optInV2: true,
-              write,
-            }),
-          catch: asError,
-        })
+        prewarmed
+          ? Effect.tryPromise({
+              try: () => prewarmed.capability,
+              catch: asError,
+            }).pipe(Effect.catch(() => issue))
+          : issue
       )
       if (capability.proxyMode === "hearth") {
         return yield* Effect.fail(
@@ -279,6 +299,129 @@ function openDirectRelayConsoleStream(
         ])
       )
     })
+  )
+}
+
+// A Relay's challenge expires 10 s after its socket opens; a prewarm that has
+// not been used well before then is discarded.
+const consolePrewarmLifetimeMs = 8_000
+// Hovering down a list prewarms each server; keep only the latest few.
+const maximumConsolePrewarms = 2
+
+interface ConsolePrewarm {
+  // Hands the prewarm to a console: it no longer expires on its own.
+  adopt: () => void
+  browserOrigin: string
+  capability: Promise<IssuedConsoleCapability>
+  discard: () => void
+  releaseCredentials: () => void
+  socket: ConsoleSocketAttempt
+}
+
+type IssuedConsoleCapability = Awaited<
+  ReturnType<ReturnType<typeof acquireRelayBrowserCredentials>["issue"]>
+>
+type ConsoleSocketAttempt = Effect.Success<
+  ReturnType<typeof forkRelayConsoleSocket>
+>
+
+const consolePrewarms = new Map<string, ConsolePrewarm>()
+
+/**
+ * Starts opening a game server's console from a link the user is about to
+ * follow: its Relay socket, up to the Relay's challenge, and its console
+ * capability. The console that opens next adopts both and only has to
+ * authenticate. A prewarm nobody adopts closes after a few seconds.
+ */
+export function prewarmRelayConsole(input: {
+  browserOrigin: string
+  instanceId: string
+  relayId: string
+  write: boolean
+}): void {
+  const key = consolePrewarmKey(input.relayId, input.instanceId, input.write)
+  if (consolePrewarms.has(key)) return
+  for (const [oldest, prewarm] of consolePrewarms) {
+    if (consolePrewarms.size < maximumConsolePrewarms) break
+    consolePrewarms.delete(oldest)
+    prewarm.discard()
+  }
+
+  const lease = acquireRelayBrowserCredentials(input.relayId, input.instanceId)
+  const capability = lease.credentials.then(() =>
+    lease.issue({ kind: "console", optInV2: true, write: input.write })
+  )
+  // Rejections reach the console that adopts it, or nobody.
+  forkPromise(() => capability)
+  const scope = Scope.makeUnsafe()
+  const socket: ConsoleSocketAttempt = {
+    fiber: Effect.runFork(
+      openRelayConsoleSocket(input.browserOrigin, input.relayId).pipe(
+        Effect.result,
+        Scope.provide(scope)
+      )
+    ),
+    scope,
+  }
+  let credentialsHeld = true
+  const releaseCredentials = () => {
+    if (!credentialsHeld) return
+    credentialsHeld = false
+    lease.release()
+  }
+  const forget = () => {
+    clearTimeout(expiry)
+    unsubscribe()
+    if (consolePrewarms.get(key) === prewarm) consolePrewarms.delete(key)
+  }
+  const prewarm: ConsolePrewarm = {
+    adopt: forget,
+    browserOrigin: input.browserOrigin,
+    capability,
+    discard: () => {
+      forget()
+      releaseCredentials()
+      Effect.runFork(closeSocketAttempt(socket))
+    },
+    releaseCredentials,
+    socket,
+  }
+  // A capability issued before an authorization change may no longer hold.
+  const unsubscribe = lease.onAuthorizationChange(() => prewarm.discard())
+  const expiry = setTimeout(() => prewarm.discard(), consolePrewarmLifetimeMs)
+  consolePrewarms.set(key, prewarm)
+}
+
+function takeConsolePrewarm(
+  relayId: string,
+  resource: RelayConsoleResource,
+  browserOrigin: string,
+  write: boolean
+): ConsolePrewarm | undefined {
+  // Only a game server's own console is prewarmed.
+  if (resource.kind !== "instance" || resource.stream) return undefined
+  const key = consolePrewarmKey(relayId, resource.id, write)
+  const prewarm = consolePrewarms.get(key)
+  if (!prewarm) return undefined
+  if (!sameRelayBrowserEndpoint(prewarm.browserOrigin, browserOrigin)) {
+    prewarm.discard()
+    return undefined
+  }
+  prewarm.adopt()
+  return prewarm
+}
+
+function consolePrewarmKey(
+  relayId: string,
+  instanceId: string,
+  write: boolean
+) {
+  return `${relayId}:${instanceId}:${write ? "write" : "read"}`
+}
+
+function closeSocketAttempt(attempt: ConsoleSocketAttempt) {
+  return Fiber.interrupt(attempt.fiber).pipe(
+    Effect.andThen(Scope.close(attempt.scope, Exit.void))
   )
 }
 
