@@ -214,6 +214,9 @@ function InstanceProvisioningBoundary({
   })
   if (!instance.provisioning) return children
   if (isInfoRoute) return children
+  // Completes a fresh tab's open. A client navigation shown here never
+  // resolves its route, because the router waits for the matches this
+  // replaces to render, so that open still ends at its timeout.
   return (
     <>
       <PageContent
