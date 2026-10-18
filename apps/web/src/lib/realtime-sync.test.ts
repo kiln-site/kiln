@@ -226,75 +226,103 @@ it("retries recovery until an open game server page has been read again", async 
   }
 })
 
-it("rereads a Relay's proxy for the map once its snapshot lands after a reconnect", async () => {
-  const clients = createAppClients()
-  openClients.push(clients)
-  const { queryClient } = clients
-  const stop = startRealtimeSync(
-    queryClient,
-    getRelayInstancesCollection(clients.dbClient)
-  )
-  const stream = FakeEventSource.current!
-  const observers: Array<() => void> = []
-  try {
-    stream.emit({
-      clear: false,
-      epoch,
-      hearth: false,
-      sequence: 1,
-      type: "reset",
-    })
-    await settle()
-
-    // The map opens while the Relay is away: no snapshot has reported its
-    // proxy yet, and its routes cannot be read.
-    relay.getRelayProxyModes
-      .mockResolvedValueOnce([{ mode: null, relayId }])
-      .mockResolvedValue([{ mode: "traefik", relayId }])
-    relays.getRelayWebRoutes
-      .mockRejectedValueOnce(new Error("Relay is offline"))
-      .mockResolvedValue([
-        {
-          hostname: "map.example.test",
-          id: "one",
-          owner: { id: row.id, kind: "server", service: null },
-          path: null,
-        },
-      ])
-    const modes = new QueryObserver(queryClient, relayProxyModesQueryOptions())
-    const routes = new QueryObserver(
+it.each([
+  ["have settled", false],
+  ["are still in flight", true],
+])(
+  "rereads a Relay's proxy for the map once its snapshot lands after a reconnect, when its first reads %s",
+  async (_case, inFlight) => {
+    const clients = createAppClients()
+    openClients.push(clients)
+    const { queryClient } = clients
+    const stop = startRealtimeSync(
       queryClient,
-      relayWebRoutesQueryOptions(relayId)
+      getRelayInstancesCollection(clients.dbClient)
     )
-    observers.push(
-      modes.subscribe(() => undefined),
-      routes.subscribe(() => undefined)
-    )
-    await vi.waitFor(() => {
-      expect(modes.getCurrentResult().data).toEqual([{ mode: null, relayId }])
-      expect(routes.getCurrentResult().status).toBe("error")
-    })
+    const stream = FakeEventSource.current!
+    const observers: Array<() => void> = []
+    try {
+      stream.emit({
+        clear: false,
+        epoch,
+        hearth: false,
+        sequence: 1,
+        type: "reset",
+      })
+      await settle()
 
-    // It reconnects, then pushes the snapshot that carries its proxy.
-    stream.emit({
-      epoch,
-      relayId,
-      sequence: 2,
-      status: "connected",
-      type: "relay.status",
-    })
-    stream.emit({ epoch, sequence: 3, type: "relay.invalidate" })
+      // The map opens while the Relay is away: no snapshot has reported its
+      // proxy yet, and its routes cannot be read. Those first answers can
+      // arrive before the Relay is back, or only after.
+      let answerFirstReads!: () => void
+      const firstReads = new Promise<void>((resolve) => {
+        answerFirstReads = resolve
+      })
+      if (!inFlight) answerFirstReads()
+      relay.getRelayProxyModes
+        .mockImplementationOnce(() =>
+          firstReads.then(() => [{ mode: null, relayId }])
+        )
+        .mockResolvedValue([{ mode: "traefik", relayId }])
+      relays.getRelayWebRoutes
+        .mockImplementationOnce(() =>
+          firstReads.then(() => Promise.reject(new Error("Relay is offline")))
+        )
+        .mockResolvedValue([
+          {
+            hostname: "map.example.test",
+            id: "one",
+            owner: { id: row.id, kind: "server", service: null },
+            path: null,
+          },
+        ])
+      const modes = new QueryObserver(
+        queryClient,
+        relayProxyModesQueryOptions()
+      )
+      const routes = new QueryObserver(
+        queryClient,
+        relayWebRoutesQueryOptions(relayId)
+      )
+      observers.push(
+        modes.subscribe(() => undefined),
+        routes.subscribe(() => undefined)
+      )
+      if (!inFlight)
+        await vi.waitFor(() => {
+          expect(modes.getCurrentResult().data).toEqual([
+            { mode: null, relayId },
+          ])
+          expect(routes.getCurrentResult().status).toBe("error")
+        })
 
-    await vi.waitFor(() => {
+      // It reconnects, then pushes the snapshot that carries its proxy.
+      stream.emit({
+        epoch,
+        relayId,
+        sequence: 2,
+        status: "connected",
+        type: "relay.status",
+      })
+      stream.emit({ epoch, sequence: 3, type: "relay.invalidate" })
+      await settle()
+      answerFirstReads()
+
+      await vi.waitFor(() => {
+        expect(modes.getCurrentResult().data).toEqual([
+          { mode: "traefik", relayId },
+        ])
+        expect(
+          routes.getCurrentResult().data?.map((route) => route.hostname)
+        ).toEqual(["map.example.test"])
+      })
+      await settle()
       expect(modes.getCurrentResult().data).toEqual([
         { mode: "traefik", relayId },
       ])
-      expect(
-        routes.getCurrentResult().data?.map((route) => route.hostname)
-      ).toEqual(["map.example.test"])
-    })
-  } finally {
-    for (const unsubscribe of observers) unsubscribe()
-    stop()
+    } finally {
+      for (const unsubscribe of observers) unsubscribe()
+      stop()
+    }
   }
-})
+)
