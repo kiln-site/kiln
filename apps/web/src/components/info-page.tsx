@@ -39,15 +39,20 @@ export function InfoPage({
   rail: React.ReactNode
 }) {
   return (
-    <section className="min-h-0 flex-1 overflow-y-auto bg-card">
+    // A size container, so the rail can be as tall as the page's viewport.
+    <section className="min-h-0 flex-1 overflow-y-auto bg-card lg:@container-size">
       <div className="grid min-h-full lg:grid-cols-[minmax(0,1fr)_21rem]">
         <div className="flex min-w-0 flex-col gap-4 px-5 py-6 sm:px-7">
           {children}
         </div>
         {/* Rail labels are short, so they take only their width and leave the
             rest to values. */}
-        <aside className="min-w-0 border-t bg-background/30 px-4 py-6 lg:border-t-0 lg:border-l [&_dt]:min-w-0">
-          {rail}
+        <aside className="min-w-0 border-t bg-background/30 lg:border-t-0 lg:border-l [&_dt]:min-w-0">
+          {/* Stays in view while the sections scroll, and scrolls on its own
+              only when it's taller than the page. */}
+          <div className="px-4 py-6 lg:sticky lg:top-0 lg:max-h-[100cqh] lg:overflow-y-auto lg:[scrollbar-width:thin] lg:[scrollbar-color:var(--border)_transparent]">
+            {rail}
+          </div>
         </aside>
       </div>
     </section>
