@@ -427,6 +427,43 @@ describeMysql("removing a game server's domain", () => {
         }).pipe(Effect.provide(disabledCache))
     )
 
+    it.effect(
+      "retries a failed replacement while leaving a failed delete alone",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          const dns = fakeCloudflare({ records: ["address-record"] })
+          dns.refuseDelete.add("address-record")
+          yield* insertCredential()
+          yield* insertAssignment({ ...testAssignment(), srvRecordId: null })
+          // Its last domain's delete half-failed, then a replacement added by
+          // hand failed before Cloudflare had any records for it.
+          yield* removeInstanceDomainEffect(
+            relayId,
+            instanceId,
+            testAssignment().id
+          ).pipe(Effect.flip)
+          yield* insertAssignment({
+            ...testAlias(),
+            addressRecordId: null,
+            status: "error",
+          })
+
+          yield* Effect.promise(() =>
+            provisionInstanceDomain(testInstance(), relayId)
+          )
+
+          const rows = yield* selectRows<{ id: string; status: string }>(
+            "instance_domain"
+          )
+          const statuses = new Map(rows.map((row) => [row.id, row.status]))
+          assert.strictEqual(statuses.get(testAssignment().id), "removing")
+          assert.strictEqual(statuses.get(aliasId), "active")
+          assert.include(dns.names(), "alias.kiln.site")
+          assert.notInclude(dns.names(), "play.kiln.site")
+        }).pipe(Effect.provide(disabledCache))
+    )
+
     it.effect("keeps the removal until the game server is gone", () =>
       Effect.gen(function* () {
         yield* resetDatabase
