@@ -211,6 +211,19 @@ function backupWithDeleteIntent(backup: Backup): Backup {
   }
 }
 
+// A delete that left the backup in place, such as one whose artifact could
+// not be removed, has still finished once its own task settles.
+function deleteSettledSinceMark(backup: Backup, marked: Backup | undefined) {
+  return (
+    marked !== undefined &&
+    backup.taskKind === "delete" &&
+    backup.taskId !== marked.taskId &&
+    (backup.taskStatus === "succeeded" ||
+      backup.taskStatus === "failed" ||
+      backup.taskStatus === "cancelled")
+  )
+}
+
 function useBackupsWithDeleteFeedback(
   backups: Array<Backup>,
   deleteFeedbackStore: BackupDeleteFeedbackStore
@@ -280,11 +293,7 @@ function useBackupsWithDeleteFeedback(
 
   React.useEffect(() => {
     const finished = backups.flatMap((backup) =>
-      deleting.has(backup.id) &&
-      backup.taskKind === "delete" &&
-      (backup.taskStatus === "cancelled" || backup.taskStatus === "failed")
-        ? [backup.id]
-        : []
+      deleteSettledSinceMark(backup, deleting.get(backup.id)) ? [backup.id] : []
     )
     if (finished.length > 0) deleteFeedbackStore.remove(finished)
   }, [backups, deleteFeedbackStore, deleting])
@@ -293,10 +302,8 @@ function useBackupsWithDeleteFeedback(
     const incomingIds = new Set(backups.map((backup) => backup.id))
     return [
       ...backups.map((backup) => {
-        const deleteFinishedWithError =
-          backup.taskKind === "delete" &&
-          (backup.taskStatus === "cancelled" || backup.taskStatus === "failed")
-        return deleting.has(backup.id) && !deleteFinishedWithError
+        const marked = deleting.get(backup.id)
+        return marked && !deleteSettledSinceMark(backup, marked)
           ? backupHasReportedDeleteArtifactProgress(backup)
             ? backup
             : backupWithDeleteIntent(backup)

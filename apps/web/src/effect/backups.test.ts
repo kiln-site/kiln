@@ -953,6 +953,52 @@ describeMysql("backup reconciliation", () => {
       })
     )
 
+    it.effect(
+      "deletes every artifact of an incremental backup once its snapshot is forgotten",
+      () =>
+        Effect.gen(function* () {
+          yield* fresh
+          yield* insertBackup("backup-one", {
+            artifact_kind: "restic_snapshot",
+            backup_mode: "incremental",
+            status: "deleting",
+          })
+          // Legacy installs also copied the backup into a storage-keyed
+          // artifact; the Relay reports only the one it was sent.
+          yield* insertArtifact("backup-one", "backup-one")
+          yield* insertArtifact("artifact-one", "backup-one", {
+            destination_key: "restic",
+          })
+          yield* insertTask("task-one", "backup-one", {
+            task_kind: "delete",
+            status: "running",
+            relay_updated_at_ms: 100,
+          })
+
+          yield* reconcileBackupTaskEffect(
+            deleteTask({
+              status: "succeeded",
+              result: {
+                artifacts: [
+                  { artifactId: "backup-one", error: null, status: "deleted" },
+                ],
+                warnings: [],
+              },
+            })
+          )
+
+          const artifactRows = yield* artifacts
+          assert.strictEqual(artifactRows.get("backup-one")?.status, "deleted")
+          assert.strictEqual(
+            artifactRows.get("artifact-one")?.status,
+            "deleted"
+          )
+          const backup = (yield* backups).get("backup-one")
+          assert.strictEqual(backup?.status, "deleted")
+          assert.strictEqual(Number(backup?.deleted_at), 200)
+        })
+    )
+
     it.effect("reconciles delete progress one artifact at a time", () =>
       Effect.gen(function* () {
         yield* fresh
