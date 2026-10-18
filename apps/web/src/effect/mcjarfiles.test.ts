@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Layer } from "effect"
+import { Effect, Fiber, Layer } from "effect"
 import * as TestClock from "effect/testing/TestClock"
 import { afterEach, expect, vi } from "vite-plus/test"
 
@@ -146,11 +146,51 @@ describe("Minecraft version catalog", () => {
         const catalog = yield* listMcJarVersionsEffect("servers", "paper")
 
         assert.deepStrictEqual(catalog.versions, ["1.21.11", "1.21.10"])
-        // Stored as stale, so the next read refreshes it from mcjarfiles.
-        expect(cache.stored()).toMatchObject({
-          storedAt: 0,
-          value: { versions: ["1.21.11", "1.21.10"] },
-        })
+        // Not stored, so the next read asks mcjarfiles again.
+        expect(cache.stored()).toBeNull()
+      }).pipe(Effect.provide(cache.layer))
+    }
+  )
+
+  it.effect(
+    "never replaces a list another reader stored with the previous one",
+    () => {
+      const cache = memoryCache({
+        "mcjarfiles:versions:servers:paper:last-known": { versions: ["old"] },
+      })
+      // Two first reads race: one succeeds, then the other fails.
+      const answers: Array<(response: Response) => void> = []
+      vi.stubGlobal(
+        "fetch",
+        () =>
+          new Promise<Response>((resolve) => {
+            answers.push(resolve)
+          })
+      )
+      return Effect.gen(function* () {
+        const fiber = yield* Effect.all(
+          [1, 2].map(() => listMcJarVersionsEffect("servers", "paper")),
+          { concurrency: "unbounded" }
+        ).pipe(Effect.forkChild)
+        yield* Effect.promise(() =>
+          vi.waitFor(() => expect(answers).toHaveLength(2))
+        )
+        answers[0]!(Response.json(["new"]))
+        yield* Effect.promise(() =>
+          vi.waitFor(() =>
+            expect(cache.stored()).toMatchObject({
+              value: { versions: ["new"] },
+            })
+          )
+        )
+        answers[1]!(new Response(null, { status: 503 }))
+        const catalogs = yield* Fiber.join(fiber)
+
+        assert.deepStrictEqual(
+          catalogs.map((catalog) => catalog.versions),
+          [["new"], ["old"]]
+        )
+        expect(cache.stored()).toMatchObject({ value: { versions: ["new"] } })
       }).pipe(Effect.provide(cache.layer))
     }
   )

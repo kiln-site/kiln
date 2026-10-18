@@ -68,9 +68,8 @@ export interface WarmCachePolicy {
 interface WarmCacheOptions<TResult, TError, TRequirements> {
   decode: (input: unknown) => TResult
   load: Effect.Effect<TResult, TError, TRequirements>
-  // A value to serve when nothing is cached and the first load fails, such
-  // as one kept under an older key. It is stored as stale, so the next read
-  // refreshes it.
+  // A value to serve when nothing is cached and the load fails, such as one
+  // kept under an older key. It is not stored, so the next read loads again.
   lastKnown?: Effect.Effect<TResult | undefined, never, TRequirements>
   policy: WarmCachePolicy
 }
@@ -117,12 +116,9 @@ export const readWarmCache = Effect.fn("cache.readWarm")(function* <
   if (Option.isNone(cached)) {
     const loaded = yield* Effect.result(storeWarm(options))
     if (Result.isSuccess(loaded)) return loaded.success
+    // Served, never stored: another reader may have stored a newer value.
     const lastKnown = options.lastKnown ? yield* options.lastKnown : undefined
     if (lastKnown === undefined) return yield* Effect.fail(loaded.failure)
-    yield* writeCachedJson(
-      { key: policy.key, name: policy.name, ttlMs: policy.ttlMs },
-      { storedAt: 0, value: lastKnown }
-    )
     return lastKnown
   }
 
