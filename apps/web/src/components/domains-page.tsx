@@ -133,22 +133,18 @@ type DomainDialog =
   | null
 
 const strategyOptions: ReadonlyArray<{
-  description: string
   label: string
   value: DomainAssignmentStrategy
 }> = [
   {
-    description: "New game servers use the default domain.",
     label: "Default only",
     value: "default",
   },
   {
-    description: "Each new game server gets a random domain.",
     label: "Random",
     value: "random",
   },
   {
-    description: "New game servers go to the domain with the fewest.",
     label: "Spread evenly",
     value: "balanced",
   },
@@ -1445,8 +1441,8 @@ function DomainConfigurationDialog({
         <DialogHeader>
           {mode === "settings" ? (
             <>
-              <DialogTitle>Configure vanity URLs</DialogTitle>
-              <DialogDescription>
+              <DialogTitle>Configure Vanity URLs</DialogTitle>
+              <DialogDescription className="sr-only">
                 Connect Cloudflare and choose the domains Kiln gives game
                 servers addresses under.
               </DialogDescription>
@@ -1522,11 +1518,6 @@ function DomainConfigurationDialog({
                   </TooltipContent>
                 </Tooltip>
               </div>
-              <TokenCheckStatus
-                check={tokenCheck}
-                hasIntegration={hasIntegration}
-                tokenLength={tokenLength}
-              />
             </div>
 
             <div className="space-y-1.5">
@@ -1535,7 +1526,12 @@ function DomainConfigurationDialog({
                   Domains
                 </p>
                 <div className="flex items-center gap-2">
-                  {choices.length > 0 ? (
+                  {tokenCheck.status === "error" && choices.length > 0 ? (
+                    <span className="type-meta flex min-w-0 items-center gap-1 text-destructive">
+                      <CircleAlert className="size-3 shrink-0" />
+                      <span className="truncate">{tokenCheck.message}</span>
+                    </span>
+                  ) : choices.length > 0 ? (
                     <span className="type-meta text-muted-foreground tabular-nums">
                       {selected.length} of {choices.length} in use
                     </span>
@@ -1607,9 +1603,15 @@ function DomainConfigurationDialog({
                           className="type-meta px-3 py-6 text-center text-muted-foreground"
                           colSpan={4}
                         >
-                          {tokenCheck.status === "checking"
-                            ? "Listing the token's domains…"
-                            : "Paste a token to list the domains it can manage."}
+                          {tokenCheck.status === "checking" ? (
+                            "Listing the token's domains…"
+                          ) : tokenCheck.status === "error" ? (
+                            <span className="text-destructive">
+                              {tokenCheck.message}
+                            </span>
+                          ) : (
+                            "Paste a token to list the domains it can manage."
+                          )}
                         </td>
                       </tr>
                     )}
@@ -1620,15 +1622,8 @@ function DomainConfigurationDialog({
 
             <div className="flex flex-col gap-3 border border-border/75 bg-background/35 p-3 sm:flex-row sm:items-center">
               <div className="min-w-0 flex-1">
-                <p className="text-xs font-medium" id="automatic-provisioning">
+                <p className="type-control-sm" id="automatic-provisioning">
                   Automatic provisioning
-                </p>
-                <p className="type-meta mt-0.5 text-muted-foreground">
-                  {enabled
-                    ? strategyOptions.find(
-                        (option) => option.value === strategy
-                      )?.description
-                    : "New game servers start without a domain."}
                 </p>
               </div>
               <div className="flex shrink-0 items-center gap-3">
@@ -1717,57 +1712,6 @@ function DomainConfigurationDialog({
         )}
       </DialogContent>
     </Dialog>
-  )
-}
-
-function TokenCheckStatus({
-  check,
-  hasIntegration,
-  tokenLength,
-}: {
-  check: TokenCheck
-  hasIntegration: boolean
-  tokenLength: number
-}) {
-  if (tokenLength > 0 && tokenLength < 20) {
-    return (
-      <p className="type-meta text-muted-foreground">Paste the whole token.</p>
-    )
-  }
-  if (check.status === "checking") {
-    return (
-      <p className="type-meta flex items-center gap-1.5 text-muted-foreground">
-        <LoaderCircle className="size-3 animate-spin" />
-        Checking the token…
-      </p>
-    )
-  }
-  if (check.status === "error") {
-    return (
-      <p className="type-meta flex items-start gap-1.5 text-destructive">
-        <CircleAlert className="mt-0.5 size-3 shrink-0" />
-        <span>{check.message}</span>
-      </p>
-    )
-  }
-  if (check.status === "ready") {
-    return (
-      <p className="type-meta flex items-center gap-1.5 text-emerald-700 dark:text-emerald-300">
-        <Check className="size-3" />
-        {tokenLength > 0 ? "This token" : "The saved token"} can manage{" "}
-        {check.count} {check.count === 1 ? "zone" : "zones"}.
-      </p>
-    )
-  }
-  return (
-    <p className="type-meta flex items-start gap-1.5 text-muted-foreground">
-      <KeyRound className="mt-0.5 size-3 shrink-0" />
-      <span>
-        {hasIntegration
-          ? "Optional. Leave blank to keep the encrypted token already on file."
-          : "Stored encrypted. Kiln lists the zones it can manage."}
-      </span>
-    </p>
   )
 }
 
