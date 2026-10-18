@@ -180,8 +180,11 @@ const DataTableRowsContext = React.createContext<
   ReadonlyArray<DataTableSelectableRow>
 >([])
 
+// Each row draws its own bottom border. The body ends 1px past the table, so a
+// last row that reaches the bottom tucks its border under the card's border
+// instead of stacking a second line beside it.
 const dataTableScrollAreaClassName =
-  "block min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain border-b border-border/70"
+  "-mb-px block min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain"
 
 export function DataTableRenderer<TData extends RowData>({
   leadingBody,
@@ -279,7 +282,7 @@ function DataTableRowModel<TData extends RowData>({
           aria-rowcount={
             leadingBody ? undefined : hasBodyState ? 2 : rows.length + 1
           }
-          className="flex h-full min-h-0 w-full min-w-0 border-collapse flex-col overflow-hidden pb-px text-left"
+          className="flex h-full min-h-0 w-full min-w-0 border-collapse flex-col overflow-hidden text-left"
           role="table"
           style={gridStyle}
         >

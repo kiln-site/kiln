@@ -195,7 +195,7 @@ export const BackupTable = React.memo(function BackupTable({
       {mobileLayout ? (
         <div
           ref={mobileScrollRootRef}
-          className="h-full overflow-x-hidden overflow-y-auto overscroll-y-contain"
+          className="-mb-px h-full overflow-x-hidden overflow-y-auto overscroll-y-contain"
         >
           <BackupMobileList
             renderEmpty={renderEmpty}

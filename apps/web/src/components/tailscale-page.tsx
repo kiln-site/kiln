@@ -139,7 +139,7 @@ export const TailscalePage = React.memo(function TailscalePage({
             />
           }
         />
-        <div className="min-h-0 flex-1 overflow-auto">
+        <div className="-mb-px min-h-0 flex-1 overflow-auto">
           <TailscaleConnectedServersTable
             searchStore={searchStore}
             stack={selectedStack}

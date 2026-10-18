@@ -81,8 +81,10 @@ export function WorkspaceTable<T>({
     return renderEmpty(searchStore.getNormalizedSnapshot().length > 0)
   }
 
+  // The last row's border sits 1px past the table's end, under the bottom
+  // border of the card that holds it, so the two never stack.
   return (
-    <div className="min-w-0 overflow-clip pb-px">
+    <div className="-mb-px min-w-0 overflow-clip">
       <table className="w-full table-fixed border-collapse text-left">
         {head}
         <tbody className="divide-y divide-border/70 border-b border-border/70">
