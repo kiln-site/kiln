@@ -100,7 +100,11 @@ export const MapNode = React.memo(function MapNode({
     case "relay-summary":
       return <RelaySummaryNode node={node} rect={rect} onSelect={onSelect} />
     case "relay":
-      return <LiveRelayNode node={node} rect={rect} onSelect={onSelect} />
+      return node.relay.restricted ? (
+        <RestrictedRelayNode node={node} rect={rect} />
+      ) : (
+        <LiveRelayNode node={node} rect={rect} onSelect={onSelect} />
+      )
     case "proxy":
       return <ProxyNode node={node} rect={rect} />
     case "resource":
@@ -536,6 +540,33 @@ function useRelayStatus(relay: InfraMapRelay): IdentityStatusPresentation {
   })
   if (!relay.enabled) return relayStatusPresentation.paused
   return relayStatusPresentation[reachability ?? "checking"]
+}
+
+/** A Relay the user cannot read: its name, and nothing it would reveal. */
+function RestrictedRelayNode({
+  node,
+  rect,
+}: {
+  node: Extract<InfraMapNode, { type: "relay" }>
+  rect: InfraMapRect
+}) {
+  return (
+    <div
+      className={cn(nodeClass, "flex flex-col justify-center px-3 py-2.5")}
+      data-node-id={node.id}
+      style={nodeStyle(rect)}
+    >
+      <NodeTitle
+        icon={
+          <NodeIcon tone="kiln">
+            <RadioTower className="size-4" aria-hidden="true" />
+          </NodeIcon>
+        }
+        meta="You can't view this Relay"
+        name={node.relay.name}
+      />
+    </div>
+  )
 }
 
 function LiveRelayNode(props: {

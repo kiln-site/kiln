@@ -163,6 +163,12 @@ function applyRealtimeEvent(input: ApplyRealtimeEventInput): void {
         )
     )
     recordReachabilityPush(queryClient, event.relayId, event.status)
+    // A Relay that reconnects pushes a fresh snapshot with its proxy mode.
+    if (event.status === "connected")
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.relayProxyModes,
+        exact: true,
+      })
     // Every observation on this Relay depends on its reachability.
     void recheckInstanceObservations(queryClient, {
       predicate: ({ queryKey }) =>

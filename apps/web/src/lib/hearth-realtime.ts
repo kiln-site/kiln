@@ -50,7 +50,11 @@ const hearthRealtimeQueryScopes = {
   ],
   activity: [prefix(["activity"])],
   "app-directory": [exact(queryKeys.apps.directory)],
-  apps: [prefix(["apps"]), prefix(["instance-inventory", "app"])],
+  apps: [
+    prefix(["apps"]),
+    prefix(["instance-inventory", "app"]),
+    prefix(["web-routes"]),
+  ],
   "backup-settings": [
     prefix(["backups", "policy"]),
     prefix(["backups", "usage"]),
@@ -82,7 +86,11 @@ const hearthRealtimeQueryScopes = {
     exact(queryKeys.relays),
     prefix(["instance-inventory", "relay"]),
   ],
-  "relay-proxy": [prefix(["relays", "proxy"])],
+  "relay-proxy": [
+    prefix(["relays", "proxy"]),
+    exact(queryKeys.relayProxyModes),
+    prefix(["web-routes"]),
+  ],
   relays: [
     prefix(["infra-directory"]),
     prefix(["instance-inventory"]),
@@ -99,6 +107,7 @@ const hearthRealtimeQueryScopes = {
     exact(queryKeys.tailscaleStacks),
     prefix(["activity"]),
     prefix(["relays", "proxy"]),
+    exact(queryKeys.relayProxyModes),
   ],
   schedules: [exact(queryKeys.schedules.all)],
   tailscale: [
@@ -155,6 +164,7 @@ function queryScopes(
     return [
       prefix(["apps"]),
       prefix(instanceInventoryScope({ kind: "app", relayId: scope.relayId })),
+      exact(queryKeys.relayWebRoutes(scope.relayId)),
     ]
   }
   if (topic === "databases" && scope) {
@@ -165,11 +175,16 @@ function queryScopes(
     ]
   }
   if (topic === "instance-web-routes" && scope?.instanceId) {
-    return [exact(queryKeys.relay.webRoutes(scope.relayId, scope.instanceId))]
+    return [
+      exact(queryKeys.relay.webRoutes(scope.relayId, scope.instanceId)),
+      exact(queryKeys.relayWebRoutes(scope.relayId)),
+    ]
   }
   if (topic === "relay-proxy" && scope) {
     return [
       prefix(queryKeys.relayProxy(scope.relayId)),
+      exact(queryKeys.relayProxyModes),
+      exact(queryKeys.relayWebRoutes(scope.relayId)),
       // The Traefik config only exists in Bundled mode.
       prefix(queryKeys.relayHostFiles(scope.relayId)),
     ]
@@ -181,6 +196,8 @@ function queryScopes(
       ),
       exact(queryKeys.relays),
       prefix(queryKeys.relayProxy(scope.relayId)),
+      exact(queryKeys.relayProxyModes),
+      exact(queryKeys.relayWebRoutes(scope.relayId)),
       prefix(["databases", scope.relayId]),
     ]
   }

@@ -5,8 +5,6 @@ import {
   relayIdSchema as relayFingerprintSchema,
   relayNameSchema,
   relayHostAccessSchema,
-  relayProxyConfigurationSchema,
-  relayProxyConfigurationV1Feature,
   relayProxyDiagnosticsSchema,
   relayProxyModeSchema,
   relayProxySettingsSchema,
@@ -400,27 +398,16 @@ export const getRelayProxy = createServerFn({ method: "GET" })
     )
   })
 
-// Every web route the Relay's proxy serves, with the game server or app each
-// reaches, for the infrastructure map. Null from Relays that predate it.
+// Every web route the Relay's proxy serves that the user may see, for the
+// infrastructure map. Null from Relays that predate it.
 export const getRelayWebRoutes = createServerFn({ method: "GET" })
   .validator(relayIdSchema)
   .handler(async ({ data }) => {
-    await requireRelayAdministrator(data.id, "relay.read")
-    const [relay, { relayConnectionFeatures, relayRpc }] = await Promise.all([
-      enabledRelay(data.id),
-      import("@/lib/relay-connection"),
-    ])
-    if (!relayConnectionFeatures(relay.id).has(relayProxyConfigurationV1Feature))
-      return null
-    const { routes } = relayProxyConfigurationSchema.parse(
-      await relayRpc(relay, "relay.proxy.config.read", {}, 15_000)
+    const user = await requireEligibleResourceUser()
+    const { relayWebRoutesHandler } = await import(
+      "@/server/relay-web-routes.server"
     )
-    return routes.map(({ hostname, id, owner, path }) => ({
-      hostname,
-      id,
-      owner,
-      path,
-    }))
+    return relayWebRoutesHandler(user, data.id)
   })
 
 // Files the Info page opens in the Relay's host files: its database, and the

@@ -1,0 +1,63 @@
+import {
+  relayProxyConfigurationSchema,
+  relayProxyConfigurationV1Feature,
+} from "@workspace/contracts"
+
+import { isPlatformAdmin, listUserGrants } from "@/lib/access-control"
+import type { AuthenticatedUser } from "@/lib/auth-session"
+import { relayConnectionFeatures, relayRpc } from "@/lib/relay-connection"
+import { listPersistedRelays } from "@/lib/relay-registry"
+import { effectiveScopePermissions } from "@/lib/resource-permissions"
+import {
+  relayScope,
+  resolveScopeAuthorization,
+} from "@/lib/scope-authorization.server"
+import { hasAppPermission } from "@/server/app-access"
+
+export interface RelayWebRoute {
+  hostname: string
+  id: string
+  owner: { id: string; kind: "app" | "server"; service: string | null }
+  path: string | null
+}
+
+/**
+ * Every web route a Relay's proxy serves that the user may see, for the
+ * infrastructure map. Each route needs the permission its resource's own
+ * routes need: `instance.network.read` on a game server, `app.read` on the
+ * Relay's apps. Null from Relays that predate the read.
+ */
+export async function relayWebRoutesHandler(
+  user: AuthenticatedUser,
+  relayId: string
+): Promise<Array<RelayWebRoute> | null> {
+  const authorization = await resolveScopeAuthorization({
+    scope: relayScope(relayId),
+    user,
+  })
+  authorization.require("relay.read")
+  const relay = (await listPersistedRelays()).find(
+    (candidate) => candidate.enabled && candidate.id === relayId
+  )
+  if (!relay) throw new Error("Relay is not configured or is paused")
+  if (!relayConnectionFeatures(relay.id).has(relayProxyConfigurationV1Feature))
+    return null
+  const { routes } = relayProxyConfigurationSchema.parse(
+    await relayRpc(relay, "relay.proxy.config.read", {}, 15_000)
+  )
+  const grants = isPlatformAdmin(user)
+    ? []
+    : await listUserGrants(user.id, relayId)
+  const canRead = (owner: RelayWebRoute["owner"]) =>
+    isPlatformAdmin(user) ||
+    (owner.kind === "app"
+      ? hasAppPermission(user, grants, relayId, "app.read")
+      : effectiveScopePermissions(grants, {
+          relayId,
+          resourceType: "instance",
+          resourceId: owner.id,
+        }).has("instance.network.read"))
+  return routes.flatMap(({ hostname, id, owner, path }) =>
+    canRead(owner) ? [{ hostname, id, owner, path }] : []
+  )
+}

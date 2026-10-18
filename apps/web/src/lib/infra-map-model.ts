@@ -26,6 +26,11 @@ export interface InfraMapRelay {
   enabled: boolean
   address: string
   nodeArch: string | null
+  /**
+   * Shown because the user can read an instance on it, not the Relay
+   * itself, so it draws with only its name.
+   */
+  restricted?: boolean
 }
 
 export interface InfraMapResource {
@@ -33,6 +38,7 @@ export interface InfraMapResource {
   kind: InfraMapResourceKind
   id: string
   relayId: string
+  relayName: string
   name: string
   meta: string
   routeId: string
@@ -174,16 +180,24 @@ function fleetView(builder: ViewBuilder, data: InfraMapData) {
   const dnsRelays = new Set(
     (data.domains?.assignments ?? []).map((domain) => domain.relayId)
   )
-  const edge = edgeNode(data, {
-    frontsHearth: data.provider !== null,
-    domainCount: data.domains?.assignments.length ?? 0,
-  })
+  // What fronts Hearth and what serves game server domains are separate;
+  // one Cloudflare node draws both when Cloudflare does both.
+  const front = frontNode(data)
+  const dns = dnsNode(data, data.domains?.assignments.length ?? 0)
+  const edge = dns && front?.provider === "cloudflare" ? null : dns
   const hearth = hearthNode(data)
   builder.rank([
     ...(edge ? [builder.lone(edge)] : []),
+    ...(front ? [builder.lone(front)] : []),
     builder.lone(hearth),
   ])
-  if (edge?.frontsHearth) builder.link(edge.id, hearth.id, "uplink")
+  if (front)
+    builder.link(
+      front.id,
+      hearth.id,
+      front.provider === "cloudflare" ? "dns" : "uplink"
+    )
+  const dnsSource = dns ? (edge ?? front) : null
 
   const relayNodes = data.relays.map((relay) =>
     builder.add({
@@ -204,8 +218,8 @@ function fleetView(builder: ViewBuilder, data: InfraMapData) {
   ])
   for (const relay of data.relays) {
     builder.link(hearth.id, relayNodeId(relay.id), "uplink", !relay.enabled)
-    if (edge && dnsRelays.has(relay.id))
-      builder.link(edge.id, relayNodeId(relay.id), "dns")
+    if (dnsSource && dnsRelays.has(relay.id))
+      builder.link(dnsSource.id, relayNodeId(relay.id), "dns")
   }
 }
 
@@ -230,10 +244,7 @@ function relayView(builder: ViewBuilder, data: InfraMapData, relayId: string) {
   builder.link(hearth.id, relayNode.id, "uplink", !relay.enabled)
 
   // Ingress: Cloudflare for game server domains, the proxy for web routes.
-  const edge =
-    domainKeys.size > 0
-      ? edgeNode(data, { frontsHearth: false, domainCount: domainKeys.size })
-      : null
+  const edge = dnsNode(data, domainKeys.size)
   const proxy = proxyNode(data, relayId, routes)
   builder.rank([
     ...(edge ? [builder.lone(edge)] : []),
@@ -344,8 +355,15 @@ function instanceView(
       resource.relayId === scope.relayId &&
       resource.id === scope.id
   )
-  const relay = data.relays.find((candidate) => candidate.id === scope.relayId)
-  if (!focus || !relay) return fleetView(builder, data)
+  if (!focus) return fleetView(builder, data)
+  const relay = data.relays.find((candidate) => candidate.id === scope.relayId) ?? {
+    id: focus.relayId,
+    name: focus.relayName,
+    enabled: true,
+    address: "",
+    nodeArch: null,
+    restricted: true,
+  }
 
   const hearth = hearthNode(data)
   builder.rank([builder.lone(hearth)])
@@ -362,9 +380,7 @@ function instanceView(
   const routes = (data.webRoutes.get(relay.id) ?? []).filter(
     (route) => route.owner.kind === focus.kind && route.owner.id === focus.id
   )
-  const edge = hasDomain
-    ? edgeNode(data, { frontsHearth: false, domainCount: 1 })
-    : null
+  const edge = hasDomain ? dnsNode(data, 1) : null
   const proxy = routes.length > 0 ? proxyNode(data, relay.id, routes) : null
   builder.rank([
     ...(edge ? [builder.lone(edge)] : []),
@@ -593,20 +609,35 @@ function hearthNode(data: InfraMapData): InfraMapNode {
   }
 }
 
-function edgeNode(
-  data: InfraMapData,
-  { domainCount, frontsHearth }: { domainCount: number; frontsHearth: boolean }
+/** The edge network a request to Hearth came through. */
+function frontNode(
+  data: InfraMapData
 ): Extract<InfraMapNode, { type: "edge" }> | null {
-  const provider =
-    data.provider ?? (data.domains && domainCount > 0 ? "cloudflare" : null)
-  if (!provider) return null
+  if (!data.provider) return null
+  const cloudflare = data.provider === "cloudflare"
   return {
     type: "edge",
-    id: `edge:${provider}`,
-    provider,
-    frontsHearth: frontsHearth && data.provider !== null,
-    zones: provider === "cloudflare" ? (data.domains?.zones ?? []) : [],
-    domainCount: provider === "cloudflare" ? domainCount : 0,
+    id: `edge:${data.provider}`,
+    provider: data.provider,
+    frontsHearth: true,
+    zones: cloudflare ? (data.domains?.zones ?? []) : [],
+    domainCount: cloudflare ? (data.domains?.assignments.length ?? 0) : 0,
+  }
+}
+
+/** Cloudflare, serving managed domains for this many game servers. */
+function dnsNode(
+  data: InfraMapData,
+  domainCount: number
+): Extract<InfraMapNode, { type: "edge" }> | null {
+  if (!data.domains || domainCount === 0) return null
+  return {
+    type: "edge",
+    id: "edge:cloudflare",
+    provider: "cloudflare",
+    frontsHearth: data.provider === "cloudflare",
+    zones: data.domains.zones,
+    domainCount,
   }
 }
 

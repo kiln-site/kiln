@@ -99,17 +99,25 @@ const InfraMap = React.memo(function InfraMap({
     enabled: scopedRelayId !== null,
     select: selectServerDatabaseLinks,
   })
+  // Routes need the Relay itself to be readable.
+  const routesReadable =
+    scopedRelayId !== null &&
+    directory.relays.some((relay) => relay.id === scopedRelayId)
   const { data: webRoutes } = useQuery({
     ...relayWebRoutesQueryOptions(scopedRelayId ?? ""),
-    enabled: includeDomains && scopedRelayId !== null,
+    enabled: routesReadable,
   })
-  const scopedApps = React.useMemo(
-    () =>
-      scopedRelayId
-        ? directory.apps.filter((app) => app.relayId === scopedRelayId)
-        : noApps,
-    [directory.apps, scopedRelayId]
-  )
+  // Only the apps the scope draws: a Relay's or a database's neighbours,
+  // or the one app in view. The fleet and a game server need none.
+  const scopedApps = React.useMemo(() => {
+    if (scope.kind === "relay" || scope.kind === "database")
+      return directory.apps.filter((app) => app.relayId === scope.relayId)
+    if (scope.kind === "app")
+      return directory.apps.filter(
+        (app) => app.relayId === scope.relayId && app.id === scope.id
+      )
+    return noApps
+  }, [directory.apps, scope])
   const appDetails = useAppDetails(scopedApps)
 
   const data = React.useMemo((): InfraMapData => {
@@ -213,9 +221,6 @@ const InfraMapScopePicker = React.memo(function InfraMapScopePicker({
   scope: InfraMapScope
 }) {
   const options = React.useMemo(() => {
-    const relayNames = new Map(
-      data.relays.map((relay) => [relay.id, relay.name])
-    )
     return [
       ...data.relays.map(
         (relay): ServerPickerOption<ScopeKind> => ({
@@ -232,7 +237,7 @@ const InfraMapScopePicker = React.memo(function InfraMapScopePicker({
           kind: resource.kind,
           name: resource.name,
           relayId: resource.relayId,
-          relayName: relayNames.get(resource.relayId) ?? "",
+          relayName: resource.relayName,
         })
       ),
     ]
@@ -325,6 +330,7 @@ function directoryResources(
         kind: "server",
         id: server.id,
         relayId: server.relayId,
+        relayName: server.relayName,
         name: server.name,
         meta: server.connectAddress || server.game,
         routeId: server.routeId,
@@ -338,6 +344,7 @@ function directoryResources(
         kind: "app",
         id: app.id,
         relayId: app.relayId,
+        relayName: app.relayName,
         name: app.name,
         meta: app.shortId,
         routeId: app.id,
@@ -349,6 +356,7 @@ function directoryResources(
         kind: "database",
         id: database.id,
         relayId: database.relayId,
+        relayName: database.relayName,
         name: database.name,
         meta: `${engineLabel(database.engine)} · ${database.shortId}`,
         routeId: database.id,

@@ -223,6 +223,9 @@ export const queryKeys = {
   },
   relays: ["relays"] as const,
   relayProxy: (relayId: string) => ["relays", "proxy", relayId] as const,
+  relayProxyModes: ["relays", "proxy-modes"] as const,
+  // Beside each game server's own routes, so route changes refresh both.
+  relayWebRoutes: (relayId: string) => ["web-routes", relayId] as const,
   relayHostFiles: (relayId: string) =>
     ["relays", "host-files", relayId] as const,
   tailscale: (relayId: string) => ["tailscale", "relays", relayId] as const,
@@ -811,7 +814,7 @@ export function relaysQueryOptions() {
 /** Which readable Relays run which proxy, read from Hearth's connections. */
 export function relayProxyModesQueryOptions() {
   return queryOptions({
-    queryKey: ["relay", "proxy-modes"] as const,
+    queryKey: queryKeys.relayProxyModes,
     queryFn: () => getRelayProxyModes(),
     staleTime: 30_000,
   })
@@ -820,7 +823,7 @@ export function relayProxyModesQueryOptions() {
 /** The web routes a Relay's proxy serves, with the resource each reaches. */
 export function relayWebRoutesQueryOptions(relayId: string) {
   return queryOptions({
-    queryKey: ["relay", relayId, "web-routes"] as const,
+    queryKey: queryKeys.relayWebRoutes(relayId),
     queryFn: () => getRelayWebRoutes({ data: { id: relayId } }),
     retry: false,
     staleTime: 15_000,
