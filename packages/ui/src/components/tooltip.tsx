@@ -29,9 +29,24 @@ function Tooltip({
 }
 
 function TooltipTrigger({
+  onFocus,
   ...props
 }: React.ComponentProps<typeof TooltipPrimitive.Trigger>) {
-  return <TooltipPrimitive.Trigger data-slot="tooltip-trigger" {...props} />
+  return (
+    <TooltipPrimitive.Trigger
+      data-slot="tooltip-trigger"
+      onFocus={(event) => {
+        onFocus?.(event)
+        // Radix opens on any focus, so a dialog or menu handing focus back to
+        // its trigger after a click left the tooltip stuck open. Only keyboard
+        // focus should open it.
+        if (!event.currentTarget.matches(":focus-visible")) {
+          event.preventDefault()
+        }
+      }}
+      {...props}
+    />
+  )
 }
 
 function TooltipContent({
