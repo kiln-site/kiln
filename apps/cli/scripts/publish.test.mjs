@@ -162,28 +162,45 @@ it.each(["successful upload", "staged-version conflict"])(
   }
 )
 
-it("fails when a staged package never becomes available and keeps the launcher unpublished", async () => {
-  vi.useFakeTimers()
-  let launcherPublished = false
-  const conflict = new Error("Cannot publish over previously staged version")
-  const publishing = publishPackages(async ([command, source]) => {
-    if (command === "view") return ""
-    if (source === join(dist, "npm")) launcherPublished = true
-    throw conflict
-  })
-  const rejected = assert.rejects(publishing, (error) => {
-    assert.ok(error instanceof AggregateError)
-    for (const failure of error.errors) {
-      assert.match(failure.message, /still unavailable/)
-      assert.equal(failure.cause, conflict)
-    }
-    return true
-  })
+it.each(["missing versions", "stalled registry reads"])(
+  "keeps the launcher unpublished when staged packages remain unavailable with %s",
+  async (outcome) => {
+    vi.useFakeTimers()
+    let launcherPublished = false
+    const conflict = new Error("Cannot publish over previously staged version")
+    const publishing = publishPackages(async ([command, source], options) => {
+      if (command === "view") {
+        if (outcome === "stalled registry reads")
+          await new Promise((_, reject) =>
+            setTimeout(
+              () =>
+                reject(
+                  new Error(
+                    "npm view terminated while waiting for the registry"
+                  )
+                ),
+              options.timeout
+            )
+          )
+        return ""
+      }
+      if (source === join(dist, "npm")) launcherPublished = true
+      throw conflict
+    })
+    const rejected = assert.rejects(publishing, (error) => {
+      assert.ok(error instanceof AggregateError)
+      for (const failure of error.errors) {
+        assert.match(failure.message, /still unavailable/)
+        assert.equal(failure.cause, conflict)
+      }
+      return true
+    })
 
-  await vi.runAllTimersAsync()
-  await rejected
-  assert.equal(launcherPublished, false)
-})
+    await vi.runAllTimersAsync()
+    await rejected
+    assert.equal(launcherPublished, false)
+  }
+)
 
 it("stops retrying persistent duplicate provenance failures", async () => {
   vi.useFakeTimers()

@@ -6,15 +6,19 @@ import { dist, packageName, platforms, version } from "./distribution.mjs"
 
 const execFileAsync = promisify(execFile)
 const retryDelay = 10_000
-const visibilityChecks = 30
+const visibilityTimeout = 5 * 60_000
 const provenanceAttempts = 3
 
-function delay() {
-  return new Promise((resolve) => setTimeout(resolve, retryDelay))
+function delay(milliseconds = retryDelay) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds))
 }
 
-async function runNpm(args) {
-  const command = execFileAsync("npm", args, { encoding: "utf8" })
+async function runNpm(args, options) {
+  const command = execFileAsync("npm", args, {
+    encoding: "utf8",
+    timeout: 10 * 60_000,
+    ...options,
+  })
   if (args[0] === "publish") {
     command.child.stdout.pipe(process.stdout)
     command.child.stderr.pipe(process.stderr)
@@ -23,9 +27,11 @@ async function runNpm(args) {
 }
 
 export async function publishPackages(run = runNpm) {
-  async function isPublished(name) {
+  async function isPublished(name, timeout = retryDelay) {
     try {
-      const published = await run(["view", `${name}@${version}`, "version"])
+      const published = await run(["view", `${name}@${version}`, "version"], {
+        timeout,
+      })
       // Older npm versions print nothing for an unpublished version. The
       // printed version can differ from ours by registry normalization.
       return Boolean(published.trim())
@@ -36,9 +42,14 @@ export async function publishPackages(run = runNpm) {
 
   async function waitForPublished(name, cause) {
     console.log(`Waiting for ${name}@${version} to become available on npm.`)
-    for (let check = 0; check <= visibilityChecks; check += 1) {
-      if (await isPublished(name)) return
-      if (check < visibilityChecks) await delay()
+    const deadline = Date.now() + visibilityTimeout
+    while (true) {
+      const budget = deadline - Date.now()
+      if (budget <= 0) break
+      // Include slow registry reads in the budget and terminate a stuck npm view.
+      if (await isPublished(name, Math.min(retryDelay, budget))) return
+      const remaining = deadline - Date.now()
+      if (remaining > 0) await delay(Math.min(retryDelay, remaining))
     }
     throw new Error(
       `${name}@${version} is still unavailable after 5 minutes. Rerun publishing after npm finishes processing it.`,
