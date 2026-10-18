@@ -4,6 +4,8 @@ import { LoaderCircle } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 
+import { PageContent } from "@/components/page-content"
+
 // Pieces shared by the database, app, and Relay workspaces: each resolves its
 // resource from the route, then renders the same frame around its pages.
 
@@ -78,6 +80,7 @@ export function ResourceWorkspaceBoundary<T>({
   const plural = noun.other.charAt(0).toUpperCase() + noun.other.slice(1)
   return (
     <div className="grid min-h-0 flex-1 place-items-center bg-card px-6 text-center">
+      <PageContent view="unavailable" />
       <div className="max-w-sm">
         <div className="mx-auto mb-4 grid size-11 place-items-center rounded-xl border bg-muted/20 text-muted-foreground [&_svg]:size-5">
           {icon}

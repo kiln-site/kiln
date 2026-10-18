@@ -97,11 +97,8 @@ export function RelayHostFilesAccess({
   if (!connected) {
     return (
       <>
-        {/* Only once the Relay is known to be away, not while it's checked. */}
-        <FilePageContent
-          reached={relayStatus === "unreachable" || relayStatus === "paused"}
-          view="waiting"
-        />
+        {/* Not while Hearth is still checking whether the Relay is there. */}
+        <FilePageContent reached={relayStatus !== "checking"} view="waiting" />
         <WaitingForRelay />
       </>
     )
