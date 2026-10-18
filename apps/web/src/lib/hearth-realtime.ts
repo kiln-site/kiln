@@ -144,6 +144,7 @@ function queryScopes(
     return [
       exact(queryKeys.servers.directory),
       prefix(queryKeys.servers.navigation),
+      exact(queryKeys.domains.settings),
       exact(queryKeys.domains.instance(scope.relayId, scope.instanceId)),
     ]
   }

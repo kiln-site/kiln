@@ -1,5 +1,6 @@
 import { Effect } from "effect"
 
+import { setInstanceDomainOptOutEffect } from "@/effect/domains"
 import { reportAppError } from "@/effect/runtime"
 import { deleteInstanceAccessEffect } from "@/lib/access-control"
 import { removeDeletedInstanceEffect } from "@/lib/instance-registry"
@@ -19,6 +20,13 @@ export const finalizeInstanceDeletionEffect = Effect.fn(
     relayId,
     instanceId,
     deleteInstanceAccessEffect(relayId, instanceId)
+  )
+  // A removed vanity domain stays removed until the server itself is gone.
+  yield* postDeleteCleanupStep(
+    "domains.optOut.clear",
+    relayId,
+    instanceId,
+    setInstanceDomainOptOutEffect(relayId, instanceId, false)
   )
   // The Relay has removed the server, so its directory record goes too.
   // Live snapshots never remove records on their own.

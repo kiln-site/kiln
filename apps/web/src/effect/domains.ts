@@ -229,7 +229,49 @@ export const deleteRelayInstanceDomainAssignmentsEffect = Effect.fn(
     `DELETE FROM ${databaseTable("instance_domain")} WHERE relay_id = ?`,
     [relayId]
   )
+  yield* database.execute(
+    "domains.optOuts.deleteRelay",
+    `DELETE FROM ${databaseTable("instance_domain_opt_out")} WHERE relay_id = ?`,
+    [relayId]
+  )
 })
+
+export const loadInstanceDomainOptOutEffect = Effect.fn(
+  "domains.optOut.load"
+)(function* (relayId: string, instanceId: string) {
+  const database = yield* Database
+  const rows = yield* database.queryRows<RowDataPacket>(
+    "domains.optOut.load",
+    `SELECT 1 FROM ${databaseTable("instance_domain_opt_out")}
+      WHERE relay_id = ? AND instance_id = ?
+      LIMIT 1`,
+    [relayId, instanceId]
+  )
+  return rows.length > 0
+})
+
+export const setInstanceDomainOptOutEffect = Effect.fn("domains.optOut.set")(
+  function* (relayId: string, instanceId: string, optedOut: boolean) {
+    const database = yield* Database
+    if (!optedOut) {
+      yield* database.execute(
+        "domains.optOut.clear",
+        `DELETE FROM ${databaseTable("instance_domain_opt_out")}
+          WHERE relay_id = ? AND instance_id = ?`,
+        [relayId, instanceId]
+      )
+      return
+    }
+    const now = yield* Clock.currentTimeMillis
+    yield* database.execute(
+      "domains.optOut.save",
+      `INSERT IGNORE INTO ${databaseTable("instance_domain_opt_out")}
+         (relay_id, instance_id, created_at)
+       VALUES (?, ?, ?)`,
+      [relayId, instanceId, now]
+    )
+  }
+)
 
 export const loadRelayInstanceDomainAssignmentsEffect = Effect.fn(
   "domains.assignments.relay"

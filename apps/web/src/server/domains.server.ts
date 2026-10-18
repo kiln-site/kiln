@@ -1,6 +1,10 @@
 import type { RelayInstance } from "@workspace/contracts"
-import { relayInstanceSchema, relaySnapshotSchema } from "@workspace/contracts"
-import { Effect, Option } from "effect"
+import {
+  builtinTailscaleBrickId,
+  relayInstanceSchema,
+  relaySnapshotSchema,
+} from "@workspace/contracts"
+import { Effect, Semaphore } from "effect"
 import { z } from "zod"
 
 import {
@@ -14,7 +18,7 @@ import {
   updateCloudflareAddressRecordEffect,
   updateCloudflareSrvRecordEffect,
 } from "@/effect/cloudflare-api"
-import { recoverPromise } from "@/effect/promise"
+import { ensuringPromise, recoverPromise } from "@/effect/promise"
 import {
   activateInstanceDomainAssignmentEffect,
   deleteInstanceDomainAssignmentEffect,
@@ -24,12 +28,14 @@ import {
   loadDomainIntegrationEffect,
   loadInstanceDomainAssignmentsEffect,
   loadInstanceDomainAssignmentEffect,
+  loadInstanceDomainOptOutEffect,
   loadRelayInstanceDomainAssignmentsEffect,
   loadUsedVanityLabelsEffect,
   recordInstanceDomainErrorEffect,
   recordInstanceDomainSyncErrorEffect,
   reserveInstanceDomainAssignmentEffect,
   saveCloudflareIntegrationEffect,
+  setInstanceDomainOptOutEffect,
   updateInstanceDomainAddressRecordEffect,
   updateInstanceDomainEndpointEffect,
   updateInstanceDomainLabelEffect,
@@ -56,14 +62,11 @@ import {
 } from "@/lib/domain-schemas"
 import { publishDomainChange } from "@/lib/domain-realtime.server"
 import { kilnRootDomain } from "@/lib/environment"
-import type { FleetRelayInstance } from "@/lib/relay-fleet"
+import { listInstanceDirectoryEffect } from "@/lib/instance-directory"
+import { relayInstanceRouteId, type FleetRelayInstance } from "@/lib/relay-fleet"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { listPersistedRelays } from "@/lib/relay-registry"
-import {
-  cachedRelayJsonEffect,
-  relayCachePolicy,
-  relayJsonEffect,
-} from "@/lib/relay-client"
+import { relayJsonEffect } from "@/lib/relay-client"
 import { requireEligibleResourceUser } from "@/server/auth"
 import {
   generateVanityCandidates,
@@ -94,33 +97,83 @@ const invalidateManagedDomainAddressesEffect = invalidateCached(
   managedDomainAddressCachePolicy
 )
 
+// Provisioning, renaming, and removing a game server's domain each read its
+// assignment and then change Cloudflare records. One permit per game server
+// keeps a removal from landing between a provision's checks and its writes.
+// Hearth runs one application process, so a process-local lock is enough.
+const instanceDomainLocks = new Map<string, Semaphore.Semaphore>()
+
+function withInstanceDomainLock<A, E, R>(
+  relayId: string,
+  instanceId: string,
+  effect: Effect.Effect<A, E, R>
+): Effect.Effect<A, E, R> {
+  const key = assignmentKey(relayId, instanceId)
+  let lock = instanceDomainLocks.get(key)
+  if (!lock) {
+    lock = Semaphore.makeUnsafe(1)
+    instanceDomainLocks.set(key, lock)
+  }
+  return lock.withPermit(effect)
+}
+
 export async function getDomainSettingsHandler() {
   await requireDomainAdministrator()
-  const [integration, assignments, relays] = await Promise.all([
+  // Hearth's own tables only, so the page never waits on a Relay.
+  const [integration, assignments, relays, directory] = await Promise.all([
     runAppEffect("domains.integration.load", loadDomainIntegrationEffect()),
     runAppEffect(
       "domains.assignments.all",
       loadInstanceDomainAssignmentsEffect()
     ),
     listPersistedRelays(),
+    runAppEffect("instances.directory.list", listInstanceDirectoryEffect()),
   ])
   const relayNames = new Map(relays.map((relay) => [relay.id, relay.name]))
-  const serverNames = await assignedServerNames(assignments, relays)
+  const servers = new Map(
+    directory.map((record) => [assignmentKey(record.relayId, record.id), record])
+  )
+  // Match the Game Servers table: a short ID routes on its own unless another
+  // game server shares it.
+  const shortIdCounts = new Map<string, number>()
+  for (const record of directory) {
+    if (record.brickId === builtinTailscaleBrickId) continue
+    const shortId = record.id.slice(0, 8)
+    shortIdCounts.set(shortId, (shortIdCounts.get(shortId) ?? 0) + 1)
+  }
   const managedDomains = assignments.map(
-    (assignment): ManagedDomainOverview => ({
-      address: managedDomainConnectAddress(assignment),
-      instanceId: assignment.instanceId,
-      port: assignment.publicPort,
-      relayId: assignment.relayId,
-      relayName: relayNames.get(assignment.relayId) ?? "Unknown Relay",
-      serverName:
-        serverNames.get(
-          assignmentKey(assignment.relayId, assignment.instanceId)
-        ) ?? assignment.instanceId.slice(0, 8),
-      srvActive: domainHasActiveSrvRecord(assignment),
-      status: assignment.status,
-      supportsSrv: assignment.supportsSrv,
-    })
+    (assignment): ManagedDomainOverview => {
+      const server = servers.get(
+        assignmentKey(assignment.relayId, assignment.instanceId)
+      )
+      const shortId = assignment.instanceId.slice(0, 8)
+      return {
+        address: managedDomainConnectAddress(assignment),
+        domain: assignment.domain,
+        instanceId: assignment.instanceId,
+        lastError: assignment.lastError,
+        port: assignment.publicPort,
+        relayId: assignment.relayId,
+        relayName: relayNames.get(assignment.relayId) ?? "Unknown Relay",
+        server: {
+          brickId: server?.brickId,
+          game: server?.game,
+          implementation: server?.implementation,
+          name: server?.name ?? shortId,
+          // Otherwise the Relay-qualified full ID, which names exactly one
+          // server even where short IDs collide or the server is missing
+          // from the directory.
+          routeId:
+            server && shortIdCounts.get(shortId) === 1
+              ? shortId
+              : relayInstanceRouteId(assignment.relayId, assignment.instanceId),
+        },
+        srvActive: domainHasActiveSrvRecord(assignment),
+        status: assignment.status,
+        supportsSrv: assignment.supportsSrv,
+        vanityLabel: assignment.vanityLabel,
+      }
+    }
   )
   return {
     hearthDomain: kilnRootDomain(),
@@ -249,14 +302,49 @@ export async function getInstanceDomainHandler(data: InstanceDomainInput) {
   }
 }
 
+/**
+ * Removes a game server's vanity address and keeps it removed: starts, port
+ * changes, and Sync skip the server until a vanity name is set again.
+ */
+export async function removeInstanceDomainHandler(data: InstanceDomainInput) {
+  await requireDomainAdministrator()
+  // A failed removal still changes the row, so publish either way.
+  await ensuringPromise(
+    () =>
+      runAppEffect(
+        "domains.instance.remove",
+        removeInstanceDomainEffect(data.relayId, data.instanceId)
+      ),
+    () => publishDomainChange(data)
+  )
+}
+
 export async function setInstanceVanityHandler(data: SetVanityInput) {
   const { instance } = await loadWritableInstance(data.relayId, data.instanceId)
-  return runAppEffect(
-    "domains.instance.setVanity",
-    setInstanceVanityEffect(
-      { ...instance, relayId: data.relayId },
-      data.vanityLabel
-    )
+  // A failed rename can still clear leftover records, so publish either way.
+  return ensuringPromise(
+    () =>
+      runAppEffect(
+        "domains.instance.setVanity",
+        withInstanceDomainLock(
+          data.relayId,
+          data.instanceId,
+          setInstanceVanityEffect(
+            { ...instance, relayId: data.relayId },
+            data.vanityLabel
+          ).pipe(
+            // Choosing a name again undoes a removal.
+            Effect.tap(() =>
+              setInstanceDomainOptOutEffect(
+                data.relayId,
+                data.instanceId,
+                false
+              )
+            )
+          )
+        )
+      ),
+    () => publishDomainChange(data)
   )
 }
 
@@ -331,6 +419,8 @@ export const loadManagedDomainAddressesEffect = Effect.fn(
   })
 })
 
+// A removal stays recorded here: the game server may survive a failed
+// deletion. Post-delete cleanup clears it once the Relay has removed it.
 export const deleteInstanceDomainEffect = Effect.fn("domains.instance.delete")(
   function* (relayId: string, instanceId: string) {
     const assignment = yield* loadInstanceDomainAssignmentEffect(
@@ -338,15 +428,64 @@ export const deleteInstanceDomainEffect = Effect.fn("domains.instance.delete")(
       instanceId
     )
     if (!assignment) return
-    const hasManagedRecords = Boolean(
-      assignment.addressRecordId || assignment.srvRecordId
+    yield* deleteAssignmentRecordsEffect(assignment)
+  },
+  (effect, relayId, instanceId) =>
+    withInstanceDomainLock(relayId, instanceId, effect)
+)
+
+export const removeInstanceDomainEffect = Effect.fn("domains.instance.remove")(
+  function* (relayId: string, instanceId: string) {
+    yield* setInstanceDomainOptOutEffect(relayId, instanceId, true)
+    const assignment = yield* loadInstanceDomainAssignmentEffect(
+      relayId,
+      instanceId
     )
-    const credential = hasManagedRecords
-      ? yield* loadCloudflareIntegrationCredentialEffect()
-      : null
+    if (!assignment) return
+    yield* deleteAssignmentRecordsEffect(assignment).pipe(
+      // Keep the removal. Cloudflare deletes are idempotent, so deleting
+      // again finishes it; until then the domain shows as failed and Hearth
+      // stops advertising it.
+      Effect.tapError((error) =>
+        recordInstanceDomainErrorEffect(
+          relayId,
+          instanceId,
+          `Delete failed: ${error.message}`
+        ).pipe(
+          Effect.andThen(invalidateManagedDomainAddressesEffect),
+          Effect.ignore
+        )
+      )
+    )
+  },
+  (effect, relayId, instanceId) =>
+    withInstanceDomainLock(relayId, instanceId, effect)
+)
+
+// A failed provision or removal can leave records behind an assignment that
+// isn't active. Delete them before choosing a name again, so the new records
+// don't orphan them and they don't make the game server's own name look taken.
+const releaseStaleRecordsEffect = Effect.fn("domains.instance.releaseStale")(
+  function* (
+    assignment: InstanceDomainAssignment,
+    credential: CloudflareIntegrationCredential
+  ) {
+    if (!assignment.addressRecordId && !assignment.srvRecordId) return
     yield* deleteManagedDomainAssignmentEffect(assignment, credential)
   }
 )
+
+const deleteAssignmentRecordsEffect = Effect.fn(
+  "domains.instance.deleteRecords"
+)(function* (assignment: InstanceDomainAssignment) {
+  const hasManagedRecords = Boolean(
+    assignment.addressRecordId || assignment.srvRecordId
+  )
+  const credential = hasManagedRecords
+    ? yield* loadCloudflareIntegrationCredentialEffect()
+    : null
+  yield* deleteManagedDomainAssignmentEffect(assignment, credential)
+})
 
 export const deleteManagedDomainAssignmentEffect = Effect.fn(
   "domains.instance.deleteAssignment"
@@ -415,6 +554,9 @@ const provisionInstanceDomainEffect = Effect.fn("domains.instance.provision")(
     if (!publicHost || !publicPort) return null
     const integration = yield* loadDomainIntegrationEffect()
     if (!integration?.enabled) return null
+    if (yield* loadInstanceDomainOptOutEffect(instance.relayId, instance.id)) {
+      return null
+    }
     const credential = yield* loadCloudflareIntegrationCredentialEffect()
     const existing = yield* loadInstanceDomainAssignmentEffect(
       instance.relayId,
@@ -435,6 +577,7 @@ const provisionInstanceDomainEffect = Effect.fn("domains.instance.provision")(
       ).pipe(Effect.ensuring(invalidateManagedDomainAddressesEffect))
       return assignmentOverview(synced)
     }
+    if (existing) yield* releaseStaleRecordsEffect(existing, credential)
     const generated = generateVanityCandidates(credential.blacklistPatterns)
     const candidates = existing
       ? [...new Set([existing.vanityLabel, ...generated])]
@@ -449,7 +592,9 @@ const provisionInstanceDomainEffect = Effect.fn("domains.instance.provision")(
       instance,
       vanityLabel
     ).pipe(Effect.ensuring(invalidateManagedDomainAddressesEffect))
-  }
+  },
+  (effect, instance) =>
+    withInstanceDomainLock(instance.relayId, instance.id, effect)
 )
 
 const setInstanceVanityEffect = Effect.fn("domains.instance.setVanity")(
@@ -480,6 +625,7 @@ const setInstanceVanityEffect = Effect.fn("domains.instance.setVanity")(
       instance.id
     )
     if (!assignment || assignment.status !== "active") {
+      if (assignment) yield* releaseStaleRecordsEffect(assignment, credential)
       const available = yield* availableVanityLabelEffect(
         credential,
         [vanityLabel],
@@ -966,46 +1112,6 @@ export function managedAddressForInstance(
   return assignment && managedDomainEndpointMatches(assignment, instance)
     ? assignment.address
     : instance.connectAddress
-}
-
-async function assignedServerNames(
-  assignments: Array<InstanceDomainAssignment>,
-  relays: Array<PersistedRelay>
-): Promise<Map<string, string>> {
-  const assignedRelayIds = new Set(
-    assignments.map((assignment) => assignment.relayId)
-  )
-  const assignedRelays: Array<PersistedRelay> = []
-  for (const relay of relays) {
-    if (relay.enabled && assignedRelayIds.has(relay.id)) {
-      assignedRelays.push(relay)
-    }
-  }
-  const snapshots = await Promise.all(
-    assignedRelays.map(async (relay) => {
-      const snapshot = await runAppEffect(
-        "relay.snapshot.domains",
-        cachedRelayJsonEffect({
-          decode: relaySnapshotSchema.parse,
-          fallbackOnError: true,
-          path: "/v1/snapshot",
-          policy: relayCachePolicy.snapshot(relay.id),
-          relay,
-        }).pipe(Effect.option)
-      )
-      return Option.isSome(snapshot)
-        ? { relayId: relay.id, snapshot: snapshot.value }
-        : null
-    })
-  )
-  const serverNames = new Map<string, string>()
-  for (const entry of snapshots) {
-    if (!entry) continue
-    for (const instance of entry.snapshot.instances) {
-      serverNames.set(assignmentKey(entry.relayId, instance.id), instance.name)
-    }
-  }
-  return serverNames
 }
 
 async function requireDomainAdministrator() {

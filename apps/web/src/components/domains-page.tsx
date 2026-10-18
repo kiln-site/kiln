@@ -4,6 +4,7 @@ import {
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query"
+import { Link } from "@tanstack/react-router"
 import { Effect, Result } from "effect"
 import {
   ArrowLeft,
@@ -16,11 +17,9 @@ import {
   Globe2,
   KeyRound,
   LoaderCircle,
-  RefreshCw,
-  Search,
-  Server,
+  Pencil,
   Settings2,
-  X,
+  Trash2,
 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
@@ -43,24 +42,46 @@ import {
 } from "@workspace/ui/components/tooltip"
 
 import {
-  WorkspaceTable,
-  WorkspaceTableCell,
-  WorkspaceTableHead,
-  WorkspaceTableHeading,
-  createWorkspaceTableSearchStore,
-  useWorkspaceTableSearchInput,
-} from "@/components/workspace-table"
-import type { WorkspaceTableSearchStore } from "@/components/workspace-table"
+  DataTableActionGroup,
+  DataTableEmptyState,
+  DataTableTextCell,
+} from "@/components/data-table"
+import { DataTable } from "@/components/data-table-view"
+import {
+  DataTableToolbar,
+  DataTableWorkspace,
+} from "@/components/data-table-workspace"
+import type { IdentityStatusPresentation } from "@/components/identity-name"
+import { InfoCopyValue } from "@/components/info-page"
+import { InfraSyncButton } from "@/components/infra-sync-button"
+import { InstanceCard } from "@/components/instance-card"
+import { statusColumnWidth } from "@/components/instance-name-presentation"
+import { StatusIndicator } from "@/components/status-indicator"
+import { WorkspaceCopyValueButton } from "@/components/workspace-header"
 import { WorkspaceSummaryCard } from "@/components/workspace-summary-card"
+import {
+  createDataTableColumnHelper,
+  dataTableColumnMeta,
+  defineDataTable,
+} from "@/lib/data-table"
+import {
+  replaceDataTableUrlSearch,
+  type DataTableSearchStore,
+} from "@/lib/data-table-search"
+import type { DataTableSource } from "@/lib/data-table-source"
 import {
   defaultDomainBlacklistPatterns,
   domainNameSchema,
   validateBlacklistPatterns,
+  vanityLabelSchema,
 } from "@/lib/domain-schemas"
 import { domainSettingsQueryOptions, queryKeys } from "@/lib/query-options"
+import { ensuringPromise } from "@/effect/promise"
 import {
   configureDomainIntegration,
+  removeInstanceDomain,
   resyncDomainAssignments,
+  setInstanceVanity,
   type ManagedDomainOverview,
 } from "@/server/domains"
 
@@ -71,32 +92,64 @@ interface DomainIntegrationView {
   zoneName: string
 }
 
-export function DomainsPage() {
+type DomainDialog =
+  | { kind: "delete"; domain: ManagedDomainOverview }
+  | { kind: "edit"; domain: ManagedDomainOverview }
+  | null
+
+const domainTableColumnHelper =
+  createDataTableColumnHelper<ManagedDomainOverview>()
+const domainTableSearchFields = [
+  (row: ManagedDomainOverview) => domainHostname(row),
+  (row: ManagedDomainOverview) => row.address,
+  (row: ManagedDomainOverview) => row.server.name,
+  (row: ManagedDomainOverview) => row.server.game,
+  (row: ManagedDomainOverview) => row.instanceId,
+  (row: ManagedDomainOverview) => row.port,
+  (row: ManagedDomainOverview) => row.relayName,
+  (row: ManagedDomainOverview) => row.relayId,
+  (row: ManagedDomainOverview) => row.status,
+  (row: ManagedDomainOverview) => srvRecordLabel(row),
+] as const
+
+export const DomainsPage = React.memo(function DomainsPage({
+  searchStore,
+}: {
+  searchStore: DataTableSearchStore
+}) {
   const { data } = useSuspenseQuery(domainSettingsQueryOptions())
-  const [searchStore] = React.useState(createWorkspaceTableSearchStore)
   const [configurationOpen, setConfigurationOpen] = React.useState(false)
+  const [dialog, setDialog] = React.useState<DomainDialog>(null)
   const openConfiguration = React.useCallback(
     () => setConfigurationOpen(true),
     []
   )
+  const closeDialog = React.useCallback((open: boolean) => {
+    if (!open) setDialog(null)
+  }, [])
 
   return (
-    <div className="mx-auto w-full max-w-[90rem] space-y-3 px-3 pb-10 sm:px-5">
+    <div className="mx-auto flex h-full min-h-[34rem] w-full max-w-[90rem] flex-col gap-3 px-3 pb-3 sm:px-5 sm:pb-5">
       <DomainSummaryCard
         integration={data.integration}
         onConfigure={openConfiguration}
       />
 
-      <section className="overflow-hidden rounded-xl border bg-card/45 [contain:paint]">
-        <DomainsToolbar
-          integration={data.integration}
-          searchStore={searchStore}
-        />
+      <DataTableWorkspace
+        toolbar={
+          <DomainsToolbar
+            syncEnabled={data.integration?.enabled === true}
+            searchStore={searchStore}
+          />
+        }
+      >
         <ManagedDomainsTable
           domains={data.managedDomains}
           searchStore={searchStore}
+          zoneName={data.integration?.zoneName}
+          onDialog={setDialog}
         />
-      </section>
+      </DataTableWorkspace>
 
       {configurationOpen ? (
         <DomainConfigurationDialog
@@ -107,9 +160,23 @@ export function DomainsPage() {
           onOpenChange={setConfigurationOpen}
         />
       ) : null}
+      {dialog?.kind === "edit" ? (
+        <EditDomainDialog
+          key={managedDomainRowKey(dialog.domain)}
+          domain={dialog.domain}
+          onOpenChange={closeDialog}
+        />
+      ) : null}
+      {dialog?.kind === "delete" ? (
+        <DeleteDomainDialog
+          key={managedDomainRowKey(dialog.domain)}
+          domain={dialog.domain}
+          onOpenChange={closeDialog}
+        />
+      ) : null}
     </div>
   )
-}
+})
 
 const DomainSummaryCard = React.memo(function DomainSummaryCard({
   integration,
@@ -154,273 +221,524 @@ const DomainSummaryCard = React.memo(function DomainSummaryCard({
 })
 
 const DomainsToolbar = React.memo(function DomainsToolbar({
-  integration,
   searchStore,
+  syncEnabled,
 }: {
-  integration: DomainIntegrationView | null
-  searchStore: WorkspaceTableSearchStore
+  searchStore: DataTableSearchStore
+  syncEnabled: boolean
 }) {
-  const queryClient = useQueryClient()
-  const [mobileSearchOpen, setMobileSearchOpen] = React.useState(false)
-  const searchInputRef = React.useRef<HTMLInputElement>(null)
-  const resync = useMutation({
-    mutationFn: resyncDomainAssignments,
-    onSuccess: ({ syncedServerCount }) => {
-      showToast({
-        message: `Synced ${syncedServerCount} ${
-          syncedServerCount === 1
-            ? "game server address"
-            : "game server addresses"
-        }`,
-        type: "success",
-      })
-    },
-    onError: (cause) =>
-      showToast({ message: errorMessage(cause), type: "error" }),
-    onSettled: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: queryKeys.domains.settings,
-        }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.relay.snapshot }),
-      ])
-    },
-  })
-
-  React.useEffect(() => {
-    if (mobileSearchOpen) searchInputRef.current?.focus()
-  }, [mobileSearchOpen])
-
   return (
-    <div className="flex min-w-0 items-center gap-2 border-b bg-background/25 p-3">
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            aria-busy={resync.isPending}
-            aria-label="Sync managed domains"
-            disabled={!integration?.enabled || resync.isPending}
-            size="icon"
-            type="button"
-            variant="outline"
-            onClick={() => resync.mutate(undefined)}
-          >
-            <RefreshCw className={resync.isPending ? "animate-spin" : ""} />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom" sideOffset={6}>
-          {integration?.enabled
-            ? "Sync managed domains"
-            : "Configure an active vanity domain first"}
-        </TooltipContent>
-      </Tooltip>
-
-      {!mobileSearchOpen ? (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              aria-label="Search managed domains"
-              className="sm:hidden"
-              size="icon"
-              type="button"
-              variant="outline"
-              onClick={() => setMobileSearchOpen(true)}
-            >
-              <Search />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" sideOffset={6}>
-            Search domains
-          </TooltipContent>
-        </Tooltip>
-      ) : null}
-
-      <div
-        className={`${mobileSearchOpen ? "block" : "hidden"} min-w-0 flex-1 sm:block sm:max-w-md`}
-      >
-        <DomainSearchInput inputRef={searchInputRef} store={searchStore} />
-      </div>
-
-      {mobileSearchOpen ? (
-        <Button
-          aria-label="Close domain search"
-          className="sm:hidden"
-          size="icon"
-          type="button"
-          variant="ghost"
-          onClick={() => {
-            searchStore.set("")
-            setMobileSearchOpen(false)
-          }}
-        >
-          <X />
-        </Button>
-      ) : null}
-    </div>
+    <DataTableToolbar
+      leading={<DomainSyncButton enabled={syncEnabled} />}
+      search={{
+        ariaLabel: "Search domains",
+        closeMobileWhenEmpty: true,
+        id: "domain-search",
+        onValueChange: replaceDataTableUrlSearch,
+        placeholder: "Search domains",
+        store: searchStore,
+      }}
+    />
   )
 })
 
-const DomainSearchInput = React.memo(function DomainSearchInput({
-  inputRef,
-  store,
+const DomainSyncButton = React.memo(function DomainSyncButton({
+  enabled,
 }: {
-  inputRef: React.RefObject<HTMLInputElement | null>
-  store: WorkspaceTableSearchStore
+  enabled: boolean
 }) {
-  useWorkspaceTableSearchInput(inputRef, store)
+  const queryClient = useQueryClient()
+  const sync = React.useCallback(async () => {
+    const result = await ensuringPromise(
+      () => resyncDomainAssignments(),
+      () => {
+        void queryClient.invalidateQueries({
+          queryKey: queryKeys.domains.settings,
+        })
+        void queryClient.invalidateQueries({
+          queryKey: queryKeys.relay.snapshot,
+        })
+      }
+    )
+    showToast({
+      message: `Synced ${result.syncedServerCount} ${
+        result.syncedServerCount === 1
+          ? "game server address"
+          : "game server addresses"
+      }`,
+      type: "success",
+    })
+  }, [queryClient])
 
   return (
-    <div className="relative min-w-0 flex-1">
-      <Search className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground" />
-      <Input
-        ref={inputRef}
-        aria-label="Search managed domains"
-        className="pl-9 text-base md:text-sm"
-        defaultValue={store.getServerSnapshot()}
-        placeholder="Search domains"
-        type="search"
-        onChange={(event) => store.set(event.currentTarget.value)}
-      />
-    </div>
+    <InfraSyncButton
+      disabled={!enabled}
+      label="Sync managed domains"
+      sync={sync}
+      onError={showErrorToast}
+    />
   )
 })
 
 const ManagedDomainsTable = React.memo(function ManagedDomainsTable({
   domains,
+  onDialog,
   searchStore,
+  zoneName,
 }: {
   domains: Array<ManagedDomainOverview>
-  searchStore: WorkspaceTableSearchStore
+  onDialog: (dialog: DomainDialog) => void
+  searchStore: DataTableSearchStore
+  zoneName: string | undefined
 }) {
-  const renderRow = React.useCallback(
-    (domain: ManagedDomainOverview) => <ManagedDomainRow domain={domain} />,
-    []
+  // The server sorts by domain, so a rename or delete shifts later rows.
+  // Match rows by game server instead of position, so only changed rows
+  // repaint.
+  const [rowCache] = React.useState(
+    () => new Map<string, { json: string; row: ManagedDomainOverview }>()
   )
-  const renderEmpty = React.useCallback(
-    (searchActive: boolean) => (
-      <EmptyDomainsTable searchActive={searchActive} />
-    ),
-    []
-  )
+  const source = React.useMemo<DataTableSource<ManagedDomainOverview>>(() => {
+    const seen = new Set<string>()
+    const rows = domains.map((domain) => {
+      const key = managedDomainRowKey(domain)
+      const json = JSON.stringify(domain)
+      seen.add(key)
+      const cached = rowCache.get(key)
+      if (cached?.json === json) return cached.row
+      rowCache.set(key, { json, row: domain })
+      return domain
+    })
+    for (const key of rowCache.keys()) {
+      if (!seen.has(key)) rowCache.delete(key)
+    }
+    return { body: { kind: "ready" }, refreshing: false, rows }
+  }, [domains, rowCache])
+  const [initialTableState] = React.useState(() => ({
+    sorting: [{ desc: false, id: "domain" }],
+  }))
+  const definition = React.useMemo(() => {
+    const columns = domainTableColumnHelper.columns([
+      domainTableColumnHelper.accessor((domain) => domain.status, {
+        id: "status",
+        header: () => <span className="sr-only sm:not-sr-only">Status</span>,
+        sortFn: "text",
+        cell: ({ row }) => (
+          <StatusIndicator status={domainStatusPresentation(row.original)} />
+        ),
+        meta: dataTableColumnMeta(
+          { width: { base: "2.5rem", sm: statusColumnWidth } },
+          {
+            cellClassName: "px-2 sm:px-3",
+            headerClassName: "px-2 sm:px-3",
+            headerLabelClassName: "shrink-0 overflow-visible text-clip",
+          }
+        ),
+      }),
+      domainTableColumnHelper.accessor((domain) => domain.server.name, {
+        id: "server",
+        header: "Game Server",
+        sortFn: "text",
+        cell: ({ row }) => <DomainServerCell domain={row.original} />,
+        meta: dataTableColumnMeta(
+          {
+            // Phones keep the domain, which this table is about.
+            hideBelow: "sm",
+            width: { base: "minmax(0,1fr)", md: "minmax(0,1.1fr)" },
+          },
+          { cellClassName: "px-0" }
+        ),
+      }),
+      domainTableColumnHelper.accessor((domain) => domainHostname(domain), {
+        id: "domain",
+        header: "Domain",
+        sortFn: "text",
+        cell: ({ row }) => (
+          <div className="type-meta flex w-full min-w-0">
+            <WorkspaceCopyValueButton
+              label="domain"
+              value={domainHostname(row.original)}
+            />
+          </div>
+        ),
+        meta: dataTableColumnMeta({
+          width: { base: "minmax(0,1fr)", md: "minmax(0,1.2fr)" },
+        }),
+      }),
+      domainTableColumnHelper.accessor((domain) => domain.port, {
+        id: "port",
+        header: "Port",
+        sortFn: (left, right) => left.original.port - right.original.port,
+        cell: ({ row }) => (
+          <InfoCopyValue label="port" value={String(row.original.port)} />
+        ),
+        meta: dataTableColumnMeta({ hideBelow: "sm", width: "6.5rem" }),
+      }),
+      domainTableColumnHelper.accessor((domain) => srvRecordLabel(domain), {
+        id: "srv",
+        header: "SRV",
+        sortFn: "text",
+        cell: ({ row }) => <SrvRecordCell domain={row.original} />,
+        meta: dataTableColumnMeta({ hideBelow: "md", width: "7.5rem" }),
+      }),
+      domainTableColumnHelper.accessor((domain) => domain.relayName, {
+        id: "relay",
+        header: "Relay",
+        sortFn: "text",
+        cell: ({ row }) => <DataTableTextCell value={row.original.relayName} />,
+        meta: dataTableColumnMeta({
+          hideBelow: "lg",
+          width: "minmax(0,0.7fr)",
+        }),
+      }),
+      domainTableColumnHelper.display({
+        id: "actions",
+        header: () => <span className="sr-only">Actions</span>,
+        enableSorting: false,
+        cell: ({ row }) => (
+          <DomainActions
+            domain={row.original}
+            zoneName={zoneName}
+            onDialog={onDialog}
+          />
+        ),
+        meta: dataTableColumnMeta(
+          { width: "7rem" },
+          { cellClassName: "px-1 sm:px-3", headerClassName: "px-1 sm:px-3" }
+        ),
+      }),
+    ])
+    return defineDataTable({
+      ariaLabel: "Managed domains",
+      columns,
+      getRowId: managedDomainRowKey,
+      model: { initialState: initialTableState },
+      search: { fields: domainTableSearchFields },
+      virtualization: true,
+    })
+  }, [initialTableState, onDialog, zoneName])
 
   return (
-    <WorkspaceTable
-      getRowKey={managedDomainRowKey}
-      getSearchText={managedDomainSearchText}
-      head={<ManagedDomainsTableHead />}
-      items={domains}
-      renderEmpty={renderEmpty}
-      renderRow={renderRow}
+    <DataTable
+      definition={definition}
+      emptyState={renderEmptyDomains}
       searchStore={searchStore}
+      source={source}
     />
   )
 })
 
-const ManagedDomainsTableHead = React.memo(function ManagedDomainsTableHead() {
-  return (
-    <WorkspaceTableHead>
-      <WorkspaceTableHeading className="w-auto sm:w-[34%]">
-        Domain
-      </WorkspaceTableHeading>
-      <WorkspaceTableHeading className="hidden w-[20%] sm:table-cell">
-        Relay
-      </WorkspaceTableHeading>
-      <WorkspaceTableHeading className="w-20">Port</WorkspaceTableHeading>
-      <WorkspaceTableHeading className="hidden w-20 md:table-cell">
-        SRV
-      </WorkspaceTableHeading>
-      <WorkspaceTableHeading className="w-[30%] max-sm:whitespace-normal">
-        Game Server
-      </WorkspaceTableHeading>
-    </WorkspaceTableHead>
-  )
-})
-
-const ManagedDomainRow = React.memo(function ManagedDomainRow({
+const DomainServerCell = React.memo(function DomainServerCell({
   domain,
 }: {
   domain: ManagedDomainOverview
 }) {
+  const { server } = domain
   return (
-    <tr className="group transition-colors hover:bg-accent/25">
-      <WorkspaceTableCell>
-        <div className="min-w-0">
-          <p
-            className="type-code truncate text-foreground"
-            title={domain.address}
-          >
-            {domain.address}
-          </p>
-          <div className="mt-0.5 flex items-center gap-1.5">
-            <span
-              className={
-                domain.status === "active"
-                  ? "size-1.5 rounded-full bg-emerald-400"
-                  : domain.status === "pending"
-                    ? "size-1.5 rounded-full bg-amber-300"
-                    : "size-1.5 rounded-full bg-destructive"
-              }
-            />
-            <span className="type-technical-label text-muted-foreground">
-              {domain.status}
-            </span>
-          </div>
-        </div>
-      </WorkspaceTableCell>
-      <WorkspaceTableCell className="hidden sm:table-cell">
-        <p className="type-meta truncate" title={domain.relayName}>
-          {domain.relayName}
-        </p>
-        <p className="type-meta truncate font-mono text-muted-foreground">
-          {domain.relayId.slice(0, 8)}
-        </p>
-      </WorkspaceTableCell>
-      <WorkspaceTableCell>
-        <span className="type-code">{domain.port}</span>
-      </WorkspaceTableCell>
-      <WorkspaceTableCell className="hidden md:table-cell">
-        <span
-          className={
-            domain.srvActive
-              ? "type-meta inline-flex items-center gap-1 text-emerald-300"
-              : "type-meta text-muted-foreground"
-          }
-        >
-          {domain.srvActive ? <Check className="size-3" /> : null}
-          {domain.srvActive ? "Active" : domain.supportsSrv ? "Not set" : "No"}
-        </span>
-      </WorkspaceTableCell>
-      <WorkspaceTableCell>
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="grid size-7 shrink-0 place-items-center rounded-md border border-border/70 bg-background/35 text-muted-foreground">
-            <Server className="size-3.5" />
-          </span>
-          <div className="min-w-0">
-            <p className="type-meta truncate" title={domain.serverName}>
-              {domain.serverName}
-            </p>
-            <p className="type-meta truncate font-mono text-muted-foreground">
-              {domain.instanceId.slice(0, 8)}
-            </p>
-          </div>
-        </div>
-      </WorkspaceTableCell>
-    </tr>
+    <Link
+      to="/server/$serverId/console"
+      params={{ serverId: server.routeId }}
+      preload="intent"
+      className="group/server-link flex min-h-14 w-full min-w-0 items-center px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
+    >
+      <InstanceCard
+        className="min-w-0 flex-1"
+        instance={{
+          brickId: server.brickId,
+          id: domain.instanceId,
+          implementation: server.implementation,
+          kind: "server",
+          relayId: domain.relayId,
+        }}
+        meta={
+          [server.game, server.implementation].filter(Boolean).join(" · ") ||
+          domain.instanceId.slice(0, 8)
+        }
+        metaClassName="font-mono"
+        name={server.name}
+        nameClassName="transition-colors group-hover/server-link:text-primary"
+        showFavorite={false}
+        showStatus={false}
+      />
+    </Link>
   )
 })
 
-function EmptyDomainsTable({ searchActive }: { searchActive: boolean }) {
+function SrvRecordCell({ domain }: { domain: ManagedDomainOverview }) {
+  return domain.srvActive ? (
+    <span className="type-meta inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-300">
+      <Check aria-hidden className="size-3" />
+      Active
+    </span>
+  ) : (
+    <span className="type-meta text-muted-foreground">
+      {srvRecordLabel(domain)}
+    </span>
+  )
+}
+
+const DomainActions = React.memo(function DomainActions({
+  domain,
+  onDialog,
+  zoneName,
+}: {
+  domain: ManagedDomainOverview
+  onDialog: (dialog: DomainDialog) => void
+  zoneName: string | undefined
+}) {
+  const hostname = domainHostname(domain)
+
   return (
-    <div className="flex min-h-64 flex-col items-center justify-center px-6 py-12 text-center">
-      <Globe2 className="size-6 text-muted-foreground/45" />
-      <p className="mt-3 text-sm font-semibold">
-        {searchActive ? "No domains match your search" : "No Active Domains"}
-      </p>
-      <p className="type-support mt-1 max-w-sm text-muted-foreground">
-        {searchActive
-          ? "Try a vanity address, game server, Relay, port, status, or ID."
-          : "Active vanity addresses will appear here after a game server is provisioned."}
-      </p>
-    </div>
+    <DataTableActionGroup>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            aria-label={`Edit ${hostname}`}
+            className="text-muted-foreground hover:text-primary"
+            size="icon-sm"
+            type="button"
+            variant="ghost"
+            onClick={() => onDialog({ kind: "edit", domain })}
+          >
+            <Pencil />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">Edit</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            aria-label={`Delete ${hostname}`}
+            className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+            size="icon-sm"
+            type="button"
+            variant="ghost"
+            onClick={() => onDialog({ kind: "delete", domain })}
+          >
+            <Trash2 />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">Delete</TooltipContent>
+      </Tooltip>
+      {zoneName ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              asChild
+              className="text-muted-foreground hover:text-primary"
+              size="icon-sm"
+              variant="ghost"
+            >
+              <a
+                aria-label={`View ${hostname} on Cloudflare`}
+                href={cloudflareDnsRecordsUrl(zoneName)}
+                rel="noreferrer"
+                target="_blank"
+              >
+                <ExternalLink />
+              </a>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">View on Cloudflare</TooltipContent>
+        </Tooltip>
+      ) : null}
+    </DataTableActionGroup>
+  )
+})
+
+function renderEmptyDomains({ searchActive }: { searchActive: boolean }) {
+  return (
+    <DataTableEmptyState
+      description={
+        <span className="block max-w-sm">
+          {searchActive
+            ? "Try a vanity address, game server, Relay, port, status, or ID."
+            : "Active vanity addresses will appear here after a game server is provisioned."}
+        </span>
+      }
+      icon={<Globe2 className="size-6 text-muted-foreground/45" />}
+      title={
+        searchActive ? "No domains match your search" : "No Active Domains"
+      }
+    />
+  )
+}
+
+function EditDomainDialog({
+  domain,
+  onOpenChange,
+}: {
+  domain: ManagedDomainOverview
+  onOpenChange: (open: boolean) => void
+}) {
+  const queryClient = useQueryClient()
+  const [vanityLabel, setVanityLabel] = React.useState(domain.vanityLabel)
+  const parsed = vanityLabelSchema.safeParse(vanityLabel)
+  const unchanged = parsed.success && parsed.data === domain.vanityLabel
+  const save = useMutation({
+    mutationFn: (label: string) =>
+      setInstanceVanity({
+        data: {
+          instanceId: domain.instanceId,
+          relayId: domain.relayId,
+          vanityLabel: label,
+        },
+      }),
+    // A failed rename can still clear a failed domain's leftover records.
+    onSettled: () =>
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.domains.settings,
+      }),
+    onSuccess: (result) => {
+      showToast({ message: `Renamed to ${result.address}`, type: "success" })
+      onOpenChange(false)
+    },
+  })
+
+  return (
+    <Dialog open onOpenChange={save.isPending ? undefined : onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Edit domain</DialogTitle>
+          <DialogDescription>
+            Choose the vanity name players use to join {domain.server.name}.
+          </DialogDescription>
+        </DialogHeader>
+        <form
+          className="space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault()
+            if (parsed.success && !unchanged) save.mutate(parsed.data)
+          }}
+        >
+          <label className="type-label block space-y-1.5">
+            Vanity name
+            <div className="flex min-w-0 items-center gap-2">
+              <Input
+                autoCapitalize="none"
+                autoCorrect="off"
+                autoFocus
+                aria-invalid={!parsed.success || undefined}
+                className="min-w-0 flex-1 font-mono"
+                maxLength={63}
+                name="vanityLabel"
+                spellCheck={false}
+                value={vanityLabel}
+                onChange={(event) => setVanityLabel(event.currentTarget.value)}
+              />
+              <span className="type-code shrink-0 text-muted-foreground">
+                .{domain.domain}
+              </span>
+            </div>
+            <span
+              className={
+                parsed.success
+                  ? "type-meta block text-muted-foreground"
+                  : "type-meta block text-destructive"
+              }
+            >
+              {parsed.success
+                ? "Kiln updates the DNS records in Cloudflare."
+                : (parsed.error.issues[0]?.message ?? "Enter a vanity name")}
+            </span>
+          </label>
+
+          {save.error ? <ConfigurationError error={save.error} /> : null}
+
+          <DialogFooter>
+            <Button
+              disabled={save.isPending}
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              disabled={save.isPending || !parsed.success || unchanged}
+              type="submit"
+            >
+              {save.isPending ? (
+                <LoaderCircle className="animate-spin" />
+              ) : (
+                <Check />
+              )}
+              Save
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function DeleteDomainDialog({
+  domain,
+  onOpenChange,
+}: {
+  domain: ManagedDomainOverview
+  onOpenChange: (open: boolean) => void
+}) {
+  const queryClient = useQueryClient()
+  const hostname = domainHostname(domain)
+  const remove = useMutation({
+    mutationFn: () =>
+      removeInstanceDomain({
+        data: { instanceId: domain.instanceId, relayId: domain.relayId },
+      }),
+    // A failed delete marks the domain as failed, so refresh either way.
+    onSettled: () =>
+      Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.domains.settings,
+        }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.relay.snapshot }),
+      ]),
+    onSuccess: () => {
+      showToast({ message: `Deleted ${hostname}`, type: "success" })
+      onOpenChange(false)
+    },
+  })
+
+  return (
+    <Dialog open onOpenChange={remove.isPending ? undefined : onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Delete domain</DialogTitle>
+          <DialogDescription>
+            Kiln deletes <span className="font-mono">{hostname}</span> from
+            Cloudflare. Players join {domain.server.name} by its Relay address
+            instead, and Kiln won&apos;t give it a new vanity domain when it
+            starts or syncs.
+          </DialogDescription>
+        </DialogHeader>
+
+        {remove.error ? <ConfigurationError error={remove.error} /> : null}
+
+        <DialogFooter>
+          <Button
+            disabled={remove.isPending}
+            type="button"
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+          >
+            Cancel
+          </Button>
+          <Button
+            disabled={remove.isPending}
+            type="button"
+            variant="destructive"
+            onClick={() => remove.mutate()}
+          >
+            {remove.isPending ? (
+              <LoaderCircle className="animate-spin" />
+            ) : (
+              <Trash2 />
+            )}
+            Delete domain
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -978,21 +1296,35 @@ function managedDomainRowKey(domain: ManagedDomainOverview): string {
   return `${domain.relayId}:${domain.instanceId}`
 }
 
-function managedDomainSearchText(domain: ManagedDomainOverview): string {
-  return [
-    domain.address,
-    domain.instanceId,
-    domain.port,
-    domain.relayId,
-    domain.relayName,
-    domain.serverName,
-    domain.srvActive
-      ? "srv active"
-      : domain.supportsSrv
-        ? "srv not set"
-        : "no srv",
-    domain.status,
-  ].join(" ")
+function domainHostname(domain: ManagedDomainOverview): string {
+  return `${domain.vanityLabel}.${domain.domain}`
+}
+
+function srvRecordLabel(domain: ManagedDomainOverview): string {
+  return domain.srvActive
+    ? "Active"
+    : domain.supportsSrv
+      ? "Not set"
+      : "Unsupported"
+}
+
+function domainStatusPresentation(
+  domain: ManagedDomainOverview
+): IdentityStatusPresentation {
+  if (domain.status === "active") return { label: "Active", tone: "success" }
+  if (domain.status === "pending") {
+    return { label: "Pending", pulse: true, tone: "warning" }
+  }
+  return {
+    detail: domain.lastError ?? undefined,
+    label: "Error",
+    tone: "danger",
+  }
+}
+
+// Cloudflare resolves `:account` to the signed-in account that owns the zone.
+function cloudflareDnsRecordsUrl(zoneName: string): string {
+  return `https://dash.cloudflare.com/?to=/:account/${encodeURIComponent(zoneName)}/dns/records`
 }
 
 function domainIntegrationKey(integration: DomainIntegrationView | null) {
@@ -1003,4 +1335,8 @@ function domainIntegrationKey(integration: DomainIntegrationView | null) {
 
 function errorMessage(cause: unknown) {
   return cause instanceof Error ? cause.message : "Could not save the domain"
+}
+
+function showErrorToast(cause: Error) {
+  showToast({ message: errorMessage(cause), type: "error" })
 }

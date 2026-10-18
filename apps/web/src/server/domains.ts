@@ -11,6 +11,7 @@ import {
   configureDomainIntegrationHandler,
   getDomainSettingsHandler,
   getInstanceDomainHandler,
+  removeInstanceDomainHandler,
   resyncDomainAssignmentsHandler,
   setInstanceVanityHandler,
 } from "@/server/domains.server"
@@ -49,14 +50,24 @@ export interface InstanceDomainOverview {
 
 export interface ManagedDomainOverview {
   address: string
+  domain: string
   instanceId: string
+  lastError: string | null
   port: number
   relayId: string
   relayName: string
-  serverName: string
+  server: {
+    brickId: string | undefined
+    game: string | undefined
+    implementation: string | undefined
+    name: string
+    /** The `/server/$serverId` param, as the Game Servers table links it. */
+    routeId: string
+  }
   srvActive: boolean
   status: "active" | "error" | "pending"
   supportsSrv: boolean
+  vanityLabel: string
 }
 
 export const getDomainSettings = createServerFn({ method: "GET" }).handler(() =>
@@ -85,8 +96,8 @@ export const getInstanceDomain = createServerFn({ method: "GET" })
 
 export const setInstanceVanity = createServerFn({ method: "POST" })
   .validator(setVanityInputSchema)
-  .handler(async ({ data }) => {
-    const result = await setInstanceVanityHandler(data)
-    publishDomainChange(data)
-    return result
-  })
+  .handler(({ data }) => setInstanceVanityHandler(data))
+
+export const removeInstanceDomain = createServerFn({ method: "POST" })
+  .validator(instanceDomainInputSchema)
+  .handler(({ data }) => removeInstanceDomainHandler(data))
