@@ -16,6 +16,7 @@ import { Effect, Result } from "effect"
 
 import {
   backupArtifactFilename,
+  isKilnInstallationId,
   type BackupCreateTaskInput,
   type BackupArchiveCreateTaskResult,
 } from "@workspace/contracts"
@@ -437,8 +438,7 @@ function parsePlatformManifest(value: Buffer): PlatformBackupManifest {
     parsed.payload !== "hearth.dmp" ||
     typeof parsed.createdAt !== "string" ||
     !Number.isFinite(Date.parse(parsed.createdAt)) ||
-    typeof parsed.installationId !== "string" ||
-    !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/u.test(parsed.installationId)
+    !isKilnInstallationId(parsed.installationId)
   ) {
     throw new Error("The Kiln platform backup manifest is invalid")
   }

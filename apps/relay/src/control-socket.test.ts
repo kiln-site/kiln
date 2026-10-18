@@ -95,6 +95,34 @@ describe("Relay control socket", () => {
     expect(restarted.installationId).toBe(installationId)
   })
 
+  it("adopts Hearth's installation ID before the session accepts requests", async () => {
+    // The longest ID Hearth accepts from KILN_INSTALLATION_ID.
+    const hearthInstallationId = `Kiln.Production_${"a".repeat(112)}`
+    const installation = {
+      installationId: "previous-installation",
+      installationIdConfigured: false,
+    }
+    // The first snapshot never arrives, so the session stays between
+    // readiness and its snapshot.
+    const relay = await startRelay({
+      initialSnapshot: () => new Promise(() => undefined),
+      installation,
+    })
+    const hearth = await relay.pair()
+    const { inbox, socket } = await relay.open()
+
+    const challenge = (await inbox.next()) as RelayAuthChallenge
+    socket.send(
+      JSON.stringify({
+        ...authResponse(challenge, hearth),
+        installationId: hearthInstallationId,
+      })
+    )
+
+    expect((await inbox.next()).type).toBe("auth.ready")
+    expect(installation.installationId).toBe(hearthInstallationId)
+  })
+
   it("ignores upgrade targets that URL parsing rejects instead of crashing", async () => {
     const relay = await startRelay()
     const address = relay.server.address() as AddressInfo
@@ -729,6 +757,7 @@ interface TestHearth {
 async function startRelay(
   options: {
     readonly execute?: ControlSocketOptions["execute"]
+    readonly initialSnapshot?: ControlSocketOptions["initialSnapshot"]
     readonly installation?: InstallationConfig
   } = {}
 ) {
@@ -747,11 +776,11 @@ async function startRelay(
     ...(installation
       ? {
           adoptInstallationId: (installationId: string) => {
-            adoptions.push(
-              runtime.runPromise(
-                adoptInstallationId(installation, state, installationId)
-              )
+            const adopted = runtime.runPromise(
+              adoptInstallationId(installation, state, installationId)
             )
+            adoptions.push(adopted)
+            return adopted
           },
         }
       : {}),
@@ -762,7 +791,7 @@ async function startRelay(
       privateKeyPem: relayKeys.private,
       publicKeyPem: relayKeys.public,
     },
-    initialSnapshot: async () => initialSnapshot,
+    initialSnapshot: options.initialSnapshot ?? (async () => initialSnapshot),
     runEffect: (effect) => runtime.runPromise(effect),
     server,
     state,

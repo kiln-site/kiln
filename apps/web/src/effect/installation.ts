@@ -4,6 +4,8 @@ import * as MysqlClient from "@effect/sql-mysql2/MysqlClient"
 import { Clock, Effect, Option, Schema } from "effect"
 import { SqlClient } from "effect/sql"
 
+import { KilnInstallationIdSchema } from "@workspace/contracts"
+
 import { databaseTableName } from "@/lib/database-config"
 import { configuredKilnInstallationId } from "@/lib/environment"
 
@@ -16,12 +18,10 @@ const installationSettingKey = "kiln.installation"
 // Hearth's platform backup target before it saved its own installation ID.
 const legacyInstallationId = "kiln"
 
-const InstallationSetting = Schema.Struct({ id: Schema.String })
-const decodeInstallationSettingJson = Schema.decodeUnknownOption(
-  Schema.fromJsonString(InstallationSetting)
+// mysql2 returns JSON columns parsed.
+const decodeInstallationSetting = Schema.decodeUnknownOption(
+  Schema.Struct({ id: KilnInstallationIdSchema })
 )
-const decodeInstallationSetting =
-  Schema.decodeUnknownOption(InstallationSetting)
 
 // Kept on globalThis because Vite reloads this module in development
 // without restarting Hearth.
@@ -91,7 +91,10 @@ export const ensureInstallationId = Effect.fn("Installation.ensure")(
           SELECT setting_value FROM ${sql(table)}
           WHERE id = ${installationSettingId}
         `
-        const saved = savedInstallationId(rows[0]?.setting_value)
+        const saved = decodeInstallationSetting(rows[0]?.setting_value).pipe(
+          Option.map(({ id }) => id),
+          Option.getOrNull
+        )
         if (!saved) {
           return yield* Effect.die(
             new Error("The saved installation ID is unreadable")
@@ -114,14 +117,3 @@ export const ensureInstallationId = Effect.fn("Installation.ensure")(
     return id
   }
 )
-
-function savedInstallationId(value: unknown): string | null {
-  return (
-    typeof value === "string"
-      ? decodeInstallationSettingJson(value)
-      : decodeInstallationSetting(value)
-  ).pipe(
-    Option.map(({ id }) => id),
-    Option.getOrNull
-  )
-}

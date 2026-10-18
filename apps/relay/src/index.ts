@@ -134,7 +134,11 @@ import {
   traefikRouteUpstream,
   traefikStaticConfiguration,
 } from "./traefik.js"
-import { forkPromise, promiseEffect } from "./effect/promise.js"
+import {
+  forkPromise,
+  promiseEffect,
+  recoverPromise,
+} from "./effect/promise.js"
 import { DockerEngine } from "./docker-engine.js"
 import {
   inspectEncryptedPlatformBackup,
@@ -799,8 +803,8 @@ const server = activeTls
   : createHttpServer(requestHandler)
 
 const controlSocket = attachControlSocket({
-  adoptInstallationId: (installationId) => {
-    forkPromise(
+  adoptInstallationId: (installationId) =>
+    recoverPromise(
       () =>
         runRelayEffect(
           "relay.installation.adopt",
@@ -809,8 +813,7 @@ const controlSocket = attachControlSocket({
       (cause) => {
         reportRelayError(cause, { operation: "relay.installation.adopt" })
       }
-    )
-  },
+    ),
   execute: executeControlRequest,
   identity: relayIdentity,
   initialSnapshot: () => snapshotHub.read(),

@@ -70,8 +70,9 @@ const MAX_CONTROL_SESSIONS = 128
 const MAX_CONTROL_SESSIONS_PER_CLIENT = 4
 
 export interface ControlSocketOptions {
-  // Called with the installation ID a full-access Hearth authenticated with.
-  readonly adoptInstallationId?: (installationId: string) => void
+  // Saves the installation ID a full-access Hearth authenticated with. The
+  // session is ready only once this settles; it reports its own failures.
+  readonly adoptInstallationId?: (installationId: string) => Promise<void>
   readonly execute: (
     request: RelayControlRequest,
     client: RelayClientGrant,
@@ -459,15 +460,7 @@ function authenticateSocket(
       nodeResourceDeltasEnabled = features.includes(
         relaySnapshotNodeResourcesFeature
       )
-      yield* completedAuthenticationEffect(client)
-      if (
-        installationId &&
-        client.role === "full_access" &&
-        // Not turned away for having too many sessions.
-        authenticatedSockets.get(socket) === client
-      ) {
-        options.adoptInstallationId?.(installationId)
-      }
+      yield* completedAuthenticationEffect(client, installationId)
     })
   }
 
@@ -630,7 +623,8 @@ function authenticateSocket(
   }
 
   function completedAuthenticationEffect(
-    client: RelayClientGrant
+    client: RelayClientGrant,
+    installationId: string | undefined
   ): EffectType.Effect<void, Error> {
     return Effect.gen(function* () {
       const clientSessionCount = [...authenticatedSockets.values()].filter(
@@ -642,12 +636,18 @@ function authenticateSocket(
         })
         return
       }
-      authenticatedClient = client
-      yield* Fiber.interrupt(authenticationTimeoutFiber)
       sessions.set(challenge.sessionId, client)
       socketSessions.set(socket, challenge.sessionId)
       authenticatedSockets.set(socket, client)
       reverseRequesters.set(socket, requestClient)
+      // Before the session accepts requests, so none of them, such as a
+      // platform backup or an update, runs under the previous ID.
+      const adopt = options.adoptInstallationId
+      if (adopt && installationId && client.role === "full_access") {
+        yield* promiseOperation(() => adopt(installationId)).pipe(Effect.ignore)
+      }
+      authenticatedClient = client
+      yield* Fiber.interrupt(authenticationTimeoutFiber)
       yield* promiseOperation(() =>
         options.runEffect(
           options.state.touchClient(client.id, Date.now(), peerAddress ?? null)

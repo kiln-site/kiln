@@ -21,6 +21,7 @@ import {
 
 export * from "./access-permissions.js"
 export * from "./relay-protocol.js"
+export * from "./installation-id.js"
 export * from "./release-version.js"
 export * from "./minecraft-java.js"
 export * from "./cli.js"

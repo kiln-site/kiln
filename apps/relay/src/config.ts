@@ -10,6 +10,7 @@ import type {
   RelayInstanceTailscale,
 } from "@workspace/contracts"
 import {
+  isKilnInstallationId,
   kilnGitRepositoryRawUrl,
   resolveKilnGitRepository,
 } from "@workspace/contracts"
@@ -182,10 +183,7 @@ export function loadConfig(
         : 443
       : directPublicPort
   const tlsMode = relayTlsMode(environment)
-  const installationId = optionalDockerIdentifier(
-    environment,
-    "KILN_INSTALLATION_ID"
-  )
+  const installationId = optionalInstallationId(environment)
   const resourceNamespace = optionalDockerIdentifier(
     environment,
     "KILN_RELAY_RESOURCE_NAMESPACE"
@@ -384,6 +382,17 @@ function optionalPlatformBackupKey(
     throw new Error("KILN_PLATFORM_BACKUP_KEY must be at least 32 bytes")
   }
   return key
+}
+
+function optionalInstallationId(environment: NodeJS.ProcessEnv): string | null {
+  const value = environment.KILN_INSTALLATION_ID?.trim()
+  if (!value) return null
+  if (!isKilnInstallationId(value)) {
+    throw new Error(
+      "KILN_INSTALLATION_ID must use 1-128 letters, numbers, dots, underscores, or hyphens"
+    )
+  }
+  return value
 }
 
 function optionalDockerIdentifier(

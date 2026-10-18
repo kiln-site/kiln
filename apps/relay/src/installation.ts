@@ -1,11 +1,15 @@
-import { Effect } from "effect"
+import { Effect, Semaphore } from "effect"
+
+import { isKilnInstallationId } from "@workspace/contracts"
 
 import type { RelayConfig } from "./config.js"
 import type { RelayStateStore } from "./effect/state.js"
 
 const INSTALLATION_ID_METADATA_KEY = "installation_id"
-// The same rule as KILN_INSTALLATION_ID, since both end up in Docker labels.
-const INSTALLATION_ID_PATTERN = /^[a-z0-9][a-z0-9_.-]{0,47}$/u
+
+// One adoption at a time, so the saved ID and the one in config can't end up
+// from different Hearth sessions.
+const adoption = Semaphore.makeUnsafe(1)
 
 type InstallationConfig = Pick<
   RelayConfig,
@@ -17,7 +21,7 @@ export const savedInstallationId = Effect.fnUntraced(function* (
   state: RelayStateStore["Service"]
 ) {
   const saved = yield* state.getMetadata(INSTALLATION_ID_METADATA_KEY)
-  return saved && INSTALLATION_ID_PATTERN.test(saved) ? saved : null
+  return saved && isKilnInstallationId(saved) ? saved : null
 })
 
 /** Loads the saved installation ID unless KILN_INSTALLATION_ID set one. */
@@ -46,9 +50,9 @@ export const adoptInstallationId = Effect.fn("Relay.installation.adopt")(
       )
       return
     }
-    if (!INSTALLATION_ID_PATTERN.test(installationId)) {
+    if (!isKilnInstallationId(installationId)) {
       yield* Effect.logWarning(
-        "Ignoring Hearth's installation ID: it must be at most 48 lowercase letters, numbers, dots, underscores, or hyphens"
+        "Ignoring Hearth's installation ID: it must use 1-128 letters, numbers, dots, underscores, or hyphens"
       )
       return
     }
@@ -60,5 +64,6 @@ export const adoptInstallationId = Effect.fn("Relay.installation.adopt")(
         ? `Hearth changed this Relay's installation ID from ${previous} to ${installationId}`
         : `Saved installation ID ${installationId} from Hearth`
     )
-  }
+  },
+  (effect) => adoption.withPermit(effect)
 )
