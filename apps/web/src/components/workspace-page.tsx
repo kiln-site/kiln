@@ -24,7 +24,7 @@ export function WorkspacePage({
         // Beside the content on wide screens, below it otherwise. Rail labels
         // are short, so they take only their width and leave the rest to
         // values.
-        <aside className="min-w-0 shrink-0 rounded-xl border border-border/75 bg-card/45 p-4 xl:w-72 xl:overflow-y-auto [&_dt]:min-w-0">
+        <aside className="min-w-0 shrink-0 rounded-xl border border-border/75 bg-card/45 p-4 xl:flex xl:w-72 xl:flex-col xl:overflow-y-auto [&_dt]:min-w-0">
           {rail}
         </aside>
       ) : null}

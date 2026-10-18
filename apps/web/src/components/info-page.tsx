@@ -602,6 +602,7 @@ export const InfoRailLink = createLink(InfoRailLinkAnchor)
 export function InfoRailCard({
   action,
   children,
+  className,
   icon,
   sections,
   summary,
@@ -610,6 +611,8 @@ export function InfoRailCard({
   // At the end of the title row, such as a pager between containers.
   action?: React.ReactNode
   children: React.ReactNode
+  // Such as stretching the card to the rail's height.
+  className?: string
   icon: React.ReactNode
   // Titled parts below the facts, such as an InfoRailCardSection.
   sections?: React.ReactNode
@@ -618,7 +621,9 @@ export function InfoRailCard({
   title: string
 }) {
   return (
-    <section className="mt-6 border bg-background/45 first:mt-0">
+    <section
+      className={cn("mt-6 border bg-background/45 first:mt-0", className)}
+    >
       <div className="flex min-h-10 items-center gap-2 border-b px-3 py-1.5">
         <h3 className="flex min-w-0 items-center gap-2 text-[0.8125rem] font-semibold [&_svg]:size-3.5 [&_svg]:shrink-0 [&_svg]:text-muted-foreground">
           {icon}
@@ -637,29 +642,28 @@ export function InfoRailCard({
   )
 }
 
-// A titled part of a rail card, set off from the facts above by its own
-// header row.
+// A titled part of a rail card below its facts. Its title row reads like a
+// fact: a label, with a value such as a count on the right.
 export function InfoRailCardSection({
   action,
   children,
+  className,
   contentClassName,
-  icon,
   title,
 }: {
   action?: React.ReactNode
   // Its own markup, such as a list, rather than facts.
   children: React.ReactNode
+  className?: string
   // Such as a height cap that scrolls a long list.
   contentClassName?: string
-  icon: React.ReactNode
   title: string
 }) {
   return (
-    <section>
-      <div className="flex min-h-10 items-center gap-2 border-y bg-muted/30 px-3 py-1.5">
-        <h4 className="flex min-w-0 items-center gap-2 text-[0.8125rem] font-semibold [&_svg]:size-3.5 [&_svg]:shrink-0 [&_svg]:text-muted-foreground">
-          {icon}
-          <span className="truncate">{title}</span>
+    <section className={className}>
+      <div className="mx-3 flex min-h-10 shrink-0 items-center gap-3 border-y border-border/60 py-1.5 text-[0.8125rem]">
+        <h4 className="min-w-0 truncate font-normal text-muted-foreground">
+          {title}
         </h4>
         {action ? (
           <div className="ml-auto flex shrink-0 items-center">{action}</div>

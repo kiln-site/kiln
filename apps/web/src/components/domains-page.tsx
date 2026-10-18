@@ -18,7 +18,6 @@ import {
   ExternalLink,
   Globe2,
   KeyRound,
-  Link2,
   LoaderCircle,
   Pencil,
   Plus,
@@ -394,6 +393,8 @@ const DomainsRail = React.memo(function DomainsRail({
           </Tooltip>
         </div>
       }
+      // Fills the rail beside the table, so the domain list can too.
+      className="xl:flex xl:min-h-0 xl:flex-1 xl:flex-col"
       icon={<Globe2 />}
       sections={
         integration && integration.domains.length > 0 ? (
@@ -403,17 +404,21 @@ const DomainsRail = React.memo(function DomainsRail({
                 {integration.domains.length}
               </span>
             }
-            // Seven and a half rows: the cut-off row shows the list scrolls.
-            contentClassName="max-h-[calc(7.5*2rem+0.5rem)] overflow-y-auto py-1"
-            icon={<Link2 />}
+            className="xl:flex xl:min-h-0 xl:flex-1 xl:flex-col"
+            // Beside the table it fills the rail. Stacked below it, seven and
+            // a half rows: the cut-off row shows the list scrolls.
+            contentClassName="max-h-[calc(7.5*(2.25rem+1px))] overflow-y-auto xl:max-h-none xl:min-h-0 xl:flex-1"
             title="Domains"
           >
             <ul aria-label="Vanity domains">
               {integration.domains.map((domain) => (
-                <li key={domain.domain}>
+                <li
+                  key={domain.domain}
+                  className="border-b border-border/60 last:border-b-0"
+                >
                   <a
                     aria-label={`View ${domain.domain} on Cloudflare`}
-                    className={`group -mx-3 flex h-8 items-center gap-2 px-3 font-mono text-[0.8125rem] outline-none hover:bg-muted/60 focus-visible:bg-muted/60 ${
+                    className={`group -mx-3 flex h-9 items-center gap-2 px-3 font-mono text-[0.8125rem] outline-none hover:bg-muted/60 focus-visible:bg-muted/60 ${
                       domain.enabled ? "" : "text-muted-foreground"
                     }`}
                     href={cloudflareDnsRecordsUrl(domain.zoneName)}
