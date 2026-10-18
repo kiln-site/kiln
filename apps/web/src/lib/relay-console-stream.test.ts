@@ -431,6 +431,37 @@ describe("Relay console prewarm", () => {
     vi.useRealTimers()
   })
 
+  it("discards a prewarm when browser authorization changes", async () => {
+    deferredCapability().resolve(consoleCapability())
+    vi.stubGlobal("navigator", { onLine: true })
+    vi.stubGlobal("WebSocket", FakeWebSocket)
+
+    prewarmRelayConsole(prewarm)
+    const stale = await FakeWebSocket.opened(0)
+    dispatchChallenge(stale)
+    // Such as a sign-out or a permission change while the link was hovered.
+    notifyRelayBrowserAuthorizationChanged()
+    await vi.waitFor(() => expect(stale.close).toHaveBeenCalled())
+
+    const running = Effect.runPromise(
+      openRelayConsoleStream(
+        "relay-one",
+        { id: "instance-one", kind: "instance" },
+        "https://relay.example.com"
+      ).pipe(Stream.runHead)
+    )
+    const next = await FakeWebSocket.opened(1)
+    dispatchChallenge(next)
+    await finishDirectConnection(next, running)
+
+    // Nothing is authenticated with what the prewarm held.
+    expect(stale.sent).toEqual([])
+    expect(next.sent).toEqual([
+      expect.objectContaining({ type: "auth" }),
+      { instanceId: "instance-one", type: "console.subscribe", v: 1 },
+    ])
+  })
+
   it("closes a prewarm nobody adopts", async () => {
     // Time still passes, so the stream's own scheduling runs.
     vi.useFakeTimers({
