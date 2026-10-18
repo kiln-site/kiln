@@ -181,6 +181,10 @@ export const DomainsPage = React.memo(function DomainsPage({
     if (!open) setDialog(null)
   }, [])
   const domains = data.integration?.domains
+  const enabledDomains = React.useMemo(
+    () => domains?.filter((domain) => domain.enabled) ?? [],
+    [domains]
+  )
   const domainUsage = React.useMemo(() => {
     const usage = new Map<string, number>()
     for (const domain of data.managedDomains) {
@@ -202,7 +206,7 @@ export const DomainsPage = React.memo(function DomainsPage({
       <DataTableWorkspace
         toolbar={
           <DomainsToolbar
-            canCreate={(domains?.length ?? 0) > 0}
+            canCreate={enabledDomains.length > 0}
             syncEnabled={data.integration !== null}
             searchStore={searchStore}
             onCreate={openCreate}
@@ -224,9 +228,9 @@ export const DomainsPage = React.memo(function DomainsPage({
           onOpenChange={closeDialog}
         />
       ) : null}
-      {dialog?.kind === "create" && domains ? (
+      {dialog?.kind === "create" ? (
         <CreateDomainDialog
-          domains={domains}
+          domains={enabledDomains}
           managedDomains={data.managedDomains}
           onOpenChange={closeDialog}
         />
@@ -235,7 +239,7 @@ export const DomainsPage = React.memo(function DomainsPage({
         <EditDomainDialog
           key={dialog.domain.id}
           domain={dialog.domain}
-          domains={domains ?? []}
+          domains={enabledDomains}
           onOpenChange={closeDialog}
         />
       ) : null}
@@ -298,7 +302,10 @@ const DomainSummaryCard = React.memo(function DomainSummaryCard({
       <p className="type-meta mt-1 truncate text-muted-foreground">
         {domains.length > 0 ? (
           <span className="type-code">
-            {domains.map((domain) => `<vanity>.${domain.domain}`).join(", ")}
+            {domains
+              .filter((domain) => domain.enabled)
+              .map((domain) => `<vanity>.${domain.domain}`)
+              .join(", ") || "No domains take new game servers"}
           </span>
         ) : (
           "Connect Cloudflare to give game servers vanity addresses."
@@ -342,6 +349,10 @@ const DomainListPopover = React.memo(function DomainListPopover({
                 </span>
                 {domain.isDefault ? (
                   <Badge variant="outline">Default</Badge>
+                ) : !domain.enabled ? (
+                  <Badge className="text-muted-foreground" variant="outline">
+                    Disabled
+                  </Badge>
                 ) : null}
                 <span className="type-meta shrink-0 text-muted-foreground tabular-nums">
                   {usage} in use
@@ -1073,7 +1084,8 @@ function EditDomainDialog({
   const [suffix, setSuffix] = React.useState(domain.domain)
   const [primary, setPrimary] = React.useState(domain.primary)
   const parsed = vanityLabelSchema.safeParse(vanityLabel)
-  // A domain that is no longer configured can still be renamed onto one.
+  // Its current domain stays a choice even when it's disabled or no longer
+  // configured, so it can be renamed in place.
   const choices = React.useMemo(
     () =>
       domains.some((item) => item.domain === domain.domain)
@@ -1082,6 +1094,7 @@ function EditDomainDialog({
             ...domains,
             {
               domain: domain.domain,
+              enabled: false,
               isDefault: false,
               zoneId: "",
               zoneName: domain.zoneName ?? domain.domain,
@@ -1293,7 +1306,7 @@ function DomainConfigurationDialog({
       integration?.domains.map((domain) => ({
         domain: domain.domain,
         missing: false,
-        selected: true,
+        selected: domain.enabled,
         zoneId: domain.zoneId,
         zoneName: domain.zoneName,
       })) ?? []
@@ -1533,7 +1546,7 @@ function DomainConfigurationDialog({
                     </span>
                   ) : choices.length > 0 ? (
                     <span className="type-meta text-muted-foreground tabular-nums">
-                      {selected.length} of {choices.length} in use
+                      {selected.length} of {choices.length} enabled
                     </span>
                   ) : null}
                   <Tooltip>
@@ -1728,56 +1741,47 @@ const DomainZoneRow = React.memo(function DomainZoneRow({
   onMakeDefault: (zoneId: string) => void
   usage: number
 }) {
-  // Its game server domains keep records in this zone until they're deleted.
-  const locked = choice.selected && usage > 0
-  const checkbox = (
-    <label
-      className={`flex items-center ${locked ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}
-    >
-      <input
-        aria-label={`Use ${choice.zoneName}`}
-        checked={choice.selected}
-        className="peer sr-only"
-        disabled={locked}
-        type="checkbox"
-        onChange={(event) =>
-          onChange(choice.zoneId, { selected: event.currentTarget.checked })
-        }
-      />
-      <span
-        className={`grid size-4 place-items-center rounded-sm border peer-focus-visible:ring-2 peer-focus-visible:ring-ring/40 ${
-          choice.selected
-            ? "border-primary bg-primary text-primary-foreground"
-            : "border-input"
-        }`}
-      >
-        {choice.selected ? <Check className="size-3" /> : null}
-      </span>
-    </label>
-  )
-
   return (
     <tr className={choice.selected ? undefined : "text-muted-foreground"}>
       <td className="px-3 py-1.5 align-middle">
-        {locked ? (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="inline-flex">{checkbox}</span>
-            </TooltipTrigger>
-            <TooltipContent side="right">
-              Delete its {usage} game server{" "}
-              {usage === 1 ? "domain" : "domains"} first
-            </TooltipContent>
-          </Tooltip>
-        ) : (
-          checkbox
-        )}
+        <label className="flex cursor-pointer items-center">
+          <input
+            aria-label={`Use ${choice.zoneName}`}
+            checked={choice.selected}
+            className="peer sr-only"
+            type="checkbox"
+            onChange={(event) =>
+              onChange(choice.zoneId, { selected: event.currentTarget.checked })
+            }
+          />
+          <span
+            className={`grid size-4 place-items-center rounded-sm border peer-focus-visible:ring-2 peer-focus-visible:ring-ring/40 ${
+              choice.selected
+                ? "border-primary bg-primary text-primary-foreground"
+                : "border-input"
+            }`}
+          >
+            {choice.selected ? <Check className="size-3" /> : null}
+          </span>
+        </label>
       </td>
       <td className="px-1 py-1.5">
         <div className="flex min-w-0 items-center gap-1.5">
-          <span className="type-code min-w-0 flex-1 truncate">
-            {choice.domain}
-          </span>
+          <span className="type-code min-w-0 truncate">{choice.domain}</span>
+          {!choice.selected && usage > 0 ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="type-meta shrink-0 text-muted-foreground">
+                  Existing only
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                Its {usage} game server {usage === 1 ? "domain keeps" : "domains keep"}{" "}
+                working. New game servers won&apos;t get it.
+              </TooltipContent>
+            </Tooltip>
+          ) : null}
+          <span className="flex-1" />
           {choice.missing ? (
             <Tooltip>
               <TooltipTrigger asChild>

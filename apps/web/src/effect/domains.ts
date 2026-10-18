@@ -20,6 +20,11 @@ export type DomainAssignmentStrategy = "balanced" | "default" | "random"
 /** A domain Kiln can create `<vanity>.<domain>` names under. */
 export interface ManagedDomain {
   domain: string
+  /**
+   * Offered to new game servers. A disabled domain still serves, syncs, and
+   * renames the game server domains already on it.
+   */
+  enabled: boolean
   isDefault: boolean
   zoneId: string
   zoneName: string
@@ -27,7 +32,7 @@ export interface ManagedDomain {
 
 export interface DomainIntegration {
   blacklistPatterns: Array<string>
-  /** Sorted by name, with the default first. */
+  /** The default first, then enabled domains, each sorted by name. */
   domains: Array<ManagedDomain>
   enabled: boolean
   id: string
@@ -77,6 +82,7 @@ interface DomainIntegrationRow extends RowDataPacket {
 
 interface DomainZoneRow extends RowDataPacket {
   domain: string
+  enabled: boolean | number
   is_default: boolean | number
   zone_id: string
   zone_name: string
@@ -120,10 +126,10 @@ const loadIntegrationRowEffect = Effect.fnUntraced(function* (
       ),
       database.queryRows<DomainZoneRow>(
         `${operation}.domains`,
-        `SELECT domain, zone_id, zone_name, is_default
+        `SELECT domain, zone_id, zone_name, is_default, enabled
            FROM ${databaseTable("domain_zone")}
           WHERE integration_id = ?
-          ORDER BY is_default DESC, domain`,
+          ORDER BY is_default DESC, enabled DESC, domain`,
         [CLOUDFLARE_INTEGRATION_ID]
       ),
     ],
@@ -232,14 +238,15 @@ export const saveCloudflareIntegrationEffect = Effect.fn(
         yield* transaction.execute(
           `INSERT INTO ${databaseTable("domain_zone")}
              (domain, integration_id, zone_id, zone_name, is_default,
-              created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+              enabled, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             domain.domain,
             CLOUDFLARE_INTEGRATION_ID,
             domain.zoneId,
             domain.zoneName,
             domain.isDefault,
+            domain.enabled,
             now,
             now,
           ]
@@ -691,6 +698,7 @@ function publicIntegration(
     blacklistPatterns: parseBlacklistPatterns(row.blacklist_patterns),
     domains: zones.map((zone) => ({
       domain: zone.domain,
+      enabled: Boolean(zone.enabled),
       isDefault: Boolean(zone.is_default),
       zoneId: zone.zone_id,
       zoneName: zone.zone_name,

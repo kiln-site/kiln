@@ -33,6 +33,7 @@ export const domainZones: Migration = {
   \`zone_id\` char(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   \`zone_name\` varchar(253) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   \`is_default\` tinyint(1) NOT NULL DEFAULT '0',
+  \`enabled\` tinyint(1) NOT NULL DEFAULT '1',
   \`created_at\` bigint unsigned NOT NULL,
   \`updated_at\` bigint unsigned NOT NULL,
   PRIMARY KEY (\`domain\`)

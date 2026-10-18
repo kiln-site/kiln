@@ -258,23 +258,28 @@ export async function configureDomainIntegrationHandler(
     }
     return {
       domain: item.domain,
+      enabled: true,
       isDefault: item.domain === data.defaultDomain,
       zoneId: zone.id,
       zoneName: zone.name,
     }
   })
-  // Game server domains keep their records in their domain's zone, so the
-  // domain can't leave or change zones until they're deleted.
+  // Game server domains keep their records in their domain's zone. A domain
+  // left out while it still has some stays, disabled, so they keep working
+  // but new game servers don't get it.
   for (const previous of existing?.domains ?? []) {
     const total = usage.get(previous.domain) ?? 0
     if (total === 0) continue
     const next = domains.find((item) => item.domain === previous.domain)
-    if (next?.zoneId === previous.zoneId) continue
-    throw new Error(
-      `Delete the ${total} ${total === 1 ? "domain" : "domains"} on ${previous.domain} before ${
-        next ? "moving it to another zone" : "removing it"
-      }`
-    )
+    if (!next) {
+      domains.push({ ...previous, enabled: false, isDefault: false })
+      continue
+    }
+    if (next.zoneId !== previous.zoneId) {
+      throw new Error(
+        `Delete the ${total} ${total === 1 ? "domain" : "domains"} on ${previous.domain} before moving it to another zone`
+      )
+    }
   }
   await runAppEffect(
     "domains.integration.save",
@@ -747,7 +752,8 @@ const provisionInstanceDomainEffect = Effect.fn("domains.instance.provision")(
         yield* releaseRecordsEffect(assignment, credential)
         const domain = yield* configuredDomainEffect(
           credential,
-          assignment.domain
+          assignment.domain,
+          true
         )
         // The primary was likely named by Kiln, so it may take a new name;
         // other domains were named by hand and keep theirs.
@@ -864,7 +870,12 @@ const updateInstanceDomainEffect = Effect.fn("domains.instance.update")(
       return yield* domainFailure("Domain not found")
     }
     const credential = yield* loadCloudflareIntegrationCredentialEffect()
-    const domain = yield* configuredDomainEffect(credential, input.domain)
+    // Renaming within a disabled domain is fine; moving onto one isn't.
+    const domain = yield* configuredDomainEffect(
+      credential,
+      input.domain,
+      input.domain === assignment.domain
+    )
     if (!vanityLabelAllowed(input.vanityLabel, credential.blacklistPatterns)) {
       return yield* domainFailure(
         "That server address is reserved by the platform administrator"
@@ -939,21 +950,22 @@ const updateInstanceDomainEffect = Effect.fn("domains.instance.update")(
 const chooseDomainEffect = Effect.fn("domains.instance.chooseDomain")(
   function* (credential: CloudflareIntegrationCredential) {
     // Loaded default first, so it wins ties.
-    const [fallback] = credential.domains
+    const domains = credential.domains.filter((domain) => domain.enabled)
+    const [fallback] = domains
     if (!fallback) {
       return yield* domainFailure(
-        "Add a domain to the vanity configuration first"
+        "Enable a domain in the vanity configuration first"
       )
     }
     if (credential.strategy === "random") {
-      const index = yield* Random.nextIntBetween(0, credential.domains.length, {
+      const index = yield* Random.nextIntBetween(0, domains.length, {
         halfOpen: true,
       })
-      return credential.domains[index] ?? fallback
+      return domains[index] ?? fallback
     }
     if (credential.strategy === "balanced") {
       const usage = yield* countInstanceDomainsByDomainEffect()
-      return credential.domains.reduce((least, domain) =>
+      return domains.reduce((least, domain) =>
         (usage.get(domain.domain) ?? 0) < (usage.get(least.domain) ?? 0)
           ? domain
           : least
@@ -1327,14 +1339,22 @@ const availableVanityLabelEffect = Effect.fn("domains.instance.availableLabel")(
   }
 )
 
+/**
+ * A configured domain. Only enabled ones take new game server domains;
+ * `existing` also accepts a disabled one a game server domain is already on.
+ */
 function configuredDomainEffect(
   credential: CloudflareIntegrationCredential,
-  name: string
+  name: string,
+  existing = false
 ): Effect.Effect<ManagedDomain, ExternalServiceError> {
   const domain = credential.domains.find((item) => item.domain === name)
-  return domain
+  if (!domain) {
+    return domainFailure(`${name} is not a configured vanity domain`)
+  }
+  return domain.enabled || existing
     ? Effect.succeed(domain)
-    : domainFailure(`${name} is not a configured vanity domain`)
+    : domainFailure(`${name} isn't taking new game server domains`)
 }
 
 function assignmentZoneIdEffect(

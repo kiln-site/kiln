@@ -81,6 +81,7 @@ vi.stubEnv("BETTER_AUTH_SECRETS", `1:${"s".repeat(32)}`)
 
 const insertCredential = (
   options: {
+    disabled?: Array<string>
     domains?: Array<string>
     strategy?: "balanced" | "default" | "random"
   } = {}
@@ -109,6 +110,7 @@ const insertCredential = (
         zone_id: index === 0 ? "zone-id" : `zone-${index}`,
         zone_name: domain,
         is_default: index === 0,
+        enabled: !options.disabled?.includes(domain),
         created_at: 0,
         updated_at: 0,
       }))
@@ -560,6 +562,53 @@ describeMysql("choosing a new game server's domain", () => {
       }).pipe(Effect.provide(disabledCache))
     )
 
+    it.effect(
+      "keeps new game servers off a disabled domain while its domains still sync",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          fakeCloudflare({ records: ["address-record", "srv-record"] })
+          yield* insertCredential({
+            disabled: ["other.site"],
+            domains: ["kiln.site", "other.site"],
+            strategy: "balanced",
+          })
+          // other.site is the least used, but disabled.
+          yield* insertAssignment({
+            ...testAssignment(),
+            id: aliasId,
+            instanceId: "c".repeat(40),
+          })
+          yield* insertAssignment({
+            ...testAssignment(),
+            domain: "other.site",
+            instanceId: "d".repeat(40),
+          })
+          const otherServer = {
+            ...testInstance(),
+            id: "d".repeat(40),
+          }
+
+          yield* Effect.promise(() =>
+            provisionInstanceDomain(testInstance(), relayId)
+          )
+          yield* Effect.promise(() =>
+            provisionInstanceDomain(otherServer, relayId)
+          )
+
+          const rows = yield* selectRows<{
+            domain: string
+            instance_id: string
+            public_host: string
+          }>("instance_domain")
+          const byServer = new Map(rows.map((row) => [row.instance_id, row]))
+          assert.strictEqual(byServer.get(instanceId)?.domain, "kiln.site")
+          const existing = byServer.get("d".repeat(40))
+          assert.strictEqual(existing?.domain, "other.site")
+          assert.strictEqual(existing?.public_host, "new-relay.example.com")
+        }).pipe(Effect.provide(disabledCache))
+    )
+
     it.effect("uses the default domain when told to", () =>
       Effect.gen(function* () {
         yield* resetDatabase
@@ -656,6 +705,7 @@ function testCredential(): CloudflareIntegrationCredential {
     domains: [
       {
         domain: "kiln.site",
+        enabled: true,
         isDefault: true,
         zoneId: "zone-id",
         zoneName: "kiln.site",
