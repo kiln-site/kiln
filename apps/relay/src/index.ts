@@ -142,6 +142,7 @@ import {
 } from "./platform-backups.js"
 import { FilesystemDriver, type FileRoot } from "./files.js"
 import { HostFiles } from "./host-files.js"
+import { adoptInstallationId, loadInstallationId } from "./installation.js"
 import { LifecycleDriver } from "./lifecycle.js"
 import { nodeSnapshot } from "./node.js"
 import { reportRelayMemoryMetrics } from "./relay-memory.js"
@@ -228,6 +229,7 @@ const startupCore = await runRelayEffect(
   Effect.gen(function* () {
     const state = yield* RelayStateStore
     const identity = yield* loadOrCreateRelayIdentity(config)
+    yield* loadInstallationId(config, state)
     return { identity, state }
   })
 )
@@ -502,7 +504,7 @@ const scheduleManager = await ScheduleManager.make({
     runRelayEffect("relay.schedules.backup.get", backupManager.get(taskId)),
   listDatabaseIds: async () =>
     new Set((await databases.list()).map((database) => database.id)),
-  platformTargetId: config.installationId ?? relayIdentity.fingerprint,
+  platformTargetId: () => config.installationId ?? relayIdentity.fingerprint,
   relayId: relayIdentity.fingerprint,
   reportError: (message, cause) => {
     reportRelayError(
@@ -797,6 +799,18 @@ const server = activeTls
   : createHttpServer(requestHandler)
 
 const controlSocket = attachControlSocket({
+  adoptInstallationId: (installationId) => {
+    forkPromise(
+      () =>
+        runRelayEffect(
+          "relay.installation.adopt",
+          adoptInstallationId(config, startup.state, installationId)
+        ),
+      (cause) => {
+        reportRelayError(cause, { operation: "relay.installation.adopt" })
+      }
+    )
+  },
   execute: executeControlRequest,
   identity: relayIdentity,
   initialSnapshot: () => snapshotHub.read(),

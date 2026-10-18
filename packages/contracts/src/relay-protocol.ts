@@ -292,6 +292,9 @@ export const RelayAuthChallengeSchema = Schema.Struct({
 export const RelayAuthResponseSchema = Schema.Struct({
   clientId: Schema.String,
   features: Schema.optionalKey(Schema.Array(Schema.String)),
+  // Hearth's installation ID, which the Relay saves as its own. Relays
+  // validate it themselves so an ID they can't use never fails authentication.
+  installationId: Schema.optionalKey(Schema.String),
   signature: Schema.String,
   type: Schema.Literal("auth.response"),
   v: Schema.Literal(1),

@@ -3,6 +3,7 @@ import type { OtlpTarget } from "@workspace/telemetry"
 import { Effect, Option } from "effect"
 import { z } from "zod"
 
+import { loadedKilnInstallationId } from "@/effect/installation"
 import { telemetryDefaults } from "@/effect/runtime"
 import { getAuthenticatedRealtimeIdentityFromHeaders } from "@/lib/auth-session"
 import { keepBrowserTrace } from "@/lib/browser-trace-sampling"
@@ -95,6 +96,7 @@ export async function forwardBrowserTelemetry(
   )
 
   const target = await Effect.runPromise(otlpTarget(signal, telemetryDefaults))
+  const installationId = loadedKilnInstallationId()
   const resource = {
     attributes: [
       { key: "service.name", value: { stringValue: "hearth-browser" } },
@@ -102,6 +104,14 @@ export async function forwardBrowserTelemetry(
         key: "service.version",
         value: { stringValue: import.meta.env.VITE_KILN_VERSION },
       },
+      ...(installationId
+        ? [
+            {
+              key: "kiln.installation_id",
+              value: { stringValue: installationId },
+            },
+          ]
+        : []),
     ],
   }
   let forwarded: unknown

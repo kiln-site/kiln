@@ -165,6 +165,39 @@ describe("container replacement", () => {
     })
   )
 
+  effectIt.effect(
+    "labels a container from before installation IDs with this installation",
+    () =>
+      Effect.gen(function* () {
+        const { docker } = yield* runningHearth()
+
+        yield* replaceContainerEffect(
+          { ...replacement, installationId: "kiln-installation" },
+          docker,
+          ignorePhase
+        )
+
+        expect(hearth()?.labels["io.kiln.installation"]).toBe(
+          "kiln-installation"
+        )
+      })
+  )
+
+  effectIt.effect("keeps the installation a container is labeled with", () =>
+    Effect.gen(function* () {
+      const { current, docker } = yield* runningHearth()
+      current.labels["io.kiln.installation"] = "kiln-original"
+
+      yield* replaceContainerEffect(
+        { ...replacement, installationId: "kiln-installation" },
+        docker,
+        ignorePhase
+      )
+
+      expect(hearth()?.labels["io.kiln.installation"]).toBe("kiln-original")
+    })
+  )
+
   effectIt.effect("preserves an explicitly configured hostname", () =>
     Effect.gen(function* () {
       const { docker } = yield* runningHearth({ hostname: "hearth.internal" })

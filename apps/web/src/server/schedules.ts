@@ -34,7 +34,7 @@ import { forkAppEffect, runAppEffect } from "@/effect/runtime"
 import { databasePool } from "@/lib/database"
 import { databaseTable } from "@/lib/database-config"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
-import { kilnInstallationId } from "@/lib/environment"
+import { kilnInstallationId } from "@/effect/installation"
 import {
   isPlatformAdmin,
   listUserGrants,

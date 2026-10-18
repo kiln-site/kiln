@@ -70,7 +70,8 @@ export interface ScheduleManagerOptions {
   ) => Fiber.Fiber<void, unknown>
   readonly getBackup: (taskId: string) => Promise<RelayBackupTask | null>
   readonly listDatabaseIds: () => Promise<ReadonlySet<string>>
-  readonly platformTargetId: string
+  // Read per run: Hearth can give the Relay its installation ID at any time.
+  readonly platformTargetId: () => string
   readonly reportError?: (message: string, cause: unknown) => void
   readonly relayId: string
   readonly runDatabasePower: (
@@ -691,7 +692,7 @@ export class ScheduleManager {
         target: {
           id:
             targetKind === "platform"
-              ? this.#options.platformTargetId
+              ? this.#options.platformTargetId()
               : target.id,
           kind: targetKind,
         },

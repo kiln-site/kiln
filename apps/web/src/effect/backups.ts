@@ -24,13 +24,14 @@ import {
 import { decryptWithKeyring, encryptWithKeyring } from "../../keyring.mjs"
 import { Database } from "@/effect/database"
 import type { DatabaseTransaction } from "@/effect/database"
+import { kilnInstallationId } from "@/effect/installation"
 import {
   BackupLimitError,
   BackupStorageError,
   CredentialError,
 } from "@/effect/errors"
 import { databaseTable } from "@/lib/database-config"
-import { betterAuthSecrets, kilnInstallationId } from "@/lib/environment"
+import { betterAuthSecrets } from "@/lib/environment"
 import {
   backupObjectKey,
   deleteS3BackupPrefix,

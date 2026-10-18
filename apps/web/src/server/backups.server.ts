@@ -57,7 +57,8 @@ import {
 } from "@/lib/backup-realtime.server"
 import { signLocalBackupDownload } from "@/backups/destinations/local"
 import { relayRpc } from "@/lib/relay-connection"
-import { kilnInstallationId, kilnPublicUrl } from "@/lib/environment"
+import { kilnInstallationId } from "@/effect/installation"
+import { kilnPublicUrl } from "@/lib/environment"
 import {
   dispatchBackupTask,
   reconcileRelayBackups,

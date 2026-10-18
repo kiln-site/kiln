@@ -3,6 +3,7 @@ import { createServerEntry } from "@tanstack/react-start/server-entry"
 import { Effect } from "effect"
 
 import { hearthStreamHandler } from "./app-server-handler"
+import { loadInstallationId } from "./effect/installation"
 import { migrateDatabase } from "./effect/migrations"
 import { disposeAppRuntime, reportAppError } from "./effect/runtime"
 import { forkPromise } from "./effect/promise"
@@ -23,6 +24,9 @@ import {
 } from "./lib/relay-registry"
 
 await migrateDatabase()
+// Before the app runtime starts, so telemetry carries the ID, and before
+// Relays connect, since Hearth sends it to them.
+await loadInstallationId()
 startInstanceDirectorySync()
 
 await Effect.runPromise(

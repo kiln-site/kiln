@@ -67,6 +67,8 @@ export interface UpdateOperation {
   phase?: string
   finishedAt: string | null
   id: string
+  // Labels a replacement whose container predates installation IDs.
+  installationId?: string
   previousImage: string
   requestedImage: string
   // The Hearth request that started it, so a browser that lost the reply
@@ -84,6 +86,11 @@ interface UpdateBatch {
   operationIds: Array<string>
 }
 
+interface InstallationIdentity {
+  readonly installationId?: string | null
+  readonly installationIdConfigured?: boolean
+}
+
 interface SystemUpdateTargetInput {
   targetContainer: string
   targetImage: string
@@ -92,7 +99,9 @@ interface SystemUpdateTargetInput {
 
 export class SystemUpdateManager {
   readonly #batchSemaphore = Semaphore.makeUnsafe(1)
-  readonly #installationId: string | null
+  // Read on each use: Hearth can give the Relay its installation ID at any
+  // time after it starts.
+  readonly #installation: InstallationIdentity
   readonly #gitRepository: string
   readonly #operationsDirectory: string
   readonly #engine: DockerEngine
@@ -110,12 +119,13 @@ export class SystemUpdateManager {
     dockerSocket?: string
     gitRepository?: string
     installationId?: string | null
+    installationIdConfigured?: boolean
   }) {
     this.#engine = new DockerEngine(
       config.dockerSocket ?? "/var/run/docker.sock"
     )
     this.#gitRepository = config.gitRepository ?? DEFAULT_KILN_GIT_REPO
-    this.#installationId = config.installationId ?? null
+    this.#installation = config
     this.#operationsDirectory = join(config.dataDirectory, "updates")
   }
 
@@ -137,7 +147,7 @@ export class SystemUpdateManager {
           )
       ),
       Effect.map((inspected) =>
-        updateEligibility(inspected, this.#installationId, this.#gitRepository)
+        updateEligibility(inspected, this.#installation, this.#gitRepository)
       ),
       Effect.withSpan("relay.systemUpdates.inspect")
     )
@@ -176,7 +186,7 @@ export class SystemUpdateManager {
     signal?: AbortSignal
   ) {
     const engine = this.#engine
-    const installationId = this.#installationId
+    const installation = this.#installation
     const gitRepository = this.#gitRepository
     const operationsDirectory = this.#operationsDirectory
     const setActiveBatch = (id: string) => {
@@ -215,7 +225,7 @@ export class SystemUpdateManager {
               targetInput,
               batchId,
               startedAt,
-              installationId,
+              installation,
               gitRepository,
               input.requestId
             ),
@@ -565,7 +575,7 @@ const prepareUpdateEffect = Effect.fn("relay.systemUpdates.prepare")(function* (
   input: SystemUpdateTargetInput,
   batchId: string,
   startedAt: string,
-  installationId: string | null,
+  installation: InstallationIdentity,
   gitRepository: string,
   requestId: string | undefined
 ) {
@@ -574,11 +584,7 @@ const prepareUpdateEffect = Effect.fn("relay.systemUpdates.prepare")(function* (
     gitRepository
   )
   const container = yield* inspectContainerEffect(engine, input.targetContainer)
-  const eligibility = updateEligibility(
-    container,
-    installationId,
-    gitRepository
-  )
+  const eligibility = updateEligibility(container, installation, gitRepository)
   if (targetComponent === null || eligibility.component !== targetComponent) {
     return yield* systemUpdateFailure(
       "start.validate",
@@ -628,6 +634,9 @@ const prepareUpdateEffect = Effect.fn("relay.systemUpdates.prepare")(function* (
       phase: "Preparing",
       finishedAt: null,
       id: randomUUID(),
+      ...(installation.installationId
+        ? { installationId: installation.installationId }
+        : {}),
       previousImage: container.Config.Image,
       requestedImage: input.targetImage,
       ...(requestId ? { requestId } : {}),
@@ -871,7 +880,7 @@ function imageVersionMatchesRelease(
 
 function updateEligibility(
   inspected: ContainerInspect,
-  expectedInstallationId: string | null,
+  installation: InstallationIdentity,
   gitRepository: string
 ): {
   component: KilnComponent | null
@@ -887,7 +896,12 @@ function updateEligibility(
   const component = kilnComponent(labels["io.kiln.component"])
   const currentImage = inspected.Config.Image
   const installationId = labels[KILN_INSTALLATION_LABEL]?.trim() || null
-  const sameInstallation = installationId === expectedInstallationId
+  // Containers created before Kiln generated installation IDs have no label.
+  // They stay updatable unless KILN_INSTALLATION_ID asks for an exact match,
+  // and their replacement gets the label.
+  const sameInstallation =
+    installationId === (installation.installationId ?? null) ||
+    (installationId === null && !installation.installationIdConfigured)
   const official = isKilnGitRepositorySource(
     labels["org.opencontainers.image.source"],
     gitRepository
@@ -1418,6 +1432,7 @@ function isUpdateOperation(value: unknown): value is UpdateOperation {
     optionalString(value.phase) &&
     (value.finishedAt === null || typeof value.finishedAt === "string") &&
     typeof value.id === "string" &&
+    optionalString(value.installationId) &&
     typeof value.previousImage === "string" &&
     typeof value.requestedImage === "string" &&
     optionalString(value.requestId) &&

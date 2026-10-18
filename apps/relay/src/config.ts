@@ -97,7 +97,11 @@ export interface RelayConfig {
   gitRepository: string
   healthPort: number
   host: string
+  // From KILN_INSTALLATION_ID, or else the ID Hearth gave this Relay, which
+  // it saves and loads at startup.
   installationId: string | null
+  // Whether KILN_INSTALLATION_ID set it, so Hearth's ID doesn't replace it.
+  installationIdConfigured: boolean
   managedLabel: string
   mclogsApiUrl: string
   serverIdLabel: string
@@ -239,6 +243,7 @@ export function loadConfig(
     healthPort,
     host: environment.KILN_RELAY_BIND_HOST?.trim() || "0.0.0.0",
     installationId,
+    installationIdConfigured: installationId !== null,
     managedLabel: "kiln.relay.managed=true",
     mclogsApiUrl:
       environment.MCLOGS_API_URL?.trim() || "https://api.mclo.gs/1/log",

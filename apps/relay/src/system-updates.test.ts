@@ -83,6 +83,7 @@ class Installation {
     dataDirectory: string
     gitRepository?: string
     installationId?: string | null
+    installationIdConfigured?: boolean
   }): Promise<SystemUpdateManager> {
     this.install()
     return new SystemUpdateManager({
@@ -581,22 +582,66 @@ describe("container identity", () => {
       )
   )
 
-  effectIt.effect("rejects a container from another Kiln installation", () =>
-    withTemporaryDataDirectory((dataDirectory) =>
-      Effect.gen(function* () {
-        const manager = yield* Effect.promise(() =>
-          docker.manager({
-            dataDirectory,
-            installationId: "hearth-feature-a1b2c3",
-          })
-        )
+  effectIt.effect(
+    "rejects an unlabeled container when KILN_INSTALLATION_ID is set",
+    () =>
+      withTemporaryDataDirectory((dataDirectory) =>
+        Effect.gen(function* () {
+          const manager = yield* Effect.promise(() =>
+            docker.manager({
+              dataDirectory,
+              installationId: "hearth-feature-a1b2c3",
+              installationIdConfigured: true,
+            })
+          )
 
-        const inspection = yield* manager.inspect("custom-relay-hostname")
+          const inspection = yield* manager.inspect("custom-relay-hostname")
 
-        expect(inspection.sameInstallation).toBe(false)
-        expect(inspection.eligible).toBe(false)
-      })
-    )
+          expect(inspection.sameInstallation).toBe(false)
+          expect(inspection.eligible).toBe(false)
+        })
+      )
+  )
+
+  effectIt.effect(
+    "updates a container from before installation IDs once Hearth sends one",
+    () =>
+      withTemporaryDataDirectory((dataDirectory) =>
+        Effect.gen(function* () {
+          const manager = yield* Effect.promise(() =>
+            docker.manager({
+              dataDirectory,
+              installationId: "0b7e5f0e-6d0f-4a4f-9a51-0f1f6c1d2a3b",
+            })
+          )
+
+          const inspection = yield* manager.inspect("custom-relay-hostname")
+
+          expect(inspection.eligible).toBe(true)
+        })
+      )
+  )
+
+  effectIt.effect(
+    "rejects a container labeled for another installation",
+    () =>
+      withTemporaryDataDirectory((dataDirectory) =>
+        Effect.gen(function* () {
+          const manager = yield* Effect.promise(() =>
+            docker.manager({
+              dataDirectory,
+              installationId: "0b7e5f0e-6d0f-4a4f-9a51-0f1f6c1d2a3b",
+            })
+          )
+          fakeDocker.container("kiln-hearth")!.labels["io.kiln.installation"] =
+            "another-installation"
+
+          const inspection = yield* manager.inspect("hearth-hostname")
+
+          expect(inspection.sameInstallation).toBe(false)
+          expect(inspection.eligible).toBe(false)
+        })
+      )
   )
 })
 

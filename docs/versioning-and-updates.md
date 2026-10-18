@@ -57,6 +57,15 @@ One-click updates are enabled only when all of these are true:
 2. Its configured image is `:latest` or `:latest-nightly`.
 3. A paired Relay can access the target's Docker daemon.
 4. The selected release has a valid public release manifest.
+5. The target belongs to this installation: its `io.kiln.installation` label
+   matches the Relay's installation ID, or it has no label.
+
+The installation ID is `KILN_INSTALLATION_ID` when set. Otherwise Hearth
+generates one on its first start, saves it in its database, and sends it to
+its Relays when they connect; each Relay saves it in its data volume.
+Containers created before installation IDs existed have no label and stay
+updatable; their replacement gets the label. With `KILN_INSTALLATION_ID` set,
+the label must match exactly.
 
 Exact version tags, digest pins, locally built images, and unsupported registries
 remain externally managed. Kiln explains why their update button is disabled.
@@ -75,7 +84,8 @@ then launches a short-lived updater from the selected Relay digest. The helper:
 1. Inspects the current container.
 2. Stops it gracefully and renames it as a rollback copy.
 3. Creates the replacement with the existing environment, mounts, labels,
-   ports, restart policy, and Docker networks.
+   ports, restart policy, and Docker networks, adding the installation label
+   if the container has none.
 4. Waits for the replacement's Docker health check to report `healthy`, or,
    if the image has no health check, for it to stay running for 5 seconds.
    For Relays, see [Relay runtime](relay-runtime.md#health-check).

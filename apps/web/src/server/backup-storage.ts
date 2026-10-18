@@ -30,7 +30,7 @@ import {
   publishBackupSettingsChange,
   publishBackupStorageChange,
 } from "@/lib/backup-realtime.server"
-import { kilnInstallationId } from "@/lib/environment"
+import { kilnInstallationId } from "@/effect/installation"
 import {
   normalizeObjectPrefix,
   normalizeS3Endpoint,

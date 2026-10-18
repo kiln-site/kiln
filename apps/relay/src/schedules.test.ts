@@ -90,7 +90,7 @@ async function manager(
     findInstance: overrides.findInstance ?? (async () => null),
     getBackup: overrides.getBackup ?? (async () => null),
     listDatabaseIds: async () => new Set(),
-    platformTargetId: "platform",
+    platformTargetId: () => "platform",
     relayId: "relay-a",
     reportError: overrides.reportError,
     runDatabasePower: async () => undefined,

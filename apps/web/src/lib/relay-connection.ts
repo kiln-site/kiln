@@ -45,6 +45,7 @@ import {
   type RelayEndpoint,
 } from "@/lib/relay-control-endpoint"
 import { RelayUnavailableError } from "@/effect/errors"
+import { loadedKilnInstallationId } from "@/effect/installation"
 import { forkAppEffect, reportAppError, runAppEffect } from "@/effect/runtime"
 import { ensuringPromise, forkPromise } from "@/effect/promise"
 import type { RelayCredentials } from "@/lib/relay-registry"
@@ -958,6 +959,8 @@ class RelayConnection {
     ) {
       throw new Error("Relay identity challenge could not be verified")
     }
+    // Relays save it, so the whole installation shares Hearth's ID.
+    const installationId = loadedKilnInstallationId()
     socket.send(
       JSON.stringify({
         clientId: credentials.clientId,
@@ -977,6 +980,7 @@ class RelayConnection {
         ).toString("base64url"),
         type: "auth.response",
         v: 1,
+        ...(installationId ? { installationId } : {}),
       })
     )
   }

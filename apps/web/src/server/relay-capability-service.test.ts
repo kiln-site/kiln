@@ -22,6 +22,7 @@ vi.mock("@/lib/access-control", () => ({
 
 vi.mock("@/lib/environment", () => ({
   browserCapabilityMinimumVersion: () => 1,
+  configuredKilnInstallationId: () => "kiln-test",
   kilnPublicUrl: () => new URL("https://hearth.example.com"),
 }))
 

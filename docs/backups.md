@@ -152,6 +152,12 @@ Object keys are generated, not supplied by users:
 kiln/<installation>/<relay>/<target-kind>/<target-id>/<backup-id>/<filename>
 ```
 
+`<installation>` is the installation ID: `KILN_INSTALLATION_ID` when set,
+otherwise the one Hearth generates on its first start and saves. Installations
+from before saved IDs used `kiln`. Each backup and restic repository records
+its own key, so existing backups stay where they are and new ones use the
+installation ID.
+
 S3 downloads use a short-lived presigned GET. Local downloads use a
 single-purpose Relay token bound to backup ID, user, expiry, and disposition.
 Neither form is a permanent public URL. The default lifetime is five minutes
@@ -220,7 +226,8 @@ kiln-relay platform-backup restore /data/backups/<backup-id>.zip \
   --confirm <installation-id>
 ```
 
-The restore verifies the authenticated manifest and ciphertext before replacing
+`inspect` prints the installation ID the bundle belongs to. The restore
+verifies the authenticated manifest and ciphertext before replacing
 the Hearth database. It refuses a mismatched installation and refuses to run
 while a labeled Hearth application container is running. Start Hearth
 afterward; normal Relay reconciliation repairs the restored catalog's queued

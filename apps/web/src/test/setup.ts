@@ -5,6 +5,8 @@ process.env.DB_PORT ??= "3306"
 process.env.DB_NAME ??= "kiln_test"
 process.env.DB_USERNAME ??= "kiln"
 process.env.DB_PASSWORD ??= "kiln"
+// Hearth loads its installation ID at startup, which tests don't run.
+process.env.KILN_INSTALLATION_ID ??= "kiln-test"
 
 // With KILN_TEST_MYSQL=1, each Vitest worker gets its own database so files
 // running in parallel never see each other's rows.

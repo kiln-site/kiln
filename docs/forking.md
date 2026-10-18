@@ -37,7 +37,8 @@ The values ship inside every image, so the headers must only grant write
 access to telemetry. Header values are URI-encoded: write a space as `%20` and
 `=` as `%3D`. Deployment environment values override the baked defaults, and
 `OTEL_SDK_DISABLED=true` turns telemetry off. Browser telemetry goes through
-Hearth, so it follows Hearth's configuration.
+Hearth, so it follows Hearth's configuration. Hearth, its browsers, and its
+Relays tag their telemetry with the `kiln.installation_id` resource attribute.
 
 Normal GitHub `ubuntu-24.04` / `ubuntu-24.04-arm` runners are the default.
 Image PRs, manual image runs, and scheduled image builds retain GitHub runners.

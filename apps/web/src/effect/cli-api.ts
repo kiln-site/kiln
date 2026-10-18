@@ -83,7 +83,7 @@ import {
   reconcileRelayBackups,
 } from "@/lib/backup-reconciliation"
 import { deleteInstanceWithFinalBackup } from "@/lib/final-instance-deletion"
-import { kilnInstallationId } from "@/lib/environment"
+import { kilnInstallationId } from "@/effect/installation"
 import {
   listPersistedRelaysEffect,
   type PersistedRelay,

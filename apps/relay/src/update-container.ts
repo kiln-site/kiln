@@ -87,6 +87,8 @@ const UPDATE_OPERATION_LABEL = "io.kiln.update-operation"
 export function replaceContainerEffect(
   input: {
     backupName: string
+    // Added as the installation label when the container has none.
+    installationId?: string | undefined
     targetContainer: string
     targetImage: string
     targetReference: string
@@ -165,6 +167,10 @@ export function replaceContainerEffect(
           Labels: {
             ...current.Config.Labels,
             ...target.Config?.Labels,
+            ...(input.installationId &&
+            !current.Config.Labels?.[KILN_INSTALLATION_LABEL]?.trim()
+              ? { [KILN_INSTALLATION_LABEL]: input.installationId }
+              : {}),
             "org.opencontainers.image.version": input.targetVersion,
             [UPDATE_OPERATION_LABEL]: operation,
           },
@@ -270,6 +276,8 @@ const rollbackContainerReplacementEffect = Effect.fn(
 )(function* (
   input: {
     backupName: string
+    // Added as the installation label when the container has none.
+    installationId?: string | undefined
     targetContainer: string
     targetReference: string
   },

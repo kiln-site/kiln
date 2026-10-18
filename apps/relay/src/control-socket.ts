@@ -70,6 +70,8 @@ const MAX_CONTROL_SESSIONS = 128
 const MAX_CONTROL_SESSIONS_PER_CLIENT = 4
 
 export interface ControlSocketOptions {
+  // Called with the installation ID a full-access Hearth authenticated with.
+  readonly adoptInstallationId?: (installationId: string) => void
   readonly execute: (
     request: RelayControlRequest,
     client: RelayClientGrant,
@@ -333,7 +335,8 @@ function authenticateSocket(
         authenticateClientEffect(
           message.clientId,
           message.signature,
-          message.features ?? []
+          message.features ?? [],
+          message.installationId
         ).pipe(
           Effect.catch(() =>
             Effect.sync(() => {
@@ -429,7 +432,8 @@ function authenticateSocket(
   function authenticateClientEffect(
     clientId: string,
     signature: string,
-    features: ReadonlyArray<string>
+    features: ReadonlyArray<string>,
+    installationId: string | undefined
   ): EffectType.Effect<void, Error> {
     return Effect.gen(function* () {
       if (Date.now() > challenge.expiresAt || authenticatedClient) {
@@ -456,6 +460,14 @@ function authenticateSocket(
         relaySnapshotNodeResourcesFeature
       )
       yield* completedAuthenticationEffect(client)
+      if (
+        installationId &&
+        client.role === "full_access" &&
+        // Not turned away for having too many sessions.
+        authenticatedSockets.get(socket) === client
+      ) {
+        options.adoptInstallationId?.(installationId)
+      }
     })
   }
 

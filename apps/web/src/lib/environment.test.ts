@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vite-plus/test"
 import {
   cliDefaultAccessDays,
   kilnGitRepository,
-  kilnInstallationId,
+  configuredKilnInstallationId,
 } from "./environment"
 
 const originalCliDefaultAccessDays = process.env.KILN_CLI_DEFAULT_ACCESS_DAYS
@@ -32,10 +32,10 @@ describe("kilnGitRepository", () => {
   })
 })
 
-describe("kilnInstallationId", () => {
+describe("configuredKilnInstallationId", () => {
   it("rejects deployment IDs that are not safe key segments", () => {
     process.env.KILN_INSTALLATION_ID = "not/a/key-segment"
-    expect(() => kilnInstallationId()).toThrow()
+    expect(() => configuredKilnInstallationId()).toThrow()
   })
 })
 

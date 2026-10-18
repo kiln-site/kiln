@@ -21,6 +21,7 @@ interface UpdateOperation {
   phase?: string
   finishedAt: string | null
   id: string
+  installationId?: string
   previousImage: string
   requestedImage: string
   startedAt: string
@@ -57,6 +58,7 @@ const runOperationEffect = Effect.fn("relay.updater.replace")(function* (
     replaceContainerEffect(
       {
         backupName,
+        installationId: operation.installationId,
         targetContainer: operation.targetContainer,
         targetImage: operation.requestedImage,
         targetReference,
@@ -263,6 +265,7 @@ function isUpdateOperation(value: unknown): value is UpdateOperation {
     optionalString(value.phase) &&
     (value.finishedAt === null || typeof value.finishedAt === "string") &&
     typeof value.id === "string" &&
+    optionalString(value.installationId) &&
     typeof value.previousImage === "string" &&
     typeof value.requestedImage === "string" &&
     typeof value.startedAt === "string" &&
