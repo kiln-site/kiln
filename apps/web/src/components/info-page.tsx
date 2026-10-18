@@ -647,6 +647,7 @@ export function InfoRailCardSection({
   title,
 }: {
   action?: React.ReactNode
+  // Its own markup, such as a list, rather than facts.
   children: React.ReactNode
   // Such as a height cap that scrolls a long list.
   contentClassName?: string
@@ -664,7 +665,7 @@ export function InfoRailCardSection({
           <div className="ml-auto flex shrink-0 items-center">{action}</div>
         ) : null}
       </div>
-      <dl className={cn("px-3", contentClassName)}>{children}</dl>
+      <div className={cn("px-3", contentClassName)}>{children}</div>
     </section>
   )
 }

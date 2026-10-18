@@ -374,91 +374,81 @@ const DomainsRail = React.memo(function DomainsRail({
   return (
     <InfoRailCard
       action={
-        <Button size="sm" type="button" variant="outline" onClick={onConfigure}>
-          <Settings2 />
-          Configure
-        </Button>
+        <div className="flex items-center gap-1.5">
+          {integration ? <DomainsRefreshButton /> : null}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-label="Configure vanity"
+                size="icon-sm"
+                type="button"
+                variant="outline"
+                onClick={onConfigure}
+              >
+                <Settings2 />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" sideOffset={6}>
+              Configure vanity
+            </TooltipContent>
+          </Tooltip>
+        </div>
       }
       icon={<Globe2 />}
       sections={
         integration && integration.domains.length > 0 ? (
           <InfoRailCardSection
             action={
-              <div className="flex items-center gap-2">
-                <span className="type-meta text-muted-foreground tabular-nums">
-                  {integration.domains.length}
-                </span>
-                <DomainsRefreshButton />
-              </div>
+              <span className="type-meta text-muted-foreground tabular-nums">
+                {integration.domains.length}
+              </span>
             }
             // Seven and a half rows: the cut-off row shows the list scrolls.
-            contentClassName="max-h-[calc(7.5*2.5rem)] overflow-y-auto"
+            contentClassName="max-h-[calc(7.5*2rem+0.5rem)] overflow-y-auto py-1"
             icon={<Link2 />}
             title="Domains"
           >
-            {integration.domains.map((domain) => (
-              <div
-                key={domain.domain}
-                className={`flex h-10 items-center gap-2 border-b border-border/60 text-[0.8125rem] last:border-b-0 ${
-                  domain.enabled ? "" : "text-muted-foreground"
-                }`}
-              >
-                <dt className="min-w-0 flex-1 truncate font-mono">
-                  {domain.domain}
-                </dt>
-                <dd className="-mr-1.5 shrink-0">
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        asChild
-                        className="text-muted-foreground hover:text-primary"
-                        size="icon-xs"
-                        variant="ghost"
-                      >
-                        <a
-                          aria-label={`View ${domain.domain} on Cloudflare`}
-                          href={cloudflareDnsRecordsUrl(domain.zoneName)}
-                          rel="noreferrer"
-                          target="_blank"
-                        >
-                          <ExternalLink />
-                        </a>
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side="left">View on Cloudflare</TooltipContent>
-                  </Tooltip>
-                </dd>
-              </div>
-            ))}
+            <ul aria-label="Vanity domains">
+              {integration.domains.map((domain) => (
+                <li key={domain.domain}>
+                  <a
+                    aria-label={`View ${domain.domain} on Cloudflare`}
+                    className={`group -mx-3 flex h-8 items-center gap-2 px-3 font-mono text-[0.8125rem] outline-none hover:bg-muted/60 focus-visible:bg-muted/60 ${
+                      domain.enabled ? "" : "text-muted-foreground"
+                    }`}
+                    href={cloudflareDnsRecordsUrl(domain.zoneName)}
+                    rel="noreferrer"
+                    target="_blank"
+                  >
+                    <span className="min-w-0 flex-1 truncate">
+                      {domain.domain}
+                    </span>
+                    <ExternalLink className="size-3 shrink-0 text-muted-foreground/40 transition-colors group-hover:text-primary group-focus-visible:text-primary" />
+                  </a>
+                </li>
+              ))}
+            </ul>
           </InfoRailCardSection>
         ) : null
       }
       title="Vanity"
     >
-      <InfoFact label="Provider">
-        {integration ? (
-          "Cloudflare"
-        ) : (
-          <span className="text-muted-foreground">Not connected</span>
-        )}
-      </InfoFact>
       {integration ? (
         <>
           <InfoFact label="Auto provisioning">
-            {integration.enabled ? "On" : "Off"}
+            {integration.enabled ? (strategy?.label ?? "Default only") : "Off"}
           </InfoFact>
-          {integration.enabled ? (
-            <InfoFact label="New game servers">
-              {strategy?.label ?? "Default only"}
-            </InfoFact>
-          ) : null}
           {defaultDomain ? (
             <InfoFact label="Default">
               <span className="truncate font-mono">{defaultDomain.domain}</span>
             </InfoFact>
           ) : null}
         </>
-      ) : null}
+      ) : (
+        <InfoFact label="Cloudflare">
+          <span className="text-muted-foreground">Not connected</span>
+        </InfoFact>
+      )}
     </InfoRailCard>
   )
 })
