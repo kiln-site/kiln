@@ -38,9 +38,25 @@ export function InfoPage({
   children: React.ReactNode
   rail: React.ReactNode
 }) {
+  const pageRef = React.useRef<HTMLElement>(null)
+  const railRef = React.useRef<HTMLDivElement>(null)
+  // The rail sticks to the top of the page as it scrolls. A rail taller than
+  // the page scrolls with it until its end is in view, then sticks there.
+  // Set on the element, so resizes don't render.
+  React.useEffect(() => {
+    const page = pageRef.current
+    const railElement = railRef.current
+    if (!page || !railElement) return
+    const observer = new ResizeObserver(() => {
+      const top = Math.min(0, page.clientHeight - railElement.offsetHeight)
+      railElement.style.top = `${top}px`
+    })
+    observer.observe(page)
+    observer.observe(railElement)
+    return () => observer.disconnect()
+  }, [])
   return (
-    // A size container, so the rail can be as tall as the page's viewport.
-    <section className="min-h-0 flex-1 overflow-y-auto bg-card lg:@container-size">
+    <section ref={pageRef} className="min-h-0 flex-1 overflow-y-auto bg-card">
       <div className="grid min-h-full lg:grid-cols-[minmax(0,1fr)_21rem]">
         <div className="flex min-w-0 flex-col gap-4 px-5 py-6 sm:px-7">
           {children}
@@ -48,9 +64,7 @@ export function InfoPage({
         {/* Rail labels are short, so they take only their width and leave the
             rest to values. */}
         <aside className="min-w-0 border-t bg-background/30 lg:border-t-0 lg:border-l [&_dt]:min-w-0">
-          {/* Stays in view while the sections scroll, and scrolls on its own
-              only when it's taller than the page. */}
-          <div className="px-4 py-6 lg:sticky lg:top-0 lg:max-h-[100cqh] lg:overflow-y-auto lg:[scrollbar-width:thin] lg:[scrollbar-color:var(--border)_transparent]">
+          <div ref={railRef} className="top-0 px-4 py-6 lg:sticky">
             {rail}
           </div>
         </aside>
