@@ -151,10 +151,16 @@ function openDirectRelayConsoleStream(
         timing,
         write
       )
-      const prewarmed =
-        instance && browserOrigin
-          ? takeConsolePrewarm(instance, browserOrigin, write)
-          : undefined
+      // Taken and handed its cleanup in one step that cannot be interrupted:
+      // the prewarm's connection is now this console's, and closes with it.
+      const prewarmed = instance
+        ? yield* Effect.acquireRelease(
+            Effect.sync(() =>
+              takeConsolePrewarm(instance, browserOrigin, write)
+            ),
+            (prewarm) => (prewarm ? closeConsolePrewarm(prewarm) : Effect.void)
+          )
+        : undefined
       const { inbox, socket } = prewarmed
         ? yield* adoptConsolePrewarm(prewarmed, connect, timing)
         : yield* connect
@@ -365,6 +371,9 @@ export function prewarmRelayConsole(input: {
   if (openConsoles.has(instance)) return
   const key = consolePrewarmKey(instance, input.write)
   if (consolePrewarms.has(key)) return
+  // One prewarm per server: the Relay would take either of two as replacing
+  // the other.
+  consolePrewarms.get(consolePrewarmKey(instance, !input.write))?.discard()
   for (const [oldest, prewarm] of consolePrewarms) {
     if (consolePrewarms.size < maximumConsolePrewarms) break
     consolePrewarms.delete(oldest)
@@ -406,17 +415,21 @@ export function prewarmRelayConsole(input: {
 }
 
 // The prewarm for the console about to open. Any other for the same server,
-// such as one that cannot write, is closed so the two never compete.
+// such as one that cannot write, is closed so the two never compete, and so
+// is every one when the console reconnects from scratch, as a retry does.
 function takeConsolePrewarm(
   instance: string,
-  browserOrigin: string,
+  browserOrigin: string | null,
   write: boolean
 ): ConsolePrewarm | undefined {
   const other = consolePrewarms.get(consolePrewarmKey(instance, !write))
   other?.discard()
   const prewarm = consolePrewarms.get(consolePrewarmKey(instance, write))
   if (!prewarm) return undefined
-  if (!sameRelayBrowserEndpoint(prewarm.browserOrigin, browserOrigin)) {
+  if (
+    !browserOrigin ||
+    !sameRelayBrowserEndpoint(prewarm.browserOrigin, browserOrigin)
+  ) {
     prewarm.discard()
     return undefined
   }
@@ -430,8 +443,6 @@ function adoptConsolePrewarm(
   timing: ConsoleLoadTiming | undefined
 ) {
   return Effect.gen(function* () {
-    // The prewarm's connection is now this console's, and closes with it.
-    yield* Effect.addFinalizer(() => closeConsolePrewarm(prewarm))
     const exit = yield* Fiber.await(prewarm.connection)
     if (
       Exit.isSuccess(exit) &&

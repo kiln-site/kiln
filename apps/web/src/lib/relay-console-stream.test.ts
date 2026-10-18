@@ -402,6 +402,50 @@ describe("Relay console prewarm", () => {
     await finishDirectConnection(socket, running)
   })
 
+  it("closes a prewarm when the console reconnects from scratch", async () => {
+    deferredCapability().resolve(consoleCapability())
+    vi.stubGlobal("navigator", { onLine: true })
+    vi.stubGlobal("WebSocket", FakeWebSocket)
+
+    prewarmRelayConsole(prewarm)
+    const warm = await FakeWebSocket.opened(0)
+    dispatchChallenge(warm)
+    await warm.sentFrames(1)
+
+    // A retry reconnects without the cached origin, and must not leave the
+    // prewarm to replace it once authenticated.
+    const running = Effect.runPromise(
+      openRelayConsoleStream(
+        "relay-one",
+        { id: "instance-one", kind: "instance" },
+        null
+      ).pipe(Stream.runHead)
+    )
+    expect(warm.close).toHaveBeenCalled()
+    const socket = await FakeWebSocket.opened(1)
+    dispatchChallenge(socket)
+    await finishDirectConnection(socket, running)
+  })
+
+  it("keeps one prewarm per server", async () => {
+    deferredCapability().resolve(consoleCapability())
+    vi.stubGlobal("navigator", { onLine: true })
+    vi.stubGlobal("WebSocket", FakeWebSocket)
+
+    prewarmRelayConsole(prewarm)
+    const readOnly = await FakeWebSocket.opened(0)
+    dispatchChallenge(readOnly)
+    await subscribed(readOnly)
+    // Such as after the user's access changed between two hovers.
+    prewarmRelayConsole({ ...prewarm, write: true })
+
+    expect(readOnly.close).toHaveBeenCalled()
+    const writer = await FakeWebSocket.opened(1)
+    dispatchChallenge(writer)
+    await subscribed(writer)
+    expect(writer.close).not.toHaveBeenCalled()
+  })
+
   it("prewarms nothing for a console that is already open", async () => {
     deferredCapability().resolve(consoleCapability())
     vi.stubGlobal("navigator", { onLine: true })
