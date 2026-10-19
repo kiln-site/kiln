@@ -427,6 +427,8 @@ effectIt.effect(
           ] as unknown as Awaited<ReturnType<typeof listPersistedRelays>>)
           yield* promiseEffect(() => relayRpc(endpoint, "relay.snapshot", {}))
           yield* Effect.promise(() => advanceTimersUntil(tellsAgain))
+          // Once it has taken the resume, later passes leave it alone.
+          yield* Effect.promise(() => vi.advanceTimersByTimeAsync(65_000))
           expect(pauseWrites).toEqual([{ paused: false }, { paused: false }])
         }).pipe(
           Effect.ensuring(
