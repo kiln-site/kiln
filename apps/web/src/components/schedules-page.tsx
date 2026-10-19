@@ -722,7 +722,8 @@ const ScheduleActions = React.memo(function ScheduleActions({
         <Button
           type="button"
           size="sm"
-          className="bg-emerald-600 px-2 text-xs text-white hover:bg-emerald-500 focus-visible:ring-emerald-500/40 dark:bg-emerald-600 dark:hover:bg-emerald-500"
+          variant="outline"
+          className="px-2 text-xs"
           disabled={runMutation.isPending}
           onClick={() => runMutation.mutate()}
         >
