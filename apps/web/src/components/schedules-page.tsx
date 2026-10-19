@@ -2,6 +2,7 @@ import * as React from "react"
 import { useLiveSuspenseQuery } from "@tanstack/react-db"
 import {
   useMutation,
+  useMutationState,
   useQuery,
   useQueryClient,
   useSuspenseQuery,
@@ -671,7 +672,14 @@ const ScheduleActions = React.memo(function ScheduleActions({
     schedule,
     targetsAvailable,
   } = item
+  // A virtual row remounts when it scrolls back into view, so pending state
+  // comes from the mutation cache rather than this row's observers.
+  const pendingActions = useMutationState({
+    filters: { mutationKey: scheduleActionKey(schedule.id), status: "pending" },
+    select: (mutation) => mutation.options.mutationKey?.[2],
+  })
   const runMutation = useMutation({
+    mutationKey: scheduleActionKey(schedule.id, "run"),
     mutationFn: () => runScheduleNow({ data: { id: schedule.id } }),
     onSuccess: async (result) => {
       await queryClient.invalidateQueries({
@@ -692,6 +700,7 @@ const ScheduleActions = React.memo(function ScheduleActions({
       }),
   })
   const enabledMutation = useMutation({
+    mutationKey: scheduleActionKey(schedule.id, "enabled"),
     mutationFn: (enabled: boolean) =>
       updateSchedule({
         data: {
@@ -715,6 +724,7 @@ const ScheduleActions = React.memo(function ScheduleActions({
       }),
   })
   const duplicateMutation = useMutation({
+    mutationKey: scheduleActionKey(schedule.id, "duplicate"),
     mutationFn: () =>
       createSchedule({
         data: {
@@ -737,6 +747,10 @@ const ScheduleActions = React.memo(function ScheduleActions({
       }),
   })
 
+  const running = pendingActions.includes("run")
+  const updatingEnabled = pendingActions.includes("enabled")
+  const duplicating = pendingActions.includes("duplicate")
+
   return (
     <DataTableActionGroup>
       {canRun ? (
@@ -745,10 +759,10 @@ const ScheduleActions = React.memo(function ScheduleActions({
           size="sm"
           variant="outline"
           className="px-2 text-xs"
-          disabled={runMutation.isPending}
+          disabled={running}
           onClick={() => runMutation.mutate()}
         >
-          {runMutation.isPending ? (
+          {running ? (
             <LoaderCircle className="animate-spin" />
           ) : (
             <Play />
@@ -808,10 +822,10 @@ const ScheduleActions = React.memo(function ScheduleActions({
           <CopyIdentifierMenuItem label="Schedule ID" value={schedule.id} />
           {canDuplicate ? (
             <DropdownMenuItem
-              disabled={duplicateMutation.isPending}
+              disabled={duplicating}
               onSelect={() => duplicateMutation.mutate()}
             >
-              {duplicateMutation.isPending ? (
+              {duplicating ? (
                 <LoaderCircle className="animate-spin" />
               ) : (
                 <Copy />
@@ -826,10 +840,10 @@ const ScheduleActions = React.memo(function ScheduleActions({
             <>
               <DropdownMenuSeparator />
               <DropdownMenuItem
-                disabled={enabledMutation.isPending}
+                disabled={updatingEnabled}
                 onSelect={() => enabledMutation.mutate(!schedule.enabled)}
               >
-                {enabledMutation.isPending ? (
+                {updatingEnabled ? (
                   <LoaderCircle className="animate-spin" />
                 ) : schedule.enabled ? (
                   <CirclePause />
@@ -845,6 +859,15 @@ const ScheduleActions = React.memo(function ScheduleActions({
     </DataTableActionGroup>
   )
 })
+
+function scheduleActionKey(
+  scheduleId: string,
+  action?: "duplicate" | "enabled" | "run"
+) {
+  return action
+    ? ["schedule-action", scheduleId, action]
+    : ["schedule-action", scheduleId]
+}
 
 /** The cron as words, with the next run under it. */
 const ScheduleTiming = React.memo(function ScheduleTiming({
@@ -936,7 +959,7 @@ const ScheduleLastRun = React.memo(function ScheduleLastRun({
       <TooltipTrigger asChild>
         <button
           type="button"
-          aria-label={`View the latest ${schedule.name} run`}
+          aria-label={`View the latest ${schedule.name} run: ${result}`}
           className="group/latest-run type-meta flex max-w-full min-w-0 flex-col items-start rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
           onClick={() => onView(schedule, run)}
         >
