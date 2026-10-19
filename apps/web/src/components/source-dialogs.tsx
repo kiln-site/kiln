@@ -45,7 +45,6 @@ import {
 import type { GitHubConnectionView } from "@/server/github-sync.server"
 
 export function AddSourceDialog({ onClose }: { onClose: () => void }) {
-  const queryClient = useQueryClient()
   const [account, setAccount] = React.useState<"organization" | "user">("user")
   const [organization, setOrganization] = React.useState("")
   const [name, setName] = React.useState(randomAppName)
@@ -63,25 +62,18 @@ export function AddSourceDialog({ onClose }: { onClose: () => void }) {
   const canSubmit =
     nameValid &&
     (account === "user" || /^[A-Za-z0-9-]{1,39}$/u.test(organization.trim()))
-  // Stays busy while this tab leaves for GitHub.
+  // Stays busy while the browser leaves for GitHub.
   const leaving = start.isPending || start.isSuccess
 
   const submit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!canSubmit || leaving) return
-    // GitHub continues in a new tab. It opens during the click, as popup
-    // blockers require, and the manifest is posted into it once Hearth has
-    // signed it. A blocked tab falls back to this one.
-    const tab = window.open("about:blank", githubSetupTab)
-    if (tab) tab.opener = null
     start.mutate(undefined, {
-      onError: () => tab?.close(),
       // GitHub creates an app from a manifest the browser posts to it.
       onSuccess: (result) => {
         const form = document.createElement("form")
         form.method = "post"
         form.action = result.action
-        form.target = tab ? githubSetupTab : "_self"
         const field = document.createElement("input")
         field.type = "hidden"
         field.name = "manifest"
@@ -89,16 +81,6 @@ export function AddSourceDialog({ onClose }: { onClose: () => void }) {
         form.append(field)
         document.body.append(form)
         form.submit()
-        form.remove()
-        if (!tab) return
-        // Setup lands on Sources in that tab; this one refreshes as the
-        // source appears.
-        showToast({
-          message: "Finish adding the source on GitHub",
-          type: "info",
-        })
-        void invalidateSources(queryClient)
-        onClose()
       },
     })
   }
@@ -557,8 +539,6 @@ function DialogError({ error }: { error: Error }) {
     </p>
   )
 }
-
-const githubSetupTab = "kiln-github-setup"
 
 // Short words for a default app name, `kiln-<adjective>-<noun>`. App names
 // are unique across GitHub, so a random pair rarely collides.

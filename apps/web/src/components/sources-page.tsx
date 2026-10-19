@@ -267,7 +267,7 @@ const SourcesTable = React.memo(function SourcesTable({
             GitHub
           </span>
         ),
-        meta: dataTableColumnMeta({ hideBelow: "sm", width: "7rem" }),
+        meta: dataTableColumnMeta({ hideBelow: "sm", width: "6.5rem" }),
       }),
       sourceColumnHelper.accessor(
         (row) => row.installation?.accountLogin ?? row.appName,
@@ -281,12 +281,23 @@ const SourcesTable = React.memo(function SourcesTable({
           meta: dataTableColumnMeta({ width: "minmax(0,1fr)" }),
         }
       ),
+      sourceColumnHelper.accessor((row) => row.appName, {
+        id: "app",
+        header: "App",
+        sortFn: "text",
+        cell: ({ row }) => (
+          <span className="type-meta truncate font-mono">
+            {row.original.appName}
+          </span>
+        ),
+        meta: dataTableColumnMeta({ hideBelow: "lg", width: "minmax(0,1fr)" }),
+      }),
       sourceColumnHelper.display({
         id: "repositories",
         header: "Repositories",
         enableSorting: false,
         cell: ({ row }) => <RepositoryCountCell source={row.original} />,
-        meta: dataTableColumnMeta({ hideBelow: "md", width: "11rem" }),
+        meta: dataTableColumnMeta({ hideBelow: "md", width: "7.5rem" }),
       }),
       sourceColumnHelper.accessor((row) => row.syncCount, {
         id: "usage",
@@ -294,7 +305,7 @@ const SourcesTable = React.memo(function SourcesTable({
         sortFn: (left, right) =>
           left.original.syncCount - right.original.syncCount,
         cell: ({ row }) => <UsageCell source={row.original} />,
-        meta: dataTableColumnMeta({ hideBelow: "md", width: "15rem" }),
+        meta: dataTableColumnMeta({ hideBelow: "md", width: "9.5rem" }),
       }),
       sourceColumnHelper.display({
         id: "actions",
@@ -375,7 +386,7 @@ function RepositoryCountCell({ source }: { source: Source }) {
 
 function UsageCell({ source }: { source: Source }) {
   return (
-    <span className="type-meta flex min-w-0 items-center gap-3">
+    <span className="type-meta flex min-w-0 flex-col items-start gap-0.5">
       <Link
         to="/automations/sync"
         className="relative z-10 inline-flex items-center gap-1.5 hover:text-primary"
@@ -386,7 +397,7 @@ function UsageCell({ source }: { source: Source }) {
       </Link>
       <Tooltip>
         <TooltipTrigger asChild>
-          <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+          <span className="relative z-10 inline-flex items-center gap-1.5 text-muted-foreground">
             <Rocket className="size-3" />
             <span className="tabular-nums">{source.deploymentCount}</span>
             {source.deploymentCount === 1 ? "deployment" : "deployments"}
