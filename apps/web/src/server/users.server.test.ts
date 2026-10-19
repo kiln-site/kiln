@@ -359,5 +359,37 @@ describeMysql("platform users", () => {
           assert.strictEqual(counts("disabled")?.instances, 0)
         })
     )
+
+    it.effect("an expired invitation isn't counted as one to accept", () =>
+      Effect.gen(function* () {
+        yield* seed
+        yield* insertUser("expired")
+        yield* insertGrant({
+          id: "99999999-9999-4999-8999-999999999999",
+          userId: "expired",
+          relayId,
+          resourceType: "instance",
+          resourceId: otherInstanceId,
+          state: "pending",
+        })
+        yield* insertRows("invitation", {
+          id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          token_hash: "a".repeat(64),
+          email: "expired@example.test",
+          user_id: "expired",
+          access_id: "99999999-9999-4999-8999-999999999999",
+          access_type: "scoped",
+          relay_id: relayId,
+          invited_by: "admin",
+          expires_at: now - 60_000,
+          created_at: now - 120_000,
+        })
+        const { items } = yield* list(admin)
+        assert.strictEqual(
+          items.find((user) => user.id === "expired")?.access.pending,
+          0
+        )
+      })
+    )
   })
 })

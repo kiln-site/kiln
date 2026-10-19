@@ -162,7 +162,9 @@ async function userHoldings(userIds: ReadonlyArray<string>) {
     `SELECT g.user_id, g.resource_type, g.relay_id, g.resource_id, g.state, r.enabled AS relay_enabled
        FROM ${databaseTable("access_grant")} g
        JOIN ${databaseTable("relay")} r ON r.id = g.relay_id
-      WHERE g.user_id IN (?) AND g.state <> 'revoked'
+      WHERE g.user_id IN (?) AND (g.state = 'active' OR (g.state = 'pending'
+        -- An expired or declined invitation leaves nothing to accept.
+        AND EXISTS (SELECT 1 FROM ${databaseTable("invitation")} i WHERE i.access_id = g.id AND ${openInvitation("i")})))
      UNION ALL
      SELECT s.owner_id, 'instance', s.relay_id, s.instance_id, 'owner', r.enabled
        FROM ${databaseTable("instance")} s
@@ -177,7 +179,7 @@ async function userHoldings(userIds: ReadonlyArray<string>) {
      SELECT r.created_by, 'relay', r.id, r.id, 'owner', r.enabled
        FROM ${databaseTable("relay")} r
       WHERE r.created_by IN (?)`,
-    [userIds, userIds, userIds, userIds]
+    [userIds, Date.now(), userIds, userIds, userIds]
   )
   const strength = { pending: 0, created: 1, active: 2, owner: 3 } as const
   const strongest = new Map<string, HoldingRow>()

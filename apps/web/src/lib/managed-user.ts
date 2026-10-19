@@ -17,3 +17,12 @@ export function roleLabel(role: string | null | undefined) {
       ? "Relay Creator"
       : "User"
 }
+
+/** How much a platform role allows, to keep a stronger one when accepting. */
+export function roleRank(role: string | null | undefined) {
+  return role === "admin" || role === "platform_admin"
+    ? 2
+    : role === "relay_creator"
+      ? 1
+      : 0
+}

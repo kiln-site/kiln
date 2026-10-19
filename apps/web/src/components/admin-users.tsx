@@ -80,7 +80,7 @@ import {
   type DataTableSearchStore,
 } from "@/lib/data-table-search"
 import { useCursorDataTableSource } from "@/lib/data-table-source"
-import { roleLabel, stateLabel } from "@/lib/managed-user"
+import { roleLabel, roleRank, stateLabel } from "@/lib/managed-user"
 import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
 import {
   grantOrInviteAccess,
@@ -549,6 +549,12 @@ function RemoveUserDialog({
     // each Relay hears about it; then platform access and invitations go.
     mutationFn: async () => {
       const access = await getUserAccess({ data: { userId: user.id } })
+      // Ownership can arrive after the table loaded, and removal would leave
+      // it in place, so check again before changing anything.
+      if (access.user.access.owned)
+        throw new Error(
+          `${user.name} owns resources now. Transfer them before removing.`
+        )
       for (const grant of access.grants)
         await updateResourceAccess({
           data: {
@@ -692,32 +698,39 @@ function AcceptInvitationsDialog({
     // invitation cancelled.
     mutationFn: async () => {
       const access = await getUserAccess({ data: { userId: user.id } })
+      let accepted = 0
       for (const grant of access.grants)
         if (
           grant.relayEnabled &&
           grant.state === "pending" &&
           grant.invitationId
-        )
+        ) {
           await decideResourceInvitation({
             data: { id: grant.invitationId, decision: "accept", force: true },
           })
-      if (access.user.invitedRole) {
-        await grantOrInviteAccess({
-          data: {
-            userId: user.id,
-            email: user.email,
-            accessType: access.user.invitedRole,
-          },
-        })
+          accepted += 1
+        }
+      const invited = access.user.invitedRole
+      if (invited) {
+        // Like accepting it themselves, never trade a stronger role they
+        // already hold for the one the invitation offered.
+        if (roleRank(invited) > roleRank(access.user.role))
+          await grantOrInviteAccess({
+            data: { userId: user.id, email: user.email, accessType: invited },
+          })
         for (const id of access.platformInvitationIds)
           await revokeAccessInvitation({ data: { id } })
+        accepted += 1
       }
+      return accepted
     },
-    onSuccess: () => {
+    onSuccess: (accepted) => {
       invalidateUsers(client)
       showToast({
-        type: "success",
-        message: `Accepted for ${user.name}`,
+        type: accepted ? "success" : "info",
+        message: accepted
+          ? `Accepted for ${user.name}`
+          : `${user.name} has no open invitations left`,
       })
       onClose()
     },
