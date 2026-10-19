@@ -249,9 +249,9 @@ const SyncToolbar = React.memo(function SyncToolbar({
       </div>
       <div className="ml-auto flex shrink-0 items-center gap-2">
         <Button asChild size="sm" variant="outline">
-          <Link to="/infra/sources" search={{ add: true }}>
+          <Link to="/infra/sources">
             <FolderGit2 />
-            <span className="hidden sm:inline">Add source</span>
+            <span className="hidden sm:inline">Sources</span>
           </Link>
         </Button>
         {createBlockedReason ? (
