@@ -3,11 +3,17 @@ import type { InstanceInventoryRequest } from "@workspace/contracts"
 import { expect, it, vi } from "vite-plus/test"
 
 // The Relay connection is the boundary; this Relay predates scoped views.
-const relay = vi.hoisted(() => ({ response: [] as Array<unknown> }))
+const relay = vi.hoisted(() => ({
+  confirmsPause: false,
+  reportsPaused: false,
+  response: [] as Array<unknown>,
+}))
 vi.mock("@/lib/relay-connection", () => ({
   isRelayUpdating: () => false,
+  relayConfirmsPause: () => relay.confirmsPause,
   relayConnectionInstances: () => [],
   relayConnectionState: () => ({ status: "authenticated" }),
+  relayReportsPaused: () => relay.reportsPaused,
   relayRpc: async () => relay.response,
 }))
 
@@ -70,4 +76,35 @@ it("projects an older Relay's full app list onto the requested views", async () 
     { view: "detail", data: { id: requested, hostname: "app-aaaaaaaa" } },
     { view: "status", observation: { runtime: null, inventory: "missing" } },
   ])
+})
+
+it("calls a Relay paused only once it has the pause, whichever Hearth asked", async () => {
+  const reachability = async (enabled: boolean) => {
+    const [result] = await Effect.runPromise(
+      Effect.gen(function* () {
+        const source = yield* InstanceInventorySource
+        return yield* source.read({ id: relayId, enabled } as PersistedRelay, [
+          {
+            reference: { kind: "relay", relayId, id: relayId },
+            view: "status",
+          },
+        ])
+      }).pipe(Effect.provide(InstanceInventorySourceLive))
+    )
+    return result && "value" in result
+      ? result.value.observation.reachability
+      : null
+  }
+  // Paused here, but the Relay hasn't taken it yet.
+  relay.confirmsPause = false
+  relay.reportsPaused = false
+  expect(await reachability(false)).toBe("pausing")
+  relay.confirmsPause = true
+  relay.reportsPaused = true
+  expect(await reachability(false)).toBe("paused")
+  // Another Hearth holds it paused.
+  relay.confirmsPause = false
+  expect(await reachability(true)).toBe("paused")
+  relay.reportsPaused = false
+  expect(await reachability(true)).toBe("connected")
 })

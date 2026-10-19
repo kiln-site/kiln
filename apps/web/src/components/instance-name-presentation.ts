@@ -86,7 +86,10 @@ export function relayStatusPresentation(
       tone: "warning",
     }
   }
-  if (relay.enabled === false || relay.relayStatus === "paused") {
+  if (
+    relay.relayStatus === "paused" ||
+    (relay.enabled === false && relay.relayStatus === undefined)
+  ) {
     return { label: "Paused", tone: "neutral" }
   }
   if (relay.updating) {

@@ -187,10 +187,13 @@ and the backup, provisioning, and deployment workers.
 Each paired Hearth holds the pause for itself (`relay.pause.write`), and the
 Relay is paused while any Hearth holds it, so one Hearth resuming can't undo
 another's pause. Hearth sends its hold when someone pauses or resumes the
-Relay, and again on every connect, so a Relay that was away learns of it.
-Hearth keeps a connection to paused Relays from startup for this, so the
-pause still arrives if Hearth restarted while the Relay was away. The
-snapshot's `relay.paused` shows whether the Relay has it. The Relay keeps
+Relay, on every connect, and every 30 seconds while the Relay reports
+otherwise, so a pause or resume it missed still arrives. Hearth keeps a
+connection to paused Relays from startup for this, so the pause still
+arrives if Hearth restarted while the Relay was away. What Hearth shows comes
+from the Relay's own `relay.paused`: a Relay paused in Hearth reads as
+Pausing until it has the pause, and one another Hearth paused reads as
+Paused. The Relay keeps
 holds in SQLite and reads them before any worker starts, so it stays paused
 across restarts. Revoking a Hearth clears its hold, and a pause that raced
 the revocation leaves none behind.

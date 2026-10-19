@@ -26,8 +26,9 @@ import {
 import {
   isRelayUpdating,
   relayConnectionInstances,
-  relayConfirmedPause,
+  relayConfirmsPause,
   relayConnectionState,
+  relayReportsPaused,
   relayRpc,
 } from "@/lib/relay-connection"
 
@@ -232,12 +233,15 @@ const readRelayInventory = Effect.fn("Instances.inventory.relay")(function* (
     "instance.count": requests.length,
   })
   const connection = relayConnectionState(relay.id)
+  // Paused only once the Relay has the pause, whichever Hearth holds it.
   const reachability: InstanceObservation["reachability"] = !relay.enabled
-    ? relayConfirmedPause(relay.id)
+    ? relayConfirmsPause(relay.id)
       ? "paused"
       : "pausing"
     : connection.status === "authenticated"
-      ? "connected"
+      ? relayReportsPaused(relay.id)
+        ? "paused"
+        : "connected"
       : connection.status === "connecting"
         ? "checking"
         : "unreachable"

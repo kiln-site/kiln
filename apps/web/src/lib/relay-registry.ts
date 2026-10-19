@@ -36,8 +36,7 @@ import {
 import { relayPairingOrigin } from "@/lib/relay-control-endpoint"
 import { relayNameForNewPairing } from "@/lib/relay-names"
 import { CredentialError, ResourceNotFoundError } from "@/effect/errors"
-import { reportAppError, runAppEffect } from "@/effect/runtime"
-import { recoverPromise } from "@/effect/promise"
+import { runAppEffect } from "@/effect/runtime"
 import { databasePool } from "@/lib/database"
 import { databaseTable } from "@/lib/database-config"
 import { betterAuthSecrets, kilnPublicUrl } from "@/lib/environment"
@@ -586,13 +585,10 @@ export async function maintainPersistedRelayConnections(): Promise<void> {
   const { relayRpc } = await import("@/lib/relay-connection")
   // A paused Relay must hear it's paused, even if it was away when it was
   // paused and Hearth restarted since: this connects to it, and the
-  // connection tells it again each time it reconnects.
+  // connection keeps telling it.
+  const { setRelayPause } = await import("@/lib/relay-connection")
   for (const relay of persisted) {
-    if (relay.enabled) continue
-    void recoverPromise(
-      () => relayRpc(relay, "relay.pause.write", { paused: true }, 10_000),
-      () => undefined
-    )
+    if (!relay.enabled) void setRelayPause(relay, true)
   }
   await Promise.allSettled(
     relays.map(async (relay) => {
@@ -958,15 +954,10 @@ export async function setPersistedRelayEnabled(
       await import("@/lib/authorization-delivery")
     wakeAuthorizationDelivery(id)
   }
-  // The Relay freezes itself while paused. One that's away learns of it
-  // when it reconnects.
-  const { relayRpc } = await import("@/lib/relay-connection")
-  await recoverPromise(
-    () => relayRpc(relay, "relay.pause.write", { paused: !enabled }, 10_000),
-    (cause) => {
-      reportAppError(cause, { operation: "relay.pause.write" })
-    }
-  )
+  // The Relay freezes itself while paused. Its connection keeps telling it
+  // until it has the pause or resume, even if it's away now.
+  const { setRelayPause } = await import("@/lib/relay-connection")
+  await setRelayPause(relay, !enabled)
   publishRelayCollectionChange(id)
   return relay
 }
@@ -1488,7 +1479,10 @@ function toPersistedRelay(row: RelayRow): PersistedRelay {
 export async function activeRelay(
   id: string,
   missing: () => Error = () =>
-    ResourceNotFoundError.make({ message: "Relay not found", resource: "relay" })
+    ResourceNotFoundError.make({
+      message: "Relay not found",
+      resource: "relay",
+    })
 ): Promise<PersistedRelay> {
   const relay = (await listPersistedRelays()).find((item) => item.id === id)
   if (!relay) throw missing()
