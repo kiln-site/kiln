@@ -101,7 +101,7 @@ describeMysql("Hearth audit", () => {
           yield* reconcilePendingRelayChanges(
             relayId,
             (yield* Clock.currentTimeMillis) + 1,
-            async (operationId) => answers.get(operationId)!
+            (operationId) => Effect.succeed(answers.get(operationId)!)
           )
 
           const outcomes = new Map(
@@ -153,7 +153,7 @@ describeMysql("Hearth audit", () => {
         yield* reconcilePendingRelayChanges(
           relayId,
           yield* Clock.currentTimeMillis,
-          async () => ({ status: "unknown" })
+          () => Effect.succeed({ status: "unknown" as const })
         )
         const [event] = yield* listAuditEvents({ limit: 10 })
         assert.strictEqual(event?.outcome, "unknown")
@@ -178,10 +178,12 @@ describeMysql("Hearth audit", () => {
         const unsettled = yield* reconcilePendingRelayChanges(
           relayId,
           (yield* Clock.currentTimeMillis) + 1,
-          async (operationId) =>
-            running.has(operationId)
-              ? { status: "running" }
-              : { result: {}, status: "succeeded" }
+          (operationId) =>
+            Effect.succeed<RelayOperationLookup>(
+              running.has(operationId)
+                ? { status: "running" }
+                : { result: {}, status: "succeeded" }
+            )
         )
         assert.strictEqual(unsettled, 200)
         const events = yield* listAuditEvents({ limit: 500 })
@@ -206,10 +208,8 @@ describeMysql("Hearth audit", () => {
           subject: "user-1",
         })
         const now = yield* Clock.currentTimeMillis
-        yield* reconcilePendingRelayChanges(
-          relayId,
-          now - 60_000,
-          async () => ({ status: "unknown" })
+        yield* reconcilePendingRelayChanges(relayId, now - 60_000, () =>
+          Effect.succeed({ status: "unknown" as const })
         )
         const [event] = yield* listAuditEvents({ limit: 10 })
         assert.strictEqual(event?.outcome, "pending")

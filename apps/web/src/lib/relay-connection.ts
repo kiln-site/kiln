@@ -1035,6 +1035,8 @@ class RelayConnection {
           `Relay connection closed (${code}${reason.length ? `: ${reason.toString()}` : ""})`
         )
         this.#socket = null
+        this.#auditFiber?.interruptUnsafe()
+        this.#auditFiber = null
         this.#rejectBrowserAuthorizationReadiness(error)
         this.#abortReverseRequests()
         this.#rejectPending(error)
@@ -1492,29 +1494,25 @@ class RelayConnection {
     }
   }
 
-  // How many pending changes it couldn't settle yet.
-  #reconcileAudit(): Effect.Effect<number> {
-    return Effect.tryPromise(async () => {
-      const { reconcilePendingRelayChanges } =
-        await import("@/lib/hearth-audit.server")
-      if (this.#state.status !== "authenticated") return 0
-      return await runAppEffect(
-        "audit.reconcile",
-        reconcilePendingRelayChanges(
-          this.#relay.id,
-          Date.now() - AUDIT_IN_FLIGHT_MS,
-          (operationId) =>
-            runAppEffect(
-              "relay.operation.lookup",
-              this.request("operation.get", { operationId }, 10_000).pipe(
-                Effect.flatMap(
-                  Schema.decodeUnknownEffect(RelayOperationLookupSchema)
+  // How many pending changes it couldn't settle yet. One Effect throughout,
+  // so interrupting it stops the scan and its lookups.
+  #reconcileAudit(): Effect.Effect<number, never, Database> {
+    return promiseEffect(() => import("@/lib/hearth-audit.server")).pipe(
+      Effect.flatMap(({ reconcilePendingRelayChanges }) =>
+        this.#state.status === "authenticated"
+          ? reconcilePendingRelayChanges(
+              this.#relay.id,
+              Date.now() - AUDIT_IN_FLIGHT_MS,
+              (operationId) =>
+                this.request("operation.get", { operationId }, 10_000).pipe(
+                  Effect.flatMap(
+                    Schema.decodeUnknownEffect(RelayOperationLookupSchema)
+                  )
                 )
-              )
             )
-        )
-      )
-    }).pipe(
+          : Effect.succeed(0)
+      ),
+      Effect.withSpan("audit.reconcile"),
       Effect.catch((cause) =>
         Effect.logWarning("Audit reconciliation after Relay connect failed", {
           cause,

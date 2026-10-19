@@ -218,7 +218,7 @@ export const reconcilePendingRelayChanges = Effect.fn(
 )(function* (
   relayId: string,
   olderThan: number,
-  lookup: (operationId: string) => Promise<RelayOperationLookup>
+  lookup: (operationId: string) => Effect.Effect<RelayOperationLookup, unknown>
 ) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
@@ -241,9 +241,7 @@ export const reconcilePendingRelayChanges = Effect.fn(
         ]
       )
     for (const row of rows) {
-      const answer = yield* Effect.tryPromise(() =>
-        lookup(row.operation_id)
-      ).pipe(Effect.option)
+      const answer = yield* lookup(row.operation_id).pipe(Effect.option)
       if (answer._tag === "None" || answer.value.status === "running") {
         unsettled += 1
         continue
