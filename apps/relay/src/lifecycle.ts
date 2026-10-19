@@ -10,7 +10,6 @@ import {
   statfs,
   writeFile,
 } from "node:fs/promises"
-import { totalmem } from "node:os"
 import { join } from "node:path"
 import { Effect, Fiber, Schedule, Semaphore } from "effect"
 
@@ -41,14 +40,16 @@ import type {
   RelayTailscaleStackConfig,
   RelayTailscaleStackDns,
   RelayUpdateInstanceStartup,
+  ResourceLimits,
+  ResourceLimitsInput,
 } from "@workspace/contracts"
 import {
   appTailscaleMember,
   builtinTailscaleBrickId,
   builtinTailscaleBrickSource,
-  relayDiskAllocationAvailableBytes,
   relayProxySettingsSchema,
   relayInstanceSchema,
+  resolveResourceLimits,
   relayTailscaleOverviewSchema,
   relayTailscaleSettingsSchema,
   relayTailscaleStackConfigSchema,
@@ -79,6 +80,12 @@ import {
   portProtocols,
 } from "./port-allocations.js"
 import { INSTANCE_STOP_TIMEOUT_SECONDS } from "./power-state.js"
+import {
+  assertResourceLimitsFit,
+  containerLimitSpec,
+  formatAllocationBytes,
+  resourceLimitLabels,
+} from "./resource-limits.js"
 import {
   APP_SERVICE,
   appIdFromRouteOwner,
@@ -245,17 +252,36 @@ function dockerMemoryBytes(value: string): number {
   return bytes
 }
 
-function formatAllocationBytes(bytes: number): string {
-  const gibibytes = bytes / 1024 ** 3
-  return `${gibibytes.toFixed(gibibytes >= 10 ? 0 : 1)} GiB`
+/**
+ * A game server's limits. Its Brick's memory is the default; a request
+ * without `limits` comes from a Hearth that sent only a disk limit.
+ */
+function gameServerLimits(
+  input: {
+    diskLimitBytes: number
+    limits?: ResourceLimitsInput
+  },
+  brickMemory: string
+): ResourceLimits {
+  return {
+    cpuMillis: input.limits?.cpuMillis ?? null,
+    diskBytes:
+      input.limits?.diskBytes === undefined
+        ? input.diskLimitBytes
+        : input.limits.diskBytes,
+    memoryBytes:
+      input.limits?.memoryBytes === undefined
+        ? dockerMemoryBytes(brickMemory)
+        : input.limits.memoryBytes,
+  }
 }
 
 function resolveInstanceStartupReconfigure(
   existing: RelayInstance,
   input: RelayUpdateInstanceStartup
 ): {
-  diskLimitBytes: number
   forcePull: boolean
+  limits: ResourceLimits
   recipe: string
   recipeDefinition?: BrickRecipe
   snapshotSha256?: string
@@ -288,10 +314,16 @@ function resolveInstanceStartupReconfigure(
       ? undefined
       : existing.brickSnapshotSha256
   return {
-    diskLimitBytes: reinstall
-      ? existing.limits.diskBytes
-      : (input.diskLimitBytes ?? existing.limits.diskBytes),
     forcePull: reinstall,
+    limits: reinstall
+      ? existing.limits
+      : resolveResourceLimits(
+          existing.limits,
+          input.limits ??
+            (input.diskLimitBytes === undefined
+              ? undefined
+              : { diskBytes: input.diskLimitBytes })
+        ),
     recipe,
     ...(input.recipeDefinition
       ? { recipeDefinition: input.recipeDefinition }
@@ -1590,7 +1622,10 @@ export class LifecycleDriver {
           join(this.#config.rootDirectory, instance.directory)
         )
       )
-      if (usedBytes > instance.limits.diskBytes) {
+      if (
+        instance.limits.diskBytes !== null &&
+        usedBytes > instance.limits.diskBytes
+      ) {
         throw new Error(
           `Cannot ${action} ${instance.name}: its ${formatAllocationBytes(usedBytes)} of files exceed the ${formatAllocationBytes(instance.limits.diskBytes)} disk quota`
         )
@@ -2106,10 +2141,7 @@ export class LifecycleDriver {
       id,
       implementation: definition.metadata.name,
       javaVersion: resolved.runtimeName,
-      limits: {
-        diskBytes: input.diskLimitBytes,
-        memoryBytes: dockerMemoryBytes(resolved.memory),
-      },
+      limits: gameServerLimits(input, resolved.memory),
       managedByRelay: true,
       name: input.name ?? `kiln-${id.slice(0, 8)}`,
       observedState: "provisioning",
@@ -2143,9 +2175,9 @@ export class LifecycleDriver {
       )
     }
     return this.#provisionManagedInstance({
-      diskLimitBytes: input.diskLimitBytes,
-      grandfatheredDiskLimitBytes: 0,
+      grandfatheredDiskLimitBytes: null,
       id,
+      limits: input,
       onPhase,
       prepareDirectory: true,
       recipe: input.recipe,
@@ -2177,8 +2209,8 @@ export class LifecycleDriver {
       )
     }
     const {
-      diskLimitBytes,
       forcePull,
+      limits,
       recipe,
       recipeDefinition,
       snapshotSha256,
@@ -2207,9 +2239,8 @@ export class LifecycleDriver {
       checkExistingUsage: true,
       currentDiskLimitBytes: existing.limits.diskBytes,
       directory: join(this.#config.rootDirectory, existing.directory),
-      diskLimitBytes,
       existing: inspected.filter((instance) => instance.id !== existing.id),
-      memoryLimitBytes: dockerMemoryBytes(resolved.memory),
+      limits,
     })
     if (forcePull) {
       await runLifecycle(
@@ -2235,9 +2266,9 @@ export class LifecycleDriver {
     return runLifecycle(
       lifecycleOperation(async () => {
         const reconfigured = await this.#provisionManagedInstance({
-          diskLimitBytes,
           grandfatheredDiskLimitBytes: existing.limits.diskBytes,
           id: existing.id,
+          limits,
           prepareDirectory: false,
           ports: existing.ports,
           recipe,
@@ -2264,9 +2295,10 @@ export class LifecycleDriver {
   }
 
   async #provisionManagedInstance(input: {
-    diskLimitBytes: number
-    grandfatheredDiskLimitBytes: number
+    grandfatheredDiskLimitBytes: number | null
     id: string
+    /** Limits to apply, or a create request to take them from. */
+    limits: ResourceLimits | Pick<RelayCreateInstance, "diskLimitBytes" | "limits">
     onPhase?: (phase: RelayInstanceProvisioning["phase"]) => Promise<void>
     prepareDirectory: boolean
     ports?: ReadonlyArray<RelayInstancePortAllocation>
@@ -2297,7 +2329,10 @@ export class LifecycleDriver {
       )
     }
     const existing = await this.#docker.inspectInstances()
-    const memoryLimitBytes = dockerMemoryBytes(resolved.memory)
+    const limits =
+      "diskLimitBytes" in input.limits
+        ? gameServerLimits(input.limits, resolved.memory)
+        : input.limits
     if (
       input.tailscale.enabled &&
       existing.some(
@@ -2315,9 +2350,8 @@ export class LifecycleDriver {
       checkExistingUsage: !input.prepareDirectory,
       currentDiskLimitBytes: input.grandfatheredDiskLimitBytes,
       directory: join(this.#config.rootDirectory, input.id),
-      diskLimitBytes: input.diskLimitBytes,
       existing,
-      memoryLimitBytes,
+      limits,
     })
     const architecture =
       process.arch === "x64"
@@ -2342,7 +2376,6 @@ export class LifecycleDriver {
       ? String(resolved.values.version)
       : "custom"
     const image = resolved.image
-    const memoryLimit = resolved.memory
     const directory = join(this.#config.rootDirectory, id)
     const hostDirectory = join(await this.#hostDataDirectory(), "instances", id)
     if (installationMarker) {
@@ -2494,9 +2527,11 @@ export class LifecycleDriver {
       "kiln.instance.game": definition.metadata.game,
       "kiln.instance.public-host": this.#config.gameHost,
       "kiln.instance.directory": id,
-      "kiln.instance.memory-bytes": String(memoryLimitBytes),
-      "kiln.instance.disk-bytes": String(input.diskLimitBytes),
+      // Older Relays read these, with 0 for no limit.
+      "kiln.instance.memory-bytes": String(limits.memoryBytes ?? 0),
+      "kiln.instance.disk-bytes": String(limits.diskBytes ?? 0),
       "kiln.instance.mount": definition.runtime.storage.mount,
+      ...resourceLimitLabels(limits),
     }
     if (managedInstallationMarker) {
       labels[INSTALLATION_MARKER_LABEL] = managedInstallationMarker
@@ -2554,9 +2589,7 @@ export class LifecycleDriver {
       image,
       interactive: true,
       labels,
-      memory: memoryLimit,
-      memoryReservation: resolved.memoryReservation,
-      memorySwap: memoryLimit,
+      ...containerLimitSpec(limits),
       name: containerName,
       network: { aliases: [containerName], name: this.#resources.gameNetwork },
       pidsLimit: definition.runtime.resources.pids,
@@ -2841,43 +2874,24 @@ export class LifecycleDriver {
 
   async #assertAllocationAvailable(input: {
     checkExistingUsage: boolean
-    currentDiskLimitBytes: number
+    currentDiskLimitBytes: number | null
     directory: string
-    diskLimitBytes: number
     existing: ReadonlyArray<RelayInstance>
-    memoryLimitBytes: number
+    limits: ResourceLimits
   }): Promise<void> {
     const filesystem = await statfs(this.#config.rootDirectory)
-    const nodeDiskBytes = filesystem.blocks * filesystem.bsize
-    const allocatedMemoryBytes = input.existing.reduce(
-      (total, instance) => total + instance.limits.memoryBytes,
-      0
-    )
-    const allocatedDiskBytes = input.existing.reduce(
-      (total, instance) => total + instance.limits.diskBytes,
-      0
-    )
-
-    if (allocatedMemoryBytes + input.memoryLimitBytes > totalmem()) {
-      throw new Error(
-        `Container memory exceeds the node's assignable capacity (${formatAllocationBytes(Math.max(totalmem() - allocatedMemoryBytes, 0))} available)`
-      )
-    }
-    const availableDiskBytes = relayDiskAllocationAvailableBytes(
-      nodeDiskBytes,
-      allocatedDiskBytes,
-      input.currentDiskLimitBytes
-    )
-    if (input.diskLimitBytes > availableDiskBytes) {
-      throw new Error(
-        `Disk quota exceeds the node's assignable capacity (${formatAllocationBytes(availableDiskBytes)} available after the 10 GiB node reserve)`
-      )
-    }
-    if (input.checkExistingUsage) {
+    assertResourceLimitsFit({
+      currentDiskBytes: input.currentDiskLimitBytes,
+      limits: input.limits,
+      nodeDiskBytes: filesystem.blocks * filesystem.bsize,
+      others: input.existing.map((instance) => instance.limits),
+    })
+    const diskLimitBytes = input.limits.diskBytes
+    if (input.checkExistingUsage && diskLimitBytes !== null) {
       const usedBytes = await runLifecycle(
         directoryApparentSizeEffect(input.directory)
       )
-      if (usedBytes > input.diskLimitBytes) {
+      if (usedBytes > diskLimitBytes) {
         throw new Error(
           `Disk quota is below this server's current ${formatAllocationBytes(usedBytes)} usage`
         )

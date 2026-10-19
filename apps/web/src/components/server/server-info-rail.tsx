@@ -1,7 +1,11 @@
 import * as React from "react"
 
 import { InstanceInfoRail, InfoContainerCard } from "@/components/resource-info-rail"
-import { formatBytes } from "@/lib/format-bytes"
+import {
+  formatCpuLimit,
+  formatDiskLimit,
+  formatMemoryLimit,
+} from "@/lib/resource-limits"
 import type {
   InstanceSettingsInstance,
   RelayNodeSummary,
@@ -33,12 +37,9 @@ export function ServerInfoRail({
           containerId={instance.containerId}
           // Older Relays don't report the server's folder.
           dataDirectory={instance.hostDirectory ?? null}
-          disk={`${formatBytes(instance.limits.diskBytes)} limit`}
-          memory={
-            instance.limits.memoryBytes > 0
-              ? `${formatBytes(instance.limits.memoryBytes)} limit`
-              : "No limit"
-          }
+          cpu={formatCpuLimit(instance.limits.cpuMillis)}
+          disk={formatDiskLimit(instance.limits.diskBytes)}
+          memory={formatMemoryLimit(instance.limits.memoryBytes)}
           name={instance.service}
         />
       }

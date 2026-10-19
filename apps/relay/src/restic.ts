@@ -464,7 +464,7 @@ export function createResticDriver(options?: {
 
 export async function validateStagingTree(
   stagingRoot: string,
-  limits: { diskBytes: number }
+  limits: { diskBytes: number | null }
 ): Promise<{ entries: number; logicalBytes: number; warnings: Array<string> }> {
   const root = resolve(stagingRoot)
   const metadata = await lstat(root)
@@ -517,7 +517,7 @@ export async function validateStagingTree(
     warnings.push(`Skipped ${skipped - warnings.length} more non-regular files`)
   }
   const maximumBytes =
-    limits.diskBytes > 0 ? limits.diskBytes : MAX_UNLIMITED_RESTORE_BYTES
+    limits.diskBytes ?? MAX_UNLIMITED_RESTORE_BYTES
   if (logicalBytes > maximumBytes) {
     throw resticError(
       "restore_too_large",

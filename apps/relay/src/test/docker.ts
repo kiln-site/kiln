@@ -64,6 +64,7 @@ export interface FakeContainer {
   openStdin: boolean
   restartPolicy: string
   memoryBytes: number
+  nanoCpus: number
   mounts: Array<FakeMount>
   portBindings: PortBindings
   networkMode: string
@@ -155,6 +156,7 @@ export interface ContainerSeed {
   restartPolicy?: string
   tty?: boolean
   memoryBytes?: number
+  nanoCpus?: number
   running?: boolean
   exitCode?: number
   oomKilled?: boolean
@@ -355,6 +357,7 @@ export class FakeDocker {
       openStdin: seed.tty ?? false,
       restartPolicy: seed.restartPolicy ?? "no",
       memoryBytes: seed.memoryBytes ?? 0,
+      nanoCpus: seed.nanoCpus ?? 0,
       mounts: [...(seed.mounts ?? [])],
       portBindings: structuredClone(seed.portBindings ?? {}),
       networkMode: seed.networks?.[0] ?? "bridge",
@@ -756,6 +759,7 @@ export class FakeDocker {
         Binds: binds,
         Memory: container.memoryBytes,
         Mounts: volumeMounts,
+        NanoCpus: container.nanoCpus,
         NetworkMode: container.networkMode,
         PortBindings: container.portBindings,
         VolumesFrom: container.volumesFrom.length ? container.volumesFrom : null,
@@ -893,6 +897,7 @@ export class FakeDocker {
     memoryBytes: number
     mounts: Array<FakeMount>
     name: string | undefined
+    nanoCpus: number
     networkMode: string | undefined
     networks: Array<{ aliases: Array<string>; ipAddress: string; name: string }>
     portBindings: PortBindings
@@ -920,6 +925,7 @@ export class FakeDocker {
       memoryBytes: input.memoryBytes,
       mounts: input.mounts,
       name,
+      nanoCpus: input.nanoCpus,
       portBindings: input.portBindings,
       restartPolicy: input.restartPolicy,
       tty: input.tty,
@@ -1876,6 +1882,7 @@ export class FakeDocker {
       memoryBytes: host.Memory ?? 0,
       mounts,
       name,
+      nanoCpus: host.NanoCpus ?? 0,
       networkMode: host.NetworkMode,
       networks: Object.entries(endpoints)
         .filter(([network]) => !isNetworkMode(network))
@@ -2188,6 +2195,7 @@ interface CreateBody {
     VolumesFrom?: Array<string> | null
     Binds?: Array<string> | null
     Memory?: number
+    NanoCpus?: number
     Mounts?: Array<{
       ReadOnly?: boolean
       Source?: string

@@ -84,12 +84,13 @@ re-enabling resumes it if the credential is still valid. Explicit logout,
 revocation, and expiration still invalidate credentials.
 
 Power commands check the specific action. File writes, deletion, and chmod use
-separate permissions; write includes read. Changing only disk limits requires
-`instance.limits.write`; it does not require configuration-write permission.
+separate permissions; write includes read. Changing only resource limits
+(`--memory`, `--cpu`, `--disk`) requires `instance.limits.write`; it does not
+require configuration-write permission.
 Use `--no-start` on a stopped server when no power permission is granted;
 reconfiguring a running server requires the corresponding stop/restart permission.
 Changing a Brick or non-resource startup variables requires
-`instance.configuration.write`. Resource variables and disk limits require
+`instance.configuration.write`. Resource limits require
 `instance.limits.write`; changes affecting both require both permissions.
 Creating a backup (including a restore safety backup) in a user-owned destination
 also requires `backup.download`, because it exports the backup contents. A read-only CLI credential never gains write
@@ -181,15 +182,19 @@ account's Hearth catalogs or a custom HTTPS recipe:
 
 ```sh
 kiln servers create <relay-id> paper --name survival --memory 4GiB --disk 25GiB
+kiln servers create <relay-id> paper --name capped --cpu 1.5 --memory 6GiB
 kiln servers create <relay-id> https://example.com/custom-brick.yml \
   --name custom --variable version=1.0.0
 ```
 
 Server creation requires a full-access CLI credential. Platform administrators
 can create on any Relay; Bring Your Own Relays users can create only on Relays
-they paired. Omitting `--disk` provisions `5GiB` of storage. Disk quotas must
-be at least `0.1GiB`, matching the Relay
-allocation minimum. New and renamed server names are limited to 32 characters;
+they paired. Omitting `--disk` provisions `5GiB` of storage, and omitting
+`--memory` takes the Brick's recommended memory. `--cpu` takes cores, such as
+`1.5`; servers have no CPU limit unless one is set. Pass `none` to `--memory`,
+`--cpu`, or `--disk` for no limit. Disk limits must be at least `0.1GiB`,
+memory limits at least `64MiB`, and CPU limits at least `0.1` cores.
+Memory, CPU, and no-limit settings need an up-to-date Relay. New and renamed server names are limited to 32 characters;
 read commands still accept legacy stored names up to 120 characters.
 `--no-start` leaves the new server stopped.
 
@@ -295,16 +300,18 @@ Patch settings on the current Brick while preserving variables that are not
 mentioned:
 
 ```sh
-kiln server startup <server> --memory 6GiB
-kiln server startup <server> --disk 40GiB --java-version 25
+kiln server startup <server> --memory 6GiB --cpu 2
+kiln server startup <server> --disk none --java-version 25
 kiln server startup <server> --game-version 1.21.11 \
   --variable online_mode=json:false
 kiln server startup <server> \
   --variable java_args="-XX:+UseG1GC -XX:+AlwaysPreTouch"
 ```
 
-Settings omitted from a startup patch, including the disk quota, are preserved.
-Use `--disk` only when the quota should change.
+Settings omitted from a startup patch, including resource limits, are
+preserved. Pass `--memory`, `--cpu`, or `--disk` only when that limit should
+change. `kiln server info` shows `No limit` for an unlimited memory or disk
+limit.
 
 Use `--variable name=value` for string variables. Prefix the value with
 `json:` for numbers or booleans, such as `slots=json:20` or

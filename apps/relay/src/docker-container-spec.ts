@@ -79,6 +79,8 @@ export interface ContainerSpec {
   readonly memory?: string
   readonly memoryReservation?: string
   readonly memorySwap?: string
+  /** Billionths of a CPU core: Docker's `--cpus` times 10^9. */
+  readonly nanoCpus?: number
   readonly readOnly?: boolean
   /** Keeps stdin open for the first attach: consoles and one-off runs. */
   readonly interactive?: boolean
@@ -162,6 +164,7 @@ function containerCreateBody(spec: ContainerSpec): unknown {
       ...(network && {
         NetworkMode: typeof network === "string" ? network : network.name,
       }),
+      ...(spec.nanoCpus && { NanoCpus: spec.nanoCpus }),
       ...(spec.pidsLimit && { PidsLimit: spec.pidsLimit }),
       ...(spec.ports?.length && { PortBindings: bindings }),
       ...(spec.readOnly && { ReadonlyRootfs: true }),
@@ -307,6 +310,7 @@ function ramInBytes(value: string): number {
   if (!match || !Number.isFinite(amount)) {
     throw new Error(`invalid size: '${value}'`)
   }
-  const exponent = "kmgtp".indexOf((match[2] ?? "").toLowerCase()) + 1
+  // Without a unit, the size is in bytes.
+  const exponent = match[2] ? "kmgtp".indexOf(match[2].toLowerCase()) + 1 : 0
   return Math.trunc(amount * 1024 ** exponent)
 }

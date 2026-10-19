@@ -59,8 +59,9 @@ import {
 import type { CliRequestInit } from "./http.js"
 import { prepareFollowLogOutput, withFollowLogReader } from "./logs.js"
 import {
+  parseCpuMillis,
   parseDiskBytes,
-  parseMemoryVariable,
+  parseMemoryBytes,
   parseVariableAssignments,
   remoteFileBasename,
 } from "./inputs.js"
@@ -420,8 +421,11 @@ const runCommandEffect = Effect.fn("cli.command")(function* (
         "POST",
         {
           brick,
+          ...startupLimits(startup),
           diskLimitBytes:
-            startup.diskLimitBytes ?? DEFAULT_INSTANCE_DISK_LIMIT_BYTES,
+            startup.diskLimitBytes === undefined
+              ? DEFAULT_INSTANCE_DISK_LIMIT_BYTES
+              : startup.diskLimitBytes,
           name,
           relayId,
           start: args.start,
@@ -451,13 +455,13 @@ const runCommandEffect = Effect.fn("cli.command")(function* (
     const brick = action === "brick" ? rest[1] : args.brick
     if (
       !brick &&
-      startup.diskLimitBytes === undefined &&
+      Object.keys(startupLimits(startup)).length === 0 &&
       Object.keys(startup.variables).length === 0
     ) {
       return yield* invalidUsage(
         action === "brick"
           ? "Usage: kiln server brick <server> <brick-id|https-url> [options]"
-          : "Provide --brick, --disk, --memory, --java-version, --game-version, or --variable."
+          : "Provide --brick, --cpu, --disk, --memory, --java-version, --game-version, or --variable."
       )
     }
     const result = yield* apiJsonEffect(
@@ -469,9 +473,7 @@ const runCommandEffect = Effect.fn("cli.command")(function* (
         {
           ...target,
           ...(brick ? { brick } : {}),
-          ...(startup.diskLimitBytes === undefined
-            ? {}
-            : { diskLimitBytes: startup.diskLimitBytes }),
+          ...startupLimits(startup),
           start: args.start,
           variables: startup.variables,
         },
@@ -902,12 +904,12 @@ const startupOptionsEffect = Effect.fn("cli.startup.options")(function* (
   return yield* Effect.try({
     try: () => {
       const variables = parseVariableAssignments(args.variables)
-      const memory = parseMemoryVariable(args.memory)
-      if (memory) variables.memory = memory
       if (args.javaVersion) variables.java_version = args.javaVersion
       if (args.gameVersion) variables.version = args.gameVersion
       return {
+        cpuLimitMillis: parseCpuMillis(args.cpu),
         diskLimitBytes: parseDiskBytes(args.disk),
+        memoryLimitBytes: parseMemoryBytes(args.memory),
         variables,
       }
     },
@@ -922,6 +924,30 @@ const startupOptionsEffect = Effect.fn("cli.startup.options")(function* (
           }),
   })
 })
+
+/** The limits a command sets; one left out keeps its current value. */
+function startupLimits(startup: {
+  cpuLimitMillis: number | null | undefined
+  diskLimitBytes: number | null | undefined
+  memoryLimitBytes: number | null | undefined
+}) {
+  return {
+    ...(startup.cpuLimitMillis === undefined
+      ? {}
+      : { cpuLimitMillis: startup.cpuLimitMillis }),
+    ...(startup.diskLimitBytes === undefined
+      ? {}
+      : { diskLimitBytes: startup.diskLimitBytes }),
+    ...(startup.memoryLimitBytes === undefined
+      ? {}
+      : { memoryLimitBytes: startup.memoryLimitBytes }),
+  }
+}
+
+function formatLimit(bytes: number): string {
+  // Hearth reports 0 for no limit.
+  return bytes === 0 ? "No limit" : formatBytes(bytes)
+}
 
 function writeRelayInfo(
   result: z.infer<typeof cliRelayInfoResponseSchema>
@@ -969,8 +995,8 @@ function writeServerInfo(
   writeLine(`Brick: ${server.brickId ?? server.brickSource ?? "unknown"}`)
   writeLine(`Connect: ${server.connectAddress}`)
   if (server.publicAddress) writeLine(`Public: ${server.publicAddress}`)
-  writeLine(`Memory limit: ${formatBytes(server.memoryLimitBytes)}`)
-  writeLine(`Disk limit: ${formatBytes(server.diskLimitBytes)}`)
+  writeLine(`Memory limit: ${formatLimit(server.memoryLimitBytes)}`)
+  writeLine(`Disk limit: ${formatLimit(server.diskLimitBytes)}`)
   if (server.resources) {
     writeLine(`CPU usage: ${server.resources.cpuPercent.toFixed(1)}%`)
     writeLine(`Memory usage: ${formatBytes(server.resources.memoryUsedBytes)}`)
@@ -1205,7 +1231,10 @@ Commands:
 Options:
       --brick <id|url> Change the Brick recipe
       --confirm <id>   Confirm a destructive server or backup deletion
-      --disk <size>    Set disk quota (minimum 0.1GiB), for example 25GiB
+      --cpu <cores|none>
+                       Set the CPU limit in cores, for example 1.5
+      --disk <size|none>
+                       Set the disk limit (minimum 0.1GiB), for example 25GiB
   -f, --follow        Follow server logs
       --game-version <version>
                        Set the Brick's version variable
@@ -1213,7 +1242,8 @@ Options:
       --java-version <version>
                        Set the Brick's java_version variable
       --limit <n>     Limit log, activity, or backup history (1-10000)
-      --memory <size> Set the Brick's memory variable, for example 4GiB
+      --memory <size|none>
+                       Set the memory limit, for example 4GiB
       --mode <full|incremental>
                        Server backup mode (default incremental)
       --name <name>   Name this CLI credential, server, or backup

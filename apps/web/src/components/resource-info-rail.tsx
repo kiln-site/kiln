@@ -121,7 +121,6 @@ export function InfoContainerCard({
   pending = false,
 }: {
   containerId: string | null
-  // Instances have no CPU limit yet.
   cpu?: React.ReactNode
   // The instance's folder on the Relay's host; null when the Relay doesn't
   // say.

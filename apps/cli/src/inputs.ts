@@ -1,12 +1,70 @@
 import { basename } from "node:path"
 
-import { MINIMUM_INSTANCE_DISK_LIMIT_BYTES } from "@workspace/contracts"
+import {
+  CPU_LIMIT_MILLIS_PER_CORE,
+  MINIMUM_CPU_LIMIT_MILLIS,
+  MINIMUM_INSTANCE_DISK_LIMIT_BYTES,
+  MINIMUM_MEMORY_LIMIT_BYTES,
+} from "@workspace/contracts"
 import { Result } from "effect"
 
 import { commandError } from "./errors.js"
 
-export function parseDiskBytes(value: string | undefined): number | undefined {
+const NO_LIMIT = "none"
+
+/** Bytes, `null` for `none`, or `undefined` when the flag wasn't given. */
+export function parseDiskBytes(
+  value: string | undefined
+): number | null | undefined {
   if (value === undefined) return undefined
+  if (value.trim().toLowerCase() === NO_LIMIT) return null
+  const bytes = parseSize(value)
+  if (bytes === null) {
+    throw invalidInput(
+      "--disk must be a positive size with a unit, such as 25GiB, or none."
+    )
+  }
+  if (bytes < MINIMUM_INSTANCE_DISK_LIMIT_BYTES) {
+    throw invalidInput("--disk must be at least 0.1GiB.")
+  }
+  return bytes
+}
+
+export function parseMemoryBytes(
+  value: string | undefined
+): number | null | undefined {
+  if (value === undefined) return undefined
+  if (value.trim().toLowerCase() === NO_LIMIT) return null
+  // Docker's shorthand, as in 4096M or 4G, means binary units.
+  const bytes = parseSize(value.trim().replace(/^(\d+(?:\.\d+)?)\s*([MG])$/iu, "$1$2iB"))
+  if (bytes === null) {
+    throw invalidInput(
+      "--memory must be a positive size with a unit, such as 4GiB, or none."
+    )
+  }
+  if (bytes < MINIMUM_MEMORY_LIMIT_BYTES) {
+    throw invalidInput("--memory must be at least 64MiB.")
+  }
+  return bytes
+}
+
+/** Thousandths of a core, so 1.5 cores is 1500. */
+export function parseCpuMillis(
+  value: string | undefined
+): number | null | undefined {
+  if (value === undefined) return undefined
+  if (value.trim().toLowerCase() === NO_LIMIT) return null
+  const cores = Number(value.trim())
+  const millis = Math.round(cores * CPU_LIMIT_MILLIS_PER_CORE)
+  if (!/^\d+(?:\.\d+)?$/u.test(value.trim()) || millis < MINIMUM_CPU_LIMIT_MILLIS) {
+    throw invalidInput(
+      "--cpu must be a number of cores of at least 0.1, such as 1.5, or none."
+    )
+  }
+  return millis
+}
+
+function parseSize(value: string): number | null {
   const match = /^(\d+(?:\.\d+)?)\s*(B|KIB|MIB|GIB|TIB|KB|MB|GB|TB)$/iu.exec(
     value.trim()
   )
@@ -33,29 +91,7 @@ export function parseDiskBytes(value: string | undefined): number | undefined {
                       ? 1_024 ** 4
                       : 0
   const bytes = Math.round(amount * multiplier)
-  if (!match || !Number.isSafeInteger(bytes) || bytes <= 0) {
-    throw invalidInput(
-      "--disk must be a positive size with a unit, such as 25GiB."
-    )
-  }
-  if (bytes < MINIMUM_INSTANCE_DISK_LIMIT_BYTES) {
-    throw invalidInput("--disk must be at least 0.1GiB.")
-  }
-  return bytes
-}
-
-export function parseMemoryVariable(
-  value: string | undefined
-): string | undefined {
-  if (value === undefined) return undefined
-  const match = /^(\d+)\s*(M|G|MIB|GIB)$/iu.exec(value.trim())
-  if (!match?.[1] || !match[2]) {
-    throw invalidInput(
-      "--memory must use whole mebibytes or gibibytes, such as 4096M or 4GiB."
-    )
-  }
-  const unit = match[2].toUpperCase()
-  return `${match[1]}${unit.startsWith("G") ? "G" : "M"}`
+  return match && Number.isSafeInteger(bytes) && bytes > 0 ? bytes : null
 }
 
 export function parseVariableAssignments(

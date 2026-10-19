@@ -2,8 +2,9 @@ import { describe, expect, it } from "vite-plus/test"
 import { MINIMUM_INSTANCE_DISK_LIMIT_BYTES } from "@workspace/contracts"
 
 import {
+  parseCpuMillis,
   parseDiskBytes,
-  parseMemoryVariable,
+  parseMemoryBytes,
   parseVariableAssignments,
   remoteFileBasename,
 } from "./inputs.js"
@@ -15,12 +16,18 @@ describe("CLI startup inputs", () => {
     expect(parseDiskBytes("0.1GiB")).toBe(MINIMUM_INSTANCE_DISK_LIMIT_BYTES)
     expect(() => parseDiskBytes("25")).toThrow("positive size with a unit")
     expect(() => parseDiskBytes("100MiB")).toThrow("at least 0.1GiB")
+    expect(parseDiskBytes("none")).toBe(null)
   })
 
-  it("normalizes memory for Brick variables", () => {
-    expect(parseMemoryVariable("4GiB")).toBe("4G")
-    expect(parseMemoryVariable("4096MiB")).toBe("4096M")
-    expect(() => parseMemoryVariable("4GB")).toThrow("whole mebibytes")
+  it("parses memory and CPU limits, or none", () => {
+    expect(parseMemoryBytes("4GiB")).toBe(4 * 1_024 ** 3)
+    expect(parseMemoryBytes("4096M")).toBe(4 * 1_024 ** 3)
+    expect(parseMemoryBytes("none")).toBe(null)
+    expect(() => parseMemoryBytes("32MiB")).toThrow("at least 64MiB")
+    expect(parseCpuMillis("1.5")).toBe(1_500)
+    expect(parseCpuMillis("none")).toBe(null)
+    expect(() => parseCpuMillis("0.01")).toThrow("at least 0.1")
+    expect(() => parseCpuMillis("two")).toThrow("number of cores")
   })
 
   it("keeps ordinary values as strings and supports explicit JSON scalars", () => {

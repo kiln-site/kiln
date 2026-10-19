@@ -54,6 +54,25 @@ describe("container creation", () => {
     )
   })
 
+  it("reads a size without a unit as bytes", async () => {
+    const docker = await engine()
+    fakeDocker.images.set("alpine:3.21", {})
+
+    await Effect.runPromise(
+      createContainer(docker, {
+        image: "alpine:3.21",
+        memory: String(512 * 1024 ** 2),
+        name: "kiln-sized",
+        nanoCpus: 5e8,
+      })
+    )
+
+    expect(fakeDocker.container("kiln-sized")).toMatchObject({
+      memoryBytes: 512 * 1024 ** 2,
+      nanoCpus: 5e8,
+    })
+  })
+
   it("pulls an image Docker doesn't have before creating", async () => {
     const docker = await engine()
 

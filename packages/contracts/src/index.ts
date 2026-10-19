@@ -7,6 +7,7 @@ import {
   MINIMUM_INSTANCE_DISK_LIMIT_BYTES,
 } from "./instance-limits.js"
 import { relayInstanceLifecycleEventSchema } from "./instance-lifecycle.js"
+import { resourceLimitsInputSchema } from "./resource-limits.js"
 import { relayInstanceStateReasonSchema } from "./instance-state-reason.js"
 import {
   databaseReadRequestSchema,
@@ -26,6 +27,7 @@ export * from "./release-version.js"
 export * from "./minecraft-java.js"
 export * from "./cli.js"
 export * from "./instance-limits.js"
+export * from "./resource-limits.js"
 export * from "./instance-overview.js"
 export * from "./instance-state.js"
 export * from "./instance-inventory.js"
@@ -826,9 +828,12 @@ export const relayInstanceTailscaleSchema = z
   })
 
 export const relayCreateInstanceSchema = z.object({
+  // Hearth sends `limits` to Relays with `resource-limits-v1`, and
+  // `diskLimitBytes` alone to older ones.
   diskLimitBytes: relayRequestedDiskLimitBytesSchema.default(
     DEFAULT_INSTANCE_DISK_LIMIT_BYTES
   ),
+  limits: resourceLimitsInputSchema.optional(),
   name: relayInstanceNameSchema.optional(),
   recipe: brickSourceSchema,
   recipeDefinition: brickRecipeSchema.optional(),
@@ -851,6 +856,7 @@ export const relayProvisionInstanceSchema = z.object({
 export const relayUpdateInstanceStartupSchema = z
   .object({
     diskLimitBytes: relayRequestedDiskLimitBytesSchema.optional(),
+    limits: resourceLimitsInputSchema.optional(),
     recipe: brickSourceSchema.optional(),
     recipeDefinition: brickRecipeSchema.optional(),
     reinstall: z.boolean().optional(),
@@ -1230,12 +1236,18 @@ export const relayInstanceResourcesSchema = z.object({
     .optional(),
 })
 
-export const relayInstanceLimitsSchema = z
-  .object({
-    diskBytes: relayDiskLimitBytesSchema,
-    memoryBytes: z.number().int().nonnegative(),
-  })
-  .strict()
+// What the Relay applied; `null` means no limit. Relays before
+// `resource-limits-v1` send no CPU limit and 0 for no memory limit.
+export const relayInstanceLimitsSchema = z.object({
+  cpuMillis: z.number().int().positive().nullable().default(null),
+  diskBytes: relayDiskLimitBytesSchema.nullable(),
+  memoryBytes: z
+    .number()
+    .int()
+    .nonnegative()
+    .nullable()
+    .transform((bytes) => (bytes === 0 ? null : bytes)),
+})
 
 export const relayInstancePortIdSchema = z
   .string()
@@ -1437,8 +1449,9 @@ export const relayInstanceSchema = z.object({
   variables: brickVariableValuesSchema.optional(),
   managedByRelay: z.boolean().default(false),
   limits: relayInstanceLimitsSchema.default({
+    cpuMillis: null,
     diskBytes: DEFAULT_INSTANCE_DISK_LIMIT_BYTES,
-    memoryBytes: 0,
+    memoryBytes: null,
   }),
   resources: relayInstanceResourcesSchema.nullable().default(null),
   provisioning: relayInstanceProvisioningSchema.optional(),

@@ -176,7 +176,11 @@ describe("Tailscale stack removal", () => {
       id,
       implementation: "Tailscale",
       javaVersion: "Tailscale + CoreDNS",
-      limits: { diskBytes: 128 * 1024 ** 2, memoryBytes: 64 * 1024 ** 2 },
+      limits: {
+        cpuMillis: null,
+        diskBytes: 128 * 1024 ** 2,
+        memoryBytes: 64 * 1024 ** 2,
+      },
       managedByRelay: true,
       name: "Private Network",
       ports: [],

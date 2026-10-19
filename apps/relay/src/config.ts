@@ -8,6 +8,7 @@ import type {
   RelayInstancePortAllocation,
   RelayInstancePortProtocol,
   RelayInstanceTailscale,
+  ResourceLimits,
 } from "@workspace/contracts"
 import {
   isKilnInstallationId,
@@ -35,10 +36,7 @@ export interface RelayInstanceConfig {
   shortId: string
   implementation: string
   javaVersion: string
-  limits: {
-    diskBytes: number
-    memoryBytes: number
-  }
+  limits: ResourceLimits
   name: string
   ports: Array<RelayInstancePortAllocation>
   publicHost?: string

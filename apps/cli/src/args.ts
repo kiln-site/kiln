@@ -6,6 +6,7 @@ export interface CliArguments {
   brick?: string
   command: Array<string>
   confirm?: string
+  cpu?: string
   disk?: string
   follow: boolean
   gameVersion?: string
@@ -30,6 +31,7 @@ export function parseArguments(argv: Array<string>): CliArguments {
   const command: Array<string> = []
   let brick: string | undefined
   let confirm: string | undefined
+  let cpu: string | undefined
   let disk: string | undefined
   let follow = false
   let gameVersion: string | undefined
@@ -68,6 +70,7 @@ export function parseArguments(argv: Array<string>): CliArguments {
     }
     if (flag === "--brick") brick = value()
     else if (flag === "--confirm") confirm = value()
+    else if (flag === "--cpu") cpu = value()
     else if (flag === "--disk") disk = value()
     else if (flag === "--follow" || flag === "-f") follow = true
     else if (flag === "--game-version") gameVersion = value()
@@ -122,6 +125,7 @@ export function parseArguments(argv: Array<string>): CliArguments {
     ...(brick ? { brick } : {}),
     command,
     ...(confirm ? { confirm } : {}),
+    ...(cpu ? { cpu } : {}),
     ...(disk ? { disk } : {}),
     follow,
     ...(gameVersion ? { gameVersion } : {}),

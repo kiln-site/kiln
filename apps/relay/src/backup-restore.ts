@@ -211,9 +211,7 @@ async function extractBackupArchive(
           entries.push(entry)
         }
         const maximumBytes =
-          instance.limits.diskBytes > 0
-            ? instance.limits.diskBytes
-            : MAX_UNLIMITED_RESTORE_BYTES
+          instance.limits.diskBytes ?? MAX_UNLIMITED_RESTORE_BYTES
         if (logicalBytes > maximumBytes) {
           throw restoreError(
             "restore_too_large",

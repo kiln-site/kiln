@@ -37,11 +37,7 @@ import {
 import { BrickVariableField } from "@/components/brick-variable-fields"
 import { MinecraftJavaVersionFields } from "@/components/minecraft-java-version-fields"
 import { BrickIcon } from "@/components/brick-icon"
-import {
-  resourceAllocationError,
-  ResourceAllocationCard,
-  type StartupResourceAllocation,
-} from "@/components/startup-resource-allocation"
+import { ResourceLimitsEditor } from "@/components/resource-limits-editor"
 import {
   useInstanceIdentity,
   useInstancePermissions,
@@ -56,7 +52,6 @@ import {
   withRecommendedMinecraftJava,
 } from "@/lib/brick-variables"
 import {
-  dockerMemoryBytes,
   managedJavaStartupFlags,
 } from "@/lib/managed-java-flags"
 import {
@@ -68,6 +63,12 @@ import {
   invalidateRelaySnapshots,
   updateRelaySnapshots,
 } from "@/lib/server-workspace"
+import {
+  parseResourceLimitsDraft,
+  resourceLimitsDraft,
+  type ResourceLimitsCapacity,
+  type ResourceLimitsDraft,
+} from "@/lib/resource-limits"
 import { updateInstanceStartup } from "@/server/bricks"
 
 const emptyBricks: Array<Brick> = []
@@ -189,7 +190,7 @@ const StartupForm = React.memo(function StartupForm({
   brick: Brick
   brickSource: string
   editing: StartupEditing
-  allocation: StartupResourceAllocation
+  allocation: ResourceLimitsCapacity | null
   initialLimits: RelayInstanceLimits
   initialVariables: Record<string, BrickVariableValue>
   instanceId: string
@@ -204,8 +205,8 @@ const StartupForm = React.memo(function StartupForm({
   )
   const [variables, setVariables] =
     React.useState<Record<string, BrickVariableValue>>(initialVariables)
-  const [diskLimitGiB, setDiskLimitGiB] = React.useState(() =>
-    bytesToGiBInput(initialLimits.diskBytes)
+  const [limitsDraft, setLimitsDraft] = React.useState(() =>
+    resourceLimitsDraft(initialLimits)
   )
   const [swapOpen, setSwapOpen] = React.useState(false)
   const [reinstallOpen, setReinstallOpen] = React.useState(false)
@@ -313,18 +314,9 @@ const StartupForm = React.memo(function StartupForm({
       )
       return
     }
-    const diskLimitBytes = gibibytesToBytes(diskLimitGiB)
-    if (diskLimitBytes === null) {
-      setError("Enter a valid disk quota in GiB.")
-      return
-    }
-    const allocationError = resourceAllocationError(
-      allocation,
-      diskLimitBytes,
-      resolvedMemoryBytes(view.memoryTemplate, variables)
-    )
-    if (allocationError) {
-      setError(allocationError)
+    const parsedLimits = parseResourceLimitsDraft(limitsDraft, allocation)
+    if (canEditLimits && "error" in parsedLimits) {
+      setError(parsedLimits.error)
       return
     }
     submittingRef.current = true
@@ -334,7 +326,9 @@ const StartupForm = React.memo(function StartupForm({
           saveMutation
             .mutateAsync({
               data: {
-                ...(canEditLimits ? { diskLimitBytes } : {}),
+                ...(canEditLimits && "limits" in parsedLimits
+                  ? { limits: parsedLimits.limits }
+                  : {}),
                 instanceId,
                 recipe: view.source,
                 relayId,
@@ -402,10 +396,8 @@ const StartupForm = React.memo(function StartupForm({
     )
   }
 
-  const memoryValue = resolvedMemoryValue(view.memoryTemplate, variables)
-  const configuredMemoryBytes =
-    (memoryValue ? dockerMemoryBytes(memoryValue) : null) ??
-    initialLimits.memoryBytes
+  // The container's memory limit replaces the Brick's memory variable,
+  // which stays out of the form.
   const memoryVariable = brickMemoryVariable(view.memoryTemplate)
   const catalogBrick =
     [
@@ -427,26 +419,20 @@ const StartupForm = React.memo(function StartupForm({
         <StartupSettingsForm
           allocation={allocation}
           editing={editing}
-          configuredMemoryBytes={configuredMemoryBytes}
-          diskLimitGiB={diskLimitGiB}
           error={reinstallOpen ? null : error}
           isRunning={isRunning}
+          limitsDraft={limitsDraft}
           pending={pending}
           saved={saved}
           memoryVariable={memoryVariable}
-          memoryValue={memoryValue}
           variables={variables}
           view={view}
-          onDiskLimitChange={setDiskLimitGiB}
+          onLimitsChange={setLimitsDraft}
           onReinstall={() => setReinstallOpen(true)}
           onSubmit={onSubmit}
           onSwap={() => setSwapOpen(true)}
           onVariableChange={(name, value) => {
-            if (
-              !canEdit ||
-              (name === memoryVariable ? !canEditLimits : !canEditConfiguration)
-            )
-              return
+            if (!canEdit || !canEditConfiguration) return
             setVariables((current) => {
               const updated = updateBrickVariable(current, name, value)
               return name === "version"
@@ -494,35 +480,31 @@ const StartupForm = React.memo(function StartupForm({
 function StartupSettingsForm({
   allocation,
   editing,
-  configuredMemoryBytes,
-  diskLimitGiB,
   error,
   isRunning,
+  limitsDraft,
   pending,
   saved,
   memoryVariable,
-  memoryValue,
   variables,
   view,
-  onDiskLimitChange,
+  onLimitsChange,
   onReinstall,
   onSubmit,
   onSwap,
   onVariableChange,
 }: {
-  allocation: StartupResourceAllocation
+  allocation: ResourceLimitsCapacity | null
   editing: StartupEditing
-  configuredMemoryBytes: number
-  diskLimitGiB: string
   error: string | null
   isRunning: boolean
+  limitsDraft: ResourceLimitsDraft
   pending: boolean
   saved: boolean
   memoryVariable: string | null
-  memoryValue: string | undefined
   variables: Record<string, BrickVariableValue>
   view: BrickView
-  onDiskLimitChange: (value: string) => void
+  onLimitsChange: (draft: ResourceLimitsDraft) => void
   onReinstall: () => void
   onSubmit: React.FormEventHandler<HTMLFormElement>
   onSwap: () => void
@@ -547,11 +529,12 @@ function StartupSettingsForm({
   const entries = Object.entries(variableDefinitions).filter(
     ([name]) => !groupedNames.has(name)
   )
-  const memoryDefinition = memoryVariable
-    ? variableDefinitions[memoryVariable]
-    : undefined
   const managedFlags = javaArgsDefinition
-    ? managedJavaStartupFlags(view.environment, memoryValue, variables, {
+    ? managedJavaStartupFlags(
+        view.environment,
+        javaContainerMemory(limitsDraft),
+        variables,
+        {
         id: view.id,
         name: view.name,
       })
@@ -567,27 +550,13 @@ function StartupSettingsForm({
             Node capacity
           </span>
         }
-        title="Resource Allocation"
+        title="Resource Limits"
       >
-        <ResourceAllocationCard
-          allocation={allocation}
-          configuredMemoryBytes={configuredMemoryBytes}
-          diskLimitGiB={diskLimitGiB}
+        <ResourceLimitsEditor
+          capacity={allocation}
           disabled={!canEdit || !canEditLimits || pending}
-          memoryMaxLength={memoryDefinition?.rules?.maxLength}
-          memoryPattern={memoryDefinition?.rules?.pattern}
-          memoryRequired={memoryDefinition?.required}
-          memoryValue={
-            memoryDefinition?.type === "string"
-              ? (memoryValue ?? "")
-              : undefined
-          }
-          onDiskLimitChange={onDiskLimitChange}
-          onMemoryChange={
-            memoryDefinition?.type === "string" && memoryVariable
-              ? (value) => onVariableChange(memoryVariable, value)
-              : undefined
-          }
+          draft={limitsDraft}
+          onChange={onLimitsChange}
         />
       </StartupSection>
 
@@ -818,21 +787,12 @@ function BrickSummary({
   )
 }
 
-function resolvedMemoryBytes(
-  template: string,
-  variables: Readonly<Record<string, BrickVariableValue>>
-): number | null {
-  const value = resolvedMemoryValue(template, variables)
-  return value ? dockerMemoryBytes(value) : null
-}
-
-function resolvedMemoryValue(
-  template: string,
-  variables: Readonly<Record<string, BrickVariableValue>>
-): string | undefined {
-  const variable = brickMemoryVariable(template)
-  const value = variable ? variables[variable] : template
-  return typeof value === "string" ? value : undefined
+/** The memory limit as Java sizes its heap from it, like `2048m`. */
+function javaContainerMemory(draft: ResourceLimitsDraft): string | undefined {
+  const gibibytes = Number(draft.memoryGiB.value)
+  return draft.memoryGiB.limited && Number.isFinite(gibibytes) && gibibytes > 0
+    ? `${Math.round(gibibytes * 1024)}m`
+    : undefined
 }
 
 function brickMemoryVariable(template: string): string | null {
@@ -840,17 +800,6 @@ function brickMemoryVariable(template: string): string | null {
     template.match(/^\{\{\s*variables\.([a-z][a-z0-9_]{0,47})\s*\}\}$/u)?.[1] ??
     null
   )
-}
-
-function gibibytesToBytes(value: string): number | null {
-  const gibibytes = Number(value)
-  if (!Number.isFinite(gibibytes) || gibibytes <= 0) return null
-  const bytes = Math.round(gibibytes * 1024 ** 3)
-  return Number.isSafeInteger(bytes) ? bytes : null
-}
-
-function bytesToGiBInput(bytes: number): string {
-  return String(Number((bytes / 1024 ** 3).toFixed(2)))
 }
 
 const StartupBrickSwapDialog = React.memo(function StartupBrickSwapDialog({

@@ -25,7 +25,7 @@ export function testInstance(
     id,
     implementation: "paper",
     javaVersion: "21",
-    limits: { diskBytes: 0, memoryBytes: 0 },
+    limits: { cpuMillis: null, diskBytes: null, memoryBytes: null },
     managedByRelay: true,
     name: "Instance One",
     ports: [],

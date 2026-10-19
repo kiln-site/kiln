@@ -19,6 +19,7 @@ import {
   relayCreateInstanceSchema,
   type BrickRecipe,
   type RelayInstance,
+  type ResourceLimitsInput,
 } from "@workspace/contracts"
 import { Effect, ManagedRuntime } from "effect"
 import { onTestFinished } from "vite-plus/test"
@@ -65,6 +66,7 @@ export interface RelayHarness extends RelayDrivers {
   /** Provisions a server through Relay's real create path. */
   readonly createServer: (input: {
     id: string
+    limits?: ResourceLimitsInput
     recipe?: BrickRecipe
     start?: boolean
     variables?: Record<string, string>
@@ -183,6 +185,7 @@ export async function relayHarness(
     publishRecipe,
     createServer: async ({
       id,
+      limits,
       recipe = serverRecipe(),
       start = false,
       variables = {},
@@ -191,6 +194,7 @@ export async function relayHarness(
         id,
         relayCreateInstanceSchema.parse({
           diskLimitBytes: 1024 ** 3,
+          limits,
           recipe: await publishRecipe(recipe),
           start,
           variables,

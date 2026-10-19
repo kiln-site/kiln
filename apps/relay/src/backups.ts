@@ -1152,7 +1152,11 @@ async function instanceBackupManifest(
         webRoutes: [...webRoutes],
       },
       startup: {
-        limits: instance.limits,
+        // Backups keep the format older Relays restore, where 0 is no limit.
+        limits: {
+          diskBytes: instance.limits.diskBytes ?? 0,
+          memoryBytes: instance.limits.memoryBytes ?? 0,
+        },
         tailscale: instance.tailscale,
         variables: instance.variables ?? {},
       },

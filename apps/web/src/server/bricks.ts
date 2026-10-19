@@ -13,6 +13,8 @@ import {
   relayNetworkingSchema,
   relaySnapshotSchema,
   relayUpdateInstanceStartupSchema,
+  resolveResourceLimits,
+  resourceLimitsEqual,
 } from "@workspace/contracts"
 import { z } from "zod"
 
@@ -59,6 +61,7 @@ import {
 } from "@/server/bricks.server"
 import { provisionInstanceDomainBestEffort } from "@/server/domains.server"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
+import { relayResourceLimitsRequest } from "@/lib/resource-limits.server"
 import {
   startupPowerPermission,
   startupResourceLimitsChanged,
@@ -210,9 +213,20 @@ export const createBrickInstance = createServerFn({ method: "POST" })
       user,
       data.recipe
     )
-    const { idempotencyKey, relayId: _, ...createInput } = data
+    const { idempotencyKey, limits, relayId: _, ...createInput } = data
     const input = relayCreateInstanceSchema.parse({
       ...createInput,
+      ...(limits && {
+        limits: relayResourceLimitsRequest(
+          relay.id,
+          {
+            cpuMillis: null,
+            diskBytes: createInput.diskLimitBytes,
+            memoryBytes: null,
+          },
+          limits
+        ).limits,
+      }),
       recipeDefinition,
     })
     const instanceId = provisioningInstanceId(idempotencyKey)
@@ -405,10 +419,17 @@ export const updateInstanceStartup = createServerFn({ method: "POST" })
       : null
     const networkChanged = startupNetworkChanged(existing.tailscale, data)
     let configurationChanged = Boolean(data.reinstall || recipeChanged)
+    const requestedLimits =
+      data.limits ??
+      (data.diskLimitBytes === undefined
+        ? undefined
+        : { diskBytes: data.diskLimitBytes })
     let limitsChanged =
       !data.reinstall &&
-      data.diskLimitBytes !== undefined &&
-      data.diskLimitBytes !== existing.limits.diskBytes
+      !resourceLimitsEqual(
+        resolveResourceLimits(existing.limits, requestedLimits),
+        existing.limits
+      )
     if (!data.reinstall) {
       const { brick: previousRecipe } = await loadInstanceRecipe(
         relay,
@@ -445,10 +466,21 @@ export const updateInstanceStartup = createServerFn({ method: "POST" })
     }
     const powerPermission = startupPowerPermission(existing, data)
     if (powerPermission) authorization.require(powerPermission)
-    const { recipeDefinition: _untrustedRecipeDefinition, ...trustedData } =
-      data
+    const {
+      diskLimitBytes: _diskLimitBytes,
+      limits: _limits,
+      recipeDefinition: _untrustedRecipeDefinition,
+      ...trustedData
+    } = data
     const input = relayUpdateInstanceStartupSchema.parse({
       ...trustedData,
+      ...(data.reinstall
+        ? {}
+        : relayResourceLimitsRequest(
+            relay.id,
+            existing.limits,
+            requestedLimits
+          )),
       ...(recipeDefinition ? { recipeDefinition } : {}),
     })
     const instance = relayInstanceSchema.parse(

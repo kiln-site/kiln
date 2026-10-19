@@ -122,6 +122,7 @@ describe("Relay archive backups", () => {
             brickSnapshotSha256: snapshotSha256,
             brickSupportsSrv: true,
             limits: {
+              cpuMillis: null,
               diskBytes: 25 * 1024 ** 3,
               memoryBytes: 4 * 1024 ** 3,
             },
@@ -200,7 +201,10 @@ describe("Relay archive backups", () => {
                 webRoutes,
               },
               startup: {
-                limits: instance.limits,
+                limits: {
+                  diskBytes: 25 * 1024 ** 3,
+                  memoryBytes: 4 * 1024 ** 3,
+                },
                 tailscale: instance.tailscale,
                 variables: instance.variables ?? {},
               },

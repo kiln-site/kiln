@@ -55,6 +55,46 @@ describe("startup reinstall", () => {
     expect(container.state.running).toBe(true)
   })
 
+  it("keeps a server's limits across startup changes until they change", async () => {
+    const harness = await relayHarness()
+    await harness.createServer({
+      id,
+      limits: { cpuMillis: 1500, memoryBytes: null },
+    })
+    expect(serverContainer(harness)).toMatchObject({
+      memoryBytes: 0,
+      nanoCpus: 1.5e9,
+    })
+
+    const kept = await reconfigure(harness, {
+      start: false,
+      variables: { version: "2.0.0" },
+    })
+    expect(kept.limits).toEqual({
+      cpuMillis: 1500,
+      diskBytes: GIBIBYTE,
+      memoryBytes: null,
+    })
+
+    const changed = await reconfigure(harness, {
+      limits: { cpuMillis: null, diskBytes: null, memoryBytes: 512 * 1024 ** 2 },
+      start: false,
+      variables: { version: "2.0.0" },
+    })
+    expect(changed.limits).toEqual({
+      cpuMillis: null,
+      diskBytes: null,
+      memoryBytes: 512 * 1024 ** 2,
+    })
+    expect(serverContainer(harness)).toMatchObject({
+      memoryBytes: 512 * 1024 ** 2,
+      nanoCpus: 0,
+    })
+    // A Relay that restarts finds the same limits on the container.
+    const [rediscovered] = await harness.docker.inspectInstances()
+    expect(rediscovered?.limits).toEqual(changed.limits)
+  })
+
   it("keeps a stopped server stopped even when the client asks to start", async () => {
     const harness = await relayHarness()
     await harness.createServer({ id, start: false })

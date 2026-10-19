@@ -15,6 +15,7 @@ import {
   requireRelayPermission,
 } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
+import type { ResourceLimitsCapacity } from "@/lib/resource-limits"
 import { hydrateBrickIcon } from "@/lib/brick-catalog-source.server"
 import { hydrateBrickVariables } from "@/lib/brick-variables"
 import { relayJsonEffect } from "@/lib/relay-client"
@@ -48,11 +49,11 @@ export async function getInstanceStartupHandler(
     (candidate) => candidate.id !== instance.id
   )
   const otherMemoryBytes = otherInstances.reduce(
-    (total, candidate) => total + candidate.limits.memoryBytes,
+    (total, candidate) => total + (candidate.limits.memoryBytes ?? 0),
     0
   )
   const otherDiskBytes = otherInstances.reduce(
-    (total, candidate) => total + candidate.limits.diskBytes,
+    (total, candidate) => total + (candidate.limits.diskBytes ?? 0),
     0
   )
   const grants = isPlatformAdmin(user)
@@ -60,11 +61,12 @@ export async function getInstanceStartupHandler(
     : await listUserGrants(user.id, relay.id)
   return {
     allocation: canReadRelayNode(user, relay.id, grants)
-      ? {
+      ? ({
+          cpu: { nodeCores: snapshot.node.cpu.cores },
           memory: {
             availableBytes: Math.max(
               snapshot.node.memory.totalBytes - otherMemoryBytes,
-              instance.limits.memoryBytes
+              instance.limits.memoryBytes ?? 0
             ),
             nodeTotalBytes: snapshot.node.memory.totalBytes,
             nodeUsedBytes: snapshot.node.memory.usedBytes,
@@ -73,12 +75,12 @@ export async function getInstanceStartupHandler(
             availableBytes: relayDiskAllocationAvailableBytes(
               snapshot.node.storage.totalBytes,
               otherDiskBytes,
-              instance.limits.diskBytes
+              instance.limits.diskBytes ?? 0
             ),
             nodeTotalBytes: snapshot.node.storage.totalBytes,
             nodeUsedBytes: snapshot.node.storage.usedBytes,
           },
-        }
+        } satisfies ResourceLimitsCapacity)
       : null,
     brick,
     brickSource,

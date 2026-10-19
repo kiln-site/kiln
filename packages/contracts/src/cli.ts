@@ -14,6 +14,10 @@ import {
   MINIMUM_INSTANCE_DISK_LIMIT_BYTES,
 } from "./instance-limits.js"
 import { relayInstanceLifecycleEventSchema } from "./instance-lifecycle.js"
+import {
+  MINIMUM_CPU_LIMIT_MILLIS,
+  MINIMUM_MEMORY_LIMIT_BYTES,
+} from "./resource-limits.js"
 import { relayInstanceStateReasonSchema } from "./instance-state-reason.js"
 
 export const cliAccessModes = ["full_access", "read_only"] as const
@@ -134,6 +138,12 @@ const cliDiskLimitBytesSchema = z
   .number()
   .int()
   .min(MINIMUM_INSTANCE_DISK_LIMIT_BYTES)
+// Limits are `null` for no limit. Server responses keep 0 for no limit, the
+// form older CLIs read.
+const cliResourceLimitFieldsSchema = z.object({
+  cpuLimitMillis: z.number().int().min(MINIMUM_CPU_LIMIT_MILLIS).nullable(),
+  memoryLimitBytes: z.number().int().min(MINIMUM_MEMORY_LIMIT_BYTES).nullable(),
+})
 
 export const cliBrickReferenceSchema = z.union([
   z.string().regex(/^[a-z0-9][a-z0-9.-]{0,63}$/u),
@@ -243,7 +253,8 @@ export const cliServerInfoResponseSchema = z
 export const cliCreateServerRequestSchema = z
   .object({
     brick: cliBrickReferenceSchema,
-    diskLimitBytes: cliDiskLimitBytesSchema,
+    ...cliResourceLimitFieldsSchema.partial().shape,
+    diskLimitBytes: cliDiskLimitBytesSchema.nullable(),
     name: z
       .string()
       .trim()
@@ -263,7 +274,8 @@ export const cliCreateServerRequestSchema = z
 export const cliUpdateServerStartupRequestSchema = cliTargetSchema
   .extend({
     brick: cliBrickReferenceSchema.optional(),
-    diskLimitBytes: cliDiskLimitBytesSchema.optional(),
+    ...cliResourceLimitFieldsSchema.partial().shape,
+    diskLimitBytes: cliDiskLimitBytesSchema.nullable().optional(),
     start: z.boolean().default(true),
     variables: z
       .record(z.string().min(1).max(120), cliBrickVariableValueSchema)
@@ -273,9 +285,11 @@ export const cliUpdateServerStartupRequestSchema = cliTargetSchema
   .refine(
     (value) =>
       value.brick !== undefined ||
+      value.cpuLimitMillis !== undefined ||
       value.diskLimitBytes !== undefined ||
+      value.memoryLimitBytes !== undefined ||
       Object.keys(value.variables).length > 0,
-    "Provide a Brick, disk limit, or startup variable"
+    "Provide a Brick, resource limit, or startup variable"
   )
 
 export const cliDeleteServerRequestSchema = cliTargetSchema

@@ -11,6 +11,7 @@ import {
 import type { CliPrincipal } from "@/effect/cli-access"
 import { PermissionDeniedError } from "@/effect/errors"
 const f = vi.hoisted(() => ({
+  features: new Set(["resource-limits-v1"]),
   authorize: vi.fn(),
   running: false,
   relays: vi.fn(),
@@ -35,7 +36,10 @@ vi.mock("@/lib/relay-registry", async (original) => ({
   ...(await original<typeof import("@/lib/relay-registry")>()),
   listPersistedRelaysEffect: f.relays,
 }))
-vi.mock("@/lib/relay-connection", () => ({ relayRpc: f.rpc }))
+vi.mock("@/lib/relay-connection", () => ({
+  relayConnectionFeatures: () => f.features,
+  relayRpc: f.rpc,
+}))
 vi.mock("@/lib/relay-client", async (original) => ({
   ...(await original<typeof import("@/lib/relay-client")>()),
   invalidateRelayCache: f.invalidate,
@@ -151,6 +155,7 @@ let allowed: Set<string>
 beforeEach(() => {
   vi.clearAllMocks()
   allowed = new Set()
+  f.features = new Set(["resource-limits-v1"])
   f.running = false
   f.authorize.mockImplementation(({ permission }) =>
     expandPermissionSelections(
@@ -183,7 +188,7 @@ beforeEach(() => {
             ...instance,
             limits: {
               ...instance.limits,
-              diskBytes: payload.diskLimitBytes ?? 1073741824,
+              diskBytes: payload.limits?.diskBytes ?? 1073741824,
             },
           }
   )
@@ -232,12 +237,27 @@ const startup = (extra: Record<string, unknown>, mode = principal.mode) =>
 const writes = () =>
   f.rpc.mock.calls.filter((call) => call[1] === "instance.startup.write")
 describe("CLI startup permission boundary", () => {
+  it("refuses limits a Relay too old to apply them would drop", async () => {
+    allowed.add("instance.limits.write")
+    f.features = new Set()
+    await expect(startup({ memoryLimitBytes: 4294967296 })).rejects.toMatchObject(
+      { code: "conflict" }
+    )
+    await expect(startup({ diskLimitBytes: null })).rejects.toMatchObject({
+      code: "conflict",
+    })
+    expect(writes()).toHaveLength(0)
+    // The disk limit alone reaches it the way it understands.
+    await startup({ diskLimitBytes: 4294967296 })
+    expect(writes()[0]?.[2]).toMatchObject({ diskLimitBytes: 4294967296 })
+    expect(writes()[0]?.[2]).not.toHaveProperty("limits")
+  })
   it("allows limits-only updates without configuration write", async () => {
     allowed.add("instance.limits.write")
     const result = await startup({ diskLimitBytes: 4294967296 })
     expect(result.server.diskLimitBytes).toBe(4294967296)
     expect(writes()[0]?.[2]).toMatchObject({
-      diskLimitBytes: 4294967296,
+      limits: { diskBytes: 4294967296 },
       start: false,
       variables: instance.variables,
     })

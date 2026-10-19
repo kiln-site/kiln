@@ -3,7 +3,7 @@ import { Schema } from "effect"
 export const relayControlProtocol = "kiln-relay.v1" as const
 // Release compatibility level for response-shape changes. Keep this separate
 // from the WebSocket subprotocol so Hearth can be upgraded before Relay.
-export const relayControlProtocolVersion = 3 as const
+export const relayControlProtocolVersion = 4 as const
 export const relayBrowserProtocol = "kiln-relay-browser.v1" as const
 export const relayBrowserConsoleProtocol = "kiln-relay-browser.v2" as const
 export const relayBrowserConsoleProtocols = [
@@ -38,6 +38,9 @@ export const relayRestartV1Feature = "relay-restart-v1"
 export const relayResourcesV1Feature = "relay-resources-v1"
 // The Relay answers `instance.files.put`, creating or replacing one file.
 export const relayFilePutV1Feature = "files-put-v1"
+// The Relay applies memory, CPU, and disk limits from a request's `limits`,
+// where `null` means no limit.
+export const relayResourceLimitsV1Feature = "resource-limits-v1"
 export const relayBrowserAuthorizationReviseMaxItems = 256
 
 export const relayControlOperations = [

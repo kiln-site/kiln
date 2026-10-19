@@ -40,9 +40,12 @@ import type {
   RelayInstanceLifecycleState,
   RelayInstanceResources,
   RelaySftpPublicationStatus,
+  ResourceLimits,
 } from "@workspace/contracts"
 import {
   builtinTailscaleBrickId,
+  CPU_LIMIT_MILLIS_PER_CORE,
+  NO_RESOURCE_LIMITS,
   brickConsoleSchema,
   brickReadinessSchema,
   brickVariableValuesSchema,
@@ -83,6 +86,10 @@ import {
 } from "./console-parsing.js"
 import { procNetTcpHasListener } from "./docker-port-parsing.js"
 import { legacyDiskLimitAssignments } from "./resource-quotas.js"
+import {
+  containerResourceLimits,
+  DISK_LIMIT_LABEL,
+} from "./resource-limits.js"
 import { WEB_ROUTE_LABEL_PREFIX } from "./web-route-labels.js"
 import type { RelayWebRouteLabelSnapshot } from "./web-route-labels.js"
 import type { RuntimeRecoveryManager } from "./runtime-recovery.js"
@@ -99,6 +106,7 @@ interface DockerInspect {
   Id: string
   HostConfig?: {
     Memory?: number
+    NanoCpus?: number
     PortBindings?: DockerPortBindings
     RestartPolicy?: {
       Name?: string
@@ -419,10 +427,10 @@ const DISCOVERY_TIMEOUT_MS = 30_000
 
 function diskQuotaExceeded(
   usedBytes: number,
-  limitBytes: number,
+  limitBytes: number | null,
   running: boolean
 ): boolean {
-  return running && usedBytes > limitBytes
+  return running && limitBytes !== null && usedBytes > limitBytes
 }
 
 function initialDiskUsageCacheEntry(): DiskUsageCacheEntry {
@@ -2032,12 +2040,13 @@ export class DockerDriver {
     const instanceStorageUsed = this.#directoryUsageFor(instance)
     const { cpu, memory } = containerCpuAndMemory(
       stats,
-      instance.config.limits.memoryBytes
+      instance.config.limits
     )
     const nodeStorageTotal = filesystem.blocks * filesystem.bsize
     const nodeStorageAvailable = filesystem.bavail * filesystem.bsize
     const nodeStorageUsed = Math.max(nodeStorageTotal - nodeStorageAvailable, 0)
-    const storageLimit = instance.config.limits.diskBytes
+    // Without a disk limit, the server can fill the node.
+    const storageLimit = instance.config.limits.diskBytes ?? nodeStorageTotal
     const network = Object.values(stats.networks ?? {}).reduce(
       (total, current) => ({
         receivedBytes: total.receivedBytes + (current.rx_bytes ?? 0),
@@ -2110,7 +2119,7 @@ export class DockerDriver {
     const dataUsed = this.#relayDataUsage()
     return {
       sampledAt: new Date().toISOString(),
-      ...(stats ? containerCpuAndMemory(stats, 0) : this.#relayProcessUsage()),
+      ...(stats ? containerCpuAndMemory(stats, NO_RESOURCE_LIMITS) : this.#relayProcessUsage()),
       storage: {
         totalBytes: nodeStorageTotal,
         usedBytes: dataUsed,
@@ -2455,14 +2464,26 @@ export class DockerDriver {
       { signal }
     )
     if (containers.length === 0) return []
-    const diskLimitCandidates = containers.map((container) => ({
-      configuredLimitBytes: optionalNonnegativeIntegerLabel(
-        container.Config.Labels?.["kiln.instance.disk-bytes"]
-      ),
-      id:
-        container.Config.Labels?.[this.#config.serverIdLabel]?.toLowerCase() ??
-        container.Id,
-    }))
+    // Servers created before disk limits were recorded take one from what
+    // the node has left. Servers without a disk limit take none.
+    const diskLimitCandidates = containers.flatMap((container) => {
+      const limits = containerResourceLimits(container)
+      const labeled = container.Config.Labels?.[DISK_LIMIT_LABEL] !== undefined
+      if (labeled && limits.diskBytes === null) return []
+      return [
+        {
+          configuredLimitBytes: labeled
+            ? limits.diskBytes
+            : optionalNonnegativeIntegerLabel(
+                container.Config.Labels?.["kiln.instance.disk-bytes"]
+              ),
+          id:
+            container.Config.Labels?.[
+              this.#config.serverIdLabel
+            ]?.toLowerCase() ?? container.Id,
+        },
+      ]
+    })
     const hasLegacyDiskLimit = diskLimitCandidates.some(
       ({ configuredLimitBytes }) =>
         configuredLimitBytes === null || configuredLimitBytes === 0
@@ -2647,13 +2668,7 @@ export class DockerDriver {
       service,
       tailscale,
       variables: parseBrickVariablesLabel(labels["kiln.brick.variables"]),
-      limits: {
-        diskBytes: diskLimitBytes,
-        memoryBytes: Math.max(
-          nonnegativeIntegerLabel(labels["kiln.instance.memory-bytes"]),
-          container.HostConfig?.Memory ?? 0
-        ),
-      },
+      limits: containerResourceLimits(container, diskLimitBytes),
       version,
       managedByRelay: owned,
     }
@@ -2869,7 +2884,7 @@ function parseBrickReadinessLabel(value: string | undefined) {
 // own limit (the host's memory when it has none).
 function containerCpuAndMemory(
   stats: DockerStats,
-  memoryLimitBytes: number
+  limits: ResourceLimits
 ): Pick<RelayInstanceResources, "cpu" | "memory"> {
   const cpuCurrent = stats.cpu_stats?.cpu_usage?.total_usage ?? 0
   const cpuPrevious = stats.precpu_stats?.cpu_usage?.total_usage ?? 0
@@ -2884,7 +2899,7 @@ function containerCpuAndMemory(
       : 0
 
   const memoryTotal = Math.max(
-    memoryLimitBytes || stats.memory_stats?.limit || 0,
+    limits.memoryBytes ?? stats.memory_stats?.limit ?? 0,
     0
   )
   const memoryCache = Math.max(
@@ -2899,7 +2914,11 @@ function containerCpuAndMemory(
   )
   return {
     cpu: {
-      capacityPercent: onlineCpus * 100,
+      // A CPU limit of 1.5 cores lets the server use up to 150%.
+      capacityPercent:
+        limits.cpuMillis === null
+          ? onlineCpus * 100
+          : limits.cpuMillis / (CPU_LIMIT_MILLIS_PER_CORE / 100),
       percent: roundPercent(cpuPercent),
     },
     memory: {
@@ -3210,10 +3229,6 @@ function titleCase(value: string): string {
     .split("-")
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ")
-}
-
-function nonnegativeIntegerLabel(value: string | undefined): number {
-  return optionalNonnegativeIntegerLabel(value) ?? 0
 }
 
 function optionalNonnegativeIntegerLabel(
