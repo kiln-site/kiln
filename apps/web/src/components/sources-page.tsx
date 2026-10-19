@@ -4,12 +4,12 @@ import {
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query"
-import { Link, useNavigate } from "@tanstack/react-router"
+import { Link } from "@tanstack/react-router"
 import {
   ExternalLink,
   FolderGit2,
   Plus,
-  RefreshCw,
+  FolderSync,
   Rocket,
   Trash2,
 } from "lucide-react"
@@ -143,20 +143,10 @@ export const SourcesPage = React.memo(function SourcesPage({
     onSetupResultShown()
   }, [connected, error, onSetupResultShown])
 
-  const usable = data.sources.some(
-    (source) => source.installation && !source.installation.suspended
-  )
-
   return (
     <WorkspacePage>
       <DataTableWorkspace
-        toolbar={
-          <SourcesToolbar
-            canCreateSync={usable}
-            searchStore={searchStore}
-            onAdd={openAdd}
-          />
-        }
+        toolbar={<SourcesToolbar searchStore={searchStore} onAdd={openAdd} />}
       >
         <SourcesTable
           searchStore={searchStore}
@@ -194,47 +184,22 @@ export const SourcesPage = React.memo(function SourcesPage({
 })
 
 const SourcesToolbar = React.memo(function SourcesToolbar({
-  canCreateSync,
   searchStore,
   onAdd,
 }: {
-  canCreateSync: boolean
   searchStore: DataTableSearchStore
   onAdd: () => void
 }) {
-  const navigate = useNavigate()
-  const createSync = (
-    <Button
-      type="button"
-      variant="outline"
-      disabled={!canCreateSync}
-      onClick={() =>
-        void navigate({
-          to: "/automations/sync",
-          search: { create: true },
-        })
-      }
-    >
-      <RefreshCw />
-      <span className="hidden sm:inline">Create sync</span>
-    </Button>
-  )
   return (
     <DataTableToolbar
       actions={
         <>
-          {canCreateSync ? (
-            createSync
-          ) : (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span tabIndex={0}>{createSync}</span>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                Add and install a source first
-              </TooltipContent>
-            </Tooltip>
-          )}
+          <Button asChild variant="outline">
+            <Link to="/automations/sync">
+              <FolderSync />
+              <span className="hidden sm:inline">Syncs</span>
+            </Link>
+          </Button>
           <Button aria-label="Add source" type="button" onClick={onAdd}>
             <Plus />
             <span className="hidden sm:inline">Add source</span>
@@ -421,7 +386,7 @@ function UsageCell({ source }: { source: Source }) {
         to="/automations/sync"
         className="relative z-10 inline-flex items-center gap-1.5 hover:text-primary"
       >
-        <RefreshCw className="size-3 text-muted-foreground" />
+        <FolderSync className="size-3 text-muted-foreground" />
         <span className="tabular-nums">{source.syncCount}</span>
         {source.syncCount === 1 ? "sync" : "syncs"}
       </Link>

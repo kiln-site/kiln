@@ -18,7 +18,7 @@ import {
   LoaderCircle,
   Pencil,
   Plus,
-  RefreshCw,
+  FolderSync,
   Search,
   Server,
   Trash2,
@@ -493,7 +493,11 @@ const SyncTableRow = React.memo(function SyncTableRow({
               disabled={busy}
               onClick={() => run.mutate()}
             >
-              <RefreshCw className={busy ? "animate-spin" : ""} />
+              {busy ? (
+                <LoaderCircle className="animate-spin" />
+              ) : (
+                <FolderSync />
+              )}
               {busy ? "Syncing" : "Sync now"}
             </Button>
           ) : null}
