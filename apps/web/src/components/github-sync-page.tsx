@@ -1,30 +1,25 @@
 import * as React from "react"
 import {
   useMutation,
+  useQuery,
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query"
+import { sortFn_basic } from "@tanstack/react-table"
 import { Link, useNavigate, useSearch } from "@tanstack/react-router"
 import {
   Boxes,
-  CircleAlert,
-  CircleCheck,
-  CircleDashed,
-  ClipboardCopy,
   EllipsisVertical,
   ExternalLink,
+  Files,
+  GitCommitHorizontal,
   FolderGit2,
-  GitBranch,
+  FolderSync,
   LoaderCircle,
   Pencil,
   Plus,
-  FolderSync,
-  RadioTower,
-  Search,
   Server,
   Trash2,
-  TriangleAlert,
-  Zap,
 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
@@ -35,32 +30,51 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
-import { Input } from "@workspace/ui/components/input"
 import { showToast } from "@workspace/ui/components/sonner"
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
-import { cn } from "@workspace/ui/lib/utils"
 
+import { CopyIdentifierMenuItem } from "@/components/copy-identifier-menu-item"
+import {
+  DataTableActionGroup,
+  DataTableEmptyState,
+} from "@/components/data-table"
+import { DataTable } from "@/components/data-table-view"
+import {
+  DataTableToolbar,
+  DataTableWorkspace,
+} from "@/components/data-table-workspace"
 import { GitHubMark } from "@/components/github-mark"
+import { IdentityName } from "@/components/identity-name"
+import type { IdentityStatusPresentation } from "@/components/identity-name"
+import { InfraSyncButton } from "@/components/infra-sync-button"
+import { InstanceCard } from "@/components/instance-card"
+import { statusColumnWidth } from "@/components/instance-name-presentation"
 import { RelativeTime } from "@/components/relative-time"
 import {
   useScheduleScope,
   type ScheduleScope,
 } from "@/components/schedule-scope"
+import { StatusIndicator } from "@/components/status-indicator"
 import {
-  WorkspaceTable,
-  WorkspaceTableCell,
-  WorkspaceTableHead,
-  WorkspaceTableHeading,
-  createWorkspaceTableSearchStore,
-  useWorkspaceTableSearchInput,
-  type WorkspaceTableSearchStore,
-} from "@/components/workspace-table"
-import { forkPromise } from "@/effect/promise"
-import { githubSyncOverviewQueryOptions, queryKeys } from "@/lib/query-options"
+  createDataTableColumnHelper,
+  dataTableColumnMeta,
+  defineDataTable,
+} from "@/lib/data-table"
+import {
+  createDataTableSearchStore,
+  type DataTableSearchStore,
+} from "@/lib/data-table-search"
+import type { DataTableSource } from "@/lib/data-table-source"
+import {
+  githubSyncOverviewQueryOptions,
+  queryKeys,
+  relaySnapshotQueryOptions,
+} from "@/lib/query-options"
+import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 import { runGitHubSync } from "@/server/github-sync"
 import type { GitHubSyncView } from "@/server/github-sync.server"
 
@@ -84,7 +98,7 @@ export const GitHubSyncPage = React.memo(function GitHubSyncPage() {
     notifyOnChangeProps: ["data"],
   })
   const scope = useScheduleScope()
-  const [searchStore] = React.useState(createWorkspaceTableSearchStore)
+  const [searchStore] = React.useState(() => createDataTableSearchStore())
   const [dialog, setDialog] = React.useState<OpenDialog | null>(null)
   // Creating lives in the URL, so Sources can open it with a source chosen.
   const creating = useSearch({
@@ -151,22 +165,33 @@ export const GitHubSyncPage = React.memo(function GitHubSyncPage() {
     []
   )
   const close = React.useCallback(() => setDialog(null), [])
+  // Set as variables the column widths read, so the columns stay memoized.
+  const columnWidths = React.useMemo(
+    () => syncColumnWidths(scopedSyncs),
+    [scopedSyncs]
+  )
 
   return (
-    <div className="mx-auto w-full max-w-[90rem] px-3 pb-10 sm:px-5">
-      <section className="overflow-hidden rounded-xl border bg-card/45 [contain:paint]">
-        <SyncToolbar
-          canCreate={canCreate}
-          createBlockedReason={
-            !hasSource
-              ? "Add a source in Infrastructure first"
-              : data.targets.length === 0
-                ? "You can't edit files on any game server or app"
-                : null
-          }
-          searchStore={searchStore}
-          onCreate={openCreate}
-        />
+    <div
+      className="mx-auto flex h-full min-h-[34rem] w-full max-w-[90rem] flex-col px-3 pb-3 sm:px-5 sm:pb-5"
+      style={columnWidths}
+    >
+      <DataTableWorkspace
+        toolbar={
+          <SyncToolbar
+            canCreate={canCreate}
+            createBlockedReason={
+              !hasSource
+                ? "Add a source in Infrastructure first"
+                : data.targets.length === 0
+                  ? "You can't edit files on any game server or app"
+                  : null
+            }
+            searchStore={searchStore}
+            onCreate={openCreate}
+          />
+        }
+      >
         <SyncTable
           canCreate={canCreate}
           hasSource={hasSource}
@@ -178,7 +203,7 @@ export const GitHubSyncPage = React.memo(function GitHubSyncPage() {
           onDelete={openDelete}
           onEdit={openEdit}
         />
-      </section>
+      </DataTableWorkspace>
 
       <React.Suspense fallback={null}>
         {creating && canCreate ? (
@@ -217,58 +242,71 @@ const SyncToolbar = React.memo(function SyncToolbar({
 }: {
   canCreate: boolean
   createBlockedReason: string | null
-  searchStore: WorkspaceTableSearchStore
+  searchStore: DataTableSearchStore
   onCreate: () => void
 }) {
-  const inputRef = React.useRef<HTMLInputElement>(null)
-  useWorkspaceTableSearchInput(inputRef, searchStore)
+  const search = React.useMemo(
+    () => ({
+      ariaLabel: "Search syncs",
+      closeMobileWhenEmpty: true,
+      id: "github-sync-search",
+      placeholder: "Search syncs",
+      store: searchStore,
+    }),
+    [searchStore]
+  )
   const createButton = (
     <Button
-      className="shrink-0"
+      aria-label="Create sync"
       size="sm"
       disabled={!canCreate}
       onClick={onCreate}
     >
       <Plus />
-      Create sync
+      <span className="hidden sm:inline">Create sync</span>
     </Button>
   )
-
   return (
-    <div className="flex min-w-0 items-center gap-2 border-b bg-background/25 p-3">
-      <div className="relative min-w-0 flex-1 sm:max-w-md">
-        <Search className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          ref={inputRef}
-          id="github-sync-search"
-          type="search"
-          className="pl-9"
-          defaultValue={searchStore.getServerSnapshot()}
-          placeholder="Search syncs"
-          onChange={(event) => searchStore.set(event.currentTarget.value)}
-        />
-      </div>
-      <div className="ml-auto flex shrink-0 items-center gap-2">
-        <Button asChild size="sm" variant="outline">
-          <Link to="/infra/sources">
-            <FolderGit2 />
-            <span className="hidden sm:inline">Sources</span>
-          </Link>
-        </Button>
-        {createBlockedReason ? (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span tabIndex={0}>{createButton}</span>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">{createBlockedReason}</TooltipContent>
-          </Tooltip>
-        ) : (
-          createButton
-        )}
-      </div>
-    </div>
+    <DataTableToolbar
+      actions={
+        <>
+          <Button asChild size="sm" variant="outline">
+            <Link to="/infra/sources" aria-label="Sources">
+              <FolderGit2 />
+              <span className="hidden sm:inline">Sources</span>
+            </Link>
+          </Button>
+          {createBlockedReason ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span tabIndex={0}>{createButton}</span>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {createBlockedReason}
+              </TooltipContent>
+            </Tooltip>
+          ) : (
+            createButton
+          )}
+        </>
+      }
+      leading={<SyncRefreshButton />}
+      search={search}
+    />
   )
 })
+
+const SyncRefreshButton = React.memo(function SyncRefreshButton() {
+  const queryClient = useQueryClient()
+  const refresh = React.useCallback(
+    () => queryClient.invalidateQueries({ queryKey: queryKeys.github.overview }),
+    [queryClient]
+  )
+  return <InfraSyncButton label="Refresh syncs" sync={refresh} />
+})
+
+const syncColumnHelper = createDataTableColumnHelper<GitHubSyncView>()
+const syncSearchFields = [syncSearchText] as const
 
 const SyncTable = React.memo(function SyncTable({
   canCreate,
@@ -285,103 +323,350 @@ const SyncTable = React.memo(function SyncTable({
   hasSource: boolean
   hasTargets: boolean
   scopeActive: boolean
-  searchStore: WorkspaceTableSearchStore
+  searchStore: DataTableSearchStore
   syncs: Array<GitHubSyncView>
   onCreate: () => void
   onDelete: (sync: GitHubSyncView) => void
   onEdit: (sync: GitHubSyncView) => void
 }) {
-  const renderRow = React.useCallback(
-    (sync: GitHubSyncView) => (
-      <SyncTableRow sync={sync} onDelete={onDelete} onEdit={onEdit} />
-    ),
+  const source = React.useMemo(
+    (): DataTableSource<GitHubSyncView> => ({
+      body: { kind: "ready" },
+      refreshing: false,
+      rows: syncs,
+    }),
+    [syncs]
+  )
+  const definition = React.useMemo(
+    () =>
+      defineDataTable({
+        ariaLabel: "Syncs",
+        columns: syncColumnHelper.columns([
+          syncColumnHelper.accessor((sync) => syncStatus(sync).label, {
+            id: "status",
+            header: () => (
+              <span className="sr-only sm:not-sr-only">Status</span>
+            ),
+            sortFn: "text",
+            cell: ({ row }) => (
+              <StatusIndicator status={syncStatus(row.original)} />
+            ),
+            meta: dataTableColumnMeta(
+              { width: { base: "2.5rem", sm: statusColumnWidth } },
+              {
+                cellClassName: "px-2 sm:px-3",
+                headerClassName: "px-2 sm:px-3",
+                headerLabelClassName: "shrink-0 overflow-visible text-clip",
+              }
+            ),
+          }),
+          syncColumnHelper.accessor(syncName, {
+            id: "source",
+            header: "Source",
+            sortFn: "text",
+            cell: ({ row }) => <SyncSource sync={row.original} />,
+            // From xl up, Source and Destination fit their longest names, so
+            // the columns after them sit close instead of spreading out.
+            // Narrower screens share the space instead.
+            meta: dataTableColumnMeta({
+              width: {
+                base: "minmax(0,1fr)",
+                lg: "minmax(0,1.2fr)",
+                xl: "minmax(0,var(--sync-source-width))",
+              },
+            }),
+          }),
+          syncColumnHelper.accessor((sync) => sync.target.name, {
+            id: "destination",
+            header: "Destination",
+            sortFn: "text",
+            cell: ({ row }) => <SyncDestination sync={row.original} />,
+            meta: dataTableColumnMeta({
+              hideBelow: "md",
+              width: {
+                md: "minmax(0,1fr)",
+                xl: "minmax(0,var(--sync-destination-width))",
+              },
+            }),
+          }),
+          syncColumnHelper.accessor(
+            (sync) => (sync.lastSyncedAt ? Date.parse(sync.lastSyncedAt) : 0),
+            {
+              id: "latest",
+              header: "Latest sync",
+              sortFn: sortFn_basic,
+              cell: ({ row }) => <SyncLatestCommit sync={row.original} />,
+              meta: dataTableColumnMeta({
+                hideBelow: "lg",
+                width: { lg: "minmax(0,1.2fr)", xl: "minmax(12rem,1fr)" },
+              }),
+            }
+          ),
+          syncColumnHelper.display({
+            id: "actions",
+            header: () => <span className="sr-only">Actions</span>,
+            enableSorting: false,
+            cell: ({ row }) => (
+              <SyncActions
+                sync={row.original}
+                onDelete={onDelete}
+                onEdit={onEdit}
+              />
+            ),
+            meta: dataTableColumnMeta(
+              { width: { base: "10.25rem", sm: "10.5rem" } },
+              {
+                cellClassName: "px-1 sm:px-2",
+                headerClassName: "px-1 sm:px-2",
+              }
+            ),
+          }),
+        ]),
+        getRowId: syncRowKey,
+        search: { fields: syncSearchFields },
+        virtualization: true,
+      }),
     [onDelete, onEdit]
   )
-  const renderEmpty = React.useCallback(
-    (searchActive: boolean) => (
-      <div className="flex min-h-64 flex-col items-center justify-center px-6 py-12 text-center">
-        <FolderGit2 className="size-6 text-muted-foreground/45" />
-        <p className="mt-3 text-sm font-semibold">
-          {searchActive
+  const emptyState = React.useCallback(
+    ({ searchActive }: { searchActive: boolean }) => (
+      <DataTableEmptyState
+        action={
+          searchActive ? undefined : canCreate ? (
+            <Button type="button" size="sm" onClick={onCreate}>
+              <Plus /> Create sync
+            </Button>
+          ) : !hasSource ? (
+            <Button asChild size="sm">
+              <Link to="/infra/sources" search={{ add: true }}>
+                <Plus /> Add source
+              </Link>
+            </Button>
+          ) : !hasTargets ? (
+            <div className="flex flex-wrap justify-center gap-2">
+              <Button asChild size="sm" variant="outline">
+                <Link to="/infra/servers">
+                  <Server /> Game servers
+                </Link>
+              </Button>
+              <Button asChild size="sm" variant="outline">
+                <Link to="/infra/apps">
+                  <Boxes /> Apps
+                </Link>
+              </Button>
+            </div>
+          ) : undefined
+        }
+        description={
+          <span className="block max-w-sm">
+            {searchActive
+              ? "Try a repository, branch, folder, or game server name."
+              : !hasSource
+                ? "Syncs copy files from a source's repositories. Add a source to get started."
+                : hasTargets
+                  ? "Create a sync to copy a repository folder into a game server or app, and keep it updated."
+                  : "Syncs copy files into a game server or app. Create one you can edit files on first."}
+          </span>
+        }
+        icon={<FolderGit2 className="size-6 text-muted-foreground/45" />}
+        title={
+          searchActive
             ? "No syncs match your search"
             : scopeActive
               ? "Nothing syncs here yet"
-              : "No syncs yet"}
-        </p>
-        <p className="type-support mt-1 max-w-sm text-muted-foreground">
-          {searchActive
-            ? "Try a repository, branch, folder, or game server name."
-            : !hasSource
-              ? "Syncs copy files from a source's repositories. Add a source to get started."
-              : hasTargets
-                ? "Create a sync to copy a repository folder into a game server or app, and keep it updated."
-                : "Syncs copy files into a game server or app. Create one you can edit files on first."}
-        </p>
-        {searchActive ? null : canCreate ? (
-          <Button type="button" size="sm" className="mt-4" onClick={onCreate}>
-            <Plus /> Create sync
-          </Button>
-        ) : !hasSource ? (
-          <Button asChild size="sm" className="mt-4">
-            <Link to="/infra/sources" search={{ add: true }}>
-              <Plus /> Add source
-            </Link>
-          </Button>
-        ) : !hasTargets ? (
-          <div className="mt-4 flex flex-wrap justify-center gap-2">
-            <Button asChild size="sm" variant="outline">
-              <Link to="/infra/servers">
-                <Server /> Game servers
-              </Link>
-            </Button>
-            <Button asChild size="sm" variant="outline">
-              <Link to="/infra/apps">
-                <Boxes /> Apps
-              </Link>
-            </Button>
-          </div>
-        ) : null}
-      </div>
+              : "No syncs yet"
+        }
+      />
     ),
     [canCreate, hasSource, hasTargets, onCreate, scopeActive]
   )
 
   return (
-    <WorkspaceTable
-      getRowKey={syncRowKey}
-      getSearchText={syncSearchText}
-      head={<SyncTableHead />}
-      items={syncs}
-      renderEmpty={renderEmpty}
-      renderRow={renderRow}
+    <DataTable
+      definition={definition}
+      emptyState={emptyState}
       searchStore={searchStore}
+      source={source}
     />
   )
 })
 
-const SyncTableHead = React.memo(function SyncTableHead() {
+const SyncSource = React.memo(function SyncSource({
+  sync,
+}: {
+  sync: GitHubSyncView
+}) {
   return (
-    <WorkspaceTableHead>
-      <WorkspaceTableHeading className="w-28 px-2 sm:w-32 sm:px-3">
-        Status
-      </WorkspaceTableHeading>
-      <WorkspaceTableHeading className="w-auto sm:w-[30%]">
-        Repository
-      </WorkspaceTableHeading>
-      <WorkspaceTableHeading className="hidden w-[20%] md:table-cell">
-        Destination
-      </WorkspaceTableHeading>
-      <WorkspaceTableHeading className="hidden w-[26%] lg:table-cell">
-        Latest sync
-      </WorkspaceTableHeading>
-      <WorkspaceTableHeading className="w-36 px-1 text-right sm:w-44 sm:px-3">
-        Actions
-      </WorkspaceTableHeading>
-    </WorkspaceTableHead>
+    <a
+      href={syncFolderUrl(sync)}
+      target="_blank"
+      rel="noreferrer"
+      className="group/source-link flex max-w-full min-w-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+    >
+      <IdentityName
+        icon={<GitHubMark className="size-4" />}
+        meta={syncSourceMeta(sync)}
+        name={syncName(sync)}
+        nameClassName="transition-colors group-hover/source-link:text-primary"
+      />
+    </a>
   )
 })
 
-const SyncTableRow = React.memo(function SyncTableRow({
+const SyncDestination = React.memo(function SyncDestination({
+  sync,
+}: {
+  sync: GitHubSyncView
+}) {
+  const { target } = sync
+  const selectServer = React.useCallback(
+    (snapshot: RelayFleetSnapshot) => {
+      const instance = snapshot.instances.find(
+        (item) => item.relayId === target.relayId && item.id === target.id
+      )
+      return instance
+        ? {
+            brickId: instance.brickId,
+            implementation: instance.implementation,
+          }
+        : null
+    },
+    [target.id, target.relayId]
+  )
+  // Only a game server needs its brick, for the icon.
+  const { data: server } = useQuery({
+    ...relaySnapshotQueryOptions(),
+    enabled: target.kind === "server",
+    notifyOnChangeProps: ["data"],
+    select: selectServer,
+  })
+  const files = sync.targetPath ? `${sync.targetPath}/` : ""
+  const meta = `/${sync.targetPath}${sync.overwrite ? " · Replaces files" : ""}`
+  const card = (
+    <InstanceCard
+      instance={
+        target.kind === "server"
+          ? {
+              brickId: server?.brickId,
+              id: target.id,
+              implementation: server?.implementation,
+              kind: "server",
+              relayId: target.relayId,
+            }
+          : { id: target.id, kind: target.kind, relayId: target.relayId }
+      }
+      meta={meta}
+      metaClassName="font-mono"
+      name={target.name}
+      nameClassName="transition-colors group-hover/destination-link:text-primary"
+      showFavorite={false}
+    />
+  )
+  const className =
+    "group/destination-link flex max-w-full min-w-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+  // Opens the synced folder. Each route takes a full ID and redirects to its
+  // short form; a game server's Relay-qualified ID names it even where short
+  // IDs collide.
+  if (target.kind === "relay") {
+    return (
+      <Link
+        to="/relay/$relayId/files/$"
+        params={{ relayId: target.relayId, _splat: files }}
+        className={className}
+      >
+        {card}
+      </Link>
+    )
+  }
+  if (target.kind === "app") {
+    return (
+      <Link
+        to="/app/$appId/files/$"
+        params={{ appId: target.id, _splat: files }}
+        className={className}
+      >
+        {card}
+      </Link>
+    )
+  }
+  return (
+    <Link
+      to="/server/$serverId/files/$"
+      params={{ serverId: `${target.relayId}-${target.id}`, _splat: files }}
+      className={className}
+    >
+      {card}
+    </Link>
+  )
+})
+
+function SyncLatestCommit({ sync }: { sync: GitHubSyncView }) {
+  if (!sync.lastSyncedAt) {
+    return <span className="type-meta text-muted-foreground">Never synced</span>
+  }
+  const syncedAt = (
+    <RelativeTime
+      className="shrink-0"
+      timestamp={Date.parse(sync.lastSyncedAt)}
+    />
+  )
+  const details = (
+    <>
+      {syncedAt}
+      {sync.status === "success" ? (
+        <>
+          <span aria-hidden="true">·</span>
+          {sync.lastChangedCount === 0 ? (
+            <span className="truncate">up to date</span>
+          ) : (
+            <span
+              className="inline-flex shrink-0 items-center gap-1"
+              title={`${sync.lastChangedCount} ${sync.lastChangedCount === 1 ? "file" : "files"} updated`}
+            >
+              <Files className="size-3" aria-hidden="true" />
+              <span className="tabular-nums">{sync.lastChangedCount}</span>
+              <span className="sr-only">
+                {sync.lastChangedCount === 1 ? "file" : "files"} updated
+              </span>
+            </span>
+          )}
+        </>
+      ) : null}
+    </>
+  )
+  if (!sync.lastCommitSha) {
+    return (
+      <span className="type-meta flex min-w-0 items-center gap-1.5 text-muted-foreground">
+        {details}
+      </span>
+    )
+  }
+  return (
+    <a
+      href={`https://github.com/${sync.repository}/commit/${sync.lastCommitSha}`}
+      target="_blank"
+      rel="noreferrer"
+      className="group/commit-link block min-w-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+    >
+      <span className="block truncate text-xs font-medium text-foreground transition-colors group-hover/commit-link:text-primary">
+        {sync.lastCommitMessage?.split("\n", 1)[0] || "No commit message"}
+      </span>
+      <span className="type-meta flex min-w-0 items-center gap-1.5 text-muted-foreground">
+        <GitCommitHorizontal
+          className="size-3 shrink-0 text-primary"
+          aria-hidden="true"
+        />
+        <span className="shrink-0 font-mono text-primary">
+          {sync.lastCommitSha.slice(0, 7)}
+        </span>
+        <span aria-hidden="true">·</span>
+        {details}
+      </span>
+    </a>
+  )
+}
+
+const SyncActions = React.memo(function SyncActions({
   sync,
   onDelete,
   onEdit,
@@ -403,277 +688,149 @@ const SyncTableRow = React.memo(function SyncTableRow({
   })
   const busy =
     run.isPending || sync.status === "queued" || sync.status === "running"
-  const repositoryUrl = `https://github.com/${sync.repository}`
-  const folderUrl = `${repositoryUrl}/tree/${sync.branch.split("/").map(encodeURIComponent).join("/")}${sync.sourcePath ? `/${sync.sourcePath}` : ""}`
-  const copyId = React.useCallback(() => {
-    forkPromise(
-      async () => {
-        await navigator.clipboard.writeText(sync.id)
-        showToast({ message: "Sync ID copied", type: "success" })
-      },
-      (cause) =>
-        showToast({
-          message: errorMessage(cause, "The sync ID could not be copied"),
-          type: "error",
-        })
-    )
-  }, [sync.id])
-  const TargetIcon =
-    sync.target.kind === "app"
-      ? Boxes
-      : sync.target.kind === "relay"
-        ? RadioTower
-        : Server
-
+  const name = syncName(sync)
   return (
-    <tr className="group transition-colors hover:bg-accent/25">
-      <WorkspaceTableCell className="px-2 sm:px-3">
-        <SyncStatus sync={sync} />
-      </WorkspaceTableCell>
-      <WorkspaceTableCell>
-        <div className="flex min-w-0 items-center gap-2">
-          <GitHubMark className="size-3.5 text-muted-foreground" />
-          <a
-            href={folderUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="truncate text-xs font-semibold hover:underline"
-          >
-            {sync.repository}
-            {sync.sourcePath ? (
-              <span className="font-normal text-muted-foreground">
-                /{sync.sourcePath}
-              </span>
-            ) : null}
-          </a>
-        </div>
-        <div className="type-support mt-0.5 flex min-w-0 items-center gap-1.5 text-muted-foreground">
-          <GitBranch className="size-3 shrink-0" />
-          <span className="max-w-[45%] shrink-0 truncate font-mono">
-            {sync.branch}
-          </span>
-          <span aria-hidden="true">·</span>
-          {sync.autoSync ? (
-            <span className="inline-flex shrink-0 items-center gap-1">
-              <Zap className="size-3" />
-              Auto
-            </span>
-          ) : (
-            <span className="shrink-0">Manual</span>
-          )}
-          {sync.includePatterns.length > 0 ? (
-            <>
-              <span aria-hidden="true">·</span>
-              <span className="truncate font-mono">
-                {sync.includePatterns.join(", ")}
-              </span>
-            </>
-          ) : null}
-        </div>
-      </WorkspaceTableCell>
-      <WorkspaceTableCell className="hidden md:table-cell">
-        <div className="flex min-w-0 items-center gap-2">
-          <TargetIcon className="size-3.5 shrink-0 text-muted-foreground" />
-          <span className="truncate text-xs font-medium">
-            {sync.target.name}
-          </span>
-        </div>
-        <p className="type-support mt-0.5 truncate font-mono text-muted-foreground">
-          /{sync.targetPath}
-          {sync.overwrite ? (
-            <span className="font-sans"> · replaces files</span>
-          ) : null}
-        </p>
-      </WorkspaceTableCell>
-      <WorkspaceTableCell className="hidden lg:table-cell">
-        <LatestSync sync={sync} />
-      </WorkspaceTableCell>
-      <WorkspaceTableCell className="px-1 sm:px-3">
-        <div className="flex items-center justify-end gap-1">
-          {sync.canManage ? (
+    <DataTableActionGroup>
+      {sync.canManage ? (
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="px-2 text-xs"
+          disabled={busy}
+          onClick={() => run.mutate()}
+        >
+          {busy ? <LoaderCircle className="animate-spin" /> : <FolderSync />}
+          {busy ? "Syncing" : "Sync now"}
+        </Button>
+      ) : null}
+      {sync.canManage ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
             <Button
               type="button"
-              size="sm"
-              variant="outline"
-              className="px-2 text-xs"
-              disabled={busy}
-              onClick={() => run.mutate()}
+              size="icon-sm"
+              variant="ghost"
+              aria-label={`Edit sync from ${name}`}
+              onClick={() => onEdit(sync)}
             >
-              {busy ? (
-                <LoaderCircle className="animate-spin" />
-              ) : (
-                <FolderSync />
-              )}
-              {busy ? "Syncing" : "Sync now"}
+              <Pencil />
             </Button>
-          ) : null}
+          </TooltipTrigger>
+          <TooltipContent side="bottom" sideOffset={6}>
+            Edit sync
+          </TooltipContent>
+        </Tooltip>
+      ) : null}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="ghost"
+            aria-label={`More actions for sync from ${name}`}
+          >
+            <EllipsisVertical />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="min-w-48">
+          <DropdownMenuItem asChild>
+            <a href={syncFolderUrl(sync)} target="_blank" rel="noreferrer">
+              <ExternalLink /> Open on GitHub
+            </a>
+          </DropdownMenuItem>
+          <CopyIdentifierMenuItem label="Sync ID" value={sync.id} />
           {sync.canManage ? (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  type="button"
-                  size="icon-sm"
-                  variant="ghost"
-                  aria-label={`Edit sync from ${sync.repository}`}
-                  onClick={() => onEdit(sync)}
-                >
-                  <Pencil />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">Edit sync</TooltipContent>
-            </Tooltip>
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                className="text-destructive focus:text-destructive"
+                onSelect={() => onDelete(sync)}
+              >
+                <Trash2 /> Delete sync
+              </DropdownMenuItem>
+            </>
           ) : null}
-          <DropdownMenu>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    type="button"
-                    size="icon-sm"
-                    variant="ghost"
-                    aria-label={`More actions for sync from ${sync.repository}`}
-                  >
-                    <EllipsisVertical />
-                  </Button>
-                </DropdownMenuTrigger>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">More actions</TooltipContent>
-            </Tooltip>
-            <DropdownMenuContent align="end" className="min-w-48">
-              <DropdownMenuItem asChild>
-                <a href={folderUrl} target="_blank" rel="noreferrer">
-                  <ExternalLink /> Open on GitHub
-                </a>
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={copyId}>
-                <ClipboardCopy /> Copy sync ID
-              </DropdownMenuItem>
-              {sync.canManage ? (
-                <>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    className="text-destructive focus:text-destructive"
-                    onSelect={() => onDelete(sync)}
-                  >
-                    <Trash2 /> Delete sync
-                  </DropdownMenuItem>
-                </>
-              ) : null}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      </WorkspaceTableCell>
-    </tr>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </DataTableActionGroup>
   )
 })
 
-function SyncStatus({ sync }: { sync: GitHubSyncView }) {
-  const presentation =
-    sync.status === "queued"
-      ? {
-          Icon: LoaderCircle,
-          className: "text-muted-foreground",
-          label: "Queued",
-          spin: true,
-        }
-      : sync.status === "running"
-        ? {
-            Icon: LoaderCircle,
-            className: "text-sky-400",
-            label: "Syncing",
-            spin: true,
-          }
-        : sync.status === "error"
-          ? {
-              Icon: CircleAlert,
-              className: "text-destructive",
-              label: "Failed",
-              spin: false,
-            }
-          : sync.status === "success"
-            ? sync.lastError
-              ? {
-                  Icon: TriangleAlert,
-                  className: "text-amber-500",
-                  label: "Warning",
-                  spin: false,
-                }
-              : {
-                  Icon: CircleCheck,
-                  className: "text-emerald-500",
-                  label: "Synced",
-                  spin: false,
-                }
-            : {
-                Icon: CircleDashed,
-                className: "text-muted-foreground",
-                label: "Not synced",
-                spin: false,
-              }
-  const label = (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1.5 text-xs font-medium",
-        presentation.className
-      )}
-    >
-      <presentation.Icon
-        className={cn("size-3.5 shrink-0", presentation.spin && "animate-spin")}
-      />
-      {presentation.label}
-    </span>
-  )
-  if (!sync.lastError || sync.status === "queued" || sync.status === "running")
-    return label
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button type="button" className="cursor-help">
-          {label}
-        </button>
-      </TooltipTrigger>
-      <TooltipContent side="right" className="max-w-xs">
-        {sync.lastError}
-      </TooltipContent>
-    </Tooltip>
-  )
+function syncStatus(sync: GitHubSyncView): IdentityStatusPresentation {
+  if (sync.status === "queued") {
+    return { label: "Queued", pulse: true, tone: "neutral" }
+  }
+  if (sync.status === "running") {
+    return { label: "Syncing", pulse: true, tone: "info" }
+  }
+  const detail = sync.lastError ?? undefined
+  if (sync.status === "error") {
+    return { detail, label: "Failed", tone: "danger" }
+  }
+  if (sync.status === "success") {
+    return sync.lastError
+      ? { detail, label: "Warning", tone: "warning" }
+      : { label: "Synced", tone: "success" }
+  }
+  return { detail, label: "Not synced", tone: "neutral" }
 }
 
-function LatestSync({ sync }: { sync: GitHubSyncView }) {
-  if (!sync.lastSyncedAt) {
-    return <span className="type-support text-muted-foreground">Never</span>
+// Estimated from character counts, which needs no layout pass and renders the
+// same on the server. Rem per character at text-xs: semibold and mono names,
+// regular meta text.
+const nameRemPerChar = 0.43
+const monoRemPerChar = 0.46
+const metaRemPerChar = 0.38
+// Cell padding, plus the card's icon and gap.
+const cardChromeRem = 4.25
+
+function syncColumnWidths(
+  syncs: ReadonlyArray<GitHubSyncView>
+): React.CSSProperties {
+  let source = 0
+  let destination = 0
+  for (const sync of syncs) {
+    source = Math.max(
+      source,
+      syncName(sync).length * nameRemPerChar,
+      syncSourceMeta(sync).length * metaRemPerChar
+    )
+    destination = Math.max(
+      destination,
+      sync.target.name.length * nameRemPerChar,
+      (sync.targetPath.length + 1) * monoRemPerChar +
+        (sync.overwrite ? 17 * monoRemPerChar : 0)
+    )
   }
-  return (
-    <div className="min-w-0">
-      {sync.lastCommitSha ? (
-        <div className="flex min-w-0 items-center gap-2 text-xs">
-          <a
-            href={`https://github.com/${sync.repository}/commit/${sync.lastCommitSha}`}
-            target="_blank"
-            rel="noreferrer"
-            className="shrink-0 font-mono text-primary hover:underline"
-          >
-            {sync.lastCommitSha.slice(0, 7)}
-          </a>
-          <span className="truncate">{sync.lastCommitMessage}</span>
-        </div>
-      ) : null}
-      <p className="type-support mt-0.5 flex min-w-0 items-center gap-1 text-muted-foreground">
-        <RelativeTime
-          className="shrink-0"
-          timestamp={Date.parse(sync.lastSyncedAt)}
-        />
-        {sync.status === "success" ? (
-          <span className="truncate">
-            ·{" "}
-            {sync.lastChangedCount === 0
-              ? "up to date"
-              : `${sync.lastChangedCount} ${sync.lastChangedCount === 1 ? "file" : "files"} updated`}
-          </span>
-        ) : null}
-      </p>
-    </div>
-  )
+  return {
+    "--sync-destination-width": columnWidth(destination, 6, 14),
+    "--sync-source-width": columnWidth(source, 7, 18),
+  } as React.CSSProperties
+}
+
+function columnWidth(textRem: number, minRem: number, maxRem: number) {
+  const text = Math.min(maxRem, Math.max(minRem, textRem))
+  return `${Math.ceil((text + cardChromeRem) * 2) / 2}rem`
+}
+
+function syncSourceMeta(sync: GitHubSyncView) {
+  return [
+    sync.branch,
+    sync.autoSync ? "Auto" : "Manual",
+    ...(sync.includePatterns.length > 0
+      ? [sync.includePatterns.join(", ")]
+      : []),
+  ].join(" · ")
+}
+
+function syncName(sync: GitHubSyncView) {
+  return `${sync.repository}${sync.sourcePath ? `/${sync.sourcePath}` : ""}`
+}
+
+function syncFolderUrl(sync: GitHubSyncView) {
+  const branch = sync.branch.split("/").map(encodeURIComponent).join("/")
+  return `https://github.com/${sync.repository}/tree/${branch}${sync.sourcePath ? `/${sync.sourcePath}` : ""}`
 }
 
 function syncMatchesScope(sync: GitHubSyncView, scope: ScheduleScope) {
