@@ -4,7 +4,7 @@ import {
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query"
-import { useNavigate, useSearch } from "@tanstack/react-router"
+import { Link, useNavigate, useSearch } from "@tanstack/react-router"
 import {
   ArrowRight,
   Boxes,
@@ -15,6 +15,7 @@ import {
   EllipsisVertical,
   ExternalLink,
   FolderGit2,
+  ImageUp,
   GitBranch,
   LoaderCircle,
   Pencil,
@@ -46,6 +47,7 @@ import {
 } from "@workspace/ui/components/tooltip"
 import { cn } from "@workspace/ui/lib/utils"
 
+import kilnAppIcon from "@/assets/branding/app-icon-512.png"
 import { GitHubMark } from "@/components/github-mark"
 import { RelativeTime } from "@/components/relative-time"
 import {
@@ -181,6 +183,7 @@ export const GitHubSyncPage = React.memo(function GitHubSyncPage() {
         <SyncTable
           canCreate={canCreate}
           connected={data.connections.length > 0}
+          hasTargets={data.targets.length > 0}
           scopeActive={scope !== null}
           searchStore={searchStore}
           syncs={scopedSyncs}
@@ -234,8 +237,17 @@ function useSetupResultToast() {
   })
   React.useEffect(() => {
     if (!connected && !error) return
-    if (error) showToast({ message: error, type: "error" })
-    else showToast({ message: "GitHub connected", type: "success" })
+    // One toast per outcome, however often the effect runs before the
+    // search clears (Strict Mode runs it twice in development).
+    if (error) {
+      showToast({ id: `github-setup:${error}`, message: error, type: "error" })
+    } else {
+      showToast({
+        id: `github-setup:${connected}`,
+        message: "GitHub connected",
+        type: "success",
+      })
+    }
     void navigate({
       replace: true,
       search: (previous) => ({
@@ -478,6 +490,9 @@ const GitHubConnectionRow = React.memo(function GitHubConnectionRow({
                 <ExternalLink /> View app on GitHub
               </a>
             </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => openKilnLogoUpload(connection)}>
+              <ImageUp /> Use the Kiln logo
+            </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem
               className="text-destructive focus:text-destructive"
@@ -550,6 +565,7 @@ const SyncToolbar = React.memo(function SyncToolbar({
 const SyncTable = React.memo(function SyncTable({
   canCreate,
   connected,
+  hasTargets,
   scopeActive,
   searchStore,
   syncs,
@@ -559,6 +575,7 @@ const SyncTable = React.memo(function SyncTable({
 }: {
   canCreate: boolean
   connected: boolean
+  hasTargets: boolean
   scopeActive: boolean
   searchStore: WorkspaceTableSearchStore
   syncs: Array<GitHubSyncView>
@@ -586,18 +603,33 @@ const SyncTable = React.memo(function SyncTable({
         <p className="type-support mt-1 max-w-sm text-muted-foreground">
           {searchActive
             ? "Try a repository, branch, folder, or game server name."
-            : connected
-              ? "Add a sync to copy a repository folder into a game server or app, and keep it updated."
-              : "Connect GitHub above, then copy a repository folder into a game server or app."}
+            : !connected
+              ? "Connect GitHub above, then copy a repository folder into a game server or app."
+              : hasTargets
+                ? "Add a sync to copy a repository folder into a game server or app, and keep it updated."
+                : "Syncs copy files into a game server or app. Create one you can edit files on first."}
         </p>
-        {!searchActive && canCreate ? (
+        {searchActive ? null : canCreate ? (
           <Button type="button" size="sm" className="mt-4" onClick={onCreate}>
             <Plus /> Add sync
           </Button>
+        ) : connected && !hasTargets ? (
+          <div className="mt-4 flex flex-wrap justify-center gap-2">
+            <Button asChild size="sm" variant="outline">
+              <Link to="/infra/servers">
+                <Server /> Game servers
+              </Link>
+            </Button>
+            <Button asChild size="sm" variant="outline">
+              <Link to="/infra/apps">
+                <Boxes /> Apps
+              </Link>
+            </Button>
+          </div>
         ) : null}
       </div>
     ),
-    [canCreate, connected, onCreate, scopeActive]
+    [canCreate, connected, hasTargets, onCreate, scopeActive]
   )
 
   return (
@@ -919,6 +951,21 @@ function LatestSync({ sync }: { sync: GitHubSyncView }) {
       </p>
     </div>
   )
+}
+
+// GitHub has no API for an app's logo, so download Kiln's and open the
+// settings page where it's uploaded.
+function openKilnLogoUpload(connection: GitHubConnectionView) {
+  const link = document.createElement("a")
+  link.href = kilnAppIcon
+  link.download = "kiln-logo.png"
+  link.click()
+  window.open(connection.settingsUrl, "_blank", "noreferrer")
+  showToast({
+    duration: 10_000,
+    message: "Upload kiln-logo.png under Display information on GitHub",
+    type: "info",
+  })
 }
 
 function syncMatchesScope(sync: GitHubSyncView, scope: ScheduleScope) {

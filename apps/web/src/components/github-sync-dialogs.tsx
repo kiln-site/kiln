@@ -407,6 +407,7 @@ export function GitHubSyncEditorDialog({
                     value={connectionId}
                     disabled={sync !== null}
                     onValueChange={(value) => {
+                      if (!value || value === connectionId) return
                       setConnectionId(value)
                       setRepository("")
                       setBranch("")
@@ -442,6 +443,9 @@ export function GitHubSyncEditorDialog({
                     value={branch}
                     disabled={!repository || branches.isPending}
                     onValueChange={(value) => {
+                      // Radix reports "" while the options re-render, which
+                      // would drop the default branch.
+                      if (!value || value === branch) return
                       setBranch(value)
                       setSourcePath("")
                     }}

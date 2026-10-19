@@ -92,6 +92,8 @@ export interface GitHubConnectionView {
   installation: GitHubInstallationRecord | null
   /** Where the installation's repository access is changed on GitHub. */
   manageUrl: string | null
+  /** The app's own settings, where its name and logo change. */
+  settingsUrl: string
   /** Null when the viewer owns it. */
   ownerName: string | null
   syncCount: number
@@ -212,6 +214,7 @@ export async function getGitHubSyncOverviewHandler() {
       manageUrl: connection.installation
         ? installationSettingsUrl(connection.installation)
         : null,
+      settingsUrl: appSettingsUrl(connection),
       ownerName:
         connection.ownerUserId === user.id
           ? null
@@ -651,6 +654,16 @@ function connectionName(connection: GitHubConnection) {
 
 function installUrl(slug: string) {
   return `https://github.com/apps/${encodeURIComponent(slug)}/installations/new`
+}
+
+// A private app installs only on the account that owns it, so its
+// installation says whether that's an organization.
+function appSettingsUrl(connection: GitHubConnection) {
+  const slug = encodeURIComponent(connection.appSlug)
+  return connection.installation?.accountType === "Organization" &&
+    connection.installation.accountLogin === connection.appOwnerLogin
+    ? `https://github.com/organizations/${encodeURIComponent(connection.appOwnerLogin)}/settings/apps/${slug}`
+    : `https://github.com/settings/apps/${slug}`
 }
 
 function installationSettingsUrl(installation: GitHubInstallationRecord) {
