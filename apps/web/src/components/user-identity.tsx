@@ -51,8 +51,10 @@ export const UserIdentity = React.memo(function UserIdentity({
           <RedactedText
             label="email address"
             value={email}
+            // Padding widens the click target; the negative margin keeps
+            // the text where it was.
             className={cn(
-              "max-w-full self-start truncate font-mono text-xs text-muted-foreground",
+              "-mx-1 -my-1 max-w-[calc(100%+0.5rem)] self-start truncate px-1 py-1 font-mono text-xs text-muted-foreground",
               emailClassName
             )}
           />
