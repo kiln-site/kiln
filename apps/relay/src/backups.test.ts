@@ -54,7 +54,7 @@ import { BrickCatalog, brickSnapshotDirectory } from "./bricks.js"
 import type { RelayConfig, RelayInstanceConfig } from "./config.js"
 import { makeRelayStateLayer, RelayStateStore } from "./effect/state.js"
 import { testInstance, testRelayConfig } from "./test/fixtures.js"
-import { OperationLanes } from "./operation-lanes.js"
+import { exclusive, laneKeys, OperationLanes } from "./operation-lanes.js"
 import { instanceFileLocks } from "./operation-plans.js"
 
 // Restic is faked at its process boundary: a stateful `restic` executable first
@@ -253,6 +253,51 @@ describe("Relay archive backups", () => {
         yield* manager.runPending()
         assert.strictEqual((yield* manager.get(input.taskId))?.status, "queued")
 
+        lanes.setPaused(false)
+        yield* manager.runPending()
+        assert.strictEqual(
+          (yield* manager.get(input.taskId))?.status,
+          "succeeded"
+        )
+      })
+    )
+  )
+
+  it.effect("puts back a task a pause withdrew while it waited its turn", () =>
+    withRelay("kiln-backup-paused-waiting-", ({ config, root }) =>
+      Effect.gen(function* () {
+        yield* Effect.promise(() =>
+          writeFile(resolve(root, "server.txt"), "data")
+        )
+        const lanes = new OperationLanes()
+        const manager = yield* backupManager(
+          config,
+          async () => testInstance(),
+          lanes
+        )
+        // A restore holds the server, so the backup waits behind it.
+        const restoring = Deferred.makeUnsafe<void>()
+        yield* Effect.forkChild(
+          lanes.run(
+            {
+              label: "restore",
+              locks: [exclusive(laneKeys.instance(testInstance().id))],
+            },
+            Deferred.await(restoring)
+          )
+        )
+        const input = backupInput(10)
+        yield* manager.enqueue(input)
+        const draining = yield* Effect.forkChild(manager.runPending())
+        yield* Effect.promise(() =>
+          vi.waitFor(() => assert.strictEqual(lanes.pending.waiting, 1))
+        )
+
+        lanes.setPaused(true)
+        yield* Fiber.join(draining)
+        assert.strictEqual((yield* manager.get(input.taskId))?.status, "queued")
+
+        Deferred.doneUnsafe(restoring, Exit.void)
         lanes.setPaused(false)
         yield* manager.runPending()
         assert.strictEqual(

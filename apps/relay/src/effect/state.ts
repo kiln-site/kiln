@@ -478,6 +478,11 @@ export class RelayStateStore extends Context.Service<
     readonly claimNextBackupTask: (
       now: number
     ) => Effect.Effect<RelayBackupTask | null, RelayStateError>
+    /** Puts back a claimed task that never started, as when a pause withdrew it. */
+    readonly returnBackupTask: (
+      taskId: string,
+      now: number
+    ) => Effect.Effect<boolean, RelayStateError>
     readonly getBackupTask: (
       taskId: string
     ) => Effect.Effect<RelayBackupTask | null, RelayStateError>
@@ -560,6 +565,11 @@ export class RelayStateStore extends Context.Service<
     readonly requeueInterruptedProvisioningJobs: (
       now: number
     ) => Effect.Effect<number, RelayStateError>
+    /** Puts back a claimed job that never started, without using an attempt. */
+    readonly returnProvisioningJob: (
+      instanceId: string,
+      now: number
+    ) => Effect.Effect<boolean, RelayStateError>
     readonly listClients: () => Effect.Effect<
       ReadonlyArray<RelayClientRecord>,
       RelayStateError
@@ -1820,9 +1830,15 @@ const makeRelayStateStore = Effect.gen(function* () {
       run(
         "set_pause_hold",
         (paused
-          ? sql`
+          ? // Only while the Hearth is still paired: a pause that raced its
+            // revocation leaves no hold behind that nobody could lift.
+            sql`
               INSERT INTO relay_pause_holds (client_id, paused_at)
-              VALUES (${clientId}, ${now})
+              SELECT ${clientId}, ${now}
+              WHERE EXISTS (
+                SELECT 1 FROM relay_clients
+                WHERE id = ${clientId} AND revoked_at IS NULL
+              )
               ON CONFLICT (client_id) DO NOTHING
             `
           : sql`DELETE FROM relay_pause_holds WHERE client_id = ${clientId}`
@@ -1981,6 +1997,19 @@ const makeRelayStateStore = Effect.gen(function* () {
             }
           })
         )
+      ),
+    returnBackupTask: (taskId, now) =>
+      run(
+        "return_backup_task",
+        sql<{ taskId: string }>`
+          UPDATE relay_backup_tasks
+          SET status = 'queued',
+              started_at = NULL,
+              phase = NULL,
+              updated_at = ${now}
+          WHERE task_id = ${taskId} AND status = 'running'
+          RETURNING task_id AS taskId
+        `.pipe(Effect.map((rows) => rows.length > 0))
       ),
     getBackupTask: (taskId) =>
       run(
@@ -2390,6 +2419,18 @@ const makeRelayStateStore = Effect.gen(function* () {
           `
           return true
         })
+      ),
+    returnProvisioningJob: (instanceId, now) =>
+      run(
+        "return_provisioning_job",
+        sql<{ instanceId: string }>`
+          UPDATE relay_instance_provisioning_jobs
+          SET status = 'queued',
+              attempt = attempt - 1,
+              updated_at = ${now}
+          WHERE instance_id = ${instanceId} AND status = 'running'
+          RETURNING instance_id AS instanceId
+        `.pipe(Effect.map((rows) => rows.length > 0))
       ),
     requeueInterruptedProvisioningJobs: (now) =>
       run(

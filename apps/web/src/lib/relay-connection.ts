@@ -17,7 +17,7 @@ import {
   relayControlDeadlineMs,
   relayControlMaxFrameBytes,
   relayControlOperationChanges,
-  relayControlOperationRunsWhilePaused,
+  relayControlOperationRefusedWhilePaused,
   RelayOperationLookupSchema,
   relayControlRequestTimeoutMs,
   relayControlProtocol,
@@ -132,9 +132,8 @@ export async function relayRpc(
 ): Promise<unknown> {
   const changes = relayControlOperationChanges(operation)
   if (
-    changes &&
     relay.enabled === false &&
-    !relayControlOperationRunsWhilePaused(operation)
+    relayControlOperationRefusedWhilePaused(operation)
   ) {
     throw relayPausedError()
   }

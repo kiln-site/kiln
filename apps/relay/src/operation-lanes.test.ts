@@ -269,9 +269,16 @@ describe("operation lanes", () => {
       const running = yield* start(lanes, log, "running", [exclusive("a")])
       const waiting = yield* start(lanes, log, "waiting", [exclusive("a")])
 
+      // Granted while its request was still being checked, not yet started.
+      const granted = lanes.admit({ label: "granted", locks: [exclusive("c")] })
+
       lanes.setPaused(true)
       const withdrawn = yield* Effect.flip(Fiber.join(waiting.fiber))
       assert.strictEqual((withdrawn as LaneRejectedError).reason, "paused")
+      const lateStart = yield* Effect.flip(
+        granted.run(Effect.sync(() => log.push("granted")))
+      )
+      assert.strictEqual((lateStart as LaneRejectedError).reason, "paused")
       const refused = yield* Effect.flip(
         lanes.run({ label: "refused", locks: [exclusive("b")] }, Effect.void)
       )

@@ -596,16 +596,21 @@ export class ScheduleManager {
       )
     )
     // Someone changed the server's power while the schedule ran, so its
-    // later power steps give way rather than undo that.
+    // later power steps give way rather than undo that. Or the Relay was
+    // paused while the step waited its turn.
     if (
       Result.isFailure(executed) &&
       executed.failure instanceof LaneRejectedError &&
-      executed.failure.reason === "superseded"
+      (executed.failure.reason === "superseded" ||
+        executed.failure.reason === "paused")
     ) {
       state.attempts.push(
         attempt({
           action,
-          error: "Not run: the server's power was changed during the schedule",
+          error:
+            executed.failure.reason === "paused"
+              ? "Not run: the Relay is paused"
+              : "Not run: the server's power was changed during the schedule",
           scheduledAt,
           scheduleId: schedule.id,
           startedAt: actionStartedAt,

@@ -46,7 +46,7 @@ import {
   relaySnapshotNodeResourcesFeature,
   isAuditedRelayControlOperation,
   relayControlOperationChanges,
-  relayControlOperationRunsWhilePaused,
+  relayControlOperationRefusedWhilePaused,
 } from "@workspace/contracts"
 import type {
   RelayAuthChallenge,
@@ -642,8 +642,7 @@ function authenticateSocket(
           )
           if (
             options.lanes.paused &&
-            relayControlOperationChanges(request.operation) &&
-            !relayControlOperationRunsWhilePaused(request.operation)
+            relayControlOperationRefusedWhilePaused(request.operation)
           ) {
             ticket?.cancel()
             yield* Effect.sync(() =>

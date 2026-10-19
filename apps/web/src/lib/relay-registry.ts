@@ -581,8 +581,19 @@ export async function initializeRelayFromEnvironment(): Promise<PersistedRelay |
 }
 
 export async function maintainPersistedRelayConnections(): Promise<void> {
-  const relays = (await listPersistedRelays()).filter((relay) => relay.enabled)
+  const persisted = await listPersistedRelays()
+  const relays = persisted.filter((relay) => relay.enabled)
   const { relayRpc } = await import("@/lib/relay-connection")
+  // A paused Relay must hear it's paused, even if it was away when it was
+  // paused and Hearth restarted since: this connects to it, and the
+  // connection tells it again each time it reconnects.
+  for (const relay of persisted) {
+    if (relay.enabled) continue
+    void recoverPromise(
+      () => relayRpc(relay, "relay.pause.write", { paused: true }, 10_000),
+      () => undefined
+    )
+  }
   await Promise.allSettled(
     relays.map(async (relay) => {
       const freshSnapshot = await Effect.runPromise(

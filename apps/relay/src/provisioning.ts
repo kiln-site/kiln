@@ -225,13 +225,27 @@ export class ProvisioningManager {
               )
           })
         )
-        yield* this.#lanes.run(
-          {
-            label: "instance.provision",
-            locks: instanceReplaceLocks(job.instanceId),
-          },
-          create
-        )
+        const refused = yield* this.#lanes
+          .run(
+            {
+              label: "instance.provision",
+              locks: instanceReplaceLocks(job.instanceId),
+            },
+            create
+          )
+          .pipe(
+            Effect.as(null),
+            Effect.catchTag("LaneRejectedError", (error) =>
+              Effect.succeed(error)
+            )
+          )
+        if (!refused) continue
+        // Refused before it started, as when the Relay was paused or too
+        // busy: it goes back in line, and waits for resume or a moment.
+        yield* this.#state.returnProvisioningJob(job.instanceId, Date.now())
+        yield* this.#refresh()
+        if (refused.reason === "paused") return
+        yield* Effect.sleep("1 second")
       }
     })
   }

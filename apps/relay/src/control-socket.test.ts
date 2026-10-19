@@ -913,6 +913,12 @@ describe("Relay control socket", () => {
       code: "relay_paused",
       replyTo: rename,
     })
+    // So is terminal input, which can change anything.
+    const input = sendRequest(socket, "database.terminal.write", {})
+    expect(await inbox.next()).toMatchObject({
+      code: "relay_paused",
+      replyTo: input,
+    })
     const read = sendRequest(socket, "relay.system.inspect", {})
     expect(await inbox.next()).toMatchObject({ replyTo: read, type: "response" })
     const resume = sendRequest(socket, "relay.pause.write", { paused: false })

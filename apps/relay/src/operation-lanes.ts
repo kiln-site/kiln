@@ -95,6 +95,8 @@ interface Waiter {
   locks: ReadonlyArray<LaneLock> | null
   readonly precondition: (() => boolean) | undefined
   readonly granted: Deferred.Deferred<void, LaneRejectedError>
+  /** Why a granted operation was withdrawn before it started. */
+  refusal?: LaneRejectedError
   state: WaiterState
 }
 
@@ -157,8 +159,8 @@ export class OperationLanes {
 
   /**
    * While paused, nothing new starts: work admitted now is refused, and work
-   * still waiting is withdrawn. Work already running finishes, and can take
-   * the nested locks it needs to.
+   * still waiting, or granted but not yet started, is withdrawn. Work already
+   * running finishes, and can take the nested locks it needs to.
    */
   setPaused(paused: boolean): void {
     this.#paused = paused
@@ -166,6 +168,11 @@ export class OperationLanes {
     for (const waiter of this.#waiting.splice(0)) {
       waiter.state = "done"
       Deferred.doneUnsafe(waiter.granted, Exit.fail(pausedError(waiter.label)))
+    }
+    for (const waiter of this.#active) {
+      if (waiter.nested || waiter.state !== "granted") continue
+      waiter.refusal = pausedError(waiter.label)
+      this.#release(waiter)
     }
     this.#grant()
   }
@@ -255,10 +262,11 @@ export class OperationLanes {
           Effect.onInterrupt(() => Effect.sync(() => this.#cancel(waiter)))
         )
         if (waiter.state !== "granted") {
-          return yield* new LaneRejectedError({
-            message: `${waiter.label} was already run or withdrawn`,
-            reason: "cancelled",
-          })
+          return yield* (waiter.refusal ??
+            new LaneRejectedError({
+              message: `${waiter.label} was already run or withdrawn`,
+              reason: "cancelled",
+            }))
         }
         waiter.state = "running"
         // Counted once it runs, so a request refused or withdrawn after its

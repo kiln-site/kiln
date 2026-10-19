@@ -69,7 +69,7 @@ import {
   relaySystemUpdates,
   relayUpdateReportState,
 } from "@/lib/relay-connection"
-import { loadRelayCredentials } from "@/lib/relay-registry"
+import { listPersistedRelays, loadRelayCredentials } from "@/lib/relay-registry"
 import { subscribeRealtimeChanges } from "@/lib/realtime-source.server"
 
 const relayId = "relay-connection-effect-test"
@@ -376,6 +376,38 @@ effectIt.effect(
         expect(relayUpdateReportState(relayId)).toBe("unsupported")
         expect(isRelayUpdating(relayId)).toBe(false)
       })
+    )
+)
+
+effectIt.effect(
+  "tells a paused Relay it's paused each time Hearth connects to it",
+  () =>
+    withRelayServer(({ endpoint, requests }) =>
+      Effect.gen(function* () {
+        vi.mocked(listPersistedRelays).mockResolvedValue([
+          { ...endpoint, enabled: false },
+        ] as unknown as Awaited<ReturnType<typeof listPersistedRelays>>)
+        // Paused while it was away, say, and Hearth has restarted since.
+        yield* promiseEffect(() =>
+          relayRpc({ ...endpoint, enabled: false }, "relay.snapshot", {})
+        )
+        yield* promiseEffect(() =>
+          vi.waitFor(() =>
+            expect(requests).toContainEqual(
+              expect.objectContaining({
+                operation: "relay.pause.write",
+                payload: { paused: true },
+              })
+            )
+          )
+        )
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() =>
+            vi.mocked(listPersistedRelays).mockResolvedValue([])
+          )
+        )
+      )
     )
 )
 

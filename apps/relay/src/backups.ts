@@ -52,6 +52,7 @@ import { createEncryptedPlatformBackup } from "./platform-backups.js"
 import { RelayBackupError } from "./effect/errors.js"
 import { promiseEffect, recoverPromise } from "./effect/promise.js"
 import { RelayStateStore } from "./effect/state.js"
+import { LaneRejectedError } from "./operation-lanes.js"
 import type { OperationLanes } from "./operation-lanes.js"
 import { backupTaskLocks } from "./operation-plans.js"
 import {
@@ -290,7 +291,7 @@ export class BackupManager {
             Effect.asVoid
           )
         )
-        yield* this.#lanes
+        const outcome = yield* this.#lanes
           .run(
             {
               label: `backup.${task.kind}`,
@@ -311,6 +312,16 @@ export class BackupManager {
             this.#execute(task, controller.signal)
           )
           .pipe(
+            Effect.as("ran" as const),
+            // Withdrawn by a pause before it started: it goes back in line
+            // and starts once the Relay is resumed.
+            Effect.catch((cause) =>
+              cause instanceof LaneRejectedError && cause.reason === "paused"
+                ? this.#state
+                    .returnBackupTask(task.taskId, Date.now())
+                    .pipe(Effect.as("paused" as const))
+                : Effect.fail(cause)
+            ),
             Effect.catch((cause) =>
               this.#state
                 .failBackupTask(
@@ -328,7 +339,7 @@ export class BackupManager {
                         })
                       : Effect.void
                   ),
-                  Effect.asVoid
+                  Effect.as("ran" as const)
                 )
             ),
             Effect.ensuring(
@@ -340,6 +351,7 @@ export class BackupManager {
                 : Effect.void
             )
           )
+        if (outcome === "paused") return
       }
     })
   }

@@ -188,23 +188,32 @@ Each paired Hearth holds the pause for itself (`relay.pause.write`), and the
 Relay is paused while any Hearth holds it, so one Hearth resuming can't undo
 another's pause. Hearth sends its hold when someone pauses or resumes the
 Relay, and again on every connect, so a Relay that was away learns of it.
-The Relay keeps holds in SQLite and reads them before any worker starts, so
-it stays paused across restarts. Revoking a Hearth clears its hold.
+Hearth keeps a connection to paused Relays from startup for this, so the
+pause still arrives if Hearth restarted while the Relay was away. The
+snapshot's `relay.paused` shows whether the Relay has it. The Relay keeps
+holds in SQLite and reads them before any worker starts, so it stays paused
+across restarts. Revoking a Hearth clears its hold, and a pause that raced
+the revocation leaves none behind.
 
 While paused:
 
-- New changes are refused with `relay_paused`, and ones waiting their turn
-  are withdrawn. Work already running finishes.
-- Schedule actions are recorded as not run.
-- Queued backups and provisioning jobs wait, and start once it's resumed.
+- New changes and terminal input are refused with `relay_paused`, and
+  changes waiting their turn, or let through but not yet started, are
+  withdrawn. Work already running finishes.
+- Schedule actions are recorded as not run, including one withdrawn while it
+  waited its turn.
+- Queued backups and provisioning jobs wait, and start once it's resumed. One
+  already taken from the queue but withdrawn before it started goes back in
+  line, without using an attempt.
 - Crash recovery waits without spending its attempts, and starts a crashed
   server once it's resumed.
 - A deployment waiting its turn is finished as failed.
 
-`relayControlOperationRunsWhilePaused` lists what a paused Relay still takes:
-pausing and resuming, and access revocations, which must reach it whatever
-its state. Reads, the snapshot loop, and network upkeep such as Tailscale
-forwarding rules carry on.
+`relayControlOperationRefusedWhilePaused` says what a paused Relay refuses.
+It still takes pausing and resuming, and access revocations, which must reach
+it whatever its state, and terminal heartbeats and detaching. Reads, the
+snapshot loop, and network upkeep such as Tailscale forwarding rules carry
+on.
 
 Hearth also sends a paused Relay no changes: `relayRpc` refuses them with the
 same `relay_paused` error, and `activeRelay` in `lib/relay-registry.ts` is

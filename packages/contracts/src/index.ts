@@ -1627,7 +1627,7 @@ const relaySnapshotRelaySchema = z.object({
   id: relayIdSchema,
   name: z.string().min(1).max(120),
   // Held paused by a Hearth, so it runs no changes. See
-  // `relayControlOperationRunsWhilePaused`.
+  // `relayControlOperationRefusedWhilePaused`.
   paused: z.boolean().optional(),
   proxyMode: relayProxyModeSchema.optional(),
   sftp: relaySftpSnapshotSchema,

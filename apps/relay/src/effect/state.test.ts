@@ -49,6 +49,9 @@ describe("Relay state", () => {
       // A revoked Hearth no longer holds it.
       yield* store.revokeClient("hearth-b", now + 3)
       assert.deepStrictEqual(yield* store.listPauseHolds(), [])
+      // Nor can a pause that raced its revocation hold it afterwards.
+      yield* store.setPauseHold("hearth-b", true, now + 4)
+      assert.deepStrictEqual(yield* store.listPauseHolds(), [])
     })
   )
 
