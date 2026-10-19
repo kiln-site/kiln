@@ -789,6 +789,37 @@ describe("Relay control socket", () => {
       expect(await inbox.next()).toMatchObject({ code: "operation_conflict" })
     })
 
+    it("journals how a change went before the Relay finishes closing", async () => {
+      const relay = await startRelay({
+        execute: async () => ({ stopped: true }),
+      })
+      const hearth = await relay.pair()
+      const { inbox, socket } = await relay.connect(hearth, { features })
+      const operationId = randomUUID()
+      sendRequest(
+        socket,
+        "instance.action",
+        { action: "stop", instanceId },
+        { operationId }
+      )
+      expect(await inbox.next()).toMatchObject({ payload: { stopped: true } })
+      // Shutting down right after the reply, as an update does.
+      await relay.control.close()
+
+      const database = new DatabaseSync(relay.databaseFile)
+      try {
+        expect(
+          database
+            .prepare(
+              "SELECT status FROM relay_operations WHERE operation_id = ?"
+            )
+            .get(operationId)
+        ).toEqual({ status: "succeeded" })
+      } finally {
+        database.close()
+      }
+    })
+
     it("runs a change sent from two sessions at once only once", async () => {
       const release = deferred<void>()
       let runs = 0
@@ -920,7 +951,10 @@ describe("Relay control socket", () => {
       replyTo: input,
     })
     const read = sendRequest(socket, "relay.system.inspect", {})
-    expect(await inbox.next()).toMatchObject({ replyTo: read, type: "response" })
+    expect(await inbox.next()).toMatchObject({
+      replyTo: read,
+      type: "response",
+    })
     const resume = sendRequest(socket, "relay.pause.write", { paused: false })
     expect(await inbox.next()).toMatchObject({
       replyTo: resume,

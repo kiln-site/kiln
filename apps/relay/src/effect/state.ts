@@ -1154,6 +1154,10 @@ function scrubBackupTaskInputJson(inputJson: string): string {
 
 const makeRelayStateStore = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
+  // In WAL mode, NORMAL commits without waiting for the disk: a Relay crash
+  // or restart loses nothing, and only a host power loss can roll back the
+  // last moments of commits. FULL cost about 2.5 ms a commit on a Relay.
+  yield* sql`PRAGMA synchronous = NORMAL`
   yield* SqliteMigrator.run({ loader: migrations })
 
   const run = <T>(operation: string, effect: Effect.Effect<T, unknown>) =>

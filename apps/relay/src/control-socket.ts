@@ -159,6 +159,7 @@ export function attachControlSocket(
   const operations: OperationRegistry = {
     finished: new Map(),
     running: new Map(),
+    writes: new Set(),
   }
   const sockets = new Set<WebSocket>()
   const socketSessions = new WeakMap<WebSocket, string>()
@@ -248,6 +249,10 @@ export function attachControlSocket(
             }
           })
           yield* closeWebSocketServerEffect(wss)
+          // Changes that already answered keep their journal outcome.
+          yield* Effect.forEach([...operations.writes], Fiber.await, {
+            discard: true,
+          }).pipe(Effect.timeoutOption(OUTCOME_WRITE_DRAIN))
         })
       ),
     requestClients: (operation, payload, timeoutMs = 5_000) =>
@@ -783,10 +788,11 @@ function authenticateSocket(
 
   /**
    * Runs a change under its operation ID. It's claimed at once, so a repeat
-   * from any session waits for it; recorded as accepted before anything it
-   * does, including `beforeRun`; and its outcome is recorded before its locks
-   * release. A repeat of a change this Relay already took gets that change's
-   * answer instead, and `ran: false`.
+   * from any session waits for it; and recorded as accepted before anything
+   * it does, including `beforeRun`. Its outcome is kept in memory as soon as
+   * it finishes, and written to the journal without holding up the reply. A
+   * repeat of a change this Relay already took gets that change's answer
+   * instead, and `ran: false`.
    */
   function journaled(
     clientId: string,
@@ -876,8 +882,16 @@ function authenticateSocket(
             ...controlFailureFor(request, Cause.squash(exit.cause), false),
             status: "failed",
           }
-      yield* recordOutcome(clientId, operationId, outcome)
       yield* settle(outcome)
+      // Lookups find the outcome in memory first, so the reply doesn't wait
+      // for the journal. Closing the socket waits for the write.
+      const write = yield* Effect.forkDetach(
+        recordOutcome(clientId, operationId, outcome)
+      )
+      operations.writes.add(write)
+      write.addObserver(() => {
+        operations.writes.delete(write)
+      })
       return { payload: yield* exit, ran: true }
     })
     // Once claimed, it always settles, even if Hearth stops waiting: nothing
@@ -1657,7 +1671,13 @@ interface OperationRegistry {
   /** Recently finished changes, with their replies, held only in memory. */
   readonly finished: Map<string, FinishedOperation>
   readonly running: Map<string, LiveOperation>
+  /** Journal writes of finished changes' outcomes still under way. */
+  readonly writes: Set<Fiber.Fiber<void, unknown>>
 }
+
+// How long closing waits for outcome writes; each normally takes well under
+// a millisecond, and its first retries last about three seconds.
+const OUTCOME_WRITE_DRAIN = "5 seconds"
 
 // Long enough for Hearth to look up any change whose reply it lost: past the
 // longest change deadline.

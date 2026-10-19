@@ -114,7 +114,9 @@ which operations are changes; reads and terminal traffic aren't.
 The Relay claims a change as soon as it's authorized, so a repeat from any
 of the same Hearth's sessions waits for it. It records the change in its
 SQLite journal (`relay_operations`) as accepted before the change does
-anything, and records how it went before releasing its locks. The journal
+anything. How it went is kept in memory as soon as it finishes, which is
+where lookups look first, and written to the journal without holding up the
+reply; a Relay that's shutting down waits for those writes. The journal
 keeps outcomes, never replies, which can carry secrets such as pairing
 tokens; a finished change's reply stays in memory for 20 minutes, for the
 Hearth that sent it. Records are kept per paired Hearth for a week.
@@ -255,3 +257,6 @@ their own traces.
 - **Unknown outcomes remain possible.** Docker can apply a change and the
   Relay can stop before recording it, or a Relay can stay away past a
   change's deadline. Hearth reports those as unknown instead of guessing.
+  The Relay's SQLite database commits without waiting for the disk
+  (`synchronous = NORMAL`), so a host power loss, unlike a Relay crash, can
+  also roll back its last moments of journal records.
