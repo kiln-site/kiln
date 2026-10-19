@@ -1627,7 +1627,7 @@ async function recordAudit(
 function auditFailure(error: unknown): {
   readonly errorCode?: string
   readonly errorMessage: string
-  readonly outcome: "failed" | "not_run" | "unknown"
+  readonly outcome: "failed" | "not_run" | "succeeded" | "unknown"
 } {
   const message = error instanceof Error ? error.message : String(error)
   if (!(error instanceof RelayUnavailableError)) {
@@ -1636,11 +1636,17 @@ function auditFailure(error: unknown): {
   if (error.outcome === "unknown") {
     return { errorMessage: message, outcome: "unknown" }
   }
+  // It went through; only its reply was lost.
+  if (error.code === "result_unavailable") {
+    return { errorCode: error.code, errorMessage: message, outcome: "succeeded" }
+  }
   // An error the Relay sent back carries a code. One without came from the
   // connection, before the Relay had the change.
   if (
     !error.code ||
     error.code === "forbidden" ||
+    error.code === "operation_withdrawn" ||
+    error.code === "relay_paused" ||
     error.code === "too_many_requests"
   ) {
     return {

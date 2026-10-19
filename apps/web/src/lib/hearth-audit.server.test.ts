@@ -90,6 +90,12 @@ describeMysql("Hearth audit", () => {
         const neverArrived = yield* start({ status: "unknown" })
         const interrupted = yield* start({ status: "interrupted" })
         const running = yield* start({ status: "running" })
+        const withdrawn = yield* start({
+          code: "operation_withdrawn",
+          message: "The change was withdrawn before it ran",
+          retryable: true,
+          status: "failed",
+        })
 
         yield* reconcilePendingRelayChanges(
           relayId,
@@ -107,6 +113,7 @@ describeMysql("Hearth audit", () => {
         assert.strictEqual(outcomes.get(neverArrived), "not_run")
         assert.strictEqual(outcomes.get(interrupted), "unknown")
         assert.strictEqual(outcomes.get(running), "pending")
+        assert.strictEqual(outcomes.get(withdrawn), "not_run")
       })
     )
 

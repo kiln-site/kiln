@@ -218,7 +218,10 @@ export const reconcilePendingRelayChanges = Effect.fn(
           ? {
               errorCode: outcome.code,
               errorMessage: outcome.message,
-              outcome: "failed" as const,
+              outcome:
+                outcome.code === "operation_withdrawn"
+                  ? ("not_run" as const)
+                  : ("failed" as const),
             }
           : outcome.status === "unknown"
             ? { outcome: "not_run" as const }
