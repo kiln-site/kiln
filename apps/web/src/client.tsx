@@ -19,7 +19,7 @@ if (import.meta.env.DEV && typeof window !== "undefined") {
   const { audit, onRender } = createRenderAudit()
   window.__hearthRenderAudit = audit
   scan({
-    enabled: true,
+    enabled: false,
     onRender,
     showToolbar: true,
   })
