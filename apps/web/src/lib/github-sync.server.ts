@@ -31,8 +31,8 @@ import {
   type GitHubSyncTrigger,
   setGitHubSyncStatusEffect,
 } from "@/effect/github-sync"
-import { forkPromise } from "@/effect/promise"
-import { forkAppWorker, runAppEffect } from "@/effect/runtime"
+import type { Database } from "@/effect/database"
+import { forkAppWorker } from "@/effect/runtime"
 import { githubSyncTargetAccess } from "@/lib/github-sync-targets"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { relayConnectionFeatures, relayRpc } from "@/lib/relay-connection"
@@ -350,52 +350,53 @@ export function enqueueGitHubSync(
 ): void {
   const queued = waiting.get(syncId)
   if (queued !== undefined) {
-    if (queued === "poll" && trigger !== "poll") {
-      waiting.set(syncId, trigger)
-      markQueued(syncId)
-    }
+    // The waiting run shows its own status once it starts.
+    if (queued === "poll" && trigger !== "poll") waiting.set(syncId, trigger)
     return
   }
   waiting.set(syncId, trigger)
-  let lock = syncLocks.get(syncId)
-  if (!lock) {
-    lock = Semaphore.makeUnsafe(1)
-    syncLocks.set(syncId, lock)
-  }
-  if (trigger !== "poll") markQueued(syncId)
-  forkAppWorker(
-    lock.withPermit(
-      Effect.sync(() => {
-        const next = waiting.get(syncId) ?? trigger
-        waiting.delete(syncId)
-        return next
-      }).pipe(
-        Effect.flatMap((next) =>
-          runGitHubSyncEffect(syncId, next).pipe(
-            Effect.catchCause((cause) =>
-              // A failing poll fails again every minute; the sync's status
-              // shows it, so only the first report reaches telemetry.
-              (next === "poll"
-                ? Effect.void
-                : logException(Cause.squash(cause), {
-                    operation: "github.sync.run",
-                    attributes: { "github.sync.id": syncId },
-                  })
-              ).pipe(
-                Effect.andThen(Clock.currentTimeMillis),
-                Effect.flatMap((now) =>
-                  recordGitHubSyncResultEffect(
-                    syncId,
-                    { startedAt: now, trigger: next },
-                    { error: syncFailureMessage(Cause.squash(cause)) }
-                  ).pipe(
-                    Effect.tap((changed) =>
-                      Effect.sync(() => {
-                        if (changed) publishGitHubSyncChange()
-                      })
-                    ),
-                    Effect.ignore
-                  )
+  const lock = syncLocks.get(syncId) ?? Semaphore.makeUnsafe(1)
+  syncLocks.set(syncId, lock)
+  // Marked queued in the same fiber, before its run, so a slow update can't
+  // land after the run and leave the sync looking queued.
+  const markQueued: Effect.Effect<void, never, Database> =
+    trigger === "poll"
+      ? Effect.void
+      : setGitHubSyncStatusEffect(syncId, "queued").pipe(
+          Effect.andThen(Effect.sync(publishGitHubSyncChange)),
+          Effect.ignore
+        )
+  const run = lock.withPermit(
+    Effect.sync(() => {
+      const next = waiting.get(syncId) ?? trigger
+      waiting.delete(syncId)
+      return next
+    }).pipe(
+      Effect.flatMap((next) =>
+        runGitHubSyncEffect(syncId, next).pipe(
+          Effect.catchCause((cause) =>
+            // A failing poll fails again every minute; the sync's status
+            // shows it, so only the first report reaches telemetry.
+            (next === "poll"
+              ? Effect.void
+              : logException(Cause.squash(cause), {
+                  operation: "github.sync.run",
+                  attributes: { "github.sync.id": syncId },
+                })
+            ).pipe(
+              Effect.andThen(Clock.currentTimeMillis),
+              Effect.flatMap((now) =>
+                recordGitHubSyncResultEffect(
+                  syncId,
+                  { startedAt: now, trigger: next },
+                  { error: syncFailureMessage(Cause.squash(cause)) }
+                ).pipe(
+                  Effect.tap((changed) =>
+                    Effect.sync(() => {
+                      if (changed) publishGitHubSyncChange()
+                    })
+                  ),
+                  Effect.ignore
                 )
               )
             )
@@ -404,15 +405,7 @@ export function enqueueGitHubSync(
       )
     )
   )
-}
-
-function markQueued(syncId: string) {
-  forkPromise(() =>
-    runAppEffect(
-      "github.sync.queue",
-      setGitHubSyncStatusEffect(syncId, "queued")
-    ).then(publishGitHubSyncChange)
-  )
+  forkAppWorker(Effect.andThen(markQueued, run))
 }
 
 /**
