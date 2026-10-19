@@ -38,7 +38,7 @@ import {
   type GitHubSync,
 } from "@/effect/github-sync"
 import { listAppRecordsEffect } from "@/effect/managed-apps"
-import { runAppEffect } from "@/effect/runtime"
+import { reportAppError, runAppEffect } from "@/effect/runtime"
 import {
   grantsAllowPermission,
   isPlatformAdmin,
@@ -57,7 +57,6 @@ import type { AccessPermission } from "@/lib/permissions"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { requireEligibleResourceUser } from "@/server/auth"
 import type {
-  DeleteGitHubConnectionInput,
   GitHubBranchesInput,
   GitHubFoldersInput,
   SaveGitHubSyncInput,
@@ -398,17 +397,24 @@ export async function refreshGitHubConnectionHandler(data: { id: string }) {
   return { installed: installation !== null }
 }
 
-export async function deleteGitHubConnectionHandler(
-  data: DeleteGitHubConnectionInput
-) {
+export async function deleteGitHubConnectionHandler(data: { id: string }) {
   const user = await requireEligibleResourceUser()
   const connection = await usableConnection(user, data.id)
-  if (data.uninstall && connection.installation) {
+  if (connection.installation) {
+    // Best effort: the app may already be uninstalled on GitHub, and the
+    // source goes either way once its credentials are forgotten.
+    const installationId = connection.installation.id
     await runAppEffect(
       "github.app.uninstall",
-      deleteGitHubInstallationEffect(connection, connection.installation.id)
+      deleteGitHubInstallationEffect(connection, installationId).pipe(
+        Effect.catch((cause) =>
+          Effect.sync(() =>
+            reportAppError(cause, { operation: "github.app.uninstall" })
+          )
+        )
+      )
     )
-    forgetGitHubInstallationToken(connection.installation.id)
+    forgetGitHubInstallationToken(installationId)
   }
   await runAppEffect(
     "github.connection.delete",

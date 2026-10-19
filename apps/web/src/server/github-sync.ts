@@ -64,9 +64,6 @@ const startConnectionInputSchema = z.object({
 })
 
 const connectionInputSchema = z.object({ id: connectionIdSchema })
-const deleteConnectionInputSchema = connectionInputSchema.extend({
-  uninstall: z.boolean(),
-})
 const repositoriesInputSchema = z.object({ connectionId: connectionIdSchema })
 const branchesInputSchema = repositoriesInputSchema.extend({
   repository: repositorySchema,
@@ -96,9 +93,6 @@ const syncInputSchema = z.object({ id: syncIdSchema })
 export type StartGitHubConnectionInput = z.infer<
   typeof startConnectionInputSchema
 >
-export type DeleteGitHubConnectionInput = z.infer<
-  typeof deleteConnectionInputSchema
->
 export type GitHubBranchesInput = z.infer<typeof branchesInputSchema>
 export type GitHubFoldersInput = z.infer<typeof foldersInputSchema>
 export type SaveGitHubSyncInput = z.infer<typeof saveSyncInputSchema>
@@ -125,7 +119,7 @@ export const refreshGitHubConnection = createServerFn({ method: "POST" })
   .handler(({ data }) => refreshGitHubConnectionHandler(data))
 
 export const deleteGitHubConnection = createServerFn({ method: "POST" })
-  .validator(deleteConnectionInputSchema)
+  .validator(connectionInputSchema)
   .handler(({ data }) => deleteGitHubConnectionHandler(data))
 
 export const listGitHubRepositories = createServerFn({ method: "GET" })

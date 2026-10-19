@@ -250,7 +250,7 @@ const SyncToolbar = React.memo(function SyncToolbar({
       <div className="ml-auto flex shrink-0 items-center gap-2">
         <Button asChild size="sm" variant="outline">
           <Link to="/infra/sources" search={{ add: true }}>
-            <GitHubMark />
+            <FolderGit2 />
             <span className="hidden sm:inline">Add source</span>
           </Link>
         </Button>
@@ -311,7 +311,7 @@ const SyncTable = React.memo(function SyncTable({
           {searchActive
             ? "Try a repository, branch, folder, or game server name."
             : !hasSource
-              ? "Syncs copy files from a source's repositories. Add a GitHub source in Infrastructure to get started."
+              ? "Syncs copy files from a source's repositories. Add a source to get started."
               : hasTargets
                 ? "Create a sync to copy a repository folder into a game server or app, and keep it updated."
                 : "Syncs copy files into a game server or app. Create one you can edit files on first."}

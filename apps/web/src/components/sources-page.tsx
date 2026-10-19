@@ -373,7 +373,7 @@ const SourcesTable = React.memo(function SourcesTable({
           <span className="block max-w-sm">
             {searchActive
               ? "Try an account, organization, or app name."
-              : "Connect a GitHub account or organization so syncs can copy files from its repositories."}
+              : "Add an account Kiln can read repositories from, so syncs can copy files from them."}
           </span>
         }
         icon={<FolderGit2 className="size-6 text-muted-foreground/45" />}

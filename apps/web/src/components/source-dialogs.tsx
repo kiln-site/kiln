@@ -28,7 +28,6 @@ import {
 } from "@workspace/ui/components/dialog"
 import { Input } from "@workspace/ui/components/input"
 import { showToast } from "@workspace/ui/components/sonner"
-import { Switch } from "@workspace/ui/components/switch"
 import { cn } from "@workspace/ui/lib/utils"
 
 import kilnAppIcon from "@/assets/branding/app-icon-512.png"
@@ -341,15 +340,8 @@ export function DeleteSourceDialog({
   onClose: () => void
 }) {
   const queryClient = useQueryClient()
-  const [uninstall, setUninstall] = React.useState(true)
   const remove = useMutation({
-    mutationFn: () =>
-      deleteGitHubConnection({
-        data: {
-          id: source.id,
-          uninstall: uninstall && source.installation !== null,
-        },
-      }),
+    mutationFn: () => deleteGitHubConnection({ data: { id: source.id } }),
     onSuccess: async () => {
       await invalidateSources(queryClient)
       showToast({ message: "Source deleted", type: "success" })
@@ -365,42 +357,21 @@ export function DeleteSourceDialog({
     >
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Delete {account}?</DialogTitle>
+          <DialogTitle>Delete source</DialogTitle>
           <DialogDescription>
+            Kiln {source.installation ? "uninstalls its app from" : "forgets"}{" "}
+            {account}
             {source.syncCount > 0
-              ? `Its ${source.syncCount} ${source.syncCount === 1 ? "sync stops and is deleted" : "syncs stop and are deleted"}. `
+              ? ` and deletes ${source.syncCount} ${source.syncCount === 1 ? "sync" : "syncs"}`
               : ""}
-            Files already synced stay where they are.
+            . Files already synced stay where they are.
           </DialogDescription>
         </DialogHeader>
-        {source.installation ? (
-          <label className="flex items-start justify-between gap-4 rounded-lg border p-3">
-            <span className="min-w-0">
-              <span className="block text-xs font-medium">
-                Uninstall from {source.installation.accountLogin}
-              </span>
-              <span className="type-support block text-muted-foreground">
-                The app stays on GitHub;{" "}
-                <a
-                  href={source.settingsUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-primary hover:underline"
-                >
-                  delete it there
-                </a>{" "}
-                if you won't add it again.
-              </span>
-            </span>
-            <Switch checked={uninstall} onCheckedChange={setUninstall} />
-          </label>
-        ) : null}
         {remove.error ? <DialogError error={remove.error} /> : null}
         <DialogFooter>
           <Button
             type="button"
             variant="outline"
-            size="sm"
             disabled={remove.isPending}
             onClick={onClose}
           >
@@ -409,7 +380,6 @@ export function DeleteSourceDialog({
           <Button
             type="button"
             variant="destructive"
-            size="sm"
             disabled={remove.isPending}
             onClick={() => remove.mutate()}
           >
