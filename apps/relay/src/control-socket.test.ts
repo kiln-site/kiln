@@ -665,6 +665,52 @@ describe("Relay control socket", () => {
       }
     })
 
+    it("keeps how a journaled change went when a request reuses its ID for something else", async () => {
+      let runs = 0
+      const relay = await startRelay({
+        execute: async () => {
+          runs += 1
+          return {}
+        },
+      })
+      const hearth = await relay.pair()
+      const { inbox, socket } = await relay.connect(hearth, { features })
+      // A change from before a restart, so only the journal knows it.
+      const operationId = randomUUID()
+      await relay.run(
+        relay.state.startOperation({
+          clientId: hearth.id,
+          operation: "instance.action",
+          operationId,
+          payloadSha256: "an-earlier-change",
+          startedAt: Date.now(),
+        })
+      )
+      await relay.run(
+        relay.state.finishOperation({
+          clientId: hearth.id,
+          errorCode: null,
+          errorMessage: null,
+          finishedAt: Date.now(),
+          operationId,
+          retryable: false,
+          status: "succeeded",
+        })
+      )
+
+      sendRequest(
+        socket,
+        "instance.action",
+        { action: "kill", instanceId },
+        { operationId }
+      )
+      expect(await inbox.next()).toMatchObject({ code: "operation_conflict" })
+      expect(runs).toBe(0)
+      expect(await lookup(relay, hearth, operationId)).toEqual({
+        status: "succeeded",
+      })
+    })
+
     it("runs a change sent from two sessions at once only once", async () => {
       const release = deferred<void>()
       let runs = 0

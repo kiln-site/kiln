@@ -788,12 +788,14 @@ function authenticateSocket(
     }
     operations.running.set(key, claim)
     let settled = false
-    const settle = (outcome: RecordedOutcome) =>
+    // Remembers how the change under this ID went, as the request that made
+    // it sent it (`madeWith`).
+    const settle = (outcome: RecordedOutcome, madeWith = digest) =>
       Effect.sync(() => {
         if (settled) return
         settled = true
         operations.running.delete(key)
-        rememberOperation(operations, key, digest, outcome)
+        rememberOperation(operations, key, madeWith, outcome)
         Deferred.doneUnsafe(claim.outcome, Exit.succeed(outcome))
       })
     const run = Effect.gen(function* () {
@@ -804,12 +806,16 @@ function authenticateSocket(
         // Taken before this Relay last restarted, or before its memory of
         // it lapsed.
         ticket?.cancel()
-        const outcome =
-          prior.payloadSha256 === digest
-            ? recordedOutcome(prior)
-            : conflictingOutcome
-        yield* settle(outcome)
-        return { payload: yield* settleRecorded(outcome), ran: false }
+        // The change made under this ID keeps its own outcome; a request
+        // reusing the ID for something else only learns of the conflict.
+        const outcome = recordedOutcome(prior)
+        yield* settle(outcome, prior.payloadSha256)
+        return {
+          payload: yield* settleRecorded(
+            prior.payloadSha256 === digest ? outcome : conflictingOutcome
+          ),
+          ran: false,
+        }
       }
       yield* promiseOperation(() =>
         options.runEffect(
@@ -823,7 +829,9 @@ function authenticateSocket(
         )
       )
       options.beforeRun?.(request)
-      const exit = yield* Effect.exit(ticket ? ticket.run(execution) : execution)
+      const exit = yield* Effect.exit(
+        ticket ? ticket.run(execution) : execution
+      )
       const outcome: RecordedOutcome = Exit.isSuccess(exit)
         ? { kept: true, payload: exit.value, status: "succeeded" }
         : {
@@ -858,18 +866,21 @@ function authenticateSocket(
     operationId: string,
     outcome: RecordedOutcome
   ): EffectType.Effect<void> {
+    // Only the outcome, never the reply, so retries hold nothing large.
+    const finished = {
+      clientId,
+      errorCode: outcome.status === "failed" ? outcome.code : null,
+      errorMessage: outcome.status === "failed" ? outcome.message : null,
+      finishedAt: Date.now(),
+      operationId,
+      retryable: outcome.status === "failed" && outcome.retryable,
+      status:
+        outcome.status === "succeeded"
+          ? ("succeeded" as const)
+          : ("failed" as const),
+    }
     const write = promiseOperation(() =>
-      options.runEffect(
-        options.state.finishOperation({
-          clientId,
-          errorCode: outcome.status === "failed" ? outcome.code : null,
-          errorMessage: outcome.status === "failed" ? outcome.message : null,
-          finishedAt: Date.now(),
-          operationId,
-          retryable: outcome.status === "failed" && outcome.retryable,
-          status: outcome.status === "succeeded" ? "succeeded" : "failed",
-        })
-      )
+      options.runEffect(options.state.finishOperation(finished))
     )
     return write.pipe(
       Effect.retry({ schedule: Schedule.spaced("1 second"), times: 3 }),
@@ -952,7 +963,7 @@ function authenticateSocket(
           relayRestartV1Feature,
           relayResourcesV1Feature,
           relayFilePutV1Feature,
-                ],
+        ],
         protocol: relayControlProtocol,
         relayBuild: relayBuildLabel(),
         role: client.role,
@@ -1603,7 +1614,9 @@ function rememberOperation(
   operations.finished.set(key, {
     digest,
     expiresAt: now + RECENT_OPERATION_MS,
-    outcome: kept ? outcome : { kept: false, payload: null, status: "succeeded" },
+    outcome: kept
+      ? outcome
+      : { kept: false, payload: null, status: "succeeded" },
   })
 }
 
