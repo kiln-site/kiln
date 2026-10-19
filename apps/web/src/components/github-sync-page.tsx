@@ -519,49 +519,16 @@ const SyncDestination = React.memo(function SyncDestination({
   sync: GitHubSyncView
 }) {
   const { target } = sync
-  const selectServer = React.useCallback(
-    (snapshot: RelayFleetSnapshot) => {
-      const instance = snapshot.instances.find(
-        (item) => item.relayId === target.relayId && item.id === target.id
-      )
-      return instance
-        ? {
-            brickId: instance.brickId,
-            implementation: instance.implementation,
-          }
-        : null
-    },
-    [target.id, target.relayId]
-  )
-  // Only a game server needs its brick, for the icon.
-  const { data: server } = useQuery({
-    ...relaySnapshotQueryOptions(),
-    enabled: target.kind === "server",
-    notifyOnChangeProps: ["data"],
-    select: selectServer,
-  })
   const files = sync.targetPath ? `${sync.targetPath}/` : ""
-  const meta = `/${sync.targetPath}${sync.overwrite ? " · Replaces files" : ""}`
-  const card = (
-    <InstanceCard
-      instance={
-        target.kind === "server"
-          ? {
-              brickId: server?.brickId,
-              id: target.id,
-              implementation: server?.implementation,
-              kind: "server",
-              relayId: target.relayId,
-            }
-          : { id: target.id, kind: target.kind, relayId: target.relayId }
-      }
-      meta={meta}
-      metaClassName="font-mono"
-      name={target.name}
-      nameClassName="transition-colors group-hover/destination-link:text-primary"
-      showFavorite={false}
-    />
-  )
+  const card =
+    target.kind === "server" ? (
+      <SyncDestinationServerCard sync={sync} />
+    ) : (
+      <InstanceCard
+        {...syncDestinationCardProps(sync)}
+        instance={{ id: target.id, kind: target.kind, relayId: target.relayId }}
+      />
+    )
   const className =
     "group/destination-link flex max-w-full min-w-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
   // Opens the synced folder. Each route takes a full ID and redirects to its
@@ -599,6 +566,55 @@ const SyncDestination = React.memo(function SyncDestination({
     </Link>
   )
 })
+
+// Only a game server needs the fleet snapshot, for its brick icon.
+const SyncDestinationServerCard = React.memo(
+  function SyncDestinationServerCard({ sync }: { sync: GitHubSyncView }) {
+    const { target } = sync
+    const selectServer = React.useCallback(
+      (snapshot: RelayFleetSnapshot) => {
+        const instance = snapshot.instances.find(
+          (item) => item.relayId === target.relayId && item.id === target.id
+        )
+        return instance
+          ? {
+              brickId: instance.brickId,
+              implementation: instance.implementation,
+            }
+          : null
+      },
+      [target.id, target.relayId]
+    )
+    const { data: server } = useQuery({
+      ...relaySnapshotQueryOptions(),
+      notifyOnChangeProps: ["data"],
+      select: selectServer,
+    })
+    return (
+      <InstanceCard
+        {...syncDestinationCardProps(sync)}
+        instance={{
+          brickId: server?.brickId,
+          id: target.id,
+          implementation: server?.implementation,
+          kind: "server",
+          relayId: target.relayId,
+        }}
+      />
+    )
+  }
+)
+
+function syncDestinationCardProps(sync: GitHubSyncView) {
+  return {
+    meta: `/${sync.targetPath}${sync.overwrite ? " · Replaces files" : ""}`,
+    metaClassName: "font-mono",
+    name: sync.target.name,
+    nameClassName:
+      "transition-colors group-hover/destination-link:text-primary",
+    showFavorite: false,
+  }
+}
 
 function SyncLatestCommit({ sync }: { sync: GitHubSyncView }) {
   if (!sync.lastSyncedAt) {
@@ -829,8 +845,12 @@ function syncName(sync: GitHubSyncView) {
 }
 
 function syncFolderUrl(sync: GitHubSyncView) {
-  const branch = sync.branch.split("/").map(encodeURIComponent).join("/")
-  return `https://github.com/${sync.repository}/tree/${branch}${sync.sourcePath ? `/${sync.sourcePath}` : ""}`
+  const branch = encodePath(sync.branch)
+  return `https://github.com/${sync.repository}/tree/${branch}${sync.sourcePath ? `/${encodePath(sync.sourcePath)}` : ""}`
+}
+
+function encodePath(path: string) {
+  return path.split("/").map(encodeURIComponent).join("/")
 }
 
 function syncMatchesScope(sync: GitHubSyncView, scope: ScheduleScope) {
