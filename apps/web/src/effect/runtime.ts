@@ -66,6 +66,19 @@ export function forkAppEffect<TResult, TError>(
   return runtime.runFork(effect.pipe(Effect.withSpan(name)))
 }
 
+/**
+ * Forks work a request starts but doesn't wait for, such as its audit
+ * writes, into that request's trace.
+ */
+export function forkAppEffectInTrace<TResult, TError>(
+  name: string,
+  effect: Effect.Effect<TResult, TError, AppCache | Database>
+): Fiber.Fiber<TResult, unknown> {
+  return runtime.runFork(
+    Telemetry.withActiveParent(effect.pipe(Effect.withSpan(name)))
+  )
+}
+
 /** Traces promise code; effects it runs become child spans. */
 export function traceAppPromise<TResult>(
   name: string,

@@ -94,6 +94,31 @@ export function traceRelayPromise<TResult>(
 }
 
 /**
+ * Runs an effect in a span exported through the Relay runtime, so the
+ * effects and promise code it runs nest under it. Before the Relay runtime
+ * exists the span is created but not exported.
+ */
+export function traceRelayEffect<A, E, R>(
+  name: string,
+  effect: Effect.Effect<A, E, R>,
+  attributes?: Record<string, unknown>,
+  // A span to nest under instead of the active one, such as Hearth's.
+  parent?: Tracer.AnySpan
+): Effect.Effect<A, E, R> {
+  const span = Effect.withSpan(
+    effect,
+    name,
+    attributes ? { attributes } : undefined
+  )
+  const traced = parent
+    ? Effect.withParentSpan(span, parent)
+    : Telemetry.withActiveParent(span)
+  return runtime
+    ? Effect.withTracer(traced, runtime.runSync(Effect.tracer))
+    : traced
+}
+
+/**
  * The span a W3C `traceparent` names, such as a browser's or Hearth's, so
  * the Relay's work joins that trace and follows its sampling.
  */

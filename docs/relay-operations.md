@@ -223,6 +223,22 @@ same `relay_paused` error, and `activeRelay` in `lib/relay-registry.ts` is
 the one way server functions find the Relay for a person's change, failing
 the same way for a paused one and as not found for a missing one.
 
+## Tracing a change
+
+A change is one trace from Hearth to the Relay, sampled once at its start:
+
+- `hearth.relay.request` on Hearth, with `relay.audit.wait` before it sends
+  and `relay.audit.start` and `relay.audit.finish` for the audit row.
+- `relay.control.request` on the Relay covers the whole request: the client
+  check, the journal (`relay.state.get_operation`,
+  `relay.state.start_operation`, `relay.state.finish_operation`), the turn in
+  the lanes, and the reply. `relay.lanes.wait_ms` records how long it waited
+  for its turn.
+- `relay.control.execute` is the work itself.
+
+Requests from the browser socket, SFTP, and the Relay's own workers start
+their own traces.
+
 ## Limits
 
 - **No preemption.** A kill waits behind a running start or stop like any

@@ -64,6 +64,7 @@ import { RelayNotFoundError } from "./effect/errors.js"
 import {
   reportRelayError,
   traceParentSpan,
+  traceRelayEffect,
   traceRelayPromise,
 } from "./effect/runtime.js"
 import {
@@ -622,7 +623,7 @@ function authenticateSocket(
           }
           const execution = promiseOperation(() =>
             traceRelayPromise(
-              "relay.control.request",
+              "relay.control.execute",
               () =>
                 options.execute(
                   request,
@@ -636,8 +637,7 @@ function authenticateSocket(
                       request.subject
                     )
                 ),
-              { "relay.operation": request.operation },
-              traceParentSpan(request.traceparent)
+              { "relay.operation": request.operation }
             )
           )
           if (
@@ -663,7 +663,7 @@ function authenticateSocket(
           const { payload, ran } =
             operationId === undefined
               ? {
-                  payload: yield* ticket ? ticket.run(execution) : execution,
+                  payload: yield* runInLane(ticket, execution),
                   ran: true,
                 }
               : yield* journaled(
@@ -701,7 +701,20 @@ function authenticateSocket(
         }),
       (timeoutFiber) => Fiber.interrupt(timeoutFiber)
     )
-    return operation.pipe(
+    // The whole request, from its client check through its journal, its turn
+    // in the lanes, and its reply, joins the trace of the Hearth that sent it.
+    const traced = traceRelayEffect(
+      "relay.control.request",
+      operation,
+      {
+        "relay.operation": request.operation,
+        ...(request.operationId
+          ? { "relay.operation_id": request.operationId }
+          : {}),
+      },
+      traceParentSpan(request.traceparent)
+    )
+    return traced.pipe(
       Effect.catch((cause) =>
         Effect.sync(() => {
           const failure = controlFailureFor(
@@ -856,9 +869,7 @@ function authenticateSocket(
         )
       )
       options.beforeRun?.(request)
-      const exit = yield* Effect.exit(
-        ticket ? ticket.run(execution) : execution
-      )
+      const exit = yield* Effect.exit(runInLane(ticket, execution))
       const outcome: RecordedOutcome = Exit.isSuccess(exit)
         ? { kept: true, payload: exit.value, status: "succeeded" }
         : {
@@ -1106,6 +1117,35 @@ function authenticateSocket(
       )
     )
   }
+}
+
+// Runs a request in its lane, noting on the request's span how long it
+// waited for its turn.
+function runInLane<A, E>(
+  ticket: LaneTicket | null,
+  execution: EffectType.Effect<A, E>
+): EffectType.Effect<A, E | LaneRejectedError> {
+  if (!ticket) return execution
+  return Effect.suspend(() => {
+    const queuedAt = Date.now()
+    let startedAt: number | undefined
+    return ticket
+      .run(
+        Effect.sync(() => {
+          startedAt = Date.now()
+        }).pipe(Effect.andThen(execution))
+      )
+      .pipe(
+        Effect.ensuring(
+          Effect.suspend(() =>
+            Effect.annotateCurrentSpan(
+              "relay.lanes.wait_ms",
+              (startedAt ?? Date.now()) - queuedAt
+            )
+          )
+        )
+      )
+  })
 }
 
 function reverseRequestCancellationGraceMs(

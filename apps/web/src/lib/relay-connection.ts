@@ -60,7 +60,12 @@ import {
 import type { Database } from "@/effect/database"
 import { RelayUnavailableError } from "@/effect/errors"
 import { loadedKilnInstallationId } from "@/effect/installation"
-import { forkAppEffect, reportAppError, runAppEffect } from "@/effect/runtime"
+import {
+  forkAppEffect,
+  forkAppEffectInTrace,
+  reportAppError,
+  runAppEffect,
+} from "@/effect/runtime"
 import { ensuringPromise, forkPromise, promiseEffect } from "@/effect/promise"
 import type { RelayCredentials } from "@/lib/relay-registry"
 import { resolveSftpAuthorization } from "@/lib/sftp-authorization"
@@ -1793,10 +1798,10 @@ function auditChange(start: AuditWrite): {
   readonly finish: (write: AuditWrite) => void
   readonly started: Promise<void>
 } {
-  const starting = forkAppEffect("relay.audit.start", auditWrite(start))
+  const starting = forkAppEffectInTrace("relay.audit.start", auditWrite(start))
   return {
     finish: (write) => {
-      forkAppEffect(
+      forkAppEffectInTrace(
         "relay.audit.finish",
         Fiber.await(starting).pipe(Effect.andThen(auditWrite(write)))
       )
