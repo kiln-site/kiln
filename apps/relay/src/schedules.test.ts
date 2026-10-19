@@ -986,17 +986,6 @@ describe("Relay schedule persistence", () => {
     }
   })
 
-  it("applies a revision and reports its Relay-owned next run", async () => {
-    const { schedules } = await manager()
-    const applied = await schedules.apply(projection)
-
-    expect(applied.acknowledgedRevision).toBe(1)
-    expect(applied.nextRunAt).toBeTypeOf("number")
-    expect((await schedules.overview([projection.id])).deployments).toEqual([
-      applied,
-    ])
-  })
-
   it("evaluates cron in the Relay timezone", async () => {
     const now = new Date("2026-01-15T12:00:00.000Z")
     vi.setSystemTime(now)

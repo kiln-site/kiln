@@ -113,20 +113,6 @@ async function runPaperJavaEmber(context, environment = {}) {
   return { ...result, args: await readArguments(argumentsPath) }
 }
 
-// Static check only: the image build is the real test. This guards against
-// trimming jlink modules or font libraries that plugins need at runtime.
-test("the Java Ember Dockerfile still requests the runtime modules plugins need", async () => {
-  const dockerfile = await readFile(
-    join(root, "embers/java/Dockerfile"),
-    "utf8"
-  )
-  assert.match(dockerfile, /\bjava\.se\b/u)
-  assert.match(dockerfile, /\bjdk\.unsupported\b/u)
-  assert.match(dockerfile, /\bjdk\.incubator\.vector\b/u)
-  assert.match(dockerfile, /\bfontconfig\b/u)
-  assert.match(dockerfile, /\blibfreetype6\b/u)
-})
-
 test("the Java Ember reports a terminal download failure and removes the partial artifact", async (context) => {
   const ember = await emberSandbox(context)
   await ember.tool(

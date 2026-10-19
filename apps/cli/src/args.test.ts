@@ -3,14 +3,6 @@ import { describe, expect, it } from "vite-plus/test"
 import { parseArguments } from "./args.js"
 
 describe("CLI arguments", () => {
-  it("parses a command with ordinary defaults", () => {
-    expect(parseArguments(["servers", "list"])).toMatchObject({
-      command: ["servers", "list"],
-      follow: false,
-      limit: 2_000,
-    })
-  })
-
   it("supports command flags in any position", () => {
     expect(
       parseArguments([

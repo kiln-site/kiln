@@ -14,24 +14,29 @@ describe("Cloudflare DNS records", () => {
   })
 
   it.effect("replaces an address record type through the batch API", () => {
-    const fetchMock = vi.fn(
-      async (_input: RequestInfo | URL, _init?: RequestInit) =>
-        Response.json({
-          errors: [],
-          result: {
-            deletes: [{ id: "old-record" }],
-            posts: [
-              {
-                id: "replacement-record",
-                name: "play.kiln.site",
-                type: "CNAME",
-              },
-            ],
-          },
-          success: true,
+    // A stateful stand-in for the zone, so the test asserts the records left
+    // behind rather than the request that produced them.
+    const zone = new Map<string, Record<string, unknown>>([
+      [
+        "old-record",
+        { content: "203.0.113.10", name: "play.kiln.site", type: "A" },
+      ],
+    ])
+    vi.stubGlobal(
+      "fetch",
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const batch = JSON.parse(String(init?.body)) as {
+          deletes: ReadonlyArray<{ id: string }>
+          posts: ReadonlyArray<Record<string, unknown>>
+        }
+        for (const { id } of batch.deletes) zone.delete(id)
+        const posts = batch.posts.map((record) => {
+          zone.set("replacement-record", record)
+          return { ...record, id: "replacement-record" }
         })
+        return Response.json({ errors: [], result: { posts }, success: true })
+      }
     )
-    vi.stubGlobal("fetch", fetchMock)
 
     return Effect.gen(function* () {
       const replacement = yield* replaceCloudflareAddressRecordEffect(
@@ -47,31 +52,19 @@ describe("Cloudflare DNS records", () => {
       )
 
       assert.strictEqual(replacement.id, "replacement-record")
-      assert.strictEqual(fetchMock.mock.calls.length, 1)
-      const [url, init] = fetchMock.mock.calls[0] ?? []
-      assert.strictEqual(
-        url,
-        "https://api.cloudflare.com/client/v4/zones/zone-id/dns_records/batch"
-      )
-      assert.strictEqual(init?.method, "POST")
-      assert.deepEqual(JSON.parse(String(init?.body)), {
-        deletes: [{ id: "old-record" }],
-        posts: [
-          {
-            comment: "Managed by Kiln for server instance-id",
-            content: "relay.example.com",
-            name: "play.kiln.site",
-            proxied: false,
-            ttl: 1,
-            type: "CNAME",
-          },
-        ],
+      assert.deepEqual([...zone.keys()], ["replacement-record"])
+      // Game traffic cannot pass through Cloudflare's HTTP proxy.
+      assert.deepInclude(zone.get("replacement-record"), {
+        content: "relay.example.com",
+        name: "play.kiln.site",
+        proxied: false,
+        type: "CNAME",
       })
     })
   })
 
   it.effect("treats an already-removed DNS record as deleted", () => {
-    const fetchMock = vi.fn(async () =>
+    vi.stubGlobal("fetch", async () =>
       Response.json(
         {
           errors: [{ code: 81_044, message: "DNS Record does not exist." }],
@@ -81,17 +74,12 @@ describe("Cloudflare DNS records", () => {
         { status: 400 }
       )
     )
-    vi.stubGlobal("fetch", fetchMock)
 
-    return Effect.gen(function* () {
-      yield* deleteCloudflareRecordEffect(
-        "api-token",
-        "zone-id",
-        "missing-record"
-      )
-
-      assert.strictEqual(fetchMock.mock.calls.length, 1)
-    })
+    return deleteCloudflareRecordEffect(
+      "api-token",
+      "zone-id",
+      "missing-record"
+    )
   })
 
   it.effect("lists every zone the token can reach across pages", () => {

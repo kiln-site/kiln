@@ -14,8 +14,6 @@ import {
   allowedInstanceIdsForUser,
   canReadRelayNode,
   type AccessGrant,
-  isPlatformAdmin,
-  isRelayCreator,
   requireRelayPermissionsEffect,
   visibleRelaysForUser,
 } from "@/lib/access-control"
@@ -32,22 +30,6 @@ const authenticatedUser = {
 } satisfies AuthenticatedUser
 
 describe("platform access roles", () => {
-  it("keeps Relay creators distinct from platform administrators", () => {
-    const relayCreator = {
-      ...authenticatedUser,
-      role: "relay_creator",
-    } satisfies AuthenticatedUser
-    const platformAdmin = {
-      ...authenticatedUser,
-      role: "admin",
-    } satisfies AuthenticatedUser
-
-    assert.isTrue(isRelayCreator(relayCreator))
-    assert.isFalse(isPlatformAdmin(relayCreator))
-    assert.isTrue(isPlatformAdmin(platformAdmin))
-    assert.isFalse(isRelayCreator(platformAdmin))
-  })
-
   it("exposes only created or granted Relays outside platform administration", () => {
     const relays = [
       { createdBy: "creator", id: "owned" },

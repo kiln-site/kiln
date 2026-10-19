@@ -139,6 +139,10 @@ describe("API authentication", () => {
   })
 })
 
+// Programs in this file share parsed (and bound) source files, as the language
+// service does, so the fixture program doesn't re-read the app it imports.
+const parsedFiles = new Map<string, ts.SourceFile>()
+
 function loadProgram(virtualFiles: Record<string, string> = {}) {
   const configPath = resolve(webRoot, "tsconfig.json")
   const config = ts.getParsedCommandLineOfConfigFile(
@@ -158,10 +162,16 @@ function loadProgram(virtualFiles: Record<string, string> = {}) {
   const { fileExists, getSourceFile, readFile } = host
   host.fileExists = (file) => file in virtualFiles || fileExists(file)
   host.readFile = (file) => virtualFiles[file] ?? readFile(file)
-  host.getSourceFile = (file, language, ...rest) =>
-    file in virtualFiles
-      ? ts.createSourceFile(file, virtualFiles[file], language, true)
-      : getSourceFile(file, language, ...rest)
+  host.getSourceFile = (file, language, ...rest) => {
+    if (file in virtualFiles) {
+      return ts.createSourceFile(file, virtualFiles[file], language, true)
+    }
+    const cached = parsedFiles.get(file)
+    if (cached) return cached
+    const parsed = getSourceFile(file, language, ...rest)
+    if (parsed) parsedFiles.set(file, parsed)
+    return parsed
+  }
   const virtualNames = Object.keys(virtualFiles)
   const program = ts.createProgram({
     rootNames: virtualNames.length

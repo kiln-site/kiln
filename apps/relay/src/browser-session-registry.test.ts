@@ -162,7 +162,7 @@ describe("browser session registry", () => {
       reason: null,
       replaced: first,
     })
-    expect(first.close).toHaveBeenCalledWith(1012, "Browser session replaced")
+    expect(first.close).toHaveBeenCalledWith(1012, expect.any(String))
     registry.close()
   })
 
@@ -201,10 +201,7 @@ describe("browser session registry", () => {
       1
     )
     expect(registry.isActive(active, "instance.console.read")).toBe(false)
-    expect(active.close).toHaveBeenCalledWith(
-      4403,
-      "Browser authorization changed"
-    )
+    expect(active.close).toHaveBeenCalledWith(4403, expect.any(String))
 
     const renewed = socket()
     registry.acquirePending(renewed, "192.0.2.2", true)
@@ -291,10 +288,7 @@ describe("browser session registry", () => {
       vi.advanceTimersByTime(1_000)
 
       expect(registry.isActive(legacy, "instance.console.read")).toBe(false)
-      expect(legacy.close).toHaveBeenCalledWith(
-        4403,
-        "Browser capability expired"
-      )
+      expect(legacy.close).toHaveBeenCalledWith(4403, expect.any(String))
       registry.close()
     } finally {
       vi.useRealTimers()

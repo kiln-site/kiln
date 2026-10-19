@@ -28,20 +28,14 @@ describe("Relay remote file sources", () => {
     "rejects literal private and metadata addresses before connecting",
     () =>
       Effect.gen(function* () {
-        for (const source of [
-          "https://127.0.0.1/file.jar",
-          "https://10.0.0.1/file.jar",
-          "https://169.254.169.254/latest/meta-data",
-          "https://[::1]/file.jar",
+        // The full address list lives in source-policy.test.ts; a bracketed
+        // IPv6 literal proves this caller unwraps the host and asks the policy.
+        const failure = yield* withRemoteFileSource(
           "https://[::ffff:7f00:1]/file.jar",
-        ]) {
-          const failure = yield* withRemoteFileSource(
-            source,
-            () => Effect.void
-          ).pipe(Effect.flip)
-          assert.instanceOf(failure, RelayRemoteFileError)
-          assert.strictEqual(failure.code, "blocked_remote_address")
-        }
+          () => Effect.void
+        ).pipe(Effect.flip)
+        assert.instanceOf(failure, RelayRemoteFileError)
+        assert.strictEqual(failure.code, "blocked_remote_address")
       })
   )
 })

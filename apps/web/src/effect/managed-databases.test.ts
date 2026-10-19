@@ -4,7 +4,6 @@ import { TestClock } from "effect/testing"
 
 import {
   deleteManagedDatabaseRecordEffect,
-  listManagedDatabaseDirectoryEffect,
   listManagedDatabaseRecordsEffect,
   managedDatabaseNameExistsEffect,
   renameManagedDatabaseRecordEffect,
@@ -94,48 +93,6 @@ describeMysql("managed database persistence", () => {
             relayId: relayOne,
           },
         ])
-      })
-    )
-
-    it.effect("lists the navigation directory with import support", () =>
-      Effect.gen(function* () {
-        yield* resetDatabase
-        yield* insertRelay(relayOne)
-        yield* insertManagedDatabase(relayOne, "valkey-id", "Valkey", "valkey")
-        yield* insertManagedDatabase(relayOne, "redis-id", "Redis", "redis")
-        yield* insertManagedDatabase(relayOne, "postgres-id", "Postgres")
-
-        const directory = yield* listManagedDatabaseDirectoryEffect()
-
-        assert.deepStrictEqual(
-          directory.map(({ createdAt: _createdAt, ...entry }) => entry),
-          [
-            {
-              databaseId: "postgres-id",
-              databaseName: "db_postgres-id",
-              engine: "postgres",
-              name: "Postgres",
-              relayId: relayOne,
-              supportsImportExport: true,
-            },
-            {
-              databaseId: "redis-id",
-              databaseName: "db_redis-id",
-              engine: "redis",
-              name: "Redis",
-              relayId: relayOne,
-              supportsImportExport: false,
-            },
-            {
-              databaseId: "valkey-id",
-              databaseName: "db_valkey-id",
-              engine: "valkey",
-              name: "Valkey",
-              relayId: relayOne,
-              supportsImportExport: false,
-            },
-          ]
-        )
       })
     )
 

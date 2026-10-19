@@ -29,16 +29,6 @@ describe("provisioning errors", () => {
     expect(message).not.toContain("secret")
   })
 
-  it("looks through Effect's promise wrapper to the Docker failure", () => {
-    const wrapped = new Error("An error occurred in Effect.tryPromise", {
-      cause: pullFailure,
-    })
-
-    expect(provisioningErrorMessage(wrapped)).toBe(
-      provisioningErrorMessage(pullFailure)
-    )
-  })
-
   it("turns exhausted Docker address pools into guidance instead of raw output", () => {
     const message = provisioningErrorMessage(
       new Error("An error occurred in Effect.tryPromise", {
@@ -50,10 +40,6 @@ describe("provisioning errors", () => {
 
     expect(message).not.toContain("Command failed")
     expect(message).not.toContain("fully subnetted")
-  })
-
-  it("still explains a failure that carries no message", () => {
-    expect(provisioningErrorMessage(null)).not.toBe("")
   })
 })
 

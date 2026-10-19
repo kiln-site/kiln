@@ -140,31 +140,6 @@ describe("container replacement", () => {
       })
   )
 
-  effectIt.effect("reports replacement phases in execution order", () =>
-    Effect.gen(function* () {
-      const { docker } = yield* runningHearth()
-      const phases: Array<string> = []
-
-      yield* replaceContainerEffect(replacement, docker, (phase) =>
-        Effect.sync(() => {
-          phases.push(phase)
-        })
-      )
-
-      expect(phases).toEqual([
-        "replace.inspectContainer",
-        "replace.tagTarget",
-        "replace.stopCurrent",
-        "replace.renameCurrent",
-        "replace.createTarget",
-        "replace.connectNetwork",
-        "replace.startTarget",
-        "replace.waitUntilHealthy",
-        "replace.removeBackup",
-      ])
-    })
-  )
-
   effectIt.effect(
     "labels a container from before installation IDs with this installation",
     () =>

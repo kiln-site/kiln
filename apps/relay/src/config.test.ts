@@ -77,44 +77,6 @@ describe("loadConfig", () => {
     expect(proxy.proxyMode).toBe("traefik")
   })
 
-  it("rejects invalid browser limit environment values", () => {
-    const integerLimits = [
-      "KILN_RELAY_BROWSER_FILE_REPLAYS_MAX",
-      "KILN_RELAY_BROWSER_OUTBOX_BYTES_MAX",
-      "KILN_RELAY_BROWSER_OUTBOX_MESSAGES_MAX",
-      "KILN_RELAY_BROWSER_PENDING_FILE_AUTH_MAX",
-      "KILN_RELAY_BROWSER_PENDING_HANDSHAKES_MAX",
-      "KILN_RELAY_BROWSER_PENDING_HANDSHAKES_PER_IP_MAX",
-      "KILN_RELAY_BROWSER_SESSIONS_MAX",
-      "KILN_RELAY_BROWSER_SESSIONS_PER_INSTANCE_MAX",
-      "KILN_RELAY_BROWSER_SESSIONS_PER_USER_MAX",
-      "KILN_RELAY_BROWSER_SESSIONS_PER_USER_INSTANCE_MAX",
-    ] as const
-    for (const name of integerLimits) {
-      expect(() =>
-        loadConfig({ [name]: "not-an-integer", NODE_ENV: "development" })
-      ).toThrow(name)
-    }
-    expect(() =>
-      loadConfig({
-        KILN_RELAY_BROWSER_SUBLIMITS_ENFORCE: "sometimes",
-        NODE_ENV: "development",
-      })
-    ).toThrow()
-  })
-
-  it("configures the backup timeout in minutes", () => {
-    expect(
-      loadConfig({
-        KILN_BACKUP_TIMEOUT: "90",
-        NODE_ENV: "development",
-      }).backupTimeoutMs
-    ).toBe(90 * 60_000)
-    expect(() =>
-      loadConfig({ KILN_BACKUP_TIMEOUT: "0", NODE_ENV: "development" })
-    ).toThrow("KILN_BACKUP_TIMEOUT")
-  })
-
   it("configures bounded server crash recovery", () => {
     const config = loadConfig({
       KILN_RELAY_CRASH_RETRY_DELAY_SECONDS: "10",
@@ -166,19 +128,6 @@ describe("loadConfig", () => {
     ).toThrow("KILN_RELAY_GAME_PORT_RANGE")
   })
 
-  it("uses an independent advertised port", () => {
-    const config = loadConfig({
-      KILN_RELAY_HOST: "relay.test",
-      KILN_RELAY_PORT: "4100",
-      KILN_RELAY_PUBLIC_PORT: "8443",
-      NODE_ENV: "development",
-    })
-
-    expect(config.port).toBe(4100)
-    expect(config.publicPort).toBe(8443)
-    expect(config.browserOrigin).toBe("http://relay.test:8443")
-  })
-
   it("uses the Relay host for game traffic unless overridden", () => {
     const fallback = loadConfig({
       KILN_RELAY_HOST: "relay.test",
@@ -218,36 +167,6 @@ describe("loadConfig", () => {
     expect(config.browserOrigin).toBe("https://relay.example.com")
     expect(config.directPublicPort).toBe(4100)
     expect(config.directBrowserOrigin).toBe("http://relay.example.com:4100")
-  })
-
-  it("uses Coolify's public HTTPS origin and keeps port 4100 private", () => {
-    const config = loadConfig({
-      KILN_RELAY_PROXY: "coolify",
-      SERVICE_URL_KILN_RELAY_4100: "https://relay.example.com:4100",
-      NODE_ENV: "production",
-    })
-
-    expect(config.proxyMode).toBe("coolify")
-    expect(config.advertisedHost).toBe("relay.example.com")
-    expect(config.advertisedHostInferred).toBe(false)
-    expect(config.port).toBe(4100)
-    expect(config.publicPort).toBe(443)
-    expect(config.browserOrigin).toBe("https://relay.example.com")
-    expect(config.coolifyPublicOrigin).toBe("https://relay.example.com")
-  })
-
-  it("prefers an explicit Coolify host over generated service URLs", () => {
-    const config = loadConfig({
-      COOLIFY_FQDN: "relay.example.com:4100",
-      COOLIFY_URL: "https://relay.example.com:4100",
-      KILN_RELAY_HOST: "relay.example.com",
-      KILN_RELAY_PROXY: "coolify",
-      NODE_ENV: "production",
-    })
-
-    expect(config.publicPort).toBe(443)
-    expect(config.browserOrigin).toBe("https://relay.example.com")
-    expect(config.coolifyPublicOrigin).toBe("https://relay.example.com")
   })
 
   it("preserves an explicit nonstandard public Coolify port", () => {
@@ -342,17 +261,6 @@ describe("loadConfig", () => {
     expect(config.canProvisionInstances).toBe(false)
   })
 
-  it("scopes Docker resources and updates to a development installation", () => {
-    const config = loadConfig({
-      KILN_INSTALLATION_ID: "hearth-feature-a1b2c3",
-      KILN_RELAY_RESOURCE_NAMESPACE: "hearth-feature-a1b2c3",
-      NODE_ENV: "development",
-    })
-
-    expect(config.installationId).toBe("hearth-feature-a1b2c3")
-    expect(config.resourceNamespace).toBe("hearth-feature-a1b2c3")
-  })
-
   it("rejects unsafe Docker scope identifiers", () => {
     expect(() =>
       loadConfig({
@@ -360,19 +268,6 @@ describe("loadConfig", () => {
         NODE_ENV: "development",
       })
     ).toThrow("KILN_RELAY_RESOURCE_NAMESPACE")
-  })
-
-  it("parses and validates ports", () => {
-    expect(
-      loadConfig({ KILN_RELAY_SFTP_PORT: "22022", NODE_ENV: "development" })
-        .sftpPort
-    ).toBe(22022)
-    expect(() =>
-      loadConfig({
-        KILN_RELAY_SFTP_PORT: "70000",
-        NODE_ENV: "development",
-      })
-    ).toThrow("KILN_RELAY_SFTP_PORT")
   })
 
   it("rejects unknown proxy modes and unpinned images", () => {

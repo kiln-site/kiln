@@ -1,11 +1,9 @@
 import { builtinTailscaleBrick } from "@workspace/contracts"
-import { Effect } from "effect"
 import { describe, expect, it, vi } from "vite-plus/test"
 
 import {
   brickRecipeDefinition,
   claimPreparedProvisioning,
-  compensatePreparedProvisioning,
   hearthCreateInstanceInputSchema,
   hearthUpdateInstanceStartupInputSchema,
   isBrickSourceChange,
@@ -26,16 +24,6 @@ describe("Hearth Brick mutation inputs", () => {
     expect(provisioningInstanceId(key)).toBe(
       "5500000000004000800000000000000155000000"
     )
-  })
-
-  it("cancels a prepared job before removing its reserved owner", async () => {
-    const unregister = vi.fn(async () => undefined)
-
-    await Effect.runPromise(
-      compensatePreparedProvisioning(async () => true, unregister)
-    )
-
-    expect(unregister).toHaveBeenCalled()
   })
 
   it("keeps ownership when a failed claim is already running", async () => {

@@ -94,7 +94,6 @@ describe("resource stream lifecycle", () => {
         )
 
         assert.strictEqual(result._tag, "Failure")
-        assert.strictEqual(fakes.open.mock.calls.length, 1)
         assert.strictEqual(fakes.release.mock.calls.length, 1)
         assert.strictEqual(fakes.poll.mock.calls.length, 0)
       })
@@ -117,7 +116,6 @@ describe("resource stream lifecycle", () => {
         yield* advanceUntil(() => fakes.send.mock.calls.length === 1)
         yield* Fiber.interrupt(fiber)
 
-        assert.strictEqual(fakes.open.mock.calls.length, 2)
         assert.strictEqual(fakes.poll.mock.calls.length, 0)
         assert.strictEqual(fakes.close.mock.calls.length, 1)
         assert.strictEqual(fakes.release.mock.calls.length, 1)

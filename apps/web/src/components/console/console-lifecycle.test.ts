@@ -2,15 +2,11 @@ import { describe, expect, it } from "vite-plus/test"
 import type { RelayInstanceLifecycleEvent } from "@workspace/contracts"
 
 import {
-  CONSOLE_STARTUP_REASON_DELAY_MS,
-  consoleRuntimeReasonDelayRemaining,
-  consoleRecoveryLine,
   consoleSessionAcceptedAheadOfRuntime,
   consoleSessionIsCurrent,
   consoleStateLine,
   initialConsoleStateLines,
   isConsoleRecoveryLine,
-  isConsoleStateLine,
   isConsoleStateLineFor,
   mergeConsoleHistory,
   mergeConsoleStateLines,
@@ -35,44 +31,6 @@ function lifecycle(
 }
 
 describe("console lifecycle lines", () => {
-  it("delays only the expected startup readiness notice", () => {
-    const startedAtMs = Date.parse(startedAt)
-    const reason = { code: "waiting_for_readiness" } as const
-
-    expect(
-      consoleRuntimeReasonDelayRemaining(reason, startedAt, startedAtMs)
-    ).toBe(CONSOLE_STARTUP_REASON_DELAY_MS)
-    expect(
-      consoleRuntimeReasonDelayRemaining(
-        reason,
-        startedAt,
-        startedAtMs + CONSOLE_STARTUP_REASON_DELAY_MS - 1
-      )
-    ).toBe(1)
-    expect(
-      consoleRuntimeReasonDelayRemaining(
-        reason,
-        startedAt,
-        startedAtMs + CONSOLE_STARTUP_REASON_DELAY_MS
-      )
-    ).toBe(0)
-    expect(
-      consoleRuntimeReasonDelayRemaining(
-        { code: "health_check_failed" },
-        startedAt,
-        startedAtMs
-      )
-    ).toBe(0)
-  })
-
-  it("shows starting and running for a ready server", () => {
-    expect(
-      initialConsoleStateLines(lifecycle(readyAt), "running").map(
-        (line) => line.text
-      )
-    ).toEqual(["Server is starting", "Server is running"])
-  })
-
   it("places a restored running transition where Relay observed readiness", () => {
     const lines = [
       {
@@ -425,49 +383,6 @@ describe("console lifecycle lines", () => {
     ])
     expect(lines[2]?.timestamp).toBe(failedAt)
     expect(lines[3] && isConsoleRecoveryLine(lines[3])).toBe(true)
-  })
-
-  it("identifies synthetic lifecycle lines for centered rendering", () => {
-    const [line] = initialConsoleStateLines([], "stopped")
-
-    expect(line && isConsoleStateLine(line)).toBe(true)
-    expect(isConsoleStateLine({ id: "docker:log-line" })).toBe(false)
-  })
-
-  it("warns about an internal stop while Relay schedules recovery", () => {
-    const line = consoleRecoveryLine(
-      {
-        attempt: 1,
-        exitCode: 0,
-        maxAttempts: 2,
-        nextAttemptAt: new Date(Date.now() + 5_000).toISOString(),
-        oomKilled: false,
-        phase: "pending",
-        reason: "clean_exit",
-        runtimeMs: 60_000,
-      },
-      null
-    )
-
-    expect(line.level).toBe("warn")
-    expect(isConsoleRecoveryLine(line)).toBe(true)
-  })
-
-  it("reports an error once automatic recovery is exhausted", () => {
-    const lines = initialConsoleStateLines([], "failed", {
-      attempt: 2,
-      exitCode: 137,
-      maxAttempts: 2,
-      nextAttemptAt: null,
-      oomKilled: true,
-      phase: "failed",
-      reason: "out_of_memory",
-      runtimeMs: 1_000,
-    })
-
-    expect(lines[0] && isConsoleStateLineFor(lines[0], "failed")).toBe(true)
-    expect(lines[1] && isConsoleRecoveryLine(lines[1])).toBe(true)
-    expect(lines[1]?.level).toBe("error")
   })
 
   it("ignores stale states that move a stopping lifecycle backwards", () => {

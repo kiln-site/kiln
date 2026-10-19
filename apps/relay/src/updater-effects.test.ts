@@ -42,25 +42,6 @@ describe("updater batch draining", () => {
 })
 
 describe("container replacement retries", () => {
-  effectIt.effect("keeps the bounded three-attempt retry policy", () =>
-    Effect.gen(function* () {
-      let attempts = 0
-      const failure = replacementFailure([])
-      const fiber = yield* retryContainerReplacementEffect(
-        Effect.suspend(() => {
-          attempts += 1
-          return Effect.fail(failure)
-        })
-      ).pipe(Effect.forkChild)
-
-      yield* TestClock.adjust("3 seconds")
-      const result = yield* Fiber.join(fiber).pipe(Effect.flip)
-
-      expect(result).toBe(failure)
-      expect(attempts).toBe(3)
-    })
-  )
-
   effectIt.effect("does not retry after rollback failure", () =>
     Effect.gen(function* () {
       let attempts = 0

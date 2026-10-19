@@ -192,11 +192,9 @@ describe("Brick recipes", () => {
     )
   })
 
+  // The full address list lives in source-policy.test.ts; these prove the
+  // catalog applies it to IPv6 literals and to resolved hostnames.
   it.each([
-    "https://127.0.0.1/recipe.yml",
-    "https://10.42.0.1/recipe.yml",
-    "https://169.254.169.254/latest/meta-data",
-    "https://[::1]/recipe.yml",
     "https://[::ffff:7f00:1]/recipe.yml",
     "https://localhost/recipe.yml",
   ])("refuses to fetch a recipe from private address %s", async (source) => {

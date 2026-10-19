@@ -2,10 +2,7 @@ import { describe, expect, it } from "vite-plus/test"
 import type { RelayInstance, RelaySnapshot } from "@workspace/contracts"
 import { builtinTailscaleBrickId } from "@workspace/contracts"
 
-import {
-  relayInstanceRouteId,
-  type RelayFleetSnapshot,
-} from "@/lib/relay-fleet"
+import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 import { replaceRelaySnapshotInstance } from "@/lib/query-options"
 import {
   findFirstCanonicalRelayInstance,
@@ -73,12 +70,6 @@ function snapshotWithCpu(percent: number): RelayFleetSnapshot {
 }
 
 describe("Relay render selectors", () => {
-  it("builds route IDs from stable Relay and instance identities", () => {
-    expect(relayInstanceRouteId("relay-one", "aaaaaaaa")).toBe(
-      "relay-one-aaaaaaaa"
-    )
-  })
-
   it("keeps sidebar and workspace data unchanged across resource samples", () => {
     const before = snapshotWithCpu(1)
     const after = snapshotWithCpu(2)

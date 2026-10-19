@@ -124,6 +124,8 @@ const config = defineConfig(({ command }) => {
         "keyring.test.mjs",
       ],
       setupFiles: ["src/test/setup.ts"],
+      // Worker threads start faster than forked processes.
+      pool: "threads",
       // Creating and migrating a fresh per-worker MySQL database takes longer
       // than the default hook timeout.
       hookTimeout: 60_000,

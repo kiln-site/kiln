@@ -1,4 +1,4 @@
-import { Effect, Exit, Queue, Scope } from "effect"
+import { Effect, Exit, Fiber, Queue, Scope, Stream } from "effect"
 import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 
 import {
@@ -399,3 +399,158 @@ describe("Relay browser lease renewal", () => {
     )
   })
 })
+
+describe("Relay browser socket inbox", () => {
+  it("routes operation replies outside the bounded console queue", async () => {
+    const socket = new FakeSocket()
+    const result = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const inbox = yield* createConsoleInbox(socket)
+          const request = inbox.request(
+            socket as unknown as WebSocket,
+            "instance-one",
+            "console.complete",
+            { cursor: 0, input: "" }
+          )
+          socket.receive({
+            payload: { suggestions: [] },
+            requestId: socket.sent[0]?.requestId,
+            type: "operation.result",
+          })
+          socket.receive({ type: "console.line" })
+          const payload = yield* Effect.promise(() => request)
+          return { next: yield* inbox.take, payload }
+        })
+      )
+    )
+
+    expect(result).toEqual({
+      next: { type: "console.line" },
+      payload: { suggestions: [] },
+    })
+  })
+
+  it("retains a terminal error after queued messages are consumed", async () => {
+    const socket = new FakeSocket()
+    const result = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const inbox = yield* createConsoleInbox(socket)
+
+          socket.receive({ type: "console.line" })
+          socket.closeWith(1006, "Relay disconnected")
+
+          const message = yield* inbox.take
+          const terminal = yield* inbox.take.pipe(
+            Effect.match({
+              onFailure: (cause) => cause,
+              onSuccess: () => new Error("Expected the inbox to fail"),
+            })
+          )
+          return { message, terminal }
+        })
+      )
+    )
+
+    expect(result.message).toEqual({ type: "console.line" })
+    expect(result.terminal).toEqual(new Error("Relay disconnected"))
+  })
+
+  it("keeps the first terminal error when error and close both fire", async () => {
+    const socket = new FakeSocket()
+    const terminal = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const inbox = yield* createConsoleInbox(socket)
+          socket.dispatchEvent(new Event("error"))
+
+          expect(() =>
+            socket.closeWith(1006, "Relay disconnected")
+          ).not.toThrow()
+          return yield* Queue.take(inbox.messages).pipe(
+            Effect.match({
+              onFailure: (cause) => cause,
+              onSuccess: () => new Error("Expected the inbox to fail"),
+            })
+          )
+        })
+      )
+    )
+
+    expect(terminal).toEqual(new Error("Unable to connect to Relay"))
+  })
+
+  it("does not recover a cancelled inbox as a typed stream failure", async () => {
+    const socket = new FakeSocket()
+    const fallbackOpened = vi.fn()
+    const fiber = Effect.runFork(
+      Effect.scoped(
+        Stream.unwrap(
+          createConsoleInbox(socket).pipe(
+            Effect.map(({ messages }) => Stream.fromQueue(messages))
+          )
+        ).pipe(
+          Stream.catch(() => {
+            fallbackOpened()
+            return Stream.empty
+          }),
+          Stream.runDrain
+        )
+      )
+    )
+
+    await vi.waitFor(() => expect(socket.listenerCount).toBeGreaterThan(0))
+    await Effect.runPromise(Fiber.interrupt(fiber))
+
+    expect(fallbackOpened).not.toHaveBeenCalled()
+    expect(socket.listenerCount).toBe(0)
+  })
+})
+
+/** An open browser socket that records sent frames and counts listeners. */
+class FakeSocket extends EventTarget {
+  readonly close = vi.fn()
+  listenerCount = 0
+  readonly readyState = 1
+  readonly sent: Array<Record<string, unknown>> = []
+
+  send(data: string): void {
+    this.sent.push(JSON.parse(data) as Record<string, unknown>)
+  }
+
+  receive(frame: Record<string, unknown>): void {
+    this.dispatchEvent(
+      new MessageEvent("message", { data: JSON.stringify(frame) })
+    )
+  }
+
+  closeWith(code: number, reason: string): void {
+    this.dispatchEvent(Object.assign(new Event("close"), { code, reason }))
+  }
+
+  override addEventListener(
+    type: string,
+    callback: EventListenerOrEventListenerObject | null,
+    options?: AddEventListenerOptions | boolean
+  ): void {
+    this.listenerCount += 1
+    super.addEventListener(type, callback, options)
+  }
+
+  override removeEventListener(
+    type: string,
+    callback: EventListenerOrEventListenerObject | null,
+    options?: EventListenerOptions | boolean
+  ): void {
+    this.listenerCount -= 1
+    super.removeEventListener(type, callback, options)
+  }
+}
+
+function createConsoleInbox(socket: FakeSocket) {
+  return createRelayBrowserSocketInbox(
+    socket as unknown as WebSocket,
+    "console"
+  )
+}

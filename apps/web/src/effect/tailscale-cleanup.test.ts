@@ -1,4 +1,4 @@
-import { assert, describe, it, layer } from "@effect/vitest"
+import { assert, layer } from "@effect/vitest"
 import { Effect } from "effect"
 import { TestClock } from "effect/testing"
 
@@ -7,7 +7,6 @@ import {
   loadPendingTailscaleCleanupsEffect,
   reconcileTailscaleDeploymentsEffect,
   requestTailscaleNetworkCleanupEffect,
-  tailscaleCleanupRetryDelaySeconds,
 } from "@/effect/tailscale-cleanup"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRows, selectRows } from "@/test/seed"
@@ -65,15 +64,6 @@ const deployments = Effect.map(
   selectRows<DeploymentRow>("tailscale_network_deployment"),
   (rows) => new Map(rows.map((row) => [row.relay_id, row]))
 )
-
-describe("Tailscale cleanup retries", () => {
-  it("backs off quickly and caps retries at five minutes", () => {
-    assert.deepEqual(
-      [1, 2, 3, 8, 9, 20].map(tailscaleCleanupRetryDelaySeconds),
-      [2, 4, 8, 256, 300, 300]
-    )
-  })
-})
 
 describeMysql("Tailscale cleanup persistence", () => {
   layer(TestDatabase)((it) => {

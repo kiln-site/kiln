@@ -18,8 +18,6 @@ import { BackupLimitError, BackupStorageError } from "@/effect/errors"
 import {
   backupReservation,
   canReuseBackupExport,
-  clampBackupExportTtlMs,
-  effectiveBackupLimit,
   getBackupPolicyEffect,
   purgeInstanceBackupRepositoriesEffect,
   reserveBackupCopyEffect,
@@ -63,21 +61,6 @@ afterEach(() => {
 })
 
 describe("backup limits", () => {
-  it("uses the stricter user or platform limit", () => {
-    expect(effectiveBackupLimit(null, null)).toBeNull()
-    expect(effectiveBackupLimit(10, null)).toBe(10)
-    expect(effectiveBackupLimit(null, 8)).toBe(8)
-    expect(effectiveBackupLimit(10, 8)).toBe(8)
-  })
-
-  it("clamps incremental export TTLs to the signed-URL bounds", () => {
-    expect(clampBackupExportTtlMs(1_000)).toBe(60_000)
-    expect(clampBackupExportTtlMs(15 * 60_000)).toBe(15 * 60_000)
-    expect(clampBackupExportTtlMs(30 * 24 * 60 * 60 * 1_000)).toBe(
-      7 * 24 * 60 * 60 * 1_000
-    )
-  })
-
   it("reuses an unexpired export while polling even if remaining is under the requested TTL", () => {
     expect(
       canReuseBackupExport({

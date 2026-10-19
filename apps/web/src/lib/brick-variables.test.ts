@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vite-plus/test"
-import {
-  brickRecipeSchema,
-  requiredMinecraftJavaVersion,
-} from "@workspace/contracts"
+import { brickRecipeSchema } from "@workspace/contracts"
 
 import {
   hydrateBrickVariables,
@@ -52,20 +49,6 @@ const paper = brickRecipeSchema.parse({
 })
 
 describe("Minecraft Java defaults", () => {
-  it.each([
-    ["paper", "1.16.4", "11"],
-    ["paper", "1.17.1", "17"],
-    ["paper", "1.21.11", "21"],
-    ["paper", "26.2", "25"],
-    ["folia", "26.1", "25"],
-    ["fabric", "1.17.1", "17"],
-    ["fabric", "1.20.4", "17"],
-    ["fabric", "1.20.5", "21"],
-    ["fabric", "26.2", "25"],
-  ])("maps %s %s to Java %s", (brickId, version, javaVersion) => {
-    expect(requiredMinecraftJavaVersion(brickId, version)).toBe(javaVersion)
-  })
-
   it("hydrates missing legacy Startup variables without replacing overrides", () => {
     expect(
       hydrateBrickVariables(

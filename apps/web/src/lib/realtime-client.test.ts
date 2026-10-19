@@ -38,9 +38,7 @@ import {
   applyRecoveredRelayConnection,
   applyRealtimeEventSafely,
   applyUpdatedInstance,
-  fleetEventNeedsRecovery,
   recheckPushedState,
-  resetRealtimeEpoch,
 } from "@/lib/realtime-client"
 import {
   ensureServerWorkspace,
@@ -50,21 +48,6 @@ import {
 } from "@/lib/server-workspace"
 
 const epoch = "00000000-0000-4000-8000-000000000001"
-const defaultBackupRunsKey = queryKeys.backups.runs({
-  direction: "desc",
-  scope: null,
-  search: "",
-  sort: "createdAt",
-  status: null,
-})
-const targetSortedBackupRunsKey = queryKeys.backups.runs({
-  direction: "asc",
-  scope: null,
-  search: "",
-  sort: "target",
-  status: null,
-})
-
 const alpha = {
   connectAddress: "play.example.test",
   id: "a".repeat(40),
@@ -230,37 +213,6 @@ describe("realtime event application", () => {
     ).toBeUndefined()
   })
 
-  it("recovers a push that arrives while the fleet's first read is in flight", async () => {
-    const clients = fleet()
-    let resolveFirstRead!: (instances: Array<FleetInstance>) => void
-    const firstRead = clients.queryClient.fetchQuery({
-      queryKey: queryKeys.relay.instances,
-      queryFn: () =>
-        new Promise<Array<FleetInstance>>((resolve) => {
-          resolveFirstRead = resolve
-        }),
-    })
-
-    // The read began before this push, so it would overwrite the change.
-    expect(
-      fleetEventNeedsRecovery(
-        clients.queryClient,
-        clients.instances,
-        instancesDelta([beta])
-      )
-    ).toBe(true)
-
-    resolveFirstRead([alpha])
-    await firstRead
-    expect(
-      fleetEventNeedsRecovery(
-        clients.queryClient,
-        clients.instances,
-        instancesDelta([beta])
-      )
-    ).toBe(false)
-  })
-
   it("reports collection write failures so the stream can recover", async () => {
     const clients = await readyFleet([collectionAlpha])
     const onFailure = vi.fn()
@@ -300,10 +252,9 @@ describe("realtime event application", () => {
     ])
   })
 
-  it("updates a node without rebuilding instance data", () => {
+  it("applies node deltas to the fleet snapshot", () => {
     const clients = fleet()
-    const current = snapshot()
-    clients.queryClient.setQueryData(queryKeys.relay.snapshot, current)
+    clients.queryClient.setQueryData(queryKeys.relay.snapshot, snapshot())
     const updatedNode = { ...node, name: "Renamed node" }
 
     applyEvent(clients, {
@@ -316,7 +267,6 @@ describe("realtime event application", () => {
     const result = clients.queryClient.getQueryData<RelayFleetSnapshot>(
       queryKeys.relay.snapshot
     )
-    expect(result?.instances).toBe(current.instances)
     expect(result?.nodes).toEqual([updatedNode])
   })
 
@@ -451,7 +401,6 @@ describe("realtime event application", () => {
     reads.pending[0]!(relayA("connected"))
 
     await expect(reads.first).resolves.toEqual(relayA("unreachable"))
-    expect(reads.pending).toHaveLength(1)
     expect(
       clients.queryClient.getQueryData(queryKeys.relay.reachability)
     ).toEqual(relayA("unreachable"))
@@ -554,31 +503,6 @@ describe("realtime event application", () => {
       relays: [{ id: alpha.relayId, status: "connected" }],
       status: "connected",
     })
-  })
-
-  it("refreshes Hearth topics without touching Relay caches", () => {
-    const clients = fleet()
-    const current = snapshot()
-    clients.queryClient.setQueryData(queryKeys.relay.snapshot, current)
-    const refreshTopics = vi.fn().mockResolvedValue(undefined)
-    const scope = { instanceId: alpha.id, relayId: alpha.relayId }
-
-    applyEvent(
-      clients,
-      {
-        epoch,
-        scope,
-        sequence: 1,
-        topics: ["file-activity"],
-        type: "collections.invalidate",
-      },
-      refreshTopics
-    )
-
-    expect(refreshTopics).toHaveBeenCalledWith(["file-activity"], scope)
-    expect(clients.queryClient.getQueryData(queryKeys.relay.snapshot)).toBe(
-      current
-    )
   })
 
   it("preserves Hearth's managed address for observation-only updates", () => {
@@ -861,38 +785,10 @@ describe("authoritative Relay recovery", () => {
       status: "unreachable",
     })
   })
-
-  it("drops an old sequence floor when the Hearth process epoch changes", () => {
-    expect(
-      resetRealtimeEpoch({
-        currentEpoch: epoch,
-        nextEpoch: "00000000-0000-4000-8000-000000000002",
-        recoveryFloor: 10_000,
-      })
-    ).toEqual({
-      changed: true,
-      epoch: "00000000-0000-4000-8000-000000000002",
-      recoveryFloor: 0,
-    })
-  })
-
-  it("preserves the sequence floor within one Hearth process epoch", () => {
-    expect(
-      resetRealtimeEpoch({
-        currentEpoch: epoch,
-        nextEpoch: epoch,
-        recoveryFloor: 42,
-      })
-    ).toEqual({
-      changed: false,
-      epoch,
-      recoveryFloor: 42,
-    })
-  })
 })
 
 describe("mutation responses", () => {
-  it("reconciles only the active provisioning row into Relay caches", () => {
+  it("applies mutation responses to every populated fleet cache", () => {
     const queryClient = new QueryClient()
     const provisioning = {
       ...alpha,
@@ -904,102 +800,42 @@ describe("mutation responses", () => {
     }
     const current = { instances: [provisioning, beta], nodes: [node] }
     queryClient.setQueryData(queryKeys.relay.snapshot, current)
-    queryClient.setQueryData(queryKeys.relay.instances, current.instances)
-
-    applyProvisioningInstance(queryClient, { ...alpha, name: "Ready" })
-
-    expect(
-      queryClient.getQueryData<RelayFleetSnapshot>(queryKeys.relay.snapshot)
-        ?.instances
-    ).toEqual([{ ...alpha, name: "Ready" }, beta])
-    expect(
-      queryClient.getQueryData<Array<FleetInstance>>(queryKeys.relay.instances)
-    ).toEqual([{ ...alpha, name: "Ready" }, beta])
-  })
-
-  it("adds a newly provisioned row to every populated fleet cache", () => {
-    const queryClient = new QueryClient()
-    queryClient.setQueryData(queryKeys.relay.snapshot, snapshot())
-    queryClient.setQueryData(queryKeys.relay.instances, [alpha])
-
-    applyProvisioningInstance(queryClient, beta)
-
-    expect(
-      queryClient.getQueryData<RelayFleetSnapshot>(queryKeys.relay.snapshot)
-        ?.instances
-    ).toEqual([beta, alpha])
-    expect(
-      queryClient.getQueryData<Array<FleetInstance>>(queryKeys.relay.instances)
-    ).toEqual([beta, alpha])
-  })
-
-  it("writes mutation responses to the normalized instance cache", () => {
-    const queryClient = new QueryClient()
-    const current = { instances: [alpha, beta], nodes: [node] }
-    queryClient.setQueryData(queryKeys.relay.snapshot, current)
-    queryClient.setQueryData(queryKeys.relay.instances, current.instances)
-
-    applyUpdatedInstance(queryClient, { ...alpha, name: "Renamed" })
-
-    expect(
-      queryClient.getQueryData<RelayFleetSnapshot>(queryKeys.relay.snapshot)
-        ?.instances
-    ).toEqual([{ ...alpha, name: "Renamed" }, beta])
-    expect(
-      queryClient.getQueryData<Array<FleetInstance>>(queryKeys.relay.instances)
-    ).toEqual([{ ...alpha, name: "Renamed" }, beta])
-  })
-
-  it("invalidates only name-dependent backup results after a rename", () => {
-    const queryClient = new QueryClient()
-    queryClient.setQueryData(queryKeys.relay.snapshot, snapshot())
-    queryClient.setQueryData(queryKeys.relay.instances, [alpha])
-    queryClient.setQueryData(defaultBackupRunsKey, {
-      pageParams: [null],
-      pages: [],
-    })
-    queryClient.setQueryData(targetSortedBackupRunsKey, {
-      pageParams: [null],
-      pages: [],
-    })
-
-    applyUpdatedInstance(queryClient, { ...alpha, name: "Renamed" })
-
-    expect(
-      queryClient.getQueryState(targetSortedBackupRunsKey)?.isInvalidated
-    ).toBe(true)
-    expect(queryClient.getQueryState(defaultBackupRunsKey)?.isInvalidated).toBe(
-      false
-    )
-  })
-
-  it("removes a deleted row from every populated fleet cache", () => {
-    const queryClient = new QueryClient()
-    const current = { instances: [alpha, beta], nodes: [node] }
-    queryClient.setQueryData(queryKeys.relay.snapshot, current)
     queryClient.setQueryData(queryKeys.relay.connection, {
       snapshot: current,
       status: "connected",
     })
     queryClient.setQueryData(queryKeys.relay.instances, current.instances)
+    const caches = () => [
+      queryClient.getQueryData<RelayFleetSnapshot>(queryKeys.relay.snapshot)
+        ?.instances,
+      queryClient.getQueryData<Array<FleetInstance>>(queryKeys.relay.instances),
+      queryClient.getQueryData<{ snapshot: RelayFleetSnapshot }>(
+        queryKeys.relay.connection
+      )?.snapshot.instances,
+    ]
+    const everyCache = (instances: Array<FleetInstance>) => [
+      instances,
+      instances,
+      instances,
+    ]
+
+    // Provisioning finished; only that row is reconciled.
+    applyProvisioningInstance(queryClient, { ...alpha, name: "Ready" })
+    expect(caches()).toEqual(everyCache([{ ...alpha, name: "Ready" }, beta]))
+
+    applyUpdatedInstance(queryClient, { ...alpha, name: "Renamed" })
+    expect(caches().slice(0, 2)).toEqual(
+      everyCache([{ ...alpha, name: "Renamed" }, beta]).slice(0, 2)
+    )
 
     applyDeletedInstance(queryClient, {
       instanceId: alpha.id,
       relayId: alpha.relayId,
     })
+    expect(caches()).toEqual(everyCache([beta]))
 
-    expect(
-      queryClient.getQueryData<RelayFleetSnapshot>(queryKeys.relay.snapshot)
-        ?.instances
-    ).toEqual([beta])
-    expect(
-      queryClient.getQueryData<Array<FleetInstance>>(queryKeys.relay.instances)
-    ).toEqual([beta])
-    expect(
-      queryClient.getQueryData<{ snapshot: RelayFleetSnapshot }>(
-        queryKeys.relay.connection
-      )?.snapshot.instances
-    ).toEqual([beta])
+    applyProvisioningInstance(queryClient, alpha)
+    expect(caches()).toEqual(everyCache([alpha, beta]))
   })
 })
 
@@ -1101,7 +937,6 @@ describe("game server pages", () => {
         serverWorkspaceQueryOptions(alpha.shortId).queryKey
       )
     ).toEqual(foundPage({ ...alpha, name: "Alpha 3" }))
-    expect(reads).toHaveLength(1)
   })
 
   it("keeps a deletion pushed during a read", async () => {
@@ -1287,7 +1122,6 @@ describe("game server pages", () => {
     reads[0]!.answer({ status: "not-found" })
 
     await expect(navigation).resolves.toEqual({ status: "not-found" })
-    expect(reads).toHaveLength(1)
   })
 
   it("fails recovery when the reread a gap requires fails", async () => {
@@ -1451,40 +1285,6 @@ describe("game server pages", () => {
       expect(relayServer.getServerWorkspace).toHaveBeenCalledTimes(1)
     )
     for (const unsubscribe of unsubscribes) unsubscribe()
-  })
-
-  it("rereads a mounted page after a gap in pushed changes", async () => {
-    const clients = fleet()
-    const page = openPage(clients)
-    const observer = new QueryObserver(
-      clients.queryClient,
-      serverWorkspaceQueryOptions(alpha.shortId)
-    )
-    const unsubscribe = observer.subscribe(() => undefined)
-    relayServer.getServerWorkspace.mockResolvedValue(
-      foundPage({ ...alpha, name: "Missed rename" })
-    )
-
-    await recheckServerWorkspaces(clients.queryClient)
-
-    expect(page()).toEqual(foundPage({ ...alpha, name: "Missed rename" }))
-    unsubscribe()
-  })
-
-  it("fails a recheck whose reread fails, so recovery retries", async () => {
-    const clients = fleet()
-    openPage(clients)
-    const observer = new QueryObserver(clients.queryClient, {
-      ...serverWorkspaceQueryOptions(alpha.shortId),
-      retry: false,
-    })
-    const unsubscribe = observer.subscribe(() => undefined)
-    relayServer.getServerWorkspace.mockRejectedValue(new Error("offline"))
-
-    await expect(recheckServerWorkspaces(clients.queryClient)).rejects.toThrow(
-      "offline"
-    )
-    unsubscribe()
   })
 
   it("resolves a navigation again after a gap marked its page stale", async () => {

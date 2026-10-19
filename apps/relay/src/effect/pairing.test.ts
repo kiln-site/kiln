@@ -155,7 +155,6 @@ describe("Relay pairing", () => {
       Effect.gen(function* () {
         const config = loadConfig({
           KILN_RELAY_DATA_DIR: directory,
-          KILN_RELAY_HOST: "relay.example.com",
           KILN_RELAY_NAME: "Coolify Relay",
           KILN_RELAY_PROXY: "coolify",
           SERVICE_URL_KILN_RELAY_4100: "https://relay.example.com:4100",

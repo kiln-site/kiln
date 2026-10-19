@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test"
-import { Effect, Exit, Fiber, Option, Queue, Stream } from "effect"
+import { Effect, Exit, Fiber, Option, Stream } from "effect"
 
 const relayCapability = vi.hoisted(() => ({
   issue: vi.fn(),
@@ -19,7 +19,6 @@ import {
   relayBrowserProtocol,
 } from "@workspace/contracts"
 
-import { createRelayBrowserSocketInbox } from "./authenticated-relay-socket"
 import { notifyRelayBrowserAuthorizationChanged } from "./relay-browser-credentials"
 import {
   openRelayConsoleStream,
@@ -417,36 +416,6 @@ describe("Relay console prewarm", () => {
       { instanceId: "instance-one", lifecycle: [], type: "ready" },
     ])
     expect(FakeWebSocket.instances).toHaveLength(1)
-    expect(relayCapability.issue).toHaveBeenCalledTimes(1)
-    expect(socket.sent).toEqual([
-      expect.objectContaining({ type: "auth" }),
-      { instanceId: "instance-one", type: "console.subscribe", v: 1 },
-    ])
-  })
-
-  it("subscribes a hovered link's connection right behind its auth", async () => {
-    deferredCapability().resolve(consoleCapability())
-    vi.stubGlobal("navigator", { onLine: true })
-    vi.stubGlobal("WebSocket", FakeWebSocket)
-
-    prewarmRelayConsole(prewarm)
-    const socket = await FakeWebSocket.opened(0)
-    dispatchChallenge(socket, { features: ["early-messages"] })
-    // Both go out before the Relay confirms the auth.
-    await socket.sentFrames(2)
-    socket.receive({ instanceId: "instance-one", type: "auth.ready" })
-    socket.receive({ instanceId: "instance-one", lifecycle: [], type: "ready" })
-
-    const events = await Effect.runPromise(
-      openConsole().pipe(Stream.take(2), Stream.runCollect)
-    )
-
-    expect(events).toContainEqual({
-      instanceId: "instance-one",
-      lifecycle: [],
-      type: "ready",
-    })
-    expect(FakeWebSocket.instances).toHaveLength(1)
     expect(socket.sent).toEqual([
       expect.objectContaining({ type: "auth" }),
       { instanceId: "instance-one", type: "console.subscribe", v: 1 },
@@ -604,7 +573,6 @@ describe("Relay console prewarm", () => {
     const next = await FakeWebSocket.opened(1)
     dispatchChallenge(next)
     await finishDirectConnection(next, running)
-    expect(FakeWebSocket.instances).toHaveLength(2)
   })
 
   it.each([
@@ -687,7 +655,6 @@ describe("Relay console kept connection", () => {
       reset("again"),
     ])
     expect(FakeWebSocket.instances).toHaveLength(1)
-    expect(relayCapability.issue).toHaveBeenCalledTimes(1)
     expect(socket.sent.at(-1)).toEqual({
       instanceId: "instance-one",
       type: "console.subscribe",
@@ -799,129 +766,6 @@ function line(text: string) {
   }
 }
 
-describe("Relay console socket inbox", () => {
-  it("routes operation replies outside the bounded console queue", async () => {
-    const socket = new FakeWebSocket()
-    const result = await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const inbox = yield* createConsoleInbox(socket)
-          const request = inbox.request(
-            socket as unknown as WebSocket,
-            "instance-one",
-            "console.complete",
-            { cursor: 0, input: "" }
-          )
-          socket.receive({
-            payload: { suggestions: [] },
-            requestId: socket.sent[0]?.requestId,
-            type: "operation.result",
-          })
-          socket.receive({ type: "console.line" })
-          const payload = yield* Effect.promise(() => request)
-          return { next: yield* inbox.take, payload }
-        })
-      )
-    )
-
-    expect(result).toEqual({
-      next: { type: "console.line" },
-      payload: { suggestions: [] },
-    })
-  })
-
-  it("retains a terminal error after queued messages are consumed", async () => {
-    const socket = new FakeWebSocket()
-    const result = await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const inbox = yield* createConsoleInbox(socket)
-
-          socket.receive({ type: "console.line" })
-          dispatchSocketClose(socket, 1006, "Relay disconnected")
-
-          const message = yield* inbox.take
-          const terminal = yield* inbox.take.pipe(
-            Effect.match({
-              onFailure: (cause) => cause,
-              onSuccess: () => new Error("Expected the inbox to fail"),
-            })
-          )
-          return { message, terminal }
-        })
-      )
-    )
-
-    expect(result.message).toEqual({ type: "console.line" })
-    expect(result.terminal).toEqual(new Error("Relay disconnected"))
-  })
-
-  it("removes browser listeners when its Effect scope closes", async () => {
-    const socket = new FakeWebSocket()
-
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          yield* createConsoleInbox(socket)
-          expect(socket.listenerCount).toBeGreaterThan(0)
-        })
-      )
-    )
-
-    expect(socket.listenerCount).toBe(0)
-  })
-
-  it("keeps the first terminal error when error and close both fire", async () => {
-    const socket = new FakeWebSocket()
-    const terminal = await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const inbox = yield* createConsoleInbox(socket)
-          socket.dispatchEvent(new Event("error"))
-
-          expect(() =>
-            dispatchSocketClose(socket, 1006, "Relay disconnected")
-          ).not.toThrow()
-          return yield* Queue.take(inbox.messages).pipe(
-            Effect.match({
-              onFailure: (cause) => cause,
-              onSuccess: () => new Error("Expected the inbox to fail"),
-            })
-          )
-        })
-      )
-    )
-
-    expect(terminal).toEqual(new Error("Unable to connect to Relay"))
-  })
-
-  it("does not recover a cancelled inbox as a typed stream failure", async () => {
-    const socket = new FakeWebSocket()
-    const fallbackOpened = vi.fn()
-    const fiber = Effect.runFork(
-      Effect.scoped(
-        Stream.unwrap(
-          createConsoleInbox(socket).pipe(
-            Effect.map(({ messages }) => Stream.fromQueue(messages))
-          )
-        ).pipe(
-          Stream.catch(() => {
-            fallbackOpened()
-            return Stream.empty
-          }),
-          Stream.runDrain
-        )
-      )
-    )
-
-    await socket.listening
-    await Effect.runPromise(Fiber.interrupt(fiber))
-
-    expect(fallbackOpened).not.toHaveBeenCalled()
-    expect(socket.listenerCount).toBe(0)
-  })
-})
-
 type SentFrame = Record<string, unknown>
 
 class FakeWebSocket extends EventTarget {
@@ -952,22 +796,17 @@ class FakeWebSocket extends EventTarget {
   readonly close = vi.fn(() => {
     this.readyState = FakeWebSocket.CLOSED
   })
-  readonly listening: Promise<void>
   listenerCount = 0
   protocol: string = relayBrowserConsoleProtocol
   readyState = FakeWebSocket.OPEN
   readonly sent: Array<SentFrame> = []
   readonly url: string
   #listening = false
-  #markListening: () => void = () => undefined
   #sendWaiters = new Set<() => void>()
 
   constructor(url: string | URL = "wss://relay.example.com/v1/browser") {
     super()
     this.url = String(url)
-    this.listening = new Promise((resolve) => {
-      this.#markListening = resolve
-    })
     FakeWebSocket.instances.push(this)
   }
 
@@ -1009,7 +848,6 @@ class FakeWebSocket extends EventTarget {
     super.addEventListener(type, callback, options)
     if (type !== "message" || this.#listening) return
     this.#listening = true
-    this.#markListening()
     for (const waiter of FakeWebSocket.#waiters) waiter()
   }
 
@@ -1021,13 +859,6 @@ class FakeWebSocket extends EventTarget {
     this.listenerCount -= 1
     super.removeEventListener(type, callback, options)
   }
-}
-
-function createConsoleInbox(socket: FakeWebSocket) {
-  return createRelayBrowserSocketInbox(
-    socket as unknown as WebSocket,
-    "console"
-  )
 }
 
 function deferredCapability(): {

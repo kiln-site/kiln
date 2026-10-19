@@ -94,6 +94,8 @@ export default defineConfig({
   },
   test: {
     include: ["src/**/*.test.ts"],
+    // Worker threads start faster than forked processes.
+    pool: "threads",
   },
 })
 

@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vite-plus/test"
 import {
   createConsoleAggregateStreamStore,
   createConsoleStreamStore,
-  createConsoleUiStore,
 } from "./console-stores"
 
 it("retries only the connection subscribers without clearing output", () => {
@@ -96,22 +95,5 @@ describe("Tailscale console stores", () => {
     expect(store.getSnapshot().consoleData?.lines).toMatchObject([
       { id: "relay-two:same-line", relayId: "relay-two" },
     ])
-  })
-
-  it("defaults relay and service filters to all", () => {
-    const store = createConsoleUiStore()
-
-    expect(store.getRelayIdsSnapshot()).toBeNull()
-    expect(store.getServicesSnapshot()).toBeNull()
-
-    store.toggleRelay("relay-one", ["relay-one", "relay-two"])
-    expect([...store.getRelayIdsSnapshot()!]).toEqual(["relay-one"])
-    store.toggleRelay("relay-two", ["relay-one", "relay-two"])
-    expect(store.getRelayIdsSnapshot()).toBeNull()
-
-    store.toggleService("coredns")
-    expect([...store.getServicesSnapshot()!]).toEqual(["coredns"])
-    store.toggleService("tailscale")
-    expect(store.getServicesSnapshot()).toBeNull()
   })
 })

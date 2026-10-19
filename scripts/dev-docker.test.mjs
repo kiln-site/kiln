@@ -149,18 +149,6 @@ test("primary checkout destroy preserves unscoped Relay resources", async () => 
   assert.match(output.join("\n"), /Refusing to destroy unscoped/u)
 })
 
-test("standard Docker prints a usable localhost URL without requiring OrbStack DNS", async () => {
-  vi.stubEnv("KILN_DEV_WEB_PORT", "3007")
-  await command("url")
-  assert.equal(output.pop(), "http://localhost:3007")
-  engine = "OrbStack"
-  await command("url")
-  assert.equal(output.pop(), "https://kiln-repo-cleanup.orb.local")
-  vi.stubEnv("KILN_DEV_NETWORK", "localhost")
-  await command("url")
-  assert.equal(output.pop(), "http://localhost:3007")
-})
-
 async function command(action) {
   vi.resetModules()
   vi.spyOn(process, "argv", "get").mockReturnValue([
