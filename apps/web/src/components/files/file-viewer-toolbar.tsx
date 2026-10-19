@@ -97,7 +97,7 @@ function FilePathCopyButton({ path }: { path: string }) {
     >
       <button
         type="button"
-        className="type-code group/path flex max-w-full items-center gap-1 text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring/50 focus-visible:outline-none"
+        className="type-code group/path flex max-w-full items-center gap-1 leading-4 text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring/50 focus-visible:outline-none"
         aria-label={
           copyState === "copied"
             ? `Copied ${fullFilePath}`
@@ -149,7 +149,7 @@ export const FileToolbarIdentity = React.memo(function FileToolbarIdentity({
         {pathIsCopyable ? (
           <FilePathCopyButton key={path} path={path} />
         ) : (
-          <p className="type-code truncate text-muted-foreground">
+          <p className="type-code truncate leading-4 text-muted-foreground">
             {rootPath}/{path}
           </p>
         )}
