@@ -44,18 +44,11 @@ import {
 } from "@/server/github-sync"
 import type { GitHubConnectionView } from "@/server/github-sync.server"
 
-export function AddSourceDialog({
-  hearthUrl,
-  webhooksReachable,
-  onClose,
-}: {
-  hearthUrl: string
-  webhooksReachable: boolean
-  onClose: () => void
-}) {
+export function AddSourceDialog({ onClose }: { onClose: () => void }) {
+  const queryClient = useQueryClient()
   const [account, setAccount] = React.useState<"organization" | "user">("user")
   const [organization, setOrganization] = React.useState("")
-  const [name, setName] = React.useState(() => defaultAppName(hearthUrl))
+  const [name, setName] = React.useState(randomAppName)
   const start = useMutation({
     mutationFn: () =>
       startGitHubConnection({
@@ -65,43 +58,61 @@ export function AddSourceDialog({
           organization: account === "organization" ? organization : undefined,
         },
       }),
-    // GitHub creates an app from a manifest the browser posts to it.
-    onSuccess: (result) => {
-      const form = document.createElement("form")
-      form.method = "post"
-      form.action = result.action
-      const field = document.createElement("input")
-      field.type = "hidden"
-      field.name = "manifest"
-      field.value = result.manifest
-      form.append(field)
-      document.body.append(form)
-      form.submit()
-    },
   })
   const nameValid = name.trim().length >= 3 && name.trim().length <= 34
   const canSubmit =
     nameValid &&
     (account === "user" || /^[A-Za-z0-9-]{1,39}$/u.test(organization.trim()))
-  // Stays busy while the browser leaves for GitHub.
+  // Stays busy while this tab leaves for GitHub.
   const leaving = start.isPending || start.isSuccess
+
+  const submit = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!canSubmit || leaving) return
+    // GitHub continues in a new tab. It opens during the click, as popup
+    // blockers require, and the manifest is posted into it once Hearth has
+    // signed it. A blocked tab falls back to this one.
+    const tab = window.open("about:blank", githubSetupTab)
+    if (tab) tab.opener = null
+    start.mutate(undefined, {
+      onError: () => tab?.close(),
+      // GitHub creates an app from a manifest the browser posts to it.
+      onSuccess: (result) => {
+        const form = document.createElement("form")
+        form.method = "post"
+        form.action = result.action
+        form.target = tab ? githubSetupTab : "_self"
+        const field = document.createElement("input")
+        field.type = "hidden"
+        field.name = "manifest"
+        field.value = result.manifest
+        form.append(field)
+        document.body.append(form)
+        form.submit()
+        form.remove()
+        if (!tab) return
+        // Setup lands on Sources in that tab; this one refreshes as the
+        // source appears.
+        showToast({
+          message: "Finish adding the source on GitHub",
+          type: "info",
+        })
+        void invalidateSources(queryClient)
+        onClose()
+      },
+    })
+  }
 
   return (
     <Dialog open onOpenChange={(open) => !open && !leaving && onClose()}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Add source</DialogTitle>
-          <DialogDescription>
-            A source is an account Kiln reads repositories from, for syncs and
-            deployments.
+          <DialogTitle>Add Source</DialogTitle>
+          <DialogDescription className="sr-only">
+            Connect an account Kiln reads repositories from.
           </DialogDescription>
         </DialogHeader>
-        <form
-          className="grid gap-5"
-          action={() => {
-            if (canSubmit && !leaving) start.mutate()
-          }}
-        >
+        <form className="grid gap-5" onSubmit={submit}>
           <fieldset className="grid gap-2">
             <legend className="mb-1.5 text-xs font-medium">Provider</legend>
             <div className="grid grid-cols-2 gap-2">
@@ -157,18 +168,6 @@ export function AddSourceDialog({
               onChange={(event) => setName(event.currentTarget.value)}
             />
           </Field>
-          <dl className="grid gap-2 rounded-lg border bg-muted/30 p-3 text-xs">
-            <FactRow label="Access">
-              Repository contents and metadata. Kiln only reads them for now;
-              write access is there for saving edits back later.
-            </FactRow>
-            <FactRow label="Updates">
-              <UpdatesDescription
-                hearthUrl={hearthUrl}
-                webhooks={webhooksReachable}
-              />
-            </FactRow>
-          </dl>
           {start.error ? <DialogError error={start.error} /> : null}
           <DialogFooter>
             <Button
@@ -559,7 +558,72 @@ function DialogError({ error }: { error: Error }) {
   )
 }
 
-function defaultAppName(hearthUrl: string) {
-  const host = new URL(hearthUrl).hostname.split(".")[0] ?? "hearth"
-  return `Kiln ${host}`.slice(0, 34)
+const githubSetupTab = "kiln-github-setup"
+
+// Short words for a default app name, `kiln-<adjective>-<noun>`. App names
+// are unique across GitHub, so a random pair rarely collides.
+const appNameAdjectives = [
+  "amber",
+  "ashen",
+  "brave",
+  "bright",
+  "cobalt",
+  "coral",
+  "dusky",
+  "ember",
+  "fabled",
+  "frosty",
+  "golden",
+  "hidden",
+  "lucky",
+  "lunar",
+  "mellow",
+  "misty",
+  "molten",
+  "quiet",
+  "rapid",
+  "rustic",
+  "silver",
+  "smoky",
+  "solar",
+  "stormy",
+  "sunny",
+  "swift",
+  "velvet",
+  "wild",
+] as const
+const appNameNouns = [
+  "anvil",
+  "beacon",
+  "brick",
+  "cinder",
+  "cobble",
+  "comet",
+  "crater",
+  "falcon",
+  "flint",
+  "forge",
+  "glaze",
+  "harbor",
+  "hearth",
+  "ingot",
+  "kettle",
+  "lantern",
+  "marble",
+  "pebble",
+  "quartz",
+  "raven",
+  "spark",
+  "summit",
+  "tinder",
+  "torch",
+  "willow",
+  "wren",
+] as const
+
+function randomAppName() {
+  const [adjective = 0, noun = 0] = crypto.getRandomValues(new Uint32Array(2))
+  return `kiln-${appNameAdjectives[adjective % appNameAdjectives.length]}-${
+    appNameNouns[noun % appNameNouns.length]
+  }`
 }

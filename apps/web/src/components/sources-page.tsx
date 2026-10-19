@@ -157,13 +157,7 @@ export const SourcesPage = React.memo(function SourcesPage({
       </DataTableWorkspace>
 
       <React.Suspense fallback={null}>
-        {addOpen ? (
-          <AddSourceDialog
-            hearthUrl={data.hearthUrl}
-            webhooksReachable={data.webhooksReachable}
-            onClose={closeAdd}
-          />
-        ) : null}
+        {addOpen ? <AddSourceDialog onClose={closeAdd} /> : null}
         {dialog?.kind === "configure" ? (
           <ConfigureSourceDialog
             // The table's copy goes stale as the dialog refreshes it.
