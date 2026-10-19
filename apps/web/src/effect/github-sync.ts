@@ -653,19 +653,21 @@ export const recordGitHubSyncResultEffect = Effect.fn("github.sync.record")(
   }
 )
 
-/** Saves which files a run is about to write, before it writes them. */
-export const saveGitHubSyncedFilesEffect = Effect.fn("github.sync.saveFiles")(
-  function* (id: string, syncedFiles: Record<string, GitHubSyncedFile>) {
-    const database = yield* Database
-    yield* database.execute(
-      "github.sync.saveFiles",
-      `UPDATE ${databaseTable("github_sync")}
-          SET synced_files = ?
-        WHERE id = ?`,
-      [JSON.stringify(syncedFiles), id]
-    )
-  }
-)
+/** Records a write about to be attempted, before it's attempted. */
+export const recordGitHubSyncAttemptEffect = Effect.fn(
+  "github.sync.recordAttempt"
+)(function* (id: string, path: string, file: GitHubSyncedFile) {
+  const database = yield* Database
+  // One path, so a run's attempts don't each rewrite every record.
+  yield* database.execute(
+    "github.sync.recordAttempt",
+    `UPDATE ${databaseTable("github_sync")}
+        SET synced_files = JSON_SET(
+              synced_files, CONCAT('$.', JSON_QUOTE(?)), CAST(? AS JSON))
+      WHERE id = ?`,
+    [path, JSON.stringify(file), id]
+  )
+})
 
 /** Clears a failure that passed, leaving the sync as it last succeeded. */
 export const restoreGitHubSyncEffect = Effect.fn("github.sync.restore")(

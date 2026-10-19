@@ -27,7 +27,7 @@ import {
   loadPolledGitHubSyncsEffect,
   recordGitHubSyncResultEffect,
   restoreGitHubSyncEffect,
-  saveGitHubSyncedFilesEffect,
+  recordGitHubSyncAttemptEffect,
   type GitHubSyncTrigger,
   setGitHubSyncStatusEffect,
 } from "@/effect/github-sync"
@@ -42,8 +42,10 @@ import { listPersistedRelaysEffect } from "@/lib/relay-registry"
 const maxSyncedFileBytes = 512 * 1024
 const maxSyncedFiles = 2_000
 const pollInterval = "1 minute"
-// Unconfirmed writes remembered per file, should several runs fail.
-const maxPendingWrites = 5
+// Unconfirmed writes remembered per file. Only attempted writes count, and
+// the newest landed one is on disk, so this many lost replies in a row on
+// one file would have to pass before it's forgotten.
+const maxPendingWrites = 20
 
 export function publishGitHubSyncChange(): void {
   publishRealtimeChange({
@@ -188,29 +190,16 @@ const runGitHubSyncEffect = Effect.fn("github.sync.run")(function* (
   let skipped = 0
   let kept = 0
   const toWrite = files.filter((file) => {
-    if (recorded[file.target]?.blob === file.sha) return false
+    const entry = recorded[file.target]
+    // An unconfirmed write may have replaced the recorded blob, so the file
+    // is checked again even when GitHub's copy matches it.
+    if (entry?.blob === file.sha && !entry.pending?.length) return false
     if (file.size > maxSyncedFileBytes) {
       skipped += 1
       return false
     }
     return true
   })
-  // Each write is recorded before it's attempted, so a write that lands
-  // with its reply lost is still recognized as Kiln's on a later run.
-  if (toWrite.length > 0) {
-    for (const file of toWrite) {
-      const entry = recorded[file.target]
-      syncedFiles[file.target] = {
-        blob: entry?.blob ?? null,
-        modifiedAt: entry?.modifiedAt ?? null,
-        // Earlier attempts stay until one is confirmed.
-        pending: [...new Set([...(entry?.pending ?? []), file.sha])].slice(
-          -maxPendingWrites
-        ),
-      }
-    }
-    yield* saveGitHubSyncedFilesEffect(sync.id, syncedFiles)
-  }
 
   const putFile = (
     target: string,
@@ -239,6 +228,18 @@ const runGitHubSyncEffect = Effect.fn("github.sync.run")(function* (
 
   for (const file of toWrite) {
     const previous = recorded[file.target]
+    // Recorded just before it's attempted, so a write that lands with its
+    // reply lost is still recognized as Kiln's on a later run. Only writes
+    // actually attempted are kept, until one is confirmed.
+    const attempt = {
+      blob: previous?.blob ?? null,
+      modifiedAt: previous?.modifiedAt ?? null,
+      pending: [...new Set([...(previous?.pending ?? []), file.sha])].slice(
+        -maxPendingWrites
+      ),
+    }
+    syncedFiles[file.target] = attempt
+    yield* recordGitHubSyncAttemptEffect(sync.id, file.target, attempt)
     const written = yield* getGitHubBlobEffect(
       token,
       sync.repository,
@@ -261,8 +262,7 @@ const runGitHubSyncEffect = Effect.fn("github.sync.run")(function* (
               current !== undefined &&
               current !== null &&
               current !== file.sha &&
-              (current === previous?.blob ||
-                (previous?.pending?.includes(current) ?? false))
+              (current === attempt.blob || attempt.pending.includes(current))
             return ours
               ? putFile(file.target, content, result.current!.modifiedAt)
               : Effect.succeed(result)

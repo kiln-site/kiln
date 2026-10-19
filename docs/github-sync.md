@@ -65,9 +65,11 @@ Each run:
    fails, the Relay reports the file's Git blob ID. Content Kiln is writing,
    last wrote, or set out to write is still Kiln's file; anything else is
    someone's file or edit, so it's kept and counted in the sync's warning.
-   Kiln records each write before attempting it (`pending` in
-   `synced_files`), so a write that landed with its reply lost is still
-   recognized on a later run, even after the branch moves on.
+   Kiln records each write just before attempting it (`pending` in
+   `synced_files`, up to 20 per file until one is confirmed), so a write
+   that landed with its reply lost is still recognized on a later run, even
+   after the branch moves on or back. A file with unconfirmed writes is
+   checked again even when GitHub's copy matches its record.
 
 Files deleted from the repository stay on the instance. Files larger than
 512 KB are skipped with a warning, since each write is one Relay control
