@@ -75,7 +75,7 @@ import { kilnRootDomain } from "@/lib/environment"
 import { listInstanceDirectoryEffect } from "@/lib/instance-directory"
 import { relayInstanceRouteId, type FleetRelayInstance } from "@/lib/relay-fleet"
 import type { PersistedRelay } from "@/lib/relay-registry"
-import { listPersistedRelays } from "@/lib/relay-registry"
+import { activeRelay, listPersistedRelays } from "@/lib/relay-registry"
 import { relayJsonEffect } from "@/lib/relay-client"
 import { requireEligibleResourceUser } from "@/server/auth"
 import {
@@ -1505,11 +1505,7 @@ async function loadWritableInstance(relayId: string, instanceId: string) {
 }
 
 async function requiredRelay(id: string): Promise<PersistedRelay> {
-  const relay = (await listPersistedRelays()).find(
-    (item) => item.enabled && item.id === id
-  )
-  if (!relay) throw new Error("Relay not found")
-  return relay
+  return activeRelay(id)
 }
 
 function domainFailure(

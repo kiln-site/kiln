@@ -19,7 +19,7 @@ import { hydrateBrickIcon } from "@/lib/brick-catalog-source.server"
 import { hydrateBrickVariables } from "@/lib/brick-variables"
 import { relayJsonEffect } from "@/lib/relay-client"
 import type { PersistedRelay } from "@/lib/relay-registry"
-import { listPersistedRelays } from "@/lib/relay-registry"
+import { activeRelay } from "@/lib/relay-registry"
 
 // Server-side work behind the Brick server functions in ./bricks, which
 // authenticate the caller first.
@@ -111,11 +111,7 @@ export async function loadInstanceRecipe(
 }
 
 export async function requiredRelay(id: string): Promise<PersistedRelay> {
-  const relay = (await listPersistedRelays()).find(
-    (item) => item.enabled && item.id === id
-  )
-  if (!relay) throw new Error("Relay not found")
-  return relay
+  return activeRelay(id)
 }
 
 export async function requestRelay(

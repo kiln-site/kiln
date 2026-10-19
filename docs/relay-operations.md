@@ -145,6 +145,36 @@ payload gets the first one's answer; one with a different payload fails with
 A cancelled change answers too: `request_cancelled` if it was withdrawn
 before it ran, or its real outcome if it was already running.
 
+## Hearth's audit
+
+Hearth records every change a person or CLI credential sends a Relay in
+`kiln_audit_event`: who asked (a user, or a CLI credential acting for one),
+the operation, the resource it acts on, the Relay, and the operation ID.
+`relayRpc` writes the row as pending before sending the change and gives it
+its outcome after: `succeeded`, `failed` (with the Relay's error), `not_run`
+when the change never reached the Relay, or `unknown`. Only short fields that
+say what a change was, such as a power action, are kept from its payload;
+file contents and credentials never are.
+
+A row a Hearth restart left pending is settled when Hearth next connects to
+the Relay, by asking `operation.get`. Rows younger than the longest change
+deadline are left alone, since a request may still be waiting for them; a
+second pass runs once that deadline has passed.
+
+Changes Hearth makes on its own, such as backup reconciliation, aren't
+audited here; the Relay's journal and audit still record them. There's no
+page for the audit yet: `listAuditEvents` reads it, newest first, optionally
+for one resource.
+
+## Paused Relays
+
+`relayRpc` sends a paused Relay no changes, and fails them with
+`RelayUnavailableError` and code `relay_paused`. Reads still go through, as do
+access revocations, which must reach a Relay whatever its state.
+`activeRelay` in `lib/relay-registry.ts` is the one way server functions find
+the Relay for a person's change: a missing Relay fails as not found, a paused
+one with `relay_paused` and the same message.
+
 ## Limits
 
 - **No preemption.** A kill waits behind a running start or stop like any

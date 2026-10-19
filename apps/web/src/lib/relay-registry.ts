@@ -47,6 +47,7 @@ import {
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 
 import { decryptWithKeyring, encryptWithKeyring } from "../../keyring.mjs"
+import { relayPausedError } from "@/lib/relay-availability"
 
 const RELAY_PRIVATE_KEY_PURPOSE = "kiln-relay-client-private-key"
 
@@ -1458,12 +1459,23 @@ function toPersistedRelay(row: RelayRow): PersistedRelay {
   }
 }
 
-async function requiredPersistedRelay(id: string): Promise<PersistedRelay> {
+/**
+ * The Relay to send a person's change to: one that exists and isn't
+ * paused. A missing one fails with `missing`, a paused one with
+ * `relay_paused`.
+ */
+export async function activeRelay(
+  id: string,
+  missing: () => Error = () =>
+    ResourceNotFoundError.make({ message: "Relay not found", resource: "relay" })
+): Promise<PersistedRelay> {
   const relay = (await listPersistedRelays()).find((item) => item.id === id)
-  if (!relay) throw new Error("Relay not found")
-  if (!relay.enabled) throw new Error("Relay is paused")
+  if (!relay) throw missing()
+  if (!relay.enabled) throw relayPausedError()
   return relay
 }
+
+const requiredPersistedRelay = (id: string) => activeRelay(id)
 
 function publicKeyFingerprint(publicKeyPem: string): string {
   return createHash("sha256")

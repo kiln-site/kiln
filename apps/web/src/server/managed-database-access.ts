@@ -5,7 +5,7 @@ import { runAppEffect } from "@/effect/runtime"
 import { requireRelayPermission } from "@/lib/access-control"
 import type { AccessPermission } from "@/lib/permissions"
 import type { PersistedRelay } from "@/lib/relay-registry"
-import { listPersistedRelays } from "@/lib/relay-registry"
+import { activeRelay } from "@/lib/relay-registry"
 import { requireEligibleResourceUser } from "@/server/auth"
 
 // Server-only helpers for managed database requests. They live apart from
@@ -37,11 +37,7 @@ export async function requiredCredential(relayId: string, databaseId: string) {
 }
 
 export async function requiredRelay(id: string): Promise<PersistedRelay> {
-  const relay = (await listPersistedRelays()).find(
-    (candidate) => candidate.enabled && candidate.id === id
-  )
-  if (!relay) throw new Error("Relay not found")
-  return relay
+  return activeRelay(id)
 }
 
 export async function databaseRpc(

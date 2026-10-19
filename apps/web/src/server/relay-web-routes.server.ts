@@ -6,7 +6,7 @@ import {
 import { isPlatformAdmin, listUserGrants } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { relayConnectionFeatures, relayRpc } from "@/lib/relay-connection"
-import { listPersistedRelays } from "@/lib/relay-registry"
+import { activeRelay } from "@/lib/relay-registry"
 import { effectiveScopePermissions } from "@/lib/resource-permissions"
 import {
   relayScope,
@@ -36,10 +36,7 @@ export async function relayWebRoutesHandler(
     user,
   })
   authorization.require("relay.read")
-  const relay = (await listPersistedRelays()).find(
-    (candidate) => candidate.enabled && candidate.id === relayId
-  )
-  if (!relay) throw new Error("Relay is not configured or is paused")
+  const relay = await activeRelay(relayId)
   if (!relayConnectionFeatures(relay.id).has(relayProxyConfigurationV1Feature))
     return null
   const { routes } = relayProxyConfigurationSchema.parse(

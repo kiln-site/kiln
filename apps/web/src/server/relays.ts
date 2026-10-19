@@ -135,12 +135,8 @@ async function requireRelayAdministrator(
 }
 
 async function enabledRelay(relayId: string): Promise<PersistedRelay> {
-  const { listPersistedRelays } = await import("@/lib/relay-registry")
-  const relay = (await listPersistedRelays()).find(
-    (candidate) => candidate.enabled && candidate.id === relayId
-  )
-  if (!relay) throw new Error("Relay is not configured or is paused")
-  return relay
+  const { activeRelay } = await import("@/lib/relay-registry")
+  return activeRelay(relayId)
 }
 
 async function managedRelays(

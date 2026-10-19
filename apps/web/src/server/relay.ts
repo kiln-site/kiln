@@ -107,7 +107,7 @@ import {
   type RelayReachability,
 } from "@/lib/relay-fleet"
 import type { PersistedRelay } from "@/lib/relay-registry"
-import { listPersistedRelays } from "@/lib/relay-registry"
+import { activeRelay, listPersistedRelays } from "@/lib/relay-registry"
 import { resolveMclogsApiUrl } from "@/lib/mclogs"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import {
@@ -1564,15 +1564,12 @@ async function findInstanceRelay(relayId: string) {
         }),
     })
   )
-  const relay = (await listPersistedRelays()).find(
-    (item) => item.enabled && item.id === relayId
-  )
-  if (!relay) {
-    throw ResourceNotFoundError.make({
+  const relay = await activeRelay(relayId, () =>
+    ResourceNotFoundError.make({
       resource: "relay",
       message: "No Relay owns this instance",
     })
-  }
+  )
   return { relay, user }
 }
 

@@ -63,7 +63,11 @@ import {
   dispatchBackupTask,
   reconcileRelayBackups,
 } from "@/lib/backup-reconciliation"
-import { listPersistedRelays, type PersistedRelay } from "@/lib/relay-registry"
+import {
+  activeRelay,
+  listPersistedRelays,
+  type PersistedRelay,
+} from "@/lib/relay-registry"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import {
   backupRunsQueryFingerprint,
@@ -1004,9 +1008,5 @@ async function validateRequestedStorage(
 }
 
 async function requireBackupRelay(relayId: string): Promise<PersistedRelay> {
-  const relay = (await listPersistedRelays()).find(
-    (candidate) => candidate.enabled && candidate.id === relayId
-  )
-  if (!relay) throw new Error("Relay is not available")
-  return relay
+  return activeRelay(relayId)
 }
