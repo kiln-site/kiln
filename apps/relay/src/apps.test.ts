@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 
 vi.mock("./command.js", () => import("./test/docker.js"))
 
+import { exclusive } from "./operation-lanes.js"
 import { appLifecycleLocks, appReplaceLocks } from "./operation-plans.js"
 import { appRouteOwner } from "./relay-resources.js"
 import { fakeDocker } from "./test/docker.js"
@@ -526,6 +527,35 @@ describe("apps", () => {
 
     const app = await deploy(harness, {})
     expect(app.deployment).toMatchObject({ state: "succeeded" })
+  })
+
+  it("finishes a deployment the Relay was too busy to start", async () => {
+    const harness = await createdApp()
+    // Fill the lanes' queue behind something that holds its lock.
+    const holder = harness.lanes.admit({
+      label: "holder",
+      locks: [exclusive("busy")],
+    })
+    const queued = Array.from({ length: 512 }, (_, index) =>
+      harness.lanes.admit({ label: `queued-${index}`, locks: [exclusive("busy")] })
+    )
+    await harness.apps.deploy(
+      relayDeployAppSchema.parse({
+        appId,
+        config: { ...defaultAppConfig, image: "nginx:alpine" },
+        name: "Website",
+      })
+    )
+    await vi.waitFor(async () =>
+      expect((await harness.apps.get(appId)).deployment).toMatchObject({
+        state: "failed",
+      })
+    )
+    for (const ticket of [holder, ...queued]) ticket.cancel()
+
+    expect((await deploy(harness, {})).deployment).toMatchObject({
+      state: "succeeded",
+    })
   })
 
   it("removes an app's containers, network, and data when deleted", async () => {

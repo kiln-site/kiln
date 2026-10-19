@@ -298,6 +298,18 @@ export class AppDriver {
             },
             promiseEffect(() => this.#runDeployment(input, deployment))
           )
+          .pipe(
+            // Refused before it ran, as when the Relay is too busy.
+            Effect.catch((cause) =>
+              promiseEffect(() =>
+                this.#finishDeployment(
+                  input.appId,
+                  deployment,
+                  errorMessage(cause)
+                )
+              )
+            )
+          )
       )
     )
     return this.get(input.appId)
@@ -608,6 +620,14 @@ export class AppDriver {
         : errorMessage(outcome.failure)
     if (message === null) log(`Deployment finished in ${seconds}s`)
     else log(`Deployment failed after ${seconds}s: ${message}`, "error")
+    await this.#finishDeployment(input.appId, deployment, message)
+  }
+
+  async #finishDeployment(
+    appId: string,
+    deployment: Deployment,
+    message: string | null
+  ) {
     const finished = {
       error: message?.slice(0, 2_000) ?? null,
       finishedAt: new Date().toISOString(),
@@ -615,11 +635,11 @@ export class AppDriver {
     }
     // Saved before it shows as finished, so a finished deployment's log is
     // always on disk. One whose App was deleted leaves nothing behind.
-    if (this.#deployments.get(input.appId) === deployment) {
-      await this.#saveDeployment(input.appId, { ...deployment, ...finished })
+    if (this.#deployments.get(appId) === deployment) {
+      await this.#saveDeployment(appId, { ...deployment, ...finished })
     }
     Object.assign(deployment, finished)
-    this.#wake(input.appId)
+    this.#wake(appId)
   }
 
   // Writes a finished deployment's log, keeping the newest few per app. A
