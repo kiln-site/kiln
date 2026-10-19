@@ -26,6 +26,7 @@ import {
 import {
   isRelayUpdating,
   relayConnectionInstances,
+  relayConfirmedPause,
   relayConnectionState,
   relayRpc,
 } from "@/lib/relay-connection"
@@ -232,7 +233,9 @@ const readRelayInventory = Effect.fn("Instances.inventory.relay")(function* (
   })
   const connection = relayConnectionState(relay.id)
   const reachability: InstanceObservation["reachability"] = !relay.enabled
-    ? "paused"
+    ? relayConfirmedPause(relay.id)
+      ? "paused"
+      : "pausing"
     : connection.status === "authenticated"
       ? "connected"
       : connection.status === "connecting"

@@ -62,6 +62,7 @@ import {
   isRelayUpdating,
   relayBrowserAuthorizationReady,
   relayConnectionBrowserMetadata,
+  relayConfirmedPause,
   relayConnectionFailing,
   relayConnectionState,
   relayConnectionNode,
@@ -388,6 +389,7 @@ effectIt.effect(
           { ...endpoint, enabled: false },
         ] as unknown as Awaited<ReturnType<typeof listPersistedRelays>>)
         // Paused while it was away, say, and Hearth has restarted since.
+        expect(relayConfirmedPause(endpoint.id)).toBe(false)
         yield* promiseEffect(() =>
           relayRpc({ ...endpoint, enabled: false }, "relay.snapshot", {})
         )
@@ -400,6 +402,10 @@ effectIt.effect(
               })
             )
           )
+        )
+        // Until then Hearth shows it as pausing, not paused.
+        yield* promiseEffect(() =>
+          vi.waitFor(() => expect(relayConfirmedPause(endpoint.id)).toBe(true))
         )
       }).pipe(
         Effect.ensuring(

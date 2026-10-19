@@ -26,7 +26,8 @@ export type InstanceObservedState = typeof InstanceObservedStateSchema.Type
  * reports it, so an unreachable Relay never reads as a failed workload.
  */
 export interface InstanceObservation extends InstanceReference {
-  reachability: "checking" | "connected" | "unreachable" | "paused"
+  /** `pausing` until the Relay confirms the pause Hearth sent it. */
+  reachability: "checking" | "connected" | "unreachable" | "paused" | "pausing"
   runtime: InstanceObservedState | null
   inventory: "available" | "missing" | "unavailable"
   updating: boolean

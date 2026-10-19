@@ -67,7 +67,7 @@ export function RelayUnavailableState({
           </h1>
           <p className="mt-3 max-w-md text-sm leading-6 text-muted-foreground">
             {paused
-              ? "Hearth will not request live data from paused Relays. Resume a Relay in settings when you are ready to reconnect it."
+              ? "Hearth doesn't show live data from paused Relays. Resume a Relay in settings when you're ready to manage it again."
               : configured
                 ? "No last-known server data is available in this browser or Hearth's cache. Live navigation will return when the Relay can be reached."
                 : "Hearth is ready. Add a Relay endpoint to discover and operate the game servers on another node."}
@@ -87,7 +87,7 @@ export function RelayUnavailableState({
         </div>
         <div className="type-code border-t border-border/70 bg-muted/10 px-5 py-3 text-muted-foreground">
           {paused
-            ? "Paused Relays remain online; only Hearth's requests are suspended."
+            ? "Paused Relays stay online and keep game servers running, but change nothing until resumed."
             : "Hearth checks configured Relays automatically. No page reload is required."}
         </div>
       </section>

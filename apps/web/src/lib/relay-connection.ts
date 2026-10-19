@@ -177,6 +177,9 @@ export async function relayRpc(
     )
   }
   if (Result.isFailure(result)) throw result.failure
+  if (operation === "relay.pause.write") {
+    confirmPause(relay.id, (payload as { paused?: unknown }).paused === true)
+  }
   return result.success
 }
 
@@ -332,6 +335,21 @@ export function relayConnectionProxyMode(
   relayId: string
 ): RelayProxyMode | null {
   return connections.get(relayId)?.pushedSnapshot?.relay?.proxyMode ?? null
+}
+
+// Whether each Relay last confirmed it holds this Hearth's pause. Kept in
+// memory: after a restart Hearth tells every paused Relay again.
+const confirmedPauses = new Map<string, boolean>()
+
+/** Whether the Relay has confirmed this Hearth's pause, as of this process. */
+export function relayConfirmedPause(relayId: string): boolean {
+  return confirmedPauses.get(relayId) === true
+}
+
+function confirmPause(relayId: string, paused: boolean): void {
+  if (confirmedPauses.get(relayId) === paused) return
+  confirmedPauses.set(relayId, paused)
+  publishRealtimeChange({ relayId, type: "relay.metadata" })
 }
 
 export function relayConnectionIds(): ReadonlyArray<string> {
@@ -1462,8 +1480,13 @@ class RelayConnection {
           if (!persisted) return
           await runAppEffect(
             "relay.pause.sync",
-            this.request("relay.pause.write", { paused: !persisted.enabled }, 10_000)
+            this.request(
+              "relay.pause.write",
+              { paused: !persisted.enabled },
+              10_000
+            )
           )
+          confirmPause(this.#relay.id, !persisted.enabled)
         }).pipe(
           Effect.catch((cause) =>
             Effect.logWarning("Relay pause sync after connect failed", {

@@ -1,13 +1,17 @@
 import * as React from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 
-import type { RelayProxyDiagnostics } from "@workspace/contracts"
+import type {
+  InstanceInventory,
+  RelayProxyDiagnostics,
+} from "@workspace/contracts"
 
 import {
   relayStatusPresentation,
   type InstanceStatusPresentation,
   type RelayIdentityStatus,
 } from "@/components/instance-name-presentation"
+import { instanceInventoryQueryOptions } from "@/lib/instance-inventory"
 import {
   relayConnectionQueryOptions,
   type RelayConnection,
@@ -21,13 +25,17 @@ export interface RelayLiveStatus {
 }
 
 // A Relay's status from its entry in the shared connection poll, or `missing`
-// while the poll has no entry for it.
+// while the poll has no entry for it. A paused one is `pausing` until it
+// confirms the pause.
 export function relayLiveState(
   enabled: boolean,
   state: { status: string; updating?: boolean } | null | undefined,
-  missing: "checking" | "unknown"
+  missing: "checking" | "unknown",
+  pausing = false
 ): { relayStatus: RelayIdentityStatus; updating: boolean } {
-  if (!enabled) return { relayStatus: "paused", updating: false }
+  if (!enabled) {
+    return { relayStatus: pausing ? "pausing" : "paused", updating: false }
+  }
   const status = state?.status
   return {
     relayStatus:
@@ -58,12 +66,24 @@ export function useRelayLiveStatus(relay: {
     notifyOnChangeProps: ["data", "isPending"],
     select,
   })
+  // The connection poll leaves out paused Relays; their inventory says
+  // whether the pause has reached them.
+  const { data: pausing = false } = useQuery({
+    ...instanceInventoryQueryOptions(
+      { id: relay.id, kind: "relay", relayId: relay.id },
+      "status"
+    ),
+    enabled: !relay.enabled,
+    notifyOnChangeProps: ["data"],
+    select: selectPausing,
+  })
   // Structural sharing keeps `state` stable while the Relay's state is.
   return React.useMemo(() => {
     const { relayStatus, updating } = relayLiveState(
       relay.enabled,
       state,
-      isPending ? "checking" : "unknown"
+      isPending ? "checking" : "unknown",
+      pausing
     )
     return {
       connected: relayStatus === "connected",
@@ -76,7 +96,11 @@ export function useRelayLiveStatus(relay: {
       relayStatus,
       updating,
     }
-  }, [isPending, relay.enabled, relay.lastError, state])
+  }, [isPending, pausing, relay.enabled, relay.lastError, state])
+}
+
+function selectPausing(inventory: InstanceInventory): boolean {
+  return inventory.observation.reachability === "pausing"
 }
 
 export const proxyModeLabels = {

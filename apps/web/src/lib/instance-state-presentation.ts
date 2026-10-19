@@ -22,6 +22,13 @@ export function instanceStatePresentation(
     return { label: "Checking", tone: "neutral", pending: true, pulse: true }
   if (observation.reachability === "paused")
     return { label: "Paused", tone: "neutral" }
+  if (observation.reachability === "pausing")
+    return {
+      detail: "Waiting for its Relay to confirm it's paused",
+      label: "Pausing",
+      pulse: true,
+      tone: "warning",
+    }
   if (
     observation.reachability === "connected" &&
     observation.inventory === "missing"
