@@ -853,13 +853,15 @@ let healthServer: HttpServer | null = null
 const sftpServer = await Effect.runPromise(
   relayOperation(() =>
     attachSftpServer({
-      clientActions: async (clientId) =>
-        (
-          await runRelayEffect(
-            "relay.sftp.clientGrant",
-            startup.state.findClientById(clientId)
-          )
-        )?.actions ?? [],
+      // Resolve the role the same way the control and browser sockets do, so
+      // a full-access Hearth paired before an action existed still has it.
+      clientActions: async (clientId) => {
+        const client = await runRelayEffect(
+          "relay.sftp.clientGrant",
+          startup.state.findClientById(clientId)
+        )
+        return client ? actionsForRole(client.role, client.actions) : []
+      },
       config,
       control: controlSocket,
       docker,

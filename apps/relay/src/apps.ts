@@ -264,13 +264,13 @@ export class AppDriver {
   }
 
   async deploy(input: RelayDeployApp): Promise<RelayApp> {
-    const current = this.#deployments.get(input.appId)
-    if (current?.state === "running") {
-      throw new Error("A deployment is already running")
-    }
     const problem = sourceProblem(input.config)
     if (problem) throw new Error(problem)
     await this.get(input.appId)
+    // Check after the await, so two deploys sent together can't both pass.
+    if (this.#deployments.get(input.appId)?.state === "running") {
+      throw new Error("A deployment is already running")
+    }
     const deployment: Deployment = {
       abort: new AbortController(),
       characters: 0,

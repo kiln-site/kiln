@@ -237,12 +237,20 @@ export function relayControlDeadlineMs(
   if (operation === "relay.tailscale.install") return 240_000
   if (operation === "relay.tailscale.stack.apply") return 240_000
   if (operation === "relay.tailscale.stack.remove") return 120_000
+  if (operation === "relay.tailscale.stack.dns") return 60_000
+  // Proxy and networking writes can pull and start edge containers.
+  if (operation === "relay.proxy.write") return 240_000
+  if (operation === "relay.networking.write") return 240_000
+  if (operation === "relay.tailscale.write") return 90_000
+  if (operation === "relay.host.files.mount") return 60_000
   if (operation === "hearth.tailscale.instance.detach") return 60_000
   if (operation === "instance.delete") return 360_000
   if (operation === "database.create") return 360_000
   if (operation === "database.delete") return 180_000
   if (operation === "app.delete") return 180_000
   if (operation === "app.action") return 180_000
+  if (operation === "app.create") return 60_000
+  if (operation === "database.action") return 180_000
   if (operation === "database.credentials.rotate") return 180_000
   if (operation === "database.dump.export") return 120_000
   // Docker walks every volume to measure them.

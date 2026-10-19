@@ -2231,6 +2231,7 @@ export class DockerDriver {
       cached.directory = directory
       const findCurrent = () => this.#findDiscovered(instance.config.id)
       const engine = this.#engine
+      const runtimeRecovery = this.#runtimeRecovery
       const refresh = Effect.gen(function* () {
         const usedBytes = yield* directoryApparentSizeEffect(directory)
         cached.usedBytes = usedBytes
@@ -2250,6 +2251,11 @@ export class DockerDriver {
               `Stopping ${current.config.name}: disk usage exceeded its configured quota`
             )
           })
+          // Record the stop as intended so crash recovery doesn't start the
+          // server again while it's still over quota.
+          if (current.config.managedByRelay) {
+            yield* runtimeRecovery.recordPowerAction(current.config.id, "stop")
+          }
           yield* engine.stopContainer(current.config.service, {
             seconds: INSTANCE_STOP_TIMEOUT_SECONDS,
             timeout: (INSTANCE_STOP_TIMEOUT_SECONDS + 15) * 1_000,

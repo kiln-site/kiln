@@ -148,6 +148,35 @@ describe("apps", () => {
     )
   })
 
+  it("refuses a second deployment sent while the first is starting", async () => {
+    const harness = await createdApp()
+    const request = relayDeployAppSchema.parse({
+      appId,
+      config: { ...defaultAppConfig, image: "nginx:alpine" },
+      name: "Website",
+    })
+
+    const results = await Promise.allSettled([
+      harness.apps.deploy(request),
+      harness.apps.deploy(request),
+    ])
+
+    expect(results.map((result) => result.status).sort()).toEqual([
+      "fulfilled",
+      "rejected",
+    ])
+    expect(results.find((result) => result.status === "rejected")).toMatchObject(
+      { reason: new Error("A deployment is already running") }
+    )
+    await vi.waitFor(
+      async () =>
+        expect((await harness.apps.get(appId)).deployment?.state).toBe(
+          "succeeded"
+        ),
+      { timeout: 10_000 }
+    )
+  })
+
   it("keeps the running container when its replacement fails to start", async () => {
     const harness = await createdApp()
     await deploy(harness, {})
