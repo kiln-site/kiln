@@ -6,7 +6,9 @@ import { dist, packageName, platforms, version } from "./distribution.mjs"
 
 const execFileAsync = promisify(execFile)
 const retryDelay = 10_000
-const visibilityTimeout = 5 * 60_000
+// npm often takes over five minutes to serve an upload it accepted.
+const visibilityMinutes = 20
+const visibilityTimeout = visibilityMinutes * 60_000
 const provenanceAttempts = 3
 
 function delay(milliseconds = retryDelay) {
@@ -52,7 +54,7 @@ export async function publishPackages(run = runNpm) {
       if (remaining > 0) await delay(Math.min(retryDelay, remaining))
     }
     throw new Error(
-      `${name}@${version} is still unavailable after 5 minutes. Rerun publishing after npm finishes processing it.`,
+      `${name}@${version} is still unavailable after ${visibilityMinutes} minutes. Rerun publishing after npm finishes processing it.`,
       { cause }
     )
   }

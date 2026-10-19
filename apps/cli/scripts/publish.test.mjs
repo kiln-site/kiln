@@ -168,7 +168,8 @@ it.each(["missing versions", "stalled registry reads"])(
     vi.useFakeTimers()
     let launcherPublished = false
     const conflict = new Error("Cannot publish over previously staged version")
-    const registryRecovery = Date.now() + 6 * 60_000
+    // Just past the publish budget.
+    const registryRecovery = Date.now() + 21 * 60_000
     const publishing = publishPackages(async ([command, source], options) => {
       if (command === "view") {
         if (outcome === "stalled registry reads") {
