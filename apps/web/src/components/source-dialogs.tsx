@@ -1,22 +1,11 @@
 import * as React from "react"
 import {
   useMutation,
-  useQuery,
   useQueryClient,
   type QueryClient,
 } from "@tanstack/react-query"
-import {
-  ArrowRight,
-  Building2,
-  ExternalLink,
-  ImageUp,
-  LoaderCircle,
-  RefreshCw,
-  Trash2,
-  User,
-} from "lucide-react"
+import { ArrowRight, Building2, LoaderCircle, Trash2, User } from "lucide-react"
 
-import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import {
   Dialog,
@@ -30,16 +19,10 @@ import { Input } from "@workspace/ui/components/input"
 import { showToast } from "@workspace/ui/components/sonner"
 import { cn } from "@workspace/ui/lib/utils"
 
-import kilnAppIcon from "@/assets/branding/app-icon-512.png"
 import { GitHubMark } from "@/components/github-mark"
-import { SourceAccount } from "@/components/source-account"
-import {
-  githubSourceRepositoryCountQueryOptions,
-  queryKeys,
-} from "@/lib/query-options"
+import { queryKeys } from "@/lib/query-options"
 import {
   deleteGitHubConnection,
-  refreshGitHubConnection,
   startGitHubConnection,
 } from "@/server/github-sync"
 import type { GitHubConnectionView } from "@/server/github-sync.server"
@@ -177,142 +160,6 @@ export function AddSourceDialog({ onClose }: { onClose: () => void }) {
   )
 }
 
-/** What Kiln knows about a source, and the changes made on GitHub. */
-export function ConfigureSourceDialog({
-  hearthUrl,
-  source,
-  onClose,
-}: {
-  hearthUrl: string
-  source: GitHubConnectionView
-  onClose: () => void
-}) {
-  const queryClient = useQueryClient()
-  const installation = source.installation
-  const repositoryCount = useQuery({
-    ...githubSourceRepositoryCountQueryOptions(source.id),
-    enabled: installation !== null && !installation.suspended,
-  })
-  const refresh = useMutation({
-    mutationFn: () => refreshGitHubConnection({ data: { id: source.id } }),
-    onSuccess: async (result) => {
-      await invalidateSources(queryClient)
-      showToast({
-        message: result.installed
-          ? "Source is up to date"
-          : "The app isn't installed on an account yet",
-        type: result.installed ? "success" : "warning",
-      })
-    },
-    onError: (cause) =>
-      showToast({
-        message:
-          cause instanceof Error ? cause.message : "GitHub couldn't be reached",
-        type: "error",
-      }),
-  })
-
-  return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Configure source</DialogTitle>
-          <DialogDescription>
-            Repository access and the app itself are managed on GitHub; Kiln
-            picks up the changes.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="flex items-center gap-3 rounded-lg border p-3">
-          <SourceAccount source={source} className="flex-1" />
-          <Badge variant="outline" className="shrink-0 gap-1.5">
-            <GitHubMark className="size-3" />
-            GitHub
-          </Badge>
-        </div>
-        <dl className="grid gap-3 text-xs">
-          <FactRow
-            label="Repositories"
-            action={
-              installation ? (
-                <ExternalButton href={source.manageUrl ?? source.appUrl}>
-                  Change
-                </ExternalButton>
-              ) : (
-                <Button asChild size="xs">
-                  <a href={source.installUrl}>
-                    <GitHubMark /> Install
-                  </a>
-                </Button>
-              )
-            }
-          >
-            {!installation
-              ? "Install the app on an account to choose repositories."
-              : installation.suspended
-                ? "Suspended on GitHub; syncs from it stop until it's resumed."
-                : repositoryAccess(
-                    installation.repositorySelection,
-                    repositoryCount.data
-                  )}
-          </FactRow>
-          <FactRow label="Updates">
-            <UpdatesDescription
-              hearthUrl={hearthUrl}
-              webhooks={source.webhookActive}
-            />
-          </FactRow>
-          <FactRow
-            label="GitHub App"
-            action={
-              <ExternalButton href={source.settingsUrl}>
-                Settings
-              </ExternalButton>
-            }
-          >
-            <span className="font-medium">{source.appName}</span>
-            <span className="block text-muted-foreground">
-              Can read and write contents, and read metadata.
-            </span>
-          </FactRow>
-          <FactRow
-            label="Logo"
-            action={
-              <Button
-                type="button"
-                size="xs"
-                variant="outline"
-                onClick={() => openKilnLogoUpload(source)}
-              >
-                <ImageUp /> Use Kiln's
-              </Button>
-            }
-          >
-            GitHub only takes an app's logo on its settings page.
-          </FactRow>
-          {source.ownerName ? (
-            <FactRow label="Added by">{source.ownerName}</FactRow>
-          ) : null}
-        </dl>
-        <DialogFooter className="sm:justify-between">
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={refresh.isPending}
-            onClick={() => refresh.mutate()}
-          >
-            <RefreshCw className={refresh.isPending ? "animate-spin" : ""} />
-            Check on GitHub
-          </Button>
-          <Button type="button" size="sm" onClick={onClose}>
-            Done
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
 export function DeleteSourceDialog({
   source,
   onClose,
@@ -377,58 +224,12 @@ export function DeleteSourceDialog({
   )
 }
 
-function repositoryAccess(
-  selection: "all" | "selected",
-  count: number | undefined
-) {
-  if (count === undefined) {
-    return selection === "all" ? "All repositories" : "Selected repositories"
-  }
-  const noun = count === 1 ? "repository" : "repositories"
-  return selection === "all"
-    ? `All ${count} ${noun}`
-    : `${count} selected ${noun}`
-}
-
 /** Sources and the syncs that count them change together. */
 export function invalidateSources(queryClient: QueryClient) {
   return Promise.all([
     queryClient.invalidateQueries({ queryKey: queryKeys.github.sources }),
     queryClient.invalidateQueries({ queryKey: queryKeys.github.overview }),
   ])
-}
-
-// GitHub has no API for an app's logo, so download Kiln's and open the
-// settings page where it's uploaded.
-function openKilnLogoUpload(source: GitHubConnectionView) {
-  const link = document.createElement("a")
-  link.href = kilnAppIcon
-  link.download = "kiln-logo.png"
-  link.click()
-  window.open(source.settingsUrl, "_blank", "noreferrer")
-  showToast({
-    duration: 10_000,
-    message: "Upload kiln-logo.png under Display information on GitHub",
-    type: "info",
-  })
-}
-
-function UpdatesDescription({
-  hearthUrl,
-  webhooks,
-}: {
-  hearthUrl: string
-  webhooks: boolean
-}) {
-  return webhooks ? (
-    "GitHub tells Kiln about every push."
-  ) : (
-    <>
-      GitHub can't reach{" "}
-      <span className="font-mono">{new URL(hearthUrl).host}</span>, so Kiln
-      checks for new commits every minute.
-    </>
-  )
 }
 
 function ChoiceCard({
@@ -472,41 +273,6 @@ function ChoiceCard({
         </span>
       </span>
     </button>
-  )
-}
-
-function FactRow({
-  action,
-  children,
-  label,
-}: {
-  action?: React.ReactNode
-  children: React.ReactNode
-  label: string
-}) {
-  return (
-    <div className="flex items-start gap-3">
-      <dt className="w-24 shrink-0 text-muted-foreground">{label}</dt>
-      <dd className="min-w-0 flex-1">{children}</dd>
-      {action ? <div className="shrink-0">{action}</div> : null}
-    </div>
-  )
-}
-
-function ExternalButton({
-  children,
-  href,
-}: {
-  children: React.ReactNode
-  href: string
-}) {
-  return (
-    <Button asChild size="xs" variant="outline">
-      <a href={href} target="_blank" rel="noreferrer">
-        {children}
-        <ExternalLink />
-      </a>
-    </Button>
   )
 }
 

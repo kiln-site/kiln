@@ -11,7 +11,6 @@ import {
   listGitHubBranchesHandler,
   listGitHubFoldersHandler,
   listGitHubRepositoriesHandler,
-  refreshGitHubConnectionHandler,
   runGitHubSyncHandler,
   saveGitHubSyncHandler,
   startGitHubConnectionHandler,
@@ -113,10 +112,6 @@ export const getGitHubSourceRepositoryCount = createServerFn({ method: "GET" })
 export const startGitHubConnection = createServerFn({ method: "POST" })
   .validator(startConnectionInputSchema)
   .handler(({ data }) => startGitHubConnectionHandler(data))
-
-export const refreshGitHubConnection = createServerFn({ method: "POST" })
-  .validator(connectionInputSchema)
-  .handler(({ data }) => refreshGitHubConnectionHandler(data))
 
 export const deleteGitHubConnection = createServerFn({ method: "POST" })
   .validator(connectionInputSchema)

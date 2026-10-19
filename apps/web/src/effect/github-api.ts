@@ -159,19 +159,6 @@ export const getGitHubInstallationEffect = Effect.fn("github.app.installation")(
   }
 )
 
-/** The app's installations; a private app has at most its owner's. */
-export const listGitHubInstallationsEffect = Effect.fn(
-  "github.app.installations"
-)(function* (credentials: GitHubAppCredentials) {
-  const jwt = yield* githubAppJwt(credentials)
-  return yield* githubRequest(
-    "GET",
-    "/app/installations?per_page=100",
-    Schema.Array(InstallationSchema),
-    { token: jwt }
-  )
-})
-
 export const deleteGitHubInstallationEffect = Effect.fn("github.app.uninstall")(
   function* (credentials: GitHubAppCredentials, installationId: number) {
     const jwt = yield* githubAppJwt(credentials)

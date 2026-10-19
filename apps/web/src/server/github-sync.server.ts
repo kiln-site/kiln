@@ -17,7 +17,6 @@ import {
   githubAppManifest,
   githubInstallationTokenEffect,
   listGitHubBranchesEffect,
-  listGitHubInstallationsEffect,
   listGitHubRepositoriesEffect,
   countGitHubRepositoriesEffect,
   type GitHubInstallation,
@@ -93,8 +92,6 @@ export interface GitHubConnectionView {
   installation: GitHubInstallationRecord | null
   /** Where the installation's repository access is changed on GitHub. */
   manageUrl: string | null
-  /** The app's own settings, where its name and logo change. */
-  settingsUrl: string
   /** Null when the viewer owns it. */
   ownerName: string | null
   /** Where the source lives; GitHub is the only one so far. */
@@ -204,11 +201,7 @@ export async function getGitHubSourcesHandler() {
     runAppEffect("github.connections.load", loadGitHubConnectionsEffect()),
     runAppEffect("github.syncs.load", loadGitHubSyncsEffect()),
   ])
-  return {
-    hearthUrl: kilnPublicUrl().origin,
-    sources: await sourceViews(user, connections, syncs),
-    webhooksReachable: githubCanReach(kilnPublicUrl()),
-  }
+  return { sources: await sourceViews(user, connections, syncs) }
 }
 
 /**
@@ -264,7 +257,6 @@ async function sourceViews(
         ? null
         : (ownerNames.get(connection.ownerUserId) ?? "Another user"),
     provider: "github",
-    settingsUrl: appSettingsUrl(connection),
     syncCount: syncCounts.get(connection.id) ?? 0,
     webhookActive: connection.webhookActive,
   }))
@@ -381,20 +373,6 @@ export async function completeGitHubInstallation(input: {
   throw new Error(
     "This installation doesn't belong to a GitHub App you connected"
   )
-}
-
-export async function refreshGitHubConnectionHandler(data: { id: string }) {
-  const user = await requireEligibleResourceUser()
-  const connection = await usableConnection(user, data.id)
-  const installations = await runAppEffect(
-    "github.app.installations",
-    listGitHubInstallationsEffect(connection)
-  )
-  const installation = installations[0] ?? null
-  if (connection.installation)
-    forgetGitHubInstallationToken(connection.installation.id)
-  await saveInstallation(connection.id, installation)
-  return { installed: installation !== null }
 }
 
 export async function deleteGitHubConnectionHandler(data: { id: string }) {
@@ -702,16 +680,6 @@ function connectionName(connection: GitHubConnection) {
 
 function installUrl(slug: string) {
   return `https://github.com/apps/${encodeURIComponent(slug)}/installations/new`
-}
-
-// A private app installs only on the account that owns it, so its
-// installation says whether that's an organization.
-function appSettingsUrl(connection: GitHubConnection) {
-  const slug = encodeURIComponent(connection.appSlug)
-  return connection.installation?.accountType === "Organization" &&
-    connection.installation.accountLogin === connection.appOwnerLogin
-    ? `https://github.com/organizations/${encodeURIComponent(connection.appOwnerLogin)}/settings/apps/${slug}`
-    : `https://github.com/settings/apps/${slug}`
 }
 
 function installationSettingsUrl(installation: GitHubInstallationRecord) {

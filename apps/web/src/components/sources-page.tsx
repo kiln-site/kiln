@@ -57,20 +57,12 @@ import type { GitHubConnectionView } from "@/server/github-sync.server"
 
 type Source = GitHubConnectionView
 
-type SourceDialog =
-  | { kind: "configure"; source: Source }
-  | { kind: "delete"; source: Source }
-  | null
+type SourceDialog = { kind: "delete"; source: Source } | null
 
 // The dialogs load on first use; idle time warms them.
 const loadSourceDialogs = () => import("@/components/source-dialogs")
 const AddSourceDialog = React.lazy(() =>
   loadSourceDialogs().then((module) => ({ default: module.AddSourceDialog }))
-)
-const ConfigureSourceDialog = React.lazy(() =>
-  loadSourceDialogs().then((module) => ({
-    default: module.ConfigureSourceDialog,
-  }))
 )
 const DeleteSourceDialog = React.lazy(() =>
   loadSourceDialogs().then((module) => ({
@@ -158,17 +150,6 @@ export const SourcesPage = React.memo(function SourcesPage({
 
       <React.Suspense fallback={null}>
         {addOpen ? <AddSourceDialog onClose={closeAdd} /> : null}
-        {dialog?.kind === "configure" ? (
-          <ConfigureSourceDialog
-            // The table's copy goes stale as the dialog refreshes it.
-            source={
-              data.sources.find((source) => source.id === dialog.source.id) ??
-              dialog.source
-            }
-            hearthUrl={data.hearthUrl}
-            onClose={closeDialog}
-          />
-        ) : null}
         {dialog?.kind === "delete" ? (
           <DeleteSourceDialog source={dialog.source} onClose={closeDialog} />
         ) : null}
@@ -275,9 +256,7 @@ const SourcesTable = React.memo(function SourcesTable({
           id: "account",
           header: "User / Org",
           sortFn: "text",
-          cell: ({ row }) => (
-            <SourceRowButton source={row.original} onDialog={onDialog} />
-          ),
+          cell: ({ row }) => <SourceAccount source={row.original} />,
           meta: dataTableColumnMeta({ width: "minmax(0,1fr)" }),
         }
       ),
@@ -323,8 +302,6 @@ const SourcesTable = React.memo(function SourcesTable({
     return defineDataTable({
       ariaLabel: "Sources",
       columns,
-      // The account cell's button covers the row; see SourceRowButton.
-      getRowClassName: () => "relative cursor-pointer",
       getRowId: (row) => row.id,
       search: { fields: sourceSearchFields },
     })
@@ -389,7 +366,7 @@ function UsageCell({ source }: { source: Source }) {
     <span className="type-meta flex min-w-0 flex-col items-start gap-0.5">
       <Link
         to="/automations/sync"
-        className="relative z-10 inline-flex items-center gap-1.5 hover:text-primary"
+        className="inline-flex items-center gap-1.5 hover:text-primary"
       >
         <FolderSync className="size-3 text-muted-foreground" />
         <span className="tabular-nums">{source.syncCount}</span>
@@ -397,7 +374,7 @@ function UsageCell({ source }: { source: Source }) {
       </Link>
       <Tooltip>
         <TooltipTrigger asChild>
-          <span className="relative z-10 inline-flex items-center gap-1.5 text-muted-foreground">
+          <span className="inline-flex items-center gap-1.5 text-muted-foreground">
             <Rocket className="size-3" />
             <span className="tabular-nums">{source.deploymentCount}</span>
             {source.deploymentCount === 1 ? "deployment" : "deployments"}
@@ -411,29 +388,6 @@ function UsageCell({ source }: { source: Source }) {
   )
 }
 
-/**
- * Opens Configure from anywhere on the row: its hit area stretches over the
- * row, beneath the links and actions raised above it.
- */
-function SourceRowButton({
-  source,
-  onDialog,
-}: {
-  source: Source
-  onDialog: (dialog: SourceDialog) => void
-}) {
-  return (
-    <button
-      type="button"
-      aria-label={`Configure ${source.installation?.accountLogin ?? source.appName}`}
-      className="flex min-w-0 text-left outline-none after:absolute after:inset-0 after:content-[''] focus-visible:after:ring-2 focus-visible:after:ring-ring/40 focus-visible:after:ring-inset"
-      onClick={() => onDialog({ kind: "configure", source })}
-    >
-      <SourceAccount source={source} />
-    </button>
-  )
-}
-
 const SourceActions = React.memo(function SourceActions({
   source,
   onDialog,
@@ -443,7 +397,7 @@ const SourceActions = React.memo(function SourceActions({
 }) {
   const name = source.installation?.accountLogin ?? source.appName
   return (
-    <DataTableActionGroup className="relative z-10">
+    <DataTableActionGroup>
       <Tooltip>
         <TooltipTrigger asChild>
           <Button
