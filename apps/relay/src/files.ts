@@ -2,6 +2,7 @@ import {
   chmod,
   chown,
   cp,
+  link,
   lstat,
   mkdir,
   open,
@@ -481,17 +482,6 @@ export class FilesystemDriver {
     }).pipe(Effect.withSpan("relay.files.stat"))
   }
 
-  /** A file's modification time in whole milliseconds, or null if absent. */
-  modifiedAt(instance: FileRoot, requestedPath: string) {
-    return this.entry(instance, requestedPath).pipe(
-      Effect.map((entry) => Math.floor(entry.modifiedAt)),
-      Effect.catchIf(
-        (error) => isMissingFile(error.cause),
-        () => Effect.succeed(null)
-      )
-    )
-  }
-
   read(instance: FileRoot, requestedPath: string) {
     return Effect.gen({ self: this }, function* () {
       const path = yield* this.#existingFile(instance, requestedPath)
@@ -811,7 +801,13 @@ export class FilesystemDriver {
     instance: FileRoot,
     requestedPath: string,
     source: AsyncIterable<Uint8Array>,
-    authorizeCommit: () => boolean = () => true
+    authorizeCommit: () => boolean = () => true,
+    /**
+     * Replace the file only if it's unchanged: its modification time in whole
+     * milliseconds still matches, or null for a file that must not exist.
+     * Otherwise the upload fails with `file_changed`.
+     */
+    unchangedSince?: number | null
   ) {
     return Effect.gen({ self: this }, function* () {
       yield* requireLinuxDescriptorAnchoring()
@@ -837,7 +833,8 @@ export class FilesystemDriver {
               name,
               requestedPath,
               source,
-              authorizeCommit
+              authorizeCommit,
+              unchangedSince
             )
           )
         )
@@ -1522,7 +1519,8 @@ const uploadIntoParent = Effect.fn("relay.files.uploadIntoParent")(function* (
   name: string,
   requestedPath: string,
   source: AsyncIterable<Uint8Array>,
-  authorizeCommit: () => boolean
+  authorizeCommit: () => boolean,
+  unchangedSince: number | null | undefined
 ) {
   const anchoredParent = fileDescriptorPath(parentHandle)
   const resolvedParent = yield* filesystemOperation(
@@ -1588,6 +1586,28 @@ const uploadIntoParent = Effect.fn("relay.files.uploadIntoParent")(function* (
             "Upload authorization changed before commit"
           )
         }
+        if (unchangedSince === null) {
+          // Linking fails if the file appeared meanwhile, so nothing the
+          // instance created is replaced.
+          yield* filesystemOperation("upload.create", () =>
+            link(temporary, target)
+          ).pipe(
+            Effect.catchIf(
+              (error) => isAlreadyExists(error.cause),
+              () => uploadChangedFailure()
+            ),
+            Effect.uninterruptible
+          )
+          return
+        }
+        if (unchangedSince !== undefined) {
+          // POSIX has no compare-and-swap rename; checking last leaves only
+          // the instant between this check and the rename.
+          const current = yield* optionalFileMetadata(target)
+          if (!current || Math.floor(current.mtimeMs) !== unchangedSince) {
+            return yield* uploadChangedFailure()
+          }
+        }
         yield* filesystemOperation("upload.replace", () =>
           rename(temporary, target)
         ).pipe(Effect.uninterruptible)
@@ -1606,6 +1626,14 @@ const uploadIntoParent = Effect.fn("relay.files.uploadIntoParent")(function* (
     size,
   }
 })
+
+function uploadChangedFailure() {
+  return filesystemFailure(
+    "file_changed",
+    "upload",
+    "The file changed on disk before the upload finished"
+  )
+}
 
 function requireLinuxDescriptorAnchoring() {
   return process.platform === "linux"

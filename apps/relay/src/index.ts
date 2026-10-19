@@ -2356,30 +2356,29 @@ async function executeControlRequest(
         serializeInstanceMutation(target.root.id, () =>
           runRelayEffect(
             "relay.files.put",
-            Effect.gen(function* () {
-              // Checked under the mutation lock, so no other Relay write
-              // lands between the check and the upload.
-              if (input.unlessModifiedSince !== undefined) {
-                const current = yield* target.filesystem.modifiedAt(
-                  target.root,
-                  input.path
-                )
-                if (current !== input.unlessModifiedSince) {
-                  return relayFilePutResultSchema.parse({ conflict: true })
-                }
-              }
-              const written = yield* target.filesystem.upload(
+            target.filesystem
+              .upload(
                 target.root,
                 input.path,
                 (async function* () {
                   yield content
-                })()
+                })(),
+                () => true,
+                input.unlessModifiedSince
               )
-              return relayFilePutResultSchema.parse({
-                ...written,
-                conflict: false,
-              })
-            })
+              .pipe(
+                Effect.map((written) =>
+                  relayFilePutResultSchema.parse({ ...written, conflict: false })
+                ),
+                // The precondition is checked as the file is committed.
+                Effect.catchIf(
+                  (error) => error.code === "file_changed",
+                  () =>
+                    Effect.succeed(
+                      relayFilePutResultSchema.parse({ conflict: true })
+                    )
+                )
+              )
           )
         )
       )

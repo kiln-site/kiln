@@ -631,17 +631,8 @@ export function canAccessInfrastructureDestination(
     return capabilities.isPlatformAdmin
   }
   if (destination.access === "sources") {
-    // Sources feed syncs, which need someone who can edit files somewhere.
-    // Each person's sources are their own.
-    return (
-      capabilities.isPlatformAdmin ||
-      capabilities.canManageRelays ||
-      hasScopedPermission(capabilities, "instance.files.write", [
-        "instance",
-        "relay",
-      ]) ||
-      hasScopedPermission(capabilities, "app.files.write", ["relay"])
-    )
+    // Sources feed syncs. Each person's sources are their own.
+    return canUseSyncs(capabilities)
   }
   if (destination.access === "app-read") {
     return hasScopedPermission(capabilities, "app.read", ["relay"])
@@ -684,7 +675,24 @@ export function canAccessAccessManagement(
 export function canAccessAutomations(
   capabilities: NavigationAccessCapabilities
 ): boolean {
-  return hasScopedPermission(capabilities, "schedule.read")
+  return (
+    hasScopedPermission(capabilities, "schedule.read") ||
+    canUseSyncs(capabilities)
+  )
+}
+
+/** Syncs write files, so they're for whoever may edit files somewhere. */
+function canUseSyncs(capabilities: NavigationAccessCapabilities): boolean {
+  return (
+    capabilities.isPlatformAdmin ||
+    capabilities.canManageRelays ||
+    hasScopedPermission(capabilities, "instance.files.write", [
+      "instance",
+      "relay",
+    ]) ||
+    hasScopedPermission(capabilities, "app.files.write", ["relay"]) ||
+    hasScopedPermission(capabilities, "relay.files.write", ["relay"])
+  )
 }
 
 export function canAccessBackups(

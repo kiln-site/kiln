@@ -568,21 +568,24 @@ export const recordGitHubSyncResultEffect = Effect.fn("github.sync.record")(
     if ("error" in result) {
       // Files written before the failure stay recorded, so a retry doesn't
       // write them again.
+      if (result.syncedFiles) {
+        yield* database.execute(
+          "github.sync.recordFiles",
+          `UPDATE ${databaseTable("github_sync")}
+              SET synced_files = ?
+            WHERE id = ?`,
+          [JSON.stringify(result.syncedFiles), id]
+        )
+      }
+      // The failure the sync already shows, as a poll repeats it, isn't a
+      // new outcome.
       const updated = yield* database.execute(
         "github.sync.recordError",
         `UPDATE ${databaseTable("github_sync")}
-            SET status = 'error', last_error = ?, last_synced_at = ?,
-                synced_files = COALESCE(?, synced_files)
+            SET status = 'error', last_error = ?, last_synced_at = ?
           WHERE id = ?
-            AND NOT (status = 'error' AND last_error <=> ? AND ? IS NULL)`,
-        [
-          result.error.slice(0, 1024),
-          now,
-          result.syncedFiles ? JSON.stringify(result.syncedFiles) : null,
-          id,
-          result.error.slice(0, 1024),
-          result.syncedFiles ? "files" : null,
-        ]
+            AND NOT (status = 'error' AND last_error <=> ?)`,
+        [result.error.slice(0, 1024), now, id, result.error.slice(0, 1024)]
       )
       if (updated.affectedRows === 0) return false
     } else {
@@ -638,6 +641,20 @@ export const recordGitHubSyncResultEffect = Effect.fn("github.sync.record")(
       [id, id]
     )
     return true
+  }
+)
+
+/** Clears a failure that passed, leaving the sync as it last succeeded. */
+export const restoreGitHubSyncEffect = Effect.fn("github.sync.restore")(
+  function* (id: string) {
+    const database = yield* Database
+    yield* database.execute(
+      "github.sync.restore",
+      `UPDATE ${databaseTable("github_sync")}
+          SET status = 'success', last_error = NULL
+        WHERE id = ? AND status = 'error'`,
+      [id]
+    )
   }
 )
 

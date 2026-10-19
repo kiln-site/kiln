@@ -59,9 +59,10 @@ Each run:
    written atomically and parent folders are created.
 3. Unless **Replace existing files** is on, a file is only written if it's
    absent or unchanged since Kiln wrote it. The put carries the modification
-   time Kiln recorded (or none), and the Relay checks it under the instance's
-   mutation lock. Anything else is someone's file or edit, so it's kept and
-   counted in the sync's warning.
+   time Kiln recorded (or none), and the Relay checks it as it commits the
+   upload: a new file is linked into place, which fails if one appeared, and
+   a replacement re-checks the time just before its rename. Anything else is
+   someone's file or edit, so it's kept and counted in the sync's warning.
 
 Files deleted from the repository stay on the instance. Files larger than
 512 KB are skipped with a warning, since each write is one Relay control
@@ -73,8 +74,17 @@ new commit isn't a run, and a failure the sync already shows isn't recorded
 again.
 
 Runs are serialized per sync. A trigger arriving while another waits joins
-it. A poll that fails the same way again leaves the row alone, so a broken
-sync doesn't notify every browser each minute.
+it, upgrading a waiting poll to the stronger trigger, so an edit or **Sync
+now** is never swallowed. Polls don't mark a sync as running; a poll that
+finds the branch still at the synced commit clears a failure that has
+passed, such as an offline Relay.
+
+A sync's target is checked against its kind: game servers and apps are
+addressed by their 40-character IDs, and a Relay's host files only by that
+Relay's own ID, because the Relay picks a file root by the ID's shape.
+
+A poll that fails the same way again leaves the row alone and records no
+run, so a broken sync doesn't notify every browser each minute.
 
 ## Not done yet
 

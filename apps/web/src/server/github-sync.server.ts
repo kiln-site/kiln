@@ -53,6 +53,10 @@ import {
   enqueueGitHubSync,
   publishGitHubSyncChange,
 } from "@/lib/github-sync.server"
+import {
+  githubSyncTargetAccess,
+  type GitHubSyncTargetKind,
+} from "@/lib/github-sync-targets"
 import { listInstanceDirectoryEffect } from "@/lib/instance-directory"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { requireEligibleResourceUser } from "@/server/auth"
@@ -80,7 +84,7 @@ const decodeSetupState = Schema.decodeUnknownOption(
   Schema.fromJsonString(SetupStateSchema)
 )
 
-export type GitHubTargetKind = "app" | "relay" | "server"
+export type GitHubTargetKind = GitHubSyncTargetKind
 
 export interface GitHubConnectionView {
   appName: string
@@ -519,9 +523,6 @@ export async function listGitHubFoldersHandler(data: GitHubFoldersInput) {
 
 export async function saveGitHubSyncHandler(data: SaveGitHubSyncInput) {
   const user = await requireEligibleResourceUser()
-  if (data.target.kind === "relay" && data.target.id !== data.target.relayId) {
-    throw new Error("Relay not found")
-  }
   const existing = data.id
     ? await runAppEffect("github.sync.load", loadGitHubSyncEffect(data.id))
     : null
@@ -533,7 +534,17 @@ export async function saveGitHubSyncHandler(data: SaveGitHubSyncInput) {
         relayId: existing.relayId,
       }
     : data.target
-  await requireTargetWrite(user, target)
+  if (existing) {
+    await requireTargetWrite(user, target)
+  } else {
+    // A new sync must name an instance that exists on its Relay and that
+    // the person may write to, as the Sync page lists them.
+    const { targets } = await getGitHubSyncOverviewHandler()
+    const key = targetKey(target)
+    if (!targets.some((candidate) => targetKey(candidate) === key)) {
+      throw new Error("Instance not found")
+    }
+  }
   const token = await connectionToken(user, data.connectionId)
   // The repository's ID survives renames, so pushes match it after one.
   const repository = await runAppEffect(
@@ -687,6 +698,7 @@ async function requireTargetWrite(
   user: AuthenticatedUser,
   target: { id: string; kind: GitHubTargetKind; relayId: string }
 ) {
+  if (!githubSyncTargetAccess(target)) throw new Error("Instance not found")
   if (isPlatformAdmin(user)) return
   const grants = await listUserGrants(user.id, target.relayId)
   if (!targetAllows(grants, target, true)) {
@@ -705,19 +717,14 @@ function targetAllows(
   target: { id: string; kind: GitHubTargetKind; relayId: string },
   write: boolean
 ) {
-  // App and host-file permissions are granted on the Relay, for every app.
-  if (target.kind !== "server") {
-    const family = target.kind === "app" ? "app" : "relay"
-    return grantsAllowPermission(
+  const access = githubSyncTargetAccess(target)
+  return (
+    access !== null &&
+    grantsAllowPermission(
       grants,
-      write ? `${family}.files.write` : `${family}.files.read`,
-      { relayId: target.relayId }
+      write ? access.write : access.read,
+      access.scope
     )
-  }
-  return grantsAllowPermission(
-    grants,
-    write ? "instance.files.write" : "instance.files.read",
-    { instanceId: target.id, relayId: target.relayId }
   )
 }
 
@@ -809,11 +816,15 @@ export async function handleGitHubWebhook(request: Request): Promise<Response> {
   if (!Number.isSafeInteger(appId) || !signature.startsWith("sha256=")) {
     return new Response("Missing GitHub signature", { status: 400 })
   }
-  // GitHub caps deliveries at 25 MB.
-  if (Number(request.headers.get("content-length") ?? 0) > 25 * 1024 * 1024) {
+  if (Number(request.headers.get("content-length") ?? 0) > maxDeliveryBytes) {
     return new Response("Delivery too large", { status: 413 })
   }
-  const body = await request.text()
+  // Read before the signature can be checked, so the limit holds even when
+  // a sender leaves out its length.
+  const body = await readLimitedText(request, maxDeliveryBytes)
+  if (body === null) {
+    return new Response("Delivery too large", { status: 413 })
+  }
   const connection = await runAppEffect(
     "github.webhook.connection",
     loadGitHubConnectionCredentialEffect({ appId }).pipe(Effect.option)
@@ -856,6 +867,31 @@ export async function handleGitHubWebhook(request: Request): Promise<Response> {
     }
   }
   return new Response(null, { status: 204 })
+}
+
+// GitHub caps deliveries at 25 MB.
+const maxDeliveryBytes = 25 * 1024 * 1024
+
+/** The body as text, or null once it passes `limit` bytes. */
+async function readLimitedText(
+  request: Request,
+  limit: number
+): Promise<string | null> {
+  if (!request.body) return ""
+  const reader = request.body.getReader()
+  const chunks: Array<Uint8Array> = []
+  let size = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    size += value.byteLength
+    if (size > limit) {
+      await reader.cancel()
+      return null
+    }
+    chunks.push(value)
+  }
+  return Buffer.concat(chunks).toString("utf8")
 }
 
 function validGitHubSignature(secret: string, body: string, signature: string) {

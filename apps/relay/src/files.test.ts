@@ -649,33 +649,81 @@ describeLinux("Relay direct file transfers", () => {
       )
   )
 
-  // A sync that mustn't overwrite edits compares this time with the one its
-  // last upload reported; an edit made outside Kiln must change it.
-  it.effect(
-    "reports modified times that match uploads and change on edits",
-    () =>
-      withSetup(({ driver, instance, root }) =>
-        Effect.gen(function* () {
-          assert.isNull(yield* driver.modifiedAt(instance, "server.properties"))
+  // A GitHub sync that keeps existing files commits only if the file is
+  // still absent, or unchanged since it last wrote it. The checks happen at
+  // commit, so a file the instance writes meanwhile survives.
+  it.effect("keeps a file created or edited while an upload is in flight", () =>
+    withSetup(({ driver, instance, root }) =>
+      Effect.gen(function* () {
+        const path = resolve(root, "server.properties")
+        const failure = (
+          effect: Effect.Effect<unknown, RelayFilesystemError>
+        ) =>
+          effect.pipe(
+            Effect.flip,
+            Effect.map((error) => error.code)
+          )
 
-          const uploaded = yield* driver.upload(
-            instance,
-            "server.properties",
-            chunks("motd=kiln\n")
-          )
-          const synced = yield* driver.modifiedAt(instance, "server.properties")
-          assert.strictEqual(synced, Date.parse(uploaded.modifiedAt))
+        // Absent when the upload starts, created before it commits.
+        assert.strictEqual(
+          yield* failure(
+            driver.upload(
+              instance,
+              "server.properties",
+              (async function* () {
+                await writeFile(path, "motd=instance\n")
+                yield Buffer.from("motd=github\n")
+              })(),
+              () => true,
+              null
+            )
+          ),
+          "file_changed"
+        )
+        assert.strictEqual(
+          yield* fromPromise(() => readFile(path, "utf8")),
+          "motd=instance\n"
+        )
 
-          const path = resolve(root, "server.properties")
-          yield* fromPromise(() =>
-            utimes(path, new Date(), new Date(Date.now() + 60_000))
-          )
-          assert.notStrictEqual(
-            yield* driver.modifiedAt(instance, "server.properties"),
-            synced
-          )
-        })
-      )
+        // Unchanged since the last upload: replaced.
+        const before = Math.floor(
+          (yield* fromPromise(() => stat(path))).mtimeMs
+        )
+        const replaced = yield* driver.upload(
+          instance,
+          "server.properties",
+          chunks("motd=github\n"),
+          () => true,
+          before
+        )
+        assert.strictEqual(
+          yield* fromPromise(() => readFile(path, "utf8")),
+          "motd=github\n"
+        )
+
+        // Edited while the next upload streams: kept.
+        assert.strictEqual(
+          yield* failure(
+            driver.upload(
+              instance,
+              "server.properties",
+              (async function* () {
+                await writeFile(path, "motd=edited\n")
+                await utimes(path, new Date(), new Date(Date.now() + 60_000))
+                yield Buffer.from("motd=newer\n")
+              })(),
+              () => true,
+              Date.parse(replaced.modifiedAt)
+            )
+          ),
+          "file_changed"
+        )
+        assert.strictEqual(
+          yield* fromPromise(() => readFile(path, "utf8")),
+          "motd=edited\n"
+        )
+      })
+    )
   )
 
   it.effect("atomically uploads and reads through a pinned file handle", () =>
