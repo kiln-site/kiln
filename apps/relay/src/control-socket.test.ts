@@ -12,8 +12,7 @@ import type { AddressInfo } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Duplex } from "node:stream"
-import { ManagedRuntime } from "effect"
-import type { Effect } from "effect"
+import { Effect, ManagedRuntime } from "effect"
 import { WebSocket } from "ws"
 import { describe, expect, it, onTestFinished, vi } from "vite-plus/test"
 
@@ -711,6 +710,50 @@ describe("Relay control socket", () => {
       })
     })
 
+    it("refuses each of two requests that reuse a journaled change's ID at once", async () => {
+      const journalRead = deferred<void>()
+      const relay = await startRelay({
+        execute: async () => ({}),
+        journalReads: journalRead.promise,
+      })
+      const hearth = await relay.pair()
+      const { inbox, socket } = await relay.connect(hearth, { features })
+      const operationId = randomUUID()
+      await relay.run(
+        relay.state.startOperation({
+          clientId: hearth.id,
+          operation: "instance.action",
+          operationId,
+          payloadSha256: "an-earlier-change",
+          startedAt: Date.now(),
+        })
+      )
+      await relay.run(
+        relay.state.finishOperation({
+          clientId: hearth.id,
+          errorCode: null,
+          errorMessage: null,
+          finishedAt: Date.now(),
+          operationId,
+          retryable: false,
+          status: "succeeded",
+        })
+      )
+
+      // The second arrives while the Relay still reads the first's journal.
+      const payload = { action: "kill", instanceId }
+      sendRequest(socket, "instance.action", payload, { operationId })
+      sendRequest(socket, "instance.action", payload, { operationId })
+      await vi.waitFor(async () =>
+        expect(await lookup(relay, hearth, operationId)).toEqual({
+          status: "running",
+        })
+      )
+      journalRead.resolve()
+      expect(await inbox.next()).toMatchObject({ code: "operation_conflict" })
+      expect(await inbox.next()).toMatchObject({ code: "operation_conflict" })
+    })
+
     it("runs a change sent from two sessions at once only once", async () => {
       const release = deferred<void>()
       let runs = 0
@@ -1218,6 +1261,8 @@ async function startRelay(
     readonly installation?: InstallationConfig
     readonly resolveInstance?: InstanceResolver
     readonly beforeRun?: ControlSocketOptions["beforeRun"]
+    /** Holds reads of the operation journal until it settles, as a slow disk would. */
+    readonly journalReads?: Promise<void>
   } = {}
 ) {
   const directory = mkdtempSync(join(tmpdir(), "kiln-relay-control-"))
@@ -1262,7 +1307,15 @@ async function startRelay(
     initialSnapshot: options.initialSnapshot ?? (async () => initialSnapshot),
     runEffect: (effect) => runtime.runPromise(effect),
     server,
-    state,
+    state: options.journalReads
+      ? {
+          ...state,
+          getOperation: (clientId, operationId) =>
+            Effect.promise(() => options.journalReads!).pipe(
+              Effect.andThen(state.getOperation(clientId, operationId))
+            ),
+        }
+      : state,
     subscribeSnapshots: (listener) => {
       listeners.add(listener)
       return () => listeners.delete(listener)

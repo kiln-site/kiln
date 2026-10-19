@@ -767,24 +767,27 @@ function authenticateSocket(
   ): EffectType.Effect<{ payload: unknown; ran: boolean }, unknown> {
     const key = operationKey(clientId, operationId)
     const digest = payloadDigest(request)
-    const repeat = (
-      earlier: { readonly digest: string },
-      outcome: EffectType.Effect<RecordedOutcome>
-    ) =>
+    const repeat = (earlier: SettledOperation) =>
       Effect.gen(function* () {
         ticket?.cancel()
         const settled =
-          earlier.digest === digest ? yield* outcome : conflictingOutcome
+          earlier.digest === digest ? earlier.outcome : conflictingOutcome
         return { payload: yield* settleRecorded(settled), ran: false }
       })
     const live = operations.running.get(key)
-    if (live) return repeat(live, Deferred.await(live.outcome))
+    if (live) {
+      // Until the journal is read, the request that claimed the ID may not
+      // be the one that made the change under it.
+      return live.digest !== null && live.digest !== digest
+        ? repeat({ digest: live.digest, outcome: conflictingOutcome })
+        : Deferred.await(live.settled).pipe(Effect.flatMap(repeat))
+    }
     const recent = recentOperation(operations, key)
-    if (recent) return repeat(recent, Effect.succeed(recent.outcome))
+    if (recent) return repeat(recent)
 
     const claim: LiveOperation = {
-      digest,
-      outcome: Deferred.makeUnsafe<RecordedOutcome>(),
+      digest: null,
+      settled: Deferred.makeUnsafe<SettledOperation>(),
     }
     operations.running.set(key, claim)
     let settled = false
@@ -796,7 +799,10 @@ function authenticateSocket(
         settled = true
         operations.running.delete(key)
         rememberOperation(operations, key, madeWith, outcome)
-        Deferred.doneUnsafe(claim.outcome, Exit.succeed(outcome))
+        Deferred.doneUnsafe(
+          claim.settled,
+          Exit.succeed({ digest: madeWith, outcome })
+        )
       })
     const run = Effect.gen(function* () {
       const prior = yield* promiseOperation(() =>
@@ -817,6 +823,7 @@ function authenticateSocket(
           ran: false,
         }
       }
+      claim.digest = digest
       yield* promiseOperation(() =>
         options.runEffect(
           options.state.startOperation({
@@ -1567,15 +1574,20 @@ function payloadDigest(request: RelayControlRequest): string {
     .digest("hex")
 }
 
-interface LiveOperation {
+/** How a change under an ID went, and the request that made it (`digest`). */
+interface SettledOperation {
   readonly digest: string
-  readonly outcome: Deferred.Deferred<RecordedOutcome>
+  readonly outcome: RecordedOutcome
 }
 
-interface FinishedOperation {
-  readonly digest: string
+interface LiveOperation {
+  /** The request making the change, once the journal shows it's this one. */
+  digest: string | null
+  readonly settled: Deferred.Deferred<SettledOperation>
+}
+
+interface FinishedOperation extends SettledOperation {
   readonly expiresAt: number
-  readonly outcome: RecordedOutcome
 }
 
 interface OperationRegistry {
