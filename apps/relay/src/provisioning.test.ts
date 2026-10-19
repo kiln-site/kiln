@@ -16,6 +16,7 @@ import type { LifecycleDriver } from "./lifecycle.js"
 import { exclusive, laneKeys, OperationLanes } from "./operation-lanes.js"
 import { provisioningErrorMessage } from "./provisioning-errors.js"
 import { ProvisioningManager } from "./provisioning.js"
+import { serverProvisioning } from "./server-provisioning.js"
 
 const pullFailure = new Error(
   "Command failed: docker pull private.example/image --env TOKEN=secret\nError response from daemon: manifest unknown\n"
@@ -92,8 +93,8 @@ describe("provisioning worker", () => {
               },
             } as unknown as LifecycleDriver
             const manager = yield* ProvisioningManager.make({
+              adapters: { server: serverProvisioning({ lifecycle, state }) },
               lanes,
-              lifecycle,
               refreshSnapshot: async () => undefined,
             })
             const worker = yield* Effect.forkChild(manager.run())
@@ -120,12 +121,13 @@ describe("provisioning worker", () => {
             )
             yield* until(() => lanes.pending.active === 1)
             yield* manager.prepare({
+              kind: "server",
               idempotencyKey: "55000000-0000-4000-8000-000000000009",
               input,
               instanceId,
               placeholder,
             })
-            yield* manager.claim(instanceId)
+            yield* manager.claim("server", instanceId)
             yield* until(() => lanes.pending.waiting === 1)
 
             lanes.setPaused(true)

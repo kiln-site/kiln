@@ -211,6 +211,7 @@ import { RelaySnapshotHub } from "./snapshot-hub.js"
 import { retainProvisioningInstances } from "./instance-mutation-snapshot.js"
 import { RuntimeRecoveryManager } from "./runtime-recovery.js"
 import { ProvisioningManager } from "./provisioning.js"
+import { serverProvisioning } from "./server-provisioning.js"
 import { SystemUpdateManager } from "./system-updates.js"
 import { ScheduleManager } from "./schedules.js"
 import { assignRelayWebRouteIds } from "./web-route-ids.js"
@@ -558,8 +559,10 @@ snapshotHub.subscribe(
 const provisioningManager = await runRelayEffect(
   "relay.startup.provisioning",
   ProvisioningManager.make({
+    adapters: {
+      server: serverProvisioning({ lifecycle, state: startupCore.state }),
+    },
     lanes,
-    lifecycle,
     refreshSnapshot: () => snapshotHub.refresh(),
   })
 )
@@ -1306,7 +1309,9 @@ async function relaySnapshot() {
   )
   const retained = Array.from(retainedInstances.values())
   const provisioningById = new Map(
-    provisioningJobs.map((job) => [job.instanceId, job.placeholder])
+    provisioningJobs.flatMap((job) =>
+      job.kind === "server" ? [[job.instanceId, job.placeholder] as const] : []
+    )
   )
   const instancesWithProvisioning = visibleInstances.map((instance) => {
     const placeholder = provisioningById.get(instance.id)
@@ -2214,6 +2219,7 @@ async function executeControlRequest(
       return runRelayEffect(
         "relay.instance.provision.prepare",
         provisioningManager.prepare({
+          kind: "server",
           idempotencyKey,
           input:
             placeholder.brickId === "velocity" && placeholder.variables
@@ -2228,14 +2234,14 @@ async function executeControlRequest(
       const { instanceId } = relayProvisionInstanceSchema.parse(request.payload)
       return runRelayEffect(
         "relay.instance.provision.claim",
-        provisioningManager.claim(instanceId)
+        provisioningManager.claim("server", instanceId)
       )
     }
     case "instance.provision.cancel": {
       const { instanceId } = relayProvisionInstanceSchema.parse(request.payload)
       const cancelled = await runRelayEffect(
         "relay.instance.provision.cancel",
-        provisioningManager.cancel(instanceId)
+        provisioningManager.cancel("server", instanceId)
       )
       return { cancelled, instanceId }
     }
@@ -2274,7 +2280,7 @@ async function executeControlRequest(
       if (provisioningJob) {
         const cancelled = await runRelayEffect(
           "relay.instance.provision.cancelForDelete",
-          provisioningManager.cancel(instanceId)
+          provisioningManager.cancel("server", instanceId)
         )
         if (!cancelled) {
           throw new Error(

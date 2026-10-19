@@ -21,7 +21,6 @@ import type {
   BrickRecipe,
   RelayCreateInstance,
   RelayInstance,
-  RelayInstanceProvisioning,
   RelayInstancePendingPrimaryPort,
   RelayInstancePortAllocation,
   RelayInstancePortInput,
@@ -40,6 +39,7 @@ import type {
   RelayTailscaleStackConfig,
   RelayTailscaleStackDns,
   RelayUpdateInstanceStartup,
+  ProvisioningWorkPhase,
   ResourceLimits,
   ResourceLimitsInput,
 } from "@workspace/contracts"
@@ -2191,7 +2191,7 @@ export class LifecycleDriver {
   async createInstanceWithId(
     id: string,
     input: RelayCreateInstance,
-    onPhase?: (phase: RelayInstanceProvisioning["phase"]) => Promise<void>
+    onPhase?: (phase: ProvisioningWorkPhase) => Promise<void>
   ): Promise<RelayInstance> {
     if (input.recipe === builtinTailscaleBrickSource) {
       throw new Error(
@@ -2326,7 +2326,7 @@ export class LifecycleDriver {
     id: string
     /** Limits to apply, or a create request to take them from. */
     limits: ResourceLimits | Pick<RelayCreateInstance, "diskLimitBytes" | "limits">
-    onPhase?: (phase: RelayInstanceProvisioning["phase"]) => Promise<void>
+    onPhase?: (phase: ProvisioningWorkPhase) => Promise<void>
     prepareDirectory: boolean
     ports?: ReadonlyArray<RelayInstancePortAllocation>
     recipe: string

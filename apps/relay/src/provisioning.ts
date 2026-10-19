@@ -1,82 +1,125 @@
 import { Effect, Queue } from "effect"
 
 import type {
-  RelayCreateInstance,
-  RelayInstance,
-  RelayInstanceProvisioning,
+  ProvisioningPhase,
+  ProvisioningState,
+  ProvisioningWorkPhase,
 } from "@workspace/contracts"
 
-import type { LifecycleDriver } from "./lifecycle.js"
-import { RelayStateStore } from "./effect/state.js"
+import {
+  RelayStateStore,
+  type RelayProvisioningJob,
+  type RelayProvisioningKind,
+} from "./effect/state.js"
 import { provisioningErrorMessage } from "./provisioning-errors.js"
-import type { OperationLanes } from "./operation-lanes.js"
-import { instanceReplaceLocks } from "./operation-plans.js"
+import type { LaneLock, OperationLanes } from "./operation-lanes.js"
 
-function withPhase(
-  instance: RelayInstance,
-  phase: RelayInstanceProvisioning["phase"],
-  attempt: number,
-  error: string | null = null,
-  failedPhase?: RelayInstanceProvisioning["failedPhase"]
-): RelayInstance {
-  const failed = phase === "failed"
-  return {
-    ...instance,
-    observedState: failed ? "failed" : "provisioning",
-    provisioning: {
-      attempt,
-      error,
-      ...(failedPhase ? { failedPhase } : {}),
-      phase,
-    },
-    status: failed ? "Provisioning failed" : provisioningStatus(phase),
-  }
+// Every kind of instance provisions through this one queue: Hearth prepares
+// a job and claims it, a worker runs it in the instance's lane, and the
+// job's placeholder stands in for the instance until it exists. What
+// differs by kind is in its adapter.
+
+type WorkPhase = ProvisioningWorkPhase
+
+/** How one kind of instance provisions. */
+export interface ProvisioningAdapter<Kind extends RelayProvisioningKind> {
+  readonly kind: Kind
+  /** Names the lane work, as in `instance.provision`. */
+  readonly label: string
+  /** What a job holds for the whole create. */
+  readonly locks: (instanceId: string) => ReadonlyArray<LaneLock>
+  /** The placeholder showing where provisioning is. */
+  readonly withState: (
+    placeholder: RelayProvisioningJob<Kind>["placeholder"],
+    state: ProvisioningState
+  ) => RelayProvisioningJob<Kind>["placeholder"]
+  /**
+   * Creates the instance, calling `onPhase` as each phase starts. The job
+   * is done once this resolves.
+   */
+  readonly provision: (
+    job: RelayProvisioningJob<Kind>,
+    onPhase: (phase: WorkPhase) => Promise<void>
+  ) => Promise<void>
 }
 
-function provisioningStatus(phase: RelayInstanceProvisioning["phase"]): string {
+export type ProvisioningAdapters = {
+  readonly [Kind in RelayProvisioningKind]: ProvisioningAdapter<Kind>
+}
+
+/** What a placeholder says at each phase, for an instance called `noun`. */
+export function provisioningStatus(
+  phase: ProvisioningPhase,
+  noun: string
+): string {
   switch (phase) {
     case "awaiting_claim":
       return "Waiting for Hearth"
     case "queued":
       return "Queued for provisioning"
     case "preparing":
-      return "Preparing server"
+      return `Preparing ${noun}`
     case "pulling_image":
-      return "Downloading server image"
+      return `Downloading ${noun} image`
     case "creating_container":
-      return "Creating server"
+      return `Creating ${noun}`
     case "finalizing":
-      return "Finalizing server"
+      return `Finalizing ${noun}`
     case "failed":
       return "Provisioning failed"
   }
 }
 
+function provisioningState(
+  phase: ProvisioningPhase,
+  attempt: number,
+  error: string | null = null,
+  failedPhase?: WorkPhase
+): ProvisioningState {
+  return { attempt, error, ...(failedPhase ? { failedPhase } : {}), phase }
+}
+
+// One job's adapter, with the job's own kind.
+function adapterFor<Kind extends RelayProvisioningKind>(
+  adapters: ProvisioningAdapters,
+  job: RelayProvisioningJob<Kind>
+): ProvisioningAdapter<Kind> {
+  return adapters[job.kind] as ProvisioningAdapter<Kind>
+}
+
+function placeholderAt<Kind extends RelayProvisioningKind>(
+  adapters: ProvisioningAdapters,
+  job: RelayProvisioningJob<Kind>,
+  state: ProvisioningState
+): RelayProvisioningJob<Kind>["placeholder"] {
+  return adapterFor(adapters, job).withState(job.placeholder, state)
+}
+
 export class ProvisioningManager {
+  readonly #adapters: ProvisioningAdapters
   readonly #lanes: OperationLanes
-  readonly #lifecycle: LifecycleDriver
   readonly #refreshSnapshot: () => Promise<unknown>
   readonly #state: RelayStateStore["Service"]
   readonly #wake: Queue.Queue<void>
 
   private constructor(options: {
+    adapters: ProvisioningAdapters
     lanes: OperationLanes
-    lifecycle: LifecycleDriver
     refreshSnapshot: () => Promise<unknown>
     state: RelayStateStore["Service"]
     wake: Queue.Queue<void>
   }) {
+    this.#adapters = options.adapters
     this.#lanes = options.lanes
-    this.#lifecycle = options.lifecycle
     this.#refreshSnapshot = options.refreshSnapshot
     this.#state = options.state
     this.#wake = options.wake
   }
 
   static make(options: {
-    /** The worker holds the new server's lane for the whole create. */
+    adapters: ProvisioningAdapters
+    /** The worker holds each new instance's lanes for the whole create. */
     lanes: OperationLanes
-    lifecycle: LifecycleDriver
     refreshSnapshot: () => Promise<unknown>
   }) {
     return Effect.gen(function* () {
@@ -89,12 +132,16 @@ export class ProvisioningManager {
     })
   }
 
-  prepare(input: {
-    idempotencyKey: string
-    instanceId: string
-    input: RelayCreateInstance
-    placeholder: RelayInstance
-  }) {
+  /**
+   * Records a job that waits for Hearth to claim it. The same key with the
+   * same input answers the job it made before.
+   */
+  prepare(
+    input: Omit<
+      RelayProvisioningJob,
+      "attempt" | "createdAt" | "error" | "status" | "updatedAt"
+    >
+  ) {
     return Effect.gen({ self: this }, function* () {
       const job = yield* this.#state.enqueueProvisioningJob(input, Date.now())
       yield* this.#refresh()
@@ -102,9 +149,10 @@ export class ProvisioningManager {
     })
   }
 
-  claim(instanceId: string) {
+  claim(kind: RelayProvisioningKind, instanceId: string) {
     return Effect.gen({ self: this }, function* () {
       const job = yield* this.#state.claimProvisioningJob(
+        kind,
         instanceId,
         Date.now()
       )
@@ -112,7 +160,11 @@ export class ProvisioningManager {
         return yield* Effect.fail(new Error("Provisioning job not found"))
       const placeholder =
         job.status === "queued"
-          ? withPhase(job.placeholder, "queued", job.attempt)
+          ? placeholderAt(
+              this.#adapters,
+              job,
+              provisioningState("queued", job.attempt)
+            )
           : job.placeholder
       if (job.status === "queued") {
         yield* this.#state.updateProvisioningJobPlaceholder(
@@ -127,9 +179,12 @@ export class ProvisioningManager {
     })
   }
 
-  cancel(instanceId: string) {
+  cancel(kind: RelayProvisioningKind, instanceId: string) {
     return Effect.gen({ self: this }, function* () {
-      const cancelled = yield* this.#state.cancelProvisioningJob(instanceId)
+      const cancelled = yield* this.#state.cancelProvisioningJob(
+        kind,
+        instanceId
+      )
       if (cancelled) yield* this.#refresh()
       return cancelled
     })
@@ -156,82 +211,11 @@ export class ProvisioningManager {
         if (this.#lanes.paused) return
         const job = yield* this.#state.claimNextProvisioningJob(Date.now())
         if (!job) return
-        let failedPhase: RelayInstanceProvisioning["failedPhase"] = "preparing"
-        const create = Effect.tryPromise({
-          try: async () => {
-            const updatePhase = async (
-              phase: RelayInstanceProvisioning["phase"]
-            ) => {
-              if (
-                phase !== "awaiting_claim" &&
-                phase !== "queued" &&
-                phase !== "failed"
-              ) {
-                failedPhase = phase
-              }
-              const placeholder = withPhase(job.placeholder, phase, job.attempt)
-              await Effect.runPromise(
-                this.#state.updateProvisioningJobPlaceholder(
-                  job.instanceId,
-                  placeholder,
-                  Date.now()
-                )
-              )
-              await Effect.runPromise(this.#refresh())
-            }
-            const instance = await this.#lifecycle.createInstanceWithId(
-              job.instanceId,
-              job.input,
-              updatePhase
-            )
-            await Effect.runPromise(
-              this.#state.setInstanceName(
-                job.instanceId,
-                job.input.name ?? instance.name
-              )
-            )
-            await Effect.runPromise(
-              this.#state.completeProvisioningJob(job.instanceId)
-            )
-            await Effect.runPromise(this.#refresh())
-          },
-          catch: (cause) => cause,
-        }).pipe(
-          Effect.catch((cause) => {
-            const message = provisioningErrorMessage(cause)
-            const placeholder = withPhase(
-              job.placeholder,
-              "failed",
-              job.attempt,
-              message,
-              failedPhase
-            )
-            return this.#state
-              .failProvisioningJob(
-                job.instanceId,
-                message,
-                placeholder,
-                Date.now()
-              )
-              .pipe(
-                Effect.tap(() => this.#refresh()),
-                Effect.tap(() =>
-                  Effect.logError("Relay instance provisioning failed", {
-                    cause,
-                    instanceId: job.instanceId,
-                  })
-                ),
-                Effect.asVoid
-              )
-          })
-        )
+        const adapter = adapterFor(this.#adapters, job)
         const refused = yield* this.#lanes
           .run(
-            {
-              label: "instance.provision",
-              locks: instanceReplaceLocks(job.instanceId),
-            },
-            create
+            { label: adapter.label, locks: adapter.locks(job.instanceId) },
+            this.#provision(job)
           )
           .pipe(
             Effect.as(null),
@@ -248,6 +232,61 @@ export class ProvisioningManager {
         yield* Effect.sleep("1 second")
       }
     })
+  }
+
+  #provision(job: RelayProvisioningJob) {
+    const adapters = this.#adapters
+    const state = this.#state
+    let failedPhase: WorkPhase = "preparing"
+    return Effect.tryPromise({
+      try: async () => {
+        const onPhase = async (phase: WorkPhase) => {
+          failedPhase = phase
+          await Effect.runPromise(
+            state.updateProvisioningJobPlaceholder(
+              job.instanceId,
+              placeholderAt(
+                adapters,
+                job,
+                provisioningState(phase, job.attempt)
+              ),
+              Date.now()
+            )
+          )
+          await Effect.runPromise(this.#refresh())
+        }
+        await adapterFor(adapters, job).provision(job, onPhase)
+        await Effect.runPromise(state.completeProvisioningJob(job.instanceId))
+        await Effect.runPromise(this.#refresh())
+      },
+      catch: (cause) => cause,
+    }).pipe(
+      Effect.catch((cause) => {
+        const message = provisioningErrorMessage(cause)
+        return state
+          .failProvisioningJob(
+            job.instanceId,
+            message,
+            placeholderAt(
+              adapters,
+              job,
+              provisioningState("failed", job.attempt, message, failedPhase)
+            ),
+            Date.now()
+          )
+          .pipe(
+            Effect.tap(() => this.#refresh()),
+            Effect.tap(() =>
+              Effect.logError("Relay provisioning failed", {
+                cause,
+                instanceId: job.instanceId,
+                kind: job.kind,
+              })
+            ),
+            Effect.asVoid
+          )
+      })
+    )
   }
 
   #refresh() {

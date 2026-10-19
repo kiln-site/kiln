@@ -1,4 +1,13 @@
-import type { RelayInstanceProvisioning } from "@workspace/contracts"
+import type {
+  ProvisioningKind,
+  RelayInstanceProvisioning,
+} from "@workspace/contracts"
+
+const KIND_LABELS: Record<ProvisioningKind, string> = {
+  app: "App",
+  database: "Database",
+  server: "Server",
+}
 
 const PHASE_LABELS: Record<
   NonNullable<RelayInstanceProvisioning["failedPhase"]>,
@@ -16,10 +25,11 @@ export function provisioningFailureDiagnostics(input: {
   failedPhase: RelayInstanceProvisioning["failedPhase"]
   instanceId: string
   instanceName: string
+  kind?: ProvisioningKind
   relayId: string
 }): string {
   return [
-    `Server: ${input.instanceName} (${input.instanceId})`,
+    `${KIND_LABELS[input.kind ?? "server"]}: ${input.instanceName} (${input.instanceId})`,
     `Relay: ${input.relayId}`,
     `Failed phase: ${PHASE_LABELS[input.failedPhase ?? "preparing"]}`,
     `Attempt: ${Math.max(1, input.attempt)}`,

@@ -89,24 +89,35 @@ export const relayObservedStateSchema = z
 
 export const relayDesiredStateSchema = z.enum(["stopped", "running"])
 
-export const relayInstanceProvisioningSchema = z
+// Every kind of instance provisions through the same steps: it waits for
+// Hearth to claim it, waits its turn, prepares its storage and network,
+// pulls its image, creates its container, and finishes setting up.
+export const provisioningKindSchema = z.enum(["server", "database", "app"])
+
+export const provisioningWorkPhaseSchema = z.enum([
+  "preparing",
+  "pulling_image",
+  "creating_container",
+  "finalizing",
+])
+
+export const provisioningPhaseSchema = z.enum([
+  "awaiting_claim",
+  "queued",
+  ...provisioningWorkPhaseSchema.options,
+  "failed",
+])
+
+export const provisioningStateSchema = z
   .object({
     attempt: z.number().int().nonnegative(),
     error: z.string().max(2_048).nullable(),
-    failedPhase: z
-      .enum(["preparing", "pulling_image", "creating_container", "finalizing"])
-      .optional(),
-    phase: z.enum([
-      "awaiting_claim",
-      "queued",
-      "preparing",
-      "pulling_image",
-      "creating_container",
-      "finalizing",
-      "failed",
-    ]),
+    failedPhase: provisioningWorkPhaseSchema.optional(),
+    phase: provisioningPhaseSchema,
   })
   .strict()
+
+export const relayInstanceProvisioningSchema = provisioningStateSchema
 
 export const relayInstanceRecoverySchema = z
   .object({
@@ -2217,6 +2228,10 @@ export type RelayProvisionInstance = z.infer<
 export type RelayInstanceProvisioning = z.infer<
   typeof relayInstanceProvisioningSchema
 >
+export type ProvisioningKind = z.infer<typeof provisioningKindSchema>
+export type ProvisioningPhase = z.infer<typeof provisioningPhaseSchema>
+export type ProvisioningWorkPhase = z.infer<typeof provisioningWorkPhaseSchema>
+export type ProvisioningState = z.infer<typeof provisioningStateSchema>
 export type RelayUpdateInstanceStartup = z.infer<
   typeof relayUpdateInstanceStartupSchema
 >

@@ -1181,6 +1181,7 @@ describe("Relay state", () => {
 
       const enqueued = yield* store.enqueueProvisioningJob(
         {
+          kind: "server",
           idempotencyKey: "55000000-0000-4000-8000-000000000001",
           input,
           instanceId,
@@ -1191,6 +1192,7 @@ describe("Relay state", () => {
       assert.strictEqual(enqueued.status, "awaiting_claim")
       const duplicate = yield* store.enqueueProvisioningJob(
         {
+          kind: "server",
           idempotencyKey: enqueued.idempotencyKey,
           input,
           instanceId: "b".repeat(40),
@@ -1201,7 +1203,7 @@ describe("Relay state", () => {
       assert.strictEqual(duplicate.instanceId, instanceId)
 
       assert.strictEqual(
-        (yield* store.claimProvisioningJob(instanceId, 1_010))?.status,
+        (yield* store.claimProvisioningJob("server", instanceId, 1_010))?.status,
         "queued"
       )
       const running = yield* store.claimNextProvisioningJob(1_020)
@@ -1218,7 +1220,7 @@ describe("Relay state", () => {
         failed?.placeholder.provisioning?.failedPhase,
         "preparing"
       )
-      assert.isTrue(yield* store.cancelProvisioningJob(instanceId))
+      assert.isTrue(yield* store.cancelProvisioningJob("server", instanceId))
       assert.isNull(yield* store.getProvisioningJob(instanceId))
     })
   )
@@ -1263,6 +1265,7 @@ describe("Relay state", () => {
         })
       yield* store.enqueueProvisioningJob(
         {
+          kind: "server",
           idempotencyKey: "55000000-0000-4000-8000-000000000002",
           input,
           instanceId: firstId,
@@ -1272,6 +1275,7 @@ describe("Relay state", () => {
       )
       yield* store.enqueueProvisioningJob(
         {
+          kind: "server",
           idempotencyKey: "55000000-0000-4000-8000-000000000003",
           input,
           instanceId: secondId,
@@ -1279,12 +1283,12 @@ describe("Relay state", () => {
         },
         2_001
       )
-      yield* store.claimProvisioningJob(firstId, 2_010)
-      yield* store.claimProvisioningJob(secondId, 2_011)
+      yield* store.claimProvisioningJob("server", firstId, 2_010)
+      yield* store.claimProvisioningJob("server", secondId, 2_011)
 
       const [cancelled, claimed] = yield* Effect.all(
         [
-          store.cancelProvisioningJob(firstId),
+          store.cancelProvisioningJob("server", firstId),
           store.claimNextProvisioningJob(2_020),
         ],
         { concurrency: "unbounded" }
