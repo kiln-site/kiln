@@ -3,6 +3,11 @@ import { randomUUID } from "node:crypto"
 import type { RowDataPacket } from "mysql2/promise"
 import { Clock, Effect, Predicate } from "effect"
 
+import {
+  appIdFromFileRoot,
+  isRelayFileRoot,
+  relayOperationRetentionMs,
+} from "@workspace/contracts"
 import type {
   RelayControlOperation,
   RelayOperationLookup,
@@ -41,7 +46,6 @@ export interface AuditEvent {
   readonly actor: AuditActor
   readonly details: Readonly<Record<string, string>> | null
   readonly errorCode: string | null
-  readonly errorMessage: string | null
   readonly finishedAt: number | null
   readonly id: string
   readonly occurredAt: number
@@ -88,8 +92,15 @@ export function relayChangeTarget(
   }
   const [area] = operation.split(".")
   if (area === "instance") {
+    // File operations take a file root: a game server's, an App's, or the
+    // Relay's own host files.
     const id = field("instanceId")
-    if (id) return { id, kind: id.startsWith("app:") ? "app" : "instance" }
+    if (id) {
+      const appId = appIdFromFileRoot(id)
+      if (appId) return { id: appId, kind: "app" }
+      if (isRelayFileRoot(id)) return { id: relayId, kind: "relay" }
+      return { id, kind: "instance" }
+    }
   }
   if (area === "app") {
     const id = field("appId") ?? field("id")
@@ -128,7 +139,11 @@ export const recordRelayChangeStarted = Effect.fn(
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
   const actor = auditActorForSubject(input.subject)
-  const target = relayChangeTarget(input.relayId, input.operation, input.payload)
+  const target = relayChangeTarget(
+    input.relayId,
+    input.operation,
+    input.payload
+  )
   const details = safeDetails(input.payload)
   yield* database.execute(
     "audit.recordRelayChangeStarted",
@@ -153,12 +168,15 @@ export const recordRelayChangeStarted = Effect.fn(
   )
 })
 
-/** Gives a pending Relay change its outcome. Settled ones are kept as they are. */
+/**
+ * Gives a pending Relay change its outcome. Settled ones are kept as they are.
+ * A failure keeps only its code: error messages can repeat what was sent,
+ * such as a password a database refused.
+ */
 export const recordRelayChangeFinished = Effect.fn(
   "audit.recordRelayChangeFinished"
 )(function* (input: {
   readonly errorCode?: string | undefined
-  readonly errorMessage?: string | undefined
   readonly operationId: string
   readonly outcome: Exclude<AuditOutcome, "pending">
 }) {
@@ -167,26 +185,33 @@ export const recordRelayChangeFinished = Effect.fn(
   yield* database.execute(
     "audit.recordRelayChangeFinished",
     `UPDATE ${databaseTable("audit_event")}
-        SET outcome = ?, finished_at = ?, error_code = ?, error_message = ?
+        SET outcome = ?, finished_at = ?, error_code = ?
       WHERE operation_id = ? AND outcome = 'pending'`,
     [
       input.outcome,
       now,
       input.errorCode?.slice(0, 64) ?? null,
-      input.errorMessage?.slice(0, 1024) ?? null,
       input.operationId,
     ]
   )
 })
 
 interface PendingRow extends RowDataPacket {
+  id: string
+  occurred_at: number | string
   operation_id: string
 }
+
+const RECONCILE_PAGE = 200
+// A Relay forgets a change a while after it finishes. Past that, less a
+// margin for the two clocks, its not knowing one says nothing.
+const RELAY_REMEMBERS_MS = relayOperationRetentionMs - 24 * 60 * 60_000
 
 /**
  * Settles changes left pending on a Relay, such as by a Hearth restart, by
  * asking the Relay how each went. Changes younger than `olderThan` may still
- * be awaited by this process and are left alone.
+ * be awaited by this process and are left alone. Returns how many it couldn't
+ * settle yet, because they're still running or the Relay didn't answer.
  */
 export const reconcilePendingRelayChanges = Effect.fn(
   "audit.reconcilePendingRelayChanges"
@@ -196,37 +221,55 @@ export const reconcilePendingRelayChanges = Effect.fn(
   lookup: (operationId: string) => Promise<RelayOperationLookup>
 ) {
   const database = yield* Database
-  const rows = yield* database.queryRows<PendingRow>(
-    "audit.pendingRelayChanges",
-    `SELECT operation_id FROM ${databaseTable("audit_event")}
-      WHERE relay_id = ? AND outcome = 'pending' AND occurred_at < ?
-      ORDER BY occurred_at
-      LIMIT 200`,
-    [relayId, olderThan]
-  )
-  for (const row of rows) {
-    const answer = yield* Effect.tryPromise(() => lookup(row.operation_id)).pipe(
-      Effect.option
-    )
-    if (answer._tag === "None" || answer.value.status === "running") continue
-    const outcome = answer.value
-    yield* recordRelayChangeFinished({
-      operationId: row.operation_id,
-      ...(outcome.status === "succeeded"
-        ? { outcome: "succeeded" as const }
-        : outcome.status === "failed"
-          ? {
-              errorCode: outcome.code,
-              errorMessage: outcome.message,
-              outcome:
-                outcome.code === "operation_withdrawn"
-                  ? ("not_run" as const)
-                  : ("failed" as const),
-            }
-          : outcome.status === "unknown"
-            ? { outcome: "not_run" as const }
-            : { outcome: "unknown" as const }),
-    })
+  const now = yield* Clock.currentTimeMillis
+  let unsettled = 0
+  let after: { readonly id: string; readonly occurredAt: number } | null = null
+  while (true) {
+    const rows: ReadonlyArray<PendingRow> =
+      yield* database.queryRows<PendingRow>(
+        "audit.pendingRelayChanges",
+        `SELECT id, occurred_at, operation_id
+         FROM ${databaseTable("audit_event")}
+        WHERE relay_id = ? AND outcome = 'pending' AND occurred_at < ?
+          ${after ? "AND (occurred_at > ? OR (occurred_at = ? AND id > ?))" : ""}
+        ORDER BY occurred_at, id
+        LIMIT ${RECONCILE_PAGE}`,
+        [
+          relayId,
+          olderThan,
+          ...(after ? [after.occurredAt, after.occurredAt, after.id] : []),
+        ]
+      )
+    for (const row of rows) {
+      const answer = yield* Effect.tryPromise(() =>
+        lookup(row.operation_id)
+      ).pipe(Effect.option)
+      if (answer._tag === "None" || answer.value.status === "running") {
+        unsettled += 1
+        continue
+      }
+      const outcome = answer.value
+      const remembered = Number(row.occurred_at) > now - RELAY_REMEMBERS_MS
+      yield* recordRelayChangeFinished({
+        operationId: row.operation_id,
+        ...(outcome.status === "succeeded"
+          ? { outcome: "succeeded" as const }
+          : outcome.status === "failed"
+            ? {
+                errorCode: outcome.code,
+                outcome:
+                  outcome.code === "operation_withdrawn"
+                    ? ("not_run" as const)
+                    : ("failed" as const),
+              }
+            : outcome.status === "unknown" && remembered
+              ? { outcome: "not_run" as const }
+              : { outcome: "unknown" as const }),
+      })
+    }
+    const last = rows.at(-1)
+    if (rows.length < RECONCILE_PAGE || !last) return unsettled
+    after = { id: last.id, occurredAt: Number(last.occurred_at) }
   }
 })
 
@@ -237,7 +280,6 @@ interface AuditRow extends RowDataPacket {
   actor_user_id: string | null
   details: unknown
   error_code: string | null
-  error_message: string | null
   finished_at: number | string | null
   id: string
   occurred_at: number | string
@@ -265,26 +307,23 @@ export const listAuditEvents = Effect.fn("audit.list")(function* (options: {
       Math.min(Math.max(options.limit, 1), 500),
     ]
   )
-  return rows.map(
-    (row): AuditEvent => ({
-      action: row.action,
-      actor: {
-        credentialId: row.actor_credential_id,
-        kind: row.actor_kind,
-        userId: row.actor_user_id,
-      },
-      details: Predicate.isObject(row.details)
-        ? (row.details as Record<string, string>)
-        : null,
-      errorCode: row.error_code,
-      errorMessage: row.error_message,
-      finishedAt: row.finished_at === null ? null : Number(row.finished_at),
-      id: row.id,
-      occurredAt: Number(row.occurred_at),
-      operationId: row.operation_id,
-      outcome: row.outcome,
-      relayId: row.relay_id,
-      target: { id: row.target_id, kind: row.target_kind },
-    })
-  )
+  return rows.map((row): AuditEvent => ({
+    action: row.action,
+    actor: {
+      credentialId: row.actor_credential_id,
+      kind: row.actor_kind,
+      userId: row.actor_user_id,
+    },
+    details: Predicate.isObject(row.details)
+      ? (row.details as Record<string, string>)
+      : null,
+    errorCode: row.error_code,
+    finishedAt: row.finished_at === null ? null : Number(row.finished_at),
+    id: row.id,
+    occurredAt: Number(row.occurred_at),
+    operationId: row.operation_id,
+    outcome: row.outcome,
+    relayId: row.relay_id,
+    target: { id: row.target_id, kind: row.target_kind },
+  }))
 })

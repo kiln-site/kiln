@@ -92,6 +92,7 @@ import {
   relayUpdateInstanceStartupSchema,
   relayBootstrapDiscoveryTranscript,
   relayControlDeadlineMs,
+  relayOperationRetentionMs,
   relaySystemUpdateSchema,
   RelayBrowserAuthorizationReviseSchema,
   relayBrowserAuthorizationReviseMaxItems,
@@ -273,15 +274,16 @@ await runRelayEffect(
 )
 // Changes that were running when the Relay last stopped may or may not have
 // taken effect; lookups report them as interrupted. Records of finished
-// changes are kept a week.
-const OPERATION_RETENTION_MS = 7 * 24 * 60 * 60_000
+// changes are kept a week (`relayOperationRetentionMs`).
 await runRelayEffect(
   "relay.startup.operations",
   startupCore.state
     .interruptRunningOperations(Date.now())
     .pipe(
       Effect.andThen(
-        startupCore.state.pruneOperations(Date.now() - OPERATION_RETENTION_MS)
+        startupCore.state.pruneOperations(
+          Date.now() - relayOperationRetentionMs
+        )
       )
     )
 )
@@ -290,7 +292,9 @@ const operationPruneFiber = forkRelayEffect(
   Effect.sleep("6 hours").pipe(
     Effect.andThen(
       Effect.suspend(() =>
-        startupCore.state.pruneOperations(Date.now() - OPERATION_RETENTION_MS)
+        startupCore.state.pruneOperations(
+          Date.now() - relayOperationRetentionMs
+        )
       )
     ),
     Effect.ignore,

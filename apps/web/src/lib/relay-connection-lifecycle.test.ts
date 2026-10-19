@@ -402,9 +402,14 @@ effectIt.effect(
         expect(auditFakes.started).toMatchObject([
           { operation: "instance.rename", operationId: sent.operationId },
         ])
-        expect(auditFakes.finished).toEqual([
-          { operationId: sent.operationId, outcome: "succeeded" },
-        ])
+        // The outcome is written after the reply, without holding it up.
+        yield* promiseEffect(() =>
+          vi.waitFor(() =>
+            expect(auditFakes.finished).toEqual([
+              { operationId: sent.operationId, outcome: "succeeded" },
+            ])
+          )
+        )
 
         const paused = yield* promiseEffect(() =>
           relayRpc(
@@ -446,7 +451,10 @@ effectIt.effect(
             advanceTimersUntil(
               new Promise<void>((resolve) => {
                 const check = () =>
-                  requests.some((r) => r.type === "request" && r.operation === "instance.action")
+                  requests.some(
+                    (r) =>
+                      r.type === "request" && r.operation === "instance.action"
+                  )
                     ? resolve()
                     : setImmediate(check)
                 check()
@@ -510,7 +518,8 @@ effectIt.effect(
               new Promise<void>((resolve) => {
                 const check = () =>
                   requests.some(
-                    (r) => r.type === "request" && r.operation === "instance.action"
+                    (r) =>
+                      r.type === "request" && r.operation === "instance.action"
                   )
                     ? resolve()
                     : setImmediate(check)
@@ -543,7 +552,10 @@ effectIt.effect(
             advanceTimersUntil(
               new Promise<void>((resolve) => {
                 const check = () =>
-                  requests.some((r) => r.type === "request" && r.operation === "instance.action")
+                  requests.some(
+                    (r) =>
+                      r.type === "request" && r.operation === "instance.action"
+                  )
                     ? resolve()
                     : setImmediate(check)
                 check()

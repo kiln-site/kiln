@@ -151,20 +151,31 @@ Hearth records every change a person or CLI credential sends a Relay in
 `kiln_audit_event`: who asked (a user, or a CLI credential acting for one),
 the operation, the resource it acts on, the Relay, and the operation ID.
 `relayRpc` writes the row as pending before sending the change and gives it
-its outcome after: `succeeded`, `failed` (with the Relay's error), `not_run`
+its outcome after: `succeeded`, `failed` (with the error's code), `not_run`
 when the change never reached the Relay, or `unknown`. Only short fields that
 say what a change was, such as a power action, are kept from its payload;
-file contents and credentials never are.
+file contents and credentials never are. Error messages aren't kept either,
+since some repeat what was sent, such as a password a database refused.
+
+An audit write never holds up the change it records. A change waits up to
+two seconds for its pending row, then goes ahead; the row and its outcome
+still land in order once the database answers.
 
 A row a Hearth restart left pending is settled when Hearth next connects to
 the Relay, by asking `operation.get`. Rows younger than the longest change
 deadline are left alone, since a request may still be waiting for them; a
-second pass runs once that deadline has passed.
+second pass runs once that deadline has passed, and a few more while some are
+still running. A Relay forgets a finished change after a week
+(`relayOperationRetentionMs`), so one it doesn't know that's older than that
+stays `unknown` rather than `not_run`.
 
-Changes Hearth makes on its own, such as backup reconciliation, aren't
-audited here; the Relay's journal and audit still record them. There's no
-page for the audit yet: `listAuditEvents` reads it, newest first, optionally
-for one resource.
+Console commands and file transfers go from the browser straight to the
+Relay, so Hearth never sees them; the Relay records them in its own audit,
+which Hearth's activity reads with `relay.audit.list`. An audit page would
+show both. Changes Hearth makes on its own, such as backup reconciliation,
+aren't audited here; the Relay's journal and audit still record them. There's
+no page for the audit yet: `listAuditEvents` reads it, newest first,
+optionally for one resource.
 
 ## Paused Relays
 

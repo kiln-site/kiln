@@ -29,7 +29,6 @@ export const auditEvents: Migration = {
   \`operation_id\` char(36) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,
   \`outcome\` enum('pending','succeeded','failed','not_run','unknown') NOT NULL,
   \`error_code\` varchar(64) DEFAULT NULL,
-  \`error_message\` varchar(1024) DEFAULT NULL,
   \`details\` json DEFAULT NULL,
   PRIMARY KEY (\`id\`),
   UNIQUE KEY \`${table}_operation_unique\` (\`operation_id\`),

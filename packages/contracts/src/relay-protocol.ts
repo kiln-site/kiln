@@ -358,6 +358,9 @@ export function relayControlOperationChanges(
   }
 }
 
+// How long a Relay keeps the record of a finished change for `operation.get`.
+export const relayOperationRetentionMs = 7 * 24 * 60 * 60_000
+
 export function relayControlDeadlineMs(
   operation: RelayControlOperation
 ): number {
