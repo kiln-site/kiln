@@ -6,7 +6,6 @@ import {
   ChevronDown,
   Folder,
   FolderRoot,
-  Info,
   LoaderCircle,
   Lock,
   Server,
@@ -43,6 +42,7 @@ import {
   SelectValue,
 } from "@workspace/ui/components/select"
 import { showToast } from "@workspace/ui/components/sonner"
+import { Separator } from "@workspace/ui/components/separator"
 import { Switch } from "@workspace/ui/components/switch"
 import { Textarea } from "@workspace/ui/components/textarea"
 import { cn } from "@workspace/ui/lib/utils"
@@ -193,10 +193,9 @@ export function GitHubSyncEditorDialog({
     <Dialog open onOpenChange={(open) => !open && !save.isPending && onClose()}>
       <DialogContent className="grid max-h-[min(92dvh,52rem)] grid-rows-[auto_minmax(0,1fr)] gap-4 overflow-hidden sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>{sync ? "Edit sync" : "Create sync"}</DialogTitle>
-          <DialogDescription>
-            Copy files from a repository folder into a game server or app. Files
-            with the same name are replaced; others are left alone.
+          <DialogTitle>{sync ? "Edit Sync" : "Create Sync"}</DialogTitle>
+          <DialogDescription className="sr-only">
+            Copy files from a repository folder into a game server or app.
           </DialogDescription>
         </DialogHeader>
         <form
@@ -206,7 +205,7 @@ export function GitHubSyncEditorDialog({
           }}
         >
           <div className="-mx-1 min-h-0 space-y-5 overflow-y-auto px-1 pb-1">
-            <EditorSection step={1} title="From">
+            <div className="space-y-3">
               <Field label="Source">
                 <Select
                   value={connectionId}
@@ -225,7 +224,14 @@ export function GitHubSyncEditorDialog({
                   <SelectContent>
                     {usable.map((item) => (
                       <SelectItem key={item.id} value={item.id}>
-                        <SourceAccount source={item} showType={false} />
+                        {/* One account can back several sources; their apps
+                            tell them apart. */}
+                        <span className="flex min-w-0 items-center gap-2">
+                          <SourceAccount source={item} showType={false} />
+                          <span className="type-meta truncate font-mono text-muted-foreground">
+                            {item.appName}
+                          </span>
+                        </span>
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -280,7 +286,7 @@ export function GitHubSyncEditorDialog({
                 </Field>
               </div>
               <Field
-                label="Folder"
+                label="Repository folder"
                 hint={
                   folderFiles === undefined
                     ? undefined
@@ -309,13 +315,13 @@ export function GitHubSyncEditorDialog({
                   onChange={(event) => setPatterns(event.currentTarget.value)}
                 />
               </Field>
-            </EditorSection>
+            </div>
 
-            <EditorSection step={2} title="Into">
+            <Separator />
+
+            <div className="space-y-3">
               <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-                <Field
-                  label={sync ? "Game server or app" : "Game server or app"}
-                >
+                <Field label="Game server or app">
                   <TargetPicker
                     disabled={sync !== null}
                     targets={targets}
@@ -326,14 +332,17 @@ export function GitHubSyncEditorDialog({
                     }}
                   />
                 </Field>
-                <Field label="Folder" hint="Created if missing">
+                <Field
+                  label="Destination folder"
+                  hint="Relative to its Files tab"
+                >
                   <div className="relative">
                     <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 font-mono text-xs text-muted-foreground">
                       /
                     </span>
                     <Input
                       value={targetPath}
-                      placeholder="Root folder"
+                      placeholder="Top level"
                       spellCheck={false}
                       autoComplete="off"
                       className="pl-6 font-mono"
@@ -344,9 +353,11 @@ export function GitHubSyncEditorDialog({
                   </div>
                 </Field>
               </div>
-            </EditorSection>
+            </div>
 
-            <EditorSection step={3} title="When">
+            <Separator />
+
+            <div className="space-y-3">
               <label className="flex items-start justify-between gap-4 rounded-lg border p-3">
                 <span className="min-w-0">
                   <span className="block text-xs font-medium">
@@ -382,27 +393,8 @@ export function GitHubSyncEditorDialog({
                   </Select>
                 </Field>
               ) : null}
-            </EditorSection>
+            </div>
 
-            {repository && target ? (
-              <p className="flex items-start gap-2 rounded-lg border border-primary/25 bg-primary/5 p-3 text-xs">
-                <Info className="mt-0.5 size-3.5 shrink-0 text-primary" />
-                <span>
-                  {includePatterns.length > 0 ? "Matching files" : "Every file"}{" "}
-                  in{" "}
-                  <span className="font-mono">
-                    {repository}/{sourcePath}
-                  </span>{" "}
-                  on <span className="font-mono">{branch || "…"}</span> will be
-                  copied to <span className="font-semibold">{target.name}</span>{" "}
-                  at{" "}
-                  <span className="font-mono">
-                    /{targetPath.replace(/^\/+/u, "")}
-                  </span>
-                  {autoSync ? ", and again whenever it changes." : "."}
-                </span>
-              </p>
-            ) : null}
             {save.error ? <DialogError error={save.error} /> : null}
           </div>
           <DialogFooter>
@@ -740,28 +732,6 @@ export function DeleteSyncDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  )
-}
-
-function EditorSection({
-  children,
-  step,
-  title,
-}: {
-  children: React.ReactNode
-  step: number
-  title: string
-}) {
-  return (
-    <section>
-      <h3 className="flex items-center gap-2 text-xs font-semibold">
-        <span className="type-code grid size-5 place-items-center rounded-full border bg-background text-muted-foreground">
-          {step}
-        </span>
-        {title}
-      </h3>
-      <div className="mt-2.5 space-y-3">{children}</div>
-    </section>
   )
 }
 
