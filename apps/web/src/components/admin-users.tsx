@@ -248,12 +248,7 @@ const UserTable = memo(function UserTable({
             header: "Added",
             sortFn: "text",
             cell: ({ row }) => (
-              // Positioned so it paints above the row's open button and its
-              // full date shows on hover.
-              <RelativeTime
-                className="type-meta relative text-foreground"
-                timestamp={Date.parse(row.original.createdAt)}
-              />
+              <UserAdded user={row.original} onAction={onAction} />
             ),
             meta: dataTableColumnMeta({ hideBelow: "xl", width: "8rem" }),
           }),
@@ -320,6 +315,29 @@ const UserCell = memo(function UserCell({
       openLabel={`Manage ${user.name}`}
       onOpen={() => onAction({ kind: "manage", userId: user.id, profileId })}
     />
+  )
+})
+
+// Positioned so its full date shows on hover above the row's manage button;
+// a click still manages the user.
+const UserAdded = memo(function UserAdded({
+  user,
+  onAction,
+}: {
+  user: ManagedUser
+  onAction: (action: UserAction) => void
+}) {
+  const profileId = useContext(UserProfilesContext)[user.id]
+  return (
+    <span
+      className="relative cursor-pointer"
+      onClick={() => onAction({ kind: "manage", userId: user.id, profileId })}
+    >
+      <RelativeTime
+        className="type-meta text-foreground"
+        timestamp={Date.parse(user.createdAt)}
+      />
+    </span>
   )
 })
 
@@ -412,8 +430,10 @@ const UserHoldings = memo(function UserHoldings({
           <span
             key={key}
             title={label}
+            // Not a target: clicks pass through to the row's manage button,
+            // which the dimmed counts' own layer would otherwise cover.
             className={cn(
-              "flex items-center gap-1 tabular-nums",
+              "pointer-events-none flex items-center gap-1 tabular-nums",
               count ? "text-foreground" : "opacity-40"
             )}
           >

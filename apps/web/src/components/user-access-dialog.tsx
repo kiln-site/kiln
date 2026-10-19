@@ -464,22 +464,44 @@ function AccessForm({
         await grantOrInviteAccess({
           data: { email: recipient, accessType: role },
         })
-      return (
-        invited?.invitations.filter((invitation) => !invitation.existing)
-          .length ?? 0
-      )
+      const results = invited?.invitations ?? []
+      return {
+        sent: results.filter((invitation) => !invitation.existing).length,
+        // Resources they already have access to, or own, are skipped by the
+        // server and keep their current permissions.
+        skipped: results.flatMap((invitation) =>
+          invitation.existing ? [invitation.resourceName] : []
+        ),
+        roleChanged: role !== "none",
+      }
     },
-    onSuccess: (sent) => {
+    onSuccess: ({ sent, skipped, roleChanged }) => {
       invalidateAccess(client)
+      const skippedNote = skipped.length
+        ? `${skipped.length === 1 ? skipped[0] : `${skipped.length} resources`}: they already have access there, so nothing changed. Edit it from the Users table.`
+        : null
+      if (!sent && !roleChanged && !updates.length && !revokes.length) {
+        // Nothing happened; keep the dialog so they can adjust it.
+        showToast({
+          type: "error",
+          message: skippedNote ?? "Nothing was sent",
+        })
+        return
+      }
       showToast({
-        type: "success",
-        message: user
-          ? sent
-            ? `Access updated. ${sent} invitation${sent === 1 ? "" : "s"} sent.`
-            : "Access updated"
-          : sent
-            ? `${sent} invitation${sent === 1 ? "" : "s"} sent. Each resource is accepted separately.`
-            : "Invitation sent",
+        type: skippedNote ? "info" : "success",
+        message: [
+          user
+            ? sent
+              ? `Access updated. ${sent} invitation${sent === 1 ? "" : "s"} sent.`
+              : "Access updated."
+            : sent
+              ? `${sent} invitation${sent === 1 ? "" : "s"} sent. Each resource is accepted separately.`
+              : "Platform role updated.",
+          skippedNote,
+        ]
+          .filter(Boolean)
+          .join(" "),
       })
       onClose()
     },
