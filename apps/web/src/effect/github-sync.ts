@@ -658,12 +658,15 @@ export const recordGitHubSyncAttemptEffect = Effect.fn(
   "github.sync.recordAttempt"
 )(function* (id: string, path: string, file: GitHubSyncedFile) {
   const database = yield* Database
-  // One path, so a run's attempts don't each rewrite every record.
+  // One path, so a run's attempts don't each rewrite every record. Once a
+  // write is attempted the instance may no longer be at the last synced
+  // commit, whatever fails next, so polls sync again until a run succeeds.
   yield* database.execute(
     "github.sync.recordAttempt",
     `UPDATE ${databaseTable("github_sync")}
         SET synced_files = JSON_SET(
-              synced_files, CONCAT('$.', JSON_QUOTE(?)), CAST(? AS JSON))
+              synced_files, CONCAT('$.', JSON_QUOTE(?)), CAST(? AS JSON)),
+            last_commit_sha = NULL
       WHERE id = ?`,
     [path, JSON.stringify(file), id]
   )
