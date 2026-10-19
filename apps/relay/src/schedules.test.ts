@@ -19,6 +19,7 @@ import {
 import { makeRelayStateLayer, RelayStateStore } from "./effect/state.js"
 
 import { ScheduleManager, type ScheduleManagerOptions } from "./schedules.js"
+import { LaneRejectedError } from "./operation-lanes.js"
 
 const directories: Array<string> = []
 const managers: Array<ScheduleManager> = []
@@ -76,6 +77,8 @@ async function manager(
     getBackup: (taskId: string) => Promise<RelayBackupTask | null>
     reportError: (message: string, cause: unknown) => void
     sendConsoleCommand: (instanceId: string, command: string) => Promise<void>
+    instancePowerIntent: (instanceId: string) => string
+    runInstancePower: ScheduleManagerOptions["runInstancePower"]
   }> = {}
 ) {
   const directory =
@@ -93,8 +96,9 @@ async function manager(
     platformTargetId: () => "platform",
     relayId: "relay-a",
     reportError: overrides.reportError,
+    instancePowerIntent: overrides.instancePowerIntent ?? (() => "0"),
     runDatabasePower: async () => undefined,
-    runInstancePower: async () => undefined,
+    runInstancePower: overrides.runInstancePower ?? (async () => undefined),
     sendConsoleCommand: overrides.sendConsoleCommand ?? (async () => undefined),
     stateDirectory: directory,
   }
@@ -1122,6 +1126,58 @@ describe("Relay schedule persistence", () => {
     ).toBeGreaterThanOrEqual(5 * minuteMs)
     expect((await latestRun(schedules))?.sequenceAttempts).toMatchObject([
       { actionType: "wait", status: "succeeded" },
+    ])
+  })
+
+  it("gives way to a power change someone makes during its wait", async () => {
+    let intent = "manual-0"
+    const ran: Array<string> = []
+    const { schedules } = await manager({
+      findInstance: async () => ({}),
+      instancePowerIntent: () => intent,
+      // As the Relay does: a step runs only while the intent it was given
+      // is still current.
+      runInstancePower: async (_instanceId, action, powerIntent) => {
+        if (powerIntent !== intent) {
+          throw new LaneRejectedError({
+            message: "superseded",
+            reason: "superseded",
+          })
+        }
+        ran.push(action)
+      },
+    })
+    await schedules.apply({
+      ...projection,
+      actions: [
+        {
+          action: "stop",
+          id: "0e9a7f5c-77e8-4b39-8c1a-6d5bb9c0b3a1",
+          type: "power",
+        },
+        waitAction(5, "minutes"),
+        {
+          action: "start",
+          id: "6c1d2a9e-5f6b-4b0e-9d57-2a7c4f1e8b33",
+          type: "power",
+        },
+      ],
+    })
+
+    await runNow(schedules)
+    await advanceUntil(async () => expect(ran).toEqual(["stop"]))
+    // Someone stops the server by hand while the schedule waits.
+    intent = "manual-1"
+
+    await advanceUntil(async () => {
+      expect((await latestRun(schedules))?.status).not.toBe("running")
+    }, minuteMs)
+    expect(ran).toEqual(["stop"])
+    const run = await latestRun(schedules)
+    expect(run?.status).toBe("succeeded")
+    expect(run?.targetRuns[0]?.attempts).toMatchObject([
+      { status: "succeeded" },
+      { status: "not_run" },
     ])
   })
 

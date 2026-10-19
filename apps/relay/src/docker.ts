@@ -12,6 +12,8 @@ import {
   type DatabaseConnections,
   type DatabaseConnectionSnapshot,
 } from "./database-connections.js"
+import type { OperationLanes } from "./operation-lanes.js"
+import { instanceLifecycleLocks } from "./operation-plans.js"
 import {
   DockerEngine,
   DockerEngineError,
@@ -463,17 +465,20 @@ export class DockerDriver {
   #relayProcessCpu: { at: number; usage: NodeJS.CpuUsage } | null = null
   #relayResourceHistory: Array<RelayInstanceResources> = []
   readonly #state: RelayStateStore["Service"]
+  readonly #lanes: OperationLanes
 
   constructor(
     config: RelayConfig,
     runtimeRecovery: RuntimeRecoveryManager,
     bricks: BrickCatalog,
     state: RelayStateStore["Service"],
-    readonly databaseConnections: DatabaseConnections
+    readonly databaseConnections: DatabaseConnections,
+    lanes: OperationLanes
   ) {
     this.#bricks = bricks
     this.#config = config
     this.#engine = new DockerEngine(config.dockerSocket)
+    this.#lanes = lanes
     this.#resources = relayResourceNames(config)
     this.#runtimeRecovery = runtimeRecovery
     this.#state = state
@@ -1430,10 +1435,15 @@ export class DockerDriver {
     )
   }
 
+  /**
+   * Writes a line to the server's console. Reports whether it was one of the
+   * server's stop commands, which records the server as intentionally
+   * stopped.
+   */
   async sendCommand(
     instance: RelayInstanceConfig,
     input: string
-  ): Promise<void> {
+  ): Promise<{ readonly intentionalStop: boolean }> {
     const stopCommands = await this.#consoleStopCommands(instance)
     const intentionalStop = isIntentionalServerStopCommand(stopCommands, input)
     const previousRecovery = intentionalStop
@@ -1460,6 +1470,7 @@ export class DockerDriver {
         )
       )
     )
+    return { intentionalStop }
   }
 
   async #consoleStopCommands(
@@ -2232,21 +2243,26 @@ export class DockerDriver {
       cached.directory = directory
       const findCurrent = () => this.#findDiscovered(instance.config.id)
       const engine = this.#engine
+      const lanes = this.#lanes
       const runtimeRecovery = this.#runtimeRecovery
-      const refresh = Effect.gen(function* () {
-        const usedBytes = yield* directoryApparentSizeEffect(directory)
-        cached.usedBytes = usedBytes
-        const current = yield* promiseEffect(findCurrent).pipe(
-          Effect.catch(() => Effect.succeed(null))
+      const exceeded = (
+        current: DiscoveredInstance | null,
+        usedBytes: number
+      ): current is DiscoveredInstance =>
+        current !== null &&
+        diskQuotaExceeded(
+          usedBytes,
+          current.config.limits.diskBytes,
+          current.container.State.Running
         )
-        if (
-          current &&
-          diskQuotaExceeded(
-            usedBytes,
-            current.config.limits.diskBytes,
-            current.container.State.Running
+      // Stops in the server's power lane, so it can't interleave with a
+      // start or console input, and looks again once its turn comes.
+      const stopOverQuota = (usedBytes: number) =>
+        Effect.gen(function* () {
+          const current = yield* promiseEffect(findCurrent).pipe(
+            Effect.catch(() => Effect.succeed(null))
           )
-        ) {
+          if (!exceeded(current, usedBytes)) return
           yield* Effect.sync(() => {
             console.warn(
               `Stopping ${current.config.name}: disk usage exceeded its configured quota`
@@ -2285,6 +2301,21 @@ export class DockerDriver {
                   : Effect.void
               )
             )
+        })
+      const refresh = Effect.gen(function* () {
+        const usedBytes = yield* directoryApparentSizeEffect(directory)
+        cached.usedBytes = usedBytes
+        const current = yield* promiseEffect(findCurrent).pipe(
+          Effect.catch(() => Effect.succeed(null))
+        )
+        if (exceeded(current, usedBytes)) {
+          yield* lanes.run(
+            {
+              label: "quota.stop",
+              locks: instanceLifecycleLocks(current.config.id),
+            },
+            stopOverQuota(usedBytes)
+          )
         }
       }).pipe(
         // Keep the last healthy value. Directory scans race with normal game

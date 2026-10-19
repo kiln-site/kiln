@@ -52,6 +52,8 @@ import { createEncryptedPlatformBackup } from "./platform-backups.js"
 import { RelayBackupError } from "./effect/errors.js"
 import { promiseEffect } from "./effect/promise.js"
 import { RelayStateStore } from "./effect/state.js"
+import type { OperationLanes } from "./operation-lanes.js"
+import { backupTaskLocks } from "./operation-plans.js"
 import {
   backupArchivePath,
   backupDestinationFor,
@@ -127,6 +129,7 @@ export class BackupManager {
   ) => Promise<RelayInstanceConfig | null>
   readonly #isInstanceStopped: (instanceId: string) => Promise<boolean>
   readonly #databases: DatabaseDriver | null
+  readonly #lanes: OperationLanes
   readonly #restic: ResticDriver
   readonly #state: RelayStateStore["Service"]
   readonly #wake: Queue.Queue<void>
@@ -137,11 +140,13 @@ export class BackupManager {
     findInstance: (instanceId: string) => Promise<RelayInstanceConfig | null>
     isInstanceStopped: (instanceId: string) => Promise<boolean>
     databases: DatabaseDriver | null
+    lanes: OperationLanes
     restic: ResticDriver
     state: RelayStateStore["Service"]
     wake: Queue.Queue<void>
   }) {
     this.#config = options.config
+    this.#lanes = options.lanes
     this.#findInstance = options.findInstance
     this.#isInstanceStopped = options.isInstanceStopped
     this.#databases = options.databases
@@ -155,6 +160,11 @@ export class BackupManager {
     findInstance: (instanceId: string) => Promise<RelayInstanceConfig | null>
     isInstanceStopped: (instanceId: string) => Promise<boolean>
     databases?: DatabaseDriver
+    /**
+     * Each task holds its target's lane while it runs: a backup alongside
+     * other work, a restore alone.
+     */
+    lanes: OperationLanes
   }) {
     return Effect.gen(function* () {
       const state = yield* RelayStateStore
@@ -164,6 +174,7 @@ export class BackupManager {
         findInstance: options.findInstance,
         isInstanceStopped: options.isInstanceStopped,
         databases: options.databases ?? null,
+        lanes: options.lanes,
         restic: createResticDriver({
           cacheDirectory: resolve(
             options.config.dataDirectory,
@@ -272,36 +283,44 @@ export class BackupManager {
             Effect.asVoid
           )
         )
-        yield* this.#execute(task, controller.signal).pipe(
-          Effect.catch((cause) =>
-            this.#state
-              .failBackupTask(
-                task.taskId,
-                backupErrorMessage(cause),
-                Date.now()
-              )
-              .pipe(
-                Effect.tap((failed) =>
-                  failed
-                    ? Effect.logError("Relay backup task failed", {
-                        backupId: task.backupId,
-                        cause,
-                        taskId: task.taskId,
-                      })
-                    : Effect.void
-                ),
-                Effect.asVoid
-              )
-          ),
-          Effect.ensuring(
-            timeoutFiber ? Fiber.interrupt(timeoutFiber) : Effect.void
-          ),
-          Effect.ensuring(
-            controller
-              ? Effect.sync(() => this.#activeCreates.delete(task.taskId))
-              : Effect.void
+        yield* this.#lanes
+          .run(
+            {
+              label: `backup.${task.kind}`,
+              locks: backupTaskLocks(task.input),
+            },
+            this.#execute(task, controller.signal)
           )
-        )
+          .pipe(
+            Effect.catch((cause) =>
+              this.#state
+                .failBackupTask(
+                  task.taskId,
+                  backupErrorMessage(cause),
+                  Date.now()
+                )
+                .pipe(
+                  Effect.tap((failed) =>
+                    failed
+                      ? Effect.logError("Relay backup task failed", {
+                          backupId: task.backupId,
+                          cause,
+                          taskId: task.taskId,
+                        })
+                      : Effect.void
+                  ),
+                  Effect.asVoid
+                )
+            ),
+            Effect.ensuring(
+              timeoutFiber ? Fiber.interrupt(timeoutFiber) : Effect.void
+            ),
+            Effect.ensuring(
+              controller
+                ? Effect.sync(() => this.#activeCreates.delete(task.taskId))
+                : Effect.void
+            )
+          )
       }
     })
   }

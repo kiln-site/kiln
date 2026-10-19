@@ -46,6 +46,7 @@ import { restorePortableInstanceBackup } from "./backup-restore.js"
 import { BackupManager } from "./backups.js"
 import { makeRelayStateLayer } from "./effect/state.js"
 import { testInstance, testRelayConfig } from "./test/fixtures.js"
+import { OperationLanes } from "./operation-lanes.js"
 
 const testDirectory = mkdtempSync(
   resolve(tmpdir(), "kiln-backup-restore-cleanup-")
@@ -69,6 +70,7 @@ describe("Relay backup restore cleanup", () => {
         config,
         findInstance: async () => instance,
         isInstanceStopped: async () => true,
+        lanes: new OperationLanes(),
       })
       yield* manager.enqueue(create)
       yield* manager.runPending()

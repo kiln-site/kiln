@@ -19,7 +19,7 @@ import type {
   RelayInventoryItem,
 } from "@workspace/contracts"
 import { appServiceNameSchema, relayAppSchema } from "@workspace/contracts"
-import { Effect, Result, Semaphore } from "effect"
+import { Effect, Result } from "effect"
 
 import { commandLines } from "./command.js"
 import type { RelayConfig } from "./config.js"
@@ -42,6 +42,8 @@ import {
   promiseEffect,
 } from "./effect/promise.js"
 import { traceRelayPromise } from "./effect/runtime.js"
+import type { OperationLanes } from "./operation-lanes.js"
+import { appLifecycleLocks } from "./operation-plans.js"
 import {
   APP_SERVICE,
   relayOwnerLabel,
@@ -159,20 +161,23 @@ export class AppDriver {
   readonly #restoring = new Map<string, Promise<void>>()
   // Wakes whatever follows an app when its deployment or containers change.
   readonly #waiters = new Map<string, Set<() => void>>()
-  readonly #mutations = new Map<
-    string,
-    { semaphore: Semaphore.Semaphore; references: number }
-  >()
+  readonly #lanes: OperationLanes
 
+  /**
+   * Callers hold the App's lane locks for each change; a deployment's build
+   * runs in the background and takes the App's lifecycle lock itself.
+   */
   constructor(
     config: RelayConfig,
     hostDataDirectory: () => Promise<string>,
-    networking: AppNetworking
+    networking: AppNetworking,
+    lanes: OperationLanes
   ) {
     this.#config = config
     this.#engine = new DockerEngine(config.dockerSocket)
     this.#resources = relayResourceNames(config)
     this.#hostDataDirectory = hostDataDirectory
+    this.#lanes = lanes
     this.#networking = networking
   }
 
@@ -253,14 +258,12 @@ export class AppDriver {
     return app
   }
 
-  create(input: RelayCreateApp): Promise<RelayApp> {
-    return this.#serialize(input.id, async () => {
-      if ((await this.#networks()).includes(input.id)) {
-        throw new Error("App already exists")
-      }
-      await this.#ensureResources(input.id)
-      return this.get(input.id)
-    })
+  async create(input: RelayCreateApp): Promise<RelayApp> {
+    if ((await this.#networks()).includes(input.id)) {
+      throw new Error("App already exists")
+    }
+    await this.#ensureResources(input.id)
+    return this.get(input.id)
   }
 
   async deploy(input: RelayDeployApp): Promise<RelayApp> {
@@ -286,139 +289,145 @@ export class AppDriver {
     this.#deployments.set(input.appId, deployment)
     this.#wake(input.appId)
     forkPromise(() =>
-      this.#serialize(input.appId, () => this.#runDeployment(input, deployment))
+      Effect.runPromise(
+        this.#lanes.run(
+          {
+            label: "app.deployment",
+            locks: appLifecycleLocks(input.appId),
+          },
+          promiseEffect(() => this.#runDeployment(input, deployment))
+        )
+      )
     )
     return this.get(input.appId)
   }
 
-  action(input: RelayAppAction): Promise<RelayApp> {
-    return this.#serialize(input.appId, async () => {
-      const containers = await this.#appContainers(input.appId)
-      if (containers.length === 0) throw new Error("Deploy the app first")
-      const engine = this.#engine
-      await docker(
-        Effect.forEach(
-          containers,
-          ({ id }) =>
-            input.action === "stop"
-              ? engine.stopContainer(id, { seconds: 30, timeout: 90_000 })
-              : input.action === "start"
-                ? engine.startContainer(id, { timeout: 120_000 })
-                : engine.restartContainer(id, {
-                    seconds: 30,
-                    timeout: 150_000,
-                  }),
-          { concurrency: "unbounded", discard: true }
-        )
+  /** Stops a running deployment, so a delete doesn't wait for its build. */
+  abortDeployment(appId: string): void {
+    this.#deployments.get(appId)?.abort.abort()
+  }
+
+  async action(input: RelayAppAction): Promise<RelayApp> {
+    const containers = await this.#appContainers(input.appId)
+    if (containers.length === 0) throw new Error("Deploy the app first")
+    const engine = this.#engine
+    await docker(
+      Effect.forEach(
+        containers,
+        ({ id }) =>
+          input.action === "stop"
+            ? engine.stopContainer(id, { seconds: 30, timeout: 90_000 })
+            : input.action === "start"
+              ? engine.startContainer(id, { timeout: 120_000 })
+              : engine.restartContainer(id, {
+                  seconds: 30,
+                  timeout: 150_000,
+                }),
+        { concurrency: "unbounded", discard: true }
       )
-      this.#wake(input.appId)
-      return this.get(input.appId)
-    })
+    )
+    this.#wake(input.appId)
+    return this.get(input.appId)
   }
 
   async delete(input: RelayDeleteApp) {
-    // A running deployment would otherwise hold the app until it finished.
-    this.#deployments.get(input.appId)?.abort.abort()
-    return this.#serialize(input.appId, async () => {
-      const containers = await this.#appContainers(input.appId)
-      if (
-        containers.length === 0 &&
-        !(await this.#networks()).includes(input.appId)
-      ) {
-        throw new Error("App not found")
-      }
-      const engine = this.#engine
-      await docker(
-        Effect.forEach(
-          containers,
-          ({ id }) =>
-            engine.removeContainer(id, { force: true, timeout: 90_000 }),
-          { concurrency: "unbounded", discard: true }
-        )
+    this.abortDeployment(input.appId)
+    const containers = await this.#appContainers(input.appId)
+    if (
+      containers.length === 0 &&
+      !(await this.#networks()).includes(input.appId)
+    ) {
+      throw new Error("App not found")
+    }
+    const engine = this.#engine
+    await docker(
+      Effect.forEach(
+        containers,
+        ({ id }) =>
+          engine.removeContainer(id, { force: true, timeout: 90_000 }),
+        { concurrency: "unbounded", discard: true }
       )
-      const project = [
-        `com.docker.compose.project=${this.#composeProject(input.appId)}`,
-      ]
-      for (const network of await docker(
-        engine.listNetworks({ filters: { label: project } })
+    )
+    const project = [
+      `com.docker.compose.project=${this.#composeProject(input.appId)}`,
+    ]
+    for (const network of await docker(
+      engine.listNetworks({ filters: { label: project } })
+    )) {
+      await this.#removeNetwork(network.Name)
+    }
+    if (input.deleteData) {
+      for (const volume of await docker(
+        engine.listVolumes({ filters: { label: project } })
       )) {
-        await this.#removeNetwork(network.Name)
+        await docker(engine.removeVolume(volume.Name).pipe(Effect.ignore))
       }
-      if (input.deleteData) {
-        for (const volume of await docker(
-          engine.listVolumes({ filters: { label: project } })
-        )) {
-          await docker(engine.removeVolume(volume.Name).pipe(Effect.ignore))
-        }
-      }
-      await this.#removeNetwork(this.#networkName(input.appId))
-      // Built images are only cleanup; failing to remove them doesn't stop
-      // the app's removal.
-      await docker(
-        engine
-          .listImages({ filters: { label: [`${ID_LABEL}=${input.appId}`] } })
-          .pipe(
-            Effect.flatMap((images) =>
-              Effect.forEach(
-                images,
-                (image) => engine.removeImage(image.Id).pipe(Effect.ignore),
-                { discard: true }
-              )
-            ),
-            Effect.ignore
-          )
-      )
-      await rm(this.#dockerfilePath(input.appId), { force: true })
-      if (input.deleteData) {
-        await rm(this.#appDirectory(input.appId), {
-          force: true,
-          recursive: true,
-        })
-      }
-      await rm(this.#deploymentDirectory(input.appId), {
+    }
+    await this.#removeNetwork(this.#networkName(input.appId))
+    // Built images are only cleanup; failing to remove them doesn't stop
+    // the app's removal.
+    await docker(
+      engine
+        .listImages({ filters: { label: [`${ID_LABEL}=${input.appId}`] } })
+        .pipe(
+          Effect.flatMap((images) =>
+            Effect.forEach(
+              images,
+              (image) => engine.removeImage(image.Id).pipe(Effect.ignore),
+              { discard: true }
+            )
+          ),
+          Effect.ignore
+        )
+    )
+    await rm(this.#dockerfilePath(input.appId), { force: true })
+    if (input.deleteData) {
+      await rm(this.#appDirectory(input.appId), {
         force: true,
         recursive: true,
       })
-      this.#deployments.delete(input.appId)
-      this.#wake(input.appId)
-      return { appId: input.appId, deleted: true }
+    }
+    await rm(this.#deploymentDirectory(input.appId), {
+      force: true,
+      recursive: true,
     })
+    this.#deployments.delete(input.appId)
+    this.#wake(input.appId)
+    return { appId: input.appId, deleted: true }
   }
 
-  updateNetwork(input: RelayAppNetwork): Promise<RelayApp> {
-    return this.#serialize(input.appId, async () => {
-      await this.get(input.appId)
-      const desired = await this.#databaseNetworks(input.databaseIds)
-      const missing = input.databaseIds.filter((id) => !desired.has(id))
-      if (missing.length > 0) {
-        throw new Error(`Database ${missing[0]!.slice(0, 8)} was not found`)
-      }
-      const wanted = new Set(desired.values())
-      for (const container of await this.#appContainers(input.appId)) {
-        if (!joinsNetworks(container)) continue
-        const attached = container.networks.filter((network) =>
-          this.#isDatabaseNetwork(network)
+  async updateNetwork(input: RelayAppNetwork): Promise<RelayApp> {
+    await this.get(input.appId)
+    const desired = await this.#databaseNetworks(input.databaseIds)
+    const missing = input.databaseIds.filter((id) => !desired.has(id))
+    if (missing.length > 0) {
+      throw new Error(`Database ${missing[0]!.slice(0, 8)} was not found`)
+    }
+    const wanted = new Set(desired.values())
+    for (const container of await this.#appContainers(input.appId)) {
+      if (!joinsNetworks(container)) continue
+      const attached = container.networks.filter((network) =>
+        this.#isDatabaseNetwork(network)
+      )
+      for (const network of wanted) {
+        if (attached.includes(network)) continue
+        await docker(
+          this.#engine.connectNetwork(network, container.id, {
+            aliases: [this.#serviceAlias(input.appId, container.service)],
+          })
         )
-        for (const network of wanted) {
-          if (attached.includes(network)) continue
-          await docker(
-            this.#engine.connectNetwork(network, container.id, {
-              aliases: [this.#serviceAlias(input.appId, container.service)],
-            })
-          )
-        }
-        for (const network of attached) {
-          if (wanted.has(network)) continue
-          await docker(
-            this.#engine
-              .disconnectNetwork(network, container.id)
-              .pipe(Effect.ignore)
-          )
-        }
       }
-      this.#wake(input.appId)
-      return this.get(input.appId)
-    })
+      for (const network of attached) {
+        if (wanted.has(network)) continue
+        await docker(
+          this.#engine
+            .disconnectNetwork(network, container.id)
+            .pipe(Effect.ignore)
+        )
+      }
+    }
+    this.#wake(input.appId)
+    return this.get(input.appId)
   }
 
   // The newest container of one of an app's services, for its terminal.
@@ -1446,26 +1455,6 @@ export class AppDriver {
         ? [id]
         : []
     })
-  }
-
-  #serialize<T>(appId: string, run: () => Promise<T>): Promise<T> {
-    let entry = this.#mutations.get(appId)
-    if (!entry) {
-      entry = { semaphore: Semaphore.makeUnsafe(1), references: 0 }
-      this.#mutations.set(appId, entry)
-    }
-    entry.references += 1
-    const active = entry
-    return Effect.runPromise(
-      active.semaphore.withPermit(promiseEffect(run)).pipe(
-        Effect.ensuring(
-          Effect.sync(() => {
-            active.references -= 1
-            if (active.references === 0) this.#mutations.delete(appId)
-          })
-        )
-      )
-    ) as Promise<T>
   }
 
   #prefix(): string {

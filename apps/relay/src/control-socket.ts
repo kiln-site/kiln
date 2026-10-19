@@ -5,7 +5,7 @@ import {
   sign,
   verify,
 } from "node:crypto"
-import { Deferred, Effect, Fiber, Option, Schema } from "effect"
+import { Deferred, Effect, Fiber, Option, Result, Schema } from "effect"
 import type { Effect as EffectType } from "effect"
 import { WebSocket, WebSocketServer } from "ws"
 
@@ -62,6 +62,12 @@ import { isSourceAllowed } from "./source-policy.js"
 import { createRelaySnapshotDelta } from "./snapshot-delta.js"
 import { requestUrl } from "./request-url.js"
 import type { RelayAction } from "./permissions.js"
+import {
+  LaneRejectedError,
+  type LaneLock,
+  type LaneTicket,
+  type OperationLanes,
+} from "./operation-lanes.js"
 import type { RelayIdentity } from "./effect/identity.js"
 import type { RelayClientGrant, RelayStateStore } from "./effect/state.js"
 import type { Server } from "node:http"
@@ -78,6 +84,12 @@ export interface ControlSocketOptions {
   // Saves the installation ID a full-access Hearth authenticated with. The
   // session is ready only once this settles; it reports its own failures.
   readonly adoptInstallationId?: (installationId: string) => Promise<void>
+  /**
+   * Runs once an authorized request has its place in line, before it waits
+   * for its locks: a delete stops a running deployment here, so it doesn't
+   * wait for the build it is about to remove.
+   */
+  readonly beforeRun?: (request: RelayControlRequest) => void
   readonly execute: (
     request: RelayControlRequest,
     client: RelayClientGrant,
@@ -90,6 +102,15 @@ export interface ControlSocketOptions {
   ) => Promise<unknown>
   readonly identity: RelayIdentity
   readonly initialSnapshot: () => Promise<unknown>
+  /** The lanes every Relay mutation waits in. */
+  readonly lanes: OperationLanes
+  /**
+   * The locks a request holds while it runs, or null for one that needs
+   * none. Requests take their place in line as they arrive.
+   */
+  readonly requestLocks: (
+    request: RelayControlRequest
+  ) => ReadonlyArray<LaneLock> | Promise<ReadonlyArray<LaneLock>> | null
   readonly subscribeSnapshots: (
     listener: (snapshot: unknown) => void
   ) => () => void
@@ -295,6 +316,7 @@ function authenticateSocket(
     {
       controller: AbortController
       fiber: Fiber.Fiber<void, unknown> | null
+      ticket: LaneTicket | null
     }
   >()
   const reversePending = new Map<string, Deferred.Deferred<unknown, Error>>()
@@ -365,6 +387,7 @@ function authenticateSocket(
     }
     if (message.type === "cancel") {
       const request = inFlight.get(message.replyTo)
+      request?.ticket?.cancel()
       request?.controller.abort()
       request?.fiber?.interruptUnsafe()
       return
@@ -402,15 +425,37 @@ function authenticateSocket(
       return
     }
     const controller = new AbortController()
+    // Take the request's place in line before any asynchronous work, so
+    // requests that conflict run in the order they arrived.
+    const planned = Result.try(() => options.requestLocks(message))
+    if (Result.isFailure(planned)) {
+      reportRelayError(planned.failure, relayControlErrorContext(message))
+      sendError(
+        socket,
+        message.id,
+        "invalid_message",
+        "Invalid control request"
+      )
+      return
+    }
+    const locks = planned.success
+    const ticket =
+      locks === null
+        ? null
+        : options.lanes.admit({ label: message.operation, locks })
     const request = {
       controller,
       fiber: null as Fiber.Fiber<void, unknown> | null,
+      ticket,
     }
+    controller.signal.addEventListener("abort", () => ticket?.cancel(), {
+      once: true,
+    })
     inFlight.set(message.id, request)
     request.fiber = Effect.runFork(
       Effect.yieldNow.pipe(
         Effect.andThen(
-          executeRequestEffect(message, authenticatedClient, controller)
+          executeRequestEffect(message, authenticatedClient, controller, ticket)
         )
       )
     )
@@ -422,7 +467,10 @@ function authenticateSocket(
     authenticationAttempt = null
     unsubscribeSnapshots?.()
     unsubscribeSnapshots = null
+    // Requests still waiting are withdrawn, so none runs after Hearth has
+    // gone. Ones already running finish and keep their locks until they do.
     for (const request of inFlight.values()) {
+      request.ticket?.cancel()
       request.controller.abort()
       request.fiber?.interruptUnsafe()
     }
@@ -472,11 +520,13 @@ function authenticateSocket(
   function executeRequestEffect(
     request: RelayControlRequest,
     sessionClient: RelayClientGrant,
-    controller: AbortController
+    controller: AbortController,
+    ticket: LaneTicket | null
   ): EffectType.Effect<void> {
     const duration = relayControlRequestTimeoutMs(request, Date.now())
     if (duration === null) {
       return Effect.sync(() => {
+        ticket?.cancel()
         sendError(
           socket,
           request.id,
@@ -533,7 +583,7 @@ function authenticateSocket(
             })
             return
           }
-          const payload = yield* promiseOperation(() =>
+          const execution = promiseOperation(() =>
             traceRelayPromise(
               "relay.control.request",
               () =>
@@ -553,6 +603,8 @@ function authenticateSocket(
               traceParentSpan(request.traceparent)
             )
           )
+          options.beforeRun?.(request)
+          const payload = yield* ticket ? ticket.run(execution) : execution
           if (isAuditedRelayControlOperation(request.operation)) {
             Effect.runFork(
               promiseOperation(() =>
@@ -616,6 +668,16 @@ function authenticateSocket(
             sendError(socket, request.id, "not_found", cause.message)
             return
           }
+          if (cause instanceof LaneRejectedError && cause.reason === "busy") {
+            sendError(
+              socket,
+              request.id,
+              "too_many_requests",
+              cause.message,
+              true
+            )
+            return
+          }
           reportRelayError(cause, relayControlErrorContext(request))
           sendError(
             socket,
@@ -627,6 +689,8 @@ function authenticateSocket(
       ),
       Effect.ensuring(
         Effect.sync(() => {
+          // A request refused before it ran gives up its place in line.
+          ticket?.cancel()
           inFlight.delete(request.id)
         })
       )

@@ -25,6 +25,7 @@ import type { RelayIdentity } from "./effect/identity.js"
 import type { DockerConsoleSession, DockerDriver } from "./docker.js"
 import type { FilesystemDriver } from "./files.js"
 import type { RelaySnapshotSample } from "./snapshot-hub.js"
+import { OperationLanes } from "./operation-lanes.js"
 
 const origin = "https://hearth.test"
 const relayId = "relay-test-fingerprint"
@@ -783,6 +784,8 @@ async function startRelay(
     docker: {} as DockerDriver,
     filesystem: {} as FilesystemDriver,
     identity: { fingerprint: relayId } as RelayIdentity,
+    lanes: new OperationLanes(),
+    onConsoleStop: () => undefined,
     runEffect: (effect) => Effect.runPromise(effect),
     server,
     state,

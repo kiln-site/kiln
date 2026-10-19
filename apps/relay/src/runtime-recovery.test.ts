@@ -4,13 +4,15 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import { afterAll, afterEach, assert, describe, layer } from "@effect/vitest"
-import { Effect, Fiber } from "effect"
+import { Deferred, Effect, Fiber } from "effect"
 import { TestClock } from "effect/testing"
 import { expect, it, vi } from "vite-plus/test"
 
 vi.mock("./command.js", () => import("./test/docker.js"))
 
 import { loadConfig } from "./config.js"
+import { OperationLanes } from "./operation-lanes.js"
+import { instanceLifecycleLocks } from "./operation-plans.js"
 import { makeRelayStateLayer, RelayStateStore } from "./effect/state.js"
 import { INSTALLATION_MARKER_LABEL } from "./installation-marker.js"
 import {
@@ -74,11 +76,18 @@ const crashed = (
 
 const dockerIdle = Effect.promise(() => fakeDocker.idle())
 
-const makeManager = (environment: Record<string, string> = {}) =>
+const makeManager = (
+  environment: Record<string, string> = {},
+  lanes = new OperationLanes()
+) =>
   Effect.gen(function* () {
     const config = loadConfig({ NODE_ENV: "test", ...environment })
     config.dockerSocket = yield* Effect.promise(() => fakeDocker.listen())
-    const manager = new RuntimeRecoveryManager(config, yield* RelayStateStore)
+    const manager = new RuntimeRecoveryManager(
+      config,
+      yield* RelayStateStore,
+      lanes
+    )
     yield* manager.initialize()
     return manager
   })
@@ -171,6 +180,54 @@ describe("runtime recovery", () => {
         const persisted = yield* state.getRuntimeRecovery(instanceId)
         assert.strictEqual(persisted?.phase, "failed")
         assert.strictEqual(persisted?.desiredState, "running")
+      })
+    )
+
+    it.effect("waits for a power change in progress and gives way to it", () =>
+      Effect.gen(function* () {
+        const lanes = new OperationLanes()
+        const manager = yield* makeManager(
+          { KILN_RELAY_CRASH_RETRY_DELAY_SECONDS: "5" },
+          lanes
+        )
+        const instanceId = "9".repeat(40)
+        const container = server(instanceId, false)
+        const startedAt = "2026-08-06T12:00:00.000Z"
+        const startedAtMs = Date.parse(startedAt)
+        yield* reconcileAt(manager, startedAtMs, [
+          observation(instanceId, { startedAt }),
+        ])
+        const crash = crashed(instanceId, {
+          finishedAt: new Date(startedAtMs + 10_000).toISOString(),
+          startedAt,
+        })
+        yield* reconcileAt(manager, startedAtMs + 10_000, [crash])
+
+        // Someone's stop is running when the retry comes due.
+        const release = yield* Deferred.make<void>()
+        const stop = yield* lanes
+          .run(
+            { label: "stop", locks: instanceLifecycleLocks(instanceId) },
+            Deferred.await(release).pipe(
+              Effect.andThen(manager.recordPowerAction(instanceId, "stop"))
+            )
+          )
+          .pipe(Effect.forkChild({ startImmediately: true }))
+        const retry = yield* reconcileAt(manager, startedAtMs + 15_000, [crash])
+        assert.strictEqual(retry.get(instanceId)?.recovery?.phase, "restarting")
+        yield* dockerIdle
+        assert.strictEqual(container.starts, 0)
+
+        yield* Deferred.succeed(release, undefined)
+        yield* Fiber.join(stop)
+        yield* Effect.yieldNow
+        yield* dockerIdle
+        // The stop won: recovery doesn't start the server it stopped.
+        assert.strictEqual(container.starts, 0)
+        assert.deepStrictEqual(manager.snapshot(instanceId), {
+          desiredState: "stopped",
+          recovery: null,
+        })
       })
     )
 

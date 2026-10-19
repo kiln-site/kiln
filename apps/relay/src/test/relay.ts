@@ -31,6 +31,7 @@ import { DatabaseDriver } from "../databases.js"
 import { DockerDriver } from "../docker.js"
 import { makeRelayStateLayer, RelayStateStore } from "../effect/state.js"
 import { LifecycleDriver } from "../lifecycle.js"
+import { OperationLanes } from "../operation-lanes.js"
 import { appRouteOwner, relayResourceNames } from "../relay-resources.js"
 import { RuntimeRecoveryManager } from "../runtime-recovery.js"
 import { type ContainerSeed, type FakeContainer, fakeDocker } from "./docker.js"
@@ -43,6 +44,7 @@ export interface RelayDrivers {
   readonly databaseConnections: DatabaseConnections
   readonly databases: DatabaseDriver
   readonly docker: DockerDriver
+  readonly lanes: OperationLanes
   readonly lifecycle: LifecycleDriver
   readonly runtimeRecovery: RuntimeRecoveryManager
 }
@@ -101,7 +103,8 @@ export async function relayHarness(
 
   const drivers = async (): Promise<RelayDrivers> => {
     const bricks = new BrickCatalog(config.brickCatalogUrl, dataDirectory)
-    const runtimeRecovery = new RuntimeRecoveryManager(config, state)
+    const lanes = new OperationLanes()
+    const runtimeRecovery = new RuntimeRecoveryManager(config, state, lanes)
     await Effect.runPromise(runtimeRecovery.initialize())
     const databaseConnections = new DatabaseConnections(config, state)
     const docker = new DockerDriver(
@@ -109,7 +112,8 @@ export async function relayHarness(
       runtimeRecovery,
       bricks,
       state,
-      databaseConnections
+      databaseConnections,
+      lanes
     )
     const lifecycle = new LifecycleDriver(
       config,
@@ -118,23 +122,28 @@ export async function relayHarness(
       databaseConnections
     )
     lifecycles.push(lifecycle)
-    const apps = new AppDriver(config, () => lifecycle.hostDataDirectory(), {
-      routes: async (appId) =>
-        lifecycle.appRoutePlan(
-          await Effect.runPromise(
-            state.listInstanceRoutes(appRouteOwner(appId))
-          )
-        ),
-      tailscale: async (appId) =>
-        (
-          await lifecycle.tailscaleMemberships(
-            (memberId) => appTailscaleMember(memberId)?.appId === appId
-          )
-        ).map((membership) => ({
-          ...membership,
-          service: appTailscaleMember(membership.memberId)!.service,
-        })),
-    })
+    const apps = new AppDriver(
+      config,
+      () => lifecycle.hostDataDirectory(),
+      {
+        routes: async (appId) =>
+          lifecycle.appRoutePlan(
+            await Effect.runPromise(
+              state.listInstanceRoutes(appRouteOwner(appId))
+            )
+          ),
+        tailscale: async (appId) =>
+          (
+            await lifecycle.tailscaleMemberships(
+              (memberId) => appTailscaleMember(memberId)?.appId === appId
+            )
+          ).map((membership) => ({
+            ...membership,
+            service: appTailscaleMember(membership.memberId)!.service,
+          })),
+      },
+      lanes
+    )
     lifecycle.useAppServiceContainers(async (appId, service) => {
       await apps.get(appId)
       return (await apps.serviceContainer(appId, service))?.name ?? null
@@ -145,6 +154,7 @@ export async function relayHarness(
       databaseConnections,
       databases: new DatabaseDriver(config, docker, databaseConnections),
       docker,
+      lanes,
       lifecycle,
       runtimeRecovery,
     }

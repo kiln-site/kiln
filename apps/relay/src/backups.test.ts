@@ -24,7 +24,7 @@ import { createServer } from "node:net"
 import { tmpdir } from "node:os"
 import { delimiter, join, resolve } from "node:path"
 import { afterAll, assert, beforeAll, describe, it } from "@effect/vitest"
-import { Effect, Exit, Fiber, type Scope } from "effect"
+import { Deferred, Effect, Exit, Fiber, type Scope } from "effect"
 import { TestClock } from "effect/testing"
 import { openPromise } from "yauzl"
 import ZipStream from "zip-stream"
@@ -53,6 +53,8 @@ import { BrickCatalog, brickSnapshotDirectory } from "./bricks.js"
 import type { RelayConfig, RelayInstanceConfig } from "./config.js"
 import { makeRelayStateLayer, RelayStateStore } from "./effect/state.js"
 import { testInstance, testRelayConfig } from "./test/fixtures.js"
+import { OperationLanes } from "./operation-lanes.js"
+import { instanceFileLocks } from "./operation-plans.js"
 
 // Restic is faked at its process boundary: a stateful `restic` executable first
 // on PATH keeps each repository's snapshots and stored data in `repos.json`.
@@ -515,6 +517,77 @@ describe("Relay archive restores", () => {
             ).recipe(instance.brickSource ?? "", instance.brickSnapshotSha256)
           ),
           testBrickRecipe()
+        )
+      })
+    )
+  )
+
+  it.effect("waits for a file change in progress before restoring", () =>
+    withRelay("kiln-backup-restore-wait-", ({ config, root }) =>
+      Effect.gen(function* () {
+        yield* Effect.promise(() =>
+          writeFile(resolve(root, "server.txt"), "old")
+        )
+        const lanes = new OperationLanes()
+        const manager = yield* backupManager(
+          config,
+          async () => testInstance(),
+          lanes
+        )
+        const input = backupInput(7)
+        const created = archiveResult(yield* runTask(manager, input))
+
+        // A save is still writing when the restore comes up.
+        const release = yield* Deferred.make<void>()
+        const save = yield* lanes
+          .run(
+            { label: "save", locks: instanceFileLocks("instance-1") },
+            Deferred.await(release).pipe(
+              Effect.andThen(
+                Effect.promise(() =>
+                  writeFile(resolve(root, "server.txt"), "saved")
+                )
+              )
+            )
+          )
+          .pipe(Effect.forkChild({ startImmediately: true }))
+        const restoreTaskId = "20000000-0000-4000-8000-000000000007"
+        yield* manager.enqueue({
+          backupId: input.backupId,
+          kind: "restore",
+          source: {
+            bytes: created.bytes,
+            checksumSha256: created.checksumSha256,
+            kind: "local",
+          },
+          target: { id: "instance-1", kind: "instance" },
+          taskId: restoreTaskId,
+        })
+        const restoring = yield* manager
+          .runPending()
+          .pipe(Effect.forkChild({ startImmediately: true }))
+        yield* Effect.promise(
+          () => new Promise((resolvePromise) => setTimeout(resolvePromise, 50))
+        )
+        assert.strictEqual(
+          (yield* manager.get(restoreTaskId))?.result,
+          null,
+          "the restore ran while the save held the server's files"
+        )
+
+        yield* Deferred.succeed(release, undefined)
+        yield* Fiber.join(save)
+        yield* Fiber.join(restoring)
+        // The restore ran after the save, so its files win.
+        assert.strictEqual(
+          (yield* manager.get(restoreTaskId))?.status,
+          "succeeded"
+        )
+        assert.strictEqual(
+          yield* Effect.promise(() =>
+            readFile(resolve(root, "server.txt"), "utf8")
+          ),
+          "old"
         )
       })
     )
@@ -1083,12 +1156,14 @@ function scratchDirectory(prefix: string) {
 function backupManager(
   config: RelayConfig,
   findInstance: () => Promise<RelayInstanceConfig | null> = async () =>
-    testInstance()
+    testInstance(),
+  lanes = new OperationLanes()
 ) {
   return BackupManager.make({
     config,
     findInstance,
     isInstanceStopped: async () => true,
+    lanes,
   })
 }
 

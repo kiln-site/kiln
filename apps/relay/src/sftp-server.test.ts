@@ -1,12 +1,15 @@
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { resolve } from "node:path"
+import { Effect } from "effect"
 import ssh2 from "ssh2"
 import { describe, expect, it, onTestFinished } from "vite-plus/test"
 
 import type { RelayConfig } from "./config.js"
 import { attachSftpServer } from "./sftp-server.js"
 import { testInstance, testRelayConfig } from "./test/fixtures.js"
+import { OperationLanes } from "./operation-lanes.js"
+import { instanceReplaceLocks } from "./operation-plans.js"
 
 const describeLinux = process.platform === "linux" ? describe : describe.skip
 const malformedLeadingZeroHostKey =
@@ -57,6 +60,7 @@ describeLinux("Relay SFTP server", () => {
       await mkdir(resolve(dataDirectory, "instances"), { recursive: true })
       const requests: Array<{ operation: string; payload: unknown }> = []
       const server = await attachSftpServer({
+        lanes: new OperationLanes(),
         clientActions: allowFileAccess,
         config: {
           ...testConfig(dataDirectory),
@@ -110,6 +114,7 @@ describeLinux("Relay SFTP server", () => {
       await mkdir(resolve(dataDirectory, "instances"), { recursive: true })
       const requests: Array<unknown> = []
       const server = await attachSftpServer({
+        lanes: new OperationLanes(),
         clientActions: allowFileAccess,
         config: {
           ...testConfig(dataDirectory),
@@ -143,6 +148,7 @@ describeLinux("Relay SFTP server", () => {
     await writeFile(resolve(instanceDirectory, "existing.txt"), "existing")
     const instance = testInstance({ id: instanceId })
     const server = await attachSftpServer({
+      lanes: new OperationLanes(),
       clientActions: allowFileAccess,
       config: testConfig(dataDirectory),
       control: {
@@ -199,10 +205,84 @@ describeLinux("Relay SFTP server", () => {
     }
   })
 
+  it("stops writing through a handle opened before the server was replaced", async () => {
+    const dataDirectory = await temporaryDirectory()
+    const instanceId = "c".repeat(40)
+    const instanceDirectory = resolve(dataDirectory, "instances", instanceId)
+    await mkdir(instanceDirectory, { recursive: true })
+    const instance = testInstance({ id: instanceId })
+    const lanes = new OperationLanes()
+    const server = await attachSftpServer({
+      lanes,
+      clientActions: allowFileAccess,
+      config: testConfig(dataDirectory),
+      control: {
+        requestClients: async () => [
+          {
+            clientId: "hearth-test",
+            payload: {
+              instances: [
+                {
+                  actions: [
+                    "instance.files.list",
+                    "instance.files.read",
+                    "instance.files.create",
+                    "instance.files.write",
+                  ],
+                  id: instanceId,
+                },
+              ],
+              userId: "user-test",
+              username: "user@example.test",
+            },
+          },
+        ],
+      },
+      docker: {
+        findInstance: async (id) => (id === instanceId ? instance : null),
+      },
+    })
+
+    const client = await connect(server.port, "dev123")
+    try {
+      const stream = await sftp(client)
+      const path = `/${instanceId}/world.dat`
+      const handle = await sftpCall<Buffer>(stream, "open", path, "w")
+      const chunk = Buffer.from("before")
+      await sftpCall(stream, "write", handle, chunk, 0, chunk.length, 0)
+
+      // A restore replaces the server's files while the handle is open.
+      await Effect.runPromise(
+        lanes.run(
+          { label: "restore", locks: instanceReplaceLocks(instanceId) },
+          Effect.void
+        )
+      )
+
+      const late = Buffer.from("after")
+      await expect(
+        sftpCall(stream, "write", handle, late, 0, late.length, 6)
+      ).rejects.toThrow()
+      expect(
+        await readFile(resolve(instanceDirectory, "world.dat"), "utf8")
+      ).toBe("before")
+      // Reopening writes to the restored server.
+      const reopened = await sftpCall<Buffer>(stream, "open", path, "w")
+      await sftpCall(stream, "write", reopened, late, 0, late.length, 0)
+      expect(
+        await readFile(resolve(instanceDirectory, "world.dat"), "utf8")
+      ).toBe("after")
+    } finally {
+      client.end()
+      await server.close()
+    }
+  })
+
   it("rejects invalid development credentials", async () => {
     const dataDirectory = await temporaryDirectory()
     await mkdir(resolve(dataDirectory, "instances"), { recursive: true })
     const server = await attachSftpServer({
+      lanes: new OperationLanes(),
       clientActions: allowFileAccess,
       config: testConfig(dataDirectory),
       control: { requestClients: async () => [] },
@@ -221,6 +301,7 @@ describeLinux("Relay SFTP server", () => {
     const dataDirectory = await temporaryDirectory()
     await mkdir(resolve(dataDirectory, "instances"), { recursive: true })
     const server = await attachSftpServer({
+      lanes: new OperationLanes(),
       clientActions: allowFileAccess,
       config: testConfig(dataDirectory),
       control: {
@@ -256,6 +337,7 @@ describeLinux("Relay SFTP server", () => {
     const dataDirectory = await temporaryDirectory()
     await mkdir(resolve(dataDirectory, "instances"), { recursive: true })
     const server = await attachSftpServer({
+      lanes: new OperationLanes(),
       clientActions: async () => ["instance.files.list", "instance.files.read"],
       config: testConfig(dataDirectory),
       control: {
@@ -293,6 +375,7 @@ describeLinux("Relay SFTP server", () => {
     await mkdir(instanceDirectory, { recursive: true })
     await writeFile(resolve(instanceDirectory, "readable.txt"), "read only")
     const server = await attachSftpServer({
+      lanes: new OperationLanes(),
       clientActions: async () => [
         "instance.sftp.connect",
         "instance.files.list",
@@ -363,6 +446,7 @@ describeLinux("Relay SFTP server", () => {
       username: "user@example.test",
     }
     const server = await attachSftpServer({
+      lanes: new OperationLanes(),
       clientActions: allowFileAccess,
       config: testConfig(dataDirectory),
       control: {
@@ -389,6 +473,7 @@ describeLinux("Relay SFTP server", () => {
     await mkdir(resolve(dataDirectory, "network", "sftp"), { recursive: true })
     await writeFile(hostKeyPath, malformedLeadingZeroHostKey)
     const options = {
+      lanes: new OperationLanes(),
       clientActions: allowFileAccess,
       config: testConfig(dataDirectory),
       control: { requestClients: async () => [] },

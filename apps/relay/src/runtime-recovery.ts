@@ -7,6 +7,11 @@ import type {
 import { reportRelayError } from "./effect/runtime.js"
 import type { RelayConfig } from "./config.js"
 import { DockerEngine } from "./docker-engine.js"
+import { LaneRejectedError, type OperationLanes } from "./operation-lanes.js"
+import {
+  instanceLifecycleLocks,
+  instanceStartLocks,
+} from "./operation-plans.js"
 import {
   INSTANCE_STOP_TIMEOUT_SECONDS,
   type InstancePowerAction,
@@ -49,10 +54,16 @@ export class RuntimeRecoveryManager {
   readonly #reportedStopFailures = new Set<string>()
   readonly #state: RelayStateStore["Service"]
   readonly #docker: DockerEngine
+  readonly #lanes: OperationLanes
 
-  constructor(config: RelayConfig, state: RelayStateStore["Service"]) {
+  constructor(
+    config: RelayConfig,
+    state: RelayStateStore["Service"],
+    lanes: OperationLanes
+  ) {
     this.#config = config.runtimeRecovery
     this.#docker = new DockerEngine(config.dockerSocket)
+    this.#lanes = lanes
     this.#state = state
   }
 
@@ -482,19 +493,51 @@ export class RuntimeRecoveryManager {
     requestedAt: number,
     token: symbol
   ): Effect.Effect<void, never> {
-    return this.#docker
-      .startContainer(observation.service, { timeout: 120_000 })
+    // Waits its turn behind power changes and console input, then starts
+    // only if nothing it waited for changed the server's intent.
+    const stillWanted = () => {
+      const current = this.#records.get(observation.instanceId)
+      return (
+        this.#activeStarts.get(observation.instanceId) === token &&
+        current?.desiredState === "running" &&
+        current.phase === "restarting"
+      )
+    }
+    return this.#lanes
+      .run(
+        {
+          label: "recovery.start",
+          locks: instanceStartLocks(observation.instanceId),
+          precondition: stillWanted,
+        },
+        this.#docker
+          .startContainer(observation.service, { timeout: 120_000 })
+          .pipe(
+            Effect.tap(() =>
+              Effect.logInfo("Docker accepted the server recovery start", {
+                instanceId: observation.instanceId,
+              })
+            ),
+            Effect.matchEffect({
+              onFailure: (cause) =>
+                this.#recordRestartFailure(
+                  observation,
+                  requestedAt,
+                  token,
+                  cause
+                ),
+              onSuccess: () => this.#enforceDesiredStateAfterStart(observation),
+            })
+          )
+      )
       .pipe(
-        Effect.tap(() =>
-          Effect.logInfo("Docker accepted the server recovery start", {
-            instanceId: observation.instanceId,
-          })
+        Effect.catchIf(
+          (cause) => cause instanceof LaneRejectedError,
+          () =>
+            Effect.logInfo("Server recovery start no longer needed", {
+              instanceId: observation.instanceId,
+            })
         ),
-        Effect.matchEffect({
-          onFailure: (cause) =>
-            this.#recordRestartFailure(observation, requestedAt, token, cause),
-          onSuccess: () => this.#enforceDesiredStateAfterStart(observation),
-        }),
         Effect.withSpan("relay.runtimeRecovery.restartWorker", {
           attributes: {
             "kiln.recovery.instance_id": observation.instanceId,
@@ -590,7 +633,7 @@ export class RuntimeRecoveryManager {
     observation: RuntimeRecoveryObservation,
     token: symbol
   ): Effect.Effect<void, never> {
-    return this.#lock(observation.instanceId)
+    const stop = this.#lock(observation.instanceId)
       .withPermit(
         Effect.sync(
           () =>
@@ -625,7 +668,18 @@ export class RuntimeRecoveryManager {
                   )
                 )
             : Effect.void
-        ),
+        )
+      )
+    // The intent is rechecked once the stop's turn comes.
+    return this.#lanes
+      .run(
+        {
+          label: "recovery.stop",
+          locks: instanceLifecycleLocks(observation.instanceId),
+        },
+        stop
+      )
+      .pipe(
         Effect.withSpan("relay.runtimeRecovery.compensatingStop", {
           attributes: {
             "kiln.recovery.instance_id": observation.instanceId,

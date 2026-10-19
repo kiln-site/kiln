@@ -9,6 +9,8 @@ import type {
 import type { LifecycleDriver } from "./lifecycle.js"
 import { RelayStateStore } from "./effect/state.js"
 import { provisioningErrorMessage } from "./provisioning-errors.js"
+import type { OperationLanes } from "./operation-lanes.js"
+import { instanceReplaceLocks } from "./operation-plans.js"
 
 function withPhase(
   instance: RelayInstance,
@@ -51,17 +53,20 @@ function provisioningStatus(phase: RelayInstanceProvisioning["phase"]): string {
 }
 
 export class ProvisioningManager {
+  readonly #lanes: OperationLanes
   readonly #lifecycle: LifecycleDriver
   readonly #refreshSnapshot: () => Promise<unknown>
   readonly #state: RelayStateStore["Service"]
   readonly #wake: Queue.Queue<void>
 
   private constructor(options: {
+    lanes: OperationLanes
     lifecycle: LifecycleDriver
     refreshSnapshot: () => Promise<unknown>
     state: RelayStateStore["Service"]
     wake: Queue.Queue<void>
   }) {
+    this.#lanes = options.lanes
     this.#lifecycle = options.lifecycle
     this.#refreshSnapshot = options.refreshSnapshot
     this.#state = options.state
@@ -69,6 +74,8 @@ export class ProvisioningManager {
   }
 
   static make(options: {
+    /** The worker holds the new server's lane for the whole create. */
+    lanes: OperationLanes
     lifecycle: LifecycleDriver
     refreshSnapshot: () => Promise<unknown>
   }) {
@@ -143,7 +150,7 @@ export class ProvisioningManager {
         const job = yield* this.#state.claimNextProvisioningJob(Date.now())
         if (!job) return
         let failedPhase: RelayInstanceProvisioning["failedPhase"] = "preparing"
-        yield* Effect.tryPromise({
+        const create = Effect.tryPromise({
           try: async () => {
             const updatePhase = async (
               phase: RelayInstanceProvisioning["phase"]
@@ -210,6 +217,13 @@ export class ProvisioningManager {
                 Effect.asVoid
               )
           })
+        )
+        yield* this.#lanes.run(
+          {
+            label: "instance.provision",
+            locks: instanceReplaceLocks(job.instanceId),
+          },
+          create
         )
       }
     })

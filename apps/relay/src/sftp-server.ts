@@ -25,6 +25,8 @@ import { reportRelayError } from "./effect/runtime.js"
 import type { RelayConfig } from "./config.js"
 import type { ControlSocketServer } from "./control-socket.js"
 import type { DockerDriver } from "./docker.js"
+import { laneKeys, type OperationLanes } from "./operation-lanes.js"
+import { fileRootTransferLocks } from "./operation-plans.js"
 
 const DEVELOPMENT_PASSWORD = "dev123"
 const MAX_OPEN_HANDLES = 128
@@ -48,6 +50,13 @@ interface ResolvedGrant extends SftpGrant {
 interface OpenFile {
   actions: ReadonlyArray<string>
   file: FileHandle
+  /** The game server whose files this is, for its writes' lane locks. */
+  grantId: string
+  /**
+   * How many times the server had been replaced when the file was opened.
+   * Writes stop once a restore, reinstall, or delete has replaced it since.
+   */
+  generation: number
   kind: "file"
   readable: boolean
   writable: boolean
@@ -78,6 +87,8 @@ export async function attachSftpServer(options: {
   config: RelayConfig
   control: Pick<ControlSocketServer, "requestClients">
   docker: Pick<DockerDriver, "findInstance">
+  /** Every change waits in these, with Hearth's requests and restores. */
+  lanes: OperationLanes
 }): Promise<SftpServerHandle> {
   if (process.platform !== "linux") {
     throw new Error("Secure Relay SFTP requires a Linux host")
@@ -211,7 +222,7 @@ export async function attachSftpServer(options: {
                       session.end()
                       return
                     }
-                    serveSftp(acceptSftp(), resolved)
+                    serveSftp(acceptSftp(), resolved, options.lanes)
                   },
                   onFailure: (cause) => {
                     reportRelayError(cause, { operation: "sftp.session" })
@@ -484,10 +495,35 @@ function resolveGrants(
   )
 }
 
-function serveSftp(stream: SFTPWrapper, grants: ReadonlyArray<ResolvedGrant>) {
+function serveSftp(
+  stream: SFTPWrapper,
+  grants: ReadonlyArray<ResolvedGrant>,
+  lanes: OperationLanes
+) {
   const handles = new Map<number, OpenResource>()
   const operations = new Set<Fiber.Fiber<void, never>>()
   let nextHandle = 1
+
+  // Each change runs in the server's file lane, alongside its other file
+  // work, so a restore or delete waits for it and it waits for them.
+  const inLane = <T>(
+    grantId: string,
+    label: string,
+    run: () => Promise<T>
+  ): Promise<T> =>
+    Effect.runPromise(
+      lanes.run(
+        { label, locks: fileRootTransferLocks(grantId) },
+        sftpOperation(run)
+      )
+    )
+  const generation = (grantId: string) =>
+    lanes.exclusiveGeneration(laneKeys.instance(grantId))
+  const requireCurrent = (resource: OpenFile) => {
+    if (generation(resource.grantId) !== resource.generation) {
+      throw new Error("The server was replaced; reopen the file")
+    }
+  }
 
   stream.on("REALPATH", (requestId, requestedPath) => {
     void respond(requestId, async () => {
@@ -579,21 +615,33 @@ function serveSftp(stream: SFTPWrapper, grants: ReadonlyArray<ResolvedGrant>) {
         requireAction(target.grant, "instance.files.create")
       if (writable || flags & OPEN_MODE.TRUNC)
         requireAction(target.grant, "instance.files.write")
-      const file = await withAnchoredParent(
-        target.grant.root,
-        target.physicalPath,
-        (anchoredPath) =>
-          open(
-            anchoredPath,
-            nodeOpenFlags(flags),
-            sanitizeMode(inputAttributes.mode, 0o644)
-          )
-      )
-      await verifyRetainedFile(target.grant.root, file)
+      const grant = target.grant
+      const physicalPath = target.physicalPath
+      const openFile = async () => {
+        const file = await withAnchoredParent(
+          grant.root,
+          physicalPath,
+          (anchoredPath) =>
+            open(
+              anchoredPath,
+              nodeOpenFlags(flags),
+              sanitizeMode(inputAttributes.mode, 0o644)
+            )
+        )
+        await verifyRetainedFile(grant.root, file)
+        return { file, generation: generation(grant.id) }
+      }
+      // Opening to write can create or truncate the file, so it's a change.
+      const { file, generation: openedAt } =
+        writable || flags & (OPEN_MODE.CREAT | OPEN_MODE.TRUNC)
+          ? await inLane(grant.id, "sftp.open", openFile)
+          : await openFile()
       const handle = nextHandle++
       handles.set(handle, {
-        actions: target.grant.actions,
+        actions: grant.actions,
         file,
+        generation: openedAt,
+        grantId: grant.id,
         kind: "file",
         readable,
         writable,
@@ -623,7 +671,10 @@ function serveSftp(stream: SFTPWrapper, grants: ReadonlyArray<ResolvedGrant>) {
       if (!resource || resource.kind !== "file" || !resource.writable) {
         throw permissionDenied()
       }
-      await writeFully(resource.file, data, offset)
+      await inLane(resource.grantId, "sftp.write", async () => {
+        requireCurrent(resource)
+        await writeFully(resource.file, data, offset)
+      })
       stream.status(requestId, STATUS_CODE.OK)
     })
   })
@@ -688,15 +739,18 @@ function serveSftp(stream: SFTPWrapper, grants: ReadonlyArray<ResolvedGrant>) {
         throw permissionDenied()
       requireAction(source.grant, "instance.files.rename")
       requireAction(destination.grant, "instance.files.rename")
-      await withAnchoredParent(
-        source.grant.root,
-        source.physicalPath,
-        (anchoredSource) =>
+      const sourceGrant = source.grant
+      const sourcePath = source.physicalPath
+      const destinationGrant = destination.grant
+      const destinationPath = destination.physicalPath
+      await inLane(sourceGrant.id, "sftp.rename", () =>
+        withAnchoredParent(sourceGrant.root, sourcePath, (anchoredSource) =>
           withAnchoredParent(
-            destination.grant!.root,
-            destination.physicalPath!,
+            destinationGrant.root,
+            destinationPath,
             (anchoredDestination) => rename(anchoredSource, anchoredDestination)
           )
+        )
       )
       stream.status(requestId, STATUS_CODE.OK)
     })
@@ -712,18 +766,20 @@ function serveSftp(stream: SFTPWrapper, grants: ReadonlyArray<ResolvedGrant>) {
       )
         throw permissionDenied()
       requireAction(target.grant, "instance.files.chmod")
-      await withOpenFile(
-        () =>
-          withAnchoredParent(
-            target.grant!.root,
-            target.physicalPath as string,
-            (anchoredPath) =>
+      const grant = target.grant
+      const physicalPath = target.physicalPath
+      const mode = inputAttributes.mode
+      await inLane(grant.id, "sftp.chmod", () =>
+        withOpenFile(
+          () =>
+            withAnchoredParent(grant.root, physicalPath, (anchoredPath) =>
               open(anchoredPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW)
-          ),
-        async (file) => {
-          await verifyOpenPath(target.grant!.root, file)
-          await file.chmod(sanitizeMode(inputAttributes.mode, 0o644))
-        }
+            ),
+          async (file) => {
+            await verifyOpenPath(grant.root, file)
+            await file.chmod(sanitizeMode(mode, 0o644))
+          }
+        )
       )
       stream.status(requestId, STATUS_CODE.OK)
     })
@@ -739,7 +795,11 @@ function serveSftp(stream: SFTPWrapper, grants: ReadonlyArray<ResolvedGrant>) {
         throw permissionDenied()
       if (!resource.actions.includes("instance.files.chmod"))
         throw permissionDenied()
-      await resource.file.chmod(sanitizeMode(inputAttributes.mode, 0o644))
+      const mode = inputAttributes.mode
+      await inLane(resource.grantId, "sftp.chmod", async () => {
+        requireCurrent(resource)
+        await resource.file.chmod(sanitizeMode(mode, 0o644))
+      })
       stream.status(requestId, STATUS_CODE.OK)
     })
   })
@@ -790,10 +850,10 @@ function serveSftp(stream: SFTPWrapper, grants: ReadonlyArray<ResolvedGrant>) {
         throw permissionDenied()
       }
       requireAction(target.grant, action)
-      await withAnchoredParent(
-        target.grant.root,
-        target.physicalPath,
-        operation
+      const grant = target.grant
+      const physicalPath = target.physicalPath
+      await inLane(grant.id, `sftp.${action}`, () =>
+        withAnchoredParent(grant.root, physicalPath, operation)
       )
       stream.status(requestId, STATUS_CODE.OK)
     })

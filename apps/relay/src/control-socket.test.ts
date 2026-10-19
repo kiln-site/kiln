@@ -9,7 +9,7 @@ import type { Duplex } from "node:stream"
 import { ManagedRuntime } from "effect"
 import type { Effect } from "effect"
 import { WebSocket } from "ws"
-import { describe, expect, it, onTestFinished } from "vite-plus/test"
+import { describe, expect, it, onTestFinished, vi } from "vite-plus/test"
 
 import {
   relayAuthChallengeTranscript,
@@ -36,6 +36,11 @@ import type { RelayClientRole } from "./effect/state.js"
 import type { RelayAction } from "./permissions.js"
 import type { RelayConfig } from "./config.js"
 import { sendRawRequest } from "./test/raw-http.js"
+import { OperationLanes } from "./operation-lanes.js"
+import {
+  controlRequestLocks,
+  type InstanceResolver,
+} from "./operation-plans.js"
 
 type InstallationConfig = Pick<
   RelayConfig,
@@ -392,6 +397,115 @@ describe("Relay control socket", () => {
       replyTo: id,
       type: "response",
     })
+  })
+
+  it("runs one game server's changes in the order they arrived, and others' at once", async () => {
+    const firstServer = "a".repeat(40)
+    const secondServer = "b".repeat(40)
+    const releases = new Map<string, () => void>()
+    const started: Array<string> = []
+    const relay = await startRelay({
+      execute: async (request) => {
+        const { action, instanceId } = request.payload as Record<string, string>
+        const label = `${instanceId!.slice(0, 1)}:${action}`
+        started.push(label)
+        await new Promise<void>((resolve) => releases.set(label, resolve))
+        return { label }
+      },
+    })
+    const { inbox, socket } = await relay.connect(await relay.pair())
+
+    const stop = sendRequest(socket, "instance.action", {
+      action: "stop",
+      instanceId: firstServer,
+    })
+    const start = sendRequest(socket, "instance.action", {
+      action: "start",
+      instanceId: firstServer,
+    })
+    sendRequest(socket, "instance.action", {
+      action: "restart",
+      instanceId: secondServer,
+    })
+    await vi.waitFor(() => expect(started).toEqual(["a:stop", "b:restart"]))
+
+    releases.get("a:stop")!()
+    expect(await inbox.next()).toMatchObject({ replyTo: stop })
+    await vi.waitFor(() =>
+      expect(started).toEqual(["a:stop", "b:restart", "a:start"])
+    )
+    releases.get("a:start")!()
+    expect(await inbox.next()).toMatchObject({ replyTo: start })
+    releases.get("b:restart")!()
+  })
+
+  it("orders a change made by a server's short ID with one made by its full ID", async () => {
+    const instanceId = "c".repeat(40)
+    const release = deferred<void>()
+    const started: Array<string> = []
+    const relay = await startRelay({
+      execute: async (request) => {
+        const { action } = request.payload as Record<string, string>
+        started.push(action!)
+        if (action === "stop") await release.promise
+        return { ok: true }
+      },
+      // Looking up a short ID takes a moment, as finding a container does.
+      resolveInstance: (reference) =>
+        reference === instanceId
+          ? reference
+          : new Promise((resolve) => setTimeout(() => resolve(instanceId), 20)),
+    })
+    const { inbox, socket } = await relay.connect(await relay.pair())
+
+    const stop = sendRequest(socket, "instance.action", {
+      action: "stop",
+      instanceId: "cccccccc",
+    })
+    const start = sendRequest(socket, "instance.action", {
+      action: "start",
+      instanceId,
+    })
+    await vi.waitFor(() => expect(started).toEqual(["stop"]))
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(started).toEqual(["stop"])
+
+    release.resolve()
+    expect(await inbox.next()).toMatchObject({ replyTo: stop })
+    expect(await inbox.next()).toMatchObject({ replyTo: start })
+    expect(started).toEqual(["stop", "start"])
+  })
+
+  it("never runs a change still waiting its turn when Hearth disconnects", async () => {
+    const instanceId = "a".repeat(40)
+    const release = deferred<void>()
+    const started: Array<string> = []
+    const relay = await startRelay({
+      execute: async (request) => {
+        const { action } = request.payload as Record<string, string>
+        started.push(action!)
+        if (action === "stop") await release.promise
+        return { ok: true }
+      },
+    })
+    const { socket } = await relay.connect(await relay.pair())
+
+    sendRequest(socket, "instance.action", { action: "stop", instanceId })
+    sendRequest(socket, "instance.action", { action: "start", instanceId })
+    await vi.waitFor(() => expect(started).toEqual(["stop"]))
+    socket.close()
+    await vi.waitFor(() => expect(relay.control.sessions.size).toBe(0))
+    release.resolve()
+
+    // A later Hearth's request for the same server runs, and the start
+    // queued by the one that left never does.
+    const next = await relay.connect(await relay.pair())
+    const restart = sendRequest(next.socket, "instance.action", {
+      action: "restart",
+      instanceId,
+    })
+    expect(await next.inbox.next()).toMatchObject({ replyTo: restart })
+    expect(started).toEqual(["stop", "restart"])
   })
 
   it("aborts an in-flight operation when Hearth cancels it", async () => {
@@ -795,6 +909,7 @@ async function startRelay(
     readonly execute?: ControlSocketOptions["execute"]
     readonly initialSnapshot?: ControlSocketOptions["initialSnapshot"]
     readonly installation?: InstallationConfig
+    readonly resolveInstance?: InstanceResolver
   } = {}
 ) {
   const directory = mkdtempSync(join(tmpdir(), "kiln-relay-control-"))
@@ -821,6 +936,13 @@ async function startRelay(
         }
       : {}),
     execute: options.execute ?? (async () => ({ ok: true })),
+    lanes: new OperationLanes(),
+    requestLocks: (request) =>
+      controlRequestLocks(
+        request.operation,
+        request.payload as Record<string, unknown>,
+        options.resolveInstance ?? ((reference) => reference)
+      ),
     identity: {
       fingerprint: fingerprint(relayKeys.public),
       name: "Test Relay",

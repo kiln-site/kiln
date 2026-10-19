@@ -60,6 +60,11 @@ Before editing files for a substantial task:
   spans, for hot paths.
 - Avoid patching framework/library internals unless explicitly given permission.
 - Use Sonner for transient feedback and shared tooltips
+- Every change the Relay makes to a game server, App, or database runs in its
+  operation lanes. A new control operation declares the locks it takes in
+  `apps/relay/src/operation-plans.ts`, and Relay-initiated work admits itself
+  the same way, rather than adding a lock of its own. See
+  [Relay operations](docs/relay-operations.md).
 - The Relay drives Docker through its Engine API client
   (`apps/relay/src/docker-engine.ts`). Use the API for what the daemon does,
   run Docker's standalone binaries only for client-side work like Compose and

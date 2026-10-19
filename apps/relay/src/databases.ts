@@ -21,9 +21,8 @@ import {
   databaseEngineSchema,
   relayManagedDatabaseSchema,
 } from "@workspace/contracts"
-import { Effect, Option, Result, Semaphore } from "effect"
+import { Effect, Option, Result } from "effect"
 
-import { promiseEffect } from "./effect/promise.js"
 import { traceRelayPromise } from "./effect/runtime.js"
 import type { DatabaseConnections } from "./database-connections.js"
 import type { RelayConfig } from "./config.js"
@@ -148,35 +147,14 @@ function databaseRecoveryLabels(
   return labels
 }
 
+/**
+ * Callers hold the database's lane lock for each change (see
+ * operation-plans.ts), so these methods don't lock themselves.
+ */
 export class DatabaseDriver {
   readonly #config: RelayConfig
   readonly #docker: DockerDriver
   readonly #engine: DockerEngine
-
-  readonly #mutations = new Map<
-    string,
-    { semaphore: Semaphore.Semaphore; references: number }
-  >()
-
-  #serialize<T>(databaseId: string, run: () => Promise<T>): Promise<T> {
-    let entry = this.#mutations.get(databaseId)
-    if (!entry) {
-      entry = { semaphore: Semaphore.makeUnsafe(1), references: 0 }
-      this.#mutations.set(databaseId, entry)
-    }
-    entry.references += 1
-    const active = entry
-    return Effect.runPromise(
-      active.semaphore.withPermit(promiseEffect(run)).pipe(
-        Effect.ensuring(
-          Effect.sync(() => {
-            active.references -= 1
-            if (active.references === 0) this.#mutations.delete(databaseId)
-          })
-        )
-      )
-    )
-  }
 
   constructor(
     config: RelayConfig,
@@ -268,25 +246,23 @@ export class DatabaseDriver {
 
   // Deletes everything in the database and leaves it empty, with the same
   // name, login, and connections.
-  wipe(input: RelayDatabaseWipe): Promise<RelayManagedDatabase> {
-    return this.#serialize(input.databaseId, async () => {
-      const database = await this.#required(input.databaseId)
-      if (!database.observedState.match(/^(?:running|starting)$/u)) {
-        throw new Error("Start the database before wiping it")
-      }
-      const container = requiredContainerId(database)
-      const wipe = databaseWipeClient(database, input.username, input.password)
-      await Effect.runPromise(
-        this.#engine.execWithInput(container, wipe.command, {
-          env: wipe.env,
-          input: wipe.input,
-          maxOutputBytes: 64 * 1024,
-          overflow: "The database wipe printed more than expected",
-          timeout: 120_000,
-        })
-      )
-      return this.#required(input.databaseId)
-    })
+  async wipe(input: RelayDatabaseWipe): Promise<RelayManagedDatabase> {
+    const database = await this.#required(input.databaseId)
+    if (!database.observedState.match(/^(?:running|starting)$/u)) {
+      throw new Error("Start the database before wiping it")
+    }
+    const container = requiredContainerId(database)
+    const wipe = databaseWipeClient(database, input.username, input.password)
+    await Effect.runPromise(
+      this.#engine.execWithInput(container, wipe.command, {
+        env: wipe.env,
+        input: wipe.input,
+        maxOutputBytes: 64 * 1024,
+        overflow: "The database wipe printed more than expected",
+        timeout: 120_000,
+      })
+    )
+    return this.#required(input.databaseId)
   }
 
   async backupTarget(id: string): Promise<RelayManagedDatabase> {
@@ -405,7 +381,7 @@ export class DatabaseDriver {
   }
 
   delete(input: RelayDeleteDatabase) {
-    return this.#serialize(input.databaseId, () => this.#delete(input))
+    return this.#delete(input)
   }
 
   async #delete(input: RelayDeleteDatabase) {
@@ -510,10 +486,11 @@ export class DatabaseDriver {
     return this.#required(input.databaseId)
   }
 
+  // The caller holds the database's lock across lookup, saving intent, and
+  // attachment, so a queued connect can't recreate a row after deletion has
+  // cleared it.
   updateNetwork(input: RelayDatabaseNetwork): Promise<RelayManagedDatabase> {
-    // Hold the database lock across lookup, saving intent, and attachment so a
-    // queued connect cannot recreate a row after deletion has cleared it.
-    return this.#serialize(input.databaseId, () => this.#updateNetwork(input))
+    return this.#updateNetwork(input)
   }
 
   async #updateNetwork(
