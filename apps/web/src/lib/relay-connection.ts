@@ -1,5 +1,13 @@
 import { randomUUID, sign, verify } from "node:crypto"
-import { Effect, Fiber, Option, Result, Schema, Tracer } from "effect"
+import {
+  Effect,
+  Fiber,
+  Option,
+  Result,
+  Schema,
+  Semaphore,
+  Tracer,
+} from "effect"
 import { HttpTraceContext } from "effect/http"
 import { WebSocket } from "ws"
 
@@ -458,6 +466,8 @@ class RelayConnection {
   #wantsPaused: boolean | null = null
   #toldPaused: boolean | null = null
   #pauseFiber: Fiber.Fiber<void, unknown> | null = null
+  // One pause write at a time, so an older one can't land after a newer.
+  readonly #pauseWrites = Semaphore.makeUnsafe(1)
   #socket: WebSocket | null = null
   #state: RelayConnectionState = {
     lastError: null,
@@ -521,33 +531,42 @@ class RelayConnection {
   // took that: a pause it reports, or a resume, since another Hearth may
   // still hold it paused.
   #tellPause(always: boolean): Effect.Effect<void> {
-    return Effect.suspend(() => {
-      const paused = this.#wantsPaused
-      if (paused === null || this.#state.status !== "authenticated") {
-        return Effect.void
-      }
-      if (
-        !always &&
-        this.#toldPaused === paused &&
-        (!paused || this.reportsPaused)
-      ) {
-        return Effect.void
-      }
-      return this.request("relay.pause.write", { paused }, 10_000).pipe(
-        Effect.tap(() =>
-          Effect.sync(() => {
-            if (this.#wantsPaused === paused) this.#toldPaused = paused
-          })
-        ),
-        Effect.catch((cause) =>
-          Effect.logWarning("Relay pause sync failed", {
-            cause,
-            relayId: this.#relay.id,
-          })
-        ),
-        Effect.asVoid
-      )
-    })
+    return this.#pauseWrites.withPermit(
+      Effect.suspend(() => {
+        const paused = this.#wantsPaused
+        if (paused === null || this.#state.status !== "authenticated") {
+          return Effect.void
+        }
+        if (
+          !always &&
+          this.#toldPaused === paused &&
+          (!paused || this.reportsPaused)
+        ) {
+          return Effect.void
+        }
+        return this.request("relay.pause.write", { paused }, 10_000).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              if (this.#wantsPaused === paused) this.#toldPaused = paused
+            })
+          ),
+          Effect.catch((cause) =>
+            Effect.sync(() => {
+              // It may or may not have taken it, so tell it again next time.
+              if (this.#wantsPaused === paused) this.#toldPaused = null
+            }).pipe(
+              Effect.andThen(
+                Effect.logWarning("Relay pause sync failed", {
+                  cause,
+                  relayId: this.#relay.id,
+                })
+              )
+            )
+          ),
+          Effect.asVoid
+        )
+      })
+    )
   }
 
   // Lets browsers know when the Relay's pause changes.
@@ -1569,16 +1588,30 @@ class RelayConnection {
       this.#pauseFiber = forkAppEffect(
         "relay.pause.syncOnConnect",
         Effect.gen({ self: this }, function* () {
-          if (this.#wantsPaused === null) {
-            const persisted = yield* promiseEffect(async () => {
-              const { listPersistedRelays } =
-                await import("@/lib/relay-registry")
-              return (await listPersistedRelays()).find(
-                (relay) => relay.id === this.#relay.id
+          // Until Hearth's database answers whether it's paused here.
+          while (this.#wantsPaused === null) {
+            const loaded = yield* Effect.result(
+              promiseEffect(async () => {
+                const { listPersistedRelays } =
+                  await import("@/lib/relay-registry")
+                return (await listPersistedRelays()).find(
+                  (relay) => relay.id === this.#relay.id
+                )
+              })
+            )
+            if (Result.isSuccess(loaded)) {
+              if (!loaded.success) return
+              this.#wantsPaused ??= !loaded.success.enabled
+            } else {
+              yield* Effect.logWarning(
+                "Relay pause sync couldn't read Hearth",
+                {
+                  cause: loaded.failure,
+                  relayId: this.#relay.id,
+                }
               )
-            })
-            if (!persisted) return
-            this.#wantsPaused ??= !persisted.enabled
+              yield* Effect.sleep(PAUSE_RECHECK_MS)
+            }
           }
           yield* this.#tellPause(true)
           while (true) {

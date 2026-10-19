@@ -72,16 +72,7 @@ export function useRelayLiveStatus(relay: {
     notifyOnChangeProps: ["data", "isPending"],
     select,
   })
-  // The connection poll leaves out paused Relays and doesn't say whether a
-  // Relay is paused; its inventory does.
-  const { data: observed } = useQuery({
-    ...instanceInventoryQueryOptions(
-      { id: relay.id, kind: "relay", relayId: relay.id },
-      "status"
-    ),
-    notifyOnChangeProps: ["data"],
-    select: selectPauseState,
-  })
+  const observed = useRelayPauseState(relay.id)
   // Structural sharing keeps `state` stable while the Relay's state is.
   return React.useMemo(() => {
     const { relayStatus, updating } = relayLiveState(
@@ -102,6 +93,25 @@ export function useRelayLiveStatus(relay: {
       updating,
     }
   }, [isPending, observed, relay.enabled, relay.lastError, state])
+}
+
+/**
+ * Whether the Relay reports itself paused (`paused`), or is paused here but
+ * hasn't taken it yet (`pausing`). The connection poll leaves out paused
+ * Relays and doesn't say whether a Relay is paused; its inventory does.
+ */
+export function useRelayPauseState(
+  relayId: string
+): "paused" | "pausing" | undefined {
+  const { data } = useQuery({
+    ...instanceInventoryQueryOptions(
+      { id: relayId, kind: "relay", relayId },
+      "status"
+    ),
+    notifyOnChangeProps: ["data"],
+    select: selectPauseState,
+  })
+  return data
 }
 
 // Only the pause, so other inventory changes don't re-render.

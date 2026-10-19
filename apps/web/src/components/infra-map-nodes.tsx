@@ -20,7 +20,10 @@ import { nodeStyle } from "@/components/infra-map-canvas"
 import { HearthMark } from "@/components/hearth-mark"
 import type { IdentityStatusPresentation } from "@/components/identity-name"
 import { InstanceCard } from "@/components/instance-card"
-import { proxyModeLabels } from "@/components/relay/relay-presentation"
+import {
+  proxyModeLabels,
+  useRelayPauseState,
+} from "@/components/relay/relay-presentation"
 import { StatusIndicator } from "@/components/status-indicator"
 import type { InfraMapRect } from "@/lib/infra-map-layout"
 import type {
@@ -523,6 +526,12 @@ const relayStatusPresentation = {
   connected: { label: "Online", tone: "success" },
   unreachable: { label: "Unreachable", tone: "danger" },
   paused: { label: "Paused", tone: "neutral" },
+  pausing: {
+    detail: "Waiting for the Relay to confirm it's paused",
+    label: "Pausing",
+    pulse: true,
+    tone: "warning",
+  },
   checking: { label: "Checking", tone: "neutral", pending: true, pulse: true },
 } satisfies Record<string, IdentityStatusPresentation>
 
@@ -538,7 +547,10 @@ function useRelayStatus(relay: InfraMapRelay): IdentityStatusPresentation {
     enabled: relay.enabled,
     select,
   })
-  if (!relay.enabled) return relayStatusPresentation.paused
+  // Paused once the Relay has it, whichever Hearth asked.
+  const pause = useRelayPauseState(relay.id)
+  if (pause === "paused") return relayStatusPresentation.paused
+  if (!relay.enabled) return relayStatusPresentation[pause ?? "checking"]
   return relayStatusPresentation[reachability ?? "checking"]
 }
 

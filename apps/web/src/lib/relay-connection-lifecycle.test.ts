@@ -412,6 +412,42 @@ effectIt.effect(
 )
 
 effectIt.effect(
+  "tells a Relay again about a resume it never answered, until it takes it",
+  () => {
+    const pauseWrites: Array<unknown> = []
+    let retold: () => void = () => {}
+    const tellsAgain = new Promise<void>((resolve) => {
+      retold = resolve
+    })
+    return withRelayServer(
+      ({ endpoint }) =>
+        Effect.gen(function* () {
+          vi.mocked(listPersistedRelays).mockResolvedValue([
+            { ...endpoint, enabled: true },
+          ] as unknown as Awaited<ReturnType<typeof listPersistedRelays>>)
+          yield* promiseEffect(() => relayRpc(endpoint, "relay.snapshot", {}))
+          yield* Effect.promise(() => advanceTimersUntil(tellsAgain))
+          expect(pauseWrites).toEqual([{ paused: false }, { paused: false }])
+        }).pipe(
+          Effect.ensuring(
+            Effect.sync(() =>
+              vi.mocked(listPersistedRelays).mockResolvedValue([])
+            )
+          )
+        ),
+      (message) => {
+        if (message.operation !== "relay.pause.write") return { ok: true }
+        pauseWrites.push(message.payload)
+        // The first is lost; the next is answered.
+        if (pauseWrites.length === 1) return noAnswer
+        retold()
+        return { paused: false }
+      }
+    )
+  }
+)
+
+effectIt.effect(
   "records a person's change in Hearth's audit, and sends a paused Relay none",
   () =>
     withRelayServer(({ endpoint, requests }) =>
