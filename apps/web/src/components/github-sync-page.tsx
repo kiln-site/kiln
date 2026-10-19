@@ -223,13 +223,13 @@ const SyncToolbar = React.memo(function SyncToolbar({
   useWorkspaceTableSearchInput(inputRef, searchStore)
   const createButton = (
     <Button
-      className="ml-auto shrink-0"
+      className="shrink-0"
       size="sm"
       disabled={!canCreate}
       onClick={onCreate}
     >
       <Plus />
-      Add sync
+      Create sync
     </Button>
   )
 
@@ -247,18 +247,24 @@ const SyncToolbar = React.memo(function SyncToolbar({
           onChange={(event) => searchStore.set(event.currentTarget.value)}
         />
       </div>
-      {createBlockedReason ? (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="ml-auto" tabIndex={0}>
-              {createButton}
-            </span>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">{createBlockedReason}</TooltipContent>
-        </Tooltip>
-      ) : (
-        createButton
-      )}
+      <div className="ml-auto flex shrink-0 items-center gap-2">
+        <Button asChild size="sm" variant="outline">
+          <Link to="/infra/sources" search={{ add: true }}>
+            <GitHubMark />
+            <span className="hidden sm:inline">Add source</span>
+          </Link>
+        </Button>
+        {createBlockedReason ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span tabIndex={0}>{createButton}</span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{createBlockedReason}</TooltipContent>
+          </Tooltip>
+        ) : (
+          createButton
+        )}
+      </div>
     </div>
   )
 })
@@ -307,16 +313,16 @@ const SyncTable = React.memo(function SyncTable({
             : !hasSource
               ? "Syncs copy files from a source's repositories. Add a GitHub source in Infrastructure to get started."
               : hasTargets
-                ? "Add a sync to copy a repository folder into a game server or app, and keep it updated."
+                ? "Create a sync to copy a repository folder into a game server or app, and keep it updated."
                 : "Syncs copy files into a game server or app. Create one you can edit files on first."}
         </p>
         {searchActive ? null : canCreate ? (
           <Button type="button" size="sm" className="mt-4" onClick={onCreate}>
-            <Plus /> Add sync
+            <Plus /> Create sync
           </Button>
         ) : !hasSource ? (
           <Button asChild size="sm" className="mt-4">
-            <Link to="/infra/sources">
+            <Link to="/infra/sources" search={{ add: true }}>
               <Plus /> Add source
             </Link>
           </Button>

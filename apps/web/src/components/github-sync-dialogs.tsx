@@ -176,7 +176,7 @@ export function GitHubSyncEditorDialog({
         queryClient.invalidateQueries({ queryKey: queryKeys.github.sources }),
       ])
       showToast({
-        message: sync ? "Sync saved; syncing now" : "Sync added; syncing now",
+        message: sync ? "Sync saved; syncing now" : "Sync created; syncing now",
         type: "success",
       })
       onClose()
@@ -193,7 +193,7 @@ export function GitHubSyncEditorDialog({
     <Dialog open onOpenChange={(open) => !open && !save.isPending && onClose()}>
       <DialogContent className="grid max-h-[min(92dvh,52rem)] grid-rows-[auto_minmax(0,1fr)] gap-4 overflow-hidden sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>{sync ? "Edit sync" : "Add sync"}</DialogTitle>
+          <DialogTitle>{sync ? "Edit sync" : "Create sync"}</DialogTitle>
           <DialogDescription>
             Copy files from a repository folder into a game server or app. Files
             with the same name are replaced; others are left alone.
@@ -421,7 +421,7 @@ export function GitHubSyncEditorDialog({
               ) : (
                 <Check />
               )}
-              {sync ? "Save and sync" : "Add and sync"}
+              {sync ? "Save and sync" : "Create and sync"}
             </Button>
           </DialogFooter>
         </form>

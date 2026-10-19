@@ -13,6 +13,8 @@ import { requireInfrastructureDestinationAccess } from "@/lib/route-access"
 
 export const Route = createFileRoute("/_app/infra/sources")({
   validateSearch: z.object({
+    // Opens Add source, as Sync's button does.
+    add: z.boolean().optional(),
     // Where GitHub's setup redirects land, with the outcome to show once.
     connected: z.uuid().optional(),
     githubError: z.string().max(300).optional(),
@@ -31,7 +33,7 @@ export const Route = createFileRoute("/_app/infra/sources")({
 })
 
 function InfraSourcesRoute() {
-  const { connected, githubError, search = "" } = Route.useSearch()
+  const { add = false, connected, githubError, search = "" } = Route.useSearch()
   const searchStore = useDataTableSearchStore(search)
   const navigate = Route.useNavigate()
   const clearSetupResult = React.useCallback(() => {
@@ -44,12 +46,23 @@ function InfraSourcesRoute() {
       }),
     })
   }, [navigate])
+  const setAddOpen = React.useCallback(
+    (open: boolean) => {
+      void navigate({
+        replace: !open,
+        search: (previous) => ({ ...previous, add: open ? true : undefined }),
+      })
+    },
+    [navigate]
+  )
 
   return (
     <SourcesPage
+      addOpen={add}
       connected={connected}
       error={githubError}
       searchStore={searchStore}
+      onAddOpenChange={setAddOpen}
       onSetupResultShown={clearSetupResult}
     />
   )

@@ -129,7 +129,7 @@ export const infrastructureDestinations = [
   },
   {
     access: "sources",
-    group: "sources",
+    group: "network",
     icon: FolderGit2,
     keywords: ["infrastructure", "github", "git", "repositories"],
     label: "Sources",
@@ -138,7 +138,7 @@ export const infrastructureDestinations = [
 ] as const satisfies ReadonlyArray<
   NavigationDestination & {
     access: InfrastructureDestinationAccess
-    group: "network" | "overview" | "resources" | "sources"
+    group: "network" | "overview" | "resources"
   }
 >
 

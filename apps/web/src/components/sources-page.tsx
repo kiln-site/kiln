@@ -11,7 +11,6 @@ import {
   Plus,
   RefreshCw,
   Rocket,
-  Settings2,
   Trash2,
 } from "lucide-react"
 
@@ -59,7 +58,6 @@ import type { GitHubConnectionView } from "@/server/github-sync.server"
 type Source = GitHubConnectionView
 
 type SourceDialog =
-  | { kind: "add" }
   | { kind: "configure"; source: Source }
   | { kind: "delete"; source: Source }
   | null
@@ -90,15 +88,20 @@ const sourceSearchFields = [
 ] as const
 
 export const SourcesPage = React.memo(function SourcesPage({
+  addOpen,
   connected,
   error,
   searchStore,
+  onAddOpenChange,
   onSetupResultShown,
 }: {
+  /** Add source lives in the URL, so Sync can link straight to it. */
+  addOpen: boolean
   /** A source GitHub's setup just finished, to announce once. */
   connected: string | undefined
   error: string | undefined
   searchStore: DataTableSearchStore
+  onAddOpenChange: (open: boolean) => void
   onSetupResultShown: () => void
 }) {
   const { data } = useSuspenseQuery({
@@ -107,7 +110,14 @@ export const SourcesPage = React.memo(function SourcesPage({
   })
   const [dialog, setDialog] = React.useState<SourceDialog>(null)
   const closeDialog = React.useCallback(() => setDialog(null), [])
-  const openAdd = React.useCallback(() => setDialog({ kind: "add" }), [])
+  const openAdd = React.useCallback(
+    () => onAddOpenChange(true),
+    [onAddOpenChange]
+  )
+  const closeAdd = React.useCallback(
+    () => onAddOpenChange(false),
+    [onAddOpenChange]
+  )
 
   React.useEffect(() => {
     const idle =
@@ -157,11 +167,11 @@ export const SourcesPage = React.memo(function SourcesPage({
       </DataTableWorkspace>
 
       <React.Suspense fallback={null}>
-        {dialog?.kind === "add" ? (
+        {addOpen ? (
           <AddSourceDialog
             hearthUrl={data.hearthUrl}
             webhooksReachable={data.webhooksReachable}
-            onClose={closeDialog}
+            onClose={closeAdd}
           />
         ) : null}
         {dialog?.kind === "configure" ? (
@@ -306,7 +316,9 @@ const SourcesTable = React.memo(function SourcesTable({
           id: "account",
           header: "User / Org",
           sortFn: "text",
-          cell: ({ row }) => <SourceAccount source={row.original} />,
+          cell: ({ row }) => (
+            <SourceRowButton source={row.original} onDialog={onDialog} />
+          ),
           meta: dataTableColumnMeta({ width: "minmax(0,1fr)" }),
         }
       ),
@@ -333,7 +345,7 @@ const SourcesTable = React.memo(function SourcesTable({
           <SourceActions source={row.original} onDialog={onDialog} />
         ),
         meta: dataTableColumnMeta(
-          { width: "6.5rem" },
+          { width: "5rem" },
           { cellClassName: "px-1 sm:px-2", headerClassName: "px-1 sm:px-2" }
         ),
       }),
@@ -341,6 +353,8 @@ const SourcesTable = React.memo(function SourcesTable({
     return defineDataTable({
       ariaLabel: "Sources",
       columns,
+      // The account cell's button covers the row; see SourceRowButton.
+      getRowClassName: () => "relative cursor-pointer",
       getRowId: (row) => row.id,
       search: { fields: sourceSearchFields },
     })
@@ -405,7 +419,7 @@ function UsageCell({ source }: { source: Source }) {
     <span className="type-meta flex min-w-0 items-center gap-3">
       <Link
         to="/automations/sync"
-        className="inline-flex items-center gap-1.5 hover:text-primary"
+        className="relative z-10 inline-flex items-center gap-1.5 hover:text-primary"
       >
         <RefreshCw className="size-3 text-muted-foreground" />
         <span className="tabular-nums">{source.syncCount}</span>
@@ -427,6 +441,29 @@ function UsageCell({ source }: { source: Source }) {
   )
 }
 
+/**
+ * Opens Configure from anywhere on the row: its hit area stretches over the
+ * row, beneath the links and actions raised above it.
+ */
+function SourceRowButton({
+  source,
+  onDialog,
+}: {
+  source: Source
+  onDialog: (dialog: SourceDialog) => void
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={`Configure ${source.installation?.accountLogin ?? source.appName}`}
+      className="flex min-w-0 text-left outline-none after:absolute after:inset-0 after:content-[''] focus-visible:after:ring-2 focus-visible:after:ring-ring/40 focus-visible:after:ring-inset"
+      onClick={() => onDialog({ kind: "configure", source })}
+    >
+      <SourceAccount source={source} />
+    </button>
+  )
+}
+
 const SourceActions = React.memo(function SourceActions({
   source,
   onDialog,
@@ -436,22 +473,7 @@ const SourceActions = React.memo(function SourceActions({
 }) {
   const name = source.installation?.accountLogin ?? source.appName
   return (
-    <DataTableActionGroup>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            aria-label={`Configure ${name}`}
-            className="text-muted-foreground hover:text-primary"
-            size="icon-sm"
-            type="button"
-            variant="ghost"
-            onClick={() => onDialog({ kind: "configure", source })}
-          >
-            <Settings2 />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">Configure</TooltipContent>
-      </Tooltip>
+    <DataTableActionGroup className="relative z-10">
       <Tooltip>
         <TooltipTrigger asChild>
           <Button
