@@ -105,6 +105,42 @@ or delete has replaced it since, further writes through that handle fail and
 the client must reopen the file. Nothing holds a lock between SFTP calls, so
 an idle SFTP session never blocks a restore.
 
+## Operation IDs
+
+Hearth gives every change it sends an `operationId`, separate from the
+request's frame `id`. `relayControlOperationChanges` in the contracts says
+which operations are changes; reads and terminal traffic aren't.
+
+The Relay records a change in its SQLite journal (`relay_operations`) as
+running before it runs, and records how it went before releasing its locks.
+Records are kept per paired Hearth for a week. `operation.get` answers with
+what the Relay knows of an ID:
+
+| Answer        | Meaning                                                              |
+| ------------- | -------------------------------------------------------------------- |
+| `unknown`     | The Relay never started a change by that ID, so it didn't run.       |
+| `running`     | It's running or waiting its turn.                                    |
+| `succeeded`   | It ran; the answer carries the reply it sent.                        |
+| `failed`      | It ran and failed; the answer carries the error.                     |
+| `interrupted` | The Relay restarted while it ran, so it may or may not have applied. |
+
+When a connection drops with changes still waiting for their replies, Hearth
+keeps waiting for each one until its deadline. Once the Relay is back, it asks
+`operation.get` how each went, and answers its caller with the result. It
+never sends a change again: a change the Relay didn't receive fails as not
+run, so the caller decides whether to try again.
+
+A change that outlives its deadline, or that a restart interrupted, fails
+with `RelayUnavailableError` and `outcome: "unknown"`. It may have applied,
+so it shouldn't simply be retried; check the resource first.
+
+The Relay never runs one ID twice. A repeated request with the same ID and
+payload gets the first one's answer; one with a different payload fails with
+`operation_conflict`. A Hearth can only look up its own changes.
+
+A cancelled change answers too: `request_cancelled` if it was withdrawn
+before it ran, or its real outcome if it was already running.
+
 ## Limits
 
 - **No preemption.** A kill waits behind a running start or stop like any
@@ -116,5 +152,8 @@ an idle SFTP session never blocks a restore.
 - **Deletes wait.** A delete waits for a running backup of the same server
   and for provisioning that is still creating it, up to its deadline.
 - **One Relay process.** Lanes are in memory. A Relay restart abandons
-  operations still running; durable workers (backups, provisioning,
-  schedules) recover their own jobs as before.
+  operations still running and records them as interrupted; durable workers
+  (backups, provisioning, schedules) recover their own jobs as before.
+- **Unknown outcomes remain possible.** Docker can apply a change and the
+  Relay can stop before recording it, or a Relay can stay away past a
+  change's deadline. Hearth reports those as unknown instead of guessing.

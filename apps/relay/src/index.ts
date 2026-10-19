@@ -271,6 +271,32 @@ await runRelayEffect(
   "relay.startup.runtimeRecovery",
   runtimeRecovery.initialize()
 )
+// Changes that were running when the Relay last stopped may or may not have
+// taken effect; lookups report them as interrupted. Records of finished
+// changes are kept a week.
+const OPERATION_RETENTION_MS = 7 * 24 * 60 * 60_000
+await runRelayEffect(
+  "relay.startup.operations",
+  startupCore.state
+    .interruptRunningOperations(Date.now())
+    .pipe(
+      Effect.andThen(
+        startupCore.state.pruneOperations(Date.now() - OPERATION_RETENTION_MS)
+      )
+    )
+)
+const operationPruneFiber = forkRelayEffect(
+  "relay.operations.prune",
+  Effect.sleep("6 hours").pipe(
+    Effect.andThen(
+      Effect.suspend(() =>
+        startupCore.state.pruneOperations(Date.now() - OPERATION_RETENTION_MS)
+      )
+    ),
+    Effect.ignore,
+    Effect.forever
+  )
+)
 const databaseConnections = new DatabaseConnections(config, startupCore.state)
 const docker = new DockerDriver(
   config,
@@ -942,6 +968,7 @@ const sftpServer = await Effect.runPromise(
     Effect.onError(() =>
       Effect.sync(() => {
         tailscaleFirewallFiber.interruptUnsafe()
+        operationPruneFiber.interruptUnsafe()
         backupFiber.interruptUnsafe()
         provisioningFiber.interruptUnsafe()
         scheduleFiber.interruptUnsafe()
@@ -1166,6 +1193,7 @@ function shutdownRelay(signal: NodeJS.Signals): Promise<void> {
         healthServer?.close()
         healthServer?.closeAllConnections()
         tailscaleFirewallFiber.interruptUnsafe()
+        operationPruneFiber.interruptUnsafe()
         tlsRefreshFiber.interruptUnsafe()
         backupFiber.interruptUnsafe()
         provisioningFiber.interruptUnsafe()

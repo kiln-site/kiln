@@ -156,6 +156,7 @@ export const relayControlOperations = [
   "hearth.tailscale.instance.detach",
   "hearth.database.terminal.output",
   "sftp.authorization.resolve",
+  "operation.get",
 ] as const
 
 export type RelayControlOperation = (typeof relayControlOperations)[number]
@@ -225,6 +226,136 @@ export function isAuditedRelayControlOperation(
   operation: RelayControlOperation
 ): boolean {
   return auditedRelayControlOperations.has(operation)
+}
+
+/**
+ * Whether an operation changes something, so the Relay records it under its
+ * operation ID and Hearth looks it up when its reply is lost. Reads, terminal session traffic, and
+ * requests the Relay sends Hearth don't.
+ */
+export function relayControlOperationChanges(
+  operation: RelayControlOperation
+): boolean {
+  switch (operation) {
+    case "relay.snapshot":
+    case "relay.system.inspect":
+    case "relay.update.status":
+    case "relay.resources.read":
+    case "relay.audit.list":
+    case "relay.networking.read":
+    case "relay.tailscale.read":
+    case "relay.tailscale.stack.list":
+    case "relay.host.read":
+    case "relay.database.read":
+    case "relay.proxy.read":
+    case "relay.proxy.config.read":
+    case "relay.pairing.list":
+    case "relay.clients.list":
+    case "brick.catalog":
+    case "brick.recipe":
+    case "database.list":
+    case "database.inspect":
+    case "database.data.read":
+    case "database.dump.export":
+    case "app.list":
+    case "app.network.routes.read":
+    case "backup.task.get":
+    case "backup.task.list":
+    case "schedule.overview":
+    case "instance.resources.read":
+    case "instance.files.list":
+    case "instance.files.directory.list":
+    case "instance.files.directory.sizes":
+    case "instance.files.search":
+    case "instance.files.stat":
+    case "instance.files.read":
+    case "instance.files.database.read":
+    case "instance.console.history":
+    case "instance.logs.latest":
+    case "instance.network.routes.read":
+    case "relay.terminal.attach":
+    case "relay.terminal.heartbeat":
+    case "relay.terminal.detach":
+    case "relay.terminal.write":
+    case "relay.terminal.claim":
+    case "relay.terminal.restart":
+    case "database.terminal.attach":
+    case "database.terminal.heartbeat":
+    case "database.terminal.detach":
+    case "database.terminal.write":
+    case "database.terminal.claim":
+    case "database.terminal.restart":
+    case "app.terminal.attach":
+    case "app.terminal.heartbeat":
+    case "app.terminal.detach":
+    case "app.terminal.write":
+    case "app.terminal.claim":
+    case "app.terminal.restart":
+    case "hearth.tailscale.instance.detach":
+    case "hearth.database.terminal.output":
+    case "sftp.authorization.resolve":
+    case "operation.get":
+      return false
+    case "relay.update.apply":
+    case "relay.restart":
+    case "relay.rename":
+    case "relay.networking.write":
+    case "relay.tailscale.install":
+    case "relay.tailscale.write":
+    case "relay.tailscale.stack.apply":
+    case "relay.tailscale.stack.dns":
+    case "relay.tailscale.stack.remove":
+    case "relay.host.files.mount":
+    case "relay.host.restart":
+    case "relay.proxy.write":
+    case "relay.pairing.create":
+    case "relay.pairing.revoke":
+    case "relay.clients.update":
+    case "relay.clients.revoke":
+    case "browser.authorization.revise":
+    case "database.create":
+    case "database.wipe":
+    case "database.delete":
+    case "database.action":
+    case "database.credentials.rotate":
+    case "database.network.write":
+    case "database.dump.import":
+    case "database.data.write":
+    case "app.create":
+    case "app.delete":
+    case "app.deploy":
+    case "app.action":
+    case "app.network.write":
+    case "app.network.routes.write":
+    case "backup.task.enqueue":
+    case "backup.task.cancel":
+    case "schedule.apply":
+    case "schedule.run":
+    case "schedule.remove":
+    case "instance.create":
+    case "instance.provision.prepare":
+    case "instance.provision.claim":
+    case "instance.provision.cancel":
+    case "instance.startup.write":
+    case "instance.rename":
+    case "instance.delete":
+    case "instance.action":
+    case "instance.files.write":
+    case "instance.files.put":
+    case "instance.files.upload-url":
+    case "instance.files.mutate":
+    case "instance.files.mutate.result":
+    case "instance.files.database.write":
+    case "instance.console.write":
+    case "instance.console.complete":
+    case "instance.logs.share":
+    case "instance.network.ports.reserve":
+    case "instance.network.ports.release":
+    case "instance.network.ports.write":
+    case "instance.network.routes.write":
+    case "instance.network.databases.remove":
+      return true
+  }
 }
 
 export function relayControlDeadlineMs(
@@ -447,6 +578,11 @@ export const RelayControlRequestSchema = Schema.Struct({
   id: Schema.String,
   operation: RelayControlOperationSchema,
   payload: Schema.Unknown,
+  // Names a change across reconnects; `id` names only this one frame. The
+  // Relay records each change it runs under its operation ID and answers
+  // `operation.get` with how it went, so Hearth learns the outcome of a
+  // change whose reply a dropped connection lost.
+  operationId: Schema.optionalKey(Schema.String),
   subject: Schema.optionalKey(Schema.String),
   timeoutMs: Schema.optionalKey(Schema.Number),
   // The W3C `traceparent` of the sender's span, so the receiver's work joins
@@ -456,6 +592,29 @@ export const RelayControlRequestSchema = Schema.Struct({
   type: Schema.Literal("request"),
   v: Schema.Literal(1),
 })
+
+/**
+ * What the Relay knows of a change Hearth sent under an `operationId`:
+ * `unknown` if it never started one by that ID, which means it never ran;
+ * `interrupted` if the Relay restarted while it ran, so it may or may not
+ * have taken effect.
+ */
+export const RelayOperationLookupSchema = Schema.Union([
+  Schema.Struct({ status: Schema.Literal("unknown") }),
+  Schema.Struct({ status: Schema.Literal("running") }),
+  Schema.Struct({
+    result: Schema.Unknown,
+    status: Schema.Literal("succeeded"),
+  }),
+  Schema.Struct({
+    code: Schema.String,
+    message: Schema.String,
+    retryable: Schema.Boolean,
+    status: Schema.Literal("failed"),
+  }),
+  Schema.Struct({ status: Schema.Literal("interrupted") }),
+])
+export type RelayOperationLookup = typeof RelayOperationLookupSchema.Type
 
 export const RelayControlCancelSchema = Schema.Struct({
   id: Schema.String,

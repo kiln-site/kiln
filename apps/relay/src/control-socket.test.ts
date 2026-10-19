@@ -1,4 +1,10 @@
-import { generateKeyPairSync, randomBytes, sign, verify } from "node:crypto"
+import {
+  generateKeyPairSync,
+  randomBytes,
+  randomUUID,
+  sign,
+  verify,
+} from "node:crypto"
 import { once } from "node:events"
 import { mkdtempSync, rmSync } from "node:fs"
 import { createServer } from "node:http"
@@ -511,6 +517,145 @@ describe("Relay control socket", () => {
     expect(started).toEqual(["stop", "restart"])
   })
 
+  describe("operation IDs", () => {
+    const features = [relaySnapshotDeltaFeature]
+    const instanceId = "d".repeat(40)
+
+    it("tells a reconnected Hearth how a change went after its reply was lost", async () => {
+      const release = deferred<void>()
+      const relay = await startRelay({
+        execute: async () => {
+          await release.promise
+          return { stopped: true }
+        },
+      })
+      const hearth = await relay.pair()
+      const first = await relay.connect(hearth, { features })
+      const operationId = randomUUID()
+      sendRequest(
+        first.socket,
+        "instance.action",
+        { action: "stop", instanceId },
+        { operationId }
+      )
+      await vi.waitFor(async () =>
+        expect(await lookup(relay, hearth, operationId)).toEqual({
+          status: "running",
+        })
+      )
+      first.socket.close()
+      await vi.waitFor(() => expect(relay.control.sessions.size).toBe(0))
+
+      // The change keeps running without its Hearth, and its outcome is kept.
+      release.resolve()
+      await vi.waitFor(async () =>
+        expect(await lookup(relay, hearth, operationId)).toEqual({
+          result: { stopped: true },
+          status: "succeeded",
+        })
+      )
+    })
+
+    it("doesn't run a change again when its ID is sent twice", async () => {
+      let runs = 0
+      const relay = await startRelay({
+        execute: async () => {
+          runs += 1
+          return { runs }
+        },
+      })
+      const { inbox, socket } = await relay.connect(await relay.pair(), {
+        features,
+      })
+      const operationId = randomUUID()
+      const payload = { action: "restart", instanceId }
+
+      sendRequest(socket, "instance.action", payload, { operationId })
+      expect(await inbox.next()).toMatchObject({ payload: { runs: 1 } })
+      sendRequest(socket, "instance.action", payload, { operationId })
+      expect(await inbox.next()).toMatchObject({ payload: { runs: 1 } })
+      expect(runs).toBe(1)
+
+      // The same ID for a different change is refused, not run.
+      const conflict = sendRequest(
+        socket,
+        "instance.action",
+        { action: "kill", instanceId },
+        { operationId }
+      )
+      expect(await inbox.next()).toMatchObject({
+        code: "operation_conflict",
+        replyTo: conflict,
+        type: "error",
+      })
+      expect(runs).toBe(1)
+    })
+
+    it("keeps a failed change's error for lookups", async () => {
+      const relay = await startRelay({
+        execute: async () => {
+          throw new Error("Server is not stopped")
+        },
+      })
+      const hearth = await relay.pair()
+      const { inbox, socket } = await relay.connect(hearth, { features })
+      const operationId = randomUUID()
+      sendRequest(
+        socket,
+        "instance.action",
+        { action: "start", instanceId },
+        { operationId }
+      )
+      expect(await inbox.next()).toMatchObject({ type: "error" })
+      expect(await lookup(relay, hearth, operationId)).toMatchObject({
+        code: "operation_failed",
+        message: "Server is not stopped",
+        status: "failed",
+      })
+    })
+
+    it("reports a change it never received as unknown, and one a restart cut off as interrupted", async () => {
+      const relay = await startRelay()
+      const hearth = await relay.pair()
+      expect(await lookup(relay, hearth, randomUUID())).toEqual({
+        status: "unknown",
+      })
+
+      const operationId = randomUUID()
+      await relay.run(
+        relay.state.startOperation({
+          clientId: hearth.id,
+          operation: "instance.action",
+          operationId,
+          payloadSha256: "x",
+          startedAt: Date.now(),
+        })
+      )
+      await relay.run(relay.state.interruptRunningOperations(Date.now()))
+      expect(await lookup(relay, hearth, operationId)).toEqual({
+        status: "interrupted",
+      })
+    })
+
+    it("keeps one Hearth's operations from another", async () => {
+      const relay = await startRelay({ execute: async () => ({ ok: true }) })
+      const owner = await relay.pair()
+      const other = await relay.pair()
+      const { inbox, socket } = await relay.connect(owner, { features })
+      const operationId = randomUUID()
+      sendRequest(
+        socket,
+        "instance.action",
+        { action: "start", instanceId },
+        { operationId }
+      )
+      await inbox.next()
+      expect(await lookup(relay, other, operationId)).toEqual({
+        status: "unknown",
+      })
+    })
+  })
+
   it("aborts an in-flight operation when Hearth cancels it", async () => {
     const started = deferred<void>()
     const aborted = deferred<void>()
@@ -540,7 +685,13 @@ describe("Relay control socket", () => {
     )
     await aborted.promise
 
-    // The cancelled request never answers; the next frame belongs to a later request.
+    // A change already running answers with how it went, so Hearth learns
+    // whether it ran.
+    expect(await inbox.next()).toMatchObject({
+      code: "request_cancelled",
+      replyTo: cancelledId,
+      type: "error",
+    })
     const followUpId = sendRequest(socket, "relay.snapshot", {})
     expect(await inbox.next()).toMatchObject({
       replyTo: followUpId,
@@ -1092,6 +1243,24 @@ function authResponse(
   }
 }
 
+async function lookup(
+  relay: Awaited<ReturnType<typeof startRelay>>,
+  hearth: TestHearth,
+  operationId: string
+) {
+  const { inbox, socket } = await relay.connect(hearth, {
+    features: [relaySnapshotDeltaFeature],
+  })
+  try {
+    const id = sendRequest(socket, "operation.get", { operationId })
+    const reply = await inbox.next()
+    expect(reply).toMatchObject({ replyTo: id, type: "response" })
+    return (reply as { payload: unknown }).payload
+  } finally {
+    socket.close()
+  }
+}
+
 function sendRequest(
   socket: WebSocket,
   operation: RelayControlOperation,
@@ -1099,6 +1268,7 @@ function sendRequest(
   overrides: {
     readonly deadline?: number
     readonly id?: string
+    readonly operationId?: string
     readonly subject?: string
     readonly timeoutMs?: number
     readonly traceparent?: string

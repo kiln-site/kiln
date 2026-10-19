@@ -260,6 +260,10 @@ export function controlRequestLocks(
     case "instance.create":
       return null
 
+    // Looks up how an earlier change went.
+    case "operation.get":
+      return null
+
     // Requests the Relay sends Hearth, never the other way.
     case "hearth.tailscale.instance.detach":
     case "hearth.database.terminal.output":

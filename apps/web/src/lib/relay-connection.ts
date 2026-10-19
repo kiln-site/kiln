@@ -16,6 +16,8 @@ import {
   relayAuthResponseTranscript,
   relayControlDeadlineMs,
   relayControlMaxFrameBytes,
+  relayControlOperationChanges,
+  RelayOperationLookupSchema,
   relayControlRequestTimeoutMs,
   relayControlProtocol,
   relaySnapshotControlDelta,
@@ -328,12 +330,11 @@ class RelayConnection {
   #closed = false
   #connecting: Fiber.Fiber<void, unknown> | null = null
   #credentials: RelayCredentials | null = null
-  #pending = new Map<
-    string,
-    {
-      resume: (effect: Effect.Effect<unknown, RelayUnavailableError>) => void
-    }
-  >()
+  #pending = new Map<string, PendingRequest>()
+  // Changes whose connection dropped before they answered, by operation ID.
+  // They're settled by asking the Relay how each went once it's back.
+  #unsettled = new Map<string, UnsettledChange>()
+  #settling = false
   #reverseInFlight = new Map<
     string,
     {
@@ -510,10 +511,17 @@ class RelayConnection {
           Math.max(timeoutMs, 1),
           relayControlDeadlineMs(operation)
         )
+        // A change keeps one ID across reconnects, so its outcome can be
+        // looked up if its answer is lost.
+        const operationId = relayControlOperationChanges(operation)
+          ? randomUUID()
+          : undefined
+        const deadline = Date.now() + duration
         const request: RelayControlRequest = {
-          deadline: Date.now() + duration,
+          deadline,
           id,
           operation,
+          ...(operationId ? { operationId } : {}),
           payload,
           ...(subject ? { subject } : {}),
           timeoutMs: duration,
@@ -522,7 +530,7 @@ class RelayConnection {
           v: 1,
         }
         return Effect.callback<unknown, RelayUnavailableError>((resume) => {
-          this.#pending.set(id, { resume })
+          this.#pending.set(id, { deadline, operationId, resume })
           socket.send(JSON.stringify(request), (cause) => {
             if (!cause) return
             this.#pending.delete(id)
@@ -534,6 +542,7 @@ class RelayConnection {
             )
           })
           return Effect.sync(() => {
+            if (operationId) this.#unsettled.delete(operationId)
             if (!this.#pending.delete(id)) return
             if (socket.readyState === WebSocket.OPEN) {
               socket.send(
@@ -549,9 +558,13 @@ class RelayConnection {
         }).pipe(
           Effect.timeout(duration),
           Effect.catchTag("TimeoutError", () =>
-            relayConnectionFailure(
-              `Relay request timed out after ${duration}ms`
-            )
+            operationId
+              ? unknownOutcome(
+                  "The Relay didn't finish this in time. It may still finish, so check the result before trying again."
+                )
+              : relayConnectionFailure(
+                  `Relay request timed out after ${duration}ms`
+                )
           )
         )
       }),
@@ -580,6 +593,14 @@ class RelayConnection {
     )
     this.#abortReverseRequests()
     this.#rejectPending(new Error("Relay connection closed"))
+    for (const change of this.#unsettled.values()) {
+      change.resume(
+        unknownOutcome(
+          "Hearth closed its connection to this Relay before the change finished. Check the result before trying again."
+        )
+      )
+    }
+    this.#unsettled.clear()
     this.#setState("disconnected", null)
   }
 
@@ -1209,11 +1230,95 @@ class RelayConnection {
     )
   }
 
+  // Requests can't answer once their connection is gone. Changes wait to be
+  // looked up after it's back; everything else fails now.
   #rejectPending(cause: Error): void {
     for (const pending of this.#pending.values()) {
+      if (pending.operationId && !this.#closed) {
+        this.#unsettled.set(pending.operationId, {
+          deadline: pending.deadline,
+          resume: pending.resume,
+        })
+        continue
+      }
       pending.resume(relayConnectionFailure(cause.message, cause))
     }
     this.#pending.clear()
+    if (this.#unsettled.size > 0) this.#watchUnsettled()
+  }
+
+  // Asks the Relay how each unsettled change went, once it's connected, until
+  // each one's deadline.
+  #watchUnsettled(): void {
+    if (this.#settling) return
+    this.#settling = true
+    forkPromise(
+      () =>
+        ensuringPromise(
+          async () => {
+            while (this.#unsettled.size > 0 && !this.#closed) {
+              await this.#settleUnsettled()
+              if (this.#unsettled.size > 0) {
+                await new Promise((resolve) =>
+                  setTimeout(resolve, UNSETTLED_CHANGE_POLL_MS)
+                )
+              }
+            }
+          },
+          () => {
+            this.#settling = false
+          }
+        ),
+      (cause) => {
+        reportAppError(cause, { operation: "relay.connection.settle" })
+      }
+    )
+  }
+
+  async #settleUnsettled(): Promise<void> {
+    const now = Date.now()
+    for (const [operationId, change] of [...this.#unsettled]) {
+      if (now >= change.deadline) {
+        this.#unsettled.delete(operationId)
+        change.resume(
+          unknownOutcome(
+            "The connection to this Relay dropped before it answered, and it hasn't reported how the change went. Check the result before trying again."
+          )
+        )
+        continue
+      }
+      if (this.#state.status !== "authenticated") continue
+      const lookup = await runAppEffect(
+        "relay.operation.lookup",
+        this.request("operation.get", { operationId }, 10_000).pipe(
+          Effect.flatMap(Schema.decodeUnknownEffect(RelayOperationLookupSchema)),
+          Effect.option
+        )
+      )
+      if (Option.isNone(lookup)) continue
+      const outcome = lookup.value
+      if (outcome.status === "running") continue
+      this.#unsettled.delete(operationId)
+      change.resume(
+        outcome.status === "succeeded"
+          ? Effect.succeed(outcome.result)
+          : outcome.status === "failed"
+            ? Effect.fail(
+                RelayUnavailableError.make({
+                  code: outcome.code,
+                  message: outcome.message,
+                  retryable: outcome.retryable,
+                })
+              )
+            : outcome.status === "unknown"
+              ? relayConnectionFailure(
+                  "The connection to this Relay dropped before the change reached it. It didn't run."
+                )
+              : unknownOutcome(
+                  "This Relay restarted while running the change. Check the result before trying again."
+                )
+      )
+    }
   }
 
   #abortReverseRequests(): void {
@@ -1357,6 +1462,29 @@ function sendSocketEffect(
     },
     catch: asError,
   })
+}
+
+interface PendingRequest {
+  readonly deadline: number
+  readonly operationId: string | undefined
+  readonly resume: (
+    effect: Effect.Effect<unknown, RelayUnavailableError>
+  ) => void
+}
+
+interface UnsettledChange {
+  readonly deadline: number
+  readonly resume: PendingRequest["resume"]
+}
+
+const UNSETTLED_CHANGE_POLL_MS = 1_000
+
+function unknownOutcome(
+  message: string
+): Effect.Effect<never, RelayUnavailableError> {
+  return Effect.fail(
+    RelayUnavailableError.make({ message, outcome: "unknown", retryable: false })
+  )
 }
 
 function relayConnectionFailure(

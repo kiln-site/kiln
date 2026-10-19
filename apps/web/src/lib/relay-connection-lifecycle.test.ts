@@ -361,6 +361,121 @@ effectIt.effect(
     )
 )
 
+effectIt.effect(
+  "learns how a change went after the connection that sent it dropped",
+  () => {
+    let applied: string | undefined
+    return withRelayServer(
+      ({ disconnect, endpoint, reconnected, requests }) =>
+        Effect.gen(function* () {
+          const action = relayRpc(
+            endpoint,
+            "instance.action",
+            { action: "stop", instanceId: "a".repeat(40) },
+            30_000
+          )
+          yield* Effect.promise(() =>
+            advanceTimersUntil(
+              new Promise<void>((resolve) => {
+                const check = () =>
+                  requests.some((r) => r.type === "request" && r.operation === "instance.action")
+                    ? resolve()
+                    : setImmediate(check)
+                check()
+              })
+            )
+          )
+          const sent = requests.find(
+            (r): r is RelayControlRequestMessage =>
+              r.type === "request" && r.operation === "instance.action"
+          )!
+          applied = sent.operationId
+          // The Relay applies the stop, but the reply is lost with the
+          // connection.
+          disconnect()
+          yield* Effect.promise(() => advanceTimersUntil(reconnected))
+
+          const result = yield* promiseEffect(() => advanceTimersUntil(action))
+          expect(result).toEqual({ stopped: true })
+          const lookups = requests.filter(
+            (r): r is RelayControlRequestMessage =>
+              r.type === "request" && r.operation === "operation.get"
+          )
+          expect(lookups.at(-1)?.payload).toEqual({
+            operationId: sent.operationId,
+          })
+          // It was looked up, never sent again.
+          expect(
+            requests.filter(
+              (r) => r.type === "request" && r.operation === "instance.action"
+            )
+          ).toHaveLength(1)
+        }),
+      (message) => {
+        if (message.operation === "instance.action") return noAnswer
+        if (message.operation === "operation.get") {
+          const { operationId } = message.payload as { operationId: string }
+          return operationId === applied
+            ? { result: { stopped: true }, status: "succeeded" }
+            : { status: "unknown" }
+        }
+        return { eligible: true }
+      }
+    )
+  }
+)
+
+effectIt.effect(
+  "reports a change the Relay never received as not run, and a slow one as unknown",
+  () =>
+    withRelayServer(
+      ({ disconnect, endpoint, reconnected, requests }) =>
+        Effect.gen(function* () {
+          const lost = relayRpc(
+            endpoint,
+            "instance.action",
+            { action: "start", instanceId: "b".repeat(40) },
+            30_000
+          )
+          yield* Effect.promise(() =>
+            advanceTimersUntil(
+              new Promise<void>((resolve) => {
+                const check = () =>
+                  requests.some((r) => r.type === "request" && r.operation === "instance.action")
+                    ? resolve()
+                    : setImmediate(check)
+                check()
+              })
+            )
+          )
+          disconnect()
+          yield* Effect.promise(() => advanceTimersUntil(reconnected))
+          const notRun = yield* promiseEffect(() =>
+            advanceTimersUntil(lost)
+          ).pipe(Effect.flip)
+          expect(notRun.message).toContain("It didn't run")
+          expect(notRun).not.toHaveProperty("outcome")
+
+          const slow = yield* promiseEffect(() =>
+            advanceTimersUntil(
+              relayRpc(
+                endpoint,
+                "instance.action",
+                { action: "start", instanceId: "c".repeat(40) },
+                500
+              )
+            )
+          ).pipe(Effect.flip)
+          expect(slow).toMatchObject({ outcome: "unknown" })
+        }),
+      (message) => {
+        if (message.operation === "instance.action") return noAnswer
+        if (message.operation === "operation.get") return { status: "unknown" }
+        return { eligible: true }
+      }
+    )
+)
+
 function nextRelayState(status: "connected" | "unreachable"): Promise<void> {
   return new Promise<void>((resolve) => {
     const unsubscribe = subscribeRealtimeChanges((event) => {
@@ -399,13 +514,24 @@ interface RelayServerFixture {
   server: WebSocketServer
 }
 
+/** What the fake Relay answers a request with; `noAnswer` leaves it hanging. */
+type RelayAnswer = (message: RelayControlRequestMessage) => unknown
+
+const noAnswer = Symbol("noAnswer")
+
+type RelayControlRequestMessage = Extract<
+  RelayControlClientMessage,
+  { type: "request" }
+>
+
 function withRelayServer<TResult, TError, TRequirements>(
   use: (
     fixture: RelayServerFixture
-  ) => Effect.Effect<TResult, TError, TRequirements>
+  ) => Effect.Effect<TResult, TError, TRequirements>,
+  answer?: RelayAnswer
 ) {
   return Effect.acquireUseRelease(
-    promiseEffect(setupRelayServer),
+    promiseEffect(() => setupRelayServer(answer)),
     use,
     ({ server }) =>
       Effect.promise(
@@ -418,7 +544,9 @@ function withRelayServer<TResult, TError, TRequirements>(
   )
 }
 
-async function setupRelayServer(): Promise<RelayServerFixture> {
+async function setupRelayServer(
+  answer?: RelayAnswer
+): Promise<RelayServerFixture> {
   const relayKeys = generateKeyPairSync("ed25519")
   const clientKeys = generateKeyPairSync("ed25519")
   vi.mocked(loadRelayCredentials).mockResolvedValue({
@@ -484,7 +612,8 @@ async function setupRelayServer(): Promise<RelayServerFixture> {
       snapshot,
       () => {
         resolveCancelled()
-      }
+      },
+      answer
     )
   })
   await once(server, "listening")
@@ -528,7 +657,8 @@ function authenticateRelaySocket(
   relayPrivateKey: ReturnType<typeof generateKeyPairSync>["privateKey"],
   requests: Array<RelayControlClientMessage>,
   snapshot: () => RelaySnapshot,
-  onCancel: () => void
+  onCancel: () => void,
+  answer?: RelayAnswer
 ): void {
   const unsignedChallenge: Omit<RelayAuthChallenge, "signature"> = {
     expiresAt: Date.now() + 10_000,
@@ -584,10 +714,12 @@ function authenticateRelaySocket(
     requests.push(message)
     // Never answered, so requests can time out.
     if (message.operation === "relay.update.status") return
+    const payload = answer ? answer(message) : { eligible: true }
+    if (payload === noAnswer) return
     socket.send(
       JSON.stringify({
         id: randomUUID(),
-        payload: { eligible: true },
+        payload,
         replyTo: message.id,
         type: "response",
         v: 1,

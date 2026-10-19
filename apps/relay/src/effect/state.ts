@@ -169,6 +169,22 @@ export type RelayRuntimeRecoveryPhase =
   | "monitoring"
   | "failed"
 
+/** A change Hearth ran under an `operationId`, kept to answer lookups. */
+export interface RelayOperationRecord {
+  readonly clientId: string
+  readonly errorCode: string | null
+  readonly errorMessage: string | null
+  readonly finishedAt: number | null
+  readonly operation: string
+  readonly operationId: string
+  readonly payloadSha256: string
+  /** The reply as sent, or null when it was too large to keep. */
+  readonly resultJson: string | null
+  readonly retryable: boolean
+  readonly startedAt: number
+  readonly status: "failed" | "interrupted" | "running" | "succeeded"
+}
+
 export interface RelayRuntimeRecoveryRecord {
   readonly attempts: number
   readonly desiredState: RelayDesiredState
@@ -376,6 +392,38 @@ export class RelayStateStore extends Context.Service<
     ) => Effect.Effect<void, RelayStateError>
     readonly appendAudit: (
       input: RelayAuditInput
+    ) => Effect.Effect<void, RelayStateError>
+    /**
+     * Records a change as running before it runs. Returns the record already
+     * kept under the same client and ID, if any, and records nothing then.
+     */
+    readonly startOperation: (input: {
+      readonly clientId: string
+      readonly operation: string
+      readonly operationId: string
+      readonly payloadSha256: string
+      readonly startedAt: number
+    }) => Effect.Effect<RelayOperationRecord | null, RelayStateError>
+    readonly finishOperation: (input: {
+      readonly clientId: string
+      readonly errorCode: string | null
+      readonly errorMessage: string | null
+      readonly finishedAt: number
+      readonly operationId: string
+      readonly resultJson: string | null
+      readonly retryable: boolean
+      readonly status: "failed" | "succeeded"
+    }) => Effect.Effect<void, RelayStateError>
+    readonly getOperation: (
+      clientId: string,
+      operationId: string
+    ) => Effect.Effect<RelayOperationRecord | null, RelayStateError>
+    /** Marks changes a Relay restart cut off, which may or may not have applied. */
+    readonly interruptRunningOperations: (
+      now: number
+    ) => Effect.Effect<void, RelayStateError>
+    readonly pruneOperations: (
+      finishedBefore: number
     ) => Effect.Effect<void, RelayStateError>
     readonly createInvitation: (
       input: RelayInvitationInput
@@ -1047,6 +1095,24 @@ const migrations = SqliteMigrator.fromRecord({
       WHERE status <> 'running'`
     yield* sql`CREATE INDEX relay_schedule_runs_unfinished ON relay_schedule_runs (run_id) WHERE status = 'running'`
   }),
+  "19_operations": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    yield* sql`CREATE TABLE relay_operations (
+      client_id TEXT NOT NULL,
+      operation_id TEXT NOT NULL,
+      operation TEXT NOT NULL,
+      payload_sha256 TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed', 'interrupted')),
+      result_json TEXT,
+      error_code TEXT,
+      error_message TEXT,
+      retryable INTEGER NOT NULL DEFAULT 0,
+      started_at INTEGER NOT NULL,
+      finished_at INTEGER,
+      PRIMARY KEY (client_id, operation_id)
+    ) STRICT`
+    yield* sql`CREATE INDEX relay_operations_started ON relay_operations (started_at)`
+  }),
 })
 
 function scrubBackupTaskInputJson(inputJson: string): string {
@@ -1067,6 +1133,22 @@ const makeRelayStateStore = Effect.gen(function* () {
     effect.pipe(
       Effect.mapError((cause) => RelayStateError.make({ operation, cause })),
       Effect.withSpan(`relay.state.${operation}`)
+    )
+
+  const selectOperation = (clientId: string, operationId: string) =>
+    sql<Omit<RelayOperationRecord, "retryable"> & { retryable: number }>`
+      SELECT client_id AS clientId, operation_id AS operationId,
+        operation, payload_sha256 AS payloadSha256, status,
+        result_json AS resultJson, error_code AS errorCode,
+        error_message AS errorMessage, retryable, started_at AS startedAt,
+        finished_at AS finishedAt
+      FROM relay_operations
+      WHERE client_id = ${clientId} AND operation_id = ${operationId}
+      LIMIT 1
+    `.pipe(
+      Effect.map((rows): RelayOperationRecord | null =>
+        rows[0] ? { ...rows[0], retryable: rows[0].retryable === 1 } : null
+      )
     )
 
   const decodeClientRows = Schema.decodeUnknownEffect(
@@ -1648,6 +1730,67 @@ const makeRelayStateStore = Effect.gen(function* () {
         sql`
           DELETE FROM relay_database_connections
           WHERE relay_id = ${relayId} AND database_id = ${databaseId}
+        `.pipe(Effect.asVoid)
+      ),
+    startOperation: (input) =>
+      run(
+        "start_operation",
+        sql.withTransaction(
+          Effect.gen(function* () {
+            const existing = yield* selectOperation(
+              input.clientId,
+              input.operationId
+            )
+            if (existing) return existing
+            yield* sql`
+              INSERT INTO relay_operations (
+                client_id, operation_id, operation, payload_sha256, status,
+                started_at
+              ) VALUES (
+                ${input.clientId},
+                ${input.operationId},
+                ${input.operation},
+                ${input.payloadSha256},
+                'running',
+                ${input.startedAt}
+              )
+            `
+            return null
+          })
+        )
+      ),
+    finishOperation: (input) =>
+      run(
+        "finish_operation",
+        sql`
+          UPDATE relay_operations
+          SET status = ${input.status},
+              result_json = ${input.resultJson},
+              error_code = ${input.errorCode},
+              error_message = ${input.errorMessage},
+              retryable = ${input.retryable ? 1 : 0},
+              finished_at = ${input.finishedAt}
+          WHERE client_id = ${input.clientId}
+            AND operation_id = ${input.operationId}
+        `.pipe(Effect.asVoid)
+      ),
+    getOperation: (clientId, operationId) =>
+      run("get_operation", selectOperation(clientId, operationId)),
+    interruptRunningOperations: (now) =>
+      run(
+        "interrupt_running_operations",
+        sql`
+          UPDATE relay_operations
+          SET status = 'interrupted', finished_at = ${now}
+          WHERE status = 'running'
+        `.pipe(Effect.asVoid)
+      ),
+    pruneOperations: (finishedBefore) =>
+      run(
+        "prune_operations",
+        sql`
+          DELETE FROM relay_operations
+          WHERE status <> 'running' AND started_at < ${finishedBefore}
         `.pipe(Effect.asVoid)
       ),
     appendAudit: (input) =>

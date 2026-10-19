@@ -122,6 +122,11 @@ export class RelayUnavailableError extends Schema.TaggedError<RelayUnavailableEr
     code: Schema.optional(Schema.String),
     requestId: Schema.optional(Schema.String),
     retryable: Schema.optional(Schema.Boolean),
+    /**
+     * For a change: `unknown` when the Relay may have applied it but its
+     * answer never came, so it mustn't simply be sent again.
+     */
+    outcome: Schema.optional(Schema.Literals(["unknown"])),
     cause: Schema.optional(Schema.Defect()),
   }
 ) {}
