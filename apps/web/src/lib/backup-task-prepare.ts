@@ -128,7 +128,15 @@ export const prepareBackupTaskEffect = Effect.fn("backups.prepareTask")(
         },
       } satisfies BackupTaskInput
     }
-    const { artifactId: _, objectKey: __, storageId: ___, ...task } = input
+    // The archive's size and checksum travel in its source, not the task.
+    const {
+      artifactId: _,
+      bytes: __,
+      checksumSha256: ___,
+      objectKey: ____,
+      storageId: _____,
+      ...task
+    } = input
     if (input.bytes === undefined || !input.checksumSha256) {
       return yield* invalidBackupDestination(
         "Available backup is missing restore integrity metadata"

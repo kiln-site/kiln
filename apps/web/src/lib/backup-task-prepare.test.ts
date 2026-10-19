@@ -3,6 +3,8 @@ import { Effect } from "effect"
 import { afterAll, beforeAll, vi } from "vite-plus/test"
 
 import { encryptWithKeyring, parseSecretKeyring } from "../../keyring.mjs"
+import { backupTaskInputSchema } from "@workspace/contracts"
+
 import type { BackupDispatch } from "@/effect/backups"
 import { prepareBackupTaskEffect } from "@/lib/backup-task-prepare"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
@@ -145,6 +147,34 @@ describeMysql("restic backup dispatch", () => {
             storedPrefix
           )
         }
+      })
+    )
+
+    it.effect("prepares a full archive restore the Relay accepts", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        const checksumSha256 = "a".repeat(64)
+
+        const prepared = yield* prepareBackupTaskEffect({
+          artifactId,
+          backupId,
+          bytes: 1_024,
+          checksumSha256,
+          kind: "restore",
+          objectKey: null,
+          storageId: null,
+          target: { id: "instance-one", kind: "instance" },
+          taskId,
+        })
+
+        // The Relay parses tasks strictly, so stray fields fail the restore.
+        assert.deepStrictEqual(backupTaskInputSchema.parse(prepared), {
+          backupId,
+          kind: "restore",
+          source: { bytes: 1_024, checksumSha256, kind: "local" },
+          target: { id: "instance-one", kind: "instance" },
+          taskId,
+        })
       })
     )
 
