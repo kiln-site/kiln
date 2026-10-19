@@ -171,8 +171,12 @@ function parseCores({
   return Math.round(cores * CPU_LIMIT_MILLIS_PER_CORE)
 }
 
-// Precise enough to give back the same bytes, so an untouched limit saves
-// unchanged.
+// The shortest decimal that gives back the same bytes, so an untouched
+// limit saves unchanged and 0.1 GiB shows as 0.1.
 function gibibytesInput(bytes: number): string {
-  return String(Number((bytes / GIBIBYTE).toPrecision(15)))
+  for (let digits = 1; digits < 17; digits += 1) {
+    const gibibytes = Number((bytes / GIBIBYTE).toPrecision(digits))
+    if (Math.round(gibibytes * GIBIBYTE) === bytes) return String(gibibytes)
+  }
+  return String(bytes / GIBIBYTE)
 }
