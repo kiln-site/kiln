@@ -951,7 +951,17 @@ const InstanceSelector = React.memo(function InstanceSelector({
   const handleOpenChange = React.useCallback((nextOpen: boolean) => {
     setOpen(nextOpen)
   }, [])
-  const closePicker = React.useCallback(() => setOpen(false), [])
+  // Picking an instance or link moves focus to the new page; returning it to
+  // the picker button would pop the button's tooltip over that page.
+  const navigatedRef = React.useRef(false)
+  const closePicker = React.useCallback(() => {
+    navigatedRef.current = true
+    setOpen(false)
+  }, [])
+  const handleCloseAutoFocus = React.useCallback((event: Event) => {
+    if (navigatedRef.current) event.preventDefault()
+    navigatedRef.current = false
+  }, [])
   // The picker lists every instance; fetch the lists as the pointer arrives
   // so it opens filled.
   const warmPicker = React.useCallback(() => {
@@ -959,7 +969,7 @@ const InstanceSelector = React.memo(function InstanceSelector({
   }, [queryClient])
   const selectInstance = React.useCallback(
     (item: InstancePickerItem) => {
-      handleOpenChange(false)
+      closePicker()
       if (item.identity.kind === "database") {
         const databases = queryClient.getQueryData(
           managedDatabaseDirectoryQueryOptions().queryKey
@@ -1052,7 +1062,7 @@ const InstanceSelector = React.memo(function InstanceSelector({
         params: { serverId: routeIdentifier },
       })
     },
-    [handleOpenChange, navigate, navigateToTab, queryClient]
+    [closePicker, navigate, navigateToTab, queryClient]
   )
   const selectedKey =
     selection.kind === "server"
@@ -1166,6 +1176,7 @@ const InstanceSelector = React.memo(function InstanceSelector({
           align="start"
           sideOffset={6}
           className="w-72 max-w-[calc(100vw-1rem)] overflow-hidden p-0"
+          onCloseAutoFocus={handleCloseAutoFocus}
         >
           <SidebarInstancePicker
             capabilities={capabilities}
