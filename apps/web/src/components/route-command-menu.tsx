@@ -155,13 +155,22 @@ export function RouteCommandMenuProvider({
     return () => document.removeEventListener("keydown", openFromKeyboard)
   }, [])
 
+  // Following a route moves focus to the new page; returning it to the search
+  // button would pop the button's tooltip over that page.
+  const navigatedRef = React.useRef(false)
   const navigateToRoute = React.useCallback(
     (to: string) => {
+      navigatedRef.current = true
       setOpen(false)
       void navigate({ href: to })
     },
     [navigate]
   )
+  const finalFocus = React.useCallback(() => {
+    const returnFocus = !navigatedRef.current
+    navigatedRef.current = false
+    return returnFocus
+  }, [])
 
   return (
     <RouteCommandMenuContext.Provider value={openMenu}>
@@ -170,6 +179,7 @@ export function RouteCommandMenuProvider({
         className="max-w-xl gap-0 border-accent-border/25 bg-popover shadow-2xl shadow-black/55 sm:max-w-xl"
         description="Search Kiln routes and navigate to a page."
         open={open}
+        finalFocus={finalFocus}
         title="Navigate Kiln"
         onOpenChange={setOpen}
       >
