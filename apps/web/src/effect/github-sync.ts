@@ -507,9 +507,46 @@ export const setGitHubSyncStatusEffect = Effect.fn("github.sync.status")(
   }
 )
 
+export type GitHubSyncTrigger = "created" | "manual" | "poll" | "push"
+
+/** A finished run, as Automations → History lists it. */
+export interface GitHubSyncRun {
+  changedCount: number
+  commitMessage: string | null
+  commitSha: string | null
+  finishedAt: number
+  id: string
+  /** The failure, or a successful run's warning. */
+  message: string | null
+  startedAt: number
+  status: "error" | "success"
+  syncId: string
+  trigger: GitHubSyncTrigger
+}
+
+interface SyncRunRow extends RowDataPacket {
+  changed_count: number
+  commit_message: string | null
+  commit_sha: string | null
+  finished_at: number | string
+  id: string
+  message: string | null
+  started_at: number | string
+  status: "error" | "success"
+  sync_id: string
+  trigger: GitHubSyncTrigger
+}
+
+const runsKeptPerSync = 50
+
+/**
+ * Saves a run's outcome on its sync and in its history. A failure the sync
+ * already shows, as a poll repeats it every minute, changes neither.
+ */
 export const recordGitHubSyncResultEffect = Effect.fn("github.sync.record")(
   function* (
     id: string,
+    run: { startedAt: number; trigger: GitHubSyncTrigger },
     result:
       | {
           changedCount: number
@@ -523,10 +560,14 @@ export const recordGitHubSyncResultEffect = Effect.fn("github.sync.record")(
   ) {
     const database = yield* Database
     const now = yield* Clock.currentTimeMillis
+    const message = "error" in result ? result.error : (result.warning ?? null)
+    const commitMessage =
+      "error" in result
+        ? null
+        : result.commitMessage.split("\n", 1)[0]!.slice(0, 255)
     if ("error" in result) {
       // Files written before the failure stay recorded, so a retry doesn't
-      // write them again. The same failure again, as a poll repeats it
-      // every minute, changes nothing.
+      // write them again.
       const updated = yield* database.execute(
         "github.sync.recordError",
         `UPDATE ${databaseTable("github_sync")}
@@ -543,26 +584,87 @@ export const recordGitHubSyncResultEffect = Effect.fn("github.sync.record")(
           result.syncedFiles ? "files" : null,
         ]
       )
-      return updated.affectedRows > 0
+      if (updated.affectedRows === 0) return false
+    } else {
+      yield* database.execute(
+        "github.sync.recordSuccess",
+        `UPDATE ${databaseTable("github_sync")}
+            SET status = 'success', last_error = ?, last_synced_at = ?,
+                last_commit_sha = ?, last_commit_message = ?,
+                last_changed_count = ?, synced_files = ?
+          WHERE id = ?`,
+        [
+          message?.slice(0, 1024) ?? null,
+          now,
+          result.commitSha,
+          commitMessage,
+          result.changedCount,
+          JSON.stringify(result.syncedFiles),
+          id,
+        ]
+      )
     }
     yield* database.execute(
-      "github.sync.recordSuccess",
-      `UPDATE ${databaseTable("github_sync")}
-          SET status = 'success', last_error = ?, last_synced_at = ?,
-              last_commit_sha = ?, last_commit_message = ?,
-              last_changed_count = ?, synced_files = ?
-        WHERE id = ?`,
+      "github.sync.run.insert",
+      `INSERT INTO ${databaseTable("github_sync_run")}
+         (id, sync_id, \`trigger\`, status, message, commit_sha,
+          commit_message, changed_count, started_at, finished_at)
+       VALUES (UUID(), ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        result.warning?.slice(0, 1024) ?? null,
-        now,
-        result.commitSha,
-        result.commitMessage.split("\n", 1)[0]!.slice(0, 255),
-        result.changedCount,
-        JSON.stringify(result.syncedFiles),
         id,
+        run.trigger,
+        "error" in result ? "error" : "success",
+        message?.slice(0, 1024) ?? null,
+        "error" in result ? null : result.commitSha,
+        commitMessage,
+        "error" in result ? 0 : result.changedCount,
+        run.startedAt,
+        now,
       ]
     )
+    // Keep each sync's history short; older runs go.
+    yield* database.execute(
+      "github.sync.run.prune",
+      `DELETE FROM ${databaseTable("github_sync_run")}
+        WHERE sync_id = ?
+          AND id NOT IN (
+            SELECT id FROM (
+              SELECT id FROM ${databaseTable("github_sync_run")}
+               WHERE sync_id = ?
+               ORDER BY started_at DESC
+               LIMIT ${runsKeptPerSync}
+            ) AS kept
+          )`,
+      [id, id]
+    )
     return true
+  }
+)
+
+/** The latest runs of every sync, newest first. */
+export const loadGitHubSyncRunsEffect = Effect.fn("github.sync.runs")(
+  function* () {
+    const database = yield* Database
+    const rows = yield* database.queryRows<SyncRunRow>(
+      "github.sync.runs",
+      `SELECT id, sync_id, \`trigger\`, status, message, commit_sha,
+              commit_message, changed_count, started_at, finished_at
+         FROM ${databaseTable("github_sync_run")}
+        ORDER BY started_at DESC
+        LIMIT 500`
+    )
+    return rows.map((row): GitHubSyncRun => ({
+      changedCount: Number(row.changed_count),
+      commitMessage: row.commit_message,
+      commitSha: row.commit_sha,
+      finishedAt: Number(row.finished_at),
+      id: row.id,
+      message: row.message,
+      startedAt: Number(row.started_at),
+      status: row.status,
+      syncId: row.sync_id,
+      trigger: row.trigger,
+    }))
   }
 )
 

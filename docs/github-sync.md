@@ -67,6 +67,11 @@ Files deleted from the repository stay on the instance. Files larger than
 512 KB are skipped with a warning, since each write is one Relay control
 frame. A sync stops at 2,000 files.
 
+Each finished run is recorded (`github_sync_run`, the latest 50 per sync)
+and listed with schedule runs in Automations → History. A poll that finds no
+new commit isn't a run, and a failure the sync already shows isn't recorded
+again.
+
 Runs are serialized per sync. A trigger arriving while another waits joins
 it. A poll that fails the same way again leaves the row alone, so a broken
 sync doesn't notify every browser each minute.
@@ -83,6 +88,5 @@ sync doesn't notify every browser each minute.
   was cut for now.
 - **Mirroring.** Optionally delete files that were removed from the
   repository.
-- **Sync history.** Runs could appear in Automations → History.
 - Polling issues one request per automatic sync each minute. Syncs that share
   a repository and branch could share that request.

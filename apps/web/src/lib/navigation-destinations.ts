@@ -142,32 +142,39 @@ export const infrastructureDestinations = [
   }
 >
 
+// Tabs render in this order, with a divider wherever `group` changes.
 export const automationDestinations = [
   {
+    group: "calendar",
+    icon: CalendarDays,
+    keywords: ["automations", "dates"],
+    label: "Calendar",
+    to: "/automations/calendar",
+  },
+  {
+    group: "automations",
     icon: ListTodo,
     keywords: ["automations", "tasks"],
     label: "Schedules",
     to: "/automations/schedules",
   },
   {
+    group: "automations",
     icon: FolderSync,
     keywords: ["automations", "synchronize"],
     label: "Sync",
     to: "/automations/sync",
   },
   {
+    group: "history",
     icon: History,
     keywords: ["automations", "runs"],
     label: "History",
     to: "/automations/history",
   },
-  {
-    icon: CalendarDays,
-    keywords: ["automations", "dates"],
-    label: "Calendar",
-    to: "/automations/calendar",
-  },
-] as const satisfies ReadonlyArray<NavigationDestination>
+] as const satisfies ReadonlyArray<
+  NavigationDestination & { group: "automations" | "calendar" | "history" }
+>
 
 export const settingsDestinations = [
   {

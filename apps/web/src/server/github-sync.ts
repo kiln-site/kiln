@@ -8,6 +8,7 @@ import {
   getGitHubSourceRepositoryCountHandler,
   getGitHubSourcesHandler,
   getGitHubSyncOverviewHandler,
+  getGitHubSyncRunsHandler,
   listGitHubBranchesHandler,
   listGitHubFoldersHandler,
   listGitHubRepositoriesHandler,
@@ -99,6 +100,10 @@ export type SaveGitHubSyncInput = z.infer<typeof saveSyncInputSchema>
 
 export const getGitHubSyncOverview = createServerFn({ method: "GET" }).handler(
   () => getGitHubSyncOverviewHandler()
+)
+
+export const getGitHubSyncRuns = createServerFn({ method: "GET" }).handler(() =>
+  getGitHubSyncRunsHandler()
 )
 
 export const getGitHubSources = createServerFn({ method: "GET" }).handler(() =>

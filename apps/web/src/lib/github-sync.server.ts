@@ -6,7 +6,15 @@ import {
   relayFilePutV1Feature,
 } from "@workspace/contracts"
 import { logException } from "@workspace/telemetry"
-import { Cause, Effect, Fiber, Predicate, Schedule, Semaphore } from "effect"
+import {
+  Cause,
+  Clock,
+  Effect,
+  Fiber,
+  Predicate,
+  Schedule,
+  Semaphore,
+} from "effect"
 
 import {
   getGitHubBlobEffect,
@@ -19,6 +27,7 @@ import {
   loadGitHubSyncEffect,
   loadPolledGitHubSyncsEffect,
   recordGitHubSyncResultEffect,
+  type GitHubSyncTrigger,
   setGitHubSyncStatusEffect,
 } from "@/effect/github-sync"
 import { forkPromise } from "@/effect/promise"
@@ -26,8 +35,6 @@ import { forkAppWorker, runAppEffect } from "@/effect/runtime"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { relayConnectionFeatures, relayRpc } from "@/lib/relay-connection"
 import { listPersistedRelaysEffect } from "@/lib/relay-registry"
-
-export type GitHubSyncTrigger = "created" | "manual" | "poll" | "push"
 
 // A put carries the file in one control frame, which caps its size.
 const maxSyncedFileBytes = 512 * 1024
@@ -68,6 +75,7 @@ const runGitHubSyncEffect = Effect.fn("github.sync.run")(function* (
   syncId: string,
   trigger: GitHubSyncTrigger
 ) {
+  const run = { startedAt: yield* Clock.currentTimeMillis, trigger }
   const sync = yield* loadGitHubSyncEffect(syncId)
   const connection = yield* loadGitHubConnectionCredentialEffect({
     id: sync.connectionId,
@@ -79,7 +87,7 @@ const runGitHubSyncEffect = Effect.fn("github.sync.run")(function* (
     "relay.id": sync.relayId,
   })
   const fail = (message: string) =>
-    recordGitHubSyncResultEffect(sync.id, { error: message }).pipe(
+    recordGitHubSyncResultEffect(sync.id, run, { error: message }).pipe(
       Effect.tap((changed) =>
         Effect.sync(() => {
           if (changed) publishGitHubSyncChange()
@@ -200,7 +208,7 @@ const runGitHubSyncEffect = Effect.fn("github.sync.run")(function* (
       Effect.result
     )
     if (written._tag === "Failure") {
-      return yield* recordGitHubSyncResultEffect(sync.id, {
+      return yield* recordGitHubSyncResultEffect(sync.id, run, {
         error: syncFailureMessage(written.failure),
         syncedFiles,
       }).pipe(Effect.andThen(Effect.sync(publishGitHubSyncChange)))
@@ -228,7 +236,7 @@ const runGitHubSyncEffect = Effect.fn("github.sync.run")(function* (
     )
   }
 
-  yield* recordGitHubSyncResultEffect(sync.id, {
+  yield* recordGitHubSyncResultEffect(sync.id, run, {
     changedCount: changed,
     commitMessage: head.message,
     commitSha: head.sha,
@@ -284,10 +292,13 @@ export function enqueueGitHubSync(
                 attributes: { "github.sync.id": syncId },
               })
           ).pipe(
-            Effect.andThen(
-              recordGitHubSyncResultEffect(syncId, {
-                error: syncFailureMessage(Cause.squash(cause)),
-              }).pipe(
+            Effect.andThen(Clock.currentTimeMillis),
+            Effect.flatMap((now) =>
+              recordGitHubSyncResultEffect(
+                syncId,
+                { startedAt: now, trigger },
+                { error: syncFailureMessage(Cause.squash(cause)) }
+              ).pipe(
                 Effect.tap((changed) =>
                   Effect.sync(() => {
                     if (changed) publishGitHubSyncChange()

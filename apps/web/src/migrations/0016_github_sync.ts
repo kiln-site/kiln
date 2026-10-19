@@ -15,6 +15,7 @@ export const githubSync: Migration = {
     const sql = yield* SqlClient.SqlClient
     const connection = databaseTableName("github_connection")
     const sync = databaseTableName("github_sync")
+    const run = databaseTableName("github_sync_run")
     const relayTable = databaseTableName("relay")
 
     yield* sql.unsafe(`CREATE TABLE IF NOT EXISTS \`${connection}\` (
@@ -72,6 +73,24 @@ export const githubSync: Migration = {
   KEY \`${sync}_connection_idx\` (\`connection_id\`),
   CONSTRAINT \`${sync}_connection_fk\` FOREIGN KEY (\`connection_id\`) REFERENCES \`${connection}\` (\`id\`) ON DELETE CASCADE,
   CONSTRAINT \`${sync}_relay_fk\` FOREIGN KEY (\`relay_id\`) REFERENCES \`${relayTable}\` (\`id\`) ON DELETE CASCADE
+)`)
+
+    // Finished runs, for Automations → History. Polls that find no new
+    // commit aren't runs; each sync keeps its latest 50.
+    yield* sql.unsafe(`CREATE TABLE IF NOT EXISTS \`${run}\` (
+  \`id\` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  \`sync_id\` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  \`trigger\` enum('created','manual','poll','push') NOT NULL,
+  \`status\` enum('success','error') NOT NULL,
+  \`message\` varchar(1024) DEFAULT NULL,
+  \`commit_sha\` char(40) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,
+  \`commit_message\` varchar(255) DEFAULT NULL,
+  \`changed_count\` int unsigned NOT NULL DEFAULT '0',
+  \`started_at\` bigint unsigned NOT NULL,
+  \`finished_at\` bigint unsigned NOT NULL,
+  PRIMARY KEY (\`id\`),
+  KEY \`${run}_sync_idx\` (\`sync_id\`,\`started_at\`),
+  CONSTRAINT \`${run}_sync_fk\` FOREIGN KEY (\`sync_id\`) REFERENCES \`${sync}\` (\`id\`) ON DELETE CASCADE
 )`)
   }),
 }

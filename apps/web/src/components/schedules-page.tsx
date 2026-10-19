@@ -20,6 +20,7 @@ import {
   Copy,
   Database,
   EllipsisVertical,
+  FolderSync,
   GripVertical,
   HardDriveDownload,
   History,
@@ -123,12 +124,14 @@ import {
 } from "@/lib/collections/schedules"
 import {
   backupStorageQueryOptions,
+  githubSyncRunsQueryOptions,
   queryKeys,
   relaySnapshotQueryOptions,
   scheduleOptionsQueryOptions,
   schedulesQueryOptions,
 } from "@/lib/query-options"
 import { getBackupStorage } from "@/server/backup-storage"
+import type { GitHubSyncRunView } from "@/server/github-sync.server"
 import { getRelaySnapshot } from "@/server/relay"
 import {
   createSchedule,
@@ -868,9 +871,23 @@ export const ScheduleHistoryPage = React.memo(function ScheduleHistoryPage() {
         : null,
     [schedules, search.schedule]
   )
+  const { data: syncRuns } = useSuspenseQuery({
+    ...githubSyncRunsQueryOptions(),
+    notifyOnChangeProps: ["data"],
+  })
   const runs = React.useMemo(
     () => scheduleHistoryRuns(schedules, selectedScope, search.schedule),
     [schedules, search.schedule, selectedScope]
+  )
+  const entries = React.useMemo(
+    () =>
+      automationHistoryEntries(
+        runs,
+        // A schedule's own history has no syncs in it.
+        search.schedule ? [] : syncRuns,
+        selectedScope
+      ),
+    [runs, search.schedule, selectedScope, syncRuns]
   )
   const selectedRun = React.useMemo(
     () =>
@@ -930,11 +947,11 @@ export const ScheduleHistoryPage = React.memo(function ScheduleHistoryPage() {
               : null
           }
           searchStore={searchStore}
-          runCount={runs.length}
+          runCount={entries.length}
           onClearScheduleFilter={clearScheduleFilter}
         />
         <ScheduleHistoryTable
-          runs={runs}
+          entries={entries}
           scopeActive={selectedScope !== null}
           searchStore={searchStore}
           onOpenRun={openRun}
@@ -978,6 +995,135 @@ function scheduleHistoryRuns(
   }
   return runs.sort((left, right) => right.scheduledAt - left.scheduledAt)
 }
+
+/** Schedule runs and sync runs, newest first. */
+type AutomationHistoryEntry =
+  | { kind: "schedule"; run: ScheduleHistoryRun; startedAt: number }
+  | { kind: "sync"; run: GitHubSyncRunView; startedAt: number }
+
+function automationHistoryEntries(
+  scheduleRuns: ReadonlyArray<ScheduleHistoryRun>,
+  syncRuns: ReadonlyArray<GitHubSyncRunView>,
+  scope: ScheduleScope | null
+): Array<AutomationHistoryEntry> {
+  const entries: Array<AutomationHistoryEntry> = scheduleRuns.map((run) => ({
+    kind: "schedule",
+    run,
+    startedAt: run.startedAt,
+  }))
+  for (const run of syncRuns) {
+    if (scope && !syncTargetMatchesScope(run.sync.target, scope)) continue
+    entries.push({ kind: "sync", run, startedAt: run.startedAt })
+  }
+  return entries.sort((left, right) => right.startedAt - left.startedAt)
+}
+
+function syncTargetMatchesScope(
+  target: GitHubSyncRunView["sync"]["target"],
+  scope: ScheduleScope
+) {
+  if (!("id" in scope)) return scope.kind === target.kind
+  if (scope.kind === "relay") return target.relayId === scope.relayId
+  return (
+    scope.kind === target.kind &&
+    scope.id === target.id &&
+    scope.relayId === target.relayId
+  )
+}
+
+const syncTriggerLabel = {
+  created: "Created",
+  manual: "Sync now",
+  poll: "New commit",
+  push: "Push",
+} as const satisfies Record<GitHubSyncRunView["trigger"], string>
+
+// Sync runs are shown in the viewer's own time zone; syncs have none.
+const localTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
+
+const SyncHistoryRow = React.memo(function SyncHistoryRow({
+  run,
+}: {
+  run: GitHubSyncRunView
+}) {
+  const navigate = useNavigate({ from: "/automations/history" })
+  const name = `${run.sync.repository}${run.sync.sourcePath ? `/${run.sync.sourcePath}` : ""}`
+  const open = React.useCallback(
+    () =>
+      void navigate({
+        to: "/automations/sync",
+        search: (previous) => previous,
+      }),
+    [navigate]
+  )
+  return (
+    <tr
+      role="button"
+      tabIndex={0}
+      aria-label={`View the sync from ${name}`}
+      className="cursor-pointer transition-colors hover:bg-accent/25 focus-visible:bg-accent/30 focus-visible:outline-none"
+      onClick={open}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault()
+          open()
+        }
+      }}
+    >
+      <WorkspaceTableCell className="px-2 sm:px-3">
+        <RunStatusDot
+          status={run.status === "success" ? "succeeded" : "failed"}
+        />
+      </WorkspaceTableCell>
+      <WorkspaceTableCell>
+        <div className="min-w-0">
+          <p className="flex min-w-0 items-center gap-1.5 text-xs font-semibold text-foreground">
+            <FolderSync className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="truncate">{name}</span>
+          </p>
+          <p className="type-meta truncate text-muted-foreground">
+            {run.status === "error"
+              ? run.message
+              : [
+                  `Sync · ${syncTriggerLabel[run.trigger]}`,
+                  run.changedCount === 0
+                    ? "up to date"
+                    : `${run.changedCount} ${run.changedCount === 1 ? "file" : "files"} updated`,
+                  run.message,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+          </p>
+        </div>
+      </WorkspaceTableCell>
+      <WorkspaceTableCell className="hidden md:table-cell">
+        <div className="min-w-0">
+          <p className="type-meta truncate text-foreground">
+            {timestampLabel(new Date(run.startedAt), localTimeZone)}
+          </p>
+          <p className="type-meta truncate text-muted-foreground">
+            <RelativeTimeText date={new Date(run.startedAt)} />
+          </p>
+        </div>
+      </WorkspaceTableCell>
+      <WorkspaceTableCell className="hidden lg:table-cell">
+        <span className="type-meta font-mono text-foreground">
+          {durationLabel(run.finishedAt - run.startedAt)}
+        </span>
+      </WorkspaceTableCell>
+      <WorkspaceTableCell className="hidden xl:table-cell">
+        <span className="type-meta truncate text-foreground">
+          {run.sync.target.name}
+        </span>
+      </WorkspaceTableCell>
+      <WorkspaceTableCell className="hidden sm:table-cell">
+        <span className="type-meta block truncate font-mono text-muted-foreground">
+          {run.sync.target.relayId}
+        </span>
+      </WorkspaceTableCell>
+    </tr>
+  )
+})
 
 const HistoryToolbar = React.memo(function HistoryToolbar({
   filteredScheduleName,
@@ -1028,20 +1174,23 @@ const HistoryToolbar = React.memo(function HistoryToolbar({
 })
 
 const ScheduleHistoryTable = React.memo(function ScheduleHistoryTable({
-  runs,
+  entries,
   scopeActive,
   searchStore,
   onOpenRun,
 }: {
-  runs: Array<ScheduleHistoryRun>
+  entries: Array<AutomationHistoryEntry>
   scopeActive: boolean
   searchStore: WorkspaceTableSearchStore
   onOpenRun: (run: ScheduleHistoryRun) => void
 }) {
   const renderRow = React.useCallback(
-    (run: ScheduleHistoryRun) => (
-      <ScheduleHistoryRow run={run} onOpen={onOpenRun} />
-    ),
+    (entry: AutomationHistoryEntry) =>
+      entry.kind === "schedule" ? (
+        <ScheduleHistoryRow run={entry.run} onOpen={onOpenRun} />
+      ) : (
+        <SyncHistoryRow run={entry.run} />
+      ),
     [onOpenRun]
   )
   const renderEmpty = React.useCallback(
@@ -1053,12 +1202,12 @@ const ScheduleHistoryTable = React.memo(function ScheduleHistoryTable({
             ? "No runs match your search"
             : scopeActive
               ? "No runs in this scope"
-              : "No schedule runs yet"}
+              : "No automation runs yet"}
         </p>
         <p className="type-support mt-1 max-w-sm text-muted-foreground">
           {scopeActive && !searchActive
             ? "Completed and attempted runs in this scope will appear here."
-            : "Completed and attempted schedule runs will appear here."}
+            : "Completed and attempted automation runs will appear here."}
         </p>
       </div>
     ),
@@ -1069,7 +1218,7 @@ const ScheduleHistoryTable = React.memo(function ScheduleHistoryTable({
       getRowKey={historyRowKey}
       getSearchText={historySearchText}
       head={<ScheduleHistoryHead />}
-      items={runs}
+      items={entries}
       renderEmpty={renderEmpty}
       renderRow={renderRow}
       searchStore={searchStore}
@@ -1084,7 +1233,7 @@ const ScheduleHistoryHead = React.memo(function ScheduleHistoryHead() {
         Status
       </WorkspaceTableHeading>
       <WorkspaceTableHeading className="w-auto sm:w-[30%]">
-        Schedule
+        Automation
       </WorkspaceTableHeading>
       <WorkspaceTableHeading className="hidden w-[24%] md:table-cell">
         Started
@@ -3282,11 +3431,29 @@ function scheduleSearchText(schedule: Schedule) {
   ].join(" ")
 }
 
-function historyRowKey(run: ScheduleHistoryRun) {
-  return `${run.relayId}:${run.id}`
+function historyRowKey(entry: AutomationHistoryEntry) {
+  return entry.kind === "schedule"
+    ? `${entry.run.relayId}:${entry.run.id}`
+    : `sync:${entry.run.id}`
 }
 
-function historySearchText(run: ScheduleHistoryRun) {
+function historySearchText(entry: AutomationHistoryEntry) {
+  if (entry.kind === "sync") {
+    const { run } = entry
+    return [
+      "sync",
+      run.sync.repository,
+      run.sync.sourcePath,
+      run.sync.branch,
+      run.sync.target.name,
+      run.sync.target.relayName,
+      run.status,
+      syncTriggerLabel[run.trigger],
+      run.message ?? "",
+      run.commitMessage ?? "",
+    ].join(" ")
+  }
+  const { run } = entry
   return [
     run.scheduleName,
     run.status,

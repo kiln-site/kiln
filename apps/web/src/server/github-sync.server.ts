@@ -27,6 +27,7 @@ import {
   loadGitHubConnectionCredentialEffect,
   loadGitHubConnectionsEffect,
   loadGitHubSyncEffect,
+  loadGitHubSyncRunsEffect,
   loadGitHubSyncsEffect,
   saveGitHubInstallationEffect,
   updateGitHubSyncEffect,
@@ -34,6 +35,7 @@ import {
   type GitHubInstallationRecord,
   type GitHubSync,
   type GitHubSyncResourceKind,
+  type GitHubSyncRun,
 } from "@/effect/github-sync"
 import { listAppRecordsEffect } from "@/effect/managed-apps"
 import { attachRelayOwnersEffect } from "@/effect/relay-owners"
@@ -200,6 +202,40 @@ export async function getGitHubSyncOverviewHandler() {
     syncs: syncViews,
     targets: allTargets.filter((target) => allows(target, true)),
   }
+}
+
+export interface GitHubSyncRunView extends GitHubSyncRun {
+  sync: Pick<
+    GitHubSyncView,
+    "branch" | "repository" | "sourcePath" | "target" | "targetPath"
+  >
+}
+
+/** Runs of the syncs the viewer can see, for Automations → History. */
+export async function getGitHubSyncRunsHandler(): Promise<
+  Array<GitHubSyncRunView>
+> {
+  const [overview, runs] = await Promise.all([
+    getGitHubSyncOverviewHandler(),
+    runAppEffect("github.sync.runs", loadGitHubSyncRunsEffect()),
+  ])
+  const syncs = new Map(overview.syncs.map((sync) => [sync.id, sync]))
+  return runs.flatMap((run) => {
+    const sync = syncs.get(run.syncId)
+    if (!sync) return []
+    return [
+      {
+        ...run,
+        sync: {
+          branch: sync.branch,
+          repository: sync.repository,
+          sourcePath: sync.sourcePath,
+          target: sync.target,
+          targetPath: sync.targetPath,
+        },
+      },
+    ]
+  })
 }
 
 /** The sources the viewer can see and use, for Infrastructure → Sources. */

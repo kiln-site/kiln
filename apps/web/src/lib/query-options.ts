@@ -33,6 +33,7 @@ import {
   getGitHubSourceRepositoryCount,
   getGitHubSources,
   getGitHubSyncOverview,
+  getGitHubSyncRuns,
   listGitHubBranches,
   listGitHubFolders,
   listGitHubRepositories,
@@ -175,6 +176,7 @@ export const queryKeys = {
       ["github-sync", "repositories", connectionId] as const,
     repositoryCount: (connectionId: string) =>
       ["github-sync", "repository-count", connectionId] as const,
+    runs: ["github-sync", "runs"] as const,
     sources: ["github-sync", "sources"] as const,
   },
   hearthEdge: ["hearth", "edge"] as const,
@@ -977,6 +979,13 @@ export function githubSyncOverviewQueryOptions() {
   return queryOptions({
     queryKey: queryKeys.github.overview,
     queryFn: () => getGitHubSyncOverview(),
+  })
+}
+
+export function githubSyncRunsQueryOptions() {
+  return queryOptions({
+    queryKey: queryKeys.github.runs,
+    queryFn: () => getGitHubSyncRuns(),
   })
 }
 
