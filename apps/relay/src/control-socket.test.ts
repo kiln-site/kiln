@@ -887,6 +887,42 @@ describe("Relay control socket", () => {
     })
   })
 
+  it("refuses changes while paused, but still answers reads and resumes", async () => {
+    const ran: Array<string> = []
+    const relay = await startRelay({
+      execute: async (request) => {
+        ran.push(request.operation)
+        return { ok: true }
+      },
+    })
+    const { inbox, socket } = await relay.connect(await relay.pair())
+    relay.lanes.setPaused(true)
+
+    const start = sendRequest(socket, "instance.action", {
+      action: "start",
+      instanceId: "a".repeat(40),
+    })
+    expect(await inbox.next()).toMatchObject({
+      code: "relay_paused",
+      replyTo: start,
+      type: "error",
+    })
+    // Changes that take no lane are refused too.
+    const rename = sendRequest(socket, "relay.rename", { name: "Paused" })
+    expect(await inbox.next()).toMatchObject({
+      code: "relay_paused",
+      replyTo: rename,
+    })
+    const read = sendRequest(socket, "relay.system.inspect", {})
+    expect(await inbox.next()).toMatchObject({ replyTo: read, type: "response" })
+    const resume = sendRequest(socket, "relay.pause.write", { paused: false })
+    expect(await inbox.next()).toMatchObject({
+      replyTo: resume,
+      type: "response",
+    })
+    expect(ran).toEqual(["relay.system.inspect", "relay.pause.write"])
+  })
+
   it("aborts an in-flight operation when Hearth cancels it", async () => {
     const started = deferred<void>()
     const aborted = deferred<void>()

@@ -1626,6 +1626,9 @@ const relaySnapshotRelaySchema = z.object({
   browserOrigin: relayProxyBrowserMetadataSchema.shape.browserOrigin.optional(),
   id: relayIdSchema,
   name: z.string().min(1).max(120),
+  // Held paused by a Hearth, so it runs no changes. See
+  // `relayControlOperationRunsWhilePaused`.
+  paused: z.boolean().optional(),
   proxyMode: relayProxyModeSchema.optional(),
   sftp: relaySftpSnapshotSchema,
   tls: z

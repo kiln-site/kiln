@@ -299,7 +299,7 @@ export class AppDriver {
             promiseEffect(() => this.#runDeployment(input, deployment))
           )
           .pipe(
-            // Refused before it ran, as when the Relay is too busy.
+            // Refused before it ran, as when the Relay is too busy or paused.
             Effect.catch((cause) =>
               promiseEffect(() =>
                 this.#finishDeployment(

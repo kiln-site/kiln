@@ -264,6 +264,11 @@ export function controlRequestLocks(
     case "operation.get":
       return null
 
+    // Holding the Relay paused changes no resource; the lanes refuse work
+    // while it holds.
+    case "relay.pause.write":
+      return null
+
     // Requests the Relay sends Hearth, never the other way.
     case "hearth.tailscale.instance.detach":
     case "hearth.database.terminal.output":

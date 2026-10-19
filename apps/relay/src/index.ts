@@ -262,6 +262,14 @@ const bricks = new BrickCatalog(config.brickCatalogUrl, config.dataDirectory)
 // Every change to a game server, App, or database waits its turn here,
 // whichever actor asks for it. See operation-plans.ts.
 const lanes = new OperationLanes()
+// A Relay a Hearth paused stays paused across restarts: nothing starts until
+// it's resumed, so this is read before any worker runs.
+lanes.setPaused(
+  (await runRelayEffect(
+    "relay.startup.pauseHolds",
+    startupCore.state.listPauseHolds()
+  )).length > 0
+)
 const powerIntents = new PowerIntents()
 const runtimeRecovery = new RuntimeRecoveryManager(
   config,
@@ -573,6 +581,7 @@ const scheduleManager = await ScheduleManager.make({
     )
   },
   instancePowerIntent: (instanceId) => instancePowerIntent(instanceId),
+  isPaused: () => lanes.paused,
   runDatabasePower: async (databaseId, action) => {
     await inLane(
       { label: "schedule.database.power", locks: databaseLocks(databaseId) },
@@ -1292,6 +1301,7 @@ async function relaySnapshot() {
       browserOrigin: config.browserOrigin,
       id: relayIdentity.fingerprint,
       name: relayIdentity.name,
+      paused: lanes.paused,
       proxyMode: config.proxyMode,
       sftp: {
         developmentAuthentication: config.sftpDevAuthentication,
@@ -1691,12 +1701,22 @@ async function executeControlRequest(
       }
       return { actions, clientId, role, updated }
     }
+    case "relay.pause.write": {
+      const paused = payload.paused === true
+      await runRelayEffect(
+        "relay.control.pause",
+        startup.state.setPauseHold(client.id, paused, Date.now())
+      )
+      await applyPauseHolds()
+      return { paused: lanes.paused }
+    }
     case "relay.clients.revoke": {
       const clientId = requiredString(payload, "clientId")
       const revoked = await runRelayEffect(
         "relay.control.clients.revoke",
         startup.state.revokeClient(clientId, Date.now())
       )
+      if (revoked) await applyPauseHolds()
       if (revoked) {
         await appendRelayAudit("client.revoked", client.id, request.id, {
           clientId,
@@ -2960,6 +2980,27 @@ function withRoutesLock<T>(
       relayOperation(mutate)
     )
   )
+}
+
+// Pauses or resumes the lanes to match the Hearths holding the Relay paused.
+// Work that waited out a pause starts again once none does.
+async function applyPauseHolds(): Promise<void> {
+  const holds = await runRelayEffect(
+    "relay.pauseHolds",
+    startup.state.listPauseHolds()
+  )
+  const paused = holds.length > 0
+  if (paused === lanes.paused) return
+  lanes.setPaused(paused)
+  if (!paused) {
+    await runRelayEffect(
+      "relay.resume",
+      Effect.all([backupManager.resume(), provisioningManager.resume()], {
+        discard: true,
+      })
+    )
+  }
+  await snapshotHub.refresh()
 }
 
 // Changes when someone changes a game server's power, or when anything

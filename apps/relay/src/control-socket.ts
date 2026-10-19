@@ -46,6 +46,7 @@ import {
   relaySnapshotNodeResourcesFeature,
   isAuditedRelayControlOperation,
   relayControlOperationChanges,
+  relayControlOperationRunsWhilePaused,
 } from "@workspace/contracts"
 import type {
   RelayAuthChallenge,
@@ -639,6 +640,23 @@ function authenticateSocket(
               traceParentSpan(request.traceparent)
             )
           )
+          if (
+            options.lanes.paused &&
+            relayControlOperationChanges(request.operation) &&
+            !relayControlOperationRunsWhilePaused(request.operation)
+          ) {
+            ticket?.cancel()
+            yield* Effect.sync(() =>
+              sendError(
+                socket,
+                request.id,
+                "relay_paused",
+                "This Relay is paused",
+                false
+              )
+            )
+            return
+          }
           const operationId = relayControlOperationChanges(request.operation)
             ? request.operationId
             : undefined
@@ -1262,6 +1280,9 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       return "relay.update"
     case "relay.rename":
       return "relay.rename"
+    // Holding the Relay paused freezes it for every Hearth.
+    case "relay.pause.write":
+      return "relay.configure"
     case "relay.audit.list":
       return "relay.audit.read"
     case "relay.networking.read":
@@ -1733,6 +1754,9 @@ function controlFailureFor(
       message: cause.message,
       retryable: cause.retryable,
     }
+  }
+  if (cause instanceof LaneRejectedError && cause.reason === "paused") {
+    return { code: "relay_paused", message: cause.message, retryable: false }
   }
   // Withdrawn from its lane before it ran, as when Hearth disconnected.
   if (cause instanceof LaneRejectedError && cause.reason === "cancelled") {

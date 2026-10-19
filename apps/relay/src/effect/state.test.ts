@@ -14,6 +14,44 @@ import { makeRelayStateLayer, RelayStateStore } from "./state.js"
 import { BROWSER_AUTHORIZATION_FLOOR_RETENTION_MS } from "../browser-security.js"
 
 describe("Relay state", () => {
+  stateTest("keeps the Relay paused while any Hearth holds it", () =>
+    Effect.gen(function* () {
+      const store = yield* RelayStateStore
+      const now = Date.UTC(2026, 0, 1)
+      for (const id of ["hearth-a", "hearth-b"]) {
+        yield* store.createInvitation({
+          actions: ["*"],
+          createdAt: now,
+          expiresAt: now + 60_000,
+          id: `invitation-${id}`,
+          role: "full_access",
+          tokenHash: `hash-${id}`,
+        })
+        yield* store.pairClient({
+          actions: ["*"],
+          id,
+          invitationId: `invitation-${id}`,
+          name: id,
+          origins: [],
+          pairedAt: now,
+          publicKey: `key-${id}`,
+          role: "full_access",
+          sourceCidrs: [],
+        })
+      }
+      yield* store.setPauseHold("hearth-a", true, now)
+      yield* store.setPauseHold("hearth-b", true, now)
+      // Holding again changes nothing.
+      yield* store.setPauseHold("hearth-a", true, now + 1)
+      yield* store.setPauseHold("hearth-a", false, now + 2)
+      assert.deepStrictEqual(yield* store.listPauseHolds(), ["hearth-b"])
+
+      // A revoked Hearth no longer holds it.
+      yield* store.revokeClient("hearth-b", now + 3)
+      assert.deepStrictEqual(yield* store.listPauseHolds(), [])
+    })
+  )
+
   stateTest("pairs a client exactly once and persists its grant", () =>
     Effect.gen(function* () {
       const store = yield* RelayStateStore
@@ -1280,7 +1318,8 @@ describe("legacy machine mutation migration", () => {
             const database = new DatabaseSync(filename)
             try {
               database.exec(
-                `DROP TABLE relay_operations;
+                `DROP TABLE relay_pause_holds;
+                 DROP TABLE relay_operations;
                  DROP TABLE relay_schedule_runs;
                  DROP TABLE relay_schedule_tombstones;
                  DROP TABLE relay_schedules;

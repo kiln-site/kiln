@@ -157,6 +157,7 @@ export const relayControlOperations = [
   "hearth.database.terminal.output",
   "sftp.authorization.resolve",
   "operation.get",
+  "relay.pause.write",
 ] as const
 
 export type RelayControlOperation = (typeof relayControlOperations)[number]
@@ -296,6 +297,7 @@ export function relayControlOperationChanges(
     case "sftp.authorization.resolve":
     case "operation.get":
       return false
+    case "relay.pause.write":
     case "relay.update.apply":
     case "relay.restart":
     case "relay.rename":
@@ -360,6 +362,23 @@ export function relayControlOperationChanges(
 
 // How long a Relay keeps the record of a finished change for `operation.get`.
 export const relayOperationRetentionMs = 7 * 24 * 60 * 60_000
+
+/**
+ * Changes a paused Relay still takes: pausing and resuming it, and revoking
+ * access, which must reach it whatever its state. A Relay is paused while
+ * any Hearth holds it paused (`relay.pause.write`), and then runs nothing
+ * else that changes anything, from Hearth or of its own accord.
+ */
+export function relayControlOperationRunsWhilePaused(
+  operation: RelayControlOperation
+): boolean {
+  return (
+    operation === "relay.pause.write" ||
+    operation === "browser.authorization.revise" ||
+    operation === "relay.clients.revoke" ||
+    operation === "relay.pairing.revoke"
+  )
+}
 
 export function relayControlDeadlineMs(
   operation: RelayControlOperation

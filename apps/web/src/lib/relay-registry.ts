@@ -36,7 +36,8 @@ import {
 import { relayPairingOrigin } from "@/lib/relay-control-endpoint"
 import { relayNameForNewPairing } from "@/lib/relay-names"
 import { CredentialError, ResourceNotFoundError } from "@/effect/errors"
-import { runAppEffect } from "@/effect/runtime"
+import { reportAppError, runAppEffect } from "@/effect/runtime"
+import { recoverPromise } from "@/effect/promise"
 import { databasePool } from "@/lib/database"
 import { databaseTable } from "@/lib/database-config"
 import { betterAuthSecrets, kilnPublicUrl } from "@/lib/environment"
@@ -946,6 +947,15 @@ export async function setPersistedRelayEnabled(
       await import("@/lib/authorization-delivery")
     wakeAuthorizationDelivery(id)
   }
+  // The Relay freezes itself while paused. One that's away learns of it
+  // when it reconnects.
+  const { relayRpc } = await import("@/lib/relay-connection")
+  await recoverPromise(
+    () => relayRpc(relay, "relay.pause.write", { paused: !enabled }, 10_000),
+    (cause) => {
+      reportAppError(cause, { operation: "relay.pause.write" })
+    }
+  )
   publishRelayCollectionChange(id)
   return relay
 }

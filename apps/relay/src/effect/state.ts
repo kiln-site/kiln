@@ -426,6 +426,16 @@ export class RelayStateStore extends Context.Service<
     readonly pruneOperations: (
       finishedBefore: number
     ) => Effect.Effect<void, RelayStateError>
+    /** The paired Hearths holding this Relay paused. */
+    readonly listPauseHolds: () => Effect.Effect<
+      ReadonlyArray<string>,
+      RelayStateError
+    >
+    readonly setPauseHold: (
+      clientId: string,
+      paused: boolean,
+      now: number
+    ) => Effect.Effect<void, RelayStateError>
     readonly createInvitation: (
       input: RelayInvitationInput
     ) => Effect.Effect<void, RelayStateError>
@@ -1113,6 +1123,13 @@ const migrations = SqliteMigrator.fromRecord({
     ) STRICT`
     yield* sql`CREATE INDEX relay_operations_started ON relay_operations (started_at)`
   }),
+  "20_pause_holds": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    yield* sql`CREATE TABLE relay_pause_holds (
+      client_id TEXT PRIMARY KEY NOT NULL,
+      paused_at INTEGER NOT NULL
+    ) STRICT`
+  }),
 })
 
 function scrubBackupTaskInputJson(inputJson: string): string {
@@ -1791,6 +1808,25 @@ const makeRelayStateStore = Effect.gen(function* () {
           DELETE FROM relay_operations
           WHERE status <> 'running' AND started_at < ${finishedBefore}
         `.pipe(Effect.asVoid)
+      ),
+    listPauseHolds: () =>
+      run(
+        "list_pause_holds",
+        sql<{ clientId: string }>`
+          SELECT client_id AS clientId FROM relay_pause_holds
+        `.pipe(Effect.map((rows) => rows.map((row) => row.clientId)))
+      ),
+    setPauseHold: (clientId, paused, now) =>
+      run(
+        "set_pause_hold",
+        (paused
+          ? sql`
+              INSERT INTO relay_pause_holds (client_id, paused_at)
+              VALUES (${clientId}, ${now})
+              ON CONFLICT (client_id) DO NOTHING
+            `
+          : sql`DELETE FROM relay_pause_holds WHERE client_id = ${clientId}`
+        ).pipe(Effect.asVoid)
       ),
     appendAudit: (input) =>
       run(
@@ -2852,6 +2888,8 @@ const makeRelayStateStore = Effect.gen(function* () {
               SET revoked_at = ${revokedAt}
               WHERE id = ${clientId} AND revoked_at IS NULL
             `
+            // A revoked Hearth no longer holds the Relay paused.
+            yield* sql`DELETE FROM relay_pause_holds WHERE client_id = ${clientId}`
             return true
           })
         )

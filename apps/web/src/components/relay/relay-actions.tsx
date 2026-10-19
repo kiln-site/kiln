@@ -108,8 +108,9 @@ export function RelayPauseDialog({
         <DialogHeader>
           <DialogTitle>Pause {relay.name}?</DialogTitle>
           <DialogDescription>
-            Hearth stops requesting data from this Relay. Game servers keep
-            running.
+            Game servers keep running, but nothing on this Relay changes
+            until you resume it: no power or file changes, schedules,
+            backups, or crash recovery.
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>

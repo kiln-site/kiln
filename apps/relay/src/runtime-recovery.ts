@@ -270,6 +270,8 @@ export class RuntimeRecoveryManager {
         existing.nextAttemptAt !== null &&
         existing.nextAttemptAt <= now
       ) {
+        // A paused Relay starts nothing; the attempt waits for a resume.
+        if (this.#lanes.paused) return Effect.succeed(this.#entry(existing))
         return this.#requestRestart(existing, observation, now)
       }
 
@@ -533,10 +535,12 @@ export class RuntimeRecoveryManager {
       .pipe(
         Effect.catchIf(
           (cause) => cause instanceof LaneRejectedError,
-          () =>
-            Effect.logInfo("Server recovery start no longer needed", {
-              instanceId: observation.instanceId,
-            })
+          (cause) =>
+            cause.reason === "paused"
+              ? this.#waitForResume(observation.instanceId, token)
+              : Effect.logInfo("Server recovery start no longer needed", {
+                  instanceId: observation.instanceId,
+                })
         ),
         Effect.withSpan("relay.runtimeRecovery.restartWorker", {
           attributes: {
@@ -557,6 +561,38 @@ export class RuntimeRecoveryManager {
             )
           )
         )
+      )
+  }
+
+  // Paused before its turn came: the attempt didn't happen, so it isn't
+  // counted, and it's made again once the Relay is resumed.
+  #waitForResume(instanceId: string, token: symbol): Effect.Effect<void> {
+    return this.#lock(instanceId)
+      .withPermit(
+        Effect.flatMap(Clock.currentTimeMillis, (now) => {
+          const current = this.#records.get(instanceId)
+          if (
+            !current ||
+            this.#activeStarts.get(instanceId) !== token ||
+            current.phase !== "restarting"
+          ) {
+            return Effect.void
+          }
+          return this.#persist({
+            ...current,
+            nextAttemptAt: now,
+            phase: "pending",
+            updatedAt: now,
+          }).pipe(Effect.asVoid)
+        })
+      )
+      .pipe(
+        Effect.tap(() =>
+          Effect.logInfo("Server recovery waits for the Relay to be resumed", {
+            instanceId,
+          })
+        ),
+        Effect.ignore
       )
   }
 

@@ -144,9 +144,16 @@ export class ProvisioningManager {
     })
   }
 
+  /** Starts jobs that waited out a pause. */
+  resume() {
+    return Queue.offer(this.#wake, undefined).pipe(Effect.asVoid)
+  }
+
   #drain() {
     return Effect.gen({ self: this }, function* () {
       while (true) {
+        // Queued jobs wait out a pause.
+        if (this.#lanes.paused) return
         const job = yield* this.#state.claimNextProvisioningJob(Date.now())
         if (!job) return
         let failedPhase: RelayInstanceProvisioning["failedPhase"] = "preparing"

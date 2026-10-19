@@ -78,6 +78,7 @@ async function manager(
     reportError: (message: string, cause: unknown) => void
     sendConsoleCommand: (instanceId: string, command: string) => Promise<void>
     instancePowerIntent: (instanceId: string) => string
+    isPaused: () => boolean
     runInstancePower: ScheduleManagerOptions["runInstancePower"]
   }> = {}
 ) {
@@ -97,6 +98,7 @@ async function manager(
     relayId: "relay-a",
     reportError: overrides.reportError,
     instancePowerIntent: overrides.instancePowerIntent ?? (() => "0"),
+    isPaused: overrides.isPaused ?? (() => false),
     runDatabasePower: async () => undefined,
     runInstancePower: overrides.runInstancePower ?? (async () => undefined),
     sendConsoleCommand: overrides.sendConsoleCommand ?? (async () => undefined),
@@ -1127,6 +1129,27 @@ describe("Relay schedule persistence", () => {
     expect((await latestRun(schedules))?.sequenceAttempts).toMatchObject([
       { actionType: "wait", status: "succeeded" },
     ])
+  })
+
+  it("runs no actions while the Relay is paused", async () => {
+    const commands: Array<string> = []
+    const { schedules } = await manager({
+      findInstance: async () => ({}),
+      isPaused: () => true,
+      sendConsoleCommand: async (_instanceId, command) => {
+        commands.push(command)
+      },
+    })
+    await schedules.apply(projection)
+
+    await runNow(schedules)
+    await advanceUntil(async () => {
+      expect((await latestRun(schedules))?.status).not.toBe("running")
+    })
+    expect(commands).toEqual([])
+    expect((await latestRun(schedules))?.targetRuns[0]?.attempts).toMatchObject(
+      [{ error: "Not run: the Relay is paused", status: "not_run" }]
+    )
   })
 
   it("gives way to a power change someone makes during its wait", async () => {

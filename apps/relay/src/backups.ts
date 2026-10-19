@@ -162,7 +162,8 @@ export class BackupManager {
     databases?: DatabaseDriver
     /**
      * Each task holds its target's lane while it runs: a backup alongside
-     * other work, a restore alone.
+     * other work, a restore alone. While the lanes are paused, queued tasks
+     * wait; `resume` starts them again.
      */
     lanes: OperationLanes
   }) {
@@ -251,9 +252,15 @@ export class BackupManager {
     return this.#drain()
   }
 
+  /** Starts tasks that waited out a pause. */
+  resume() {
+    return Queue.offer(this.#wake, undefined).pipe(Effect.asVoid)
+  }
+
   #drain() {
     return Effect.gen({ self: this }, function* () {
       while (true) {
+        if (this.#lanes.paused) return
         const task = yield* this.#state.claimNextBackupTask(Date.now())
         if (!task) return
         const controller = new AbortController()

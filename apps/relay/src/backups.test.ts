@@ -235,6 +235,34 @@ describe("Relay archive backups", () => {
     )
   )
 
+  it.effect("holds queued tasks while the Relay is paused, then runs them", () =>
+    withRelay("kiln-backup-paused-", ({ config, root }) =>
+      Effect.gen(function* () {
+        yield* Effect.promise(() =>
+          writeFile(resolve(root, "server.txt"), "data")
+        )
+        const lanes = new OperationLanes()
+        const manager = yield* backupManager(
+          config,
+          async () => testInstance(),
+          lanes
+        )
+        const input = backupInput(9)
+        lanes.setPaused(true)
+        yield* manager.enqueue(input)
+        yield* manager.runPending()
+        assert.strictEqual((yield* manager.get(input.taskId))?.status, "queued")
+
+        lanes.setPaused(false)
+        yield* manager.runPending()
+        assert.strictEqual(
+          (yield* manager.get(input.taskId))?.status,
+          "succeeded"
+        )
+      })
+    )
+  )
+
   it.effect("cancels a queued create task before archive work starts", () =>
     withRelay("kiln-backup-queued-cancel-", ({ config }) =>
       Effect.gen(function* () {

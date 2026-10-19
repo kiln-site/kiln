@@ -231,6 +231,48 @@ describe("runtime recovery", () => {
       })
     )
 
+    it.effect("waits out a pause without spending recovery attempts", () =>
+      Effect.gen(function* () {
+        const lanes = new OperationLanes()
+        const manager = yield* makeManager(
+          {
+            KILN_RELAY_CRASH_RETRY_DELAY_SECONDS: "5",
+            KILN_RELAY_CRASH_RETRY_LIMIT: "1",
+          },
+          lanes
+        )
+        const instanceId = "8".repeat(40)
+        const container = server(instanceId, false)
+        const startedAt = "2026-08-06T12:00:00.000Z"
+        const startedAtMs = Date.parse(startedAt)
+        yield* reconcileAt(manager, startedAtMs, [
+          observation(instanceId, { startedAt }),
+        ])
+        const crash = crashed(instanceId, {
+          finishedAt: new Date(startedAtMs + 10_000).toISOString(),
+          startedAt,
+        })
+        yield* reconcileAt(manager, startedAtMs + 10_000, [crash])
+
+        // The retry comes due, and again and again, while the Relay is paused.
+        lanes.setPaused(true)
+        for (const later of [15_000, 60_000, 600_000]) {
+          yield* reconcileAt(manager, startedAtMs + later, [crash])
+          yield* dockerIdle
+        }
+        assert.strictEqual(container.starts, 0)
+        assert.deepInclude(manager.snapshot(instanceId)?.recovery, {
+          attempt: 1,
+          phase: "pending",
+        })
+
+        lanes.setPaused(false)
+        yield* reconcileAt(manager, startedAtMs + 601_000, [crash])
+        yield* dockerIdle
+        assert.strictEqual(container.starts, 1)
+      })
+    )
+
     it.effect("does not restart an incomplete Ember installation", () =>
       Effect.gen(function* () {
         const manager = yield* makeManager()

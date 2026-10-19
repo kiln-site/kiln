@@ -96,6 +96,8 @@ export interface ScheduleManagerOptions {
    * replaces it, read when an occurrence begins.
    */
   readonly instancePowerIntent: (instanceId: string) => string
+  /** A paused Relay runs no schedule actions; they're recorded as not run. */
+  readonly isPaused: () => boolean
   readonly sendConsoleCommand: (
     instanceId: string,
     command: string
@@ -532,6 +534,20 @@ export class ScheduleManager {
           scheduleId: schedule.id,
           startedAt: actionStartedAt,
           status: "skipped_missing",
+          target: state.target,
+        })
+      )
+      return
+    }
+    if (this.#options.isPaused()) {
+      state.attempts.push(
+        attempt({
+          action,
+          error: "Not run: the Relay is paused",
+          scheduledAt,
+          scheduleId: schedule.id,
+          startedAt: actionStartedAt,
+          status: "not_run",
           target: state.target,
         })
       )

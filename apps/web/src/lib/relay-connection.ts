@@ -17,6 +17,7 @@ import {
   relayControlDeadlineMs,
   relayControlMaxFrameBytes,
   relayControlOperationChanges,
+  relayControlOperationRunsWhilePaused,
   RelayOperationLookupSchema,
   relayControlRequestTimeoutMs,
   relayControlProtocol,
@@ -113,14 +114,6 @@ const connections = (globalThis.kilnRelayConnections ??= new Map())
 const relayUpdates = (globalThis.kilnRelayUpdates ??= new Map())
 const ABSENT_RELAY_UPDATE_MS = 15 * 60_000
 
-// Changes a paused Relay still takes: revoking access, which must reach it
-// whatever its state.
-const changesAllowedWhilePaused = new Set<RelayControlOperation>([
-  "browser.authorization.revise",
-  "relay.clients.revoke",
-  "relay.pairing.revoke",
-])
-
 /**
  * Sends one request to a Relay. A change gets an operation ID, and one a
  * person or CLI credential asked for (`subject`) is recorded in Hearth's
@@ -141,7 +134,7 @@ export async function relayRpc(
   if (
     changes &&
     relay.enabled === false &&
-    !changesAllowedWhilePaused.has(operation)
+    !relayControlOperationRunsWhilePaused(operation)
   ) {
     throw relayPausedError()
   }
@@ -1459,6 +1452,28 @@ class RelayConnection {
       })
     }
     if (becameAuthenticated) {
+      // The Relay keeps its own pause; tell it whether this Hearth holds it.
+      forkAppEffect(
+        "relay.pause.syncOnConnect",
+        Effect.tryPromise(async () => {
+          const { listPersistedRelays } = await import("@/lib/relay-registry")
+          const persisted = (await listPersistedRelays()).find(
+            (relay) => relay.id === this.#relay.id
+          )
+          if (!persisted) return
+          await runAppEffect(
+            "relay.pause.sync",
+            this.request("relay.pause.write", { paused: !persisted.enabled }, 10_000)
+          )
+        }).pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("Relay pause sync after connect failed", {
+              cause,
+              relayId: this.#relay.id,
+            })
+          )
+        )
+      )
       forkAppEffect(
         "backups.reconcileOnConnect",
         Effect.tryPromise({

@@ -12,7 +12,7 @@ import {
   type DatabaseConnections,
   type DatabaseConnectionSnapshot,
 } from "./database-connections.js"
-import type { OperationLanes } from "./operation-lanes.js"
+import { LaneRejectedError, type OperationLanes } from "./operation-lanes.js"
 import { instanceLifecycleLocks } from "./operation-plans.js"
 import {
   DockerEngine,
@@ -2331,9 +2331,14 @@ export class DockerDriver {
             )
             .pipe(
               Effect.catch((cause) =>
-                Effect.sync(() => {
-                  reportRelayError(cause, { operation: "relay.quota.stop" })
-                })
+                // A paused Relay stops nothing; the next scan asks again.
+                cause instanceof LaneRejectedError
+                  ? Effect.void
+                  : Effect.sync(() => {
+                      reportRelayError(cause, {
+                        operation: "relay.quota.stop",
+                      })
+                    })
               ),
               Effect.ensuring(
                 Effect.sync(() => {
