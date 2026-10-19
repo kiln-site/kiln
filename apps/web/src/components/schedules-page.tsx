@@ -24,6 +24,7 @@ import {
   GripVertical,
   HardDriveDownload,
   History,
+  ListTodo,
   LoaderCircle,
   Pencil,
   Play,
@@ -38,7 +39,8 @@ import {
   TriangleAlert,
   X,
 } from "lucide-react"
-import { useNavigate, useSearch } from "@tanstack/react-router"
+import { sortFn_basic } from "@tanstack/react-table"
+import { Link, useNavigate, useSearch } from "@tanstack/react-router"
 import cronstrue from "cronstrue"
 import { Result } from "effect"
 
@@ -93,6 +95,20 @@ import {
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
 
+import { DataTable } from "@/components/data-table-view"
+import { DataTableEmptyState, DataTableTextCell } from "@/components/data-table"
+import {
+  DataTableToolbar,
+  DataTableWorkspace,
+} from "@/components/data-table-workspace"
+import {
+  InstanceKindCounts,
+  type InstanceKindCountValues,
+} from "@/components/instance-kind-counts"
+import { CopyIdentifierMenuItem } from "@/components/copy-identifier-menu-item"
+import { IdentityName } from "@/components/identity-name"
+import { InstanceCard } from "@/components/instance-card"
+import { RelativeTime } from "@/components/relative-time"
 import {
   WorkspaceTable,
   WorkspaceTableCell,
@@ -116,6 +132,17 @@ import {
   type ScheduleScope,
 } from "@/components/schedule-scope"
 import { forkPromise } from "@/effect/promise"
+import {
+  createDataTableColumnHelper,
+  dataTableColumnMeta,
+  defineDataTable,
+} from "@/lib/data-table"
+import {
+  createDataTableSearchStore,
+  type DataTableSearchStore,
+} from "@/lib/data-table-search"
+import type { DataTableSource } from "@/lib/data-table-source"
+import type { InstancePickerKind } from "@/lib/instance-picker-filters"
 import { scheduleBackupDestination } from "@/lib/schedule-backup-configuration"
 import {
   removeScheduleFromCache,
@@ -862,7 +889,7 @@ export const ScheduleHistoryPage = React.memo(function ScheduleHistoryPage() {
   const search = useSearch({ from: "/_app/automations" })
   const navigate = useNavigate({ from: "/automations/history" })
   const selectedScope = useScheduleScope()
-  const [searchStore] = React.useState(createWorkspaceTableSearchStore)
+  const [searchStore] = React.useState(() => createDataTableSearchStore())
   const filteredSchedule = React.useMemo(
     () =>
       search.schedule
@@ -875,6 +902,13 @@ export const ScheduleHistoryPage = React.memo(function ScheduleHistoryPage() {
     ...githubSyncRunsQueryOptions(),
     notifyOnChangeProps: ["data"],
   })
+  // A schedule run carries only its Relay's ID; every Relay with a target
+  // has its name in the target options.
+  const { data: relayNames } = useSuspenseQuery({
+    ...scheduleOptionsQueryOptions(),
+    notifyOnChangeProps: ["data"],
+    select: selectHistoryRelayNames,
+  })
   const runs = React.useMemo(
     () => scheduleHistoryRuns(schedules, selectedScope, search.schedule),
     [schedules, search.schedule, selectedScope]
@@ -885,9 +919,10 @@ export const ScheduleHistoryPage = React.memo(function ScheduleHistoryPage() {
         runs,
         // A schedule's own history has no syncs in it.
         search.schedule ? [] : syncRuns,
-        selectedScope
+        selectedScope,
+        relayNames
       ),
-    [runs, search.schedule, selectedScope, syncRuns]
+    [relayNames, runs, search.schedule, selectedScope, syncRuns]
   )
   const selectedRun = React.useMemo(
     () =>
@@ -913,14 +948,18 @@ export const ScheduleHistoryPage = React.memo(function ScheduleHistoryPage() {
       }),
     [navigate]
   )
-  const openRun = React.useCallback(
-    (run: ScheduleHistoryRun) => {
+  const openEntry = React.useCallback(
+    (entry: AutomationHistoryEntry) => {
+      if (entry.kind === "sync") {
+        void navigate({ to: "/automations/sync", search: automationScope })
+        return
+      }
       void navigate({
         replace: true,
         search: (previous) => ({
           ...previous,
-          run: run.id,
-          runRelay: run.relayId,
+          run: entry.run.id,
+          runRelay: entry.run.relayId,
         }),
       })
     },
@@ -938,25 +977,28 @@ export const ScheduleHistoryPage = React.memo(function ScheduleHistoryPage() {
   }, [navigate])
 
   return (
-    <div className="mx-auto w-full max-w-[90rem] px-3 pb-10 sm:px-5">
-      <section className="overflow-hidden rounded-xl border bg-card/45 [contain:paint]">
-        <HistoryToolbar
-          filteredScheduleName={
-            search.schedule
-              ? (filteredSchedule?.name ?? "Unknown schedule")
-              : null
-          }
-          searchStore={searchStore}
-          runCount={entries.length}
-          onClearScheduleFilter={clearScheduleFilter}
-        />
+    <div className="mx-auto flex h-full min-h-[34rem] w-full max-w-[90rem] flex-col px-3 pb-3 sm:px-5 sm:pb-5">
+      <DataTableWorkspace
+        toolbar={
+          <HistoryToolbar
+            filteredScheduleName={
+              search.schedule
+                ? (filteredSchedule?.name ?? "Unknown schedule")
+                : null
+            }
+            searchStore={searchStore}
+            onClearScheduleFilter={clearScheduleFilter}
+          />
+        }
+      >
         <ScheduleHistoryTable
           entries={entries}
+          resetKey={search.schedule ?? ""}
           scopeActive={selectedScope !== null}
           searchStore={searchStore}
-          onOpenRun={openRun}
+          onOpenEntry={openEntry}
         />
-      </section>
+      </DataTableWorkspace>
       <ScheduleRunDialog run={selectedRun} onClose={closeRun} />
     </div>
   )
@@ -996,26 +1038,103 @@ function scheduleHistoryRuns(
   return runs.sort((left, right) => right.scheduledAt - left.scheduledAt)
 }
 
+/** A schedule or sync target, by the kind the instance picker uses. */
+interface HistoryTarget {
+  id: string
+  kind: InstancePickerKind
+  name: string
+  relayId: string
+}
+
+interface HistoryEntryBase {
+  durationMs: number
+  name: string
+  relayId: string
+  relayName: string
+  startedAt: number
+  targetCounts: InstanceKindCountValues
+  targets: ReadonlyArray<HistoryTarget>
+}
+
 /** Schedule runs and sync runs, newest first. */
 type AutomationHistoryEntry =
-  | { kind: "schedule"; run: ScheduleHistoryRun; startedAt: number }
-  | { kind: "sync"; run: GitHubSyncRunView; startedAt: number }
+  | (HistoryEntryBase & { kind: "schedule"; run: ScheduleHistoryRun })
+  | (HistoryEntryBase & { kind: "sync"; run: GitHubSyncRunView })
 
 function automationHistoryEntries(
   scheduleRuns: ReadonlyArray<ScheduleHistoryRun>,
   syncRuns: ReadonlyArray<GitHubSyncRunView>,
-  scope: ScheduleScope | null
+  scope: ScheduleScope | null,
+  relayNames: ReadonlyMap<string, string>
 ): Array<AutomationHistoryEntry> {
   const entries: Array<AutomationHistoryEntry> = scheduleRuns.map((run) => ({
+    ...historyEntryBase(
+      run.scheduleName,
+      run,
+      run.relayId,
+      relayNames.get(run.relayId) ?? run.relayId,
+      run.targetRuns.map(({ target }) => ({
+        id: target.kind === "relay" ? target.relayId : target.id,
+        kind: target.kind === "instance" ? "server" : target.kind,
+        name: target.name,
+        relayId: target.relayId,
+      }))
+    ),
     kind: "schedule",
     run,
-    startedAt: run.startedAt,
   }))
   for (const run of syncRuns) {
     if (scope && !syncTargetMatchesScope(run.sync.target, scope)) continue
-    entries.push({ kind: "sync", run, startedAt: run.startedAt })
+    const { target } = run.sync
+    entries.push({
+      ...historyEntryBase(
+        syncName(run),
+        run,
+        target.relayId,
+        target.relayName,
+        [
+          {
+            id: target.kind === "relay" ? target.relayId : target.id,
+            kind: target.kind,
+            name: target.name,
+            relayId: target.relayId,
+          },
+        ]
+      ),
+      kind: "sync",
+      run,
+    })
   }
   return entries.sort((left, right) => right.startedAt - left.startedAt)
+}
+
+function historyEntryBase(
+  name: string,
+  run: { finishedAt: number; startedAt: number },
+  relayId: string,
+  relayName: string,
+  targets: ReadonlyArray<HistoryTarget>
+): HistoryEntryBase {
+  const targetCounts = { apps: 0, databases: 0, instances: 0, relays: 0 }
+  for (const target of targets) {
+    if (target.kind === "server") targetCounts.instances += 1
+    else if (target.kind === "app") targetCounts.apps += 1
+    else if (target.kind === "database") targetCounts.databases += 1
+    else targetCounts.relays += 1
+  }
+  return {
+    durationMs: Math.max(0, run.finishedAt - run.startedAt),
+    name,
+    relayId,
+    relayName,
+    startedAt: run.startedAt,
+    targetCounts,
+    targets,
+  }
+}
+
+function syncName(run: GitHubSyncRunView) {
+  return `${run.sync.repository}${run.sync.sourcePath ? `/${run.sync.sourcePath}` : ""}`
 }
 
 function syncTargetMatchesScope(
@@ -1038,282 +1157,546 @@ const syncTriggerLabel = {
   push: "Push",
 } as const satisfies Record<GitHubSyncRunView["trigger"], string>
 
-// Sync runs are shown in the viewer's own time zone; syncs have none.
-const localTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
-
-const SyncHistoryRow = React.memo(function SyncHistoryRow({
-  run,
-}: {
-  run: GitHubSyncRunView
+// Leaving history keeps the scope picker's choice and drops the run.
+function automationScope(previous: {
+  kind?: "database" | "relay" | "server"
+  relay?: string
+  target?: string
 }) {
-  const navigate = useNavigate({ from: "/automations/history" })
-  const name = `${run.sync.repository}${run.sync.sourcePath ? `/${run.sync.sourcePath}` : ""}`
-  const open = React.useCallback(
-    () =>
-      void navigate({
-        to: "/automations/sync",
-        search: (previous) => previous,
-      }),
-    [navigate]
-  )
-  return (
-    <tr
-      role="button"
-      tabIndex={0}
-      aria-label={`View the sync from ${name}`}
-      className="cursor-pointer transition-colors hover:bg-accent/25 focus-visible:bg-accent/30 focus-visible:outline-none"
-      onClick={open}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault()
-          open()
-        }
-      }}
-    >
-      <WorkspaceTableCell className="px-2 sm:px-3">
-        <RunStatusDot
-          status={run.status === "success" ? "succeeded" : "failed"}
-        />
-      </WorkspaceTableCell>
-      <WorkspaceTableCell>
-        <div className="min-w-0">
-          <p className="flex min-w-0 items-center gap-1.5 text-xs font-semibold text-foreground">
-            <FolderSync className="size-3.5 shrink-0 text-muted-foreground" />
-            <span className="truncate">{name}</span>
-          </p>
-          <p className="type-meta truncate text-muted-foreground">
-            {run.status === "error"
-              ? run.message
-              : [
-                  `Sync · ${syncTriggerLabel[run.trigger]}`,
-                  run.changedCount === 0
-                    ? "up to date"
-                    : `${run.changedCount} ${run.changedCount === 1 ? "file" : "files"} updated`,
-                  run.message,
-                ]
-                  .filter(Boolean)
-                  .join(" · ")}
-          </p>
-        </div>
-      </WorkspaceTableCell>
-      <WorkspaceTableCell className="hidden md:table-cell">
-        <div className="min-w-0">
-          <p className="type-meta truncate text-foreground">
-            {timestampLabel(new Date(run.startedAt), localTimeZone)}
-          </p>
-          <p className="type-meta truncate text-muted-foreground">
-            <RelativeTimeText date={new Date(run.startedAt)} />
-          </p>
-        </div>
-      </WorkspaceTableCell>
-      <WorkspaceTableCell className="hidden lg:table-cell">
-        <span className="type-meta font-mono text-foreground">
-          {durationLabel(run.finishedAt - run.startedAt)}
-        </span>
-      </WorkspaceTableCell>
-      <WorkspaceTableCell className="hidden xl:table-cell">
-        <span className="type-meta truncate text-foreground">
-          {run.sync.target.name}
-        </span>
-      </WorkspaceTableCell>
-      <WorkspaceTableCell className="hidden sm:table-cell">
-        <span className="type-meta block truncate font-mono text-muted-foreground">
-          {run.sync.target.relayId}
-        </span>
-      </WorkspaceTableCell>
-    </tr>
-  )
-})
+  return {
+    kind: previous.kind,
+    relay: previous.relay,
+    target: previous.target,
+  }
+}
 
 const HistoryToolbar = React.memo(function HistoryToolbar({
   filteredScheduleName,
-  runCount,
   searchStore,
   onClearScheduleFilter,
 }: {
   filteredScheduleName: string | null
-  runCount: number
-  searchStore: WorkspaceTableSearchStore
+  searchStore: DataTableSearchStore
   onClearScheduleFilter: () => void
 }) {
-  const inputRef = React.useRef<HTMLInputElement>(null)
-  useWorkspaceTableSearchInput(inputRef, searchStore)
-  return (
-    <div className="flex min-w-0 items-center gap-2 border-b bg-background/25 p-3">
-      <ScheduleSyncButton />
-      <div className="relative min-w-0 flex-1 sm:max-w-md">
-        <Search className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          ref={inputRef}
-          id="schedule-history-search"
-          type="search"
-          className="pl-9"
-          defaultValue={searchStore.getServerSnapshot()}
-          placeholder="Search run history"
-          onChange={(event) => searchStore.set(event.currentTarget.value)}
-        />
-      </div>
-      {filteredScheduleName ? (
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          className="type-control-sm flex max-w-32 min-w-0 gap-1.5 px-2 sm:max-w-52"
-          aria-label={`Clear history filter for ${filteredScheduleName}`}
-          onClick={onClearScheduleFilter}
-        >
-          <span className="truncate">{filteredScheduleName}</span>
-          <X className="shrink-0" />
-        </Button>
-      ) : null}
-      <Badge variant="outline" className="type-meta font-mono">
-        {runCount} run{runCount === 1 ? "" : "s"}
-      </Badge>
-    </div>
-  )
-})
-
-const ScheduleHistoryTable = React.memo(function ScheduleHistoryTable({
-  entries,
-  scopeActive,
-  searchStore,
-  onOpenRun,
-}: {
-  entries: Array<AutomationHistoryEntry>
-  scopeActive: boolean
-  searchStore: WorkspaceTableSearchStore
-  onOpenRun: (run: ScheduleHistoryRun) => void
-}) {
-  const renderRow = React.useCallback(
-    (entry: AutomationHistoryEntry) =>
-      entry.kind === "schedule" ? (
-        <ScheduleHistoryRow run={entry.run} onOpen={onOpenRun} />
-      ) : (
-        <SyncHistoryRow run={entry.run} />
-      ),
-    [onOpenRun]
-  )
-  const renderEmpty = React.useCallback(
-    (searchActive: boolean) => (
-      <div className="flex min-h-64 flex-col items-center justify-center px-6 py-12 text-center">
-        <Play className="size-6 text-muted-foreground/45" />
-        <p className="mt-3 text-sm font-semibold">
-          {searchActive
-            ? "No runs match your search"
-            : scopeActive
-              ? "No runs in this scope"
-              : "No automation runs yet"}
-        </p>
-        <p className="type-support mt-1 max-w-sm text-muted-foreground">
-          {scopeActive && !searchActive
-            ? "Completed and attempted runs in this scope will appear here."
-            : "Completed and attempted automation runs will appear here."}
-        </p>
-      </div>
-    ),
-    [scopeActive]
+  const search = React.useMemo(
+    () => ({
+      ariaLabel: "Search run history",
+      closeMobileWhenEmpty: true,
+      id: "schedule-history-search",
+      placeholder: "Search run history",
+      store: searchStore,
+    }),
+    [searchStore]
   )
   return (
-    <WorkspaceTable
-      getRowKey={historyRowKey}
-      getSearchText={historySearchText}
-      head={<ScheduleHistoryHead />}
-      items={entries}
-      renderEmpty={renderEmpty}
-      renderRow={renderRow}
-      searchStore={searchStore}
+    <DataTableToolbar
+      controls={
+        filteredScheduleName ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="type-control-sm flex max-w-32 min-w-0 gap-1.5 px-2 sm:max-w-52"
+            aria-label={`Clear history filter for ${filteredScheduleName}`}
+            onClick={onClearScheduleFilter}
+          >
+            <span className="truncate">{filteredScheduleName}</span>
+            <X className="shrink-0" />
+          </Button>
+        ) : null
+      }
+      leading={<ScheduleSyncButton />}
+      search={search}
     />
   )
 })
 
-const ScheduleHistoryHead = React.memo(function ScheduleHistoryHead() {
+const historyColumnHelper =
+  createDataTableColumnHelper<AutomationHistoryEntry>()
+const historyTableInitialState = {
+  sorting: [{ desc: true, id: "started" }],
+}
+
+const ScheduleHistoryTable = React.memo(function ScheduleHistoryTable({
+  entries,
+  resetKey,
+  scopeActive,
+  searchStore,
+  onOpenEntry,
+}: {
+  entries: Array<AutomationHistoryEntry>
+  resetKey: string
+  scopeActive: boolean
+  searchStore: DataTableSearchStore
+  onOpenEntry: (entry: AutomationHistoryEntry) => void
+}) {
+  const source = React.useMemo(
+    (): DataTableSource<AutomationHistoryEntry> => ({
+      body: { kind: "ready" },
+      refreshing: false,
+      resetKey,
+      rows: entries,
+    }),
+    [entries, resetKey]
+  )
+  const definition = React.useMemo(
+    () =>
+      defineDataTable({
+        ariaLabel: "Automation history",
+        columns: historyColumnHelper.columns([
+          historyColumnHelper.accessor(historyStatus, {
+            id: "status",
+            header: () => (
+              <span className="sr-only sm:not-sr-only">Status</span>
+            ),
+            sortFn: "text",
+            cell: ({ row }) => (
+              <>
+                <HistoryRowOpen entry={row.original} onOpen={onOpenEntry} />
+                <RunStatusDot status={historyStatus(row.original)} />
+              </>
+            ),
+            meta: dataTableColumnMeta(
+              { width: { base: "2.5rem", sm: "7rem" } },
+              {
+                cellClassName: "px-2 sm:px-3",
+                headerClassName: "px-2 sm:px-3",
+              }
+            ),
+          }),
+          historyColumnHelper.accessor("name", {
+            id: "automation",
+            header: "Automation",
+            sortFn: "text",
+            cell: ({ row }) => <HistoryAutomation entry={row.original} />,
+            meta: dataTableColumnMeta({
+              width: { base: "minmax(0,1fr)", md: "minmax(0,1.4fr)" },
+            }),
+          }),
+          historyColumnHelper.accessor((entry) => entry.targets.length, {
+            id: "targets",
+            header: "Targets",
+            sortFn: sortFn_basic,
+            cell: ({ row }) => (
+              <HistoryTargets
+                counts={row.original.targetCounts}
+                name={row.original.name}
+                relayName={row.original.relayName}
+                targets={row.original.targets}
+              />
+            ),
+            meta: dataTableColumnMeta({ hideBelow: "lg", width: "11rem" }),
+          }),
+          historyColumnHelper.accessor("startedAt", {
+            id: "started",
+            header: "Started",
+            sortFn: sortFn_basic,
+            cell: ({ row }) => (
+              <HistoryStarted entry={row.original} onOpen={onOpenEntry} />
+            ),
+            meta: dataTableColumnMeta({
+              width: { base: "7.5rem" },
+            }),
+          }),
+          historyColumnHelper.accessor("durationMs", {
+            id: "duration",
+            header: "Duration",
+            sortFn: sortFn_basic,
+            cell: ({ row }) => (
+              <DataTableTextCell
+                monospace
+                value={
+                  historyStatus(row.original) === "running"
+                    ? "—"
+                    : durationLabel(row.original.durationMs)
+                }
+              />
+            ),
+            meta: dataTableColumnMeta({ hideBelow: "xl", width: "8rem" }),
+          }),
+          historyColumnHelper.accessor("relayName", {
+            id: "relay",
+            header: "Relay",
+            sortFn: "text",
+            cell: ({ row }) => (
+              <HistoryRelay
+                relayId={row.original.relayId}
+                relayName={row.original.relayName}
+              />
+            ),
+            meta: dataTableColumnMeta({
+              hideBelow: "xl",
+              width: "minmax(10rem,0.8fr)",
+            }),
+          }),
+          historyColumnHelper.display({
+            id: "actions",
+            header: () => <span className="sr-only">Actions</span>,
+            enableSorting: false,
+            cell: ({ row }) => <HistoryActions entry={row.original} />,
+            // The whole cell sits above the row's open button, so a click
+            // that misses the menu doesn't open the run instead.
+            meta: dataTableColumnMeta(
+              { width: { base: "2.5rem", sm: "3rem" } },
+              {
+                cellClassName: "relative z-10 justify-end px-1 sm:px-2",
+                headerClassName: "px-1 sm:px-2",
+              }
+            ),
+          }),
+        ]),
+        getRowClassName: () => "relative cursor-pointer",
+        getRowId: historyRowKey,
+        model: { initialState: historyTableInitialState },
+        search: { fields: historySearchFields },
+        virtualization: true,
+      }),
+    [onOpenEntry]
+  )
   return (
-    <WorkspaceTableHead>
-      <WorkspaceTableHeading className="w-24 px-2 sm:w-32 sm:px-3">
-        Status
-      </WorkspaceTableHeading>
-      <WorkspaceTableHeading className="w-auto sm:w-[30%]">
-        Automation
-      </WorkspaceTableHeading>
-      <WorkspaceTableHeading className="hidden w-[24%] md:table-cell">
-        Started
-      </WorkspaceTableHeading>
-      <WorkspaceTableHeading className="hidden w-[16%] lg:table-cell">
-        Duration
-      </WorkspaceTableHeading>
-      <WorkspaceTableHeading className="hidden w-[14%] xl:table-cell">
-        Targets
-      </WorkspaceTableHeading>
-      <WorkspaceTableHeading className="hidden w-[18%] sm:table-cell">
-        Relay
-      </WorkspaceTableHeading>
-    </WorkspaceTableHead>
+    <DataTable
+      definition={definition}
+      emptyState={({ searchActive }) => (
+        <DataTableEmptyState
+          description={
+            <span className="block max-w-sm">
+              {scopeActive && !searchActive
+                ? "Completed and attempted runs in this scope will appear here."
+                : "Completed and attempted automation runs will appear here."}
+            </span>
+          }
+          icon={<Play className="size-6 text-muted-foreground/45" />}
+          title={
+            searchActive
+              ? "No runs match your search"
+              : scopeActive
+                ? "No runs in this scope"
+                : "No automation runs yet"
+          }
+        />
+      )}
+      searchStore={searchStore}
+      source={source}
+    />
   )
 })
 
-const ScheduleHistoryRow = React.memo(function ScheduleHistoryRow({
-  run,
+/**
+ * Covers the whole row, so a click anywhere but the automation link, the
+ * targets, or the start time opens the run. The row is `relative`, and those
+ * cells sit above this button.
+ */
+const HistoryRowOpen = React.memo(function HistoryRowOpen({
+  entry,
   onOpen,
 }: {
-  run: ScheduleHistoryRun
-  onOpen: (run: ScheduleHistoryRun) => void
+  entry: AutomationHistoryEntry
+  onOpen: (entry: AutomationHistoryEntry) => void
 }) {
-  const open = React.useCallback(() => onOpen(run), [onOpen, run])
   return (
-    <tr
-      role="button"
-      tabIndex={0}
-      aria-label={`View ${run.scheduleName} run from ${timestampLabel(new Date(run.startedAt), run.timezone)} details`}
-      className="cursor-pointer transition-colors hover:bg-accent/25 focus-visible:bg-accent/30 focus-visible:outline-none"
-      onClick={open}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault()
-          open()
-        }
-      }}
-    >
-      <WorkspaceTableCell className="px-2 sm:px-3">
-        <RunStatusDot status={run.status} />
-      </WorkspaceTableCell>
-      <WorkspaceTableCell>
-        <div className="min-w-0">
-          <p className="truncate text-xs font-semibold text-foreground">
-            {run.scheduleName}
-          </p>
-          <p className="type-meta truncate font-mono text-muted-foreground">
-            r{run.revision} · {run.status.replaceAll("_", " ")}
-          </p>
-        </div>
-      </WorkspaceTableCell>
-      <WorkspaceTableCell className="hidden md:table-cell">
-        <div className="min-w-0">
-          <p className="type-meta truncate text-foreground">
-            {timestampLabel(new Date(run.startedAt), run.timezone)}
-          </p>
-          <p className="type-meta truncate text-muted-foreground">
-            <RelativeTimeText date={new Date(run.startedAt)} />
-          </p>
-        </div>
-      </WorkspaceTableCell>
-      <WorkspaceTableCell className="hidden lg:table-cell">
-        <span className="type-meta font-mono text-foreground">
-          {durationLabel(run.finishedAt - run.startedAt)}
-        </span>
-      </WorkspaceTableCell>
-      <WorkspaceTableCell className="hidden xl:table-cell">
-        <span className="type-meta text-foreground">
-          {run.targetRuns.length}
-        </span>
-      </WorkspaceTableCell>
-      <WorkspaceTableCell className="hidden sm:table-cell">
-        <span className="type-meta block truncate font-mono text-muted-foreground">
-          {run.relayId}
-        </span>
-      </WorkspaceTableCell>
-    </tr>
+    <button
+      type="button"
+      aria-label={
+        entry.kind === "schedule"
+          ? `View ${entry.name} run from ${timestampLabel(new Date(entry.startedAt), entry.run.timezone)} details`
+          : `View the sync from ${entry.name}`
+      }
+      className="absolute inset-0 outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset"
+      onClick={() => onOpen(entry)}
+    />
   )
 })
+
+const HistoryAutomation = React.memo(function HistoryAutomation({
+  entry,
+}: {
+  entry: AutomationHistoryEntry
+}) {
+  const Icon = entry.kind === "schedule" ? ListTodo : FolderSync
+  const meta =
+    entry.kind === "schedule"
+      ? `Schedule · r${entry.run.revision}`
+      : entry.run.status === "error"
+        ? entry.run.message
+        : [
+            `Sync · ${syncTriggerLabel[entry.run.trigger]}`,
+            entry.run.changedCount === 0
+              ? "up to date"
+              : `${entry.run.changedCount} ${entry.run.changedCount === 1 ? "file" : "files"} updated`,
+            entry.run.message,
+          ]
+            .filter(Boolean)
+            .join(" · ")
+  return (
+    <Link
+      to={
+        entry.kind === "schedule"
+          ? "/automations/schedules"
+          : "/automations/sync"
+      }
+      search={automationScope}
+      className="group/automation-link relative z-10 flex max-w-full min-w-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+    >
+      <IdentityName
+        icon={<Icon className="size-4" aria-hidden="true" />}
+        meta={meta}
+        name={entry.name}
+        nameClassName="transition-colors group-hover/automation-link:text-primary"
+      />
+    </Link>
+  )
+})
+
+const HistoryRelay = React.memo(function HistoryRelay({
+  relayId,
+  relayName,
+}: {
+  relayId: string
+  relayName: string
+}) {
+  return (
+    <Link
+      to="/relay/$relayId"
+      params={{ relayId }}
+      className="group/relay-link relative z-10 flex max-w-full min-w-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+    >
+      <InstanceCard
+        instance={{ id: relayId, kind: "relay", relayId }}
+        meta={relayId.slice(0, 8)}
+        metaClassName="font-mono"
+        name={relayName}
+        nameClassName="transition-colors group-hover/relay-link:text-primary"
+        showFavorite={false}
+      />
+    </Link>
+  )
+})
+
+const HistoryActions = React.memo(function HistoryActions({
+  entry,
+}: {
+  entry: AutomationHistoryEntry
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          size="icon-sm"
+          variant="ghost"
+          aria-label={`More actions for ${entry.name}`}
+        >
+          <EllipsisVertical />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-44">
+        <CopyIdentifierMenuItem label="Run ID" value={entry.run.id} />
+        {entry.kind === "schedule" ? (
+          <CopyIdentifierMenuItem
+            label="Schedule ID"
+            value={entry.run.scheduleId}
+          />
+        ) : (
+          <CopyIdentifierMenuItem label="Sync ID" value={entry.run.syncId} />
+        )}
+        <CopyIdentifierMenuItem label="Relay ID" value={entry.relayId} />
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+})
+
+// Positioned so its full date shows on hover above the row's open button; a
+// click still opens the run.
+const HistoryStarted = React.memo(function HistoryStarted({
+  entry,
+  onOpen,
+}: {
+  entry: AutomationHistoryEntry
+  onOpen: (entry: AutomationHistoryEntry) => void
+}) {
+  return (
+    <span className="relative min-w-0" onClick={() => onOpen(entry)}>
+      <RelativeTime
+        className="type-meta block text-foreground"
+        timestamp={entry.startedAt}
+      />
+    </span>
+  )
+})
+
+const HistoryTargets = React.memo(function HistoryTargets({
+  counts,
+  name,
+  relayName,
+  targets,
+}: {
+  counts: InstanceKindCountValues
+  name: string
+  relayName: string
+  targets: ReadonlyArray<HistoryTarget>
+}) {
+  const [open, setOpen] = React.useState(false)
+  const close = React.useCallback(() => setOpen(false), [])
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label={`${targets.length} ${targets.length === 1 ? "target" : "targets"} for ${name}`}
+          className="type-meta relative z-10 -mx-1.5 flex h-8 min-w-0 items-center gap-3 rounded-md px-1.5 text-muted-foreground transition-colors outline-none hover:bg-muted/55 focus-visible:ring-2 focus-visible:ring-ring/40 data-[state=open]:bg-muted/55"
+        >
+          <InstanceKindCounts counts={counts} />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        aria-label="Targets"
+        align="start"
+        sideOffset={6}
+        className="w-72 max-w-[calc(100vw-1rem)] overflow-hidden p-0"
+      >
+        <HistoryTargetPicker
+          relayName={relayName}
+          targets={targets}
+          onNavigate={close}
+        />
+      </PopoverContent>
+    </Popover>
+  )
+})
+
+const noSelectedTargets: ReadonlySet<string> = new Set()
+
+// A run's targets all sit on the Relay that ran it.
+const HistoryTargetPicker = React.memo(function HistoryTargetPicker({
+  relayName,
+  targets,
+  onNavigate,
+}: {
+  relayName: string
+  targets: ReadonlyArray<HistoryTarget>
+  onNavigate: () => void
+}) {
+  const navigate = useNavigate()
+  const { data: servers } = useQuery({
+    ...relaySnapshotQueryOptions(),
+    select: selectHistoryTargetServers,
+  })
+  const items = React.useMemo(
+    () =>
+      targets.map((target) =>
+        historyTargetPickerItem(target, servers, relayName)
+      ),
+    [relayName, servers, targets]
+  )
+  const select = React.useCallback(
+    (item: InstancePickerItem) => {
+      onNavigate()
+      void navigate({ href: historyTargetHref(item.identity) })
+    },
+    [navigate, onNavigate]
+  )
+  return (
+    <InstancePickerContent
+      ariaLabel="Targets"
+      emptyMessage="No targets"
+      favoritesFilter={false}
+      includeKindGroups={false}
+      items={items}
+      selectedKeys={noSelectedTargets}
+      onSelect={select}
+    />
+  )
+})
+
+function historyTargetPickerItem(
+  target: HistoryTarget,
+  servers: ReadonlyMap<string, HistoryTargetServer> | undefined,
+  runRelayName: string
+): InstancePickerItem {
+  const server =
+    target.kind === "server"
+      ? servers?.get(`${target.relayId}:${target.id}`)
+      : undefined
+  const relayName = server?.relayName ?? runRelayName
+  const kindLabel =
+    target.kind === "server"
+      ? "Game Server"
+      : target.kind === "database"
+        ? "Database"
+        : target.kind === "app"
+          ? "App"
+          : "Relay"
+  return {
+    identity:
+      target.kind === "server"
+        ? {
+            brickId: server?.brickId,
+            id: target.id,
+            implementation: server?.implementation,
+            kind: "server",
+            relayId: target.relayId,
+          }
+        : target.kind === "relay"
+          ? {
+              id: target.relayId,
+              kind: "relay",
+              relayId: target.relayId,
+              source: "fleet",
+            }
+          : { id: target.id, kind: target.kind, relayId: target.relayId },
+    key: `${target.kind}:${target.relayId}:${target.id}`,
+    meta:
+      target.kind === "relay"
+        ? "Relay"
+        : `${server?.implementation ?? kindLabel} · ${relayName}`,
+    name: server?.name ?? target.name,
+    searchText: `${kindLabel} ${relayName} ${target.id}`,
+  }
+}
+
+// Each workspace route takes a full ID and redirects to its short form. A
+// game server's Relay-qualified ID names it even where short IDs collide.
+function historyTargetHref(identity: InstancePickerItem["identity"]) {
+  if (identity.kind === "server") {
+    return `/server/${encodeURIComponent(`${identity.relayId}-${identity.id}`)}`
+  }
+  if (identity.kind === "database") {
+    return `/db/${encodeURIComponent(identity.id)}`
+  }
+  if (identity.kind === "app") return `/app/${encodeURIComponent(identity.id)}`
+  return `/relay/${encodeURIComponent(identity.relayId)}`
+}
+
+interface HistoryTargetServer {
+  brickId?: string
+  implementation: string
+  name: string
+  relayName: string
+}
+
+function selectHistoryTargetServers(snapshot: RelaySnapshot) {
+  return new Map<string, HistoryTargetServer>(
+    snapshot.instances.map((instance) => [
+      `${instance.relayId}:${instance.id}`,
+      {
+        brickId: instance.brickId,
+        implementation: instance.implementation,
+        name: instance.name,
+        relayName: instance.relayName,
+      },
+    ])
+  )
+}
+
+function selectHistoryRelayNames(options: Array<ScheduleOption>) {
+  return new Map(options.map((option) => [option.relayId, option.relayName]))
+}
+
+function historyStatus(entry: AutomationHistoryEntry): ScheduleRun["status"] {
+  if (entry.kind === "schedule") return entry.run.status
+  return entry.run.status === "success" ? "succeeded" : "failed"
+}
 
 const ScheduleRunDialog = React.memo(function ScheduleRunDialog({
   run,
@@ -3431,6 +3814,8 @@ function scheduleSearchText(schedule: Schedule) {
   ].join(" ")
 }
 
+const historySearchFields = [historySearchText] as const
+
 function historyRowKey(entry: AutomationHistoryEntry) {
   return entry.kind === "schedule"
     ? `${entry.run.relayId}:${entry.run.id}`
@@ -3458,6 +3843,7 @@ function historySearchText(entry: AutomationHistoryEntry) {
     run.scheduleName,
     run.status,
     run.relayId,
+    entry.relayName,
     ...run.targetRuns.flatMap((targetRun) => [
       targetRun.target.name,
       targetRun.target.kind,

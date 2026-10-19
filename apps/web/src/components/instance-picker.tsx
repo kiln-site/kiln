@@ -54,6 +54,8 @@ export type InstancePickerGroup = "all" | InstancePickerKind
 interface InstancePickerContentProps {
   ariaLabel?: string
   emptyMessage?: string
+  /** Shows the "Show favorites only" filter. Off ignores a saved choice. */
+  favoritesFilter?: boolean
   items: ReadonlyArray<InstancePickerItem>
   /** Multi-select shows checkboxes and keeps the picker open on select. */
   multiple?: boolean
@@ -102,6 +104,7 @@ const emptyGroupList: ReadonlyArray<InstancePickerGroup> = []
 export const InstancePickerContent = React.memo(function InstancePickerContent({
   ariaLabel = "Instances",
   emptyMessage = "No instances found",
+  favoritesFilter = true,
   includeAllGroup = false,
   includeKindGroups = true,
   items: sourceItems,
@@ -131,10 +134,12 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
           ),
     [favoriteKeys, sourceItems]
   )
-  const availableFilters = React.useMemo(
-    () => availableInstancePickerFilters(items),
-    [items]
-  )
+  const availableFilters = React.useMemo(() => {
+    const filters = availableInstancePickerFilters(items)
+    return favoritesFilter
+      ? filters
+      : filters.filter((filter) => filter !== favoriteInstancePickerFilter)
+  }, [favoritesFilter, items])
   const typeFilters = React.useMemo(
     () => availableFilters.filter((filter) => filter.group === "type"),
     [availableFilters]
@@ -296,19 +301,21 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
             className="h-8 bg-input/14 pr-2 pl-8 text-sm"
           />
         </div>
-        <InstancePickerToolButton
-          active={favoritesOnly}
-          label="Show favorites only"
-          onClick={toggleFavorites}
-        >
-          <Star
-            className={cn(
-              "size-3.5",
-              favoritesOnly && "fill-amber-400 text-amber-400"
-            )}
-            aria-hidden="true"
-          />
-        </InstancePickerToolButton>
+        {favoritesFilter ? (
+          <InstancePickerToolButton
+            active={favoritesOnly}
+            label="Show favorites only"
+            onClick={toggleFavorites}
+          >
+            <Star
+              className={cn(
+                "size-3.5",
+                favoritesOnly && "fill-amber-400 text-amber-400"
+              )}
+              aria-hidden="true"
+            />
+          </InstancePickerToolButton>
+        ) : null}
         {typeFilters.length > 0 ? (
           <InstancePickerTypeMenu
             activeFilters={activeTypeFilters}

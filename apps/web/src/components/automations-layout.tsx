@@ -98,8 +98,8 @@ export const AutomationsShell = React.memo(function AutomationsShell({
 
   return (
     <ScheduleScopeContext.Provider value={scope}>
-      <div className="min-h-full bg-background">
-        <header className="mx-auto w-full max-w-[90rem] px-3 pt-3 sm:px-5">
+      <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
+        <header className="mx-auto w-full max-w-[90rem] shrink-0 px-3 pt-3 sm:px-5">
           <ServerScopePicker
             allLabel="All instances"
             ariaLabel="Accessible schedule targets"
@@ -114,7 +114,10 @@ export const AutomationsShell = React.memo(function AutomationsShell({
           />
           <AutomationsNavigation />
         </header>
-        <div data-slot="automations-content" className="[contain:paint]">
+        <div
+          data-slot="automations-content"
+          className="min-h-0 flex-1 overflow-y-auto [contain:paint]"
+        >
           {children}
         </div>
       </div>

@@ -18,15 +18,11 @@ import { Link } from "@tanstack/react-router"
 import {
   Activity,
   Ban,
-  Boxes,
-  Database,
   EllipsisVertical,
   KeyRound,
   Mail,
   MailCheck,
   Plus,
-  RadioTower,
-  Server,
   Trash2,
   UserCheck,
   Users,
@@ -63,6 +59,7 @@ import {
   DataTableToolbar,
   DataTableWorkspace,
 } from "@/components/data-table-workspace"
+import { InstanceKindCounts } from "@/components/instance-kind-counts"
 import { RelativeTime } from "@/components/relative-time"
 import { UserAccessDialog } from "@/components/user-access-dialog"
 import {
@@ -381,38 +378,6 @@ const UserState = memo(function UserState({ user }: { user: ManagedUser }) {
   )
 })
 
-// The same icons and colours as the infrastructure map's Relay cards.
-const holdingKinds = [
-  {
-    key: "relays",
-    icon: RadioTower,
-    tone: "text-primary",
-    one: "Relay",
-    other: "Relays",
-  },
-  {
-    key: "instances",
-    icon: Server,
-    tone: "text-emerald-300",
-    one: "game server",
-    other: "game servers",
-  },
-  {
-    key: "apps",
-    icon: Boxes,
-    tone: "text-red-300",
-    one: "app",
-    other: "apps",
-  },
-  {
-    key: "databases",
-    icon: Database,
-    tone: "text-blue-300",
-    one: "database",
-    other: "databases",
-  },
-] as const
-
 const UserHoldings = memo(function UserHoldings({
   user,
   onAction,
@@ -423,26 +388,7 @@ const UserHoldings = memo(function UserHoldings({
   const pending = user.access.pending + (user.invitedRole ? 1 : 0)
   return (
     <span className="type-meta flex min-w-0 items-center gap-3 text-muted-foreground">
-      {holdingKinds.map(({ key, icon: Icon, tone, one, other }) => {
-        const count = user.access[key]
-        const label = `${count} ${count === 1 ? one : other}`
-        return (
-          <span
-            key={key}
-            title={label}
-            // Not a target: clicks pass through to the row's manage button,
-            // which the dimmed counts' own layer would otherwise cover.
-            className={cn(
-              "pointer-events-none flex items-center gap-1 tabular-nums",
-              count ? "text-foreground" : "opacity-40"
-            )}
-          >
-            <Icon className={cn("size-3.5", tone)} aria-hidden="true" />
-            {count}
-            <span className="sr-only">{count === 1 ? one : other}</span>
-          </span>
-        )
-      })}
+      <InstanceKindCounts counts={user.access} />
       {pending ? (
         <span aria-hidden className="h-3.5 w-px shrink-0 bg-border" />
       ) : null}
