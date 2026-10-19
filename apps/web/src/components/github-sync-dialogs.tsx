@@ -1,9 +1,7 @@
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
-  ArrowRight,
   Boxes,
-  Building2,
   Check,
   ChevronDown,
   Folder,
@@ -13,7 +11,6 @@ import {
   Lock,
   Server,
   Trash2,
-  User,
 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
@@ -51,6 +48,7 @@ import { Textarea } from "@workspace/ui/components/textarea"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { GitHubMark } from "@/components/github-mark"
+import { SourceAccount } from "@/components/source-account"
 import {
   InstancePickerContent,
   type InstancePickerItem,
@@ -61,223 +59,25 @@ import {
   githubRepositoriesQueryOptions,
   queryKeys,
 } from "@/lib/query-options"
-import {
-  deleteGitHubConnection,
-  deleteGitHubSync,
-  saveGitHubSync,
-  startGitHubConnection,
-} from "@/server/github-sync"
+import { deleteGitHubSync, saveGitHubSync } from "@/server/github-sync"
 import type {
   GitHubConnectionView,
   GitHubSyncTarget,
   GitHubSyncView,
 } from "@/server/github-sync.server"
 
-export function ConnectGitHubDialog({
-  hearthUrl,
-  webhooksReachable,
-  onClose,
-}: {
-  hearthUrl: string
-  webhooksReachable: boolean
-  onClose: () => void
-}) {
-  const [account, setAccount] = React.useState<"organization" | "user">("user")
-  const [organization, setOrganization] = React.useState("")
-  const [name, setName] = React.useState(() => defaultAppName(hearthUrl))
-  const start = useMutation({
-    mutationFn: () =>
-      startGitHubConnection({
-        data: {
-          account,
-          name,
-          organization: account === "organization" ? organization : undefined,
-        },
-      }),
-    // GitHub creates an app from a manifest the browser posts to it.
-    onSuccess: (result) => {
-      const form = document.createElement("form")
-      form.method = "post"
-      form.action = result.action
-      const field = document.createElement("input")
-      field.type = "hidden"
-      field.name = "manifest"
-      field.value = result.manifest
-      form.append(field)
-      document.body.append(form)
-      form.submit()
-    },
-  })
-  const nameValid = name.trim().length >= 3 && name.trim().length <= 34
-  const canSubmit =
-    nameValid &&
-    (account === "user" || /^[A-Za-z0-9-]{1,39}$/u.test(organization.trim()))
-  // Stays busy while the browser leaves for GitHub.
-  const leaving = start.isPending || start.isSuccess
-
-  return (
-    <Dialog open onOpenChange={(open) => !open && !leaving && onClose()}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <GitHubMark />
-            Connect GitHub
-          </DialogTitle>
-          <DialogDescription>
-            Kiln creates a private GitHub App with the access it needs. You
-            install it and choose which repositories it can read.
-          </DialogDescription>
-        </DialogHeader>
-        <form
-          className="grid gap-5"
-          action={() => {
-            if (canSubmit && !leaving) start.mutate()
-          }}
-        >
-          <fieldset className="grid gap-2">
-            <legend className="mb-1.5 text-xs font-medium">
-              Where are your repositories?
-            </legend>
-            <div className="grid grid-cols-2 gap-2">
-              <AccountOption
-                checked={account === "user"}
-                description="Your own repositories"
-                icon={User}
-                label="Personal account"
-                onSelect={() => setAccount("user")}
-              />
-              <AccountOption
-                checked={account === "organization"}
-                description="Needs an org owner"
-                icon={Building2}
-                label="Organization"
-                onSelect={() => setAccount("organization")}
-              />
-            </div>
-            {account === "organization" ? (
-              <Field label="Organization" hint="As in github.com/name">
-                <Input
-                  autoFocus
-                  value={organization}
-                  placeholder="my-org"
-                  autoComplete="off"
-                  spellCheck={false}
-                  onChange={(event) =>
-                    setOrganization(event.currentTarget.value)
-                  }
-                />
-              </Field>
-            ) : null}
-          </fieldset>
-          <Field label="App name" hint="Unique on GitHub">
-            <Input
-              value={name}
-              maxLength={34}
-              autoComplete="off"
-              onChange={(event) => setName(event.currentTarget.value)}
-            />
-          </Field>
-          <dl className="grid gap-2 rounded-lg border bg-muted/30 p-3 text-xs">
-            <div className="flex gap-2">
-              <dt className="w-24 shrink-0 text-muted-foreground">Access</dt>
-              <dd>
-                Repository contents and metadata. Kiln only reads them for now;
-                write access is there for saving edits back later.
-              </dd>
-            </div>
-            <div className="flex gap-2">
-              <dt className="w-24 shrink-0 text-muted-foreground">Updates</dt>
-              <dd>
-                {webhooksReachable ? (
-                  "GitHub tells Kiln about every push."
-                ) : (
-                  <>
-                    GitHub can't reach{" "}
-                    <span className="font-mono">{new URL(hearthUrl).host}</span>
-                    , so Kiln checks for new commits every minute.
-                  </>
-                )}
-              </dd>
-            </div>
-          </dl>
-          {start.error ? <DialogError error={start.error} /> : null}
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={leaving}
-              onClick={onClose}
-            >
-              Cancel
-            </Button>
-            <Button type="submit" size="sm" disabled={!canSubmit || leaving}>
-              {leaving ? (
-                <LoaderCircle className="animate-spin" />
-              ) : (
-                <GitHubMark />
-              )}
-              Continue to GitHub
-              <ArrowRight />
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-function AccountOption({
-  checked,
-  description,
-  icon: Icon,
-  label,
-  onSelect,
-}: {
-  checked: boolean
-  description: string
-  icon: typeof User
-  label: string
-  onSelect: () => void
-}) {
-  return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={checked}
-      className={cn(
-        "flex items-start gap-2.5 rounded-lg border p-3 text-left transition-colors",
-        checked
-          ? "border-primary bg-primary/10"
-          : "hover:border-foreground/25 hover:bg-accent/30"
-      )}
-      onClick={onSelect}
-    >
-      <Icon
-        className={cn(
-          "mt-0.5 size-4 shrink-0",
-          checked ? "text-primary" : "text-muted-foreground"
-        )}
-      />
-      <span className="min-w-0">
-        <span className="block text-xs font-semibold">{label}</span>
-        <span className="type-support block text-muted-foreground">
-          {description}
-        </span>
-      </span>
-    </button>
-  )
-}
-
 export function GitHubSyncEditorDialog({
-  connections,
+  initialSourceId,
   initialTarget,
+  sources,
   sync,
   targets,
   onClose,
 }: {
-  connections: ReadonlyArray<GitHubConnectionView>
+  /** Chosen on Sources before opening. */
+  initialSourceId: string | null
   initialTarget: GitHubSyncTarget | null
+  sources: ReadonlyArray<GitHubConnectionView>
   sync: GitHubSyncView | null
   targets: ReadonlyArray<GitHubSyncTarget>
   onClose: () => void
@@ -285,17 +85,22 @@ export function GitHubSyncEditorDialog({
   const queryClient = useQueryClient()
   const usable = React.useMemo(
     () =>
-      connections.filter(
-        (connection) =>
-          connection.installation && !connection.installation.suspended
+      sources.filter(
+        (source) =>
+          (source.installation && !source.installation.suspended) ||
+          source.id === sync?.connectionId
       ),
-    [connections]
+    [sources, sync?.connectionId]
   )
   const [target, setTarget] = React.useState<GitHubSyncTarget | null>(
     sync?.target ?? initialTarget
   )
   const [connectionId, setConnectionId] = React.useState(
-    sync?.connectionId ?? usable[0]?.id ?? ""
+    () =>
+      sync?.connectionId ??
+      usable.find((source) => source.id === initialSourceId)?.id ??
+      usable[0]?.id ??
+      ""
   )
   const [repository, setRepository] = React.useState(sync?.repository ?? "")
   const [branch, setBranch] = React.useState(sync?.branch ?? "")
@@ -366,9 +171,10 @@ export function GitHubSyncEditorDialog({
         },
       }),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({
-        queryKey: queryKeys.github.overview,
-      })
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.github.overview }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.github.sources }),
+      ])
       showToast({
         message: sync ? "Sync saved; syncing now" : "Sync added; syncing now",
         type: "success",
@@ -400,33 +206,31 @@ export function GitHubSyncEditorDialog({
           }}
         >
           <div className="-mx-1 min-h-0 space-y-5 overflow-y-auto px-1 pb-1">
-            <EditorSection step={1} title="From GitHub">
-              {usable.length > 1 || (sync && !connection) ? (
-                <Field label="Account">
-                  <Select
-                    value={connectionId}
-                    disabled={sync !== null}
-                    onValueChange={(value) => {
-                      if (!value || value === connectionId) return
-                      setConnectionId(value)
-                      setRepository("")
-                      setBranch("")
-                      setSourcePath("")
-                    }}
-                  >
-                    <SelectTrigger className="w-full">
-                      <SelectValue placeholder="Choose an account" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {usable.map((item) => (
-                        <SelectItem key={item.id} value={item.id}>
-                          {item.installation?.accountLogin ?? item.appName}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </Field>
-              ) : null}
+            <EditorSection step={1} title="From">
+              <Field label="Source">
+                <Select
+                  value={connectionId}
+                  disabled={sync !== null}
+                  onValueChange={(value) => {
+                    if (!value || value === connectionId) return
+                    setConnectionId(value)
+                    setRepository("")
+                    setBranch("")
+                    setSourcePath("")
+                  }}
+                >
+                  <SelectTrigger className="h-10 w-full">
+                    <SelectValue placeholder="Choose a source" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {usable.map((item) => (
+                      <SelectItem key={item.id} value={item.id}>
+                        <SourceAccount source={item} showType={false} />
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
               <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_12rem]">
                 <Field label="Repository">
                   <RepositoryPicker
@@ -872,101 +676,6 @@ function TargetPicker({
   )
 }
 
-export function RemoveConnectionDialog({
-  connection,
-  onClose,
-}: {
-  connection: GitHubConnectionView
-  onClose: () => void
-}) {
-  const queryClient = useQueryClient()
-  const [uninstall, setUninstall] = React.useState(true)
-  const remove = useMutation({
-    mutationFn: () =>
-      deleteGitHubConnection({
-        data: {
-          id: connection.id,
-          uninstall: uninstall && !!connection.installation,
-        },
-      }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({
-        queryKey: queryKeys.github.overview,
-      })
-      showToast({ message: "GitHub disconnected", type: "success" })
-      onClose()
-    },
-  })
-  const account = connection.installation?.accountLogin ?? connection.appName
-
-  return (
-    <Dialog
-      open
-      onOpenChange={(open) => !open && !remove.isPending && onClose()}
-    >
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Disconnect {account}?</DialogTitle>
-          <DialogDescription>
-            {connection.syncCount > 0
-              ? `Its ${connection.syncCount} ${connection.syncCount === 1 ? "sync stops and is deleted" : "syncs stop and are deleted"}. `
-              : ""}
-            Files already synced stay where they are.
-          </DialogDescription>
-        </DialogHeader>
-        {connection.installation ? (
-          <label className="flex items-start justify-between gap-4 rounded-lg border p-3">
-            <span className="min-w-0">
-              <span className="block text-xs font-medium">
-                Uninstall from {connection.installation.accountLogin}
-              </span>
-              <span className="type-support block text-muted-foreground">
-                The app keeps its GitHub page;{" "}
-                <a
-                  href={connection.appUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-primary hover:underline"
-                >
-                  delete it there
-                </a>{" "}
-                if you won't reconnect.
-              </span>
-            </span>
-            <Switch checked={uninstall} onCheckedChange={setUninstall} />
-          </label>
-        ) : null}
-        {remove.error ? <DialogError error={remove.error} /> : null}
-        <DialogFooter>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={remove.isPending}
-            onClick={onClose}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            variant="destructive"
-            size="sm"
-            disabled={remove.isPending}
-            onClick={() => remove.mutate()}
-          >
-            {remove.isPending ? (
-              <LoaderCircle className="animate-spin" />
-            ) : (
-              <Trash2 />
-            )}
-            Disconnect
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
 export function DeleteSyncDialog({
   sync,
   onClose,
@@ -978,9 +687,10 @@ export function DeleteSyncDialog({
   const remove = useMutation({
     mutationFn: () => deleteGitHubSync({ data: { id: sync.id } }),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({
-        queryKey: queryKeys.github.overview,
-      })
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.github.overview }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.github.sources }),
+      ])
       showToast({ message: "Sync deleted", type: "success" })
       onClose()
     },
@@ -1087,9 +797,4 @@ function DialogError({ error }: { error: Error }) {
 
 function targetKey(target: Pick<GitHubSyncTarget, "id" | "kind" | "relayId">) {
   return `${target.kind}:${target.relayId}:${target.id}`
-}
-
-function defaultAppName(hearthUrl: string) {
-  const host = new URL(hearthUrl).hostname.split(".")[0] ?? "hearth"
-  return `Kiln ${host}`.slice(0, 34)
 }

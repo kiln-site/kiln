@@ -19,6 +19,7 @@ import {
   listGitHubBranchesEffect,
   listGitHubInstallationsEffect,
   listGitHubRepositoriesEffect,
+  countGitHubRepositoriesEffect,
   type GitHubInstallation,
 } from "@/effect/github-api"
 import {
@@ -87,6 +88,7 @@ export interface GitHubConnectionView {
   appOwnerLogin: string
   appSlug: string
   appUrl: string
+  deploymentCount: number
   id: string
   installUrl: string
   installation: GitHubInstallationRecord | null
@@ -96,6 +98,8 @@ export interface GitHubConnectionView {
   settingsUrl: string
   /** Null when the viewer owns it. */
   ownerName: string | null
+  /** Where the source lives; GitHub is the only one so far. */
+  provider: "github"
   syncCount: number
   webhookActive: boolean
 }
@@ -158,16 +162,8 @@ export async function getGitHubSyncOverviewHandler() {
   const targetsByKey = new Map(
     allTargets.map((target) => [targetKey(target), target])
   )
-  const visibleConnections = connections.filter(
-    (connection) => admin || connection.ownerUserId === user.id
-  )
   const connectionNames = new Map(
     connections.map((connection) => [connection.id, connectionName(connection)])
-  )
-  const ownerNames = await userNames(
-    visibleConnections
-      .filter((connection) => connection.ownerUserId !== user.id)
-      .map((connection) => connection.ownerUserId)
   )
   const syncViews = syncs.flatMap((sync): Array<GitHubSyncView> => {
     const kind = sync.resourceKind === "app" ? "app" : "server"
@@ -195,6 +191,55 @@ export async function getGitHubSyncOverviewHandler() {
       },
     ]
   })
+  return {
+    sources: await sourceViews(user, connections, syncs),
+    syncs: syncViews,
+    targets: allTargets.filter((target) => allows(target, true)),
+  }
+}
+
+/** The sources the viewer can see and use, for Infrastructure → Sources. */
+export async function getGitHubSourcesHandler() {
+  const user = await requireEligibleResourceUser()
+  const [connections, syncs] = await Promise.all([
+    runAppEffect("github.connections.load", loadGitHubConnectionsEffect()),
+    runAppEffect("github.syncs.load", loadGitHubSyncsEffect()),
+  ])
+  return {
+    hearthUrl: kilnPublicUrl().origin,
+    sources: await sourceViews(user, connections, syncs),
+    webhooksReachable: githubCanReach(kilnPublicUrl()),
+  }
+}
+
+/**
+ * How many repositories a source can read. Separate from the list so the
+ * table never waits on GitHub.
+ */
+export async function getGitHubSourceRepositoryCountHandler(data: {
+  id: string
+}) {
+  const user = await requireEligibleResourceUser()
+  const token = await connectionToken(user, data.id)
+  return runAppEffect(
+    "github.repositories.count",
+    countGitHubRepositoriesEffect(token)
+  )
+}
+
+async function sourceViews(
+  user: AuthenticatedUser,
+  connections: ReadonlyArray<GitHubConnection>,
+  syncs: ReadonlyArray<GitHubSync>
+): Promise<Array<GitHubConnectionView>> {
+  const visible = connections.filter(
+    (connection) => isPlatformAdmin(user) || connection.ownerUserId === user.id
+  )
+  const ownerNames = await userNames(
+    visible
+      .filter((connection) => connection.ownerUserId !== user.id)
+      .map((connection) => connection.ownerUserId)
+  )
   const syncCounts = new Map<string, number>()
   for (const sync of syncs) {
     syncCounts.set(
@@ -202,31 +247,28 @@ export async function getGitHubSyncOverviewHandler() {
       (syncCounts.get(sync.connectionId) ?? 0) + 1
     )
   }
-  return {
-    connections: visibleConnections.map((connection): GitHubConnectionView => ({
-      appName: connection.appName,
-      appOwnerLogin: connection.appOwnerLogin,
-      appSlug: connection.appSlug,
-      appUrl: connection.appUrl,
-      id: connection.id,
-      installUrl: installUrl(connection.appSlug),
-      installation: connection.installation,
-      manageUrl: connection.installation
-        ? installationSettingsUrl(connection.installation)
-        : null,
-      settingsUrl: appSettingsUrl(connection),
-      ownerName:
-        connection.ownerUserId === user.id
-          ? null
-          : (ownerNames.get(connection.ownerUserId) ?? "Another user"),
-      syncCount: syncCounts.get(connection.id) ?? 0,
-      webhookActive: connection.webhookActive,
-    })),
-    hearthUrl: kilnPublicUrl().origin,
-    syncs: syncViews,
-    targets: allTargets.filter((target) => allows(target, true)),
-    webhooksReachable: githubCanReach(kilnPublicUrl()),
-  }
+  return visible.map((connection) => ({
+    appName: connection.appName,
+    appOwnerLogin: connection.appOwnerLogin,
+    appSlug: connection.appSlug,
+    appUrl: connection.appUrl,
+    // Auto deployments from a source aren't built yet.
+    deploymentCount: 0,
+    id: connection.id,
+    installUrl: installUrl(connection.appSlug),
+    installation: connection.installation,
+    manageUrl: connection.installation
+      ? installationSettingsUrl(connection.installation)
+      : null,
+    ownerName:
+      connection.ownerUserId === user.id
+        ? null
+        : (ownerNames.get(connection.ownerUserId) ?? "Another user"),
+    provider: "github",
+    settingsUrl: appSettingsUrl(connection),
+    syncCount: syncCounts.get(connection.id) ?? 0,
+    webhookActive: connection.webhookActive,
+  }))
 }
 
 export async function startGitHubConnectionHandler(
@@ -335,7 +377,7 @@ export async function completeGitHubInstallation(input: {
     if (installation._tag === "None") continue
     if (installation.value.app_id !== connection.appId) continue
     await saveInstallation(connection.id, installation.value)
-    return `/automations/sync?connected=${connection.id}`
+    return `/infra/sources?connected=${connection.id}`
   }
   throw new Error(
     "This installation doesn't belong to a GitHub App you connected"

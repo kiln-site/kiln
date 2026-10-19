@@ -5,6 +5,8 @@ import { z } from "zod"
 import {
   deleteGitHubConnectionHandler,
   deleteGitHubSyncHandler,
+  getGitHubSourceRepositoryCountHandler,
+  getGitHubSourcesHandler,
   getGitHubSyncOverviewHandler,
   listGitHubBranchesHandler,
   listGitHubFoldersHandler,
@@ -104,6 +106,14 @@ export type SaveGitHubSyncInput = z.infer<typeof saveSyncInputSchema>
 export const getGitHubSyncOverview = createServerFn({ method: "GET" }).handler(
   () => getGitHubSyncOverviewHandler()
 )
+
+export const getGitHubSources = createServerFn({ method: "GET" }).handler(() =>
+  getGitHubSourcesHandler()
+)
+
+export const getGitHubSourceRepositoryCount = createServerFn({ method: "GET" })
+  .validator(connectionInputSchema)
+  .handler(({ data }) => getGitHubSourceRepositoryCountHandler(data))
 
 // Returns the manifest the browser posts to GitHub to create the app.
 export const startGitHubConnection = createServerFn({ method: "POST" })

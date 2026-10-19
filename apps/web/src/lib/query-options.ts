@@ -30,6 +30,8 @@ import {
   listBrickCatalogs,
 } from "@/server/brick-catalogs"
 import {
+  getGitHubSourceRepositoryCount,
+  getGitHubSources,
   getGitHubSyncOverview,
   listGitHubBranches,
   listGitHubFolders,
@@ -171,6 +173,9 @@ export const queryKeys = {
     overview: ["github-sync", "overview"] as const,
     repositories: (connectionId: string) =>
       ["github-sync", "repositories", connectionId] as const,
+    repositoryCount: (connectionId: string) =>
+      ["github-sync", "repository-count", connectionId] as const,
+    sources: ["github-sync", "sources"] as const,
   },
   hearthEdge: ["hearth", "edge"] as const,
   servers: {
@@ -972,6 +977,23 @@ export function githubSyncOverviewQueryOptions() {
   return queryOptions({
     queryKey: queryKeys.github.overview,
     queryFn: () => getGitHubSyncOverview(),
+  })
+}
+
+export function githubSourcesQueryOptions() {
+  return queryOptions({
+    queryKey: queryKeys.github.sources,
+    queryFn: () => getGitHubSources(),
+  })
+}
+
+export function githubSourceRepositoryCountQueryOptions(connectionId: string) {
+  return queryOptions({
+    queryKey: queryKeys.github.repositoryCount(connectionId),
+    queryFn: () =>
+      getGitHubSourceRepositoryCount({ data: { id: connectionId } }),
+    retry: false,
+    staleTime: 60_000,
   })
 }
 

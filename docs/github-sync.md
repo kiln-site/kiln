@@ -1,15 +1,18 @@
 # GitHub sync
 
 People keep config files in a GitHub repository and Kiln copies them into a
-game server or app. It lives under **Automations → Sync**.
+game server or app. Accounts are added as **sources** under
+**Infrastructure → Sources**, and syncs that read from them live under
+**Automations → Sync**. Sources are meant to feed auto deployments too, and
+other providers later; the code still calls them GitHub connections.
 
-## Connecting GitHub
+## Adding a GitHub source
 
 Each connection is a private GitHub App that Kiln creates from a
 [manifest](https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-from-a-manifest),
 so nobody pastes keys:
 
-1. **Connect GitHub** posts the manifest to GitHub for a personal account or
+1. **Add source** posts the manifest to GitHub for a personal account or
    an organization. The person confirms the app's name there.
 2. GitHub redirects to `/api/github/manifest` with a code. Hearth exchanges it
    for the app's ID, private key, client secret, and webhook secret, stores
@@ -17,7 +20,8 @@ so nobody pastes keys:
    install the app.
 3. After installing, GitHub redirects to `/api/github/setup` with the
    installation ID. Hearth looks it up with the app's own credentials, so an
-   installation ID from someone else's app is refused.
+   installation ID from someone else's app is refused, and the person lands
+   back on Sources.
 
 A signed, expiring state value ties both redirects to the person who started
 the flow. Someone can connect several accounts; each is its own app. A

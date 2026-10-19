@@ -30,7 +30,7 @@ export async function githubSetupRedirect(
           ? cause.message
           : "Kiln couldn't finish connecting GitHub"
       return redirect(
-        `/automations/sync?githubError=${encodeURIComponent(message)}`
+        `/infra/sources?githubError=${encodeURIComponent(message)}`
       )
     }
   )

@@ -180,7 +180,7 @@ describeMysql("GitHub installation setup", () => {
           })
         )
 
-        assert.strictEqual(next, `/automations/sync?connected=${connectionId}`)
+        assert.strictEqual(next, `/infra/sources?connected=${connectionId}`)
         assert.deepEqual(yield* installationIds, [installationId + 1])
       })
     )

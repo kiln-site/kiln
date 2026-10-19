@@ -7,6 +7,7 @@ import {
   Database,
   Folder,
   FolderDown,
+  FolderGit2,
   Globe2,
   History,
   LayoutDashboard,
@@ -47,6 +48,7 @@ export type InfrastructureDestinationAccess =
   | "instance-read"
   | "manage-relays"
   | "platform-admin"
+  | "sources"
 
 export interface NavigationAccessCapabilities {
   canManageAccess: boolean
@@ -125,10 +127,18 @@ export const infrastructureDestinations = [
     label: "Domains",
     to: "/infra/domains",
   },
+  {
+    access: "sources",
+    group: "sources",
+    icon: FolderGit2,
+    keywords: ["infrastructure", "github", "git", "repositories"],
+    label: "Sources",
+    to: "/infra/sources",
+  },
 ] as const satisfies ReadonlyArray<
   NavigationDestination & {
     access: InfrastructureDestinationAccess
-    group: "network" | "overview" | "resources"
+    group: "network" | "overview" | "resources" | "sources"
   }
 >
 
@@ -612,6 +622,19 @@ export function canAccessInfrastructureDestination(
   }
   if (destination.access === "platform-admin") {
     return capabilities.isPlatformAdmin
+  }
+  if (destination.access === "sources") {
+    // Sources feed syncs, which need someone who can edit files somewhere.
+    // Each person's sources are their own.
+    return (
+      capabilities.isPlatformAdmin ||
+      capabilities.canManageRelays ||
+      hasScopedPermission(capabilities, "instance.files.write", [
+        "instance",
+        "relay",
+      ]) ||
+      hasScopedPermission(capabilities, "app.files.write", ["relay"])
+    )
   }
   if (destination.access === "app-read") {
     return hasScopedPermission(capabilities, "app.read", ["relay"])

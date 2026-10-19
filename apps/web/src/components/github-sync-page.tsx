@@ -6,7 +6,6 @@ import {
 } from "@tanstack/react-query"
 import { Link, useNavigate, useSearch } from "@tanstack/react-router"
 import {
-  ArrowRight,
   Boxes,
   CircleAlert,
   CircleCheck,
@@ -15,7 +14,6 @@ import {
   EllipsisVertical,
   ExternalLink,
   FolderGit2,
-  ImageUp,
   GitBranch,
   LoaderCircle,
   Pencil,
@@ -23,13 +21,11 @@ import {
   RefreshCw,
   Search,
   Server,
-  Settings2,
   Trash2,
   TriangleAlert,
   Zap,
 } from "lucide-react"
 
-import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import {
   DropdownMenu,
@@ -47,7 +43,6 @@ import {
 } from "@workspace/ui/components/tooltip"
 import { cn } from "@workspace/ui/lib/utils"
 
-import kilnAppIcon from "@/assets/branding/app-icon-512.png"
 import { GitHubMark } from "@/components/github-mark"
 import { RelativeTime } from "@/components/relative-time"
 import {
@@ -65,35 +60,22 @@ import {
 } from "@/components/workspace-table"
 import { forkPromise } from "@/effect/promise"
 import { githubSyncOverviewQueryOptions, queryKeys } from "@/lib/query-options"
-import { refreshGitHubConnection, runGitHubSync } from "@/server/github-sync"
-import type {
-  GitHubConnectionView,
-  GitHubSyncTarget,
-  GitHubSyncView,
-} from "@/server/github-sync.server"
+import { runGitHubSync } from "@/server/github-sync"
+import type { GitHubSyncView } from "@/server/github-sync.server"
 
 // The dialogs load on first use; idle time warms them so opening one
 // doesn't wait on the network.
 const loadDialogs = () => import("@/components/github-sync-dialogs")
-const ConnectGitHubDialog = React.lazy(() =>
-  loadDialogs().then((module) => ({ default: module.ConnectGitHubDialog }))
-)
 const GitHubSyncEditorDialog = React.lazy(() =>
   loadDialogs().then((module) => ({ default: module.GitHubSyncEditorDialog }))
-)
-const RemoveConnectionDialog = React.lazy(() =>
-  loadDialogs().then((module) => ({ default: module.RemoveConnectionDialog }))
 )
 const DeleteSyncDialog = React.lazy(() =>
   loadDialogs().then((module) => ({ default: module.DeleteSyncDialog }))
 )
 
 type OpenDialog =
-  | { kind: "connect" }
-  | { kind: "create"; target: GitHubSyncTarget | null }
   | { kind: "delete"; sync: GitHubSyncView }
   | { kind: "edit"; sync: GitHubSyncView }
-  | { kind: "remove"; connection: GitHubConnectionView }
 
 export const GitHubSyncPage = React.memo(function GitHubSyncPage() {
   const { data } = useSuspenseQuery({
@@ -103,7 +85,16 @@ export const GitHubSyncPage = React.memo(function GitHubSyncPage() {
   const scope = useScheduleScope()
   const [searchStore] = React.useState(createWorkspaceTableSearchStore)
   const [dialog, setDialog] = React.useState<OpenDialog | null>(null)
-  useSetupResultToast()
+  // Creating lives in the URL, so Sources can open it with a source chosen.
+  const creating = useSearch({
+    from: "/_app/automations/sync",
+    select: (search) => search.create === true,
+  })
+  const preselectedSource = useSearch({
+    from: "/_app/automations/sync",
+    select: (search) => search.source,
+  })
+  const navigate = useNavigate({ from: "/automations/sync" })
 
   React.useEffect(() => {
     const idle = window.requestIdleCallback?.(() => void loadDialogs())
@@ -131,19 +122,25 @@ export const GitHubSyncPage = React.memo(function GitHubSyncPage() {
         : null,
     [data.targets, scope]
   )
-  const installed = data.connections.some(
-    (connection) =>
-      connection.installation && !connection.installation.suspended
+  const hasSource = data.sources.some(
+    (source) => source.installation && !source.installation.suspended
   )
-  const canCreate = installed && data.targets.length > 0
-  const openConnect = React.useCallback(
-    () => setDialog({ kind: "connect" }),
-    []
+  const canCreate = hasSource && data.targets.length > 0
+  const setCreating = React.useCallback(
+    (open: boolean) => {
+      void navigate({
+        replace: !open,
+        search: (previous) => ({
+          ...previous,
+          create: open ? true : undefined,
+          source: undefined,
+        }),
+      })
+    },
+    [navigate]
   )
-  const openCreate = React.useCallback(
-    () => setDialog({ kind: "create", target: scopedTarget }),
-    [scopedTarget]
-  )
+  const openCreate = React.useCallback(() => setCreating(true), [setCreating])
+  const closeCreate = React.useCallback(() => setCreating(false), [setCreating])
   const openEdit = React.useCallback(
     (sync: GitHubSyncView) => setDialog({ kind: "edit", sync }),
     []
@@ -152,27 +149,16 @@ export const GitHubSyncPage = React.memo(function GitHubSyncPage() {
     (sync: GitHubSyncView) => setDialog({ kind: "delete", sync }),
     []
   )
-  const openRemove = React.useCallback(
-    (connection: GitHubConnectionView) =>
-      setDialog({ connection, kind: "remove" }),
-    []
-  )
   const close = React.useCallback(() => setDialog(null), [])
 
   return (
-    <div className="mx-auto w-full max-w-[90rem] space-y-4 px-3 pb-10 sm:px-5">
-      <GitHubConnections
-        connections={data.connections}
-        webhooksReachable={data.webhooksReachable}
-        onConnect={openConnect}
-        onRemove={openRemove}
-      />
+    <div className="mx-auto w-full max-w-[90rem] px-3 pb-10 sm:px-5">
       <section className="overflow-hidden rounded-xl border bg-card/45 [contain:paint]">
         <SyncToolbar
           canCreate={canCreate}
           createBlockedReason={
-            !installed
-              ? "Connect GitHub first"
+            !hasSource
+              ? "Add a source in Infrastructure first"
               : data.targets.length === 0
                 ? "You can't edit files on any game server or app"
                 : null
@@ -182,7 +168,7 @@ export const GitHubSyncPage = React.memo(function GitHubSyncPage() {
         />
         <SyncTable
           canCreate={canCreate}
-          connected={data.connections.length > 0}
+          hasSource={hasSource}
           hasTargets={data.targets.length > 0}
           scopeActive={scope !== null}
           searchStore={searchStore}
@@ -194,18 +180,22 @@ export const GitHubSyncPage = React.memo(function GitHubSyncPage() {
       </section>
 
       <React.Suspense fallback={null}>
-        {dialog?.kind === "connect" ? (
-          <ConnectGitHubDialog
-            hearthUrl={data.hearthUrl}
-            webhooksReachable={data.webhooksReachable}
-            onClose={close}
+        {creating && canCreate ? (
+          <GitHubSyncEditorDialog
+            initialSourceId={preselectedSource ?? null}
+            initialTarget={scopedTarget}
+            sources={data.sources}
+            sync={null}
+            targets={data.targets}
+            onClose={closeCreate}
           />
         ) : null}
-        {dialog?.kind === "create" || dialog?.kind === "edit" ? (
+        {dialog?.kind === "edit" ? (
           <GitHubSyncEditorDialog
-            connections={data.connections}
-            initialTarget={dialog.kind === "create" ? dialog.target : null}
-            sync={dialog.kind === "edit" ? dialog.sync : null}
+            initialSourceId={null}
+            initialTarget={null}
+            sources={data.sources}
+            sync={dialog.sync}
             targets={data.targets}
             onClose={close}
           />
@@ -213,297 +203,8 @@ export const GitHubSyncPage = React.memo(function GitHubSyncPage() {
         {dialog?.kind === "delete" ? (
           <DeleteSyncDialog sync={dialog.sync} onClose={close} />
         ) : null}
-        {dialog?.kind === "remove" ? (
-          <RemoveConnectionDialog
-            connection={dialog.connection}
-            onClose={close}
-          />
-        ) : null}
       </React.Suspense>
     </div>
-  )
-})
-
-/** GitHub sends the browser back here with the outcome of connecting. */
-function useSetupResultToast() {
-  const navigate = useNavigate({ from: "/automations/sync" })
-  const connected = useSearch({
-    from: "/_app/automations/sync",
-    select: (search) => search.connected,
-  })
-  const error = useSearch({
-    from: "/_app/automations/sync",
-    select: (search) => search.githubError,
-  })
-  React.useEffect(() => {
-    if (!connected && !error) return
-    // One toast per outcome, however often the effect runs before the
-    // search clears (Strict Mode runs it twice in development).
-    if (error) {
-      showToast({ id: `github-setup:${error}`, message: error, type: "error" })
-    } else {
-      showToast({
-        id: `github-setup:${connected}`,
-        message: "GitHub connected",
-        type: "success",
-      })
-    }
-    void navigate({
-      replace: true,
-      search: (previous) => ({
-        ...previous,
-        connected: undefined,
-        githubError: undefined,
-      }),
-    })
-  }, [connected, error, navigate])
-}
-
-const GitHubConnections = React.memo(function GitHubConnections({
-  connections,
-  webhooksReachable,
-  onConnect,
-  onRemove,
-}: {
-  connections: ReadonlyArray<GitHubConnectionView>
-  webhooksReachable: boolean
-  onConnect: () => void
-  onRemove: (connection: GitHubConnectionView) => void
-}) {
-  return (
-    <section className="overflow-hidden rounded-xl border bg-card/45 [contain:paint]">
-      <div className="flex flex-wrap items-center gap-3 border-b bg-background/25 p-3">
-        <div className="grid size-9 shrink-0 place-items-center rounded-lg border bg-background">
-          <GitHubMark />
-        </div>
-        <div className="min-w-0 flex-1">
-          <h2 className="text-sm font-semibold">GitHub</h2>
-          <p className="type-support text-muted-foreground">
-            Keep config files in a repository and copy them into game servers
-            and apps{webhooksReachable ? " on every push" : ""}.
-          </p>
-        </div>
-        {connections.length > 0 ? (
-          <Button size="sm" variant="outline" onClick={onConnect}>
-            <Plus />
-            Add account
-          </Button>
-        ) : null}
-      </div>
-      {connections.length === 0 ? (
-        <GitHubConnectSteps onConnect={onConnect} />
-      ) : (
-        <ul className="divide-y">
-          {connections.map((connection) => (
-            <GitHubConnectionRow
-              key={connection.id}
-              connection={connection}
-              onRemove={onRemove}
-            />
-          ))}
-        </ul>
-      )}
-    </section>
-  )
-})
-
-const connectSteps = [
-  {
-    description: "Kiln fills in a private GitHub App for you.",
-    title: "Create the app",
-  },
-  {
-    description: "Install it on your account or an organization.",
-    title: "Choose repositories",
-  },
-  {
-    description: "Pick a repository folder for each game server or app.",
-    title: "Add syncs",
-  },
-] as const
-
-function GitHubConnectSteps({ onConnect }: { onConnect: () => void }) {
-  return (
-    <div className="grid gap-4 p-4 sm:p-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
-      <ol className="grid gap-3 sm:grid-cols-3">
-        {connectSteps.map((step, index) => (
-          <li key={step.title} className="flex gap-3">
-            <span className="type-code grid size-6 shrink-0 place-items-center rounded-full border bg-background text-muted-foreground">
-              {index + 1}
-            </span>
-            <span className="min-w-0">
-              <span className="block text-xs font-semibold">{step.title}</span>
-              <span className="type-support block text-muted-foreground">
-                {step.description}
-              </span>
-            </span>
-          </li>
-        ))}
-      </ol>
-      <Button size="sm" onClick={onConnect}>
-        <GitHubMark />
-        Connect GitHub
-        <ArrowRight />
-      </Button>
-    </div>
-  )
-}
-
-const GitHubConnectionRow = React.memo(function GitHubConnectionRow({
-  connection,
-  onRemove,
-}: {
-  connection: GitHubConnectionView
-  onRemove: (connection: GitHubConnectionView) => void
-}) {
-  const queryClient = useQueryClient()
-  const refresh = useMutation({
-    mutationFn: () => refreshGitHubConnection({ data: { id: connection.id } }),
-    onSuccess: async (result) => {
-      await queryClient.invalidateQueries({
-        queryKey: queryKeys.github.overview,
-      })
-      showToast({
-        message: result.installed
-          ? "GitHub connection refreshed"
-          : "The app isn't installed on an account yet",
-        type: result.installed ? "success" : "warning",
-      })
-    },
-    onError: (cause) =>
-      showToast({
-        message: errorMessage(cause, "GitHub couldn't be reached"),
-        type: "error",
-      }),
-  })
-  const installation = connection.installation
-
-  return (
-    <li className="flex flex-wrap items-center gap-3 px-3 py-2.5 sm:flex-nowrap">
-      {installation?.accountAvatarUrl ? (
-        <img
-          alt=""
-          src={`${installation.accountAvatarUrl}${installation.accountAvatarUrl.includes("?") ? "&" : "?"}s=64`}
-          className={cn(
-            "size-8 shrink-0 border bg-background",
-            installation.accountType === "Organization"
-              ? "rounded-md"
-              : "rounded-full"
-          )}
-          loading="lazy"
-        />
-      ) : (
-        <div className="grid size-8 shrink-0 place-items-center rounded-full border bg-background text-muted-foreground">
-          <GitHubMark className="size-3.5" />
-        </div>
-      )}
-      <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 items-center gap-2">
-          <p className="truncate text-xs font-semibold">
-            {installation ? installation.accountLogin : connection.appName}
-          </p>
-          {installation ? (
-            <Badge variant="outline" className="shrink-0">
-              {installation.accountType === "Organization"
-                ? "Organization"
-                : "Personal"}
-            </Badge>
-          ) : null}
-          {!installation ? (
-            <Badge
-              variant="outline"
-              className="shrink-0 border-amber-500/40 text-amber-500"
-            >
-              Not installed
-            </Badge>
-          ) : installation.suspended ? (
-            <Badge variant="destructive" className="shrink-0">
-              Suspended
-            </Badge>
-          ) : null}
-        </div>
-        <p className="type-support truncate text-muted-foreground">
-          {[
-            installation
-              ? installation.repositorySelection === "all"
-                ? "All repositories"
-                : "Selected repositories"
-              : "Install the app to choose repositories",
-            connection.webhookActive ? "Syncs on push" : "Checks every minute",
-            `${connection.syncCount} ${connection.syncCount === 1 ? "sync" : "syncs"}`,
-            connection.ownerName
-              ? `Connected by ${connection.ownerName}`
-              : null,
-          ]
-            .filter(Boolean)
-            .join(" · ")}
-        </p>
-      </div>
-      <div className="ml-auto flex shrink-0 items-center gap-1">
-        {installation ? (
-          <Button asChild size="sm" variant="ghost">
-            <a
-              href={connection.manageUrl ?? connection.appUrl}
-              target="_blank"
-              rel="noreferrer"
-            >
-              <Settings2 />
-              Repository access
-            </a>
-          </Button>
-        ) : (
-          <Button asChild size="sm">
-            <a href={connection.installUrl}>
-              <GitHubMark />
-              Install on GitHub
-            </a>
-          </Button>
-        )}
-        <DropdownMenu>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  size="icon-sm"
-                  variant="ghost"
-                  aria-label={`More actions for ${connection.appName}`}
-                >
-                  {refresh.isPending ? (
-                    <LoaderCircle className="animate-spin" />
-                  ) : (
-                    <EllipsisVertical />
-                  )}
-                </Button>
-              </DropdownMenuTrigger>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">More actions</TooltipContent>
-          </Tooltip>
-          <DropdownMenuContent align="end" className="min-w-52">
-            <DropdownMenuItem
-              disabled={refresh.isPending}
-              onSelect={() => refresh.mutate()}
-            >
-              <RefreshCw /> Check installation
-            </DropdownMenuItem>
-            <DropdownMenuItem asChild>
-              <a href={connection.appUrl} target="_blank" rel="noreferrer">
-                <ExternalLink /> View app on GitHub
-              </a>
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => openKilnLogoUpload(connection)}>
-              <ImageUp /> Use the Kiln logo
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              className="text-destructive focus:text-destructive"
-              onSelect={() => onRemove(connection)}
-            >
-              <Trash2 /> Disconnect
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-    </li>
   )
 })
 
@@ -564,7 +265,7 @@ const SyncToolbar = React.memo(function SyncToolbar({
 
 const SyncTable = React.memo(function SyncTable({
   canCreate,
-  connected,
+  hasSource,
   hasTargets,
   scopeActive,
   searchStore,
@@ -574,7 +275,7 @@ const SyncTable = React.memo(function SyncTable({
   onEdit,
 }: {
   canCreate: boolean
-  connected: boolean
+  hasSource: boolean
   hasTargets: boolean
   scopeActive: boolean
   searchStore: WorkspaceTableSearchStore
@@ -603,8 +304,8 @@ const SyncTable = React.memo(function SyncTable({
         <p className="type-support mt-1 max-w-sm text-muted-foreground">
           {searchActive
             ? "Try a repository, branch, folder, or game server name."
-            : !connected
-              ? "Connect GitHub above, then copy a repository folder into a game server or app."
+            : !hasSource
+              ? "Syncs copy files from a source's repositories. Add a GitHub source in Infrastructure to get started."
               : hasTargets
                 ? "Add a sync to copy a repository folder into a game server or app, and keep it updated."
                 : "Syncs copy files into a game server or app. Create one you can edit files on first."}
@@ -613,7 +314,13 @@ const SyncTable = React.memo(function SyncTable({
           <Button type="button" size="sm" className="mt-4" onClick={onCreate}>
             <Plus /> Add sync
           </Button>
-        ) : connected && !hasTargets ? (
+        ) : !hasSource ? (
+          <Button asChild size="sm" className="mt-4">
+            <Link to="/infra/sources">
+              <Plus /> Add source
+            </Link>
+          </Button>
+        ) : !hasTargets ? (
           <div className="mt-4 flex flex-wrap justify-center gap-2">
             <Button asChild size="sm" variant="outline">
               <Link to="/infra/servers">
@@ -629,7 +336,7 @@ const SyncTable = React.memo(function SyncTable({
         ) : null}
       </div>
     ),
-    [canCreate, connected, hasTargets, onCreate, scopeActive]
+    [canCreate, hasSource, hasTargets, onCreate, scopeActive]
   )
 
   return (
@@ -951,21 +658,6 @@ function LatestSync({ sync }: { sync: GitHubSyncView }) {
       </p>
     </div>
   )
-}
-
-// GitHub has no API for an app's logo, so download Kiln's and open the
-// settings page where it's uploaded.
-function openKilnLogoUpload(connection: GitHubConnectionView) {
-  const link = document.createElement("a")
-  link.href = kilnAppIcon
-  link.download = "kiln-logo.png"
-  link.click()
-  window.open(connection.settingsUrl, "_blank", "noreferrer")
-  showToast({
-    duration: 10_000,
-    message: "Upload kiln-logo.png under Display information on GitHub",
-    type: "info",
-  })
 }
 
 function syncMatchesScope(sync: GitHubSyncView, scope: ScheduleScope) {

@@ -239,6 +239,18 @@ export const listGitHubRepositoriesEffect = Effect.fn(
   )
 })
 
+export const countGitHubRepositoriesEffect = Effect.fn(
+  "github.repositories.count"
+)(function* (token: string) {
+  const page = yield* githubRequest(
+    "GET",
+    "/installation/repositories?per_page=1",
+    RepositoryPageSchema,
+    { token }
+  )
+  return page.total_count
+})
+
 export const getGitHubRepositoryEffect = Effect.fn("github.repository.get")(
   function* (token: string, repository: string) {
     return yield* githubRequest(
