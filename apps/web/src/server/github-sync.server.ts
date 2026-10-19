@@ -3,9 +3,7 @@ import { isIP } from "node:net"
 
 import { builtinTailscaleBrickId } from "@workspace/contracts"
 import { Effect, Result, Schema } from "effect"
-import type { RowDataPacket } from "mysql2/promise"
 
-import { Database } from "@/effect/database"
 import {
   convertGitHubManifestEffect,
   deleteGitHubInstallationEffect,
@@ -37,6 +35,7 @@ import {
   type GitHubSync,
 } from "@/effect/github-sync"
 import { listAppRecordsEffect } from "@/effect/managed-apps"
+import { attachRelayOwnersEffect } from "@/effect/relay-owners"
 import { reportAppError, runAppEffect } from "@/effect/runtime"
 import {
   grantsAllowPermission,
@@ -45,7 +44,7 @@ import {
   type AccessGrant,
 } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
-import { databaseTable } from "@/lib/database-config"
+import { resolveDisplayName } from "@/lib/display-name"
 import { betterAuthSecrets, kilnPublicUrl } from "@/lib/environment"
 import {
   enqueueGitHubSync,
@@ -92,7 +91,8 @@ export interface GitHubConnectionView {
   installation: GitHubInstallationRecord | null
   /** Where the installation's repository access is changed on GitHub. */
   manageUrl: string | null
-  /** Null when the viewer owns it. */
+  /** The Kiln user who added it; null if their account is gone. */
+  ownerEmail: string | null
   ownerName: string | null
   /** Where the source lives; GitHub is the only one so far. */
   provider: "github"
@@ -227,10 +227,14 @@ async function sourceViews(
   const visible = connections.filter(
     (connection) => isPlatformAdmin(user) || connection.ownerUserId === user.id
   )
-  const ownerNames = await userNames(
-    visible
-      .filter((connection) => connection.ownerUserId !== user.id)
-      .map((connection) => connection.ownerUserId)
+  // Viewers see only their own sources unless they're administrators, who
+  // may see every owner's details.
+  const owners = await runAppEffect(
+    "github.connection.owners",
+    attachRelayOwnersEffect(
+      visible.map((connection) => ({ createdBy: connection.ownerUserId })),
+      true
+    )
   )
   const syncCounts = new Map<string, number>()
   for (const sync of syncs) {
@@ -239,7 +243,7 @@ async function sourceViews(
       (syncCounts.get(sync.connectionId) ?? 0) + 1
     )
   }
-  return visible.map((connection) => ({
+  return visible.map((connection, index) => ({
     appName: connection.appName,
     appOwnerLogin: connection.appOwnerLogin,
     appSlug: connection.appSlug,
@@ -252,10 +256,16 @@ async function sourceViews(
     manageUrl: connection.installation
       ? installationSettingsUrl(connection.installation)
       : null,
+    // The viewer is named from their session, which also covers the
+    // development login that has no user row.
+    ownerEmail:
+      connection.ownerUserId === user.id
+        ? user.email
+        : (owners[index]?.ownerEmail ?? null),
     ownerName:
       connection.ownerUserId === user.id
-        ? null
-        : (ownerNames.get(connection.ownerUserId) ?? "Another user"),
+        ? resolveDisplayName(user.name, user.email)
+        : (owners[index]?.ownerName ?? null),
     provider: "github",
     syncCount: syncCounts.get(connection.id) ?? 0,
     webhookActive: connection.webhookActive,
@@ -686,26 +696,6 @@ function installationSettingsUrl(installation: GitHubInstallationRecord) {
   return installation.accountType === "Organization"
     ? `https://github.com/organizations/${encodeURIComponent(installation.accountLogin)}/settings/installations/${installation.id}`
     : `https://github.com/settings/installations/${installation.id}`
-}
-
-async function userNames(ids: ReadonlyArray<string>) {
-  const unique = [...new Set(ids)]
-  if (unique.length === 0) return new Map<string, string>()
-  const rows = await runAppEffect(
-    "github.connection.owners",
-    Effect.gen(function* () {
-      const database = yield* Database
-      return yield* database.queryRows<
-        RowDataPacket & { email: string; id: string; name: string | null }
-      >(
-        "github.connection.owners",
-        `SELECT id, name, email FROM ${databaseTable("user")}
-          WHERE id IN (${unique.map(() => "?").join(", ")})`,
-        unique
-      )
-    })
-  )
-  return new Map(rows.map((row) => [row.id, row.name || row.email]))
 }
 
 function encryptSetupState(state: typeof SetupStateSchema.Type) {

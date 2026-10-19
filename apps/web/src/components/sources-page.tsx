@@ -12,6 +12,7 @@ import {
   FolderSync,
   Rocket,
   Trash2,
+  UserRound,
 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
@@ -31,7 +32,9 @@ import {
   DataTableToolbar,
   DataTableWorkspace,
 } from "@/components/data-table-workspace"
+import { AccountAvatar } from "@/components/account-avatar"
 import { GitHubMark } from "@/components/github-mark"
+import { IdentityName } from "@/components/identity-name"
 import type { IdentityStatusPresentation } from "@/components/identity-name"
 import { InfraSyncButton } from "@/components/infra-sync-button"
 import { statusColumnWidth } from "@/components/instance-name-presentation"
@@ -75,6 +78,8 @@ const sourceSearchFields = [
   (row: Source) => row.installation?.accountLogin ?? "",
   (row: Source) => row.appName,
   (row: Source) => row.appOwnerLogin,
+  (row: Source) => row.ownerName ?? "",
+  (row: Source) => row.ownerEmail ?? "",
   (row: Source) => sourceStatus(row).label,
   () => "GitHub",
 ] as const
@@ -248,18 +253,25 @@ const SourcesTable = React.memo(function SourcesTable({
             GitHub
           </span>
         ),
-        meta: dataTableColumnMeta({ hideBelow: "sm", width: "6.5rem" }),
+        meta: dataTableColumnMeta({ hideBelow: "sm", width: "6rem" }),
       }),
       sourceColumnHelper.accessor(
         (row) => row.installation?.accountLogin ?? row.appName,
         {
           id: "account",
-          header: "User / Org",
+          header: "Source",
           sortFn: "text",
           cell: ({ row }) => <SourceAccount source={row.original} />,
           meta: dataTableColumnMeta({ width: "minmax(0,1fr)" }),
         }
       ),
+      sourceColumnHelper.accessor((row) => row.ownerName ?? "", {
+        id: "owner",
+        header: "Kiln User",
+        sortFn: "text",
+        cell: ({ row }) => <SourceOwnerCell source={row.original} />,
+        meta: dataTableColumnMeta({ hideBelow: "lg", width: "minmax(0,1fr)" }),
+      }),
       sourceColumnHelper.accessor((row) => row.appName, {
         id: "app",
         header: "App",
@@ -273,10 +285,10 @@ const SourcesTable = React.memo(function SourcesTable({
       }),
       sourceColumnHelper.display({
         id: "repositories",
-        header: "Repositories",
+        header: "Scope",
         enableSorting: false,
         cell: ({ row }) => <RepositoryCountCell source={row.original} />,
-        meta: dataTableColumnMeta({ hideBelow: "md", width: "7.5rem" }),
+        meta: dataTableColumnMeta({ hideBelow: "md", width: "5.5rem" }),
       }),
       sourceColumnHelper.accessor((row) => row.syncCount, {
         id: "usage",
@@ -284,7 +296,7 @@ const SourcesTable = React.memo(function SourcesTable({
         sortFn: (left, right) =>
           left.original.syncCount - right.original.syncCount,
         cell: ({ row }) => <UsageCell source={row.original} />,
-        meta: dataTableColumnMeta({ hideBelow: "md", width: "9.5rem" }),
+        meta: dataTableColumnMeta({ hideBelow: "md", width: "8.5rem" }),
       }),
       sourceColumnHelper.display({
         id: "actions",
@@ -294,7 +306,7 @@ const SourcesTable = React.memo(function SourcesTable({
           <SourceActions source={row.original} onDialog={onDialog} />
         ),
         meta: dataTableColumnMeta(
-          { width: "5rem" },
+          { width: "4.5rem" },
           { cellClassName: "px-1 sm:px-2", headerClassName: "px-1 sm:px-2" }
         ),
       }),
@@ -339,6 +351,23 @@ const SourcesTable = React.memo(function SourcesTable({
     />
   )
 })
+
+function SourceOwnerCell({ source }: { source: Source }) {
+  return (
+    <IdentityName
+      icon={
+        source.ownerName ? (
+          <AccountAvatar name={source.ownerName} />
+        ) : (
+          <UserRound className="size-4" aria-hidden="true" />
+        )
+      }
+      iconClassName="border-0 bg-transparent"
+      meta={source.ownerEmail}
+      name={source.ownerName ?? "Deleted user"}
+    />
+  )
+}
 
 function RepositoryCountCell({ source }: { source: Source }) {
   const installation = source.installation
