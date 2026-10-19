@@ -1447,10 +1447,25 @@ export class FakeDocker {
       method === "POST" &&
       (parameters = route(/^\/containers\/([^/]+)\/update$/u))
     ) {
-      const update = JSON.parse(body) as { RestartPolicy?: { Name?: string } }
+      const update = JSON.parse(body) as {
+        Memory?: number
+        MemorySwap?: number
+        NanoCpus?: number
+        RestartPolicy?: { Name?: string }
+      }
       const policy = update.RestartPolicy?.Name
-      if (policy === undefined) return this.#unsupported(`POST ${path} ${body}`)
-      await this.#setRestartPolicy(parameters[0] ?? "", policy)
+      if (policy !== undefined) {
+        await this.#setRestartPolicy(parameters[0] ?? "", policy)
+        return json(200, { Warnings: [] })
+      }
+      if (update.Memory === undefined && update.NanoCpus === undefined) {
+        return this.#unsupported(`POST ${path} ${body}`)
+      }
+      await this.#checkpoint("update", parameters[0] ?? "")
+      const container = this.#requiredContainer(parameters[0] ?? "")
+      // As Docker, 0 leaves a limit as it is.
+      if (update.Memory) container.memoryBytes = update.Memory
+      if (update.NanoCpus) container.nanoCpus = update.NanoCpus
       return json(200, { Warnings: [] })
     }
     if (

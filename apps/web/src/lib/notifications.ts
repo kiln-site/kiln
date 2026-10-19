@@ -45,6 +45,14 @@ export const notificationContentSchema = z.discriminatedUnion("kind", [
     kind: z.literal("access.removed"),
     resource: notificationResourceSchema,
   }),
+  // An instance's data outgrew its disk limit. Instances that keep running
+  // past it, such as databases, warn this way.
+  z.object({
+    kind: z.literal("resource.disk-limit"),
+    limitBytes: z.number(),
+    resource: notificationResourceSchema,
+    usedBytes: z.number(),
+  }),
 ])
 
 export type NotificationContent = z.infer<typeof notificationContentSchema>

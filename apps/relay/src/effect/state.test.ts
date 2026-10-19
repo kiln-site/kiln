@@ -1321,7 +1321,8 @@ describe("legacy machine mutation migration", () => {
             const database = new DatabaseSync(filename)
             try {
               database.exec(
-                `DROP TABLE relay_pause_holds;
+                `DROP TABLE relay_disk_limits;
+                 DROP TABLE relay_pause_holds;
                  DROP TABLE relay_operations;
                  DROP TABLE relay_schedule_runs;
                  DROP TABLE relay_schedule_tombstones;

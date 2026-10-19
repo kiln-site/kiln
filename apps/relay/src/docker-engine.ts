@@ -380,6 +380,29 @@ export class DockerEngine {
     })
   }
 
+  /**
+   * `docker update --memory --memory-swap --cpus`, without restarting the
+   * container. Docker can't remove a limit this way: 0 leaves it unchanged.
+   */
+  updateContainerResources(
+    reference: string,
+    resources: { readonly memoryBytes?: number; readonly nanoCpus?: number }
+  ): Effect.Effect<void, DockerEngineError> {
+    return this.#empty({
+      body: {
+        ...(resources.memoryBytes !== undefined && {
+          Memory: resources.memoryBytes,
+          MemorySwap: resources.memoryBytes,
+        }),
+        ...(resources.nanoCpus !== undefined && {
+          NanoCpus: resources.nanoCpus,
+        }),
+      },
+      method: "POST",
+      path: `/containers/${segment(reference)}/update`,
+    })
+  }
+
   containerStats(reference: string): Effect.Effect<unknown, DockerEngineError> {
     return this.#json({
       maxBytes: 1024 * 1024,

@@ -1,5 +1,6 @@
 import * as React from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
+import type { ResourceLimits } from "@workspace/contracts"
 import {
   ArrowRight,
   Cable,
@@ -43,10 +44,15 @@ import { RenameButton } from "@/components/rename-dialog"
 import { useCopyFeedback } from "@/components/workspace-header"
 import {
   backupUsageQueryOptions,
+  managedDatabaseCapacityQueryOptions,
   managedDatabaseCredentialQueryOptions,
   queryKeys,
 } from "@/lib/query-options"
-import { renameManagedDatabase } from "@/server/databases"
+import { ResourceLimitsSection } from "@/components/resource-limits-section"
+import {
+  renameManagedDatabase,
+  updateManagedDatabaseLimits,
+} from "@/server/databases"
 
 // The database's details on its Info page, one section per concern, each
 // with the actions that change it.
@@ -489,4 +495,48 @@ function databaseConnectionUrl(
   const path =
     scheme === "redis" ? "" : `/${encodeURIComponent(database.databaseName)}`
   return `${scheme}://${encodeURIComponent(username)}:${password}@${database.hostname}:${database.internalPort}${path}`
+}
+
+// Databases warn rather than stop at their disk limit, so a full disk never
+// takes one offline.
+export function DatabaseLimitsSection({
+  available,
+  database,
+  editable,
+}: {
+  available: boolean
+  database: ManagedDatabase
+  editable: boolean
+}) {
+  const queryClient = useQueryClient()
+  const { data: capacity = null } = useQuery({
+    ...managedDatabaseCapacityQueryOptions(database.relayId, database.id),
+    enabled: editable && available,
+  })
+  const save = React.useCallback(
+    async (limits: ResourceLimits) => {
+      await updateManagedDatabaseLimits({
+        data: { databaseId: database.id, limits, relayId: database.relayId },
+      })
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.databases.all }),
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.databases.capacity(database.relayId, database.id),
+        }),
+      ])
+    },
+    [database.id, database.relayId, queryClient]
+  )
+  return (
+    <ResourceLimitsSection
+      capacity={capacity}
+      disabledReason={
+        available ? undefined : "Reconnect this database's Relay first"
+      }
+      editable={editable}
+      hint="Changing memory or CPU applies at once. Removing one restarts the database. Over its disk limit, the database keeps running and everyone with access is warned."
+      limits={database.limits}
+      onSave={save}
+    />
+  )
 }

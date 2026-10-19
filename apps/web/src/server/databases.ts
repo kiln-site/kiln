@@ -21,6 +21,7 @@ import {
   relayDatabaseContainerSchema,
   relayDatabaseDumpFormatSchema,
   relayManagedDatabaseSchema,
+  resourceLimitsInputSchema,
 } from "@workspace/contracts"
 import type { RelayManagedDatabase } from "@workspace/contracts"
 import { Effect, Result } from "effect"
@@ -70,6 +71,9 @@ const databaseInputSchema = z.strictObject({
 })
 const databaseActionInputSchema = databaseInputSchema.extend({
   action: z.enum(["start", "stop", "restart"]),
+})
+const databaseLimitsInputSchema = databaseInputSchema.extend({
+  limits: resourceLimitsInputSchema,
 })
 const databaseRenameInputSchema = databaseInputSchema.extend({
   name: relayDatabaseNameSchema,
@@ -361,6 +365,26 @@ export const runManagedDatabaseAction = createServerFn({ method: "POST" })
         "database.action",
         { action: data.action, databaseId: data.databaseId },
         180_000,
+        user.id
+      )
+    )
+    publishDatabaseChange(relay.id, false)
+    return database
+  })
+
+export const updateManagedDatabaseLimits = createServerFn({ method: "POST" })
+  .validator(databaseLimitsInputSchema)
+  .handler(async ({ data }) => {
+    const { relay, user } = await authorizedDatabase(
+      data,
+      "database.limits.write"
+    )
+    const database = relayManagedDatabaseSchema.parse(
+      await databaseRpc(
+        relay,
+        "database.limits.write",
+        { databaseId: data.databaseId, limits: data.limits },
+        240_000,
         user.id
       )
     )

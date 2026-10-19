@@ -2,6 +2,7 @@ import * as React from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { Link, useNavigate } from "@tanstack/react-router"
 import {
+  HardDrive,
   PackageCheck,
   Rocket,
   UserMinus,
@@ -29,6 +30,7 @@ import type {
   NotificationContent,
   NotificationResource,
 } from "@/lib/notifications"
+import { formatBytes } from "@/lib/format-bytes"
 import { kilnReleaseLabel } from "@/lib/release-version"
 
 export type NotificationListItem =
@@ -229,6 +231,13 @@ function NotificationActions({
       ) : null
     case "access.removed":
       return null
+    case "resource.disk-limit":
+      return (
+        <OpenResourceButton
+          resource={content.resource}
+          onNavigate={onNavigate}
+        />
+      )
   }
 }
 
@@ -363,6 +372,7 @@ const notificationIcons = {
   "access.removed": UserMinus,
   "kiln.release": Rocket,
   "kiln.updated": PackageCheck,
+  "resource.disk-limit": HardDrive,
 } satisfies Record<
   NotificationContent["kind"],
   React.ComponentType<{ className?: string }>
@@ -380,7 +390,7 @@ function releaseName(name: string | undefined, version: string) {
   return name ?? kilnReleaseLabel(version)
 }
 
-function notificationTitle(content: NotificationContent): string {
+export function notificationTitle(content: NotificationContent): string {
   switch (content.kind) {
     case "kiln.release":
       return `${releaseName(content.name, content.version)} available`
@@ -403,6 +413,8 @@ function notificationTitle(content: NotificationContent): string {
     }
     case "access.removed":
       return `Removed from ${content.resource.name}`
+    case "resource.disk-limit":
+      return `${content.resource.name} is over its disk limit`
   }
 }
 
@@ -418,5 +430,7 @@ function notificationDetail(content: NotificationContent): string | null {
         : resourceTypeLabels[content.resource.type]
     case "access.removed":
       return `by ${content.actorName}`
+    case "resource.disk-limit":
+      return `${formatBytes(content.usedBytes)} of ${formatBytes(content.limitBytes)}`
   }
 }

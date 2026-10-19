@@ -89,6 +89,7 @@ import { legacyDiskLimitAssignments } from "./resource-quotas.js"
 import {
   containerResourceLimits,
   DISK_LIMIT_LABEL,
+  ResourceAllocations,
 } from "./resource-limits.js"
 import { WEB_ROUTE_LABEL_PREFIX } from "./web-route-labels.js"
 import type { RelayWebRouteLabelSnapshot } from "./web-route-labels.js"
@@ -492,7 +493,16 @@ export class DockerDriver {
     this.#resources = relayResourceNames(config)
     this.#runtimeRecovery = runtimeRecovery
     this.#state = state
+    this.allocations.register("server", async () =>
+      (await this.#discover()).map(({ config }) => ({
+        id: config.id,
+        limits: config.limits,
+      }))
+    )
   }
+
+  /** Every instance's limits; other kinds of instance register theirs. */
+  readonly allocations = new ResourceAllocations()
 
   async inspectInstances(): Promise<Array<RelayInstance>> {
     await this.#initializeLifecycleSessions()

@@ -7,7 +7,11 @@ import {
   MINIMUM_INSTANCE_DISK_LIMIT_BYTES,
 } from "./instance-limits.js"
 import { relayInstanceLifecycleEventSchema } from "./instance-lifecycle.js"
-import { resourceLimitsInputSchema } from "./resource-limits.js"
+import {
+  NO_RESOURCE_LIMITS,
+  observedResourceLimitsSchema,
+  resourceLimitsInputSchema,
+} from "./resource-limits.js"
 import { relayInstanceStateReasonSchema } from "./instance-state-reason.js"
 import {
   databaseReadRequestSchema,
@@ -144,6 +148,10 @@ export const relayManagedDatabaseSchema = z
     id: databaseIdSchema,
     image: z.string().min(1).max(512),
     internalPort: z.number().int().min(1).max(65_535),
+    // Relays before resource-limits-v1 report neither.
+    limits: observedResourceLimitsSchema.default(NO_RESOURCE_LIMITS),
+    /** The data volume's size when the Relay last measured it. */
+    diskUsedBytes: z.number().int().nonnegative().nullable().default(null),
     name: relayDatabaseNameSchema,
     observedState: z.enum(["starting", "running", "stopped", "failed"]),
     shortId: z.string().regex(/^[a-f0-9]{8}$/u),
@@ -167,6 +175,13 @@ export const relayDatabaseActionSchema = z
   .object({
     action: z.enum(["start", "stop", "restart"]),
     databaseId: databaseIdSchema,
+  })
+  .strict()
+
+export const relayDatabaseLimitsSchema = z
+  .object({
+    databaseId: databaseIdSchema,
+    limits: resourceLimitsInputSchema,
   })
   .strict()
 
@@ -2100,6 +2115,7 @@ export function databaseEngineSupportsBrowsing(
 export type RelayManagedDatabase = z.infer<typeof relayManagedDatabaseSchema>
 export type RelayCreateDatabase = z.infer<typeof relayCreateDatabaseSchema>
 export type RelayDatabaseAction = z.infer<typeof relayDatabaseActionSchema>
+export type RelayDatabaseLimits = z.infer<typeof relayDatabaseLimitsSchema>
 export type RelayDeleteDatabase = z.infer<typeof relayDeleteDatabaseSchema>
 export type RelayRotateDatabaseCredentials = z.infer<
   typeof relayRotateDatabaseCredentialsSchema

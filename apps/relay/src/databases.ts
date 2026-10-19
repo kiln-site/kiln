@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto"
+import { statfs } from "node:fs/promises"
 
 import type {
   DatabaseEngine,
@@ -6,6 +7,7 @@ import type {
   RelayDatabaseAction,
   RelayDatabaseDump,
   RelayDatabaseExport,
+  RelayDatabaseLimits,
   RelayDatabaseNetwork,
   RelayDatabaseContainer,
   RelayDatabaseWipe,
@@ -15,11 +17,13 @@ import type {
   InstanceObservedState,
   RelayInventoryLookup,
   RelayInventoryItem,
+  ResourceLimits,
 } from "@workspace/contracts"
 import {
   databaseEngineSupportsLogicalBackups,
   databaseEngineSchema,
   relayManagedDatabaseSchema,
+  resolveResourceLimits,
 } from "@workspace/contracts"
 import { Effect, Option, Result } from "effect"
 
@@ -39,6 +43,11 @@ import {
   type DockerExecProcess,
 } from "./docker-engine.js"
 import { relayOwnerLabel, relayOwnsLabels } from "./relay-resources.js"
+import {
+  assertResourceLimitsFit,
+  containerLimitSpec,
+  containerResourceLimits,
+} from "./resource-limits.js"
 
 function databaseObservedState(
   container: DatabaseContainerInspect
@@ -53,6 +62,9 @@ function databaseObservedState(
 const DATABASE_KIND_LABEL = "kiln.resource.kind"
 const DATABASE_KIND = "database"
 const MAX_DUMP_BYTES = 700_000
+// Docker walks every volume to measure them, so sizes are measured at most
+// this often.
+const DISK_USAGE_REFRESH_MS = 5 * 60_000
 
 interface DatabaseEngineSpec {
   command?: ReadonlyArray<string>
@@ -105,9 +117,14 @@ const engineSpecs: Record<DatabaseEngine, DatabaseEngineSpec> = {
 
 interface DatabaseContainerInspect {
   Config: {
+    Env?: ReadonlyArray<string> | null
     Image: string
     Labels: Record<string, string | undefined> | null
   }
+  HostConfig?: {
+    Memory?: number
+    NanoCpus?: number
+  } | null
   Id: string
   Name: string
   State: {
@@ -155,6 +172,12 @@ export class DatabaseDriver {
   readonly #config: RelayConfig
   readonly #docker: DockerDriver
   readonly #engine: DockerEngine
+  // Data volume sizes by volume name, from Docker's last measurement.
+  #diskUsage: { measuredAt: number; sizes: ReadonlyMap<string, number> } = {
+    measuredAt: 0,
+    sizes: new Map(),
+  }
+  #diskUsageRefresh: Promise<void> | null = null
 
   constructor(
     config: RelayConfig,
@@ -164,12 +187,21 @@ export class DatabaseDriver {
     this.#config = config
     this.#docker = docker
     this.#engine = new DockerEngine(config.dockerSocket)
+    docker.allocations.register(DATABASE_KIND, async () =>
+      (await this.list()).map(({ id, limits }) => ({ id, limits }))
+    )
   }
 
   async list(): Promise<Array<RelayManagedDatabase>> {
-    const containers = await this.#discover()
+    this.#refreshDiskUsage()
+    const [containers, diskLimits] = await Promise.all([
+      this.#discover(),
+      this.#diskLimits(),
+    ])
     return Promise.all(
-      containers.map((container) => this.#toManagedDatabase(container))
+      containers.map((container) =>
+        this.#toManagedDatabase(container, diskLimits)
+      )
     )
   }
 
@@ -202,7 +234,11 @@ export class DatabaseDriver {
             }
             // Only the detail view needs the network's attached containers.
             if (view === "detail")
-              item.database = await this.#toManagedDatabase(container, signal)
+              item.database = await this.#toManagedDatabase(
+                container,
+                await this.#diskLimits(),
+                signal
+              )
             return [item]
           })
         )
@@ -235,6 +271,7 @@ export class DatabaseDriver {
         { concurrency: "unbounded" }
       )
     )
+    this.#recordDiskUsage(volumes)
     const size = volumes.find((candidate) => candidate.Name === volume)
       ?.UsageData?.Size
     return {
@@ -356,6 +393,138 @@ export class DatabaseDriver {
     return created.success
   }
 
+  /**
+   * Changes the database's limits. Docker changes memory and CPU limits in
+   * place, but can't remove one, so removing one recreates the container
+   * over the same data volume. The Relay keeps the disk limit.
+   */
+  async setLimits(input: RelayDatabaseLimits): Promise<RelayManagedDatabase> {
+    const container = await this.#container(input.databaseId)
+    const id = input.databaseId
+    const current = (
+      await this.#toManagedDatabase(container, await this.#diskLimits())
+    ).limits
+    const next = resolveResourceLimits(current, input.limits)
+    const [filesystem, others] = await Promise.all([
+      statfs(this.#config.rootDirectory),
+      this.#docker.allocations.others(DATABASE_KIND, id),
+    ])
+    assertResourceLimitsFit({
+      currentDiskBytes: current.diskBytes,
+      limits: next,
+      nodeDiskBytes: filesystem.blocks * filesystem.bsize,
+      others,
+    })
+    const removed = (key: "cpuMillis" | "memoryBytes") =>
+      current[key] !== null && next[key] === null
+    if (removed("cpuMillis") || removed("memoryBytes")) {
+      await this.#replaceContainer(container, next)
+    } else if (
+      next.cpuMillis !== current.cpuMillis ||
+      next.memoryBytes !== current.memoryBytes
+    ) {
+      const spec = containerLimitSpec(next)
+      await Effect.runPromise(
+        this.#engine.updateContainerResources(container.Id, {
+          ...(next.memoryBytes !== null && { memoryBytes: next.memoryBytes }),
+          ...(spec.nanoCpus !== undefined && { nanoCpus: spec.nanoCpus }),
+        })
+      )
+    }
+    if (next.diskBytes !== current.diskBytes) {
+      await Effect.runPromise(
+        this.connections.state.setDiskLimit(DATABASE_KIND, id, next.diskBytes)
+      )
+    }
+    return this.#required(id)
+  }
+
+  // A new container over the old one's volume and network, with the same
+  // environment. The old one is set aside until the new one is ready, and
+  // put back if it never is.
+  async #replaceContainer(
+    container: DatabaseContainerInspect,
+    limits: ResourceLimits
+  ): Promise<void> {
+    const labels = container.Config.Labels ?? {}
+    const id = requiredLabel(labels, "kiln.database.id")
+    const engine = databaseEngineSchema.parse(
+      requiredLabel(labels, "kiln.database.engine")
+    )
+    const spec = engineSpecs[engine]
+    const name = container.Name.replace(/^\//u, "")
+    const aside = `${name}-replaced-${randomBytes(4).toString("hex")}`
+    const running = container.State.Running
+    const docker = this.#engine
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        if (running) {
+          yield* docker.stopContainer(container.Id, {
+            seconds: 30,
+            timeout: 45_000,
+          })
+        }
+        yield* docker.renameContainer(container.Id, aside)
+      })
+    )
+    const replaced = await promiseResult(async () => {
+      await Effect.runPromise(
+        createContainer(this.#engine, {
+          command: spec.command ?? [],
+          env: Object.fromEntries(
+            (container.Config.Env ?? []).map((entry) => {
+              const separator = entry.indexOf("=")
+              return [entry.slice(0, separator), entry.slice(separator + 1)]
+            })
+          ),
+          healthcheck: databaseHealthcheck(engine),
+          hostname: databaseHostname(id),
+          image: labels["kiln.database.image"] ?? container.Config.Image,
+          labels: stringLabels(labels),
+          mounts: [
+            {
+              source: requiredLabel(labels, "kiln.database.volume"),
+              target: spec.dataMount,
+              type: "volume",
+            },
+          ],
+          name,
+          network: {
+            aliases: [databaseHostname(id)],
+            name: requiredLabel(labels, "kiln.database.network"),
+          },
+          restart: "unless-stopped",
+          ...containerLimitSpec(limits),
+        })
+      )
+      if (running) {
+        await Effect.runPromise(
+          this.#engine.startContainer(name, { timeout: 120_000 })
+        )
+        await waitUntilReady(this.#engine, name)
+      }
+    })
+    if (Result.isFailure(replaced)) {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          yield* docker
+            .removeContainer(name, { force: true })
+            .pipe(Effect.ignore)
+          yield* docker.renameContainer(container.Id, name)
+          if (running) {
+            yield* docker.startContainer(container.Id, { timeout: 120_000 })
+          }
+        }).pipe(Effect.ignore)
+      )
+      throw replaced.failure
+    }
+    await Effect.runPromise(
+      this.#engine
+        .removeContainer(container.Id, { force: true })
+        .pipe(Effect.ignore)
+    )
+  }
+
   async action(input: RelayDatabaseAction): Promise<RelayManagedDatabase> {
     const database = await this.#required(input.databaseId)
     const container = requiredContainerId(database)
@@ -430,6 +599,9 @@ export class DatabaseDriver {
       await Effect.runPromise(engine.removeNetwork(network).pipe(Effect.ignore))
     }
     await this.connections.forgetDatabase(input.databaseId)
+    await Effect.runPromise(
+      this.connections.state.setDiskLimit(DATABASE_KIND, input.databaseId, null)
+    )
     if (input.deleteData && volume) {
       await Effect.runPromise(engine.removeVolume(volume))
     }
@@ -650,8 +822,54 @@ export class DatabaseDriver {
     )
   }
 
+  #diskLimits(): Promise<ReadonlyMap<string, number>> {
+    return Effect.runPromise(
+      this.connections.state.listDiskLimits(DATABASE_KIND)
+    )
+  }
+
+  // Measures the data volumes in the background when the last measurement
+  // is old, so listing never waits on Docker walking every volume.
+  #refreshDiskUsage(): void {
+    if (
+      this.#diskUsageRefresh ||
+      Date.now() - this.#diskUsage.measuredAt < DISK_USAGE_REFRESH_MS
+    ) {
+      return
+    }
+    this.#diskUsageRefresh = Effect.runPromise(
+      this.#engine.volumeUsage({ timeout: 60_000 }).pipe(
+        Effect.map((volumes) => this.#recordDiskUsage(volumes)),
+        Effect.ignore,
+        Effect.ensuring(
+          Effect.sync(() => {
+            this.#diskUsageRefresh = null
+          })
+        )
+      )
+    )
+  }
+
+  #recordDiskUsage(
+    volumes: ReadonlyArray<{
+      readonly Name: string
+      readonly UsageData?: { readonly Size?: number } | null
+    }>
+  ): void {
+    this.#diskUsage = {
+      measuredAt: Date.now(),
+      sizes: new Map(
+        volumes.flatMap((volume) => {
+          const size = volume.UsageData?.Size
+          return size !== undefined && size >= 0 ? [[volume.Name, size]] : []
+        })
+      ),
+    }
+  }
+
   async #toManagedDatabase(
     container: DatabaseContainerInspect,
+    diskLimits: ReadonlyMap<string, number>,
     signal?: AbortSignal
   ): Promise<RelayManagedDatabase> {
     const labels = container.Config.Labels ?? {}
@@ -688,6 +906,14 @@ export class DatabaseDriver {
       id,
       image: labels["kiln.database.image"] ?? container.Config.Image,
       internalPort: engineSpecs[engine].internalPort,
+      limits: {
+        ...containerResourceLimits(container),
+        diskBytes: diskLimits.get(id) ?? null,
+      },
+      diskUsedBytes:
+        this.#diskUsage.sizes.get(
+          requiredLabel(labels, "kiln.database.volume")
+        ) ?? null,
       name: requiredLabel(labels, "kiln.database.name"),
       observedState,
       shortId: id.slice(0, 8),
@@ -900,19 +1126,20 @@ function databaseWipeClient(
   }
   if (database.engine === "mysql" || database.engine === "mariadb") {
     const root =
-      database.engine === "mysql" ? "MYSQL_ROOT_PASSWORD" : "MARIADB_ROOT_PASSWORD"
+      database.engine === "mysql"
+        ? "MYSQL_ROOT_PASSWORD"
+        : "MARIADB_ROOT_PASSWORD"
     const client = database.engine === "mysql" ? "mysql" : "mariadb"
     return {
-      command: [
-        "sh",
-        "-ec",
-        `MYSQL_PWD="$${root}" exec ${client} --user=root`,
-      ],
+      command: ["sh", "-ec", `MYSQL_PWD="$${root}" exec ${client} --user=root`],
       env: [],
       input: `DROP DATABASE IF EXISTS \`${name}\`;\nCREATE DATABASE \`${name}\`;\n`,
     }
   }
-  return { ...keyValueClient(database.engine, username, password, ["FLUSHALL"]), input: "" }
+  return {
+    ...keyValueClient(database.engine, username, password, ["FLUSHALL"]),
+    input: "",
+  }
 }
 
 // Redis and Valkey's clients both read the password from REDISCLI_AUTH, and

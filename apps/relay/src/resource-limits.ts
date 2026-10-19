@@ -80,6 +80,45 @@ function diskLimitLabel(
   return Number.isSafeInteger(bytes) && bytes > 0 ? bytes : fallback
 }
 
+export interface ResourceAllocation {
+  readonly id: string
+  readonly limits: ResourceLimits
+}
+
+/**
+ * Every instance's limits on this node, whatever its kind, so limits set on
+ * one kind leave room for the others. Each kind registers where its limits
+ * come from.
+ */
+export class ResourceAllocations {
+  readonly #sources = new Map<
+    string,
+    () => Promise<ReadonlyArray<ResourceAllocation>>
+  >()
+
+  register(
+    kind: string,
+    source: () => Promise<ReadonlyArray<ResourceAllocation>>
+  ): void {
+    this.#sources.set(kind, source)
+  }
+
+  /** The limits of every instance but this one. */
+  async others(
+    kind: string,
+    id: string
+  ): Promise<ReadonlyArray<ResourceLimits>> {
+    const lists = await Promise.all(
+      [...this.#sources].map(async ([sourceKind, source]) =>
+        (await source()).flatMap((allocation) =>
+          sourceKind === kind && allocation.id === id ? [] : [allocation.limits]
+        )
+      )
+    )
+    return lists.flat()
+  }
+}
+
 /**
  * Refuses limits the node can't honor. Memory and disk are reserved: every
  * container's limit counts against the node's total. CPU is shared, so a

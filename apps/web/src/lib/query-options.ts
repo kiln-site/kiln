@@ -40,6 +40,7 @@ import {
 } from "@/server/github-sync"
 import { getDomainSettings, getInstanceDomain } from "@/server/domains"
 import { getHearthEdge } from "@/server/hearth-edge"
+import { getResourceLimitsCapacity } from "@/server/resource-limits"
 import {
   getManagedDatabaseCredential,
   getManagedDatabaseContainer,
@@ -200,6 +201,9 @@ export const queryKeys = {
     // Outside "databases", so list refreshes don't measure the volume again.
     container: (relayId: string, databaseId: string) =>
       ["database-container", relayId, databaseId] as const,
+    // Outside "databases": it asks the Relay for every instance's limits.
+    capacity: (relayId: string, databaseId: string) =>
+      ["resource-limits-capacity", relayId, "database", databaseId] as const,
   },
   fileActivity: (relayId: string, instanceId: string) =>
     ["file-activity", relayId, instanceId] as const,
@@ -722,6 +726,23 @@ export function managedDatabaseContainerQueryOptions(
       getManagedDatabaseContainer({ data: { databaseId, relayId } }),
     retry: false,
     staleTime: 5 * 60_000,
+  })
+}
+
+// What the node can still give the database, for its limits editor; null
+// for those who can't see the node.
+export function managedDatabaseCapacityQueryOptions(
+  relayId: string,
+  databaseId: string
+) {
+  return queryOptions({
+    queryKey: queryKeys.databases.capacity(relayId, databaseId),
+    queryFn: () =>
+      getResourceLimitsCapacity({
+        data: { id: databaseId, kind: "database", relayId },
+      }),
+    retry: false,
+    staleTime: 30_000,
   })
 }
 

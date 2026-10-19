@@ -135,6 +135,9 @@ export interface RelayStoredInstanceName {
   readonly name: string
 }
 
+/** Kinds of instance whose disk limit the Relay keeps here, not on Docker. */
+export type RelayDiskLimitKind = "app" | "database"
+
 export interface RelayStoredPendingPrimaryPort extends RelayInstancePendingPrimaryPort {
   readonly instanceId: string
 }
@@ -584,6 +587,15 @@ export class RelayStateStore extends Context.Service<
       ReadonlyArray<RelayStoredInstanceName>,
       RelayStateError
     >
+    /** Disk limits by instance ID; one without a row has no limit. */
+    readonly listDiskLimits: (
+      kind: RelayDiskLimitKind
+    ) => Effect.Effect<ReadonlyMap<string, number>, RelayStateError>
+    readonly setDiskLimit: (
+      kind: RelayDiskLimitKind,
+      id: string,
+      bytes: number | null
+    ) => Effect.Effect<void, RelayStateError>
     readonly getRuntimeRecovery: (
       instanceId: string
     ) => Effect.Effect<RelayRuntimeRecoveryRecord | null, RelayStateError>
@@ -1138,6 +1150,17 @@ const migrations = SqliteMigrator.fromRecord({
     yield* sql`CREATE TABLE relay_pause_holds (
       client_id TEXT PRIMARY KEY NOT NULL,
       paused_at INTEGER NOT NULL
+    ) STRICT`
+  }),
+  // Docker can't change a container's labels, so the disk limits of
+  // instances whose limits change in place live here.
+  "21_disk_limits": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    yield* sql`CREATE TABLE relay_disk_limits (
+      kind TEXT NOT NULL CHECK (kind IN ('app', 'database')),
+      resource_id TEXT NOT NULL,
+      disk_bytes INTEGER NOT NULL CHECK (disk_bytes > 0),
+      PRIMARY KEY (kind, resource_id)
     ) STRICT`
   }),
 })
@@ -2816,6 +2839,33 @@ const makeRelayStateStore = Effect.gen(function* () {
       ),
     listRuntimeRecoveries: () =>
       run("list_runtime_recoveries", runtimeRecoveries()),
+    listDiskLimits: (kind) =>
+      run(
+        "list_disk_limits",
+        sql<{ id: string; bytes: number }>`
+          SELECT resource_id AS id, disk_bytes AS bytes
+          FROM relay_disk_limits
+          WHERE kind = ${kind}
+        `.pipe(
+          Effect.map((rows) => new Map(rows.map((row) => [row.id, row.bytes])))
+        )
+      ),
+    setDiskLimit: (kind, id, bytes) =>
+      run(
+        "set_disk_limit",
+        (bytes === null
+          ? sql`
+              DELETE FROM relay_disk_limits
+              WHERE kind = ${kind} AND resource_id = ${id}
+            `
+          : sql`
+              INSERT INTO relay_disk_limits (kind, resource_id, disk_bytes)
+              VALUES (${kind}, ${id}, ${bytes})
+              ON CONFLICT (kind, resource_id) DO UPDATE
+              SET disk_bytes = excluded.disk_bytes
+            `
+        ).pipe(Effect.asVoid)
+      ),
     getPendingPrimaryPort: (instanceId) =>
       run(
         "get_pending_primary_port",

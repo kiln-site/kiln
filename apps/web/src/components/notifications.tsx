@@ -1,11 +1,12 @@
 import * as React from "react"
 import { isNull, useLiveQuery } from "@tanstack/react-db"
-import { useQueryClient } from "@tanstack/react-query"
+import { hashKey, useQueryClient } from "@tanstack/react-query"
 import type { QueryClient } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import { Bell } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
+import { showToast } from "@workspace/ui/components/sonner"
 import {
   Popover,
   PopoverAnchor,
@@ -23,13 +24,16 @@ import {
   NotificationGroupLabel,
   NotificationRow,
   notificationListItems,
+  notificationTitle,
   useNotificationClearing,
 } from "@/components/notification-list"
 import {
   markCachedNotificationsRead,
   notificationsCollectionOptions,
   notificationsPopoverLimit,
+  notificationsQueryOptions,
 } from "@/lib/collections/notifications"
+import type { NotificationContent } from "@/lib/notifications"
 
 interface NotificationsPopoverStore {
   close: () => void
@@ -104,6 +108,7 @@ export const NotificationsProvider = React.memo(function NotificationsProvider({
   const [store] = React.useState(() =>
     createNotificationsPopoverStore(queryClient)
   )
+  useArrivingNotificationToasts(queryClient)
   return (
     <NotificationsPopoverContext.Provider value={store}>
       {children}
@@ -150,6 +155,49 @@ function UnreadCountBadge({
       {count > 9 ? "9+" : count}
     </span>
   )
+}
+
+// Kinds that need attention now, so they also pop up as they arrive.
+const toastedKinds: ReadonlySet<NotificationContent["kind"]> = new Set([
+  "resource.disk-limit",
+])
+
+/**
+ * Shows a toast for each warning that arrives while the tab is open. It
+ * watches the inbox's cache, so it renders nothing and re-renders nothing.
+ * The inbox's first load sets what counts as already there.
+ */
+function useArrivingNotificationToasts(queryClient: QueryClient) {
+  React.useEffect(() => {
+    const { queryKey } = notificationsQueryOptions()
+    const hash = hashKey(queryKey)
+    let seen: Set<string> | null = null
+    const check = () => {
+      const inbox = queryClient.getQueryData(queryKey)
+      if (!inbox) return
+      if (seen === null) {
+        seen = new Set(inbox.map((notification) => notification.id))
+        return
+      }
+      for (const notification of inbox) {
+        if (seen.has(notification.id)) continue
+        seen.add(notification.id)
+        if (
+          notification.readAt === null &&
+          toastedKinds.has(notification.content.kind)
+        ) {
+          showToast({
+            message: notificationTitle(notification.content),
+            type: "warning",
+          })
+        }
+      }
+    }
+    check()
+    return queryClient.getQueryCache().subscribe((event) => {
+      if (event.query.queryHash === hash) check()
+    })
+  }, [queryClient])
 }
 
 /** The bell beside the Kiln name in the expanded sidebar. */

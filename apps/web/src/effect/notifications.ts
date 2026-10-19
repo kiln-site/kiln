@@ -28,6 +28,7 @@ interface NotificationRow extends RowDataPacket {
  * Delivers one notification to each user. A user who already has a
  * notification for `sourceKey` keeps it unchanged, so callers can retry or
  * re-announce without duplicates. Inside a transaction the rows commit with it.
+ * Answers how many users got a new one.
  */
 export const notifyUsersEffect = Effect.fn("notifications.notify")(function* (
   userIds: ReadonlyArray<string>,
@@ -35,12 +36,12 @@ export const notifyUsersEffect = Effect.fn("notifications.notify")(function* (
   content: NotificationContent
 ) {
   const recipients = [...new Set(userIds)]
-  if (!recipients.length) return
+  if (!recipients.length) return 0
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
   const { kind, ...data } = content
   const json = JSON.stringify(data)
-  yield* database.execute(
+  const result = yield* database.execute(
     "notifications.notify",
     `INSERT INTO ${databaseTable("notification")}
        (id, user_id, kind, source_key, data, created_at)
@@ -55,6 +56,8 @@ export const notifyUsersEffect = Effect.fn("notifications.notify")(function* (
       now,
     ])
   )
+  // MySQL counts an inserted row as 1 and an untouched duplicate as 0.
+  return result.affectedRows
 })
 
 /**

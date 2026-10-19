@@ -88,6 +88,7 @@ export const accessPermissions = [
   "database.data.write",
   "database.terminal",
   "database.logs.read",
+  "database.limits.write",
   "app.read",
   "app.create",
   "app.manage",
@@ -256,6 +257,7 @@ const permissionPlacement: Record<
   "database.data.write": ["database.data", "database"],
   "database.terminal": ["database.terminal", "database"],
   "database.logs.read": ["database.logs", "database"],
+  "database.limits.write": ["database.limits", "database"],
   "app.read": ["overview", "app"],
   "app.create": ["resource.creation", "relay"],
   "app.manage": ["app.manage", "app"],
@@ -458,6 +460,10 @@ const permissionCopy: Record<
   "database.power": {
     label: "Control database power",
     description: "Start, stop, or restart the database.",
+  },
+  "database.limits.write": {
+    label: "Manage resource limits",
+    description: "Change the database’s memory, CPU, and disk limits.",
   },
   "database.delete": {
     label: "Delete database",
@@ -683,6 +689,7 @@ const blockLabels: Record<string, string> = {
   "database.data": "Database tables",
   "database.terminal": "Database terminal",
   "database.logs": "Database logs",
+  "database.limits": "Database limits",
   "app.manage": "App configuration",
   "app.logs": "App logs",
   "app.terminal": "App shell",

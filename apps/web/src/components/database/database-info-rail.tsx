@@ -8,6 +8,7 @@ import {
 } from "@/components/database/database-presentation"
 import { InstanceInfoRail, InfoContainerCard } from "@/components/resource-info-rail"
 import { formatBytes } from "@/lib/format-bytes"
+import { formatCpuLimit, formatMemoryLimit } from "@/lib/resource-limits"
 import { managedDatabaseContainerQueryOptions } from "@/lib/query-options"
 
 // What the database is at a glance, like a game server's. Its name and
@@ -31,7 +32,7 @@ export function DatabaseInfoRail({ database }: { database: ManagedDatabase }) {
 }
 
 // The Relay reports the container's name, data folder, and volume size on
-// request, and only while it's reachable. Databases have no limits.
+// request, and only while it's reachable.
 function DatabaseContainerCard({ database }: { database: ManagedDatabase }) {
   const available = databaseRelayAvailable(database)
   const { data, isPending } = useQuery({
@@ -43,10 +44,14 @@ function DatabaseContainerCard({ database }: { database: ManagedDatabase }) {
     <InfoContainerCard
       containerId={database.containerId}
       dataDirectory={data?.dataDirectory ?? null}
+      cpu={formatCpuLimit(database.limits.cpuMillis)}
       disk={
         data?.volumeBytes != null ? (
-          <span className="tabular-nums" title="No disk limit">
+          <span className="tabular-nums">
             {formatBytes(data.volumeBytes)} used
+            {database.limits.diskBytes === null
+              ? ""
+              : ` of ${formatBytes(database.limits.diskBytes)}`}
           </span>
         ) : pending ? (
           <LoaderCircle
@@ -57,7 +62,7 @@ function DatabaseContainerCard({ database }: { database: ManagedDatabase }) {
           <span className="text-muted-foreground">—</span>
         )
       }
-      memory="No limit"
+      memory={formatMemoryLimit(database.limits.memoryBytes)}
       name={data?.containerName ?? null}
       pending={pending}
     />

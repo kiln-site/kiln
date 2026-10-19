@@ -3,7 +3,7 @@ import { Schema } from "effect"
 export const relayControlProtocol = "kiln-relay.v1" as const
 // Release compatibility level for response-shape changes. Keep this separate
 // from the WebSocket subprotocol so Hearth can be upgraded before Relay.
-export const relayControlProtocolVersion = 4 as const
+export const relayControlProtocolVersion = 5 as const
 export const relayBrowserProtocol = "kiln-relay-browser.v1" as const
 export const relayBrowserConsoleProtocol = "kiln-relay-browser.v2" as const
 export const relayBrowserConsoleProtocols = [
@@ -89,6 +89,7 @@ export const relayControlOperations = [
   "database.wipe",
   "database.delete",
   "database.action",
+  "database.limits.write",
   "database.credentials.rotate",
   "database.network.write",
   "database.dump.export",
@@ -204,6 +205,7 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "database.delete",
   "database.wipe",
   "database.action",
+  "database.limits.write",
   "database.credentials.rotate",
   "database.network.write",
   "database.dump.export",
@@ -322,6 +324,7 @@ export function relayControlOperationChanges(
     case "database.wipe":
     case "database.delete":
     case "database.action":
+    case "database.limits.write":
     case "database.credentials.rotate":
     case "database.network.write":
     case "database.dump.import":
@@ -431,6 +434,8 @@ export function relayControlDeadlineMs(
   if (operation === "app.action") return 180_000
   if (operation === "app.create") return 60_000
   if (operation === "database.action") return 180_000
+  // Removing a limit recreates the container and waits for it to be ready.
+  if (operation === "database.limits.write") return 240_000
   if (operation === "database.credentials.rotate") return 180_000
   if (operation === "database.dump.export") return 120_000
   // Docker walks every volume to measure them.

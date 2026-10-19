@@ -296,6 +296,7 @@ export function controlRequestLocks(
     case "database.wipe":
     case "database.delete":
     case "database.action":
+    case "database.limits.write":
     case "database.credentials.rotate":
     case "database.dump.import":
     case "database.data.write":

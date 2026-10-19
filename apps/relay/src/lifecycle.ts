@@ -2239,7 +2239,7 @@ export class LifecycleDriver {
       checkExistingUsage: true,
       currentDiskLimitBytes: existing.limits.diskBytes,
       directory: join(this.#config.rootDirectory, existing.directory),
-      existing: inspected.filter((instance) => instance.id !== existing.id),
+      id: existing.id,
       limits,
     })
     if (forcePull) {
@@ -2350,7 +2350,7 @@ export class LifecycleDriver {
       checkExistingUsage: !input.prepareDirectory,
       currentDiskLimitBytes: input.grandfatheredDiskLimitBytes,
       directory: join(this.#config.rootDirectory, input.id),
-      existing,
+      id: input.id,
       limits,
     })
     const architecture =
@@ -2876,15 +2876,18 @@ export class LifecycleDriver {
     checkExistingUsage: boolean
     currentDiskLimitBytes: number | null
     directory: string
-    existing: ReadonlyArray<RelayInstance>
+    id: string
     limits: ResourceLimits
   }): Promise<void> {
-    const filesystem = await statfs(this.#config.rootDirectory)
+    const [filesystem, others] = await Promise.all([
+      statfs(this.#config.rootDirectory),
+      this.#docker.allocations.others("server", input.id),
+    ])
     assertResourceLimitsFit({
       currentDiskBytes: input.currentDiskLimitBytes,
       limits: input.limits,
       nodeDiskBytes: filesystem.blocks * filesystem.bsize,
-      others: input.existing.map((instance) => instance.limits),
+      others,
     })
     const diskLimitBytes = input.limits.diskBytes
     if (input.checkExistingUsage && diskLimitBytes !== null) {

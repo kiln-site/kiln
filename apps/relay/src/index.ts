@@ -40,6 +40,7 @@ import {
   relayDeleteAppSchema,
   relayDeployAppSchema,
   relayDatabaseActionSchema,
+  relayDatabaseLimitsSchema,
   relayDatabaseDumpSchema,
   relayDatabaseDataReadSchema,
   relayDatabaseDataWriteSchema,
@@ -1802,6 +1803,10 @@ async function executeControlRequest(
       return databases.wipe(relayDatabaseWipeSchema.parse(request.payload))
     case "database.action":
       return databases.action(relayDatabaseActionSchema.parse(request.payload))
+    case "database.limits.write":
+      return databases.setLimits(
+        relayDatabaseLimitsSchema.parse(request.payload)
+      )
     case "database.credentials.rotate":
       return databases.rotateCredentials(
         relayRotateDatabaseCredentialsSchema.parse(request.payload)

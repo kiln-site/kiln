@@ -29,6 +29,16 @@ export const resourceLimitsSchema = z
  */
 export const resourceLimitsInputSchema = resourceLimitsSchema.partial()
 
+/**
+ * Limits a Relay reports for an instance. Lenient, since a container can
+ * carry limits Kiln didn't set; a missing field is no limit.
+ */
+export const observedResourceLimitsSchema = z.object({
+  cpuMillis: z.number().int().positive().nullable().default(null),
+  diskBytes: z.number().int().positive().nullable().default(null),
+  memoryBytes: z.number().int().positive().nullable().default(null),
+})
+
 export type ResourceLimits = z.infer<typeof resourceLimitsSchema>
 export type ResourceLimitsInput = z.infer<typeof resourceLimitsInputSchema>
 export type ResourceLimitKey = keyof ResourceLimits

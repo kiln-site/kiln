@@ -22,6 +22,7 @@ import {
   stopGitHubSyncPolling,
 } from "./lib/github-sync.server"
 import { scheduleTailscaleCleanupProcessing } from "./lib/tailscale-cleanup.server"
+import { startDiskLimitWarnings } from "./lib/disk-limit-warnings.server"
 import {
   initializeRelayFromEnvironment,
   maintainPersistedRelayConnections,
@@ -71,6 +72,7 @@ scheduleBackupCopyProcessing()
 scheduleInstancePostProvisionProcessing()
 scheduleTailscaleCleanupProcessing()
 startKilnUpdateNotifications()
+startDiskLimitWarnings()
 forkPromise(wakePendingAuthorizationDelivery, (cause) => {
   reportAppError(cause, { operation: "authorization.delivery.recover" })
 })

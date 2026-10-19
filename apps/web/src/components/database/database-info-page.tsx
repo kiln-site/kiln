@@ -19,6 +19,7 @@ import {
   DatabaseCredentialsSection,
   DatabaseDataSection,
   DatabaseGeneralSettings,
+  DatabaseLimitsSection,
 } from "@/components/database/database-settings"
 import { useDatabaseWorkspace } from "@/components/database/database-workspace-context"
 import {
@@ -74,6 +75,11 @@ export function DatabaseInfoPage() {
           routeId={routeId}
         />
       ) : null}
+      <DatabaseLimitsSection
+        available={available}
+        database={database}
+        editable={can("database.limits.write")}
+      />
       <DatabaseConnectionSettings
         canViewNetwork={can("database.network.read")}
         database={database}

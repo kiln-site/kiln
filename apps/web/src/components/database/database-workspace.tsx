@@ -1,3 +1,4 @@
+import { NO_RESOURCE_LIMITS } from "@workspace/contracts"
 import { instanceInventoryScope } from "@/lib/instance-inventory"
 import { instanceInventoryQueryOptions } from "@/lib/instance-inventory"
 import { inventoryInstanceState } from "@/lib/instance-state"
@@ -119,6 +120,8 @@ function useDatabaseWorkspaceQuery(
         ...(detail ?? {
           connectedInstanceIds: [],
           containerId: null,
+          diskUsedBytes: null,
+          limits: NO_RESOURCE_LIMITS,
           observedState: "failed" as const,
           status: "Unavailable",
         }),
