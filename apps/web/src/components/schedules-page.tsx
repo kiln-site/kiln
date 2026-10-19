@@ -372,8 +372,26 @@ const ScheduleSyncButton = React.memo(function ScheduleSyncButton() {
   )
 })
 
-const scheduleColumnHelper = createDataTableColumnHelper<Schedule>()
-const scheduleSearchFields = [scheduleSearchText] as const
+/**
+ * A schedule with what its row shows that depends on the scope and the
+ * caller's access, worked out once per schedule.
+ */
+interface ScheduleTableItem {
+  canDelete: boolean
+  canDuplicate: boolean
+  canEdit: boolean
+  canRun: boolean
+  lastRun: ScheduleRunWithRelay | null
+  schedule: Schedule
+  targetCounts: InstanceKindCountValues
+  targets: ReadonlyArray<HistoryTarget>
+  targetsAvailable: boolean
+}
+
+const scheduleColumnHelper = createDataTableColumnHelper<ScheduleTableItem>()
+const scheduleSearchFields = [
+  (item: ScheduleTableItem) => scheduleSearchText(item.schedule),
+] as const
 
 const ScheduleTable = React.memo(function ScheduleTable({
   canCreate,
@@ -398,21 +416,32 @@ const ScheduleTable = React.memo(function ScheduleTable({
   onViewHistory: (schedule: Schedule) => void
   onViewRun: (schedule: Schedule, run: ScheduleRunWithRelay) => void
 }) {
-  const source = React.useMemo(
-    (): DataTableSource<Schedule> => ({
-      body: { kind: "ready" },
-      refreshing: false,
-      rows: schedules,
-    }),
-    [schedules]
+  // Items keep their identity while their schedule, the scope, and access
+  // stay the same, so an update to one schedule re-renders only its row.
+  const itemCache = React.useMemo(
+    () => new WeakMap<Schedule, ScheduleTableItem>(),
+    [optionMap, scope]
   )
+  const source = React.useMemo((): DataTableSource<ScheduleTableItem> => {
+    const rows = schedules.map((schedule) => {
+      let item = itemCache.get(schedule)
+      if (!item) {
+        item = scheduleTableItem(schedule, optionMap, scope)
+        itemCache.set(schedule, item)
+      }
+      return item
+    })
+    return { body: { kind: "ready" }, refreshing: false, rows }
+  }, [itemCache, optionMap, schedules, scope])
+  // The columns read everything that changes from the row, so they're built
+  // once and cells never remount, which would drop a pending action.
   const definition = React.useMemo(
     () =>
       defineDataTable({
         ariaLabel: "Schedules",
         columns: scheduleColumnHelper.columns([
           scheduleColumnHelper.accessor(
-            (schedule) => scheduleStatusPresentation(schedule).label,
+            ({ schedule }) => scheduleStatusPresentation(schedule).label,
             {
               id: "status",
               header: () => (
@@ -421,7 +450,7 @@ const ScheduleTable = React.memo(function ScheduleTable({
               sortFn: "text",
               cell: ({ row }) => (
                 <StatusIndicator
-                  status={scheduleStatusPresentation(row.original)}
+                  status={scheduleStatusPresentation(row.original.schedule)}
                 />
               ),
               meta: dataTableColumnMeta(
@@ -434,18 +463,14 @@ const ScheduleTable = React.memo(function ScheduleTable({
               ),
             }
           ),
-          scheduleColumnHelper.accessor("name", {
+          scheduleColumnHelper.accessor(({ schedule }) => schedule.name, {
             id: "schedule",
             header: "Schedule",
             sortFn: "text",
             cell: ({ row }) => (
               <ScheduleName
-                canEdit={canOperateSchedule(
-                  row.original,
-                  optionMap,
-                  "canUpdate"
-                )}
-                schedule={row.original}
+                canEdit={row.original.canEdit}
+                schedule={row.original.schedule}
                 onEdit={onEdit}
               />
             ),
@@ -453,28 +478,29 @@ const ScheduleTable = React.memo(function ScheduleTable({
               width: { base: "minmax(0,1fr)", md: "minmax(0,1.3fr)" },
             }),
           }),
+          scheduleColumnHelper.accessor(({ targets }) => targets.length, {
+            id: "targets",
+            header: "Targets",
+            sortFn: sortFn_basic,
+            cell: ({ row }) => (
+              <HistoryTargets
+                counts={row.original.targetCounts}
+                name={row.original.schedule.name}
+                relayName=""
+                targets={row.original.targets}
+              />
+            ),
+            meta: dataTableColumnMeta({ hideBelow: "xl", width: "11rem" }),
+          }),
           scheduleColumnHelper.accessor(
-            (schedule) => schedule.targets.length,
-            {
-              id: "targets",
-              header: "Targets",
-              sortFn: sortFn_basic,
-              cell: ({ row }) => (
-                <ScheduleTargets
-                  optionMap={optionMap}
-                  schedule={row.original}
-                />
-              ),
-              meta: dataTableColumnMeta({ hideBelow: "xl", width: "11rem" }),
-            }
-          ),
-          scheduleColumnHelper.accessor(
-            (schedule) => scheduleNextRun(schedule)?.getTime() ?? Infinity,
+            ({ schedule }) => scheduleNextRun(schedule)?.getTime() ?? Infinity,
             {
               id: "timing",
               header: "Timing",
               sortFn: sortFn_basic,
-              cell: ({ row }) => <ScheduleTiming schedule={row.original} />,
+              cell: ({ row }) => (
+                <ScheduleTiming schedule={row.original.schedule} />
+              ),
               meta: dataTableColumnMeta({
                 hideBelow: "md",
                 width: "minmax(7.5rem,0.6fr)",
@@ -482,15 +508,15 @@ const ScheduleTable = React.memo(function ScheduleTable({
             }
           ),
           scheduleColumnHelper.accessor(
-            (schedule) => scheduleLastRun(schedule, scope)?.finishedAt ?? 0,
+            ({ lastRun }) => lastRun?.finishedAt ?? 0,
             {
               id: "latest",
               header: "Latest run",
               sortFn: sortFn_basic,
               cell: ({ row }) => (
                 <ScheduleLastRun
-                  schedule={row.original}
-                  scope={scope}
+                  run={row.original.lastRun}
+                  schedule={row.original.schedule}
                   onView={onViewRun}
                 />
               ),
@@ -503,8 +529,7 @@ const ScheduleTable = React.memo(function ScheduleTable({
             enableSorting: false,
             cell: ({ row }) => (
               <ScheduleActions
-                optionMap={optionMap}
-                schedule={row.original}
+                item={row.original}
                 onDelete={onDelete}
                 onEdit={onEdit}
                 onViewHistory={onViewHistory}
@@ -519,11 +544,11 @@ const ScheduleTable = React.memo(function ScheduleTable({
             ),
           }),
         ]),
-        getRowId: scheduleRowKey,
+        getRowId: ({ schedule }) => scheduleRowKey(schedule),
         search: { fields: scheduleSearchFields },
         virtualization: true,
       }),
-    [onDelete, onEdit, onViewHistory, onViewRun, optionMap, scope]
+    [onDelete, onEdit, onViewHistory, onViewRun]
   )
   const emptyState = React.useCallback(
     ({ searchActive }: { searchActive: boolean }) => (
@@ -567,6 +592,31 @@ const ScheduleTable = React.memo(function ScheduleTable({
   )
 })
 
+function scheduleTableItem(
+  schedule: Schedule,
+  optionMap: ReadonlyMap<string, ScheduleOption>,
+  scope: ScheduleScope | null
+): ScheduleTableItem {
+  const targets = schedule.targets.map((target) =>
+    scheduleHistoryTarget(target, optionMap.get(targetKey(target))?.relayName)
+  )
+  return {
+    canDelete: schedule.targets.every(
+      (target) => optionMap.get(targetKey(target))?.canDelete
+    ),
+    canDuplicate: canOperateSchedule(schedule, optionMap, "canCreate"),
+    canEdit: canOperateSchedule(schedule, optionMap, "canUpdate"),
+    canRun: canOperateSchedule(schedule, optionMap, "canExecute"),
+    lastRun: scheduleLastRun(schedule, scope),
+    schedule,
+    targetCounts: historyTargetCounts(targets),
+    targets,
+    targetsAvailable: schedule.targets.every(
+      (target) => optionMap.get(targetKey(target))?.available
+    ),
+  }
+}
+
 const ScheduleName = React.memo(function ScheduleName({
   canEdit,
   schedule,
@@ -601,55 +651,26 @@ const ScheduleName = React.memo(function ScheduleName({
   )
 })
 
-const ScheduleTargets = React.memo(function ScheduleTargets({
-  optionMap,
-  schedule,
-}: {
-  optionMap: ReadonlyMap<string, ScheduleOption>
-  schedule: Schedule
-}) {
-  const { counts, targets } = React.useMemo(() => {
-    const targets = schedule.targets.map((target) =>
-      scheduleHistoryTarget(
-        target,
-        optionMap.get(targetKey(target))?.relayName
-      )
-    )
-    return { counts: historyTargetCounts(targets), targets }
-  }, [optionMap, schedule.targets])
-  return (
-    <HistoryTargets
-      counts={counts}
-      name={schedule.name}
-      relayName=""
-      targets={targets}
-    />
-  )
-})
-
 const ScheduleActions = React.memo(function ScheduleActions({
-  optionMap,
-  schedule,
+  item,
   onDelete,
   onEdit,
   onViewHistory,
 }: {
-  optionMap: ReadonlyMap<string, ScheduleOption>
-  schedule: Schedule
+  item: ScheduleTableItem
   onDelete: (schedule: Schedule) => void
   onEdit: (schedule: Schedule) => void
   onViewHistory: (schedule: Schedule) => void
 }) {
   const queryClient = useQueryClient()
-  const canEdit = canOperateSchedule(schedule, optionMap, "canUpdate")
-  const canDelete = schedule.targets.every(
-    (target) => optionMap.get(targetKey(target))?.canDelete
-  )
-  const targetsAvailable = schedule.targets.every(
-    (target) => optionMap.get(targetKey(target))?.available
-  )
-  const canRun = canOperateSchedule(schedule, optionMap, "canExecute")
-  const canDuplicate = canOperateSchedule(schedule, optionMap, "canCreate")
+  const {
+    canDelete,
+    canDuplicate,
+    canEdit,
+    canRun,
+    schedule,
+    targetsAvailable,
+  } = item
   const runMutation = useMutation({
     mutationFn: () => runScheduleNow({ data: { id: schedule.id } }),
     onSuccess: async (result) => {
@@ -896,58 +917,69 @@ const RelativeTimeText = React.memo(function RelativeTimeText({
 })
 
 const ScheduleLastRun = React.memo(function ScheduleLastRun({
+  run,
   schedule,
-  scope,
   onView,
 }: {
+  run: ScheduleRunWithRelay | null
   schedule: Schedule
-  scope: ScheduleScope | null
   onView: (schedule: Schedule, run: ScheduleRunWithRelay) => void
 }) {
-  const run = scheduleLastRun(schedule, scope)
   if (!run) {
     return <span className="type-meta text-muted-foreground">Never</span>
   }
   const result = latestRunResult(run)
+  const finishedAt = new Date(run.finishedAt)
+  // The tooltip sits on the button, so focusing it shows the full date too.
   return (
-    <button
-      type="button"
-      aria-label={`View the latest ${schedule.name} run`}
-      className="group/latest-run type-meta flex max-w-full min-w-0 flex-col items-start rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-      onClick={() => onView(schedule, run)}
-    >
-      <span
-        className={cn(
-          "inline-flex max-w-full items-center gap-1.5 text-xs font-medium group-hover/latest-run:underline",
-          latestRunResultClassName[result]
-        )}
-      >
-        <span
-          className={cn(
-            "size-1.5 shrink-0 rounded-full",
-            latestRunResultDotClassName[result]
-          )}
-        />
-        {result}
-      </span>
-      <RelativeTime
-        className="max-w-full text-muted-foreground"
-        timestamp={run.finishedAt}
-      />
-    </button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label={`View the latest ${schedule.name} run`}
+          className="group/latest-run type-meta flex max-w-full min-w-0 flex-col items-start rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          onClick={() => onView(schedule, run)}
+        >
+          <span
+            className={cn(
+              "inline-flex max-w-full items-center gap-1.5 text-xs font-medium group-hover/latest-run:underline",
+              latestRunResultClassName[result]
+            )}
+          >
+            <span
+              className={cn(
+                "size-1.5 shrink-0 rounded-full",
+                latestRunResultDotClassName[result]
+              )}
+            />
+            {result}
+          </span>
+          <time
+            className="max-w-full truncate text-muted-foreground"
+            dateTime={finishedAt.toISOString()}
+            suppressHydrationWarning
+          >
+            <RelativeTimeText date={finishedAt} />
+          </time>
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">
+        {fullTimestampLabel(finishedAt, schedule.timezone)}
+      </TooltipContent>
+    </Tooltip>
   )
 })
 
 const latestRunResultClassName = {
-  Errored: "text-amber-300",
+  Errored: "text-amber-700 dark:text-amber-300",
   Failed: "text-destructive",
-  Success: "text-emerald-300",
+  Success: "text-emerald-700 dark:text-emerald-300",
 } as const satisfies Record<ReturnType<typeof latestRunResult>, string>
 
 const latestRunResultDotClassName = {
-  Errored: "bg-amber-400",
+  Errored: "bg-amber-500 dark:bg-amber-400",
   Failed: "bg-destructive",
-  Success: "bg-emerald-400",
+  Success: "bg-emerald-500 dark:bg-emerald-400",
 } as const satisfies Record<ReturnType<typeof latestRunResult>, string>
 
 function latestRunResult(run: ScheduleRunWithRelay) {
@@ -1390,7 +1422,7 @@ const ScheduleHistoryTable = React.memo(function ScheduleHistoryTable({
                 targets={row.original.targets}
               />
             ),
-            meta: dataTableColumnMeta({ hideBelow: "xl", width: "11rem" }),
+            meta: dataTableColumnMeta({ hideBelow: "lg", width: "11rem" }),
           }),
           historyColumnHelper.accessor("startedAt", {
             id: "started",
