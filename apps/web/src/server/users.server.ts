@@ -11,7 +11,11 @@ import type { AuthenticatedUser } from "@/lib/auth-session"
 import { databaseTable } from "@/lib/database-config"
 import { databasePool } from "@/lib/database"
 import { isMinecraftUsername } from "@/lib/minecraft-profile"
-import type { ResourceScope } from "@/lib/resource-permissions"
+import {
+  effectiveScopePermissions,
+  loadResourceGrantsEffect,
+  type ResourceScope,
+} from "@/lib/resource-permissions"
 
 // The platform Users table and its Manage dialog. The server functions in
 // ./users authenticate, then hand the user here.
@@ -443,15 +447,31 @@ export async function getUserAccessHandler(
  */
 export async function getUserMinecraftProfilesHandler(
   actor: AuthenticatedUser,
-  userIds: ReadonlyArray<string>
+  userIds: ReadonlyArray<string>,
+  /** Outside the platform view: a resource whose people the actor can read. */
+  scope?: ResourceScope
 ): Promise<Record<string, string>> {
-  requirePlatformAdmin(actor)
+  const admin = isPlatformAdmin(actor)
+  if (!admin) {
+    if (!scope) throw new Error("Platform administrator required")
+    const grants = await runAppEffect(
+      "access.scope",
+      loadResourceGrantsEffect(actor.id, scope.relayId, undefined, scope)
+    )
+    if (!effectiveScopePermissions(grants, scope).has("access.read"))
+      throw new Error("Resource not found")
+  }
   if (!userIds.length) return {}
+  // Others only see heads for people with access on the same Relay.
   const [rows] = await databasePool.query<
     Array<RowDataPacket & { id: string; name: string }>
   >(
-    `SELECT u.id, u.name FROM ${databaseTable("user")} u WHERE u.id IN (?) AND ${hasCredential}`,
-    [userIds]
+    `SELECT u.id, u.name FROM ${databaseTable("user")} u WHERE u.id IN (?) AND ${hasCredential}${
+      admin
+        ? ""
+        : ` AND EXISTS (SELECT 1 FROM ${databaseTable("access_grant")} g WHERE g.user_id = u.id AND g.relay_id = ? AND g.state <> 'revoked')`
+    }`,
+    admin ? [userIds] : [userIds, scope!.relayId]
   )
   const named = rows.filter((row) => isMinecraftUsername(row.name))
   const profiles = await runAppEffect(

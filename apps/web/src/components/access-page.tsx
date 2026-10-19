@@ -343,6 +343,7 @@ function ResourceAccessPanel({
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["resource-access"] })
       void queryClient.invalidateQueries({ queryKey: ["access"] })
+      setAcceptTarget(null)
       showToast({ type: "success", message: "Invitation accepted for user" })
     },
   })
@@ -383,13 +384,8 @@ function ResourceAccessPanel({
   })
   const invite = useCallback(() => setInviting(true), [])
   const createPreset = useCallback(() => setPreset("new"), [])
-  const accept = useCallback(
-    (person: Person) =>
-      decision.mutate({
-        data: { id: person.invitationId!, decision: "accept", force: true },
-      }),
-    [decision.mutate]
-  )
+  const [acceptTarget, setAcceptTarget] = useState<Person | null>(null)
+  const accept = setAcceptTarget
   return (
     <>
       {tab === "users" ? (
@@ -466,10 +462,15 @@ function ResourceAccessPanel({
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Revoke access?</DialogTitle>
+            <DialogTitle>
+              {revokeTarget?.state === "pending"
+                ? "Cancel invitation?"
+                : "Revoke access?"}
+            </DialogTitle>
             <DialogDescription>
-              {revokeTarget?.name} will lose their direct access to this
-              instance. Access inherited from a Relay will still apply.
+              {revokeTarget?.state === "pending"
+                ? `${revokeTarget.name}'s invitation to this resource is cancelled.`
+                : `${revokeTarget?.name} will lose their direct access to this resource. Access inherited from a Relay will still apply.`}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -498,7 +499,51 @@ function ResourceAccessPanel({
                 })
               }
             >
-              Revoke access
+              {revokeTarget?.state === "pending"
+                ? "Cancel invitation"
+                : "Revoke access"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={!!acceptTarget}
+        onOpenChange={(open) => {
+          if (!open && !decision.isPending) setAcceptTarget(null)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              Accept invitation for {acceptTarget?.name}?
+            </DialogTitle>
+            <DialogDescription>
+              They get this access right away, without accepting it themselves.
+              The invitation is recorded as accepted by you.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={decision.isPending}
+              onClick={() => setAcceptTarget(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              disabled={decision.isPending}
+              onClick={() =>
+                acceptTarget?.invitationId &&
+                decision.mutate({
+                  data: {
+                    id: acceptTarget.invitationId,
+                    decision: "accept",
+                    force: true,
+                  },
+                })
+              }
+            >
+              {decision.isPending ? "Accepting…" : "Accept invitation"}
             </Button>
           </DialogFooter>
         </DialogContent>

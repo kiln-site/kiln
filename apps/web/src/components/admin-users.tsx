@@ -1,5 +1,4 @@
 import {
-  createContext,
   memo,
   useCallback,
   useContext,
@@ -24,6 +23,7 @@ import {
   EllipsisVertical,
   KeyRound,
   Mail,
+  MailCheck,
   Plus,
   RadioTower,
   Server,
@@ -44,7 +44,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
 import { showToast } from "@workspace/ui/components/sonner"
@@ -66,7 +65,11 @@ import {
   DataTableWorkspace,
 } from "@/components/data-table-workspace"
 import { UserAccessDialog, UserBadges } from "@/components/user-access-dialog"
-import { UserIdentity } from "@/components/user-identity"
+import {
+  UserActionButton,
+  UserProfilesContext,
+  UserRowIdentity,
+} from "@/components/user-table-parts"
 import {
   createDataTableColumnHelper,
   dataTableColumnMeta,
@@ -79,8 +82,15 @@ import {
 import { useCursorDataTableSource } from "@/lib/data-table-source"
 import { stateLabel } from "@/lib/managed-user"
 import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
-import { removePlatformAccess, revokeAccessInvitation } from "@/server/access"
-import { updateResourceAccess } from "@/server/resource-access"
+import {
+  grantOrInviteAccess,
+  removePlatformAccess,
+  revokeAccessInvitation,
+} from "@/server/access"
+import {
+  decideResourceInvitation,
+  updateResourceAccess,
+} from "@/server/resource-access"
 import {
   getUserAccess,
   getUserMinecraftProfiles,
@@ -99,10 +109,7 @@ type UserAction =
   | { kind: "add" }
   | { kind: "remove"; user: ManagedUser }
   | { kind: "status"; user: ManagedUser }
-
-// Minecraft heads load after the rows. Reading them from context re-renders
-// only the identity cells when they arrive, not every row and its actions.
-const UserProfilesContext = createContext(NO_PROFILES)
+  | { kind: "accept"; user: ManagedUser }
 
 export const AdminUsers = memo(function AdminUsers() {
   const [searchStore] = useState(() => createDataTableSearchStore())
@@ -139,6 +146,8 @@ export const AdminUsers = memo(function AdminUsers() {
         <RemoveUserDialog user={action.user} onClose={close} />
       ) : action?.kind === "status" ? (
         <UserStatusDialog user={action.user} onClose={close} />
+      ) : action?.kind === "accept" ? (
+        <AcceptInvitationsDialog user={action.user} onClose={close} />
       ) : null}
     </DataTableWorkspace>
   )
@@ -212,7 +221,9 @@ const UserTable = memo(function UserTable({
             id: "instances",
             header: "Instances",
             enableSorting: false,
-            cell: ({ row }) => <UserHoldings user={row.original} />,
+            cell: ({ row }) => (
+              <UserHoldings user={row.original} onAction={onAction} />
+            ),
             meta: dataTableColumnMeta({
               hideBelow: "md",
               width: "minmax(11rem,1.2fr)",
@@ -281,33 +292,24 @@ const UserCell = memo(function UserCell({
 }) {
   const profileId = useContext(UserProfilesContext)[user.id]
   return (
-    <>
-      {/* Covers the row: clicking anywhere but an action manages the user. */}
-      <button
-        type="button"
-        aria-label={`Manage ${user.name}`}
-        className="absolute inset-0 outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset"
-        onClick={() => onAction({ kind: "manage", userId: user.id, profileId })}
-      />
-      <UserIdentity
-        className="pointer-events-none relative w-full"
-        emailClassName="pointer-events-auto relative"
-        name={user.name}
-        email={user.email}
-        profileId={profileId}
-        accessory={
-          <>
-            <UserBadges user={user} />
-            {/* The Status column is hidden on phones. */}
-            {user.state === "active" ? null : (
-              <span className="sm:hidden">
-                <UserState user={user} />
-              </span>
-            )}
-          </>
-        }
-      />
-    </>
+    <UserRowIdentity
+      userId={user.id}
+      name={user.name}
+      email={user.email}
+      openLabel={`Manage ${user.name}`}
+      onOpen={() => onAction({ kind: "manage", userId: user.id, profileId })}
+      accessory={
+        <>
+          <UserBadges user={user} />
+          {/* The Status column is hidden on phones. */}
+          {user.state === "active" ? null : (
+            <span className="sm:hidden">
+              <UserState user={user} />
+            </span>
+          )}
+        </>
+      }
+    />
   )
 })
 
@@ -363,10 +365,12 @@ const holdingKinds = [
 
 const UserHoldings = memo(function UserHoldings({
   user,
+  onAction,
 }: {
   user: ManagedUser
+  onAction: (action: UserAction) => void
 }) {
-  const { pending } = user.access
+  const pending = user.access.pending + (user.invitedRole ? 1 : 0)
   return (
     <span className="type-meta flex min-w-0 items-center gap-3 text-muted-foreground">
       {holdingKinds.map(({ key, icon: Icon, tone, one, other }) => {
@@ -391,14 +395,24 @@ const UserHoldings = memo(function UserHoldings({
         <span aria-hidden className="h-3.5 w-px shrink-0 bg-border" />
       ) : null}
       {pending ? (
-        <span
-          title={`${pending} unanswered invitation${pending === 1 ? "" : "s"}`}
-          className="flex items-center gap-1 text-amber-700 tabular-nums dark:text-amber-300"
-        >
-          <Mail className="size-3.5" aria-hidden="true" />
-          {pending}
-          <span className="sr-only">invited</span>
-        </span>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            {/* Above the row's manage button, so it can be clicked on its own. */}
+            <button
+              type="button"
+              aria-label={`Accept ${pending} invitation${pending === 1 ? "" : "s"} for ${user.name}`}
+              className="relative z-10 -mx-1 flex h-7 items-center gap-1 rounded-md px-1 text-amber-700 tabular-nums transition-colors hover:bg-amber-500/10 dark:text-amber-300"
+              onClick={() => onAction({ kind: "accept", user })}
+            >
+              <Mail className="size-3.5" aria-hidden="true" />
+              {pending}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {pending} unanswered invitation{pending === 1 ? "" : "s"}. Click to
+            accept for them.
+          </TooltipContent>
+        </Tooltip>
       ) : null}
     </span>
   )
@@ -414,6 +428,7 @@ const UserActions = memo(function UserActions({
   onAction: (action: UserAction) => void
 }) {
   const enabled = user.status === "enabled"
+  const invitations = user.access.pending + (user.invitedRole ? 1 : 0)
   const removeBlocked = self
     ? "You can't remove yourself"
     : user.access.owned
@@ -422,48 +437,22 @@ const UserActions = memo(function UserActions({
   return (
     <DataTableActionGroup>
       {self ? null : (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              aria-label={`${enabled ? "Disable" : "Enable"} ${user.name}`}
-              className={cn(
-                "text-muted-foreground",
-                enabled ? "hover:text-amber-500" : "hover:text-emerald-500"
-              )}
-              onClick={() => onAction({ kind: "status", user })}
-            >
-              {enabled ? <Ban /> : <UserCheck />}
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            {enabled ? "Disable account" : "Enable account"}
-          </TooltipContent>
-        </Tooltip>
+        <UserActionButton
+          icon={enabled ? Ban : UserCheck}
+          tone={enabled ? "warning" : "success"}
+          label={`${enabled ? "Disable" : "Enable"} ${user.name}`}
+          tooltip={enabled ? "Disable account" : "Enable account"}
+          onClick={() => onAction({ kind: "status", user })}
+        />
       )}
-      <Tooltip>
-        <TooltipTrigger asChild>
-          {/* A disabled button gets no pointer events, so the tooltip hangs on its wrapper. */}
-          <span className="inline-flex">
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              aria-label={`Remove ${user.name}`}
-              disabled={!!removeBlocked}
-              className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-              onClick={() => onAction({ kind: "remove", user })}
-            >
-              <Trash2 />
-            </Button>
-          </span>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">
-          {removeBlocked ?? "Remove from Kiln"}
-        </TooltipContent>
-      </Tooltip>
+      <UserActionButton
+        icon={Trash2}
+        tone="danger"
+        label={`Remove ${user.name}`}
+        tooltip={removeBlocked ?? "Remove from Kiln"}
+        disabled={!!removeBlocked}
+        onClick={() => onAction({ kind: "remove", user })}
+      />
       <DropdownMenu>
         <Tooltip>
           <TooltipTrigger asChild>
@@ -480,7 +469,7 @@ const UserActions = memo(function UserActions({
           </TooltipTrigger>
           <TooltipContent side="bottom">More actions</TooltipContent>
         </Tooltip>
-        <DropdownMenuContent align="end" className="min-w-44">
+        <DropdownMenuContent align="end" className="min-w-48">
           <DropdownMenuItem
             onSelect={() => onAction({ kind: "manage", userId: user.id })}
           >
@@ -493,7 +482,14 @@ const UserActions = memo(function UserActions({
               </Link>
             </DropdownMenuItem>
           ) : null}
-          <DropdownMenuSeparator />
+          {invitations ? (
+            <DropdownMenuItem
+              onSelect={() => onAction({ kind: "accept", user })}
+            >
+              <MailCheck />
+              {invitations === 1 ? "Accept invitation" : "Accept invitations"}
+            </DropdownMenuItem>
+          ) : null}
           <CopyIdentifierMenuItem label="Email" value={user.email} />
           <CopyIdentifierMenuItem label="User ID" value={user.id} />
         </DropdownMenuContent>
@@ -642,6 +638,92 @@ function UserStatusDialog({
             onClick={() => update.mutate()}
           >
             {enabled ? "Disable account" : "Enable account"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function AcceptInvitationsDialog({
+  user,
+  onClose,
+}: {
+  user: ManagedUser
+  onClose: () => void
+}) {
+  const client = useQueryClient()
+  const count = user.access.pending + (user.invitedRole ? 1 : 0)
+  const accept = useMutation({
+    // Resource invitations are accepted for them and recorded as accepted by
+    // you. A platform role has no accept path, so it is assigned and its
+    // invitation cancelled.
+    mutationFn: async () => {
+      const access = await getUserAccess({ data: { userId: user.id } })
+      for (const grant of access.grants)
+        if (grant.state === "pending" && grant.invitationId)
+          await decideResourceInvitation({
+            data: { id: grant.invitationId, decision: "accept", force: true },
+          })
+      if (access.user.invitedRole) {
+        await grantOrInviteAccess({
+          data: {
+            userId: user.id,
+            email: user.email,
+            accessType: access.user.invitedRole,
+          },
+        })
+        for (const id of access.platformInvitationIds)
+          await revokeAccessInvitation({ data: { id } })
+      }
+    },
+    onSuccess: () => {
+      invalidateUsers(client)
+      showToast({
+        type: "success",
+        message: `Accepted for ${user.name}`,
+      })
+      onClose()
+    },
+    onError: (error) => {
+      invalidateUsers(client)
+      showToast({ type: "error", message: error.message })
+    },
+  })
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open && !accept.isPending) onClose()
+      }}
+    >
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>
+            Accept {count === 1 ? "invitation" : `${count} invitations`} for{" "}
+            {user.name}?
+          </DialogTitle>
+          <DialogDescription>
+            They get this access right away, without accepting it themselves.
+            {user.invitedRole
+              ? ` That includes the ${user.invitedRole === "platform_admin" ? "platform administrator" : "Relay creator"} role.`
+              : ""}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button
+            variant="outline"
+            disabled={accept.isPending}
+            onClick={onClose}
+          >
+            Cancel
+          </Button>
+          <Button disabled={accept.isPending} onClick={() => accept.mutate()}>
+            {accept.isPending
+              ? "Accepting…"
+              : count === 1
+                ? "Accept invitation"
+                : "Accept invitations"}
           </Button>
         </DialogFooter>
       </DialogContent>

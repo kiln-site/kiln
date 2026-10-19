@@ -17,6 +17,7 @@ import {
   requireAuthenticatedUser,
   requireEligibleResourceUser,
 } from "@/server/auth"
+import { resourceScopeSchema } from "@/server/resource-access"
 import {
   getUserAccessHandler,
   getUserMinecraftProfilesHandler,
@@ -75,11 +76,17 @@ export const getUserAccess = createServerFn({ method: "GET" })
 // Heads for the Users table, resolved after its rows so Mojang never holds
 // them up.
 export const getUserMinecraftProfiles = createServerFn({ method: "GET" })
-  .validator(z.object({ userIds: z.array(z.string().min(1).max(36)).max(100) }))
+  .validator(
+    z.object({
+      userIds: z.array(z.string().min(1).max(36)).max(100),
+      scope: resourceScopeSchema.optional(),
+    })
+  )
   .handler(async ({ data }) =>
     getUserMinecraftProfilesHandler(
       await requireEligibleResourceUser(),
-      data.userIds
+      data.userIds,
+      data.scope
     )
   )
 

@@ -7,7 +7,18 @@ import {
   useSyncExternalStore,
 } from "react"
 import { Link } from "@tanstack/react-router"
-import { EllipsisVertical, Plus, Shield, Users } from "lucide-react"
+import { useQuery } from "@tanstack/react-query"
+import {
+  Activity,
+  ArrowRightLeft,
+  EllipsisVertical,
+  KeyRound,
+  MailCheck,
+  Plus,
+  Shield,
+  Trash2,
+  Users,
+} from "lucide-react"
 import { Button } from "@workspace/ui/components/button"
 import { Badge } from "@workspace/ui/components/badge"
 import { Dialog } from "@workspace/ui/components/dialog"
@@ -22,9 +33,14 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
-import { copyWithToast, utcTimestamp } from "@/components/access-format"
+import { utcTimestamp } from "@/components/access-format"
 import { DataTable } from "@/components/data-table-view"
-import { DataTableEmptyState, DataTableTextCell } from "@/components/data-table"
+import { CopyIdentifierMenuItem } from "@/components/copy-identifier-menu-item"
+import {
+  DataTableActionGroup,
+  DataTableEmptyState,
+  DataTableTextCell,
+} from "@/components/data-table"
 import {
   DataTableToolbar,
   DataTableWorkspace,
@@ -34,7 +50,11 @@ import {
   PermissionEditor,
   type PermissionTarget,
 } from "@/components/permission-editor"
-import { UserIdentity } from "@/components/user-identity"
+import {
+  UserActionButton,
+  UserProfilesContext,
+  UserRowIdentity,
+} from "@/components/user-table-parts"
 import {
   createDataTableColumnHelper,
   dataTableColumnMeta,
@@ -46,6 +66,7 @@ import {
 } from "@/lib/data-table-search"
 import type { DataTableSource } from "@/lib/data-table-source"
 import type { getResourceAccess } from "@/server/resource-access"
+import { getUserMinecraftProfiles } from "@/server/users"
 
 export type ScopeAccess = Awaited<ReturnType<typeof getResourceAccess>>
 export type Person = ScopeAccess["people"][number]
@@ -68,6 +89,12 @@ interface PeopleProps {
   onAccept: (person: Person) => void
   onInvite: () => void
 }
+type PersonHandlers = Pick<
+  PeopleProps,
+  "access" | "onEdit" | "onTransfer" | "onRevoke" | "onAccept"
+> & { onView: (person: Person) => void }
+
+const NO_PROFILES: Record<string, string> = {}
 
 export const ResourcePeopleTable = memo(function ResourcePeopleTable({
   access,
@@ -84,6 +111,32 @@ export const ResourcePeopleTable = memo(function ResourcePeopleTable({
     searchStore.getNormalizedSnapshot,
     searchStore.getNormalizedServerSnapshot
   )
+  const [viewing, setViewing] = useState<Person | null>(null)
+  const scope = access?.scope
+  const userIds = useMemo(
+    () => [
+      ...new Set(
+        source.rows.flatMap((person) => (person.userId ? [person.userId] : []))
+      ),
+    ],
+    [source.rows]
+  )
+  const profiles = useQuery({
+    queryKey: [
+      "users",
+      "minecraft-profiles",
+      scope?.relayId,
+      scope?.resourceType,
+      scope?.resourceId,
+      userIds.join(","),
+    ],
+    queryFn: () =>
+      getUserMinecraftProfiles({
+        data: { userIds: userIds.slice(0, 100), scope: scope! },
+      }),
+    enabled: !!scope && userIds.length > 0,
+    staleTime: 60 * 60_000,
+  })
   const definition = useMemo(() => {
     const names = new Map([
       ...(access?.defaults.map(
@@ -92,6 +145,14 @@ export const ResourcePeopleTable = memo(function ResourcePeopleTable({
       ...(access?.presets.map((preset) => [preset.id, preset.name] as const) ??
         []),
     ])
+    const handlers: PersonHandlers = {
+      access,
+      onEdit,
+      onTransfer,
+      onRevoke,
+      onAccept,
+      onView: setViewing,
+    }
     return defineDataTable({
       ariaLabel: "Resource users",
       columns: personHelper.columns([
@@ -99,19 +160,7 @@ export const ResourcePeopleTable = memo(function ResourcePeopleTable({
           header: "User",
           sortFn: "text",
           cell: ({ row }) => (
-            <UserIdentity
-              className="w-full"
-              name={row.original.name}
-              email={row.original.email}
-              accessory={
-                <Badge
-                  variant="outline"
-                  className="h-4 px-1 text-[10px] sm:hidden"
-                >
-                  {personStatus(row.original)}
-                </Badge>
-              }
-            />
+            <PersonIdentity person={row.original} {...handlers} />
           ),
           meta: dataTableColumnMeta({ width: "minmax(0,1.4fr)" }),
         }),
@@ -162,20 +211,20 @@ export const ResourcePeopleTable = memo(function ResourcePeopleTable({
         personHelper.display({
           id: "actions",
           header: () => <span className="sr-only">Actions</span>,
+          enableSorting: false,
           cell: ({ row }) => (
-            <PersonActions
-              person={row.original}
-              access={access}
-              onEdit={onEdit}
-              onTransfer={onTransfer}
-              onRevoke={onRevoke}
-              onAccept={onAccept}
-            />
+            <PersonActions person={row.original} {...handlers} />
           ),
-          meta: dataTableColumnMeta({ width: "3.5rem" }),
+          // Above the row's open button, so a near miss on an action doesn't
+          // open the person instead.
+          meta: dataTableColumnMeta(
+            { width: { base: "7.25rem" } },
+            { cellClassName: "relative z-10 px-2" }
+          ),
         }),
       ]),
       getRowId: (person) => person.id,
+      getRowClassName: () => "relative cursor-pointer",
     })
   }, [access, onEdit, onTransfer, onRevoke, onAccept])
   return (
@@ -210,24 +259,62 @@ export const ResourcePeopleTable = memo(function ResourcePeopleTable({
         />
       }
     >
-      <DataTable
-        definition={definition}
-        source={source}
-        emptyState={
-          <DataTableEmptyState
-            icon={<Users className="size-6 text-muted-foreground/45" />}
-            title={
-              search ? "No users match your search" : "No additional users"
-            }
-            description={
-              search
-                ? "Try a name or email address."
-                : "Invite someone to share access to this resource."
-            }
-          />
-        }
-      />
+      <UserProfilesContext.Provider value={profiles.data ?? NO_PROFILES}>
+        <DataTable
+          definition={definition}
+          source={source}
+          emptyState={
+            <DataTableEmptyState
+              icon={<Users className="size-6 text-muted-foreground/45" />}
+              title={
+                search ? "No users match your search" : "No additional users"
+              }
+              description={
+                search
+                  ? "Try a name or email address."
+                  : "Invite someone to share access to this resource."
+              }
+            />
+          }
+        />
+      </UserProfilesContext.Provider>
+      {viewing ? (
+        <PersonPermissionsDialog
+          person={viewing}
+          access={access}
+          viewing
+          onOpenChange={(open) => {
+            if (!open) setViewing(null)
+          }}
+        />
+      ) : null}
     </DataTableWorkspace>
+  )
+})
+
+const canEditPerson = (person: Person, access?: ScopeAccess) =>
+  !!access?.canManage && !person.inherited && !person.isOwner
+
+const PersonIdentity = memo(function PersonIdentity({
+  person,
+  access,
+  onEdit,
+  onView,
+}: PersonHandlers & { person: Person }) {
+  const canEdit = canEditPerson(person, access)
+  return (
+    <UserRowIdentity
+      userId={person.userId}
+      name={person.name}
+      email={person.email}
+      openLabel={`${canEdit ? "Edit" : "View"} access for ${person.name}`}
+      onOpen={() => (canEdit ? onEdit(person) : onView(person))}
+      accessory={
+        <Badge variant="outline" className="h-4 px-1 text-[10px] sm:hidden">
+          {personStatus(person)}
+        </Badge>
+      }
+    />
   )
 })
 
@@ -235,17 +322,37 @@ const PersonActions = memo(function PersonActions({
   person,
   access,
   onEdit,
+  onView,
   onTransfer,
   onRevoke,
   onAccept,
-}: Pick<
-  PeopleProps,
-  "access" | "onEdit" | "onTransfer" | "onRevoke" | "onAccept"
-> & { person: Person }) {
-  const [viewing, setViewing] = useState(false)
-  const canEdit = access?.canManage && !person.inherited && !person.isOwner
+}: PersonHandlers & { person: Person }) {
+  const accepting = useContext(AcceptingInvitationContext)
+  const canEdit = canEditPerson(person, access)
+  const canAccept = !!person.invitationId && !!access?.isPlatformAdmin
   return (
-    <div className="flex justify-end px-2">
+    <DataTableActionGroup>
+      {canAccept ? (
+        <UserActionButton
+          icon={MailCheck}
+          tone="success"
+          label={`Accept invitation for ${person.name}`}
+          tooltip="Accept invitation for them"
+          disabled={accepting}
+          onClick={() => onAccept(person)}
+        />
+      ) : null}
+      {canEdit ? (
+        <UserActionButton
+          icon={Trash2}
+          tone="danger"
+          label={`Revoke access for ${person.name}`}
+          tooltip={
+            person.state === "pending" ? "Cancel invitation" : "Revoke access"
+          }
+          onClick={() => onRevoke(person)}
+        />
+      ) : null}
       <DropdownMenu>
         <Tooltip>
           <TooltipTrigger asChild>
@@ -253,122 +360,74 @@ const PersonActions = memo(function PersonActions({
               <Button
                 variant="ghost"
                 size="icon-sm"
-                aria-label={`Actions for ${person.email}`}
+                aria-label={`More actions for ${person.name}`}
               >
                 <EllipsisVertical />
               </Button>
             </DropdownMenuTrigger>
           </TooltipTrigger>
-          <TooltipContent>User actions</TooltipContent>
+          <TooltipContent side="bottom">More actions</TooltipContent>
         </Tooltip>
-        <DropdownMenuContent align="end">
+        <DropdownMenuContent align="end" className="min-w-48">
           <DropdownMenuItem
-            onSelect={() => (canEdit ? onEdit(person) : setViewing(true))}
+            onSelect={() => (canEdit ? onEdit(person) : onView(person))}
           >
+            <KeyRound />
             {canEdit ? "Edit permissions" : "View permissions"}
           </DropdownMenuItem>
-          <PersonActivityItem person={person} access={access} />
-          <PersonInvitationItems
-            person={person}
-            access={access}
-            onAccept={onAccept}
-          />
+          {person.userId &&
+          access?.scope.resourceType !== "database" &&
+          access?.permissions.includes("instance.read") ? (
+            <DropdownMenuItem asChild>
+              <Link
+                to="/activity"
+                search={{
+                  user: person.userId,
+                  relay: access.scope.relayId,
+                  ...(access.scope.resourceType === "instance"
+                    ? { server: access.scope.resourceId }
+                    : {}),
+                }}
+              >
+                <Activity /> View activity
+              </Link>
+            </DropdownMenuItem>
+          ) : null}
+          {canAccept ? (
+            <DropdownMenuItem
+              disabled={accepting}
+              onSelect={() => onAccept(person)}
+            >
+              <MailCheck /> Accept invitation
+            </DropdownMenuItem>
+          ) : null}
           {access?.canTransferOwnership &&
           !person.isOwner &&
           !person.inherited &&
           person.state === "active" ? (
             <DropdownMenuItem onSelect={() => onTransfer(person)}>
-              Transfer ownership
+              <ArrowRightLeft /> Transfer ownership
             </DropdownMenuItem>
           ) : null}
-          {canEdit ? (
-            <DropdownMenuItem
-              className="text-destructive focus:text-destructive"
-              onSelect={() => onRevoke(person)}
-            >
-              Revoke access
-            </DropdownMenuItem>
+          {person.invitationId ? (
+            <CopyIdentifierMenuItem
+              label="Invitation Link"
+              value={new URL(
+                `/invite?id=${encodeURIComponent(person.invitationId)}`,
+                window.location.origin
+              ).toString()}
+            />
+          ) : null}
+          <CopyIdentifierMenuItem label="Email" value={person.email} />
+          {person.userId ? (
+            <CopyIdentifierMenuItem label="User ID" value={person.userId} />
           ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
-      <PersonPermissionsDialog
-        person={person}
-        access={access}
-        viewing={viewing}
-        onOpenChange={setViewing}
-      />
-    </div>
+    </DataTableActionGroup>
   )
 })
 
-function PersonActivityItem({
-  person,
-  access,
-}: {
-  person: Person
-  access?: ScopeAccess
-}) {
-  return (
-    <>
-      {" "}
-      {person.userId &&
-      access?.scope.resourceType !== "database" &&
-      access?.permissions.includes("instance.read") ? (
-        <DropdownMenuItem asChild>
-          <Link
-            to="/activity"
-            search={{
-              user: person.userId,
-              relay: access.scope.relayId,
-              ...(access?.scope.resourceType === "instance"
-                ? { server: access.scope.resourceId }
-                : {}),
-            }}
-          >
-            View activity
-          </Link>
-        </DropdownMenuItem>
-      ) : null}
-    </>
-  )
-}
-function PersonInvitationItems({
-  person,
-  access,
-  onAccept,
-}: Pick<PeopleProps, "access" | "onAccept"> & {
-  person: Person
-}) {
-  const accepting = useContext(AcceptingInvitationContext)
-  return (
-    <>
-      {" "}
-      {person.invitationId ? (
-        <DropdownMenuItem
-          onSelect={() =>
-            copyWithToast(
-              new URL(
-                `/invite?id=${encodeURIComponent(person.invitationId!)}`,
-                window.location.origin
-              ).toString(),
-              "Invitation link"
-            )
-          }
-        >
-          Copy invitation link
-        </DropdownMenuItem>
-      ) : null}
-      {person.invitationId && access?.isPlatformAdmin ? (
-        <DropdownMenuItem
-          disabled={accepting}
-          onSelect={() => onAccept(person)}
-        >
-          Accept for user
-        </DropdownMenuItem>
-      ) : null}
-    </>
-  )
-}
 function PersonPermissionsDialog({
   person,
   access,
