@@ -47,6 +47,8 @@ import {
   controlRequestLocks,
   type InstanceResolver,
 } from "./operation-plans.js"
+import { DatabaseSync } from "node:sqlite"
+import { exclusive } from "./operation-lanes.js"
 
 type InstallationConfig = Pick<
   RelayConfig,
@@ -637,6 +639,111 @@ describe("Relay control socket", () => {
       })
     })
 
+    it("keeps no reply in its journal, only how the change went", async () => {
+      const relay = await startRelay({
+        execute: async () => ({ token: "kiln_pair_secret_token" }),
+      })
+      const hearth = await relay.pair()
+      const { inbox, socket } = await relay.connect(hearth, { features })
+      const operationId = randomUUID()
+      sendRequest(socket, "relay.pairing.create", {}, { operationId })
+      expect(await inbox.next()).toMatchObject({
+        payload: { token: "kiln_pair_secret_token" },
+      })
+      // The reply stays in memory for this Hearth to look up.
+      expect(await lookup(relay, hearth, operationId)).toEqual({
+        result: { token: "kiln_pair_secret_token" },
+        status: "succeeded",
+      })
+      const database = new DatabaseSync(relay.databaseFile)
+      try {
+        const rows = database.prepare("SELECT * FROM relay_operations").all()
+        expect(rows).toHaveLength(1)
+        expect(JSON.stringify(rows)).not.toContain("kiln_pair_secret_token")
+      } finally {
+        database.close()
+      }
+    })
+
+    it("runs a change sent from two sessions at once only once", async () => {
+      const release = deferred<void>()
+      let runs = 0
+      const relay = await startRelay({
+        execute: async () => {
+          runs += 1
+          await release.promise
+          return { renamed: true }
+        },
+      })
+      const hearth = await relay.pair()
+      const first = await relay.connect(hearth, { features })
+      const second = await relay.connect(hearth, { features })
+      const operationId = randomUUID()
+      const payload = { name: "Lobby" }
+      sendRequest(first.socket, "relay.rename", payload, { operationId })
+      await vi.waitFor(() => expect(runs).toBe(1))
+      sendRequest(second.socket, "relay.rename", payload, { operationId })
+      // A different change under the same ID is refused, even while it runs.
+      const conflict = sendRequest(
+        second.socket,
+        "relay.rename",
+        { name: "Other" },
+        { operationId }
+      )
+      expect(await second.inbox.next()).toMatchObject({
+        code: "operation_conflict",
+        replyTo: conflict,
+      })
+
+      release.resolve()
+      expect(await first.inbox.next()).toMatchObject({
+        payload: { renamed: true },
+      })
+      expect(await second.inbox.next()).toMatchObject({
+        payload: { renamed: true },
+      })
+      expect(runs).toBe(1)
+      expect(await lookup(relay, hearth, operationId)).toMatchObject({
+        status: "succeeded",
+      })
+    })
+
+    it("records a change withdrawn before it ran, after it already acted", async () => {
+      const appId = "f".repeat(40)
+      let aborted = 0
+      const relay = await startRelay({
+        beforeRun: () => {
+          aborted += 1
+        },
+      })
+      const hearth = await relay.pair()
+      const { socket } = await relay.connect(hearth, { features })
+      // Something already holds the App, so the delete waits.
+      const holding = relay.lanes.admit({
+        label: "deployment",
+        locks: [exclusive(`app:${appId}`)],
+      })
+      const operationId = randomUUID()
+      sendRequest(
+        socket,
+        "app.delete",
+        { appId, deleteData: false },
+        { operationId }
+      )
+      await vi.waitFor(() => expect(aborted).toBe(1))
+      socket.close()
+      await vi.waitFor(() => expect(relay.control.sessions.size).toBe(0))
+      holding.cancel()
+
+      // It didn't run, but the Relay knows it took it.
+      await vi.waitFor(async () =>
+        expect(await lookup(relay, hearth, operationId)).toMatchObject({
+          code: "operation_withdrawn",
+          status: "failed",
+        })
+      )
+    })
+
     it("keeps one Hearth's operations from another", async () => {
       const relay = await startRelay({ execute: async () => ({ ok: true }) })
       const owner = await relay.pair()
@@ -1064,6 +1171,7 @@ async function startRelay(
     readonly initialSnapshot?: ControlSocketOptions["initialSnapshot"]
     readonly installation?: InstallationConfig
     readonly resolveInstance?: InstanceResolver
+    readonly beforeRun?: ControlSocketOptions["beforeRun"]
   } = {}
 ) {
   const directory = mkdtempSync(join(tmpdir(), "kiln-relay-control-"))
@@ -1090,6 +1198,7 @@ async function startRelay(
           },
         }
       : {}),
+    ...(options.beforeRun ? { beforeRun: options.beforeRun } : {}),
     execute: options.execute ?? (async () => ({ ok: true })),
     lanes,
     requestLocks: (request) =>
@@ -1165,6 +1274,7 @@ async function startRelay(
       return connection
     },
     control,
+    databaseFile: join(directory, "relay.sqlite"),
     lanes,
     loadInstallationId: (config: InstallationConfig) =>
       runtime.runPromise(loadInstallationId(config, state)),

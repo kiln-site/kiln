@@ -426,6 +426,40 @@ effectIt.effect(
 )
 
 effectIt.effect(
+  "reports a change unknown when Hearth closes the connection it was sent on",
+  () =>
+    withRelayServer(
+      ({ endpoint, requests }) =>
+        Effect.gen(function* () {
+          const pending = relayRpc(
+            endpoint,
+            "instance.action",
+            { action: "restart", instanceId: "d".repeat(40) },
+            30_000
+          )
+          yield* Effect.promise(() =>
+            advanceTimersUntil(
+              new Promise<void>((resolve) => {
+                const check = () =>
+                  requests.some(
+                    (r) => r.type === "request" && r.operation === "instance.action"
+                  )
+                    ? resolve()
+                    : setImmediate(check)
+                check()
+              })
+            )
+          )
+          closeRelayConnection(relayId)
+          const closed = yield* promiseEffect(() => pending).pipe(Effect.flip)
+          expect(closed).toMatchObject({ outcome: "unknown" })
+        }),
+      (message) =>
+        message.operation === "instance.action" ? noAnswer : { eligible: true }
+    )
+)
+
+effectIt.effect(
   "reports a change the Relay never received as not run, and a slow one as unknown",
   () =>
     withRelayServer(

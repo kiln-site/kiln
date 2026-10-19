@@ -595,15 +595,16 @@ export const RelayControlRequestSchema = Schema.Struct({
 
 /**
  * What the Relay knows of a change Hearth sent under an `operationId`:
- * `unknown` if it never started one by that ID, which means it never ran;
+ * `unknown` if it never received one by that ID, which means it never ran;
  * `interrupted` if the Relay restarted while it ran, so it may or may not
  * have taken effect.
  */
 export const RelayOperationLookupSchema = Schema.Union([
   Schema.Struct({ status: Schema.Literal("unknown") }),
   Schema.Struct({ status: Schema.Literal("running") }),
+  // `result` is the reply it sent, while the Relay still has it.
   Schema.Struct({
-    result: Schema.Unknown,
+    result: Schema.optionalKey(Schema.Unknown),
     status: Schema.Literal("succeeded"),
   }),
   Schema.Struct({

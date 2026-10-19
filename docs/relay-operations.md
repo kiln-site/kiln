@@ -111,17 +111,21 @@ Hearth gives every change it sends an `operationId`, separate from the
 request's frame `id`. `relayControlOperationChanges` in the contracts says
 which operations are changes; reads and terminal traffic aren't.
 
-The Relay records a change in its SQLite journal (`relay_operations`) as
-running before it runs, and records how it went before releasing its locks.
-Records are kept per paired Hearth for a week. `operation.get` answers with
-what the Relay knows of an ID:
+The Relay claims a change as soon as it's authorized, so a repeat from any
+of the same Hearth's sessions waits for it. It records the change in its
+SQLite journal (`relay_operations`) as accepted before the change does
+anything, and records how it went before releasing its locks. The journal
+keeps outcomes, never replies, which can carry secrets such as pairing
+tokens; a finished change's reply stays in memory for 20 minutes, for the
+Hearth that sent it. Records are kept per paired Hearth for a week.
+`operation.get` answers with what the Relay knows of an ID:
 
 | Answer        | Meaning                                                              |
 | ------------- | -------------------------------------------------------------------- |
 | `unknown`     | The Relay never started a change by that ID, so it didn't run.       |
 | `running`     | It's running or waiting its turn.                                    |
-| `succeeded`   | It ran; the answer carries the reply it sent.                        |
-| `failed`      | It ran and failed; the answer carries the error.                     |
+| `succeeded`   | It ran; the answer carries its reply while the Relay still has it.   |
+| `failed`      | It failed, or was withdrawn before it ran (`operation_withdrawn`).   |
 | `interrupted` | The Relay restarted while it ran, so it may or may not have applied. |
 
 When a connection drops with changes still waiting for their replies, Hearth

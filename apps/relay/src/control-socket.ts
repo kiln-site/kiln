@@ -96,8 +96,6 @@ const MAX_BUFFERED_BYTES = 2 * relayControlMaxFrameBytes
 const MAX_IN_FLIGHT_REQUESTS = 32
 const MAX_CONTROL_SESSIONS = 128
 const MAX_CONTROL_SESSIONS_PER_CLIENT = 4
-// Replies larger than this aren't kept for lookups; the change's outcome is.
-const MAX_RECORDED_RESULT_BYTES = 256 * 1024
 
 export interface ControlSocketOptions {
   // Saves the installation ID a full-access Hearth authenticated with. The
@@ -154,12 +152,12 @@ export function attachControlSocket(
   options: ControlSocketOptions
 ): ControlSocketServer {
   const sessions = new Map<string, RelayClientGrant>()
-  // Changes running under an operation ID, by client and ID, so a lookup or
-  // a repeated request from any of the client's sessions sees them.
-  const runningOperations = new Map<
-    string,
-    Deferred.Deferred<RecordedOutcome>
-  >()
+  // Changes under an operation ID, by client and ID, so a lookup or a
+  // repeated request from any of the client's sessions sees them.
+  const operations: OperationRegistry = {
+    finished: new Map(),
+    running: new Map(),
+  }
   const sockets = new Set<WebSocket>()
   const socketSessions = new WeakMap<WebSocket, string>()
   const authenticatedSockets = new Map<WebSocket, RelayClientGrant>()
@@ -206,7 +204,7 @@ export function attachControlSocket(
       socketSessions,
       authenticatedSockets,
       reverseRequesters,
-      runningOperations,
+      operations,
       request.socket.remoteAddress
     )
     socket.once("close", () => {
@@ -311,7 +309,7 @@ function authenticateSocket(
       timeoutMs: number
     ) => Promise<unknown>
   >,
-  runningOperations: Map<string, Deferred.Deferred<RecordedOutcome>>,
+  operations: OperationRegistry,
   peerAddress: string | undefined
 ): void {
   const unsignedChallenge = {
@@ -644,28 +642,21 @@ function authenticateSocket(
           const operationId = relayControlOperationChanges(request.operation)
             ? request.operationId
             : undefined
-          if (operationId !== undefined) {
-            const earlier = yield* earlierOutcome(
-              currentClient.id,
-              operationId,
-              request
-            )
-            if (earlier) {
-              // Already run, or running: answer with that, and don't run it
-              // again.
-              ticket?.cancel()
-              const payload = yield* settleRecorded(earlier)
-              yield* Effect.sync(() => sendResponse(request, payload))
-              return
-            }
-          }
-          options.beforeRun?.(request)
-          const recorded =
+          if (operationId === undefined) options.beforeRun?.(request)
+          const { payload, ran } =
             operationId === undefined
-              ? execution
-              : journaled(currentClient.id, operationId, request, execution)
-          const payload = yield* ticket ? ticket.run(recorded) : recorded
-          if (isAuditedRelayControlOperation(request.operation)) {
+              ? {
+                  payload: yield* ticket ? ticket.run(execution) : execution,
+                  ran: true,
+                }
+              : yield* journaled(
+                  currentClient.id,
+                  operationId,
+                  request,
+                  ticket,
+                  execution
+                )
+          if (ran && isAuditedRelayControlOperation(request.operation)) {
             Effect.runFork(
               promiseOperation(() =>
                 options.runEffect(
@@ -741,123 +732,133 @@ function authenticateSocket(
     sendSerialized(socket, serialized)
   }
 
-  // How a change Hearth sent before under this ID went, or is going.
-  function earlierOutcome(
-    clientId: string,
-    operationId: string,
-    request: RelayControlRequest
-  ): EffectType.Effect<
-    Deferred.Deferred<RecordedOutcome> | RecordedOutcome | null,
-    Error
-  > {
-    const live = runningOperations.get(operationKey(clientId, operationId))
-    if (live) return Effect.succeed(live)
-    return promiseOperation(() =>
-      options.runEffect(options.state.getOperation(clientId, operationId))
-    ).pipe(
-      Effect.map((record) => {
-        if (!record) return null
-        if (record.payloadSha256 !== payloadDigest(request)) {
-          return conflictingOutcome
-        }
-        return recordedOutcome(record)
-      })
-    )
-  }
-
   function lookupOperation(
     clientId: string,
     operationId: string
   ): EffectType.Effect<RelayOperationLookup, Error> {
-    if (runningOperations.has(operationKey(clientId, operationId))) {
+    const key = operationKey(clientId, operationId)
+    if (operations.running.has(key)) {
       return Effect.succeed({ status: "running" })
     }
+    const recent = recentOperation(operations, key)
+    if (recent) return Effect.succeed(lookupFor(recent.outcome))
     return promiseOperation(() =>
       options.runEffect(options.state.getOperation(clientId, operationId))
     ).pipe(
-      Effect.map((record): RelayOperationLookup => {
-        if (!record) return { status: "unknown" }
-        const outcome = recordedOutcome(record)
-        return outcome.status === "succeeded"
-          ? { result: outcome.payload, status: "succeeded" }
-          : outcome.status === "interrupted"
-            ? { status: "interrupted" }
-            : {
-                code: outcome.code,
-                message: outcome.message,
-                retryable: outcome.retryable,
-                status: "failed",
-              }
-      })
+      Effect.map((record): RelayOperationLookup =>
+        record ? lookupFor(recordedOutcome(record)) : { status: "unknown" }
+      )
     )
   }
 
-  // Runs a change under its operation ID: records it as running before it
-  // runs, then records how it went before its locks are released.
-  function journaled<A>(
+  /**
+   * Runs a change under its operation ID. It's claimed at once, so a repeat
+   * from any session waits for it; recorded as accepted before anything it
+   * does, including `beforeRun`; and its outcome is recorded before its locks
+   * release. A repeat of a change this Relay already took gets that change's
+   * answer instead, and `ran: false`.
+   */
+  function journaled(
     clientId: string,
     operationId: string,
     request: RelayControlRequest,
-    execution: EffectType.Effect<A, unknown>
-  ): EffectType.Effect<A, unknown> {
+    ticket: LaneTicket | null,
+    execution: EffectType.Effect<unknown, unknown>
+  ): EffectType.Effect<{ payload: unknown; ran: boolean }, unknown> {
     const key = operationKey(clientId, operationId)
-    // Once recorded as running, it runs to the end and records how it went,
-    // even if Hearth stops waiting: the record must never stay running.
-    return Effect.uninterruptible(
+    const digest = payloadDigest(request)
+    const repeat = (
+      earlier: { readonly digest: string },
+      outcome: EffectType.Effect<RecordedOutcome>
+    ) =>
       Effect.gen(function* () {
-        const outcome = Deferred.makeUnsafe<RecordedOutcome>()
-        runningOperations.set(key, outcome)
-        const started = yield* promiseOperation(() =>
-          options.runEffect(
-            options.state.startOperation({
-              clientId,
-              operation: request.operation,
-              operationId,
-              payloadSha256: payloadDigest(request),
-              startedAt: Date.now(),
-            })
-          )
-        ).pipe(
-          Effect.onError(() =>
-            Effect.sync(() => {
-              runningOperations.delete(key)
-            })
-          )
-        )
-        if (started) {
-          // Another session started it first; answer with that one.
-          const earlier = recordedOutcome(started)
-          yield* Deferred.succeed(outcome, earlier)
-          runningOperations.delete(key)
-          return (yield* settleRecorded(earlier)) as A
-        }
-        const exit = yield* Effect.exit(execution)
-        const settled: RecordedOutcome = Exit.isSuccess(exit)
-          ? { payload: exit.value, status: "succeeded" }
-          : (() => {
-              const failure = controlFailureFor(
-                request,
-                Cause.squash(exit.cause),
-                false
-              )
-              return { ...failure, status: "failed" as const }
-            })()
-        yield* recordOutcome(clientId, operationId, settled)
-        yield* Deferred.succeed(outcome, settled)
-        runningOperations.delete(key)
-        return yield* exit
+        ticket?.cancel()
+        const settled =
+          earlier.digest === digest ? yield* outcome : conflictingOutcome
+        return { payload: yield* settleRecorded(settled), ran: false }
       })
+    const live = operations.running.get(key)
+    if (live) return repeat(live, Deferred.await(live.outcome))
+    const recent = recentOperation(operations, key)
+    if (recent) return repeat(recent, Effect.succeed(recent.outcome))
+
+    const claim: LiveOperation = {
+      digest,
+      outcome: Deferred.makeUnsafe<RecordedOutcome>(),
+    }
+    operations.running.set(key, claim)
+    let settled = false
+    const settle = (outcome: RecordedOutcome) =>
+      Effect.sync(() => {
+        if (settled) return
+        settled = true
+        operations.running.delete(key)
+        rememberOperation(operations, key, digest, outcome)
+        Deferred.doneUnsafe(claim.outcome, Exit.succeed(outcome))
+      })
+    const run = Effect.gen(function* () {
+      const prior = yield* promiseOperation(() =>
+        options.runEffect(options.state.getOperation(clientId, operationId))
+      )
+      if (prior) {
+        // Taken before this Relay last restarted, or before its memory of
+        // it lapsed.
+        ticket?.cancel()
+        const outcome =
+          prior.payloadSha256 === digest
+            ? recordedOutcome(prior)
+            : conflictingOutcome
+        yield* settle(outcome)
+        return { payload: yield* settleRecorded(outcome), ran: false }
+      }
+      yield* promiseOperation(() =>
+        options.runEffect(
+          options.state.startOperation({
+            clientId,
+            operation: request.operation,
+            operationId,
+            payloadSha256: digest,
+            startedAt: Date.now(),
+          })
+        )
+      )
+      options.beforeRun?.(request)
+      const exit = yield* Effect.exit(ticket ? ticket.run(execution) : execution)
+      const outcome: RecordedOutcome = Exit.isSuccess(exit)
+        ? { kept: true, payload: exit.value, status: "succeeded" }
+        : {
+            ...controlFailureFor(request, Cause.squash(exit.cause), false),
+            status: "failed",
+          }
+      yield* recordOutcome(clientId, operationId, outcome)
+      yield* settle(outcome)
+      return { payload: yield* exit, ran: true }
+    })
+    // Once claimed, it always settles, even if Hearth stops waiting: nothing
+    // may wait on it forever.
+    return Effect.uninterruptible(
+      run.pipe(
+        Effect.onExit((exit) =>
+          Exit.isSuccess(exit)
+            ? Effect.void
+            : settle({
+                ...controlFailureFor(request, Cause.squash(exit.cause), false),
+                status: "failed",
+              })
+        )
+      )
     )
   }
 
+  // Records how a change went. It already ran, so a failed write is retried,
+  // in the background once the first attempts fail, and never raised; the
+  // outcome stays in memory for lookups meanwhile.
   function recordOutcome(
     clientId: string,
     operationId: string,
     outcome: RecordedOutcome
   ): EffectType.Effect<void> {
-    const resultJson =
-      outcome.status === "succeeded" ? JSON.stringify(outcome.payload) : null
-    return promiseOperation(() =>
+    const write = promiseOperation(() =>
       options.runEffect(
         options.state.finishOperation({
           clientId,
@@ -865,25 +866,31 @@ function authenticateSocket(
           errorMessage: outcome.status === "failed" ? outcome.message : null,
           finishedAt: Date.now(),
           operationId,
-          resultJson:
-            resultJson !== null &&
-            Buffer.byteLength(resultJson) <= MAX_RECORDED_RESULT_BYTES
-              ? resultJson
-              : null,
           retryable: outcome.status === "failed" && outcome.retryable,
           status: outcome.status === "succeeded" ? "succeeded" : "failed",
         })
       )
-    ).pipe(
-      // The change already ran; recording it must not run it again, so a
-      // failed write is retried and then reported, not raised.
-      Effect.retry({ schedule: Schedule.spaced("1 second"), times: 5 }),
+    )
+    return write.pipe(
+      Effect.retry({ schedule: Schedule.spaced("1 second"), times: 3 }),
       Effect.catch((cause) =>
         Effect.sync(() => {
           reportRelayError(cause, {
             operation: "relay.control.operation.record",
           })
-        })
+        }).pipe(
+          Effect.andThen(
+            write.pipe(
+              Effect.retry({
+                schedule: Schedule.spaced("30 seconds"),
+                times: 120,
+              }),
+              Effect.ignore,
+              Effect.forkDetach
+            )
+          ),
+          Effect.asVoid
+        )
       )
     )
   }
@@ -1507,7 +1514,12 @@ function sendError(
 
 /** How a change run under an operation ID went, as later lookups see it. */
 type RecordedOutcome =
-  | { readonly payload: unknown; readonly status: "succeeded" }
+  | {
+      /** False once the reply itself is no longer kept. */
+      readonly kept: boolean
+      readonly payload: unknown
+      readonly status: "succeeded"
+    }
   | {
       readonly code: string
       readonly message: string
@@ -1544,13 +1556,88 @@ function payloadDigest(request: RelayControlRequest): string {
     .digest("hex")
 }
 
+interface LiveOperation {
+  readonly digest: string
+  readonly outcome: Deferred.Deferred<RecordedOutcome>
+}
+
+interface FinishedOperation {
+  readonly digest: string
+  readonly expiresAt: number
+  readonly outcome: RecordedOutcome
+}
+
+interface OperationRegistry {
+  /** Recently finished changes, with their replies, held only in memory. */
+  readonly finished: Map<string, FinishedOperation>
+  readonly running: Map<string, LiveOperation>
+}
+
+// Long enough for Hearth to look up any change whose reply it lost: past the
+// longest change deadline.
+const RECENT_OPERATION_MS = 20 * 60_000
+const MAX_RECENT_OPERATIONS = 500
+// Larger replies are dropped from memory; lookups report the outcome alone.
+const MAX_RECENT_RESULT_BYTES = 64 * 1024
+
+function rememberOperation(
+  operations: OperationRegistry,
+  key: string,
+  digest: string,
+  outcome: RecordedOutcome
+) {
+  const now = Date.now()
+  for (const [oldest, entry] of operations.finished) {
+    if (
+      entry.expiresAt > now &&
+      operations.finished.size < MAX_RECENT_OPERATIONS
+    ) {
+      break
+    }
+    operations.finished.delete(oldest)
+  }
+  const kept =
+    outcome.status !== "succeeded" ||
+    Buffer.byteLength(JSON.stringify(outcome.payload) ?? "") <=
+      MAX_RECENT_RESULT_BYTES
+  operations.finished.set(key, {
+    digest,
+    expiresAt: now + RECENT_OPERATION_MS,
+    outcome: kept ? outcome : { kept: false, payload: null, status: "succeeded" },
+  })
+}
+
+function recentOperation(
+  operations: OperationRegistry,
+  key: string
+): FinishedOperation | null {
+  const entry = operations.finished.get(key)
+  if (!entry) return null
+  if (entry.expiresAt > Date.now()) return entry
+  operations.finished.delete(key)
+  return null
+}
+
+function lookupFor(outcome: RecordedOutcome): RelayOperationLookup {
+  if (outcome.status === "succeeded") {
+    return outcome.kept
+      ? { result: outcome.payload, status: "succeeded" }
+      : { status: "succeeded" }
+  }
+  if (outcome.status === "interrupted") return { status: "interrupted" }
+  return {
+    code: outcome.code,
+    message: outcome.message,
+    retryable: outcome.retryable,
+    status: "failed",
+  }
+}
+
+// What the journal says of a change. It keeps outcomes, never replies,
+// which can carry secrets such as pairing tokens.
 function recordedOutcome(record: RelayOperationRecord): RecordedOutcome {
   if (record.status === "succeeded") {
-    return {
-      payload:
-        record.resultJson === null ? null : JSON.parse(record.resultJson),
-      status: "succeeded",
-    }
+    return { kept: false, payload: null, status: "succeeded" }
   }
   if (record.status === "failed") {
     return {
@@ -1576,7 +1663,15 @@ function settleRecorded(
   return outcome.pipe(
     Effect.flatMap((outcome) =>
       outcome.status === "succeeded"
-        ? Effect.succeed(outcome.payload)
+        ? outcome.kept
+          ? Effect.succeed(outcome.payload)
+          : Effect.fail(
+              new RecordedFailure(
+                "result_unavailable",
+                "The change went through, but the Relay no longer has its reply. Refresh to see the result.",
+                false
+              )
+            )
         : Effect.fail(
             outcome.status === "failed"
               ? new RecordedFailure(
@@ -1609,6 +1704,14 @@ function controlFailureFor(
       code: cause.code,
       message: cause.message,
       retryable: cause.retryable,
+    }
+  }
+  // Withdrawn from its lane before it ran, as when Hearth disconnected.
+  if (cause instanceof LaneRejectedError && cause.reason === "cancelled") {
+    return {
+      code: "operation_withdrawn",
+      message: "The change was withdrawn before it ran",
+      retryable: true,
     }
   }
   if (aborted) {

@@ -169,7 +169,10 @@ export type RelayRuntimeRecoveryPhase =
   | "monitoring"
   | "failed"
 
-/** A change Hearth ran under an `operationId`, kept to answer lookups. */
+/**
+ * A change Hearth sent under an `operationId`, kept to answer lookups. Only
+ * its outcome is kept, never its reply, which can carry secrets.
+ */
 export interface RelayOperationRecord {
   readonly clientId: string
   readonly errorCode: string | null
@@ -178,8 +181,6 @@ export interface RelayOperationRecord {
   readonly operation: string
   readonly operationId: string
   readonly payloadSha256: string
-  /** The reply as sent, or null when it was too large to keep. */
-  readonly resultJson: string | null
   readonly retryable: boolean
   readonly startedAt: number
   readonly status: "failed" | "interrupted" | "running" | "succeeded"
@@ -394,8 +395,9 @@ export class RelayStateStore extends Context.Service<
       input: RelayAuditInput
     ) => Effect.Effect<void, RelayStateError>
     /**
-     * Records a change as running before it runs. Returns the record already
-     * kept under the same client and ID, if any, and records nothing then.
+     * Records a change as accepted, before it does anything. Returns the
+     * record already kept under the same client and ID, if any, and records
+     * nothing then.
      */
     readonly startOperation: (input: {
       readonly clientId: string
@@ -410,7 +412,6 @@ export class RelayStateStore extends Context.Service<
       readonly errorMessage: string | null
       readonly finishedAt: number
       readonly operationId: string
-      readonly resultJson: string | null
       readonly retryable: boolean
       readonly status: "failed" | "succeeded"
     }) => Effect.Effect<void, RelayStateError>
@@ -1103,7 +1104,6 @@ const migrations = SqliteMigrator.fromRecord({
       operation TEXT NOT NULL,
       payload_sha256 TEXT NOT NULL,
       status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed', 'interrupted')),
-      result_json TEXT,
       error_code TEXT,
       error_message TEXT,
       retryable INTEGER NOT NULL DEFAULT 0,
@@ -1139,7 +1139,7 @@ const makeRelayStateStore = Effect.gen(function* () {
     sql<Omit<RelayOperationRecord, "retryable"> & { retryable: number }>`
       SELECT client_id AS clientId, operation_id AS operationId,
         operation, payload_sha256 AS payloadSha256, status,
-        result_json AS resultJson, error_code AS errorCode,
+        error_code AS errorCode,
         error_message AS errorMessage, retryable, started_at AS startedAt,
         finished_at AS finishedAt
       FROM relay_operations
@@ -1765,7 +1765,6 @@ const makeRelayStateStore = Effect.gen(function* () {
         sql`
           UPDATE relay_operations
           SET status = ${input.status},
-              result_json = ${input.resultJson},
               error_code = ${input.errorCode},
               error_message = ${input.errorMessage},
               retryable = ${input.retryable ? 1 : 0},

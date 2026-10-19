@@ -1241,7 +1241,14 @@ class RelayConnection {
         })
         continue
       }
-      pending.resume(relayConnectionFailure(cause.message, cause))
+      // A change sent on a connection Hearth itself closed may have run.
+      pending.resume(
+        pending.operationId
+          ? unknownOutcome(
+              "Hearth closed its connection to this Relay before the change finished. Check the result before trying again."
+            )
+          : relayConnectionFailure(cause.message, cause)
+      )
     }
     this.#pending.clear()
     if (this.#unsettled.size > 0) this.#watchUnsettled()
@@ -1301,7 +1308,20 @@ class RelayConnection {
       this.#unsettled.delete(operationId)
       change.resume(
         outcome.status === "succeeded"
-          ? Effect.succeed(outcome.result)
+          ? "result" in outcome
+            ? Effect.succeed(outcome.result)
+            : Effect.fail(
+                RelayUnavailableError.make({
+                  code: "result_unavailable",
+                  message:
+                    "The change went through, but its result is no longer available. Refresh to see it.",
+                  retryable: false,
+                })
+              )
+          : outcome.status === "failed" && outcome.code === "operation_withdrawn"
+            ? relayConnectionFailure(
+                "The connection to this Relay dropped before the change ran. It didn't run."
+              )
           : outcome.status === "failed"
             ? Effect.fail(
                 RelayUnavailableError.make({
