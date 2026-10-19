@@ -693,7 +693,11 @@ function AcceptInvitationsDialog({
     mutationFn: async () => {
       const access = await getUserAccess({ data: { userId: user.id } })
       for (const grant of access.grants)
-        if (grant.state === "pending" && grant.invitationId)
+        if (
+          grant.relayEnabled &&
+          grant.state === "pending" &&
+          grant.invitationId
+        )
           await decideResourceInvitation({
             data: { id: grant.invitationId, decision: "accept", force: true },
           })

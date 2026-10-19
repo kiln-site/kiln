@@ -301,5 +301,63 @@ describeMysql("platform users", () => {
           assert.isTrue(unreadable._tag === "Failure")
         })
     )
+
+    it.effect(
+      "removal sees access on disabled Relays, and only real ownership blocks it",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          const disabledRelayId = "d".repeat(43)
+          const databaseId = "c".repeat(40)
+          yield* insertRelay(disabledRelayId, { enabled: false })
+          yield* insertInstance(disabledRelayId, "e".repeat(40), {
+            owner_id: "disabled",
+          })
+          yield* insertGrant({
+            id: "88888888-8888-4888-8888-888888888888",
+            userId: "member",
+            relayId: disabledRelayId,
+            resourceType: "relay",
+            resourceId: disabledRelayId,
+          })
+          // Creating a database confers no ownership.
+          yield* insertRows("database", {
+            database_id: databaseId,
+            relay_id: relayId,
+            name: "made-by-grumm",
+            engine: "mysql",
+            database_name: "made",
+            username: "made",
+            password_ciphertext: "ciphertext",
+            created_by: "member",
+            created_at: now,
+            updated_at: now,
+          })
+
+          const access = yield* Effect.promise(() =>
+            getUserAccessHandler(admin, "member")
+          )
+          const disabled = access.grants.find(
+            (grant) => grant.scope.relayId === disabledRelayId
+          )
+          assert.strictEqual(disabled?.relayEnabled, false)
+          assert.isFalse(
+            access.owned.some(
+              (resource) => resource.scope.resourceId === databaseId
+            )
+          )
+
+          const { items } = yield* list(admin)
+          const counts = (id: string) =>
+            items.find((user) => user.id === id)?.access
+          // member's database counts don't change, and their game server is
+          // their only ownership.
+          assert.strictEqual(counts("member")?.databases, 0)
+          assert.strictEqual(counts("member")?.owned, 1)
+          // A game server owned on a disabled Relay still blocks removal.
+          assert.strictEqual(counts("disabled")?.owned, 1)
+          assert.strictEqual(counts("disabled")?.instances, 0)
+        })
+    )
   })
 })

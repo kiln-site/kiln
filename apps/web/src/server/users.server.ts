@@ -11,6 +11,7 @@ import type { AuthenticatedUser } from "@/lib/auth-session"
 import { databaseTable } from "@/lib/database-config"
 import { databasePool } from "@/lib/database"
 import { isMinecraftUsername } from "@/lib/minecraft-profile"
+import { peopleFilter } from "@/server/resource-access.server"
 import {
   effectiveScopePermissions,
   loadResourceGrantsEffect,
@@ -84,7 +85,9 @@ interface HoldingRow extends RowDataPacket {
   resource_type: ResourceScope["resourceType"] | "app"
   relay_id: string
   resource_id: string
-  state: "owner" | "active" | "pending"
+  /** Apps have no grants or owner; creating one is all that links a person to it. */
+  state: "pending" | "active" | "created" | "owner"
+  relay_enabled: number
 }
 
 function requirePlatformAdmin(actor: AuthenticatedUser) {
@@ -152,33 +155,31 @@ export async function listManagedUsersHandler(
 async function userHoldings(userIds: ReadonlyArray<string>) {
   const result = new Map<string, Array<HoldingRow>>()
   if (!userIds.length) return result
+  // Ownership follows authority: a Relay's creator and a game server's
+  // owner. Databases have no owner, so their creators aren't listed.
+  // Disabled Relays are kept so ownership there still blocks removal.
   const [rows] = await databasePool.query<Array<HoldingRow>>(
-    `SELECT g.user_id, g.resource_type, g.relay_id, g.resource_id, g.state
+    `SELECT g.user_id, g.resource_type, g.relay_id, g.resource_id, g.state, r.enabled AS relay_enabled
        FROM ${databaseTable("access_grant")} g
-       JOIN ${databaseTable("relay")} r ON r.id = g.relay_id AND r.enabled = TRUE
+       JOIN ${databaseTable("relay")} r ON r.id = g.relay_id
       WHERE g.user_id IN (?) AND g.state <> 'revoked'
      UNION ALL
-     SELECT s.owner_id, 'instance', s.relay_id, s.instance_id, 'owner'
+     SELECT s.owner_id, 'instance', s.relay_id, s.instance_id, 'owner', r.enabled
        FROM ${databaseTable("instance")} s
-       JOIN ${databaseTable("relay")} r ON r.id = s.relay_id AND r.enabled = TRUE
+       JOIN ${databaseTable("relay")} r ON r.id = s.relay_id
       WHERE s.owner_id IN (?)
      UNION ALL
-     SELECT d.created_by, 'database', d.relay_id, d.database_id, 'owner'
-       FROM ${databaseTable("database")} d
-       JOIN ${databaseTable("relay")} r ON r.id = d.relay_id AND r.enabled = TRUE
-      WHERE d.created_by IN (?)
-     UNION ALL
-     SELECT a.created_by, 'app', a.relay_id, a.app_id, 'owner'
+     SELECT a.created_by, 'app', a.relay_id, a.app_id, 'created', r.enabled
        FROM ${databaseTable("app")} a
-       JOIN ${databaseTable("relay")} r ON r.id = a.relay_id AND r.enabled = TRUE
+       JOIN ${databaseTable("relay")} r ON r.id = a.relay_id
       WHERE a.created_by IN (?)
      UNION ALL
-     SELECT r.created_by, 'relay', r.id, r.id, 'owner'
+     SELECT r.created_by, 'relay', r.id, r.id, 'owner', r.enabled
        FROM ${databaseTable("relay")} r
-      WHERE r.enabled = TRUE AND r.created_by IN (?)`,
-    [userIds, userIds, userIds, userIds, userIds]
+      WHERE r.created_by IN (?)`,
+    [userIds, userIds, userIds, userIds]
   )
-  const strength = { pending: 0, active: 1, owner: 2 } as const
+  const strength = { pending: 0, created: 1, active: 2, owner: 3 } as const
   const strongest = new Map<string, HoldingRow>()
   for (const row of rows) {
     const key = `${row.user_id}|${row.resource_type}|${row.relay_id}|${row.resource_id}`
@@ -221,7 +222,9 @@ function serializeUser(
   totals?: PlatformTotals
 ): ManagedUser {
   const enabled = isAccountEnabled(row)
-  const held = holdings.filter((holding) => holding.state !== "pending")
+  // The counts show what's usable now, on enabled Relays.
+  const live = holdings.filter((holding) => holding.relay_enabled)
+  const held = live.filter((holding) => holding.state !== "pending")
   const count = (kind: HoldingRow["resource_type"]) =>
     held.filter((holding) => holding.resource_type === kind).length
   return {
@@ -253,8 +256,10 @@ function serializeUser(
             apps: count("app"),
             databases: count("database"),
           }),
-      owned: held.filter((holding) => holding.state === "owner").length,
-      pending: holdings.length - held.length,
+      // Anywhere, disabled Relays included: removing someone leaves what
+      // they own, which a re-enabled Relay would hand back.
+      owned: holdings.filter((holding) => holding.state === "owner").length,
+      pending: live.length - held.length,
     },
   }
 }
@@ -272,6 +277,7 @@ interface GrantRow extends RowDataPacket {
   resource_id: string
   resource_name: string | null
   relay_name: string
+  relay_enabled: number
 }
 
 export interface UserAccessGrant {
@@ -285,6 +291,11 @@ export interface UserAccessGrant {
   presetIds: Array<string>
   builtinKeys: Array<string>
   invitationId: string | null
+  /**
+   * Grants on disabled Relays come back so removal can revoke them; editors
+   * show only enabled ones.
+   */
+  relayEnabled: boolean
 }
 
 export interface UserAccess {
@@ -300,7 +311,7 @@ export interface UserAccess {
   platformInvitationIds: Array<string>
 }
 
-/** Everything a user holds on enabled Relays, for the Manage dialog. */
+/** Everything a user holds, for the Manage dialog and removal. */
 export async function getUserAccessHandler(
   actor: AuthenticatedUser,
   userId: string
@@ -325,9 +336,9 @@ export async function getUserAccessHandler(
     END, g.resource_id)`
   const [grants] = await databasePool.query<Array<GrantRow>>(
     `SELECT g.id, g.revision, g.state, g.relay_id, g.resource_type, g.resource_id,
-            ${resourceName} AS resource_name, r.name AS relay_name
+            ${resourceName} AS resource_name, r.name AS relay_name, r.enabled AS relay_enabled
        FROM ${databaseTable("access_grant")} g
-       JOIN ${databaseTable("relay")} r ON r.id = g.relay_id AND r.enabled = TRUE
+       JOIN ${databaseTable("relay")} r ON r.id = g.relay_id
       WHERE g.user_id = ? AND g.state <> 'revoked'
       ORDER BY r.name, g.relay_id, FIELD(g.resource_type, 'relay', 'instance', 'database'), resource_name, g.id`,
     [userId]
@@ -390,12 +401,8 @@ export async function getUserAccessHandler(
      UNION ALL
      SELECT s.relay_id, 'instance', s.instance_id, COALESCE(s.display_name, s.source_name, s.instance_id), r.name
        FROM ${databaseTable("instance")} s JOIN ${databaseTable("relay")} r ON r.id = s.relay_id AND r.enabled = TRUE
-      WHERE s.owner_id = ?
-     UNION ALL
-     SELECT d.relay_id, 'database', d.database_id, d.name, r.name
-       FROM ${databaseTable("database")} d JOIN ${databaseTable("relay")} r ON r.id = d.relay_id AND r.enabled = TRUE
-      WHERE d.created_by = ?`,
-    [userId, userId, userId]
+      WHERE s.owner_id = ?`,
+    [userId, userId]
   )
   const holdings = await userHoldings([userId])
   return {
@@ -429,6 +436,7 @@ export async function getUserAccessHandler(
       invitationId:
         invitations.find((invitation) => invitation.access_id === grant.id)
           ?.id ?? null,
+      relayEnabled: Boolean(grant.relay_enabled),
     })),
     owned: owned.map((resource) => ({
       scope: {
@@ -466,16 +474,18 @@ export async function getUserMinecraftProfilesHandler(
       throw new Error("Resource not found")
   }
   if (!userIds.length) return {}
-  // Others only see heads for people with access on the same Relay.
+  // Others only see heads for the people that resource lists: the same
+  // filter as its Access page, inherited Relay access included.
+  const people = admin ? null : peopleFilter(scope!)
   const [rows] = await databasePool.query<
     Array<RowDataPacket & { id: string; name: string }>
   >(
     `SELECT u.id, u.name FROM ${databaseTable("user")} u WHERE u.id IN (?) AND ${hasCredential}${
-      admin
-        ? ""
-        : ` AND EXISTS (SELECT 1 FROM ${databaseTable("access_grant")} g WHERE g.user_id = u.id AND g.relay_id = ? AND g.state <> 'revoked')`
+      people
+        ? ` AND EXISTS (SELECT 1 FROM ${databaseTable("access_grant")} g WHERE g.user_id = u.id AND ${people.sql})`
+        : ""
     }`,
-    admin ? [userIds] : [userIds, scope!.relayId]
+    people ? [userIds, ...people.values] : [userIds]
   )
   const named = rows.filter((row) => isMinecraftUsername(row.name))
   const profiles = await runAppEffect(

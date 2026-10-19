@@ -223,11 +223,14 @@ function AccessForm({
   const [drafts, setDrafts] = useState<Array<Draft>>(() => [
     ...(initialScope &&
     !access?.grants.some(
-      (grant) => scopeKey(grant.scope) === scopeKey(initialScope)
+      (grant) =>
+        grant.relayEnabled && scopeKey(grant.scope) === scopeKey(initialScope)
     )
       ? [emptyDraft(initialScope)]
       : []),
-    ...(access?.grants.map(grantDraft) ?? []),
+    // Disabled Relays can't load what's grantable; removal still covers them.
+    ...(access?.grants.filter((grant) => grant.relayEnabled).map(grantDraft) ??
+      []),
   ])
   const [removed, setRemoved] = useState<Array<UserAccessGrant>>([])
   const [activeKey, setActiveKey] = useState<string | undefined>(() =>
