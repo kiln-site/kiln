@@ -2368,14 +2368,22 @@ async function executeControlRequest(
               )
               .pipe(
                 Effect.map((written) =>
-                  relayFilePutResultSchema.parse({ ...written, conflict: false })
+                  relayFilePutResultSchema.parse({
+                    ...written,
+                    conflict: false,
+                  })
                 ),
                 // The precondition is checked as the file is committed.
                 Effect.catchIf(
                   (error) => error.code === "file_changed",
                   () =>
-                    Effect.succeed(
-                      relayFilePutResultSchema.parse({ conflict: true })
+                    target.filesystem.fingerprint(target.root, input.path).pipe(
+                      Effect.map((current) =>
+                        relayFilePutResultSchema.parse({
+                          conflict: true,
+                          current,
+                        })
+                      )
                     )
                 )
               )

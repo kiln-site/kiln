@@ -80,6 +80,7 @@ import { ensuringPromise, promiseEffect } from "./effect/promise.js"
 import { decodeNbt, encodeNbt } from "./nbt.js"
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024
+const MAX_FINGERPRINT_BYTES = 8 * 1024 * 1024
 const MAX_LOG_SHARE_BYTES = 10 * 1024 * 1024
 const MAX_TREE_ITEMS = 5_000
 const MAX_TREE_DEPTH = 10
@@ -1112,6 +1113,34 @@ export class FilesystemDriver {
 
   resolveFile(instance: FileRoot, requestedPath: string) {
     return this.#existingFile(instance, requestedPath)
+  }
+
+  /**
+   * A file's content hash and modification time in whole milliseconds, or
+   * null when it doesn't exist or isn't a regular file. Files over 8 MiB
+   * aren't hashed.
+   */
+  fingerprint(instance: FileRoot, requestedPath: string) {
+    return this.#existingFile(instance, requestedPath).pipe(
+      Effect.flatMap((path) =>
+        filesystemOperation("fingerprint.read", async () => {
+          const metadata = await stat(path)
+          const content =
+            metadata.size > MAX_FINGERPRINT_BYTES ? null : await readFile(path)
+          return {
+            modifiedAt: Math.floor(metadata.mtimeMs),
+            sha256: content
+              ? createHash("sha256").update(content).digest("hex")
+              : null,
+          }
+        })
+      ),
+      Effect.catchIf(
+        (error) => error.code === "not_a_file" || isMissingFile(error.cause),
+        () => Effect.succeed(null)
+      ),
+      Effect.withSpan("relay.files.fingerprint")
+    )
   }
 
   #existingFile(instance: FileRoot, requestedPath: string) {

@@ -12,6 +12,7 @@ import {
   utimes,
   writeFile,
 } from "node:fs/promises"
+import { createHash } from "node:crypto"
 import { tmpdir } from "node:os"
 import { resolve } from "node:path"
 import { buffer as consumeBuffer } from "node:stream/consumers"
@@ -684,6 +685,12 @@ describeLinux("Relay direct file transfers", () => {
           yield* fromPromise(() => readFile(path, "utf8")),
           "motd=instance\n"
         )
+        // What's there, so a caller can tell its own write from an edit.
+        assert.strictEqual(
+          (yield* driver.fingerprint(instance, "server.properties"))?.sha256,
+          createHash("sha256").update("motd=instance\n").digest("hex")
+        )
+        assert.isNull(yield* driver.fingerprint(instance, "missing.properties"))
 
         // Unchanged since the last upload: replaced.
         const before = Math.floor(

@@ -1808,10 +1808,28 @@ export const relayFilePutInputSchema = z
   })
   .strict()
 
-/** A precondition that failed leaves the file alone and says so. */
+/**
+ * A precondition that failed leaves the file alone and says what's there,
+ * so a caller can tell its own earlier write from someone else's.
+ */
 export const relayFilePutResultSchema = z.union([
   relayRemoteFileUploadResultSchema.extend({ conflict: z.literal(false) }),
-  z.object({ conflict: z.literal(true) }).strict(),
+  z
+    .object({
+      conflict: z.literal(true),
+      current: z
+        .object({
+          modifiedAt: z.number().int().nonnegative(),
+          /** Null for a file too large to hash. */
+          sha256: z
+            .string()
+            .regex(/^[a-f0-9]{64}$/u)
+            .nullable(),
+        })
+        .strict()
+        .nullable(),
+    })
+    .strict(),
 ])
 
 export const relayFileMutationInputSchema = z.discriminatedUnion("operation", [

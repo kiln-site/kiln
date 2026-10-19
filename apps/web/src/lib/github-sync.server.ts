@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import { posix } from "node:path"
 
 import {
@@ -218,9 +219,13 @@ const runGitHubSyncEffect = Effect.fn("github.sync.run")(function* (
             new Error(
               `Couldn't write ${file.target}: ${syncFailureMessage(cause)}`
             ),
-        })
+        }).pipe(
+          Effect.map((result) => ({
+            result: relayFilePutResultSchema.parse(result),
+            sha256: createHash("sha256").update(content).digest("hex"),
+          }))
+        )
       ),
-      Effect.map((result) => relayFilePutResultSchema.parse(result)),
       Effect.result
     )
     if (written._tag === "Failure") {
@@ -237,13 +242,23 @@ const runGitHubSyncEffect = Effect.fn("github.sync.run")(function* (
         )
       )
     }
-    if (written.success.conflict) {
-      kept += 1
+    const { result, sha256 } = written.success
+    if (result.conflict) {
+      // Already the repository's content, as when Kiln's earlier write
+      // landed but its reply was lost: Kiln's file again, not someone's edit.
+      if (result.current?.sha256 === sha256) {
+        syncedFiles[file.target] = {
+          blob: file.sha,
+          modifiedAt: result.current.modifiedAt,
+        }
+      } else {
+        kept += 1
+      }
       continue
     }
     syncedFiles[file.target] = {
       blob: file.sha,
-      modifiedAt: Date.parse(written.success.modifiedAt),
+      modifiedAt: Date.parse(result.modifiedAt),
     }
     changed += 1
   }
