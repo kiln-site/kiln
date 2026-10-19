@@ -1571,6 +1571,17 @@ const uploadIntoParent = Effect.fn("relay.files.uploadIntoParent")(function* (
             })
           )
         )
+        if (existing) {
+          // A replacement keeps the file's owner and mode, as saving does: a
+          // root Relay would otherwise hand the file to root, and the umask
+          // would narrow its mode.
+          yield* filesystemOperation("upload.keepOwnership", async () => {
+            if (process.getuid?.() === 0) {
+              await file.chown(existing.uid, existing.gid)
+            }
+            await file.chmod(existing.mode & 0o7777)
+          })
+        }
         yield* filesystemOperation("upload.sync", () => file.sync()).pipe(
           Effect.uninterruptible
         )

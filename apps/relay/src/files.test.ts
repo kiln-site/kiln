@@ -726,6 +726,29 @@ describeLinux("Relay direct file transfers", () => {
     )
   )
 
+  // A sync replaces config files the instance reads; the replacement must
+  // stay readable to it.
+  it.effect("keeps a replaced file's mode", () =>
+    withSetup(({ driver, instance, root }) =>
+      Effect.gen(function* () {
+        const path = resolve(root, "server.properties")
+        yield* fromPromise(() => writeFile(path, "motd=old\n"))
+        yield* fromPromise(() => chmod(path, 0o666))
+
+        yield* driver.upload(
+          instance,
+          "server.properties",
+          chunks("motd=new\n")
+        )
+
+        assert.strictEqual(
+          (yield* fromPromise(() => stat(path))).mode & 0o777,
+          0o666
+        )
+      })
+    )
+  )
+
   it.effect("atomically uploads and reads through a pinned file handle", () =>
     withSetup(({ driver, instance, root }) =>
       Effect.gen(function* () {

@@ -226,8 +226,16 @@ const runGitHubSyncEffect = Effect.fn("github.sync.run")(function* (
     if (written._tag === "Failure") {
       return yield* recordGitHubSyncResultEffect(sync.id, run, {
         error: syncFailureMessage(written.failure),
-        syncedFiles,
-      }).pipe(Effect.andThen(Effect.sync(publishGitHubSyncChange)))
+        // Files this run wrote before failing; the instance is no longer at
+        // the last synced commit.
+        ...(changed > 0 ? { syncedFiles } : {}),
+      }).pipe(
+        Effect.tap((recorded) =>
+          Effect.sync(() => {
+            if (recorded) publishGitHubSyncChange()
+          })
+        )
+      )
     }
     if (written.success.conflict) {
       kept += 1

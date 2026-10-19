@@ -677,9 +677,7 @@ function LatestSync({ sync }: { sync: GitHubSyncView }) {
 }
 
 function syncMatchesScope(sync: GitHubSyncView, scope: ScheduleScope) {
-  if (!("id" in scope)) {
-    return scope.kind === "server" && sync.target.kind === "server"
-  }
+  if (!("id" in scope)) return scope.kind === sync.target.kind
   if (scope.kind === "relay") return sync.target.relayId === scope.relayId
   return (
     scope.kind === sync.target.kind &&

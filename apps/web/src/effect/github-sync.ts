@@ -556,7 +556,11 @@ export const recordGitHubSyncResultEffect = Effect.fn("github.sync.record")(
           /** Kept in `last_error` beside a successful status. */
           warning: string | null
         }
-      | { error: string; syncedFiles?: Record<string, GitHubSyncedFile> }
+      | {
+          error: string
+          /** Files a run wrote before failing. */
+          syncedFiles?: Record<string, GitHubSyncedFile>
+        }
   ) {
     const database = yield* Database
     const now = yield* Clock.currentTimeMillis
@@ -567,12 +571,13 @@ export const recordGitHubSyncResultEffect = Effect.fn("github.sync.record")(
         : result.commitMessage.split("\n", 1)[0]!.slice(0, 255)
     if ("error" in result) {
       // Files written before the failure stay recorded, so a retry doesn't
-      // write them again.
+      // write them again. Having written some, the instance is no longer at
+      // the last synced commit, so the next poll syncs again.
       if (result.syncedFiles) {
         yield* database.execute(
           "github.sync.recordFiles",
           `UPDATE ${databaseTable("github_sync")}
-              SET synced_files = ?
+              SET synced_files = ?, last_commit_sha = NULL
             WHERE id = ?`,
           [JSON.stringify(result.syncedFiles), id]
         )
