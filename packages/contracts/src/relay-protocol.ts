@@ -266,6 +266,8 @@ export function relayControlDeadlineMs(
     return 30_000
   }
   if (operation === "instance.logs.share") return 60_000
+  // The CLI saves files of up to the control frame limit.
+  if (operation === "instance.files.write") return 180_000
   if (
     operation === "instance.create" ||
     operation === "instance.startup.write" ||
