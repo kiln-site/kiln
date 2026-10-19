@@ -15,7 +15,6 @@ import {
   CirclePlay,
   CircleCheck,
   CircleX,
-  ClipboardCopy,
   Code2,
   Copy,
   Database,
@@ -31,7 +30,6 @@ import {
   Plus,
   Power,
   RefreshCw,
-  Search,
   Server,
   SlidersHorizontal,
   Timer,
@@ -94,9 +92,14 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
+import { cn } from "@workspace/ui/lib/utils"
 
 import { DataTable } from "@/components/data-table-view"
-import { DataTableEmptyState, DataTableTextCell } from "@/components/data-table"
+import {
+  DataTableActionGroup,
+  DataTableEmptyState,
+  DataTableTextCell,
+} from "@/components/data-table"
 import {
   DataTableToolbar,
   DataTableWorkspace,
@@ -107,17 +110,11 @@ import {
 } from "@/components/instance-kind-counts"
 import { CopyIdentifierMenuItem } from "@/components/copy-identifier-menu-item"
 import { IdentityName } from "@/components/identity-name"
+import type { IdentityStatusPresentation } from "@/components/identity-name"
 import { InstanceCard } from "@/components/instance-card"
+import { statusColumnWidth } from "@/components/instance-name-presentation"
 import { RelativeTime } from "@/components/relative-time"
-import {
-  WorkspaceTable,
-  WorkspaceTableCell,
-  WorkspaceTableHead,
-  WorkspaceTableHeading,
-  createWorkspaceTableSearchStore,
-  useWorkspaceTableSearchInput,
-} from "@/components/workspace-table"
-import type { WorkspaceTableSearchStore } from "@/components/workspace-table"
+import { StatusIndicator } from "@/components/status-indicator"
 import {
   BackupConfigurationDialog,
   type BackupConfigurationTarget,
@@ -131,7 +128,6 @@ import {
   useScheduleScope,
   type ScheduleScope,
 } from "@/components/schedule-scope"
-import { forkPromise } from "@/effect/promise"
 import {
   createDataTableColumnHelper,
   dataTableColumnMeta,
@@ -211,7 +207,7 @@ export const SchedulesPage = React.memo(function SchedulesPage() {
   })
   const navigate = useNavigate({ from: "/automations/schedules" })
   const selectedScope = useScheduleScope()
-  const [searchStore] = React.useState(createWorkspaceTableSearchStore)
+  const [searchStore] = React.useState(() => createDataTableSearchStore())
   const [editor, setEditor] = React.useState<EditorMode | null>(null)
   const [deleting, setDeleting] = React.useState<Schedule | null>(null)
   const options = React.useMemo(
@@ -271,13 +267,16 @@ export const SchedulesPage = React.memo(function SchedulesPage() {
   )
 
   return (
-    <div className="mx-auto w-full max-w-[90rem] px-3 pb-10 sm:px-5">
-      <section className="overflow-hidden rounded-xl border bg-card/45 [contain:paint]">
-        <ScheduleToolbar
-          canCreate={canCreate}
-          searchStore={searchStore}
-          onCreate={openCreate}
-        />
+    <div className="mx-auto flex h-full min-h-[34rem] w-full max-w-[90rem] flex-col px-3 pb-3 sm:px-5 sm:pb-5">
+      <DataTableWorkspace
+        toolbar={
+          <ScheduleToolbar
+            canCreate={canCreate}
+            searchStore={searchStore}
+            onCreate={openCreate}
+          />
+        }
+      >
         <ScheduleTable
           canCreate={canCreate}
           optionMap={optionMap}
@@ -290,7 +289,7 @@ export const SchedulesPage = React.memo(function SchedulesPage() {
           onViewHistory={viewHistory}
           onViewRun={viewRun}
         />
-      </section>
+      </DataTableWorkspace>
 
       {editor ? (
         <ScheduleEditorDialog
@@ -315,34 +314,32 @@ const ScheduleToolbar = React.memo(function ScheduleToolbar({
   onCreate,
 }: {
   canCreate: boolean
-  searchStore: WorkspaceTableSearchStore
+  searchStore: DataTableSearchStore
   onCreate: () => void
 }) {
-  const inputRef = React.useRef<HTMLInputElement>(null)
-  useWorkspaceTableSearchInput(inputRef, searchStore)
-
+  const search = React.useMemo(
+    () => ({
+      ariaLabel: "Search schedules",
+      closeMobileWhenEmpty: true,
+      id: "schedule-search",
+      placeholder: "Search schedules",
+      store: searchStore,
+    }),
+    [searchStore]
+  )
   return (
-    <div className="flex min-w-0 items-center gap-2 border-b bg-background/25 p-3">
-      <ScheduleSyncButton />
-      <div className="relative min-w-0 flex-1 sm:max-w-md">
-        <Search className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          ref={inputRef}
-          id="schedule-search"
-          type="search"
-          className="pl-9"
-          defaultValue={searchStore.getServerSnapshot()}
-          placeholder="Search schedules"
-          onChange={(event) => searchStore.set(event.currentTarget.value)}
-        />
-      </div>
-      {canCreate ? (
-        <Button className="ml-auto shrink-0" size="sm" onClick={onCreate}>
-          <Plus />
-          Create schedule
-        </Button>
-      ) : null}
-    </div>
+    <DataTableToolbar
+      actions={
+        canCreate ? (
+          <Button aria-label="Create schedule" size="sm" onClick={onCreate}>
+            <Plus />
+            <span className="hidden sm:inline">Create schedule</span>
+          </Button>
+        ) : null
+      }
+      leading={<ScheduleSyncButton />}
+      search={search}
+    />
   )
 })
 
@@ -375,6 +372,9 @@ const ScheduleSyncButton = React.memo(function ScheduleSyncButton() {
   )
 })
 
+const scheduleColumnHelper = createDataTableColumnHelper<Schedule>()
+const scheduleSearchFields = [scheduleSearchText] as const
+
 const ScheduleTable = React.memo(function ScheduleTable({
   canCreate,
   optionMap,
@@ -391,93 +391,254 @@ const ScheduleTable = React.memo(function ScheduleTable({
   optionMap: ReadonlyMap<string, ScheduleOption>
   schedules: Array<Schedule>
   scope: ScheduleScope | null
-  searchStore: WorkspaceTableSearchStore
+  searchStore: DataTableSearchStore
   onCreate: () => void
   onDelete: (schedule: Schedule) => void
   onEdit: (schedule: Schedule) => void
   onViewHistory: (schedule: Schedule) => void
   onViewRun: (schedule: Schedule, run: ScheduleRunWithRelay) => void
 }) {
-  const renderRow = React.useCallback(
-    (schedule: Schedule) => (
-      <ScheduleTableRow
-        optionMap={optionMap}
-        schedule={schedule}
-        scope={scope}
-        onDelete={onDelete}
-        onEdit={onEdit}
-        onViewHistory={onViewHistory}
-        onViewRun={onViewRun}
-      />
-    ),
+  const source = React.useMemo(
+    (): DataTableSource<Schedule> => ({
+      body: { kind: "ready" },
+      refreshing: false,
+      rows: schedules,
+    }),
+    [schedules]
+  )
+  const definition = React.useMemo(
+    () =>
+      defineDataTable({
+        ariaLabel: "Schedules",
+        columns: scheduleColumnHelper.columns([
+          scheduleColumnHelper.accessor(
+            (schedule) => scheduleStatusPresentation(schedule).label,
+            {
+              id: "status",
+              header: () => (
+                <span className="sr-only sm:not-sr-only">Status</span>
+              ),
+              sortFn: "text",
+              cell: ({ row }) => (
+                <StatusIndicator
+                  status={scheduleStatusPresentation(row.original)}
+                />
+              ),
+              meta: dataTableColumnMeta(
+                { width: { base: "2.5rem", sm: statusColumnWidth } },
+                {
+                  cellClassName: "px-2 sm:px-3",
+                  headerClassName: "px-2 sm:px-3",
+                  headerLabelClassName: "shrink-0 overflow-visible text-clip",
+                }
+              ),
+            }
+          ),
+          scheduleColumnHelper.accessor("name", {
+            id: "schedule",
+            header: "Schedule",
+            sortFn: "text",
+            cell: ({ row }) => (
+              <ScheduleName
+                canEdit={canOperateSchedule(
+                  row.original,
+                  optionMap,
+                  "canUpdate"
+                )}
+                schedule={row.original}
+                onEdit={onEdit}
+              />
+            ),
+            meta: dataTableColumnMeta({
+              width: { base: "minmax(0,1fr)", md: "minmax(0,1.3fr)" },
+            }),
+          }),
+          scheduleColumnHelper.accessor(
+            (schedule) => schedule.targets.length,
+            {
+              id: "targets",
+              header: "Targets",
+              sortFn: sortFn_basic,
+              cell: ({ row }) => (
+                <ScheduleTargets
+                  optionMap={optionMap}
+                  schedule={row.original}
+                />
+              ),
+              meta: dataTableColumnMeta({ hideBelow: "xl", width: "11rem" }),
+            }
+          ),
+          scheduleColumnHelper.accessor(
+            (schedule) => scheduleNextRun(schedule)?.getTime() ?? Infinity,
+            {
+              id: "timing",
+              header: "Timing",
+              sortFn: sortFn_basic,
+              cell: ({ row }) => <ScheduleTiming schedule={row.original} />,
+              meta: dataTableColumnMeta({
+                hideBelow: "md",
+                width: "minmax(7.5rem,0.6fr)",
+              }),
+            }
+          ),
+          scheduleColumnHelper.accessor(
+            (schedule) => scheduleLastRun(schedule, scope)?.finishedAt ?? 0,
+            {
+              id: "latest",
+              header: "Latest run",
+              sortFn: sortFn_basic,
+              cell: ({ row }) => (
+                <ScheduleLastRun
+                  schedule={row.original}
+                  scope={scope}
+                  onView={onViewRun}
+                />
+              ),
+              meta: dataTableColumnMeta({ hideBelow: "lg", width: "9rem" }),
+            }
+          ),
+          scheduleColumnHelper.display({
+            id: "actions",
+            header: () => <span className="sr-only">Actions</span>,
+            enableSorting: false,
+            cell: ({ row }) => (
+              <ScheduleActions
+                optionMap={optionMap}
+                schedule={row.original}
+                onDelete={onDelete}
+                onEdit={onEdit}
+                onViewHistory={onViewHistory}
+              />
+            ),
+            meta: dataTableColumnMeta(
+              { width: { base: "11.25rem", sm: "11.75rem" } },
+              {
+                cellClassName: "px-1 sm:px-2",
+                headerClassName: "px-1 sm:px-2",
+              }
+            ),
+          }),
+        ]),
+        getRowId: scheduleRowKey,
+        search: { fields: scheduleSearchFields },
+        virtualization: true,
+      }),
     [onDelete, onEdit, onViewHistory, onViewRun, optionMap, scope]
   )
-  const renderEmpty = React.useCallback(
-    (searchActive: boolean) => (
-      <EmptyScheduleTable
-        canCreate={canCreate}
-        scopeActive={scope !== null}
-        searchActive={searchActive}
-        onCreate={onCreate}
+  const emptyState = React.useCallback(
+    ({ searchActive }: { searchActive: boolean }) => (
+      <DataTableEmptyState
+        action={
+          !searchActive && canCreate ? (
+            <Button type="button" size="sm" onClick={onCreate}>
+              <Plus /> Create schedule
+            </Button>
+          ) : undefined
+        }
+        description={
+          <span className="block max-w-sm">
+            {searchActive
+              ? "Try a schedule name, cron expression, action, or target."
+              : scope
+                ? "Choose another scope or create a schedule for it."
+                : "Create Relay-owned automation that keeps running when Hearth is offline."}
+          </span>
+        }
+        icon={<Play className="size-6 text-muted-foreground/45" />}
+        title={
+          searchActive
+            ? "No schedules match your search"
+            : scope
+              ? "No schedules in this scope"
+              : "No schedules yet"
+        }
       />
     ),
     [canCreate, onCreate, scope]
   )
 
   return (
-    <WorkspaceTable
-      getRowKey={scheduleRowKey}
-      getSearchText={scheduleSearchText}
-      head={<ScheduleTableHead />}
-      items={schedules}
-      renderEmpty={renderEmpty}
-      renderRow={renderRow}
+    <DataTable
+      definition={definition}
+      emptyState={emptyState}
       searchStore={searchStore}
+      source={source}
     />
   )
 })
 
-const ScheduleTableHead = React.memo(function ScheduleTableHead() {
+const ScheduleName = React.memo(function ScheduleName({
+  canEdit,
+  schedule,
+  onEdit,
+}: {
+  canEdit: boolean
+  schedule: Schedule
+  onEdit: (schedule: Schedule) => void
+}) {
+  const card = (
+    <IdentityName
+      icon={<ListTodo className="size-4" aria-hidden="true" />}
+      meta={scheduleActionSummary(schedule)}
+      name={schedule.name}
+      nameClassName={
+        canEdit
+          ? "transition-colors group-hover/schedule-name:text-primary"
+          : undefined
+      }
+    />
+  )
+  if (!canEdit) return card
   return (
-    <WorkspaceTableHead>
-      <WorkspaceTableHeading className="w-20 px-2 sm:w-28 sm:px-3">
-        Status
-      </WorkspaceTableHeading>
-      <WorkspaceTableHeading className="w-auto sm:w-[34%]">
-        Name
-      </WorkspaceTableHeading>
-      <WorkspaceTableHeading className="hidden w-[20%] md:table-cell">
-        Timing
-      </WorkspaceTableHeading>
-      <WorkspaceTableHeading className="hidden w-[16%] lg:table-cell">
-        Latest run
-      </WorkspaceTableHeading>
-      <WorkspaceTableHeading className="hidden w-[16%] xl:table-cell">
-        Next run
-      </WorkspaceTableHeading>
-      <WorkspaceTableHeading className="w-48 px-1 text-right sm:w-64 sm:px-3">
-        Actions
-      </WorkspaceTableHeading>
-    </WorkspaceTableHead>
+    <button
+      type="button"
+      aria-label={`Edit ${schedule.name}`}
+      className="group/schedule-name flex max-w-full min-w-0 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+      onClick={() => onEdit(schedule)}
+    >
+      {card}
+    </button>
   )
 })
 
-const ScheduleTableRow = React.memo(function ScheduleTableRow({
+const ScheduleTargets = React.memo(function ScheduleTargets({
   optionMap,
   schedule,
-  scope,
-  onDelete,
-  onEdit,
-  onViewHistory,
-  onViewRun,
 }: {
   optionMap: ReadonlyMap<string, ScheduleOption>
   schedule: Schedule
-  scope: ScheduleScope | null
+}) {
+  const { counts, targets } = React.useMemo(() => {
+    const targets = schedule.targets.map((target) =>
+      scheduleHistoryTarget(
+        target,
+        optionMap.get(targetKey(target))?.relayName
+      )
+    )
+    return { counts: historyTargetCounts(targets), targets }
+  }, [optionMap, schedule.targets])
+  return (
+    <HistoryTargets
+      counts={counts}
+      name={schedule.name}
+      relayName=""
+      targets={targets}
+    />
+  )
+})
+
+const ScheduleActions = React.memo(function ScheduleActions({
+  optionMap,
+  schedule,
+  onDelete,
+  onEdit,
+  onViewHistory,
+}: {
+  optionMap: ReadonlyMap<string, ScheduleOption>
+  schedule: Schedule
   onDelete: (schedule: Schedule) => void
   onEdit: (schedule: Schedule) => void
   onViewHistory: (schedule: Schedule) => void
-  onViewRun: (schedule: Schedule, run: ScheduleRunWithRelay) => void
 }) {
   const queryClient = useQueryClient()
   const canEdit = canOperateSchedule(schedule, optionMap, "canUpdate")
@@ -554,217 +715,166 @@ const ScheduleTableRow = React.memo(function ScheduleTableRow({
         type: "error",
       }),
   })
-  const nextRun = scheduleNextRun(schedule)
-  const lastRun = scheduleLastRun(schedule, scope)
-  const status = scheduleStatus(schedule)
-  const copyScheduleId = React.useCallback(() => {
-    forkPromise(
-      async () => {
-        await navigator.clipboard.writeText(schedule.id)
-        showToast({ message: "Schedule ID copied", type: "success" })
-      },
-      (cause) =>
-        showToast({
-          message: errorMessage(cause, "The schedule ID could not be copied"),
-          type: "error",
-        })
-    )
-  }, [schedule.id])
 
   return (
-    <tr className="group transition-colors hover:bg-accent/25">
-      <WorkspaceTableCell className="px-2 sm:px-3">
-        <ScheduleState state={status} />
-      </WorkspaceTableCell>
-      <WorkspaceTableCell>
-        <p className="truncate text-xs font-semibold text-foreground">
-          {schedule.name}
-        </p>
-      </WorkspaceTableCell>
-      <WorkspaceTableCell className="hidden md:table-cell">
-        <ScheduleTiming cron={schedule.cron} />
-      </WorkspaceTableCell>
-      <WorkspaceTableCell className="hidden lg:table-cell">
-        <ScheduleLastRun
-          run={lastRun}
-          timezone={schedule.timezone}
-          onView={() => lastRun && onViewRun(schedule, lastRun)}
-        />
-      </WorkspaceTableCell>
-      <WorkspaceTableCell className="hidden xl:table-cell">
-        <ScheduleNextRun nextRun={nextRun} timezone={schedule.timezone} />
-      </WorkspaceTableCell>
-      <WorkspaceTableCell className="px-1 sm:px-3">
-        <div className="flex items-center justify-end gap-1">
-          {canRun ? (
+    <DataTableActionGroup>
+      {canRun ? (
+        <Button
+          type="button"
+          size="sm"
+          className="bg-emerald-600 px-2 text-xs text-white hover:bg-emerald-500 focus-visible:ring-emerald-500/40 dark:bg-emerald-600 dark:hover:bg-emerald-500"
+          disabled={runMutation.isPending}
+          onClick={() => runMutation.mutate()}
+        >
+          {runMutation.isPending ? (
+            <LoaderCircle className="animate-spin" />
+          ) : (
+            <Play />
+          )}
+          Run now
+        </Button>
+      ) : null}
+      {canEdit ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
             <Button
               type="button"
-              size="sm"
-              className="bg-emerald-600 px-2 text-xs text-white hover:bg-emerald-500 focus-visible:ring-emerald-500/40 dark:bg-emerald-600 dark:hover:bg-emerald-500"
-              disabled={runMutation.isPending}
-              onClick={() => runMutation.mutate()}
+              size="icon-sm"
+              variant="ghost"
+              aria-label={`Edit ${schedule.name}`}
+              onClick={() => onEdit(schedule)}
             >
-              {runMutation.isPending ? (
+              <Pencil />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" sideOffset={6}>
+            Edit schedule
+          </TooltipContent>
+        </Tooltip>
+      ) : null}
+      {canDelete ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="ghost"
+              className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+              aria-label={`Delete ${schedule.name}`}
+              onClick={() => onDelete(schedule)}
+            >
+              <Trash2 />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" sideOffset={6}>
+            Delete schedule
+          </TooltipContent>
+        </Tooltip>
+      ) : null}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="ghost"
+            aria-label={`More actions for ${schedule.name}`}
+          >
+            <EllipsisVertical />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="min-w-48">
+          <CopyIdentifierMenuItem label="Schedule ID" value={schedule.id} />
+          {canDuplicate ? (
+            <DropdownMenuItem
+              disabled={duplicateMutation.isPending}
+              onSelect={() => duplicateMutation.mutate()}
+            >
+              {duplicateMutation.isPending ? (
                 <LoaderCircle className="animate-spin" />
               ) : (
-                <Play />
+                <Copy />
               )}
-              Run now
-            </Button>
+              Duplicate schedule
+            </DropdownMenuItem>
           ) : null}
-          {canEdit ? (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  type="button"
-                  size="icon-sm"
-                  variant="ghost"
-                  aria-label={`Edit ${schedule.name}`}
-                  onClick={() => onEdit(schedule)}
-                >
-                  <Pencil />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">Edit schedule</TooltipContent>
-            </Tooltip>
-          ) : null}
-          {canDelete ? (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  type="button"
-                  size="icon-sm"
-                  variant="ghost"
-                  className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-                  aria-label={`Delete ${schedule.name}`}
-                  onClick={() => onDelete(schedule)}
-                >
-                  <Trash2 />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">Delete schedule</TooltipContent>
-            </Tooltip>
-          ) : null}
-          <DropdownMenu>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    type="button"
-                    size="icon-sm"
-                    variant="ghost"
-                    aria-label={`More actions for ${schedule.name}`}
-                  >
-                    <EllipsisVertical />
-                  </Button>
-                </DropdownMenuTrigger>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">More actions</TooltipContent>
-            </Tooltip>
-            <DropdownMenuContent align="end" className="min-w-48">
-              <DropdownMenuItem onSelect={copyScheduleId}>
-                <ClipboardCopy /> Copy schedule ID
+          <DropdownMenuItem onSelect={() => onViewHistory(schedule)}>
+            <History /> View history
+          </DropdownMenuItem>
+          {canEdit && targetsAvailable ? (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                disabled={enabledMutation.isPending}
+                onSelect={() => enabledMutation.mutate(!schedule.enabled)}
+              >
+                {enabledMutation.isPending ? (
+                  <LoaderCircle className="animate-spin" />
+                ) : schedule.enabled ? (
+                  <CirclePause />
+                ) : (
+                  <CirclePlay />
+                )}
+                {schedule.enabled ? "Disable schedule" : "Enable schedule"}
               </DropdownMenuItem>
-              {canDuplicate ? (
-                <DropdownMenuItem
-                  disabled={duplicateMutation.isPending}
-                  onSelect={() => duplicateMutation.mutate()}
-                >
-                  {duplicateMutation.isPending ? (
-                    <LoaderCircle className="animate-spin" />
-                  ) : (
-                    <Copy />
-                  )}
-                  Duplicate schedule
-                </DropdownMenuItem>
-              ) : null}
-              <DropdownMenuItem onSelect={() => onViewHistory(schedule)}>
-                <History /> View history
-              </DropdownMenuItem>
-              {canEdit && targetsAvailable ? (
-                <>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    disabled={enabledMutation.isPending}
-                    onSelect={() => enabledMutation.mutate(!schedule.enabled)}
-                  >
-                    {enabledMutation.isPending ? (
-                      <LoaderCircle className="animate-spin" />
-                    ) : schedule.enabled ? (
-                      <CirclePause />
-                    ) : (
-                      <CirclePlay />
-                    )}
-                    {schedule.enabled ? "Disable schedule" : "Enable schedule"}
-                  </DropdownMenuItem>
-                </>
-              ) : null}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      </WorkspaceTableCell>
-    </tr>
+            </>
+          ) : null}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </DataTableActionGroup>
   )
 })
 
-function ScheduleTiming({ cron }: { cron: string }) {
-  const alias = cronAliasLabel(cron)
-  if (!alias) {
-    return (
-      <span className="type-code -my-1 inline-flex h-7 items-center px-1 text-foreground">
-        {cron}
-      </span>
-    )
-  }
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span
-          tabIndex={0}
-          className="type-control-sm -my-1 inline-flex h-7 cursor-default items-center rounded-sm px-1 text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-        >
-          {alias}
-        </span>
-      </TooltipTrigger>
-      <TooltipContent side="bottom" className="font-mono">
-        {cron}
-      </TooltipContent>
-    </Tooltip>
-  )
-}
-
-function ScheduleNextRun({
-  nextRun,
-  timezone,
+/** The cron as words, with the next run under it. */
+const ScheduleTiming = React.memo(function ScheduleTiming({
+  schedule,
 }: {
-  nextRun: Date | null
-  timezone: string
+  schedule: Schedule
 }) {
-  if (!nextRun) {
-    return (
-      <span className="type-meta -my-1 inline-flex h-7 items-center px-1 text-muted-foreground">
-        Not scheduled
-      </span>
-    )
-  }
+  const alias = cronAliasLabel(schedule.cron)
+  const nextRun = scheduleNextRun(schedule)
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <time
-          dateTime={nextRun.toISOString()}
-          tabIndex={0}
-          className="type-control-sm -my-1 inline-flex h-7 cursor-default items-center rounded-sm px-1 text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-          suppressHydrationWarning
-        >
-          <RelativeTimeText date={nextRun} />
-        </time>
-      </TooltipTrigger>
-      <TooltipContent side="bottom">
-        {fullTimestampLabel(nextRun, timezone)}
-      </TooltipContent>
-    </Tooltip>
+    <span className="flex min-w-0 flex-col items-start">
+      {alias ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span
+              tabIndex={0}
+              className="max-w-full cursor-default truncate rounded-sm text-xs font-medium text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+            >
+              {alias}
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" className="font-mono">
+            {schedule.cron}
+          </TooltipContent>
+        </Tooltip>
+      ) : (
+        <span className="max-w-full truncate font-mono text-xs text-foreground">
+          {schedule.cron}
+        </span>
+      )}
+      {nextRun ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <time
+              dateTime={nextRun.toISOString()}
+              tabIndex={0}
+              className="type-meta max-w-full cursor-default truncate rounded-sm text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+              suppressHydrationWarning
+            >
+              Next <RelativeTimeText date={nextRun} />
+            </time>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {fullTimestampLabel(nextRun, schedule.timezone)}
+          </TooltipContent>
+        </Tooltip>
+      ) : (
+        <span className="type-meta text-muted-foreground">Not scheduled</span>
+      )}
+    </span>
   )
-}
+})
 
 const RelativeTimeText = React.memo(function RelativeTimeText({
   date,
@@ -784,46 +894,60 @@ const RelativeTimeText = React.memo(function RelativeTimeText({
   return relativeTime(date, now)
 })
 
-function ScheduleLastRun({
-  run,
-  timezone,
+const ScheduleLastRun = React.memo(function ScheduleLastRun({
+  schedule,
+  scope,
   onView,
 }: {
-  run: ScheduleRunWithRelay | null
-  timezone: string
-  onView: () => void
+  schedule: Schedule
+  scope: ScheduleScope | null
+  onView: (schedule: Schedule, run: ScheduleRunWithRelay) => void
 }) {
+  const run = scheduleLastRun(schedule, scope)
   if (!run) {
-    return (
-      <span className="type-meta -my-1 inline-flex h-7 items-center px-1 text-muted-foreground">
-        Never
-      </span>
-    )
+    return <span className="type-meta text-muted-foreground">Never</span>
   }
   const result = latestRunResult(run)
-  const finishedAt = new Date(run.finishedAt)
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          className="-my-1 inline-flex h-7 items-center px-1 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 hover:[&_[data-slot=badge]]:brightness-110"
-          onClick={onView}
-        >
-          <Badge
-            variant="outline"
-            className={`type-meta px-1.5 py-0 ${result === "Success" ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" : result === "Errored" ? "border-amber-500/35 bg-amber-500/10 text-amber-700 dark:text-amber-300" : "border-destructive/30 bg-destructive/10 text-destructive"}`}
-          >
-            {result}
-          </Badge>
-        </button>
-      </TooltipTrigger>
-      <TooltipContent side="bottom">
-        {fullTimestampLabel(finishedAt, timezone)}
-      </TooltipContent>
-    </Tooltip>
+    <button
+      type="button"
+      aria-label={`View the latest ${schedule.name} run`}
+      className="group/latest-run type-meta flex max-w-full min-w-0 flex-col items-start rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+      onClick={() => onView(schedule, run)}
+    >
+      <span
+        className={cn(
+          "inline-flex max-w-full items-center gap-1.5 text-xs font-medium group-hover/latest-run:underline",
+          latestRunResultClassName[result]
+        )}
+      >
+        <span
+          className={cn(
+            "size-1.5 shrink-0 rounded-full",
+            latestRunResultDotClassName[result]
+          )}
+        />
+        {result}
+      </span>
+      <RelativeTime
+        className="max-w-full text-muted-foreground"
+        timestamp={run.finishedAt}
+      />
+    </button>
   )
-}
+})
+
+const latestRunResultClassName = {
+  Errored: "text-amber-300",
+  Failed: "text-destructive",
+  Success: "text-emerald-300",
+} as const satisfies Record<ReturnType<typeof latestRunResult>, string>
+
+const latestRunResultDotClassName = {
+  Errored: "bg-amber-400",
+  Failed: "bg-destructive",
+  Success: "bg-emerald-400",
+} as const satisfies Record<ReturnType<typeof latestRunResult>, string>
 
 function latestRunResult(run: ScheduleRunWithRelay) {
   const attempts = [
@@ -839,43 +963,6 @@ function latestRunResult(run: ScheduleRunWithRelay) {
   if (passed.length === 0) return "Failed" as const
   if (failed.length > 0) return "Errored" as const
   return "Success" as const
-}
-
-function EmptyScheduleTable({
-  canCreate,
-  scopeActive,
-  searchActive,
-  onCreate,
-}: {
-  canCreate: boolean
-  scopeActive: boolean
-  searchActive: boolean
-  onCreate: () => void
-}) {
-  return (
-    <div className="flex min-h-64 flex-col items-center justify-center px-6 py-12 text-center">
-      <Play className="size-6 text-muted-foreground/45" />
-      <p className="mt-3 text-sm font-semibold">
-        {searchActive
-          ? "No schedules match your search"
-          : scopeActive
-            ? "No schedules in this scope"
-            : "No schedules yet"}
-      </p>
-      <p className="type-support mt-1 max-w-sm text-muted-foreground">
-        {searchActive
-          ? "Try a schedule name, cron expression, action, or target."
-          : scopeActive
-            ? "Choose another scope or create a schedule for it."
-            : "Create Relay-owned automation that keeps running when Hearth is offline."}
-      </p>
-      {!searchActive && canCreate ? (
-        <Button type="button" size="sm" className="mt-4" onClick={onCreate}>
-          <Plus /> Create schedule
-        </Button>
-      ) : null}
-    </div>
-  )
 }
 
 export const ScheduleHistoryPage = React.memo(function ScheduleHistoryPage() {
@@ -1044,6 +1131,8 @@ interface HistoryTarget {
   kind: InstancePickerKind
   name: string
   relayId: string
+  /** Falls back to the Relay that ran it. */
+  relayName?: string
 }
 
 interface HistoryEntryBase {
@@ -1073,12 +1162,7 @@ function automationHistoryEntries(
       run,
       run.relayId,
       relayNames.get(run.relayId) ?? run.relayId,
-      run.targetRuns.map(({ target }) => ({
-        id: target.kind === "relay" ? target.relayId : target.id,
-        kind: target.kind === "instance" ? "server" : target.kind,
-        name: target.name,
-        relayId: target.relayId,
-      }))
+      run.targetRuns.map(({ target }) => scheduleHistoryTarget(target))
     ),
     kind: "schedule",
     run,
@@ -1115,21 +1199,40 @@ function historyEntryBase(
   relayName: string,
   targets: ReadonlyArray<HistoryTarget>
 ): HistoryEntryBase {
-  const targetCounts = { apps: 0, databases: 0, instances: 0, relays: 0 }
-  for (const target of targets) {
-    if (target.kind === "server") targetCounts.instances += 1
-    else if (target.kind === "app") targetCounts.apps += 1
-    else if (target.kind === "database") targetCounts.databases += 1
-    else targetCounts.relays += 1
-  }
   return {
     durationMs: Math.max(0, run.finishedAt - run.startedAt),
     name,
     relayId,
     relayName,
     startedAt: run.startedAt,
-    targetCounts,
+    targetCounts: historyTargetCounts(targets),
     targets,
+  }
+}
+
+function historyTargetCounts(
+  targets: ReadonlyArray<HistoryTarget>
+): InstanceKindCountValues {
+  const counts = { apps: 0, databases: 0, instances: 0, relays: 0 }
+  for (const target of targets) {
+    if (target.kind === "server") counts.instances += 1
+    else if (target.kind === "app") counts.apps += 1
+    else if (target.kind === "database") counts.databases += 1
+    else counts.relays += 1
+  }
+  return counts
+}
+
+function scheduleHistoryTarget(
+  target: ScheduleTarget,
+  relayName?: string
+): HistoryTarget {
+  return {
+    id: target.kind === "relay" ? target.relayId : target.id,
+    kind: target.kind === "instance" ? "server" : target.kind,
+    name: target.name,
+    relayId: target.relayId,
+    relayName,
   }
 }
 
@@ -1286,7 +1389,7 @@ const ScheduleHistoryTable = React.memo(function ScheduleHistoryTable({
                 targets={row.original.targets}
               />
             ),
-            meta: dataTableColumnMeta({ hideBelow: "lg", width: "11rem" }),
+            meta: dataTableColumnMeta({ hideBelow: "xl", width: "11rem" }),
           }),
           historyColumnHelper.accessor("startedAt", {
             id: "started",
@@ -1618,7 +1721,7 @@ function historyTargetPickerItem(
     target.kind === "server"
       ? servers?.get(`${target.relayId}:${target.id}`)
       : undefined
-  const relayName = server?.relayName ?? runRelayName
+  const relayName = server?.relayName ?? target.relayName ?? runRelayName
   const kindLabel =
     target.kind === "server"
       ? "Game Server"
@@ -3427,29 +3530,6 @@ function DeleteScheduleDialog({
   )
 }
 
-function ScheduleState({
-  state,
-}: {
-  state: "enabled" | "disabled" | "running"
-}) {
-  const label =
-    state === "enabled"
-      ? "Enabled"
-      : state === "running"
-        ? "Running"
-        : "Disabled"
-  return (
-    <span
-      className={`type-label inline-flex items-center gap-1.5 ${state === "enabled" ? "text-emerald-400" : state === "running" ? "text-amber-300" : "text-muted-foreground"}`}
-    >
-      <span
-        className={`size-1.5 shrink-0 rounded-full ${state === "enabled" ? "bg-emerald-400" : state === "running" ? "animate-pulse bg-amber-400" : "bg-muted-foreground"}`}
-      />
-      <span>{label}</span>
-    </span>
-  )
-}
-
 function RunStatusDot({
   status,
 }: {
@@ -3916,11 +3996,22 @@ function scheduleLastRun(
   return latest
 }
 
-function scheduleStatus(
+function scheduleStatusPresentation(
   schedule: Schedule
-): "enabled" | "disabled" | "running" {
-  if (schedule.runs.some((run) => run.status === "running")) return "running"
-  return schedule.enabled ? "enabled" : "disabled"
+): IdentityStatusPresentation {
+  if (schedule.runs.some((run) => run.status === "running")) {
+    return { label: "Running", pulse: true, tone: "info" }
+  }
+  return schedule.enabled
+    ? { label: "Enabled", tone: "success" }
+    : { label: "Disabled", tone: "neutral" }
+}
+
+/** "Backup · Restart · Command", or how many actions when there are many. */
+function scheduleActionSummary(schedule: Schedule) {
+  if (schedule.actions.length === 0) return "No actions"
+  if (schedule.actions.length > 3) return `${schedule.actions.length} actions`
+  return schedule.actions.map((action) => actionLabel(action.type)).join(" · ")
 }
 
 function subscribeRelativeClock(listener: () => void) {
