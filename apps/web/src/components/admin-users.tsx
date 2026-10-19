@@ -1,14 +1,37 @@
-import { memo, useMemo, useState, useSyncExternalStore } from "react"
+import {
+  createContext,
+  memo,
+  useCallback,
+  useContext,
+  useDeferredValue,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+} from "react"
 import {
   keepPreviousData,
+  useInfiniteQuery,
   useMutation,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query"
-import { EllipsisVertical, Mail, Plus, Users } from "lucide-react"
+import { Link } from "@tanstack/react-router"
+import {
+  Activity,
+  Ban,
+  Boxes,
+  Database,
+  EllipsisVertical,
+  KeyRound,
+  Mail,
+  Plus,
+  RadioTower,
+  Server,
+  Trash2,
+  UserCheck,
+  Users,
+} from "lucide-react"
 import { Button } from "@workspace/ui/components/button"
-import { Input } from "@workspace/ui/components/input"
-import { Badge } from "@workspace/ui/components/badge"
 import {
   Dialog,
   DialogContent,
@@ -21,28 +44,29 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@workspace/ui/components/select"
+import { showToast } from "@workspace/ui/components/sonner"
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
-import { showToast } from "@workspace/ui/components/sonner"
-import { copyWithToast, utcTimestamp } from "@/components/access-format"
+import { cn } from "@workspace/ui/lib/utils"
+import { CopyIdentifierMenuItem } from "@/components/copy-identifier-menu-item"
 import { DataTable } from "@/components/data-table-view"
-import { DataTableEmptyState, DataTableTextCell } from "@/components/data-table"
+import {
+  DataTableActionGroup,
+  DataTableEmptyState,
+  DataTableTextCell,
+} from "@/components/data-table"
 import {
   DataTableToolbar,
   DataTableWorkspace,
 } from "@/components/data-table-workspace"
+import { UserAccessDialog, UserBadges } from "@/components/user-access-dialog"
+import { UserIdentity } from "@/components/user-identity"
 import {
   createDataTableColumnHelper,
   dataTableColumnMeta,
@@ -52,105 +76,39 @@ import {
   createDataTableSearchStore,
   type DataTableSearchStore,
 } from "@/lib/data-table-search"
-import type { DataTableSource } from "@/lib/data-table-source"
+import { useCursorDataTableSource } from "@/lib/data-table-source"
+import { stateLabel } from "@/lib/managed-user"
+import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
+import { removePlatformAccess, revokeAccessInvitation } from "@/server/access"
+import { updateResourceAccess } from "@/server/resource-access"
 import {
-  issueAccountClaim,
+  getUserAccess,
+  getUserMinecraftProfiles,
   listUsers,
-  manuallyVerifyUser,
   setUserStatus,
   type ManagedUser,
 } from "@/server/users"
-import {
-  grantOrInviteAccess,
-  removePlatformAccess,
-  listPendingPlatformInvitations,
-  revokeAccessInvitation,
-} from "@/server/access"
 
-const pageSize = 25
-const EMPTY_USERS: Array<ManagedUser> = []
+const pageSize = 50
 const helper = createDataTableColumnHelper<ManagedUser>()
-const userDefinition = defineDataTable({
-  ariaLabel: "Platform users",
-  columns: helper.columns([
-    helper.accessor("name", {
-      header: "User",
-      enableSorting: false,
-      cell: ({ row }) => (
-        <div className="min-w-0">
-          <div className="flex min-w-0 items-center gap-2">
-            <p className="truncate text-sm font-medium">{row.original.name}</p>
-            <Badge
-              variant="outline"
-              className="h-4 px-1 text-[10px] capitalize sm:hidden"
-            >
-              {row.original.status}
-            </Badge>
-          </div>
-          <p className="truncate text-xs text-muted-foreground">
-            {row.original.email}
-          </p>
-        </div>
-      ),
-      meta: dataTableColumnMeta({ width: "minmax(0,1.5fr)" }),
-    }),
-    helper.accessor("status", {
-      header: "Status",
-      enableSorting: false,
-      cell: ({ row }) => (
-        <div className="min-w-0">
-          <Badge variant="outline" className="capitalize">
-            {row.original.status}
-          </Badge>
-        </div>
-      ),
-      meta: dataTableColumnMeta({ hideBelow: "sm", width: "7rem" }),
-    }),
-    helper.accessor("role", {
-      header: "Platform role",
-      enableSorting: false,
-      cell: ({ row }) => (
-        <DataTableTextCell value={roleLabel(row.original.role)} />
-      ),
-      meta: dataTableColumnMeta({
-        hideBelow: "lg",
-        width: "minmax(10rem,1fr)",
-      }),
-    }),
-    helper.display({
-      id: "verification",
-      header: "Verification",
-      cell: ({ row }) => (
-        <DataTableTextCell
-          value={
-            !row.original.hasCredential
-              ? "Awaiting claim"
-              : verificationLabel(row.original)
-          }
-        />
-      ),
-      meta: dataTableColumnMeta({ hideBelow: "md", width: "minmax(8rem,1fr)" }),
-    }),
-    helper.accessor("createdAt", {
-      header: "Created",
-      enableSorting: false,
-      cell: ({ row }) => (
-        <DataTableTextCell value={utcTimestamp(row.original.createdAt)} />
-      ),
-      meta: dataTableColumnMeta({ hideBelow: "xl", width: "12rem" }),
-    }),
-    helper.display({
-      id: "actions",
-      header: () => <span className="sr-only">Actions</span>,
-      cell: ({ row }) => <UserActions user={row.original} />,
-      meta: dataTableColumnMeta({ width: "3.5rem" }),
-    }),
-  ]),
-  getRowId: (user) => user.id,
-})
+const userKey = (user: ManagedUser) => user.id
+const NO_PROFILES: Record<string, string> = {}
+
+type UserAction =
+  | { kind: "manage"; userId: string; profileId?: string }
+  | { kind: "add" }
+  | { kind: "remove"; user: ManagedUser }
+  | { kind: "status"; user: ManagedUser }
+
+// Minecraft heads load after the rows. Reading them from context re-renders
+// only the identity cells when they arrive, not every row and its actions.
+const UserProfilesContext = createContext(NO_PROFILES)
 
 export const AdminUsers = memo(function AdminUsers() {
   const [searchStore] = useState(() => createDataTableSearchStore())
+  const [action, setAction] = useState<UserAction | null>(null)
+  const add = useCallback(() => setAction({ kind: "add" }), [])
+  const close = useCallback(() => setAction(null), [])
   return (
     <DataTableWorkspace
       toolbar={
@@ -160,134 +118,143 @@ export const AdminUsers = memo(function AdminUsers() {
             placeholder: "Search users",
             store: searchStore,
           }}
-          actions={<AdminUserToolbarActions />}
+          actions={
+            <Button aria-label="Add user" onClick={add}>
+              <Plus />
+              <span className="hidden sm:inline">Add user</span>
+            </Button>
+          }
         />
       }
     >
-      <UserTable searchStore={searchStore} />
+      <UserTable searchStore={searchStore} onAction={setAction} />
+      {action?.kind === "manage" || action?.kind === "add" ? (
+        <UserAccessDialog
+          userId={action.kind === "manage" ? action.userId : undefined}
+          profileId={action.kind === "manage" ? action.profileId : undefined}
+          platform
+          onClose={close}
+        />
+      ) : action?.kind === "remove" ? (
+        <RemoveUserDialog user={action.user} onClose={close} />
+      ) : action?.kind === "status" ? (
+        <UserStatusDialog user={action.user} onClose={close} />
+      ) : null}
     </DataTableWorkspace>
-  )
-})
-
-const AdminUserToolbarActions = memo(function AdminUserToolbarActions() {
-  const [dialog, setDialog] = useState<"add" | "invitations" | null>(null)
-  const [pending, setPending] = useState(false)
-  return (
-    <>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            variant="outline"
-            aria-label="Pending platform invitations"
-            onClick={() => setDialog("invitations")}
-          >
-            <Mail />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent>Pending platform invitations</TooltipContent>
-      </Tooltip>
-      <Button aria-label="Add user" onClick={() => setDialog("add")}>
-        <Plus />
-        <span className="hidden sm:inline">Add user</span>
-      </Button>
-      <Dialog
-        open={dialog !== null}
-        onOpenChange={(open) => {
-          if (!open && !pending) setDialog(null)
-        }}
-      >
-        <DialogContent className="max-h-[90dvh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>
-              {dialog === "add" ? "Add user" : "Pending platform invitations"}
-            </DialogTitle>
-            <DialogDescription>
-              {dialog === "add"
-                ? "Choose the platform access this user should receive."
-                : "Review or cancel invitations that have not been accepted."}
-            </DialogDescription>
-          </DialogHeader>
-          {dialog === "add" ? (
-            <PlatformInvitationForm onPendingChange={setPending} />
-          ) : dialog === "invitations" ? (
-            <PendingPlatformInvitations onPendingChange={setPending} />
-          ) : null}
-          <DialogFooter>
-            <Button
-              variant="outline"
-              disabled={pending}
-              onClick={() => setDialog(null)}
-            >
-              Close
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </>
   )
 })
 
 const UserTable = memo(function UserTable({
   searchStore,
+  onAction,
 }: {
   searchStore: DataTableSearchStore
+  onAction: (action: UserAction) => void
 }) {
-  const search = useSyncExternalStore(
-    searchStore.subscribe,
-    searchStore.getNormalizedSnapshot,
-    searchStore.getNormalizedServerSnapshot
+  const search = useDeferredValue(
+    useSyncExternalStore(
+      searchStore.subscribe,
+      searchStore.getNormalizedSnapshot,
+      searchStore.getNormalizedServerSnapshot
+    )
   )
-  return <UserTablePage search={search} />
-})
-function UserTablePage({ search }: { search: string }) {
-  const [offset, setOffset] = useState(0)
-  const [page, setPage] = useState(search)
-  // Remounting per keystroke threw away the table model and flashed a skeleton.
-  // Adjusting state during render keeps the mounted rows while resetting the
-  // pagination window the previous search left behind.
-  if (page !== search) {
-    setPage(search)
-    setOffset(0)
-  }
-  const query = useQuery({
-    queryKey: ["users", search, offset],
-    queryFn: () => listUsers({ data: { search, offset, limit: pageSize } }),
+  const query = useInfiniteQuery({
+    queryKey: ["users", "list", search],
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) =>
+      listUsers({ data: { search, offset: pageParam, limit: pageSize } }),
+    getNextPageParam: (last) => last.nextCursor,
     // The realtime access topic invalidates the users prefix, so this list
     // stays fresh without a poll.
     placeholderData: keepPreviousData,
   })
-  const source = useMemo<DataTableSource<ManagedUser>>(
-    () => ({
-      rows: query.data?.users ?? EMPTY_USERS,
-      refreshing: query.isFetching && !query.isPending,
-      body: query.isPending
-        ? { kind: "loading" }
-        : query.isError
-          ? {
-              kind: "error",
-              error: query.error,
-              retry: () => {
-                void query.refetch()
-              },
-            }
-          : { kind: "ready" },
-      resetKey: `${search}:${offset}`,
-    }),
-    [
-      query.data,
-      query.isFetching,
-      query.isPending,
-      query.isError,
-      query.error,
-      query.refetch,
-      search,
-      offset,
-    ]
+  const source = useCursorDataTableSource({
+    query,
+    resetKey: search,
+    getRowKey: userKey,
+  })
+  const userIds = useMemo(
+    () => source.rows.flatMap((user) => (user.hasCredential ? [user.id] : [])),
+    [source.rows]
+  )
+  const profiles = useQuery({
+    queryKey: ["users", "minecraft-profiles", userIds.join(",")],
+    queryFn: () =>
+      getUserMinecraftProfiles({ data: { userIds: userIds.slice(0, 100) } }),
+    enabled: userIds.length > 0,
+    staleTime: 60 * 60_000,
+  })
+  const { data: capabilities } = useQuery(accessCapabilitiesQueryOptions())
+  const selfId = capabilities?.user.id
+  const definition = useMemo(
+    () =>
+      defineDataTable({
+        ariaLabel: "Users",
+        columns: helper.columns([
+          helper.accessor("name", {
+            header: "User",
+            sortFn: "text",
+            cell: ({ row }) => (
+              <UserCell user={row.original} onAction={onAction} />
+            ),
+            meta: dataTableColumnMeta({
+              width: { base: "minmax(0,1fr)", md: "minmax(0,1.6fr)" },
+            }),
+          }),
+          helper.accessor((user) => stateLabel(user), {
+            id: "status",
+            header: "Status",
+            sortFn: "text",
+            cell: ({ row }) => <UserState user={row.original} />,
+            meta: dataTableColumnMeta({ hideBelow: "sm", width: "8.5rem" }),
+          }),
+          helper.display({
+            id: "instances",
+            header: "Instances",
+            enableSorting: false,
+            cell: ({ row }) => <UserHoldings user={row.original} />,
+            meta: dataTableColumnMeta({
+              hideBelow: "md",
+              width: "minmax(11rem,1.2fr)",
+            }),
+          }),
+          helper.accessor("createdAt", {
+            header: "Added",
+            sortFn: "text",
+            cell: ({ row }) => (
+              <DataTableTextCell value={row.original.createdAt.slice(0, 10)} />
+            ),
+            meta: dataTableColumnMeta({ hideBelow: "xl", width: "8rem" }),
+          }),
+          helper.display({
+            id: "actions",
+            header: () => <span className="sr-only">Actions</span>,
+            enableSorting: false,
+            cell: ({ row }) => (
+              <UserActions
+                user={row.original}
+                self={row.original.id === selfId}
+                onAction={onAction}
+              />
+            ),
+            // The whole cell sits above the row's manage button, so a click
+            // that misses an action doesn't open the dialog instead.
+            meta: dataTableColumnMeta(
+              { width: { base: "7.25rem" } },
+              { cellClassName: "relative z-10 px-2" }
+            ),
+          }),
+        ]),
+        getRowId: userKey,
+        getRowClassName: () => "relative cursor-pointer",
+        virtualization: true,
+      }),
+    [onAction, selfId]
   )
   return (
-    <>
+    <UserProfilesContext.Provider value={profiles.data ?? NO_PROFILES}>
       <DataTable
-        definition={userDefinition}
+        definition={definition}
         source={source}
         emptyState={
           <DataTableEmptyState
@@ -296,510 +263,388 @@ function UserTablePage({ search }: { search: string }) {
             description={
               search
                 ? "Try a name or email address."
-                : "Add a user to manage their account and access."
+                : "Add a user to invite them to Kiln."
             }
           />
         }
       />
-      <div className="flex shrink-0 items-center justify-between gap-3 p-3 text-xs text-muted-foreground">
-        <span>{query.data?.total ?? 0} users</span>
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={!offset || query.isPending}
-            onClick={() => setOffset(Math.max(0, offset - pageSize))}
-          >
-            Previous
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={
-              !query.data ||
-              offset + pageSize >= query.data.total ||
-              query.isPending
-            }
-            onClick={() => setOffset(offset + pageSize)}
-          >
-            Next
-          </Button>
-        </div>
-      </div>
-    </>
-  )
-}
-
-const UserActions = memo(function UserActions({ user }: { user: ManagedUser }) {
-  const [open, setOpen] = useState(false)
-  const [pending, setPending] = useState(false)
-  return (
-    <div className="flex justify-end px-2">
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label={`Actions for ${user.email}`}
-          >
-            <EllipsisVertical />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          <DropdownMenuItem onSelect={() => setOpen(true)}>
-            Manage user
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-      <Dialog
-        open={open}
-        onOpenChange={(next) => {
-          if (!pending) setOpen(next)
-        }}
-      >
-        {open ? (
-          <UserManagement
-            user={user}
-            pending={pending}
-            onPendingChange={setPending}
-            onClose={() => setOpen(false)}
-          />
-        ) : null}
-      </Dialog>
-    </div>
+    </UserProfilesContext.Provider>
   )
 })
-function UserManagement({
+
+const UserCell = memo(function UserCell({
+  user,
+  onAction,
+}: {
+  user: ManagedUser
+  onAction: (action: UserAction) => void
+}) {
+  const profileId = useContext(UserProfilesContext)[user.id]
+  return (
+    <>
+      {/* Covers the row: clicking anywhere but an action manages the user. */}
+      <button
+        type="button"
+        aria-label={`Manage ${user.name}`}
+        className="absolute inset-0 outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset"
+        onClick={() => onAction({ kind: "manage", userId: user.id, profileId })}
+      />
+      <UserIdentity
+        className="pointer-events-none relative w-full"
+        emailClassName="pointer-events-auto relative"
+        name={user.name}
+        email={user.email}
+        profileId={profileId}
+        accessory={
+          <>
+            <UserBadges user={user} />
+            {/* The Status column is hidden on phones. */}
+            {user.state === "active" ? null : (
+              <span className="sm:hidden">
+                <UserState user={user} />
+              </span>
+            )}
+          </>
+        }
+      />
+    </>
+  )
+})
+
+const stateDot: Record<ManagedUser["state"], string> = {
+  active: "bg-emerald-400",
+  pending: "bg-amber-400",
+  disabled: "bg-destructive",
+}
+
+const UserState = memo(function UserState({ user }: { user: ManagedUser }) {
+  return (
+    <span className="type-meta inline-flex min-w-0 items-center gap-2 text-foreground">
+      <span
+        aria-hidden
+        className={cn("size-1.5 shrink-0 rounded-full", stateDot[user.state])}
+      />
+      <span className="truncate">{stateLabel(user)}</span>
+    </span>
+  )
+})
+
+// The same icons and colours as the infrastructure map's Relay cards.
+const holdingKinds = [
+  {
+    key: "relays",
+    icon: RadioTower,
+    tone: "text-primary",
+    one: "Relay",
+    other: "Relays",
+  },
+  {
+    key: "instances",
+    icon: Server,
+    tone: "text-emerald-300",
+    one: "game server",
+    other: "game servers",
+  },
+  {
+    key: "apps",
+    icon: Boxes,
+    tone: "text-red-300",
+    one: "app",
+    other: "apps",
+  },
+  {
+    key: "databases",
+    icon: Database,
+    tone: "text-blue-300",
+    one: "database",
+    other: "databases",
+  },
+] as const
+
+const UserHoldings = memo(function UserHoldings({
+  user,
+}: {
+  user: ManagedUser
+}) {
+  const { pending } = user.access
+  return (
+    <span className="type-meta flex min-w-0 items-center gap-3 text-muted-foreground">
+      {holdingKinds.map(({ key, icon: Icon, tone, one, other }) => {
+        const count = user.access[key]
+        const label = `${count} ${count === 1 ? one : other}`
+        return (
+          <span
+            key={key}
+            title={label}
+            className={cn(
+              "flex items-center gap-1 tabular-nums",
+              count ? "text-foreground" : "opacity-40"
+            )}
+          >
+            <Icon className={cn("size-3.5", tone)} aria-hidden="true" />
+            {count}
+            <span className="sr-only">{count === 1 ? one : other}</span>
+          </span>
+        )
+      })}
+      {pending ? (
+        <span aria-hidden className="h-3.5 w-px shrink-0 bg-border" />
+      ) : null}
+      {pending ? (
+        <span
+          title={`${pending} unanswered invitation${pending === 1 ? "" : "s"}`}
+          className="flex items-center gap-1 text-amber-700 tabular-nums dark:text-amber-300"
+        >
+          <Mail className="size-3.5" aria-hidden="true" />
+          {pending}
+          <span className="sr-only">invited</span>
+        </span>
+      ) : null}
+    </span>
+  )
+})
+
+const UserActions = memo(function UserActions({
+  user,
+  self,
+  onAction,
+}: {
+  user: ManagedUser
+  self: boolean
+  onAction: (action: UserAction) => void
+}) {
+  const enabled = user.status === "enabled"
+  const removeBlocked = self
+    ? "You can't remove yourself"
+    : user.access.owned
+      ? "Transfer what they own first"
+      : null
+  return (
+    <DataTableActionGroup>
+      {self ? null : (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label={`${enabled ? "Disable" : "Enable"} ${user.name}`}
+              className={cn(
+                "text-muted-foreground",
+                enabled ? "hover:text-amber-500" : "hover:text-emerald-500"
+              )}
+              onClick={() => onAction({ kind: "status", user })}
+            >
+              {enabled ? <Ban /> : <UserCheck />}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {enabled ? "Disable account" : "Enable account"}
+          </TooltipContent>
+        </Tooltip>
+      )}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          {/* A disabled button gets no pointer events, so the tooltip hangs on its wrapper. */}
+          <span className="inline-flex">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label={`Remove ${user.name}`}
+              disabled={!!removeBlocked}
+              className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+              onClick={() => onAction({ kind: "remove", user })}
+            >
+              <Trash2 />
+            </Button>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">
+          {removeBlocked ?? "Remove from Kiln"}
+        </TooltipContent>
+      </Tooltip>
+      <DropdownMenu>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                aria-label={`More actions for ${user.name}`}
+              >
+                <EllipsisVertical />
+              </Button>
+            </DropdownMenuTrigger>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">More actions</TooltipContent>
+        </Tooltip>
+        <DropdownMenuContent align="end" className="min-w-44">
+          <DropdownMenuItem
+            onSelect={() => onAction({ kind: "manage", userId: user.id })}
+          >
+            <KeyRound /> Manage access
+          </DropdownMenuItem>
+          {user.hasCredential ? (
+            <DropdownMenuItem asChild>
+              <Link to="/activity" search={{ user: user.id }}>
+                <Activity /> View activity
+              </Link>
+            </DropdownMenuItem>
+          ) : null}
+          <DropdownMenuSeparator />
+          <CopyIdentifierMenuItem label="Email" value={user.email} />
+          <CopyIdentifierMenuItem label="User ID" value={user.id} />
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </DataTableActionGroup>
+  )
+})
+
+function invalidateUsers(client: ReturnType<typeof useQueryClient>) {
+  void client.invalidateQueries({ queryKey: ["users"] })
+  void client.invalidateQueries({ queryKey: ["resource-access"] })
+  void client.invalidateQueries({ queryKey: ["access"] })
+}
+
+function RemoveUserDialog({
   user,
   onClose,
-  pending,
-  onPendingChange,
 }: {
-  pending: boolean
-  onPendingChange: (pending: boolean) => void
   user: ManagedUser
   onClose: () => void
 }) {
   const client = useQueryClient()
-  const [claim, setClaim] = useState<{
-    claimUrl: string
-    expiresAt: string
-  } | null>(null)
-  const mutation = useMutation({
-    onMutate: () => onPendingChange(true),
-    onSettled: () => onPendingChange(false),
-    mutationFn: async (action: "status" | "verify" | "claim") => {
-      if (action === "status")
-        await setUserStatus({
+  const remove = useMutation({
+    // Every grant is revoked through the same path as the Access page, so
+    // each Relay hears about it; then platform access and invitations go.
+    mutationFn: async () => {
+      const access = await getUserAccess({ data: { userId: user.id } })
+      for (const grant of access.grants)
+        await updateResourceAccess({
           data: {
-            userId: user.id,
-            status: user.status === "enabled" ? "disabled" : "enabled",
+            ...grant.scope,
+            id: grant.id,
+            revision: grant.revision,
+            revoke: true,
+            selections: [],
+            presetIds: [],
+            builtinKeys: [],
           },
         })
-      else if (action === "verify")
-        await manuallyVerifyUser({ data: { userId: user.id } })
-      else setClaim(await issueAccountClaim({ data: { userId: user.id } }))
-      return action
+      for (const id of access.platformInvitationIds)
+        await revokeAccessInvitation({ data: { id } })
+      if (access.user.role === "admin" || access.user.role === "relay_creator")
+        await removePlatformAccess({ data: { userId: user.id } })
     },
-    onSuccess: (action) => {
-      showToast({
-        type: "success",
-        message:
-          action === "claim"
-            ? "Manual claim link created"
-            : action === "verify"
-              ? "Account manually verified"
-              : "Account status updated",
-      })
-      void client.invalidateQueries({ queryKey: ["users"] })
+    onSuccess: () => {
+      invalidateUsers(client)
+      showToast({ type: "success", message: `${user.name} removed` })
+      onClose()
     },
-    onError: (cause) => showToast({ type: "error", message: cause.message }),
+    onError: (error) => {
+      invalidateUsers(client)
+      showToast({ type: "error", message: error.message })
+    },
   })
+  const pending = user.state === "pending"
   return (
-    <DialogContent className="max-h-[90dvh] overflow-y-auto">
-      <DialogHeader>
-        <DialogTitle>{user.name}</DialogTitle>
-        <DialogDescription className="break-all">
-          {user.email}
-        </DialogDescription>
-      </DialogHeader>
-      <section className="space-y-3">
-        <h3 className="text-sm font-medium">Account status</h3>
-        <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm">
-          <dt className="text-muted-foreground">Status</dt>
-          <dd className="capitalize">{user.status}</dd>
-          <dt className="text-muted-foreground">Changed</dt>
-          <dd>{utcTimestamp(user.statusChangedAt)}</dd>
-          {user.statusExpiresAt ? (
-            <>
-              <dt className="text-muted-foreground">Until</dt>
-              <dd>{utcTimestamp(user.statusExpiresAt)}</dd>
-            </>
-          ) : null}
-          <dt className="text-muted-foreground">Created</dt>
-          <dd>{utcTimestamp(user.createdAt)}</dd>
-        </dl>
-        {user.statusReason ? (
-          <p className="text-sm text-muted-foreground">{user.statusReason}</p>
-        ) : null}
-        <Button
-          variant="outline"
-          disabled={pending}
-          onClick={() => mutation.mutate("status")}
-        >
-          {user.status === "enabled" ? "Disable account" : "Enable account"}
-        </Button>
-      </section>
-      <section className="space-y-3 border-t pt-4">
-        <h3 className="text-sm font-medium">Verification</h3>
-        <p className="text-sm">{verificationLabel(user)}</p>
-        {user.emailVerifiedAt ? (
-          <p className="text-xs text-muted-foreground">
-            Email verified {utcTimestamp(user.emailVerifiedAt)}
-          </p>
-        ) : null}
-        {user.manuallyVerifiedAt ? (
-          <p className="text-xs text-muted-foreground">
-            Manually verified {utcTimestamp(user.manuallyVerifiedAt)}
-          </p>
-        ) : null}
-        {user.legacyVerificationRecordedAt ? (
-          <p className="text-xs text-muted-foreground">
-            Legacy trust recorded{" "}
-            {utcTimestamp(user.legacyVerificationRecordedAt)}; original method
-            unknown.
-          </p>
-        ) : null}
-        <div className="flex flex-wrap gap-2">
-          {!user.manuallyVerifiedAt ? (
-            <Button
-              variant="outline"
-              disabled={pending}
-              onClick={() => mutation.mutate("verify")}
-            >
-              Verify manually
-            </Button>
-          ) : null}
-          {!user.hasCredential ? (
-            <Button
-              variant="outline"
-              disabled={pending}
-              onClick={() => mutation.mutate("claim")}
-            >
-              Issue manual claim
-            </Button>
-          ) : null}
-        </div>
-        {claim ? (
-          <div className="space-y-2">
-            <Input
-              readOnly
-              aria-label={`Manual claim link for ${user.email}`}
-              value={claim.claimUrl}
-            />
-            <p className="text-xs text-muted-foreground">
-              Redeeming this link verifies the account manually. Expires{" "}
-              {utcTimestamp(claim.expiresAt)}.
-            </p>
-            <Button
-              variant="outline"
-              onClick={() => copyWithToast(claim.claimUrl, "Claim link")}
-            >
-              Copy link
-            </Button>
-          </div>
-        ) : null}
-      </section>
-      <section className="space-y-3 border-t pt-4">
-        <h3 className="text-sm font-medium">Platform role</h3>
-        <PlatformRoleControl
-          key={user.role}
-          user={user}
-          pending={pending}
-          onPendingChange={onPendingChange}
-        />
-      </section>
-      <DialogFooter>
-        <Button variant="outline" disabled={pending} onClick={onClose}>
-          Close
-        </Button>
-      </DialogFooter>
-    </DialogContent>
-  )
-}
-function roleLabel(role: string | null) {
-  return role === "admin"
-    ? "Platform administrator"
-    : role === "relay_creator"
-      ? "Relay creator"
-      : "None"
-}
-function verificationLabel(user: ManagedUser) {
-  return (
-    [
-      user.emailVerifiedAt && "Email",
-      user.manuallyVerifiedAt && "Manual",
-      user.legacyVerificationRecordedAt && "Legacy trust",
-    ]
-      .filter(Boolean)
-      .join(" + ") || "Unverified"
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open && !remove.isPending) onClose()
+      }}
+    >
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Remove {user.name}?</DialogTitle>
+          <DialogDescription>
+            {pending
+              ? "Their invitations are cancelled and they're taken off this list. You can invite them again later."
+              : "They lose access to every Relay, game server, and database, and their platform role and open invitations are removed. Their account stays, so they can still sign in; disable it to stop that."}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button
+            variant="outline"
+            disabled={remove.isPending}
+            onClick={onClose}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="destructive"
+            disabled={remove.isPending}
+            onClick={() => remove.mutate()}
+          >
+            {remove.isPending ? "Removing…" : "Remove"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
-const PlatformRoleControl = memo(function PlatformRoleControl({
+function UserStatusDialog({
   user,
-  pending,
-  onPendingChange,
+  onClose,
 }: {
   user: ManagedUser
-  pending: boolean
-  onPendingChange: (pending: boolean) => void
+  onClose: () => void
 }) {
   const client = useQueryClient()
-  const initial =
-    user.role === "admin" || user.role === "relay_creator" ? user.role : "user"
-  const [role, setRole] = useState(initial)
-  const mutation = useMutation({
-    onMutate: () => onPendingChange(true),
-    onSettled: () => onPendingChange(false),
-    mutationFn: async () => {
-      if (role === "user")
-        await removePlatformAccess({ data: { userId: user.id } })
-      else
-        await grantOrInviteAccess({
-          data: {
-            userId: user.id,
-            email: user.email,
-            accessType: role === "admin" ? "platform_admin" : "relay_creator",
-          },
-        })
-    },
+  const enabled = user.status === "enabled"
+  const update = useMutation({
+    mutationFn: () =>
+      setUserStatus({
+        data: { userId: user.id, status: enabled ? "disabled" : "enabled" },
+      }),
     onSuccess: () => {
-      showToast({ type: "success", message: "Platform role updated" })
-      void client.invalidateQueries({ queryKey: ["users"] })
-      void client.invalidateQueries({ queryKey: ["access"] })
-      void client.invalidateQueries({ queryKey: ["auth"] })
-    },
-    onError: (error) => showToast({ type: "error", message: error.message }),
-  })
-  return (
-    <div className="mt-2 flex flex-wrap gap-2">
-      <Select
-        value={role}
-        onValueChange={(value) => setRole(value as typeof role)}
-        disabled={pending}
-      >
-        <SelectTrigger aria-label={`Platform role for ${user.email}`}>
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="user">No platform role</SelectItem>
-          <SelectItem value="relay_creator">Relay creator</SelectItem>
-          <SelectItem value="admin">Platform administrator</SelectItem>
-        </SelectContent>
-      </Select>
-      <Button
-        size="sm"
-        variant="outline"
-        disabled={pending || role === initial}
-        onClick={() => mutation.mutate()}
-      >
-        Save role
-      </Button>
-    </div>
-  )
-})
-
-const PlatformInvitationForm = memo(function PlatformInvitationForm({
-  onPendingChange,
-}: {
-  onPendingChange: (pending: boolean) => void
-}) {
-  const client = useQueryClient()
-  const [email, setEmail] = useState("")
-  const [accessType, setAccessType] = useState<
-    "platform_admin" | "relay_creator"
-  >("relay_creator")
-  const [inviteUrl, setInviteUrl] = useState<string | null>(null)
-  const mutation = useMutation({
-    onMutate: () => onPendingChange(true),
-    onSettled: () => onPendingChange(false),
-    mutationFn: () => grantOrInviteAccess({ data: { email, accessType } }),
-    onSuccess: (result) => {
-      setInviteUrl(result.inviteUrl)
-      void client.invalidateQueries({ queryKey: ["platform-invitations"] })
+      invalidateUsers(client)
       showToast({
         type: "success",
-        message:
-          result.kind === "invitation"
-            ? "Platform invitation created"
-            : "Platform role updated",
+        message: `${user.name} ${enabled ? "disabled" : "enabled"}`,
       })
-      void client.invalidateQueries({ queryKey: ["users"] })
-      void client.invalidateQueries({ queryKey: ["access"] })
+      onClose()
     },
     onError: (error) => showToast({ type: "error", message: error.message }),
   })
   return (
-    <div className="space-y-3">
-      <p className="text-xs text-muted-foreground">
-        Existing accounts receive the selected role. New accounts must verify
-        their identity and accept an invitation.
-      </p>
-      <form
-        className="grid gap-3"
-        onSubmit={(event) => {
-          event.preventDefault()
-          if (!mutation.isPending) mutation.mutate()
-        }}
-      >
-        <label htmlFor="platform-user-email" className="text-sm font-medium">
-          Email address
-        </label>
-        <Input
-          disabled={mutation.isPending}
-          id="platform-user-email"
-          className="w-full"
-          type="email"
-          required
-          aria-label="Platform access email"
-          placeholder="Email address"
-          value={email}
-          onChange={(event) => setEmail(event.target.value)}
-        />
-        <label htmlFor="platform-user-role" className="text-sm font-medium">
-          Platform role
-        </label>
-        <Select
-          value={accessType}
-          onValueChange={(value) => setAccessType(value as typeof accessType)}
-          disabled={mutation.isPending}
-        >
-          <SelectTrigger
-            id="platform-user-role"
-            aria-label="Platform access role"
-            className="w-full"
-          >
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="relay_creator">Relay creator</SelectItem>
-            <SelectItem value="platform_admin">
-              Platform administrator
-            </SelectItem>
-          </SelectContent>
-        </Select>
-        <Button disabled={mutation.isPending}>
-          {mutation.isPending ? "Saving…" : "Add user"}
-        </Button>
-      </form>
-      {inviteUrl ? (
-        <div className="flex gap-2">
-          <Input
-            readOnly
-            aria-label="Platform invitation link"
-            value={inviteUrl}
-          />
-          <Button
-            variant="outline"
-            onClick={() => copyWithToast(inviteUrl, "Invitation link")}
-          >
-            Copy invitation
-          </Button>
-        </div>
-      ) : null}
-    </div>
-  )
-})
-
-const PendingPlatformInvitations = memo(function PendingPlatformInvitations({
-  onPendingChange,
-}: {
-  onPendingChange: (pending: boolean) => void
-}) {
-  const [offset, setOffset] = useState(0)
-  const client = useQueryClient()
-  const query = useQuery({
-    queryKey: ["platform-invitations", offset],
-    queryFn: () =>
-      listPendingPlatformInvitations({ data: { offset, limit: 10 } }),
-  })
-  const cancel = useMutation({
-    onMutate: () => onPendingChange(true),
-    onSettled: () => onPendingChange(false),
-    mutationFn: (id: string) => revokeAccessInvitation({ data: { id } }),
-    onSuccess: () => {
-      showToast({ type: "success", message: "Platform invitation cancelled" })
-      void client.invalidateQueries({ queryKey: ["platform-invitations"] })
-    },
-    onError: (error) => showToast({ type: "error", message: error.message }),
-  })
-  return (
-    <section
-      className="space-y-3"
-      aria-labelledby="platform-invitations-heading"
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open && !update.isPending) onClose()
+      }}
     >
-      <h3 id="platform-invitations-heading" className="sr-only">
-        Pending platform invitations
-      </h3>
-      {query.isError ? (
-        <p role="alert" className="text-sm text-destructive">
-          {query.error.message}
-        </p>
-      ) : null}
-      {query.isPending ? (
-        <p className="text-sm text-muted-foreground">Loading invitations…</p>
-      ) : null}
-      {query.data?.invitations.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No pending invitations.</p>
-      ) : null}
-      <ul className="divide-y">
-        {query.data?.invitations.map((invitation) => (
-          <li
-            key={invitation.id}
-            className="flex flex-wrap items-center justify-between gap-3 py-3"
-          >
-            <div>
-              <p className="text-sm break-all">{invitation.email}</p>
-              <p className="text-xs text-muted-foreground">
-                {invitation.accessType === "platform_admin"
-                  ? "Platform administrator"
-                  : "Relay creator"}{" "}
-                · Expires {utcTimestamp(invitation.expiresAt)}
-              </p>
-            </div>
-            <Button
-              size="sm"
-              variant="outline"
-              aria-label={`Cancel platform invitation for ${invitation.email}`}
-              disabled={cancel.isPending}
-              onClick={() => cancel.mutate(invitation.id)}
-            >
-              Cancel invitation
-            </Button>
-          </li>
-        ))}
-      </ul>
-      {offset > 0 || query.data?.hasMore ? (
-        <div className="flex justify-end gap-2">
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>
+            {enabled ? "Disable" : "Enable"} {user.name}?
+          </DialogTitle>
+          <DialogDescription>
+            {enabled
+              ? "They're signed out and can't sign in until you enable them again. Their access is kept."
+              : "They can sign in again with the access they had."}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
           <Button
-            size="sm"
             variant="outline"
-            disabled={offset === 0}
-            onClick={() => setOffset(Math.max(0, offset - 10))}
+            disabled={update.isPending}
+            onClick={onClose}
           >
-            Previous invitations
+            Cancel
           </Button>
           <Button
-            size="sm"
-            variant="outline"
-            disabled={!query.data?.hasMore}
-            onClick={() => setOffset(offset + 10)}
+            variant={enabled ? "destructive" : "default"}
+            disabled={update.isPending}
+            onClick={() => update.mutate()}
           >
-            Next invitations
+            {enabled ? "Disable account" : "Enable account"}
           </Button>
-        </div>
-      ) : null}
-    </section>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
-})
+}

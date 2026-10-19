@@ -10,14 +10,7 @@ import { Link } from "@tanstack/react-router"
 import { EllipsisVertical, Plus, Shield, Users } from "lucide-react"
 import { Button } from "@workspace/ui/components/button"
 import { Badge } from "@workspace/ui/components/badge"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@workspace/ui/components/dialog"
+import { Dialog } from "@workspace/ui/components/dialog"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -36,10 +29,12 @@ import {
   DataTableToolbar,
   DataTableWorkspace,
 } from "@/components/data-table-workspace"
+import { PermissionDialogContent } from "@/components/permission-dialog"
 import {
   PermissionEditor,
   type PermissionTarget,
 } from "@/components/permission-editor"
+import { UserIdentity } from "@/components/user-identity"
 import {
   createDataTableColumnHelper,
   dataTableColumnMeta,
@@ -104,22 +99,19 @@ export const ResourcePeopleTable = memo(function ResourcePeopleTable({
           header: "User",
           sortFn: "text",
           cell: ({ row }) => (
-            <div className="min-w-0">
-              <div className="flex min-w-0 items-center gap-2">
-                <p className="truncate text-sm font-medium">
-                  {row.original.name}
-                </p>
+            <UserIdentity
+              className="w-full"
+              name={row.original.name}
+              email={row.original.email}
+              accessory={
                 <Badge
                   variant="outline"
                   className="h-4 px-1 text-[10px] sm:hidden"
                 >
                   {personStatus(row.original)}
                 </Badge>
-              </div>
-              <p className="truncate text-xs text-muted-foreground">
-                {row.original.email}
-              </p>
-            </div>
+              }
+            />
           ),
           meta: dataTableColumnMeta({ width: "minmax(0,1.4fr)" }),
         }),
@@ -391,22 +383,25 @@ function PersonPermissionsDialog({
   return (
     <Dialog open={viewing} onOpenChange={onOpenChange}>
       {access ? (
-        <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-5xl">
-          <DialogHeader>
-            <DialogTitle>{person.name} permissions</DialogTitle>
-            <DialogDescription>
-              {person.inherited
-                ? "These permissions are inherited from the Relay."
-                : "Effective permissions from this assignment and its linked presets."}
-            </DialogDescription>
-          </DialogHeader>
-          <PermissionEditor targets={personTargets(person, access)} presets />
-          <DialogFooter>
-            <Button variant="outline" onClick={() => onOpenChange(false)}>
+        <PermissionDialogContent
+          title={`${person.name} permissions`}
+          description={
+            person.inherited
+              ? "These permissions are inherited from the Relay."
+              : "Effective permissions from this assignment and its linked presets."
+          }
+          footer={
+            <Button
+              variant="outline"
+              className="sm:ml-auto"
+              onClick={() => onOpenChange(false)}
+            >
               Close
             </Button>
-          </DialogFooter>
-        </DialogContent>
+          }
+        >
+          <PermissionEditor targets={personTargets(person, access)} presets />
+        </PermissionDialogContent>
       ) : null}
     </Dialog>
   )
@@ -644,13 +639,19 @@ const PresetActions = memo(function PresetActions({
       </DropdownMenu>
       <Dialog open={viewing} onOpenChange={setViewing}>
         {row.builtin && access ? (
-          <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-5xl">
-            <DialogHeader>
-              <DialogTitle>{row.name}</DialogTitle>
-              <DialogDescription>
-                {row.builtin.description} Kiln defaults cannot be edited.
-              </DialogDescription>
-            </DialogHeader>
+          <PermissionDialogContent
+            title={row.name}
+            description={`${row.builtin.description} Kiln defaults cannot be edited.`}
+            footer={
+              <Button
+                variant="outline"
+                className="sm:ml-auto"
+                onClick={() => setViewing(false)}
+              >
+                Close
+              </Button>
+            }
+          >
             <PermissionEditor
               targets={[
                 {
@@ -663,12 +664,7 @@ const PresetActions = memo(function PresetActions({
                 },
               ]}
             />
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setViewing(false)}>
-                Close
-              </Button>
-            </DialogFooter>
-          </DialogContent>
+          </PermissionDialogContent>
         ) : null}
       </Dialog>
     </div>

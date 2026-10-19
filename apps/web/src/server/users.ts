@@ -17,26 +17,13 @@ import {
   requireAuthenticatedUser,
   requireEligibleResourceUser,
 } from "@/server/auth"
+import {
+  getUserAccessHandler,
+  getUserMinecraftProfilesHandler,
+  listManagedUsersHandler,
+} from "@/server/users.server"
 
-export interface ManagedUser {
-  id: string
-  name: string
-  email: string
-  role: string
-  status: "enabled" | "disabled"
-  statusChangedAt: string | null
-  statusChangedBy: string | null
-  statusReason: string | null
-  statusExpiresAt: string | null
-  emailVerified: boolean
-  emailVerifiedAt: string | null
-  manuallyVerifiedAt: string | null
-  manuallyVerifiedBy: string | null
-  legacyVerificationRecordedAt: string | null
-  createdAt: string
-  updatedAt: string
-  hasCredential: boolean
-}
+export type { ManagedUser, UserAccess } from "@/server/users.server"
 interface UserRow extends RowDataPacket {
   id: string
   name: string
@@ -69,56 +56,32 @@ export const listUsers = createServerFn({ method: "GET" })
     z
       .object({
         search: z.string().trim().max(160).optional(),
-        status: z.enum(["enabled", "disabled"]).optional(),
         offset: z.number().int().min(0).default(0),
         limit: z.number().int().min(1).max(100).default(50),
       })
       .default({ offset: 0, limit: 50 })
   )
-  .handler(async ({ data }) => {
-    const actor = await requireEligibleResourceUser()
-    if (actor.role !== "admin")
-      throw new Error("Platform administrator required")
-    const clauses: string[] = []
-    const values: Array<string | number | Date> = []
-    if (data.search) {
-      clauses.push("(u.email LIKE ? OR u.name LIKE ?)")
-      const search = `%${data.search.replace(/[\\%_]/gu, "\\$&")}%`
-      values.push(search, search)
-    }
-    if (data.status) {
-      clauses.push(
-        data.status === "disabled"
-          ? "(u.status = 'disabled' AND (u.statusExpiresAt IS NULL OR u.statusExpiresAt > ?))"
-          : "(u.status = 'enabled' OR u.statusExpiresAt <= ?)"
-      )
-      values.push(new Date())
-    }
-    const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : ""
-    return runAppEffect(
-      "users.list",
-      Effect.gen(function* () {
-        const database = yield* Database
-        const rows = yield* database.queryRows<UserRow>(
-          "users.list",
-          `SELECT u.*, (EXISTS(SELECT 1 FROM ${databaseTable("account")} a WHERE a.userId=u.id)
-             OR EXISTS(SELECT 1 FROM ${databaseTable("passkey")} p WHERE p.userId=u.id)) AS hasCredential
-           FROM ${databaseTable("user")} u ${where}
-          ORDER BY u.createdAt DESC, u.id LIMIT ? OFFSET ?`,
-          [...values, data.limit, data.offset]
-        )
-        const count = yield* database.queryRows<RowDataPacket>(
-          "users.count",
-          `SELECT COUNT(*) AS count FROM ${databaseTable("user")} u ${where}`,
-          values
-        )
-        return {
-          users: rows.map(serializeUser),
-          total: Number(count[0]?.count ?? 0),
-        }
-      })
+  .handler(async ({ data }) =>
+    listManagedUsersHandler(await requireEligibleResourceUser(), data)
+  )
+
+// One user's access across every resource, for the Manage user dialog.
+export const getUserAccess = createServerFn({ method: "GET" })
+  .validator(subjectSchema)
+  .handler(async ({ data }) =>
+    getUserAccessHandler(await requireEligibleResourceUser(), data.userId)
+  )
+
+// Heads for the Users table, resolved after its rows so Mojang never holds
+// them up.
+export const getUserMinecraftProfiles = createServerFn({ method: "GET" })
+  .validator(z.object({ userIds: z.array(z.string().min(1).max(36)).max(100) }))
+  .handler(async ({ data }) =>
+    getUserMinecraftProfilesHandler(
+      await requireEligibleResourceUser(),
+      data.userIds
     )
-  })
+  )
 
 export const setUserStatus = createServerFn({ method: "POST" })
   .validator(
@@ -338,30 +301,6 @@ export const claimAccount = createServerFn({ method: "POST" })
     return redeemAccountClaim(data)
   })
 
-function serializeUser(row: UserRow): ManagedUser {
-  return {
-    id: row.id,
-    email: row.email,
-    name: row.name,
-    role: row.role,
-    status: isAccountEnabled(row) ? "enabled" : "disabled",
-    statusChangedAt: iso(row.statusChangedAt),
-    statusChangedBy: row.statusChangedBy,
-    statusReason: row.statusReason,
-    statusExpiresAt: iso(row.statusExpiresAt),
-    emailVerified: Boolean(row.emailVerified),
-    emailVerifiedAt: iso(row.emailVerifiedAt),
-    manuallyVerifiedAt: iso(row.manuallyVerifiedAt),
-    manuallyVerifiedBy: row.manuallyVerifiedBy,
-    legacyVerificationRecordedAt: iso(row.legacyVerificationRecordedAt),
-    createdAt: row.createdAt.toISOString(),
-    updatedAt: row.updatedAt.toISOString(),
-    hasCredential: Boolean(row.hasCredential),
-  }
-}
-function iso(value: Date | null): string | null {
-  return value?.toISOString() ?? null
-}
 async function publishUserChange(
   userId: string,
   relayIds: ReadonlyArray<string>

@@ -1,26 +1,6 @@
 import { createDataTableSearchStore } from "@/lib/data-table-search"
 import { getRouteApi, Link } from "@tanstack/react-router"
-import {
-  Users,
-  ListChecks,
-  Server,
-  Database,
-  Network,
-  ArrowLeftRight,
-  ChevronDown,
-} from "lucide-react"
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@workspace/ui/components/popover"
-import {
-  Command,
-  CommandInput,
-  CommandList,
-  CommandItem,
-  CommandEmpty,
-} from "@workspace/ui/components/command"
+import { Users, ListChecks, Server, Database, Network } from "lucide-react"
 import { WorkspaceSummaryCard } from "@/components/workspace-summary-card"
 import { DataTableWorkspace } from "@/components/data-table-workspace"
 import {
@@ -34,7 +14,6 @@ import {
 import { useCursorDataTableSource } from "@/lib/data-table-source"
 import {
   memo,
-  type ReactNode,
   useState,
   useCallback,
   useMemo,
@@ -44,7 +23,6 @@ import {
 import { Result } from "effect"
 import {
   useMutation,
-  useQueries,
   useQuery,
   useQueryClient,
   useInfiniteQuery,
@@ -67,29 +45,31 @@ import {
 import { showToast } from "@workspace/ui/components/sonner"
 import { AdminUsers } from "@/components/admin-users"
 import {
-  ContextChips,
+  contextFor,
+  EMPTY_RESOURCES,
+  ResourcePicker,
+  scopeKey,
+  type AccessScope,
+  type Resource,
+} from "@/components/access-resource-picker"
+import { PermissionDialogContent } from "@/components/permission-dialog"
+import {
   PermissionEditor,
   type PermissionAssignment,
-  type PermissionContext,
-  type PermissionTarget,
 } from "@/components/permission-editor"
+import { UserAccessDialog } from "@/components/user-access-dialog"
 import { transferInstanceOwnership } from "@/server/access"
 import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
 import type { ResourceScope } from "@/lib/resource-permissions"
 import {
   getAccessResources,
   getResourceAccess,
-  inviteResourceAccess,
   updateResourceAccess,
   savePermissionPreset,
   deletePermissionPreset,
   decideResourceInvitation,
 } from "@/server/resource-access"
 
-type Resource = Awaited<
-  ReturnType<typeof getAccessResources>
->["resources"][number]
-const EMPTY_RESOURCES: Array<Resource> = []
 const NO_IDS: Array<string> = []
 const errorToast = (error: Error) =>
   showToast({ type: "error", message: error.message })
@@ -279,142 +259,6 @@ const AccessScopeControls = memo(function AccessScopeControls({
         {scopeDescription(scope, platform)}
       </p>
     </WorkspaceSummaryCard>
-  )
-})
-
-const ResourcePicker = memo(function ResourcePicker({
-  resources,
-  selected,
-  onSelect,
-  onSearch,
-  platform,
-  onPlatform,
-  loading,
-  error,
-  hasMore,
-  onMore,
-  onPrevious,
-  hasPrevious,
-  trigger,
-}: {
-  resources: Array<Resource>
-  selected: AccessScope | null
-  onSelect: (resource: Resource) => void
-  onSearch: (search: string) => void
-  platform?: boolean
-  onPlatform?: () => void
-  loading?: boolean
-  error?: string
-  hasMore?: boolean
-  onMore?: () => void
-  onPrevious?: () => void
-  hasPrevious?: boolean
-  trigger?: ReactNode
-}) {
-  const [open, setOpen] = useState(false)
-  const [searchValue, setSearchValue] = useState("")
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        {trigger ?? (
-          <Button type="button" variant="outline" size="sm">
-            <ArrowLeftRight />
-            {selected ? "Change instance" : "Choose instance"}
-          </Button>
-        )}
-      </PopoverTrigger>
-      <PopoverContent
-        align="end"
-        className="w-[min(32rem,calc(100vw-2rem))] p-1.5"
-      >
-        <Command shouldFilter={false}>
-          <CommandInput
-            aria-label="Find instances"
-            placeholder="Search by name or ID…"
-            value={searchValue}
-            onValueChange={(value) => {
-              setSearchValue(value)
-              onSearch(value)
-            }}
-          />
-          <CommandList aria-label="Instances">
-            {platform ? (
-              <CommandItem
-                value="platform"
-                onSelect={() => {
-                  onPlatform?.()
-                  setOpen(false)
-                }}
-              >
-                <Users />
-                Platform users
-              </CommandItem>
-            ) : null}
-            {resources.map((resource) => (
-              <CommandItem
-                key={scopeKey(resource)}
-                value={scopeKey(resource)}
-                onSelect={() => {
-                  onSelect(resource)
-                  setOpen(false)
-                }}
-              >
-                {resource.resourceType === "relay" ? (
-                  <Network />
-                ) : resource.resourceType === "database" ? (
-                  <Database />
-                ) : (
-                  <Server />
-                )}
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate">{resource.name}</span>
-                  <span className="block truncate font-mono text-xs text-muted-foreground">
-                    {resource.resourceType === "relay"
-                      ? resource.resourceId
-                      : `${resource.resourceId} · ${resource.relayName}`}
-                  </span>
-                </span>
-                <span className="text-xs text-muted-foreground">
-                  {resource.resourceType === "instance"
-                    ? "Game Server"
-                    : resource.resourceType}
-                </span>
-              </CommandItem>
-            ))}
-            <CommandEmpty>
-              {loading
-                ? "Loading instances…"
-                : (error ?? "No instances found.")}
-            </CommandEmpty>
-          </CommandList>
-          {hasPrevious ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={loading}
-              onClick={onPrevious}
-            >
-              Previous instances
-            </Button>
-          ) : null}
-          {hasMore ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={loading}
-              onClick={onMore}
-            >
-              Load more instances
-            </Button>
-          ) : null}
-          {error && resources.length ? (
-            <p role="alert" className="px-3 py-2 text-xs text-destructive">
-              {error}
-            </p>
-          ) : null}
-        </Command>
-      </PopoverContent>
-    </Popover>
   )
 })
 
@@ -700,13 +544,20 @@ function ResourceAccessPanel({
         </DialogContent>
       </Dialog>
       {access && inviting ? (
-        <InviteEditor
-          scope={scope}
+        <UserAccessDialog
+          initialScope={scope}
+          platform={access.isPlatformAdmin}
           onClose={() => setInviting(false)}
-          onSaved={refresh}
         />
       ) : null}
-      {access && editing ? (
+      {access && editing && access.isPlatformAdmin ? (
+        <UserAccessDialog
+          userId={editing.userId}
+          initialScope={scope}
+          platform
+          onClose={() => setEditing(null)}
+        />
+      ) : access && editing ? (
         <AssignmentEditor
           person={editing}
           scope={scope}
@@ -726,23 +577,6 @@ function ResourceAccessPanel({
       ) : null}
     </>
   )
-}
-
-type AccessScope = ResourceScope & { name?: string; relayName?: string }
-
-/** The context chips for a scope, from whichever names are known. */
-function contextFor(scope: AccessScope): PermissionContext {
-  return {
-    scope: {
-      relayId: scope.relayId,
-      resourceType: scope.resourceType,
-      resourceId: scope.resourceId,
-    },
-    relayName:
-      scope.relayName ??
-      (scope.resourceType === "relay" ? scope.name : undefined),
-    resourceName: scope.resourceType === "relay" ? undefined : scope.name,
-  }
 }
 
 function AssignmentEditor({
@@ -794,283 +628,46 @@ function AssignmentEditor({
         if (!open && !save.isPending) onClose()
       }}
     >
-      <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-5xl">
-        <DialogHeader>
-          <DialogTitle>Edit access for {person.name}</DialogTitle>
-          <DialogDescription>
-            Linked presets stay in sync when the preset changes. Permissions add
-            to them.
-          </DialogDescription>
-        </DialogHeader>
+      <PermissionDialogContent
+        title={`Edit access for ${person.name}`}
+        description="Linked presets stay in sync when the preset changes. Permissions add to them."
+        footer={
+          <>
+            <Button
+              variant="outline"
+              className="sm:ml-auto"
+              disabled={save.isPending}
+              onClick={onClose}
+            >
+              Cancel
+            </Button>
+            <Button
+              disabled={save.isPending}
+              onClick={() =>
+                save.mutate({
+                  data: {
+                    relayId: scope.relayId,
+                    resourceType: scope.resourceType,
+                    resourceId: scope.resourceId,
+                    id: person.id,
+                    revision: person.revision,
+                    ...assignment,
+                  },
+                })
+              }
+            >
+              {save.isPending ? "Saving…" : "Save access"}
+            </Button>
+          </>
+        }
+      >
         <PermissionEditor
           targets={targets}
           onChange={change}
           presets
           disabled={save.isPending}
         />
-        <DialogFooter>
-          <Button variant="outline" disabled={save.isPending} onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            disabled={save.isPending}
-            onClick={() =>
-              save.mutate({
-                data: {
-                  relayId: scope.relayId,
-                  resourceType: scope.resourceType,
-                  resourceId: scope.resourceId,
-                  id: person.id,
-                  revision: person.revision,
-                  ...assignment,
-                },
-              })
-            }
-          >
-            {save.isPending ? "Saving…" : "Save access"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-interface InviteDraft extends AccessScope, PermissionAssignment {}
-const scopeKey = (scope: ResourceScope) =>
-  `${scope.relayId}:${scope.resourceType}:${scope.resourceId}`
-const hasEntries = (draft: PermissionAssignment) =>
-  draft.selections.length > 0 ||
-  draft.presetIds.length > 0 ||
-  draft.builtinKeys.length > 0
-const emptyDraft = (scope: AccessScope): InviteDraft => ({
-  ...scope,
-  selections: [],
-  presetIds: [],
-  builtinKeys: [],
-})
-function combineAccess(
-  results: Array<{
-    data?: ScopeAccess
-    error: Error | null
-    isPending: boolean
-  }>
-) {
-  return results.map(({ data, error, isPending }) => ({
-    data,
-    error,
-    isPending,
-  }))
-}
-
-function InviteEditor({
-  scope,
-  onClose,
-  onSaved,
-}: {
-  scope: AccessScope
-  onClose: () => void
-  onSaved: () => void
-}) {
-  const [email, setEmail] = useState("")
-  const [drafts, setDrafts] = useState<Array<InviteDraft>>(() => [
-    emptyDraft(scope),
-  ])
-  const [addKey, setAddKey] = useState(() => scopeKey(scope))
-  const [search, setSearch] = useState("")
-  const [offset, setOffset] = useState(0)
-  const resources = useQuery({
-    queryKey: ["access-resources", search, offset],
-    queryFn: () => getAccessResources({ data: { search, offset } }),
-  })
-  const access = useQueries({
-    queries: drafts.map((draft) => ({
-      queryKey: [
-        "resource-access",
-        draft.relayId,
-        draft.resourceType,
-        draft.resourceId,
-      ],
-      queryFn: () =>
-        getResourceAccess({
-          data: {
-            relayId: draft.relayId,
-            resourceType: draft.resourceType,
-            resourceId: draft.resourceId,
-          },
-        }),
-    })),
-    combine: combineAccess,
-  })
-  const targets = useMemo<Array<PermissionTarget>>(
-    () =>
-      drafts.map((draft, index) => {
-        const result = access[index]
-        return {
-          key: scopeKey(draft),
-          context: contextFor(draft),
-          access: result?.data,
-          notice:
-            !result || result.isPending
-              ? "Loading permissions…"
-              : result.error
-                ? result.error.message
-                : !result.data?.canInvite
-                  ? "You can't invite people to this resource."
-                  : undefined,
-          selections: draft.selections,
-          presetIds: draft.presetIds,
-          builtinKeys: draft.builtinKeys,
-        }
-      }),
-    [drafts, access]
-  )
-  const addTarget = targets.find((target) => target.key === addKey)
-  const invite = useMutation({
-    mutationFn: inviteResourceAccess,
-    onError: errorToast,
-    onSuccess: (result) => {
-      onSaved()
-      const created = result.invitations.filter(
-        (invitation) => !invitation.existing
-      ).length
-      showToast({
-        type: "success",
-        message: `${created} invitation${created === 1 ? "" : "s"} created. Each resource is accepted separately.`,
-      })
-      onClose()
-    },
-  })
-  const change = useCallback(
-    (key: string, assignment: PermissionAssignment) =>
-      setDrafts((current) =>
-        current.map((draft) =>
-          scopeKey(draft) === key ? { ...draft, ...assignment } : draft
-        )
-      ),
-    []
-  )
-  // Switching context keeps every resource that has entries and drops ones
-  // that were picked but never used.
-  const pickContext = useCallback((resource: Resource) => {
-    const key = scopeKey(resource)
-    setDrafts((current) => {
-      const kept = current.filter(
-        (draft) => hasEntries(draft) || scopeKey(draft) === key
-      )
-      return kept.some((draft) => scopeKey(draft) === key) || kept.length >= 25
-        ? kept
-        : [...kept, emptyDraft(resource)]
-    })
-    setAddKey(key)
-  }, [])
-  const previousResources = useCallback(
-    () => setOffset((current) => Math.max(0, current - 50)),
-    []
-  )
-  const nextResources = useCallback(
-    () => setOffset((current) => current + 50),
-    []
-  )
-  const searchResources = useCallback((value: string) => {
-    setSearch(value)
-    setOffset(0)
-  }, [])
-  const submitted = drafts.filter(hasEntries)
-  const contextPicker = (
-    <ResourcePicker
-      resources={resources.data?.resources ?? EMPTY_RESOURCES}
-      selected={null}
-      onSelect={pickContext}
-      onSearch={searchResources}
-      loading={resources.isFetching}
-      error={resources.error?.message}
-      hasPrevious={offset > 0}
-      onPrevious={previousResources}
-      hasMore={resources.data?.hasMore}
-      onMore={nextResources}
-      trigger={
-        <Button
-          type="button"
-          variant="outline"
-          aria-label="Context for new entries"
-          className="h-10 max-w-full min-w-0 justify-start gap-2 px-2.5 sm:max-w-[24rem]"
-        >
-          <span className="type-meta shrink-0 text-muted-foreground">in</span>
-          {addTarget ? <ContextChips context={addTarget.context} /> : null}
-          <ChevronDown className="ml-auto text-muted-foreground" />
-        </Button>
-      }
-    />
-  )
-  return (
-    <Dialog
-      open
-      onOpenChange={(open) => {
-        if (!open && !invite.isPending) onClose()
-      }}
-    >
-      <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-5xl">
-        <DialogHeader>
-          <DialogTitle>Invite user</DialogTitle>
-          <DialogDescription>
-            Add permissions and presets, each on a Relay, game server, or
-            database. The user verifies their account, then accepts each
-            resource&apos;s invitation.
-          </DialogDescription>
-        </DialogHeader>
-        <fieldset disabled={invite.isPending} className="min-w-0 space-y-4">
-          <Input
-            type="email"
-            aria-label="Email address"
-            placeholder="person@example.com"
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-          />
-          <PermissionEditor
-            targets={targets}
-            onChange={change}
-            addTarget={addKey}
-            contextPicker={contextPicker}
-            showContexts
-            presets
-            disabled={invite.isPending}
-            emptyMessage="Nothing to invite to yet. Add a permission or preset above."
-          />
-        </fieldset>
-        <DialogFooter>
-          <Button
-            variant="outline"
-            disabled={invite.isPending}
-            onClick={onClose}
-          >
-            Cancel
-          </Button>
-          <Button
-            disabled={invite.isPending || !email.trim() || !submitted.length}
-            onClick={() =>
-              invite.mutate({
-                data: {
-                  email,
-                  targets: submitted.map((draft) => ({
-                    relayId: draft.relayId,
-                    resourceType: draft.resourceType,
-                    resourceId: draft.resourceId,
-                    selections: draft.selections,
-                    presetIds: draft.presetIds,
-                    builtinKeys: draft.builtinKeys,
-                  })),
-                },
-              })
-            }
-          >
-            {invite.isPending
-              ? "Sending…"
-              : submitted.length > 1
-                ? `Send ${submitted.length} invitations`
-                : "Send invitation"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
+      </PermissionDialogContent>
     </Dialog>
   )
 }
@@ -1188,26 +785,38 @@ function PresetEditor({
         if (!open && !save.isPending) onClose()
       }}
     >
-      <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-5xl">
-        <DialogHeader>
-          <DialogTitle>{preset ? preset.name : "Create preset"}</DialogTitle>
-          <DialogDescription>
-            {preset
-              ? `Changes apply to ${preset.assignmentCount} assignments on this resource.`
-              : "Copy a template or choose permissions. This creates an independent preset on this resource."}
-          </DialogDescription>
-        </DialogHeader>
-        <fieldset disabled={save.isPending || !editable} className="space-y-4">
-          <Input
-            aria-label="Preset name"
-            placeholder="Preset name"
-            value={name}
-            disabled={!editable || save.isPending}
-            onChange={(event) => setName(event.target.value)}
-          />
-          {!preset ? (
-            <div className="space-y-3">
-              <div className="flex flex-wrap gap-2">
+      <PermissionDialogContent
+        title={preset ? preset.name : "Create preset"}
+        description={
+          preset
+            ? `Changes apply to ${preset.assignmentCount} assignments on this resource.`
+            : "Copy a template or choose permissions. This creates an independent preset on this resource."
+        }
+        header={
+          <fieldset
+            disabled={save.isPending || !editable}
+            className="min-w-0 space-y-3"
+          >
+            <div>
+              <h2 className="type-dialog-title">
+                {preset ? preset.name : "Create preset"}
+              </h2>
+              <p className="type-support mt-1 text-muted-foreground">
+                {preset
+                  ? `Changes apply to ${preset.assignmentCount} assignments on this resource.`
+                  : "Copy a template or choose permissions. This creates an independent preset on this resource."}
+              </p>
+            </div>
+            <Input
+              aria-label="Preset name"
+              placeholder="Preset name"
+              className="sm:max-w-sm"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+            />
+            {!preset ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="type-meta text-muted-foreground">Copy</span>
                 {access.defaults.map((entry) => (
                   <Button
                     key={entry.key}
@@ -1215,24 +824,9 @@ function PresetEditor({
                     size="sm"
                     onClick={() => copy(entry.selections)}
                   >
-                    Copy {entry.name}
+                    {entry.name}
                   </Button>
                 ))}
-              </div>
-              <ResourcePicker
-                resources={resources.data?.resources ?? EMPTY_RESOURCES}
-                selected={source}
-                onSelect={setSource}
-                onSearch={searchSources}
-                loading={resources.isFetching}
-                error={resources.error?.message}
-                hasPrevious={sourceOffset > 0}
-                onPrevious={previousSources}
-                hasMore={resources.data?.hasMore}
-                onMore={nextSources}
-              />
-
-              <div className="flex flex-wrap gap-2">
                 {sourcePresets.data?.presets.map((entry) => (
                   <Button
                     key={entry.id}
@@ -1240,44 +834,71 @@ function PresetEditor({
                     size="sm"
                     onClick={() => copy(entry.selections)}
                   >
-                    Copy {entry.name}
+                    {entry.name}
                   </Button>
                 ))}
+                <ResourcePicker
+                  resources={resources.data?.resources ?? EMPTY_RESOURCES}
+                  selected={source}
+                  onSelect={setSource}
+                  onSearch={searchSources}
+                  loading={resources.isFetching}
+                  error={resources.error?.message}
+                  hasPrevious={sourceOffset > 0}
+                  onPrevious={previousSources}
+                  hasMore={resources.data?.hasMore}
+                  onMore={nextSources}
+                  trigger={
+                    <Button type="button" variant="ghost" size="sm">
+                      {source
+                        ? `Presets from ${source.name}`
+                        : "From another resource…"}
+                    </Button>
+                  }
+                />
               </div>
-            </div>
-          ) : null}
-          <PermissionEditor
-            targets={targets}
-            onChange={editable ? changeSelections : undefined}
-            disabled={save.isPending}
-          />
-        </fieldset>
-        <DialogFooter>
-          <Button variant="outline" disabled={save.isPending} onClick={onClose}>
-            {editable ? "Cancel" : "Close"}
-          </Button>
-          {editable ? (
+            ) : null}
+          </fieldset>
+        }
+        footer={
+          <>
             <Button
-              disabled={!name.trim() || save.isPending}
-              onClick={() =>
-                save.mutate({
-                  data: {
-                    relayId: scope.relayId,
-                    resourceType: scope.resourceType,
-                    resourceId: scope.resourceId,
-                    id: preset?.id,
-                    revision: preset?.revision,
-                    name,
-                    selections,
-                  },
-                })
-              }
+              variant="outline"
+              className="sm:ml-auto"
+              disabled={save.isPending}
+              onClick={onClose}
             >
-              {save.isPending ? "Saving…" : "Save preset"}
+              {editable ? "Cancel" : "Close"}
             </Button>
-          ) : null}
-        </DialogFooter>
-      </DialogContent>
+            {editable ? (
+              <Button
+                disabled={!name.trim() || save.isPending}
+                onClick={() =>
+                  save.mutate({
+                    data: {
+                      relayId: scope.relayId,
+                      resourceType: scope.resourceType,
+                      resourceId: scope.resourceId,
+                      id: preset?.id,
+                      revision: preset?.revision,
+                      name,
+                      selections,
+                    },
+                  })
+                }
+              >
+                {save.isPending ? "Saving…" : "Save preset"}
+              </Button>
+            ) : null}
+          </>
+        }
+      >
+        <PermissionEditor
+          targets={targets}
+          onChange={editable ? changeSelections : undefined}
+          disabled={save.isPending}
+        />
+      </PermissionDialogContent>
     </Dialog>
   )
 }

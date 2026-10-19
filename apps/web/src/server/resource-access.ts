@@ -938,6 +938,8 @@ export const getResourceAccess = createServerFn({ method: "GET" })
     resourceScopeSchema.extend({
       offset: z.number().int().min(0).default(0),
       search: z.string().trim().max(256).default(""),
+      // Editors only need what can be granted here, not who has it.
+      includePeople: z.boolean().default(true),
     })
   )
   .handler(async ({ data }) => {
@@ -976,16 +978,17 @@ export const getResourceAccess = createServerFn({ method: "GET" })
       ? `%${data.search.replace(/[\\%_]/gu, "\\$&")}%`
       : null
     const scopePeople = peopleFilter(data)
-    const [people] = canReadPeople
-      ? await databasePool.query<Array<GrantRow>>(
-          `SELECT g.*, u.email, u.name FROM ${databaseTable("access_grant")} g JOIN ${databaseTable("user")} u ON u.id = g.user_id WHERE ${scopePeople.sql}${peopleSearch ? " AND (u.email LIKE ? OR u.name LIKE ?)" : ""} ORDER BY g.created_at, g.id LIMIT 101 OFFSET ?`,
-          [
-            ...scopePeople.values,
-            ...(peopleSearch ? [peopleSearch, peopleSearch] : []),
-            data.offset,
-          ]
-        )
-      : [[]]
+    const [people] =
+      canReadPeople && data.includePeople
+        ? await databasePool.query<Array<GrantRow>>(
+            `SELECT g.*, u.email, u.name FROM ${databaseTable("access_grant")} g JOIN ${databaseTable("user")} u ON u.id = g.user_id WHERE ${scopePeople.sql}${peopleSearch ? " AND (u.email LIKE ? OR u.name LIKE ?)" : ""} ORDER BY g.created_at, g.id LIMIT 101 OFFSET ?`,
+            [
+              ...scopePeople.values,
+              ...(peopleSearch ? [peopleSearch, peopleSearch] : []),
+              data.offset,
+            ]
+          )
+        : [[]]
     const ownAccess = grants.flatMap((grant) =>
       grant.source === "access" &&
       grant.resourceType === data.resourceType &&
