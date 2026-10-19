@@ -1799,10 +1799,20 @@ export const relayFilePutInputSchema = z
      * file) keeps the control frame under `relayControlMaxFrameBytes`.
      */
     contentBase64: z.base64().max(700 * 1024),
+    /**
+     * Write only if the file is unchanged: its modification time, in whole
+     * milliseconds, still matches, or null for a file that must not exist.
+     * Omitted to write regardless.
+     */
+    unlessModifiedSince: z.number().int().nonnegative().nullable().optional(),
   })
   .strict()
 
-export const relayFilePutResultSchema = relayRemoteFileUploadResultSchema
+/** A precondition that failed leaves the file alone and says so. */
+export const relayFilePutResultSchema = z.union([
+  relayRemoteFileUploadResultSchema.extend({ conflict: z.literal(false) }),
+  z.object({ conflict: z.literal(true) }).strict(),
+])
 
 export const relayFileMutationInputSchema = z.discriminatedUnion("operation", [
   z.object({

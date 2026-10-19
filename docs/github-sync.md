@@ -42,11 +42,13 @@ and Hearth checks each automatic sync's branch for a new commit every minute.
 
 ## Syncs
 
-A sync copies one folder of one branch into a folder of a game server or
-app, optionally limited to glob patterns. A pattern without a slash matches a
-file name at any depth, as in `.gitignore`. Creating or editing a sync needs
-permission to edit that game server's or app's files, and the connection's
-owner (or an administrator).
+A sync copies one folder of one branch into a folder of an instance: a game
+server, an app, or a Relay's host files. The destination is relative to the
+top of the instance's Files tab. For a game server, that's the folder it runs
+from. Databases have no file root, so they can't be synced into. A sync can
+be limited to glob patterns; a pattern without a slash matches a file name at
+any depth, as in `.gitignore`. Creating or editing a sync needs permission to
+edit that instance's files, and the source's owner (or an administrator).
 
 Each run:
 
@@ -55,11 +57,15 @@ Each run:
    wrote to that path (`synced_files`), and writes only changed files through
    the Relay's `instance.files.put` operation (`files-put-v1`). Files are
    written atomically and parent folders are created.
-3. Optionally restarts a running game server when something changed.
+3. Unless **Replace existing files** is on, a file is only written if it's
+   absent or unchanged since Kiln wrote it. The put carries the modification
+   time Kiln recorded (or none), and the Relay checks it under the instance's
+   mutation lock. Anything else is someone's file or edit, so it's kept and
+   counted in the sync's warning.
 
-Files deleted from the repository stay on the server. Files larger than 512 KB
-are skipped with a warning, since each write is one Relay control frame. A
-sync stops at 2,000 files.
+Files deleted from the repository stay on the instance. Files larger than
+512 KB are skipped with a warning, since each write is one Relay control
+frame. A sync stops at 2,000 files.
 
 Runs are serialized per sync. A trigger arriving while another waits joins
 it. A poll that fails the same way again leaves the row alone, so a broken
@@ -70,9 +76,11 @@ sync doesn't notify every browser each minute.
 - **Saving back to GitHub.** When a synced file is saved in the editor, offer
   to commit it to the branch (Contents API, with the blob SHA Kiln last wrote
   as the expected base so a newer commit isn't overwritten).
-- **Drift.** A file edited on the server after it synced is only replaced
-  when GitHub's copy changes. A "Restore from GitHub" action could rewrite
-  every file.
+- **Drift.** A file edited on the instance after it synced is only looked at
+  again when GitHub's copy changes. A "Restore from GitHub" action could
+  rewrite every file.
+- **Restarting.** Restarting a running game server after its files change
+  was cut for now.
 - **Mirroring.** Optionally delete files that were removed from the
   repository.
 - **Sync history.** Runs could appear in Automations → History.

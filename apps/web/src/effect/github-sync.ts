@@ -24,9 +24,20 @@ const decodeJsonString = Schema.decodeUnknownOption(
 const decodeStringArray = Schema.decodeUnknownOption(
   Schema.Array(Schema.String)
 )
-// The blob SHA Kiln last wrote for each repository path it synced.
+// What Kiln last wrote at each destination path: the blob, and the file's
+// modification time afterwards, so an edit since shows. Older records hold
+// only the blob.
 const decodeSyncedFiles = Schema.decodeUnknownOption(
-  Schema.Record(Schema.String, Schema.String)
+  Schema.Record(
+    Schema.String,
+    Schema.Union([
+      Schema.String,
+      Schema.Struct({
+        blob: Schema.String,
+        modifiedAt: Schema.NullOr(Schema.Number),
+      }),
+    ])
+  )
 )
 
 export type GitHubSyncStatus =
@@ -35,8 +46,14 @@ export type GitHubSyncStatus =
   | "queued"
   | "running"
   | "success"
-export type GitHubSyncAfter = "none" | "restart"
-export type GitHubSyncResourceKind = "app" | "instance"
+export type GitHubSyncResourceKind = "app" | "instance" | "relay"
+
+/** A file Kiln wrote, as it left it. */
+export interface GitHubSyncedFile {
+  blob: string
+  /** Null when the file was written before Kiln recorded it. */
+  modifiedAt: number | null
+}
 
 export interface GitHubInstallationRecord {
   accountAvatarUrl: string | null
@@ -71,7 +88,6 @@ export interface GitHubConnectionCredential extends GitHubConnection {
 
 /** Files from one repository folder, copied into a game server or app. */
 export interface GitHubSync {
-  afterSync: GitHubSyncAfter
   autoSync: boolean
   branch: string
   connectionId: string
@@ -85,6 +101,7 @@ export interface GitHubSync {
   lastCommitSha: string | null
   lastError: string | null
   lastSyncedAt: string | null
+  overwrite: boolean
   relayId: string
   repository: string
   repositoryId: number
@@ -98,8 +115,9 @@ export interface GitHubSync {
 }
 
 export interface GitHubSyncSettings {
-  afterSync: GitHubSyncAfter
   autoSync: boolean
+  /** Replaces files that exist but Kiln didn't write, or that changed since. */
+  overwrite: boolean
   branch: string
   includePatterns: Array<string>
   repository: string
@@ -128,7 +146,6 @@ interface ConnectionRow extends RowDataPacket {
 }
 
 interface SyncRow extends RowDataPacket {
-  after_sync: GitHubSyncAfter
   auto_sync: boolean | number
   branch: string
   connection_id: string
@@ -141,6 +158,7 @@ interface SyncRow extends RowDataPacket {
   last_commit_sha: string | null
   last_error: string | null
   last_synced_at: number | string | null
+  overwrite: boolean | number
   relay_id: string
   repository: string
   repository_id: number | string
@@ -158,7 +176,7 @@ const connectionColumns = `id, owner_user_id, app_id, app_slug, app_name, app_ur
 
 const syncColumns = `id, connection_id, relay_id, resource_kind, resource_id,
   repository_id, repository, branch, source_path, target_path,
-  include_patterns, auto_sync, after_sync, status, last_error,
+  include_patterns, auto_sync, overwrite, status, last_error,
   last_commit_sha, last_commit_message, last_synced_at, last_changed_count,
   created_by, created_at`
 
@@ -404,7 +422,7 @@ export const insertGitHubSyncEffect = Effect.fn("github.sync.insert")(
       `INSERT INTO ${databaseTable("github_sync")}
          (id, connection_id, relay_id, resource_kind, resource_id,
           repository_id, repository, branch, source_path, target_path,
-          include_patterns, auto_sync, after_sync, synced_files, created_by,
+          include_patterns, auto_sync, overwrite, synced_files, created_by,
           created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?, ?)`,
       [
@@ -420,7 +438,7 @@ export const insertGitHubSyncEffect = Effect.fn("github.sync.insert")(
         input.targetPath,
         JSON.stringify(input.includePatterns),
         input.autoSync,
-        input.afterSync,
+        input.overwrite,
         input.createdBy,
         now,
         now,
@@ -444,7 +462,7 @@ export const updateGitHubSyncEffect = Effect.fn("github.sync.update")(
                 last_commit_sha, NULL),
               repository_id = ?, repository = ?, branch = ?,
               source_path = ?, target_path = ?, include_patterns = ?,
-              auto_sync = ?, after_sync = ?, updated_at = ?
+              auto_sync = ?, overwrite = ?, updated_at = ?
         WHERE id = ?`,
       [
         settings.repositoryId,
@@ -459,7 +477,7 @@ export const updateGitHubSyncEffect = Effect.fn("github.sync.update")(
         settings.targetPath,
         JSON.stringify(settings.includePatterns),
         settings.autoSync,
-        settings.afterSync,
+        settings.overwrite,
         now,
         id,
       ]
@@ -497,11 +515,11 @@ export const recordGitHubSyncResultEffect = Effect.fn("github.sync.record")(
           changedCount: number
           commitMessage: string
           commitSha: string
-          syncedFiles: Record<string, string>
+          syncedFiles: Record<string, GitHubSyncedFile>
           /** Kept in `last_error` beside a successful status. */
           warning: string | null
         }
-      | { error: string; syncedFiles?: Record<string, string> }
+      | { error: string; syncedFiles?: Record<string, GitHubSyncedFile> }
   ) {
     const database = yield* Database
     const now = yield* Clock.currentTimeMillis
@@ -593,7 +611,6 @@ function publicConnection(row: ConnectionRow): GitHubConnection {
 
 function publicSync(row: SyncRow): GitHubSync {
   return {
-    afterSync: row.after_sync,
     autoSync: Boolean(row.auto_sync),
     branch: row.branch,
     connectionId: row.connection_id,
@@ -609,6 +626,7 @@ function publicSync(row: SyncRow): GitHubSync {
       row.last_synced_at === null
         ? null
         : new Date(Number(row.last_synced_at)).toISOString(),
+    overwrite: Boolean(row.overwrite),
     relayId: row.relay_id,
     repository: row.repository,
     repositoryId: Number(row.repository_id),
@@ -632,9 +650,15 @@ function stringArray(value: unknown): Array<string> {
   })
 }
 
-function syncedFiles(value: unknown): Record<string, string> {
+function syncedFiles(value: unknown): Record<string, GitHubSyncedFile> {
   return Option.match(decodeSyncedFiles(decodeJson(value)), {
     onNone: () => ({}),
-    onSome: (files) => ({ ...files }),
+    onSome: (files) =>
+      Object.fromEntries(
+        Object.entries(files).map(([path, file]) => [
+          path,
+          typeof file === "string" ? { blob: file, modifiedAt: null } : file,
+        ])
+      ),
   })
 }

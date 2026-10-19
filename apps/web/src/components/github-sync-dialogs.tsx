@@ -5,9 +5,11 @@ import {
   Check,
   ChevronDown,
   Folder,
+  Info,
   FolderRoot,
   LoaderCircle,
   Lock,
+  RadioTower,
   Server,
   Trash2,
 } from "lucide-react"
@@ -45,6 +47,11 @@ import { showToast } from "@workspace/ui/components/sonner"
 import { Separator } from "@workspace/ui/components/separator"
 import { Switch } from "@workspace/ui/components/switch"
 import { Textarea } from "@workspace/ui/components/textarea"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@workspace/ui/components/tooltip"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { GitHubMark } from "@/components/github-mark"
@@ -110,9 +117,7 @@ export function GitHubSyncEditorDialog({
     sync?.includePatterns.join("\n") ?? ""
   )
   const [autoSync, setAutoSync] = React.useState(sync?.autoSync ?? true)
-  const [afterSync, setAfterSync] = React.useState<"none" | "restart">(
-    sync?.afterSync ?? "none"
-  )
+  const [overwrite, setOverwrite] = React.useState(sync?.overwrite ?? false)
   const connection = usable.find((item) => item.id === connectionId) ?? null
 
   const repositories = useQuery({
@@ -154,12 +159,12 @@ export function GitHubSyncEditorDialog({
     mutationFn: () =>
       saveGitHubSync({
         data: {
-          afterSync: target?.kind === "server" ? afterSync : "none",
           autoSync,
           branch,
           connectionId,
           id: sync?.id,
           includePatterns,
+          overwrite,
           repository,
           sourcePath,
           target: {
@@ -321,15 +326,12 @@ export function GitHubSyncEditorDialog({
 
             <div className="space-y-3">
               <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-                <Field label="Game server or app">
+                <Field label="Instance">
                   <TargetPicker
                     disabled={sync !== null}
                     targets={targets}
                     value={target}
-                    onChange={(next) => {
-                      setTarget(next)
-                      if (next.kind !== "server") setAfterSync("none")
-                    }}
+                    onChange={setTarget}
                   />
                 </Field>
                 <Field
@@ -357,42 +359,19 @@ export function GitHubSyncEditorDialog({
 
             <Separator />
 
-            <div className="space-y-3">
-              <label className="flex items-start justify-between gap-4 rounded-lg border p-3">
-                <span className="min-w-0">
-                  <span className="block text-xs font-medium">
-                    Sync automatically
-                  </span>
-                  <span className="type-support block text-muted-foreground">
-                    {connection?.webhookActive === false
-                      ? "Kiln checks the branch for new commits every minute."
-                      : "Every push to the branch syncs the changed files."}
-                  </span>
-                </span>
-                <Switch checked={autoSync} onCheckedChange={setAutoSync} />
-              </label>
-              {target?.kind === "server" ? (
-                <Field label="After files change">
-                  <Select
-                    value={afterSync}
-                    onValueChange={(value) =>
-                      setAfterSync(value === "restart" ? "restart" : "none")
-                    }
-                  >
-                    <SelectTrigger className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">
-                        Do nothing; changes apply on the next restart
-                      </SelectItem>
-                      <SelectItem value="restart">
-                        Restart the game server if it's running
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
-                </Field>
-              ) : null}
+            <div className="grid gap-3 sm:grid-cols-2">
+              <SwitchRow
+                checked={autoSync}
+                info="Syncs again whenever the branch gets a new commit."
+                label="Sync automatically"
+                onCheckedChange={setAutoSync}
+              />
+              <SwitchRow
+                checked={overwrite}
+                info="Replaces files already on the instance, even ones edited there. Off keeps them."
+                label="Replace existing files"
+                onCheckedChange={setOverwrite}
+              />
             </div>
 
             {save.error ? <DialogError error={save.error} /> : null}
@@ -613,11 +592,22 @@ function TargetPicker({
   const items = React.useMemo(
     () =>
       targets.map((target): InstancePickerItem => ({
-        identity: { id: target.id, kind: target.kind, relayId: target.relayId },
+        identity:
+          target.kind === "relay"
+            ? {
+                id: target.id,
+                kind: "relay",
+                relayId: target.relayId,
+                source: "fleet",
+              }
+            : { id: target.id, kind: target.kind, relayId: target.relayId },
         key: targetKey(target),
-        meta: `${target.relayName} · ${target.id.slice(0, 8)}`,
+        meta:
+          target.kind === "relay"
+            ? "Host files"
+            : `${target.relayName} · ${target.id.slice(0, 8)}`,
         name: target.name,
-        searchText: `${target.kind === "app" ? "App" : "Game Server"} ${target.relayName} ${target.id}`,
+        searchText: `${targetKindLabel[target.kind]} ${target.relayName} ${target.id}`,
       })),
     [targets]
   )
@@ -625,7 +615,7 @@ function TargetPicker({
     () => new Set(value ? [targetKey(value)] : []),
     [value]
   )
-  const TargetIcon = value?.kind === "app" ? Boxes : Server
+  const TargetIcon = value ? targetIcon[value.kind] : Server
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -640,7 +630,7 @@ function TargetPicker({
           <span className="flex min-w-0 items-center gap-2">
             <TargetIcon className="size-3.5 text-muted-foreground" />
             <span className={cn("truncate", !value && "text-muted-foreground")}>
-              {value?.name ?? "Choose a game server or app"}
+              {value?.name ?? "Choose an instance"}
             </span>
           </span>
           <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
@@ -651,8 +641,8 @@ function TargetPicker({
         className="z-[70] w-[min(34rem,calc(100vw-2rem))] overflow-hidden p-0"
       >
         <InstancePickerContent
-          ariaLabel="Game servers and apps"
-          emptyMessage="No game servers or apps you can edit files on."
+          ariaLabel="Instances"
+          emptyMessage="No instances you can edit files on."
           items={items}
           selectedKeys={selectedKeys}
           onSelect={(item) => {
@@ -735,6 +725,43 @@ export function DeleteSyncDialog({
   )
 }
 
+function SwitchRow({
+  checked,
+  info,
+  label,
+  onCheckedChange,
+}: {
+  checked: boolean
+  info: string
+  label: string
+  onCheckedChange: (checked: boolean) => void
+}) {
+  return (
+    <label className="flex items-center justify-between gap-3 rounded-lg border p-3">
+      <span className="flex min-w-0 items-center gap-1.5">
+        <span className="truncate text-xs font-medium">{label}</span>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              aria-label={`About ${label.toLowerCase()}`}
+              className="shrink-0 text-muted-foreground hover:text-foreground"
+              // Inside the label, a click would flip the switch.
+              onClick={(event) => event.preventDefault()}
+            >
+              <Info className="size-3.5" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="top" className="max-w-60">
+            {info}
+          </TooltipContent>
+        </Tooltip>
+      </span>
+      <Switch checked={checked} onCheckedChange={onCheckedChange} />
+    </label>
+  )
+}
+
 function Field({
   children,
   hint,
@@ -764,6 +791,18 @@ function DialogError({ error }: { error: Error }) {
     </p>
   )
 }
+
+const targetKindLabel = {
+  app: "App",
+  relay: "Relay",
+  server: "Game Server",
+} as const satisfies Record<GitHubSyncTarget["kind"], string>
+
+const targetIcon = {
+  app: Boxes,
+  relay: RadioTower,
+  server: Server,
+} as const satisfies Record<GitHubSyncTarget["kind"], typeof Server>
 
 function targetKey(target: Pick<GitHubSyncTarget, "id" | "kind" | "relayId">) {
   return `${target.kind}:${target.relayId}:${target.id}`

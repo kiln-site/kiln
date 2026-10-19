@@ -9,6 +9,7 @@ import {
   stat,
   symlink,
   truncate,
+  utimes,
   writeFile,
 } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -643,6 +644,35 @@ describeLinux("Relay direct file transfers", () => {
               )
             ),
             "nested"
+          )
+        })
+      )
+  )
+
+  // A sync that mustn't overwrite edits compares this time with the one its
+  // last upload reported; an edit made outside Kiln must change it.
+  it.effect(
+    "reports modified times that match uploads and change on edits",
+    () =>
+      withSetup(({ driver, instance, root }) =>
+        Effect.gen(function* () {
+          assert.isNull(yield* driver.modifiedAt(instance, "server.properties"))
+
+          const uploaded = yield* driver.upload(
+            instance,
+            "server.properties",
+            chunks("motd=kiln\n")
+          )
+          const synced = yield* driver.modifiedAt(instance, "server.properties")
+          assert.strictEqual(synced, Date.parse(uploaded.modifiedAt))
+
+          const path = resolve(root, "server.properties")
+          yield* fromPromise(() =>
+            utimes(path, new Date(), new Date(Date.now() + 60_000))
+          )
+          assert.notStrictEqual(
+            yield* driver.modifiedAt(instance, "server.properties"),
+            synced
           )
         })
       )

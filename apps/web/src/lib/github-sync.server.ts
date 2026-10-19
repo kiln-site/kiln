@@ -24,11 +24,7 @@ import {
 import { forkPromise } from "@/effect/promise"
 import { forkAppWorker, runAppEffect } from "@/effect/runtime"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
-import {
-  relayConnectionFeatures,
-  relayConnectionInstances,
-  relayRpc,
-} from "@/lib/relay-connection"
+import { relayConnectionFeatures, relayRpc } from "@/lib/relay-connection"
 import { listPersistedRelaysEffect } from "@/lib/relay-registry"
 
 export type GitHubSyncTrigger = "created" | "manual" | "poll" | "push"
@@ -62,9 +58,11 @@ function githubSyncIncludes(
 }
 
 /**
- * Copies the files a sync covers from the head of its branch into its game
- * server or app. Files Kiln already wrote at the same blob are skipped, so a
- * sync only writes what changed; files removed from the repository stay.
+ * Copies the files a sync covers from the head of its branch into its
+ * instance. Files Kiln already wrote at the same blob are skipped, so a sync
+ * only writes what changed; files removed from the repository stay. Unless
+ * the sync overwrites, files that existed first or changed since Kiln wrote
+ * them are kept.
  */
 const runGitHubSyncEffect = Effect.fn("github.sync.run")(function* (
   syncId: string,
@@ -160,8 +158,10 @@ const runGitHubSyncEffect = Effect.fn("github.sync.run")(function* (
   const syncedFiles = { ...sync.syncedFiles }
   let changed = 0
   let skipped = 0
+  let kept = 0
   for (const file of files) {
-    if (syncedFiles[file.target] === file.sha) continue
+    const previous = syncedFiles[file.target]
+    if (previous?.blob === file.sha) continue
     if (file.size > maxSyncedFileBytes) {
       skipped += 1
       continue
@@ -181,6 +181,11 @@ const runGitHubSyncEffect = Effect.fn("github.sync.run")(function* (
                 contentBase64: content.toString("base64"),
                 instanceId: fileRootId,
                 path: file.target,
+                // Without overwrite, only a file Kiln left as it was, or
+                // none, is written; anything else is someone's edit.
+                ...(sync.overwrite
+                  ? {}
+                  : { unlessModifiedSince: previous?.modifiedAt ?? null }),
               },
               30_000,
               sync.createdBy
@@ -200,7 +205,14 @@ const runGitHubSyncEffect = Effect.fn("github.sync.run")(function* (
         syncedFiles,
       }).pipe(Effect.andThen(Effect.sync(publishGitHubSyncChange)))
     }
-    syncedFiles[file.target] = file.sha
+    if (written.success.conflict) {
+      kept += 1
+      continue
+    }
+    syncedFiles[file.target] = {
+      blob: file.sha,
+      modifiedAt: Date.parse(written.success.modifiedAt),
+    }
     changed += 1
   }
 
@@ -210,31 +222,10 @@ const runGitHubSyncEffect = Effect.fn("github.sync.run")(function* (
       `Skipped ${skipped} ${skipped === 1 ? "file" : "files"} over 512 KB`
     )
   }
-  if (
-    changed > 0 &&
-    sync.afterSync === "restart" &&
-    sync.resourceKind === "instance"
-  ) {
-    const instance = relayConnectionInstances(relay.id)?.find(
-      (item) => item.id === sync.resourceId
+  if (kept > 0) {
+    warnings.push(
+      `Kept ${kept} ${kept === 1 ? "file" : "files"} that already existed or changed on the instance`
     )
-    // A stopped game server picks the files up when it next starts.
-    if (instance?.desiredState === "running") {
-      const restart = yield* Effect.tryPromise(() =>
-        relayRpc(
-          relay,
-          "instance.action",
-          { action: "restart", instanceId: sync.resourceId },
-          120_000,
-          sync.createdBy
-        )
-      ).pipe(Effect.result)
-      if (restart._tag === "Failure") {
-        warnings.push(
-          `The restart failed: ${syncFailureMessage(restart.failure.cause)}`
-        )
-      }
-    }
   }
 
   yield* recordGitHubSyncResultEffect(sync.id, {

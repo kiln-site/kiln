@@ -19,6 +19,7 @@ import {
   Pencil,
   Plus,
   FolderSync,
+  RadioTower,
   Search,
   Server,
   Trash2,
@@ -417,7 +418,12 @@ const SyncTableRow = React.memo(function SyncTableRow({
         })
     )
   }, [sync.id])
-  const TargetIcon = sync.target.kind === "app" ? Boxes : Server
+  const TargetIcon =
+    sync.target.kind === "app"
+      ? Boxes
+      : sync.target.kind === "relay"
+        ? RadioTower
+        : Server
 
   return (
     <tr className="group transition-colors hover:bg-accent/25">
@@ -474,8 +480,8 @@ const SyncTableRow = React.memo(function SyncTableRow({
         </div>
         <p className="type-support mt-0.5 truncate font-mono text-muted-foreground">
           /{sync.targetPath}
-          {sync.afterSync === "restart" ? (
-            <span className="font-sans"> · restarts after changes</span>
+          {sync.overwrite ? (
+            <span className="font-sans"> · replaces files</span>
           ) : null}
         </p>
       </WorkspaceTableCell>

@@ -5,9 +5,9 @@ import type { Migration } from "@/effect/migrations"
 import { databaseTableName } from "@/lib/database-config"
 
 // GitHub Apps that people connect to Kiln, and the syncs that copy files
-// from one of their repositories into a game server or app. A connection
-// belongs to the person who created it; a sync to the game server or app it
-// writes to.
+// from one of their repositories into a game server, an app, or a Relay's
+// host. A connection belongs to the person who created it; a sync to the
+// instance it writes to.
 export const githubSync: Migration = {
   id: 16,
   name: "github_sync",
@@ -46,8 +46,8 @@ export const githubSync: Migration = {
   \`id\` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   \`connection_id\` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   \`relay_id\` char(43) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-  \`resource_kind\` enum('instance','app') NOT NULL,
-  \`resource_id\` char(40) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  \`resource_kind\` enum('instance','app','relay') NOT NULL,
+  \`resource_id\` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   \`repository_id\` bigint unsigned NOT NULL,
   \`repository\` varchar(140) NOT NULL,
   \`branch\` varchar(255) NOT NULL,
@@ -55,7 +55,7 @@ export const githubSync: Migration = {
   \`target_path\` varchar(1024) NOT NULL DEFAULT '',
   \`include_patterns\` json NOT NULL,
   \`auto_sync\` tinyint(1) NOT NULL DEFAULT '1',
-  \`after_sync\` enum('none','restart') NOT NULL DEFAULT 'none',
+  \`overwrite\` tinyint(1) NOT NULL DEFAULT '0',
   \`status\` enum('idle','queued','running','success','error') NOT NULL DEFAULT 'idle',
   \`last_error\` varchar(1024) DEFAULT NULL,
   \`last_commit_sha\` char(40) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,

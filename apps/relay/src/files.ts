@@ -481,6 +481,17 @@ export class FilesystemDriver {
     }).pipe(Effect.withSpan("relay.files.stat"))
   }
 
+  /** A file's modification time in whole milliseconds, or null if absent. */
+  modifiedAt(instance: FileRoot, requestedPath: string) {
+    return this.entry(instance, requestedPath).pipe(
+      Effect.map((entry) => Math.floor(entry.modifiedAt)),
+      Effect.catchIf(
+        (error) => isMissingFile(error.cause),
+        () => Effect.succeed(null)
+      )
+    )
+  }
+
   read(instance: FileRoot, requestedPath: string) {
     return Effect.gen({ self: this }, function* () {
       const path = yield* this.#existingFile(instance, requestedPath)

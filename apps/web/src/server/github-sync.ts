@@ -70,18 +70,19 @@ const branchesInputSchema = repositoriesInputSchema.extend({
 const foldersInputSchema = branchesInputSchema.extend({ branch: branchSchema })
 
 const saveSyncInputSchema = z.object({
-  afterSync: z.enum(["none", "restart"]),
   autoSync: z.boolean(),
   branch: branchSchema,
   connectionId: connectionIdSchema,
   /** Omitted to create a sync. */
   id: syncIdSchema.optional(),
   includePatterns: includePatternsSchema,
+  overwrite: z.boolean(),
   repository: repositorySchema,
   sourcePath: folderSchema,
   target: z.object({
-    id: z.string().regex(/^[a-f0-9]{40}$/u),
-    kind: z.enum(["app", "server"]),
+    // A game server's or app's ID, or a Relay's own for its host files.
+    id: z.string().regex(/^(?:[a-f0-9]{40}|[A-Za-z\d_-]{43})$/u),
+    kind: z.enum(["app", "relay", "server"]),
     relayId: relayIdSchema,
   }),
   targetPath: folderSchema,

@@ -33,6 +33,7 @@ import {
   type GitHubConnection,
   type GitHubInstallationRecord,
   type GitHubSync,
+  type GitHubSyncResourceKind,
 } from "@/effect/github-sync"
 import { listAppRecordsEffect } from "@/effect/managed-apps"
 import { attachRelayOwnersEffect } from "@/effect/relay-owners"
@@ -51,7 +52,6 @@ import {
   publishGitHubSyncChange,
 } from "@/lib/github-sync.server"
 import { listInstanceDirectoryEffect } from "@/lib/instance-directory"
-import type { AccessPermission } from "@/lib/permissions"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { requireEligibleResourceUser } from "@/server/auth"
 import type {
@@ -78,7 +78,7 @@ const decodeSetupState = Schema.decodeUnknownOption(
   Schema.fromJsonString(SetupStateSchema)
 )
 
-export type GitHubTargetKind = "app" | "server"
+export type GitHubTargetKind = "app" | "relay" | "server"
 
 export interface GitHubConnectionView {
   appName: string
@@ -154,6 +154,14 @@ export async function getGitHubSyncOverviewHandler() {
       relayId: app.relayId,
       relayName: relayNames.get(app.relayId) ?? "",
     })),
+    // A Relay's host files, under its own ID.
+    ...[...relayNames].map(([id, name]) => ({
+      id,
+      kind: "relay" as const,
+      name,
+      relayId: id,
+      relayName: name,
+    })),
   ].filter((target) => relayNames.has(target.relayId))
   const targetsByKey = new Map(
     allTargets.map((target) => [targetKey(target), target])
@@ -162,7 +170,7 @@ export async function getGitHubSyncOverviewHandler() {
     connections.map((connection) => [connection.id, connectionName(connection)])
   )
   const syncViews = syncs.flatMap((sync): Array<GitHubSyncView> => {
-    const kind = sync.resourceKind === "app" ? "app" : "server"
+    const kind = targetKind(sync.resourceKind)
     const target = targetsByKey.get(
       targetKey({ id: sync.resourceId, kind, relayId: sync.relayId })
     ) ?? {
@@ -475,20 +483,17 @@ export async function listGitHubFoldersHandler(data: GitHubFoldersInput) {
 
 export async function saveGitHubSyncHandler(data: SaveGitHubSyncInput) {
   const user = await requireEligibleResourceUser()
-  if (data.afterSync === "restart" && data.target.kind !== "server") {
-    throw new Error("Only game servers restart after a sync")
+  if (data.target.kind === "relay" && data.target.id !== data.target.relayId) {
+    throw new Error("Relay not found")
   }
   const existing = data.id
     ? await runAppEffect("github.sync.load", loadGitHubSyncEffect(data.id))
     : null
-  // A sync keeps its game server or app; changing it means a new sync.
+  // A sync keeps its instance; changing it means a new sync.
   const target = existing
     ? {
         id: existing.resourceId,
-        kind:
-          existing.resourceKind === "app"
-            ? ("app" as const)
-            : ("server" as const),
+        kind: targetKind(existing.resourceKind),
         relayId: existing.relayId,
       }
     : data.target
@@ -500,10 +505,10 @@ export async function saveGitHubSyncHandler(data: SaveGitHubSyncInput) {
     getGitHubRepositoryEffect(token, data.repository)
   )
   const settings = {
-    afterSync: data.afterSync,
     autoSync: data.autoSync,
     branch: data.branch,
     includePatterns: data.includePatterns,
+    overwrite: data.overwrite,
     repository: repository.full_name,
     repositoryId: repository.id,
     sourcePath: data.sourcePath,
@@ -530,7 +535,7 @@ export async function saveGitHubSyncHandler(data: SaveGitHubSyncInput) {
       id,
       relayId: target.relayId,
       resourceId: target.id,
-      resourceKind: target.kind === "app" ? "app" : "instance",
+      resourceKind: target.kind === "server" ? "instance" : target.kind,
     })
   )
   enqueueGitHubSync(id, "created")
@@ -636,7 +641,7 @@ async function manageableSync(user: AuthenticatedUser, id: string) {
   const sync = await runAppEffect("github.sync.load", loadGitHubSyncEffect(id))
   await requireTargetWrite(user, {
     id: sync.resourceId,
-    kind: sync.resourceKind === "app" ? "app" : "server",
+    kind: targetKind(sync.resourceKind),
     relayId: sync.relayId,
   })
   return sync
@@ -652,7 +657,9 @@ async function requireTargetWrite(
     throw new Error(
       target.kind === "app"
         ? "You need permission to edit this app's files"
-        : "You need permission to edit this game server's files"
+        : target.kind === "relay"
+          ? "You need permission to edit this Relay's files"
+          : "You need permission to edit this game server's files"
     )
   }
 }
@@ -662,22 +669,24 @@ function targetAllows(
   target: { id: string; kind: GitHubTargetKind; relayId: string },
   write: boolean
 ) {
-  const permission: AccessPermission =
-    target.kind === "app"
-      ? write
-        ? "app.files.write"
-        : "app.files.read"
-      : write
-        ? "instance.files.write"
-        : "instance.files.read"
-  // App permissions are granted on the Relay, for every app on it.
+  // App and host-file permissions are granted on the Relay, for every app.
+  if (target.kind !== "server") {
+    const family = target.kind === "app" ? "app" : "relay"
+    return grantsAllowPermission(
+      grants,
+      write ? `${family}.files.write` : `${family}.files.read`,
+      { relayId: target.relayId }
+    )
+  }
   return grantsAllowPermission(
     grants,
-    permission,
-    target.kind === "app"
-      ? { relayId: target.relayId }
-      : { instanceId: target.id, relayId: target.relayId }
+    write ? "instance.files.write" : "instance.files.read",
+    { instanceId: target.id, relayId: target.relayId }
   )
+}
+
+function targetKind(kind: GitHubSyncResourceKind): GitHubTargetKind {
+  return kind === "instance" ? "server" : kind
 }
 
 function targetKey(target: { id: string; kind: string; relayId: string }) {
