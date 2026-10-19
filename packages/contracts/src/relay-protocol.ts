@@ -41,6 +41,8 @@ export const relayFilePutV1Feature = "files-put-v1"
 // The Relay applies memory, CPU, and disk limits from a request's `limits`,
 // where `null` means no limit.
 export const relayResourceLimitsV1Feature = "resource-limits-v1"
+// The Relay answers `database.limits.write` and reports databases' limits.
+export const relayDatabaseLimitsV1Feature = "database-limits-v1"
 export const relayBrowserAuthorizationReviseMaxItems = 256
 
 export const relayControlOperations = [

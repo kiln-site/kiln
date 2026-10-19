@@ -320,6 +320,8 @@ const docker = new DockerDriver(
   lanes
 )
 const databases = new DatabaseDriver(config, docker, databaseConnections)
+// Before anything reads the databases, so none shows twice.
+await databases.recoverReplacements()
 const hostShell = new HostShell(config)
 const relayEngine = new DockerEngine(config.dockerSocket)
 const terminals = new ContainerTerminals(config)

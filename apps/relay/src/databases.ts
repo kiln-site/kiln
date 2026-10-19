@@ -62,6 +62,9 @@ function databaseObservedState(
 const DATABASE_KIND_LABEL = "kiln.resource.kind"
 const DATABASE_KIND = "database"
 const MAX_DUMP_BYTES = 700_000
+// A container a limits change set aside. Discovery skips it, and Relay
+// startup finishes or undoes a replacement it interrupted.
+const REPLACED_MARKER = "-replaced-"
 // Docker walks every volume to measure them, so sizes are measured at most
 // this often.
 const DISK_USAGE_REFRESH_MS = 5 * 60_000
@@ -453,23 +456,21 @@ export class DatabaseDriver {
     )
     const spec = engineSpecs[engine]
     const name = container.Name.replace(/^\//u, "")
-    const aside = `${name}-replaced-${randomBytes(4).toString("hex")}`
+    const aside = `${name}${REPLACED_MARKER}${randomBytes(4).toString("hex")}`
     const running = container.State.Running
     const docker = this.#engine
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        if (running) {
-          yield* docker.stopContainer(container.Id, {
-            seconds: 30,
-            timeout: 45_000,
-          })
-        }
-        yield* docker.renameContainer(container.Id, aside)
-      })
-    )
+    let setAside = false
+    let created = false
     const replaced = await promiseResult(async () => {
+      if (running) {
+        await Effect.runPromise(
+          docker.stopContainer(container.Id, { seconds: 30, timeout: 45_000 })
+        )
+      }
+      await Effect.runPromise(docker.renameContainer(container.Id, aside))
+      setAside = true
       await Effect.runPromise(
-        createContainer(this.#engine, {
+        createContainer(docker, {
           command: spec.command ?? [],
           env: Object.fromEntries(
             (container.Config.Env ?? []).map((entry) => {
@@ -497,20 +498,24 @@ export class DatabaseDriver {
           ...containerLimitSpec(limits),
         })
       )
+      created = true
       if (running) {
         await Effect.runPromise(
-          this.#engine.startContainer(name, { timeout: 120_000 })
+          docker.startContainer(name, { timeout: 120_000 })
         )
-        await waitUntilReady(this.#engine, name)
+        await waitUntilReady(docker, name)
       }
     })
     if (Result.isFailure(replaced)) {
+      // The old container comes back as it was, running if it was.
       await Effect.runPromise(
         Effect.gen(function* () {
-          yield* docker
-            .removeContainer(name, { force: true })
-            .pipe(Effect.ignore)
-          yield* docker.renameContainer(container.Id, name)
+          if (created) {
+            yield* docker
+              .removeContainer(name, { force: true })
+              .pipe(Effect.ignore)
+          }
+          if (setAside) yield* docker.renameContainer(container.Id, name)
           if (running) {
             yield* docker.startContainer(container.Id, { timeout: 120_000 })
           }
@@ -518,10 +523,45 @@ export class DatabaseDriver {
       )
       throw replaced.failure
     }
+    // A container left behind is skipped, and removed when the Relay starts.
     await Effect.runPromise(
-      this.#engine
-        .removeContainer(container.Id, { force: true })
-        .pipe(Effect.ignore)
+      docker.removeContainer(container.Id, { force: true }).pipe(Effect.ignore)
+    )
+  }
+
+  /**
+   * Finishes replacements a Relay restart interrupted: a set-aside container
+   * whose replacement exists is removed, and one without a replacement goes
+   * back, started, since a limits change never meant to stop the database.
+   */
+  async recoverReplacements(): Promise<void> {
+    const engine = this.#engine
+    const config = this.#config
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const listed = (yield* engine.listContainers({
+          all: true,
+          filters: { label: [`${DATABASE_KIND_LABEL}=${DATABASE_KIND}`] },
+        })).filter((container) => relayOwnsLabels(config, container.Labels))
+        const names = new Set(listed.flatMap((container) => container.Names))
+        for (const container of listed) {
+          const current = container.Names[0] ?? ""
+          const marker = current.lastIndexOf(REPLACED_MARKER)
+          if (marker === -1) continue
+          const original = current.slice(0, marker)
+          if (names.has(original)) {
+            yield* engine
+              .removeContainer(container.Id, { force: true })
+              .pipe(Effect.ignore)
+          } else {
+            yield* engine.renameContainer(container.Id, original.slice(1))
+            names.add(original)
+            yield* engine
+              .startContainer(container.Id, { timeout: 120_000 })
+              .pipe(Effect.ignore)
+          }
+        }
+      })
     )
   }
 
@@ -812,6 +852,7 @@ export class DatabaseDriver {
         return yield* engine.inspectContainers<DatabaseContainerInspect>(
           listed.flatMap((container) =>
             relayOwnsLabels(config, container.Labels) &&
+            !container.Names.some((name) => name.includes(REPLACED_MARKER)) &&
             (!ids || ids.includes(container.Labels?.["kiln.database.id"] ?? ""))
               ? [container.Id]
               : []

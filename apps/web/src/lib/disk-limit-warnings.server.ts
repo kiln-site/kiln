@@ -29,11 +29,14 @@ import {
 
 const CHECK_INTERVAL = "5 minutes"
 
-let started = false
+// Process-wide, so a reloaded module doesn't start a second worker.
+const workerState = globalThis as typeof globalThis & {
+  __kilnDiskLimitWarningsStarted?: boolean
+}
 
 export function startDiskLimitWarnings(): void {
-  if (started) return
-  started = true
+  if (workerState.__kilnDiskLimitWarningsStarted) return
+  workerState.__kilnDiskLimitWarningsStarted = true
   forkAppEffect(
     "diskLimits.warnings",
     warnDatabasesOverDiskLimitEffect().pipe(
@@ -100,32 +103,31 @@ export const warnDatabasesOverDiskLimitEffect = Effect.fn(
   }
 })
 
-/** Everyone who can see the database: admins, its owner, and grantees. */
+/**
+ * Everyone who can see the database: admins, and anyone whose grants or
+ * Relay ownership give them `database.read` on it. Creating a database
+ * gives no access of its own.
+ */
 const databaseAudienceEffect = Effect.fn("diskLimits.databaseAudience")(
   function* (scope: ResourceScope) {
     const database = yield* Database
-    const [admins, owners, grantees] = yield* Effect.all([
+    const [admins, candidates] = yield* Effect.all([
       platformAdminIdsEffect(),
       database.queryRows<RowDataPacket & { user_id: string }>(
-        "diskLimits.databaseOwner",
-        `SELECT created_by AS user_id FROM ${databaseTable("database")}
-          WHERE relay_id = ? AND database_id = ? AND created_by IS NOT NULL`,
-        [scope.relayId, scope.resourceId]
-      ),
-      database.queryRows<RowDataPacket & { user_id: string }>(
-        "diskLimits.databaseGrantees",
-        `SELECT DISTINCT user_id FROM ${databaseTable("access_grant")}
+        "diskLimits.databaseCandidates",
+        `SELECT user_id FROM ${databaseTable("access_grant")}
           WHERE state = 'active' AND relay_id = ?
             AND (resource_type = 'relay'
-              OR (resource_type = 'database' AND resource_id = ?))`,
-        [scope.relayId, scope.resourceId]
+              OR (resource_type = 'database' AND resource_id = ?))
+         UNION
+         SELECT created_by AS user_id FROM ${databaseTable("relay")}
+          WHERE id = ? AND created_by IS NOT NULL`,
+        [scope.relayId, scope.resourceId, scope.relayId]
       ),
     ])
-    const known = new Set([...admins, ...owners.map((row) => row.user_id)])
-    // A Relay-wide grant doesn't always reach databases, so each grantee's
-    // permissions are resolved as they'd be to open it.
+    const adminIds = new Set(admins)
     const readers = yield* Effect.forEach(
-      grantees.filter((row) => !known.has(row.user_id)),
+      candidates.filter((row) => !adminIds.has(row.user_id)),
       (row) =>
         loadResourceGrantsEffect(
           row.user_id,
@@ -141,6 +143,6 @@ const databaseAudienceEffect = Effect.fn("diskLimits.databaseAudience")(
         ),
       { concurrency: 4 }
     )
-    return [...known, ...readers.flat()]
+    return [...adminIds, ...readers.flat()]
   }
 )

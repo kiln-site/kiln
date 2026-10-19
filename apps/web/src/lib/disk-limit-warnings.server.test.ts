@@ -81,13 +81,21 @@ describeMysql("database disk limit warnings", () => {
     it.effect("warns those who can see the database, once per limit", () =>
       Effect.gen(function* () {
         yield* resetDatabase
-        yield* insertRelay(relayId, { enabled: true })
-        for (const user of ["owner", "reader", "relay-reader", "outsider"]) {
+        // The Relay's creator owns it; the database's creator has no access
+        // of their own.
+        yield* insertRelay(relayId, { created_by: "owner", enabled: true })
+        for (const user of [
+          "owner",
+          "creator",
+          "reader",
+          "relay-reader",
+          "outsider",
+        ]) {
           yield* insertUser(user)
         }
         yield* insertRows("database", {
           created_at: 0,
-          created_by: "owner",
+          created_by: "creator",
           database_id: databaseId,
           database_name: "kiln_main",
           engine: "postgres",
@@ -119,6 +127,7 @@ describeMysql("database disk limit warnings", () => {
           })
         }
         assert.lengthOf(yield* warned("outsider"), 0)
+        assert.lengthOf(yield* warned("creator"), 0)
       })
     )
   })

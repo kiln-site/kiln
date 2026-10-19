@@ -47,6 +47,11 @@ export const laneKeys = {
   instanceMetadata: (id: string) => `instance:${id}/metadata`,
   /** Web routes, game ports, and the edge proxy shared by every resource. */
   routes: "relay:routes",
+  /**
+   * The node's memory and disk, which instances' limits reserve: checking a
+   * change against the others and applying it happen together.
+   */
+  allocations: "relay:allocations",
   /** The Relay's own Tailscale settings, which every stack runs under. */
   tailscale: "relay:tailscale",
 } as const

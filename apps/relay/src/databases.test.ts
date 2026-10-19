@@ -15,6 +15,7 @@ import {
   TEST_NAMESPACE,
   type RelayHarness,
 } from "./test/relay.js"
+import { DockerEngine } from "./docker-engine.js"
 import { controlRequestLocks } from "./operation-plans.js"
 
 const serverId = "a".repeat(40)
@@ -205,6 +206,63 @@ describe("managed database limits", () => {
       memoryBytes: 512 * MIB,
     })
     expect(databaseContainer(id).state.running).toBe(true)
+  })
+})
+
+describe("managed database replacement recovery", () => {
+  const MIB = 1024 ** 2
+
+  it("never lists a database twice when the old container outlives its replacement", async () => {
+    const harness = await relayHarness()
+    const id = "d".repeat(40)
+    await createDatabase(harness, id)
+    await harness.databases.setLimits({
+      databaseId: id,
+      limits: { memoryBytes: 512 * MIB },
+    })
+    const before = databaseContainer(id).id
+    fakeDocker.failNext({ command: "rm", target: before }, "device busy")
+
+    await harness.databases.setLimits({
+      databaseId: id,
+      limits: { memoryBytes: null },
+    })
+
+    expect(fakeDocker.containers.size).toBe(2)
+    expect(await harness.databases.list()).toHaveLength(1)
+    await harness.databases.recoverReplacements()
+    expect([...fakeDocker.containers.values()]).toEqual([
+      expect.objectContaining({ id: databaseContainer(id).id }),
+    ])
+    expect(databaseContainer(id).id).not.toBe(before)
+  })
+
+  it("puts back a database a restart caught set aside", async () => {
+    const harness = await relayHarness()
+    const id = "d".repeat(40)
+    await createDatabase(harness, id)
+    const original = databaseContainer(id)
+    const engine = new DockerEngine(harness.config.dockerSocket)
+    // As a Relay that stopped right after setting the old container aside.
+    await Effect.runPromise(
+      engine.stopContainer(original.id, {
+        seconds: 1,
+        timeout: 5_000,
+      })
+    )
+    await Effect.runPromise(
+      engine.renameContainer(
+        original.id,
+        `${original.name}-replaced-0000`
+      )
+    )
+    expect(await harness.databases.list()).toHaveLength(0)
+
+    await harness.databases.recoverReplacements()
+
+    expect(databaseContainer(id)).toMatchObject({ id: original.id })
+    expect(databaseContainer(id).state.running).toBe(true)
+    expect(await harness.databases.list()).toHaveLength(1)
   })
 })
 

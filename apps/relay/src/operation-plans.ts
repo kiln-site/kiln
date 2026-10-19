@@ -295,8 +295,12 @@ export function controlRequestLocks(
       return database(databaseLocks, "id")
     case "database.wipe":
     case "database.delete":
-    case "database.action":
     case "database.limits.write":
+      return database((id) => [
+        ...databaseLocks(id),
+        exclusive(laneKeys.allocations),
+      ])
+    case "database.action":
     case "database.credentials.rotate":
     case "database.dump.import":
     case "database.data.write":
