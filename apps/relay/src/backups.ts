@@ -295,19 +295,19 @@ export class BackupManager {
           .run(
             {
               label: `backup.${task.kind}`,
-            // A task that timed out or was cancelled while it waited its turn
-            // mustn't start, a restore least of all.
-            precondition: () => !controller.signal.aborted,
+              // A task that timed out or was cancelled while it waited its turn
+              // mustn't start, a restore least of all.
+              precondition: () => !controller.signal.aborted,
               // A task may name its game server by short ID or name.
-            locks: backupTaskLocks(task.input, (reference) =>
-              /^[a-f0-9]{40}$/u.test(reference)
-                ? reference
-                : recoverPromise(
-                    async () =>
-                      (await this.#findInstance(reference))?.id ?? reference,
-                    () => reference
-                  )
-            ),
+              locks: backupTaskLocks(task.input, (reference) =>
+                /^[a-f0-9]{40}$/u.test(reference)
+                  ? reference
+                  : recoverPromise(
+                      async () =>
+                        (await this.#findInstance(reference))?.id ?? reference,
+                      () => reference
+                    )
+              ),
             },
             this.#execute(task, controller.signal)
           )
@@ -317,9 +317,13 @@ export class BackupManager {
             // and starts once the Relay is resumed.
             Effect.catch((cause) =>
               cause instanceof LaneRejectedError && cause.reason === "paused"
-                ? this.#state
-                    .returnBackupTask(task.taskId, Date.now())
-                    .pipe(Effect.as("paused" as const))
+                ? // Its deadline mustn't cancel it while it goes back.
+                  Fiber.interrupt(timeoutFiber).pipe(
+                    Effect.andThen(
+                      this.#state.returnBackupTask(task.taskId, Date.now())
+                    ),
+                    Effect.as("paused" as const)
+                  )
                 : Effect.fail(cause)
             ),
             Effect.catch((cause) =>
