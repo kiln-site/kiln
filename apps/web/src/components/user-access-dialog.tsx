@@ -36,7 +36,7 @@ import {
   type PermissionTarget,
 } from "@/components/permission-editor"
 import { UserIdentity } from "@/components/user-identity"
-import { stateLabel } from "@/lib/managed-user"
+import { roleLabel, stateLabel } from "@/lib/managed-user"
 import { tryExpandSelections } from "@/lib/permission-nodes"
 import { grantOrInviteAccess, removePlatformAccess } from "@/server/access"
 import {
@@ -523,11 +523,9 @@ function AccessForm({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="none">No platform role</SelectItem>
-              <SelectItem value="relay_creator">Relay creator</SelectItem>
-              <SelectItem value="platform_admin">
-                Platform administrator
-              </SelectItem>
+              <SelectItem value="none">User</SelectItem>
+              <SelectItem value="relay_creator">Relay Creator</SelectItem>
+              <SelectItem value="platform_admin">Kiln Admin</SelectItem>
             </SelectContent>
           </Select>
         ) : null}
@@ -672,15 +670,11 @@ export const UserBadges = memo(function UserBadges({
   user: Pick<ManagedUser, "role" | "invitedRole">
 }) {
   const role =
-    user.role === "admin"
-      ? "Admin"
-      : user.role === "relay_creator"
-        ? "Relay creator"
-        : user.invitedRole === "platform_admin"
-          ? "Invited as admin"
-          : user.invitedRole === "relay_creator"
-            ? "Invited as Relay creator"
-            : null
+    user.role === "admin" || user.role === "relay_creator"
+      ? roleLabel(user.role)
+      : user.invitedRole
+        ? `Invited as ${roleLabel(user.invitedRole)}`
+        : null
   return role ? (
     <Badge
       variant="outline"
@@ -840,8 +834,8 @@ function AccountPanel({
         </AccountSection>
         <AccountSection title="Platform role">
           <p className="type-support text-muted-foreground">
-            Administrators manage everything in Kiln. Relay creators can pair
-            new Relays.
+            Kiln Admins manage everything in Kiln. Relay Creators can pair new
+            Relays. Users only have the access granted to them.
           </p>
           <PlatformRoleControl
             key={`${user.role}:${platformInvitationIds.join()}`}
@@ -928,9 +922,9 @@ function PlatformRoleControl({
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="none">No platform role</SelectItem>
-          <SelectItem value="relay_creator">Relay creator</SelectItem>
-          <SelectItem value="platform_admin">Platform administrator</SelectItem>
+          <SelectItem value="none">User</SelectItem>
+          <SelectItem value="relay_creator">Relay Creator</SelectItem>
+          <SelectItem value="platform_admin">Kiln Admin</SelectItem>
         </SelectContent>
       </Select>
       <Button

@@ -58,13 +58,13 @@ import { DataTable } from "@/components/data-table-view"
 import {
   DataTableActionGroup,
   DataTableEmptyState,
-  DataTableTextCell,
 } from "@/components/data-table"
 import {
   DataTableToolbar,
   DataTableWorkspace,
 } from "@/components/data-table-workspace"
-import { UserAccessDialog, UserBadges } from "@/components/user-access-dialog"
+import { RelativeTime } from "@/components/relative-time"
+import { UserAccessDialog } from "@/components/user-access-dialog"
 import {
   UserActionButton,
   UserProfilesContext,
@@ -80,7 +80,7 @@ import {
   type DataTableSearchStore,
 } from "@/lib/data-table-search"
 import { useCursorDataTableSource } from "@/lib/data-table-source"
-import { stateLabel } from "@/lib/managed-user"
+import { roleLabel, stateLabel } from "@/lib/managed-user"
 import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
 import {
   grantOrInviteAccess,
@@ -103,6 +103,7 @@ const pageSize = 50
 const helper = createDataTableColumnHelper<ManagedUser>()
 const userKey = (user: ManagedUser) => user.id
 const NO_PROFILES: Record<string, string> = {}
+const initialTableState = { sorting: [{ id: "role", desc: false }] }
 
 type UserAction =
   | { kind: "manage"; userId: string; profileId?: string }
@@ -200,6 +201,18 @@ const UserTable = memo(function UserTable({
       defineDataTable({
         ariaLabel: "Users",
         columns: helper.columns([
+          helper.accessor((user) => stateLabel(user), {
+            id: "status",
+            header: () => (
+              <span className="sr-only sm:not-sr-only">Status</span>
+            ),
+            sortFn: "text",
+            cell: ({ row }) => <UserState user={row.original} />,
+            meta: dataTableColumnMeta(
+              { width: { base: "2rem", sm: "7rem" } },
+              { cellClassName: "pr-0", headerClassName: "pr-0" }
+            ),
+          }),
           helper.accessor("name", {
             header: "User",
             sortFn: "text",
@@ -207,15 +220,17 @@ const UserTable = memo(function UserTable({
               <UserCell user={row.original} onAction={onAction} />
             ),
             meta: dataTableColumnMeta({
-              width: { base: "minmax(0,1fr)", md: "minmax(0,1.6fr)" },
+              width: { base: "minmax(0,1fr)", md: "minmax(0,1.5fr)" },
             }),
           }),
-          helper.accessor((user) => stateLabel(user), {
-            id: "status",
-            header: "Status",
+          // Labels sort Kiln Admin, Relay Creator, User, so the default
+          // ascending sort puts admins first.
+          helper.accessor((user) => roleLabel(user.role), {
+            id: "role",
+            header: "Role",
             sortFn: "text",
-            cell: ({ row }) => <UserState user={row.original} />,
-            meta: dataTableColumnMeta({ hideBelow: "sm", width: "8.5rem" }),
+            cell: ({ row }) => <UserRole user={row.original} />,
+            meta: dataTableColumnMeta({ hideBelow: "sm", width: "9rem" }),
           }),
           helper.display({
             id: "instances",
@@ -226,14 +241,19 @@ const UserTable = memo(function UserTable({
             ),
             meta: dataTableColumnMeta({
               hideBelow: "md",
-              width: "minmax(11rem,1.2fr)",
+              width: "minmax(13rem,1.2fr)",
             }),
           }),
           helper.accessor("createdAt", {
             header: "Added",
             sortFn: "text",
             cell: ({ row }) => (
-              <DataTableTextCell value={row.original.createdAt.slice(0, 10)} />
+              // Positioned so it paints above the row's open button and its
+              // full date shows on hover.
+              <RelativeTime
+                className="type-meta relative text-foreground"
+                timestamp={Date.parse(row.original.createdAt)}
+              />
             ),
             meta: dataTableColumnMeta({ hideBelow: "xl", width: "8rem" }),
           }),
@@ -258,6 +278,7 @@ const UserTable = memo(function UserTable({
         ]),
         getRowId: userKey,
         getRowClassName: () => "relative cursor-pointer",
+        model: { initialState: initialTableState },
         virtualization: true,
       }),
     [onAction, selfId]
@@ -298,18 +319,27 @@ const UserCell = memo(function UserCell({
       email={user.email}
       openLabel={`Manage ${user.name}`}
       onOpen={() => onAction({ kind: "manage", userId: user.id, profileId })}
-      accessory={
-        <>
-          <UserBadges user={user} />
-          {/* The Status column is hidden on phones. */}
-          {user.state === "active" ? null : (
-            <span className="sm:hidden">
-              <UserState user={user} />
-            </span>
-          )}
-        </>
-      }
     />
+  )
+})
+
+const UserRole = memo(function UserRole({ user }: { user: ManagedUser }) {
+  return (
+    <span className="min-w-0">
+      <span
+        className={cn(
+          "type-meta block truncate",
+          user.role === "admin" ? "font-medium text-primary" : "text-foreground"
+        )}
+      >
+        {roleLabel(user.role)}
+      </span>
+      {user.invitedRole && user.role !== "admin" ? (
+        <span className="type-meta block truncate text-muted-foreground">
+          Invited as {roleLabel(user.invitedRole)}
+        </span>
+      ) : null}
+    </span>
   )
 })
 
@@ -326,7 +356,9 @@ const UserState = memo(function UserState({ user }: { user: ManagedUser }) {
         aria-hidden
         className={cn("size-1.5 shrink-0 rounded-full", stateDot[user.state])}
       />
-      <span className="truncate">{stateLabel(user)}</span>
+      <span className="sr-only truncate sm:not-sr-only">
+        {stateLabel(user)}
+      </span>
     </span>
   )
 })
@@ -706,7 +738,7 @@ function AcceptInvitationsDialog({
           <DialogDescription>
             They get this access right away, without accepting it themselves.
             {user.invitedRole
-              ? ` That includes the ${user.invitedRole === "platform_admin" ? "platform administrator" : "Relay creator"} role.`
+              ? ` That includes the ${roleLabel(user.invitedRole)} role.`
               : ""}
           </DialogDescription>
         </DialogHeader>

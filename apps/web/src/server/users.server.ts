@@ -127,7 +127,11 @@ export async function listManagedUsersHandler(
          ORDER BY i.created_at DESC LIMIT 1) AS invitedRole
        FROM ${databaseTable("user")} u
       WHERE ${clauses.join(" AND ")}
-      ORDER BY u.createdAt DESC, u.id LIMIT ? OFFSET ?`,
+      -- Kiln Admins, then Relay Creators, then everyone else, newest first:
+      -- the order the Users table sorts by default, so pages arrive in it.
+      ORDER BY FIELD(COALESCE(u.role, 'user'), 'admin', 'relay_creator') = 0,
+               FIELD(COALESCE(u.role, 'user'), 'admin', 'relay_creator'),
+               u.createdAt DESC, u.id LIMIT ? OFFSET ?`,
     [now, ...values, data.limit + 1, data.offset]
   )
   const page = rows.slice(0, data.limit)
