@@ -446,6 +446,8 @@ export class DockerDriver {
   readonly #consoleSizeStarts = new Map<string, string>()
   readonly #consoleSizePending = new Map<string, Promise<void>>()
   readonly #diskUsageCache = new Map<string, DiskUsageCacheEntry>()
+  // Servers with a quota stop waiting for or holding their lane.
+  readonly #quotaStops = new Set<string>()
   readonly #engine: DockerEngine
   readonly #powerTransitions = new Map<string, InstancePowerTransition>()
   readonly #runtimeRecovery: RuntimeRecoveryManager
@@ -2255,74 +2257,87 @@ export class DockerDriver {
           current.config.limits.diskBytes,
           current.container.State.Running
         )
+      const quotaStops = this.#quotaStops
       // Stops in the server's power lane, so it can't interleave with a
-      // start or console input, and looks again once its turn comes.
-      const stopOverQuota = (usedBytes: number) =>
-        Effect.gen(function* () {
-          const current = yield* promiseEffect(findCurrent).pipe(
-            Effect.catch(() => Effect.succeed(null))
+      // start or console input, and measures again once its turn comes.
+      const stopOverQuota = Effect.gen(function* () {
+        const usedBytes = yield* directoryApparentSizeEffect(directory)
+        cached.usedBytes = usedBytes
+        const current = yield* promiseEffect(findCurrent).pipe(
+          Effect.catch(() => Effect.succeed(null))
+        )
+        if (!exceeded(current, usedBytes)) return
+        yield* Effect.sync(() => {
+          console.warn(
+            `Stopping ${current.config.name}: disk usage exceeded its configured quota`
           )
-          if (!exceeded(current, usedBytes)) return
-          yield* Effect.sync(() => {
-            console.warn(
-              `Stopping ${current.config.name}: disk usage exceeded its configured quota`
-            )
-          })
-          // Record the stop as intended so crash recovery doesn't start the
-          // server again while it's still over quota. Stopping matters more
-          // than the record, so a failed write doesn't prevent it.
-          const recorded = current.config.managedByRelay
-            ? yield* runtimeRecovery
-                .recordPowerAction(current.config.id, "stop")
-                .pipe(
-                  Effect.map((previous) => ({ previous })),
-                  Effect.catch((cause) =>
-                    Effect.sync(() => {
-                      reportRelayError(cause, {
-                        operation: "relay.quota.recordStop",
-                      })
-                      return null
-                    })
-                  )
-                )
-            : null
-          yield* engine
-            .stopContainer(current.config.service, {
-              seconds: INSTANCE_STOP_TIMEOUT_SECONDS,
-              timeout: (INSTANCE_STOP_TIMEOUT_SECONDS + 15) * 1_000,
-            })
-            .pipe(
-              // A stop Docker refused leaves the server running as before.
-              Effect.onError(() =>
-                recorded
-                  ? runtimeRecovery
-                      .restore(current.config.id, recorded.previous)
-                      .pipe(Effect.ignore)
-                  : Effect.void
-              )
-            )
         })
+        // Record the stop as intended so crash recovery doesn't start the
+        // server again while it's still over quota. Stopping matters more
+        // than the record, so a failed write doesn't prevent it.
+        const recorded = current.config.managedByRelay
+          ? yield* runtimeRecovery
+              .recordPowerAction(current.config.id, "stop")
+              .pipe(
+                Effect.map((previous) => ({ previous })),
+                Effect.catch((cause) =>
+                  Effect.sync(() => {
+                    reportRelayError(cause, {
+                      operation: "relay.quota.recordStop",
+                    })
+                    return null
+                  })
+                )
+              )
+          : null
+        yield* engine
+          .stopContainer(current.config.service, {
+            seconds: INSTANCE_STOP_TIMEOUT_SECONDS,
+            timeout: (INSTANCE_STOP_TIMEOUT_SECONDS + 15) * 1_000,
+          })
+          .pipe(
+            // A stop Docker refused leaves the server running as before.
+            Effect.onError(() =>
+              recorded
+                ? runtimeRecovery
+                    .restore(current.config.id, recorded.previous)
+                    .pipe(Effect.ignore)
+                : Effect.void
+            )
+          )
+      })
       const refresh = Effect.gen(function* () {
         const usedBytes = yield* directoryApparentSizeEffect(directory)
         cached.usedBytes = usedBytes
         const current = yield* promiseEffect(findCurrent).pipe(
           Effect.catch(() => Effect.succeed(null))
         )
-        if (exceeded(current, usedBytes)) {
+        if (
+          exceeded(current, usedBytes) &&
+          !quotaStops.has(current.config.id)
+        ) {
           // Waits for its lane apart from the scan, so a server busy
-          // reinstalling doesn't hold up every other server's scan.
+          // reinstalling doesn't hold up every other server's scan. One
+          // waits per server at a time.
+          const instanceId = current.config.id
+          quotaStops.add(instanceId)
           yield* lanes
             .run(
               {
                 label: "quota.stop",
-                locks: instanceLifecycleLocks(current.config.id),
+                locks: instanceLifecycleLocks(instanceId),
               },
-              stopOverQuota(usedBytes)
+              stopOverQuota
             )
             .pipe(
               Effect.catch((cause) =>
                 Effect.sync(() => {
                   reportRelayError(cause, { operation: "relay.quota.stop" })
+                })
+              ),
+              Effect.ensuring(
+                Effect.sync(() => {
+                  quotaStops.delete(instanceId)
                 })
               ),
               Effect.forkDetach

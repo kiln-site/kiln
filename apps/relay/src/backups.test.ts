@@ -595,6 +595,70 @@ describe("Relay archive restores", () => {
     )
   )
 
+  it.effect("doesn't restore after timing out while it waited its turn", () =>
+    withRelay("kiln-backup-restore-expired-", ({ config, root }) =>
+      Effect.gen(function* () {
+        yield* Effect.promise(() =>
+          writeFile(resolve(root, "server.txt"), "old")
+        )
+        const lanes = new OperationLanes()
+        const manager = yield* backupManager(
+          { ...config, backupTimeoutMs: 10 },
+          async () => testInstance(),
+          lanes
+        )
+        const input = backupInput(8)
+        const created = archiveResult(yield* runTask(manager, input))
+        yield* Effect.promise(() =>
+          writeFile(resolve(root, "server.txt"), "new")
+        )
+
+        const release = yield* Deferred.make<void>()
+        const save = yield* lanes
+          .run(
+            { label: "save", locks: instanceFileLocks("instance-1") },
+            Deferred.await(release)
+          )
+          .pipe(Effect.forkChild({ startImmediately: true }))
+        const restoreTaskId = "20000000-0000-4000-8000-000000000008"
+        yield* manager.enqueue({
+          backupId: input.backupId,
+          kind: "restore",
+          source: {
+            bytes: created.bytes,
+            checksumSha256: created.checksumSha256,
+            kind: "local",
+          },
+          target: { id: "instance-1", kind: "instance" },
+          taskId: restoreTaskId,
+        })
+        const restoring = yield* manager
+          .runPending()
+          .pipe(Effect.forkChild({ startImmediately: true }))
+        yield* Effect.promise(() =>
+          vi.waitFor(() => assert.strictEqual(lanes.pending.waiting, 1))
+        )
+
+        // It times out still waiting, then its turn comes.
+        yield* TestClock.adjust("10 millis")
+        yield* Deferred.succeed(release, undefined)
+        yield* Fiber.join(save)
+        yield* Fiber.join(restoring)
+
+        assert.strictEqual(
+          (yield* manager.get(restoreTaskId))?.status,
+          "failed"
+        )
+        assert.strictEqual(
+          yield* Effect.promise(() =>
+            readFile(resolve(root, "server.txt"), "utf8")
+          ),
+          "new"
+        )
+      })
+    )
+  )
+
   it.effect("finishes a journaled directory swap after Relay restart", () =>
     Effect.gen(function* () {
       const directory = yield* scratchDirectory("kiln-backup-recovery-")

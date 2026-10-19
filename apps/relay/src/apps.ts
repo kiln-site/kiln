@@ -42,7 +42,7 @@ import {
   promiseEffect,
 } from "./effect/promise.js"
 import { traceRelayPromise } from "./effect/runtime.js"
-import { LaneRejectedError, type OperationLanes } from "./operation-lanes.js"
+import type { OperationLanes } from "./operation-lanes.js"
 import { appLifecycleLocks } from "./operation-plans.js"
 import {
   APP_SERVICE,
@@ -295,19 +295,8 @@ export class AppDriver {
             {
               label: "app.deployment",
               locks: appLifecycleLocks(input.appId),
-              // A delete that ran first aborted it; it mustn't recreate the
-              // App it removed.
-              precondition: () => !deployment.abort.signal.aborted,
             },
             promiseEffect(() => this.#runDeployment(input, deployment))
-          )
-          .pipe(
-            Effect.catchIf(
-              (cause) =>
-                cause instanceof LaneRejectedError &&
-                cause.reason === "superseded",
-              () => Effect.void
-            )
           )
       )
     )
@@ -589,6 +578,11 @@ export class AppDriver {
     const outcome = await Effect.runPromise(
       Effect.result(
         promiseEffect(async () => {
+          // A delete aborted it while it waited its turn, and may have
+          // removed the App; it mustn't recreate it.
+          if (deployment.abort.signal.aborted) {
+            throw new Error("The deployment was cancelled")
+          }
           const { config } = input
           log(`Deploying ${input.name} (deployment ${deployment.id})`)
           log(`Source: ${describeSource(config)}`)
@@ -620,8 +614,10 @@ export class AppDriver {
       state: message === null ? ("succeeded" as const) : ("failed" as const),
     }
     // Saved before it shows as finished, so a finished deployment's log is
-    // always on disk.
-    await this.#saveDeployment(input.appId, { ...deployment, ...finished })
+    // always on disk. One whose App was deleted leaves nothing behind.
+    if (this.#deployments.get(input.appId) === deployment) {
+      await this.#saveDeployment(input.appId, { ...deployment, ...finished })
+    }
     Object.assign(deployment, finished)
     this.#wake(input.appId)
   }

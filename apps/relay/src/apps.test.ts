@@ -492,6 +492,42 @@ describe("apps", () => {
     expect(appContainers()).toHaveLength(0)
   })
 
+  it("finishes a deployment a withdrawn delete aborted, so the next one can run", async () => {
+    const harness = await createdApp()
+    let releaseDeploy: () => void = () => undefined
+    const deployRequest = Effect.runPromise(
+      harness.lanes.run(
+        { label: "app.deploy", locks: appLifecycleLocks(appId) },
+        Effect.promise(
+          () =>
+            new Promise<void>((resolve) => {
+              releaseDeploy = resolve
+            })
+        )
+      )
+    )
+    await harness.apps.deploy(
+      relayDeployAppSchema.parse({
+        appId,
+        config: { ...defaultAppConfig, image: "nginx:alpine" },
+        name: "Website",
+      })
+    )
+    // A delete stops the deployment, then is withdrawn before it runs.
+    harness.apps.abortDeployment(appId)
+    releaseDeploy()
+    await deployRequest
+    await vi.waitFor(async () =>
+      expect((await harness.apps.get(appId)).deployment).toMatchObject({
+        error: "The deployment was cancelled",
+        state: "failed",
+      })
+    )
+
+    const app = await deploy(harness, {})
+    expect(app.deployment).toMatchObject({ state: "succeeded" })
+  })
+
   it("removes an app's containers, network, and data when deleted", async () => {
     const harness = await createdApp()
     await deploy(harness, {})
