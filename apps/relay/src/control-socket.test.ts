@@ -710,6 +710,41 @@ describe("Relay control socket", () => {
       })
     })
 
+    it("runs a change once when its repeat claims the ID first", async () => {
+      const slowLookup = deferred<void>()
+      const clientLookups: Array<Promise<void>> = []
+      let runs = 0
+      const relay = await startRelay({
+        clientLookups,
+        execute: async () => {
+          runs += 1
+          return { runs }
+        },
+      })
+      const hearth = await relay.pair()
+      const first = await relay.connect(hearth, { features })
+      const second = await relay.connect(hearth, { features })
+      const operationId = randomUUID()
+      const payload = { action: "restart", instanceId }
+
+      // The first is first in line but slower to be checked, so its repeat
+      // claims the ID and then waits its turn behind it.
+      clientLookups.push(slowLookup.promise)
+      sendRequest(first.socket, "instance.action", payload, { operationId })
+      await vi.waitFor(() => expect(clientLookups).toHaveLength(0))
+      sendRequest(second.socket, "instance.action", payload, { operationId })
+      await vi.waitFor(async () =>
+        expect(await lookup(relay, hearth, operationId)).toEqual({
+          status: "running",
+        })
+      )
+      slowLookup.resolve()
+
+      expect(await first.inbox.next()).toMatchObject({ payload: { runs: 1 } })
+      expect(await second.inbox.next()).toMatchObject({ payload: { runs: 1 } })
+      expect(runs).toBe(1)
+    })
+
     it("refuses each of two requests that reuse a journaled change's ID at once", async () => {
       const journalRead = deferred<void>()
       const relay = await startRelay({
@@ -1263,6 +1298,8 @@ async function startRelay(
     readonly beforeRun?: ControlSocketOptions["beforeRun"]
     /** Holds reads of the operation journal until it settles, as a slow disk would. */
     readonly journalReads?: Promise<void>
+    /** Each request's client lookup waits for the next of these, if any. */
+    readonly clientLookups?: Array<Promise<void>>
   } = {}
 ) {
   const directory = mkdtempSync(join(tmpdir(), "kiln-relay-control-"))
@@ -1307,15 +1344,23 @@ async function startRelay(
     initialSnapshot: options.initialSnapshot ?? (async () => initialSnapshot),
     runEffect: (effect) => runtime.runPromise(effect),
     server,
-    state: options.journalReads
-      ? {
-          ...state,
-          getOperation: (clientId, operationId) =>
-            Effect.promise(() => options.journalReads!).pipe(
+    state: {
+      ...state,
+      findClientById: (clientId) => {
+        const lookup = options.clientLookups?.shift()
+        return lookup
+          ? Effect.promise(() => lookup).pipe(
+              Effect.andThen(state.findClientById(clientId))
+            )
+          : state.findClientById(clientId)
+      },
+      getOperation: (clientId, operationId) =>
+        options.journalReads
+          ? Effect.promise(() => options.journalReads!).pipe(
               Effect.andThen(state.getOperation(clientId, operationId))
-            ),
-        }
-      : state,
+            )
+          : state.getOperation(clientId, operationId),
+    },
     subscribeSnapshots: (listener) => {
       listeners.add(listener)
       return () => listeners.delete(listener)

@@ -776,6 +776,9 @@ function authenticateSocket(
       })
     const live = operations.running.get(key)
     if (live) {
+      // A repeat gives up its place in line before waiting: the change may
+      // be waiting behind it.
+      ticket?.cancel()
       // Until the journal is read, the request that claimed the ID may not
       // be the one that made the change under it.
       return live.digest !== null && live.digest !== digest
