@@ -61,8 +61,13 @@ Each run:
    absent or unchanged since Kiln wrote it. The put carries the modification
    time Kiln recorded (or none), and the Relay checks it as it commits the
    upload: a new file is linked into place, which fails if one appeared, and
-   a replacement re-checks the time just before its rename. Anything else is
+   a replacement re-checks the time just before its rename. When that check
+   fails, the Relay reports the file's Git blob ID. Content Kiln is writing,
+   last wrote, or set out to write is still Kiln's file; anything else is
    someone's file or edit, so it's kept and counted in the sync's warning.
+   Kiln records each write before attempting it (`pending` in
+   `synced_files`), so a write that landed with its reply lost is still
+   recognized on a later run, even after the branch moves on.
 
 Files deleted from the repository stay on the instance. Files larger than
 512 KB are skipped with a warning, since each write is one Relay control

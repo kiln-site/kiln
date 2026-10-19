@@ -1819,12 +1819,12 @@ export const relayFilePutResultSchema = z.union([
       conflict: z.literal(true),
       current: z
         .object({
-          modifiedAt: z.number().int().nonnegative(),
-          /** Null for a file too large to hash. */
-          sha256: z
+          /** The content's Git blob ID; null for a file too large to hash. */
+          blob: z
             .string()
-            .regex(/^[a-f0-9]{64}$/u)
+            .regex(/^[a-f0-9]{40}$/u)
             .nullable(),
+          modifiedAt: z.number().int().nonnegative(),
         })
         .strict()
         .nullable(),

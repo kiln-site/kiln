@@ -33,8 +33,9 @@ const decodeSyncedFiles = Schema.decodeUnknownOption(
     Schema.Union([
       Schema.String,
       Schema.Struct({
-        blob: Schema.String,
+        blob: Schema.NullOr(Schema.String),
         modifiedAt: Schema.NullOr(Schema.Number),
+        pending: Schema.optionalKey(Schema.Array(Schema.String)),
       }),
     ])
   )
@@ -50,9 +51,12 @@ export type GitHubSyncResourceKind = "app" | "instance" | "relay"
 
 /** A file Kiln wrote, as it left it. */
 export interface GitHubSyncedFile {
-  blob: string
+  /** The blob Kiln last wrote there; null before a write completed. */
+  blob: string | null
   /** Null when the file was written before Kiln recorded it. */
   modifiedAt: number | null
+  /** Blobs Kiln set out to write there, whose result it hasn't recorded. */
+  pending?: ReadonlyArray<string>
 }
 
 export interface GitHubInstallationRecord {
@@ -558,7 +562,7 @@ export const recordGitHubSyncResultEffect = Effect.fn("github.sync.record")(
         }
       | {
           error: string
-          /** Files a run wrote before failing. */
+          /** The run's file records, including writes it attempted. */
           syncedFiles?: Record<string, GitHubSyncedFile>
         }
   ) {
@@ -571,8 +575,8 @@ export const recordGitHubSyncResultEffect = Effect.fn("github.sync.record")(
         : result.commitMessage.split("\n", 1)[0]!.slice(0, 255)
     if ("error" in result) {
       // Files written before the failure stay recorded, so a retry doesn't
-      // write them again. Having written some, the instance is no longer at
-      // the last synced commit, so the next poll syncs again.
+      // write them again. Having maybe written some, the instance may no
+      // longer be at the last synced commit, so the next poll syncs again.
       if (result.syncedFiles) {
         yield* database.execute(
           "github.sync.recordFiles",
@@ -646,6 +650,20 @@ export const recordGitHubSyncResultEffect = Effect.fn("github.sync.record")(
       [id, id]
     )
     return true
+  }
+)
+
+/** Saves which files a run is about to write, before it writes them. */
+export const saveGitHubSyncedFilesEffect = Effect.fn("github.sync.saveFiles")(
+  function* (id: string, syncedFiles: Record<string, GitHubSyncedFile>) {
+    const database = yield* Database
+    yield* database.execute(
+      "github.sync.saveFiles",
+      `UPDATE ${databaseTable("github_sync")}
+          SET synced_files = ?
+        WHERE id = ?`,
+      [JSON.stringify(syncedFiles), id]
+    )
   }
 )
 

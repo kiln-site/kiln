@@ -686,9 +686,10 @@ describeLinux("Relay direct file transfers", () => {
           "motd=instance\n"
         )
         // What's there, so a caller can tell its own write from an edit.
+        // The Git blob ID `git hash-object` gives this content.
         assert.strictEqual(
-          (yield* driver.fingerprint(instance, "server.properties"))?.sha256,
-          createHash("sha256").update("motd=instance\n").digest("hex")
+          (yield* driver.fingerprint(instance, "server.properties"))?.blob,
+          createHash("sha1").update("blob 14\0motd=instance\n").digest("hex")
         )
         assert.isNull(yield* driver.fingerprint(instance, "missing.properties"))
 

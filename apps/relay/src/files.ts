@@ -1116,9 +1116,9 @@ export class FilesystemDriver {
   }
 
   /**
-   * A file's content hash and modification time in whole milliseconds, or
-   * null when it doesn't exist or isn't a regular file. Files over 8 MiB
-   * aren't hashed.
+   * A file's Git blob ID, as Git hashes its content, and its modification
+   * time in whole milliseconds; null when it doesn't exist or isn't a
+   * regular file. Files over 8 MiB aren't hashed.
    */
   fingerprint(instance: FileRoot, requestedPath: string) {
     return this.#existingFile(instance, requestedPath).pipe(
@@ -1128,10 +1128,13 @@ export class FilesystemDriver {
           const content =
             metadata.size > MAX_FINGERPRINT_BYTES ? null : await readFile(path)
           return {
-            modifiedAt: Math.floor(metadata.mtimeMs),
-            sha256: content
-              ? createHash("sha256").update(content).digest("hex")
+            blob: content
+              ? createHash("sha1")
+                  .update(`blob ${content.byteLength}\0`)
+                  .update(content)
+                  .digest("hex")
               : null,
+            modifiedAt: Math.floor(metadata.mtimeMs),
           }
         })
       ),

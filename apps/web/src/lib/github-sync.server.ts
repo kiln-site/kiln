@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto"
 import { posix } from "node:path"
 
 import {
@@ -28,6 +27,7 @@ import {
   loadPolledGitHubSyncsEffect,
   recordGitHubSyncResultEffect,
   restoreGitHubSyncEffect,
+  saveGitHubSyncedFilesEffect,
   type GitHubSyncTrigger,
   setGitHubSyncStatusEffect,
 } from "@/effect/github-sync"
@@ -42,6 +42,8 @@ import { listPersistedRelaysEffect } from "@/lib/relay-registry"
 const maxSyncedFileBytes = 512 * 1024
 const maxSyncedFiles = 2_000
 const pollInterval = "1 minute"
+// Unconfirmed writes remembered per file, should several runs fail.
+const maxPendingWrites = 5
 
 export function publishGitHubSyncChange(): void {
   publishRealtimeChange({
@@ -180,87 +182,128 @@ const runGitHubSyncEffect = Effect.fn("github.sync.run")(function* (
   })
   if (!access) return yield* fail("This sync's instance doesn't exist")
   const fileRootId = access.fileRootId
-  const syncedFiles = { ...sync.syncedFiles }
+  const recorded = sync.syncedFiles
+  const syncedFiles = { ...recorded }
   let changed = 0
   let skipped = 0
   let kept = 0
-  for (const file of files) {
-    const previous = syncedFiles[file.target]
-    if (previous?.blob === file.sha) continue
+  const toWrite = files.filter((file) => {
+    if (recorded[file.target]?.blob === file.sha) return false
     if (file.size > maxSyncedFileBytes) {
       skipped += 1
-      continue
+      return false
     }
+    return true
+  })
+  // Each write is recorded before it's attempted, so a write that lands
+  // with its reply lost is still recognized as Kiln's on a later run.
+  if (toWrite.length > 0) {
+    for (const file of toWrite) {
+      const entry = recorded[file.target]
+      syncedFiles[file.target] = {
+        blob: entry?.blob ?? null,
+        modifiedAt: entry?.modifiedAt ?? null,
+        // Earlier attempts stay until one is confirmed.
+        pending: [...new Set([...(entry?.pending ?? []), file.sha])].slice(
+          -maxPendingWrites
+        ),
+      }
+    }
+    yield* saveGitHubSyncedFilesEffect(sync.id, syncedFiles)
+  }
+
+  const putFile = (
+    target: string,
+    content: Buffer,
+    unlessModifiedSince: number | null | undefined
+  ) =>
+    Effect.tryPromise({
+      try: () =>
+        relayRpc(
+          relay,
+          "instance.files.put",
+          {
+            contentBase64: content.toString("base64"),
+            instanceId: fileRootId,
+            path: target,
+            ...(unlessModifiedSince === undefined
+              ? {}
+              : { unlessModifiedSince }),
+          },
+          30_000,
+          sync.createdBy
+        ),
+      catch: (cause) =>
+        new Error(`Couldn't write ${target}: ${syncFailureMessage(cause)}`),
+    }).pipe(Effect.map((result) => relayFilePutResultSchema.parse(result)))
+
+  for (const file of toWrite) {
+    const previous = recorded[file.target]
     const written = yield* getGitHubBlobEffect(
       token,
       sync.repository,
       file.sha
     ).pipe(
       Effect.flatMap((content) =>
-        Effect.tryPromise({
-          try: () =>
-            relayRpc(
-              relay,
-              "instance.files.put",
-              {
-                contentBase64: content.toString("base64"),
-                instanceId: fileRootId,
-                path: file.target,
-                // Without overwrite, only a file Kiln left as it was, or
-                // none, is written; anything else is someone's edit.
-                ...(sync.overwrite
-                  ? {}
-                  : { unlessModifiedSince: previous?.modifiedAt ?? null }),
-              },
-              30_000,
-              sync.createdBy
-            ),
-          catch: (cause) =>
-            new Error(
-              `Couldn't write ${file.target}: ${syncFailureMessage(cause)}`
-            ),
-        }).pipe(
-          Effect.map((result) => ({
-            result: relayFilePutResultSchema.parse(result),
-            sha256: createHash("sha256").update(content).digest("hex"),
-          }))
+        // Without overwrite, only a file Kiln left as it was, or none, is
+        // written; anything else is someone's edit.
+        putFile(
+          file.target,
+          content,
+          sync.overwrite ? undefined : (previous?.modifiedAt ?? null)
+        ).pipe(
+          Effect.flatMap((result) => {
+            if (!result.conflict) return Effect.succeed(result)
+            const current = result.current?.blob
+            // Content Kiln wrote, or tried to write, is still Kiln's file,
+            // however its time changed: replace it as it now stands.
+            const ours =
+              current !== undefined &&
+              current !== null &&
+              current !== file.sha &&
+              (current === previous?.blob ||
+                (previous?.pending?.includes(current) ?? false))
+            return ours
+              ? putFile(file.target, content, result.current!.modifiedAt)
+              : Effect.succeed(result)
+          })
         )
       ),
       Effect.result
     )
     if (written._tag === "Failure") {
+      // The records, pending writes included, outlast the failure; the
+      // instance may no longer be at the last synced commit.
       return yield* recordGitHubSyncResultEffect(sync.id, run, {
         error: syncFailureMessage(written.failure),
-        // Files this run wrote before failing; the instance is no longer at
-        // the last synced commit.
-        ...(changed > 0 ? { syncedFiles } : {}),
+        syncedFiles,
       }).pipe(
-        Effect.tap((recorded) =>
+        Effect.tap((recordedResult) =>
           Effect.sync(() => {
-            if (recorded) publishGitHubSyncChange()
+            if (recordedResult) publishGitHubSyncChange()
           })
         )
       )
     }
-    const { result, sha256 } = written.success
-    if (result.conflict) {
-      // Already the repository's content, as when Kiln's earlier write
-      // landed but its reply was lost: Kiln's file again, not someone's edit.
-      if (result.current?.sha256 === sha256) {
-        syncedFiles[file.target] = {
-          blob: file.sha,
-          modifiedAt: result.current.modifiedAt,
-        }
-      } else {
-        kept += 1
+    const result = written.success
+    if (!result.conflict) {
+      syncedFiles[file.target] = {
+        blob: file.sha,
+        modifiedAt: Date.parse(result.modifiedAt),
       }
-      continue
+      changed += 1
+    } else if (result.current?.blob === file.sha) {
+      // Already the repository's content, as when Kiln's earlier write
+      // landed but its reply was lost.
+      syncedFiles[file.target] = {
+        blob: file.sha,
+        modifiedAt: result.current.modifiedAt,
+      }
+    } else {
+      kept += 1
+      if (previous) syncedFiles[file.target] = previous
+      else delete syncedFiles[file.target]
     }
-    syncedFiles[file.target] = {
-      blob: file.sha,
-      modifiedAt: Date.parse(result.modifiedAt),
-    }
-    changed += 1
   }
 
   const warnings: Array<string> = []
