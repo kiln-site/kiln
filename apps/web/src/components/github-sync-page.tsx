@@ -27,7 +27,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
 import { showToast } from "@workspace/ui/components/sonner"
@@ -414,7 +413,7 @@ const SyncTable = React.memo(function SyncTable({
               />
             ),
             meta: dataTableColumnMeta(
-              { width: { base: "10.25rem", sm: "10.5rem" } },
+              { width: { base: "12.25rem", sm: "12.5rem" } },
               {
                 cellClassName: "px-1 sm:px-2",
                 headerClassName: "px-1 sm:px-2",
@@ -626,33 +625,34 @@ function SyncLatestCommit({ sync }: { sync: GitHubSyncView }) {
       timestamp={Date.parse(sync.lastSyncedAt)}
     />
   )
+  // The change count gives way first, so a narrow cell keeps the time.
   const details = (
     <>
       {syncedAt}
       {sync.status === "success" ? (
-        <>
+        <span className="inline-flex min-w-0 items-center gap-1.5 overflow-hidden">
           <span aria-hidden="true">·</span>
           {sync.lastChangedCount === 0 ? (
             <span className="truncate">up to date</span>
           ) : (
             <span
-              className="inline-flex shrink-0 items-center gap-1"
+              className="inline-flex items-center gap-1"
               title={`${sync.lastChangedCount} ${sync.lastChangedCount === 1 ? "file" : "files"} updated`}
             >
-              <Files className="size-3" aria-hidden="true" />
+              <Files className="size-3 shrink-0" aria-hidden="true" />
               <span className="tabular-nums">{sync.lastChangedCount}</span>
               <span className="sr-only">
                 {sync.lastChangedCount === 1 ? "file" : "files"} updated
               </span>
             </span>
           )}
-        </>
+        </span>
       ) : null}
     </>
   )
   if (!sync.lastCommitSha) {
     return (
-      <span className="type-meta flex min-w-0 items-center gap-1.5 text-muted-foreground">
+      <span className="type-meta flex min-w-0 items-center gap-1.5 overflow-hidden text-muted-foreground">
         {details}
       </span>
     )
@@ -667,7 +667,7 @@ function SyncLatestCommit({ sync }: { sync: GitHubSyncView }) {
       <span className="block truncate text-xs font-medium text-foreground transition-colors group-hover/commit-link:text-primary">
         {sync.lastCommitMessage?.split("\n", 1)[0] || "No commit message"}
       </span>
-      <span className="type-meta flex min-w-0 items-center gap-1.5 text-muted-foreground">
+      <span className="type-meta flex min-w-0 items-center gap-1.5 overflow-hidden text-muted-foreground">
         <GitCommitHorizontal
           className="size-3 shrink-0 text-primary"
           aria-hidden="true"
@@ -738,6 +738,25 @@ const SyncActions = React.memo(function SyncActions({
           </TooltipContent>
         </Tooltip>
       ) : null}
+      {sync.canManage ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="ghost"
+              className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+              aria-label={`Delete sync from ${name}`}
+              onClick={() => onDelete(sync)}
+            >
+              <Trash2 />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" sideOffset={6}>
+            Delete sync
+          </TooltipContent>
+        </Tooltip>
+      ) : null}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button
@@ -756,17 +775,6 @@ const SyncActions = React.memo(function SyncActions({
             </a>
           </DropdownMenuItem>
           <CopyIdentifierMenuItem label="Sync ID" value={sync.id} />
-          {sync.canManage ? (
-            <>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                className="text-destructive focus:text-destructive"
-                onSelect={() => onDelete(sync)}
-              >
-                <Trash2 /> Delete sync
-              </DropdownMenuItem>
-            </>
-          ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
     </DataTableActionGroup>
