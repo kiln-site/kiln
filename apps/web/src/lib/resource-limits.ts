@@ -171,6 +171,8 @@ function parseCores({
   return Math.round(cores * CPU_LIMIT_MILLIS_PER_CORE)
 }
 
+// Precise enough to give back the same bytes, so an untouched limit saves
+// unchanged.
 function gibibytesInput(bytes: number): string {
-  return String(Number((bytes / GIBIBYTE).toFixed(2)))
+  return String(Number((bytes / GIBIBYTE).toPrecision(15)))
 }

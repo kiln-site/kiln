@@ -40,6 +40,7 @@ import {
   relayInstanceSchema,
   relayRemoteFileUploadSchema,
   relayRemoteFileUploadResultSchema,
+  relayResourceLimitsV1Feature,
   relaySnapshotSchema,
   type ResourceLimits,
   type ResourceLimitsInput,
@@ -80,7 +81,7 @@ import { signS3BackupDownload } from "@/backups/destinations/s3"
 import type { AccessPermission } from "@/lib/permissions"
 import { grantHasPermission } from "@/lib/permissions"
 import { invalidateRelayCache, relayCachePolicy } from "@/lib/relay-client"
-import { relayRpc } from "@/lib/relay-connection"
+import { relayConnectionFeatures, relayRpc } from "@/lib/relay-connection"
 import {
   dispatchBackupTask,
   reconcileRelayBackups,
@@ -886,7 +887,13 @@ export const updateCliServerStartupEffect = Effect.fn(
         instance.variables ?? {},
         variables
       )
-    const memoryVariable = brickMemoryVariable(nextRecipe)
+    // A Relay without resource limits still sizes memory from the
+    // variable itself.
+    const memoryVariable = relayConnectionFeatures(relay.id).has(
+      relayResourceLimitsV1Feature
+    )
+      ? brickMemoryVariable(nextRecipe)
+      : null
     const legacyMemory =
       memoryVariable && Object.hasOwn(input.variables, memoryVariable)
         ? dockerMemoryBytes(String(input.variables[memoryVariable]))

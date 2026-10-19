@@ -39,7 +39,6 @@ export const ResourceLimitsEditor = React.memo(function ResourceLimitsEditor({
         label="Memory"
         max={capacity ? capacity.memory.availableBytes / GIBIBYTE : undefined}
         min={0.0625}
-        step={0.25}
         unit="GiB"
         usage={
           capacity && (
@@ -67,7 +66,6 @@ export const ResourceLimitsEditor = React.memo(function ResourceLimitsEditor({
         label="CPU"
         max={capacity?.cpu.nodeCores}
         min={0.1}
-        step={0.1}
         unit="cores"
         usage={null}
         value={draft.cpuCores}
@@ -84,7 +82,6 @@ export const ResourceLimitsEditor = React.memo(function ResourceLimitsEditor({
         label="Disk"
         max={capacity ? capacity.storage.availableBytes / GIBIBYTE : undefined}
         min={0.1}
-        step={0.1}
         unit="GiB"
         usage={
           capacity && (
@@ -112,7 +109,6 @@ function ResourceLimitField({
   label,
   max,
   min,
-  step,
   unit,
   usage,
   value,
@@ -124,7 +120,6 @@ function ResourceLimitField({
   label: string
   max: number | undefined
   min: number
-  step: number
   unit: string
   usage: React.ReactNode
   value: ResourceLimitDraft
@@ -157,7 +152,9 @@ function ResourceLimitField({
             disabled={disabled}
             max={max}
             min={min}
-            step={step}
+            // Any value: the editor checks limits itself, and a step would
+            // make the browser refuse ones like 0.5 GiB.
+            step="any"
             type="number"
             value={value.value}
             onChange={(event) =>

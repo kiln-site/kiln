@@ -216,17 +216,15 @@ export const createBrickInstance = createServerFn({ method: "POST" })
     const { idempotencyKey, limits, relayId: _, ...createInput } = data
     const input = relayCreateInstanceSchema.parse({
       ...createInput,
-      ...(limits && {
-        limits: relayResourceLimitsRequest(
-          relay.id,
-          {
-            cpuMillis: null,
-            diskBytes: createInput.diskLimitBytes,
-            memoryBytes: null,
-          },
-          limits
-        ).limits,
-      }),
+      ...relayResourceLimitsRequest(
+        relay.id,
+        {
+          cpuMillis: null,
+          diskBytes: createInput.diskLimitBytes,
+          memoryBytes: null,
+        },
+        limits
+      ),
       recipeDefinition,
     })
     const instanceId = provisioningInstanceId(idempotencyKey)
