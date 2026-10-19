@@ -13,91 +13,115 @@ import type {
 
 const GIBIBYTE = 1024 ** 3
 
+export type ResourceLimitKind = "cpu" | "disk" | "memory"
+
+const allFields: ReadonlyArray<ResourceLimitKind> = ["memory", "cpu", "disk"]
+
+const columns = {
+  1: "sm:grid-cols-1",
+  2: "sm:grid-cols-2",
+  3: "sm:grid-cols-3",
+} as const
+
 // Memory, CPU, and disk limits for any instance, each of which can be
-// turned off. Limits apply to one container.
+// turned off. Limits apply to one container; `fields` picks those that
+// apply, as an app's services take memory and CPU and the app its disk.
 export const ResourceLimitsEditor = React.memo(function ResourceLimitsEditor({
   capacity,
   disabled,
   draft,
+  fields = allFields,
   onChange,
 }: {
   capacity: ResourceLimitsCapacity | null
   disabled: boolean
   draft: ResourceLimitsDraft
+  fields?: ReadonlyArray<ResourceLimitKind>
   onChange: (draft: ResourceLimitsDraft) => void
 }) {
+  const shown = new Set(fields)
   return (
-    <div className="grid divide-y divide-border/65 overflow-hidden rounded-xl border border-border/75 bg-background/45 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
-      <ResourceLimitField
-        assignable={
-          capacity
-            ? `${formatBytes(capacity.memory.availableBytes)} assignable`
-            : null
-        }
-        disabled={disabled}
-        icon={<MemoryStick className="size-3.5" />}
-        label="Memory"
-        max={capacity ? capacity.memory.availableBytes / GIBIBYTE : undefined}
-        min={0.0625}
-        unit="GiB"
-        usage={
-          capacity && (
-            <NodeCapacityBar
-              totalLabel={`${formatBytes(capacity.memory.nodeTotalBytes)} total`}
-              usedLabel={`${formatBytes(capacity.memory.nodeUsedBytes)} node used`}
-              usedPercent={percent(
-                capacity.memory.nodeUsedBytes,
-                capacity.memory.nodeTotalBytes
-              )}
-            />
-          )
-        }
-        value={draft.memoryGiB}
-        onChange={(memoryGiB) => onChange({ ...draft, memoryGiB })}
-      />
-      <ResourceLimitField
-        assignable={
-          capacity
-            ? `${capacity.cpu.nodeCores} ${capacity.cpu.nodeCores === 1 ? "core" : "cores"} on node`
-            : null
-        }
-        disabled={disabled}
-        icon={<Cpu className="size-3.5" />}
-        label="CPU"
-        max={capacity?.cpu.nodeCores}
-        min={0.1}
-        unit="cores"
-        usage={null}
-        value={draft.cpuCores}
-        onChange={(cpuCores) => onChange({ ...draft, cpuCores })}
-      />
-      <ResourceLimitField
-        assignable={
-          capacity
-            ? `${formatBytes(capacity.storage.availableBytes)} assignable`
-            : null
-        }
-        disabled={disabled}
-        icon={<HardDrive className="size-3.5" />}
-        label="Disk"
-        max={capacity ? capacity.storage.availableBytes / GIBIBYTE : undefined}
-        min={0.1}
-        unit="GiB"
-        usage={
-          capacity && (
-            <NodeCapacityBar
-              totalLabel={`${formatBytes(capacity.storage.nodeTotalBytes)} total`}
-              usedLabel={`${formatBytes(capacity.storage.nodeUsedBytes)} node used`}
-              usedPercent={percent(
-                capacity.storage.nodeUsedBytes,
-                capacity.storage.nodeTotalBytes
-              )}
-            />
-          )
-        }
-        value={draft.diskGiB}
-        onChange={(diskGiB) => onChange({ ...draft, diskGiB })}
-      />
+    <div
+      className={`grid divide-y divide-border/65 overflow-hidden rounded-xl border border-border/75 bg-background/45 sm:divide-x sm:divide-y-0 ${columns[Math.max(1, Math.min(fields.length, 3)) as 1 | 2 | 3]}`}
+    >
+      {shown.has("memory") ? (
+        <ResourceLimitField
+          assignable={
+            capacity
+              ? `${formatBytes(capacity.memory.availableBytes)} assignable`
+              : null
+          }
+          disabled={disabled}
+          icon={<MemoryStick className="size-3.5" />}
+          label="Memory"
+          max={capacity ? capacity.memory.availableBytes / GIBIBYTE : undefined}
+          min={0.0625}
+          unit="GiB"
+          usage={
+            capacity && (
+              <NodeCapacityBar
+                totalLabel={`${formatBytes(capacity.memory.nodeTotalBytes)} total`}
+                usedLabel={`${formatBytes(capacity.memory.nodeUsedBytes)} node used`}
+                usedPercent={percent(
+                  capacity.memory.nodeUsedBytes,
+                  capacity.memory.nodeTotalBytes
+                )}
+              />
+            )
+          }
+          value={draft.memoryGiB}
+          onChange={(memoryGiB) => onChange({ ...draft, memoryGiB })}
+        />
+      ) : null}
+      {shown.has("cpu") ? (
+        <ResourceLimitField
+          assignable={
+            capacity
+              ? `${capacity.cpu.nodeCores} ${capacity.cpu.nodeCores === 1 ? "core" : "cores"} on node`
+              : null
+          }
+          disabled={disabled}
+          icon={<Cpu className="size-3.5" />}
+          label="CPU"
+          max={capacity?.cpu.nodeCores}
+          min={0.1}
+          unit="cores"
+          usage={null}
+          value={draft.cpuCores}
+          onChange={(cpuCores) => onChange({ ...draft, cpuCores })}
+        />
+      ) : null}
+      {shown.has("disk") ? (
+        <ResourceLimitField
+          assignable={
+            capacity
+              ? `${formatBytes(capacity.storage.availableBytes)} assignable`
+              : null
+          }
+          disabled={disabled}
+          icon={<HardDrive className="size-3.5" />}
+          label="Disk"
+          max={
+            capacity ? capacity.storage.availableBytes / GIBIBYTE : undefined
+          }
+          min={0.1}
+          unit="GiB"
+          usage={
+            capacity && (
+              <NodeCapacityBar
+                totalLabel={`${formatBytes(capacity.storage.nodeTotalBytes)} total`}
+                usedLabel={`${formatBytes(capacity.storage.nodeUsedBytes)} node used`}
+                usedPercent={percent(
+                  capacity.storage.nodeUsedBytes,
+                  capacity.storage.nodeTotalBytes
+                )}
+              />
+            )
+          }
+          value={draft.diskGiB}
+          onChange={(diskGiB) => onChange({ ...draft, diskGiB })}
+        />
+      ) : null}
     </div>
   )
 })

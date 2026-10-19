@@ -113,6 +113,8 @@ function useAppWorkspaceQuery(
           containers: [],
           dataDirectory: "",
           deployment: null,
+          diskLimitBytes: null,
+          diskUsedBytes: null,
           hostname: `app-${directory.shortId}`,
           network: "",
           observedState: "failed" as const,

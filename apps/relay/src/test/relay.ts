@@ -145,7 +145,8 @@ export async function relayHarness(
             service: appTailscaleMember(membership.memberId)!.service,
           })),
       },
-      lanes
+      lanes,
+      { allocations: docker.allocations, state }
     )
     lifecycle.useAppServiceContainers(async (appId, service) => {
       await apps.get(appId)

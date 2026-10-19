@@ -328,11 +328,14 @@ function OpenResourceButton({
       onClick={() => {
         onNavigate?.()
         void navigate({
-          href: acceptedInvitationHref(queryClient, {
-            relayId: resource.relayId,
-            resourceId: resource.id,
-            resourceType: resource.type,
-          }),
+          href:
+            resource.type === "app"
+              ? `/infra/apps?search=${encodeURIComponent(resource.id)}`
+              : acceptedInvitationHref(queryClient, {
+                  relayId: resource.relayId,
+                  resourceId: resource.id,
+                  resourceType: resource.type,
+                }),
         })
       }}
     >
@@ -379,6 +382,7 @@ const notificationIcons = {
 >
 
 const resourceTypeLabels = {
+  app: "App",
   database: "Database",
   instance: "Game Server",
   relay: "Relay",
@@ -414,7 +418,10 @@ export function notificationTitle(content: NotificationContent): string {
     case "access.removed":
       return `Removed from ${content.resource.name}`
     case "resource.disk-limit":
-      return `${content.resource.name} is over its disk limit`
+      // Apps stop at their limit; databases keep running.
+      return content.resource.type === "app"
+        ? `${content.resource.name} was stopped at its disk limit`
+        : `${content.resource.name} is over its disk limit`
   }
 }
 

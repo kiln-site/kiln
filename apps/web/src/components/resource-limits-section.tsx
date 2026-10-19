@@ -7,42 +7,62 @@ import { Button } from "@workspace/ui/components/button"
 import { showToast } from "@workspace/ui/components/sonner"
 
 import { InfoSection } from "@/components/info-page"
-import { ResourceLimitsEditor } from "@/components/resource-limits-editor"
+import {
+  ResourceLimitsEditor,
+  type ResourceLimitKind,
+} from "@/components/resource-limits-editor"
 import {
   parseResourceLimitsDraft,
   resourceLimitsDraft,
   type ResourceLimitsCapacity,
+  type ResourceLimitsDraft,
 } from "@/lib/resource-limits"
 
+/**
+ * One set of limits in the section: a database's, or one of an app's
+ * services'. `fields` picks the limits that apply to it.
+ */
+export interface ResourceLimitsGroup {
+  readonly fields?: ReadonlyArray<ResourceLimitKind>
+  readonly key: string
+  readonly label?: string
+  readonly limits: ResourceLimits
+}
+
 // An instance's memory, CPU, and disk limits on its Info page, for any kind
-// of instance. Saving sends the whole set; `onSave` applies it.
+// of instance. Saving sends every group's limits; `onSave` applies them.
 export function ResourceLimitsSection({
   capacity,
   disabledReason,
   editable,
+  groups,
   hint,
-  limits,
   onSave,
 }: {
   capacity: ResourceLimitsCapacity | null
   /** Why the limits can't change right now, such as an offline Relay. */
   disabledReason?: string
   editable: boolean
+  groups: ReadonlyArray<ResourceLimitsGroup>
   /** What happens at the limits, for this kind of instance. */
   hint?: React.ReactNode
-  limits: ResourceLimits
-  onSave: (limits: ResourceLimits) => Promise<unknown>
+  onSave: (limits: Readonly<Record<string, ResourceLimits>>) => Promise<unknown>
 }) {
   return (
     <InfoSection content icon={<Gauge />} title="Resource limits">
-      {/* A new set of limits from the Relay starts a fresh draft. */}
+      {/* New limits from the Relay start a fresh draft. */}
       <ResourceLimitsForm
-        key={`${limits.cpuMillis}:${limits.memoryBytes}:${limits.diskBytes}`}
+        key={groups
+          .map(
+            ({ key, limits }) =>
+              `${key}:${limits.cpuMillis}:${limits.memoryBytes}:${limits.diskBytes}`
+          )
+          .join("|")}
         capacity={capacity}
         disabledReason={disabledReason}
         editable={editable}
+        groups={groups}
         hint={hint}
-        limits={limits}
         onSave={onSave}
       />
     </InfoSection>
@@ -53,28 +73,42 @@ function ResourceLimitsForm({
   capacity,
   disabledReason,
   editable,
+  groups,
   hint,
-  limits,
   onSave,
 }: React.ComponentProps<typeof ResourceLimitsSection>) {
-  const [draft, setDraft] = React.useState(() => resourceLimitsDraft(limits))
+  const [drafts, setDrafts] = React.useState<
+    Readonly<Record<string, ResourceLimitsDraft>>
+  >(() =>
+    Object.fromEntries(
+      groups.map((group) => [group.key, resourceLimitsDraft(group.limits)])
+    )
+  )
   const [error, setError] = React.useState<string | null>(null)
   const [pending, setPending] = React.useState(false)
-  const parsed = parseResourceLimitsDraft(draft, capacity)
-  const changed =
-    "error" in parsed || !resourceLimitsEqual(parsed.limits, limits)
+  const parsed = groups.map((group) => {
+    const draft = drafts[group.key] ?? resourceLimitsDraft(group.limits)
+    return { group, result: parseResourceLimitsDraft(draft, capacity) }
+  })
+  const changed = parsed.some(
+    ({ group, result }) =>
+      "error" in result || !resourceLimitsEqual(result.limits, group.limits)
+  )
   const disabled = !editable || disabledReason !== undefined || pending
 
   async function save(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (disabled) return
-    if ("error" in parsed) {
-      setError(parsed.error)
-      return
+    const limits: Record<string, ResourceLimits> = {}
+    for (const { group, result } of parsed) {
+      if ("error" in result) {
+        setError(group.label ? `${group.label}: ${result.error}` : result.error)
+        return
+      }
+      limits[group.key] = result.limits
     }
     setError(null)
     setPending(true)
-    const limits = parsed.limits
     await Effect.runPromise(
       Effect.tryPromise({
         try: () => onSave(limits),
@@ -97,12 +131,24 @@ function ResourceLimitsForm({
 
   return (
     <form className="space-y-3" onSubmit={save}>
-      <ResourceLimitsEditor
-        capacity={capacity}
-        disabled={disabled}
-        draft={draft}
-        onChange={setDraft}
-      />
+      {groups.map((group) => (
+        <div key={group.key} className="space-y-1.5">
+          {group.label ? (
+            <p className="type-technical-label text-muted-foreground">
+              {group.label}
+            </p>
+          ) : null}
+          <ResourceLimitsEditor
+            capacity={capacity}
+            disabled={disabled}
+            draft={drafts[group.key] ?? resourceLimitsDraft(group.limits)}
+            fields={group.fields}
+            onChange={(draft) =>
+              setDrafts((current) => ({ ...current, [group.key]: draft }))
+            }
+          />
+        </div>
+      ))}
       {hint ? (
         <p className="type-support text-muted-foreground">{hint}</p>
       ) : null}

@@ -1,4 +1,12 @@
-import { access, chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import {
+  access,
+  chmod,
+  mkdir,
+  mkdtemp,
+  rm,
+  truncate,
+  writeFile,
+} from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -28,6 +36,7 @@ import {
 } from "./test/relay.js"
 
 const appId = "c".repeat(40)
+const MIB = 1024 ** 2
 
 it("returns only requested App views, with table summaries separated from container details", async () => {
   const harness = await createdApp()
@@ -437,6 +446,7 @@ describe("apps", () => {
 
     const composed = await deploy(harness, {
       compose: "services:\n  web:\n    image: nginx:alpine\n",
+      serviceLimits: { web: { cpuMillis: 250, memoryBytes: 256 * MIB } },
       sourceType: "compose",
     })
     expect(composed.deployment).toMatchObject({ state: "succeeded" })
@@ -444,9 +454,64 @@ describe("apps", () => {
       appContainers().map((container) => [
         container.labels["com.docker.compose.service"],
         container.state.running,
+        container.memoryBytes,
+        container.nanoCpus,
       ])
-    ).toEqual([["web", true]])
+    ).toEqual([["web", true, 256 * MIB, 2.5e8]])
     await rm(bin, { force: true, recursive: true })
+  })
+
+  it("applies each service's limits when it deploys and changes them in place", async () => {
+    const harness = await createdApp()
+    await deploy(harness, {
+      serviceLimits: { app: { cpuMillis: 500, memoryBytes: 256 * MIB } },
+    })
+    const [deployed] = appContainers()
+    expect(deployed).toMatchObject({ memoryBytes: 256 * MIB, nanoCpus: 5e8 })
+
+    const limited = await harness.apps.setLimits({
+      appId,
+      diskLimitBytes: 1024 * MIB,
+      serviceLimits: { app: { cpuMillis: 500, memoryBytes: 512 * MIB } },
+    })
+
+    expect(appContainers()).toEqual([
+      expect.objectContaining({ id: deployed!.id, memoryBytes: 512 * MIB }),
+    ])
+    expect(limited).toMatchObject({
+      containers: [
+        {
+          limits: { cpuMillis: 500, diskBytes: null, memoryBytes: 512 * MIB },
+        },
+      ],
+      diskLimitBytes: 1024 * MIB,
+    })
+  })
+
+  it("stops an app whose data outgrows its disk limit", async () => {
+    const harness = await createdApp()
+    await deploy(harness, {})
+    await harness.apps.setLimits({
+      appId,
+      diskLimitBytes: 128 * MIB,
+      serviceLimits: {},
+    })
+    const data = join(harness.config.dataDirectory, "apps", appId, "big.bin")
+
+    await harness.apps.enforceDiskLimits()
+    expect(appContainers()[0]?.state.running).toBe(true)
+
+    // A sparse file: its apparent size counts, without filling the disk.
+    await writeFile(data, "")
+    await truncate(data, 200 * MIB)
+    await harness.apps.enforceDiskLimits()
+
+    expect(appContainers()[0]?.state.running).toBe(false)
+    expect(await harness.apps.get(appId)).toMatchObject({
+      diskLimitBytes: 128 * MIB,
+      diskUsedBytes: 200 * MIB,
+      observedState: "stopped",
+    })
   })
 
   it("doesn't recreate an App deleted while its deployment waited", async () => {

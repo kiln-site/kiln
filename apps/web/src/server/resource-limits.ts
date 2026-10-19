@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start"
 import {
+  appIdSchema,
   databaseIdSchema,
   relayIdSchema,
   relaySnapshotSchema,
@@ -23,8 +24,8 @@ import { databaseRpc, requiredRelay } from "@/server/managed-database-access"
 // kind of instance. Only people who may see the node's capacity get it.
 
 const capacityInputSchema = z.strictObject({
-  id: databaseIdSchema,
-  kind: z.literal("database"),
+  id: databaseIdSchema.or(appIdSchema),
+  kind: z.enum(["app", "database"]),
   relayId: relayIdSchema,
 })
 
@@ -33,12 +34,16 @@ export const getResourceLimitsCapacity = createServerFn({ method: "GET" })
   .handler(async ({ data }) => {
     const user = await requireEligibleResourceUser()
     const relay = await requiredRelay(data.relayId)
-    await requireRelayPermission({
-      databaseId: data.id,
-      permission: "database.read",
-      relayId: relay.id,
-      user,
-    })
+    await requireRelayPermission(
+      data.kind === "database"
+        ? {
+            databaseId: data.id,
+            permission: "database.read",
+            relayId: relay.id,
+            user,
+          }
+        : { permission: "app.read", relayId: relay.id, user }
+    )
     const grants = isPlatformAdmin(user)
       ? []
       : await listUserGrants(user.id, relay.id)
@@ -51,6 +56,10 @@ export const getResourceLimitsCapacity = createServerFn({ method: "GET" })
       await relayAllocations(relay, snapshot),
       { id: data.id, kind: data.kind }
     )
-    if (!capacity) throw new Error("Database not found")
+    if (!capacity) {
+      throw new Error(
+        data.kind === "database" ? "Database not found" : "App not found"
+      )
+    }
     return capacity
   })

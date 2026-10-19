@@ -1,5 +1,12 @@
 import { spawn } from "node:child_process"
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises"
+import {
+  mkdir,
+  readdir,
+  readFile,
+  rm,
+  statfs,
+  writeFile,
+} from "node:fs/promises"
 import { join } from "node:path"
 
 import type {
@@ -9,6 +16,7 @@ import type {
   RelayAppAction,
   RelayAppContainer,
   RelayAppDeployment,
+  RelayAppLimits,
   RelayAppNetwork,
   RelayConsoleLevel,
   RelayConsoleLine,
@@ -17,9 +25,15 @@ import type {
   RelayDeployApp,
   RelayInventoryLookup,
   RelayInventoryItem,
+  ServiceResourceLimits,
 } from "@workspace/contracts"
-import { appServiceNameSchema, relayAppSchema } from "@workspace/contracts"
-import { Effect, Result } from "effect"
+import {
+  appServiceNameSchema,
+  CPU_LIMIT_MILLIS_PER_CORE,
+  NO_RESOURCE_LIMITS,
+  relayAppSchema,
+} from "@workspace/contracts"
+import { Effect, Predicate, Result } from "effect"
 
 import { commandLines } from "./command.js"
 import type { RelayConfig } from "./config.js"
@@ -41,9 +55,17 @@ import {
   forkPromise,
   promiseEffect,
 } from "./effect/promise.js"
-import { traceRelayPromise } from "./effect/runtime.js"
+import { reportRelayError, traceRelayPromise } from "./effect/runtime.js"
+import type { RelayStateStore } from "./effect/state.js"
+import { directoryApparentSizeEffect } from "./disk-usage.js"
 import type { OperationLanes } from "./operation-lanes.js"
 import { appLifecycleLocks } from "./operation-plans.js"
+import {
+  assertResourceLimitsFit,
+  containerLimitSpec,
+  containerResourceLimits,
+  type ResourceAllocations,
+} from "./resource-limits.js"
 import {
   APP_SERVICE,
   relayOwnerLabel,
@@ -86,7 +108,7 @@ interface ContainerInspect {
     Tty?: boolean
   }
   Created: string
-  HostConfig?: { NetworkMode?: string }
+  HostConfig?: { Memory?: number; NanoCpus?: number; NetworkMode?: string }
   Id: string
   Name: string
   // Times Docker restarted it under its restart policy.
@@ -108,6 +130,7 @@ interface ContainerInspect {
 
 interface AppContainer extends RelayAppContainer {
   appId: string
+  limits: NonNullable<RelayAppContainer["limits"]>
   deploymentId: string | null
   health: string | null
   networkMode: string | null
@@ -135,6 +158,12 @@ export interface AppRoutePlan {
 
 // What deploys join each service to besides its own network: its Traefik
 // routes, and the Tailscale networks its services are members of.
+/** Where an app's limits are kept and counted with every instance's. */
+export interface AppLimitStores {
+  readonly allocations: ResourceAllocations
+  readonly state: RelayStateStore["Service"]
+}
+
 export interface AppNetworking {
   readonly routes: (appId: string) => Promise<AppRoutePlan>
   readonly tailscale: (
@@ -162,6 +191,9 @@ export class AppDriver {
   // Wakes whatever follows an app when its deployment or containers change.
   readonly #waiters = new Map<string, Set<() => void>>()
   readonly #lanes: OperationLanes
+  readonly #limits: AppLimitStores
+  // Data directory sizes of apps with a disk limit, from the last check.
+  readonly #diskUsage = new Map<string, number>()
 
   /**
    * Callers hold the App's lane locks for each change; a deployment's build
@@ -171,14 +203,35 @@ export class AppDriver {
     config: RelayConfig,
     hostDataDirectory: () => Promise<string>,
     networking: AppNetworking,
-    lanes: OperationLanes
+    lanes: OperationLanes,
+    limits: AppLimitStores
   ) {
     this.#config = config
     this.#engine = new DockerEngine(config.dockerSocket)
     this.#resources = relayResourceNames(config)
     this.#hostDataDirectory = hostDataDirectory
     this.#lanes = lanes
+    this.#limits = limits
     this.#networking = networking
+    // Every container counts its memory and CPU, and the app its disk.
+    limits.allocations.register(APP_KIND, async () =>
+      (await this.list()).flatMap((app) => [
+        {
+          id: app.id,
+          limits: { ...NO_RESOURCE_LIMITS, diskBytes: app.diskLimitBytes },
+        },
+        ...app.containers.map((container) => ({
+          id: app.id,
+          limits: {
+            ...NO_RESOURCE_LIMITS,
+            ...(container.limits && {
+              cpuMillis: container.limits.cpuMillis,
+              memoryBytes: container.limits.memoryBytes,
+            }),
+          },
+        })),
+      ])
+    )
   }
 
   // Where app data directories live inside the Relay.
@@ -187,10 +240,11 @@ export class AppDriver {
   }
 
   async list(): Promise<Array<RelayApp>> {
-    const [containers, networks, host] = await Promise.all([
+    const [containers, networks, host, diskLimits] = await Promise.all([
       this.#containers(),
       this.#networks(),
       this.#hostDataDirectory(),
+      this.#diskLimits(),
     ])
     const ids = new Set([
       ...networks,
@@ -201,7 +255,8 @@ export class AppDriver {
       this.#toApp(
         id,
         containers.filter((container) => container.appId === id),
-        host
+        host,
+        diskLimits
       )
     )
   }
@@ -215,12 +270,12 @@ export class AppDriver {
       "Apps.inventory",
       async () => {
         const ids = [...new Set(requests.map((request) => request.id))]
-        const [containers, networks, host] = await Promise.all([
+        const detail = requests.some((request) => request.view === "detail")
+        const [containers, networks, host, diskLimits] = await Promise.all([
           this.#containers(undefined, ids, signal),
           this.#networks(signal),
-          requests.some((request) => request.view === "detail")
-            ? this.#hostDataDirectory()
-            : "",
+          detail ? this.#hostDataDirectory() : "",
+          detail ? this.#diskLimits() : new Map<string, number>(),
           Promise.all(ids.map((id) => this.#restoreDeployment(id))),
         ])
         return requests.flatMap(({ id, view }): Array<RelayInventoryItem> => {
@@ -229,7 +284,9 @@ export class AppDriver {
           const { observedState } = this.#runtimeState(id, owned)
           const common = { id, view, observedState }
           if (view === "detail")
-            return [{ ...common, app: this.#toApp(id, owned, host) }]
+            return [
+              { ...common, app: this.#toApp(id, owned, host, diskLimits) },
+            ]
           if (view === "status") return [common]
           return [
             {
@@ -341,6 +398,157 @@ export class AppDriver {
     )
     this.#wake(input.appId)
     return this.get(input.appId)
+  }
+
+  /**
+   * Saves an app's limits and applies what Docker can change in place to
+   * its containers. Removing a service's memory or CPU limit applies when
+   * the app next deploys, since Docker can't remove one from a container.
+   */
+  async setLimits(input: RelayAppLimits): Promise<RelayApp> {
+    const containers = await this.#appContainers(input.appId)
+    if (
+      containers.length === 0 &&
+      !(await this.#networks()).includes(input.appId)
+    ) {
+      throw new Error("App not found")
+    }
+    await this.#assertLimitsFit(
+      input.appId,
+      input.diskLimitBytes,
+      containers.map(
+        (container) => input.serviceLimits[container.service] ?? null
+      )
+    )
+    await Effect.runPromise(
+      this.#limits.state.setDiskLimit(
+        APP_KIND,
+        input.appId,
+        input.diskLimitBytes
+      )
+    )
+    const engine = this.#engine
+    await docker(
+      Effect.forEach(
+        containers,
+        (container) => {
+          const next = input.serviceLimits[container.service]
+          const spec = containerLimitSpec({
+            ...NO_RESOURCE_LIMITS,
+            ...next,
+          })
+          return next &&
+            (next.memoryBytes !== container.limits.memoryBytes ||
+              next.cpuMillis !== container.limits.cpuMillis)
+            ? engine.updateContainerResources(container.id, {
+                ...(next.memoryBytes !== null && {
+                  memoryBytes: next.memoryBytes,
+                }),
+                ...(spec.nanoCpus !== undefined && {
+                  nanoCpus: spec.nanoCpus,
+                }),
+              })
+            : Effect.void
+        },
+        { concurrency: "unbounded", discard: true }
+      )
+    )
+    this.#wake(input.appId)
+    return this.get(input.appId)
+  }
+
+  /**
+   * Measures the data directories of apps with a disk limit and stops a
+   * running app that's past its limit, in its lifecycle lane so it can't
+   * interleave with a deploy or a start. It measures again once its turn
+   * comes. Docker leaves a stopped container stopped under its
+   * `unless-stopped` policy.
+   */
+  async enforceDiskLimits(): Promise<void> {
+    const diskLimits = await this.#diskLimits()
+    for (const appId of this.#diskUsage.keys()) {
+      if (!diskLimits.has(appId)) this.#diskUsage.delete(appId)
+    }
+    for (const [appId, limitBytes] of diskLimits) {
+      const measure = directoryApparentSizeEffect(this.#appDirectory(appId))
+      const usedBytes = await Effect.runPromise(measure)
+      this.#diskUsage.set(appId, usedBytes)
+      if (usedBytes <= limitBytes) continue
+      const running = (await this.#appContainers(appId)).filter(
+        (container) => container.running
+      )
+      if (running.length === 0) continue
+      const engine = this.#engine
+      const diskUsage = this.#diskUsage
+      await Effect.runPromise(
+        this.#lanes
+          .run(
+            {
+              label: "app.disk-limit.stop",
+              locks: appLifecycleLocks(appId),
+            },
+            Effect.gen(function* () {
+              const measured = yield* measure
+              diskUsage.set(appId, measured)
+              if (measured <= limitBytes) return
+              yield* Effect.logWarning(
+                `Stopping app ${appId}: its data exceeded its disk limit`
+              )
+              yield* Effect.forEach(
+                running,
+                ({ id }) =>
+                  engine.stopContainer(id, { seconds: 30, timeout: 90_000 }),
+                { concurrency: "unbounded", discard: true }
+              )
+            })
+          )
+          .pipe(
+            Effect.catch((cause) =>
+              Effect.sync(() =>
+                reportRelayError(cause, {
+                  operation: "relay.apps.diskLimitStop",
+                })
+              )
+            )
+          )
+      )
+      this.#wake(appId)
+    }
+  }
+
+  async #assertLimitsFit(
+    appId: string,
+    diskLimitBytes: number | null,
+    services: ReadonlyArray<ServiceResourceLimits | null>
+  ): Promise<void> {
+    const [filesystem, others, current] = await Promise.all([
+      statfs(this.#config.rootDirectory),
+      this.#limits.allocations.others(APP_KIND, appId),
+      this.#diskLimits().then((limits) => limits.get(appId) ?? null),
+    ])
+    const nodeDiskBytes = filesystem.blocks * filesystem.bsize
+    assertResourceLimitsFit({
+      currentDiskBytes: current,
+      limits: { ...NO_RESOURCE_LIMITS, diskBytes: diskLimitBytes },
+      nodeDiskBytes,
+      others,
+    })
+    // Each service's memory counts against the node, with the others'.
+    const allocated: Array<typeof NO_RESOURCE_LIMITS> = [...others]
+    for (const service of services) {
+      const limits = { ...NO_RESOURCE_LIMITS, ...service }
+      assertResourceLimitsFit({
+        currentDiskBytes: null,
+        limits,
+        nodeDiskBytes,
+        others: allocated,
+      })
+      allocated.push(limits)
+    }
+  }
+
+  #diskLimits(): Promise<ReadonlyMap<string, number>> {
+    return Effect.runPromise(this.#limits.state.listDiskLimits(APP_KIND))
   }
 
   async delete(input: RelayDeleteApp) {
@@ -599,6 +807,18 @@ export class AppDriver {
           log(`Deploying ${input.name} (deployment ${deployment.id})`)
           log(`Source: ${describeSource(config)}`)
           await this.#ensureResources(input.appId)
+          await this.#assertLimitsFit(
+            input.appId,
+            config.diskLimitBytes,
+            Object.values(config.serviceLimits)
+          )
+          await Effect.runPromise(
+            this.#limits.state.setDiskLimit(
+              APP_KIND,
+              input.appId,
+              config.diskLimitBytes
+            )
+          )
           const host = await this.#hostDataDirectory()
           if (config.sourceType === "compose") {
             await this.#deployCompose(input, deployment, host)
@@ -784,6 +1004,10 @@ export class AppDriver {
         env: environment,
         hostname,
         image,
+        ...containerLimitSpec({
+          ...NO_RESOURCE_LIMITS,
+          ...config.serviceLimits[APP_SERVICE],
+        }),
         labels: {
           ...routes.labels(APP_SERVICE),
           ...this.#containerLabels(input.appId, APP_SERVICE, deployment.id),
@@ -987,6 +1211,7 @@ export class AppDriver {
       appId: input.appId,
       databases,
       routes: await this.#networking.routes(input.appId),
+      serviceLimits: input.config.serviceLimits,
       tailscale: await this.#networking.tailscale(input.appId),
       deploymentId: deployment.id,
       directory,
@@ -1062,6 +1287,7 @@ export class AppDriver {
       directory: string
       hostDirectory: string
       routes: AppRoutePlan
+      serviceLimits: AppConfig["serviceLimits"]
       tailscale: ReadonlyArray<{
         address: string
         network: string
@@ -1106,6 +1332,7 @@ export class AppDriver {
           }
       services[name] = {
         ...service,
+        ...composeLimits(service, options.serviceLimits[name]),
         container_name: this.#containerName(
           options.appId,
           name,
@@ -1320,7 +1547,8 @@ export class AppDriver {
   #toApp(
     id: string,
     containers: ReadonlyArray<AppContainer>,
-    host: string
+    host: string,
+    diskLimits: ReadonlyMap<string, number>
   ): RelayApp {
     const deployment = this.#deployments.get(id) ?? null
     const { observedState, status } = this.#runtimeState(id, containers)
@@ -1351,6 +1579,7 @@ export class AppDriver {
           id: container.id,
           image: container.image,
           labels: container.labels,
+          limits: container.limits,
           name: container.name,
           networks: container.networks,
           ports: container.ports,
@@ -1361,6 +1590,8 @@ export class AppDriver {
           status: container.status,
         })),
       dataDirectory: join(host, "apps", id),
+      diskLimitBytes: diskLimits.get(id) ?? null,
+      diskUsedBytes: this.#diskUsage.get(id) ?? null,
       deployment: deployment
         ? {
             error: deployment.error,
@@ -1446,6 +1677,7 @@ export class AppDriver {
             value === undefined ? [] : [[key, value]]
           )
         ),
+        limits: containerResourceLimits(container),
         name: container.Name.replace(/^\//u, ""),
         networkMode: container.HostConfig?.NetworkMode ?? null,
         networks: Object.keys(container.NetworkSettings?.Networks ?? {}),
@@ -1810,4 +2042,43 @@ function sleep(milliseconds: number, signal: AbortSignal): Promise<void> {
 
 function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause)
+}
+
+// A service's limits as Compose sets them; a limit Kiln doesn't set leaves
+// the Compose file's own. Compose refuses a service whose `mem_limit` and
+// `deploy.resources.limits` differ, so a set limit replaces both.
+function composeLimits(
+  service: ComposeService,
+  limits: ServiceResourceLimits | undefined
+): Partial<ComposeService> {
+  const memory = limits?.memoryBytes ?? null
+  const cpus =
+    limits?.cpuMillis == null
+      ? null
+      : limits.cpuMillis / CPU_LIMIT_MILLIS_PER_CORE
+  if (memory === null && cpus === null) return {}
+  const deploy = Predicate.isObject(service.deploy) ? service.deploy : null
+  const resources =
+    deploy && Predicate.isObject(deploy.resources) ? deploy.resources : null
+  const deployLimits =
+    resources && Predicate.isObject(resources.limits) ? resources.limits : null
+  return {
+    ...(memory !== null && { mem_limit: memory, memswap_limit: memory }),
+    ...(cpus !== null && { cpus }),
+    ...(deploy &&
+      resources &&
+      deployLimits && {
+        deploy: {
+          ...deploy,
+          resources: {
+            ...resources,
+            limits: {
+              ...deployLimits,
+              ...(memory !== null && { memory: String(memory) }),
+              ...(cpus !== null && { cpus: String(cpus) }),
+            },
+          },
+        },
+      }),
+  }
 }

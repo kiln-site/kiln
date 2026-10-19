@@ -513,10 +513,20 @@ export function DatabaseLimitsSection({
     ...managedDatabaseCapacityQueryOptions(database.relayId, database.id),
     enabled: editable && available,
   })
+  const groups = React.useMemo(
+    () => [{ key: "database", limits: database.limits }],
+    [database.limits]
+  )
   const save = React.useCallback(
-    async (limits: ResourceLimits) => {
+    async (limits: Readonly<Record<string, ResourceLimits>>) => {
+      const next = limits.database
+      if (!next) return
       await updateManagedDatabaseLimits({
-        data: { databaseId: database.id, limits, relayId: database.relayId },
+        data: {
+          databaseId: database.id,
+          limits: next,
+          relayId: database.relayId,
+        },
       })
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.databases.all }),
@@ -534,8 +544,8 @@ export function DatabaseLimitsSection({
         available ? undefined : "Reconnect this database's Relay first"
       }
       editable={editable}
+      groups={groups}
       hint="Changing memory or CPU applies at once. Removing one restarts the database. Over its disk limit, the database keeps running and everyone with access is warned."
-      limits={database.limits}
       onSave={save}
     />
   )

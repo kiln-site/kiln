@@ -41,6 +41,7 @@ import {
   relayFilePutV1Feature,
   relayResourceLimitsV1Feature,
   relayDatabaseLimitsV1Feature,
+  relayAppLimitsV1Feature,
   appIdFromFileRoot,
   isRelayFileRoot,
   relayFileRequestReplayV1Feature,
@@ -1019,6 +1020,7 @@ function authenticateSocket(
           relayFilePutV1Feature,
           relayResourceLimitsV1Feature,
           relayDatabaseLimitsV1Feature,
+          relayAppLimitsV1Feature,
         ],
         protocol: relayControlProtocol,
         relayBuild: relayBuildLabel(),
@@ -1440,6 +1442,7 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       return "app.delete"
     case "app.deploy":
     case "app.action":
+    case "app.limits.write":
     case "app.network.write":
     case "app.network.routes.write":
       return "app.manage"

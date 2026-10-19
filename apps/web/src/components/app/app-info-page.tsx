@@ -15,6 +15,7 @@ import {
   AppDeploymentSettings,
   AppEnvironmentSettings,
   AppGeneralSettings,
+  AppLimitsSection,
   AppSourceSettings,
   AppWebRouteSettings,
 } from "@/components/app/app-settings"
@@ -70,6 +71,12 @@ function AppInfoContent({ app, routeId }: { app: App; routeId: string }) {
               environment={config.data.config.environment}
               hidden={config.data.environmentHidden}
               routeId={routeId}
+            />
+            <AppLimitsSection
+              app={app}
+              available={appRelayAvailable(app)}
+              config={config.data.config}
+              editable={app.permissions.includes("app.manage")}
             />
           </>
         ) : (

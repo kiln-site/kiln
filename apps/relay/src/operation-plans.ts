@@ -326,6 +326,11 @@ export function controlRequestLocks(
       return app(appReplaceLocks)
     // A deploy only checks and records the deployment; its worker takes the
     // App's lifecycle lock for the build itself.
+    case "app.limits.write":
+      return app((id) => [
+        ...appLifecycleLocks(id),
+        exclusive(laneKeys.allocations),
+      ])
     case "app.deploy":
     case "app.action":
     case "app.network.write":

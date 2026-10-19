@@ -1,5 +1,8 @@
 import {
   relayDiskAllocationAvailableBytes,
+  NO_RESOURCE_LIMITS,
+  relayAppLimitsV1Feature,
+  relayAppSchema,
   relayManagedDatabaseSchema,
   relayResourceLimitsV1Feature,
   type RelayNode,
@@ -79,13 +82,14 @@ export function relayResourceLimitsRequest(
 
 export type InstanceAllocation = {
   id: string
-  kind: "database" | "server"
+  kind: "app" | "database" | "server"
   limits: ResourceLimits
 }
 
 /**
  * Every instance's limits on a Relay, whatever its kind: game servers from
- * its snapshot, and the rest from their own lists.
+ * its snapshot, and the rest from their own lists. An app counts each
+ * container's memory and CPU, and its own disk.
  */
 export async function relayAllocations(
   relay: PersistedRelay,
@@ -96,12 +100,18 @@ export async function relayAllocations(
     kind: "server" as const,
     limits: instance.limits,
   }))
-  if (!relayConnectionFeatures(relay.id).has(relayResourceLimitsV1Feature)) {
-    return servers
-  }
-  const databases = z
-    .array(relayManagedDatabaseSchema)
-    .parse(await relayRpc(relay, "database.list", {}, 30_000))
+  const features = relayConnectionFeatures(relay.id)
+  if (!features.has(relayResourceLimitsV1Feature)) return servers
+  const [databases, apps] = await Promise.all([
+    relayRpc(relay, "database.list", {}, 30_000).then((value) =>
+      z.array(relayManagedDatabaseSchema).parse(value)
+    ),
+    features.has(relayAppLimitsV1Feature)
+      ? relayRpc(relay, "app.list", {}, 30_000).then((value) =>
+          z.array(relayAppSchema).parse(value)
+        )
+      : [],
+  ])
   return [
     ...servers,
     ...databases.map((database) => ({
@@ -109,25 +119,46 @@ export async function relayAllocations(
       kind: "database" as const,
       limits: database.limits,
     })),
+    ...apps.flatMap((app) => [
+      {
+        id: app.id,
+        kind: "app" as const,
+        limits: { ...NO_RESOURCE_LIMITS, diskBytes: app.diskLimitBytes },
+      },
+      ...app.containers.map((container) => ({
+        id: app.id,
+        kind: "app" as const,
+        limits: {
+          ...NO_RESOURCE_LIMITS,
+          cpuMillis: container.limits?.cpuMillis ?? null,
+          memoryBytes: container.limits?.memoryBytes ?? null,
+        },
+      })),
+    ]),
   ]
 }
 
-/** What the node can give one instance, given every instance's limits. */
+/**
+ * What the node can give one instance, given every instance's limits. An
+ * instance with several entries, such as an app's containers, keeps what
+ * all of them hold.
+ */
 export function instanceCapacity(
   node: Pick<RelayNode, "cpu" | "memory" | "storage">,
   allocations: ReadonlyArray<InstanceAllocation>,
   target: { id: string; kind: InstanceAllocation["kind"] }
 ): ResourceLimitsCapacity | null {
-  const current = allocations.find(
-    (allocation) =>
-      allocation.kind === target.kind && allocation.id === target.id
-  )
-  if (!current) return null
+  const own = (allocation: InstanceAllocation) =>
+    allocation.kind === target.kind && allocation.id === target.id
+  const current = allocations.filter(own)
+  if (current.length === 0) return null
+  const total = (key: "diskBytes" | "memoryBytes") =>
+    current.reduce((sum, allocation) => sum + (allocation.limits[key] ?? 0), 0)
   return nodeResourceCapacity(
     node,
     allocations.flatMap((allocation) =>
-      allocation === current ? [] : [allocation.limits]
+      own(allocation) ? [] : [allocation.limits]
     ),
-    current.limits
+    { cpuMillis: null, diskBytes: total("diskBytes"), memoryBytes: total("memoryBytes") }
   )
 }

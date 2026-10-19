@@ -620,8 +620,10 @@ export class FakeDocker {
         string,
         {
           container_name?: string
+          cpus?: number
           image?: string
           labels?: Record<string, string>
+          mem_limit?: number
         }
       >
     }
@@ -644,6 +646,12 @@ export class FakeDocker {
         name,
         running: true,
       })
+      // As Compose sets them on the container.
+      const created = this.container(name)
+      if (created) {
+        created.memoryBytes = settings.mem_limit ?? 0
+        created.nanoCpus = Math.round((settings.cpus ?? 0) * 1e9)
+      }
       lines.push(` Container ${name}  Started`)
     }
     return { stderr: `${lines.join("\n")}\n`, stdout: "" }

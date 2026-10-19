@@ -1,6 +1,11 @@
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import type { RelayAppWebRoute } from "@workspace/contracts"
+import {
+  NO_RESOURCE_LIMITS,
+  type AppConfig,
+  type RelayAppWebRoute,
+  type ResourceLimits,
+} from "@workspace/contracts"
 import {
   Boxes,
   Cable,
@@ -45,9 +50,17 @@ import { InstanceFavoriteButton } from "@/components/instance-favorite"
 import { RelativeTime } from "@/components/relative-time"
 import { RenameButton } from "@/components/rename-dialog"
 import { StatusIndicator } from "@/components/status-indicator"
-import { appWebRoutesQueryOptions, queryKeys } from "@/lib/query-options"
+import {
+  ResourceLimitsSection,
+  type ResourceLimitsGroup,
+} from "@/components/resource-limits-section"
+import {
+  appWebRoutesQueryOptions,
+  queryKeys,
+  resourceLimitsCapacityQueryOptions,
+} from "@/lib/query-options"
 import { warmSyntaxCodeEditorModule } from "@/lib/syntax-editor-module-preload"
-import { deployApp, renameApp } from "@/server/apps"
+import { deployApp, renameApp, updateAppLimits } from "@/server/apps"
 
 // The app's details on its Info page, one section per concern, each with
 // the actions that change it. What runs where is tagged with the service
@@ -730,4 +743,108 @@ function environmentVariableNames(environment: string): Array<string> {
       ?.trim()
     return name ? [name] : []
   })
+}
+
+const APP_DISK_GROUP = "app-data"
+
+// An app's disk limit covers its data directory, which its services share;
+// memory and CPU are each service's own. Services are those it runs and
+// those with saved limits, or its one container before a first deploy.
+export function AppLimitsSection({
+  app,
+  available,
+  config,
+  editable,
+}: {
+  app: App
+  available: boolean
+  config: AppConfig
+  editable: boolean
+}) {
+  const queryClient = useQueryClient()
+  const { data: capacity = null } = useQuery({
+    ...resourceLimitsCapacityQueryOptions(app.relayId, "app", app.id),
+    enabled: editable && available,
+  })
+  const services = React.useMemo(() => {
+    const names = new Set([
+      ...app.containers.map((container) => container.service),
+      ...Object.keys(config.serviceLimits),
+    ])
+    if (names.size === 0 && config.sourceType !== "compose") names.add("app")
+    return [...names].sort()
+  }, [app.containers, config.serviceLimits, config.sourceType])
+  const groups = React.useMemo<Array<ResourceLimitsGroup>>(
+    () => [
+      {
+        fields: ["disk"],
+        key: APP_DISK_GROUP,
+        label: "App data",
+        limits: { ...NO_RESOURCE_LIMITS, diskBytes: config.diskLimitBytes },
+      },
+      ...services.map((service) => ({
+        fields: ["memory", "cpu"] as const,
+        key: `service:${service}`,
+        label:
+          config.sourceType === "compose" ? `Service ${service}` : "Container",
+        limits: { ...NO_RESOURCE_LIMITS, ...config.serviceLimits[service] },
+      })),
+    ],
+    [config.diskLimitBytes, config.serviceLimits, config.sourceType, services]
+  )
+  const save = React.useCallback(
+    async (limits: Readonly<Record<string, ResourceLimits>>) => {
+      await updateAppLimits({
+        data: {
+          appId: app.id,
+          diskLimitBytes: limits[APP_DISK_GROUP]?.diskBytes ?? null,
+          relayId: app.relayId,
+          serviceLimits: Object.fromEntries(
+            services.flatMap((service) => {
+              const next = limits[`service:${service}`]
+              return next &&
+                (next.cpuMillis !== null || next.memoryBytes !== null)
+                ? [
+                    [
+                      service,
+                      {
+                        cpuMillis: next.cpuMillis,
+                        memoryBytes: next.memoryBytes,
+                      },
+                    ],
+                  ]
+                : []
+            })
+          ),
+        },
+      })
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.apps.all }),
+        queryClient.invalidateQueries({
+          queryKey: resourceLimitsCapacityQueryOptions(
+            app.relayId,
+            "app",
+            app.id
+          ).queryKey,
+        }),
+      ])
+    },
+    [app.id, app.relayId, queryClient, services]
+  )
+  return (
+    <ResourceLimitsSection
+      capacity={capacity}
+      disabledReason={
+        available ? undefined : "Reconnect this app's Relay first"
+      }
+      editable={editable}
+      groups={groups}
+      hint={
+        config.sourceType === "compose" && services.length === 0
+          ? "Deploy the app once to set each service's memory and CPU."
+          : "Memory and CPU apply to running containers at once; removing one applies on the next deploy. Past its disk limit, the app is stopped."
+      }
+      onSave={save}
+    />
+  )
 }

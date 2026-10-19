@@ -203,7 +203,7 @@ export const queryKeys = {
       ["database-container", relayId, databaseId] as const,
     // Outside "databases": it asks the Relay for every instance's limits.
     capacity: (relayId: string, databaseId: string) =>
-      ["resource-limits-capacity", relayId, "database", databaseId] as const,
+      resourceLimitsCapacityKey(relayId, "database", databaseId),
   },
   fileActivity: (relayId: string, instanceId: string) =>
     ["file-activity", relayId, instanceId] as const,
@@ -729,21 +729,34 @@ export function managedDatabaseContainerQueryOptions(
   })
 }
 
-// What the node can still give the database, for its limits editor; null
-// for those who can't see the node.
+function resourceLimitsCapacityKey(
+  relayId: string,
+  kind: "app" | "database",
+  id: string
+) {
+  return ["resource-limits-capacity", relayId, kind, id] as const
+}
+
+// What the node can still give an app or database, for its limits editor;
+// null for those who can't see the node.
+export function resourceLimitsCapacityQueryOptions(
+  relayId: string,
+  kind: "app" | "database",
+  id: string
+) {
+  return queryOptions({
+    queryKey: resourceLimitsCapacityKey(relayId, kind, id),
+    queryFn: () => getResourceLimitsCapacity({ data: { id, kind, relayId } }),
+    retry: false,
+    staleTime: 30_000,
+  })
+}
+
 export function managedDatabaseCapacityQueryOptions(
   relayId: string,
   databaseId: string
 ) {
-  return queryOptions({
-    queryKey: queryKeys.databases.capacity(relayId, databaseId),
-    queryFn: () =>
-      getResourceLimitsCapacity({
-        data: { id: databaseId, kind: "database", relayId },
-      }),
-    retry: false,
-    staleTime: 30_000,
-  })
+  return resourceLimitsCapacityQueryOptions(relayId, "database", databaseId)
 }
 
 export function accessCapabilitiesQueryOptions() {

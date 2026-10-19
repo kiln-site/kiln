@@ -21,6 +21,7 @@ import {
   relayConsoleShareInputSchema,
   relayCreateDatabaseSchema,
   relayAppActionSchema,
+  relayAppLimitsSchema,
   relayAppNetworkSchema,
   relayStateDatabaseReadSchema,
   relayHostTerminalAttachSchema,
@@ -386,7 +387,28 @@ const apps = new AppDriver(
         service: appTailscaleMember(membership.memberId)!.service,
       })),
   },
-  lanes
+  lanes,
+  { allocations: docker.allocations, state: startupCore.state }
+)
+// Apps past their disk limit are stopped; each check is its own span.
+const appDiskLimitFiber = forkRelayEffect(
+  "relay.apps.diskLimits",
+  Effect.sleep("1 minute").pipe(
+    Effect.andThen(
+      Effect.tryPromise({
+        try: () => apps.enforceDiskLimits(),
+        catch: (cause) => cause,
+      }).pipe(
+        Effect.withSpan("Apps.enforceDiskLimits"),
+        Effect.catch((cause) =>
+          Effect.sync(() =>
+            reportRelayError(cause, { operation: "relay.apps.diskLimits" })
+          )
+        )
+      )
+    ),
+    Effect.forever
+  )
 )
 lifecycle.useAppServiceContainers(async (appId, service) => {
   await apps.get(appId)
@@ -985,6 +1007,7 @@ const sftpServer = await Effect.runPromise(
     Effect.onError(() =>
       Effect.sync(() => {
         tailscaleFirewallFiber.interruptUnsafe()
+        appDiskLimitFiber.interruptUnsafe()
         operationPruneFiber.interruptUnsafe()
         backupFiber.interruptUnsafe()
         provisioningFiber.interruptUnsafe()
@@ -1210,6 +1233,7 @@ function shutdownRelay(signal: NodeJS.Signals): Promise<void> {
         healthServer?.close()
         healthServer?.closeAllConnections()
         tailscaleFirewallFiber.interruptUnsafe()
+        appDiskLimitFiber.interruptUnsafe()
         operationPruneFiber.interruptUnsafe()
         tlsRefreshFiber.interruptUnsafe()
         backupFiber.interruptUnsafe()
@@ -1944,6 +1968,8 @@ async function executeControlRequest(
       return apps.deploy(relayDeployAppSchema.parse(request.payload))
     case "app.action":
       return apps.action(relayAppActionSchema.parse(request.payload))
+    case "app.limits.write":
+      return apps.setLimits(relayAppLimitsSchema.parse(request.payload))
     case "app.network.write":
       return apps.updateNetwork(relayAppNetworkSchema.parse(request.payload))
     case "app.network.routes.read": {

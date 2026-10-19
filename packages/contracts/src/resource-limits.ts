@@ -24,6 +24,15 @@ export const resourceLimitsSchema = z
   .strict()
 
 /**
+ * Memory and CPU for one of an app's services. An app's services share its
+ * data directory, so its disk limit is the app's.
+ */
+export const serviceResourceLimitsSchema = resourceLimitsSchema.pick({
+  cpuMillis: true,
+  memoryBytes: true,
+})
+
+/**
  * Limits a create or update request asks for. A missing field keeps the
  * current limit, or takes the kind's default for a new instance.
  */
@@ -42,6 +51,7 @@ export const observedResourceLimitsSchema = z.object({
 export type ResourceLimits = z.infer<typeof resourceLimitsSchema>
 export type ResourceLimitsInput = z.infer<typeof resourceLimitsInputSchema>
 export type ResourceLimitKey = keyof ResourceLimits
+export type ServiceResourceLimits = z.infer<typeof serviceResourceLimitsSchema>
 
 export const NO_RESOURCE_LIMITS: ResourceLimits = {
   cpuMillis: null,

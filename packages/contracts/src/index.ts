@@ -11,6 +11,7 @@ import {
   NO_RESOURCE_LIMITS,
   observedResourceLimitsSchema,
   resourceLimitsInputSchema,
+  serviceResourceLimitsSchema,
 } from "./resource-limits.js"
 import { relayInstanceStateReasonSchema } from "./instance-state-reason.js"
 import {
@@ -430,6 +431,12 @@ export const appPortSchema = z
   })
   .strict()
 
+// Memory and CPU limits by service name. A service without an entry has
+// none.
+export const appServiceLimitsSchema = z
+  .record(appServiceNameSchema, serviceResourceLimitsSchema)
+  .refine((limits) => Object.keys(limits).length <= 64, "Too many services")
+
 // Every source is kept, so switching between them loses nothing; only
 // `sourceType` deploys.
 export const appConfigSchema = z
@@ -444,11 +451,20 @@ export const appConfigSchema = z
       .max(512)
       .regex(/^\/[^\0:]*$/u, "Use an absolute path inside the container"),
     databaseIds: z.array(databaseIdSchema).max(32),
+    // The data directory's limit; past it, the app is stopped. Configs saved
+    // before limits have none.
+    diskLimitBytes: z
+      .number()
+      .int()
+      .min(MINIMUM_INSTANCE_DISK_LIMIT_BYTES)
+      .nullable()
+      .default(null),
     dockerfile: z.string().max(200_000),
     // KEY=VALUE lines, as in an env file.
     environment: z.string().max(65_536),
     image: z.string().trim().max(512),
     ports: z.array(appPortSchema).max(32),
+    serviceLimits: appServiceLimitsSchema.default({}),
     sourceType: appSourceTypeSchema,
   })
   .strict()
@@ -458,10 +474,12 @@ export const defaultAppConfig: z.infer<typeof appConfigSchema> = {
   compose: "",
   dataMount: "/data",
   databaseIds: [],
+  diskLimitBytes: null,
   dockerfile: "",
   environment: "",
   image: "",
   ports: [],
+  serviceLimits: {},
   sourceType: "image",
 }
 
@@ -478,6 +496,8 @@ export const relayAppContainerSchema = z.object({
   id: z.string().min(1),
   image: z.string(),
   labels: z.record(z.string(), z.string()),
+  // The memory and CPU it runs with. Absent from older Relays.
+  limits: observedResourceLimitsSchema.optional(),
   name: z.string().min(1),
   networks: z.array(z.string()),
   ports: z.array(appPortSchema),
@@ -503,6 +523,10 @@ export const relayAppSchema = z.object({
   // The app's data directory on the Relay's host.
   dataDirectory: z.string(),
   deployment: relayAppDeploymentSchema.nullable(),
+  // The data directory's limit, and its size when last measured. Absent
+  // from older Relays.
+  diskLimitBytes: z.number().int().positive().nullable().default(null),
+  diskUsedBytes: z.number().int().nonnegative().nullable().default(null),
   // The name its containers answer to on the app's network.
   hostname: z.string(),
   id: appIdSchema,
@@ -518,6 +542,14 @@ export const relayCreateAppSchema = z
 
 export const relayDeployAppSchema = z
   .object({ appId: appIdSchema, config: appConfigSchema, name: appNameSchema })
+  .strict()
+
+export const relayAppLimitsSchema = z
+  .object({
+    appId: appIdSchema,
+    diskLimitBytes: appConfigSchema.shape.diskLimitBytes,
+    serviceLimits: appServiceLimitsSchema,
+  })
   .strict()
 
 export const relayAppActionSchema = z
@@ -2156,6 +2188,7 @@ export type AppPort = z.infer<typeof appPortSchema>
 export type AppDeploymentState = z.infer<typeof appDeploymentStateSchema>
 export type RelayApp = z.infer<typeof relayAppSchema>
 export type RelayAppContainer = z.infer<typeof relayAppContainerSchema>
+export type RelayAppLimits = z.infer<typeof relayAppLimitsSchema>
 export type RelayAppDeployment = z.infer<typeof relayAppDeploymentSchema>
 export type RelayCreateApp = z.infer<typeof relayCreateAppSchema>
 export type RelayDeployApp = z.infer<typeof relayDeployAppSchema>

@@ -43,6 +43,9 @@ export const relayFilePutV1Feature = "files-put-v1"
 export const relayResourceLimitsV1Feature = "resource-limits-v1"
 // The Relay answers `database.limits.write` and reports databases' limits.
 export const relayDatabaseLimitsV1Feature = "database-limits-v1"
+// The Relay applies app configs' `serviceLimits` and `diskLimitBytes`, and
+// answers `app.limits.write`.
+export const relayAppLimitsV1Feature = "app-limits-v1"
 export const relayBrowserAuthorizationReviseMaxItems = 256
 
 export const relayControlOperations = [
@@ -109,6 +112,7 @@ export const relayControlOperations = [
   "app.delete",
   "app.deploy",
   "app.action",
+  "app.limits.write",
   "app.network.write",
   "app.network.routes.read",
   "app.network.routes.write",
@@ -219,6 +223,7 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "app.delete",
   "app.deploy",
   "app.action",
+  "app.limits.write",
   "app.network.write",
   "app.network.routes.write",
   "app.terminal.attach",
@@ -335,6 +340,7 @@ export function relayControlOperationChanges(
     case "app.delete":
     case "app.deploy":
     case "app.action":
+    case "app.limits.write":
     case "app.network.write":
     case "app.network.routes.write":
     case "backup.task.enqueue":
