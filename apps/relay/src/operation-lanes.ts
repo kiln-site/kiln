@@ -115,7 +115,7 @@ export class OperationLanes {
   readonly #waiting: Array<Waiter> = []
   readonly #nested: Array<Waiter> = []
   readonly #active = new Set<Waiter>()
-  readonly #exclusiveGrants = new Map<string, number>()
+  readonly #exclusiveStarts = new Map<string, number>()
   readonly #held = new Map<string, HeldLock>()
 
   constructor(options: OperationLanesOptions = {}) {
@@ -206,12 +206,13 @@ export class OperationLanes {
   }
 
   /**
-   * How many times `key` has been held exclusively. Something that keeps a
-   * resource open across operations, such as an SFTP file handle, notes this
-   * and stops once it changes: whatever replaced the resource ran between.
+   * How many operations holding `key` exclusively have started. Something
+   * that keeps a resource open across operations, such as an SFTP file
+   * handle, notes this and stops once it changes: whatever replaced the
+   * resource ran between.
    */
   exclusiveGeneration(key: string): number {
-    return this.#exclusiveGrants.get(key) ?? 0
+    return this.#exclusiveStarts.get(key) ?? 0
   }
 
   /** How many operations hold locks and how many wait, for diagnostics. */
@@ -238,6 +239,16 @@ export class OperationLanes {
           })
         }
         waiter.state = "running"
+        // Counted once it runs, so a request refused or withdrawn after its
+        // grant replaces nothing.
+        for (const lock of waiter.locks ?? []) {
+          if (lock.mode === "exclusive") {
+            this.#exclusiveStarts.set(
+              lock.key,
+              this.exclusiveGeneration(lock.key) + 1
+            )
+          }
+        }
         const fiber = yield* effect.pipe(
           Effect.ensuring(Effect.sync(() => this.#release(waiter))),
           Effect.forkDetach({ startImmediately: true })
@@ -289,15 +300,7 @@ export class OperationLanes {
   }
 
   #take(locks: ReadonlyArray<LaneLock>) {
-    for (const lock of locks) {
-      hold(this.#held, lock)
-      if (lock.mode === "exclusive") {
-        this.#exclusiveGrants.set(
-          lock.key,
-          this.exclusiveGeneration(lock.key) + 1
-        )
-      }
-    }
+    for (const lock of locks) hold(this.#held, lock)
   }
 
   /**

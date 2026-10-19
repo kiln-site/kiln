@@ -2309,13 +2309,24 @@ export class DockerDriver {
           Effect.catch(() => Effect.succeed(null))
         )
         if (exceeded(current, usedBytes)) {
-          yield* lanes.run(
-            {
-              label: "quota.stop",
-              locks: instanceLifecycleLocks(current.config.id),
-            },
-            stopOverQuota(usedBytes)
-          )
+          // Waits for its lane apart from the scan, so a server busy
+          // reinstalling doesn't hold up every other server's scan.
+          yield* lanes
+            .run(
+              {
+                label: "quota.stop",
+                locks: instanceLifecycleLocks(current.config.id),
+              },
+              stopOverQuota(usedBytes)
+            )
+            .pipe(
+              Effect.catch((cause) =>
+                Effect.sync(() => {
+                  reportRelayError(cause, { operation: "relay.quota.stop" })
+                })
+              ),
+              Effect.forkDetach
+            )
         }
       }).pipe(
         // Keep the last healthy value. Directory scans race with normal game

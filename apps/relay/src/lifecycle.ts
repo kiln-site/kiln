@@ -316,6 +316,9 @@ export class LifecycleDriver {
   #hostDataDirectoryPromise: Promise<string> | null = null
   #listenerMode: RelayProxySettings["mode"] | null = null
   readonly #gamePortSemaphore = Semaphore.makeUnsafe(1)
+  // The Tailscale CoreDNS container is shared by every server; starts on
+  // different servers can refresh it at once.
+  readonly #tailscaleDnsSemaphore = Semaphore.makeUnsafe(1)
   readonly #pendingGamePorts = new Set<string>()
   readonly #portLeases = new Map<string, PortLeaseRecord>()
   readonly #portLeaseTimers = new Map<string, NodeJS.Timeout>()
@@ -3439,7 +3442,21 @@ export class LifecycleDriver {
     return overview
   }
 
-  async #ensureTailscaleDns(
+  #ensureTailscaleDns(
+    settings: RelayTailscaleSettings,
+    address: string | null,
+    replace: boolean
+  ): Promise<void> {
+    return Effect.runPromise(
+      this.#tailscaleDnsSemaphore.withPermit(
+        lifecycleOperation(() =>
+          this.#ensureTailscaleDnsNow(settings, address, replace)
+        )
+      )
+    )
+  }
+
+  async #ensureTailscaleDnsNow(
     settings: RelayTailscaleSettings,
     address: string | null,
     replace: boolean

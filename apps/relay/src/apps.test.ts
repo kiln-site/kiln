@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 
 vi.mock("./command.js", () => import("./test/docker.js"))
 
+import { appLifecycleLocks, appReplaceLocks } from "./operation-plans.js"
 import { appRouteOwner } from "./relay-resources.js"
 import { fakeDocker } from "./test/docker.js"
 import {
@@ -445,6 +446,50 @@ describe("apps", () => {
       ])
     ).toEqual([["web", true]])
     await rm(bin, { force: true, recursive: true })
+  })
+
+  it("doesn't recreate an App deleted while its deployment waited", async () => {
+    const harness = await createdApp()
+    // The deploy request holds the App's lane while it records the
+    // deployment, and a delete arrives behind it.
+    let releaseDeploy: () => void = () => undefined
+    const deployRequest = Effect.runPromise(
+      harness.lanes.run(
+        { label: "app.deploy", locks: appLifecycleLocks(appId) },
+        Effect.promise(
+          () =>
+            new Promise<void>((resolve) => {
+              releaseDeploy = resolve
+            })
+        )
+      )
+    )
+    const deletion = Effect.runPromise(
+      harness.lanes.run(
+        { label: "app.delete", locks: appReplaceLocks(appId) },
+        Effect.promise(() =>
+          harness.apps.delete({ appId, deleteData: true })
+        )
+      )
+    )
+    await harness.apps.deploy(
+      relayDeployAppSchema.parse({
+        appId,
+        config: { ...defaultAppConfig, image: "nginx:alpine" },
+        name: "Website",
+      })
+    )
+    // As the control socket does before the delete waits its turn.
+    harness.apps.abortDeployment(appId)
+    releaseDeploy()
+    await deployRequest
+    await expect(deletion).resolves.toMatchObject({ deleted: true })
+    await fakeDocker.idle()
+
+    expect((await harness.apps.list()).map((app) => app.id)).not.toContain(
+      appId
+    )
+    expect(appContainers()).toHaveLength(0)
   })
 
   it("removes an app's containers, network, and data when deleted", async () => {

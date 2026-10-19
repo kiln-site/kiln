@@ -50,7 +50,7 @@ import {
 } from "./database-backups.js"
 import { createEncryptedPlatformBackup } from "./platform-backups.js"
 import { RelayBackupError } from "./effect/errors.js"
-import { promiseEffect } from "./effect/promise.js"
+import { promiseEffect, recoverPromise } from "./effect/promise.js"
 import { RelayStateStore } from "./effect/state.js"
 import type { OperationLanes } from "./operation-lanes.js"
 import { backupTaskLocks } from "./operation-plans.js"
@@ -287,7 +287,16 @@ export class BackupManager {
           .run(
             {
               label: `backup.${task.kind}`,
-              locks: backupTaskLocks(task.input),
+              // A task may name its game server by short ID or name.
+            locks: backupTaskLocks(task.input, (reference) =>
+              /^[a-f0-9]{40}$/u.test(reference)
+                ? reference
+                : recoverPromise(
+                    async () =>
+                      (await this.#findInstance(reference))?.id ?? reference,
+                    () => reference
+                  )
+            ),
             },
             this.#execute(task, controller.signal)
           )

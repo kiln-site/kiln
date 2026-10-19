@@ -442,6 +442,7 @@ describe("Relay control socket", () => {
   it("orders a change made by a server's short ID with one made by its full ID", async () => {
     const instanceId = "c".repeat(40)
     const release = deferred<void>()
+    const lookedUp = deferred<string>()
     const started: Array<string> = []
     const relay = await startRelay({
       execute: async (request) => {
@@ -450,11 +451,9 @@ describe("Relay control socket", () => {
         if (action === "stop") await release.promise
         return { ok: true }
       },
-      // Looking up a short ID takes a moment, as finding a container does.
+      // Finding the container a short ID names takes a moment.
       resolveInstance: (reference) =>
-        reference === instanceId
-          ? reference
-          : new Promise((resolve) => setTimeout(() => resolve(instanceId), 20)),
+        reference === instanceId ? reference : lookedUp.promise,
     })
     const { inbox, socket } = await relay.connect(await relay.pair())
 
@@ -466,9 +465,13 @@ describe("Relay control socket", () => {
       action: "start",
       instanceId,
     })
+    // Neither runs while the short ID is looked up.
+    await vi.waitFor(() => expect(relay.lanes.pending.waiting).toBe(2))
+    expect(started).toEqual([])
+
+    lookedUp.resolve(instanceId)
     await vi.waitFor(() => expect(started).toEqual(["stop"]))
-    await new Promise((resolve) => setTimeout(resolve, 50))
-    expect(started).toEqual(["stop"])
+    expect(relay.lanes.pending.waiting).toBe(1)
 
     release.resolve()
     expect(await inbox.next()).toMatchObject({ replyTo: stop })
@@ -923,6 +926,7 @@ async function startRelay(
   const server = createServer()
   const adoptions: Array<Promise<void>> = []
   const installation = options.installation
+  const lanes = new OperationLanes()
   const control = attachControlSocket({
     ...(installation
       ? {
@@ -936,7 +940,7 @@ async function startRelay(
         }
       : {}),
     execute: options.execute ?? (async () => ({ ok: true })),
-    lanes: new OperationLanes(),
+    lanes,
     requestLocks: (request) =>
       controlRequestLocks(
         request.operation,
@@ -1010,6 +1014,7 @@ async function startRelay(
       return connection
     },
     control,
+    lanes,
     loadInstallationId: (config: InstallationConfig) =>
       runtime.runPromise(loadInstallationId(config, state)),
     open,

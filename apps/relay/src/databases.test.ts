@@ -15,6 +15,7 @@ import {
   TEST_NAMESPACE,
   type RelayHarness,
 } from "./test/relay.js"
+import { controlRequestLocks } from "./operation-plans.js"
 
 const serverId = "a".repeat(40)
 const password = "correct-horse-battery-staple-1"
@@ -381,31 +382,49 @@ describe("database mutation serialization", () => {
       target: databaseContainer(id).id,
     })
 
-    const deleting = harness.databases.delete({
-      databaseId: id,
-      deleteData: true,
-    })
+    // As the control socket runs them: each in its turn in the lanes.
+    const inLane = <T>(
+      operation: "database.delete" | "database.network.write",
+      payload: Record<string, unknown>,
+      run: () => Promise<T>
+    ) =>
+      Effect.runPromise(
+        harness.lanes.run(
+          {
+            label: operation,
+            locks: controlRequestLocks(operation, payload, (ref) => ref)!,
+          },
+          Effect.promise(run)
+        )
+      )
+    const deleting = inLane("database.delete", { databaseId: id }, () =>
+      harness.databases.delete({ databaseId: id, deleteData: true })
+    )
     await removal.reached
-    const connecting = harness.databases.updateNetwork({
+    const connect = {
       connected: true,
       databaseId: id,
       instanceId: serverId,
-    })
+    } as const
+    const connecting = inLane("database.network.write", connect, () =>
+      harness.databases.updateNetwork(connect)
+    ).then(
+      () => null,
+      (error: unknown) => error
+    )
     removal.release()
 
     await expect(deleting).resolves.toMatchObject({ deleted: true })
-    await expect(connecting).rejects.toThrow("Database not found")
+    expect(await connecting).toMatchObject({ message: "Database not found" })
     expect(
       await Effect.runPromise(harness.state.listInstanceDatabaseConnections(serverId))
     ).toEqual([])
     expect([...server.networks.keys()]).toEqual([harness.resources.gameNetwork])
     // The failed connect released its lock for later operations.
     await expect(
-      harness.databases.updateNetwork({
-        connected: true,
-        databaseId: id,
-        instanceId: serverId,
-      })
+      inLane("database.network.write", connect, () =>
+        harness.databases.updateNetwork(connect)
+      )
     ).rejects.toThrow("Database not found")
   })
 })

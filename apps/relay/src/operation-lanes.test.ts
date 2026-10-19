@@ -248,6 +248,20 @@ describe("operation lanes", () => {
     })
   )
 
+  it.effect("counts an exclusive operation only once it starts", () =>
+    Effect.gen(function* () {
+      const lanes = new OperationLanes()
+      // Granted at once, then refused before it ran, as a request that
+      // fails its permission check is.
+      const refused = lanes.admit({ label: "delete", locks: [exclusive("a")] })
+      refused.cancel()
+      assert.strictEqual(lanes.exclusiveGeneration("a"), 0)
+
+      yield* lanes.run({ label: "restore", locks: [exclusive("a")] }, Effect.void)
+      assert.strictEqual(lanes.exclusiveGeneration("a"), 1)
+    })
+  )
+
   it.effect("refuses new work past its waiting limit", () =>
     Effect.gen(function* () {
       const lanes = new OperationLanes({ maxWaiting: 1 })

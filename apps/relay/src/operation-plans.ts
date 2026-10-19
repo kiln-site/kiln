@@ -96,12 +96,18 @@ export function fileRootWriteLocks(
  * A backup reads its target as it runs and a restore replaces it. Exports,
  * prunes, and deletes touch only stored artifacts.
  */
-export function backupTaskLocks(input: BackupTaskInput): Array<LaneLock> {
+export function backupTaskLocks(
+  input: BackupTaskInput,
+  resolveInstance: InstanceResolver
+): ReadonlyArray<LaneLock> | Promise<ReadonlyArray<LaneLock>> {
   if (input.kind !== "create" && input.kind !== "restore") return []
   const { id, kind } = input.target
   const restore = input.kind === "restore"
   if (kind === "instance") {
-    return restore ? instanceReplaceLocks(id) : instanceReadLocks(id)
+    return withInstance(
+      resolveInstance(id),
+      restore ? instanceReplaceLocks : instanceReadLocks
+    )
   }
   if (kind === "database") {
     return restore ? databaseLocks(id) : databaseReadLocks(id)

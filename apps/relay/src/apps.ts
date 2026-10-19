@@ -42,7 +42,7 @@ import {
   promiseEffect,
 } from "./effect/promise.js"
 import { traceRelayPromise } from "./effect/runtime.js"
-import type { OperationLanes } from "./operation-lanes.js"
+import { LaneRejectedError, type OperationLanes } from "./operation-lanes.js"
 import { appLifecycleLocks } from "./operation-plans.js"
 import {
   APP_SERVICE,
@@ -290,13 +290,25 @@ export class AppDriver {
     this.#wake(input.appId)
     forkPromise(() =>
       Effect.runPromise(
-        this.#lanes.run(
-          {
-            label: "app.deployment",
-            locks: appLifecycleLocks(input.appId),
-          },
-          promiseEffect(() => this.#runDeployment(input, deployment))
-        )
+        this.#lanes
+          .run(
+            {
+              label: "app.deployment",
+              locks: appLifecycleLocks(input.appId),
+              // A delete that ran first aborted it; it mustn't recreate the
+              // App it removed.
+              precondition: () => !deployment.abort.signal.aborted,
+            },
+            promiseEffect(() => this.#runDeployment(input, deployment))
+          )
+          .pipe(
+            Effect.catchIf(
+              (cause) =>
+                cause instanceof LaneRejectedError &&
+                cause.reason === "superseded",
+              () => Effect.void
+            )
+          )
       )
     )
     return this.get(input.appId)

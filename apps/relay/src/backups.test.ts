@@ -24,6 +24,7 @@ import { createServer } from "node:net"
 import { tmpdir } from "node:os"
 import { delimiter, join, resolve } from "node:path"
 import { afterAll, assert, beforeAll, describe, it } from "@effect/vitest"
+import { vi } from "vite-plus/test"
 import { Deferred, Effect, Exit, Fiber, type Scope } from "effect"
 import { TestClock } from "effect/testing"
 import { openPromise } from "yauzl"
@@ -566,8 +567,9 @@ describe("Relay archive restores", () => {
         const restoring = yield* manager
           .runPending()
           .pipe(Effect.forkChild({ startImmediately: true }))
-        yield* Effect.promise(
-          () => new Promise((resolvePromise) => setTimeout(resolvePromise, 50))
+        // The restore waits its turn behind the save.
+        yield* Effect.promise(() =>
+          vi.waitFor(() => assert.strictEqual(lanes.pending.waiting, 1))
         )
         assert.strictEqual(
           (yield* manager.get(restoreTaskId))?.result,
