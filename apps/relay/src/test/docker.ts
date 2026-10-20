@@ -1719,6 +1719,7 @@ export class FakeDocker {
     }
     // Each volume is as big as the files written into it.
     if (method === "GET" && path === "/system/df") {
+      await this.#checkpoint("system df")
       return json(200, {
         Volumes: [...this.volumes.values()].map((volume) => ({
           Name: volume.name,

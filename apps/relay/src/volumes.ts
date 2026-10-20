@@ -20,10 +20,9 @@ const VOLUME_KIND = "volume"
 const ID_LABEL = "kiln.volume.id"
 // The name it was made with, for when the Relay's own record of it is gone.
 const NAME_LABEL = "kiln.volume.name"
-// How often Docker measures every volume, and how soon it measures again
-// for a volume it hasn't measured yet, such as a new one.
+// How often Docker measures every volume, and how long a failed measure
+// waits before the next.
 const SIZE_REFRESH_MS = 60_000
-const UNMEASURED_RETRY_MS = 5_000
 
 export class RelayVolumeError extends Schema.TaggedError<RelayVolumeError>()(
   "RelayVolumeError",
@@ -39,11 +38,14 @@ export class RelayVolumes {
   readonly #config: RelayConfig
   readonly #engine: DockerEngine
   readonly #state: RelayStateStore["Service"]
-  // Sizes from Docker's last measure of every volume, by Docker name.
-  #sizes: { measuredAt: number; values: ReadonlyMap<string, number> } = {
-    measuredAt: 0,
-    values: new Map(),
-  }
+  // Sizes from Docker's last measure of every volume, by Docker name, and
+  // the volumes it covered.
+  #sizes: {
+    covered: ReadonlySet<string>
+    measuredAt: number
+    values: ReadonlyMap<string, number>
+  } = { covered: new Set(), measuredAt: 0, values: new Map() }
+  #measureFailedAt = 0
   #measuring: Promise<void> | null = null
 
   constructor(
@@ -185,17 +187,16 @@ export class RelayVolumes {
 
   /**
    * Measures every volume in the background when the last measure is old,
-   * or sooner for a volume it hasn't measured, so listing never waits on
-   * Docker walking every volume. Whether a measure is running.
+   * or right away for a volume it didn't cover, such as a new one, so
+   * listing never waits on Docker walking every volume. A failed measure
+   * waits as long before the next try. Whether a measure is running.
    */
   #measureSizes(names: ReadonlyArray<string>): boolean {
     if (this.#measuring) return true
-    const age = Date.now() - this.#sizes.measuredAt
-    const unmeasured = names.some((name) => !this.#sizes.values.has(name))
-    if (
-      age < SIZE_REFRESH_MS &&
-      !(unmeasured && age >= UNMEASURED_RETRY_MS)
-    ) {
+    const now = Date.now()
+    if (now - this.#measureFailedAt < SIZE_REFRESH_MS) return false
+    const stale = now - this.#sizes.measuredAt >= SIZE_REFRESH_MS
+    if (!stale && names.every((name) => this.#sizes.covered.has(name))) {
       return false
     }
     this.#measuring = Effect.runPromise(
@@ -203,21 +204,27 @@ export class RelayVolumes {
         "RelayVolumes.measure",
         this.#engine.volumeUsage({ timeout: 60_000 })
       ).pipe(
-        Effect.map((usage) => {
-          this.#sizes = {
-            measuredAt: Date.now(),
-            values: new Map(
-              usage.flatMap((volume) => {
-                const size = volume.UsageData?.Size
-                // Docker reports -1 for a volume it can't measure.
-                return size !== undefined && size >= 0
-                  ? [[volume.Name, size] as const]
-                  : []
-              })
-            ),
-          }
+        Effect.match({
+          onFailure: () => {
+            this.#measureFailedAt = Date.now()
+          },
+          onSuccess: (usage) => {
+            this.#sizes = {
+              // Those Docker can't measure, reported as -1, are covered too,
+              // so they don't start a measure on every list.
+              covered: new Set(usage.map((volume) => volume.Name)),
+              measuredAt: Date.now(),
+              values: new Map(
+                usage.flatMap((volume) => {
+                  const size = volume.UsageData?.Size
+                  return size !== undefined && size >= 0
+                    ? [[volume.Name, size] as const]
+                    : []
+                })
+              ),
+            }
+          },
         }),
-        Effect.ignore,
         Effect.ensuring(
           Effect.sync(() => {
             this.#measuring = null

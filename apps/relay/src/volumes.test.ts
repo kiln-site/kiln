@@ -30,6 +30,16 @@ async function listed(volumes: RelayVolumes) {
   return (await run(volumes.list())).volumes
 }
 
+// Lists until Docker's measure is done; it's real I/O against the fake.
+async function measured(volumes: RelayVolumes) {
+  let latest = await run(volumes.list())
+  for (let tries = 0; tries < 100 && latest.measuring; tries += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    latest = await run(volumes.list())
+  }
+  return latest
+}
+
 describe("Relay volumes", () => {
   it("makes a Docker volume named after its ID and name, labeled as the Relay's", async () => {
     const volumes = await relayVolumes()
@@ -94,15 +104,42 @@ describe("Relay volumes", () => {
       volumes: [{ sizeBytes: null }],
     })
 
-    let latest = first
-    for (let tries = 0; tries < 100 && latest.measuring; tries += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 5))
-      latest = await run(volumes.list())
-    }
-    expect(latest).toMatchObject({
+    expect(await measured(volumes)).toMatchObject({
       measuring: false,
       volumes: [{ sizeBytes: 5 }],
     })
+  })
+
+  it("measures a volume made since the last measure right away", async () => {
+    const volumes = await relayVolumes()
+    await run(volumes.create(volumeId, "data"))
+    await measured(volumes)
+
+    const later = await run(volumes.create("b".repeat(40), "cache"))
+    fakeDocker.volumes.get(later.dockerName)!.files.set("/a", "hi")
+
+    expect((await run(volumes.list())).measuring).toBe(true)
+    expect(await measured(volumes)).toMatchObject({
+      measuring: false,
+      volumes: [
+        { name: "cache", sizeBytes: 2 },
+        { name: "data", sizeBytes: 0 },
+      ],
+    })
+  })
+
+  it("stops measuring for a while once Docker fails to, so callers stop waiting", async () => {
+    const volumes = await relayVolumes()
+    await run(volumes.create(volumeId, "data"))
+    fakeDocker.failNext({ command: "system df" }, "context deadline exceeded")
+
+    expect((await run(volumes.list())).measuring).toBe(true)
+
+    expect(await measured(volumes)).toMatchObject({
+      measuring: false,
+      volumes: [{ sizeBytes: null }],
+    })
+    expect((await run(volumes.list())).measuring).toBe(false)
   })
 
   it("lists only its own volumes, with the containers that mount each", async () => {
