@@ -210,9 +210,13 @@ export class RelayVolumes {
           },
           onSuccess: (usage) => {
             this.#sizes = {
-              // Those Docker can't measure, reported as -1, are covered too,
-              // so they don't start a measure on every list.
-              covered: new Set(usage.map((volume) => volume.Name)),
+              // Every volume listed when it began is covered, with those
+              // Docker reports as -1 or leaves out (another driver, or
+              // mount options), so they don't start a measure on every list.
+              covered: new Set([
+                ...names,
+                ...usage.map((volume) => volume.Name),
+              ]),
               measuredAt: Date.now(),
               values: new Map(
                 usage.flatMap((volume) => {

@@ -128,6 +128,19 @@ describe("Relay volumes", () => {
     })
   })
 
+  it("stops measuring once Docker leaves a volume out of its measure", async () => {
+    const volumes = await relayVolumes()
+    const created = await run(volumes.create(volumeId, "data"))
+    // As Docker leaves out volumes of other drivers, such as NFS.
+    fakeDocker.volumes.get(created.dockerName)!.driver = "nfs"
+
+    expect(await measured(volumes)).toMatchObject({
+      measuring: false,
+      volumes: [{ sizeBytes: null }],
+    })
+    expect((await run(volumes.list())).measuring).toBe(false)
+  })
+
   it("stops measuring for a while once Docker fails to, so callers stop waiting", async () => {
     const volumes = await relayVolumes()
     await run(volumes.create(volumeId, "data"))
