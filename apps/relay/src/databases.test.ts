@@ -21,7 +21,7 @@ import { DockerEngine } from "./docker-engine.js"
 import { RelayStateStore } from "./effect/state.js"
 import { ProvisioningManager } from "./provisioning.js"
 import { serverProvisioning } from "./server-provisioning.js"
-import { controlRequestLocks } from "./operation-plans.js"
+import { controlRequestLocks, databaseLocks } from "./operation-plans.js"
 
 const serverId = "a".repeat(40)
 const password = "correct-horse-battery-staple-1"
@@ -239,6 +239,85 @@ describe("managed database provisioning", () => {
     })
     expect(fakeDocker.networks.has(networkOf(id))).toBe(false)
     expect(fakeDocker.volumes.has(volumeOf(id))).toBe(false)
+    await stop()
+  })
+
+  it("keeps a deleted job visible until what it made is gone, and never runs it", async () => {
+    const harness = await relayHarness()
+    const { manager, stop } = await provisioning(harness)
+    const id = "c".repeat(40)
+    await Effect.runPromise(
+      manager.prepare({
+        idempotencyKey: randomUUID(),
+        input: input(id),
+        instanceId: id,
+        kind: "database",
+        placeholder: harness.databases.placeholder(input(id)),
+      })
+    )
+
+    await expect(
+      Effect.runPromise(
+        manager.discard("database", id, async () => {
+          throw new Error("Docker unavailable")
+        })
+      )
+    ).rejects.toThrow("Docker unavailable")
+    expect(await harness.databases.list()).toEqual([
+      expect.objectContaining({ id, observedState: "failed" }),
+    ])
+    // Hearth's claim no longer starts it.
+    await expect(
+      Effect.runPromise(manager.claim("database", id))
+    ).resolves.toMatchObject({ observedState: "failed" })
+
+    await Effect.runPromise(manager.discard("database", id, async () => {}))
+    expect(await harness.databases.list()).toEqual([])
+    expect(fakeDocker.volumes.has(volumeOf(id))).toBe(false)
+    await stop()
+  })
+
+  it("refuses to delete a job the worker has taken", async () => {
+    const harness = await relayHarness()
+    const { manager, stop } = await provisioning(harness)
+    const id = "c".repeat(40)
+    // Another change to the database holds its lanes, so the worker takes
+    // the job and waits its turn.
+    let release: () => void = () => undefined
+    const held = Effect.runPromise(
+      harness.lanes.run(
+        { label: "database.action", locks: databaseLocks(id) },
+        Effect.promise(
+          () =>
+            new Promise<void>((resolve) => {
+              release = resolve
+            })
+        )
+      )
+    )
+    await Effect.runPromise(
+      manager.prepare({
+        idempotencyKey: randomUUID(),
+        input: input(id),
+        instanceId: id,
+        kind: "database",
+        placeholder: harness.databases.placeholder(input(id)),
+      })
+    )
+    await Effect.runPromise(manager.claim("database", id))
+    for (let tries = 0; tries < 10_000; tries += 1) {
+      const job = await Effect.runPromise(harness.state.getProvisioningJob(id))
+      if (job?.status === "running") break
+      await new Promise((resolve) => setImmediate(resolve))
+    }
+
+    await expect(
+      Effect.runPromise(manager.discard("database", id, async () => {}))
+    ).rejects.toThrow("Wait for the database to finish provisioning")
+
+    release()
+    await held
+    expect(await settled(harness, id)).toMatchObject({ observedState: "running" })
     await stop()
   })
 })

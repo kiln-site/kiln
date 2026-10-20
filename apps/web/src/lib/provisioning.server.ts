@@ -19,6 +19,21 @@ export function compensatePreparedProvisioning(
   )
 }
 
+/**
+ * Undoes a prepare that may or may not have reached the Relay. Once the
+ * Relay answers the cancel, no job can run, so Hearth's record goes too;
+ * if it can't be reached, the record stays so the instance can be deleted.
+ */
+export function abandonPreparedProvisioning(
+  cancel: () => Promise<boolean>,
+  unregister: () => Promise<void>
+) {
+  return promiseEffect(cancel).pipe(
+    Effect.andThen(promiseEffect(unregister)),
+    Effect.catch(() => Effect.void)
+  )
+}
+
 /** The instance ID a retried request with the same key provisions again. */
 export function provisioningInstanceId(idempotencyKey: string): string {
   const hex = idempotencyKey.replaceAll("-", "")

@@ -565,6 +565,17 @@ export class RelayStateStore extends Context.Service<
       kind: RelayProvisioningKind,
       instanceId: string
     ) => Effect.Effect<boolean, RelayStateError>
+    /**
+     * Fails a job that hasn't started, so the worker never takes it, and
+     * answers whether the job is failed now. A running job is left alone.
+     */
+    readonly withdrawProvisioningJob: (
+      kind: RelayProvisioningKind,
+      instanceId: string,
+      error: string,
+      placeholder: RelayProvisioningJob["placeholder"],
+      now: number
+    ) => Effect.Effect<boolean, RelayStateError>
     readonly failProvisioningJob: (
       instanceId: string,
       error: string,
@@ -2417,6 +2428,30 @@ const makeRelayStateStore = Effect.gen(function* () {
               AND kind = ${kind}
               AND status IN ('awaiting_claim', 'queued', 'failed')
             RETURNING instance_id AS instanceId
+          `
+          return rows.length > 0
+        })
+      ),
+    withdrawProvisioningJob: (kind, instanceId, error, placeholder, now) =>
+      run(
+        "withdraw_provisioning_job",
+        Effect.gen(function* () {
+          yield* sql`
+            UPDATE relay_instance_provisioning_jobs
+            SET status = 'failed',
+                placeholder_json = ${JSON.stringify(placeholder)},
+                error = ${error.slice(0, 2_048)},
+                updated_at = ${now}
+            WHERE instance_id = ${instanceId}
+              AND kind = ${kind}
+              AND status IN ('awaiting_claim', 'queued')
+          `
+          const rows = yield* sql<{ instanceId: string }>`
+            SELECT instance_id AS instanceId
+            FROM relay_instance_provisioning_jobs
+            WHERE instance_id = ${instanceId}
+              AND kind = ${kind}
+              AND status = 'failed'
           `
           return rows.length > 0
         })

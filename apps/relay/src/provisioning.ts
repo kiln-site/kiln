@@ -191,6 +191,47 @@ export class ProvisioningManager {
     })
   }
 
+  /**
+   * Removes a job that isn't running and whatever it made: it fails the
+   * job first, so the worker never takes it, runs `cleanup`, and only then
+   * drops the job, so if cleanup fails the job still shows what's left.
+   * Refuses a job the worker has taken. Callers hold the instance's lanes.
+   */
+  discard(
+    kind: RelayProvisioningKind,
+    instanceId: string,
+    cleanup: () => Promise<unknown>
+  ) {
+    return Effect.gen({ self: this }, function* () {
+      const job = yield* this.#state.getProvisioningJob(instanceId)
+      if (job?.kind !== kind) return false
+      const error = "Deleting it"
+      const withdrawn = yield* this.#state.withdrawProvisioningJob(
+        kind,
+        instanceId,
+        error,
+        placeholderAt(
+          this.#adapters,
+          job,
+          provisioningState("failed", job.attempt, error, "preparing")
+        ),
+        Date.now()
+      )
+      if (!withdrawn) {
+        return yield* Effect.fail(
+          new Error(
+            `Wait for the ${kind === "server" ? "game server" : kind} to finish provisioning before deleting it`
+          )
+        )
+      }
+      yield* this.#announce(kind)
+      yield* Effect.tryPromise({ try: cleanup, catch: (cause) => cause })
+      yield* this.#state.cancelProvisioningJob(kind, instanceId)
+      yield* this.#announce(kind)
+      return true
+    })
+  }
+
   run() {
     return Effect.gen({ self: this }, function* () {
       while (true) {

@@ -1872,32 +1872,24 @@ async function executeControlRequest(
     }
     case "database.delete": {
       const input = relayDeleteDatabaseSchema.parse(request.payload)
-      const job = await runRelayEffect(
-        "relay.database.provision.readForDelete",
-        startup.state.getProvisioningJob(input.databaseId)
-      )
-      if (job?.kind !== "database") return databases.delete(input)
-      // A job the worker has taken waits for this delete's lanes, and would
-      // create the database after it.
-      const cancelled = await runRelayEffect(
-        "relay.database.provision.cancelForDelete",
-        provisioningManager.cancel("database", input.databaseId)
-      )
-      if (!cancelled) {
-        throw new Error(
-          "Wait for the database to finish provisioning before deleting it"
+      // One still provisioning goes with whatever its create made. A failed
+      // create removed what it made, unless the Relay stopped partway.
+      const discarded = await runRelayEffect(
+        "relay.database.provision.discard",
+        provisioningManager.discard("database", input.databaseId, () =>
+          recoverPromise(
+            () => databases.delete({ ...input, deleteData: true }),
+            (cause) => {
+              if (
+                !(cause instanceof Error && cause.message === "Database not found")
+              )
+                throw cause
+            }
+          )
         )
-      }
-      // A failed create removed what it made, unless the Relay stopped
-      // partway through.
-      return recoverPromise(
-        () => databases.delete({ ...input, deleteData: true }),
-        (cause) => {
-          if (cause instanceof Error && cause.message === "Database not found")
-            return { databaseId: input.databaseId, deleted: true }
-          throw cause
-        }
       )
+      if (discarded) return { databaseId: input.databaseId, deleted: true }
+      return databases.delete(input)
     }
     case "database.wipe":
       return databases.wipe(relayDatabaseWipeSchema.parse(request.payload))

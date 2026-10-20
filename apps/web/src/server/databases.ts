@@ -56,8 +56,8 @@ import { accessPermissions, grantHasPermission } from "@/lib/permissions"
 import type { AccessPermission } from "@/lib/permissions"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import {
+  abandonPreparedProvisioning,
   claimPreparedProvisioning,
-  compensatePreparedProvisioning,
 } from "@/lib/provisioning.server"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { requireEligibleResourceUser } from "@/server/auth"
@@ -358,6 +358,9 @@ export const createManagedDatabase = createServerFn({ method: "POST" })
           "managedDatabases.record.delete",
           deleteManagedDatabaseRecordEffect(relay.id, id)
         )
+      // Recorded first, so a job the Relay holds always has a database in
+      // Hearth to show it and delete it from.
+      await register()
       const placeholder = await Effect.runPromise(
         promiseEffect(() =>
           databaseRpc(
@@ -369,10 +372,7 @@ export const createManagedDatabase = createServerFn({ method: "POST" })
           )
         ).pipe(
           Effect.map((value) => relayManagedDatabaseSchema.parse(value)),
-          Effect.tap(() => promiseEffect(register)),
-          Effect.tapError(() =>
-            compensatePreparedProvisioning(cancel, unregister)
-          )
+          Effect.tapError(() => abandonPreparedProvisioning(cancel, unregister))
         )
       )
       await claimPreparedProvisioning({
@@ -749,10 +749,19 @@ export const deleteManagedDatabase = createServerFn({ method: "POST" })
       relay,
       requestedBy: user.id,
     }
-    // One that never finished provisioning has no data to back up.
-    if (
-      databaseEngineSupportsLogicalBackups(database.engine) &&
-      !(await provisioningOnRelay(relay, data.databaseId, user.id))
+    const onRelay = await databaseOnRelay(relay, data.databaseId, user.id)
+    if (onRelay === "missing") {
+      // The Relay lists nothing of it, as when an earlier delete removed it
+      // but Hearth stopped before its record went, so there's nothing to
+      // back up. Any data volume left on the Relay stays.
+      await runAppEffect(
+        "managedDatabases.missingDelete",
+        deleteManagedDatabaseRecordEffect(relay.id, data.databaseId)
+      )
+    } else if (
+      // One that never finished provisioning has no data to back up.
+      onRelay === "running" &&
+      databaseEngineSupportsLogicalBackups(database.engine)
     ) {
       await deleteDatabaseWithFinalBackup({ ...deletion, user })
     } else {
@@ -762,28 +771,19 @@ export const deleteManagedDatabase = createServerFn({ method: "POST" })
     return { deleted: true }
   })
 
-// Whether the Relay is still provisioning the database, or failed to.
-async function provisioningOnRelay(
+// What the Relay has of the database: nothing, a provisioning job, or the
+// database itself.
+async function databaseOnRelay(
   relay: Awaited<ReturnType<typeof requiredRelay>>,
   databaseId: string,
   userId: string
-): Promise<boolean> {
-  const { relayConnectionFeatures } = await import("@/lib/relay-connection")
-  if (!relayConnectionFeatures(relay.id).has(relayDatabaseProvisioningV1Feature))
-    return false
-  const items = await databaseRpc(
-    relay,
-    "database.list",
-    { requests: [{ id: databaseId, view: "detail" }] },
-    30_000,
-    userId
-  )
-  return z
-    .array(
-      z.object({ database: relayManagedDatabaseSchema.optional() }).loose()
-    )
-    .parse(items)
-    .some((item) => item.database?.provisioning !== undefined)
+): Promise<"missing" | "provisioning" | "running"> {
+  const databases = z
+    .array(relayManagedDatabaseSchema)
+    .parse(await databaseRpc(relay, "database.list", {}, 30_000, userId))
+  const database = databases.find((candidate) => candidate.id === databaseId)
+  if (!database) return "missing"
+  return database.provisioning ? "provisioning" : "running"
 }
 
 function publishDatabaseChange(
