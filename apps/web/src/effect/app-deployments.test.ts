@@ -232,4 +232,3 @@ describeMysql("App deployments", () => {
     )
   })
 })
-
