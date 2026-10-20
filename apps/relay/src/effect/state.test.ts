@@ -1331,6 +1331,7 @@ describe("legacy machine mutation migration", () => {
                  DROP TABLE relay_schedule_runs;
                  DROP TABLE relay_schedule_tombstones;
                  DROP TABLE relay_schedules;
+                 DROP TABLE relay_volume_names;
                  DELETE FROM effect_sql_migrations WHERE migration_id >= 16`
               )
               database
