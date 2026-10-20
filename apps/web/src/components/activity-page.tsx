@@ -9,6 +9,7 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleGauge,
+  EllipsisVertical,
   FileClock,
   FolderClock,
   KeyRound,
@@ -23,6 +24,12 @@ import {
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@workspace/ui/components/dropdown-menu"
+import {
   Popover,
   PopoverContent,
   PopoverTrigger,
@@ -36,7 +43,11 @@ import {
 } from "@workspace/ui/components/select"
 import { cn } from "@workspace/ui/lib/utils"
 
-import { DataTableEmptyState } from "@/components/data-table"
+import { CopyIdentifierMenuItem } from "@/components/copy-identifier-menu-item"
+import {
+  DataTableActionGroup,
+  DataTableEmptyState,
+} from "@/components/data-table"
 import { DataTable } from "@/components/data-table-view"
 import {
   DataTableToolbar,
@@ -49,6 +60,7 @@ import {
   type InstanceIdentity,
 } from "@/components/instance-card"
 import { RelayKindIcon, ServerKindIcon } from "@/components/instance-kind-icon"
+import { RelativeTime } from "@/components/relative-time"
 import {
   ServerScopePicker,
   type ServerPickerOption,
@@ -253,18 +265,6 @@ const typeDetails: Record<
   updates: { icon: RefreshCw, label: "Updates" },
   system: { icon: FileClock, label: "System" },
 }
-
-const activityTime = new Intl.DateTimeFormat(undefined, {
-  hour: "2-digit",
-  minute: "2-digit",
-  second: "2-digit",
-})
-
-const activityDay = new Intl.DateTimeFormat(undefined, {
-  day: "2-digit",
-  month: "short",
-  year: "numeric",
-})
 
 const activityShortDate = new Intl.DateTimeFormat(undefined, {
   day: "numeric",
@@ -1480,10 +1480,13 @@ const activityTableDefinition = defineDataTable({
       header: "Time",
       sortDescFirst: true,
       sortFn: sortFn_basic,
-      cell: ({ row }) => <ActivityTime occurredAt={row.original.occurredAt} />,
-      meta: dataTableColumnMeta({
-        width: { base: "7rem", lg: "8rem" },
-      }),
+      cell: ({ row }) => (
+        <RelativeTime
+          className="type-meta text-foreground"
+          timestamp={row.original.occurredAt}
+        />
+      ),
+      meta: dataTableColumnMeta({ width: { base: "7rem", lg: "8rem" } }),
     }),
     activityColumnHelper.accessor(activityWhereName, {
       id: "where",
@@ -1516,6 +1519,16 @@ const activityTableDefinition = defineDataTable({
         width: { base: "minmax(0,1fr)", md: "minmax(0,1.4fr)" },
       }),
     }),
+    activityColumnHelper.display({
+      id: "actions",
+      header: () => <span className="sr-only">Actions</span>,
+      enableSorting: false,
+      cell: ({ row }) => <ActivityRowActions entry={row.original} />,
+      meta: dataTableColumnMeta(
+        { width: "3rem" },
+        { cellClassName: "px-1 sm:px-2", headerClassName: "px-1 sm:px-2" }
+      ),
+    }),
   ]),
   getRowId: (entry) => entry.id,
   model: { initialState: { sorting: [{ desc: true, id: "time" }] } },
@@ -1533,23 +1546,6 @@ const activityTableDefinition = defineDataTable({
   },
   virtualization: true,
 })
-
-function ActivityTime({ occurredAt }: { occurredAt: number }) {
-  const date = new Date(occurredAt)
-  return (
-    <time
-      dateTime={date.toISOString()}
-      className="type-meta flex min-w-0 flex-col font-mono whitespace-nowrap text-muted-foreground"
-    >
-      <span className="text-foreground/85" suppressHydrationWarning>
-        {activityTime.format(date)}
-      </span>
-      <span className="truncate" suppressHydrationWarning>
-        {activityDay.format(date)}
-      </span>
-    </time>
-  )
-}
 
 // The instance an event acted on, or its Relay for Relay-wide events.
 const ActivityWhere = React.memo(function ActivityWhere({
@@ -1685,6 +1681,67 @@ const ActivityAction = React.memo(function ActivityAction({
     />
   )
 })
+
+const targetIdLabels = {
+  app: "App ID",
+  database: "Database ID",
+  server: "Game server ID",
+} satisfies Record<NonNullable<ActivityEntry["target"]>["kind"], string>
+
+const ActivityRowActions = React.memo(function ActivityRowActions({
+  entry,
+}: {
+  entry: ActivityEntry
+}) {
+  const { actor, relay, target } = entry
+  // The Kiln system acts without an account.
+  const person = actor.id !== systemActorId
+  return (
+    <DataTableActionGroup>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="ghost"
+            aria-label={`More actions for ${entry.label}`}
+          >
+            <EllipsisVertical />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="min-w-48">
+          <CopyIdentifierMenuItem
+            label="Timestamp"
+            value={new Date(entry.occurredAt).toISOString()}
+          />
+          <CopyIdentifierMenuItem label="Action" value={entry.label} />
+          <DropdownMenuSeparator />
+          {target ? (
+            <CopyIdentifierMenuItem
+              label={targetIdLabels[target.kind]}
+              value={target.id}
+            />
+          ) : null}
+          <CopyIdentifierMenuItem label="Relay ID" value={relay.id} />
+          {person ? (
+            <>
+              <DropdownMenuSeparator />
+              <CopyIdentifierMenuItem label="User ID" value={actor.id} />
+              {actor.email ? (
+                <CopyIdentifierMenuItem label="User email" value={actor.email} />
+              ) : null}
+            </>
+          ) : null}
+          <DropdownMenuSeparator />
+          <CopyIdentifierMenuItem label="Activity ID" value={entry.id} />
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </DataTableActionGroup>
+  )
+})
+
+// Hearth's actor ID for events no person caused.
+const systemActorId = "system"
 
 function activityWhereName({ relay, target }: ActivityEntry): string {
   return target?.name ?? relay.name
