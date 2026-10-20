@@ -226,32 +226,47 @@ const ConnectedServersTableContent = React.memo(
     // another dialog opened in the meantime.
     const finishDialog = (target: MemberDialog) =>
       setDialog((current) => (current === target ? null : current))
+    // Each save sends the whole binding list, so allow one at a time: a
+    // double click lands before `pending` renders, and an older response
+    // arriving last would overwrite a newer save.
+    const saving = React.useRef(false)
+    const saveBindings = async (
+      target: MemberDialog,
+      bindings: Array<StackBinding>
+    ) => {
+      if (saving.current) return
+      saving.current = true
+      try {
+        await save.mutateAsync({ bindings, stack })
+        finishDialog(target)
+      } finally {
+        saving.current = false
+      }
+    }
     // Apply only the fields the dialog changed to the current binding, so a
     // change made elsewhere since it opened is kept.
-    const updateBinding = async (
+    const updateBinding = (
       target: MemberDialog,
       next: Partial<Pick<StackBinding, "enabled" | "hostname">>
-    ) => {
-      await save.mutateAsync({
-        bindings: stack.bindings.map((candidate) =>
+    ) =>
+      saveBindings(
+        target,
+        stack.bindings.map((candidate) =>
           stackBindingKey(candidate) === stackBindingKey(target.row.binding)
             ? { ...candidate, ...next }
             : candidate
-        ),
-        stack,
-      })
-      finishDialog(target)
-    }
-    const disconnect = async (target: MemberDialog) => {
-      await save.mutateAsync({
-        bindings: stack.bindings.filter(
+        )
+      )
+    const disconnect = (target: MemberDialog) =>
+      saveBindings(
+        target,
+        stack.bindings.filter(
           (candidate) =>
             stackBindingKey(candidate) !== stackBindingKey(target.row.binding)
-        ),
-        stack,
-      })
-      finishDialog(target)
-    }
+        )
+      )
+    // A dialog belongs to the network it was opened on.
+    if (dialog && dialog.row.stackId !== stack.id) setDialog(null)
     // Hide a dialog whose game server left the tailnet since it opened.
     const dialogBound = dialog
       ? dialog.row.stackId === stack.id &&
