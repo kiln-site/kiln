@@ -40,6 +40,11 @@ export interface ContainerHealthcheck {
   readonly intervalMs: number
   readonly timeoutMs: number
   readonly startPeriodMs: number
+  /**
+   * How often to check during the start period, until the first check
+   * passes. Docker 25 and later; earlier daemons check every `intervalMs`.
+   */
+  readonly startIntervalMs?: number
   readonly retries: number
 }
 
@@ -122,6 +127,9 @@ function containerCreateBody(spec: ContainerSpec): unknown {
               Interval: healthcheck.intervalMs * 1e6,
               Retries: healthcheck.retries,
               StartPeriod: healthcheck.startPeriodMs * 1e6,
+              ...(healthcheck.startIntervalMs !== undefined && {
+                StartInterval: healthcheck.startIntervalMs * 1e6,
+              }),
               Test: ["CMD-SHELL", healthcheck.command],
               Timeout: healthcheck.timeoutMs * 1e6,
             },

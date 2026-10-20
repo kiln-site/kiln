@@ -1218,6 +1218,14 @@ function databaseEnvironment(
         : {}
 }
 
+// Each check passes only once the database serves its network port. The
+// images first initialize on a temporary server that only listens on a local
+// socket, and checking that one would report ready before the restart.
+// Redis and Valkey answer any connection without a login with NOAUTH, which
+// is enough to know they're serving.
+//
+// Databases are checked twice a second while they start, so they're ready as
+// soon as they serve, and every five seconds after the first check passes.
 function databaseHealthcheck(engine: DatabaseEngine): ContainerHealthcheck {
   return {
     command:
@@ -1226,11 +1234,12 @@ function databaseHealthcheck(engine: DatabaseEngine): ContainerHealthcheck {
         : engine === "mariadb"
           ? "healthcheck.sh --connect --innodb_initialized"
           : engine === "postgres"
-            ? 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
-            : "kill -0 1",
+            ? 'pg_isready -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+            : `${engine === "redis" ? "redis-cli" : "valkey-cli"} ping | grep -qE '^(PONG|NOAUTH)'`,
     intervalMs: 5_000,
     retries: 24,
-    startPeriodMs: 10_000,
+    startIntervalMs: 500,
+    startPeriodMs: 60_000,
     timeoutMs: 3_000,
   }
 }
@@ -1430,6 +1439,10 @@ async function writeAclFile(
   )
 }
 
+// Half the start interval of the health check, so a passing check is seen
+// soon after it lands. Inspecting a container is a cheap local request.
+const READY_POLL_MS = 250
+
 async function waitUntilReady(
   engine: DockerEngine,
   container: string
@@ -1448,7 +1461,7 @@ async function waitUntilReady(
     if (state.Health.Status === "unhealthy") {
       throw new Error("Database failed its startup health check")
     }
-    await new Promise((resolve) => setTimeout(resolve, 2_000))
+    await new Promise((resolve) => setTimeout(resolve, READY_POLL_MS))
   }
   throw new Error("Database did not become ready within 3 minutes")
 }
