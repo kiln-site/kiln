@@ -119,14 +119,22 @@ async function settledDeployment(
   harness: RelayHarness,
   id = appId
 ): Promise<RelayApp> {
+  const [app] = await settledDeployments(harness, [id])
+  return app!
+}
+
+async function settledDeployments(
+  harness: RelayHarness,
+  ids: ReadonlyArray<string>
+): Promise<Array<RelayApp>> {
   // Docker and the filesystem are real I/O; each step lets them progress
   // before the clock moves on.
   for (let step = 0; step < 10_000; step += 1) {
-    const app = await harness.apps.get(id)
-    if (app.deployment?.state !== "running") {
+    const apps = await Promise.all(ids.map((id) => harness.apps.get(id)))
+    if (apps.every((app) => app.deployment?.state !== "running")) {
       clock = Date.now()
       vi.useRealTimers()
-      return app
+      return apps
     }
     await new Promise((resolve) => setImmediate(resolve))
     await vi.advanceTimersByTimeAsync(100)
@@ -588,10 +596,9 @@ describe("apps", () => {
     useDeploymentClock()
     await harness.apps.deploy(deployment({ serviceLimits: limits }))
     await harness.apps.deploy(deployment({ serviceLimits: limits }, otherId))
-    const outcomes = [
-      await settledDeployment(harness),
-      await settledDeployment(harness, otherId),
-    ].map((app) => app.deployment?.state)
+    const outcomes = (await settledDeployments(harness, [appId, otherId])).map(
+      (app) => app.deployment?.state
+    )
 
     expect([...outcomes].sort()).toEqual(["failed", "succeeded"])
     expect(
