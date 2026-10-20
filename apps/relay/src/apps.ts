@@ -2680,14 +2680,17 @@ function fileMounts(
       const host =
         typeof declared?.file === "string" ? hostPath(declared.file) : null
       if (!host) return true
+      // As Compose places them: a relative target, or none, under
+      // /run/secrets for a secret and / for a config.
+      const target = reference.target || reference.source
       volumes.push({
         read_only: true,
         source: host,
-        target:
-          reference.target ??
-          (kind === "secrets"
-            ? `/run/secrets/${reference.source}`
-            : `/${reference.source}`),
+        target: target.startsWith("/")
+          ? target
+          : kind === "secrets"
+            ? `/run/secrets/${target}`
+            : `/${target}`,
         type: "bind",
       })
       return false

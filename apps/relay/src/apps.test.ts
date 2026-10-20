@@ -1282,14 +1282,22 @@ describe("rolling deployments", () => {
       "    configs:",
       "      - source: site",
       "        target: /etc/nginx/conf.d/site.conf",
+      "      - source: app",
+      "        target: app.conf",
       "    secrets:",
       "      - source: key",
+      "      - source: password",
+      "        target: db_password",
       "configs:",
       "  site:",
       `    file: ${data}/site.conf`,
+      "  app:",
+      `    file: ${data}/app.conf`,
       "secrets:",
       "  key:",
       `    file: ${data}/key.pem`,
+      "  password:",
+      `    file: ${data}/password.txt`,
       "",
     ].join("\n")
 
@@ -1307,6 +1315,15 @@ describe("rolling deployments", () => {
           destination: "/run/secrets/key",
           readOnly: true,
           source: join(host, "apps", appId, "key.pem"),
+        }),
+        // Relative targets land where Compose puts them.
+        expect.objectContaining({
+          destination: "/app.conf",
+          source: join(host, "apps", appId, "app.conf"),
+        }),
+        expect.objectContaining({
+          destination: "/run/secrets/db_password",
+          source: join(host, "apps", appId, "password.txt"),
         }),
       ])
     )
