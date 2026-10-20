@@ -106,6 +106,8 @@ export class ProvisioningManager {
   // The span of the request that claimed each job, so the job's own span
   // continues the trace of the create that started it. Lost on restart.
   readonly #claims = new Map<string, Tracer.AnySpan>()
+  // Jobs being claimed this moment, whose noted spans the worker keeps.
+  readonly #claiming = new Set<string>()
   readonly #state: RelayStateStore["Service"]
   readonly #wake: Queue.Queue<void>
 
@@ -156,6 +158,7 @@ export class ProvisioningManager {
   claim(kind: RelayProvisioningKind, instanceId: string) {
     return Effect.gen({ self: this }, function* () {
       // Noted before the job can run, so the worker always finds it.
+      this.#claiming.add(instanceId)
       const claimedBy = yield* Effect.option(Effect.currentSpan)
       if (claimedBy._tag === "Some") {
         this.#claims.set(instanceId, claimedBy.value)
@@ -188,7 +191,8 @@ export class ProvisioningManager {
       yield* this.#announce(kind)
       return placeholder
     }).pipe(
-      Effect.onError(() => Effect.sync(() => this.#claims.delete(instanceId)))
+      Effect.onError(() => Effect.sync(() => this.#claims.delete(instanceId))),
+      Effect.ensuring(Effect.sync(() => this.#claiming.delete(instanceId)))
     )
   }
 
@@ -267,9 +271,11 @@ export class ProvisioningManager {
         if (this.#lanes.paused) return
         const job = yield* this.#state.claimNextProvisioningJob(Date.now())
         if (!job) {
-          // Nothing waits, so no claim's span can still be wanted, short of
-          // one being claimed this moment, which only loses its trace.
-          this.#claims.clear()
+          // Nothing waits, so only a job being claimed this moment can still
+          // want its noted span.
+          for (const instanceId of this.#claims.keys()) {
+            if (!this.#claiming.has(instanceId)) this.#claims.delete(instanceId)
+          }
           return
         }
         const adapter = adapterFor(this.#adapters, job)
