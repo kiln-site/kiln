@@ -38,6 +38,20 @@ describe("game server file roots", () => {
     ).resolves.toMatchObject({ directory: second, id: second })
   })
 
+  it("refuses an id two containers share, whatever its case", async () => {
+    const harness = await relayHarness()
+    await harness.seedServer({ id: first })
+    await harness.seedServer({
+      id: second,
+      labels: { "kiln.server.id": first.toUpperCase() },
+      name: "uppercase-duplicate",
+    })
+
+    await expect(harness.docker.findFileRoot(first)).rejects.toThrow(
+      `Duplicate kiln.server.id ${first}`
+    )
+  })
+
   it("follows a replaced container and forgets a removed one", async () => {
     const harness = await relayHarness()
     await harness.seedServer({ id: first })

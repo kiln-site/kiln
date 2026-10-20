@@ -17,6 +17,7 @@ import { instanceLifecycleLocks } from "./operation-plans.js"
 import {
   DockerEngine,
   DockerEngineError,
+  type DockerContainerSummary,
   type DockerLogOptions,
 } from "./docker-engine.js"
 import type { BrickCatalog } from "./bricks.js"
@@ -763,17 +764,32 @@ export class DockerDriver {
 
   /**
    * Where a game server's files live. Inspects only its container when
-   * addressed by its full id, rather than discovering every server the way
-   * `findInstance` does; other ids, and labels it can't settle, fall back to
-   * that.
+   * addressed by its full id, rather than every server the way
+   * `findInstance` does. Other ids, and a fleet whose labels discovery would
+   * reject as ambiguous, fall back to it.
    */
   async findFileRoot(
     id: string
   ): Promise<Pick<RelayInstanceConfig, "directory" | "id"> | null> {
     if (/^[a-f0-9]{40}$/u.test(id)) {
-      const containers = await this.#inspectManaged([
-        `${this.#config.serverIdLabel}=${id}`,
-      ])
+      const serverIdLabel = this.#config.serverIdLabel
+      const containers = await this.#inspectManaged((owned) => {
+        // Checked as discovery does, from the listing's labels: ids compare
+        // case-insensitively and must be unique in full and in short.
+        const ids = owned.map((container) =>
+          container.Labels?.[serverIdLabel]?.toLowerCase()
+        )
+        const valid = ids.filter(
+          (value): value is string =>
+            value !== undefined && /^[a-f0-9]{40}$/u.test(value)
+        )
+        const unambiguous =
+          valid.length === ids.length &&
+          new Set(valid).size === valid.length &&
+          new Set(valid.map((value) => value.slice(0, 8))).size === valid.length
+        const match = owned[ids.indexOf(id)]
+        return unambiguous && match ? [match.Id] : []
+      })
       const [container] = containers
       if (containers.length === 1 && container) {
         // The disk limit is the fleet's to assign, and isn't needed here.
@@ -781,7 +797,7 @@ export class DockerDriver {
           container,
           DEFAULT_INSTANCE_DISK_LIMIT_BYTES
         )
-        return { directory: config.directory, id: config.id }
+        if (config.id === id) return { directory: config.directory, id }
       }
     }
     return this.findInstance(id)
@@ -2469,11 +2485,13 @@ export class DockerDriver {
   // Runs on every snapshot: one listing, then one inspect per server, all on
   // the Docker socket.
   /**
-   * Inspects the server containers this Relay owns, narrowed by further label
-   * filters.
+   * Inspects the server containers this Relay owns that `select` picks from
+   * their listing, by container id.
    */
   #inspectManaged(
-    labels: ReadonlyArray<string>,
+    select: (
+      owned: ReadonlyArray<DockerContainerSummary>
+    ) => ReadonlyArray<string>,
     signal?: AbortSignal
   ): Promise<Array<DockerInspect>> {
     const engine = this.#engine
@@ -2482,15 +2500,14 @@ export class DockerDriver {
       Effect.gen(function* () {
         const listed = yield* engine.listContainers({
           all: true,
-          filters: { label: [config.managedLabel, ...labels] },
+          filters: { label: [config.managedLabel] },
         })
-        const ids = listed.flatMap((container) =>
-          container.Labels?.["kiln.resource.kind"] !== "database" &&
-          relayOwnsLabels(config, container.Labels)
-            ? [container.Id]
-            : []
+        const owned = listed.filter(
+          (container) =>
+            container.Labels?.["kiln.resource.kind"] !== "database" &&
+            relayOwnsLabels(config, container.Labels)
         )
-        return yield* engine.inspectContainers<DockerInspect>(ids)
+        return yield* engine.inspectContainers<DockerInspect>(select(owned))
       }).pipe(
         // One budget for the whole listing, as `docker inspect a b c` had.
         Effect.timeoutOrElse({
@@ -2509,7 +2526,10 @@ export class DockerDriver {
   }
 
   async #discover(signal?: AbortSignal): Promise<Array<DiscoveredInstance>> {
-    const containers = await this.#inspectManaged([], signal)
+    const containers = await this.#inspectManaged(
+      (owned) => owned.map((container) => container.Id),
+      signal
+    )
     if (containers.length === 0) return []
     // Servers created before disk limits were recorded take one from what
     // the node has left. Servers without a disk limit take none.
