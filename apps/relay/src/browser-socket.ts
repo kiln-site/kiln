@@ -232,6 +232,8 @@ export interface BrowserSocketOptions {
 }
 
 export interface BrowserSocketServer {
+  /** Direct file transfers running, across every Hearth. */
+  readonly activeTransfers: () => number
   readonly close: () => Promise<void>
   readonly handleRequest: (
     request: IncomingMessage,
@@ -370,6 +372,7 @@ export function attachBrowserSocket(
   )
 
   return {
+    activeTransfers: () => transfers.active,
     close: async () => {
       heartbeatFiber.interruptUnsafe()
       registry.close()

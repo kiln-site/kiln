@@ -72,6 +72,11 @@ import { resolveSftpAuthorization } from "@/lib/sftp-authorization"
 import { relayControlFailureError } from "@/lib/relay-control-errors"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { relayPausedError } from "@/lib/relay-availability"
+import {
+  countHearthRefusal,
+  recordRelayRequest,
+  type RelayConnectionCapacity,
+} from "@/lib/relay-metrics"
 
 export { relayControlEndpoint }
 export type { RelayEndpoint }
@@ -384,6 +389,14 @@ export function relayConnectionIds(): ReadonlyArray<string> {
   return Array.from(connections.keys())
 }
 
+/** How full each Relay connection is, for Hearth's metrics. */
+export function relayConnectionsCapacity(): ReadonlyArray<RelayConnectionCapacity> {
+  return Array.from(connections, ([relayId, connection]) => ({
+    relayId,
+    ...connection.capacity(),
+  }))
+}
+
 export function relayConnectionInstances(
   relayId: string
 ): ReadonlyArray<RelaySnapshot["instances"][number]> | null {
@@ -673,6 +686,19 @@ class RelayConnection {
     return this.#browserIssuerGeneration
   }
 
+  capacity(): Omit<RelayConnectionCapacity, "relayId"> {
+    const now = Date.now()
+    let oldestSentAt = now
+    for (const pending of this.#pending.values()) {
+      oldestSentAt = Math.min(oldestSentAt, pending.sentAt)
+    }
+    return {
+      oldestPendingMs: now - oldestSentAt,
+      pending: this.#pending.size,
+      unsettled: this.#unsettled.size,
+    }
+  }
+
   matches(relay: RelayEndpoint): boolean {
     return (
       this.#relay.hostname === relay.hostname &&
@@ -704,8 +730,12 @@ class RelayConnection {
           return relayConnectionFailure("Relay control socket is not connected")
         }
         if (this.#pending.size >= 32) {
-          return relayConnectionFailure(
-            "Relay control request limit reached; retry after pending work completes"
+          return countHearthRefusal(this.#relay.id).pipe(
+            Effect.andThen(
+              relayConnectionFailure(
+                "Relay control request limit reached; retry after pending work completes"
+              )
+            )
           )
         }
         const id = randomUUID()
@@ -728,8 +758,9 @@ class RelayConnection {
           type: "request",
           v: 1,
         }
+        const sentAt = Date.now()
         return Effect.callback<unknown, RelayUnavailableError>((resume) => {
-          this.#pending.set(id, { deadline, operationId, resume })
+          this.#pending.set(id, { deadline, operationId, resume, sentAt })
           socket.send(JSON.stringify(request), (cause) => {
             if (!cause) return
             this.#pending.delete(id)
@@ -756,6 +787,14 @@ class RelayConnection {
           })
         }).pipe(
           Effect.timeout(duration),
+          Effect.onExit((exit) =>
+            recordRelayRequest(
+              this.#relay.id,
+              operation,
+              Date.now() - sentAt,
+              exit
+            )
+          ),
           Effect.catchTag("TimeoutError", () =>
             operationId
               ? unknownOutcome(
@@ -1865,6 +1904,7 @@ interface PendingRequest {
   readonly resume: (
     effect: Effect.Effect<unknown, RelayUnavailableError>
   ) => void
+  readonly sentAt: number
 }
 
 interface UnsettledChange {

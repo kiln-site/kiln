@@ -182,3 +182,32 @@ process memory is shown. Relays that predate memory reporting show
 Hearth reads these values from its live Relay connection, so the column adds no
 Relay requests. When OpenTelemetry export is configured, the Relay also reports
 `relay.memory.*` gauges once a minute.
+
+## Capacity metrics
+
+Every user of a Relay shares its control connection and its file, transfer,
+and terminal limits. With `OTEL_METRICS_EXPORTER=otlp`, Hearth and the Relay
+report how full they are, so you can see when one caller crowds out the rest.
+Gauges are sampled every ten seconds. Every metric is labelled with
+`relay.id`; other labels are small fixed sets, never users, paths, or request
+IDs.
+
+| Metric                                                                   | From   | Meaning                                                                                                                                |
+| ------------------------------------------------------------------------ | ------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `hearth.relay.requests.pending`                                          | Hearth | Requests Hearth has sent the Relay and is waiting on; it sends at most 32.                                                             |
+| `hearth.relay.requests.oldest_age`                                       | Hearth | How long the oldest of those has waited.                                                                                               |
+| `hearth.relay.changes.unsettled`                                         | Hearth | Changes whose connection dropped before they answered, whose outcome Hearth is still asking for.                                       |
+| `hearth.relay.requests.refused`                                          | Hearth | Requests turned away for lack of room, by `reason`: `hearth_limit` (Hearth's 32) or `relay_limit` (the Relay refused).                 |
+| `hearth.relay.request.duration`                                          | Hearth | Time from sending a request to it settling, by `relay.operation` and `outcome` (`ok`, `error`, `timeout`, `cancelled`, `refused`).     |
+| `relay.control.requests.in_flight`, `relay.control.requests.oldest_age`  | Relay  | Control requests the Relay is running, across every Hearth session, and how long the oldest has run.                                   |
+| `relay.control.work.orphaned`, `relay.control.work.oldest_orphaned_age`  | Relay  | Work still running after its request ended, such as a read Hearth cancelled that the Relay can't stop. It holds no request slot.       |
+| `relay.control.requests.refused`                                         | Relay  | Requests the Relay refused, by `reason`: `in_flight_limit` (its 32) or `lanes_full` (too many changes waiting in the operation lanes). |
+| `relay.control.reverse_requests.pending`                                 | Relay  | Requests the Relay sent Hearth that are waiting for an answer.                                                                         |
+| `relay.files.directory_size.scans`, `relay.files.directory_size.pending` | Relay  | Folder-size scans running and folders waiting for one, by `filesystem` (`instances`, `apps`, `host`).                                  |
+| `relay.files.cursors`                                                    | Relay  | Open directory listing and search cursors, by `filesystem` and `kind`.                                                                 |
+| `relay.browser.transfers.active`                                         | Relay  | Direct file transfers between browsers and the Relay.                                                                                  |
+| `relay.terminals.sessions`, `relay.terminals.viewers`                    | Relay  | Terminal sessions open and the viewers attached to them.                                                                               |
+
+A frozen Relay can't report, so during an outage Hearth's metrics are the ones
+that move. Ten-second samples can miss a spike shorter than that; the refusal
+counters and request durations record every request.

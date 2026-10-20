@@ -78,6 +78,7 @@ import { directoryApparentSizeEffect } from "./disk-usage.js"
 import { RelayFilesystemError } from "./effect/errors.js"
 import { ensuringPromise, promiseEffect } from "./effect/promise.js"
 import { decodeNbt, encodeNbt } from "./nbt.js"
+import type { FilesystemCapacity } from "./relay-capacity.js"
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024
 const MAX_FINGERPRINT_BYTES = 8 * 1024 * 1024
@@ -121,6 +122,16 @@ export class FilesystemDriver {
   ) {
     this.#config = config
     this.#saveInPlace = options.saveInPlace ?? false
+  }
+
+  /** What this driver's shared scan and cursor limits hold right now. */
+  capacity(): FilesystemCapacity {
+    return {
+      directorySizeScans: this.#activeDirectorySizeScans.size,
+      directorySizePending: this.#directorySizeQueue.length,
+      directoryCursors: this.#directoryScans.size + this.#openingDirectoryScans,
+      searchCursors: this.#searchScans.size,
+    }
   }
 
   tree(instance: FileRoot) {

@@ -31,6 +31,8 @@ import {
   initializeRelayFromEnvironment,
   maintainPersistedRelayConnections,
 } from "./lib/relay-registry"
+import { relayConnectionsCapacity } from "./lib/relay-connection"
+import { startRelayMetrics, stopRelayMetrics } from "./lib/relay-metrics"
 
 await migrateDatabase()
 // Before the app runtime starts, so telemetry carries the ID, and before
@@ -39,6 +41,7 @@ await loadInstallationId()
 startInstanceDirectorySync()
 startGitHubSyncPolling()
 startAppDeploymentPolling()
+startRelayMetrics(relayConnectionsCapacity)
 
 await Effect.runPromise(
   Effect.tryPromise({
@@ -92,6 +95,7 @@ export function shutdownHearth(): Promise<void> {
     stopInstanceDirectorySync(),
     stopGitHubSyncPolling(),
     stopAppDeploymentPolling(),
+    stopRelayMetrics(),
   ])
     .then(() => Effect.runPromise(stopWarmCacheRefreshes))
     .then(disposeAppRuntime)

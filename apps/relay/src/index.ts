@@ -161,6 +161,7 @@ import { adoptInstallationId, loadInstallationId } from "./installation.js"
 import { LifecycleDriver } from "./lifecycle.js"
 import { nodeSnapshot } from "./node.js"
 import { reportRelayMemoryMetrics } from "./relay-memory.js"
+import { sampleRelayCapacity } from "./relay-capacity.js"
 import { RelayPairingError } from "./effect/errors.js"
 import {
   loadOrCreateRelayIdentity,
@@ -983,6 +984,23 @@ const browserSocket = attachBrowserSocket({
   state: startup.state,
   subscribeSnapshots: (listener) => snapshotHub.subscribe(listener),
 })
+// How full the Relay's shared capacity is, for its metrics.
+const capacityMetricsFiber = forkRelayEffect(
+  "relay.capacity.metrics",
+  sampleRelayCapacity(
+    () => config.nodeId,
+    () => ({
+      control: controlSocket.capacity(),
+      filesystems: [
+        { filesystem: "instances", capacity: filesystem.capacity() },
+        { filesystem: "apps", capacity: appFilesystem.capacity() },
+        { filesystem: "host", capacity: hostFilesystem.capacity() },
+      ],
+      terminals: terminals.capacity(),
+      transfers: browserSocket.activeTransfers(),
+    })
+  )
+)
 let startingSftpServer: Awaited<ReturnType<typeof attachSftpServer>> | null =
   null
 let healthServer: HttpServer | null = null
@@ -1027,6 +1045,7 @@ const sftpServer = await Effect.runPromise(
     Effect.onError(() =>
       Effect.sync(() => {
         tailscaleFirewallFiber.interruptUnsafe()
+        capacityMetricsFiber.interruptUnsafe()
         appDiskLimitFiber.interruptUnsafe()
         operationPruneFiber.interruptUnsafe()
         backupFiber.interruptUnsafe()
@@ -1253,6 +1272,7 @@ function shutdownRelay(signal: NodeJS.Signals): Promise<void> {
         healthServer?.close()
         healthServer?.closeAllConnections()
         tailscaleFirewallFiber.interruptUnsafe()
+        capacityMetricsFiber.interruptUnsafe()
         appDiskLimitFiber.interruptUnsafe()
         operationPruneFiber.interruptUnsafe()
         tlsRefreshFiber.interruptUnsafe()

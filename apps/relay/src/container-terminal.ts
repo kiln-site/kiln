@@ -16,6 +16,7 @@ import { Effect } from "effect"
 import type { RelayConfig } from "./config.js"
 import { DockerEngine } from "./docker-engine.js"
 import { forkPromise, recoverPromise } from "./effect/promise.js"
+import type { TerminalCapacity } from "./relay-capacity.js"
 
 // Each person gets one terminal session per target: a database's client, or a
 // shell in one of an app's services. It belongs to the Relay, so it outlives
@@ -162,6 +163,15 @@ export class ContainerTerminals {
 
   constructor(config: Pick<RelayConfig, "dockerSocket">) {
     this.#docker = new DockerEngine(config.dockerSocket)
+  }
+
+  /** Sessions open, and the viewers attached to them. */
+  capacity(): TerminalCapacity {
+    let viewers = 0
+    for (const session of this.#sessions.values()) {
+      viewers += session.viewers.size
+    }
+    return { sessions: this.#sessions.size, viewers }
   }
 
   // Attaches and restarts run one at a time per person and target, so pages

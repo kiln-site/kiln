@@ -67,6 +67,7 @@ import type {
 } from "@workspace/contracts"
 
 import { RelayNotFoundError } from "./effect/errors.js"
+import { promiseEffect } from "./effect/promise.js"
 import {
   reportRelayError,
   traceParentSpan,
@@ -90,6 +91,7 @@ import {
   type OperationLanes,
 } from "./operation-lanes.js"
 import type { RelayIdentity } from "./effect/identity.js"
+import { countRelayRefusal, type ControlCapacity } from "./relay-capacity.js"
 import type {
   RelayClientGrant,
   RelayOperationRecord,
@@ -145,6 +147,8 @@ export interface ControlSocketOptions {
 }
 
 export interface ControlSocketServer {
+  /** How full the control sessions are, across every Hearth session. */
+  readonly capacity: () => ControlCapacity
   readonly close: () => Promise<void>
   readonly requestClients: (
     operation: RelayControlOperation,
@@ -166,6 +170,10 @@ export function attachControlSocket(
     finished: new Map(),
     running: new Map(),
     writes: new Set(),
+  }
+  const capacity: CapacityTracking = {
+    orphanedWork: new Set(),
+    sessions: new Set(),
   }
   const sockets = new Set<WebSocket>()
   const socketSessions = new WeakMap<WebSocket, string>()
@@ -214,6 +222,7 @@ export function attachControlSocket(
       authenticatedSockets,
       reverseRequesters,
       operations,
+      capacity,
       request.socket.remoteAddress
     )
     socket.once("close", () => {
@@ -245,6 +254,30 @@ export function attachControlSocket(
   )
 
   return {
+    capacity: () => {
+      const now = Date.now()
+      let inFlight = 0
+      let reversePending = 0
+      let oldestReceivedAt = now
+      for (const session of capacity.sessions) {
+        inFlight += session.inFlight.size
+        reversePending += session.reversePending.size
+        for (const request of session.inFlight.values()) {
+          oldestReceivedAt = Math.min(oldestReceivedAt, request.receivedAt)
+        }
+      }
+      let oldestWorkStartedAt = now
+      for (const work of capacity.orphanedWork) {
+        oldestWorkStartedAt = Math.min(oldestWorkStartedAt, work.startedAt)
+      }
+      return {
+        inFlight,
+        oldestInFlightMs: now - oldestReceivedAt,
+        orphanedWork: capacity.orphanedWork.size,
+        oldestOrphanedWorkMs: now - oldestWorkStartedAt,
+        reversePending,
+      }
+    },
     close: () =>
       Effect.runPromise(
         Effect.gen(function* () {
@@ -308,6 +341,28 @@ interface TrackedWebSocket extends WebSocket {
   kilnAlive?: boolean
 }
 
+interface InFlightRequest {
+  readonly controller: AbortController
+  fiber: Fiber.Fiber<void, unknown> | null
+  readonly receivedAt: number
+  readonly ticket: LaneTicket | null
+  /** The request's work while it runs, so it's seen if it outlives it. */
+  work: RunningWork | null
+}
+
+interface RunningWork {
+  readonly startedAt: number
+}
+
+// What every session is running, read for the Relay's capacity metrics.
+interface CapacityTracking {
+  readonly orphanedWork: Set<RunningWork>
+  readonly sessions: Set<{
+    readonly inFlight: ReadonlyMap<string, InFlightRequest>
+    readonly reversePending: ReadonlyMap<string, unknown>
+  }>
+}
+
 function authenticateSocket(
   socket: WebSocket,
   options: ControlSocketOptions,
@@ -323,6 +378,7 @@ function authenticateSocket(
     ) => Promise<unknown>
   >,
   operations: OperationRegistry,
+  capacity: CapacityTracking,
   peerAddress: string | undefined
 ): void {
   const unsignedChallenge = {
@@ -349,15 +405,10 @@ function authenticateSocket(
   let previousSnapshot: RelaySnapshot | null = null
   let snapshotDeltasEnabled = false
   let nodeResourceDeltasEnabled = false
-  const inFlight = new Map<
-    string,
-    {
-      controller: AbortController
-      fiber: Fiber.Fiber<void, unknown> | null
-      ticket: LaneTicket | null
-    }
-  >()
+  const inFlight = new Map<string, InFlightRequest>()
   const reversePending = new Map<string, Deferred.Deferred<unknown, Error>>()
+  const tracked = { inFlight, reversePending }
+  capacity.sessions.add(tracked)
   let authenticationAttempt: Fiber.Fiber<void, unknown> | null = null
   const authenticationTimeoutFiber = Effect.runFork(
     Effect.sleep(relayAuthenticationWindowMs).pipe(
@@ -447,6 +498,9 @@ function authenticateSocket(
       return
     }
     if (inFlight.size >= MAX_IN_FLIGHT_REQUESTS) {
+      Effect.runFork(
+        countRelayRefusal(options.identity.fingerprint, "in_flight_limit")
+      )
       sendError(
         socket,
         message.id,
@@ -486,10 +540,26 @@ function authenticateSocket(
       locks === null
         ? null
         : options.lanes.admit({ label: message.operation, locks })
-    const request = {
+    const request: InFlightRequest = {
       controller,
-      fiber: null as Fiber.Fiber<void, unknown> | null,
+      fiber: null,
+      receivedAt,
       ticket,
+      work: null,
+    }
+    const onWork = (running: Promise<unknown>) => {
+      const work = { startedAt: Date.now() }
+      request.work = work
+      const settled = () => {
+        if (request.work === work) request.work = null
+        capacity.orphanedWork.delete(work)
+      }
+      Effect.runFork(
+        promiseEffect(() => running).pipe(
+          Effect.ensuring(Effect.sync(settled)),
+          Effect.ignore
+        )
+      )
     }
     controller.signal.addEventListener("abort", () => ticket?.cancel(), {
       once: true,
@@ -507,7 +577,8 @@ function authenticateSocket(
               client,
               controller,
               ticket,
-              receivedAt
+              receivedAt,
+              onWork
             )
           )
         ),
@@ -516,6 +587,9 @@ function authenticateSocket(
             if (inFlight.get(message.id) === request) {
               inFlight.delete(message.id)
             }
+            // Work its request no longer waits for keeps running; it's
+            // counted until it settles.
+            if (request.work) capacity.orphanedWork.add(request.work)
             // A request refused before it ran gives up its place in line.
             ticket?.cancel()
           })
@@ -538,6 +612,7 @@ function authenticateSocket(
       request.fiber?.interruptUnsafe()
     }
     inFlight.clear()
+    capacity.sessions.delete(tracked)
     for (const pending of reversePending.values()) {
       Effect.runFork(
         Deferred.fail(pending, new Error("Hearth control connection closed"))
@@ -585,7 +660,8 @@ function authenticateSocket(
     sessionClient: RelayClientGrant,
     controller: AbortController,
     ticket: LaneTicket | null,
-    receivedAt: number
+    receivedAt: number,
+    onWork: (running: Promise<unknown>) => void
   ): EffectType.Effect<void> {
     const duration = relayControlRequestTimeoutMs(request, receivedAt)
     if (duration === null) {
@@ -653,8 +729,8 @@ function authenticateSocket(
             })
             return
           }
-          const execution = promiseOperation(() =>
-            traceRelayPromise(
+          const execution = promiseOperation(() => {
+            const running = traceRelayPromise(
               "relay.control.execute",
               () =>
                 options.execute(
@@ -671,7 +747,9 @@ function authenticateSocket(
                 ),
               { "relay.operation": request.operation }
             )
-          )
+            onWork(running)
+            return running
+          })
           if (
             options.lanes.paused &&
             relayControlOperationRefusedWhilePaused(request.operation)
@@ -748,7 +826,7 @@ function authenticateSocket(
     )
     return traced.pipe(
       Effect.catch((cause) =>
-        Effect.sync(() => {
+        Effect.suspend(() => {
           const failure = controlFailureFor(
             request,
             cause,
@@ -761,6 +839,10 @@ function authenticateSocket(
             failure.message,
             failure.retryable
           )
+          // Too many changes were already waiting in the lanes.
+          return failure.code === "too_many_requests"
+            ? countRelayRefusal(options.identity.fingerprint, "lanes_full")
+            : Effect.void
         })
       )
     )

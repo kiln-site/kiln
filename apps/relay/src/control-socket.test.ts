@@ -1088,6 +1088,49 @@ describe("Relay control socket", () => {
     expect([...answered].sort()).toEqual([...held].sort())
   })
 
+  it("counts work Hearth stopped waiting for until it settles", async () => {
+    const started = deferred<void>()
+    const finish = deferred<void>()
+    onTestFinished(() => finish.resolve())
+    const relay = await startRelay({
+      // Like a file read, it doesn't stop when its request is cancelled.
+      execute: async () => {
+        started.resolve()
+        await finish.promise
+        return { ok: true }
+      },
+    })
+    const { socket } = await relay.connect(await relay.pair())
+
+    const id = sendRequest(socket, "relay.snapshot", {})
+    await started.promise
+    expect(relay.control.capacity()).toMatchObject({
+      inFlight: 1,
+      orphanedWork: 0,
+    })
+
+    socket.send(
+      JSON.stringify({
+        id: randomBytes(12).toString("hex"),
+        replyTo: id,
+        type: "cancel",
+        v: 1,
+      })
+    )
+    // The cancel frees the request's place, but its work runs on.
+    await vi.waitFor(() =>
+      expect(relay.control.capacity()).toMatchObject({
+        inFlight: 0,
+        orphanedWork: 1,
+      })
+    )
+
+    finish.resolve()
+    await vi.waitFor(() =>
+      expect(relay.control.capacity()).toMatchObject({ orphanedWork: 0 })
+    )
+  })
+
   it("enforces the relative request timeout", async () => {
     const relay = await startRelay({
       execute: async (request, _client, signal) => {
