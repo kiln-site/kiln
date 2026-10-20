@@ -27,7 +27,6 @@ import {
   deleteAppRecordEffect,
   listAppRecordsEffect,
   renameAppRecordEffect,
-  saveAppConfigEffect,
   updateAppConfigEffect,
 } from "@/effect/managed-apps"
 import { runAppEffect } from "@/effect/runtime"
@@ -231,11 +230,13 @@ export const createApp = createServerFn({ method: "POST" })
 export const updateAppConfig = createServerFn({ method: "POST" })
   .validator(appConfigInputSchema)
   .handler(async ({ data }) => {
-    const { app } = await authorizedApp(data, "app.manage")
-    const config = appConfigSchema.parse({ ...app.config, ...data.config })
-    await runAppEffect(
+    await authorizedApp(data, "app.manage")
+    // Only the fields this edit changes, into the config saved now.
+    const config = await runAppEffect(
       "apps.config.save",
-      saveAppConfigEffect(data.relayId, data.appId, config)
+      updateAppConfigEffect(data.relayId, data.appId, (current) =>
+        appConfigSchema.parse({ ...current, ...data.config })
+      )
     )
     publishAppChange(data.relayId, false)
     return { config }
@@ -347,10 +348,12 @@ export const updateAppNetwork = createServerFn({ method: "POST" })
         user,
       })
     }
-    const config = { ...app.config, databaseIds: [...after] }
-    await runAppEffect(
+    const config = await runAppEffect(
       "apps.network.save",
-      saveAppConfigEffect(relay.id, data.appId, config)
+      updateAppConfigEffect(relay.id, data.appId, (current) => ({
+        ...current,
+        databaseIds: [...after],
+      }))
     )
     const updated = relayAppSchema.parse(
       await databaseRpc(

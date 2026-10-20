@@ -160,26 +160,6 @@ function decryptConfig(row: AppConfigRow) {
   )
 }
 
-export const saveAppConfigEffect = Effect.fn("apps.saveConfig")(function* (
-  relayId: string,
-  appId: string,
-  config: AppConfig
-) {
-  const database = yield* Database
-  const now = yield* Clock.currentTimeMillis
-  const ciphertext = yield* encryptConfig(config)
-  const result = yield* database.execute(
-    "app_config_save",
-    `UPDATE ${databaseTable("app")}
-        SET config_ciphertext = ?, updated_at = ?
-      WHERE relay_id = ? AND app_id = ?`,
-    [ciphertext, now, relayId, appId]
-  )
-  if (result.affectedRows !== 1) {
-    return yield* Effect.fail(new Error("App not found"))
-  }
-})
-
 // Hearth keeps the name; the Relay uses it only to label deployment logs.
 export const renameAppRecordEffect = Effect.fn("apps.rename")(function* (
   relayId: string,
