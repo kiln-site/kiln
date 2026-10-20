@@ -98,10 +98,13 @@ describe("provisioning worker", () => {
               adapters: {
                 // Only game servers provision here.
                 database: databaseProvisioning({} as DatabaseDriver),
-                server: serverProvisioning({ lifecycle, state }),
+                server: serverProvisioning({
+                  lifecycle,
+                  refreshSnapshot: async () => undefined,
+                  state,
+                }),
               },
               lanes,
-              refreshSnapshot: async () => undefined,
             })
             const worker = yield* Effect.forkChild(manager.run())
             const until = (done: () => boolean) =>

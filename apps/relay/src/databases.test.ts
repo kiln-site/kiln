@@ -137,11 +137,11 @@ describe("managed database provisioning", () => {
           database: databaseProvisioning(harness.databases),
           server: serverProvisioning({
             lifecycle: harness.lifecycle,
+            refreshSnapshot: async () => undefined,
             state: harness.state,
           }),
         },
         lanes: harness.lanes,
-        refreshSnapshot: async () => undefined,
       }).pipe(Effect.provideService(RelayStateStore, harness.state))
     )
     const worker = Effect.runFork(manager.run())

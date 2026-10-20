@@ -41,6 +41,11 @@ export interface ProvisioningAdapter<Kind extends RelayProvisioningKind> {
     job: RelayProvisioningJob<Kind>,
     onPhase: (phase: WorkPhase) => Promise<void>
   ) => Promise<void>
+  /**
+   * Tells Hearth a placeholder changed, for a kind it doesn't read on
+   * request, as game servers come in the Relay's snapshot.
+   */
+  readonly announce?: () => Promise<unknown>
 }
 
 export type ProvisioningAdapters = {
@@ -98,20 +103,17 @@ function placeholderAt<Kind extends RelayProvisioningKind>(
 export class ProvisioningManager {
   readonly #adapters: ProvisioningAdapters
   readonly #lanes: OperationLanes
-  readonly #refreshSnapshot: () => Promise<unknown>
   readonly #state: RelayStateStore["Service"]
   readonly #wake: Queue.Queue<void>
 
   private constructor(options: {
     adapters: ProvisioningAdapters
     lanes: OperationLanes
-    refreshSnapshot: () => Promise<unknown>
     state: RelayStateStore["Service"]
     wake: Queue.Queue<void>
   }) {
     this.#adapters = options.adapters
     this.#lanes = options.lanes
-    this.#refreshSnapshot = options.refreshSnapshot
     this.#state = options.state
     this.#wake = options.wake
   }
@@ -120,7 +122,6 @@ export class ProvisioningManager {
     adapters: ProvisioningAdapters
     /** The worker holds each new instance's lanes for the whole create. */
     lanes: OperationLanes
-    refreshSnapshot: () => Promise<unknown>
   }) {
     return Effect.gen(function* () {
       const state = yield* RelayStateStore
@@ -144,7 +145,7 @@ export class ProvisioningManager {
   ) {
     return Effect.gen({ self: this }, function* () {
       const job = yield* this.#state.enqueueProvisioningJob(input, Date.now())
-      yield* this.#refresh()
+      yield* this.#announce(job.kind)
       return job.placeholder
     })
   }
@@ -174,7 +175,7 @@ export class ProvisioningManager {
         )
         yield* Queue.offer(this.#wake, undefined)
       }
-      yield* this.#refresh()
+      yield* this.#announce(kind)
       return placeholder
     })
   }
@@ -185,7 +186,7 @@ export class ProvisioningManager {
         kind,
         instanceId
       )
-      if (cancelled) yield* this.#refresh()
+      if (cancelled) yield* this.#announce(kind)
       return cancelled
     })
   }
@@ -227,7 +228,7 @@ export class ProvisioningManager {
         // Refused before it started, as when the Relay was paused or too
         // busy: it goes back in line, and waits for resume or a moment.
         yield* this.#state.returnProvisioningJob(job.instanceId, Date.now())
-        yield* this.#refresh()
+        yield* this.#announce(job.kind)
         if (refused.reason === "paused") return
         yield* Effect.sleep("1 second")
       }
@@ -253,11 +254,11 @@ export class ProvisioningManager {
               Date.now()
             )
           )
-          await Effect.runPromise(this.#refresh())
+          await Effect.runPromise(this.#announce(job.kind))
         }
         await adapterFor(adapters, job).provision(job, onPhase)
         await Effect.runPromise(state.completeProvisioningJob(job.instanceId))
-        await Effect.runPromise(this.#refresh())
+        await Effect.runPromise(this.#announce(job.kind))
       },
       catch: (cause) => cause,
     }).pipe(
@@ -275,7 +276,7 @@ export class ProvisioningManager {
             Date.now()
           )
           .pipe(
-            Effect.tap(() => this.#refresh()),
+            Effect.tap(() => this.#announce(job.kind)),
             Effect.tap(() =>
               Effect.logError("Relay provisioning failed", {
                 cause,
@@ -289,11 +290,14 @@ export class ProvisioningManager {
     )
   }
 
-  #refresh() {
-    return Effect.tryPromise(() => this.#refreshSnapshot()).pipe(
+  #announce(kind: RelayProvisioningKind) {
+    const announce = this.#adapters[kind].announce
+    if (!announce) return Effect.void
+    return Effect.tryPromise(announce).pipe(
       Effect.catch((cause) =>
-        Effect.logWarning("Relay provisioning snapshot refresh failed", {
+        Effect.logWarning("Relay provisioning announcement failed", {
           cause,
+          kind,
         })
       )
     )

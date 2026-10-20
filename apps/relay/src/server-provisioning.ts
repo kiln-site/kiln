@@ -8,10 +8,13 @@ import { type ProvisioningAdapter, provisioningStatus } from "./provisioning.js"
 /** How a game server provisions: its container, from its Brick. */
 export function serverProvisioning(options: {
   lifecycle: LifecycleDriver
+  /** Sends Hearth the Relay's snapshot, where game servers' placeholders are. */
+  refreshSnapshot: () => Promise<unknown>
   state: RelayStateStore["Service"]
 }): ProvisioningAdapter<"server"> {
   return {
     kind: "server",
+    announce: options.refreshSnapshot,
     label: "instance.provision",
     locks: instanceReplaceLocks,
     withState: (placeholder, state) => ({

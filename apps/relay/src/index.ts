@@ -564,10 +564,13 @@ const provisioningManager = await runRelayEffect(
   ProvisioningManager.make({
     adapters: {
       database: databaseProvisioning(databases),
-      server: serverProvisioning({ lifecycle, state: startupCore.state }),
+      server: serverProvisioning({
+        lifecycle,
+        refreshSnapshot: () => snapshotHub.refresh(),
+        state: startupCore.state,
+      }),
     },
     lanes,
-    refreshSnapshot: () => snapshotHub.refresh(),
   })
 )
 const provisioningFiber = forkRelayEffect(
