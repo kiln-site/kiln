@@ -550,6 +550,8 @@ function authenticateSocket(
     const onWork = (running: Promise<unknown>) => {
       const work = { startedAt: Date.now() }
       request.work = work
+      // A change can start after its session closed; nothing waits for it.
+      if (inFlight.get(message.id) !== request) capacity.orphanedWork.add(work)
       const settled = () => {
         if (request.work === work) request.work = null
         capacity.orphanedWork.delete(work)
@@ -610,6 +612,9 @@ function authenticateSocket(
       request.ticket?.cancel()
       request.controller.abort()
       request.fiber?.interruptUnsafe()
+      // A change can't be interrupted, so its request may only finish once
+      // its work does; until then the work is orphaned.
+      if (request.work) capacity.orphanedWork.add(request.work)
     }
     inFlight.clear()
     capacity.sessions.delete(tracked)
