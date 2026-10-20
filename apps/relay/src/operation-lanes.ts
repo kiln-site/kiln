@@ -54,6 +54,8 @@ export const laneKeys = {
   allocations: "relay:allocations",
   /** The Relay's own Tailscale settings, which every stack runs under. */
   tailscale: "relay:tailscale",
+  /** One of the Relay's Docker named volumes. */
+  volume: (id: string) => `volume:${id}`,
 } as const
 
 export class LaneRejectedError extends Schema.TaggedError<LaneRejectedError>()(

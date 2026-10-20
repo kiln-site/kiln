@@ -62,6 +62,7 @@ import {
 } from "@/lib/instance-favorites"
 import { getMinecraftProfile } from "@/server/minecraft"
 import { getRelayResources } from "@/server/relay-host"
+import { getRelayVolumes } from "@/server/relay-volumes"
 import { isDatabaseFilePath } from "@/lib/database-files"
 import { traceFileWork } from "@/lib/file-timing"
 import { reconcilePendingPowerSnapshot } from "@/lib/instance-power-state"
@@ -265,6 +266,7 @@ export const queryKeys = {
   },
   relays: ["relays"] as const,
   relayProxy: (relayId: string) => ["relays", "proxy", relayId] as const,
+  relayVolumes: (relayId: string) => ["relays", "volumes", relayId] as const,
   relayProxyModes: ["relays", "proxy-modes"] as const,
   // Beside each game server's own routes, so route changes refresh both.
   relayWebRoutes: (relayId: string) => ["web-routes", relayId] as const,
@@ -899,6 +901,17 @@ export function relayWebRoutesQueryOptions(relayId: string) {
     queryFn: () => getRelayWebRoutes({ data: { id: relayId } }),
     retry: false,
     staleTime: 15_000,
+  })
+}
+
+// Sizes are Docker's last measure; changes refresh it through the
+// `relay-volumes` topic.
+export function relayVolumesQueryOptions(relayId: string) {
+  return queryOptions({
+    queryFn: () => getRelayVolumes({ data: { relayId } }),
+    queryKey: queryKeys.relayVolumes(relayId),
+    retry: false,
+    staleTime: 30_000,
   })
 }
 

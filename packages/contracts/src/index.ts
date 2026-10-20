@@ -417,6 +417,67 @@ export const relayHostAccessSchema = z.object({
   dataDirectory: z.string().min(1).optional(),
 })
 
+// A Docker named volume on a Relay: one Kiln made, named
+// `kiln-<short ID>-<slug>` after its ID and the name it was made with, or the
+// Relay's own data volume, which it keeps.
+export const relayVolumeIdSchema = z.string().regex(/^[a-f0-9]{40}$/u)
+export const RELAY_VOLUME_NAME_MAX_LENGTH = 64
+export const relayVolumeNameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(RELAY_VOLUME_NAME_MAX_LENGTH)
+// A container that mounts a volume, and the Kiln resource it belongs to, by
+// its labels.
+export const relayVolumeMountSchema = z.object({
+  container: z.string(),
+  destination: z.string(),
+  kind: z.enum(["app", "database", "instance", "relay", "other"]),
+  readOnly: z.boolean(),
+  // The app's, database's, or game server's ID, when the container names one.
+  resourceId: z.string().nullable(),
+  running: z.boolean(),
+})
+export const relayVolumeSchema = z.object({
+  createdAt: z.string().nullable(),
+  dockerName: z.string().min(1),
+  // Null for the Relay's own data volume, which Kiln didn't make.
+  id: relayVolumeIdSchema.nullable(),
+  kind: z.enum(["relay", "volume"]),
+  // Where its files are on the host.
+  mountpoint: z.string().nullable(),
+  mounts: z.array(relayVolumeMountSchema),
+  name: z.string(),
+  // Null until Docker has measured it.
+  sizeBytes: z.number().int().nonnegative().nullable(),
+})
+export const relayVolumesSchema = z.object({
+  volumes: z.array(relayVolumeSchema),
+})
+// The part of a volume's Docker name its name gives: lowercase letters,
+// digits, and dashes, as Docker allows.
+export function relayVolumeSlug(name: string): string {
+  return (
+    name
+      .normalize("NFKD")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/gu, "-")
+      .replace(/^-+/u, "")
+      .slice(0, 40)
+      .replace(/-+$/u, "") || "volume"
+  )
+}
+export const relayVolumeCreateSchema = z.strictObject({
+  id: relayVolumeIdSchema,
+  name: relayVolumeNameSchema,
+})
+export const relayVolumeRenameSchema = relayVolumeCreateSchema
+export const relayVolumeDeleteSchema = z.strictObject({
+  id: relayVolumeIdSchema,
+})
+export type RelayVolume = z.infer<typeof relayVolumeSchema>
+export type RelayVolumeMount = z.infer<typeof relayVolumeMountSchema>
+
 // Relay to Hearth: output for one attachment, in order. `ended` arrives with
 // the session's last output. Not strict: a Relay newer than its Hearth may
 // send fields this Hearth doesn't know yet.

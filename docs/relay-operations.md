@@ -36,6 +36,7 @@ it exclusive, which waits for every part.
 | `relay:tailscale`                                  | Exclusive to the Relay's Tailscale settings; shared by stack changes                                                                                 |
 | `relay:allocations`                                | Exclusive to anything that reserves the node's memory, CPU, or disk: limit changes, a deployment's container start, and a game server's check before it's created or replaced, whose reservation stands in for it until its new container exists |
 | `relay:host-files`                                 | The host file root                                                                                                                                   |
+| `volume:<id>`                                      | Exclusive to creating, renaming, and deleting one of the Relay's named volumes                                                                       |
 
 `apps/relay/src/operation-plans.ts` maps each control operation to its keys.
 Its switch is exhaustive, so a new operation can't compile until it declares

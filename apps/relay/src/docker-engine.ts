@@ -63,6 +63,17 @@ export interface DockerContainerSummary {
     readonly Type: string
   }> | null
   readonly State: string
+  readonly Mounts?: ReadonlyArray<DockerMount>
+}
+
+/** A container's mount, as both container listing and inspection report it. */
+export interface DockerMount {
+  readonly Destination: string
+  // A volume's name; binds and tmpfs have none.
+  readonly Name?: string
+  readonly RW: boolean
+  readonly Source: string
+  readonly Type?: string
 }
 
 /** The parts of `GET /containers/{id}/json` Relay reads. */
@@ -85,11 +96,7 @@ export interface DockerContainerInspect {
     readonly RestartPolicy?: { readonly Name?: string }
   }
   readonly Id: string
-  readonly Mounts?: ReadonlyArray<{
-    readonly Destination: string
-    readonly RW: boolean
-    readonly Source: string
-  }>
+  readonly Mounts?: ReadonlyArray<DockerMount>
   readonly Name: string
   readonly NetworkSettings?: {
     readonly Networks?: Readonly<
@@ -125,6 +132,7 @@ export interface DockerNetwork {
 }
 
 export interface DockerVolume {
+  readonly CreatedAt?: string
   readonly Labels: Readonly<Record<string, string>> | null
   // The volume's folder on the host, as the daemon sees it.
   readonly Mountpoint?: string

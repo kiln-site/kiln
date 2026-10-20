@@ -43,6 +43,7 @@ import {
   relayDatabaseLimitsV1Feature,
   relayAppLimitsV1Feature,
   relayAppGitHubV1Feature,
+  relayVolumesV1Feature,
   relayDatabaseProvisioningV1Feature,
   relayAppProvisioningV1Feature,
   appIdFromFileRoot,
@@ -1128,6 +1129,7 @@ function authenticateSocket(
           relayDatabaseProvisioningV1Feature,
           relayAppProvisioningV1Feature,
           relayAppGitHubV1Feature,
+          relayVolumesV1Feature,
         ],
         protocol: relayControlProtocol,
         relayBuild: relayBuildLabel(),
@@ -1472,6 +1474,12 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "relay.proxy.config.read":
       return "instance.network.read"
     case "relay.proxy.write":
+      return "relay.configure"
+    case "relay.volumes.read":
+      return "relay.read"
+    case "relay.volumes.create":
+    case "relay.volumes.rename":
+    case "relay.volumes.delete":
       return "relay.configure"
     case "relay.pairing.create":
       return "relay.pairing.create"

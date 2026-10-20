@@ -138,6 +138,11 @@ export interface RelayStoredInstanceName {
   readonly name: string
 }
 
+export interface RelayStoredVolumeName {
+  readonly name: string
+  readonly volumeId: string
+}
+
 /** Kinds of instance whose disk limit the Relay keeps here, not on Docker. */
 export type RelayDiskLimitKind = "app" | "database"
 
@@ -627,6 +632,10 @@ export class RelayStateStore extends Context.Service<
       ReadonlyArray<RelayStoredInstanceName>,
       RelayStateError
     >
+    readonly listVolumeNames: () => Effect.Effect<
+      ReadonlyArray<RelayStoredVolumeName>,
+      RelayStateError
+    >
     /** Disk limits by instance ID; one without a row has no limit. */
     readonly listDiskLimits: (
       kind: RelayDiskLimitKind
@@ -683,6 +692,10 @@ export class RelayStateStore extends Context.Service<
       instanceId: string,
       name: string
     ) => Effect.Effect<void, RelayStateError>
+    readonly setVolumeName: (
+      volumeId: string,
+      name: string
+    ) => Effect.Effect<void, RelayStateError>
     readonly setRuntimeRecovery: (
       recovery: RelayRuntimeRecoveryRecord
     ) => Effect.Effect<void, RelayStateError>
@@ -694,6 +707,9 @@ export class RelayStateStore extends Context.Service<
     ) => Effect.Effect<void, RelayStateError>
     readonly deleteInstanceName: (
       instanceId: string
+    ) => Effect.Effect<void, RelayStateError>
+    readonly deleteVolumeName: (
+      volumeId: string
     ) => Effect.Effect<void, RelayStateError>
     readonly deletePendingPrimaryPort: (
       instanceId: string
@@ -1216,6 +1232,16 @@ const migrations = SqliteMigrator.fromRecord({
       ADD COLUMN kind TEXT NOT NULL DEFAULT 'server'
         CHECK (kind IN ('server', 'database', 'app'))
     `
+  }),
+  // Docker can't rename a volume or change its labels, so the names its
+  // volumes are shown by live here.
+  "23_volume_names": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    yield* sql`CREATE TABLE relay_volume_names (
+      volume_id TEXT PRIMARY KEY NOT NULL,
+      name TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    ) STRICT`
   }),
 })
 
@@ -2928,6 +2954,15 @@ const makeRelayStateStore = Effect.gen(function* () {
           ORDER BY instance_id ASC
         `
       ),
+    listVolumeNames: () =>
+      run(
+        "list_volume_names",
+        sql<RelayStoredVolumeName>`
+          SELECT volume_id AS volumeId, name
+          FROM relay_volume_names
+          ORDER BY volume_id ASC
+        `
+      ),
     listRuntimeRecoveries: () =>
       run("list_runtime_recoveries", runtimeRecoveries()),
     listDiskLimits: (kind) =>
@@ -3124,6 +3159,16 @@ const makeRelayStateStore = Effect.gen(function* () {
           SET name = excluded.name, updated_at = excluded.updated_at
         `.pipe(Effect.asVoid)
       ),
+    setVolumeName: (volumeId, name) =>
+      run(
+        "set_volume_name",
+        sql`
+          INSERT INTO relay_volume_names (volume_id, name, updated_at)
+          VALUES (${volumeId}, ${name}, ${Date.now()})
+          ON CONFLICT (volume_id) DO UPDATE
+          SET name = excluded.name, updated_at = excluded.updated_at
+        `.pipe(Effect.asVoid)
+      ),
     setRuntimeRecovery: (recovery) =>
       run(
         "set_runtime_recovery",
@@ -3205,6 +3250,13 @@ const makeRelayStateStore = Effect.gen(function* () {
         "delete_instance_name",
         sql`
           DELETE FROM relay_instance_names WHERE instance_id = ${instanceId}
+        `.pipe(Effect.asVoid)
+      ),
+    deleteVolumeName: (volumeId) =>
+      run(
+        "delete_volume_name",
+        sql`
+          DELETE FROM relay_volume_names WHERE volume_id = ${volumeId}
         `.pipe(Effect.asVoid)
       ),
     deleteRuntimeRecovery: (instanceId) =>

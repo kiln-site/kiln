@@ -22,6 +22,7 @@ export const hearthRealtimeTopics = [
   "preferences",
   "relay-health",
   "relay-proxy",
+  "relay-volumes",
   "relays",
   "schedules",
   "tailscale",

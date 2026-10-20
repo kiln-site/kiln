@@ -78,6 +78,9 @@ import {
   relayProxyReadInputSchema,
   relayProxyConfigurationSchema,
   relayProxySettingsSchema,
+  relayVolumeCreateSchema,
+  relayVolumeDeleteSchema,
+  relayVolumeRenameSchema,
   relayDirectoryPageInputSchema,
   relayDirectorySizesInputSchema,
   relayFileMutationInputSchema,
@@ -151,6 +154,7 @@ import {
   recoverPromise,
 } from "./effect/promise.js"
 import { DockerEngine } from "./docker-engine.js"
+import { RelayVolumes } from "./volumes.js"
 import {
   inspectEncryptedPlatformBackup,
   restoreEncryptedPlatformBackup,
@@ -378,6 +382,11 @@ const lifecycle = new LifecycleDriver(
   bricks,
   databaseConnections,
   lanes
+)
+const volumes = new RelayVolumes(
+  config,
+  new DockerEngine(config.dockerSocket),
+  startupCore.state
 )
 const apps = new AppDriver(
   config,
@@ -1680,6 +1689,30 @@ async function executeControlRequest(
       const proxy = await lifecycle.configureProxy(settings, routes)
       await snapshotHub.refresh()
       return proxy
+    }
+    case "relay.volumes.read":
+      return {
+        volumes: await runRelayEffect("relay.volumes.read", volumes.list()),
+      }
+    case "relay.volumes.create": {
+      const input = relayVolumeCreateSchema.parse(request.payload)
+      return runRelayEffect(
+        "relay.volumes.create",
+        volumes.create(input.id, input.name)
+      )
+    }
+    case "relay.volumes.rename": {
+      const input = relayVolumeRenameSchema.parse(request.payload)
+      await runRelayEffect(
+        "relay.volumes.rename",
+        volumes.rename(input.id, input.name)
+      )
+      return { id: input.id, name: input.name }
+    }
+    case "relay.volumes.delete": {
+      const input = relayVolumeDeleteSchema.parse(request.payload)
+      await runRelayEffect("relay.volumes.delete", volumes.delete(input.id))
+      return { id: input.id }
     }
     case "relay.audit.list":
       return runRelayEffect(

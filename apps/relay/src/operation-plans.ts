@@ -174,6 +174,7 @@ export function controlRequestLocks(
     case "relay.system.inspect":
     case "relay.update.status":
     case "relay.resources.read":
+    case "relay.volumes.read":
     case "relay.rename":
     case "relay.audit.list":
     case "relay.networking.read":
@@ -287,6 +288,12 @@ export function controlRequestLocks(
     case "relay.networking.write":
     case "relay.proxy.write":
       return [exclusive(laneKeys.routes)]
+    case "relay.volumes.create":
+    case "relay.volumes.rename":
+    case "relay.volumes.delete": {
+      const id = stringField(payload, "id")
+      return id ? [exclusive(laneKeys.volume(id))] : null
+    }
     case "relay.tailscale.install":
     case "relay.tailscale.write":
       return [exclusive(laneKeys.tailscale)]

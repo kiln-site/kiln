@@ -243,11 +243,14 @@ export function InfoDetailRow({
 }
 
 export function InfoCopyValue({
+  className,
   display,
   label,
   mono = true,
   value,
 }: {
+  // Such as a quieter hover where the value isn't a link-like accent.
+  className?: string
   // Shown in place of a value too long to read in the row, such as "Copy
   // path"; the value is still what's copied, and shows on hover.
   display?: string
@@ -267,7 +270,8 @@ export function InfoCopyValue({
           className={cn(
             "flex min-w-0 items-center gap-1.5 transition-colors",
             mono && "font-mono text-xs",
-            copied ? "text-emerald-400" : "hover:text-primary"
+            copied ? "text-emerald-400" : "hover:text-primary",
+            !copied && className
           )}
           onClick={() => void copy()}
         >

@@ -20,6 +20,7 @@ replace MySQL, Relay state, or high-frequency Relay streams.
 | Relay registration, display name, and enabled state                | Hearth    | Policy refresh, `relays` invalidation, and fleet recovery  |
 | Relay reachability and observed host facts                         | Hearth    | Exact `relay-health` invalidation                          |
 | Relay proxy configuration                                          | Relay     | Exact Relay-scoped `relay-proxy` invalidation              |
+| Relay volumes                                                      | Relay     | Exact Relay-scoped `relay-volumes` invalidation            |
 | User appearance preferences and platform appearance defaults       | Hearth    | User or authenticated `preferences` invalidation           |
 | Domain integration and instance vanity assignments                 | Hearth    | `domains` query-scope invalidation                         |
 | Schedules and their desired revisions                              | Hearth    | `schedules` collection invalidation                        |

@@ -102,6 +102,7 @@ import { Route as AppRelayRelayIdInfoRouteImport } from './routes/_app/relay/$re
 import { Route as AppRelayRelayIdLogsRouteImport } from './routes/_app/relay/$relayId.logs'
 import { Route as AppRelayRelayIdProxyRouteImport } from './routes/_app/relay/$relayId.proxy'
 import { Route as AppRelayRelayIdTerminalRouteImport } from './routes/_app/relay/$relayId.terminal'
+import { Route as AppRelayRelayIdVolumesRouteImport } from './routes/_app/relay/$relayId.volumes'
 import { Route as AppServerServerIdIndexRouteImport } from './routes/_app/server/$serverId.index'
 import { Route as AppServerServerIdSplatRouteImport } from './routes/_app/server/$serverId.$'
 import { Route as AppServerServerIdConsoleRouteImport } from './routes/_app/server/$serverId.console'
@@ -583,6 +584,11 @@ const AppRelayRelayIdTerminalRoute = AppRelayRelayIdTerminalRouteImport.update({
   path: '/terminal',
   getParentRoute: () => AppRelayRelayIdRoute,
 } as any)
+const AppRelayRelayIdVolumesRoute = AppRelayRelayIdVolumesRouteImport.update({
+  id: '/volumes',
+  path: '/volumes',
+  getParentRoute: () => AppRelayRelayIdRoute,
+} as any)
 const AppServerServerIdIndexRoute = AppServerServerIdIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -748,6 +754,7 @@ export interface FileRoutesByFullPath {
   '/relay/$relayId/logs': typeof AppRelayRelayIdLogsRoute
   '/relay/$relayId/proxy': typeof AppRelayRelayIdProxyRoute
   '/relay/$relayId/terminal': typeof AppRelayRelayIdTerminalRoute
+  '/relay/$relayId/volumes': typeof AppRelayRelayIdVolumesRoute
   '/server/$serverId/$': typeof AppServerServerIdSplatRoute
   '/server/$serverId/console': typeof AppServerServerIdConsoleRoute
   '/server/$serverId/files': typeof AppServerServerIdFilesRouteWithChildren
@@ -848,6 +855,7 @@ export interface FileRoutesByTo {
   '/relay/$relayId/logs': typeof AppRelayRelayIdLogsRoute
   '/relay/$relayId/proxy': typeof AppRelayRelayIdProxyRoute
   '/relay/$relayId/terminal': typeof AppRelayRelayIdTerminalRoute
+  '/relay/$relayId/volumes': typeof AppRelayRelayIdVolumesRoute
   '/server/$serverId/$': typeof AppServerServerIdSplatRoute
   '/server/$serverId/console': typeof AppServerServerIdConsoleRoute
   '/server/$serverId/files': typeof AppServerServerIdFilesRouteWithChildren
@@ -958,6 +966,7 @@ export interface FileRoutesById {
   '/_app/relay/$relayId/logs': typeof AppRelayRelayIdLogsRoute
   '/_app/relay/$relayId/proxy': typeof AppRelayRelayIdProxyRoute
   '/_app/relay/$relayId/terminal': typeof AppRelayRelayIdTerminalRoute
+  '/_app/relay/$relayId/volumes': typeof AppRelayRelayIdVolumesRoute
   '/_app/server/$serverId/$': typeof AppServerServerIdSplatRoute
   '/_app/server/$serverId/console': typeof AppServerServerIdConsoleRoute
   '/_app/server/$serverId/files': typeof AppServerServerIdFilesRouteWithChildren
@@ -1068,6 +1077,7 @@ export interface FileRouteTypes {
     | '/relay/$relayId/logs'
     | '/relay/$relayId/proxy'
     | '/relay/$relayId/terminal'
+    | '/relay/$relayId/volumes'
     | '/server/$serverId/$'
     | '/server/$serverId/console'
     | '/server/$serverId/files'
@@ -1168,6 +1178,7 @@ export interface FileRouteTypes {
     | '/relay/$relayId/logs'
     | '/relay/$relayId/proxy'
     | '/relay/$relayId/terminal'
+    | '/relay/$relayId/volumes'
     | '/server/$serverId/$'
     | '/server/$serverId/console'
     | '/server/$serverId/files'
@@ -1277,6 +1288,7 @@ export interface FileRouteTypes {
     | '/_app/relay/$relayId/logs'
     | '/_app/relay/$relayId/proxy'
     | '/_app/relay/$relayId/terminal'
+    | '/_app/relay/$relayId/volumes'
     | '/_app/server/$serverId/$'
     | '/_app/server/$serverId/console'
     | '/_app/server/$serverId/files'
@@ -1986,6 +1998,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppRelayRelayIdTerminalRouteImport
       parentRoute: typeof AppRelayRelayIdRoute
     }
+    '/_app/relay/$relayId/volumes': {
+      id: '/_app/relay/$relayId/volumes'
+      path: '/volumes'
+      fullPath: '/relay/$relayId/volumes'
+      preLoaderRoute: typeof AppRelayRelayIdVolumesRouteImport
+      parentRoute: typeof AppRelayRelayIdRoute
+    }
     '/_app/server/$serverId/': {
       id: '/_app/server/$serverId/'
       path: '/'
@@ -2261,6 +2280,7 @@ interface AppRelayRelayIdRouteChildren {
   AppRelayRelayIdLogsRoute: typeof AppRelayRelayIdLogsRoute
   AppRelayRelayIdProxyRoute: typeof AppRelayRelayIdProxyRoute
   AppRelayRelayIdTerminalRoute: typeof AppRelayRelayIdTerminalRoute
+  AppRelayRelayIdVolumesRoute: typeof AppRelayRelayIdVolumesRoute
   AppRelayRelayIdIndexRoute: typeof AppRelayRelayIdIndexRoute
 }
 
@@ -2272,6 +2292,7 @@ const AppRelayRelayIdRouteChildren: AppRelayRelayIdRouteChildren = {
   AppRelayRelayIdLogsRoute: AppRelayRelayIdLogsRoute,
   AppRelayRelayIdProxyRoute: AppRelayRelayIdProxyRoute,
   AppRelayRelayIdTerminalRoute: AppRelayRelayIdTerminalRoute,
+  AppRelayRelayIdVolumesRoute: AppRelayRelayIdVolumesRoute,
   AppRelayRelayIdIndexRoute: AppRelayRelayIdIndexRoute,
 }
 

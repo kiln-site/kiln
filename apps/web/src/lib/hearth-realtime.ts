@@ -95,6 +95,7 @@ const hearthRealtimeQueryScopes = {
     exact(queryKeys.relayProxyModes),
     prefix(["web-routes"]),
   ],
+  "relay-volumes": [prefix(["relays", "volumes"])],
   relays: [
     prefix(["infra-directory"]),
     prefix(["instance-inventory"]),
@@ -183,6 +184,9 @@ function queryScopes(
       exact(queryKeys.relay.webRoutes(scope.relayId, scope.instanceId)),
       exact(queryKeys.relayWebRoutes(scope.relayId)),
     ]
+  }
+  if (topic === "relay-volumes" && scope) {
+    return [exact(queryKeys.relayVolumes(scope.relayId))]
   }
   if (topic === "relay-proxy" && scope) {
     return [

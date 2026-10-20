@@ -55,6 +55,9 @@ export const relayAppProvisioningV1Feature = "app-provisioning-v1"
 // rolls deployments over once their containers are healthy, and answers
 // `app.deployment.read`.
 export const relayAppGitHubV1Feature = "app-github-v1"
+// The Relay lists, creates, renames, and deletes its Docker named volumes
+// through `relay.volumes.*`.
+export const relayVolumesV1Feature = "relay-volumes-v1"
 export const relayBrowserAuthorizationReviseMaxItems = 256
 
 export const relayControlOperations = [
@@ -88,6 +91,10 @@ export const relayControlOperations = [
   "relay.proxy.read",
   "relay.proxy.config.read",
   "relay.proxy.write",
+  "relay.volumes.read",
+  "relay.volumes.create",
+  "relay.volumes.rename",
+  "relay.volumes.delete",
   "relay.pairing.create",
   "relay.pairing.list",
   "relay.pairing.revoke",
@@ -198,6 +205,9 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "relay.clients.update",
   "relay.clients.revoke",
   "relay.networking.write",
+  "relay.volumes.create",
+  "relay.volumes.rename",
+  "relay.volumes.delete",
   "relay.tailscale.install",
   "relay.tailscale.stack.apply",
   "relay.tailscale.stack.dns",
@@ -284,6 +294,7 @@ export function relayControlOperationChanges(
     case "relay.database.read":
     case "relay.proxy.read":
     case "relay.proxy.config.read":
+    case "relay.volumes.read":
     case "relay.pairing.list":
     case "relay.clients.list":
     case "brick.catalog":
@@ -345,6 +356,9 @@ export function relayControlOperationChanges(
     case "relay.host.files.mount":
     case "relay.host.restart":
     case "relay.proxy.write":
+    case "relay.volumes.create":
+    case "relay.volumes.rename":
+    case "relay.volumes.delete":
     case "relay.pairing.create":
     case "relay.pairing.revoke":
     case "relay.clients.update":
@@ -477,6 +491,7 @@ export function relayControlDeadlineMs(
   if (operation === "database.dump.export") return 120_000
   // Docker walks every volume to measure them.
   if (operation === "database.inspect") return 75_000
+  if (operation === "relay.volumes.read") return 75_000
   if (operation === "database.wipe") return 120_000
   if (operation === "database.dump.import") return 120_000
   if (operation === "instance.action") return 180_000

@@ -1712,6 +1712,7 @@ export class FakeDocker {
           .map((volume) => ({
             Driver: "local",
             Labels: volume.labels,
+            Mountpoint: `/var/lib/docker/volumes/${volume.name}/_data`,
             Name: volume.name,
           })),
       })
@@ -2473,6 +2474,14 @@ function containerSummary(container: FakeContainer): unknown {
     Id: container.id,
     Image: container.image,
     Labels: container.labels,
+    // As `docker ps` reports them; anonymous volumes have hex names too.
+    Mounts: container.mounts.map((mount) => ({
+      Destination: mount.destination,
+      Name: mount.type === "volume" ? mount.source : undefined,
+      RW: !mount.readOnly,
+      Source: mount.source,
+      Type: mount.type,
+    })),
     Names: [`/${container.name}`],
     Ports: Object.entries(container.portBindings).flatMap(([port, hosts]) => {
       const [privatePort = "0", type = "tcp"] = port.split("/")

@@ -8,6 +8,7 @@ import {
   FolderGit2,
   FolderSync,
   Globe2,
+  HardDrive,
   History,
   LayoutDashboard,
   ListTodo,
@@ -530,7 +531,12 @@ export function appDestinationHref(
   return destination.to.replace("$appId", encodeURIComponent(routeId))
 }
 
-export type RelayDestinationId = "info" | "terminal" | "logs" | "files"
+export type RelayDestinationId =
+  | "info"
+  | "terminal"
+  | "volumes"
+  | "files"
+  | "logs"
 
 export interface RelayDestination extends NavigationDestination {
   id: RelayDestinationId
@@ -564,12 +570,12 @@ export const relayDestinations = [
     to: "/relay/$relayId/terminal",
   },
   {
-    icon: ScrollText,
-    id: "logs",
-    keywords: ["output", "container", "errors"],
-    label: "Logs",
-    permission: "relay.logs.read",
-    to: "/relay/$relayId/logs",
+    icon: HardDrive,
+    id: "volumes",
+    keywords: ["docker", "storage", "data", "persistent", "mounts"],
+    label: "Volumes",
+    permission: "relay.read",
+    to: "/relay/$relayId/volumes",
   },
   {
     icon: Folder,
@@ -578,6 +584,14 @@ export const relayDestinations = [
     label: "Files",
     permission: "relay.files.read",
     to: "/relay/$relayId/files",
+  },
+  {
+    icon: ScrollText,
+    id: "logs",
+    keywords: ["output", "container", "errors"],
+    label: "Logs",
+    permission: "relay.logs.read",
+    to: "/relay/$relayId/logs",
   },
 ] as const satisfies ReadonlyArray<RelayDestination>
 
