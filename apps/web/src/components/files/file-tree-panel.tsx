@@ -171,14 +171,17 @@ const fileTreeLayoutCss = `
 `
 
 function clampFileTreeWidth(width: number, workspaceWidth: number) {
-  const responsiveMaximum = Math.floor(workspaceWidth * 0.45)
+  const responsiveMaximum = workspaceWidth * 0.45
   const maximum = Math.max(
     fileTreeMinWidth,
     Math.min(fileTreeMaxWidth, responsiveMaximum)
   )
-  return Math.min(maximum, Math.max(fileTreeMinWidth, Math.round(width)))
+  // Match the CSS limit, including fractional pixels, across repeated clamps.
+  return Math.min(maximum, Math.max(fileTreeMinWidth, width))
 }
 
+// Keep these fixed-pixel defaults in sync with the loading and error panels.
+// Rem-based widths grow with the viewport typography scale.
 function defaultFileTreeWidth() {
   return window.innerWidth >= 1280 ? 304 : 280
 }
@@ -1382,7 +1385,7 @@ export function FileTreePanel({
       data-mobile-file-drawer
       data-state={mobileOpen ? "open" : "closed"}
       data-collapsed={collapsed}
-      className={`group/tree-drop absolute inset-x-0 bottom-0 z-30 flex w-full shrink-0 flex-col overflow-hidden border-t border-border/80 bg-card shadow-[0_-18px_45px_rgba(0,0,0,0.35)] transition-[height] duration-200 ease-out md:relative md:inset-auto md:z-auto md:h-auto md:min-h-0 md:border-t-0 md:shadow-none ${animateCollapsedChange ? "md:transition-[width,min-width,max-width] md:duration-200 md:ease-linear" : "md:transition-none"} ${collapsed ? "md:!w-0 md:!max-w-0 md:!min-w-0 md:overflow-hidden" : "md:w-[var(--file-tree-width)] md:max-w-[45%] md:min-w-56 md:overflow-visible md:[--file-tree-width:17.5rem] xl:max-w-[30rem] xl:[--file-tree-width:19rem]"} ${mobileOpen ? "h-full" : "h-11"}`}
+      className={`group/tree-drop absolute inset-x-0 bottom-0 z-30 flex w-full shrink-0 flex-col overflow-hidden border-t border-border/80 bg-card shadow-[0_-18px_45px_rgba(0,0,0,0.35)] transition-[height] duration-200 ease-out md:relative md:inset-auto md:z-auto md:h-auto md:min-h-0 md:border-t-0 md:shadow-none ${animateCollapsedChange ? "md:transition-[width,min-width,max-width] md:duration-200 md:ease-linear" : "md:transition-none"} ${collapsed ? "md:!w-0 md:!max-w-0 md:!min-w-0 md:overflow-hidden" : "md:w-[var(--file-tree-width)] md:max-w-[min(45%,480px)] md:min-w-[224px] md:overflow-visible md:[--file-tree-width:280px] xl:[--file-tree-width:304px]"} ${mobileOpen ? "h-full" : "h-11"}`}
       onDragEnter={handleTreeDragEnter}
       onDragOver={handleTreeDragOver}
       onDragLeave={handleTreeDragLeave}

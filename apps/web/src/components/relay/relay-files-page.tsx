@@ -47,7 +47,7 @@ export function RelayFilesPage() {
   return (
     <RelayHostFilesAccess>
       {(limitation) => (
-        <div className="flex min-h-0 flex-1 flex-col">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           {limitation ? <HostFilesLimitation limitation={limitation} /> : null}
           <ResourceFilesPage
             instance={instance}

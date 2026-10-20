@@ -47,7 +47,7 @@ export function FileTreeLoadingPanel({
 
   return (
     <div
-      className="hidden h-full min-h-0 w-[var(--file-tree-width)] max-w-[45%] min-w-56 shrink-0 flex-col border-r border-border/80 bg-card md:flex md:[--file-tree-width:17.5rem] xl:max-w-[30rem] xl:[--file-tree-width:19rem]"
+      className="hidden h-full min-h-0 w-[var(--file-tree-width)] max-w-[min(45%,480px)] min-w-[224px] shrink-0 flex-col border-r border-border/80 bg-card md:flex md:[--file-tree-width:280px] xl:[--file-tree-width:304px]"
       style={
         width
           ? ({ "--file-tree-width": `${width}px` } as React.CSSProperties)
@@ -95,7 +95,7 @@ export function FileTreeErrorPanel({
 
   return (
     <aside
-      className="hidden h-full min-h-0 w-[var(--file-tree-width)] max-w-[45%] min-w-56 shrink-0 flex-col border-r border-border/80 bg-card md:flex md:[--file-tree-width:17.5rem] xl:max-w-[30rem] xl:[--file-tree-width:19rem]"
+      className="hidden h-full min-h-0 w-[var(--file-tree-width)] max-w-[min(45%,480px)] min-w-[224px] shrink-0 flex-col border-r border-border/80 bg-card md:flex md:[--file-tree-width:280px] xl:[--file-tree-width:304px]"
       style={
         width
           ? ({ "--file-tree-width": `${width}px` } as React.CSSProperties)
