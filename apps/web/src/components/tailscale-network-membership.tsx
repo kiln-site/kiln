@@ -222,26 +222,44 @@ const ConnectedServersTableContent = React.memo(
       []
     )
     const closeDialog = React.useCallback(() => setDialog(null), [])
-    const updateBinding = (
-      row: TailscaleMemberRow,
-      next: Pick<StackBinding, "enabled" | "hostname">
-    ) =>
-      save.mutateAsync({
+    // A save that finishes after its dialog was dismissed must not close
+    // another dialog opened in the meantime.
+    const finishDialog = (target: MemberDialog) =>
+      setDialog((current) => (current === target ? null : current))
+    // Apply only the fields the dialog changed to the current binding, so a
+    // change made elsewhere since it opened is kept.
+    const updateBinding = async (
+      target: MemberDialog,
+      next: Partial<Pick<StackBinding, "enabled" | "hostname">>
+    ) => {
+      await save.mutateAsync({
         bindings: stack.bindings.map((candidate) =>
-          stackBindingKey(candidate) === stackBindingKey(row.binding)
+          stackBindingKey(candidate) === stackBindingKey(target.row.binding)
             ? { ...candidate, ...next }
             : candidate
         ),
         stack,
       })
-    const disconnect = (row: TailscaleMemberRow) =>
-      save.mutateAsync({
+      finishDialog(target)
+    }
+    const disconnect = async (target: MemberDialog) => {
+      await save.mutateAsync({
         bindings: stack.bindings.filter(
           (candidate) =>
-            stackBindingKey(candidate) !== stackBindingKey(row.binding)
+            stackBindingKey(candidate) !== stackBindingKey(target.row.binding)
         ),
         stack,
       })
+      finishDialog(target)
+    }
+    // Hide a dialog whose game server left the tailnet since it opened.
+    const dialogBound = dialog
+      ? dialog.row.stackId === stack.id &&
+        stack.bindings.some(
+          (candidate) =>
+            stackBindingKey(candidate) === stackBindingKey(dialog.row.binding)
+        )
+      : false
 
     return (
       <>
@@ -261,21 +279,21 @@ const ConnectedServersTableContent = React.memo(
           onConfigure={openConfigure}
           onDisconnect={openDisconnect}
         />
-        {dialog?.kind === "configure" ? (
+        {dialogBound && dialog?.kind === "configure" ? (
           <ConfigureMemberDialog
             pending={save.isPending}
             row={dialog.row}
             onClose={closeDialog}
-            onSave={(next) => updateBinding(dialog.row, next)}
+            onSave={(next) => updateBinding(dialog, next)}
           />
         ) : null}
-        {dialog?.kind === "disconnect" ? (
+        {dialogBound && dialog?.kind === "disconnect" ? (
           <DisconnectMemberDialog
             pending={save.isPending}
             row={dialog.row}
             stack={stack}
             onClose={closeDialog}
-            onDisconnect={() => disconnect(dialog.row)}
+            onDisconnect={() => disconnect(dialog)}
           />
         ) : null}
       </>
@@ -638,7 +656,7 @@ const TailscaleMembersTable = React.memo(function TailscaleMembersTable({
             id: "instance",
             header: "Instance",
             sortFn: "text",
-            cell: ({ row }) => <MemberInstance server={row.original.server} />,
+            cell: ({ row }) => <MemberInstance row={row.original} />,
             meta: dataTableColumnMeta(
               { width: { base: "minmax(0,1fr)", md: "minmax(0,1.2fr)" } },
               { cellClassName: "px-0" }
@@ -737,10 +755,14 @@ const TailscaleMembersTable = React.memo(function TailscaleMembersTable({
 })
 
 const MemberInstance = React.memo(function MemberInstance({
-  server,
+  row,
 }: {
-  server: TailscaleServer
+  row: TailscaleMemberRow
 }) {
+  const { server } = row
+  const release =
+    [server.implementation, server.version].filter(Boolean).join(" ") ||
+    server.shortId
   return (
     <Link
       to="/server/$serverId/console"
@@ -757,12 +779,24 @@ const MemberInstance = React.memo(function MemberInstance({
           kind: "server",
           relayId: server.relayId,
         }}
+        // Narrow screens hide the Relay and hostname columns; show them here.
         meta={
-          [server.implementation, server.version].filter(Boolean).join(" ") ||
-          server.shortId
+          <>
+            <span className="sm:hidden">{memberHostname(row)} · </span>
+            <span className="md:hidden">{server.relayName}</span>
+            <span className="hidden sm:inline md:hidden"> · </span>
+            <span className="hidden sm:inline">{release}</span>
+          </>
         }
         metaClassName="font-mono"
         name={server.name}
+        nameAccessory={
+          server.tailscaleSupported ? undefined : (
+            <span className="flex md:hidden">
+              <TailscaleRelayUpdateHint relayName={server.relayName} />
+            </span>
+          )
+        }
         nameClassName="transition-colors group-hover/server-link:text-primary"
         showFavorite={false}
       />
@@ -877,16 +911,20 @@ const ConfigureMemberDialog = React.memo(function ConfigureMemberDialog({
   pending: boolean
   row: TailscaleMemberRow
   onClose: () => void
-  onSave: (next: Pick<StackBinding, "enabled" | "hostname">) => Promise<unknown>
+  onSave: (
+    next: Partial<Pick<StackBinding, "enabled" | "hostname">>
+  ) => Promise<unknown>
 }) {
   const { binding, domain, server } = row
   const [hostname, setHostname] = React.useState(binding.hostname)
   const [enabled, setEnabled] = React.useState(binding.enabled)
   const nextHostname = hostname.trim()
+  const hostnameChanged = nextHostname !== binding.hostname
+  const enabledChanged = enabled !== binding.enabled
   const canSave =
     !pending &&
     nextHostname.length > 0 &&
-    (nextHostname !== binding.hostname || enabled !== binding.enabled)
+    (hostnameChanged || enabledChanged)
   const connectionLabelId = React.useId()
 
   return (
@@ -902,10 +940,12 @@ const ConfigureMemberDialog = React.memo(function ConfigureMemberDialog({
           onSubmit={(event) => {
             event.preventDefault()
             if (!canSave) return
-            forkPromise(async () => {
-              await onSave({ enabled, hostname: nextHostname })
-              onClose()
-            })
+            forkPromise(() =>
+              onSave({
+                ...(enabledChanged ? { enabled } : {}),
+                ...(hostnameChanged ? { hostname: nextHostname } : {}),
+              })
+            )
           }}
         >
           <DialogHeader>
@@ -1005,12 +1045,7 @@ const DisconnectMemberDialog = React.memo(function DisconnectMemberDialog({
             type="button"
             variant="destructive"
             disabled={pending}
-            onClick={() =>
-              forkPromise(async () => {
-                await onDisconnect()
-                onClose()
-              })
-            }
+            onClick={() => forkPromise(onDisconnect)}
           >
             {pending ? <LoaderCircle className="animate-spin" /> : <Unplug />}
             Disconnect Server
