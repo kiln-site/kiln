@@ -102,7 +102,46 @@ export const loadAppConfigEffect = Effect.fn("apps.config")(function* (
   )
   const row = rows.at(0)
   if (!row) return null
-  const decrypted = yield* Effect.try({
+  return { ...toRecord(row), config: yield* decryptConfig(row) }
+})
+
+/**
+ * Changes part of an app's config against the one saved now, holding its
+ * row while it does, so an edit saved meanwhile isn't overwritten.
+ */
+export const updateAppConfigEffect = Effect.fn("apps.updateConfig")(function* (
+  relayId: string,
+  appId: string,
+  update: (config: AppConfig) => AppConfig
+) {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  return yield* database.transaction("app_config_update", (transaction) =>
+    Effect.gen(function* () {
+      const rows = yield* transaction.queryRows<AppConfigRow>(
+        `SELECT app_id, relay_id, name, config_ciphertext, created_by, created_at
+           FROM ${databaseTable("app")}
+          WHERE relay_id = ? AND app_id = ?
+          LIMIT 1
+            FOR UPDATE`,
+        [relayId, appId]
+      )
+      const row = rows.at(0)
+      if (!row) return yield* Effect.fail(new Error("App not found"))
+      const config = update(yield* decryptConfig(row))
+      yield* transaction.execute(
+        `UPDATE ${databaseTable("app")}
+            SET config_ciphertext = ?, updated_at = ?
+          WHERE relay_id = ? AND app_id = ?`,
+        [yield* encryptConfig(config), now, relayId, appId]
+      )
+      return config
+    })
+  )
+})
+
+function decryptConfig(row: AppConfigRow) {
+  return Effect.try({
     try: () =>
       decryptWithKeyring(
         row.config_ciphertext,
@@ -111,13 +150,15 @@ export const loadAppConfigEffect = Effect.fn("apps.config")(function* (
       ),
     catch: (cause) =>
       CredentialError.make({ operation: "decrypt_app_config", cause }),
-  })
-  const config = appConfigSchema.parse({
-    ...defaultAppConfig,
-    ...(JSON.parse(decrypted.plaintext) as object),
-  })
-  return { ...toRecord(row), config }
-})
+  }).pipe(
+    Effect.map((decrypted) =>
+      appConfigSchema.parse({
+        ...defaultAppConfig,
+        ...(JSON.parse(decrypted.plaintext) as object),
+      })
+    )
+  )
+}
 
 export const saveAppConfigEffect = Effect.fn("apps.saveConfig")(function* (
   relayId: string,

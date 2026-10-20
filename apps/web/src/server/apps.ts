@@ -28,6 +28,7 @@ import {
   listAppRecordsEffect,
   renameAppRecordEffect,
   saveAppConfigEffect,
+  updateAppConfigEffect,
 } from "@/effect/managed-apps"
 import { runAppEffect } from "@/effect/runtime"
 import {
@@ -282,33 +283,31 @@ export const deployApp = createServerFn({ method: "POST" })
 export const updateAppLimits = createServerFn({ method: "POST" })
   .validator(appLimitsInputSchema)
   .handler(async ({ data }) => {
-    const { app, relay, user } = await authorizedApp(data, "app.manage")
+    const { relay, user } = await authorizedApp(data, "app.manage")
     if (!(await relayAppLimitsSupported(relay.id))) {
       throw new Error("Update this Relay to set app limits")
     }
-    const config = appConfigSchema.parse({
-      ...app.config,
-      diskLimitBytes: data.diskLimitBytes,
-      serviceLimits: data.serviceLimits,
-    })
+    const limits = appConfigSchema
+      .pick({ diskLimitBytes: true, serviceLimits: true })
+      .parse(data)
     // Saved once the Relay applies them, so limits it refuses aren't used
-    // by the next deployment.
+    // by the next deployment, and into the config saved by then, so other
+    // edits made meanwhile stay.
     const updated = relayAppSchema.parse(
       await databaseRpc(
         relay,
         "app.limits.write",
-        {
-          appId: data.appId,
-          diskLimitBytes: config.diskLimitBytes,
-          serviceLimits: config.serviceLimits,
-        },
+        { appId: data.appId, ...limits },
         60_000,
         user.id
       )
     )
     await runAppEffect(
-      "apps.config.save",
-      saveAppConfigEffect(data.relayId, data.appId, config)
+      "apps.limits.save",
+      updateAppConfigEffect(data.relayId, data.appId, (config) => ({
+        ...config,
+        ...limits,
+      }))
     )
     publishAppChange(relay.id, false)
     return updated

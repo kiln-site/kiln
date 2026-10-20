@@ -1,12 +1,18 @@
 import { assert, layer } from "@effect/vitest"
 import { Effect } from "effect"
+import { vi } from "vite-plus/test"
 
 import {
+  createAppRecordEffect,
   listAppRecordsEffect,
+  loadAppConfigEffect,
   renameAppRecordEffect,
+  updateAppConfigEffect,
 } from "@/effect/managed-apps"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRelay, insertRows } from "@/test/seed"
+
+vi.stubEnv("BETTER_AUTH_SECRETS", `1:${"x".repeat(32)}`)
 
 const relayOne = "r".repeat(43)
 const relayTwo = "s".repeat(43)
@@ -47,6 +53,40 @@ describeMysql("managed apps", () => {
           ["b", "Elsewhere"],
           ["c", "Elsewhere"],
         ])
+      })
+    )
+
+    it.effect("keeps both of two config changes saved at once", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        yield* insertRelay(relayOne)
+        const appId = "a".repeat(40)
+        yield* createAppRecordEffect({
+          appId,
+          createdBy: "user-one",
+          name: "Website",
+          relayId: relayOne,
+        })
+
+        // As an environment edit saved while a limits change waited on the
+        // Relay.
+        yield* Effect.all(
+          [
+            updateAppConfigEffect(relayOne, appId, (config) => ({
+              ...config,
+              environment: "MODE=production",
+            })),
+            updateAppConfigEffect(relayOne, appId, (config) => ({
+              ...config,
+              diskLimitBytes: 8 * 1024 ** 3,
+            })),
+          ],
+          { concurrency: "unbounded" }
+        )
+
+        const saved = yield* loadAppConfigEffect(relayOne, appId)
+        assert.strictEqual(saved?.config.environment, "MODE=production")
+        assert.strictEqual(saved?.config.diskLimitBytes, 8 * 1024 ** 3)
       })
     )
 
