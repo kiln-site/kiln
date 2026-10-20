@@ -70,6 +70,13 @@ worker locks the work when it runs it:
   **restore** runs alone (exclusive), so it waits for file writes and power
   changes and nothing starts the server mid-restore.
 - **Provisioning** holds the new server exclusively while it's created.
+  Jobs for different instances run at once, up to half the host's cores
+  (two to four), so a slow image download or install doesn't hold up the
+  creates queued behind it. Past the first job, another starts only while
+  the host's load average is under one per core, so provisioning doesn't
+  slow running game servers; while it isn't, the worker checks again every
+  five seconds or when a job finishes. Jobs start in the order they were
+  queued.
 - **App deployments** hold the App's lifecycle lock for the whole build. An
   App delete stops a running deployment before it waits, so it doesn't wait
   for the build it's removing.
@@ -247,7 +254,7 @@ request that claimed it:
 
 | Span | What it times |
 | --- | --- |
-| `relay.provisioning.job` | One instance's create, from its wait for the instance's lanes to its last phase. Under the claim's `relay.control.request`; `relay.provisioning.kind`, `.attempt`, `.outcome`, and `.failed_phase` |
+| `relay.provisioning.job` | One instance's create, from its wait for the instance's lanes to its last phase. Under the claim's `relay.control.request`; `relay.provisioning.kind`, `.attempt`, `.outcome`, `.failed_phase`, and `.running`, how many jobs ran once it started |
 | `relay.provisioning.phase` | Each phase: `preparing`, `pulling_image`, `creating_container`, `finalizing` |
 | `relay.apps.deployment` | An App deployment, with `.pull`, `.build`, `.composeConfig`, `.composeUp`, and `.replace` for its steps |
 | `relay.apps.reserve` | Checking an App's limits against the node and applying them, holding the allocations lane |

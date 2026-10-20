@@ -1,3 +1,5 @@
+import { availableParallelism, loadavg } from "node:os"
+
 import { Effect, Fiber, Queue, type Tracer } from "effect"
 
 import type {
@@ -18,8 +20,39 @@ import type { LaneLock, OperationLanes } from "./operation-lanes.js"
 // a job and claims it, a worker runs it in the instance's lane, and the
 // job's placeholder stands in for the instance until it exists. What
 // differs by kind is in its adapter.
+//
+// Jobs for different instances run at once, up to the host's capacity, so a
+// slow image download or install doesn't hold up everything queued behind
+// it. Each job still waits for its own instance's lanes.
 
 type WorkPhase = ProvisioningWorkPhase
+
+/** How many provisioning jobs the host runs at once. */
+export interface ProvisioningCapacity {
+  /** The most jobs that run at once. */
+  readonly slots: number
+  /** Whether the host is too busy to start another job beside one running. */
+  readonly busy: () => boolean
+}
+
+/**
+ * Half the host's cores, from two to four jobs. Past the first job, another
+ * only starts while the load average is under one per core, so provisioning
+ * doesn't slow the game servers already running. On Linux the load average
+ * also counts work waiting on the disk, which image extraction and database
+ * setup mostly are.
+ */
+export function hostProvisioningCapacity(): ProvisioningCapacity {
+  const cores = Math.max(availableParallelism(), 1)
+  return {
+    busy: () => (loadavg()[0] ?? 0) / cores >= 1,
+    slots: Math.min(4, Math.max(2, Math.floor(cores / 2))),
+  }
+}
+
+// How long a busy host waits before checking its load again, when no running
+// job finishes first.
+const BUSY_RECHECK = "5 seconds"
 
 /** How one kind of instance provisions. */
 export interface ProvisioningAdapter<Kind extends RelayProvisioningKind> {
@@ -102,22 +135,29 @@ function placeholderAt<Kind extends RelayProvisioningKind>(
 
 export class ProvisioningManager {
   readonly #adapters: ProvisioningAdapters
+  readonly #capacity: ProvisioningCapacity
   readonly #lanes: OperationLanes
   // The span of the request that claimed each job, so the job's own span
   // continues the trace of the create that started it. Lost on restart.
   readonly #claims = new Map<string, Tracer.AnySpan>()
   // Jobs being claimed this moment, whose noted spans the worker keeps.
   readonly #claiming = new Set<string>()
+  // Jobs the worker has taken and not yet finished or put back. Each claim
+  // is its own entry, so a job put back and claimed again counts once.
+  readonly #running = new Set<RelayProvisioningJob>()
+  #recheckScheduled = false
   readonly #state: RelayStateStore["Service"]
   readonly #wake: Queue.Queue<void>
 
   private constructor(options: {
     adapters: ProvisioningAdapters
+    capacity: ProvisioningCapacity
     lanes: OperationLanes
     state: RelayStateStore["Service"]
     wake: Queue.Queue<void>
   }) {
     this.#adapters = options.adapters
+    this.#capacity = options.capacity
     this.#lanes = options.lanes
     this.#state = options.state
     this.#wake = options.wake
@@ -125,6 +165,8 @@ export class ProvisioningManager {
 
   static make(options: {
     adapters: ProvisioningAdapters
+    /** How many jobs run at once; see `hostProvisioningCapacity`. */
+    capacity: ProvisioningCapacity
     /** The worker holds each new instance's lanes for the whole create. */
     lanes: OperationLanes
   }) {
@@ -264,53 +306,106 @@ export class ProvisioningManager {
     return Queue.offer(this.#wake, undefined).pipe(Effect.asVoid)
   }
 
+  // Starts queued jobs while the host has room for them. A job that
+  // finishes, or is put back, wakes the worker to start the next.
   #drain() {
     return Effect.gen({ self: this }, function* () {
       while (true) {
         // Queued jobs wait out a pause.
         if (this.#lanes.paused) return
+        if (this.#running.size >= this.#capacity.slots) return
+        if (this.#running.size > 0 && this.#capacity.busy()) {
+          yield* this.#recheckLater()
+          return
+        }
         const job = yield* this.#state.claimNextProvisioningJob(Date.now())
         if (!job) {
-          // Nothing waits, so only a job being claimed this moment can still
-          // want its noted span.
+          // Nothing waits, so only a job being claimed this moment, or one
+          // being put back, can still want its noted span.
+          const running = new Set(
+            [...this.#running].map((taken) => taken.instanceId)
+          )
           for (const instanceId of this.#claims.keys()) {
-            if (!this.#claiming.has(instanceId)) this.#claims.delete(instanceId)
+            if (!this.#claiming.has(instanceId) && !running.has(instanceId)) {
+              this.#claims.delete(instanceId)
+            }
           }
           return
         }
-        const adapter = adapterFor(this.#adapters, job)
-        const claimedBy = this.#claims.get(job.instanceId)
-        this.#claims.delete(job.instanceId)
-        // The whole job, from its wait for the instance's lanes through each
-        // phase, in the trace of the request that claimed it.
-        const refused = yield* this.#lanes
-          .run(
-            { label: adapter.label, locks: adapter.locks(job.instanceId) },
-            this.#provision(job)
-          )
-          .pipe(
-            Effect.as(null),
-            Effect.catchTag("LaneRejectedError", (error) =>
-              Effect.succeed(error)
-            ),
-            Effect.withSpan("relay.provisioning.job", {
-              attributes: {
-                "relay.instance_id": job.instanceId,
-                "relay.provisioning.attempt": job.attempt,
-                "relay.provisioning.kind": job.kind,
-              },
-              ...(claimedBy ? { parent: claimedBy } : {}),
+        this.#running.add(job)
+        const running = this.#running.size
+        yield* this.#run(job, running).pipe(
+          // A job that can't be recorded stays running until the Relay
+          // restarts and puts it back; the worker carries on with the rest.
+          Effect.catch((cause) =>
+            Effect.logError("Relay provisioning job stopped", {
+              cause,
+              instanceId: job.instanceId,
+              kind: job.kind,
             })
-          )
-        if (!refused) continue
-        // Refused before it started, as when the Relay was paused or too
-        // busy: it goes back in line, and waits for resume or a moment.
-        if (claimedBy) this.#claims.set(job.instanceId, claimedBy)
-        yield* this.#state.returnProvisioningJob(job.instanceId, Date.now())
-        yield* this.#announce(job.kind)
-        if (refused.reason === "paused") return
-        yield* Effect.sleep("1 second")
+          ),
+          Effect.ensuring(
+            Effect.suspend(() => {
+              this.#running.delete(job)
+              return Queue.offer(this.#wake, undefined)
+            })
+          ),
+          Effect.forkChild
+        )
       }
+    })
+  }
+
+  // Checks the load again in a moment, once, while jobs wait for it to fall.
+  #recheckLater() {
+    if (this.#recheckScheduled) return Effect.void
+    this.#recheckScheduled = true
+    return Effect.sleep(BUSY_RECHECK).pipe(
+      Effect.andThen(
+        Effect.suspend(() => {
+          this.#recheckScheduled = false
+          return Queue.offer(this.#wake, undefined)
+        })
+      ),
+      Effect.forkChild,
+      Effect.asVoid
+    )
+  }
+
+  // One job, from its wait for the instance's lanes through each phase, in
+  // the trace of the request that claimed it.
+  #run(job: RelayProvisioningJob, running: number) {
+    return Effect.gen({ self: this }, function* () {
+      const adapter = adapterFor(this.#adapters, job)
+      const claimedBy = this.#claims.get(job.instanceId)
+      this.#claims.delete(job.instanceId)
+      const refused = yield* this.#lanes
+        .run(
+          { label: adapter.label, locks: adapter.locks(job.instanceId) },
+          this.#provision(job)
+        )
+        .pipe(
+          Effect.as(null),
+          Effect.catchTag("LaneRejectedError", (error) =>
+            Effect.succeed(error)
+          ),
+          Effect.withSpan("relay.provisioning.job", {
+            attributes: {
+              "relay.instance_id": job.instanceId,
+              "relay.provisioning.attempt": job.attempt,
+              "relay.provisioning.kind": job.kind,
+              "relay.provisioning.running": running,
+            },
+            ...(claimedBy ? { parent: claimedBy } : {}),
+          })
+        )
+      if (!refused) return
+      // Refused before it started, as when the Relay was paused or too
+      // busy: it goes back in line, and waits for resume or a moment.
+      if (claimedBy) this.#claims.set(job.instanceId, claimedBy)
+      yield* this.#state.returnProvisioningJob(job.instanceId, Date.now())
+      yield* this.#announce(job.kind)
+      if (refused.reason !== "paused") yield* Effect.sleep("1 second")
     })
   }
 

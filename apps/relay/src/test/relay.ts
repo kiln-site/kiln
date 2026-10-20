@@ -35,7 +35,10 @@ import { DockerDriver } from "../docker.js"
 import { makeRelayStateLayer, RelayStateStore } from "../effect/state.js"
 import { LifecycleDriver } from "../lifecycle.js"
 import { OperationLanes } from "../operation-lanes.js"
-import { ProvisioningManager } from "../provisioning.js"
+import {
+  hostProvisioningCapacity,
+  ProvisioningManager,
+} from "../provisioning.js"
 import { appRouteOwner, relayResourceNames } from "../relay-resources.js"
 import { RuntimeRecoveryManager } from "../runtime-recovery.js"
 import { serverProvisioning } from "../server-provisioning.js"
@@ -298,6 +301,7 @@ export async function provisioningWorker(
           state: harness.state,
         }),
       },
+      capacity: hostProvisioningCapacity(),
       lanes: harness.lanes,
     }).pipe(Effect.provideService(RelayStateStore, harness.state))
   )

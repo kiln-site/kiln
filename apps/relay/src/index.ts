@@ -214,7 +214,10 @@ import { withRemoteFileSource } from "./remote-file-source.js"
 import { RelaySnapshotHub } from "./snapshot-hub.js"
 import { retainProvisioningInstances } from "./instance-mutation-snapshot.js"
 import { RuntimeRecoveryManager } from "./runtime-recovery.js"
-import { ProvisioningManager } from "./provisioning.js"
+import {
+  hostProvisioningCapacity,
+  ProvisioningManager,
+} from "./provisioning.js"
 import { appProvisioning } from "./app-provisioning.js"
 import { databaseProvisioning } from "./database-provisioning.js"
 import { serverProvisioning } from "./server-provisioning.js"
@@ -574,6 +577,7 @@ const provisioningManager = await runRelayEffect(
         state: startupCore.state,
       }),
     },
+    capacity: hostProvisioningCapacity(),
     lanes,
   })
 )

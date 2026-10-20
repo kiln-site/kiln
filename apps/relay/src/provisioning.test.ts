@@ -4,6 +4,7 @@ import { join } from "node:path"
 
 import { assert, it as effectIt } from "@effect/vitest"
 import { Deferred, Effect, Exit, Fiber } from "effect"
+import { TestClock } from "effect/testing"
 import { describe, expect, it } from "vite-plus/test"
 
 import {
@@ -19,7 +20,10 @@ import { makeRelayStateLayer, RelayStateStore } from "./effect/state.js"
 import type { LifecycleDriver } from "./lifecycle.js"
 import { exclusive, laneKeys, OperationLanes } from "./operation-lanes.js"
 import { provisioningErrorMessage } from "./provisioning-errors.js"
-import { ProvisioningManager } from "./provisioning.js"
+import {
+  type ProvisioningCapacity,
+  ProvisioningManager,
+} from "./provisioning.js"
 import { serverProvisioning } from "./server-provisioning.js"
 
 const pullFailure = new Error(
@@ -79,47 +83,96 @@ describe("provisioning worker", () => {
     version: "1.21.8",
   })
 
+  const serverInput = (instanceId: string) => ({
+    kind: "server" as const,
+    idempotencyKey: `55000000-0000-4000-8000-${instanceId.slice(0, 12)}`,
+    input,
+    instanceId,
+    placeholder: { ...placeholder, directory: instanceId, id: instanceId },
+  })
+
+  // Waits for the worker, which runs on its own fibers, to catch up.
+  const until = (done: () => boolean) =>
+    Effect.gen(function* () {
+      for (let tries = 0; !done(); tries += 1) {
+        if (tries > 10_000) throw new Error("Timed out waiting")
+        yield* Effect.promise(
+          () => new Promise((resolve) => setImmediate(resolve))
+        )
+      }
+    })
+
+  // Gives the worker a moment to start anything it was going to.
+  const settle = Effect.gen(function* () {
+    for (let tick = 0; tick < 50; tick += 1) {
+      yield* Effect.promise(
+        () => new Promise((resolve) => setImmediate(resolve))
+      )
+    }
+  })
+
+  // A worker over a fresh Relay state, where Docker is the one thing faked:
+  // creating a game server runs `create`.
+  const withWorker = <A, E>(
+    capacity: ProvisioningCapacity,
+    create: (instanceId: string) => Promise<void>,
+    body: (worker: {
+      lanes: OperationLanes
+      manager: ProvisioningManager
+      state: RelayStateStore["Service"]
+    }) => Effect.Effect<A, E, RelayStateStore>
+  ) =>
+    Effect.acquireUseRelease(
+      Effect.sync(() => mkdtempSync(join(tmpdir(), "kiln-provisioning-"))),
+      (directory) =>
+        Effect.gen(function* () {
+          const state = yield* RelayStateStore
+          const lanes = new OperationLanes()
+          const lifecycle = {
+            createInstanceWithId: async (id: string) => {
+              await create(id)
+              return placeholder
+            },
+          } as unknown as LifecycleDriver
+          const manager = yield* ProvisioningManager.make({
+            adapters: {
+              // Only game servers provision here.
+              app: appProvisioning({} as AppDriver),
+              database: databaseProvisioning({} as DatabaseDriver),
+              server: serverProvisioning({
+                lifecycle,
+                refreshSnapshot: async () => undefined,
+                state,
+              }),
+            },
+            capacity,
+            lanes,
+          })
+          const worker = yield* Effect.forkChild(manager.run())
+          const result = yield* body({ lanes, manager, state })
+          assert.isUndefined(worker.pollUnsafe())
+          yield* Fiber.interrupt(worker)
+          return result
+        }).pipe(
+          Effect.provide(makeRelayStateLayer(join(directory, "relay.sqlite")))
+        ),
+      (directory) =>
+        Effect.sync(() => rmSync(directory, { force: true, recursive: true }))
+    )
+
+  const idle: ProvisioningCapacity = { busy: () => false, slots: 2 }
+
   effectIt.effect(
     "puts back a job a pause withdrew, and creates it once resumed",
-    () =>
-      Effect.acquireUseRelease(
-        Effect.sync(() => mkdtempSync(join(tmpdir(), "kiln-provisioning-"))),
-        (directory) =>
+    () => {
+      const created: Array<string> = []
+      return withWorker(
+        idle,
+        async (id) => {
+          created.push(id)
+        },
+        ({ lanes, manager, state }) =>
           Effect.gen(function* () {
-            const state = yield* RelayStateStore
-            const lanes = new OperationLanes()
-            const created: Array<string> = []
-            // Docker is the one thing faked: creating just notes the server.
-            const lifecycle = {
-              createInstanceWithId: async (id: string) => {
-                created.push(id)
-                return placeholder
-              },
-            } as unknown as LifecycleDriver
-            const manager = yield* ProvisioningManager.make({
-              adapters: {
-                // Only game servers provision here.
-                app: appProvisioning({} as AppDriver),
-                database: databaseProvisioning({} as DatabaseDriver),
-                server: serverProvisioning({
-                  lifecycle,
-                  refreshSnapshot: async () => undefined,
-                  state,
-                }),
-              },
-              lanes,
-            })
-            const worker = yield* Effect.forkChild(manager.run())
-            const until = (done: () => boolean) =>
-              Effect.gen(function* () {
-                for (let tries = 0; !done(); tries += 1) {
-                  if (tries > 10_000) throw new Error("Timed out waiting")
-                  yield* Effect.promise(
-                    () => new Promise((resolve) => setImmediate(resolve))
-                  )
-                }
-              })
-
             // A restore holds the server, so its job waits for its lane.
             const restoring = Deferred.makeUnsafe<void>()
             yield* Effect.forkChild(
@@ -132,13 +185,7 @@ describe("provisioning worker", () => {
               )
             )
             yield* until(() => lanes.pending.active === 1)
-            yield* manager.prepare({
-              kind: "server",
-              idempotencyKey: "55000000-0000-4000-8000-000000000009",
-              input,
-              instanceId,
-              placeholder,
-            })
+            yield* manager.prepare(serverInput(instanceId))
             yield* manager.claim("server", instanceId)
             yield* until(() => lanes.pending.waiting === 1)
 
@@ -159,15 +206,97 @@ describe("provisioning worker", () => {
             yield* manager.resume()
             yield* until(() => created.length > 0)
             assert.deepStrictEqual(created, [instanceId])
-            assert.isUndefined(worker.pollUnsafe())
-            yield* Fiber.interrupt(worker)
-          }).pipe(
-            Effect.provide(
-              makeRelayStateLayer(join(directory, "relay.sqlite"))
-            )
-          ),
-        (directory) =>
-          Effect.sync(() => rmSync(directory, { force: true, recursive: true }))
+          })
       )
+    }
+  )
+
+  effectIt.effect(
+    "creates different instances at once, up to its slots, and starts the next as one fails",
+    () => {
+      const [first, second, third] = ["a", "b", "c"].map((id) =>
+        id.repeat(40)
+      ) as [string, string, string]
+      const started: Array<string> = []
+      const finish = new Map<string, (error?: Error) => void>()
+      return withWorker(
+        idle,
+        (id) =>
+          new Promise<void>((resolve, reject) => {
+            started.push(id)
+            finish.set(id, (error) => (error ? reject(error) : resolve()))
+          }),
+        ({ manager, state }) =>
+          Effect.gen(function* () {
+            for (const id of [first, second, third]) {
+              yield* manager.prepare(serverInput(id))
+              yield* manager.claim("server", id)
+            }
+            yield* until(() => started.length === 2)
+            // The third waits for a free slot.
+            yield* settle
+            assert.deepStrictEqual(started, [first, second])
+
+            // A failed job frees its slot as a finished one does.
+            finish.get(first)!(new Error("Image not found"))
+            yield* until(() => started.length === 3)
+            assert.deepStrictEqual(started, [first, second, third])
+            finish.get(second)!()
+            finish.get(third)!()
+
+            const settled = (id: string) =>
+              state
+                .getProvisioningJob(id)
+                .pipe(Effect.map((job) => job?.status ?? "done"))
+            let statuses: Array<string> = []
+            for (let tries = 0; ; tries += 1) {
+              if (tries > 10_000) throw new Error("Timed out waiting")
+              statuses = yield* Effect.all([first, second, third].map(settled))
+              if (!statuses.includes("running")) break
+              yield* Effect.promise(
+                () => new Promise((resolve) => setImmediate(resolve))
+              )
+            }
+            assert.deepStrictEqual(statuses, ["failed", "done", "done"])
+          })
+      )
+    }
+  )
+
+  effectIt.effect(
+    "starts nothing beside a running job while the host is busy, until its load falls",
+    () => {
+      const [first, second] = ["d", "e"].map((id) => id.repeat(40)) as [
+        string,
+        string,
+      ]
+      let busy = true
+      const started: Array<string> = []
+      return withWorker(
+        { busy: () => busy, slots: 4 },
+        (id) =>
+          new Promise<void>(() => {
+            started.push(id)
+          }),
+        ({ manager }) =>
+          Effect.gen(function* () {
+            for (const id of [first, second]) {
+              yield* manager.prepare(serverInput(id))
+              yield* manager.claim("server", id)
+            }
+            // The first job always starts, so the queue keeps moving.
+            yield* until(() => started.length === 1)
+            yield* settle
+            assert.deepStrictEqual(started, [first])
+
+            // Once the load falls, the next starts without waiting for the
+            // first to finish.
+            busy = false
+            yield* TestClock.adjust("5 seconds")
+            yield* until(() => started.length === 2)
+            assert.deepStrictEqual(started, [first, second])
+          })
+      )
+    }
   )
 })
