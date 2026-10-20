@@ -761,6 +761,32 @@ export class DockerDriver {
     )
   }
 
+  /**
+   * Where a game server's files live. Inspects only its container when
+   * addressed by its full id, rather than discovering every server the way
+   * `findInstance` does; other ids, and labels it can't settle, fall back to
+   * that.
+   */
+  async findFileRoot(
+    id: string
+  ): Promise<Pick<RelayInstanceConfig, "directory" | "id"> | null> {
+    if (/^[a-f0-9]{40}$/u.test(id)) {
+      const containers = await this.#inspectManaged([
+        `${this.#config.serverIdLabel}=${id}`,
+      ])
+      const [container] = containers
+      if (containers.length === 1 && container) {
+        // The disk limit is the fleet's to assign, and isn't needed here.
+        const config = this.#instanceConfig(
+          container,
+          DEFAULT_INSTANCE_DISK_LIMIT_BYTES
+        )
+        return { directory: config.directory, id: config.id }
+      }
+    }
+    return this.findInstance(id)
+  }
+
   async findInstance(id: string): Promise<RelayInstanceConfig | null> {
     const found = (await this.#discover()).find((item) =>
       matchesInstanceId(item.config, id)
@@ -2442,14 +2468,21 @@ export class DockerDriver {
 
   // Runs on every snapshot: one listing, then one inspect per server, all on
   // the Docker socket.
-  async #discover(signal?: AbortSignal): Promise<Array<DiscoveredInstance>> {
+  /**
+   * Inspects the server containers this Relay owns, narrowed by further label
+   * filters.
+   */
+  #inspectManaged(
+    labels: ReadonlyArray<string>,
+    signal?: AbortSignal
+  ): Promise<Array<DockerInspect>> {
     const engine = this.#engine
     const config = this.#config
-    const containers = await Effect.runPromise(
+    return Effect.runPromise(
       Effect.gen(function* () {
         const listed = yield* engine.listContainers({
           all: true,
-          filters: { label: [config.managedLabel] },
+          filters: { label: [config.managedLabel, ...labels] },
         })
         const ids = listed.flatMap((container) =>
           container.Labels?.["kiln.resource.kind"] !== "database" &&
@@ -2473,6 +2506,10 @@ export class DockerDriver {
       ),
       { signal }
     )
+  }
+
+  async #discover(signal?: AbortSignal): Promise<Array<DiscoveredInstance>> {
+    const containers = await this.#inspectManaged([], signal)
     if (containers.length === 0) return []
     // Servers created before disk limits were recorded take one from what
     // the node has left. Servers without a disk limit take none.

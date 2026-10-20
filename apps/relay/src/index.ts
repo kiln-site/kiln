@@ -3021,11 +3021,17 @@ async function withFileTarget<T>(
           : {
               databaseBrowser,
               filesystem,
-              root: await requiredInstance(payload),
+              root: await requiredFileRoot(id),
             },
     { "kiln.files.root": kind }
   )
   return run(target)
+}
+
+async function requiredFileRoot(instanceId: string) {
+  const root = await docker.findFileRoot(instanceId)
+  if (!root) throw new Error("Instance not found")
+  return root
 }
 
 async function requiredInstance(payload: Readonly<Record<string, unknown>>) {
