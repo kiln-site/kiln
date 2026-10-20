@@ -2,12 +2,10 @@ import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Server } from "lucide-react"
 
-import { Progress } from "@workspace/ui/components/progress"
-import { cn } from "@workspace/ui/lib/utils"
-
 import { InfoCopyValue, InfoFact, InfoRailCard } from "@/components/info-page"
 import { useRelayLiveStatus } from "@/components/relay/relay-presentation"
 import { useUptime } from "@/components/resource-meters"
+import { UsageBar, percentOf } from "@/components/usage-bar"
 import { formatBytes } from "@/lib/format-bytes"
 import {
   relayNodeReadingsQueryOptions,
@@ -181,46 +179,6 @@ const RelayNodeUsage = React.memo(function RelayNodeUsage({
     </div>
   )
 })
-
-function UsageBar({
-  detail,
-  indicatorClassName,
-  label,
-  percent,
-  title,
-  value,
-}: {
-  detail?: string
-  // Colors the bar, as a class on the progress root.
-  indicatorClassName: string
-  label: string
-  percent: number | undefined
-  title?: string
-  value: string
-}) {
-  return (
-    <div title={title}>
-      <div className="flex items-baseline justify-between gap-2 text-xs">
-        <span className="text-muted-foreground">{label}</span>
-        <span className="truncate tabular-nums">
-          {value}
-          {detail ? (
-            <span className="ml-1 text-muted-foreground">{detail}</span>
-          ) : null}
-        </span>
-      </div>
-      <Progress
-        aria-label={label}
-        className={cn("mt-1.5 h-1.5", indicatorClassName)}
-        value={Math.min(100, Math.max(0, percent ?? 0))}
-      />
-    </div>
-  )
-}
-
-function percentOf(used: number, total: number): number {
-  return total > 0 ? (used / total) * 100 : 0
-}
 
 function platformLabel(platform: string): string {
   if (platform === "linux") return "Linux"

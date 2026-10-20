@@ -2,17 +2,24 @@ import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import {
+  CPU_LIMIT_MILLIS_PER_CORE,
+  type AppConfig,
+  type ResourceLimits,
+} from "@workspace/contracts"
+import {
   ChevronLeft,
   ChevronRight,
   Container,
   GitCommitHorizontal,
   History,
   Rocket,
+  ScanSearch,
   ScrollText,
 } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 
+import { AppContainerDetailsDialog } from "@/components/app/app-container-details-dialog"
 import {
   useAppContainerSelection,
   type AppContainerTarget,
@@ -30,7 +37,6 @@ import {
 import { GitHubMark } from "@/components/github-mark"
 import {
   InfoCopyValue,
-  InfoDetails,
   InfoFact,
   InfoRailCard,
   InfoRailGroup,
@@ -41,11 +47,20 @@ import { OwnerCard } from "@/components/owner-card"
 import { RelativeTime } from "@/components/relative-time"
 import { InfoRailRelayLink } from "@/components/resource-info-rail"
 import { StatusIndicator } from "@/components/status-indicator"
+import { UsageBar, percentOf } from "@/components/usage-bar"
+import { formatBytes } from "@/lib/format-bytes"
 import {
+  appConfigQueryOptions,
   appDeploymentSummaryQueryOptions,
   appOwnerMinecraftProfileQueryOptions,
   appOwnerQueryOptions,
+  resourceLimitsCapacityQueryOptions,
 } from "@/lib/query-options"
+import {
+  formatCpuLimit,
+  formatDiskLimit,
+  formatMemoryLimit,
+} from "@/lib/resource-limits"
 
 // What the app is at a glance: the Relay it runs on and the databases it
 // reaches, who owns it, and its containers, one at a time. Its name and
@@ -78,7 +93,7 @@ export function AppInfoRail({ app, routeId }: { app: App; routeId: string }) {
       </InfoRailGroup>
       <AppOwner appId={app.id} relayId={app.relayId} />
       <AppDeploymentCard app={app} routeId={routeId} />
-      <AppContainerCard app={app} />
+      <AppContainerCard app={app} routeId={routeId} />
     </>
   )
 }
@@ -145,7 +160,7 @@ const AppDeploymentCard = React.memo(function AppDeploymentCard({
             className={railFooterLinkClassName}
           >
             <History />
-            Deployments
+            History
           </Link>
           {canReadLogs ? (
             <Link
@@ -181,9 +196,6 @@ const AppDeploymentCard = React.memo(function AppDeploymentCard({
             <span className="truncate font-mono text-xs">
               {source.repository}
             </span>
-            <span className="shrink-0 font-mono text-xs text-muted-foreground">
-              {source.branch}
-            </span>
           </a>
         ) : (
           <span className="text-muted-foreground">
@@ -191,8 +203,11 @@ const AppDeploymentCard = React.memo(function AppDeploymentCard({
           </span>
         )}
       </InfoFact>
-      {runningCommit ? (
+      {/* Held in place for GitHub apps, so a deploy finishing in the
+          background doesn't move the card. */}
+      {summary?.sourceType === "github" ? (
         <InfoFact label="Running">
+          {runningCommit ? (
           <a
             className="flex min-w-0 items-center gap-1.5 hover:text-primary"
             href={
@@ -213,13 +228,20 @@ const AppDeploymentCard = React.memo(function AppDeploymentCard({
               </span>
             ) : null}
           </a>
+          ) : (
+            <span className="text-muted-foreground">Not running</span>
+          )}
         </InfoFact>
       ) : null}
-      {latest ? (
-        <InfoFact label={latest.status === "running" ? "Started" : "Last deploy"}>
+      <InfoFact label={latest?.status === "running" ? "Started" : "Last deploy"}>
+        {latest ? (
           <RelativeTime timestamp={Date.parse(latest.startedAt)} />
-        </InfoFact>
-      ) : null}
+        ) : (
+          <span className="text-muted-foreground">
+            {summary ? "Never" : "…"}
+          </span>
+        )}
+      </InfoFact>
     </InfoRailCard>
   )
 })
@@ -229,7 +251,7 @@ const railFooterLinkClassName =
 
 // One container at a time, paged through in its title row. The page's
 // service tags select one too.
-function AppContainerCard({ app }: { app: App }) {
+function AppContainerCard({ app, routeId }: { app: App; routeId: string }) {
   const containers = React.useMemo(() => appContainers(app), [app])
   const selection = useAppContainerSelection()
   const selected = React.useSyncExternalStore(
@@ -237,6 +259,7 @@ function AppContainerCard({ app }: { app: App }) {
     selection?.get ?? getNone,
     getNone
   )
+  const [detailsOpen, setDetailsOpen] = React.useState(false)
   const index = selectedIndex(containers, selected)
   const container = containers[index]
   const step = (offset: number) => {
@@ -277,8 +300,52 @@ function AppContainerCard({ app }: { app: App }) {
           />
         ) : null
       }
+      sections={
+        <>
+          <div className="border-t border-border/60 px-3">
+            <ContainerLimits app={app} service={container.service} />
+          </div>
+          <div className="grid grid-cols-2 divide-x divide-border/60 border-t">
+            <button
+              type="button"
+              className={railFooterLinkClassName}
+              onClick={() => setDetailsOpen(true)}
+            >
+              <ScanSearch />
+              Details
+            </button>
+            {app.permissions.includes("app.logs.read") ? (
+              <Link
+                to="/app/$appId/logs"
+                params={{ appId: routeId }}
+                search={{ stream: `service:${container.service}` }}
+                className={railFooterLinkClassName}
+              >
+                <ScrollText />
+                Logs
+              </Link>
+            ) : (
+              <span
+                className={cn(
+                  railFooterLinkClassName,
+                  "pointer-events-none opacity-50"
+                )}
+              >
+                <ScrollText />
+                Logs
+              </span>
+            )}
+          </div>
+        </>
+      }
     >
-      <ContainerFacts app={app} container={container} />
+      <ContainerFacts container={container} />
+      {detailsOpen ? (
+        <AppContainerDetailsDialog
+          container={container}
+          onOpenChange={setDetailsOpen}
+        />
+      ) : null}
     </InfoRailCard>
   )
 }
@@ -332,16 +399,116 @@ function PagerButton({
   )
 }
 
-function ContainerFacts({
+// The container's limits against the node: its service's CPU and memory,
+// and the disk the app's data may take.
+const ContainerLimits = React.memo(function ContainerLimits({
   app,
-  container,
+  service,
 }: {
   app: App
+  service: string
+}) {
+  const select = React.useCallback(
+    ({ config }: { config: AppConfig }): ResourceLimits => ({
+      cpuMillis: config.serviceLimits[service]?.cpuMillis ?? null,
+      diskBytes: config.diskLimitBytes,
+      memoryBytes: config.serviceLimits[service]?.memoryBytes ?? null,
+    }),
+    [service]
+  )
+  const { data: limits } = useQuery({
+    ...appConfigQueryOptions(app.relayId, app.id),
+    select,
+  })
+  const { data: capacity } = useQuery({
+    ...resourceLimitsCapacityQueryOptions(app.relayId, "app", app.id),
+    enabled: appRelayAvailable(app),
+  })
+  const cores = capacity?.cpu.nodeCores
+  const memoryTotal = capacity?.memory.nodeTotalBytes
+  const diskTotal = capacity?.storage.nodeTotalBytes
+
+  return (
+    <div className="flex flex-col gap-3 py-3">
+      <LimitBar
+        indicatorClassName="[&_[data-slot=progress-indicator]]:bg-sky-400/85"
+        label="CPU"
+        limit={limits?.cpuMillis}
+        total={cores === undefined ? undefined : cores * CPU_LIMIT_MILLIS_PER_CORE}
+        value={formatCpuLimit}
+        detail={
+          cores === undefined
+            ? undefined
+            : `of ${cores} ${cores === 1 ? "core" : "cores"}`
+        }
+      />
+      <LimitBar
+        indicatorClassName="[&_[data-slot=progress-indicator]]:bg-violet-400/85"
+        label="Memory"
+        limit={limits?.memoryBytes}
+        total={memoryTotal}
+        value={formatMemoryLimit}
+        detail={
+          memoryTotal === undefined ? undefined : `of ${formatBytes(memoryTotal)}`
+        }
+      />
+      <LimitBar
+        indicatorClassName="[&_[data-slot=progress-indicator]]:bg-emerald-400/80"
+        label="Disk"
+        limit={limits?.diskBytes}
+        title="The app's data, shared by its containers"
+        total={diskTotal}
+        value={formatDiskLimit}
+        detail={
+          diskTotal === undefined ? undefined : `of ${formatBytes(diskTotal)}`
+        }
+      />
+    </div>
+  )
+})
+
+// A limit's share of the node; no limit leaves the bar empty.
+function LimitBar({
+  detail,
+  indicatorClassName,
+  label,
+  limit,
+  title,
+  total,
+  value,
+}: {
+  detail: string | undefined
+  indicatorClassName: string
+  label: string
+  // `null` for no limit, `undefined` while the config loads.
+  limit: number | null | undefined
+  title?: string
+  total: number | undefined
+  value: (limit: number | null) => string
+}) {
+  return (
+    <UsageBar
+      detail={limit === null ? undefined : detail}
+      indicatorClassName={indicatorClassName}
+      label={label}
+      percent={
+        limit === null || limit === undefined || total === undefined
+          ? undefined
+          : percentOf(limit, total)
+      }
+      title={title}
+      value={limit === undefined ? "—" : value(limit)}
+    />
+  )
+}
+
+// What the container runs. Its name, ID, and the rest are in its details
+// dialog.
+function ContainerFacts({
+  container,
+}: {
   container: App["containers"][number]
 }) {
-  const labels = Object.entries(container.labels).sort(([left], [right]) =>
-    left.localeCompare(right)
-  )
   return (
     <>
       <InfoFact label="Service">
@@ -358,98 +525,11 @@ function ContainerFacts({
           </span>
         </span>
       </InfoFact>
-      <InfoFact label="Name">
-        <InfoCopyValue label="container name" value={container.name} />
-      </InfoFact>
-      <InfoFact label="ID">
-        {/* Shortened as Docker shows it; the full ID is what's copied. */}
-        <InfoCopyValue
-          display={container.id.slice(0, 12)}
-          label="container ID"
-          value={container.id}
-        />
-      </InfoFact>
       <InfoFact label="Image">
         <InfoCopyValue label="image" value={container.image} />
       </InfoFact>
-      <InfoFact label="State">
-        <span
-          className={cn(
-            "truncate",
-            !container.running && "text-muted-foreground"
-          )}
-          title={container.status}
-        >
-          {containerState(container)}
-        </span>
-      </InfoFact>
-      {container.running && container.startedAt ? (
-        <InfoFact label="Started">
-          <RelativeTime timestamp={Date.parse(container.startedAt)} />
-        </InfoFact>
-      ) : null}
-      <InfoFact label="Ports">
-        {container.ports.length === 0 ? (
-          <span className="text-muted-foreground">None published</span>
-        ) : (
-          <span className="truncate font-mono text-xs">
-            {container.ports
-              .map(
-                (port) =>
-                  `${port.hostPort}→${port.containerPort}/${port.protocol}`
-              )
-              .join(", ")}
-          </span>
-        )}
-      </InfoFact>
-      <InfoFact label="Labels">
-        {labels.length === 0 ? (
-          <span className="text-muted-foreground">None</span>
-        ) : (
-          <InfoDetails
-            title="Docker labels"
-            trigger={
-              <span className="tabular-nums">
-                {labels.length === 1 ? "1 label" : `${labels.length} labels`}
-              </span>
-            }
-          >
-            <dl className="flex max-h-72 flex-col gap-1.5 overflow-y-auto font-mono text-[11px]">
-              {labels.map(([key, value]) => (
-                <div key={key} className="min-w-0">
-                  <dt className="truncate" title={key}>
-                    {key}
-                  </dt>
-                  <dd className="break-all text-foreground">{value || "—"}</dd>
-                </div>
-              ))}
-            </dl>
-          </InfoDetails>
-        )}
-      </InfoFact>
-      {app.dataDirectory ? (
-        <InfoFact label="Data">
-          <InfoCopyValue
-            display="Copy path"
-            label="data path"
-            mono={false}
-            value={app.dataDirectory}
-          />
-        </InfoFact>
-      ) : null}
     </>
   )
-}
-
-// "Running", or how it stopped, as Docker reports it.
-function containerState(container: App["containers"][number]): string {
-  if (container.running) return "Running"
-  if (container.exitCode !== null && container.state === "exited") {
-    return `Exited (${container.exitCode})`
-  }
-  return container.state
-    ? `${container.state.charAt(0).toUpperCase()}${container.state.slice(1)}`
-    : "Stopped"
 }
 
 // The selected container, or, once a redeploy replaces it, its service's

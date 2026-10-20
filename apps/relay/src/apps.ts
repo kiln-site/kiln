@@ -135,7 +135,13 @@ interface ContainerInspect {
   Created: string
   HostConfig?: { Memory?: number; NanoCpus?: number; NetworkMode?: string }
   Id: string
-  Mounts?: Array<{ Destination?: string; Name?: string; Type: string }>
+  Mounts?: Array<{
+    Destination?: string
+    Name?: string
+    RW?: boolean
+    Source?: string
+    Type: string
+  }>
   Name: string
   // Times Docker restarted it under its restart policy.
   RestartCount?: number
@@ -157,6 +163,7 @@ interface ContainerInspect {
 interface AppContainer extends RelayAppContainer {
   appId: string
   limits: NonNullable<RelayAppContainer["limits"]>
+  mounts: NonNullable<RelayAppContainer["mounts"]>
   deploymentId: string | null
   health: string | null
   networkMode: string | null
@@ -2383,6 +2390,7 @@ export class AppDriver {
           image: container.image,
           labels: container.labels,
           limits: container.limits,
+          mounts: container.mounts,
           name: container.name,
           networks: container.networks,
           ports: container.ports,
@@ -2472,6 +2480,13 @@ export class AppDriver {
           )
         ),
         limits: containerResourceLimits(container),
+        mounts: (container.Mounts ?? []).map((mount) => ({
+          destination: mount.Destination ?? "",
+          readOnly: mount.RW === false,
+          source:
+            (mount.Type === "volume" ? mount.Name : mount.Source) ?? "",
+          type: mount.Type,
+        })),
         name: container.Name.replace(/^\//u, ""),
         networkMode: container.HostConfig?.NetworkMode ?? null,
         networks: Object.keys(container.NetworkSettings?.Networks ?? {}),

@@ -12,10 +12,8 @@ import { AppInfoRail } from "@/components/app/app-info-rail"
 import { appRelayAvailable, type App } from "@/components/app/app-presentation"
 import {
   AppConnectionSettings,
-  AppDeploymentSettings,
   AppEnvironmentSettings,
   AppGeneralSettings,
-  AppLimitsSection,
   AppSourceSettings,
   AppWebRouteSettings,
 } from "@/components/app/app-settings"
@@ -72,12 +70,6 @@ function AppInfoContent({ app, routeId }: { app: App; routeId: string }) {
               hidden={config.data.environmentHidden}
               routeId={routeId}
             />
-            <AppLimitsSection
-              app={app}
-              available={appRelayAvailable(app)}
-              config={config.data.config}
-              editable={app.permissions.includes("app.manage")}
-            />
           </>
         ) : (
           <InfoSection icon={<FileCode2 />} title="Source" content>
@@ -90,11 +82,6 @@ function AppInfoContent({ app, routeId }: { app: App; routeId: string }) {
             )}
           </InfoSection>
         )}
-        <AppDeploymentSettings
-          app={app}
-          canReadLogs={app.permissions.includes("app.logs.read")}
-          routeId={routeId}
-        />
         <AppWebRouteSettings
           app={app}
           canManage={canManage}

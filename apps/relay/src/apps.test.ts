@@ -287,6 +287,39 @@ describe("apps", () => {
     )
   })
 
+  it("reports what each container mounts", async () => {
+    const harness = await createdApp()
+    const image = await deploy(harness, {})
+
+    expect(image.containers[0]?.mounts).toEqual([
+      {
+        destination: "/data",
+        readOnly: false,
+        source: join(harness.config.dataDirectory, "apps", appId),
+        type: "bind",
+      },
+    ])
+
+    // A volume, by the name Docker gives it.
+    const removeCompose = await composeConfigCommand()
+    fakeDocker.images.set("redis:alpine", {})
+    fakeDocker.imageConfigs.set("redis:alpine", { Volumes: { "/data": {} } })
+    const compose = await deploy(harness, {
+      compose: "services:\n  cache:\n    image: redis:alpine\n",
+      sourceType: "compose",
+    })
+
+    expect(compose.containers[0]?.mounts).toEqual([
+      {
+        destination: "/data",
+        readOnly: false,
+        source: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        type: "volume",
+      },
+    ])
+    await removeCompose()
+  })
+
   it("refuses a second deployment sent while the first is starting", async () => {
     const harness = await createdApp()
     const request = relayDeployAppSchema.parse({

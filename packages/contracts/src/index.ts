@@ -626,6 +626,15 @@ export const appDeploymentStateSchema = z.enum([
 ])
 
 // Not strict: a newer Relay may report more about its containers.
+// One thing a container mounts: a named volume by its name, a bind by its
+// path on the node, or a tmpfs, which has no source.
+export const relayAppContainerMountSchema = z.object({
+  destination: z.string(),
+  readOnly: z.boolean(),
+  source: z.string(),
+  type: z.string(),
+})
+
 export const relayAppContainerSchema = z.object({
   createdAt: z.string().datetime().nullable(),
   exitCode: z.number().int().nullable(),
@@ -634,6 +643,8 @@ export const relayAppContainerSchema = z.object({
   labels: z.record(z.string(), z.string()),
   // The memory and CPU it runs with. Absent from older Relays.
   limits: observedResourceLimitsSchema.optional(),
+  // What it mounts. Absent from older Relays.
+  mounts: z.array(relayAppContainerMountSchema).optional(),
   name: z.string().min(1),
   networks: z.array(z.string()),
   ports: z.array(appPortSchema),

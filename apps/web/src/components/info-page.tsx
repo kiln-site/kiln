@@ -78,6 +78,7 @@ export function InfoSection({
   action,
   children,
   content = false,
+  grid = false,
   icon,
   status,
   title,
@@ -87,6 +88,8 @@ export function InfoSection({
   children?: React.ReactNode
   // Holds something other than facts, such as a drop zone.
   content?: boolean
+  // Lays its InfoGridFacts out in columns, as many as fit.
+  grid?: boolean
   icon?: React.ReactNode
   // Beside the title, such as a status indicator.
   status?: React.ReactNode
@@ -115,6 +118,14 @@ export function InfoSection({
       </header>
       {children == null ? null : content ? (
         <div className="p-4">{children}</div>
+      ) : grid ? (
+        // Each fact rules its left and bottom edges; the outer ones are
+        // pulled under the section's border.
+        <div className="@container overflow-hidden">
+          <dl className="-mb-px -ml-px grid grid-cols-2 @xl:grid-cols-3">
+            {children}
+          </dl>
+        </div>
       ) : (
         <dl className="px-4">{children}</dl>
       )}
@@ -158,6 +169,32 @@ export function InfoFact({
         {label}
       </dt>
       <dd className="flex min-w-0 flex-1 items-center justify-end gap-1.5 text-right">
+        {children}
+      </dd>
+    </div>
+  )
+}
+
+// One fact in an InfoSection's grid: its label above its value. `wide`
+// takes the whole row, for a value such as a list of tags.
+export function InfoGridFact({
+  children,
+  label,
+  wide = false,
+}: {
+  children: React.ReactNode
+  label: string
+  wide?: boolean
+}) {
+  return (
+    <div
+      className={cn(
+        "min-w-0 border-b border-l border-border/60 px-4 py-2.5",
+        wide && "col-span-full"
+      )}
+    >
+      <dt className="truncate text-xs text-muted-foreground">{label}</dt>
+      <dd className="mt-1 flex min-h-5 min-w-0 items-center gap-1.5 text-[0.8125rem]">
         {children}
       </dd>
     </div>
