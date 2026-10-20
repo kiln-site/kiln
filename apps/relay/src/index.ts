@@ -2036,32 +2036,21 @@ async function executeControlRequest(
     }
     case "app.delete": {
       const input = relayDeleteAppSchema.parse(request.payload)
-      const job = await runRelayEffect(
-        "relay.app.provision.readForDelete",
-        startup.state.getProvisioningJob(input.appId)
-      )
-      if (job?.kind === "app") {
-        // A job the worker has taken waits for this delete's lanes, and
-        // would create the app after it.
-        const cancelled = await runRelayEffect(
-          "relay.app.provision.cancelForDelete",
-          provisioningManager.cancel("app", input.appId)
-        )
-        if (!cancelled) {
-          throw new Error(
-            "Wait for the app to finish provisioning before deleting it"
+      // One still provisioning goes with whatever its create made: at most
+      // its network and data directory.
+      const discarded = await runRelayEffect(
+        "relay.app.provision.discard",
+        provisioningManager.discard("app", input.appId, () =>
+          recoverPromise(
+            () => apps.delete({ ...input, deleteData: true }),
+            (cause) => {
+              if (!(cause instanceof Error && cause.message === "App not found"))
+                throw cause
+            }
           )
-        }
-        // A failed create left at most its network and data directory.
-        return recoverPromise(
-          () => apps.delete({ ...input, deleteData: true }),
-          (cause) => {
-            if (cause instanceof Error && cause.message === "App not found")
-              return { appId: input.appId, deleted: true }
-            throw cause
-          }
         )
-      }
+      )
+      if (discarded) return { appId: input.appId, deleted: true }
       // Hearth removes its services' DNS records from every node first.
       await lifecycle.detachAppFromTailscale(
         input.appId,

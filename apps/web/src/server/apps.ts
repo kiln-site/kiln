@@ -40,8 +40,8 @@ import {
 import { accessPermissions } from "@/lib/permissions"
 import type { AccessPermission } from "@/lib/permissions"
 import {
+  abandonPreparedProvisioning,
   claimPreparedProvisioning,
-  compensatePreparedProvisioning,
 } from "@/lib/provisioning.server"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { listPersistedRelays } from "@/lib/relay-registry"
@@ -223,6 +223,9 @@ export const createApp = createServerFn({ method: "POST" })
         ).then((result) => cancelledSchema.parse(result).cancelled)
       const unregister = () =>
         runAppEffect("apps.record.delete", deleteAppRecordEffect(relay.id, id))
+      // Recorded first, so a job the Relay holds always has an app in
+      // Hearth to show it and delete it from.
+      await register()
       const placeholder = await Effect.runPromise(
         promiseEffect(() =>
           databaseRpc(
@@ -234,10 +237,7 @@ export const createApp = createServerFn({ method: "POST" })
           )
         ).pipe(
           Effect.map((value) => relayAppSchema.parse(value)),
-          Effect.tap(() => promiseEffect(register)),
-          Effect.tapError(() =>
-            compensatePreparedProvisioning(cancel, unregister)
-          )
+          Effect.tapError(() => abandonPreparedProvisioning(cancel, unregister))
         )
       )
       await claimPreparedProvisioning({
