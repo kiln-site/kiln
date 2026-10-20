@@ -429,32 +429,48 @@ export class AppDriver {
           memoryBytes: next?.memoryBytes ?? container.limits.memoryBytes,
         }
       }),
-      () =>
-        docker(
-          Effect.forEach(
-            containers,
-            (container) => {
-              const next = input.serviceLimits[container.service]
-              const spec = containerLimitSpec({
-                ...NO_RESOURCE_LIMITS,
-                ...next,
+      () => {
+        const update = (container: AppContainer) => {
+          const next = input.serviceLimits[container.service]
+          const spec = containerLimitSpec({ ...NO_RESOURCE_LIMITS, ...next })
+          return next &&
+            (next.memoryBytes !== container.limits.memoryBytes ||
+              next.cpuMillis !== container.limits.cpuMillis)
+            ? engine.updateContainerResources(container.id, {
+                ...(next.memoryBytes !== null && {
+                  memoryBytes: next.memoryBytes,
+                }),
+                ...(spec.nanoCpus !== undefined && {
+                  nanoCpus: spec.nanoCpus,
+                }),
               })
-              return next &&
-                (next.memoryBytes !== container.limits.memoryBytes ||
-                  next.cpuMillis !== container.limits.cpuMillis)
-                ? engine.updateContainerResources(container.id, {
-                    ...(next.memoryBytes !== null && {
-                      memoryBytes: next.memoryBytes,
-                    }),
-                    ...(spec.nanoCpus !== undefined && {
-                      nanoCpus: spec.nanoCpus,
-                    }),
-                  })
-                : Effect.void
-            },
+            : Effect.void
+        }
+        // Memory one service gives up is freed before another takes more,
+        // so a change that fails partway never leaves the node overcommitted.
+        const grows = (container: AppContainer) => {
+          const next = input.serviceLimits[container.service]?.memoryBytes
+          return (
+            next !== undefined &&
+            next !== null &&
+            next > (container.limits.memoryBytes ?? 0)
+          )
+        }
+        return docker(
+          Effect.forEach(
+            containers.filter((container) => !grows(container)),
+            update,
             { concurrency: "unbounded", discard: true }
+          ).pipe(
+            Effect.andThen(
+              Effect.forEach(containers.filter(grows), update, {
+                concurrency: "unbounded",
+                discard: true,
+              })
+            )
           )
         )
+      }
     )
     this.#wake(input.appId)
     return this.get(input.appId)

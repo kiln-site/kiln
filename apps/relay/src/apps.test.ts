@@ -586,6 +586,51 @@ describe("apps", () => {
     await removeCompose()
   })
 
+  it("frees one service's memory before another takes it", async () => {
+    const removeCompose = await composeConfigCommand()
+    const harness = await createdApp()
+    const most = Math.ceil((totalmem() * 0.6) / MIB) * MIB
+    await deploy(harness, {
+      compose: [
+        "services:",
+        "  web:",
+        "    image: nginx:alpine",
+        "  worker:",
+        "    image: nginx:alpine",
+      ].join("\n"),
+      serviceLimits: {
+        web: { cpuMillis: null, memoryBytes: most },
+        worker: { cpuMillis: null, memoryBytes: 64 * MIB },
+      },
+      sourceType: "compose",
+    })
+    const service = (name: string) =>
+      appContainers().find(
+        (container) => container.labels["com.docker.compose.service"] === name
+      )!
+    // Docker refuses the web service's decrease.
+    fakeDocker.failNext(
+      { command: "update", target: service("web").id },
+      "Docker unavailable"
+    )
+
+    await expect(
+      harness.apps.setLimits({
+        appId,
+        diskLimitBytes: null,
+        serviceLimits: {
+          web: { cpuMillis: null, memoryBytes: 64 * MIB },
+          worker: { cpuMillis: null, memoryBytes: most },
+        },
+      })
+    ).rejects.toThrow("Docker unavailable")
+
+    // The worker never took the memory the web service still holds.
+    expect(service("web").memoryBytes).toBe(most)
+    expect(service("worker").memoryBytes).toBe(64 * MIB)
+    await removeCompose()
+  })
+
   it("lets only one of two deployments that each fit alone take the node's memory", async () => {
     const harness = await createdApp()
     const otherId = "e".repeat(40)
