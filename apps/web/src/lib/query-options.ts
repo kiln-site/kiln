@@ -1214,12 +1214,8 @@ export function readsFileWithEntry(
 ) {
   if (!path || path.endsWith("/") || isDatabaseFilePath(path)) return false
   if (kind) return kind === "file"
-  // An unlisted path, as on a direct load. The router can trim a directory's
-  // trailing slash from its splat, so check the URL; past that, a name with
-  // an extension is almost always a file.
-  if (typeof window === "undefined" || window.location.pathname.endsWith("/")) {
-    return false
-  }
+  // An unlisted path, as on a direct load: a name with an extension is
+  // almost always a file.
   const name = path.slice(path.lastIndexOf("/") + 1)
   return name.lastIndexOf(".") > 0
 }

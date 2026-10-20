@@ -15,10 +15,7 @@ import {
 } from "@/components/instance-workspace-context"
 import { pageTitle } from "@/lib/page-title"
 import { requireServerDestinationAccess } from "@/lib/route-access"
-import {
-  relayFileActivityQueryOptions,
-  relayRootDirectoryQueryOptions,
-} from "@/lib/query-options"
+import { filePageLocation, startFilePageReads } from "@/lib/file-page-reads"
 import {
   loadFileWorkspaceModule,
   warmFilePreviewModule,
@@ -33,23 +30,16 @@ export const Route = createFileRoute("/_app/server/$serverId/files")({
       params.serverId
     )
   },
-  loader: async ({ context }) => {
+  loader: async ({ context, location, params }) => {
     const { instance, queryClient } = context
-    // Start data work with client-side route transitions without holding them
-    // open. Pending Relay requests cannot cross SSR hydration safely: if the
-    // Relay disappears mid-request, the dehydrated promise remains pending in
-    // the browser instead of reaching the bounded query error state.
-    if (typeof window === "undefined" || !instance) return
-
-    // FileWorkspace observes these same query keys and reuses the in-flight work.
-    void Promise.all([
-      queryClient.prefetchInfiniteQuery(
-        relayRootDirectoryQueryOptions(instance.relayId, instance.id)
-      ),
-      queryClient.prefetchQuery(
-        relayFileActivityQueryOptions(instance.relayId, instance.id)
-      ),
-    ])
+    if (!instance) return
+    // FileWorkspace observes these same query keys and reuses the work.
+    startFilePageReads(
+      queryClient,
+      { instanceId: instance.id, relayId: instance.relayId },
+      filePageLocation({ location, params })
+    )
+    if (typeof window === "undefined") return
     // Loaded with the route, or on hover, the workspace renders without
     // suspending behind its fallback.
     await loadFileWorkspaceModule()

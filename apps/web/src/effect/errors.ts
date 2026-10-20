@@ -204,3 +204,12 @@ export type AppError =
   | RelayUnavailableError
   | ResourceNotFoundError
   | TailscaleOrchestrationError
+
+/**
+ * A read Hearth started while rendering a page and couldn't finish. The
+ * browser receives it in place of the result, so its message is shown.
+ */
+export class RenderReadError extends Schema.TaggedError<RenderReadError>()(
+  "RenderReadError",
+  { message: Schema.String }
+) {}

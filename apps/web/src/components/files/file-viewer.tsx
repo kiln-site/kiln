@@ -254,10 +254,17 @@ export function FileViewer({
     if (selectedPathIsReadable) warmFilePreviewModule(selectedPath)
   }, [selectedPath, selectedPathIsReadable])
   // Read alongside the entry rather than after it; the entry still decides
-  // whether the path is shown as a file.
+  // whether the path is shown as a file. The router can trim a directory's
+  // trailing slash from its path, but not from the URL.
   const readWithEntry =
     entryQuery.isPending &&
-    readsFileWithEntry(selectedPath, fileIndex.entryKind(selectedPath))
+    readsFileWithEntry(
+      selectedPath,
+      fileIndex.entryKind(selectedPath) ??
+        (typeof window !== "undefined" && window.location.pathname.endsWith("/")
+          ? "directory"
+          : undefined)
+    )
   const fileQuery = useQuery({
     ...relayFileQueryOptions(instance.relayId, instance.id, selectedPath),
     enabled:
@@ -274,8 +281,9 @@ export function FileViewer({
     fileTreeLoading ||
     (Boolean(selectedPath) && relayConnected && entryQuery.isPending) ||
     (selectedPathIsReadable && !selectedPathIsDatabase && fileQuery.isPending)
+  // A read that failed while the Relay was away says nothing of the path.
   const routeError =
-    selectedPath && entryQuery.isError
+    selectedPath && relayConnected && entryQuery.isError
       ? queryErrorMessage(
           entryQuery.error,
           `Could not find ${rootPath}/${selectedPath}`
