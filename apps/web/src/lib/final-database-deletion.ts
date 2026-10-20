@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto"
 import { Effect, Result } from "effect"
 import { z } from "zod"
 
-import { relayManagedDatabaseSchema } from "@workspace/contracts"
 
 import {
   clearFailedFinalDatabaseDeletionEffect,
@@ -57,10 +56,17 @@ export async function deleteDatabaseWithFinalBackup(input: {
 
 export async function deleteDatabaseWithoutFinalBackup(input: {
   databaseId: string
+  /** Whether its data volume goes too. Defaults to true. */
+  deleteData?: boolean
   relay: PersistedRelay
   requestedBy: string
 }): Promise<void> {
-  await deleteDatabaseOnRelay(input.relay, input.databaseId, input.requestedBy)
+  await deleteDatabaseOnRelay(
+    input.relay,
+    input.databaseId,
+    input.requestedBy,
+    input.deleteData ?? true
+  )
   await runAppEffect(
     "managedDatabases.directDelete",
     deleteManagedDatabaseRecordEffect(input.relay.id, input.databaseId)
@@ -212,10 +218,14 @@ async function deleteFinalizedDatabase(
   await updateFinalDeletion(deletion, "completed", ["deleting"], null)
 }
 
+// Deletes the database on the Relay. Only the Relay saying it has nothing
+// of the database left (no container, network, or volume) counts as already
+// deleted; any other failure leaves Hearth's record for a retry.
 async function deleteDatabaseOnRelay(
   relay: PersistedRelay,
   databaseId: string,
-  requestedBy: string
+  requestedBy: string,
+  deleteData = true
 ): Promise<void> {
   const removed = await Effect.runPromise(
     Effect.result(
@@ -224,7 +234,7 @@ async function deleteDatabaseOnRelay(
           relayRpc(
             relay,
             "database.delete",
-            { databaseId, deleteData: true },
+            { databaseId, deleteData },
             180_000,
             requestedBy
           ),
@@ -232,15 +242,17 @@ async function deleteDatabaseOnRelay(
       })
     )
   )
-  if (Result.isFailure(removed)) {
-    const databases = z
-      .array(relayManagedDatabaseSchema)
-      .parse(await relayRpc(relay, "database.list", {}, 15_000, requestedBy))
-    if (databases.some((database) => database.id === databaseId)) {
-      throw removed.failure
-    }
-  } else {
+  if (Result.isSuccess(removed)) {
     deleteResultSchema.parse(removed.success)
+    return
+  }
+  if (
+    !(
+      removed.failure instanceof Error &&
+      removed.failure.message.includes("Database not found")
+    )
+  ) {
+    throw removed.failure
   }
 }
 

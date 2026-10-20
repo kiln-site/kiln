@@ -751,13 +751,11 @@ export const deleteManagedDatabase = createServerFn({ method: "POST" })
     }
     const onRelay = await databaseOnRelay(relay, data.databaseId, user.id)
     if (onRelay === "missing") {
-      // The Relay lists nothing of it, as when an earlier delete removed it
-      // but Hearth stopped before its record went, so there's nothing to
-      // back up. Any data volume left on the Relay stays.
-      await runAppEffect(
-        "managedDatabases.missingDelete",
-        deleteManagedDatabaseRecordEffect(relay.id, data.databaseId)
-      )
+      // The Relay lists no container or job for it, as when an earlier
+      // delete stopped partway, so there's nothing to back up. The Relay
+      // removes what's left, keeping any data volume, which a database
+      // without a container can't be backed up from.
+      await deleteDatabaseWithoutFinalBackup({ ...deletion, deleteData: false })
     } else if (
       // One that never finished provisioning has no data to back up.
       onRelay === "running" &&
