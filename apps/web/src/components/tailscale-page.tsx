@@ -4,7 +4,6 @@ import {
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query"
-import { ensuringPromise, forkPromise } from "@/effect/promise"
 import {
   ArrowLeftRight,
   Check,
@@ -14,11 +13,9 @@ import {
   LoaderCircle,
   Network,
   Plus,
-  RefreshCw,
   Search,
   Settings2,
   Trash2,
-  X,
 } from "lucide-react"
 
 import { Badge } from "@workspace/ui/components/badge"
@@ -48,15 +45,19 @@ import {
 } from "@workspace/contracts"
 
 import {
-  createWorkspaceTableSearchStore,
-  useWorkspaceTableSearchInput,
-} from "@/components/workspace-table"
-import type { WorkspaceTableSearchStore } from "@/components/workspace-table"
+  DataTableToolbar,
+  DataTableWorkspace,
+} from "@/components/data-table-workspace"
+import { InfraSyncButton } from "@/components/infra-sync-button"
 import {
   TailscaleConnectServersPopover,
   TailscaleConnectedServersTable,
 } from "@/components/tailscale-network-membership"
 import { WorkspaceSummaryCard } from "@/components/workspace-summary-card"
+import {
+  createDataTableSearchStore,
+  type DataTableSearchStore,
+} from "@/lib/data-table-search"
 import { queryKeys, tailscaleStacksQueryOptions } from "@/lib/query-options"
 import {
   configureTailscaleIntegration,
@@ -84,7 +85,7 @@ export const TailscalePage = React.memo(function TailscalePage({
   displayName: string
   onCreateOpenChange: (open: boolean) => void
 }) {
-  const [searchStore] = React.useState(createWorkspaceTableSearchStore)
+  const [searchStore] = React.useState(() => createDataTableSearchStore())
   const [selectedNetworkId, setSelectedNetworkId] = React.useState<
     string | null
   >(null)
@@ -128,26 +129,27 @@ export const TailscalePage = React.memo(function TailscalePage({
         onSelect={selectNetwork}
       />
 
-      <section className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border bg-card/45 [contain:paint]">
-        <TailscaleToolbar
-          searchStore={searchStore}
-          serverPicker={
-            <TailscaleConnectServersPopover
-              open={serverPickerOpen}
-              stack={selectedStack}
-              onOpenChange={setServerPickerOpen}
-            />
-          }
-        />
-        <div className="-mb-px min-h-0 flex-1 overflow-auto">
-          <TailscaleConnectedServersTable
+      <DataTableWorkspace
+        toolbar={
+          <TailscaleToolbar
             searchStore={searchStore}
-            stack={selectedStack}
-            onAddServers={openServerPicker}
-            onSetup={openCreate}
+            serverPicker={
+              <TailscaleConnectServersPopover
+                open={serverPickerOpen}
+                stack={selectedStack}
+                onOpenChange={setServerPickerOpen}
+              />
+            }
           />
-        </div>
-      </section>
+        }
+      >
+        <TailscaleConnectedServersTable
+          searchStore={searchStore}
+          stack={selectedStack}
+          onAddServers={openServerPicker}
+          onSetup={openCreate}
+        />
+      </DataTableWorkspace>
 
       <CreateNetworkDialog
         defaultNetworkName={`${displayName}'s Tailnet`}
@@ -341,130 +343,39 @@ const TailscaleToolbar = React.memo(function TailscaleToolbar({
   searchStore,
   serverPicker,
 }: {
-  searchStore: WorkspaceTableSearchStore
+  searchStore: DataTableSearchStore
   serverPicker: React.ReactNode
 }) {
-  const [mobileSearchOpen, setMobileSearchOpen] = React.useState(false)
-  const searchInputRef = React.useRef<HTMLInputElement>(null)
-
-  React.useEffect(() => {
-    if (mobileSearchOpen) searchInputRef.current?.focus()
-  }, [mobileSearchOpen])
-
+  const search = React.useMemo(
+    () => ({
+      ariaLabel: "Search connected game servers",
+      closeMobileWhenEmpty: true,
+      id: "tailscale-search",
+      placeholder: "Search connected game servers",
+      store: searchStore,
+    }),
+    [searchStore]
+  )
   return (
-    <div className="flex min-w-0 items-center gap-2 border-b bg-background/25 p-3">
-      <TailscaleSyncButton />
-
-      {!mobileSearchOpen ? (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              type="button"
-              size="icon"
-              variant="outline"
-              aria-label="Search connected game servers"
-              className="sm:hidden"
-              onClick={() => setMobileSearchOpen(true)}
-            >
-              <Search />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Search game servers</TooltipContent>
-        </Tooltip>
-      ) : null}
-
-      <div
-        className={`${mobileSearchOpen ? "block" : "hidden"} min-w-0 flex-1 sm:block sm:max-w-md`}
-      >
-        <TailscaleSearchInput inputRef={searchInputRef} store={searchStore} />
-      </div>
-
-      {mobileSearchOpen ? (
-        <Button
-          type="button"
-          size="icon"
-          variant="ghost"
-          aria-label="Close game server search"
-          className="sm:hidden"
-          onClick={() => {
-            searchStore.set("")
-            setMobileSearchOpen(false)
-          }}
-        >
-          <X />
-        </Button>
-      ) : null}
-
-      <div className={`${mobileSearchOpen ? "hidden sm:block" : ""} ml-auto`}>
-        {serverPicker}
-      </div>
-    </div>
+    <DataTableToolbar
+      actions={serverPicker}
+      leading={<TailscaleRefreshButton />}
+      search={search}
+    />
   )
 })
 
-const TailscaleSyncButton = React.memo(function TailscaleSyncButton() {
+const TailscaleRefreshButton = React.memo(function TailscaleRefreshButton() {
   const queryClient = useQueryClient()
-  const [syncing, setSyncing] = React.useState(false)
-
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          type="button"
-          size="icon"
-          variant="outline"
-          aria-label="Refresh Tailscale game servers"
-          aria-busy={syncing}
-          disabled={syncing}
-          onClick={() => {
-            setSyncing(true)
-            forkPromise(() =>
-              ensuringPromise(
-                () =>
-                  Promise.all([
-                    queryClient.invalidateQueries({
-                      queryKey: queryKeys.tailscaleStacks,
-                    }),
-                    queryClient.invalidateQueries({
-                      queryKey: queryKeys.relay.snapshot,
-                    }),
-                  ]),
-                () => setSyncing(false)
-              )
-            )
-          }}
-        >
-          <RefreshCw className={syncing ? "animate-spin" : undefined} />
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent side="bottom">Refresh game servers</TooltipContent>
-    </Tooltip>
+  const refresh = React.useCallback(
+    () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.tailscaleStacks }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.relay.snapshot }),
+      ]),
+    [queryClient]
   )
-})
-
-const TailscaleSearchInput = React.memo(function TailscaleSearchInput({
-  inputRef,
-  store,
-}: {
-  inputRef: React.RefObject<HTMLInputElement | null>
-  store: WorkspaceTableSearchStore
-}) {
-  useWorkspaceTableSearchInput(inputRef, store)
-
-  return (
-    <div className="relative min-w-0 flex-1">
-      <Search className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground" />
-      <Input
-        ref={inputRef}
-        type="search"
-        defaultValue={store.getServerSnapshot()}
-        onChange={(event) => store.set(event.currentTarget.value)}
-        placeholder="Search connected game servers"
-        aria-label="Search connected game servers"
-        className="pl-9 text-base md:text-sm"
-      />
-    </div>
-  )
+  return <InfraSyncButton label="Refresh game servers" sync={refresh} />
 })
 
 const EditNetworkDialog = React.memo(function EditNetworkDialog({
