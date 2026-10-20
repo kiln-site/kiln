@@ -237,6 +237,59 @@ describe("managed database replacement recovery", () => {
     expect(databaseContainer(id).id).not.toBe(before)
   })
 
+  it("starts a replacement a restart caught before it started", async () => {
+    const harness = await relayHarness()
+    const id = "d".repeat(40)
+    await createDatabase(harness, id)
+    await harness.databases.setLimits({
+      databaseId: id,
+      limits: { memoryBytes: 512 * MIB },
+    })
+    const original = databaseContainer(id).id
+    // The Relay stops while Docker starts the replacement.
+    const start = fakeDocker.hold({ command: "start" })
+    void harness.databases.setLimits({
+      databaseId: id,
+      limits: { memoryBytes: null },
+    })
+    await start.reached
+    const restarted = await harness.restart()
+
+    await restarted.databases.recoverReplacements()
+
+    expect([...fakeDocker.containers.values()]).toEqual([
+      expect.objectContaining({ id: databaseContainer(id).id }),
+    ])
+    expect(databaseContainer(id).id).not.toBe(original)
+    expect(databaseContainer(id).state.running).toBe(true)
+    expect(databaseContainer(id).memoryBytes).toBe(0)
+  })
+
+  it("leaves a stopped database stopped when a restart caught its replacement", async () => {
+    const harness = await relayHarness()
+    const id = "d".repeat(40)
+    await createDatabase(harness, id)
+    await harness.databases.setLimits({
+      databaseId: id,
+      limits: { memoryBytes: 512 * MIB },
+    })
+    await harness.databases.action({ action: "stop", databaseId: id })
+    const original = databaseContainer(id).id
+    // The Relay stops while Docker creates the replacement.
+    const creation = fakeDocker.hold({ command: "create" })
+    void harness.databases.setLimits({
+      databaseId: id,
+      limits: { memoryBytes: null },
+    })
+    await creation.reached
+    const restarted = await harness.restart()
+
+    await restarted.databases.recoverReplacements()
+
+    expect(databaseContainer(id)).toMatchObject({ id: original })
+    expect(databaseContainer(id).state.running).toBe(false)
+  })
+
   it("puts back a database a restart caught set aside", async () => {
     const harness = await relayHarness()
     const id = "d".repeat(40)

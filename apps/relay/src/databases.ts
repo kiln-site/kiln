@@ -65,6 +65,9 @@ const MAX_DUMP_BYTES = 700_000
 // A container a limits change set aside. Discovery skips it, and Relay
 // startup finishes or undoes a replacement it interrupted.
 const REPLACED_MARKER = "-replaced-"
+// After the marker: whether the set-aside container was running.
+const RUNNING_MARKER = "running-"
+const STOPPED_MARKER = "stopped-"
 // Docker walks every volume to measure them, so sizes are measured at most
 // this often.
 const DISK_USAGE_REFRESH_MS = 5 * 60_000
@@ -456,19 +459,21 @@ export class DatabaseDriver {
     )
     const spec = engineSpecs[engine]
     const name = container.Name.replace(/^\//u, "")
-    const aside = `${name}${REPLACED_MARKER}${randomBytes(4).toString("hex")}`
     const running = container.State.Running
+    // The name says whether it was running, for recovery after a restart.
+    const aside = `${name}${REPLACED_MARKER}${running ? RUNNING_MARKER : STOPPED_MARKER}${randomBytes(4).toString("hex")}`
     const docker = this.#engine
     let setAside = false
     let created = false
     const replaced = await promiseResult(async () => {
+      // Set aside before it stops, so a restart at any later step finds it.
+      await Effect.runPromise(docker.renameContainer(container.Id, aside))
+      setAside = true
       if (running) {
         await Effect.runPromise(
           docker.stopContainer(container.Id, { seconds: 30, timeout: 45_000 })
         )
       }
-      await Effect.runPromise(docker.renameContainer(container.Id, aside))
-      setAside = true
       await Effect.runPromise(
         createContainer(docker, {
           command: spec.command ?? [],
@@ -530,38 +535,74 @@ export class DatabaseDriver {
   }
 
   /**
-   * Finishes replacements a Relay restart interrupted: a set-aside container
-   * whose replacement exists is removed, and one without a replacement goes
-   * back, started, since a limits change never meant to stop the database.
+   * Finishes replacements a Relay restart interrupted. A set-aside container
+   * whose replacement exists goes once the replacement is running, if the
+   * database was; a replacement that won't start makes way for it again.
+   * One without a replacement goes back, running if it was.
    */
   async recoverReplacements(): Promise<void> {
     const engine = this.#engine
     const config = this.#config
+    const ready = (reference: string) =>
+      Effect.tryPromise({
+        try: () => waitUntilReady(engine, reference),
+        catch: (cause) => cause,
+      })
     await Effect.runPromise(
       Effect.gen(function* () {
         const listed = (yield* engine.listContainers({
           all: true,
           filters: { label: [`${DATABASE_KIND_LABEL}=${DATABASE_KIND}`] },
         })).filter((container) => relayOwnsLabels(config, container.Labels))
-        const names = new Set(listed.flatMap((container) => container.Names))
+        const byName = new Map(
+          listed.flatMap((container) =>
+            container.Names.map((name) => [name, container] as const)
+          )
+        )
         for (const container of listed) {
           const current = container.Names[0] ?? ""
           const marker = current.lastIndexOf(REPLACED_MARKER)
           if (marker === -1) continue
           const original = current.slice(0, marker)
-          if (names.has(original)) {
-            yield* engine
-              .removeContainer(container.Id, { force: true })
-              .pipe(Effect.ignore)
-          } else {
+          const wasRunning = !current
+            .slice(marker + REPLACED_MARKER.length)
+            .startsWith(STOPPED_MARKER)
+          const restore = Effect.gen(function* () {
             yield* engine.renameContainer(container.Id, original.slice(1))
-            names.add(original)
-            yield* engine
-              .startContainer(container.Id, { timeout: 120_000 })
-              .pipe(Effect.ignore)
+            if (wasRunning) {
+              yield* engine.startContainer(container.Id, { timeout: 120_000 })
+            }
+          })
+          const replacement = byName.get(original)
+          if (!replacement) {
+            yield* restore
+            continue
           }
+          if (wasRunning && replacement.State !== "running") {
+            const started = yield* Effect.result(
+              engine
+                .startContainer(replacement.Id, { timeout: 120_000 })
+                .pipe(Effect.andThen(ready(replacement.Id)))
+            )
+            if (started._tag === "Failure") {
+              yield* engine
+                .removeContainer(replacement.Id, { force: true })
+                .pipe(Effect.ignore)
+              yield* restore
+              continue
+            }
+          }
+          yield* engine
+            .removeContainer(container.Id, { force: true })
+            .pipe(Effect.ignore)
         }
-      })
+      }).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("Could not finish interrupted database changes", {
+            cause,
+          })
+        )
+      )
     )
   }
 
