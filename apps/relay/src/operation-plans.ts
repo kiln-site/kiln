@@ -293,13 +293,15 @@ export function controlRequestLocks(
 
     case "database.create":
       return database(databaseLocks, "id")
-    case "database.wipe":
-    case "database.delete":
+    // Checking a limit against every instance's and applying it happen
+    // together, holding the node's allocations.
     case "database.limits.write":
       return database((id) => [
         ...databaseLocks(id),
         exclusive(laneKeys.allocations),
       ])
+    case "database.wipe":
+    case "database.delete":
     case "database.action":
     case "database.credentials.rotate":
     case "database.dump.import":
