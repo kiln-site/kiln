@@ -778,12 +778,25 @@ async function databaseOnRelay(
   databaseId: string,
   userId: string
 ): Promise<"missing" | "provisioning" | "running"> {
-  const databases = z
-    .array(relayManagedDatabaseSchema)
-    .parse(await databaseRpc(relay, "database.list", {}, 30_000, userId))
-  const database = databases.find((candidate) => candidate.id === databaseId)
-  if (!database) return "missing"
-  return database.provisioning ? "provisioning" : "running"
+  // Only this database. Its detail tells a failed provisioning job from a
+  // database that exists but failed, which share an observed state.
+  const [item] = z
+    .array(
+      z
+        .object({ database: relayManagedDatabaseSchema.optional() })
+        .loose()
+    )
+    .parse(
+      await databaseRpc(
+        relay,
+        "database.list",
+        { requests: [{ id: databaseId, view: "detail" }] },
+        30_000,
+        userId
+      )
+    )
+  if (!item) return "missing"
+  return item.database?.provisioning ? "provisioning" : "running"
 }
 
 function publishDatabaseChange(
