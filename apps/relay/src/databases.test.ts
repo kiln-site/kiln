@@ -750,6 +750,32 @@ describe("managed database deletion", () => {
     expect(fakeDocker.volumes.has(volumeOf(id))).toBe(false)
   })
 
+  it("doesn't call a database gone when Docker can't say what's left of it", async () => {
+    const harness = await relayHarness()
+    const id = "d".repeat(40)
+    await createDatabase(harness, id)
+    // An earlier delete stopped after removing the container.
+    await Effect.runPromise(
+      new DockerEngine(harness.config.dockerSocket).removeContainer(
+        databaseContainer(id).id,
+        { force: true }
+      )
+    )
+    fakeDocker.failNext(
+      { command: "network inspect", target: networkOf(id) },
+      "Docker unavailable"
+    )
+
+    await expect(
+      harness.databases.delete({ databaseId: id, deleteData: true })
+    ).rejects.toThrow("Docker unavailable")
+    expect(fakeDocker.networks.has(networkOf(id))).toBe(true)
+
+    await harness.databases.delete({ databaseId: id, deleteData: true })
+    expect(fakeDocker.networks.has(networkOf(id))).toBe(false)
+    expect(fakeDocker.volumes.has(volumeOf(id))).toBe(false)
+  })
+
   it("finishes when the container disappears before Docker removes it", async () => {
     const harness = await relayHarness()
     const id = "d".repeat(40)

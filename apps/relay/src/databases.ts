@@ -1134,7 +1134,13 @@ export class DatabaseDriver {
             : this.#engine.inspectVolume(name)
         )
       )
-      if (Result.isFailure(inspected)) continue
+      // Only Docker saying it doesn't exist counts as absent; any other
+      // failure fails the lookup, so a delete never reports the database
+      // gone while something of it remains.
+      if (Result.isFailure(inspected)) {
+        if (isDockerNotFound(inspected.failure)) continue
+        throw inspected.failure
+      }
       const labels = stringLabels(inspected.success.Labels)
       if (
         labels[DATABASE_KIND_LABEL] === DATABASE_KIND &&
