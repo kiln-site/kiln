@@ -11,6 +11,8 @@ export type App = Omit<AppListItem, "observedState"> & {
   relayUpdating: boolean
   observedState: import("@workspace/contracts").RelayObservedState | undefined
   runtimeStatus?: import("@/lib/instance-state").InstanceState
+  // The latest observation, whether or not this mount has confirmed it.
+  latestObservation?: import("@workspace/contracts").InstanceObservation
 }
 
 export const sourceTypeLabels: Record<AppSourceType, string> = {
@@ -49,6 +51,24 @@ export function appRelayAvailable(
       state.observation.inventory === "available"
     )
   return app.inventoryStatus === "available" && app.relayStatus === "connected"
+}
+
+// Files open on the latest observation while the page confirms it, as a game
+// server's do on its loaded snapshot, so a page Hearth rendered with the
+// app's files shows them at once. A Relay that has since gone fails the
+// reads, and the confirmed state takes over when it arrives.
+export function appFilesAvailable(
+  app: Pick<
+    App,
+    "inventoryStatus" | "latestObservation" | "relayStatus" | "runtimeStatus"
+  >
+): boolean {
+  if (app.runtimeStatus?.phase !== "checking") return appRelayAvailable(app)
+  const observation = app.latestObservation
+  return (
+    observation?.reachability === "connected" &&
+    observation.inventory === "available"
+  )
 }
 
 // Image and Dockerfile apps run one service; Compose apps one per service.

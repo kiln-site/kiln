@@ -1,4 +1,5 @@
 import {
+  environmentManager,
   queryOptions,
   replaceEqualDeep,
   type QueryClient,
@@ -189,24 +190,35 @@ function pollInterval(
   return 5_000
 }
 
+// While Hearth renders a page, a read runs as that page's request. A batch
+// runs as whichever request started it, so these never join one.
+async function readRenderedInventory(
+  lookup: InstanceInventoryRequest,
+  signal: AbortSignal
+) {
+  const [item] = await getInstanceInventory({ data: [lookup], signal })
+  if (item && "value" in item) return item.value
+  throw lookupFailure(item?.error)
+}
+
 export function instanceInventoryQueryOptions(
   reference: InstanceReference,
   view: InstanceInventoryView
 ) {
+  // The endpoint rejects views a kind does not serve.
+  const lookup = { reference, view } as InstanceInventoryRequest
   return queryOptions({
     queryKey: instanceInventoryQueryKey(reference, view),
     queryFn: ({ signal }) =>
-      runBrowserEffect(
-        Effect.request(
-          new ReadInstanceInventory({
-            // The endpoint rejects views a kind does not serve.
-            lookup: { reference, view } as InstanceInventoryRequest,
-            signal,
-          }),
-          inventoryResolver
-        ),
-        { signal }
-      ),
+      environmentManager.isServer()
+        ? readRenderedInventory(lookup, signal)
+        : runBrowserEffect(
+            Effect.request(
+              new ReadInstanceInventory({ lookup, signal }),
+              inventoryResolver
+            ),
+            { signal }
+          ),
     // Cached views let a revisited workspace render at once; its runtime
     // state still shows as checking until this mount confirms it.
     staleTime: 0,

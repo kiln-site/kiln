@@ -1,5 +1,6 @@
 import * as React from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useHydrated } from "@tanstack/react-router"
 
 import type {
   InstanceInventory,
@@ -73,12 +74,18 @@ export function useRelayLiveStatus(relay: {
     select,
   })
   const observed = useRelayPauseState(relay.id)
+  // The check streams into a page while Hearth renders it, so it can arrive
+  // before the browser hydrates. Until then it reads as Hearth rendered it,
+  // still checking, so the two renders match.
+  const hydrated = useHydrated()
+  const known = hydrated ? state : undefined
+  const checking = isPending || !hydrated
   // Structural sharing keeps `state` stable while the Relay's state is.
   return React.useMemo(() => {
     const { relayStatus, updating } = relayLiveState(
       relay.enabled,
-      state,
-      isPending ? "checking" : "unknown",
+      known,
+      checking ? "checking" : "unknown",
       observed
     )
     return {
@@ -92,7 +99,7 @@ export function useRelayLiveStatus(relay: {
       relayStatus,
       updating,
     }
-  }, [isPending, observed, relay.enabled, relay.lastError, state])
+  }, [checking, known, observed, relay.enabled, relay.lastError])
 }
 
 /**

@@ -1,7 +1,9 @@
 import { Outlet, createFileRoute, redirect } from "@tanstack/react-router"
 
 import { appRouteIdentifier, resolveAppRoute } from "@/lib/app-route"
+import { instanceInventoryQueryOptions } from "@/lib/instance-inventory"
 import { appDirectoryQueryOptions } from "@/lib/query-options"
+import { renderRead } from "@/lib/render-reads"
 
 export const Route = createFileRoute("/_app/app/$appId")({
   staleTime: Infinity,
@@ -35,6 +37,20 @@ export const Route = createFileRoute("/_app/app/$appId")({
       })
     }
     return { app: { id: app.id, relayId: app.relayId } }
+  },
+  loader: ({ context }) => {
+    const { app, queryClient } = context
+    // Every app page opens once it has the app's details, so they start with
+    // the navigation, and stream in while Hearth renders the page.
+    void queryClient.prefetchQuery(
+      renderRead(
+        "app",
+        instanceInventoryQueryOptions(
+          { kind: "app", id: app.id, relayId: app.relayId },
+          "detail"
+        )
+      )
+    )
   },
   component: Outlet,
 })

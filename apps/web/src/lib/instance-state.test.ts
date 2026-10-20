@@ -1,7 +1,9 @@
 import {
   QueryClient,
   QueryObserver,
+  dehydrate,
   environmentManager,
+  hydrate,
 } from "@tanstack/react-query"
 import type {
   InstanceObservation,
@@ -9,18 +11,21 @@ import type {
   InstanceInventoryResult,
   InstanceInventoryRequest,
 } from "@workspace/contracts"
-import { afterEach, describe, expect, it, vi } from "vite-plus/test"
+import { AsyncLocalStorage } from "node:async_hooks"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 const endpoint = vi.hoisted(() => ({ read: vi.fn() }))
 vi.mock("@/server/instance-inventory", () => ({
   getInstanceInventory: endpoint.read,
 }))
 
+import { RenderReadError } from "@/effect/errors"
 import {
   instanceStateFromQuery,
   instanceStateQueryOptions,
 } from "./instance-state"
 import { instanceInventoryQueryOptions } from "./instance-inventory"
+import { createAppQueryClient } from "./query-client"
 
 const reference = (id: string) => ({
   kind: "database" as const,
@@ -46,6 +51,12 @@ afterEach(() => {
 })
 
 describe("instance status queries", () => {
+  // These run as the browser does, batching lookups.
+  beforeEach(() => environmentManager.setIsServer(() => false))
+  afterEach(() =>
+    environmentManager.setIsServer(() => typeof window === "undefined")
+  )
+
   it("preserves workspace detail through an outage while clearing live status", async () => {
     const ref = { ...reference("first"), kind: "app" as const }
     endpoint.read.mockImplementation(
@@ -334,8 +345,6 @@ describe("instance status queries", () => {
   })
 
   it("keeps polling an app whose first read failed until it recovers", async () => {
-    // Query only schedules polling in a browser.
-    environmentManager.setIsServer(() => false)
     vi.useFakeTimers()
     try {
       const ref = { ...reference("first"), kind: "app" as const }
@@ -372,7 +381,81 @@ describe("instance status queries", () => {
       }
     } finally {
       vi.useRealTimers()
-      environmentManager.setIsServer(() => typeof window === "undefined")
+    }
+  })
+})
+
+describe("instance status reads while Hearth renders a page", () => {
+  it("reads each page's lookups as that page's own request", async () => {
+    // Who Hearth answers as: the request a read runs in.
+    const request = new AsyncLocalStorage<string>()
+    endpoint.read.mockImplementation(
+      async ({ data }: { data: Array<InstanceInventoryRequest> }) => {
+        const reader = request.getStore()
+        await new Promise((resolve) => setTimeout(resolve, 20))
+        return data.map((lookup) => ({
+          request: lookup,
+          value: {
+            kind: "database",
+            view: "status",
+            data: null,
+            observation: { ...observation(lookup.reference), id: reader },
+          },
+        }))
+      }
+    )
+    const render = (reader: string, id: string) =>
+      request.run(reader, () =>
+        client().fetchQuery(instanceInventoryQueryOptions(reference(id), "status"))
+      )
+    const [alice, bob] = await Promise.all([
+      render("alice", "first"),
+      render("bob", "second"),
+    ])
+    expect(alice.observation.id).toBe("alice")
+    expect(bob.observation.id).toBe("bob")
+  })
+})
+
+describe("app details read while Hearth renders the page", () => {
+  afterEach(() =>
+    environmentManager.setIsServer(() => typeof window === "undefined")
+  )
+
+  it("settles as failed in the browser when Hearth's read failed", async () => {
+    // A Relay that stopped answering: a browser retry would never settle.
+    endpoint.read.mockImplementation(() => new Promise(() => {}))
+    const ref = { ...reference("first"), kind: "app" as const }
+    const server = createAppQueryClient()
+    clients.push(server)
+    let fail!: (error: Error) => void
+    void server.prefetchQuery({
+      ...instanceInventoryQueryOptions(ref, "detail"),
+      queryFn: () =>
+        new Promise<never>((_, reject) => {
+          fail = reject
+        }),
+    })
+    const streamed = dehydrate(server, { shouldDehydrateQuery: () => true })
+
+    environmentManager.setIsServer(() => false)
+    const browser = createAppQueryClient()
+    clients.push(browser)
+    hydrate(browser, streamed)
+    const observer = new QueryObserver(
+      browser,
+      instanceInventoryQueryOptions(ref, "detail")
+    )
+    const unsubscribe = observer.subscribe(() => {})
+    try {
+      fail(new RenderReadError({ message: "The Relay didn't answer in time" }))
+      await vi.waitFor(() =>
+        expect(observer.getCurrentResult().error?.message).toBe(
+          "The Relay didn't answer in time"
+        )
+      )
+    } finally {
+      unsubscribe()
     }
   })
 })

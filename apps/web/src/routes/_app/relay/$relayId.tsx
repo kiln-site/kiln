@@ -1,6 +1,10 @@
 import { Outlet, createFileRoute, redirect } from "@tanstack/react-router"
 
-import { relaysQueryOptions } from "@/lib/query-options"
+import {
+  relayConnectionQueryOptions,
+  relaysQueryOptions,
+} from "@/lib/query-options"
+import { renderRead } from "@/lib/render-reads"
 import { relayRouteIdentifier, resolveRelayRoute } from "@/lib/relay-route"
 
 export const Route = createFileRoute("/_app/relay/$relayId")({
@@ -33,6 +37,13 @@ export const Route = createFileRoute("/_app/relay/$relayId")({
       })
     }
     return { relay: { id: relay.id } }
+  },
+  loader: ({ context: { queryClient } }) => {
+    // A Relay's pages wait on whether Hearth reaches it, so that check
+    // starts with the navigation, and streams in while Hearth renders.
+    void queryClient.prefetchQuery(
+      renderRead("relay-connection", relayConnectionQueryOptions(queryClient))
+    )
   },
   component: Outlet,
 })

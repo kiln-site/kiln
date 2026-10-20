@@ -2,7 +2,7 @@ import * as React from "react"
 import { useMatch } from "@tanstack/react-router"
 import { appFileRootId } from "@workspace/contracts"
 
-import { appRelayAvailable } from "@/components/app/app-presentation"
+import { appFilesAvailable } from "@/components/app/app-presentation"
 import { useAppWorkspace } from "@/components/app/app-workspace-context"
 import { ResourceFilesPage } from "@/components/files/resource-files-page"
 import type { FileWorkspaceInstance } from "@/lib/relay-selectors"
@@ -39,7 +39,7 @@ export function AppFilesPage() {
       route={route}
       filePath={filePath}
       canWrite={app.permissions.includes("app.files.write")}
-      connected={appRelayAvailable(app)}
+      connected={appFilesAvailable(app)}
     />
   )
 }
