@@ -87,6 +87,40 @@ describe("startup reinstall", () => {
     expect(serverContainer(harness).memoryBytes).toBe(most)
   })
 
+  it("keeps a server's larger memory claimed until its old container is gone", async () => {
+    const harness = await relayHarness()
+    const MIB = 1024 ** 2
+    const most = Math.ceil((totalmem() * 0.6) / MIB) * MIB
+    await harness.createServer({ id, limits: { memoryBytes: most } })
+    const databaseId = "d".repeat(40)
+    await harness.databases.create(
+      relayCreateDatabaseSchema.parse({
+        databaseName: "kiln_app",
+        engine: "postgres",
+        id: databaseId,
+        name: "Main",
+        password: "correct-horse-battery-staple-1",
+        username: "kiln_user",
+      })
+    )
+    // Lowering the limit, with Docker holding the old container's removal.
+    const removal = fakeDocker.hold({ command: "rm" })
+    const reconfiguring = reconfigure(harness, {
+      limits: { memoryBytes: 256 * MIB },
+      start: false,
+      variables: {},
+    })
+    await removal.reached
+
+    await expect(
+      harness.databases.setLimits({ databaseId, limits: { memoryBytes: most } })
+    ).rejects.toThrow(/Memory limit exceeds/u)
+
+    removal.release()
+    await reconfiguring
+    expect(serverContainer(harness).memoryBytes).toBe(256 * MIB)
+  })
+
   it("keeps a server's limits across startup changes until they change", async () => {
     const harness = await relayHarness()
     await harness.createServer({

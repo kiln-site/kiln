@@ -536,8 +536,9 @@ export class DatabaseDriver {
 
   /**
    * Finishes replacements a Relay restart interrupted. A set-aside container
-   * whose replacement exists goes once the replacement is running, if the
-   * database was; a replacement that won't start makes way for it again.
+   * whose replacement exists goes once the replacement is ready, if the
+   * database was running; a replacement that won't get ready makes way for
+   * it again.
    * One without a replacement goes back, running if it was.
    */
   async recoverReplacements(): Promise<void> {
@@ -578,11 +579,14 @@ export class DatabaseDriver {
             yield* restore
             continue
           }
-          if (wasRunning && replacement.State !== "running") {
+          // As an uninterrupted change would: the replacement of a running
+          // database must be ready, started if the restart caught it first.
+          if (wasRunning) {
             const started = yield* Effect.result(
-              engine
-                .startContainer(replacement.Id, { timeout: 120_000 })
-                .pipe(Effect.andThen(ready(replacement.Id)))
+              (replacement.State === "running"
+                ? Effect.void
+                : engine.startContainer(replacement.Id, { timeout: 120_000 })
+              ).pipe(Effect.andThen(ready(replacement.Id)))
             )
             if (started._tag === "Failure") {
               yield* engine

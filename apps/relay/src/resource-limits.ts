@@ -90,6 +90,27 @@ export interface ResourceAllocation {
  * one kind leave room for the others. Each kind registers where its limits
  * come from.
  */
+/**
+ * The larger of two sets of limits, field by field, for what to hold while
+ * one gives way to the other. No limit holds nothing.
+ */
+export function widestResourceLimits(
+  current: ResourceLimits,
+  next: ResourceLimits
+): ResourceLimits {
+  const widest = (key: keyof ResourceLimits) =>
+    current[key] === null
+      ? next[key]
+      : next[key] === null
+        ? current[key]
+        : Math.max(current[key], next[key])
+  return {
+    cpuMillis: widest("cpuMillis"),
+    diskBytes: widest("diskBytes"),
+    memoryBytes: widest("memoryBytes"),
+  }
+}
+
 export class ResourceAllocations {
   readonly #sources = new Map<
     string,

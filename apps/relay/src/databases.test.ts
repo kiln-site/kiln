@@ -265,6 +265,41 @@ describe("managed database replacement recovery", () => {
     expect(databaseContainer(id).memoryBytes).toBe(0)
   })
 
+  it("goes back to the old container when a restart caught a replacement that never got ready", async () => {
+    const harness = await relayHarness()
+    const id = "d".repeat(40)
+    await createDatabase(harness, id)
+    await harness.databases.setLimits({
+      databaseId: id,
+      limits: { memoryBytes: 512 * MIB },
+    })
+    const original = databaseContainer(id).id
+    // The Relay stops as Docker starts the replacement, which comes up
+    // running but fails its health check.
+    fakeDocker.unhealthyImages.add("postgres:17")
+    const start = fakeDocker.hold({ command: "start" })
+    void harness.databases.setLimits({
+      databaseId: id,
+      limits: { memoryBytes: null },
+    })
+    await start.reached
+    const replacement = `${TEST_NAMESPACE}-kiln-db-${id}-database`
+    await Effect.runPromise(
+      new DockerEngine(harness.config.dockerSocket).startContainer(replacement, {
+        timeout: 5_000,
+      })
+    )
+    expect(fakeDocker.container(replacement)?.state.health).toBe("unhealthy")
+    const restarted = await harness.restart()
+
+    await restarted.databases.recoverReplacements()
+
+    expect([...fakeDocker.containers.values()]).toEqual([
+      expect.objectContaining({ id: original }),
+    ])
+    expect(databaseContainer(id).memoryBytes).toBe(512 * MIB)
+  })
+
   it("leaves a stopped database stopped when a restart caught its replacement", async () => {
     const harness = await relayHarness()
     const id = "d".repeat(40)

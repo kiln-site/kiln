@@ -85,6 +85,7 @@ import {
   containerLimitSpec,
   formatAllocationBytes,
   resourceLimitLabels,
+  widestResourceLimits,
 } from "./resource-limits.js"
 import {
   exclusive,
@@ -350,6 +351,11 @@ interface AllocationRequest {
   directory: string
   id: string
   limits: ResourceLimits
+  /**
+   * What it holds meanwhile, when more than `limits`: a reconfigured
+   * server's old container keeps its limits until it's gone.
+   */
+  holds?: ResourceLimits
 }
 
 export class LifecycleDriver {
@@ -2258,6 +2264,7 @@ export class LifecycleDriver {
       checkExistingUsage: true,
       currentDiskLimitBytes: existing.limits.diskBytes,
       directory: join(this.#config.rootDirectory, existing.directory),
+      holds: widestResourceLimits(existing.limits, limits),
       id: existing.id,
       limits,
     }, async () => {
@@ -2946,7 +2953,7 @@ export class LifecycleDriver {
           return this.#docker.allocations.reserve(
             "server",
             input.id,
-            input.limits
+            input.holds ?? input.limits
           )
         })
       )
