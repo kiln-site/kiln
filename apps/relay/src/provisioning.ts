@@ -155,6 +155,11 @@ export class ProvisioningManager {
 
   claim(kind: RelayProvisioningKind, instanceId: string) {
     return Effect.gen({ self: this }, function* () {
+      // Noted before the job can run, so the worker always finds it.
+      const claimedBy = yield* Effect.option(Effect.currentSpan)
+      if (claimedBy._tag === "Some") {
+        this.#claims.set(instanceId, claimedBy.value)
+      }
       const job = yield* this.#state.claimProvisioningJob(
         kind,
         instanceId,
@@ -162,6 +167,8 @@ export class ProvisioningManager {
       )
       if (!job)
         return yield* Effect.fail(new Error("Provisioning job not found"))
+      // A job already taken or failed keeps whatever trace it had.
+      if (job.status !== "queued") this.#claims.delete(instanceId)
       const placeholder =
         job.status === "queued"
           ? placeholderAt(
@@ -176,15 +183,13 @@ export class ProvisioningManager {
           placeholder,
           Date.now()
         )
-        const claimedBy = yield* Effect.option(Effect.currentSpan)
-        if (claimedBy._tag === "Some") {
-          this.#claims.set(instanceId, claimedBy.value)
-        }
         yield* Queue.offer(this.#wake, undefined)
       }
       yield* this.#announce(kind)
       return placeholder
-    })
+    }).pipe(
+      Effect.onError(() => Effect.sync(() => this.#claims.delete(instanceId)))
+    )
   }
 
   cancel(kind: RelayProvisioningKind, instanceId: string) {
@@ -261,7 +266,12 @@ export class ProvisioningManager {
         // Queued jobs wait out a pause.
         if (this.#lanes.paused) return
         const job = yield* this.#state.claimNextProvisioningJob(Date.now())
-        if (!job) return
+        if (!job) {
+          // Nothing waits, so no claim's span can still be wanted, short of
+          // one being claimed this moment, which only loses its trace.
+          this.#claims.clear()
+          return
+        }
         const adapter = adapterFor(this.#adapters, job)
         const claimedBy = this.#claims.get(job.instanceId)
         this.#claims.delete(job.instanceId)
@@ -289,6 +299,7 @@ export class ProvisioningManager {
         if (!refused) continue
         // Refused before it started, as when the Relay was paused or too
         // busy: it goes back in line, and waits for resume or a moment.
+        if (claimedBy) this.#claims.set(job.instanceId, claimedBy)
         yield* this.#state.returnProvisioningJob(job.instanceId, Date.now())
         yield* this.#announce(job.kind)
         if (refused.reason === "paused") return
