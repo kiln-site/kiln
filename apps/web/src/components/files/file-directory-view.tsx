@@ -2,7 +2,7 @@ import { useFileRootPath } from "@/components/files/file-root-context"
 import { FilePageContent } from "@/components/files/file-page-content"
 import * as React from "react"
 import { useInfiniteQuery, useQueries, useQuery } from "@tanstack/react-query"
-import type { RelayFileEntry } from "@workspace/contracts"
+import { isRelayFileRoot, type RelayFileEntry } from "@workspace/contracts"
 import {
   ArrowDownUp,
   ArrowUp,
@@ -126,6 +126,7 @@ function FileModifiedAtTime({ modifiedAt }: { modifiedAt: number }) {
 }
 
 const emptyEntries: ReadonlyArray<RelayFileEntry> = []
+const noSizeBatches: Array<ReadonlyArray<string>> = []
 const noSizes = () => null
 const selectSizes = (data: { sizes: Record<string, number> }) => data.sizes
 const combineSizes = (
@@ -200,9 +201,13 @@ function useFileDirectory(
     select: directoryPageEntries,
   })
   const entries = query.data ?? emptyEntries
+  // The Relay doesn't size host directories, so don't ask.
   const sizeBatches = React.useMemo(
-    () => directorySizeBatches(entries),
-    [entries]
+    () =>
+      isRelayFileRoot(fileIndex.instanceId)
+        ? noSizeBatches
+        : directorySizeBatches(entries),
+    [entries, fileIndex.instanceId]
   )
   // Poll without subscribing the directory list to size updates. Each size cell selects its own value.
   useQueries({

@@ -107,6 +107,7 @@ import { relayScheduleProjectionSchema } from "@workspace/contracts/schedules"
 import type {
   RelayControlOperation,
   RelayControlRequest,
+  RelayDirectorySizes,
   RelayInstance,
 } from "@workspace/contracts"
 
@@ -2523,8 +2524,13 @@ async function executeControlRequest(
     case "instance.files.directory.sizes": {
       const input = relayDirectorySizesInputSchema.parse(payload)
       if (isRelayFileRoot(input.instanceId)) {
+        // Host directories are too large to size recursively.
         await hostFileRoot(input.instanceId)
-        return { sizes: {}, pending: [] }
+        return {
+          instanceId: input.instanceId,
+          pending: [],
+          sizes: {},
+        } satisfies RelayDirectorySizes
       }
       return withFileTarget(input, (target) =>
         runRelayEffect(
