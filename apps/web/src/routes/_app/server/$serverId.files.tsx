@@ -19,8 +19,10 @@ import {
   relayFileActivityQueryOptions,
   relayRootDirectoryQueryOptions,
 } from "@/lib/query-options"
-import { warmSyntaxCodeEditorModule } from "@/lib/syntax-editor-module-preload"
-import { loadFileWorkspaceModule } from "@/lib/workspace-module-preloads"
+import {
+  loadFileWorkspaceModule,
+  warmFilePreviewModule,
+} from "@/lib/workspace-module-preloads"
 
 export const Route = createFileRoute("/_app/server/$serverId/files")({
   beforeLoad: async ({ context, params }) => {
@@ -66,7 +68,9 @@ function FilesRoute() {
   })
 
   React.useLayoutEffect(() => {
-    if (filePath) warmSyntaxCodeEditorModule()
+    if (filePath && !window.location.pathname.endsWith("/")) {
+      warmFilePreviewModule(filePath)
+    }
   }, [filePath])
 
   const fileTreePreferences = useFileTreePreferences()
@@ -75,7 +79,7 @@ function FilesRoute() {
   const relayConnected = useInstanceRelayConnected()
 
   return (
-    <React.Suspense
+    <LazyFileWorkspace
       fallback={
         <div className="flex min-h-0 flex-1 bg-card">
           <FileTreeLoadingPanel
@@ -112,21 +116,18 @@ function FilesRoute() {
           </div>
         </div>
       }
-    >
-      <LazyFileWorkspace
-        key={`${instance.relayId}:${instance.id}`}
-        instance={instance}
-        route={{ id: serverId, kind: "server" }}
-        active
-        routeFilePath={filePath}
-        canShare={permissions.shareLogs}
-        canWrite={permissions.filesWrite}
-        relayConnected={relayConnected}
-        openTreeOnEntry
-        initialTreeCollapsed={fileTreePreferences.collapsed}
-        initialTreeWidth={fileTreePreferences.width}
-      />
-    </React.Suspense>
+      key={`${instance.relayId}:${instance.id}`}
+      instance={instance}
+      route={{ id: serverId, kind: "server" }}
+      active
+      routeFilePath={filePath}
+      canShare={permissions.shareLogs}
+      canWrite={permissions.filesWrite}
+      relayConnected={relayConnected}
+      openTreeOnEntry
+      initialTreeCollapsed={fileTreePreferences.collapsed}
+      initialTreeWidth={fileTreePreferences.width}
+    />
   )
 }
 

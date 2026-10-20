@@ -31,15 +31,36 @@ import {
 } from "@/lib/query-options"
 import { isDatabaseFilePath } from "@/lib/database-files"
 import type { FileWorkspaceInstance } from "@/lib/relay-selectors"
-import { warmSyntaxCodeEditorModule } from "@/lib/syntax-editor-module-preload"
 import { recordRelayFileView } from "@/server/relay"
+import { usePreloadedModule } from "@/lib/use-preloaded-module"
+import {
+  loadFileDatabaseViewerModule,
+  loadedFileDatabaseViewerModule,
+  warmFilePreviewModule,
+} from "@/lib/workspace-module-preloads"
 
 const activeFileRevisionPollDelayMs = 30_000
 
-const FileDatabaseViewer = React.lazy(async () => {
-  const module = await import("@/components/files/file-database-viewer")
-  return { default: module.FileDatabaseViewer }
-})
+function FileDatabasePreview({
+  fallback,
+  ...props
+}: React.ComponentProps<
+  typeof import("@/components/files/file-database-viewer").FileDatabaseViewer
+> & { fallback: React.ReactNode }) {
+  const module = usePreloadedModule(
+    loadFileDatabaseViewerModule,
+    loadedFileDatabaseViewerModule
+  )
+  if (!module) return fallback
+  const Viewer = module.FileDatabaseViewer
+  return (
+    <>
+      <Viewer {...props} />
+      {/* The viewer is on screen; its tables load after. */}
+      <FilePageContent path={props.displayPath} view="database" />
+    </>
+  )
+}
 
 const UnavailablePreviewToolbar = React.memo(
   function UnavailablePreviewToolbar({
@@ -229,8 +250,8 @@ export function FileViewer({
     selectedPathIsDirectory,
   ])
   React.useEffect(() => {
-    if (selectedPath) warmSyntaxCodeEditorModule()
-  }, [selectedPath])
+    if (selectedPathIsReadable) warmFilePreviewModule(selectedPath)
+  }, [selectedPath, selectedPathIsReadable])
   const fileQuery = useQuery({
     ...relayFileQueryOptions(instance.relayId, instance.id, selectedPath),
     enabled:
@@ -354,19 +375,16 @@ export function FileViewer({
           revision="database"
           enabled={relayConnected}
         />
-        <React.Suspense fallback={fallback}>
-          <FileDatabaseViewer
-            key={`${instance.id}:${selectedPath}`}
-            canWrite={canWrite}
-            displayPath={selectedPath}
-            instance={instance}
-            treeCollapsed={treeCollapsed}
-            onNotDatabase={() => setTextFallbackPath(selectedPath)}
-            onTreeExpand={onTreeExpand}
-          />
-          {/* The viewer is on screen; its tables load after. */}
-          <FilePageContent path={selectedPath} view="database" />
-        </React.Suspense>
+        <FileDatabasePreview
+          fallback={fallback}
+          key={`${instance.id}:${selectedPath}`}
+          canWrite={canWrite}
+          displayPath={selectedPath}
+          instance={instance}
+          treeCollapsed={treeCollapsed}
+          onNotDatabase={() => setTextFallbackPath(selectedPath)}
+          onTreeExpand={onTreeExpand}
+        />
       </>
     )
   }

@@ -26,10 +26,8 @@ import { refreshFileQueries } from "@/components/files/file-query-options"
 import { FileTreeIndex } from "@/components/files/file-tree-index"
 import { relayRootDirectoryQueryOptions } from "@/lib/query-options"
 import type { FileWorkspaceInstance } from "@/lib/relay-selectors"
-import {
-  warmSyntaxCodeEditorModule,
-  warmSyntaxCodeEditorModuleWhenIdle,
-} from "@/lib/syntax-editor-module-preload"
+import { warmSyntaxCodeEditorModuleWhenIdle } from "@/lib/syntax-editor-module-preload"
+import { warmFilePreviewModule } from "@/lib/workspace-module-preloads"
 const fileTreeCollapsedCookieName = "file_tree_collapsed"
 const fileTreeCookieMaxAge = 60 * 60 * 24 * 7
 
@@ -84,7 +82,7 @@ export function FileWorkspace(props: FileWorkspaceProps) {
     (path: string) => {
       const currentPath = selectionStore.getSnapshot()
       if (currentPath === path) return
-      if (path) warmSyntaxCodeEditorModule()
+      warmFilePreviewModule(path)
 
       const location =
         props.route.kind === "relay"
@@ -117,9 +115,7 @@ export function FileWorkspace(props: FileWorkspaceProps) {
   )
 
   return (
-    <FileRootPathContext
-      value={props.route.kind === "relay" ? "" : "/data"}
-    >
+    <FileRootPathContext value={props.route.kind === "relay" ? "" : "/data"}>
       <StableFileWorkspaceSurface
         instance={props.instance}
         selectionStore={selectionStore}

@@ -7,6 +7,7 @@ import { currentPageOpenSpan } from "@/lib/page-timing"
 /** Work a Files page waits on before its content can show. */
 export type FileWork =
   | "activity"
+  | "database-module"
   | "directory"
   | "editor-module"
   | "entry"
@@ -15,6 +16,7 @@ export type FileWork =
 
 const spanNames: Record<FileWork, string> = {
   activity: "Files activity read",
+  "database-module": "File database viewer module",
   directory: "Files directory read",
   "editor-module": "Code editor module",
   entry: "Files entry read",
@@ -72,9 +74,7 @@ export function traceFileWork<TResult>(
       ),
       Effect.tapError((cause) =>
         Effect.sync(() =>
-          signal?.aborted
-            ? finish("cancelled", {})
-            : finish("error", {}, cause)
+          signal?.aborted ? finish("cancelled", {}) : finish("error", {}, cause)
         )
       )
     )

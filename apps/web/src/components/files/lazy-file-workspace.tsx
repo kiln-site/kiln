@@ -1,27 +1,50 @@
 import * as React from "react"
+import { useQueryClient } from "@tanstack/react-query"
 
 import type { FileWorkspace as FileWorkspaceComponent } from "@/components/files/file-workspace"
+import {
+  relayFileActivityQueryOptions,
+  relayFileEntryQueryOptions,
+  relayRootDirectoryQueryOptions,
+} from "@/lib/query-options"
 import {
   loadFileWorkspaceModule,
   loadedFileWorkspaceModule,
 } from "@/lib/workspace-module-preloads"
-
-const SuspendingFileWorkspace = React.lazy(async () => {
-  const module = await loadFileWorkspaceModule()
-  return { default: module.FileWorkspace }
-})
+import { usePreloadedModule } from "@/lib/use-preloaded-module"
 
 /**
- * The file workspace, loaded on demand. Once its module has loaded it renders
- * at once: a lazy component suspends on its first render even then, and React
- * holds content revealed after a fallback for up to 300 ms.
+ * Load code and data together. A local loading state reveals the workspace
+ * immediately; suspending after the host-access check would hold its reveal
+ * for up to 300 ms and delay every query inside it.
  */
-export function LazyFileWorkspace(
-  props: React.ComponentProps<typeof FileWorkspaceComponent>
-) {
-  // Chosen once per mount: changing the component type would remount it.
-  const [Workspace] = React.useState(
-    () => loadedFileWorkspaceModule()?.FileWorkspace ?? SuspendingFileWorkspace
+export function LazyFileWorkspace({
+  fallback,
+  ...props
+}: React.ComponentProps<typeof FileWorkspaceComponent> & {
+  fallback: React.ReactNode
+}) {
+  const queryClient = useQueryClient()
+  const module = usePreloadedModule(
+    loadFileWorkspaceModule,
+    loadedFileWorkspaceModule
   )
-  return <Workspace {...props} />
+
+  const { id, relayId } = props.instance
+  const path = props.routeFilePath?.replace(/^\/+/, "") ?? ""
+  React.useEffect(() => {
+    void queryClient.prefetchInfiniteQuery(
+      relayRootDirectoryQueryOptions(relayId, id)
+    )
+    if (!path) {
+      void queryClient.prefetchQuery(relayFileActivityQueryOptions(relayId, id))
+    } else if (props.relayConnected) {
+      void queryClient.prefetchQuery(
+        relayFileEntryQueryOptions(relayId, id, path)
+      )
+    }
+  }, [id, path, props.relayConnected, queryClient, relayId])
+
+  const Workspace = module?.FileWorkspace
+  return Workspace ? <Workspace {...props} /> : fallback
 }

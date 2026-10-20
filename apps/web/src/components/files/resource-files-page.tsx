@@ -8,7 +8,7 @@ import {
 import { LazyFileWorkspace } from "@/components/files/lazy-file-workspace"
 import { uiPreferencesQueryOptions } from "@/lib/query-options"
 import type { FileWorkspaceInstance } from "@/lib/relay-selectors"
-import { warmSyntaxCodeEditorModule } from "@/lib/syntax-editor-module-preload"
+import { warmFilePreviewModule } from "@/lib/workspace-module-preloads"
 
 export function ResourceFilesPage({
   instance,
@@ -28,10 +28,13 @@ export function ResourceFilesPage({
     select: selectFileTreePreferences,
   })
   React.useLayoutEffect(() => {
-    if (filePath) warmSyntaxCodeEditorModule()
+    // The router can trim a directory's trailing slash from its splat.
+    if (filePath && !window.location.pathname.endsWith("/")) {
+      warmFilePreviewModule(filePath)
+    }
   }, [filePath])
   return (
-    <React.Suspense
+    <LazyFileWorkspace
       fallback={
         <div className="flex min-h-0 flex-1 bg-card">
           <FileTreeLoadingPanel
@@ -46,21 +49,18 @@ export function ResourceFilesPage({
           </div>
         </div>
       }
-    >
-      <LazyFileWorkspace
-        key={`${instance.relayId}:${instance.id}`}
-        instance={instance}
-        route={route}
-        active
-        routeFilePath={filePath}
-        canShare={false}
-        canWrite={canWrite}
-        relayConnected={connected}
-        openTreeOnEntry
-        initialTreeCollapsed={preferences.fileTreeCollapsed}
-        initialTreeWidth={preferences.fileTreeWidth}
-      />
-    </React.Suspense>
+      key={`${instance.relayId}:${instance.id}`}
+      instance={instance}
+      route={route}
+      active
+      routeFilePath={filePath}
+      canShare={false}
+      canWrite={canWrite}
+      relayConnected={connected}
+      openTreeOnEntry
+      initialTreeCollapsed={preferences.fileTreeCollapsed}
+      initialTreeWidth={preferences.fileTreeWidth}
+    />
   )
 }
 

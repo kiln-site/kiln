@@ -12,8 +12,10 @@ import { useRelayWorkspace } from "@/components/relay/relay-workspace-context"
 import { canAccessRelayPermission } from "@/lib/navigation-destinations"
 import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
 import type { FileWorkspaceInstance } from "@/lib/relay-selectors"
+import { warmFileWorkspaceModule } from "@/lib/workspace-module-preloads"
 
 export function RelayFilesPage() {
+  React.useEffect(warmFileWorkspaceModule, [])
   const { relay, routeId } = useRelayWorkspace()
   const { connected } = useRelayLiveStatus(relay)
   const filePath = useMatch({

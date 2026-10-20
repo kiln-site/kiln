@@ -167,7 +167,7 @@ export function FilesHome({
     relayFileActivityQueryOptions(instance.relayId, instance.id)
   )
   const activity = activityQuery.data?.files ?? []
-  const loading = fileTreeLoading || activityQuery.isFetching
+  const loading = fileTreeLoading || activityQuery.isPending
   const error = queryErrorMessage(
     activityQuery.error,
     "Could not load recent files"

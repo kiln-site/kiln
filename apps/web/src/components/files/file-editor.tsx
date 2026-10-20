@@ -5,7 +5,10 @@ import { LoaderCircle, RefreshCw, Save, TriangleAlert } from "lucide-react"
 import { Button } from "@workspace/ui/components/button"
 import { PopoverAnchor } from "@workspace/ui/components/popover"
 
-import type { SyntaxCodeEditorHandle } from "@/components/syntax-code-editor"
+import type {
+  SyntaxCodeEditor as SyntaxCodeEditorComponent,
+  SyntaxCodeEditorHandle,
+} from "@/components/syntax-code-editor"
 import { FileWorkspaceLoadingState } from "@/components/file-tree-loading-panel"
 import {
   type SaveFileRevision,
@@ -38,11 +41,11 @@ import {
 } from "@/components/files/file-viewer-toolbar"
 import { fileLanguageForPath } from "@/lib/file-language"
 import type { FileWorkspaceInstance } from "@/lib/relay-selectors"
-import { loadSyntaxCodeEditorModule } from "@/lib/syntax-editor-module-preload"
-const SyntaxCodeEditor = React.lazy(async () => {
-  const module = await loadSyntaxCodeEditorModule()
-  return { default: module.SyntaxCodeEditor }
-})
+import {
+  loadSyntaxCodeEditorModule,
+  loadedSyntaxCodeEditorModule,
+} from "@/lib/syntax-editor-module-preload"
+import { usePreloadedModule } from "@/lib/use-preloaded-module"
 
 function formatName(path: string) {
   return path.split("/").filter(Boolean).at(-1) ?? path
@@ -73,6 +76,10 @@ function Editor({
   onTreeExpand: () => void
   onUploadFiles: UploadFiles
 }) {
+  const editorModule = usePreloadedModule(
+    loadSyntaxCodeEditorModule,
+    loadedSyntaxCodeEditorModule
+  )
   const [sessionStore] = React.useState(() =>
     createEditorSessionStore(file.content, file.modifiedAt)
   )
@@ -223,19 +230,24 @@ function Editor({
       />
 
       <div className="editor-grid relative min-h-[360px] min-w-0 flex-1 overflow-hidden">
-        <React.Suspense fallback={<SyntaxEditorLoadingState />}>
-          <StableEditorDocument
-            editorRef={editorRef}
-            ariaLabel={`Edit ${formatName(file.path)}`}
-            path={file.path}
-            disabled={loading}
-            readOnly={file.readOnly || !canWrite}
-            preferencesStore={preferencesStore}
-            searchStore={searchStore}
-            sessionStore={sessionStore}
-          />
-          <FilePageContent path={displayPath} view="file" />
-        </React.Suspense>
+        {editorModule ? (
+          <>
+            <StableEditorDocument
+              EditorComponent={editorModule.SyntaxCodeEditor}
+              editorRef={editorRef}
+              ariaLabel={`Edit ${formatName(file.path)}`}
+              path={file.path}
+              disabled={loading}
+              readOnly={file.readOnly || !canWrite}
+              preferencesStore={preferencesStore}
+              searchStore={searchStore}
+              sessionStore={sessionStore}
+            />
+            <FilePageContent path={displayPath} view="file" />
+          </>
+        ) : (
+          <SyntaxEditorLoadingState />
+        )}
         {loading ? (
           <div className="absolute inset-y-0 right-0 left-[var(--file-editor-gutter-width,3rem)] z-20 grid place-items-center bg-card/75 backdrop-blur-[2px]">
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -429,13 +441,14 @@ function fileEncodingSummary(file: RelayFileContent) {
 }
 
 function EditorDocument({
+  EditorComponent,
   editorRef,
   preferencesStore,
   searchStore,
   sessionStore,
   ...props
 }: Omit<
-  React.ComponentProps<typeof SyntaxCodeEditor>,
+  React.ComponentProps<typeof SyntaxCodeEditorComponent>,
   | "fontSize"
   | "onChange"
   | "onSearchOpenChange"
@@ -448,6 +461,7 @@ function EditorDocument({
   | "value"
   | "wrapLines"
 > & {
+  EditorComponent: typeof SyntaxCodeEditorComponent
   editorRef: React.RefObject<SyntaxCodeEditorHandle | null>
   preferencesStore: FileEditorPreferencesStore
   searchStore: EditorSearchStore
@@ -502,7 +516,7 @@ function EditorDocument({
   )
 
   return (
-    <SyntaxCodeEditor
+    <EditorComponent
       ref={editorRef}
       {...props}
       fontSize={fontSize}
