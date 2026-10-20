@@ -187,9 +187,7 @@ const AppDeploymentCard = React.memo(function AppDeploymentCard({
           </a>
         ) : (
           <span className="text-muted-foreground">
-            {app.deployment
-              ? sourceTypeLabels[app.deployment.sourceType]
-              : "Not deployed"}
+            {summary ? sourceTypeLabels[summary.sourceType] : "…"}
           </span>
         )}
       </InfoFact>

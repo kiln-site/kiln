@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto"
 import { assert, layer } from "@effect/vitest"
 import { Effect } from "effect"
 import { SqlClient } from "effect/sql"
+import { vi } from "vite-plus/test"
 
 import {
   finishAppDeploymentEffect,
@@ -13,13 +14,34 @@ import {
   saveAppGitHubSourceEffect,
   type AppDeploymentRecord,
 } from "@/effect/app-deployments"
+import {
+  createAppRecordEffect,
+  updateAppConfigEffect,
+} from "@/effect/managed-apps"
+import { startAppDeploymentEffect } from "@/lib/app-deployments.server"
 import { databaseTableName } from "@/lib/database-config"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
-import { insertRelay, insertRows } from "@/test/seed"
+import { insertRelay, insertRows, selectRows } from "@/test/seed"
+
+vi.stubEnv("BETTER_AUTH_SECRETS", `1:${"x".repeat(32)}`)
 
 const relayId = "r".repeat(43)
 const appId = "a".repeat(40)
 const connectionId = "c".repeat(36)
+
+const insertConnection = insertRows("github_connection", {
+  app_id: 1,
+  app_name: "kiln",
+  app_owner_login: "acme",
+  app_slug: "kiln",
+  app_url: "https://github.com/apps/kiln",
+  client_id: "client",
+  created_at: 0,
+  credentials_ciphertext: "unused",
+  id: connectionId,
+  owner_user_id: "user",
+  updated_at: 0,
+})
 
 const seedApp = Effect.gen(function* () {
   yield* insertRelay(relayId)
@@ -136,19 +158,7 @@ describeMysql("App deployments", () => {
         Effect.gen(function* () {
           yield* resetDatabase
           yield* seedApp
-          yield* insertRows("github_connection", {
-            app_id: 1,
-            app_name: "kiln",
-            app_owner_login: "acme",
-            app_slug: "kiln",
-            app_url: "https://github.com/apps/kiln",
-            client_id: "client",
-            created_at: 0,
-            credentials_ciphertext: "unused",
-            id: connectionId,
-            owner_user_id: "user",
-            updated_at: 0,
-          })
+          yield* insertConnection
           yield* saveAppGitHubSourceEffect({
             appId,
             autoDeploy: true,
@@ -177,6 +187,47 @@ describeMysql("App deployments", () => {
             repository: "acme/site",
             repositoryId: 42,
           })
+        })
+    )
+
+    it.effect(
+      "deploys nothing a push queued once deploying on push is turned off",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* insertRelay(relayId)
+          yield* createAppRecordEffect({
+            appId,
+            createdBy: "user",
+            name: "Website",
+            relayId,
+          })
+          yield* updateAppConfigEffect(relayId, appId, (config) => ({
+            ...config,
+            sourceType: "github",
+          }))
+          yield* insertConnection
+          yield* saveAppGitHubSourceEffect({
+            appId,
+            autoDeploy: false,
+            branch: "main",
+            build: "dockerfile",
+            connectionId,
+            createdBy: "user",
+            path: "Dockerfile",
+            repository: "acme/site",
+            repositoryId: 42,
+          })
+
+          const started = yield* startAppDeploymentEffect({
+            appId,
+            relayId,
+            trigger: "push",
+            userId: null,
+          })
+
+          assert.strictEqual(started, null)
+          assert.deepStrictEqual(yield* selectRows("app_deployment"), [])
         })
     )
   })

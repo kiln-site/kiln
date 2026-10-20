@@ -167,6 +167,8 @@ export async function getAppDeploymentSummaryHandler(data: {
     // its Source dialog to switch back to.
     savedSource: view,
     source: app.config.sourceType === "github" ? view : null,
+    // What the app deploys from now, which its last deployment may not show.
+    sourceType: app.config.sourceType,
   }
 }
 

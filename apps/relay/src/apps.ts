@@ -644,20 +644,23 @@ export class AppDriver {
   }
 
   /**
-   * Checks an app's limits against every instance's, runs `apply`, and then
-   * saves its disk limit, all holding the node's allocations, so no other
-   * change can claim the same capacity in between. Callers hold the app's
+   * Checks an app's limits against every instance's and reserves them,
+   * holding the node's allocations only that long, then runs `apply` and
+   * saves its disk limit. The reservation stands in for the app's
+   * containers until `apply` ends, so no other change claims the same
+   * capacity meanwhile, and a deployment waiting on health checks doesn't
+   * hold up every other change on the node. Callers hold the app's
    * lifecycle lock, and take the allocations as a nested step: nothing takes
    * them while waiting on an app's lifecycle, and a pause doesn't strand a
    * deployment halfway.
    */
-  #reserving<A>(
+  async #reserving<A>(
     appId: string,
     diskLimitBytes: number | null,
     services: ReadonlyArray<ServiceResourceLimits>,
     apply: () => Promise<A>
   ): Promise<A> {
-    return Effect.runPromise(
+    const release = await Effect.runPromise(
       traceRelayEffect(
         "relay.apps.reserve",
         this.#lanes.runNested(
@@ -667,16 +670,35 @@ export class AppDriver {
           },
           promiseEffect(async () => {
             await this.#assertLimitsFit(appId, diskLimitBytes, services)
-            const applied = await apply()
-            await Effect.runPromise(
-              this.#limits.state.setDiskLimit(APP_KIND, appId, diskLimitBytes)
-            )
-            return applied
+            return this.#limits.allocations.reserve(APP_KIND, appId, {
+              cpuMillis: services.reduce<number | null>(
+                (widest, service) =>
+                  service.cpuMillis === null
+                    ? widest
+                    : Math.max(widest ?? 0, service.cpuMillis),
+                null
+              ),
+              diskBytes: diskLimitBytes,
+              memoryBytes: services.reduce<number | null>(
+                (total, service) =>
+                  service.memoryBytes === null
+                    ? total
+                    : (total ?? 0) + service.memoryBytes,
+                null
+              ),
+            })
           })
         ),
         { "relay.app_id": appId, "relay.app.services": services.length }
       )
     )
+    return ensuringPromise(async () => {
+      const applied = await apply()
+      await Effect.runPromise(
+        this.#limits.state.setDiskLimit(APP_KIND, appId, diskLimitBytes)
+      )
+      return applied
+    }, release)
   }
 
   async #assertLimitsFit(

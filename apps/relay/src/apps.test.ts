@@ -736,6 +736,39 @@ describe("apps", () => {
     ).toHaveLength(1)
   })
 
+  it("lets another app deploy while one waits for its health check", async () => {
+    const harness = await createdApp()
+    const otherId = "e".repeat(40)
+    await harness.apps.create({ id: otherId, name: "Other" })
+    fakeDocker.images.set("slow:latest", {})
+    fakeDocker.imageConfigs.set("slow:latest", {
+      Healthcheck: { Test: ["CMD", "true"] },
+    })
+    fakeDocker.healthTimelines.set("slow:latest", [
+      { afterMs: 0, health: "starting" },
+      { afterMs: 60_000, health: "healthy" },
+    ])
+
+    useDeploymentClock()
+    await harness.apps.deploy(deployment({ image: "slow:latest" }))
+    await harness.apps.deploy(deployment({}, otherId))
+    // On one clock, until the other app's deployment ends.
+    let other = await harness.apps.get(otherId)
+    while (other.deployment?.state === "running") {
+      await new Promise((resolve) => setImmediate(resolve))
+      await vi.advanceTimersByTimeAsync(100)
+      other = await harness.apps.get(otherId)
+    }
+
+    expect(other.deployment).toMatchObject({ state: "succeeded" })
+    expect((await harness.apps.get(appId)).deployment).toMatchObject({
+      state: "running",
+    })
+    expect((await settledDeployment(harness)).deployment).toMatchObject({
+      state: "succeeded",
+    })
+  })
+
   it("finishes a deployment the Relay was paused during", async () => {
     const harness = await createdApp()
     const pull = fakeDocker.hold({ command: "pull" })

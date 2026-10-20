@@ -103,7 +103,7 @@ export const startAppDeploymentEffect = Effect.fn("Apps.deploy")(function* (
       new Error("The app no longer deploys from GitHub")
     )
   }
-  const github =
+  const prepared =
     app.config.sourceType === "github"
       ? yield* githubCommit(relay, request).pipe(
           // A push or a deploy waiting on provisioning that fails before it
@@ -115,7 +115,9 @@ export const startAppDeploymentEffect = Effect.fn("Apps.deploy")(function* (
               : Effect.void
           )
         )
-      : null
+      : undefined
+  if (prepared === null) return null
+  const github = prepared ?? null
   // A commit deployed again, as a rollback, holds until a new one lands.
   if (github && automatic) {
     const { head } = yield* latestAppDeploymentsEffect(request.appId)
@@ -248,12 +250,20 @@ const githubCommit = Effect.fnUntraced(function* (
   relay: PersistedRelay,
   request: AppDeploymentRequest
 ) {
+  const source = yield* loadAppGitHubSourceEffect(request.appId)
+  // Turned off while a push or poll waited: nothing it queued deploys.
+  if (
+    (request.trigger === "push" || request.trigger === "poll") &&
+    source &&
+    !source.autoDeploy
+  ) {
+    return null
+  }
   if (!relayConnectionFeatures(relay.id).has(relayAppGitHubV1Feature)) {
     return yield* Effect.fail(
       new Error("Update this Relay to deploy apps from GitHub")
     )
   }
-  const source = yield* loadAppGitHubSourceEffect(request.appId)
   if (!source) {
     return yield* Effect.fail(
       new Error("Choose a GitHub repository for this app first")
@@ -434,12 +444,15 @@ declare global {
   var kilnAppDeploymentFollowed: Set<string> | undefined
   var kilnAppDeploymentLocks: Map<string, Semaphore.Semaphore> | undefined
   var kilnAppDeploymentQueued: Set<string> | undefined
+  var kilnAppDeploymentPollFailures: Map<string, string> | undefined
   var kilnAppDeploymentPoller: Fiber.Fiber<void> | undefined
 }
 
 const followed = (globalThis.kilnAppDeploymentFollowed ??= new Set())
 const deployLocks = (globalThis.kilnAppDeploymentLocks ??= new Map())
 const queued = (globalThis.kilnAppDeploymentQueued ??= new Set())
+// Each polled app's last failure, reported once.
+const pollFailures = (globalThis.kilnAppDeploymentPollFailures ??= new Map())
 
 /** Checks a running deployment until it ends, once per process. */
 export function followAppDeployment(record: AppDeploymentRecord): void {
@@ -491,16 +504,22 @@ export function enqueueAppDeployment(
           startAppDeploymentEffect({ appId, relayId, trigger, userId: null })
         ),
         Effect.asVoid,
-        Effect.catchCause((cause) =>
-          // A failing poll fails again every minute; its recorded
-          // deployment shows it, so only pushes reach telemetry.
-          trigger === "poll"
-            ? Effect.void
-            : logException(Cause.squash(cause), {
-                operation: "Apps.deploy.push",
-                attributes: { "app.id": appId, "relay.id": relayId },
-              })
-        )
+        // A poll that succeeds clears its app's last failure.
+        Effect.tap(() => Effect.sync(() => pollFailures.delete(key))),
+        Effect.catchCause((cause) => {
+          const failure = Cause.squash(cause)
+          // A failing poll fails again every minute, so only a new failure
+          // reaches telemetry, until a poll gets through.
+          if (trigger === "poll") {
+            const message = errorMessage(failure)
+            if (pollFailures.get(key) === message) return Effect.void
+            pollFailures.set(key, message)
+          }
+          return logException(failure, {
+            operation: trigger === "poll" ? "Apps.deploy.poll" : "Apps.deploy.push",
+            attributes: { "app.id": appId, "relay.id": relayId },
+          })
+        })
       )
     )
   )
@@ -612,3 +631,7 @@ export const deployPushedAppsEffect = Effect.fn("Apps.deploy.pushed")(
     }
   }
 )
+
+function errorMessage(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause)
+}
