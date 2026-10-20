@@ -37,6 +37,7 @@ import {
   type GitHubSyncResourceKind,
   type GitHubSyncRun,
 } from "@/effect/github-sync"
+import { countAppGitHubSourcesEffect } from "@/effect/app-deployments"
 import { listAppRecordsEffect } from "@/effect/managed-apps"
 import { attachRelayOwnersEffect } from "@/effect/relay-owners"
 import { reportAppError, runAppEffect } from "@/effect/runtime"
@@ -49,6 +50,7 @@ import {
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { resolveDisplayName } from "@/lib/display-name"
 import { betterAuthSecrets, kilnPublicUrl } from "@/lib/environment"
+import { deployPushedAppsEffect } from "@/lib/app-deployments.server"
 import {
   enqueueGitHubSync,
   publishGitHubSyncChange,
@@ -91,6 +93,7 @@ export interface GitHubConnectionView {
   appOwnerLogin: string
   appSlug: string
   appUrl: string
+  /** Apps that deploy from it. */
   deploymentCount: number
   id: string
   installUrl: string
@@ -126,7 +129,7 @@ export interface GitHubSyncView extends Omit<
 export async function getGitHubSyncOverviewHandler() {
   const user = await requireEligibleResourceUser()
   const admin = isPlatformAdmin(user)
-  const [connections, syncs, relays, directory, apps, grants] =
+  const [connections, syncs, relays, directory, apps, grants, deployments] =
     await Promise.all([
       runAppEffect("github.connections.load", loadGitHubConnectionsEffect()),
       runAppEffect("github.syncs.load", loadGitHubSyncsEffect()),
@@ -134,6 +137,7 @@ export async function getGitHubSyncOverviewHandler() {
       runAppEffect("instances.directory.list", listInstanceDirectoryEffect()),
       runAppEffect("apps.list", listAppRecordsEffect()),
       admin ? Promise.resolve([]) : listUserGrants(user.id),
+      runAppEffect("apps.github.sources.count", countAppGitHubSourcesEffect()),
     ])
   const relayNames = new Map(
     relays
@@ -202,7 +206,7 @@ export async function getGitHubSyncOverviewHandler() {
     ]
   })
   return {
-    sources: await sourceViews(user, connections, syncs),
+    sources: await sourceViews(user, connections, syncs, deployments),
     syncs: syncViews,
     targets: allTargets.filter((target) => allows(target, true)),
   }
@@ -245,11 +249,14 @@ export async function getGitHubSyncRunsHandler(): Promise<
 /** The sources the viewer can see and use, for Infrastructure → Sources. */
 export async function getGitHubSourcesHandler() {
   const user = await requireEligibleResourceUser()
-  const [connections, syncs] = await Promise.all([
+  const [connections, syncs, deployments] = await Promise.all([
     runAppEffect("github.connections.load", loadGitHubConnectionsEffect()),
     runAppEffect("github.syncs.load", loadGitHubSyncsEffect()),
+    runAppEffect("apps.github.sources.count", countAppGitHubSourcesEffect()),
   ])
-  return { sources: await sourceViews(user, connections, syncs) }
+  return {
+    sources: await sourceViews(user, connections, syncs, deployments),
+  }
 }
 
 /**
@@ -270,7 +277,8 @@ export async function getGitHubSourceRepositoryCountHandler(data: {
 async function sourceViews(
   user: AuthenticatedUser,
   connections: ReadonlyArray<GitHubConnection>,
-  syncs: ReadonlyArray<GitHubSync>
+  syncs: ReadonlyArray<GitHubSync>,
+  deployments: ReadonlyMap<string, number>
 ): Promise<Array<GitHubConnectionView>> {
   const visible = connections.filter(
     (connection) => isPlatformAdmin(user) || connection.ownerUserId === user.id
@@ -296,8 +304,7 @@ async function sourceViews(
     appOwnerLogin: connection.appOwnerLogin,
     appSlug: connection.appSlug,
     appUrl: connection.appUrl,
-    // Auto deployments from a source aren't built yet.
-    deploymentCount: 0,
+    deploymentCount: deployments.get(connection.id) ?? 0,
     id: connection.id,
     installUrl: installUrl(connection.appSlug),
     installation: connection.installation,
@@ -670,7 +677,11 @@ async function usableConnection(user: AuthenticatedUser, id: string) {
   return connection
 }
 
-async function connectionToken(user: AuthenticatedUser, connectionId: string) {
+/** A token for a connection the person may use: theirs, or any for admins. */
+export async function connectionToken(
+  user: AuthenticatedUser,
+  connectionId: string
+) {
   const connection = await usableConnection(user, connectionId)
   if (!connection.installation) {
     throw new Error("Install the GitHub App on an account first")
@@ -779,6 +790,8 @@ function readSetupState(value: string, user: AuthenticatedUser) {
 }
 
 const PushEventSchema = Schema.Struct({
+  // A push that deletes the branch.
+  deleted: Schema.optionalKey(Schema.Boolean),
   ref: Schema.String,
   repository: Schema.Struct({ id: Schema.Number }),
 })
@@ -851,6 +864,17 @@ export async function handleGitHubWebhook(request: Request): Promise<Response> {
       for (const sync of syncs) {
         if (sync.autoSync && sync.branch === branch)
           enqueueGitHubSync(sync.id, "push")
+      }
+      // A deleted branch has nothing to deploy.
+      if (!push.value.deleted) {
+        await runAppEffect(
+          "github.webhook.deploy",
+          deployPushedAppsEffect({
+            branch,
+            connectionId: app.id,
+            repositoryId: push.value.repository.id,
+          })
+        )
       }
     }
   } else if (event === "installation") {

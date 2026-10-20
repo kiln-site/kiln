@@ -346,11 +346,16 @@ export class DockerEngine {
    */
   removeContainer(
     reference: string,
-    options: { readonly force?: boolean; readonly timeout?: number } = {}
+    options: {
+      readonly force?: boolean
+      readonly timeout?: number
+      /** Its anonymous volumes too, as `docker rm --volumes`. */
+      readonly volumes?: boolean
+    } = {}
   ): Effect.Effect<void, DockerEngineError> {
     const removal = this.#empty({
       method: "DELETE",
-      path: `/containers/${segment(reference)}${query({ force: options.force })}`,
+      path: `/containers/${segment(reference)}${query({ force: options.force, v: options.volumes })}`,
       timeout: options.timeout,
     })
     return options.force

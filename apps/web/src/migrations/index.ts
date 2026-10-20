@@ -17,6 +17,7 @@ import { instanceDomainOptOut } from "./0014_instance_domain_opt_out"
 import { domainZones } from "./0015_domain_zones"
 import { githubSync } from "./0016_github_sync"
 import { auditEvents } from "./0017_audit_events"
+import { appDeployments } from "./0018_app_deployments"
 
 // Append new migrations with the next id. Never edit or reorder applied ones.
 export const migrations: ReadonlyArray<Migration> = [
@@ -37,4 +38,5 @@ export const migrations: ReadonlyArray<Migration> = [
   domainZones,
   githubSync,
   auditEvents,
+  appDeployments,
 ]

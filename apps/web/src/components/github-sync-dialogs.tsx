@@ -404,7 +404,7 @@ export function GitHubSyncEditorDialog({
   )
 }
 
-function RepositoryPicker({
+export function RepositoryPicker({
   error,
   loading,
   manageUrl,
@@ -728,7 +728,7 @@ export function DeleteSyncDialog({
   )
 }
 
-function SwitchRow({
+export function SwitchRow({
   checked,
   info,
   label,
@@ -765,7 +765,7 @@ function SwitchRow({
   )
 }
 
-function Field({
+export function Field({
   children,
   hint,
   label,

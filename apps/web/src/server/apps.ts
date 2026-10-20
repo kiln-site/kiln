@@ -315,27 +315,27 @@ export const renameApp = createServerFn({ method: "POST" })
     return { name: data.name }
   })
 
-// Deploys the saved configuration. The Relay answers once the deployment
-// starts; its log and the app's state follow it from there.
+// Deploys the saved configuration, a GitHub app its branch's head. The
+// Relay answers once the deployment starts; its log and the app's state
+// follow it from there, and Hearth records how it ends.
 export const deployApp = createServerFn({ method: "POST" })
   .validator(appInputSchema)
   .handler(async ({ data }) => {
-    const { app, relay, user } = await authorizedApp(data, "app.manage")
-    const deployed = relayAppSchema.parse(
-      await databaseRpc(
-        relay,
-        "app.deploy",
-        {
-          appId: data.appId,
-          config: await relayAppConfig(relay.id, app.config),
-          name: app.name,
-        },
-        30_000,
-        user.id
-      )
+    const { relay, user } = await authorizedApp(data, "app.manage")
+    const { startAppDeploymentEffect } = await import(
+      "@/lib/app-deployments.server"
+    )
+    const started = await runAppEffect(
+      "apps.deploy",
+      startAppDeploymentEffect({
+        appId: data.appId,
+        relayId: relay.id,
+        trigger: "manual",
+        userId: user.id,
+      })
     )
     publishAppChange(relay.id, false)
-    return deployed
+    return started!.app
   })
 
 // Saves the app's limits and applies them to its running containers. A
@@ -577,19 +577,4 @@ async function ignorePromise(run: () => Promise<unknown>): Promise<void> {
 async function relayAppLimitsSupported(relayId: string): Promise<boolean> {
   const { relayConnectionFeatures } = await import("@/lib/relay-connection")
   return relayConnectionFeatures(relayId).has(relayAppLimitsV1Feature)
-}
-
-// The config as the Relay takes it. A Relay without app limits refuses
-// their fields, so it gets the config without them, or none if it would
-// have to drop limits.
-async function relayAppConfig(
-  relayId: string,
-  config: z.infer<typeof appConfigSchema>
-) {
-  if (await relayAppLimitsSupported(relayId)) return config
-  const { diskLimitBytes, serviceLimits, ...rest } = config
-  if (diskLimitBytes !== null || Object.keys(serviceLimits).length > 0) {
-    throw new Error("Update this Relay to deploy an app with limits")
-  }
-  return rest
 }

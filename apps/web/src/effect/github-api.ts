@@ -79,6 +79,15 @@ const BranchDetailSchema = Schema.Struct({
   name: Schema.String,
 })
 
+const CommitSchema = Schema.Struct({
+  author: Schema.NullOr(Schema.Struct({ login: Schema.String })),
+  commit: Schema.Struct({
+    author: Schema.NullOr(Schema.Struct({ name: Schema.String })),
+    message: Schema.String,
+  }),
+  sha: Schema.String,
+})
+
 const TreeSchema = Schema.Struct({
   sha: Schema.String,
   tree: Schema.Array(
@@ -196,6 +205,54 @@ export const githubInstallationTokenEffect = Effect.fn(
     token: created.token,
   })
   return created.token
+})
+
+/**
+ * A token that reads one repository's contents and nothing else, for a
+ * Relay to download a commit with. Never cached or reused: each deployment
+ * gets its own, which expires within the hour.
+ */
+export const githubRepositoryReadTokenEffect = Effect.fn(
+  "github.app.repositoryToken"
+)(function* (
+  credentials: GitHubAppCredentials,
+  installationId: number,
+  repositoryId: number
+) {
+  const jwt = yield* githubAppJwt(credentials)
+  const created = yield* githubRequest(
+    "POST",
+    `/app/installations/${installationId}/access_tokens`,
+    InstallationTokenSchema,
+    {
+      body: {
+        permissions: { contents: "read" },
+        repository_ids: [repositoryId],
+      },
+      token: jwt,
+    }
+  )
+  return created.token
+})
+
+/** A commit, by its SHA or a branch, whose head it is. */
+export const getGitHubCommitEffect = Effect.fn("github.commit.get")(function* (
+  token: string,
+  repository: string,
+  ref: string
+) {
+  const commit = yield* githubRequest(
+    "GET",
+    `/repos/${pathSegments(repository)}/commits/${pathSegments(ref)}`,
+    CommitSchema,
+    { token }
+  )
+  return {
+    author: commit.author?.login ?? commit.commit.author?.name ?? null,
+    // The first line, as GitHub lists it.
+    message: commit.commit.message.split("\n")[0] ?? "",
+    sha: commit.sha,
+  }
 })
 
 export function forgetGitHubInstallationToken(installationId: number) {
@@ -356,15 +413,19 @@ function githubRequest<S extends Schema.Constraint>(
   method: "DELETE" | "GET" | "POST",
   path: string,
   schema: S,
-  options: { token?: string } = {}
+  options: { body?: unknown; token?: string } = {}
 ) {
   return Effect.gen(function* () {
     const client = yield* HttpClient.HttpClient
-    const request = HttpClientRequest.make(method)(`${githubApiUrl}${path}`, {
+    const base = HttpClientRequest.make(method)(`${githubApiUrl}${path}`, {
       headers: options.token
         ? { ...githubHeaders, Authorization: `Bearer ${options.token}` }
         : githubHeaders,
     })
+    const request =
+      options.body === undefined
+        ? base
+        : HttpClientRequest.bodyJsonUnsafe(base, options.body)
     const response = yield* client.execute(request).pipe(
       Effect.timeout("20 seconds"),
       Effect.retry({

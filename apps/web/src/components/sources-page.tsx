@@ -332,7 +332,7 @@ const SourcesTable = React.memo(function SourcesTable({
           <span className="block max-w-sm">
             {searchActive
               ? "Try an account, organization, or app name."
-              : "Add an account Kiln can read repositories from, so syncs can copy files from them."}
+              : "Add an account Kiln can read repositories from, so apps can deploy from them and syncs can copy their files."}
           </span>
         }
         icon={<FolderGit2 className="size-6 text-muted-foreground/45" />}
@@ -401,18 +401,14 @@ function UsageCell({ source }: { source: Source }) {
         <span className="tabular-nums">{source.syncCount}</span>
         {source.syncCount === 1 ? "sync" : "syncs"}
       </Link>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-            <Rocket className="size-3" />
-            <span className="tabular-nums">{source.deploymentCount}</span>
-            {source.deploymentCount === 1 ? "deployment" : "deployments"}
-          </span>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">
-          Auto deployments are coming
-        </TooltipContent>
-      </Tooltip>
+      <Link
+        to="/infra/deployments"
+        className="inline-flex items-center gap-1.5 hover:text-primary"
+      >
+        <Rocket className="size-3 text-muted-foreground" />
+        <span className="tabular-nums">{source.deploymentCount}</span>
+        {source.deploymentCount === 1 ? "app" : "apps"}
+      </Link>
     </span>
   )
 }

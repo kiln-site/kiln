@@ -585,7 +585,16 @@ export class FakeDocker {
       executable === "docker-compose" &&
       arguments_.slice(-4).join(" ") === "up --detach --build --remove-orphans"
     ) {
-      return this.#composeUp(arguments_, input ?? "")
+      return this.#composeUp(arguments_, input ?? "", true)
+    }
+    if (
+      executable === "docker-compose" &&
+      arguments_.slice(-4).join(" ") === "up --no-start --build --remove-orphans"
+    ) {
+      return this.#composeUp(arguments_, input ?? "", false)
+    }
+    if (executable === "docker-compose" && arguments_.at(-1) === "start") {
+      return this.#composeStart(arguments_)
     }
     return this.#unsupported(`${executable} ${arguments_.join(" ")}`)
   }
@@ -610,20 +619,27 @@ export class FakeDocker {
     }
   }
 
-  // `docker-compose … -p <project> … up --detach --build --remove-orphans`
-  // with the project on stdin: each service's container, replacing the
-  // project's previous ones.
-  #composeUp(arguments_: ReadonlyArray<string>, input: string): CommandResult {
+  // `docker-compose … -p <project> … up [--detach|--no-start] --build
+  // --remove-orphans` with the project on stdin: each service's container,
+  // replacing the project's previous ones, started unless `--no-start`.
+  #composeUp(
+    arguments_: ReadonlyArray<string>,
+    input: string,
+    start: boolean
+  ): CommandResult {
     const project = arguments_[arguments_.indexOf("-p") + 1] ?? ""
     const definition = JSON.parse(input) as {
+      networks?: Record<string, { external?: boolean; name?: string } | null>
       services: Record<
         string,
         {
           container_name?: string
           cpus?: number
+          healthcheck?: { disable?: boolean; test?: unknown }
           image?: string
           labels?: Record<string, string>
           mem_limit?: number
+          networks?: Record<string, { aliases?: Array<string> } | null>
         }
       >
     }
@@ -635,24 +651,61 @@ export class FakeDocker {
     const lines: Array<string> = []
     for (const [service, settings] of Object.entries(definition.services)) {
       const name = settings.container_name ?? `${project}-${service}-1`
+      const image = settings.image ?? `${project}-${service}`
+      const imageConfig = this.imageConfigs.get(image) as
+        | { Healthcheck?: unknown; Volumes?: Record<string, object> }
+        | undefined
       this.addContainer({
-        image: settings.image ?? `${project}-${service}`,
+        image,
         labels: {
           ...settings.labels,
           "com.docker.compose.oneoff": "False",
           "com.docker.compose.project": project,
           "com.docker.compose.service": service,
         },
+        // Volumes its image declares, each new and empty.
+        mounts: Object.keys(imageConfig?.Volumes ?? {}).map((destination) => ({
+          anonymous: true,
+          destination,
+          source: randomBytes(32).toString("hex"),
+          type: "volume" as const,
+        })),
         name,
-        running: true,
       })
       // As Compose sets them on the container.
       const created = this.container(name)
       if (created) {
         created.memoryBytes = settings.mem_limit ?? 0
         created.nanoCpus = Math.round((settings.cpus ?? 0) * 1e9)
+        created.healthCheck = settings.healthcheck
+          ? !settings.healthcheck.disable
+          : imageConfig?.Healthcheck !== undefined
+        // The external networks it joins, under its aliases; the project's
+        // own networks aren't modelled.
+        for (const [key, endpoint] of Object.entries(settings.networks ?? {})) {
+          const network = definition.networks?.[key]
+          if (!network?.external || !network.name) continue
+          if (!this.networks.has(network.name)) continue
+          created.networks.set(network.name, {
+            aliases: [...(endpoint?.aliases ?? []), name],
+            ipAddress: "",
+          })
+        }
+        if (start) this.#start(created)
       }
-      lines.push(` Container ${name}  Started`)
+      lines.push(` Container ${name}  ${start ? "Started" : "Created"}`)
+    }
+    return { stderr: `${lines.join("\n")}\n`, stdout: "" }
+  }
+
+  // `docker-compose … -p <project> … start`: the project's containers.
+  #composeStart(arguments_: ReadonlyArray<string>): CommandResult {
+    const project = arguments_[arguments_.indexOf("-p") + 1] ?? ""
+    const lines: Array<string> = []
+    for (const container of this.containers.values()) {
+      if (container.labels["com.docker.compose.project"] !== project) continue
+      if (!container.state.running) this.#start(container)
+      lines.push(` Container ${container.name}  Started`)
     }
     return { stderr: `${lines.join("\n")}\n`, stdout: "" }
   }
@@ -1897,8 +1950,13 @@ export class FakeDocker {
           (entry) => splitOnce(entry, "=") as [string, string]
         )
       ),
+      // Its own, or its image's.
       healthCheck:
-        body.Healthcheck !== undefined && body.Healthcheck.Test?.[0] !== "NONE",
+        body.Healthcheck !== undefined
+          ? body.Healthcheck.Test?.[0] !== "NONE"
+          : this.#imageKey(body.Image) !== undefined &&
+            this.imageConfigs.get(this.#imageKey(body.Image)!)?.Healthcheck !==
+              undefined,
       image: body.Image,
       interactive: body.OpenStdin ?? false,
       labels: { ...body.Labels },

@@ -16,6 +16,7 @@ export type App = Omit<AppListItem, "observedState"> & {
 export const sourceTypeLabels: Record<AppSourceType, string> = {
   compose: "Compose",
   dockerfile: "Dockerfile",
+  github: "GitHub",
   image: "Image",
 }
 

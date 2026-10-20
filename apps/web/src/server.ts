@@ -21,6 +21,10 @@ import {
   startGitHubSyncPolling,
   stopGitHubSyncPolling,
 } from "./lib/github-sync.server"
+import {
+  startAppDeploymentPolling,
+  stopAppDeploymentPolling,
+} from "./lib/app-deployments.server"
 import { scheduleTailscaleCleanupProcessing } from "./lib/tailscale-cleanup.server"
 import { startDiskLimitWarnings } from "./lib/disk-limit-warnings.server"
 import {
@@ -34,6 +38,7 @@ await migrateDatabase()
 await loadInstallationId()
 startInstanceDirectorySync()
 startGitHubSyncPolling()
+startAppDeploymentPolling()
 
 await Effect.runPromise(
   Effect.tryPromise({
@@ -86,6 +91,7 @@ export function shutdownHearth(): Promise<void> {
   shutdownPromise ??= Promise.all([
     stopInstanceDirectorySync(),
     stopGitHubSyncPolling(),
+    stopAppDeploymentPolling(),
   ])
     .then(() => Effect.runPromise(stopWarmCacheRefreshes))
     .then(disposeAppRuntime)

@@ -197,6 +197,7 @@ export function controlRequestLocks(
     case "database.data.read":
     case "app.list":
     case "app.network.routes.read":
+    case "app.deployment.read":
     case "instance.resources.read":
     case "instance.files.list":
     case "instance.files.directory.list":

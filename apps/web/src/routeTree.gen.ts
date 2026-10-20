@@ -54,6 +54,7 @@ import { Route as AppDbDatabaseIdRouteImport } from './routes/_app/db/$databaseI
 import { Route as AppInfraIndexRouteImport } from './routes/_app.infra.index'
 import { Route as AppInfraAppsRouteImport } from './routes/_app.infra.apps'
 import { Route as AppInfraDatabasesRouteImport } from './routes/_app.infra.databases'
+import { Route as AppInfraDeploymentsRouteImport } from './routes/_app.infra.deployments'
 import { Route as AppInfraDomainsRouteImport } from './routes/_app.infra.domains'
 import { Route as AppInfraOverviewRouteImport } from './routes/_app.infra.overview'
 import { Route as AppInfraRelaysRouteImport } from './routes/_app.infra.relays'
@@ -338,6 +339,11 @@ const AppInfraAppsRoute = AppInfraAppsRouteImport.update({
 const AppInfraDatabasesRoute = AppInfraDatabasesRouteImport.update({
   id: '/databases',
   path: '/databases',
+  getParentRoute: () => AppInfraRoute,
+} as any)
+const AppInfraDeploymentsRoute = AppInfraDeploymentsRouteImport.update({
+  id: '/deployments',
+  path: '/deployments',
   getParentRoute: () => AppInfraRoute,
 } as any)
 const AppInfraDomainsRoute = AppInfraDomainsRouteImport.update({
@@ -695,6 +701,7 @@ export interface FileRoutesByFullPath {
   '/db/$databaseId': typeof AppDbDatabaseIdRouteWithChildren
   '/infra/apps': typeof AppInfraAppsRoute
   '/infra/databases': typeof AppInfraDatabasesRoute
+  '/infra/deployments': typeof AppInfraDeploymentsRoute
   '/infra/domains': typeof AppInfraDomainsRoute
   '/infra/overview': typeof AppInfraOverviewRoute
   '/infra/relays': typeof AppInfraRelaysRoute
@@ -796,6 +803,7 @@ export interface FileRoutesByTo {
   '/backups/settings': typeof AppBackupsSettingsRoute
   '/infra/apps': typeof AppInfraAppsRoute
   '/infra/databases': typeof AppInfraDatabasesRoute
+  '/infra/deployments': typeof AppInfraDeploymentsRoute
   '/infra/domains': typeof AppInfraDomainsRoute
   '/infra/overview': typeof AppInfraOverviewRoute
   '/infra/relays': typeof AppInfraRelaysRoute
@@ -903,6 +911,7 @@ export interface FileRoutesById {
   '/_app/db/$databaseId': typeof AppDbDatabaseIdRouteWithChildren
   '/_app/infra/apps': typeof AppInfraAppsRoute
   '/_app/infra/databases': typeof AppInfraDatabasesRoute
+  '/_app/infra/deployments': typeof AppInfraDeploymentsRoute
   '/_app/infra/domains': typeof AppInfraDomainsRoute
   '/_app/infra/overview': typeof AppInfraOverviewRoute
   '/_app/infra/relays': typeof AppInfraRelaysRoute
@@ -1012,6 +1021,7 @@ export interface FileRouteTypes {
     | '/db/$databaseId'
     | '/infra/apps'
     | '/infra/databases'
+    | '/infra/deployments'
     | '/infra/domains'
     | '/infra/overview'
     | '/infra/relays'
@@ -1113,6 +1123,7 @@ export interface FileRouteTypes {
     | '/backups/settings'
     | '/infra/apps'
     | '/infra/databases'
+    | '/infra/deployments'
     | '/infra/domains'
     | '/infra/overview'
     | '/infra/relays'
@@ -1219,6 +1230,7 @@ export interface FileRouteTypes {
     | '/_app/db/$databaseId'
     | '/_app/infra/apps'
     | '/_app/infra/databases'
+    | '/_app/infra/deployments'
     | '/_app/infra/domains'
     | '/_app/infra/overview'
     | '/_app/infra/relays'
@@ -1636,6 +1648,13 @@ declare module '@tanstack/react-router' {
       path: '/databases'
       fullPath: '/infra/databases'
       preLoaderRoute: typeof AppInfraDatabasesRouteImport
+      parentRoute: typeof AppInfraRoute
+    }
+    '/_app/infra/deployments': {
+      id: '/_app/infra/deployments'
+      path: '/deployments'
+      fullPath: '/infra/deployments'
+      preLoaderRoute: typeof AppInfraDeploymentsRouteImport
       parentRoute: typeof AppInfraRoute
     }
     '/_app/infra/domains': {
@@ -2109,6 +2128,7 @@ const AppBackupsRouteWithChildren = AppBackupsRoute._addFileChildren(
 interface AppInfraRouteChildren {
   AppInfraAppsRoute: typeof AppInfraAppsRoute
   AppInfraDatabasesRoute: typeof AppInfraDatabasesRoute
+  AppInfraDeploymentsRoute: typeof AppInfraDeploymentsRoute
   AppInfraDomainsRoute: typeof AppInfraDomainsRoute
   AppInfraOverviewRoute: typeof AppInfraOverviewRoute
   AppInfraRelaysRoute: typeof AppInfraRelaysRoute
@@ -2123,6 +2143,7 @@ interface AppInfraRouteChildren {
 const AppInfraRouteChildren: AppInfraRouteChildren = {
   AppInfraAppsRoute: AppInfraAppsRoute,
   AppInfraDatabasesRoute: AppInfraDatabasesRoute,
+  AppInfraDeploymentsRoute: AppInfraDeploymentsRoute,
   AppInfraDomainsRoute: AppInfraDomainsRoute,
   AppInfraOverviewRoute: AppInfraOverviewRoute,
   AppInfraRelaysRoute: AppInfraRelaysRoute,

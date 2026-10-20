@@ -1,5 +1,5 @@
 import * as React from "react"
-import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 import type { AppConfig, AppSourceType } from "@workspace/contracts"
 import { LoaderCircle, Rocket } from "lucide-react"
@@ -25,7 +25,14 @@ import {
 import { CodeDocumentPanel } from "@/components/code-document-panel"
 import { recoverPromise } from "@/effect/promise"
 import { instanceInventoryScope } from "@/lib/instance-inventory"
-import { queryKeys } from "@/lib/query-options"
+import {
+  GitHubSourceFields,
+  githubSourceDraftReady,
+  emptyGitHubSourceDraft,
+  type GitHubSourceDraft,
+} from "@/components/app/app-github-source-fields"
+import { appDeploymentSummaryQueryOptions, queryKeys } from "@/lib/query-options"
+import { saveAppGitHubSource } from "@/server/app-deployments"
 import { deployApp, updateAppConfig } from "@/server/apps"
 
 // Dialogs that change what an app runs. Each saves only its own fields, then
@@ -43,14 +50,29 @@ export function useAppConfigSave(
   return useMutation({
     mutationFn: async ({
       config,
+      github,
       next,
     }: {
       config: Partial<EditableAppConfig>
+      /** Makes this repository the app's source, deploying it if asked. */
+      github?: GitHubSourceDraft
       next: SaveNext
     }) => {
       const result = await updateAppConfig({
         data: { appId: app.id, config, relayId: app.relayId },
       })
+      if (github) {
+        const saved = await saveAppGitHubSource({
+          data: {
+            ...github,
+            appId: app.id,
+            deploy: next === "deploy",
+            path: github.path.trim(),
+            relayId: app.relayId,
+          },
+        })
+        return { config: saved.config, next }
+      }
       if (next === "deploy") {
         await deployApp({ data: { appId: app.id, relayId: app.relayId } })
       }
@@ -206,6 +228,7 @@ export function AppDocumentDialog({
 }
 
 const sourceTypes: ReadonlyArray<AppSourceType> = [
+  "github",
   "image",
   "dockerfile",
   "compose",
@@ -214,6 +237,7 @@ const sourceTypes: ReadonlyArray<AppSourceType> = [
 const sourceTypeDetails: Record<AppSourceType, string> = {
   compose: "Services from a Compose file",
   dockerfile: "Built on the Relay",
+  github: "Built from a repository",
   image: "Pulled from a registry",
 }
 
@@ -247,29 +271,68 @@ export function AppSourceDialog({
     [saved]
   )
   const [draft, setDraft] = React.useState(initial)
+  const summary = useQuery(
+    appDeploymentSummaryQueryOptions(app.relayId, app.id)
+  )
+  const savedGitHub = React.useMemo<GitHubSourceDraft | null>(() => {
+    const source = summary.data?.savedSource
+    return source
+      ? {
+          autoDeploy: source.autoDeploy,
+          branch: source.branch,
+          build: source.build,
+          connectionId: source.connectionId ?? "",
+          path: source.path,
+          repository: source.repository,
+        }
+      : null
+  }, [summary.data?.savedSource])
+  const [github, setGitHub] = React.useState<GitHubSourceDraft | null>(null)
+  const githubDraft = github ?? savedGitHub ?? emptyGitHubSourceDraft()
   const save = useAppConfigSave(app, routeId)
   const dirty =
     draft.command !== initial.command ||
     draft.dataMount !== initial.dataMount ||
     draft.image !== initial.image ||
-    draft.sourceType !== initial.sourceType
+    draft.sourceType !== initial.sourceType ||
+    (draft.sourceType === "github" && github !== null)
   const update = <K extends keyof SourceDraft>(key: K, value: SourceDraft[K]) =>
     setDraft((current) => ({ ...current, [key]: value }))
   const submit = async (next: SaveNext) => {
+    const { sourceType, ...rest } = draft
+    // Saving the repository makes GitHub the source. It's saved only when
+    // it changes, since that needs its source's owner.
+    const saveRepository =
+      sourceType === "github" &&
+      (github !== null || initial.sourceType !== "github")
     const done = await recoverPromise(
-      () => save.mutateAsync({ config: draft, next }).then(() => true),
+      () =>
+        save
+          .mutateAsync(
+            saveRepository
+              ? { config: rest, github: githubDraft, next }
+              : { config: draft, next }
+          )
+          .then(() => true),
       () => false
     )
     if (done) onOpenChange(false)
   }
   const pending = save.isPending ? save.variables.next : null
-  const singleContainer = draft.sourceType !== "compose"
+  const singleContainer =
+    draft.sourceType === "github"
+      ? githubDraft.build === "dockerfile"
+      : draft.sourceType !== "compose"
   const document =
-    draft.sourceType === "image" ? null : appDocuments[draft.sourceType]
+    draft.sourceType === "image" || draft.sourceType === "github"
+      ? null
+      : appDocuments[draft.sourceType]
+  const ready =
+    draft.sourceType !== "github" || githubSourceDraftReady(githubDraft)
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-xl">
+      <DialogContent className="max-h-[min(92dvh,52rem)] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>Source</DialogTitle>
           <DialogDescription>
@@ -286,7 +349,7 @@ export function AppSourceDialog({
           <div
             role="radiogroup"
             aria-label="Source"
-            className="grid grid-cols-3 gap-2"
+            className="grid grid-cols-2 gap-2 sm:grid-cols-4"
           >
             {sourceTypes.map((type) => (
               <button
@@ -325,6 +388,15 @@ export function AppSourceDialog({
                 onChange={(event) => update("image", event.currentTarget.value)}
               />
             </SourceField>
+          ) : draft.sourceType === "github" ? (
+            // Opens on the saved repository, once it's known.
+            summary.isPending ? (
+              <div className="grid h-24 place-items-center">
+                <LoaderCircle className="size-4 animate-spin text-muted-foreground" />
+              </div>
+            ) : (
+              <GitHubSourceFields draft={githubDraft} onChange={setGitHub} />
+            )
           ) : document ? (
             <p className="border border-dashed px-3 py-2.5 text-xs text-muted-foreground">
               {document.hint} Edit the {document.noun} from the Source section.
@@ -365,7 +437,7 @@ export function AppSourceDialog({
               Cancel
             </Button>
             <Button
-              disabled={pending !== null || !dirty}
+              disabled={pending !== null || !dirty || !ready}
               type="submit"
               variant="outline"
             >
@@ -375,7 +447,7 @@ export function AppSourceDialog({
               Save
             </Button>
             <Button
-              disabled={pending !== null || deploying}
+              disabled={pending !== null || deploying || !ready}
               type="button"
               onClick={() => void submit("deploy")}
             >

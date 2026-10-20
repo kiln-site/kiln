@@ -109,6 +109,11 @@ import {
   getServerNavigation,
 } from "@/server/infra-directory"
 import {
+  getAppDeploymentLog,
+  getAppDeployments,
+  getAppDeploymentSummary,
+} from "@/server/app-deployments"
+import {
   getAppConfig,
   getAppDirectory,
   getAppOwner,
@@ -186,6 +191,14 @@ export const queryKeys = {
   servers: {
     directory: ["servers", "directory"] as const,
     navigation: ["servers", "navigation"] as const,
+  },
+  appDeployments: {
+    list: (scope: { appId?: string; relayId?: string }) =>
+      ["app-deployments", "list", scope] as const,
+    log: (deploymentId: string) =>
+      ["app-deployments", "log", deploymentId] as const,
+    summary: (relayId: string, appId: string) =>
+      ["app-deployments", "summary", relayId, appId] as const,
   },
   apps: {
     all: ["apps"] as const,
@@ -1022,6 +1035,39 @@ export function githubSyncRunsQueryOptions() {
   return queryOptions({
     queryKey: queryKeys.github.runs,
     queryFn: () => getGitHubSyncRuns(),
+  })
+}
+
+export function appDeploymentsQueryOptions(scope: {
+  appId?: string
+  relayId?: string
+}) {
+  return infiniteQueryOptions({
+    queryKey: queryKeys.appDeployments.list(scope),
+    queryFn: ({ pageParam }) =>
+      getAppDeployments({
+        data: { ...scope, ...(pageParam && { before: pageParam }) },
+      }),
+    initialPageParam: null as { id: string; startedAt: string } | null,
+    getNextPageParam: (page) => page.nextCursor,
+  })
+}
+
+export function appDeploymentSummaryQueryOptions(
+  relayId: string,
+  appId: string
+) {
+  return queryOptions({
+    queryKey: queryKeys.appDeployments.summary(relayId, appId),
+    queryFn: () => getAppDeploymentSummary({ data: { appId, relayId } }),
+  })
+}
+
+export function appDeploymentLogQueryOptions(deploymentId: string) {
+  return queryOptions({
+    queryKey: queryKeys.appDeployments.log(deploymentId),
+    queryFn: () => getAppDeploymentLog({ data: { deploymentId } }),
+    retry: false,
   })
 }
 

@@ -7,12 +7,14 @@ import {
   statfs,
   writeFile,
 } from "node:fs/promises"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 
 import type {
   AppConfig,
   AppPort,
   RelayApp,
+  RelayAppDeploymentLog,
+  RelayAppDeploymentRead,
   RelayAppAction,
   RelayAppContainer,
   RelayAppDeployment,
@@ -71,6 +73,11 @@ import {
 import { appLifecycleLocks } from "./operation-plans.js"
 import { provisioningStatus } from "./provisioning.js"
 import {
+  checkOutRepository,
+  checkoutDirectory,
+  checkoutFile,
+} from "./repository-checkout.js"
+import {
   assertResourceLimitsFit,
   containerLimitSpec,
   containerResourceLimits,
@@ -92,6 +99,8 @@ const APP_KIND = "app"
 const ID_LABEL = "kiln.app.id"
 const SERVICE_LABEL = "kiln.app.service"
 const DEPLOYMENT_LABEL = "kiln.app.deployment"
+// The commit a GitHub deployment built.
+const COMMIT_LABEL = "kiln.app.commit"
 const COMPOSE_PROJECT_LABEL = "com.docker.compose.project"
 // The console stream that follows an app's deployments; its services'
 // streams are `service:<name>`.
@@ -106,6 +115,9 @@ const BUILD_TIMEOUT_MS = 30 * 60_000
 const BUILDX = "/usr/local/libexec/docker/cli-plugins/docker-buildx"
 // How long a new container must stay up before its deployment succeeds.
 const SETTLE_MS = 3_000
+// How long a container's health check may take to pass, past its settle.
+const HEALTH_TIMEOUT_MS = 10 * 60_000
+const HEALTH_POLL_MS = 1_000
 // Variables Docker and Compose read themselves; an app's environment can't
 // steer the Relay's own Docker client with them.
 const RESERVED_ENVIRONMENT =
@@ -120,6 +132,7 @@ interface ContainerInspect {
   Created: string
   HostConfig?: { Memory?: number; NanoCpus?: number; NetworkMode?: string }
   Id: string
+  Mounts?: Array<{ Destination?: string; Name?: string; Type: string }>
   Name: string
   // Times Docker restarted it under its restart policy.
   RestartCount?: number
@@ -388,7 +401,7 @@ export class AppDriver {
   }
 
   async deploy(input: RelayDeployApp): Promise<RelayApp> {
-    const problem = sourceProblem(input.config)
+    const problem = sourceProblem(input)
     if (problem) throw new Error(problem)
     await this.get(input.appId)
     // Check after the await, so two deploys sent together can't both pass.
@@ -398,11 +411,13 @@ export class AppDriver {
     const deployment: Deployment = {
       abort: new AbortController(),
       characters: 0,
+      commit: input.github?.commit ?? null,
       dropped: 0,
       error: null,
       finishedAt: null,
       id: deploymentStamp(),
       lines: [],
+      rolling: null,
       sourceType: input.config.sourceType,
       startedAt: new Date().toISOString(),
       state: "running",
@@ -426,6 +441,10 @@ export class AppDriver {
               "relay.app_id": input.appId,
               "relay.app.deployment_id": deployment.id,
               "relay.app.source": input.config.sourceType,
+              ...(input.github && {
+                "relay.app.github.repository": input.github.repository,
+                "relay.app.github.commit": input.github.commit,
+              }),
             })
           )
           .pipe(
@@ -732,11 +751,8 @@ export class AppDriver {
     const project = [
       `com.docker.compose.project=${this.#composeProject(input.appId)}`,
     ]
-    for (const network of await docker(
-      engine.listNetworks({ filters: { label: project } })
-    )) {
-      await this.#removeNetwork(network.Name)
-    }
+    // Rolled deployments' projects too.
+    await this.#removeComposeNetworks(input.appId, null)
     if (input.deleteData) {
       for (const volume of await docker(
         engine.listVolumes({ filters: { label: project } })
@@ -769,6 +785,10 @@ export class AppDriver {
       })
     }
     await rm(this.#deploymentDirectory(input.appId), {
+      force: true,
+      recursive: true,
+    })
+    await rm(join(this.#config.dataDirectory, "app-sources", input.appId), {
       force: true,
       recursive: true,
     })
@@ -969,11 +989,21 @@ export class AppDriver {
           }
           const { config } = input
           log(`Deploying ${input.name} (deployment ${deployment.id})`)
-          log(`Source: ${describeSource(config)}`)
+          log(`Source: ${describeSource(input)}`)
           await this.#ensureResources(input.appId)
           const host = await this.#hostDataDirectory()
-          if (config.sourceType === "compose") {
-            await this.#deployCompose(input, deployment, host)
+          const checkout =
+            config.sourceType === "github" && input.github
+              ? await traceRelayPromise(
+                  "relay.apps.deployment.checkout",
+                  () => this.#checkOut(input, deployment)
+                )
+              : null
+          if (
+            config.sourceType === "compose" ||
+            input.github?.build === "compose"
+          ) {
+            await this.#deployCompose(input, deployment, host, checkout)
           } else {
             const image =
               config.sourceType === "image"
@@ -981,7 +1011,7 @@ export class AppDriver {
                     this.#pullImage(input, deployment)
                   )
                 : await traceRelayPromise("relay.apps.deployment.build", () =>
-                    this.#buildImage(input, deployment)
+                    this.#buildImage(input, deployment, checkout)
                   )
             // Its one service's limits count once the image is ready.
             await this.#reserving(
@@ -1002,6 +1032,7 @@ export class AppDriver {
         })
       )
     )
+    await this.#cleanCheckouts(input, deployment, Result.isSuccess(outcome))
     const seconds = ((Date.now() - startedAt) / 1_000).toFixed(1)
     const message = Result.isSuccess(outcome)
       ? null
@@ -1072,14 +1103,33 @@ export class AppDriver {
   }
 
   async #readDeployment(appId: string) {
-    const directory = this.#deploymentDirectory(appId)
-    const restored = await Effect.runPromise(
+    const [latest] = await Effect.runPromise(
+      promiseEffect(() =>
+        deploymentFiles(this.#deploymentDirectory(appId))
+      ).pipe(Effect.orElseSucceed((): Array<string> => []))
+    )
+    const restored = latest
+      ? await this.#savedDeployment(appId, latest.slice(0, -".json".length))
+      : null
+    if (restored && !this.#deployments.has(appId)) {
+      this.#deployments.set(appId, restored)
+    }
+  }
+
+  // A finished deployment's saved log, or null if it isn't kept.
+  async #savedDeployment(
+    appId: string,
+    deploymentId: string
+  ): Promise<Deployment | null> {
+    if (!/^\d{14}$/u.test(deploymentId)) return null
+    const file = join(this.#deploymentDirectory(appId), `${deploymentId}.json`)
+    return Effect.runPromise(
       promiseEffect(async () => {
-        const [latest] = await deploymentFiles(directory)
-        if (!latest) return null
-        const saved = JSON.parse(
-          await readFile(join(directory, latest), "utf8")
-        ) as Omit<Deployment, "abort" | "characters">
+        const saved = JSON.parse(await readFile(file, "utf8")) as Omit<
+          Deployment,
+          "abort" | "characters" | "commit" | "rolling"
+        > &
+          Partial<Pick<Deployment, "commit" | "rolling">>
         const deployment: Deployment = {
           ...saved,
           abort: new AbortController(),
@@ -1087,18 +1137,92 @@ export class AppDriver {
             (total, line) => total + consoleLineCharacters(line),
             0
           ),
+          // Logs saved before deployments recorded these.
+          commit: saved.commit ?? null,
+          rolling: saved.rolling ?? null,
         }
         trimDeploymentLog(deployment)
         return deployment
       }).pipe(Effect.orElseSucceed(() => null))
     )
-    if (restored && !this.#deployments.has(appId)) {
-      this.#deployments.set(appId, restored)
+  }
+
+  /**
+   * One of the app's recent deployments with its log: the latest, or one
+   * whose log the Relay kept. Null once it no longer keeps it.
+   */
+  async readDeployment(
+    input: RelayAppDeploymentRead
+  ): Promise<RelayAppDeploymentLog> {
+    await this.#restoreDeployment(input.appId)
+    const latest = this.#deployments.get(input.appId)
+    const deployment =
+      latest?.id === input.deploymentId
+        ? latest
+        : await this.#savedDeployment(input.appId, input.deploymentId)
+    if (!deployment) return null
+    return {
+      deployment: deploymentSummary(deployment),
+      dropped: deployment.dropped,
+      lines: deployment.lines,
     }
   }
 
   #deploymentDirectory(appId: string): string {
     return join(this.#config.dataDirectory, "app-deployments", appId)
+  }
+
+  // The commit a GitHub deployment builds, unpacked in the Relay's data
+  // directory, where Docker on the host can bind its files into Compose
+  // services.
+  async #checkOut(
+    input: RelayDeployApp,
+    deployment: Deployment
+  ): Promise<string> {
+    const github = input.github!
+    const directory = checkoutDirectory(
+      this.#config.dataDirectory,
+      input.appId,
+      deployment.id
+    )
+    this.#log(
+      input.appId,
+      deployment,
+      `Downloading ${github.repository} at ${github.commit.slice(0, 7)}`
+    )
+    const summary = await checkOutRepository(
+      github,
+      directory,
+      deployment.abort.signal
+    )
+    this.#log(
+      input.appId,
+      deployment,
+      summary.skipped > 0
+        ? `Checked out ${summary.files} files, leaving out ${summary.skipped} links or special files that lead outside the repository`
+        : `Checked out ${summary.files} files`
+    )
+    return directory
+  }
+
+  // A deployment that succeeded keeps only its own checkout, and only for
+  // Compose, whose services may bind its files; one that failed leaves the
+  // checkout of whatever still runs.
+  async #cleanCheckouts(
+    input: RelayDeployApp,
+    deployment: Deployment,
+    succeeded: boolean
+  ) {
+    const root = join(this.#config.dataDirectory, "app-sources", input.appId)
+    const keepOwn = succeeded && input.github?.build === "compose"
+    await Effect.runPromise(
+      promiseEffect(async () => {
+        for (const entry of await readdir(root)) {
+          if (entry === deployment.id ? keepOwn : !succeeded) continue
+          await rm(join(root, entry), { force: true, recursive: true })
+        }
+      }).pipe(Effect.ignore)
+    )
   }
 
   async #pullImage(input: RelayDeployApp, deployment: Deployment) {
@@ -1114,16 +1238,31 @@ export class AppDriver {
     return image
   }
 
-  // Builds with the app's data directory as the context, so a Dockerfile
-  // can COPY files uploaded to the app.
-  async #buildImage(input: RelayDeployApp, deployment: Deployment) {
+  // Builds a pasted Dockerfile with the app's data directory as the
+  // context, so it can COPY files uploaded to the app, and a repository's
+  // with the repository as its context.
+  async #buildImage(
+    input: RelayDeployApp,
+    deployment: Deployment,
+    checkout: string | null
+  ) {
     const tag = `kiln-app-${input.appId}:${deployment.id}`
-    const dockerfile = this.#dockerfilePath(input.appId)
-    await mkdir(join(this.#config.dataDirectory, "app-builds"), {
-      recursive: true,
-      mode: 0o700,
-    })
-    await writeFile(dockerfile, input.config.dockerfile, { mode: 0o600 })
+    let dockerfile = this.#dockerfilePath(input.appId)
+    let context = this.#appDirectory(input.appId)
+    if (checkout && input.github) {
+      const found = await checkoutFile(checkout, input.github.path)
+      if (!found) {
+        throw new Error(`The repository has no file at ${input.github.path}`)
+      }
+      dockerfile = found
+      context = checkout
+    } else {
+      await mkdir(join(this.#config.dataDirectory, "app-builds"), {
+        recursive: true,
+        mode: 0o700,
+      })
+      await writeFile(dockerfile, input.config.dockerfile, { mode: 0o600 })
+    }
     this.#log(input.appId, deployment, `Building ${tag}`)
     await this.#stream(
       input.appId,
@@ -1138,10 +1277,13 @@ export class AppDriver {
         tag,
         "--file",
         dockerfile,
-        this.#appDirectory(input.appId),
+        context,
       ],
       // Docker's own builder, which loads the image into Docker.
-      { env: { ...process.env, BUILDX_BUILDER: "default" }, timeout: BUILD_TIMEOUT_MS }
+      {
+        env: { ...process.env, BUILDX_BUILDER: "default" },
+        timeout: BUILD_TIMEOUT_MS,
+      }
     )
     return tag
   }
@@ -1168,6 +1310,19 @@ export class AppDriver {
     const tailscale = (await this.#networking.tailscale(input.appId)).filter(
       (membership) => membership.service === APP_SERVICE
     )
+    const running = previous.some((container) => container.running)
+    // Two containers can't hold the same host port or Tailscale address.
+    const blocker =
+      config.ports.length > 0
+        ? "it publishes ports on the Relay"
+        : tailscale.length > 0
+          ? "it has a Tailscale address"
+          : null
+    const rolling = running && blocker === null
+    deployment.rolling = rolling
+    if (running && blocker) {
+      log(`Stopping the running container first, since ${blocker}`)
+    }
     await docker(
       createContainer(this.#engine, {
         command: shellWords(config.command),
@@ -1180,7 +1335,12 @@ export class AppDriver {
         }),
         labels: {
           ...routes.labels(APP_SERVICE),
-          ...this.#containerLabels(input.appId, APP_SERVICE, deployment.id),
+          ...this.#containerLabels(
+            input.appId,
+            APP_SERVICE,
+            deployment.id,
+            deployment.commit
+          ),
         },
         mounts: [
           {
@@ -1190,7 +1350,13 @@ export class AppDriver {
           },
         ],
         name,
-        network: { aliases: [hostname], name: this.#networkName(input.appId) },
+        // Beside the running container, the new one takes the app's name
+        // on its network only once it's healthy, so bundled Traefik sends it
+        // nothing before then.
+        network: {
+          aliases: rolling ? [] : [hostname],
+          name: this.#networkName(input.appId),
+        },
         ports: config.ports.map((port) => ({
           containerPort: port.containerPort,
           hostPort: port.hostPort,
@@ -1218,15 +1384,152 @@ export class AppDriver {
         })
       )
     }
-    await this.#replacing(input.appId, deployment, previous, [name], () =>
-      this.#startContainer(input.appId, deployment, name)
+    const start = () => this.#startContainer(input.appId, deployment, name)
+    if (!rolling) {
+      await this.#replacing(input.appId, deployment, previous, [name], start)
+      return
+    }
+    await this.#rollingOver(input.appId, deployment, previous, start, () =>
+      this.#takeAlias(this.#networkName(input.appId), name, hostname)
     )
   }
 
   async #startContainer(appId: string, deployment: Deployment, name: string) {
     await docker(this.#engine.startContainer(name, { timeout: 120_000 }))
     this.#log(appId, deployment, `Started ${name}`)
-    await this.#settle(appId, deployment, name)
+    await this.#awaitHealthy(appId, deployment, [name], false)
+  }
+
+  /**
+   * Starts a deployment's containers beside the running ones and, once
+   * they're healthy, moves the app's names to them and stops the old ones.
+   * Until then the running containers serve as before, and stay if the new
+   * ones fail.
+   */
+  async #rollingOver(
+    appId: string,
+    deployment: Deployment,
+    previous: ReadonlyArray<AppContainer>,
+    start: () => Promise<void>,
+    takeOver: () => Promise<void>
+  ) {
+    this.#log(
+      appId,
+      deployment,
+      "Starting the new containers beside the running ones"
+    )
+    // Until the old ones stop, they keep their names, so a failure up to
+    // the switch leaves them serving, without the new ones beside them.
+    const switched = await Effect.runPromise(
+      Effect.result(promiseEffect(() => start().then(takeOver)))
+    )
+    if (Result.isFailure(switched)) {
+      for (const container of await this.#appContainers(appId)) {
+        if (container.deploymentId !== deployment.id) continue
+        await this.#removeContainer(container.id)
+      }
+      this.#log(appId, deployment, "Keeping the running containers", "warn")
+      throw switched.failure
+    }
+    this.#log(appId, deployment, "Switched traffic to the new containers")
+    for (const container of previous) {
+      if (container.running) {
+        this.#log(appId, deployment, `Stopping ${container.name}`)
+        await docker(
+          this.#engine
+            .stopContainer(container.id, { seconds: 30, timeout: 60_000 })
+            .pipe(Effect.ignore)
+        )
+      }
+      this.#log(appId, deployment, `Removing ${container.name}`)
+      await this.#removeContainer(container.id)
+    }
+  }
+
+  // Gives a running container a name on a network it joined without it.
+  async #takeAlias(network: string, container: string, alias: string) {
+    await docker(this.#engine.disconnectNetwork(network, container))
+    await docker(
+      this.#engine.connectNetwork(network, container, { aliases: [alias] })
+    )
+  }
+
+  // Waits for new containers to come up: each stays running past a brief
+  // settle, and one with a health check passes it. With `exitedCleanly`, a
+  // container that exits with 0, like a Compose migration step, is done.
+  async #awaitHealthy(
+    appId: string,
+    deployment: Deployment,
+    names: ReadonlyArray<string>,
+    exitedCleanly: boolean
+  ) {
+    await sleep(SETTLE_MS, deployment.abort.signal)
+    const deadline = Date.now() + HEALTH_TIMEOUT_MS
+    const waiting = new Set<string>()
+    let pending = [...names]
+    while (pending.length > 0) {
+      const next: Array<string> = []
+      for (const name of pending) {
+        const [container] = this.#appContainer(
+          await docker(this.#engine.inspectContainer<ContainerInspect>(name))
+        )
+        const exited =
+          !container ||
+          container.restarted ||
+          (!container.running && !(exitedCleanly && container.exitCode === 0))
+        if (exited) {
+          this.#log(
+            appId,
+            deployment,
+            `${name} exited right after starting:`,
+            "error"
+          )
+          await this.#tailLogs(
+            appId,
+            deployment,
+            container?.id ?? name,
+            container?.tty ?? false
+          )
+          throw new Error(
+            container?.restarted
+              ? `${name} keeps exiting, and Docker keeps restarting it`
+              : `${name} exited with code ${container?.exitCode ?? "unknown"}`
+          )
+        }
+        if (container.health === "unhealthy") {
+          this.#log(
+            appId,
+            deployment,
+            `${name} failed its health check:`,
+            "error"
+          )
+          await this.#tailLogs(appId, deployment, container.id, container.tty)
+          throw new Error(`${name} failed its health check`)
+        }
+        if (container.running && container.health === "starting") {
+          if (!waiting.has(name)) {
+            waiting.add(name)
+            this.#log(
+              appId,
+              deployment,
+              `Waiting for ${name} to pass its health check`
+            )
+          }
+          next.push(name)
+        }
+      }
+      pending = next
+      if (pending.length === 0) break
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `${pending[0]} didn't pass its health check within 10 minutes`
+        )
+      }
+      await sleep(HEALTH_POLL_MS, deployment.abort.signal)
+    }
+    for (const name of waiting) {
+      this.#log(appId, deployment, `${name} is healthy`)
+    }
   }
 
   // Swaps an app's previous containers for a deployment's. The previous ones
@@ -1305,28 +1608,6 @@ export class AppDriver {
     )
   }
 
-  // Waits briefly so a container that exits right away fails its
-  // deployment, with its last output in the deployment log.
-  async #settle(appId: string, deployment: Deployment, name: string) {
-    await sleep(SETTLE_MS, deployment.abort.signal)
-    const [container] = this.#appContainer(
-      await docker(this.#engine.inspectContainer<ContainerInspect>(name))
-    )
-    if (container?.running && !container.restarted) return
-    this.#log(
-      appId,
-      deployment,
-      `${name} exited right after starting:`,
-      "error"
-    )
-    await this.#tailLogs(appId, deployment, container?.id ?? name, false)
-    throw new Error(
-      container?.restarted
-        ? `${name} keeps exiting, and Docker keeps restarting it`
-        : `${name} exited with code ${container?.exitCode ?? "unknown"}`
-    )
-  }
-
   // A container's last lines, into the deployment log.
   async #tailLogs(
     appId: string,
@@ -1348,13 +1629,32 @@ export class AppDriver {
   async #deployCompose(
     input: RelayDeployApp,
     deployment: Deployment,
-    host: string
+    host: string,
+    checkout: string | null
   ) {
     const log = (text: string, level: RelayConsoleLevel = "info") =>
       this.#log(input.appId, deployment, text, level)
-    const project = this.#composeProject(input.appId)
+    const base = this.#composeProject(input.appId)
     const directory = this.#appDirectory(input.appId)
     const hostDirectory = join(host, "apps", input.appId)
+    // A pasted Compose file's relative paths are in the app's data
+    // directory; a repository's in its own folder of the checkout, so its
+    // builds and binds read the repository's files.
+    let file = input.config.compose
+    let projectDirectory = directory
+    const binds = [{ host: hostDirectory, relay: directory }]
+    if (checkout && input.github) {
+      const found = await checkoutFile(checkout, input.github.path)
+      if (!found) {
+        throw new Error(`The repository has no file at ${input.github.path}`)
+      }
+      file = await readFile(found, "utf8")
+      projectDirectory = join(checkout, dirname(input.github.path))
+      binds.push({
+        host: join(host, "app-sources", input.appId, deployment.id),
+        relay: checkout,
+      })
+    }
     const environment = {
       ...process.env,
       ...this.#environment(input.appId, deployment, input.config),
@@ -1362,54 +1662,111 @@ export class AppDriver {
       KILN_DATA: hostDirectory,
     }
     // The standalone Compose binary, which `docker compose` runs.
-    const compose = ["--ansi", "never", "-p", project]
-    compose.push("--project-directory", directory, "-f", "-")
-    log("Reading Compose file")
-    const normalized = await traceRelayPromise(
-      "relay.apps.deployment.composeConfig",
-      () =>
+    const composeArguments = (project: string) => [
+      "--ansi",
+      "never",
+      "-p",
+      project,
+      "--project-directory",
+      projectDirectory,
+      "-f",
+      "-",
+    ]
+    const readConfig = (project: string) =>
+      traceRelayPromise("relay.apps.deployment.composeConfig", () =>
         composeConfig(
-          [...compose, "config", "--format", "json"],
-          input.config.compose,
+          [...composeArguments(project), "config", "--format", "json"],
+          file,
           environment,
           deployment.abort.signal,
           (line) => this.#logOutput(input.appId, deployment, line, "warn")
         )
-    )
+      )
+    log("Reading Compose file")
+    const normalized = await readConfig(base)
     const databases = await this.#connectableDatabases(
       input.appId,
       deployment,
       input.config.databaseIds
     )
-    const prepared = this.#prepareCompose(normalized, {
+    const routes = await this.#networking.routes(input.appId)
+    const tailscale = await this.#networking.tailscale(input.appId)
+    const options = {
       appId: input.appId,
+      binds,
+      commit: deployment.commit,
       databases,
-      routes: await this.#networking.routes(input.appId),
-      serviceLimits: input.config.serviceLimits,
-      tailscale: await this.#networking.tailscale(input.appId),
       deploymentId: deployment.id,
-      directory,
-      hostDirectory,
-    })
-    log(`Services: ${Object.keys(prepared.services).join(", ")}`)
-    // Containers from an image or Dockerfile deployment aren't the
-    // project's, so Compose's --remove-orphans can't see them.
-    const previous = (await this.#appContainers(input.appId)).filter(
-      (container) => container.labels[COMPOSE_PROJECT_LABEL] !== project
-    )
+      routes,
+      serviceLimits: input.config.serviceLimits,
+      tailscale,
+    }
+    const previous = await this.#appContainers(input.appId)
+    const running = previous.some((container) => container.running)
+    const blocker = composeRollingBlocker(normalized, tailscale)
+    if (running && blocker) {
+      log(`Stopping the running containers first, since ${blocker}`)
+    }
     // Every service counts, with the limits the Compose file sets for those
     // Kiln leaves alone.
-    await this.#reserving(
-      input.appId,
-      input.config.diskLimitBytes,
-      Object.values(prepared.services).map(composeServiceLimits),
-      () =>
-        traceRelayPromise("relay.apps.deployment.composeUp", () =>
-          this.#replacing(input.appId, deployment, previous, [], () =>
-            this.#composeUp(input, deployment, compose, environment, prepared)
-          )
+    const reserve = (prepared: ComposeProject, apply: () => Promise<void>) =>
+      this.#reserving(
+        input.appId,
+        input.config.diskLimitBytes,
+        Object.values(prepared.services).map(composeServiceLimits),
+        () => traceRelayPromise("relay.apps.deployment.composeUp", apply)
+      )
+    if (running && blocker === null) {
+      // Its own project, so its networks and containers stand apart from
+      // the running ones until it takes over.
+      const project = `${base}-${deployment.id}`
+      const prepared = this.#prepareCompose(await readConfig(project), {
+        ...options,
+        deferAliases: true,
+      })
+      log(`Services: ${Object.keys(prepared.services).join(", ")}`)
+      let rolled = false
+      await reserve(prepared, async () => {
+        rolled = await this.#rollCompose(
+          input,
+          deployment,
+          composeArguments(project),
+          environment,
+          prepared,
+          previous
         )
+      })
+      if (rolled) {
+        deployment.rolling = true
+        await this.#removeComposeNetworks(input.appId, project)
+        return
+      }
+    }
+    deployment.rolling = false
+    const prepared = this.#prepareCompose(normalized, {
+      ...options,
+      deferAliases: false,
+    })
+    if (!running || blocker) {
+      log(`Services: ${Object.keys(prepared.services).join(", ")}`)
+    }
+    // Containers from an image or Dockerfile deployment, or a rolled one,
+    // aren't the project's, so Compose's --remove-orphans can't see them.
+    const outside = previous.filter(
+      (container) => container.labels[COMPOSE_PROJECT_LABEL] !== base
     )
+    await reserve(prepared, () =>
+      this.#replacing(input.appId, deployment, outside, [], () =>
+        this.#composeUp(
+          input,
+          deployment,
+          composeArguments(base),
+          environment,
+          prepared
+        )
+      )
+    )
+    await this.#removeComposeNetworks(input.appId, base)
   }
 
   async #composeUp(
@@ -1419,8 +1776,6 @@ export class AppDriver {
     environment: NodeJS.ProcessEnv,
     prepared: ComposeProject
   ) {
-    const log = (text: string, level: RelayConsoleLevel = "info") =>
-      this.#log(input.appId, deployment, text, level)
     await this.#stream(
       input.appId,
       deployment,
@@ -1440,36 +1795,181 @@ export class AppDriver {
         timeout: BUILD_TIMEOUT_MS,
       }
     )
-    await sleep(SETTLE_MS, deployment.abort.signal)
-    const containers = await this.#appContainers(input.appId)
-    const exited = containers.filter(
-      (container) =>
-        container.deploymentId === deployment.id &&
-        (container.restarted ||
-          (!container.running && container.exitCode !== 0))
+    await this.#awaitHealthy(
+      input.appId,
+      deployment,
+      (await this.#appContainers(input.appId))
+        .filter((container) => container.deploymentId === deployment.id)
+        .map((container) => container.name),
+      true
     )
-    for (const container of exited) {
-      log(`${container.name} exited after starting:`, "error")
-      await this.#tailLogs(input.appId, deployment, container.id, container.tty)
-    }
-    if (exited.length > 0) {
-      throw new Error(
-        `${exited.map((container) => container.service).join(", ")} exited after starting`
+  }
+
+  /**
+   * Starts a whole Compose project beside the running one and switches over
+   * once every service is healthy. False, with nothing left behind, when a
+   * service turns out to keep data in a volume its image declares: two
+   * copies would share or lose it, so the project is replaced instead.
+   */
+  async #rollCompose(
+    input: RelayDeployApp,
+    deployment: Deployment,
+    compose: ReadonlyArray<string>,
+    environment: NodeJS.ProcessEnv,
+    prepared: ComposeProject,
+    previous: ReadonlyArray<AppContainer>
+  ): Promise<boolean> {
+    const run = (command: ReadonlyArray<string>) =>
+      this.#stream(
+        input.appId,
+        deployment,
+        "docker-compose",
+        [...compose, "--progress", "plain", ...command],
+        {
+          env: environment,
+          input: JSON.stringify(prepared),
+          timeout: BUILD_TIMEOUT_MS,
+        }
       )
+    const project = compose[compose.indexOf("-p") + 1]!
+    const created = async () =>
+      (await this.#appContainers(input.appId)).filter(
+        (container) => container.deploymentId === deployment.id
+      )
+    const discard = async () => {
+      for (const container of await created()) {
+        await docker(
+          this.#engine
+            .removeContainer(container.id, {
+              force: true,
+              timeout: 90_000,
+              volumes: true,
+            })
+            .pipe(Effect.ignore)
+        )
+      }
+      await this.#removeComposeNetworks(input.appId, null, project)
+    }
+    // Created before anything starts, so what each container mounts shows.
+    const outcome = await Effect.runPromise(
+      Effect.result(
+        promiseEffect(async () => {
+          await run(["up", "--no-start", "--build", "--remove-orphans"])
+          return this.#volumeService(await created())
+        })
+      )
+    )
+    if (Result.isFailure(outcome)) {
+      await discard()
+      throw outcome.failure
+    }
+    if (outcome.success) {
+      this.#log(
+        input.appId,
+        deployment,
+        `Stopping the running containers first, since ${outcome.success} keeps data in a volume`
+      )
+      await discard()
+      return false
+    }
+    const rolled = await Effect.runPromise(
+      Effect.result(
+        promiseEffect(() =>
+          this.#rollingOver(
+            input.appId,
+            deployment,
+            previous,
+            async () => {
+              await run(["start"])
+              await this.#awaitHealthy(
+                input.appId,
+                deployment,
+                (await created()).map((container) => container.name),
+                true
+              )
+            },
+            async () => {
+              for (const container of await created()) {
+                if (!container.running || !joinsNetworks(container)) continue
+                await this.#takeAlias(
+                  this.#networkName(input.appId),
+                  container.name,
+                  this.#serviceAlias(input.appId, container.service)
+                )
+              }
+            }
+          )
+        )
+      )
+    )
+    if (Result.isFailure(rolled)) {
+      await this.#removeComposeNetworks(input.appId, null, project)
+      throw rolled.failure
+    }
+    return true
+  }
+
+  // The first of these containers that mounts a Docker volume, by service.
+  async #volumeService(
+    containers: ReadonlyArray<AppContainer>
+  ): Promise<string | null> {
+    for (const container of containers) {
+      const inspected = await docker(
+        this.#engine.inspectContainer<ContainerInspect>(container.id)
+      )
+      if (inspected.Mounts?.some((mount) => mount.Type === "volume")) {
+        return container.service
+      }
+    }
+    return null
+  }
+
+  /**
+   * Removes the networks Compose made for the app's projects: all but
+   * `keep`'s, or only `only`'s. Only those Compose named after their project;
+   * a network the file names itself outlives projects, since the next
+   * project joins it.
+   */
+  async #removeComposeNetworks(
+    appId: string,
+    keep: string | null,
+    only?: string
+  ) {
+    const base = this.#composeProject(appId)
+    const networks = await docker(
+      this.#engine
+        .listNetworks({ filters: { label: [COMPOSE_PROJECT_LABEL] } })
+        .pipe(Effect.orElseSucceed(() => []))
+    )
+    for (const network of networks) {
+      const project = network.Labels?.[COMPOSE_PROJECT_LABEL]
+      if (
+        !project ||
+        !network.Name.startsWith(`${project}_`) ||
+        project === keep ||
+        (only !== undefined
+          ? project !== only
+          : project !== base && !project.startsWith(`${base}-`))
+      ) {
+        continue
+      }
+      await this.#removeNetwork(network.Name)
     }
   }
 
   // Names, labels, and networks every service so its containers are found
-  // as the app's, and rewrites binds into the data directory to the host
-  // path Docker needs.
+  // as the app's, and rewrites binds into the data directory or checkout to
+  // the host paths Docker needs. With `deferAliases`, services join the
+  // app's network without their names, which they take once healthy.
   #prepareCompose(
     normalized: ComposeProject,
     options: {
       appId: string
+      binds: ReadonlyArray<{ host: string; relay: string }>
+      commit: string | null
       databases: ReadonlyArray<string>
+      deferAliases: boolean
       deploymentId: string
-      directory: string
-      hostDirectory: string
       routes: AppRoutePlan
       serviceLimits: AppConfig["serviceLimits"]
       tailscale: ReadonlyArray<{
@@ -1493,9 +1993,9 @@ export class AppDriver {
         ? {}
         : {
             ...(service.networks ?? { default: null }),
-            kiln_app: {
-              aliases: [this.#serviceAlias(options.appId, name)],
-            },
+            kiln_app: options.deferAliases
+              ? {}
+              : { aliases: [this.#serviceAlias(options.appId, name)] },
             ...Object.fromEntries(
               joined.map((network) => [
                 network,
@@ -1525,23 +2025,36 @@ export class AppDriver {
         labels: {
           ...service.labels,
           ...options.routes.labels(name),
-          ...this.#containerLabels(options.appId, name, options.deploymentId),
+          ...this.#containerLabels(
+            options.appId,
+            name,
+            options.deploymentId,
+            options.commit
+          ),
         },
         restart: service.restart ?? "unless-stopped",
         ...(service.network_mode ? {} : { networks }),
         ...(service.volumes
           ? {
-              volumes: service.volumes.map((volume) =>
-                volume.type === "bind" &&
-                typeof volume.source === "string" &&
-                (volume.source === options.directory ||
-                  volume.source.startsWith(`${options.directory}/`))
+              volumes: service.volumes.map((volume) => {
+                if (
+                  volume.type !== "bind" ||
+                  typeof volume.source !== "string"
+                ) {
+                  return volume
+                }
+                const source = volume.source
+                const bind = options.binds.find(
+                  ({ relay }) =>
+                    source === relay || source.startsWith(`${relay}/`)
+                )
+                return bind
                   ? {
                       ...volume,
-                      source: `${options.hostDirectory}${volume.source.slice(options.directory.length)}`,
+                      source: `${bind.host}${source.slice(bind.relay.length)}`,
                     }
                   : volume
-              ),
+              }),
             }
           : {}),
       }
@@ -1776,16 +2289,7 @@ export class AppDriver {
       dataDirectory: join(host, "apps", id),
       diskLimitBytes: diskLimits.get(id) ?? null,
       diskUsedBytes: this.#diskUsage.get(id) ?? null,
-      deployment: deployment
-        ? {
-            error: deployment.error,
-            finishedAt: deployment.finishedAt,
-            id: deployment.id,
-            sourceType: deployment.sourceType,
-            startedAt: deployment.startedAt,
-            state: deployment.state,
-          }
-        : null,
+      deployment: deployment ? deploymentSummary(deployment) : null,
       hostname: this.#hostname(id),
       id,
       network: this.#networkName(id),
@@ -1969,10 +2473,12 @@ export class AppDriver {
   #containerLabels(
     appId: string,
     service: string,
-    deploymentId: string
+    deploymentId: string,
+    commit: string | null
   ): Record<string, string> {
     return {
       ...this.#resourceLabels(appId),
+      ...(commit && { [COMMIT_LABEL]: commit }),
       [DEPLOYMENT_LABEL]: deploymentId,
       [SERVICE_LABEL]: service,
     }
@@ -1984,6 +2490,7 @@ interface ComposeService {
   labels?: Record<string, string>
   network_mode?: string
   networks?: Record<string, unknown>
+  ports?: Array<{ published?: unknown; [key: string]: unknown }>
   restart?: string
   volumes?: Array<{ source?: unknown; type?: string; [key: string]: unknown }>
   [key: string]: unknown
@@ -2041,8 +2548,31 @@ function composeConfig(
   })
 }
 
+// Why two copies of a Compose project can't run side by side, if they
+// can't: they would share or lose a volume's data, fight over a host port
+// or Tailscale address, or share another container's network.
+function composeRollingBlocker(
+  project: ComposeProject,
+  tailscale: ReadonlyArray<{ service: string }>
+): string | null {
+  for (const [name, service] of Object.entries(project.services ?? {})) {
+    if (service.volumes?.some((volume) => volume.type === "volume")) {
+      return `${name} keeps data in a volume`
+    }
+    if (service.ports?.some((port) => port.published !== undefined)) {
+      return `${name} publishes ports on the Relay`
+    }
+    if (service.network_mode) return `${name} shares another network`
+    if (tailscale.some((membership) => membership.service === name)) {
+      return `${name} has a Tailscale address`
+    }
+  }
+  return null
+}
+
 // A missing or invalid source fails before anything is deployed.
-function sourceProblem(config: AppConfig): string | null {
+function sourceProblem(input: RelayDeployApp): string | null {
+  const { config } = input
   switch (config.sourceType) {
     case "image":
       return /^[a-zA-Z0-9][a-zA-Z0-9._\-/:@]*$/u.test(config.image)
@@ -2052,10 +2582,13 @@ function sourceProblem(config: AppConfig): string | null {
       return config.dockerfile.trim() ? null : "Add a Dockerfile to build"
     case "compose":
       return config.compose.trim() ? null : "Add a Compose file to deploy"
+    case "github":
+      return input.github ? null : "Choose a GitHub repository to deploy"
   }
 }
 
-function describeSource(config: AppConfig): string {
+function describeSource(input: RelayDeployApp): string {
+  const { config } = input
   switch (config.sourceType) {
     case "image":
       return `image ${config.image}`
@@ -2063,6 +2596,10 @@ function describeSource(config: AppConfig): string {
       return "Dockerfile"
     case "compose":
       return "Docker Compose"
+    case "github":
+      return input.github
+        ? `${input.github.repository} at ${input.github.commit.slice(0, 7)}, ${input.github.build === "compose" ? "running" : "building"} ${input.github.path}`
+        : "GitHub"
   }
 }
 
@@ -2164,6 +2701,20 @@ function isoTime(value: string | undefined): string | null {
   if (!value || value.startsWith("0001-")) return null
   const time = new Date(value)
   return Number.isNaN(time.getTime()) ? null : time.toISOString()
+}
+
+// What Hearth sees of a deployment, without its log.
+function deploymentSummary(deployment: Deployment): RelayAppDeployment {
+  return {
+    commit: deployment.commit,
+    error: deployment.error,
+    finishedAt: deployment.finishedAt,
+    id: deployment.id,
+    rolling: deployment.rolling,
+    sourceType: deployment.sourceType,
+    startedAt: deployment.startedAt,
+    state: deployment.state,
+  }
 }
 
 // UTC time to the second, as in kiln-<shortid>-20261009093012.

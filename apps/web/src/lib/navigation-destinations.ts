@@ -137,6 +137,14 @@ export const infrastructureDestinations = [
     label: "Sources",
     to: "/infra/sources",
   },
+  {
+    access: "app-read",
+    group: "network",
+    icon: Rocket,
+    keywords: ["infrastructure", "deploys", "github", "commits", "releases"],
+    label: "Deployments",
+    to: "/infra/deployments",
+  },
 ] as const satisfies ReadonlyArray<
   NavigationDestination & {
     access: InfrastructureDestinationAccess

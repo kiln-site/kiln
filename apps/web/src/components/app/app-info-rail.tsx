@@ -1,6 +1,15 @@
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
-import { ChevronLeft, ChevronRight, Container } from "lucide-react"
+import { Link } from "@tanstack/react-router"
+import {
+  ChevronLeft,
+  ChevronRight,
+  Container,
+  GitCommitHorizontal,
+  History,
+  Rocket,
+  ScrollText,
+} from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -9,10 +18,16 @@ import {
   type AppContainerTarget,
 } from "@/components/app/app-container-selection"
 import {
+  deploymentStatusPresentation,
+  shortCommit,
+} from "@/components/app/app-deployment-presentation"
+import {
   appContainers,
   appRelayAvailable,
+  sourceTypeLabels,
   type App,
 } from "@/components/app/app-presentation"
+import { GitHubMark } from "@/components/github-mark"
 import {
   InfoCopyValue,
   InfoDetails,
@@ -25,7 +40,9 @@ import { DatabaseKindIcon } from "@/components/instance-kind-icon"
 import { OwnerCard } from "@/components/owner-card"
 import { RelativeTime } from "@/components/relative-time"
 import { InfoRailRelayLink } from "@/components/resource-info-rail"
+import { StatusIndicator } from "@/components/status-indicator"
 import {
+  appDeploymentSummaryQueryOptions,
   appOwnerMinecraftProfileQueryOptions,
   appOwnerQueryOptions,
 } from "@/lib/query-options"
@@ -60,6 +77,7 @@ export function AppInfoRail({ app, routeId }: { app: App; routeId: string }) {
         </InfoRailLink>
       </InfoRailGroup>
       <AppOwner appId={app.id} relayId={app.relayId} />
+      <AppDeploymentCard app={app} routeId={routeId} />
       <AppContainerCard app={app} />
     </>
   )
@@ -87,6 +105,129 @@ const AppOwner = React.memo(function AppOwner({
     />
   )
 })
+
+// Where the app deploys from, what it runs now, and the way to its
+// deployments and their logs.
+const AppDeploymentCard = React.memo(function AppDeploymentCard({
+  app,
+  routeId,
+}: {
+  app: App
+  routeId: string
+}) {
+  const { data: summary } = useQuery(
+    appDeploymentSummaryQueryOptions(app.relayId, app.id)
+  )
+  // What the running containers were built from, as the Relay labels them.
+  const runningCommit =
+    appContainers(app).find((container) => container.running)?.labels[
+      "kiln.app.commit"
+    ] ?? null
+  const current =
+    summary?.current?.commitSha === runningCommit ? summary?.current : null
+  const latest = summary?.latest ?? null
+  const source = summary?.source ?? null
+  const canReadLogs = app.permissions.includes("app.logs.read")
+  return (
+    <InfoRailCard
+      icon={<Rocket />}
+      title="Deployment"
+      action={
+        latest ? (
+          <StatusIndicator status={deploymentStatusPresentation(latest)} />
+        ) : null
+      }
+      sections={
+        <div className="grid grid-cols-2 divide-x divide-border/60 border-t">
+          <Link
+            to="/infra/deployments"
+            search={{ appId: app.id, relayId: app.relayId }}
+            className={railFooterLinkClassName}
+          >
+            <History />
+            Deployments
+          </Link>
+          {canReadLogs ? (
+            <Link
+              to="/app/$appId/logs"
+              params={{ appId: routeId }}
+              search={{ stream: "deployment" }}
+              className={railFooterLinkClassName}
+            >
+              <ScrollText />
+              Logs
+            </Link>
+          ) : (
+            <span
+              className={cn(railFooterLinkClassName, "pointer-events-none opacity-50")}
+            >
+              <ScrollText />
+              Logs
+            </span>
+          )}
+        </div>
+      }
+    >
+      <InfoFact label="Source">
+        {source ? (
+          <a
+            className="flex min-w-0 items-center gap-1.5 hover:text-primary"
+            href={source.repositoryUrl}
+            rel="noreferrer"
+            target="_blank"
+            title={`${source.repository} on ${source.branch}`}
+          >
+            <GitHubMark className="size-3.5 shrink-0" />
+            <span className="truncate font-mono text-xs">
+              {source.repository}
+            </span>
+            <span className="shrink-0 font-mono text-xs text-muted-foreground">
+              {source.branch}
+            </span>
+          </a>
+        ) : (
+          <span className="text-muted-foreground">
+            {app.deployment
+              ? sourceTypeLabels[app.deployment.sourceType]
+              : "Not deployed"}
+          </span>
+        )}
+      </InfoFact>
+      {runningCommit ? (
+        <InfoFact label="Running">
+          <a
+            className="flex min-w-0 items-center gap-1.5 hover:text-primary"
+            href={
+              current?.commitUrl ??
+              (source ? `${source.repositoryUrl}/commit/${runningCommit}` : undefined)
+            }
+            rel="noreferrer"
+            target="_blank"
+            title={current?.commitMessage ?? runningCommit}
+          >
+            <GitCommitHorizontal className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="shrink-0 font-mono text-xs">
+              {shortCommit(runningCommit)}
+            </span>
+            {current?.commitMessage ? (
+              <span className="truncate text-xs text-muted-foreground">
+                {current.commitMessage}
+              </span>
+            ) : null}
+          </a>
+        </InfoFact>
+      ) : null}
+      {latest ? (
+        <InfoFact label={latest.status === "running" ? "Started" : "Last deploy"}>
+          <RelativeTime timestamp={Date.parse(latest.startedAt)} />
+        </InfoFact>
+      ) : null}
+    </InfoRailCard>
+  )
+})
+
+const railFooterLinkClassName =
+  "flex h-9 items-center justify-center gap-1.5 text-xs text-muted-foreground transition-colors outline-none hover:bg-muted/60 hover:text-foreground focus-visible:bg-muted/60 focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset [&_svg]:size-3.5"
 
 // One container at a time, paged through in its title row. The page's
 // service tags select one too.

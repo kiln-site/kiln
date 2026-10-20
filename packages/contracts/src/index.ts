@@ -448,7 +448,53 @@ export const appServiceNameSchema = z
   .string()
   .regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/u)
 
-export const appSourceTypeSchema = z.enum(["image", "dockerfile", "compose"])
+// GitHub builds a Dockerfile or runs a Compose file from a repository. Hearth
+// keeps which repository; the Relay gets the commit to deploy with each
+// deployment.
+export const appSourceTypeSchema = z.enum([
+  "image",
+  "dockerfile",
+  "compose",
+  "github",
+])
+
+export const appGitHubBuildSchema = z.enum(["dockerfile", "compose"])
+
+// A file in a repository, from its root: no leading slash, no `..`.
+export const appRepositoryPathSchema = z
+  .string()
+  .min(1)
+  .max(1_024)
+  .refine(
+    (path) =>
+      !path.startsWith("/") &&
+      !path.includes("\\") &&
+      !path.includes("\0") &&
+      path
+        .split("/")
+        .every((segment) => segment !== "" && segment !== "." && segment !== ".."),
+    "Use a path inside the repository, like Dockerfile or deploy/compose.yaml"
+  )
+
+// owner/name, as GitHub spells them.
+export const githubRepositoryNameSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/u)
+
+export const gitCommitShaSchema = z.string().regex(/^[a-f0-9]{40}$/u)
+
+// What a GitHub deployment builds: one commit of one repository, read with a
+// token that only reads that repository and expires within the hour. The
+// Relay keeps neither once the deployment finishes.
+export const relayAppGitHubCheckoutSchema = z
+  .object({
+    build: appGitHubBuildSchema,
+    commit: gitCommitShaSchema,
+    path: appRepositoryPathSchema,
+    repository: githubRepositoryNameSchema,
+    token: z.string().min(1).max(1_024),
+  })
+  .strict()
 
 export const appPortSchema = z
   .object({
@@ -536,9 +582,15 @@ export const relayAppContainerSchema = z.object({
 })
 
 export const relayAppDeploymentSchema = z.object({
+  // The commit a GitHub deployment built. Absent from older Relays.
+  commit: gitCommitShaSchema.nullable().default(null),
   error: z.string().max(2_000).nullable(),
   finishedAt: z.string().datetime().nullable(),
   id: z.string().min(1).max(64),
+  // Whether the new containers started beside the old ones and took over
+  // once healthy, rather than replacing them stopped. Null until decided,
+  // and from older Relays.
+  rolling: z.boolean().nullable().default(null),
   sourceType: appSourceTypeSchema,
   startedAt: z.string().datetime(),
   state: appDeploymentStateSchema,
@@ -584,7 +636,19 @@ export const relayProvisionAppSchema = z
   .strict()
 
 export const relayDeployAppSchema = z
-  .object({ appId: appIdSchema, config: appConfigSchema, name: appNameSchema })
+  .object({
+    appId: appIdSchema,
+    config: appConfigSchema,
+    // Required when the config's source is GitHub.
+    github: relayAppGitHubCheckoutSchema.optional(),
+    name: appNameSchema,
+  })
+  .strict()
+
+// One of the app's recent deployments, with its log: the running one, or one
+// the Relay kept.
+export const relayAppDeploymentReadSchema = z
+  .object({ appId: appIdSchema, deploymentId: z.string().min(1).max(64) })
   .strict()
 
 export const relayAppLimitsSchema = z
@@ -2025,6 +2089,16 @@ export const relayConsoleLineSchema = z.object({
   segments: z.array(relayConsoleSegmentSchema).optional(),
 })
 
+// Null when the Relay no longer keeps that deployment.
+export const relayAppDeploymentLogSchema = z
+  .object({
+    deployment: relayAppDeploymentSchema,
+    // Lines dropped from the front once the log reached its limits.
+    dropped: z.number().int().nonnegative(),
+    lines: z.array(relayConsoleLineSchema),
+  })
+  .nullable()
+
 export const relayConsoleSchema = z.object({
   instanceId: z.string().min(1),
   lifecycle: z.array(relayInstanceLifecycleEventSchema).default([]),
@@ -2235,6 +2309,14 @@ export type RelayAppLimits = z.infer<typeof relayAppLimitsSchema>
 export type RelayAppDeployment = z.infer<typeof relayAppDeploymentSchema>
 export type RelayCreateApp = z.infer<typeof relayCreateAppSchema>
 export type RelayDeployApp = z.infer<typeof relayDeployAppSchema>
+export type AppGitHubBuild = z.infer<typeof appGitHubBuildSchema>
+export type RelayAppGitHubCheckout = z.infer<
+  typeof relayAppGitHubCheckoutSchema
+>
+export type RelayAppDeploymentRead = z.infer<
+  typeof relayAppDeploymentReadSchema
+>
+export type RelayAppDeploymentLog = z.infer<typeof relayAppDeploymentLogSchema>
 export type RelayAppAction = z.infer<typeof relayAppActionSchema>
 export type RelayDeleteApp = z.infer<typeof relayDeleteAppSchema>
 export type RelayAppNetwork = z.infer<typeof relayAppNetworkSchema>

@@ -51,6 +51,10 @@ export const relayAppLimitsV1Feature = "app-limits-v1"
 export const relayDatabaseProvisioningV1Feature = "database-provisioning-v1"
 // The Relay provisions apps through `app.provision.*` the same way.
 export const relayAppProvisioningV1Feature = "app-provisioning-v1"
+// The Relay deploys GitHub sources from `app.deploy`'s `github` checkout,
+// rolls deployments over once their containers are healthy, and answers
+// `app.deployment.read`.
+export const relayAppGitHubV1Feature = "app-github-v1"
 export const relayBrowserAuthorizationReviseMaxItems = 256
 
 export const relayControlOperations = [
@@ -126,6 +130,7 @@ export const relayControlOperations = [
   "app.limits.write",
   "app.network.write",
   "app.network.routes.read",
+  "app.deployment.read",
   "app.network.routes.write",
   "app.terminal.attach",
   "app.terminal.heartbeat",
@@ -289,6 +294,7 @@ export function relayControlOperationChanges(
     case "database.dump.export":
     case "app.list":
     case "app.network.routes.read":
+    case "app.deployment.read":
     case "backup.task.get":
     case "backup.task.list":
     case "schedule.overview":

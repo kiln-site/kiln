@@ -49,6 +49,7 @@ const hearthRealtimeQueryScopes = {
     prefix(["users"]),
   ],
   activity: [prefix(["activity"])],
+  "app-deployments": [prefix(["app-deployments"])],
   "app-directory": [exact(queryKeys.apps.directory)],
   apps: [
     prefix(["apps"]),

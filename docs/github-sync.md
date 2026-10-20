@@ -3,8 +3,9 @@
 People keep config files in a GitHub repository and Kiln copies them into a
 game server or app. Accounts are added as **sources** under
 **Infrastructure → Sources**, and syncs that read from them live under
-**Automations → Sync**. Sources are meant to feed auto deployments too, and
-other providers later; the code still calls them GitHub connections.
+**Automations → Sync**. Apps deploy from them too; see
+[App deployments](app-deployments.md). Other providers may come later; the
+code still calls them GitHub connections.
 
 ## Adding a GitHub source
 

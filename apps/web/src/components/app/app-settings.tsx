@@ -55,10 +55,12 @@ import {
   type ResourceLimitsGroup,
 } from "@/components/resource-limits-section"
 import {
+  appDeploymentSummaryQueryOptions,
   appWebRoutesQueryOptions,
   queryKeys,
   resourceLimitsCapacityQueryOptions,
 } from "@/lib/query-options"
+import type { AppGitHubSourceView } from "@/server/app-deployments.server"
 import { warmSyntaxCodeEditorModule } from "@/lib/syntax-editor-module-preload"
 import { deployApp, renameApp, updateAppLimits } from "@/server/apps"
 
@@ -154,8 +156,19 @@ export function AppSourceSettings({
   const [configuring, setConfiguring] = React.useState(false)
   const deploying =
     appRelayAvailable(app) && app.deployment?.state === "running"
-  const kind = config.sourceType === "image" ? null : config.sourceType
-  const singleContainer = config.sourceType !== "compose"
+  const kind =
+    config.sourceType === "image" || config.sourceType === "github"
+      ? null
+      : config.sourceType
+  const github = useQuery({
+    ...appDeploymentSummaryQueryOptions(app.relayId, app.id),
+    enabled: config.sourceType === "github",
+    select: (summary) => summary.source,
+  })
+  const singleContainer =
+    config.sourceType === "github"
+      ? github.data?.build !== "compose"
+      : config.sourceType !== "compose"
   const services = appServices(app)
 
   return (
@@ -200,7 +213,9 @@ export function AppSourceSettings({
       }
     >
       <InfoFact label="Type">{sourceTypeLabels[config.sourceType]}</InfoFact>
-      {kind ? (
+      {config.sourceType === "github" ? (
+        <AppGitHubSourceFacts source={github.data} />
+      ) : kind ? (
         <InfoFact label="File">
           <span className="font-mono text-xs">{appDocuments[kind].path}</span>
           <span className="text-xs text-muted-foreground tabular-nums">
@@ -241,6 +256,60 @@ export function AppSourceSettings({
         </>
       ) : null}
     </InfoSection>
+  )
+}
+
+// The repository a GitHub app builds, and which file in it.
+function AppGitHubSourceFacts({
+  source,
+}: {
+  source: AppGitHubSourceView | null | undefined
+}) {
+  if (source === undefined) {
+    return (
+      <InfoFact label="Repository">
+        <span className="text-muted-foreground">Loading…</span>
+      </InfoFact>
+    )
+  }
+  if (source === null) {
+    return (
+      <InfoFact label="Repository">
+        <span className="text-muted-foreground">Not chosen</span>
+      </InfoFact>
+    )
+  }
+  return (
+    <>
+      <InfoFact label="Repository">
+        <a
+          className="truncate font-mono text-xs hover:text-primary"
+          href={source.repositoryUrl}
+          rel="noreferrer"
+          target="_blank"
+        >
+          {source.repository}
+        </a>
+      </InfoFact>
+      <InfoFact label="Branch">
+        <span className="truncate font-mono text-xs">{source.branch}</span>
+      </InfoFact>
+      <InfoFact label={source.build === "compose" ? "Compose file" : "Dockerfile"}>
+        <span className="truncate font-mono text-xs">{source.path}</span>
+      </InfoFact>
+      <InfoFact label="Deploy on push">
+        <span
+          className={source.autoDeploy ? undefined : "text-muted-foreground"}
+        >
+          {source.autoDeploy ? "On" : "Off"}
+        </span>
+      </InfoFact>
+      {source.connectionId === null ? (
+        <InfoFact label="Source">
+          <span className="text-destructive">Removed; choose another</span>
+        </InfoFact>
+      ) : null}
+    </>
   )
 }
 

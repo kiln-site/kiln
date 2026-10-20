@@ -3,6 +3,7 @@ import {
   chmod,
   mkdir,
   mkdtemp,
+  readdir,
   rm,
   truncate,
   writeFile,
@@ -11,6 +12,7 @@ import { randomUUID } from "node:crypto"
 import { tmpdir, totalmem } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
+import { gzipSync } from "node:zlib"
 
 import {
   appTailscaleMemberId,
@@ -22,6 +24,7 @@ import {
   type RelayConsoleLine,
 } from "@workspace/contracts"
 import { Effect } from "effect"
+import { pack } from "tar-stream"
 import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 
 vi.mock("./command.js", () => import("./test/docker.js"))
@@ -154,6 +157,7 @@ it("removes the data directory of an app whose create failed before its network"
 afterEach(() => {
   vi.useRealTimers()
   vi.unstubAllEnvs()
+  vi.unstubAllGlobals()
 })
 
 async function createdApp() {
@@ -937,5 +941,347 @@ describe("apps", () => {
     ).toBe(false)
     await expect(access(data)).rejects.toThrow()
     await expect(harness.apps.get(appId)).rejects.toThrow("App not found")
+  })
+})
+
+describe("rolling deployments", () => {
+  const healthChecked = "site:healthy"
+
+  function containerAliases(name: string, network: string) {
+    return fakeDocker.container(name)?.networks.get(network)?.aliases ?? []
+  }
+
+  it("starts the replacement beside the running container and moves the app's name to it once healthy", async () => {
+    const harness = await createdApp()
+    fakeDocker.images.set(healthChecked, {})
+    fakeDocker.imageConfigs.set(healthChecked, {
+      Healthcheck: { Test: ["CMD", "true"] },
+    })
+    await deploy(harness, { image: healthChecked })
+    const [previous] = appContainers()
+    const stops = fakeDocker.hold({ command: "stop", target: previous!.id })
+
+    useDeploymentClock()
+    await harness.apps.deploy(
+      deployment({ command: "serve --v2", image: healthChecked })
+    )
+    // The old container is still serving when the new one has its name.
+    let reached = false
+    void stops.reached.then(() => {
+      reached = true
+    })
+    while (!reached) await vi.advanceTimersByTimeAsync(100)
+    const network = harness.resources.appNetwork(appId)
+    const next = appContainers().find(
+      (container) => container.id !== previous!.id
+    )
+    expect(previous!.state.running).toBe(true)
+    expect(containerAliases(next!.name, network)).toContain(
+      `app-${appId.slice(0, 8)}`
+    )
+    stops.release()
+    const app = await settledDeployment(harness)
+
+    expect(app.deployment).toMatchObject({ rolling: true, state: "succeeded" })
+    expect(appContainers().map((container) => container.id)).toEqual([
+      next!.id,
+    ])
+  })
+
+  it("keeps the running container, and its name, when the replacement fails its health check", async () => {
+    const harness = await createdApp()
+    await deploy(harness, {})
+    const [previous] = appContainers()
+    fakeDocker.images.set("broken:latest", {})
+    fakeDocker.imageConfigs.set("broken:latest", {
+      Healthcheck: { Test: ["CMD", "false"] },
+    })
+    fakeDocker.unhealthyImages.add("broken:latest")
+
+    const app = await deploy(harness, { image: "broken:latest" })
+
+    expect(app.deployment).toMatchObject({
+      error: expect.stringContaining("failed its health check"),
+      rolling: true,
+      state: "failed",
+    })
+    expect(appContainers().map((container) => container.id)).toEqual([
+      previous!.id,
+    ])
+    expect(previous!.state.running).toBe(true)
+    expect(
+      containerAliases(previous!.name, harness.resources.appNetwork(appId))
+    ).toContain(`app-${appId.slice(0, 8)}`)
+  })
+
+  it("stops the running container first when the app publishes host ports", async () => {
+    const harness = await createdApp()
+    const ports = [
+      { containerPort: 80, hostPort: 8080, protocol: "tcp" as const },
+    ]
+    await deploy(harness, { ports })
+
+    const app = await deploy(harness, { command: "serve --v2", ports })
+
+    expect(app.deployment).toMatchObject({ rolling: false, state: "succeeded" })
+    expect(appContainers()).toHaveLength(1)
+  })
+
+  it("rolls a Compose project over in a project of its own, and removes the old one", async () => {
+    const removeCompose = await composeConfigCommand()
+    const harness = await createdApp()
+    const compose =
+      "services:\n  web:\n    image: nginx:alpine\n  worker:\n    image: nginx:alpine\n"
+    const first = await deploy(harness, { compose, sourceType: "compose" })
+    expect(first.deployment).toMatchObject({ rolling: false })
+    const before = appContainers().map((container) => container.id)
+
+    const second = await deploy(harness, { compose, sourceType: "compose" })
+
+    expect(second.deployment).toMatchObject({
+      rolling: true,
+      state: "succeeded",
+    })
+    const after = appContainers()
+    expect(after).toHaveLength(2)
+    expect(after.some((container) => before.includes(container.id))).toBe(
+      false
+    )
+    expect(
+      new Set(
+        after.map((container) => container.labels["com.docker.compose.project"])
+      )
+    ).toEqual(
+      new Set([
+        `${TEST_NAMESPACE}-kiln-app-${appId}-${second.deployment!.id}`,
+      ])
+    )
+    expect(
+      containerAliases(
+        after.find(
+          (container) =>
+            container.labels["com.docker.compose.service"] === "web"
+        )!.name,
+        harness.resources.appNetwork(appId)
+      )
+    ).toContain(`web.app-${appId.slice(0, 8)}`)
+    await removeCompose()
+  })
+
+  it("removes the old project's own networks after rolling over, and leaves networks the file names", async () => {
+    const removeCompose = await composeConfigCommand()
+    const harness = await createdApp()
+    const compose = "services:\n  web:\n    image: nginx:alpine\n"
+    await deploy(harness, { compose, sourceType: "compose" })
+    const base = `${TEST_NAMESPACE}-kiln-app-${appId}`
+    // As Compose made them for the first project: its default network, and
+    // one the file names itself, which the next project joins.
+    fakeDocker.addNetwork({
+      labels: { "com.docker.compose.project": base },
+      name: `${base}_default`,
+    })
+    fakeDocker.addNetwork({
+      labels: { "com.docker.compose.project": base },
+      name: "acme-backend",
+    })
+
+    const rolled = await deploy(harness, { compose, sourceType: "compose" })
+
+    expect(rolled.deployment).toMatchObject({
+      rolling: true,
+      state: "succeeded",
+    })
+    expect(fakeDocker.networks.has(`${base}_default`)).toBe(false)
+    expect(fakeDocker.networks.has("acme-backend")).toBe(true)
+    await removeCompose()
+  })
+
+  it("replaces a Compose project that keeps data in a volume instead of running two copies", async () => {
+    const removeCompose = await composeConfigCommand()
+    const harness = await createdApp()
+    fakeDocker.images.set("postgres:17", {})
+    fakeDocker.imageConfigs.set("postgres:17", {
+      Volumes: { "/var/lib/postgresql/data": {} },
+    })
+    const declared =
+      "services:\n  web:\n    image: nginx:alpine\n  db:\n    image: postgres:17\n"
+    const named =
+      "services:\n  db:\n    image: nginx:alpine\n    volumes:\n      - type: volume\n        source: data\n        target: /data\nvolumes:\n  data: {}\n"
+
+    for (const compose of [declared, named]) {
+      await deploy(harness, { compose, sourceType: "compose" })
+      const app = await deploy(harness, { compose, sourceType: "compose" })
+
+      expect(app.deployment).toMatchObject({
+        rolling: false,
+        state: "succeeded",
+      })
+      expect(
+        new Set(
+          appContainers().map(
+            (container) => container.labels["com.docker.compose.project"]
+          )
+        )
+      ).toEqual(new Set([`${TEST_NAMESPACE}-kiln-app-${appId}`]))
+    }
+    await removeCompose()
+  })
+})
+
+describe("GitHub deployments", () => {
+  const commit = "0123456789abcdef0123456789abcdef01234567"
+
+  // A tarball shaped like GitHub's, served for the commit.
+  async function serveRepository(files: Record<string, string>) {
+    const packer = pack()
+    const chunks: Array<Buffer> = []
+    packer.on("data", (chunk: unknown) => {
+      chunks.push(Buffer.from(chunk as Uint8Array))
+    })
+    const done = new Promise<void>((resolve) =>
+      packer.on("end", () => resolve())
+    )
+    for (const [name, body] of Object.entries(files)) {
+      packer.entry({ name: `acme-site-${commit.slice(0, 7)}/${name}` }, body)
+    }
+    packer.finalize()
+    await done
+    const tarball = gzipSync(Buffer.concat(chunks))
+    const requests: Array<{ authorization: string | null; url: string }> = []
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+      requests.push({
+        authorization: new Headers(init.headers).get("authorization"),
+        url,
+      })
+      return new Response(tarball, { status: 200 })
+    })
+    return requests
+  }
+
+  function githubDeployment(
+    build: "compose" | "dockerfile",
+    path: string,
+    config: Partial<AppConfig> = {}
+  ) {
+    return relayDeployAppSchema.parse({
+      appId,
+      config: { ...defaultAppConfig, ...config, sourceType: "github" },
+      github: {
+        build,
+        commit,
+        path,
+        repository: "acme/site",
+        token: "ghs_short_lived",
+      },
+      name: "Website",
+    })
+  }
+
+  async function deployGitHub(
+    harness: RelayHarness,
+    input: ReturnType<typeof githubDeployment>
+  ) {
+    useDeploymentClock()
+    await harness.apps.deploy(input)
+    return settledDeployment(harness)
+  }
+
+  it("builds the commit's Dockerfile with the repository as its context, and keeps no checkout", async () => {
+    const harness = await createdApp()
+    const requests = await serveRepository({
+      "docker/web.Dockerfile": "FROM alpine\nCOPY . .\n",
+      "index.html": "<h1>hi</h1>",
+    })
+
+    const app = await deployGitHub(
+      harness,
+      githubDeployment("dockerfile", "docker/web.Dockerfile")
+    )
+
+    expect(app.deployment).toMatchObject({ commit, state: "succeeded" })
+    expect(requests).toEqual([
+      {
+        authorization: "Bearer ghs_short_lived",
+        url: `https://api.github.com/repos/acme/site/tarball/${commit}`,
+      },
+    ])
+    const [container] = appContainers()
+    expect(container!.image).toBe(`kiln-app-${appId}:${app.deployment!.id}`)
+    expect(container!.labels["kiln.app.commit"]).toBe(commit)
+    await expect(
+      readdir(join(harness.config.dataDirectory, "app-sources", appId))
+    ).resolves.toEqual([])
+  })
+
+  it("runs the commit's Compose file, binding its relative paths to the checkout it keeps", async () => {
+    const removeCompose = await composeConfigCommand()
+    const harness = await createdApp()
+    await serveRepository({
+      "deploy/compose.yaml":
+        "services:\n  web:\n    image: nginx:alpine\n    volumes:\n      - type: bind\n        source: ./nginx.conf\n        target: /etc/nginx/nginx.conf\n",
+      "deploy/nginx.conf": "events {}",
+    })
+
+    const app = await deployGitHub(
+      harness,
+      githubDeployment("compose", "deploy/compose.yaml")
+    )
+
+    expect(app.deployment).toMatchObject({ commit, state: "succeeded" })
+    const checkout = join(
+      harness.config.dataDirectory,
+      "app-sources",
+      appId,
+      app.deployment!.id
+    )
+    expect(appContainers()[0]?.labels["kiln.app.commit"]).toBe(commit)
+    await expect(access(join(checkout, "deploy/nginx.conf"))).resolves.toBe(
+      undefined
+    )
+    await removeCompose()
+  })
+
+  it("fails before deploying when the repository has no file at the path", async () => {
+    const harness = await createdApp()
+    await serveRepository({ "README.md": "hi" })
+
+    const app = await deployGitHub(
+      harness,
+      githubDeployment("dockerfile", "Dockerfile")
+    )
+
+    expect(app.deployment).toMatchObject({
+      error: "The repository has no file at Dockerfile",
+      state: "failed",
+    })
+    expect(appContainers()).toEqual([])
+  })
+})
+
+describe("deployment logs", () => {
+  it("reads the latest deployment's log and those the Relay kept, and nothing outside them", async () => {
+    const harness = await createdApp()
+    const first = await deploy(harness, {})
+    const second = await deploy(harness, { command: "serve --v2" })
+
+    const latest = await harness.apps.readDeployment({
+      appId,
+      deploymentId: second.deployment!.id,
+    })
+    const earlier = await harness.apps.readDeployment({
+      appId,
+      deploymentId: first.deployment!.id,
+    })
+
+    expect(latest?.deployment).toMatchObject({ state: "succeeded" })
+    expect(earlier?.lines.map((line) => line.text)).toContain(
+      "Pulling nginx:alpine"
+    )
+    expect(
+      await harness.apps.readDeployment({
+        appId,
+        deploymentId: "../../relay",
+      })
+    ).toBeNull()
   })
 })

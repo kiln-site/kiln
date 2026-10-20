@@ -43,6 +43,7 @@ import {
   relayAppWebRouteStateSchema,
   relayAppWebRoutesWriteSchema,
   relayDeleteAppSchema,
+  relayAppDeploymentReadSchema,
   relayDeployAppSchema,
   relayDatabaseActionSchema,
   relayDatabaseLimitsSchema,
@@ -2079,6 +2080,10 @@ async function executeControlRequest(
     }
     case "app.deploy":
       return apps.deploy(relayDeployAppSchema.parse(request.payload))
+    case "app.deployment.read":
+      return apps.readDeployment(
+        relayAppDeploymentReadSchema.parse(request.payload)
+      )
     case "app.action":
       return apps.action(relayAppActionSchema.parse(request.payload))
     case "app.limits.write":
