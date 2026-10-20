@@ -1,6 +1,13 @@
 import { createGunzip } from "node:zlib"
 import { createWriteStream } from "node:fs"
-import { lstat, mkdir, realpath, rm, symlink } from "node:fs/promises"
+import {
+  chmod,
+  lstat,
+  mkdir,
+  realpath,
+  rm,
+  symlink,
+} from "node:fs/promises"
 import {
   basename,
   dirname,
@@ -110,7 +117,11 @@ export async function extractRepositoryArchive(
   signal: AbortSignal
 ): Promise<CheckoutSummary> {
   await mkdir(dirname(destination), { recursive: true, mode: 0o700 })
-  await mkdir(destination, { mode: 0o700 })
+  // Its folders, top one included, are readable by every user, as a
+  // repository's are, so a container running as any user can read files
+  // bound from it. The folders above it stay private.
+  await mkdir(destination, { mode: 0o755 })
+  await chmod(destination, 0o755)
   const root = await realpath(destination)
   const extractor = createTarExtractor()
   const links: Array<{ path: string; target: string }> = []

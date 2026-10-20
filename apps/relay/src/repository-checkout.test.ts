@@ -82,6 +82,8 @@ describe("repository checkouts", () => {
     ])
 
     expect(summary).toEqual({ files: 2, skipped: 0 })
+    // A container running as any user can read files bound from it.
+    expect((await stat(destination)).mode & 0o777).toBe(0o755)
     expect(await readFile(join(destination, "Dockerfile"), "utf8")).toBe(
       "FROM node:22\n"
     )

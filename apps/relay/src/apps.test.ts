@@ -736,6 +736,38 @@ describe("apps", () => {
     ).toHaveLength(1)
   })
 
+  it("keeps an app's current memory reserved until a smaller limit applies", async () => {
+    const harness = await createdApp()
+    const otherId = "e".repeat(40)
+    await harness.apps.create({ id: otherId, name: "Other" })
+    const most = Math.ceil((totalmem() * 0.6) / MIB) * MIB
+    await deploy(harness, {
+      serviceLimits: { app: { cpuMillis: null, memoryBytes: most } },
+    })
+    const [container] = appContainers()
+    const update = fakeDocker.hold({ command: "update", target: container!.id })
+
+    const shrinking = harness.apps.setLimits({
+      appId,
+      diskLimitBytes: null,
+      serviceLimits: { app: { cpuMillis: null, memoryBytes: 64 * MIB } },
+    })
+    await update.reached
+    const other = await deploy(
+      harness,
+      { serviceLimits: { app: { cpuMillis: null, memoryBytes: most } } },
+      otherId
+    )
+    update.fail("cannot update a running container")
+
+    expect(other.deployment).toMatchObject({
+      error: expect.stringContaining("Memory limit exceeds"),
+      state: "failed",
+    })
+    await expect(shrinking).rejects.toThrow()
+    expect(container!.memoryBytes).toBe(most)
+  })
+
   it("lets another app deploy while one waits for its health check", async () => {
     const harness = await createdApp()
     const otherId = "e".repeat(40)

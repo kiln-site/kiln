@@ -28,6 +28,7 @@ import type {
   RelayDeployApp,
   RelayInventoryLookup,
   RelayInventoryItem,
+  ResourceLimits,
   ServiceResourceLimits,
 } from "@workspace/contracts"
 import {
@@ -82,6 +83,7 @@ import {
   containerLimitSpec,
   containerResourceLimits,
   type ResourceAllocations,
+  widestResourceLimits,
 } from "./resource-limits.js"
 import {
   APP_SERVICE,
@@ -670,23 +672,23 @@ export class AppDriver {
           },
           promiseEffect(async () => {
             await this.#assertLimitsFit(appId, diskLimitBytes, services)
-            return this.#limits.allocations.reserve(APP_KIND, appId, {
-              cpuMillis: services.reduce<number | null>(
-                (widest, service) =>
-                  service.cpuMillis === null
-                    ? widest
-                    : Math.max(widest ?? 0, service.cpuMillis),
-                null
-              ),
-              diskBytes: diskLimitBytes,
-              memoryBytes: services.reduce<number | null>(
-                (total, service) =>
-                  service.memoryBytes === null
-                    ? total
-                    : (total ?? 0) + service.memoryBytes,
-                null
-              ),
-            })
+            // The wider of what it holds now and what it asks for, since a
+            // smaller limit isn't free until it applies, and may not.
+            const [containers, diskLimits] = await Promise.all([
+              this.#appContainers(appId),
+              this.#diskLimits(),
+            ])
+            return this.#limits.allocations.reserve(
+              APP_KIND,
+              appId,
+              widestResourceLimits(
+                combinedLimits(
+                  containers.map((container) => container.limits),
+                  diskLimits.get(appId) ?? null
+                ),
+                combinedLimits(services, diskLimitBytes)
+              )
+            )
           })
         ),
         { "relay.app_id": appId, "relay.app.services": services.length }
@@ -2725,6 +2727,31 @@ function isoTime(value: string | undefined): string | null {
   if (!value || value.startsWith("0001-")) return null
   const time = new Date(value)
   return Number.isNaN(time.getTime()) ? null : time.toISOString()
+}
+
+// One app's containers' limits as one allocation: their memory adds up,
+// and CPU, shared, is its widest.
+function combinedLimits(
+  services: ReadonlyArray<Pick<ServiceResourceLimits, "cpuMillis" | "memoryBytes">>,
+  diskBytes: number | null
+): ResourceLimits {
+  return {
+    cpuMillis: services.reduce<number | null>(
+      (widest, service) =>
+        service.cpuMillis === null
+          ? widest
+          : Math.max(widest ?? 0, service.cpuMillis),
+      null
+    ),
+    diskBytes,
+    memoryBytes: services.reduce<number | null>(
+      (total, service) =>
+        service.memoryBytes === null
+          ? total
+          : (total ?? 0) + service.memoryBytes,
+      null
+    ),
+  }
 }
 
 // What Hearth sees of a deployment, without its log.
