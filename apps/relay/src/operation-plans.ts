@@ -325,9 +325,9 @@ export function controlRequestLocks(
     case "app.delete":
       return app(appReplaceLocks)
     // A deploy only checks and records the deployment; its worker takes the
-    // App's lifecycle lock for the build itself.
-    // App changes that reserve capacity take the node's allocations in a
-    // nested step, inside the lifecycle lock, so a deployment can too.
+    // App's lifecycle lock for the build itself. App changes that reserve
+    // capacity take the node's allocations in a nested step, inside the
+    // lifecycle lock, so a deployment's container start can too.
     case "app.limits.write":
     case "app.deploy":
     case "app.action":
