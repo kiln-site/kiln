@@ -1,6 +1,11 @@
+import {
+  DatabaseKindIcon,
+  RelayKindIcon,
+  ServerKindIcon,
+} from "@/components/instance-kind-icon"
 import { createDataTableSearchStore } from "@/lib/data-table-search"
 import { getRouteApi, Link } from "@tanstack/react-router"
-import { Users, ListChecks, Server, Database, Network } from "lucide-react"
+import { Users, ListChecks, Layers } from "lucide-react"
 import { WorkspaceSummaryCard } from "@/components/workspace-summary-card"
 import { DataTableWorkspace } from "@/components/data-table-workspace"
 import {
@@ -180,7 +185,13 @@ export function AccessPage() {
 
 function ScopeIcon({ type }: { type?: ResourceScope["resourceType"] }) {
   const Icon =
-    type === "relay" ? Network : type === "database" ? Database : Server
+    type === "relay"
+      ? RelayKindIcon
+      : type === "database"
+        ? DatabaseKindIcon
+        : type === "instance"
+          ? ServerKindIcon
+          : Layers
   return <Icon className="size-5" />
 }
 function scopeDescription(scope: ResourceScope | null, platform: boolean) {

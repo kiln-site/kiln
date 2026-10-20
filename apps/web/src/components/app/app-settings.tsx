@@ -7,7 +7,6 @@ import {
   type ResourceLimits,
 } from "@workspace/contracts"
 import {
-  Boxes,
   Cable,
   FileCode2,
   Globe2,
@@ -47,6 +46,7 @@ import {
   InfoSectionLink,
 } from "@/components/info-page"
 import { InstanceFavoriteButton } from "@/components/instance-favorite"
+import { AppKindIcon } from "@/components/instance-kind-icon"
 import { RelativeTime } from "@/components/relative-time"
 import { RenameButton } from "@/components/rename-dialog"
 import { StatusIndicator } from "@/components/status-indicator"
@@ -79,7 +79,7 @@ export function AppGeneralSettings({
   const available = appRelayAvailable(app)
   return (
     <InfoSection
-      icon={<Boxes />}
+      icon={<AppKindIcon />}
       title="App"
       action={
         <>

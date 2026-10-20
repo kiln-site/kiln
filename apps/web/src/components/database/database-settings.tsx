@@ -6,7 +6,6 @@ import {
   Cable,
   Check,
   Copy,
-  Database,
   Download,
   HardDriveDownload,
   KeyRound,
@@ -40,6 +39,7 @@ import {
   InfoSectionLink,
 } from "@/components/info-page"
 import { InstanceFavoriteButton } from "@/components/instance-favorite"
+import { DatabaseKindIcon } from "@/components/instance-kind-icon"
 import { RenameButton } from "@/components/rename-dialog"
 import { useCopyFeedback } from "@/components/workspace-header"
 import {
@@ -69,7 +69,7 @@ export function DatabaseGeneralSettings({
 }) {
   return (
     <InfoSection
-      icon={<Database />}
+      icon={<DatabaseKindIcon />}
       title="Database"
       action={
         <>

@@ -1,3 +1,4 @@
+import { AppKindIcon } from "@/components/instance-kind-icon"
 import { instanceInventoryScope } from "@/lib/instance-inventory"
 import { instanceInventoryQueryOptions } from "@/lib/instance-inventory"
 import { inventoryInstanceState } from "@/lib/instance-state"
@@ -5,7 +6,7 @@ import { instanceStatePresentation } from "@/lib/instance-state-presentation"
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
-import { Boxes, Rocket, Trash2 } from "lucide-react"
+import { Rocket, Trash2 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 
@@ -57,7 +58,7 @@ export const AppWorkspaceShell = React.memo(function AppWorkspaceShell({
       <div data-slot="app-workspace-surface" className="contents">
         <ResourceWorkspaceBoundary
           context={AppWorkspaceContext}
-          icon={<Boxes />}
+          icon={<AppKindIcon />}
           list={{ label: "All apps", to: "/infra/apps" }}
           noun={{ one: "app", other: "apps" }}
           workspace={workspace}

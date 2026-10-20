@@ -1,11 +1,11 @@
 import type { AppTableInventory, InstanceInventory } from "@workspace/contracts"
+import { AppKindIcon } from "@/components/instance-kind-icon"
 import type { getAppDirectory } from "@/server/apps"
 import * as React from "react"
 import { useLiveSuspenseQuery } from "@tanstack/react-db"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { Link, useNavigate } from "@tanstack/react-router"
 import {
-  Boxes,
   Container,
   EllipsisVertical,
   LoaderCircle,
@@ -398,7 +398,7 @@ const AppTable = React.memo(function AppTable({
       emptyState={({ searchActive }) =>
         favoritesFiltered ? (
           <FavoritesOnlyEmptyState
-            icon={<Boxes className="size-6 text-muted-foreground/45" />}
+            icon={<AppKindIcon className="size-6" />}
             searchActive={searchActive}
             table="apps"
           />
@@ -728,7 +728,7 @@ function EmptyAppTable({
               : "No apps have been assigned to your account yet."}
         </span>
       }
-      icon={<Boxes className="size-6 text-muted-foreground/45" />}
+      icon={<AppKindIcon className="size-6" />}
       title={searchActive ? "No apps match your search" : "No apps"}
     />
   )

@@ -23,7 +23,6 @@ import {
   ExternalLink,
   GitPullRequest,
   LoaderCircle,
-  RadioTower,
   RefreshCw,
   ScrollText,
   Search,
@@ -63,6 +62,7 @@ import {
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
 
+import { RelayKindIcon } from "@/components/instance-kind-icon"
 import type { PublicKilnRelease } from "@/effect/github-releases"
 import type { InfraUpdateDialogView } from "@/components/infra-update-dialog-provider"
 import { useKilnGitRepository } from "@/lib/git-repository"
@@ -2032,7 +2032,7 @@ function useHearthReloadRequired(activityStore: SystemUpdateActivityStore) {
 }
 
 function UpdateTargetIcon({ target }: { target: UpdateTarget }) {
-  const Icon = target.component === "hearth" ? ServerCog : RadioTower
+  const Icon = target.component === "hearth" ? ServerCog : RelayKindIcon
   return (
     <span
       className={`grid size-8 shrink-0 place-items-center border ${
@@ -3049,7 +3049,7 @@ const ChangelogJumpButton = React.memo(function ChangelogJumpButton({
         if (index !== undefined) onJump(index)
       }}
     >
-      {entry.component === "hearth" ? <ServerCog /> : <RadioTower />}
+      {entry.component === "hearth" ? <ServerCog /> : <RelayKindIcon />}
       <span className="truncate">{entry.name}</span>
     </Button>
   )
@@ -3204,7 +3204,7 @@ function ChangelogJumpList({
                 {entry.component === "hearth" ? (
                   <ServerCog className="size-3.5 shrink-0 text-muted-foreground" />
                 ) : (
-                  <RadioTower className="size-3.5 shrink-0 text-muted-foreground" />
+                  <RelayKindIcon className="size-3.5 shrink-0" />
                 )}
                 <span className="min-w-0 flex-1 truncate">{entry.name}</span>
                 <span className="type-meta shrink-0 font-mono text-muted-foreground">
@@ -3413,7 +3413,7 @@ function ChangelogMarkerIcons({
           {panel ? <ServerCog className="size-4" /> : null}
           {relays.length > 0 ? (
             <span className="inline-flex items-center gap-0.5">
-              <RadioTower className="size-4" />
+              <RelayKindIcon className="size-4" />
               {relays.length > 1 ? `+${relays.length - 1}` : null}
             </span>
           ) : null}
@@ -3449,7 +3449,7 @@ function ChangelogMarkerList({
           {marker.component === "hearth" ? (
             <ServerCog className="size-3.5 shrink-0 text-muted-foreground" />
           ) : (
-            <RadioTower className="size-3.5 shrink-0 text-muted-foreground" />
+            <RelayKindIcon className="size-3.5 shrink-0" />
           )}
           <span className="truncate">{marker.name}</span>
         </p>

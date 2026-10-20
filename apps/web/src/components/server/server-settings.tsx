@@ -6,7 +6,6 @@ import {
   Copy,
   FileCode2,
   LoaderCircle,
-  Server,
   ToyBrick,
   TriangleAlert,
 } from "lucide-react"
@@ -30,6 +29,7 @@ import {
   InfoSectionLink,
 } from "@/components/info-page"
 import { InstanceFavoriteButton } from "@/components/instance-favorite"
+import { ServerKindIcon } from "@/components/instance-kind-icon"
 import { LiveServerBrickIcon } from "@/components/server-brick-icon"
 import { RenameButton } from "@/components/rename-dialog"
 import { StatusIndicator } from "@/components/status-indicator"
@@ -55,7 +55,7 @@ export function ServerGeneralSettings({
 }) {
   return (
     <InfoSection
-      icon={<Server />}
+      icon={<ServerKindIcon />}
       title="Server"
       action={
         <>

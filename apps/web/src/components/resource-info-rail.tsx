@@ -7,7 +7,6 @@ import {
   Container,
   Copy,
   LoaderCircle,
-  RadioTower,
   Users,
 } from "lucide-react"
 
@@ -21,6 +20,7 @@ import {
   InfoRailLink,
   InfoRailRow,
 } from "@/components/info-page"
+import { RelayKindIcon } from "@/components/instance-kind-icon"
 import { OwnerCard } from "@/components/owner-card"
 import { useCopyFeedback } from "@/components/workspace-header"
 import {
@@ -202,7 +202,7 @@ export function InfoRailRelayLink({
   const copyId = <CopyRelayIdButton relayId={relayId} />
   if (!data) {
     return (
-      <InfoRailRow action={copyId} leading={<RadioTower />}>
+      <InfoRailRow action={copyId} leading={<RelayKindIcon />}>
         {name}
       </InfoRailRow>
     )
@@ -212,7 +212,7 @@ export function InfoRailRelayLink({
       to="/relay/$relayId/info"
       params={{ relayId: data.routeId }}
       action={copyId}
-      leading={<RadioTower />}
+      leading={<RelayKindIcon />}
     >
       {data.name}
     </InfoRailLink>

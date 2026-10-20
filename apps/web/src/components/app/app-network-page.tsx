@@ -1,3 +1,4 @@
+import { DatabaseKindIcon } from "@/components/instance-kind-icon"
 import { instanceInventoryScope } from "@/lib/instance-inventory"
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
@@ -6,7 +7,6 @@ import { appTailscaleMemberId } from "@workspace/contracts"
 import type { AppPort, RelayAppWebRoute } from "@workspace/contracts"
 import {
   Cable,
-  Database,
   Globe2,
   LoaderCircle,
   Network,
@@ -749,7 +749,7 @@ function ConnectedDatabases({
   return (
     <InfoCard>
       <InfoCardHeader
-        icon={<Database />}
+        icon={<DatabaseKindIcon />}
         title="Databases"
         action={
           canManage && connectable.length > 0 ? (
@@ -801,7 +801,7 @@ function ConnectedDatabases({
                 key={id}
                 className="flex items-center gap-3 border-b px-4 py-3 last:border-b-0"
               >
-                <Database className="size-4 shrink-0 text-muted-foreground" />
+                <DatabaseKindIcon className="size-4 shrink-0" />
                 <span className="min-w-0 flex-1">
                   {database ? (
                     <Link

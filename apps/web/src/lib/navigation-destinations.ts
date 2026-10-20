@@ -1,10 +1,8 @@
 import type { ComponentType } from "react"
 import {
-  Boxes,
   CalendarDays,
   CircleUserRound,
   CreditCard,
-  Database,
   Folder,
   FolderDown,
   FolderGit2,
@@ -15,10 +13,8 @@ import {
   ListTodo,
   Network,
   Palette,
-  RadioTower,
   Rocket,
   ScrollText,
-  Server,
   SlidersHorizontal,
   Table2,
   TerminalSquare,
@@ -30,6 +26,12 @@ import {
   type RelayInstance,
 } from "@workspace/contracts"
 
+import {
+  AppKindIcon,
+  DatabaseKindIcon,
+  RelayKindIcon,
+  ServerKindIcon,
+} from "@/components/instance-kind-icon"
 import type { AccessPermission } from "@/lib/permissions"
 import { grantHasPermission } from "@/lib/permissions"
 
@@ -81,7 +83,7 @@ export const infrastructureDestinations = [
   {
     access: "manage-relays",
     group: "resources",
-    icon: RadioTower,
+    icon: RelayKindIcon,
     keywords: ["infrastructure", "nodes"],
     label: "Relays",
     to: "/infra/relays",
@@ -89,7 +91,7 @@ export const infrastructureDestinations = [
   {
     access: "database-read",
     group: "resources",
-    icon: Database,
+    icon: DatabaseKindIcon,
     keywords: ["infrastructure", "mysql"],
     label: "Databases",
     to: "/infra/databases",
@@ -97,7 +99,7 @@ export const infrastructureDestinations = [
   {
     access: "instance-read",
     group: "resources",
-    icon: Server,
+    icon: ServerKindIcon,
     keywords: ["infrastructure", "instances", "servers"],
     // Users see "Game Servers"; the code keeps "servers". See AGENTS.md Naming.
     label: "Game Servers",
@@ -106,7 +108,7 @@ export const infrastructureDestinations = [
   {
     access: "app-read",
     group: "resources",
-    icon: Boxes,
+    icon: AppKindIcon,
     keywords: ["infrastructure", "docker", "compose", "containers"],
     label: "Apps",
     to: "/infra/apps",

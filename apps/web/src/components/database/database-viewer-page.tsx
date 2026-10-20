@@ -1,11 +1,12 @@
 import * as React from "react"
-import { Database, Play } from "lucide-react"
+import { Play } from "lucide-react"
 
 import {
   DATABASE_QUERY_MAX_ROWS,
   type DatabaseSource,
 } from "@/components/database-viewer/database-source"
 import { useDatabaseWorkspace } from "@/components/database/database-workspace-context"
+import { DatabaseKindIcon } from "@/components/instance-kind-icon"
 import {
   getManagedDatabaseOverview,
   getManagedDatabaseRows,
@@ -33,7 +34,7 @@ export function DatabaseViewerPage() {
   const identity = React.useCallback(
     ({ readOnly }: { readOnly: boolean | null }) => (
       <div className="flex min-w-0 flex-1 items-center gap-2.5 md:gap-3">
-        <Database className="size-5 shrink-0 text-primary" />
+        <DatabaseKindIcon className="size-5 shrink-0" />
         <div className="min-w-0 flex-1">
           <div className="mb-1 flex min-w-0 items-center gap-2.5">
             <p className="min-w-0 truncate text-sm font-semibold">Tables</p>

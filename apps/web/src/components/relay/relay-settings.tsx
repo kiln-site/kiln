@@ -1,7 +1,7 @@
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
-import { Database, RadioTower, Settings2 } from "lucide-react"
+import { Database, Settings2 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 
@@ -13,6 +13,7 @@ import {
   InfoSection,
 } from "@/components/info-page"
 import { InstanceFavoriteButton } from "@/components/instance-favorite"
+import { RelayKindIcon } from "@/components/instance-kind-icon"
 import { useRelayLiveStatus } from "@/components/relay/relay-presentation"
 import { RelayVersion } from "@/components/relay/relay-version"
 import { canAccessRelayPermission } from "@/lib/navigation-destinations"
@@ -76,7 +77,7 @@ export function RelayGeneralSettings({
 }) {
   return (
     <InfoSection
-      icon={<RadioTower />}
+      icon={<RelayKindIcon />}
       title="Relay"
       action={
         <>

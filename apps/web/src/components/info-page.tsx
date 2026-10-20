@@ -102,7 +102,7 @@ export function InfoSection({
           children != null && "border-b"
         )}
       >
-        <h3 className="flex shrink-0 items-center gap-2 text-sm font-semibold [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-muted-foreground">
+        <h3 className="flex shrink-0 items-center gap-2 text-sm font-semibold [&_svg]:size-4 [&_svg]:shrink-0 [&_svg:not([class*='text-'])]:text-muted-foreground">
           {icon}
           <span>{title}</span>
         </h3>
@@ -489,7 +489,7 @@ function InfoRailRowContent({
   const inCard = React.useContext(InfoRailInCardContext)
   return (
     <>
-      <span className="flex w-6 shrink-0 items-center font-semibold tabular-nums [&_svg]:size-3.5 [&_svg]:text-muted-foreground">
+      <span className="flex w-6 shrink-0 items-center font-semibold tabular-nums [&_svg]:size-3.5 [&_svg:not([class*='text-'])]:text-muted-foreground">
         {leading}
       </span>
       <span className="min-w-0 flex-1 truncate text-muted-foreground transition-colors group-hover:text-foreground">
@@ -625,7 +625,7 @@ export function InfoRailCard({
       className={cn("mt-6 border bg-background/45 first:mt-0", className)}
     >
       <div className="flex min-h-10 items-center gap-2 border-b px-3 py-1.5">
-        <h3 className="flex min-w-0 items-center gap-2 text-[0.8125rem] font-semibold [&_svg]:size-3.5 [&_svg]:shrink-0 [&_svg]:text-muted-foreground">
+        <h3 className="flex min-w-0 items-center gap-2 text-[0.8125rem] font-semibold [&_svg]:size-3.5 [&_svg]:shrink-0 [&_svg:not([class*='text-'])]:text-muted-foreground">
           {icon}
           <span className="truncate">{title}</span>
         </h3>

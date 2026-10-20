@@ -2,16 +2,11 @@ import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import {
-  Boxes,
   Cloud,
   Container,
-  Database,
   Globe2,
-  RadioTower,
   Router,
-  Server,
   Triangle,
-  type LucideIcon,
 } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
@@ -20,6 +15,12 @@ import { nodeStyle } from "@/components/infra-map-canvas"
 import { HearthMark } from "@/components/hearth-mark"
 import type { IdentityStatusPresentation } from "@/components/identity-name"
 import { InstanceCard } from "@/components/instance-card"
+import {
+  AppKindIcon,
+  DatabaseKindIcon,
+  RelayKindIcon,
+  ServerKindIcon,
+} from "@/components/instance-kind-icon"
 import {
   proxyModeLabels,
   useRelayPauseState,
@@ -46,19 +47,21 @@ export type SelectScope = (scope: InfraMapScope) => void
 
 export const kindPresentation: Record<
   InfraMapResourceKind,
-  { icon: LucideIcon; one: string; other: string }
+  { icon: typeof ServerKindIcon; one: string; other: string }
 > = {
-  server: { icon: Server, one: "game server", other: "game servers" },
-  app: { icon: Boxes, one: "app", other: "apps" },
-  database: { icon: Database, one: "database", other: "databases" },
+  server: { icon: ServerKindIcon, one: "game server", other: "game servers" },
+  app: { icon: AppKindIcon, one: "app", other: "apps" },
+  database: { icon: DatabaseKindIcon, one: "database", other: "databases" },
 }
 
 /**
  * Each kind keeps one colour across the map: Kiln's own parts take the
- * accent, Traefik violet, game servers green, apps red, databases blue.
+ * accent, Relays orange, Traefik violet, game servers green, apps red,
+ * databases blue.
  */
 export const kindTone = {
   kiln: "border-primary/35 bg-primary/10 text-primary",
+  relay: "border-orange-400/35 bg-orange-400/10",
   server: "border-emerald-400/35 bg-emerald-400/10 text-emerald-300",
   app: "border-red-400/35 bg-red-400/10 text-red-300",
   database: "border-blue-400/35 bg-blue-400/10 text-blue-300",
@@ -71,12 +74,6 @@ const laneTone = {
   server: "border-emerald-400/50 bg-emerald-400/[0.05]",
   app: "border-red-400/50 bg-red-400/[0.05]",
   database: "border-blue-400/50 bg-blue-400/[0.05]",
-} as const
-
-const kindText = {
-  server: "text-emerald-300",
-  app: "text-red-300",
-  database: "text-blue-300",
 } as const
 
 const nodeClass =
@@ -135,10 +132,7 @@ export const MapGroup = React.memo(function MapGroup({
       style={nodeStyle(rect)}
     >
       <div className="flex h-9 items-center gap-1.5 px-5 text-muted-foreground">
-        <Icon
-          className={cn("size-3.5", kindText[label.kind])}
-          aria-hidden="true"
-        />
+        <Icon className="size-3.5" aria-hidden="true" />
         <span className="type-label">{label.label}</span>
         <span className="type-meta tabular-nums">{label.count}</span>
       </div>
@@ -164,7 +158,7 @@ function StackGroup({
     "group/stack flex h-9 w-full items-center gap-1.5 rounded-t-xl px-5 text-left text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
   const title = (
     <>
-      <Boxes className="size-3.5 shrink-0 text-red-300" aria-hidden="true" />
+      <AppKindIcon className="size-3.5 shrink-0" aria-hidden="true" />
       <span className="type-label min-w-0 truncate text-foreground transition-colors group-hover/stack:text-primary">
         {app.name}
       </span>
@@ -473,8 +467,8 @@ const RelaySummaryNode = React.memo(function RelaySummaryNode({
     >
       <NodeTitle
         icon={
-          <NodeIcon tone="kiln">
-            <RadioTower className="size-4" aria-hidden="true" />
+          <NodeIcon tone="relay">
+            <RelayKindIcon className="size-4" aria-hidden="true" />
           </NodeIcon>
         }
         meta={relay.address}
@@ -500,10 +494,7 @@ const RelaySummaryNode = React.memo(function RelaySummaryNode({
               className="type-meta flex items-center gap-1 tabular-nums"
               title={`${count} ${count === 1 ? one : other}`}
             >
-              <Icon
-                className={cn("size-3.5", kindText[kind])}
-                aria-hidden="true"
-              />
+              <Icon className="size-3.5" aria-hidden="true" />
               {count}
             </span>
           )
@@ -570,8 +561,8 @@ function RestrictedRelayNode({
     >
       <NodeTitle
         icon={
-          <NodeIcon tone="kiln">
-            <RadioTower className="size-4" aria-hidden="true" />
+          <NodeIcon tone="relay">
+            <RelayKindIcon className="size-4" aria-hidden="true" />
           </NodeIcon>
         }
         meta="You can't view this Relay"
@@ -606,7 +597,7 @@ const RelayNode = React.memo(function RelayNode({
   const card = (
     <InstanceCard
       className="min-w-0 flex-1"
-      iconClassName={kindTone.kiln}
+      iconClassName={kindTone.relay}
       instance={{ id: relay.id, kind: "relay", relayId: relay.id }}
       meta={relay.address}
       metaClassName="font-mono"

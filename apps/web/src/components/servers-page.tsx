@@ -1,3 +1,4 @@
+import { ServerKindIcon } from "@/components/instance-kind-icon"
 import {
   loadingInfraTableSource,
   useInfraTableSource,
@@ -17,7 +18,6 @@ import {
   Folder,
   ListTodo,
   Plus,
-  Server,
   TerminalSquare,
   Trash2,
 } from "lucide-react"
@@ -536,7 +536,7 @@ const ServerDataTable = React.memo(function ServerDataTable({
       emptyState={({ searchActive }) =>
         favoritesFiltered ? (
           <FavoritesOnlyEmptyState
-            icon={<Server className="size-6 text-muted-foreground/45" />}
+            icon={<ServerKindIcon className="size-6" />}
             searchActive={searchActive}
             table="servers"
           />
@@ -733,7 +733,7 @@ function EmptyServerTable({
               : "No game servers have been assigned to your account yet."}
         </span>
       }
-      icon={<Server className="size-6 text-muted-foreground/45" />}
+      icon={<ServerKindIcon className="size-6" />}
       title={
         searchActive
           ? "No game servers match your search"

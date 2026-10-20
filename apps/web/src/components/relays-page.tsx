@@ -1,3 +1,4 @@
+import { RelayKindIcon } from "@/components/instance-kind-icon"
 import {
   PendingResourceInvitations,
   PendingResourceInvitationBadge,
@@ -24,7 +25,6 @@ import {
   LoaderCircle,
   Plus,
   RefreshCw,
-  ServerCog,
   Settings2,
   UserRound,
   X,
@@ -694,7 +694,7 @@ function RelayTable({
       emptyState={({ searchActive }) =>
         favoritesFiltered ? (
           <FavoritesOnlyEmptyState
-            icon={<ServerCog className="size-6 text-muted-foreground/45" />}
+            icon={<RelayKindIcon className="size-6" />}
             searchActive={searchActive}
             table="relays"
           />
@@ -830,7 +830,7 @@ function EmptyRelayTable({
             ? "Pair the first Relay to start managing game servers from Hearth."
             : "No Relays have been assigned to your account."
       }
-      icon={<ServerCog className="size-6 text-muted-foreground/45" />}
+      icon={<RelayKindIcon className="size-6" />}
       title={searchActive ? "No Relays match your search" : "No saved Relays"}
     />
   )

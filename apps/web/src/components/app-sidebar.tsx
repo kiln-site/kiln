@@ -5,15 +5,11 @@ import {
   useSuspenseQuery,
 } from "@tanstack/react-query"
 import {
-  Boxes,
   CalendarClock,
   ChevronsUpDown,
-  Database,
   ListTodo,
   LoaderCircle,
   LogOut,
-  RadioTower,
-  Server as ServerIcon,
   Settings,
   UserRoundCog,
 } from "lucide-react"
@@ -59,7 +55,12 @@ import {
   RouteCommandMenuTrigger,
 } from "@/components/route-command-menu"
 import { InstanceCard } from "@/components/instance-card"
-import { instanceKindTones } from "@/components/instance-kind-counts"
+import {
+  AppKindIcon,
+  DatabaseKindIcon,
+  RelayKindIcon,
+  ServerKindIcon,
+} from "@/components/instance-kind-icon"
 import {
   InstancePickerContent,
   type InstancePickerItem,
@@ -289,7 +290,7 @@ function RelaysNavigationItem({ relayConfigured }: { relayConfigured: boolean })
           activeProps={{ "data-active": true }}
           preload="intent"
         >
-          <RadioTower className={instanceKindTones.relays} />
+          <RelayKindIcon />
           <span>Relays</span>
         </Link>
       </SidebarMenuButton>
@@ -328,7 +329,7 @@ function DatabasesNavigationItem({
           activeProps={{ "data-active": true }}
           preload="intent"
         >
-          <Database className={instanceKindTones.databases} />
+          <DatabaseKindIcon />
           <span>Databases</span>
         </Link>
       </SidebarMenuButton>
@@ -363,7 +364,7 @@ function AppsNavigationItem({ relayConfigured }: { relayConfigured: boolean }) {
           activeProps={{ "data-active": true }}
           preload="intent"
         >
-          <Boxes className="text-red-600 dark:text-red-400" />
+          <AppKindIcon />
           <span>Apps</span>
         </Link>
       </SidebarMenuButton>
@@ -404,7 +405,7 @@ function ServersNavigationItem({
           activeProps={{ "data-active": true }}
           preload="intent"
         >
-          <ServerIcon className={instanceKindTones.instances} />
+          <ServerKindIcon />
           <span>Game Servers</span>
         </Link>
       </SidebarMenuButton>
@@ -1182,8 +1183,8 @@ const InstanceSelector = React.memo(function InstanceSelector({
             ) : (
               <>
                 <span className="relative grid size-8 shrink-0 place-items-center rounded-md border border-sidebar-border/70 bg-background/25 group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:inset-0 group-data-[collapsible=icon]:size-full group-data-[collapsible=icon]:rounded-none group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent">
-                  <ServerIcon
-                    className="size-4 text-sidebar-foreground/85"
+                  <ServerKindIcon
+                    className="size-4"
                     aria-hidden="true"
                   />
                 </span>

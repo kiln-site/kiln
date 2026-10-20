@@ -4,18 +4,15 @@ import { useVirtualizer } from "@tanstack/react-virtual"
 import { Link } from "@tanstack/react-router"
 import {
   ArrowRight,
-  Boxes,
   Check,
-  Database,
   Layers,
   ListFilter,
   LoaderCircle,
   Minus,
-  RadioTower,
   Search,
-  Server as ServerIcon,
   Star,
 } from "lucide-react"
+import type { LucideProps } from "lucide-react"
 
 import {
   DropdownMenu,
@@ -30,6 +27,12 @@ import { cn } from "@workspace/ui/lib/utils"
 
 import { useInstanceFavoriteKeys } from "@/components/instance-favorite"
 import { InstanceCard } from "@/components/instance-card"
+import {
+  AppKindIcon,
+  DatabaseKindIcon,
+  RelayKindIcon,
+  ServerKindIcon,
+} from "@/components/instance-kind-icon"
 import { instanceFavoriteKey } from "@/lib/instance-favorites"
 import {
   availableInstancePickerFilters,
@@ -84,12 +87,20 @@ interface InstancePickerContentProps {
 // Kind `server` is shown to users as "Game Server". See AGENTS.md Naming.
 const kindPresentation: Record<
   InstancePickerKind,
-  { Icon: typeof ServerIcon; label: string; plural: string }
+  { Icon: typeof ServerKindIcon; label: string; plural: string }
 > = {
-  app: { Icon: Boxes, label: "App", plural: "apps" },
-  database: { Icon: Database, label: "Database", plural: "databases" },
-  relay: { Icon: RadioTower, label: "Relay", plural: "Relays" },
-  server: { Icon: ServerIcon, label: "Game Server", plural: "game servers" },
+  app: { Icon: AppKindIcon, label: "App", plural: "apps" },
+  database: {
+    Icon: DatabaseKindIcon,
+    label: "Database",
+    plural: "databases",
+  },
+  relay: { Icon: RelayKindIcon, label: "Relay", plural: "Relays" },
+  server: {
+    Icon: ServerKindIcon,
+    label: "Game Server",
+    plural: "game servers",
+  },
 }
 
 const kindOrder: ReadonlyArray<InstancePickerKind> = [
@@ -524,10 +535,7 @@ const InstancePickerTypeMenu = React.memo(function InstancePickerTypeMenu({
               }
               onSelect={(event) => event.preventDefault()}
             >
-              <Icon
-                className="size-3.5 text-muted-foreground"
-                aria-hidden="true"
-              />
+              <Icon className="size-3.5" aria-hidden="true" />
               {filter.label}
             </DropdownMenuCheckboxItem>
           )
@@ -691,13 +699,13 @@ function InstancePickerCheckbox({ state }: { state: "all" | "none" | "some" }) {
 
 const groupPresentation: Record<
   InstancePickerGroup,
-  { Icon: typeof ServerIcon; label: string }
+  { Icon: React.ComponentType<LucideProps>; label: string }
 > = {
   all: { Icon: Layers, label: "All instances" },
-  app: { Icon: Boxes, label: "All apps" },
-  database: { Icon: Database, label: "All databases" },
-  relay: { Icon: RadioTower, label: "All Relays" },
-  server: { Icon: ServerIcon, label: "All game servers" },
+  app: { Icon: AppKindIcon, label: "All apps" },
+  database: { Icon: DatabaseKindIcon, label: "All databases" },
+  relay: { Icon: RelayKindIcon, label: "All Relays" },
+  server: { Icon: ServerKindIcon, label: "All game servers" },
 }
 
 const InstancePickerGroupRow = React.memo(function InstancePickerGroupRow({
@@ -811,7 +819,7 @@ const InstancePickerViewAll = React.memo(function InstancePickerViewAll({
         onClick={onNavigate}
         className="type-control-sm group flex h-9 w-full items-center gap-2 rounded-md bg-muted/45 px-2.5 text-foreground transition-colors outline-none hover:bg-muted/70 focus-visible:ring-2 focus-visible:ring-ring/40"
       >
-        <Icon className="size-3.5 text-muted-foreground" aria-hidden="true" />
+        <Icon className="size-3.5" aria-hidden="true" />
         <span>{destination.label}</span>
         <ArrowRight
           className="ml-auto size-3.5 text-muted-foreground transition-transform duration-150 group-hover:translate-x-0.5 group-focus-visible:translate-x-0.5"

@@ -1,6 +1,6 @@
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
-import { ChevronLeft, ChevronRight, Container, Database } from "lucide-react"
+import { ChevronLeft, ChevronRight, Container } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -21,6 +21,7 @@ import {
   InfoRailGroup,
   InfoRailLink,
 } from "@/components/info-page"
+import { DatabaseKindIcon } from "@/components/instance-kind-icon"
 import { OwnerCard } from "@/components/owner-card"
 import { RelativeTime } from "@/components/relative-time"
 import { InfoRailRelayLink } from "@/components/resource-info-rail"
@@ -41,7 +42,7 @@ export function AppInfoRail({ app, routeId }: { app: App; routeId: string }) {
         <InfoRailLink
           to="/app/$appId/network"
           params={{ appId: routeId }}
-          leading={<Database />}
+          leading={<DatabaseKindIcon />}
           detail={
             <span
               className="tabular-nums"

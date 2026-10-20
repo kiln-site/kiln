@@ -1,7 +1,6 @@
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
-  Boxes,
   Check,
   ChevronDown,
   Folder,
@@ -9,9 +8,8 @@ import {
   FolderRoot,
   LoaderCircle,
   Lock,
-  RadioTower,
-  Server,
   Trash2,
+  Layers,
 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
@@ -55,6 +53,11 @@ import {
 import { cn } from "@workspace/ui/lib/utils"
 
 import { GitHubMark } from "@/components/github-mark"
+import {
+  AppKindIcon,
+  RelayKindIcon,
+  ServerKindIcon,
+} from "@/components/instance-kind-icon"
 import { SourceAccount } from "@/components/source-account"
 import {
   InstancePickerContent,
@@ -615,7 +618,7 @@ function TargetPicker({
     () => new Set(value ? [targetKey(value)] : []),
     [value]
   )
-  const TargetIcon = value ? targetIcon[value.kind] : Server
+  const TargetIcon = value ? targetIcon[value.kind] : Layers
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -799,10 +802,10 @@ const targetKindLabel = {
 } as const satisfies Record<GitHubSyncTarget["kind"], string>
 
 const targetIcon = {
-  app: Boxes,
-  relay: RadioTower,
-  server: Server,
-} as const satisfies Record<GitHubSyncTarget["kind"], typeof Server>
+  app: AppKindIcon,
+  relay: RelayKindIcon,
+  server: ServerKindIcon,
+} as const satisfies Record<GitHubSyncTarget["kind"], typeof ServerKindIcon>
 
 function targetKey(target: Pick<GitHubSyncTarget, "id" | "kind" | "relayId">) {
   return `${target.kind}:${target.relayId}:${target.id}`

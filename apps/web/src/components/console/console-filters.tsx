@@ -1,7 +1,7 @@
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
 import type { RelayConsoleLevel } from "@workspace/contracts"
-import { Boxes, Check, ListFilter, RadioTower, Search, X } from "lucide-react"
+import { Boxes, Check, ListFilter, Search, X } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
@@ -18,6 +18,7 @@ import {
 } from "@/components/console/console-stores"
 import { useConsoleCopy } from "@/components/console/console-copy-context"
 import { ConsoleTooltip } from "@/components/console/console-tooltip"
+import { RelayKindIcon } from "@/components/instance-kind-icon"
 import { tailscaleStacksQueryOptions } from "@/lib/query-options"
 import type { TailscaleStackOverview } from "@/server/tailscale"
 
@@ -229,7 +230,7 @@ function ConsoleRelayMenu({
                 : `Filter console relays, ${selected.size} active`
             }
           >
-            <RadioTower />
+            <RelayKindIcon />
             {!all ? (
               <span
                 className="absolute top-1 right-1 size-1.5 bg-primary"

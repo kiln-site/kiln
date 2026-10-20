@@ -1,5 +1,5 @@
 import * as React from "react"
-import { ArrowLeftRight, Boxes, Database, Network, Server } from "lucide-react"
+import { ArrowLeftRight, Layers } from "lucide-react"
 
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
@@ -14,6 +14,12 @@ import {
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
 
+import {
+  AppKindIcon,
+  DatabaseKindIcon,
+  RelayKindIcon,
+  ServerKindIcon,
+} from "@/components/instance-kind-icon"
 import {
   InstancePickerContent,
   type InstancePickerGroup,
@@ -48,18 +54,23 @@ export const serverPickerOptionKey = (
 
 const scopeKindPresentation: Record<
   ScopeKind,
-  { Icon: typeof Server; label: string; one: string; other: string }
+  { Icon: typeof ServerKindIcon; label: string; one: string; other: string }
 > = {
-  app: { Icon: Boxes, label: "All apps", one: "app", other: "apps" },
+  app: { Icon: AppKindIcon, label: "All apps", one: "app", other: "apps" },
   database: {
-    Icon: Database,
+    Icon: DatabaseKindIcon,
     label: "All databases",
     one: "database",
     other: "databases",
   },
-  relay: { Icon: Network, label: "All Relays", one: "Relay", other: "Relays" },
+  relay: {
+    Icon: RelayKindIcon,
+    label: "All Relays",
+    one: "Relay",
+    other: "Relays",
+  },
   server: {
-    Icon: Server,
+    Icon: ServerKindIcon,
     label: "All game servers",
     one: "game server",
     other: "game servers",
@@ -158,9 +169,8 @@ function ServerScopePickerView<K extends ScopeKind>({
     : kindScope
       ? `${kindCount} accessible ${kindCount === 1 ? kindScope.one : kindScope.other}, including new ones`
       : `${servers.length} accessible ${servers.length === 1 ? "instance" : "instances"}`
-  const ScopeIcon =
-    scopeKindPresentation[selectedServer?.kind ?? selectedKind ?? "server"]
-      .Icon
+  const scopeKind = selectedServer?.kind ?? selectedKind
+  const ScopeIcon = scopeKind ? scopeKindPresentation[scopeKind].Icon : Layers
 
   return (
     <div className="mb-3">

@@ -1,7 +1,7 @@
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
-import { RadioTower } from "lucide-react"
 
+import { RelayKindIcon } from "@/components/instance-kind-icon"
 import { usePageMilestone } from "@/lib/page-timing"
 import { RelayPowerControls } from "@/components/relay/relay-power-controls"
 import { useRelayLiveStatus } from "@/components/relay/relay-presentation"
@@ -53,7 +53,7 @@ export const RelayWorkspaceShell = React.memo(function RelayWorkspaceShell({
       <div data-slot="relay-workspace-surface" className="contents">
         <ResourceWorkspaceBoundary
           context={RelayWorkspaceContext}
-          icon={<RadioTower />}
+          icon={<RelayKindIcon />}
           list={{ label: "All Relays", to: "/infra/relays" }}
           noun={{ one: "Relay", other: "Relays" }}
           workspace={workspace}

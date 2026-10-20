@@ -1,5 +1,5 @@
 import { memo, useState, type ReactNode } from "react"
-import { ArrowLeftRight, Database, Network, Server, Users } from "lucide-react"
+import { ArrowLeftRight, Users } from "lucide-react"
 import { Button } from "@workspace/ui/components/button"
 import {
   Command,
@@ -13,6 +13,11 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@workspace/ui/components/popover"
+import {
+  DatabaseKindIcon,
+  RelayKindIcon,
+  ServerKindIcon,
+} from "@/components/instance-kind-icon"
 import type { PermissionContext } from "@/components/permission-editor"
 import type { ResourceScope } from "@/lib/resource-permissions"
 import type { getAccessResources } from "@/server/resource-access"
@@ -119,11 +124,11 @@ export const ResourcePicker = memo(function ResourcePicker({
                 }}
               >
                 {resource.resourceType === "relay" ? (
-                  <Network />
+                  <RelayKindIcon />
                 ) : resource.resourceType === "database" ? (
-                  <Database />
+                  <DatabaseKindIcon />
                 ) : (
-                  <Server />
+                  <ServerKindIcon />
                 )}
                 <span className="min-w-0 flex-1">
                   <span className="block truncate">{resource.name}</span>

@@ -2,6 +2,7 @@ import * as React from "react"
 import { keepPreviousData, useQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import { useVirtualizer } from "@tanstack/react-virtual"
+import { RelayKindIcon, ServerKindIcon } from "@/components/instance-kind-icon"
 import { ensuringPromise, forkPromise } from "@/effect/promise"
 import {
   CalendarDays,
@@ -14,10 +15,8 @@ import {
   KeyRound,
   ListFilter,
   Network,
-  RadioTower,
   RefreshCw,
   Search,
-  Server,
   TerminalSquare,
   UserRound,
   X,
@@ -287,13 +286,13 @@ const typeDetails: Record<
   ActivityType,
   { icon: React.ComponentType<{ className?: string }>; label: string }
 > = {
-  server: { icon: Server, label: "Game Server" },
+  server: { icon: ServerKindIcon, label: "Game Server" },
   power: { icon: CircleGauge, label: "Power" },
   console: { icon: TerminalSquare, label: "Console" },
   files: { icon: FolderClock, label: "Files" },
   network: { icon: Network, label: "Network" },
   access: { icon: KeyRound, label: "Access" },
-  relay: { icon: RadioTower, label: "Relay" },
+  relay: { icon: RelayKindIcon, label: "Relay" },
   updates: { icon: RefreshCw, label: "Updates" },
   system: { icon: FileClock, label: "System" },
 }
@@ -624,7 +623,7 @@ const ActivityRelayFilter = React.memo(function ActivityRelayFilter({
   return (
     <ActivitySelect
       ariaLabel="Filter activity by Relay"
-      icon={<RadioTower />}
+      icon={<RelayKindIcon />}
       value={relay ?? ""}
       onChange={update}
     >

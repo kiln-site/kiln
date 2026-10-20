@@ -4,7 +4,6 @@ import type { RelayHostFiles } from "@workspace/contracts"
 import {
   HardDrive,
   LoaderCircle,
-  RadioTower,
   TriangleAlert,
 } from "lucide-react"
 
@@ -20,6 +19,7 @@ import {
 import { showToast } from "@workspace/ui/components/sonner"
 
 import { FilePageContent } from "@/components/files/file-page-content"
+import { RelayKindIcon } from "@/components/instance-kind-icon"
 import { useRelayLiveStatus } from "@/components/relay/relay-presentation"
 import { useRelayWorkspace } from "@/components/relay/relay-workspace-context"
 import { canAccessRelayPermission } from "@/lib/navigation-destinations"
@@ -64,7 +64,7 @@ export function RelayHostTerminalAccess({
   if (access.data?.terminal) return children
   return (
     <HostUnavailable
-      icon={<RadioTower />}
+      icon={<RelayKindIcon />}
       title="Host terminal unavailable"
       description={
         access.error?.message ??
@@ -109,7 +109,7 @@ export function RelayHostFilesAccess({
       <>
         <FilePageContent view="unavailable" />
         <HostUnavailable
-          icon={<RadioTower />}
+          icon={<RelayKindIcon />}
           title="Host filesystem unavailable"
           description={access.error?.message ?? "Update this Relay."}
         />
@@ -124,7 +124,7 @@ export function RelayHostFilesAccess({
         <>
           <FilePageContent view="unavailable" />
           <HostUnavailable
-            icon={<RadioTower />}
+            icon={<RelayKindIcon />}
             title="Host access is off"
             description="Set KILN_RELAY_HOST_ACCESS=true on the Relay to browse its host's files."
           />
@@ -270,7 +270,7 @@ export function HostFilesLimitation({
 function WaitingForRelay() {
   return (
     <HostUnavailable
-      icon={<RadioTower />}
+      icon={<RelayKindIcon />}
       title="Waiting for the Relay"
       description="This page will open when the Relay reconnects."
     />

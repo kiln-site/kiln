@@ -18,11 +18,9 @@ import {
   CircleX,
   Code2,
   Copy,
-  Database,
   EllipsisVertical,
   FolderSync,
   GripVertical,
-  HardDriveDownload,
   History,
   ListTodo,
   LoaderCircle,
@@ -113,6 +111,10 @@ import { CopyIdentifierMenuItem } from "@/components/copy-identifier-menu-item"
 import { IdentityName } from "@/components/identity-name"
 import type { IdentityStatusPresentation } from "@/components/identity-name"
 import { InstanceCard } from "@/components/instance-card"
+import {
+  ServerKindIcon,
+  instanceKindIcons,
+} from "@/components/instance-kind-icon"
 import { statusColumnWidth } from "@/components/instance-name-presentation"
 import { RelativeTime } from "@/components/relative-time"
 import { StatusIndicator } from "@/components/status-indicator"
@@ -3639,12 +3641,7 @@ function TargetIcon({
   kind: ScheduleTarget["kind"]
   className?: string
 }) {
-  const Icon =
-    kind === "instance"
-      ? Server
-      : kind === "database"
-        ? Database
-        : HardDriveDownload
+  const Icon = kind === "instance" ? ServerKindIcon : instanceKindIcons[kind]
   return <Icon className={className} aria-hidden="true" />
 }
 

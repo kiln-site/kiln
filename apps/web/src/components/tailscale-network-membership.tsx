@@ -14,12 +14,12 @@ import {
   Pencil,
   Play,
   Plus,
-  Server,
   Settings2,
   Unplug,
 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
+import { ServerKindIcon } from "@/components/instance-kind-icon"
 import { forkPromise, recoverPromise } from "@/effect/promise"
 import {
   Dialog,
@@ -1409,7 +1409,7 @@ function TailscaleEmptyTable({
   title: string
   onAction?: () => void
 }) {
-  const Icon = icon === "network" ? Network : Server
+  const Icon = icon === "network" ? Network : ServerKindIcon
 
   return (
     <div className="flex min-h-64 flex-col items-center justify-center px-6 py-12 text-center">

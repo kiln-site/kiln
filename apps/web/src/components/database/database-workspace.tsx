@@ -1,4 +1,5 @@
 import { NO_RESOURCE_LIMITS } from "@workspace/contracts"
+import { DatabaseKindIcon } from "@/components/instance-kind-icon"
 import { instanceInventoryScope } from "@/lib/instance-inventory"
 import { instanceInventoryQueryOptions } from "@/lib/instance-inventory"
 import { inventoryInstanceState } from "@/lib/instance-state"
@@ -6,7 +7,7 @@ import { instanceStatePresentation } from "@/lib/instance-state-presentation"
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
-import { Database, Trash2 } from "lucide-react"
+import { Trash2 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 
@@ -61,7 +62,7 @@ export const DatabaseWorkspaceShell = React.memo(
         <div data-slot="database-workspace-surface" className="contents">
           <ResourceWorkspaceBoundary
             context={DatabaseWorkspaceContext}
-            icon={<Database />}
+            icon={<DatabaseKindIcon />}
             list={{ label: "All databases", to: "/infra/databases" }}
             noun={{ one: "database", other: "databases" }}
             workspace={workspace}

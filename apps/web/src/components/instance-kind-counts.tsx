@@ -1,7 +1,8 @@
 import * as React from "react"
-import { Boxes, Database, RadioTower, Server } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
+
+import { instanceKindIcons } from "@/components/instance-kind-icon"
 
 export interface InstanceKindCountValues {
   apps: number
@@ -10,42 +11,29 @@ export interface InstanceKindCountValues {
   relays: number
 }
 
-// Fixed colours, so a custom accent can't change them or make two kinds match.
-// Light mode takes darker shades so the icons keep their contrast.
-export const instanceKindTones = {
-  relays: "text-orange-700 dark:text-orange-400",
-  instances: "text-emerald-700 dark:text-emerald-300",
-  apps: "text-red-600 dark:text-red-300",
-  databases: "text-blue-600 dark:text-blue-300",
-} as const
-
 // The same icons as the infrastructure map's Relay cards.
 const instanceKinds = [
   {
     key: "relays",
-    icon: RadioTower,
-    tone: instanceKindTones.relays,
+    icon: instanceKindIcons.relay,
     one: "Relay",
     other: "Relays",
   },
   {
     key: "instances",
-    icon: Server,
-    tone: instanceKindTones.instances,
+    icon: instanceKindIcons.server,
     one: "game server",
     other: "game servers",
   },
   {
     key: "apps",
-    icon: Boxes,
-    tone: instanceKindTones.apps,
+    icon: instanceKindIcons.app,
     one: "app",
     other: "apps",
   },
   {
     key: "databases",
-    icon: Database,
-    tone: instanceKindTones.databases,
+    icon: instanceKindIcons.database,
     one: "database",
     other: "databases",
   },
@@ -60,7 +48,7 @@ export const InstanceKindCounts = React.memo(function InstanceKindCounts({
 }: {
   counts: InstanceKindCountValues
 }) {
-  return instanceKinds.map(({ key, icon: Icon, tone, one, other }) => {
+  return instanceKinds.map(({ key, icon: Icon, one, other }) => {
     const count = counts[key]
     return (
       <span
@@ -71,7 +59,7 @@ export const InstanceKindCounts = React.memo(function InstanceKindCounts({
           count ? "text-foreground" : "opacity-40"
         )}
       >
-        <Icon className={cn("size-3.5", tone)} aria-hidden="true" />
+        <Icon className="size-3.5" aria-hidden="true" />
         {count}
         <span className="sr-only">{count === 1 ? one : other}</span>
       </span>

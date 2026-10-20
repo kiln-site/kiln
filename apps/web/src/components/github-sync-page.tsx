@@ -8,7 +8,6 @@ import {
 import { sortFn_basic } from "@tanstack/react-table"
 import { Link, useNavigate, useSearch } from "@tanstack/react-router"
 import {
-  Boxes,
   EllipsisVertical,
   ExternalLink,
   Files,
@@ -18,7 +17,6 @@ import {
   LoaderCircle,
   Pencil,
   Plus,
-  Server,
   Trash2,
 } from "lucide-react"
 
@@ -51,6 +49,7 @@ import { IdentityName } from "@/components/identity-name"
 import type { IdentityStatusPresentation } from "@/components/identity-name"
 import { InfraSyncButton } from "@/components/infra-sync-button"
 import { InstanceCard } from "@/components/instance-card"
+import { AppKindIcon, ServerKindIcon } from "@/components/instance-kind-icon"
 import { statusColumnWidth } from "@/components/instance-name-presentation"
 import { RelativeTime } from "@/components/relative-time"
 import {
@@ -445,12 +444,12 @@ const SyncTable = React.memo(function SyncTable({
             <div className="flex flex-wrap justify-center gap-2">
               <Button asChild size="sm" variant="outline">
                 <Link to="/infra/servers">
-                  <Server /> Game servers
+                  <ServerKindIcon /> Game servers
                 </Link>
               </Button>
               <Button asChild size="sm" variant="outline">
                 <Link to="/infra/apps">
-                  <Boxes /> Apps
+                  <AppKindIcon /> Apps
                 </Link>
               </Button>
             </div>

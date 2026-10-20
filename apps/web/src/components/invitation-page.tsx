@@ -8,7 +8,6 @@ import {
   Clock3,
   LoaderCircle,
   LogOut,
-  RadioTower,
   Server,
   ShieldCheck,
 } from "lucide-react"
@@ -16,6 +15,7 @@ import {
 import { Button } from "@workspace/ui/components/button"
 
 import { HearthMark } from "@/components/hearth-mark"
+import { RelayKindIcon } from "@/components/instance-kind-icon"
 import { clearAppearanceCache } from "@/lib/appearance"
 import { authClient } from "@/lib/auth-client"
 import type { AuthenticatedUser } from "@/lib/auth-session"
@@ -163,7 +163,7 @@ export function InvitationPage({
 
             <div className="mt-6 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 rounded-xl border bg-background/60 p-4">
               {preview.accessType === "relay_creator" ? (
-                <RadioTower className="mt-0.5 size-4 text-primary" />
+                <RelayKindIcon className="mt-0.5 size-4" />
               ) : platformInvitation ? (
                 <ShieldCheck className="mt-0.5 size-4 text-primary" />
               ) : (

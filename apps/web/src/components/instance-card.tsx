@@ -1,9 +1,9 @@
 import * as React from "react"
 import type { InstanceReference } from "@workspace/contracts"
-import { Boxes, Database, RadioTower, Server } from "lucide-react"
 
 import { IdentityName } from "@/components/identity-name"
 import type { IdentityNameProps } from "@/components/identity-name"
+import { instanceKindIcons } from "@/components/instance-kind-icon"
 import { LiveServerBrickIcon } from "@/components/server-brick-icon"
 import { InstanceFavoriteStar } from "@/components/instance-favorite"
 import { StatusIndicator } from "@/components/status-indicator"
@@ -76,14 +76,7 @@ const InstanceCardView = React.memo(function InstanceCardView({
   state = { phase: "checking" },
   ...props
 }: InstanceCardProps) {
-  const Icon =
-    instance.kind === "app"
-      ? Boxes
-      : instance.kind === "database"
-        ? Database
-        : instance.kind === "relay"
-          ? RadioTower
-          : Server
+  const Icon = instanceKindIcons[instance.kind]
   return (
     <IdentityName
       {...props}
