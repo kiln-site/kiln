@@ -77,7 +77,8 @@ type VolumeDialog =
   | null
 
 // The dialogs load on first use.
-const loadVolumeDialogs = () => import("@/components/relay/relay-volume-dialogs")
+const loadVolumeDialogs = () =>
+  import("@/components/relay/relay-volume-dialogs")
 const CreateVolumeDialog = React.lazy(() =>
   loadVolumeDialogs().then((module) => ({
     default: module.CreateVolumeDialog,
@@ -245,7 +246,11 @@ function VolumesTable({
               refreshing: volumes.isFetching,
               rows: volumes.data.volumes,
             }
-          : { body: { kind: "loading", rowCount: 2 }, refreshing: false, rows: [] },
+          : {
+              body: { kind: "loading", rowCount: 2 },
+              refreshing: false,
+              rows: [],
+            },
     [volumes]
   )
   const definition = React.useMemo(() => {
@@ -550,14 +555,23 @@ function volumeMountItems(
 ): Array<InstancePickerItem> {
   const groups = new Map<
     string,
-    { identity: InstancePickerItem["identity"]; mounts: Array<RelayVolumeMount>; name: string }
+    {
+      identity: InstancePickerItem["identity"]
+      mounts: Array<RelayVolumeMount>
+      name: string
+    }
   >()
   for (const mount of volume.mounts) {
     const id = mount.resourceId
     const target =
       mount.kind === "relay"
         ? {
-            identity: { id: relayId, kind: "relay", relayId, source: "fleet" } as const,
+            identity: {
+              id: relayId,
+              kind: "relay",
+              relayId,
+              source: "fleet",
+            } as const,
             key: "relay",
             name: relayName,
           }
@@ -680,7 +694,10 @@ const VolumeActions = React.memo(function VolumeActions({
       {canManage ? (
         <Tooltip>
           <TooltipTrigger asChild>
-            <span tabIndex={deleteBlocked ? 0 : -1} className="rounded-md outline-none">
+            <span
+              tabIndex={deleteBlocked ? 0 : -1}
+              className="rounded-md outline-none"
+            >
               <Button
                 aria-label={`Delete ${volume.name}`}
                 className="text-destructive hover:bg-destructive/10 hover:text-destructive"
@@ -694,7 +711,9 @@ const VolumeActions = React.memo(function VolumeActions({
               </Button>
             </span>
           </TooltipTrigger>
-          <TooltipContent side="bottom">{deleteBlocked ?? "Delete"}</TooltipContent>
+          <TooltipContent side="bottom">
+            {deleteBlocked ?? "Delete"}
+          </TooltipContent>
         </Tooltip>
       ) : null}
       <DropdownMenu>
@@ -727,10 +746,16 @@ const VolumeActions = React.memo(function VolumeActions({
           {volume.id ? (
             <CopyIdentifierMenuItem label="Volume ID" value={volume.id} />
           ) : null}
-          <CopyIdentifierMenuItem label="Docker name" value={volume.dockerName} />
+          <CopyIdentifierMenuItem
+            label="Docker name"
+            value={volume.dockerName}
+          />
           <CopyIdentifierMenuItem label="Relay ID" value={relayId} />
           {volume.mountpoint ? (
-            <CopyIdentifierMenuItem label="Host path" value={volume.mountpoint} />
+            <CopyIdentifierMenuItem
+              label="Host path"
+              value={volume.mountpoint}
+            />
           ) : null}
         </DropdownMenuContent>
       </DropdownMenu>

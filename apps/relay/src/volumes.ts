@@ -61,52 +61,53 @@ export class RelayVolumes {
   /** Every volume, the Relay's own first, with what mounts each. */
   list() {
     return Effect.gen({ self: this }, function* () {
-    const [volumes, own, containers, names] = yield* Effect.all(
-      [
-        this.#volumes(),
-        this.#ownVolume(),
-        this.#engine.listContainers({ all: true }),
-        this.#state.listVolumeNames(),
-      ],
-      { concurrency: "unbounded" }
-    )
-    const measuring = this.#measureSizes([
-      ...(own ? [own.Name] : []),
-      ...volumes.map((volume) => volume.Name),
-    ])
-    const sizes = this.#sizes.values
-    const named = new Map(names.map((entry) => [entry.volumeId, entry.name]))
-    const mounts = volumeMounts(containers, ownContainerId())
-    const view = (
-      volume: DockerVolume,
-      kind: RelayVolume["kind"]
-    ): RelayVolume => {
-      const id = kind === "volume" ? (volume.Labels?.[ID_LABEL] ?? null) : null
-      return {
-        createdAt: volume.CreatedAt ?? null,
-        dockerName: volume.Name,
-        id,
-        kind,
-        mountpoint: volume.Mountpoint ?? null,
-        mounts: mounts.get(volume.Name) ?? [],
-        name:
-          kind === "relay"
-            ? "Relay data"
-            : ((id ? named.get(id) : undefined) ??
-              volume.Labels?.[NAME_LABEL] ??
-              volume.Name),
-        sizeBytes: sizes.get(volume.Name) ?? null,
+      const [volumes, own, containers, names] = yield* Effect.all(
+        [
+          this.#volumes(),
+          this.#ownVolume(),
+          this.#engine.listContainers({ all: true }),
+          this.#state.listVolumeNames(),
+        ],
+        { concurrency: "unbounded" }
+      )
+      const measuring = this.#measureSizes([
+        ...(own ? [own.Name] : []),
+        ...volumes.map((volume) => volume.Name),
+      ])
+      const sizes = this.#sizes.values
+      const named = new Map(names.map((entry) => [entry.volumeId, entry.name]))
+      const mounts = volumeMounts(containers, ownContainerId())
+      const view = (
+        volume: DockerVolume,
+        kind: RelayVolume["kind"]
+      ): RelayVolume => {
+        const id =
+          kind === "volume" ? (volume.Labels?.[ID_LABEL] ?? null) : null
+        return {
+          createdAt: volume.CreatedAt ?? null,
+          dockerName: volume.Name,
+          id,
+          kind,
+          mountpoint: volume.Mountpoint ?? null,
+          mounts: mounts.get(volume.Name) ?? [],
+          name:
+            kind === "relay"
+              ? "Relay data"
+              : ((id ? named.get(id) : undefined) ??
+                volume.Labels?.[NAME_LABEL] ??
+                volume.Name),
+          sizeBytes: sizes.get(volume.Name) ?? null,
+        }
       }
-    }
-    return {
-      measuring,
-      volumes: [
-        ...(own ? [view(own, "relay")] : []),
-        ...volumes
-          .map((volume) => view(volume, "volume"))
-          .sort((left, right) => left.name.localeCompare(right.name)),
-      ],
-    }
+      return {
+        measuring,
+        volumes: [
+          ...(own ? [view(own, "relay")] : []),
+          ...volumes
+            .map((volume) => view(volume, "volume"))
+            .sort((left, right) => left.name.localeCompare(right.name)),
+        ],
+      }
     }).pipe(Effect.withSpan("RelayVolumes.list"))
   }
 
@@ -116,72 +117,72 @@ export class RelayVolumes {
    */
   create(id: string, name: string) {
     return Effect.gen({ self: this }, function* () {
-    yield* Effect.annotateCurrentSpan({ "kiln.volume_id": id })
-    const dockerName = this.dockerName(id, name)
-    // An ID names one volume: a retry finds the one it made, and anything
-    // else asking for the same ID is refused.
-    const existing = (yield* this.#volumes()).find(
-      (volume) => volume.Labels?.[ID_LABEL] === id
-    )
-    if (existing && existing.Name !== dockerName) {
-      return yield* new RelayVolumeError({
-        message: "Another volume already has this ID",
+      yield* Effect.annotateCurrentSpan({ "kiln.volume_id": id })
+      const dockerName = this.dockerName(id, name)
+      // An ID names one volume: a retry finds the one it made, and anything
+      // else asking for the same ID is refused.
+      const existing = (yield* this.#volumes()).find(
+        (volume) => volume.Labels?.[ID_LABEL] === id
+      )
+      if (existing && existing.Name !== dockerName) {
+        return yield* new RelayVolumeError({
+          message: "Another volume already has this ID",
+        })
+      }
+      const created = yield* this.#engine.createVolume({
+        labels: {
+          [KIND_LABEL]: VOLUME_KIND,
+          [ID_LABEL]: id,
+          [NAME_LABEL]: name,
+          ...relayOwnerLabels(this.#config),
+        },
+        name: dockerName,
       })
-    }
-    const created = yield* this.#engine.createVolume({
-      labels: {
-        [KIND_LABEL]: VOLUME_KIND,
-        [ID_LABEL]: id,
-        [NAME_LABEL]: name,
-        ...relayOwnerLabels(this.#config),
-      },
-      name: dockerName,
-    })
-    // Docker answers with the volume already there when the name is taken.
-    if (created.Labels?.[ID_LABEL] !== id) {
-      return yield* new RelayVolumeError({
-        message: `A volume named ${dockerName} already exists`,
-      })
-    }
-    yield* this.#state.setVolumeName(id, name)
-    return {
-      createdAt: created.CreatedAt ?? null,
-      dockerName,
-      id,
-      kind: "volume",
-      mountpoint: created.Mountpoint ?? null,
-      mounts: [],
-      name,
-      sizeBytes: null,
-    } satisfies RelayVolume
+      // Docker answers with the volume already there when the name is taken.
+      if (created.Labels?.[ID_LABEL] !== id) {
+        return yield* new RelayVolumeError({
+          message: `A volume named ${dockerName} already exists`,
+        })
+      }
+      yield* this.#state.setVolumeName(id, name)
+      return {
+        createdAt: created.CreatedAt ?? null,
+        dockerName,
+        id,
+        kind: "volume",
+        mountpoint: created.Mountpoint ?? null,
+        mounts: [],
+        name,
+        sizeBytes: null,
+      } satisfies RelayVolume
     }).pipe(Effect.withSpan("RelayVolumes.create"))
   }
 
   rename(id: string, name: string) {
     return Effect.gen({ self: this }, function* () {
-    yield* Effect.annotateCurrentSpan({ "kiln.volume_id": id })
-    yield* this.#required(id)
-    yield* this.#state.setVolumeName(id, name)
+      yield* Effect.annotateCurrentSpan({ "kiln.volume_id": id })
+      yield* this.#required(id)
+      yield* this.#state.setVolumeName(id, name)
     }).pipe(Effect.withSpan("RelayVolumes.rename"))
   }
 
   /** Deletes a volume and its files. One a container mounts is refused. */
   delete(id: string) {
     return Effect.gen({ self: this }, function* () {
-    yield* Effect.annotateCurrentSpan({ "kiln.volume_id": id })
-    const volume = yield* this.#required(id)
-    const containers = yield* this.#engine.listContainers({ all: true })
-    const users = volumeMounts(containers, ownContainerId()).get(volume.Name)
-    if (users?.length) {
-      return yield* new RelayVolumeError({
-        message:
-          users.length === 1
-            ? `${users[0]!.container} mounts this volume; remove it first`
-            : `${users.length} containers mount this volume; remove them first`,
-      })
-    }
-    yield* this.#engine.removeVolume(volume.Name)
-    yield* this.#state.deleteVolumeName(id)
+      yield* Effect.annotateCurrentSpan({ "kiln.volume_id": id })
+      const volume = yield* this.#required(id)
+      const containers = yield* this.#engine.listContainers({ all: true })
+      const users = volumeMounts(containers, ownContainerId()).get(volume.Name)
+      if (users?.length) {
+        return yield* new RelayVolumeError({
+          message:
+            users.length === 1
+              ? `${users[0]!.container} mounts this volume; remove it first`
+              : `${users.length} containers mount this volume; remove them first`,
+        })
+      }
+      yield* this.#engine.removeVolume(volume.Name)
+      yield* this.#state.deleteVolumeName(id)
     }).pipe(Effect.withSpan("RelayVolumes.delete"))
   }
 

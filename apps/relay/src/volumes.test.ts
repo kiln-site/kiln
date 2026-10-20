@@ -69,9 +69,9 @@ describe("Relay volumes", () => {
     const volumes = await relayVolumes()
     await run(volumes.create(volumeId, "data"))
 
-    await expect(run(volumes.create(volumeId, "data"))).resolves.toMatchObject(
-      { id: volumeId }
-    )
+    await expect(run(volumes.create(volumeId, "data"))).resolves.toMatchObject({
+      id: volumeId,
+    })
     // Another ID with the same short ID, whose name a volume already has.
     fakeDocker.addVolume({ name: `${TEST_NAMESPACE}-kiln-3f9a21c4-cache` })
     await expect(
