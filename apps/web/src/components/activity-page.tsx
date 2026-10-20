@@ -1722,6 +1722,12 @@ const ActivityRowActions = React.memo(function ActivityRowActions({
               value={target.id}
             />
           ) : null}
+          {entry.databaseId && target?.kind !== "database" ? (
+            <CopyIdentifierMenuItem
+              label="Database ID"
+              value={entry.databaseId}
+            />
+          ) : null}
           <CopyIdentifierMenuItem label="Relay ID" value={relay.id} />
           {person ? (
             <>
@@ -1930,15 +1936,13 @@ function filterActivity(
       return false
     }
     if (filters.app && !targetIs(target, "app", filters.app)) return false
-    if (filters.database && !targetIs(target, "database", filters.database)) {
+    if (filters.database && entry.databaseId !== filters.database) {
       return false
     }
     // The Relay kind is activity on the Relay itself, not on an instance.
-    if (filters.scope) {
-      return filters.scope === "relay"
-        ? target === null
-        : target?.kind === filters.scope
-    }
+    if (filters.scope === "relay") return target === null
+    if (filters.scope === "database") return entry.databaseId !== null
+    if (filters.scope) return target?.kind === filters.scope
     return true
   })
 }

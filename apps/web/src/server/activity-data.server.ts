@@ -1,4 +1,7 @@
 import {
+  appIdFromFileRoot,
+  appTailscaleMember,
+  isRelayFileRoot,
   relayAuditRecordSchema,
   relayIdSchema,
   relaySnapshotSchema,
@@ -179,15 +182,22 @@ export async function getActivityForUser(
   }
   const userById = new Map(userRows.map((actor) => [actor.id, actor]))
 
-  // What an event acted on. Apps run as Relay instances, so an instance ID
-  // can name an app; a game server wins over a database it was linked to.
+  // What an event acted on. Apps and Relays can take a game server's place:
+  // an app runs as a Relay instance, its files are `app:<id>`, and its
+  // Tailscale members `app:<id>:<service>`; a Relay's host files use its
+  // fingerprint. A game server wins over a database it was linked to.
   const activityTarget = (relayId: string, record: RelayAuditRecord) => {
-    const instanceId = auditInstanceId(record)
-    const appId =
-      auditAppId(record) ??
-      (instanceId && appNames.has(instanceKey(relayId, instanceId))
-        ? instanceId
-        : null)
+    const recordedId = auditInstanceId(record)
+    const instanceAppId = recordedId
+      ? (appIdFromFileRoot(recordedId) ??
+        appTailscaleMember(recordedId)?.appId ??
+        (appNames.has(instanceKey(relayId, recordedId)) ? recordedId : null))
+      : null
+    const instanceId =
+      recordedId && !instanceAppId && !isRelayFileRoot(recordedId)
+        ? recordedId
+        : null
+    const appId = auditAppId(record) ?? instanceAppId
     if (appId) {
       return {
         id: appId,
@@ -235,6 +245,9 @@ export async function getActivityForUser(
               id: systemActorId,
               name: "Kiln system",
             },
+        // Kept beside the target: connecting a database to a game server
+        // targets the server but belongs in the database's activity too.
+        databaseId: auditDatabaseId(record),
         id: `${relay.id}:${record.id}`,
         label: activityLabelForAudit(record),
         occurredAt: record.occurredAt,
