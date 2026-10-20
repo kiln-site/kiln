@@ -2,6 +2,8 @@ import {
   relayCreateDatabaseSchema,
   relayUpdateInstanceStartupSchema,
 } from "@workspace/contracts"
+import { totalmem } from "node:os"
+
 import { describe, expect, it, vi } from "vite-plus/test"
 
 vi.mock("./command.js", () => import("./test/docker.js"))
@@ -53,6 +55,36 @@ describe("startup reinstall", () => {
     const container = serverContainer(harness)
     expect(container.image).toBe("registry.example.com/example/server:1.2.3")
     expect(container.state.running).toBe(true)
+  })
+
+  it("keeps a server's memory claimed while its container is replaced", async () => {
+    const harness = await relayHarness()
+    // Over half the node, so two such limits can't both fit.
+    const most = Math.ceil((totalmem() * 0.6) / 1024 ** 2) * 1024 ** 2
+    await harness.createServer({ id, limits: { memoryBytes: most } })
+    const databaseId = "d".repeat(40)
+    await harness.databases.create(
+      relayCreateDatabaseSchema.parse({
+        databaseName: "kiln_app",
+        engine: "postgres",
+        id: databaseId,
+        name: "Main",
+        password: "correct-horse-battery-staple-1",
+        username: "kiln_user",
+      })
+    )
+    // Docker holds the new container's creation, once the old one is gone.
+    const creation = fakeDocker.hold({ command: "create" })
+    const reconfiguring = reconfigure(harness, { start: false, variables: {} })
+    await creation.reached
+
+    await expect(
+      harness.databases.setLimits({ databaseId, limits: { memoryBytes: most } })
+    ).rejects.toThrow(/Memory limit exceeds/u)
+
+    creation.release()
+    await reconfiguring
+    expect(serverContainer(harness).memoryBytes).toBe(most)
   })
 
   it("keeps a server's limits across startup changes until they change", async () => {

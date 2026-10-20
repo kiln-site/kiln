@@ -362,7 +362,8 @@ const lifecycle = new LifecycleDriver(
   config,
   docker,
   bricks,
-  databaseConnections
+  databaseConnections,
+  lanes
 )
 const apps = new AppDriver(
   config,

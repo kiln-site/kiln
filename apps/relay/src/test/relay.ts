@@ -121,7 +121,8 @@ export async function relayHarness(
       config,
       docker,
       bricks,
-      databaseConnections
+      databaseConnections,
+      lanes
     )
     lifecycles.push(lifecycle)
     const apps = new AppDriver(

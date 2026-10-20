@@ -87,6 +87,11 @@ import {
   resourceLimitLabels,
 } from "./resource-limits.js"
 import {
+  exclusive,
+  laneKeys,
+  type OperationLanes,
+} from "./operation-lanes.js"
+import {
   APP_SERVICE,
   appIdFromRouteOwner,
   relayOwnerLabels,
@@ -337,8 +342,19 @@ function resolveInstanceStartupReconfigure(
   }
 }
 
+// An instance's limits to check against the node and hold.
+interface AllocationRequest {
+  /** Whether its data must already fit the disk limit. */
+  checkExistingUsage: boolean
+  currentDiskLimitBytes: number | null
+  directory: string
+  id: string
+  limits: ResourceLimits
+}
+
 export class LifecycleDriver {
   readonly #bricks: BrickCatalog
+  readonly #lanes: OperationLanes
   readonly #config: RelayConfig
   readonly #docker: DockerDriver
   readonly #engine: DockerEngine
@@ -363,8 +379,10 @@ export class LifecycleDriver {
     config: RelayConfig,
     docker: DockerDriver,
     bricks: BrickCatalog,
-    readonly databaseConnections: DatabaseConnections
+    readonly databaseConnections: DatabaseConnections,
+    lanes: OperationLanes
   ) {
+    this.#lanes = lanes
     this.#bricks = bricks
     this.#config = config
     this.#docker = docker
@@ -2235,63 +2253,65 @@ export class LifecycleDriver {
     const definition =
       recipeDefinition ?? (await this.#bricks.recipe(recipe, snapshotSha256))
     const resolved = resolveBrick(definition, variables, recipe)
-    await this.#assertAllocationAvailable({
+    // Held from before the old container goes until the new one exists.
+    return this.#holdingAllocation({
       checkExistingUsage: true,
       currentDiskLimitBytes: existing.limits.diskBytes,
       directory: join(this.#config.rootDirectory, existing.directory),
       id: existing.id,
       limits,
-    })
-    if (forcePull) {
+    }, async () => {
+      if (forcePull) {
+        await runLifecycle(
+          this.#engine.pullImage(resolved.image, { timeout: 300_000 })
+        )
+      }
+
       await runLifecycle(
-        this.#engine.pullImage(resolved.image, { timeout: 300_000 })
+        this.#engine
+          .stopContainer(existing.service, {
+            seconds: INSTANCE_STOP_TIMEOUT_SECONDS,
+            timeout: (INSTANCE_STOP_TIMEOUT_SECONDS + 15) * 1_000,
+          })
+          .pipe(Effect.ignore)
       )
-    }
-
-    await runLifecycle(
-      this.#engine
-        .stopContainer(existing.service, {
-          seconds: INSTANCE_STOP_TIMEOUT_SECONDS,
-          timeout: (INSTANCE_STOP_TIMEOUT_SECONDS + 15) * 1_000,
+      await runLifecycle(
+        this.#engine.removeContainer(existing.service, {
+          force: true,
+          timeout: 90_000,
         })
-        .pipe(Effect.ignore)
-    )
-    await runLifecycle(
-      this.#engine.removeContainer(existing.service, {
-        force: true,
-        timeout: 90_000,
-      })
-    )
+      )
 
-    return runLifecycle(
-      lifecycleOperation(async () => {
-        const reconfigured = await this.#provisionManagedInstance({
-          grandfatheredDiskLimitBytes: existing.limits.diskBytes,
-          id: existing.id,
-          limits,
-          prepareDirectory: false,
-          ports: existing.ports,
-          recipe,
-          recipeDefinition: definition,
-          skipImagePull: forcePull,
-          start,
-          tailscale,
-          variables,
-        })
-        // The new container joins its Tailscale networks where the old one
-        // was.
-        await this.reattachTailscaleMember(existing.id)
-        return reconfigured
-      }).pipe(
-        Effect.mapError(
-          (error) =>
-            new Error(
-              `Failed to reconfigure ${existing.name}: ${error instanceof Error ? error.message : "unknown error"}`,
-              { cause: error }
-            )
+      return runLifecycle(
+        lifecycleOperation(async () => {
+          const reconfigured = await this.#provisionManagedInstance({
+            grandfatheredDiskLimitBytes: existing.limits.diskBytes,
+            id: existing.id,
+            limits,
+            prepareDirectory: false,
+            ports: existing.ports,
+            recipe,
+            recipeDefinition: definition,
+            skipImagePull: forcePull,
+            start,
+            tailscale,
+            variables,
+          })
+          // The new container joins its Tailscale networks where the old one
+          // was.
+          await this.reattachTailscaleMember(existing.id)
+          return reconfigured
+        }).pipe(
+          Effect.mapError(
+            (error) =>
+              new Error(
+                `Failed to reconfigure ${existing.name}: ${error instanceof Error ? error.message : "unknown error"}`,
+                { cause: error }
+              )
+          )
         )
       )
-    )
+    })
   }
 
   async #provisionManagedInstance(input: {
@@ -2346,330 +2366,332 @@ export class LifecycleDriver {
         `The Tailscale address ${input.tailscale.subdomain} is already assigned to another server`
       )
     }
-    await this.#assertAllocationAvailable({
+    // Held until the container exists, so its capacity stays claimed.
+    return this.#holdingAllocation({
       checkExistingUsage: !input.prepareDirectory,
       currentDiskLimitBytes: input.grandfatheredDiskLimitBytes,
       directory: join(this.#config.rootDirectory, input.id),
       id: input.id,
       limits,
-    })
-    const architecture =
-      process.arch === "x64"
-        ? "amd64"
-        : process.arch === "arm64"
-          ? "arm64"
-          : null
-    if (
-      definition.constraints.architectures &&
-      (!architecture ||
-        !definition.constraints.architectures.includes(architecture))
-    ) {
-      throw new Error(
-        `${definition.metadata.name} does not support Relay architecture ${architecture}`
-      )
-    }
-
-    const id = input.id
-    const defaultInstanceName = `kiln-${id.slice(0, 8)}`
-    const containerName = this.#resources.instanceContainer(id)
-    const version = Object.hasOwn(resolved.values, "version")
-      ? String(resolved.values.version)
-      : "custom"
-    const image = resolved.image
-    const directory = join(this.#config.rootDirectory, id)
-    const hostDirectory = join(await this.#hostDataDirectory(), "instances", id)
-    if (installationMarker) {
-      await rm(join(directory, installationMarker), { force: true })
-    }
-    const networking = await this.networking()
-    const tailscaleSettings = input.tailscale.enabled
-      ? await this.tailscaleSettings()
-      : null
-    if (input.tailscale.enabled && !tailscaleSettings) {
-      throw new Error(
-        "Configure Tailscale infrastructure before connecting this server"
-      )
-    }
-    const hostnamePrefix = input.tailscale.enabled
-      ? input.tailscale.subdomain
-      : undefined
-    if (input.tailscale.enabled && !hostnamePrefix) {
-      throw new Error("Enter a Tailscale subdomain for this server")
-    }
-    const hostname = hostnamePrefix
-      ? `${hostnamePrefix.replace(/\.$/u, "")}.${
-          tailscaleSettings?.domain ??
-          networking?.domain ??
-          this.#config.connectDomain
-        }`
-      : null
-    const primaryPort = definition.network.ports.find(
-      (port) => port.name === definition.network.primaryPort
-    )
-    if (!primaryPort) {
-      throw new Error("Brick primary network port disappeared after validation")
-    }
-    const webRoutes = this.#webRoutes.filter(
-      (route) => route.instanceId === input.id
-    )
-    const proxySettings = await this.proxySettings()
-    const routeLabels = this.#containerWebRouteLabels(webRoutes, proxySettings)
-    const usesExternalEdge =
-      proxySettings.mode === "none" || proxySettings.mode === "coolify"
-
-    if (input.prepareDirectory) {
-      await mkdir(directory, { recursive: true })
-      if (definition.runtime.user) {
-        const identity = definition.runtime.user.split(":")
-        const user = Number(identity[0])
-        const group = identity.length === 2 ? Number(identity[1]) : user
-        await chown(directory, user, group)
+    }, async () => {
+      const architecture =
+        process.arch === "x64"
+          ? "amd64"
+          : process.arch === "arm64"
+            ? "arm64"
+            : null
+      if (
+        definition.constraints.architectures &&
+        (!architecture ||
+          !definition.constraints.architectures.includes(architecture))
+      ) {
+        throw new Error(
+          `${definition.metadata.name} does not support Relay architecture ${architecture}`
+        )
       }
-    }
-    await this.#ensureNetwork()
-    if (usesExternalEdge && webRoutes.length > 0) {
-      await this.#ensureEdgeNetwork()
-    }
-    if (networking?.enabled) await this.#ensureInfrastructure(networking, false)
-    let managedInstallationMarker: string | null = null
-    const pullImage = () =>
-      this.#engine.pullImage(image, { timeout: 300_000 })
-    if (!input.skipImagePull) {
-      await input.onPhase?.("pulling_image")
+
+      const id = input.id
+      const defaultInstanceName = `kiln-${id.slice(0, 8)}`
+      const containerName = this.#resources.instanceContainer(id)
+      const version = Object.hasOwn(resolved.values, "version")
+        ? String(resolved.values.version)
+        : "custom"
+      const image = resolved.image
+      const directory = join(this.#config.rootDirectory, id)
+      const hostDirectory = join(await this.#hostDataDirectory(), "instances", id)
       if (installationMarker) {
-        await runLifecycle(
-          pullImage().pipe(
-            Effect.catch(() => this.#engine.inspectImage(image)),
-            Effect.asVoid
-          )
-        )
-      } else {
-        await runLifecycle(
-          this.#engine.inspectImage(image).pipe(
-            Effect.catch(() => pullImage()),
-            Effect.asVoid
-          )
+        await rm(join(directory, installationMarker), { force: true })
+      }
+      const networking = await this.networking()
+      const tailscaleSettings = input.tailscale.enabled
+        ? await this.tailscaleSettings()
+        : null
+      if (input.tailscale.enabled && !tailscaleSettings) {
+        throw new Error(
+          "Configure Tailscale infrastructure before connecting this server"
         )
       }
-    }
-    if (installationMarker) {
-      const protocol = await runLifecycle(
-        this.#engine
-          .inspectImage(image)
-          .pipe(
-            Effect.map(
-              (inspected) =>
-                inspected.Config?.Labels?.[
-                  INSTALLATION_MARKER_PROTOCOL_LABEL
-                ]?.trim() ?? ""
+      const hostnamePrefix = input.tailscale.enabled
+        ? input.tailscale.subdomain
+        : undefined
+      if (input.tailscale.enabled && !hostnamePrefix) {
+        throw new Error("Enter a Tailscale subdomain for this server")
+      }
+      const hostname = hostnamePrefix
+        ? `${hostnamePrefix.replace(/\.$/u, "")}.${
+            tailscaleSettings?.domain ??
+            networking?.domain ??
+            this.#config.connectDomain
+          }`
+        : null
+      const primaryPort = definition.network.ports.find(
+        (port) => port.name === definition.network.primaryPort
+      )
+      if (!primaryPort) {
+        throw new Error("Brick primary network port disappeared after validation")
+      }
+      const webRoutes = this.#webRoutes.filter(
+        (route) => route.instanceId === input.id
+      )
+      const proxySettings = await this.proxySettings()
+      const routeLabels = this.#containerWebRouteLabels(webRoutes, proxySettings)
+      const usesExternalEdge =
+        proxySettings.mode === "none" || proxySettings.mode === "coolify"
+
+      if (input.prepareDirectory) {
+        await mkdir(directory, { recursive: true })
+        if (definition.runtime.user) {
+          const identity = definition.runtime.user.split(":")
+          const user = Number(identity[0])
+          const group = identity.length === 2 ? Number(identity[1]) : user
+          await chown(directory, user, group)
+        }
+      }
+      await this.#ensureNetwork()
+      if (usesExternalEdge && webRoutes.length > 0) {
+        await this.#ensureEdgeNetwork()
+      }
+      if (networking?.enabled) await this.#ensureInfrastructure(networking, false)
+      let managedInstallationMarker: string | null = null
+      const pullImage = () =>
+        this.#engine.pullImage(image, { timeout: 300_000 })
+      if (!input.skipImagePull) {
+        await input.onPhase?.("pulling_image")
+        if (installationMarker) {
+          await runLifecycle(
+            pullImage().pipe(
+              Effect.catch(() => this.#engine.inspectImage(image)),
+              Effect.asVoid
             )
           )
-      )
-      if (supportsInstallationMarkerProtocol(protocol)) {
-        managedInstallationMarker = installationMarker
-      }
-    }
-
-    const reservedPorts: Array<{
-      port: number
-      protocol: RelayInstancePortAllocation["protocol"]
-    }> = []
-    const portAllocations: Array<RelayInstancePortAllocation> = input.ports
-      ? [...input.ports]
-      : []
-    if (portAllocations.length === 0) {
-      const publishedPorts =
-        definition.network.mode === "direct"
-          ? definition.network.ports
-          : [primaryPort]
-      for (const port of publishedPorts) {
-        const externalPort =
-          port.host ??
-          (await this.#reserveGamePort(id, port.protocol, existing))
-        if (port.host === undefined) {
-          reservedPorts.push({ port: externalPort, protocol: port.protocol })
+        } else {
+          await runLifecycle(
+            this.#engine.inspectImage(image).pipe(
+              Effect.catch(() => pullImage()),
+              Effect.asVoid
+            )
+          )
         }
-        const primary = port.name === definition.network.primaryPort
-        portAllocations.push({
-          externalPort,
-          id: primary ? "primary" : `brick-${port.name}`,
-          internalPort: port.container,
-          kind: primary ? "primary" : "brick",
-          name: port.name.replaceAll("-", " "),
-          protocol: port.protocol,
-        })
       }
-    }
-    const primaryAllocation = portAllocations.find(
-      (allocation) => allocation.kind === "primary"
-    )
-    if (!primaryAllocation) {
-      throw new Error("Managed server port allocations require a primary port")
-    }
-    const portLabels = portAllocationContainerLabels(portAllocations)
-    const variablesLabel = JSON.stringify(resolved.values)
-    const labels: Record<string, string> = {
-      "kiln.relay.managed": "true",
-      "kiln.relay.owned": "true",
-      "kiln.server.id": id,
-      "kiln.brick.id": definition.metadata.id,
-      "kiln.brick.format": definition.format,
-      "kiln.brick.source": input.recipe,
-      "kiln.brick.snapshot-sha256": snapshotSha256,
-      "kiln.brick.variables": variablesLabel,
-      "kiln.brick.network-mode": definition.network.mode,
-      "kiln.brick.supports-srv": String(definition.network.supportsSrv),
-      "kiln.traefik.managed": "true",
-      "kiln.traefik.service.port": String(primaryAllocation.internalPort),
-      "kiln.instance.name": defaultInstanceName,
-      "kiln.instance.version": version,
-      "kiln.instance.java": resolved.runtimeName,
-      "kiln.instance.game": definition.metadata.game,
-      "kiln.instance.public-host": this.#config.gameHost,
-      "kiln.instance.directory": id,
-      // Older Relays read these, with 0 for no limit.
-      "kiln.instance.memory-bytes": String(limits.memoryBytes ?? 0),
-      "kiln.instance.disk-bytes": String(limits.diskBytes ?? 0),
-      "kiln.instance.mount": definition.runtime.storage.mount,
-      ...resourceLimitLabels(limits),
-    }
-    if (managedInstallationMarker) {
-      labels[INSTALLATION_MARKER_LABEL] = managedInstallationMarker
-    }
-    Object.assign(labels, portLabels)
-    if (definition.readiness) {
-      labels["kiln.brick.readiness"] = JSON.stringify(definition.readiness)
-    }
-    if (definition.console) {
-      labels["kiln.brick.console-stop-commands"] = JSON.stringify(
-        definition.console.stopCommands
-      )
-    }
-    if (hostname) {
-      const privatePort =
-        definition.network.mode === "direct"
-          ? primaryAllocation.internalPort
-          : this.#config.connectPort
-      labels["kiln.instance.hostname"] =
-        privatePort === 25_565 ? hostname : `${hostname}:${privatePort}`
-    }
-    labels["kiln.instance.tailscale-enabled"] = String(input.tailscale.enabled)
-    if (input.tailscale.subdomain) {
-      labels["kiln.instance.tailscale-subdomain"] = input.tailscale.subdomain
-    }
-    Object.assign(labels, relayOwnerLabels(this.#config), routeLabels)
-    Object.assign(labels, await this.databaseConnections.labels(id))
-    const ports = Object.entries(
-      dockerPortBindingsForAllocations(portAllocations)
-    ).flatMap(([binding, candidates]) => {
-      const hostPort = candidates[0]?.HostPort
-      const [containerPort, protocol] = binding.split("/")
-      return hostPort
-        ? [
-            {
-              containerPort: Number(containerPort),
-              hostPort,
-              protocol: protocol === "udp" ? ("udp" as const) : ("tcp" as const),
-            },
-          ]
+      if (installationMarker) {
+        const protocol = await runLifecycle(
+          this.#engine
+            .inspectImage(image)
+            .pipe(
+              Effect.map(
+                (inspected) =>
+                  inspected.Config?.Labels?.[
+                    INSTALLATION_MARKER_PROTOCOL_LABEL
+                  ]?.trim() ?? ""
+              )
+            )
+        )
+        if (supportsInstallationMarkerProtocol(protocol)) {
+          managedInstallationMarker = installationMarker
+        }
+      }
+
+      const reservedPorts: Array<{
+        port: number
+        protocol: RelayInstancePortAllocation["protocol"]
+      }> = []
+      const portAllocations: Array<RelayInstancePortAllocation> = input.ports
+        ? [...input.ports]
         : []
-    })
-    const spec: ContainerSpec = {
-      binds: [`${hostDirectory}:${definition.runtime.storage.mount}`],
-      capDrop: ["ALL"],
-      command: [
-        ...(definition.runtime.entrypoint?.slice(1) ?? []),
-        ...(definition.runtime.command ?? []),
-      ],
-      ...(definition.runtime.entrypoint?.[0] && {
-        entrypoint: definition.runtime.entrypoint[0],
-      }),
-      env: resolved.environment,
-      hostname: containerName,
-      image,
-      interactive: true,
-      labels,
-      ...containerLimitSpec(limits),
-      name: containerName,
-      network: { aliases: [containerName], name: this.#resources.gameNetwork },
-      pidsLimit: definition.runtime.resources.pids,
-      ports,
-      readOnly: true,
-      restart: "no",
-      securityOpt: ["no-new-privileges:true"],
-      ...(definition.runtime.stopSignal && {
-        stopSignal: definition.runtime.stopSignal,
-      }),
-      tmpfs: { "/tmp": "rw,exec,nosuid,nodev,size=128m" },
-      tty: true,
-      ...(definition.runtime.user && { user: definition.runtime.user }),
-      ...(definition.runtime.workingDirectory && {
-        workdir: definition.runtime.workingDirectory,
-      }),
-    }
-
-    await input.onPhase?.("creating_container")
-    await runLifecycle(
-      lifecycleOperation(async () => {
-        await runLifecycle(createContainer(this.#engine, spec))
-        await input.onPhase?.("finalizing")
-        if (usesExternalEdge && webRoutes.length > 0) {
-          await runLifecycle(
-            this.#engine.connectNetwork(
-              this.#resources.edgeNetwork,
-              containerName,
-              { aliases: [containerName] }
-            )
-          )
-        }
-        await this.databaseConnections.reconcile(id, containerName)
-        if (input.start) {
-          await runLifecycle(
-            this.#engine.startContainer(containerName, { timeout: 120_000 })
-          )
-        }
-        await this.#docker.recordProvisionedState(
-          id,
-          input.start ? "running" : "stopped"
-        )
-        if (networking?.enabled) {
-          await this.#refreshCoreDnsConfiguration(networking)
-        }
-        await this.#refreshTailscaleDns()
-      }).pipe(
-        Effect.catch((error) =>
-          this.#engine.removeContainer(containerName, { force: true }).pipe(
-            Effect.ignore,
-            Effect.flatMap(() =>
-              input.prepareDirectory
-                ? lifecycleOperation(() =>
-                    rm(directory, { recursive: true, force: true })
-                  )
-                : Effect.void
-            ),
-            Effect.flatMap(() => Effect.fail(error))
-          )
-        ),
-        Effect.ensuring(
-          Effect.sync(() => {
-            for (const allocation of reservedPorts) {
-              for (const protocol of portProtocols(allocation.protocol)) {
-                this.#pendingGamePorts.delete(`${protocol}:${allocation.port}`)
-              }
-            }
+      if (portAllocations.length === 0) {
+        const publishedPorts =
+          definition.network.mode === "direct"
+            ? definition.network.ports
+            : [primaryPort]
+        for (const port of publishedPorts) {
+          const externalPort =
+            port.host ??
+            (await this.#reserveGamePort(id, port.protocol, existing))
+          if (port.host === undefined) {
+            reservedPorts.push({ port: externalPort, protocol: port.protocol })
+          }
+          const primary = port.name === definition.network.primaryPort
+          portAllocations.push({
+            externalPort,
+            id: primary ? "primary" : `brick-${port.name}`,
+            internalPort: port.container,
+            kind: primary ? "primary" : "brick",
+            name: port.name.replaceAll("-", " "),
+            protocol: port.protocol,
           })
+        }
+      }
+      const primaryAllocation = portAllocations.find(
+        (allocation) => allocation.kind === "primary"
+      )
+      if (!primaryAllocation) {
+        throw new Error("Managed server port allocations require a primary port")
+      }
+      const portLabels = portAllocationContainerLabels(portAllocations)
+      const variablesLabel = JSON.stringify(resolved.values)
+      const labels: Record<string, string> = {
+        "kiln.relay.managed": "true",
+        "kiln.relay.owned": "true",
+        "kiln.server.id": id,
+        "kiln.brick.id": definition.metadata.id,
+        "kiln.brick.format": definition.format,
+        "kiln.brick.source": input.recipe,
+        "kiln.brick.snapshot-sha256": snapshotSha256,
+        "kiln.brick.variables": variablesLabel,
+        "kiln.brick.network-mode": definition.network.mode,
+        "kiln.brick.supports-srv": String(definition.network.supportsSrv),
+        "kiln.traefik.managed": "true",
+        "kiln.traefik.service.port": String(primaryAllocation.internalPort),
+        "kiln.instance.name": defaultInstanceName,
+        "kiln.instance.version": version,
+        "kiln.instance.java": resolved.runtimeName,
+        "kiln.instance.game": definition.metadata.game,
+        "kiln.instance.public-host": this.#config.gameHost,
+        "kiln.instance.directory": id,
+        // Older Relays read these, with 0 for no limit.
+        "kiln.instance.memory-bytes": String(limits.memoryBytes ?? 0),
+        "kiln.instance.disk-bytes": String(limits.diskBytes ?? 0),
+        "kiln.instance.mount": definition.runtime.storage.mount,
+        ...resourceLimitLabels(limits),
+      }
+      if (managedInstallationMarker) {
+        labels[INSTALLATION_MARKER_LABEL] = managedInstallationMarker
+      }
+      Object.assign(labels, portLabels)
+      if (definition.readiness) {
+        labels["kiln.brick.readiness"] = JSON.stringify(definition.readiness)
+      }
+      if (definition.console) {
+        labels["kiln.brick.console-stop-commands"] = JSON.stringify(
+          definition.console.stopCommands
+        )
+      }
+      if (hostname) {
+        const privatePort =
+          definition.network.mode === "direct"
+            ? primaryAllocation.internalPort
+            : this.#config.connectPort
+        labels["kiln.instance.hostname"] =
+          privatePort === 25_565 ? hostname : `${hostname}:${privatePort}`
+      }
+      labels["kiln.instance.tailscale-enabled"] = String(input.tailscale.enabled)
+      if (input.tailscale.subdomain) {
+        labels["kiln.instance.tailscale-subdomain"] = input.tailscale.subdomain
+      }
+      Object.assign(labels, relayOwnerLabels(this.#config), routeLabels)
+      Object.assign(labels, await this.databaseConnections.labels(id))
+      const ports = Object.entries(
+        dockerPortBindingsForAllocations(portAllocations)
+      ).flatMap(([binding, candidates]) => {
+        const hostPort = candidates[0]?.HostPort
+        const [containerPort, protocol] = binding.split("/")
+        return hostPort
+          ? [
+              {
+                containerPort: Number(containerPort),
+                hostPort,
+                protocol: protocol === "udp" ? ("udp" as const) : ("tcp" as const),
+              },
+            ]
+          : []
+      })
+      const spec: ContainerSpec = {
+        binds: [`${hostDirectory}:${definition.runtime.storage.mount}`],
+        capDrop: ["ALL"],
+        command: [
+          ...(definition.runtime.entrypoint?.slice(1) ?? []),
+          ...(definition.runtime.command ?? []),
+        ],
+        ...(definition.runtime.entrypoint?.[0] && {
+          entrypoint: definition.runtime.entrypoint[0],
+        }),
+        env: resolved.environment,
+        hostname: containerName,
+        image,
+        interactive: true,
+        labels,
+        ...containerLimitSpec(limits),
+        name: containerName,
+        network: { aliases: [containerName], name: this.#resources.gameNetwork },
+        pidsLimit: definition.runtime.resources.pids,
+        ports,
+        readOnly: true,
+        restart: "no",
+        securityOpt: ["no-new-privileges:true"],
+        ...(definition.runtime.stopSignal && {
+          stopSignal: definition.runtime.stopSignal,
+        }),
+        tmpfs: { "/tmp": "rw,exec,nosuid,nodev,size=128m" },
+        tty: true,
+        ...(definition.runtime.user && { user: definition.runtime.user }),
+        ...(definition.runtime.workingDirectory && {
+          workdir: definition.runtime.workingDirectory,
+        }),
+      }
+
+      await input.onPhase?.("creating_container")
+      await runLifecycle(
+        lifecycleOperation(async () => {
+          await runLifecycle(createContainer(this.#engine, spec))
+          await input.onPhase?.("finalizing")
+          if (usesExternalEdge && webRoutes.length > 0) {
+            await runLifecycle(
+              this.#engine.connectNetwork(
+                this.#resources.edgeNetwork,
+                containerName,
+                { aliases: [containerName] }
+              )
+            )
+          }
+          await this.databaseConnections.reconcile(id, containerName)
+          if (input.start) {
+            await runLifecycle(
+              this.#engine.startContainer(containerName, { timeout: 120_000 })
+            )
+          }
+          await this.#docker.recordProvisionedState(
+            id,
+            input.start ? "running" : "stopped"
+          )
+          if (networking?.enabled) {
+            await this.#refreshCoreDnsConfiguration(networking)
+          }
+          await this.#refreshTailscaleDns()
+        }).pipe(
+          Effect.catch((error) =>
+            this.#engine.removeContainer(containerName, { force: true }).pipe(
+              Effect.ignore,
+              Effect.flatMap(() =>
+                input.prepareDirectory
+                  ? lifecycleOperation(() =>
+                      rm(directory, { recursive: true, force: true })
+                    )
+                  : Effect.void
+              ),
+              Effect.flatMap(() => Effect.fail(error))
+            )
+          ),
+          Effect.ensuring(
+            Effect.sync(() => {
+              for (const allocation of reservedPorts) {
+                for (const protocol of portProtocols(allocation.protocol)) {
+                  this.#pendingGamePorts.delete(`${protocol}:${allocation.port}`)
+                }
+              }
+            })
+          )
         )
       )
-    )
 
-    const created = (await this.#docker.inspectInstances()).find(
-      (instance) => instance.id === id
-    )
-    if (!created)
-      throw new Error(
-        "Docker created the instance but Relay could not discover it"
+      const created = (await this.#docker.inspectInstances()).find(
+        (instance) => instance.id === id
       )
-    return created
+      if (!created)
+        throw new Error(
+          "Docker created the instance but Relay could not discover it"
+        )
+      return created
+    })
   }
 
   async #reserveGamePort(
@@ -2872,23 +2894,27 @@ export class LifecycleDriver {
     )
   }
 
-  async #assertAllocationAvailable(input: {
-    checkExistingUsage: boolean
-    currentDiskLimitBytes: number | null
-    directory: string
-    id: string
-    limits: ResourceLimits
-  }): Promise<void> {
-    const [filesystem, others] = await Promise.all([
-      statfs(this.#config.rootDirectory),
-      this.#docker.allocations.others("server", input.id),
-    ])
-    assertResourceLimitsFit({
-      currentDiskBytes: input.currentDiskLimitBytes,
-      limits: input.limits,
-      nodeDiskBytes: filesystem.blocks * filesystem.bsize,
-      others,
-    })
+  // Runs `run` holding the instance's reserved limits, released however it
+  // ends.
+  async #holdingAllocation<A>(
+    input: AllocationRequest,
+    run: () => Promise<A>
+  ): Promise<A> {
+    const release = await this.#reserveAllocation(input)
+    return Effect.runPromise(
+      Effect.tryPromise({ try: run, catch: (cause) => cause }).pipe(
+        Effect.ensuring(Effect.sync(release))
+      )
+    )
+  }
+
+  /**
+   * Checks an instance's limits against every other instance's and holds
+   * them until the returned release, so nothing else claims the same
+   * capacity while its container is replaced or created. Its data is
+   * measured first, outside the node's allocations lane.
+   */
+  async #reserveAllocation(input: AllocationRequest): Promise<() => void> {
     const diskLimitBytes = input.limits.diskBytes
     if (input.checkExistingUsage && diskLimitBytes !== null) {
       const usedBytes = await runLifecycle(
@@ -2900,6 +2926,31 @@ export class LifecycleDriver {
         )
       }
     }
+    return runLifecycle(
+      this.#lanes.runNested(
+        {
+          label: "instance.allocations",
+          locks: [exclusive(laneKeys.allocations)],
+        },
+        lifecycleOperation(async () => {
+          const [filesystem, others] = await Promise.all([
+            statfs(this.#config.rootDirectory),
+            this.#docker.allocations.others("server", input.id),
+          ])
+          assertResourceLimitsFit({
+            currentDiskBytes: input.currentDiskLimitBytes,
+            limits: input.limits,
+            nodeDiskBytes: filesystem.blocks * filesystem.bsize,
+            others,
+          })
+          return this.#docker.allocations.reserve(
+            "server",
+            input.id,
+            input.limits
+          )
+        })
+      )
+    )
   }
 
   async deleteInstance(

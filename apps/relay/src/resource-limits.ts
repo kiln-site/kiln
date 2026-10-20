@@ -95,6 +95,13 @@ export class ResourceAllocations {
     string,
     () => Promise<ReadonlyArray<ResourceAllocation>>
   >()
+  // Limits held for instances whose containers are being replaced or
+  // created, newest last.
+  readonly #reservations: Array<{
+    readonly id: string
+    readonly kind: string
+    readonly limits: ResourceLimits
+  }> = []
 
   register(
     kind: string,
@@ -103,19 +110,47 @@ export class ResourceAllocations {
     this.#sources.set(kind, source)
   }
 
+  /**
+   * Holds an instance's limits until the returned release, standing in for
+   * whatever its containers report meanwhile, so a container briefly gone
+   * during a replacement frees nothing. Take it holding the allocations
+   * lane, after checking the limits fit.
+   */
+  reserve(kind: string, id: string, limits: ResourceLimits): () => void {
+    const reservation = { id, kind, limits }
+    this.#reservations.push(reservation)
+    return () => {
+      const index = this.#reservations.indexOf(reservation)
+      if (index !== -1) this.#reservations.splice(index, 1)
+    }
+  }
+
   /** The limits of every instance but this one. */
   async others(
     kind: string,
     id: string
   ): Promise<ReadonlyArray<ResourceLimits>> {
+    const key = (entryKind: string, entryId: string) =>
+      `${entryKind}:${entryId}`
+    // One reservation counts per instance, its newest.
+    const reserved = new Map(
+      this.#reservations.map((reservation) => [
+        key(reservation.kind, reservation.id),
+        reservation.limits,
+      ])
+    )
+    reserved.delete(key(kind, id))
     const lists = await Promise.all(
       [...this.#sources].map(async ([sourceKind, source]) =>
         (await source()).flatMap((allocation) =>
-          sourceKind === kind && allocation.id === id ? [] : [allocation.limits]
+          (sourceKind === kind && allocation.id === id) ||
+          reserved.has(key(sourceKind, allocation.id))
+            ? []
+            : [allocation.limits]
         )
       )
     )
-    return lists.flat()
+    return [...lists.flat(), ...reserved.values()]
   }
 }
 
