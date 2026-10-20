@@ -2041,13 +2041,7 @@ async function executeControlRequest(
       const discarded = await runRelayEffect(
         "relay.app.provision.discard",
         provisioningManager.discard("app", input.appId, () =>
-          recoverPromise(
-            () => apps.delete({ ...input, deleteData: true }),
-            (cause) => {
-              if (!(cause instanceof Error && cause.message === "App not found"))
-                throw cause
-            }
-          )
+          apps.discard(input.appId)
         )
       )
       if (discarded) return { appId: input.appId, deleted: true }

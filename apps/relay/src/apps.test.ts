@@ -120,6 +120,37 @@ it("shows a provisioning app at once, then creates it once Hearth claims it", as
   )
 })
 
+it("removes the data directory of an app whose create failed before its network", async () => {
+  const harness = await relayHarness()
+  const manager = await provisioningWorker(harness)
+  const input = { id: appId, name: "Website" }
+  fakeDocker.failNext({ command: "network create" }, "address pools exhausted")
+  await Effect.runPromise(
+    manager.prepare({
+      idempotencyKey: randomUUID(),
+      input,
+      instanceId: appId,
+      kind: "app",
+      placeholder: harness.apps.placeholder(input),
+    })
+  )
+  await Effect.runPromise(manager.claim("app", appId))
+  for (let tries = 0; tries < 10_000; tries += 1) {
+    const [app] = await harness.apps.list()
+    if (app?.observedState === "failed") break
+    await new Promise((resolve) => setImmediate(resolve))
+  }
+  const directory = join(harness.config.dataDirectory, "apps", appId)
+  await access(directory)
+
+  await Effect.runPromise(
+    manager.discard("app", appId, () => harness.apps.discard(appId))
+  )
+
+  await expect(access(directory)).rejects.toThrow()
+  expect(await harness.apps.list()).toEqual([])
+})
+
 afterEach(() => {
   vi.useRealTimers()
   vi.unstubAllEnvs()

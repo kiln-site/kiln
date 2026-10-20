@@ -672,6 +672,22 @@ export class AppDriver {
     return Effect.runPromise(this.#limits.state.listDiskLimits(APP_KIND))
   }
 
+  /**
+   * Removes whatever a create made for an app still provisioning: all of
+   * it once its network exists, or only its data directory if the create
+   * stopped before then.
+   */
+  async discard(appId: string): Promise<void> {
+    const exists =
+      (await this.#appContainers(appId)).length > 0 ||
+      (await this.#networks()).includes(appId)
+    if (exists) {
+      await this.delete({ appId, deleteData: true })
+      return
+    }
+    await rm(this.#appDirectory(appId), { force: true, recursive: true })
+  }
+
   async delete(input: RelayDeleteApp) {
     this.abortDeployment(input.appId)
     const containers = await this.#appContainers(input.appId)
