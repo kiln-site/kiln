@@ -56,6 +56,14 @@ export class FileTreeIndex {
     return [...this.#entries.keys()]
   }
 
+  /** What a listed path is, with or without a directory's trailing slash. */
+  entryKind(path: string): RelayFileEntry["kind"] | undefined {
+    return (
+      this.#entries.get(path)?.kind ??
+      (this.#entries.has(`${path}/`) ? "directory" : undefined)
+    )
+  }
+
   getTreePendingDirectories(): ReadonlyArray<string> {
     return [...this.#pendingDirectories]
   }

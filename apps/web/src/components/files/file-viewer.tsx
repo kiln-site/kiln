@@ -26,6 +26,7 @@ import {
 } from "@/components/files/file-viewer-toolbar"
 import {
   queryKeys,
+  readsFileWithEntry,
   relayFileEntryQueryOptions,
   relayFileQueryOptions,
 } from "@/lib/query-options"
@@ -252,10 +253,17 @@ export function FileViewer({
   React.useEffect(() => {
     if (selectedPathIsReadable) warmFilePreviewModule(selectedPath)
   }, [selectedPath, selectedPathIsReadable])
+  // Read alongside the entry rather than after it; the entry still decides
+  // whether the path is shown as a file.
+  const readWithEntry =
+    entryQuery.isPending &&
+    readsFileWithEntry(selectedPath, fileIndex.entryKind(selectedPath))
   const fileQuery = useQuery({
     ...relayFileQueryOptions(instance.relayId, instance.id, selectedPath),
     enabled:
-      selectedPathIsReadable && !selectedPathIsDatabase && relayConnected,
+      (selectedPathIsReadable || readWithEntry) &&
+      !selectedPathIsDatabase &&
+      relayConnected,
     refetchInterval: activeFileRevisionPollDelayMs,
     refetchIntervalInBackground: false,
     refetchOnReconnect: "always",

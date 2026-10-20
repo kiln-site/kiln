@@ -3,8 +3,10 @@ import { useQueryClient } from "@tanstack/react-query"
 
 import type { FileWorkspace as FileWorkspaceComponent } from "@/components/files/file-workspace"
 import {
+  readsFileWithEntry,
   relayFileActivityQueryOptions,
   relayFileEntryQueryOptions,
+  relayFileQueryOptions,
   relayRootDirectoryQueryOptions,
 } from "@/lib/query-options"
 import {
@@ -32,7 +34,10 @@ export function LazyFileWorkspace({
 
   const { id, relayId } = props.instance
   const path = props.routeFilePath?.replace(/^\/+/, "") ?? ""
+  const loaded = Boolean(module)
   React.useEffect(() => {
+    // Once loaded, the workspace starts its own reads.
+    if (loaded) return
     void queryClient.prefetchInfiniteQuery(
       relayRootDirectoryQueryOptions(relayId, id)
     )
@@ -42,8 +47,11 @@ export function LazyFileWorkspace({
       void queryClient.prefetchQuery(
         relayFileEntryQueryOptions(relayId, id, path)
       )
+      if (readsFileWithEntry(path, undefined)) {
+        void queryClient.prefetchQuery(relayFileQueryOptions(relayId, id, path))
+      }
     }
-  }, [id, path, props.relayConnected, queryClient, relayId])
+  }, [id, loaded, path, props.relayConnected, queryClient, relayId])
 
   const Workspace = module?.FileWorkspace
   return Workspace ? <Workspace {...props} /> : fallback
