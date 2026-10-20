@@ -163,7 +163,7 @@ const sampleRatio = Config.Number("OTEL_TRACES_SAMPLER_ARG").pipe(
 )
 
 // Traces and logs export whenever an endpoint is set. Metrics stay opt-in
-// because some backends, such as Sentry, reject them.
+// because some OTLP backends reject them.
 const signalDefaults: TelemetryDefaults = {
   OTEL_TRACES_EXPORTER: "otlp",
   OTEL_LOGS_EXPORTER: "otlp",

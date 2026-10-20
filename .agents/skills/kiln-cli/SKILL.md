@@ -465,7 +465,7 @@ Interpret the result narrowly:
 - If an upload reports a local-file error, confirm the source exists and is one
   regular file. Directory uploads are not supported.
 - If Hearth returns HTTP 500, treat it as a server-side defect. Correlate the
-  request with application logs, Sentry, or traces when available; do not add
+  request with application logs or traces when available; do not add
   proxy or routing workarounds without evidence that routing is the cause.
 - If a console write reports `relay_operation_failed`, use its request ID to
   correlate Relay logs; no activity entry means the Relay did not accept the

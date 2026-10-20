@@ -27,8 +27,8 @@ Before application implementation:
 - Run the local intent skill check before substantial edits. The planning run on
   2026-09-08 reported no intent-enabled packages. Recheck for implementation.
 - Apply the Better Auth integration/security skills for actual identity changes;
-  React Doctor for React completion; CLI skill if CLI behavior changes; Sentry
-  guidance when debugging. Keep the CLI skill synchronized with CLI changes.
+  React Doctor for React completion; CLI skill if CLI behavior changes; traces
+  and logs when debugging. Keep the CLI skill synchronized with CLI changes.
 
 ## 2. Implementation sequence
 

@@ -51,9 +51,9 @@ Before editing files for a substantial task:
 - Hearth, Relays, and the browser export OpenTelemetry traces, logs, and
   metrics through Effect (`packages/telemetry`), configured by `OTEL_*`
   variables. Errors are error logs with `exception.*` attributes and an
-  `error.fingerprint` that groups occurrences. They currently go to Sentry
-  over OTLP: query them with `sentry log list` and
-  `sentry explore --dataset logs` (see the `sentry-cli` skill).
+  `error.fingerprint` that groups occurrences. They go to whichever OTLP
+  backend `OTEL_EXPORTER_OTLP_ENDPOINT` names; Kiln's maintainers read traces
+  in Tempo and logs in Loki through Grafana.
 - Name spans with `Effect.fn("Area.operation")` or `Effect.withSpan`, keep
   names stable and put IDs in attributes. Give long-lived loops and workers no
   span of their own, span each unit of work instead, and use metrics, not

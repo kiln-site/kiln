@@ -6,13 +6,6 @@
       "sourceType": "github",
       "skillPath": "skills/react-doctor/SKILL.md",
       "computedHash": "c2fe7246d704327c3757100ba675411cab545168374ec580645c3491073475ba"
-    },
-    "sentry-cli": {
-      "source": "cli.sentry.dev",
-      "sourceUrl": "https://cli.sentry.dev",
-      "sourceType": "well-known",
-      "computedHash": "5c4ad508ccc3d980158604271847da68c00f832d02a48688ffcfb342f6888db9",
-      "wellKnownDigest": "sha256:51cf883c6b5bab2e089db992c3f3b999a6b0e50a4df05e5097de9288d6e86b5e"
     }
   }
 }
