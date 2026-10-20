@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto"
+import { randomBytes, randomUUID } from "node:crypto"
 
 import { createServerFn } from "@tanstack/react-start"
 import {
@@ -9,6 +9,7 @@ import {
   databaseIdSchema,
   appServiceLimitsSchema,
   relayAppLimitsV1Feature,
+  relayAppProvisioningV1Feature,
   relayAppSchema,
   relayAppTerminalClaimSchema,
   relayAppTerminalRestartSchema,
@@ -29,6 +30,7 @@ import {
   renameAppRecordEffect,
   updateAppConfigEffect,
 } from "@/effect/managed-apps"
+import { promiseEffect } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
 import {
   isPlatformAdmin,
@@ -37,6 +39,10 @@ import {
 } from "@/lib/access-control"
 import { accessPermissions } from "@/lib/permissions"
 import type { AccessPermission } from "@/lib/permissions"
+import {
+  claimPreparedProvisioning,
+  compensatePreparedProvisioning,
+} from "@/lib/provisioning.server"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import {
@@ -171,6 +177,8 @@ export const getAppOwnerMinecraftProfileId = createServerFn({ method: "GET" })
     )
   )
 
+const cancelledSchema = z.object({ cancelled: z.boolean() })
+
 export const createApp = createServerFn({ method: "POST" })
   .validator(createAppInputSchema)
   .handler(async ({ data }) => {
@@ -191,16 +199,7 @@ export const createApp = createServerFn({ method: "POST" })
       )
     }
     const id = randomBytes(20).toString("hex")
-    const created = relayAppSchema.parse(
-      await databaseRpc(
-        relay,
-        "app.create",
-        { id, name: data.name },
-        60_000,
-        user.id
-      )
-    )
-    const persisted = await promiseResult(() =>
+    const register = () =>
       runAppEffect(
         "apps.record.create",
         createAppRecordEffect({
@@ -210,7 +209,67 @@ export const createApp = createServerFn({ method: "POST" })
           relayId: relay.id,
         })
       )
+    const { relayConnectionFeatures } = await import("@/lib/relay-connection")
+    if (relayConnectionFeatures(relay.id).has(relayAppProvisioningV1Feature)) {
+      // The Relay creates it in the background; it opens on its
+      // provisioning page at once.
+      const cancel = () =>
+        databaseRpc(
+          relay,
+          "app.provision.cancel",
+          { appId: id },
+          30_000,
+          user.id
+        ).then((result) => cancelledSchema.parse(result).cancelled)
+      const unregister = () =>
+        runAppEffect("apps.record.delete", deleteAppRecordEffect(relay.id, id))
+      const placeholder = await Effect.runPromise(
+        promiseEffect(() =>
+          databaseRpc(
+            relay,
+            "app.provision.prepare",
+            { id, idempotencyKey: randomUUID(), name: data.name },
+            30_000,
+            user.id
+          )
+        ).pipe(
+          Effect.map((value) => relayAppSchema.parse(value)),
+          Effect.tap(() => promiseEffect(register)),
+          Effect.tapError(() =>
+            compensatePreparedProvisioning(cancel, unregister)
+          )
+        )
+      )
+      await claimPreparedProvisioning({
+        cancel,
+        claim: () =>
+          databaseRpc(
+            relay,
+            "app.provision.claim",
+            { appId: id },
+            30_000,
+            user.id
+          ),
+        unconfirmed: "If it stays waiting, delete it and create it again.",
+        unregister,
+      })
+      publishAppChange(relay.id, true)
+      return {
+        id: placeholder.id,
+        relayId: relay.id,
+        shortId: placeholder.shortId,
+      }
+    }
+    const created = relayAppSchema.parse(
+      await databaseRpc(
+        relay,
+        "app.create",
+        { id, name: data.name },
+        60_000,
+        user.id
+      )
     )
+    const persisted = await promiseResult(register)
     if (Result.isFailure(persisted)) {
       await ignorePromise(() =>
         databaseRpc(

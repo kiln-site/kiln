@@ -7,6 +7,7 @@ import {
   truncate,
   writeFile,
 } from "node:fs/promises"
+import { randomUUID } from "node:crypto"
 import { tmpdir, totalmem } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -30,6 +31,7 @@ import { appLifecycleLocks, appReplaceLocks } from "./operation-plans.js"
 import { appRouteOwner } from "./relay-resources.js"
 import { fakeDocker } from "./test/docker.js"
 import {
+  provisioningWorker,
   relayHarness,
   TEST_NAMESPACE,
   type RelayHarness,
@@ -70,6 +72,52 @@ it("returns only requested App views, with table summaries separated from contai
       app: expect.objectContaining({ id: appId, containers: [] }),
     },
   ])
+})
+
+it("shows a provisioning app at once, then creates it once Hearth claims it", async () => {
+  const harness = await relayHarness()
+  const manager = await provisioningWorker(harness)
+  const input = { id: appId, name: "Website" }
+
+  await Effect.runPromise(
+    manager.prepare({
+      idempotencyKey: randomUUID(),
+      input,
+      instanceId: appId,
+      kind: "app",
+      placeholder: harness.apps.placeholder(input),
+    })
+  )
+  expect(
+    await harness.apps.inventory(
+      [{ id: appId, view: "detail" }],
+      new AbortController().signal
+    )
+  ).toEqual([
+    expect.objectContaining({
+      app: expect.objectContaining({
+        provisioning: expect.objectContaining({ phase: "awaiting_claim" }),
+      }),
+      observedState: "provisioning",
+    }),
+  ])
+  // Until it exists, nothing can change it.
+  await expect(harness.apps.get(appId)).rejects.toThrow("App not found")
+
+  await Effect.runPromise(manager.claim("app", appId))
+  for (let tries = 0; tries < 10_000; tries += 1) {
+    const [app] = await harness.apps.list()
+    if (app && !app.provisioning) break
+    await new Promise((resolve) => setImmediate(resolve))
+  }
+
+  expect(await harness.apps.list()).toEqual([
+    expect.objectContaining({ id: appId, observedState: "stopped" }),
+  ])
+  expect((await harness.apps.list())[0]?.provisioning).toBeUndefined()
+  expect(fakeDocker.networks.has(harness.resources.appNetwork(appId))).toBe(
+    true
+  )
 })
 
 afterEach(() => {

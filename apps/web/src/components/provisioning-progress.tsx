@@ -16,6 +16,7 @@ import {
 import { Button } from "@workspace/ui/components/button"
 import { showToast } from "@workspace/ui/components/sonner"
 
+import { PageContent } from "@/components/page-content"
 import { provisioningFailureDiagnostics } from "@/lib/provisioning-diagnostics"
 
 // What an instance shows while its Relay provisions it, for every kind of
@@ -116,29 +117,15 @@ const COPY: Readonly<Record<ProvisioningKind, ProvisioningCopy>> = {
   app: {
     noun: "app",
     summary:
-      "Kiln is creating the app's network and data directory on the Relay. You can leave this page; provisioning will continue and this page will unlock automatically.",
+      "Kiln is creating the app's network and data directory on the Relay. Once it's ready, choose what it runs and deploy it.",
     failure:
-      "Kiln kept the app record and its configuration, but the Relay could not finish creating it. The Relay's reported reason and next step are below.",
+      "Kiln kept the app record, but the Relay could not finish creating it. The Relay's reported reason and next step are below.",
+    // An app's images and containers come with its first deployment.
     steps: [
       {
         phase: "preparing",
         label: "Prepare",
         detail: "Creating its network and data directory",
-      },
-      {
-        phase: "pulling_image",
-        label: "Download",
-        detail: "Fetching or building its images",
-      },
-      {
-        phase: "creating_container",
-        label: "Build",
-        detail: "Creating its containers",
-      },
-      {
-        phase: "finalizing",
-        label: "Finalize",
-        detail: "Connecting its services",
       },
     ],
     guidance: {
@@ -152,6 +139,29 @@ const COPY: Readonly<Record<ProvisioningKind, ProvisioningCopy>> = {
         "Check Relay networking and the app's configuration. After resolving the cause, delete this failed app and create it again.",
     },
   },
+}
+
+/**
+ * An instance's pages once it exists; until then, how far its provisioning
+ * got, whichever page is open.
+ */
+export function ProvisioningGate({
+  children,
+  provisioning,
+  ...progress
+}: Omit<React.ComponentProps<typeof ProvisioningProgress>, "provisioning"> & {
+  children: React.ReactNode
+  provisioning: ProvisioningState | undefined
+}) {
+  if (!provisioning) return children
+  return (
+    <>
+      <PageContent
+        view={provisioning.phase === "failed" ? "unavailable" : "waiting"}
+      />
+      <ProvisioningProgress {...progress} provisioning={provisioning} />
+    </>
+  )
 }
 
 export const ProvisioningProgress = React.memo(function ProvisioningProgress({

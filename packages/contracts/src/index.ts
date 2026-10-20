@@ -558,13 +558,29 @@ export const relayAppSchema = z.object({
   hostname: z.string(),
   id: appIdSchema,
   network: z.string(),
-  observedState: z.enum(["starting", "running", "stopped", "failed"]),
+  observedState: z.enum([
+    "provisioning",
+    "starting",
+    "running",
+    "stopped",
+    "failed",
+  ]),
+  /** Where its provisioning is, until the app exists. */
+  provisioning: provisioningStateSchema.optional(),
   shortId: z.string().regex(/^[a-f0-9]{8}$/u),
   status: z.string().min(1).max(280),
 })
 
 export const relayCreateAppSchema = z
   .object({ id: appIdSchema, name: appNameSchema })
+  .strict()
+
+export const relayPrepareAppSchema = relayCreateAppSchema.extend({
+  idempotencyKey: z.uuid(),
+})
+
+export const relayProvisionAppSchema = z
+  .object({ appId: appIdSchema })
   .strict()
 
 export const relayDeployAppSchema = z

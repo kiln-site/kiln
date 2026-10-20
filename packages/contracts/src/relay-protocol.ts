@@ -3,7 +3,7 @@ import { Schema } from "effect"
 export const relayControlProtocol = "kiln-relay.v1" as const
 // Release compatibility level for response-shape changes. Keep this separate
 // from the WebSocket subprotocol so Hearth can be upgraded before Relay.
-export const relayControlProtocolVersion = 6 as const
+export const relayControlProtocolVersion = 7 as const
 export const relayBrowserProtocol = "kiln-relay-browser.v1" as const
 export const relayBrowserConsoleProtocol = "kiln-relay-browser.v2" as const
 export const relayBrowserConsoleProtocols = [
@@ -49,6 +49,8 @@ export const relayAppLimitsV1Feature = "app-limits-v1"
 // The Relay provisions databases in the background through
 // `database.provision.*`, showing a placeholder until each one exists.
 export const relayDatabaseProvisioningV1Feature = "database-provisioning-v1"
+// The Relay provisions apps through `app.provision.*` the same way.
+export const relayAppProvisioningV1Feature = "app-provisioning-v1"
 export const relayBrowserAuthorizationReviseMaxItems = 256
 
 export const relayControlOperations = [
@@ -115,6 +117,9 @@ export const relayControlOperations = [
   "database.terminal.restart",
   "app.list",
   "app.create",
+  "app.provision.prepare",
+  "app.provision.claim",
+  "app.provision.cancel",
   "app.delete",
   "app.deploy",
   "app.action",
@@ -229,6 +234,9 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "database.terminal.attach",
   "database.terminal.restart",
   "app.create",
+  "app.provision.prepare",
+  "app.provision.claim",
+  "app.provision.cancel",
   "app.delete",
   "app.deploy",
   "app.action",
@@ -349,6 +357,9 @@ export function relayControlOperationChanges(
     case "database.dump.import":
     case "database.data.write":
     case "app.create":
+    case "app.provision.prepare":
+    case "app.provision.claim":
+    case "app.provision.cancel":
     case "app.delete":
     case "app.deploy":
     case "app.action":

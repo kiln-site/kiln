@@ -43,6 +43,7 @@ import {
   relayDatabaseLimitsV1Feature,
   relayAppLimitsV1Feature,
   relayDatabaseProvisioningV1Feature,
+  relayAppProvisioningV1Feature,
   appIdFromFileRoot,
   isRelayFileRoot,
   relayFileRequestReplayV1Feature,
@@ -1023,6 +1024,7 @@ function authenticateSocket(
           relayDatabaseLimitsV1Feature,
           relayAppLimitsV1Feature,
           relayDatabaseProvisioningV1Feature,
+          relayAppProvisioningV1Feature,
         ],
         protocol: relayControlProtocol,
         relayBuild: relayBuildLabel(),
@@ -1216,7 +1218,11 @@ function auditDetailsForRequest(
   if (typeof payload.appId === "string") {
     details.appId = payload.appId
   }
-  if (request.operation === "app.create" && typeof payload.id === "string") {
+  if (
+    (request.operation === "app.create" ||
+      request.operation === "app.provision.prepare") &&
+    typeof payload.id === "string"
+  ) {
     details.appId = payload.id
   }
   if (
@@ -1443,7 +1449,10 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "app.network.routes.read":
       return "app.read"
     case "app.create":
+    case "app.provision.prepare":
+    case "app.provision.claim":
       return "app.create"
+    case "app.provision.cancel":
     case "app.delete":
       return "app.delete"
     case "app.deploy":

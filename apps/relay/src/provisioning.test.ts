@@ -11,6 +11,8 @@ import {
   relayInstanceSchema,
 } from "@workspace/contracts"
 
+import { appProvisioning } from "./app-provisioning.js"
+import type { AppDriver } from "./apps.js"
 import { databaseProvisioning } from "./database-provisioning.js"
 import type { DatabaseDriver } from "./databases.js"
 import { makeRelayStateLayer, RelayStateStore } from "./effect/state.js"
@@ -97,6 +99,7 @@ describe("provisioning worker", () => {
             const manager = yield* ProvisioningManager.make({
               adapters: {
                 // Only game servers provision here.
+                app: appProvisioning({} as AppDriver),
                 database: databaseProvisioning({} as DatabaseDriver),
                 server: serverProvisioning({
                   lifecycle,

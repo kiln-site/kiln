@@ -22,6 +22,8 @@ import {
   backupTaskResultSchema,
   omitBackupSecrets,
   relayBackupTaskSchema,
+  relayAppSchema,
+  relayCreateAppSchema,
   relayCreateDatabaseSchema,
   relayCreateInstanceSchema,
   relayInstanceSchema,
@@ -157,6 +159,7 @@ export type RelayProvisioningJobStatus =
 // What each kind of instance provisions from, and what it shows until it
 // exists: its create request and its placeholder.
 const provisioningSchemas = {
+  app: { input: relayCreateAppSchema, placeholder: relayAppSchema },
   database: {
     input: relayCreateDatabaseSchema,
     placeholder: relayManagedDatabaseSchema,
@@ -385,7 +388,7 @@ const RelayProvisioningJobRowSchema = Schema.Struct({
   idempotencyKey: Schema.String,
   inputJson: Schema.String,
   instanceId: Schema.String,
-  kind: Schema.Literals(["server", "database"]),
+  kind: Schema.Literals(["server", "database", "app"]),
   placeholderJson: Schema.String,
   status: RelayProvisioningJobStatusSchema,
   updatedAt: Schema.Number,

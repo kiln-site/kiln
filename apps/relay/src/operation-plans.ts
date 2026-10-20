@@ -259,6 +259,9 @@ export function controlRequestLocks(
     case "database.provision.prepare":
     case "database.provision.claim":
     case "database.provision.cancel":
+    case "app.provision.prepare":
+    case "app.provision.claim":
+    case "app.provision.cancel":
       return null
 
     // A new game server gets an ID only the create itself knows.

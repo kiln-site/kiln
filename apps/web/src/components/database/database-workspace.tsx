@@ -22,8 +22,7 @@ import {
   useDatabaseWorkspace,
   type DatabaseWorkspaceDatabase,
 } from "@/components/database/database-workspace-context"
-import { PageContent } from "@/components/page-content"
-import { ProvisioningProgress } from "@/components/provisioning-progress"
+import { ProvisioningGate } from "@/components/provisioning-progress"
 import {
   ResourceWorkspaceBoundary,
   WorkspaceRouteTitle,
@@ -83,27 +82,21 @@ function DatabaseProvisioningBoundary({
   children: React.ReactNode
 }) {
   const { database } = useDatabaseWorkspace()
-  if (!database.provisioning) return children
   return (
-    <>
-      <PageContent
-        view={
-          database.provisioning.phase === "failed" ? "unavailable" : "waiting"
-        }
-      />
-      <ProvisioningProgress
-        failedActions={
-          database.permissions.includes("database.delete") ? (
-            <DeleteFailedDatabase database={database} />
-          ) : null
-        }
-        id={database.id}
-        kind="database"
-        name={database.name}
-        provisioning={database.provisioning}
-        relayId={database.relayId}
-      />
-    </>
+    <ProvisioningGate
+      failedActions={
+        database.permissions.includes("database.delete") ? (
+          <DeleteFailedDatabase database={database} />
+        ) : null
+      }
+      id={database.id}
+      kind="database"
+      name={database.name}
+      provisioning={database.provisioning}
+      relayId={database.relayId}
+    >
+      {children}
+    </ProvisioningGate>
   )
 }
 

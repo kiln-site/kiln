@@ -20,6 +20,7 @@ import type {
   RelayAppNetwork,
   RelayConsoleLevel,
   RelayConsoleLine,
+  ProvisioningWorkPhase,
   RelayCreateApp,
   RelayDeleteApp,
   RelayDeployApp,
@@ -64,6 +65,7 @@ import {
   type OperationLanes,
 } from "./operation-lanes.js"
 import { appLifecycleLocks } from "./operation-plans.js"
+import { provisioningStatus } from "./provisioning.js"
 import {
   assertResourceLimitsFit,
   containerLimitSpec,
@@ -219,7 +221,7 @@ export class AppDriver {
     this.#networking = networking
     // Every container counts its memory and CPU, and the app its disk.
     limits.allocations.register(APP_KIND, async () =>
-      (await this.list()).flatMap((app) => [
+      (await this.#existing()).flatMap((app) => [
         {
           id: app.id,
           limits: { ...NO_RESOURCE_LIMITS, diskBytes: app.diskLimitBytes },
@@ -243,7 +245,46 @@ export class AppDriver {
     return join(this.#config.dataDirectory, "apps")
   }
 
+  /** Every app, with the placeholders of those still provisioning. */
   async list(): Promise<Array<RelayApp>> {
+    const [apps, provisioning] = await Promise.all([
+      this.#existing(),
+      this.#provisioning(),
+    ])
+    return withProvisioning(apps, provisioning)
+  }
+
+  // Apps still provisioning, by ID: what each shows until it exists.
+  async #provisioning(): Promise<ReadonlyMap<string, RelayApp>> {
+    const jobs = await Effect.runPromise(
+      this.#limits.state.listProvisioningJobs()
+    )
+    return new Map(
+      jobs.flatMap((job) =>
+        job.kind === "app" ? [[job.instanceId, job.placeholder]] : []
+      )
+    )
+  }
+
+  /** What an app shows from its create request until it exists. */
+  placeholder(input: RelayCreateApp): RelayApp {
+    return relayAppSchema.parse({
+      connectedDatabaseIds: [],
+      containers: [],
+      dataDirectory: this.#appDirectory(input.id),
+      deployment: null,
+      hostname: this.#hostname(input.id),
+      id: input.id,
+      network: this.#networkName(input.id),
+      observedState: "provisioning",
+      provisioning: { attempt: 0, error: null, phase: "awaiting_claim" },
+      shortId: input.id.slice(0, 8),
+      status: provisioningStatus("awaiting_claim", "app"),
+    })
+  }
+
+  // The apps that exist, as their networks and containers report them.
+  async #existing(): Promise<Array<RelayApp>> {
     const [containers, networks, host, diskLimits] = await Promise.all([
       this.#containers(),
       this.#networks(),
@@ -282,15 +323,23 @@ export class AppDriver {
           detail ? this.#diskLimits() : new Map<string, number>(),
           Promise.all(ids.map((id) => this.#restoreDeployment(id))),
         ])
+        const provisioning = await this.#provisioning()
         return requests.flatMap(({ id, view }): Array<RelayInventoryItem> => {
           const owned = containers.filter((container) => container.appId === id)
-          if (!owned.length && !networks.includes(id)) return []
-          const { observedState } = this.#runtimeState(id, owned)
+          const placeholder = provisioning.get(id)
+          const exists = owned.length > 0 || networks.includes(id)
+          if (!exists && !placeholder) return []
+          const observedState =
+            placeholder?.observedState ??
+            this.#runtimeState(id, owned).observedState
           const common = { id, view, observedState }
-          if (view === "detail")
-            return [
-              { ...common, app: this.#toApp(id, owned, host, diskLimits) },
-            ]
+          if (view === "detail") {
+            const [app] = withProvisioning(
+              exists ? [this.#toApp(id, owned, host, diskLimits)] : [],
+              placeholder ? new Map([[id, placeholder]]) : new Map()
+            )
+            return [{ ...common, app }]
+          }
           if (view === "status") return [common]
           return [
             {
@@ -314,12 +363,19 @@ export class AppDriver {
   }
 
   async get(appId: string): Promise<RelayApp> {
-    const app = (await this.list()).find((candidate) => candidate.id === appId)
+    const app = (await this.#existing()).find(
+      (candidate) => candidate.id === appId
+    )
     if (!app) throw new Error("App not found")
     return app
   }
 
-  async create(input: RelayCreateApp): Promise<RelayApp> {
+  /** Creates an app's network and data directory, calling `onPhase` first. */
+  async create(
+    input: RelayCreateApp,
+    onPhase: (phase: ProvisioningWorkPhase) => Promise<void> = async () => {}
+  ): Promise<RelayApp> {
+    await onPhase("preparing")
     if ((await this.#networks()).includes(input.id)) {
       throw new Error("App already exists")
     }
@@ -2190,4 +2246,26 @@ function composeLimits(
         },
       }),
   }
+}
+
+// Apps with the state of any still provisioning: one that exists shows its
+// provisioning until the job finishes, and one that doesn't yet shows its
+// placeholder.
+function withProvisioning(
+  apps: ReadonlyArray<RelayApp>,
+  placeholders: ReadonlyMap<string, RelayApp>
+): Array<RelayApp> {
+  const pending = new Map(placeholders)
+  const listed = apps.map((app) => {
+    const placeholder = pending.get(app.id)
+    if (!placeholder) return app
+    pending.delete(app.id)
+    return {
+      ...app,
+      observedState: placeholder.observedState,
+      provisioning: placeholder.provisioning,
+      status: placeholder.status,
+    }
+  })
+  return [...listed, ...pending.values()]
 }

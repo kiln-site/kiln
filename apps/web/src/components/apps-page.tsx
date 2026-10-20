@@ -586,7 +586,9 @@ function CreateAppDialog({
   const create = useMutation({
     mutationFn: () => createApp({ data: { name: name.trim(), relayId } }),
     onSuccess: async (created) => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.apps.all })
+      // The app's page resolves it from the directory, so the directory has
+      // it before the page opens.
+      await queryClient.invalidateQueries({ queryKey: queryKeys.apps.all })
       // Leaving the list closes the dialog with it.
       await navigate({
         params: { appId: created.id },

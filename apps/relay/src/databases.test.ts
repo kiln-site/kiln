@@ -5,22 +5,19 @@ import {
 } from "@workspace/contracts"
 import { randomUUID } from "node:crypto"
 
-import { Effect, Fiber } from "effect"
+import { Effect } from "effect"
 import { describe, expect, it, vi } from "vite-plus/test"
 
 vi.mock("./command.js", () => import("./test/docker.js"))
 
 import { fakeDocker } from "./test/docker.js"
 import {
+  provisioningWorker,
   relayHarness,
   TEST_NAMESPACE,
   type RelayHarness,
 } from "./test/relay.js"
-import { databaseProvisioning } from "./database-provisioning.js"
 import { DockerEngine } from "./docker-engine.js"
-import { RelayStateStore } from "./effect/state.js"
-import { ProvisioningManager } from "./provisioning.js"
-import { serverProvisioning } from "./server-provisioning.js"
 import { controlRequestLocks, databaseLocks } from "./operation-plans.js"
 
 const serverId = "a".repeat(40)
@@ -129,28 +126,6 @@ describe("managed database recovery metadata", () => {
 })
 
 describe("managed database provisioning", () => {
-  // The Relay's provisioning queue and worker over the harness's drivers.
-  async function provisioning(harness: RelayHarness) {
-    const manager = await Effect.runPromise(
-      ProvisioningManager.make({
-        adapters: {
-          database: databaseProvisioning(harness.databases),
-          server: serverProvisioning({
-            lifecycle: harness.lifecycle,
-            refreshSnapshot: async () => undefined,
-            state: harness.state,
-          }),
-        },
-        lanes: harness.lanes,
-      }).pipe(Effect.provideService(RelayStateStore, harness.state))
-    )
-    const worker = Effect.runFork(manager.run())
-    return {
-      manager,
-      stop: () => Effect.runPromise(Fiber.interrupt(worker)),
-    }
-  }
-
   function input(id: string) {
     return relayCreateDatabaseSchema.parse({
       databaseName: "kiln_app",
@@ -177,7 +152,7 @@ describe("managed database provisioning", () => {
 
   it("shows a placeholder at once, then creates the database once Hearth claims it", async () => {
     const harness = await relayHarness()
-    const { manager, stop } = await provisioning(harness)
+    const manager = await provisioningWorker(harness)
     const id = "c".repeat(40)
     const job = {
       idempotencyKey: randomUUID(),
@@ -211,12 +186,11 @@ describe("managed database provisioning", () => {
     expect(database).toMatchObject({ id, observedState: "running" })
     expect(database.provisioning).toBeUndefined()
     expect(databaseContainer(id).state.running).toBe(true)
-    await stop()
   })
 
   it("shows where a failed create stopped and leaves nothing behind", async () => {
     const harness = await relayHarness()
-    const { manager, stop } = await provisioning(harness)
+    const manager = await provisioningWorker(harness)
     const id = "c".repeat(40)
     fakeDocker.failNext({ command: "start" }, "port is already allocated")
 
@@ -239,12 +213,11 @@ describe("managed database provisioning", () => {
     })
     expect(fakeDocker.networks.has(networkOf(id))).toBe(false)
     expect(fakeDocker.volumes.has(volumeOf(id))).toBe(false)
-    await stop()
   })
 
   it("keeps a deleted job visible until what it made is gone, and never runs it", async () => {
     const harness = await relayHarness()
-    const { manager, stop } = await provisioning(harness)
+    const manager = await provisioningWorker(harness)
     const id = "c".repeat(40)
     await Effect.runPromise(
       manager.prepare({
@@ -274,12 +247,11 @@ describe("managed database provisioning", () => {
     await Effect.runPromise(manager.discard("database", id, async () => {}))
     expect(await harness.databases.list()).toEqual([])
     expect(fakeDocker.volumes.has(volumeOf(id))).toBe(false)
-    await stop()
   })
 
   it("refuses to delete a job the worker has taken", async () => {
     const harness = await relayHarness()
-    const { manager, stop } = await provisioning(harness)
+    const manager = await provisioningWorker(harness)
     const id = "c".repeat(40)
     // Another change to the database holds its lanes, so the worker takes
     // the job and waits its turn.
@@ -318,7 +290,6 @@ describe("managed database provisioning", () => {
     release()
     await held
     expect(await settled(harness, id)).toMatchObject({ observedState: "running" })
-    await stop()
   })
 })
 

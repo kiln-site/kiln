@@ -5,16 +5,22 @@ import { instanceStatePresentation } from "@/lib/instance-state-presentation"
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
-import { Boxes, Rocket } from "lucide-react"
+import { Boxes, Rocket, Trash2 } from "lucide-react"
 
+import { Button } from "@workspace/ui/components/button"
+
+import { DeleteAppDialog } from "@/components/app/app-dialogs"
 import {
   appRelayAvailable,
   showAppOperationError,
+  type App,
 } from "@/components/app/app-presentation"
 import {
   AppWorkspaceContext,
+  useAppWorkspace,
   type AppWorkspaceApp,
 } from "@/components/app/app-workspace-context"
+import { ProvisioningGate } from "@/components/provisioning-progress"
 import {
   WorkspaceCopyValueButton,
   WorkspaceHeader,
@@ -56,12 +62,60 @@ export const AppWorkspaceShell = React.memo(function AppWorkspaceShell({
           noun={{ one: "app", other: "apps" }}
           workspace={workspace}
         >
-          {children}
+          <AppProvisioningBoundary>{children}</AppProvisioningBoundary>
         </ResourceWorkspaceBoundary>
       </div>
     </WorkspaceFrame>
   )
 })
+
+// Until the Relay has created the app, every page shows how far it got,
+// and one that failed can be deleted from there.
+function AppProvisioningBoundary({ children }: { children: React.ReactNode }) {
+  const { app } = useAppWorkspace()
+  return (
+    <ProvisioningGate
+      failedActions={
+        app.permissions.includes("app.delete") ? (
+          <DeleteFailedApp app={app} />
+        ) : null
+      }
+      id={app.id}
+      kind="app"
+      name={app.name}
+      provisioning={app.provisioning}
+      relayId={app.relayId}
+    >
+      {children}
+    </ProvisioningGate>
+  )
+}
+
+function DeleteFailedApp({ app }: { app: App }) {
+  const navigate = useNavigate()
+  const [open, setOpen] = React.useState(false)
+  return (
+    <>
+      <Button
+        size="sm"
+        type="button"
+        variant="destructive"
+        onClick={() => setOpen(true)}
+      >
+        <Trash2 />
+        Delete app
+      </Button>
+      {open ? (
+        <DeleteAppDialog
+          app={app}
+          open
+          onDeleted={() => void navigate({ to: "/infra/apps", replace: true })}
+          onOpenChange={setOpen}
+        />
+      ) : null}
+    </>
+  )
+}
 
 function useAppWorkspaceQuery(
   routeId: string | undefined
@@ -287,7 +341,11 @@ function AppPowerControls({
         pendingLabel: "Deploying",
         onClick: () => deploy.mutate(),
       }}
-      target={{ name: app.name, observedState: app.observedState }}
+      target={{
+        name: app.name,
+        observedState: app.observedState,
+        provisioning: app.provisioning ?? null,
+      }}
       relayConnected={relayConnected}
       onAction={handleAction}
     />

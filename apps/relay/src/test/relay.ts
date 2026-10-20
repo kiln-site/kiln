@@ -21,20 +21,24 @@ import {
   type RelayInstance,
   type ResourceLimitsInput,
 } from "@workspace/contracts"
-import { Effect, ManagedRuntime } from "effect"
+import { Effect, Fiber, ManagedRuntime } from "effect"
 import { onTestFinished } from "vite-plus/test"
 
+import { appProvisioning } from "../app-provisioning.js"
 import { AppDriver } from "../apps.js"
 import { BrickCatalog } from "../bricks.js"
 import { loadConfig, type RelayConfig } from "../config.js"
 import { DatabaseConnections } from "../database-connections.js"
+import { databaseProvisioning } from "../database-provisioning.js"
 import { DatabaseDriver } from "../databases.js"
 import { DockerDriver } from "../docker.js"
 import { makeRelayStateLayer, RelayStateStore } from "../effect/state.js"
 import { LifecycleDriver } from "../lifecycle.js"
 import { OperationLanes } from "../operation-lanes.js"
+import { ProvisioningManager } from "../provisioning.js"
 import { appRouteOwner, relayResourceNames } from "../relay-resources.js"
 import { RuntimeRecoveryManager } from "../runtime-recovery.js"
+import { serverProvisioning } from "../server-provisioning.js"
 import { type ContainerSeed, type FakeContainer, fakeDocker } from "./docker.js"
 
 export const TEST_NAMESPACE = "kiln-test"
@@ -274,4 +278,30 @@ export function serverRecipe(
     },
     ...overrides,
   })
+}
+
+/**
+ * The Relay's provisioning queue and its worker over a harness's drivers,
+ * as Relay startup builds them. The worker stops when the test finishes.
+ */
+export async function provisioningWorker(
+  harness: RelayHarness
+): Promise<ProvisioningManager> {
+  const manager = await Effect.runPromise(
+    ProvisioningManager.make({
+      adapters: {
+        app: appProvisioning(harness.apps),
+        database: databaseProvisioning(harness.databases),
+        server: serverProvisioning({
+          lifecycle: harness.lifecycle,
+          refreshSnapshot: async () => undefined,
+          state: harness.state,
+        }),
+      },
+      lanes: harness.lanes,
+    }).pipe(Effect.provideService(RelayStateStore, harness.state))
+  )
+  const worker = Effect.runFork(manager.run())
+  onTestFinished(() => Effect.runPromise(Fiber.interrupt(worker)))
+  return manager
 }
