@@ -41,6 +41,7 @@ import {
 import {
   DockerEngine,
   ensureImage,
+  isDockerNotFound,
   type DockerContainerSummary,
   type DockerExecProcess,
 } from "./docker-engine.js"
@@ -761,8 +762,14 @@ export class DatabaseDriver {
         engine.removeContainer(container, { force: true, timeout: 90_000 })
       )
     }
+    // A network that won't go fails the delete, so it can be retried
+    // rather than left behind unseen.
     if (network) {
-      await Effect.runPromise(engine.removeNetwork(network).pipe(Effect.ignore))
+      await Effect.runPromise(
+        engine
+          .removeNetwork(network)
+          .pipe(Effect.catchIf(isDockerNotFound, () => Effect.void))
+      )
     }
     await this.connections.forgetDatabase(input.databaseId)
     await Effect.runPromise(

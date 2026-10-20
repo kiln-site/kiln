@@ -731,6 +731,25 @@ describe("managed database deletion", () => {
     expect(server.state.running).toBe(true)
   })
 
+  it("fails a delete whose network won't go, so it can be retried", async () => {
+    const harness = await relayHarness()
+    const id = "d".repeat(40)
+    await createDatabase(harness, id)
+    fakeDocker.failNext(
+      { command: "network rm", target: networkOf(id) },
+      "network has active endpoints"
+    )
+
+    await expect(
+      harness.databases.delete({ databaseId: id, deleteData: true })
+    ).rejects.toThrow("network has active endpoints")
+    expect(fakeDocker.networks.has(networkOf(id))).toBe(true)
+
+    await harness.databases.delete({ databaseId: id, deleteData: true })
+    expect(fakeDocker.networks.has(networkOf(id))).toBe(false)
+    expect(fakeDocker.volumes.has(volumeOf(id))).toBe(false)
+  })
+
   it("finishes when the container disappears before Docker removes it", async () => {
     const harness = await relayHarness()
     const id = "d".repeat(40)
