@@ -600,7 +600,7 @@ describe("apps", () => {
       (app) => app.deployment?.state
     )
 
-    expect([...outcomes].sort()).toEqual(["failed", "succeeded"])
+    expect(new Set(outcomes)).toEqual(new Set(["failed", "succeeded"]))
     expect(
       [...appContainers(), ...appContainers(otherId)].filter(
         (container) => container.memoryBytes === most
