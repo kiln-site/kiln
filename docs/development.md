@@ -52,6 +52,26 @@ to be unique across running stacks.
 Run relevant checks with `vp check`, `vp run -r typecheck`, or targeted
 `vp test run` suites. Validate user-visible changes in the browser.
 
+## Marketing site
+
+`apps/site` is the public site at kiln.site, a separate TanStack Start app with
+no database or Relay. It needs no Docker stack:
+
+```sh
+pnpm --filter site dev
+```
+
+It serves `http://localhost:3100`. `KILN_HEARTH_URL` (default
+`https://panel.kiln.site`) is where Log in, Sign up, and plan buttons point, and
+`KILN_DOCS_URL` (default `https://docs.kiln.site`) is where docs links point.
+Both are read when the site serves a request, not at build time. Choosing a
+paid plan opens Hearth's sign-up with `plan` and `interval` parameters and a
+`redirect` to `/settings/billing` carrying the same choice.
+
+Its console and editor demos render Hearth's own components from
+`apps/web/src`, which the site resolves through the `@/` alias; site code uses
+`~/`. Build with `vp run site#build` and serve with `pnpm --filter site start`.
+
 ## PR titles
 
 Use `<type>(<scope>): <short human title>`. Examples:

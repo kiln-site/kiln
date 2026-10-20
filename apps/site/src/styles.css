@@ -1,0 +1,53 @@
+@import "@workspace/ui/globals.css";
+/* The demos render these Hearth components, so their classes must exist. */
+@source "../../web/src/components/console";
+@source "../../web/src/components/instance-kind-icon.tsx";
+@source "../../web/src/components/overlay-notice.tsx";
+@source "../../web/src/components/syntax-code-editor.tsx";
+@source "../../web/src/components/workspace-toolbar-tooltip.tsx";
+
+/*
+ * The site shares Hearth's palette, flat corners, and type roles. These add
+ * the few marketing-only scales Hearth has no use for.
+ */
+@layer components {
+  .site-display {
+    font-family: var(--font-heading);
+    font-size: clamp(2.5rem, 1.6rem + 4.4vw, 5.25rem);
+    font-weight: 600;
+    letter-spacing: -0.055em;
+    line-height: 0.98;
+    text-wrap: balance;
+  }
+
+  .site-title {
+    font-family: var(--font-heading);
+    font-size: clamp(1.75rem, 1.35rem + 1.6vw, 2.625rem);
+    font-weight: 600;
+    letter-spacing: -0.045em;
+    line-height: 1.08;
+    text-wrap: balance;
+  }
+
+  .site-lede {
+    font-size: clamp(1.0625rem, 1rem + 0.3vw, 1.25rem);
+    line-height: 1.5;
+    letter-spacing: -0.01em;
+    text-wrap: pretty;
+  }
+
+  .site-copy {
+    font-size: 1rem;
+    line-height: 1.6;
+    text-wrap: pretty;
+  }
+}
+
+@layer utilities {
+  .site-container {
+    margin-inline: auto;
+    width: 100%;
+    max-width: 76rem;
+    padding-inline: clamp(1.25rem, 4vw, 2.5rem);
+  }
+}
