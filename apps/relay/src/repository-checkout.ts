@@ -15,6 +15,7 @@ import {
   join,
   relative,
   resolve,
+  sep,
 } from "node:path"
 import { Readable } from "node:stream"
 import { pipeline } from "node:stream/promises"
@@ -141,22 +142,20 @@ export async function extractRepositoryArchive(
     const type = header.type ?? "file"
     if (type === "directory") {
       // The top folder itself has no path of its own.
-      if (path !== null) await mkdir(path, { recursive: true, mode: 0o755 })
+      if (path !== null) await makeFolders(root, path)
     } else if (path !== null && type === "file") {
       bytes += header.size ?? 0
       if (bytes > MAX_CHECKOUT_BYTES) {
         throw new Error("The repository is larger than 2 GiB")
       }
-      await mkdir(dirname(path), { recursive: true, mode: 0o755 })
-      await pipeline(
-        entry,
-        createWriteStream(path, {
-          flags: "wx",
-          // Executable files stay executable; nothing else carries over.
-          mode: 0o644 | ((header.mode ?? 0) & 0o111),
-        }),
-        { signal }
-      )
+      await makeFolders(root, dirname(path))
+      // Executable files stay executable; nothing else carries over.
+      const mode = 0o644 | ((header.mode ?? 0) & 0o111)
+      await pipeline(entry, createWriteStream(path, { flags: "wx", mode }), {
+        signal,
+      })
+      // Set again past the umask, so any container user can read it.
+      await chmod(path, mode)
       summary.files += 1
       return
     } else if (path !== null && type === "symlink" && header.linkname) {
@@ -200,6 +199,22 @@ export async function extractRepositoryArchive(
   }
   summary.skipped += await createContainedLinks(root, links)
   return summary
+}
+
+// Makes each folder from the checkout down to `path` that doesn't exist,
+// readable by every user whatever the umask. No links exist yet, so none is
+// followed.
+async function makeFolders(root: string, path: string): Promise<void> {
+  let folder = root
+  for (const segment of relative(root, path).split(sep)) {
+    if (!segment) continue
+    folder = join(folder, segment)
+    const made = await recoverPromise(
+      () => mkdir(folder, { mode: 0o755 }).then(() => true),
+      () => false
+    )
+    if (made) await chmod(folder, 0o755)
+  }
 }
 
 // Makes the links whose folders are inside the checkout and that lead to

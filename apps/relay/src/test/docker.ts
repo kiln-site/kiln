@@ -649,6 +649,12 @@ export class FakeDocker {
           labels?: Record<string, string>
           mem_limit?: number
           networks?: Record<string, { aliases?: Array<string> } | null>
+          volumes?: Array<{
+            read_only?: boolean
+            source?: string
+            target: string
+            type: string
+          }>
         }
       >
     }
@@ -672,13 +678,28 @@ export class FakeDocker {
           "com.docker.compose.project": project,
           "com.docker.compose.service": service,
         },
-        // Volumes its image declares, each new and empty.
-        mounts: Object.keys(imageConfig?.Volumes ?? {}).map((destination) => ({
-          anonymous: true,
-          destination,
-          source: randomBytes(32).toString("hex"),
-          type: "volume" as const,
-        })),
+        mounts: [
+          // Its binds, as the host path Docker gets.
+          ...(settings.volumes ?? []).flatMap((volume) =>
+            volume.type === "bind" && volume.source
+              ? [
+                  {
+                    destination: volume.target,
+                    readOnly: volume.read_only ?? false,
+                    source: volume.source,
+                    type: "bind" as const,
+                  },
+                ]
+              : []
+          ),
+          // Volumes its image declares, each new and empty.
+          ...Object.keys(imageConfig?.Volumes ?? {}).map((destination) => ({
+            anonymous: true,
+            destination,
+            source: randomBytes(32).toString("hex"),
+            type: "volume" as const,
+          })),
+        ],
         name,
       })
       // As Compose sets them on the container.
@@ -689,14 +710,15 @@ export class FakeDocker {
         created.healthCheck = settings.healthcheck
           ? !settings.healthcheck.disable
           : imageConfig?.Healthcheck !== undefined
-        // The external networks it joins, under its aliases; the project's
-        // own networks aren't modelled.
+        // The external networks it joins, under its aliases and, as Compose
+        // adds it, its service's name; the project's own networks aren't
+        // modelled.
         for (const [key, endpoint] of Object.entries(settings.networks ?? {})) {
           const network = definition.networks?.[key]
           if (!network?.external || !network.name) continue
           if (!this.networks.has(network.name)) continue
           created.networks.set(network.name, {
-            aliases: [...(endpoint?.aliases ?? []), name],
+            aliases: [...(endpoint?.aliases ?? []), service, name],
             ipAddress: "",
           })
         }

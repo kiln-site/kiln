@@ -58,6 +58,7 @@ import {
   ensuringPromise,
   forkPromise,
   promiseEffect,
+  recoverPromise,
 } from "./effect/promise.js"
 import {
   reportRelayError,
@@ -660,9 +661,16 @@ export class AppDriver {
     appId: string,
     diskLimitBytes: number | null,
     services: ReadonlyArray<ServiceResourceLimits>,
-    apply: () => Promise<A>
+    apply: (surge: boolean) => Promise<A>,
+    options: {
+      /**
+       * Whether the new containers may run beside the app's running ones,
+       * which `apply` learns: only if the node holds both at once.
+       */
+      surge?: boolean
+    } = {}
   ): Promise<A> {
-    const release = await Effect.runPromise(
+    const { release, surge } = await Effect.runPromise(
       traceRelayEffect(
         "relay.apps.reserve",
         this.#lanes.runNested(
@@ -672,30 +680,56 @@ export class AppDriver {
           },
           promiseEffect(async () => {
             await this.#assertLimitsFit(appId, diskLimitBytes, services)
-            // The wider of what it holds now and what it asks for, since a
-            // smaller limit isn't free until it applies, and may not.
             const [containers, diskLimits] = await Promise.all([
               this.#appContainers(appId),
               this.#diskLimits(),
             ])
-            return this.#limits.allocations.reserve(
-              APP_KIND,
-              appId,
-              widestResourceLimits(
-                combinedLimits(
-                  containers.map((container) => container.limits),
-                  diskLimits.get(appId) ?? null
-                ),
-                combinedLimits(services, diskLimitBytes)
-              )
+            const running = containers
+              .filter((container) => container.running)
+              .map((container) => container.limits)
+            const surge =
+              options.surge === true &&
+              running.length > 0 &&
+              (await recoverPromise(
+                () =>
+                  this.#assertLimitsFit(
+                    appId,
+                    diskLimitBytes,
+                    services,
+                    running
+                  ).then(() => true),
+                () => false
+              ))
+            const current = combinedLimits(
+              containers.map((container) => container.limits),
+              diskLimits.get(appId) ?? null
             )
+            const requested = combinedLimits(services, diskLimitBytes)
+            // Beside the running containers, both sets of memory count; a
+            // smaller limit isn't free until it applies, and may not, so
+            // otherwise the wider of the two does.
+            const held = surge
+              ? {
+                  ...widestResourceLimits(current, requested),
+                  memoryBytes:
+                    current.memoryBytes === null &&
+                    requested.memoryBytes === null
+                      ? null
+                      : (current.memoryBytes ?? 0) +
+                        (requested.memoryBytes ?? 0),
+                }
+              : widestResourceLimits(current, requested)
+            return {
+              release: this.#limits.allocations.reserve(APP_KIND, appId, held),
+              surge,
+            }
           })
         ),
         { "relay.app_id": appId, "relay.app.services": services.length }
       )
     )
     return ensuringPromise(async () => {
-      const applied = await apply()
+      const applied = await apply(surge)
       await Effect.runPromise(
         this.#limits.state.setDiskLimit(APP_KIND, appId, diskLimitBytes)
       )
@@ -706,7 +740,9 @@ export class AppDriver {
   async #assertLimitsFit(
     appId: string,
     diskLimitBytes: number | null,
-    services: ReadonlyArray<ServiceResourceLimits>
+    services: ReadonlyArray<ServiceResourceLimits>,
+    // Containers that keep running beside the new ones.
+    alongside: ReadonlyArray<ServiceResourceLimits> = []
   ): Promise<void> {
     const [filesystem, others, current] = await Promise.all([
       statfs(this.#config.rootDirectory),
@@ -721,7 +757,10 @@ export class AppDriver {
       others,
     })
     // Each service's memory counts against the node, with the others'.
-    const allocated: Array<typeof NO_RESOURCE_LIMITS> = [...others]
+    const allocated: Array<typeof NO_RESOURCE_LIMITS> = [
+      ...others,
+      ...alongside.map((limits) => ({ ...NO_RESOURCE_LIMITS, ...limits })),
+    ]
     for (const service of services) {
       const limits = { ...NO_RESOURCE_LIMITS, ...service }
       assertResourceLimitsFit({
@@ -1047,10 +1086,11 @@ export class AppDriver {
                   memoryBytes: null,
                 },
               ],
-              () =>
+              (surge) =>
                 traceRelayPromise("relay.apps.deployment.replace", () =>
-                  this.#replaceContainer(input, deployment, image, host)
-                )
+                  this.#replaceContainer(input, deployment, image, host, surge)
+                ),
+              { surge: true }
             )
           }
         })
@@ -1318,7 +1358,9 @@ export class AppDriver {
     input: RelayDeployApp,
     deployment: Deployment,
     image: string,
-    host: string
+    host: string,
+    // Whether the node holds the new container beside the running one.
+    surge: boolean
   ) {
     const log = (text: string, level: RelayConsoleLevel = "info") =>
       this.#log(input.appId, deployment, text, level)
@@ -1337,13 +1379,16 @@ export class AppDriver {
       (membership) => membership.service === APP_SERVICE
     )
     const running = previous.some((container) => container.running)
-    // Two containers can't hold the same host port or Tailscale address.
+    // Two containers can't hold the same host port or Tailscale address,
+    // or memory the node doesn't have for both.
     const blocker =
       config.ports.length > 0
         ? "it publishes ports on the Relay"
         : tailscale.length > 0
           ? "it has a Tailscale address"
-          : null
+          : !surge
+            ? "the node can't hold both copies at once"
+            : null
     const rolling = running && blocker === null
     deployment.rolling = rolling
     if (running && blocker) {
@@ -1735,12 +1780,20 @@ export class AppDriver {
     }
     // Every service counts, with the limits the Compose file sets for those
     // Kiln leaves alone.
-    const reserve = (prepared: ComposeProject, apply: () => Promise<void>) =>
+    const reserve = (
+      prepared: ComposeProject,
+      apply: (surge: boolean) => Promise<void>,
+      surge = false
+    ) =>
       this.#reserving(
         input.appId,
         input.config.diskLimitBytes,
         Object.values(prepared.services).map(composeServiceLimits),
-        () => traceRelayPromise("relay.apps.deployment.composeUp", apply)
+        (fits) =>
+          traceRelayPromise("relay.apps.deployment.composeUp", () =>
+            apply(fits)
+          ),
+        { surge }
       )
     if (running && blocker === null) {
       // Its own project, so its networks and containers stand apart from
@@ -1752,16 +1805,26 @@ export class AppDriver {
       })
       log(`Services: ${Object.keys(prepared.services).join(", ")}`)
       let rolled = false
-      await reserve(prepared, async () => {
-        rolled = await this.#rollCompose(
-          input,
-          deployment,
-          composeArguments(project),
-          environment,
-          prepared,
-          previous
-        )
-      })
+      await reserve(
+        prepared,
+        async (surge) => {
+          if (!surge) {
+            log(
+              "Stopping the running containers first, since the node can't hold both copies at once"
+            )
+            return
+          }
+          rolled = await this.#rollCompose(
+            input,
+            deployment,
+            composeArguments(project),
+            environment,
+            prepared,
+            previous
+          )
+        },
+        true
+      )
       if (rolled) {
         deployment.rolling = true
         await this.#removeComposeNetworks(input.appId, project)
@@ -1917,10 +1980,16 @@ export class AppDriver {
             async () => {
               for (const container of await created()) {
                 if (!container.running || !joinsNetworks(container)) continue
-                await this.#takeAlias(
-                  this.#networkName(input.appId),
-                  container.name,
-                  this.#serviceAlias(input.appId, container.service)
+                await docker(
+                  this.#engine.connectNetwork(
+                    this.#networkName(input.appId),
+                    container.name,
+                    {
+                      aliases: [
+                        this.#serviceAlias(input.appId, container.service),
+                      ],
+                    }
+                  )
                 )
               }
             }
@@ -1986,7 +2055,7 @@ export class AppDriver {
   // Names, labels, and networks every service so its containers are found
   // as the app's, and rewrites binds into the data directory or checkout to
   // the host paths Docker needs. With `deferAliases`, services join the
-  // app's network without their names, which they take once healthy.
+  // app's network only once healthy, under their names.
   #prepareCompose(
     normalized: ComposeProject,
     options: {
@@ -2010,18 +2079,34 @@ export class AppDriver {
       ...options.databases,
       ...(options.routes.network ? [options.routes.network] : []),
     ]
+    // A path in the data directory or checkout, as Docker on the host sees
+    // it, or null for any other.
+    const hostPath = (source: string): string | null => {
+      const bind = options.binds.find(
+        ({ relay }) => source === relay || source.startsWith(`${relay}/`)
+      )
+      return bind ? `${bind.host}${source.slice(bind.relay.length)}` : null
+    }
     const services: Record<string, ComposeService> = {}
     for (const [name, service] of Object.entries(normalized.services ?? {})) {
       if (!appServiceNameSchema.safeParse(name).success) {
         throw new Error(`Rename the "${name}" service: use letters and digits`)
       }
+      const mounts = fileMounts(service, normalized, hostPath)
       const networks: Record<string, unknown> = service.network_mode
         ? {}
         : {
             ...(service.networks ?? { default: null }),
-            kiln_app: options.deferAliases
+            // Compose names each service on every network it joins, so a
+            // staged service stays off the app's network until it's ready,
+            // when it joins under its alias.
+            ...(options.deferAliases
               ? {}
-              : { aliases: [this.#serviceAlias(options.appId, name)] },
+              : {
+                  kiln_app: {
+                    aliases: [this.#serviceAlias(options.appId, name)],
+                  },
+                }),
             ...Object.fromEntries(
               joined.map((network) => [
                 network,
@@ -2060,27 +2145,22 @@ export class AppDriver {
         },
         restart: service.restart ?? "unless-stopped",
         ...(service.network_mode ? {} : { networks }),
-        ...(service.volumes
+        ...mounts,
+        ...(service.volumes || mounts.volumes
           ? {
-              volumes: service.volumes.map((volume) => {
-                if (
-                  volume.type !== "bind" ||
-                  typeof volume.source !== "string"
-                ) {
-                  return volume
-                }
-                const source = volume.source
-                const bind = options.binds.find(
-                  ({ relay }) =>
-                    source === relay || source.startsWith(`${relay}/`)
-                )
-                return bind
-                  ? {
-                      ...volume,
-                      source: `${bind.host}${source.slice(bind.relay.length)}`,
-                    }
-                  : volume
-              }),
+              volumes: [
+                ...(service.volumes ?? []).map((volume) => {
+                  if (
+                    volume.type !== "bind" ||
+                    typeof volume.source !== "string"
+                  ) {
+                    return volume
+                  }
+                  const host = hostPath(volume.source)
+                  return host ? { ...volume, source: host } : volume
+                }),
+                ...(mounts.volumes ?? []),
+              ],
             }
           : {}),
       }
@@ -2511,19 +2591,29 @@ export class AppDriver {
   }
 }
 
+interface ComposeFileReference {
+  source: string
+  target?: string
+  [key: string]: unknown
+}
+
 interface ComposeService {
+  configs?: Array<ComposeFileReference>
   container_name?: string
   labels?: Record<string, string>
   network_mode?: string
   networks?: Record<string, unknown>
   ports?: Array<{ published?: unknown; [key: string]: unknown }>
+  secrets?: Array<ComposeFileReference>
   restart?: string
   volumes?: Array<{ source?: unknown; type?: string; [key: string]: unknown }>
   [key: string]: unknown
 }
 
 interface ComposeProject {
+  configs?: Record<string, { file?: unknown; [key: string]: unknown }>
   networks?: Record<string, unknown>
+  secrets?: Record<string, { file?: unknown; [key: string]: unknown }>
   services: Record<string, ComposeService>
   [key: string]: unknown
 }
@@ -2572,6 +2662,43 @@ function composeConfig(
     child.stdin.on("error", () => undefined)
     child.stdin.end(input)
   })
+}
+
+// Configs and secrets a service reads from files in the data directory or
+// checkout, as read-only binds of their host paths: Compose mounts them
+// from the path it reads, which is the Relay's own, not the host's. The
+// service keeps the rest of its configs and secrets.
+function fileMounts(
+  service: ComposeService,
+  project: ComposeProject,
+  hostPath: (source: string) => string | null
+): Pick<ComposeService, "configs" | "secrets" | "volumes"> {
+  const volumes: NonNullable<ComposeService["volumes"]> = []
+  const kept = (kind: "configs" | "secrets") =>
+    (service[kind] ?? []).filter((reference) => {
+      const declared = project[kind]?.[reference.source]
+      const host =
+        typeof declared?.file === "string" ? hostPath(declared.file) : null
+      if (!host) return true
+      volumes.push({
+        read_only: true,
+        source: host,
+        target:
+          reference.target ??
+          (kind === "secrets"
+            ? `/run/secrets/${reference.source}`
+            : `/${reference.source}`),
+        type: "bind",
+      })
+      return false
+    })
+  const configs = kept("configs")
+  const secrets = kept("secrets")
+  return {
+    ...(service.configs && { configs }),
+    ...(service.secrets && { secrets }),
+    ...(volumes.length > 0 && { volumes }),
+  }
 }
 
 // Why two copies of a Compose project can't run side by side, if they

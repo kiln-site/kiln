@@ -92,6 +92,22 @@ describe("repository checkouts", () => {
     )
   })
 
+  it("leaves every folder and file readable by any user under a restrictive umask", async () => {
+    const previous = process.umask(0o077)
+    const unpacked = await checkout([
+      { name: "repo-sha/", type: "directory" },
+      { body: "<h1>hi</h1>", name: "repo-sha/public/site/index.html" },
+      { name: "repo-sha/config/", type: "directory" },
+    ]).finally(() => process.umask(previous))
+    const mode = async (path: string) =>
+      (await stat(join(unpacked.destination, path))).mode & 0o777
+
+    expect(await mode("public")).toBe(0o755)
+    expect(await mode("public/site")).toBe(0o755)
+    expect(await mode("config")).toBe(0o755)
+    expect(await mode("public/site/index.html")).toBe(0o644)
+  })
+
   it("leaves out entries that would land outside the checkout", async () => {
     const { destination, parent, summary } = await checkout([
       { name: "acme-site-0123abc/", type: "directory" },

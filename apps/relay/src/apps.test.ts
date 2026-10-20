@@ -1079,6 +1079,18 @@ describe("rolling deployments", () => {
     ).toContain(`app-${appId.slice(0, 8)}`)
   })
 
+  it("stops the running container first when the node can't hold both copies' memory", async () => {
+    const harness = await createdApp()
+    const most = Math.ceil((totalmem() * 0.6) / MIB) * MIB
+    const serviceLimits = { app: { cpuMillis: null, memoryBytes: most } }
+    await deploy(harness, { serviceLimits })
+
+    const app = await deploy(harness, { command: "serve --v2", serviceLimits })
+
+    expect(app.deployment).toMatchObject({ rolling: false, state: "succeeded" })
+    expect(appContainers()).toHaveLength(1)
+  })
+
   it("stops the running container first when the app publishes host ports", async () => {
     const harness = await createdApp()
     const ports = [
@@ -1197,6 +1209,107 @@ describe("rolling deployments", () => {
     })
     expect(fakeDocker.networks.has(`${base}_default`)).toBe(false)
     expect(fakeDocker.networks.has("acme-backend")).toBe(true)
+    await removeCompose()
+  })
+
+  it("keeps a staged Compose service off the app's network, under any name, until it takes over", async () => {
+    const removeCompose = await composeConfigCommand()
+    const harness = await createdApp()
+    await deploy(harness, {
+      compose: "services:\n  api:\n    image: nginx:alpine\n",
+      sourceType: "compose",
+    })
+    const network = harness.resources.appNetwork(appId)
+    const [previous] = appContainers()
+    fakeDocker.images.set("site:api", {})
+    fakeDocker.imageConfigs.set("site:api", {
+      Healthcheck: { Test: ["CMD", "true"] },
+    })
+    fakeDocker.healthTimelines.set("site:api", [
+      { afterMs: 0, health: "starting" },
+      { afterMs: 20_000, health: "healthy" },
+    ])
+
+    useDeploymentClock()
+    await harness.apps.deploy(
+      deployment({
+        compose: "services:\n  api:\n    image: site:api\n",
+        sourceType: "compose",
+      })
+    )
+    // While the new service waits for its health check.
+    const staged = () =>
+      appContainers().find(
+        (container) => container.id !== previous!.id && container.state.running
+      )
+    while (!staged()) await vi.advanceTimersByTimeAsync(100)
+    await vi.advanceTimersByTimeAsync(10_000)
+
+    expect(staged()!.networks.has(network)).toBe(false)
+    expect(containerAliases(previous!.name, network)).toContain("api")
+    const app = await settledDeployment(harness)
+    expect(app.deployment).toMatchObject({ rolling: true, state: "succeeded" })
+    expect(containerAliases(appContainers()[0]!.name, network)).toContain(
+      `api.app-${appId.slice(0, 8)}`
+    )
+    await removeCompose()
+  })
+
+  it("binds a Compose file's configs and secrets from the host path of the app's files", async () => {
+    const removeCompose = await composeConfigCommand()
+    const harness = await relayHarness()
+    // The Relay's data directory, as the host mounted it, at another path.
+    const host = "/srv/kiln/relay-data"
+    fakeDocker.addContainer({
+      mounts: [
+        {
+          destination: harness.config.dataDirectory,
+          source: host,
+          type: "bind",
+        },
+      ],
+      name: "kiln-relay-self",
+      running: true,
+    })
+    vi.stubEnv("HOSTNAME", "kiln-relay-self")
+    await harness.apps.create({ id: appId, name: "Website" })
+    fakeDocker.images.set("nginx:alpine", {})
+    const data = join(harness.config.dataDirectory, "apps", appId)
+    const compose = [
+      "services:",
+      "  web:",
+      "    image: nginx:alpine",
+      "    configs:",
+      "      - source: site",
+      "        target: /etc/nginx/conf.d/site.conf",
+      "    secrets:",
+      "      - source: key",
+      "configs:",
+      "  site:",
+      `    file: ${data}/site.conf`,
+      "secrets:",
+      "  key:",
+      `    file: ${data}/key.pem`,
+      "",
+    ].join("\n")
+
+    const app = await deploy(harness, { compose, sourceType: "compose" })
+
+    expect(app.deployment).toMatchObject({ state: "succeeded" })
+    expect(appContainers()[0]?.mounts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          destination: "/etc/nginx/conf.d/site.conf",
+          readOnly: true,
+          source: join(host, "apps", appId, "site.conf"),
+        }),
+        expect.objectContaining({
+          destination: "/run/secrets/key",
+          readOnly: true,
+          source: join(host, "apps", appId, "key.pem"),
+        }),
+      ])
+    )
     await removeCompose()
   })
 

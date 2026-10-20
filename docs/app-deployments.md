@@ -28,7 +28,9 @@ and links that resolve inside the checkout are kept; links are made after
 every file, and each is checked on disk, so no entry can write or point
 outside it. A Dockerfile build drops its checkout once it succeeds. A Compose
 deployment keeps its own, since its services may bind files from it, and the
-next successful deployment removes it. Persistent data belongs in
+next successful deployment removes it. Configs and secrets a Compose file
+reads from its folder are bound read-only from the checkout. Persistent
+data belongs in
 `${KILN_DATA}`, the app's data directory, not the checkout.
 
 Containers carry the commit they were built from in `kiln.app.commit`.
@@ -72,7 +74,8 @@ The old containers stop first instead when two copies can't run together:
 - the app publishes ports on the Relay, or has a Tailscale address;
 - a Compose service keeps data in a volume, named or declared by its image,
   as databases do: two copies would share or lose it;
-- a Compose service uses another network mode.
+- a Compose service uses another network mode;
+- the node hasn't the memory to hold both copies at once.
 
 The deployment log says which. While the copies overlap they share the
 app's data directory, so an app that can't run twice on its files, such as
@@ -80,10 +83,9 @@ one that writes SQLite without WAL, should publish a port or use Compose
 with a volume to deploy stop-first. A Relay that restarts mid-way leaves
 both copies running until the next deployment replaces them.
 
-A Compose project replaced this way deploys
-as before, under the app's own project name, so Compose keeps its volumes.
-While both copies run, the node briefly holds both; limits are checked for
-the new one.
+A Compose project replaced this way deploys as before, under the app's own
+project name, so Compose keeps its volumes. While both copies run, the node
+reserves both copies' memory.
 
 ## Recording
 
