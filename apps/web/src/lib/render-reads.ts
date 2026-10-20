@@ -51,7 +51,10 @@ const runRenderRead = createServerOnlyFn(
  * On the server the read is bounded: a streamed read that never settles
  * would leave the browser's query pending for good. It isn't retried there
  * either; a read that fails is retried by the browser as soon as it hydrates
- * (see `createAppQueryClient`). In the browser the options are unchanged.
+ * (see `createAppQueryClient`), or when its query mounts. An infinite query
+ * already mounted when it fails is the exception: TanStack retries it with
+ * the options it hydrated with, which have no query function, so it keeps
+ * the error until retried by hand. In the browser the options are unchanged.
  */
 export function renderRead<
   TOptions extends {
