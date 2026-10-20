@@ -8,7 +8,7 @@ import {
 import { once } from "node:events"
 import { mkdtempSync, rmSync } from "node:fs"
 import { createServer } from "node:http"
-import type { AddressInfo } from "node:net"
+import type { AddressInfo, Socket } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Duplex } from "node:stream"
@@ -1004,6 +1004,46 @@ describe("Relay control socket", () => {
       replyTo: followUpId,
       type: "response",
     })
+  })
+
+  it("frees the place of a request Hearth cancels before it starts", async () => {
+    const relay = await startRelay()
+    const { inbox, socket } = await relay.connect(await relay.pair())
+
+    // A Relay that stalled reads Hearth's backlog in one go: each request,
+    // then the cancel Hearth sent when it gave up on it. Enough of them to
+    // fill every place, some with timeouts the Relay refuses.
+    const transport = (socket as unknown as { _socket: Socket })._socket
+    transport.cork()
+    for (let index = 0; index < 32; index++) {
+      const id = sendRequest(
+        socket,
+        "relay.snapshot",
+        {},
+        index % 2 ? { timeoutMs: 0 } : {}
+      )
+      socket.send(
+        JSON.stringify({
+          id: randomBytes(12).toString("hex"),
+          replyTo: id,
+          type: "cancel",
+          v: 1,
+        })
+      )
+    }
+    transport.uncork()
+
+    // The cancelled requests give up their places as they unwind, so the
+    // connection serves Hearth again, rather than refusing it until it
+    // reconnects.
+    let reply: RelayControlServerMessage | undefined
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const id = sendRequest(socket, "relay.snapshot", {})
+      do reply = await inbox.next()
+      while (!("replyTo" in reply) || reply.replyTo !== id)
+      if (reply.type === "response") break
+    }
+    expect(reply).toMatchObject({ type: "response" })
   })
 
   it("enforces the relative request timeout", async () => {

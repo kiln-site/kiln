@@ -464,6 +464,8 @@ function authenticateSocket(
       )
       return
     }
+    const client = authenticatedClient
+    const receivedAt = Date.now()
     const controller = new AbortController()
     // Take the request's place in line before any asynchronous work, so
     // requests that conflict run in the order they arrived.
@@ -492,10 +494,30 @@ function authenticateSocket(
       once: true,
     })
     inFlight.set(message.id, request)
+    // The request keeps its slot until this fiber ends, however it ends. A
+    // cancel read in the same batch of frames interrupts it at the yield,
+    // before the request itself has started.
     request.fiber = Effect.runFork(
       Effect.yieldNow.pipe(
         Effect.andThen(
-          executeRequestEffect(message, authenticatedClient, controller, ticket)
+          Effect.suspend(() =>
+            executeRequestEffect(
+              message,
+              client,
+              controller,
+              ticket,
+              receivedAt
+            )
+          )
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (inFlight.get(message.id) === request) {
+              inFlight.delete(message.id)
+            }
+            // A request refused before it ran gives up its place in line.
+            ticket?.cancel()
+          })
         )
       )
     )
@@ -561,19 +583,18 @@ function authenticateSocket(
     request: RelayControlRequest,
     sessionClient: RelayClientGrant,
     controller: AbortController,
-    ticket: LaneTicket | null
+    ticket: LaneTicket | null,
+    receivedAt: number
   ): EffectType.Effect<void> {
-    const duration = relayControlRequestTimeoutMs(request, Date.now())
+    const duration = relayControlRequestTimeoutMs(request, receivedAt)
     if (duration === null) {
       return Effect.sync(() => {
-        ticket?.cancel()
         sendError(
           socket,
           request.id,
           "invalid_timeout",
           "Request timeout is invalid"
         )
-        inFlight.delete(request.id)
       })
     }
     const operation = Effect.acquireUseRelease(
@@ -739,13 +760,6 @@ function authenticateSocket(
             failure.message,
             failure.retryable
           )
-        })
-      ),
-      Effect.ensuring(
-        Effect.sync(() => {
-          // A request refused before it ran gives up its place in line.
-          ticket?.cancel()
-          inFlight.delete(request.id)
         })
       )
     )
