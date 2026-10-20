@@ -537,7 +537,9 @@ export class AppDriver {
    * Checks an app's limits against every instance's, runs `apply`, and then
    * saves its disk limit, all holding the node's allocations, so no other
    * change can claim the same capacity in between. Callers hold the app's
-   * lifecycle lock.
+   * lifecycle lock, and take the allocations as a nested step: nothing takes
+   * them while waiting on an app's lifecycle, and a pause doesn't strand a
+   * deployment halfway.
    */
   #reserving<A>(
     appId: string,
@@ -546,7 +548,7 @@ export class AppDriver {
     apply: () => Promise<A>
   ): Promise<A> {
     return Effect.runPromise(
-      this.#lanes.run(
+      this.#lanes.runNested(
         {
           label: "app.allocations",
           locks: [exclusive(laneKeys.allocations)],

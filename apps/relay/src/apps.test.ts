@@ -608,6 +608,26 @@ describe("apps", () => {
     ).toHaveLength(1)
   })
 
+  it("finishes a deployment the Relay was paused during", async () => {
+    const harness = await createdApp()
+    const pull = fakeDocker.hold({ command: "pull" })
+    const deploying = deploy(harness, {
+      image: "fresh:latest",
+      serviceLimits: { app: { cpuMillis: null, memoryBytes: 256 * MIB } },
+    })
+    await pull.reached
+    // A pause lets running work finish; the deployment still reserves its
+    // memory once its image is ready.
+    harness.lanes.setPaused(true)
+    pull.release()
+
+    expect((await deploying).deployment).toMatchObject({ state: "succeeded" })
+    expect(appContainers()).toEqual([
+      expect.objectContaining({ memoryBytes: 256 * MIB }),
+    ])
+    harness.lanes.setPaused(false)
+  })
+
   it("keeps checking disk limits after a limited app is deleted", async () => {
     const harness = await createdApp()
     const otherId = "e".repeat(40)
