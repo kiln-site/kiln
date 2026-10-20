@@ -1,12 +1,11 @@
 import * as React from "react"
+import { useLiveSuspenseQuery } from "@tanstack/react-db"
 import { keepPreviousData, useQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
-import { useVirtualizer } from "@tanstack/react-virtual"
-import { RelayKindIcon, ServerKindIcon } from "@/components/instance-kind-icon"
-import { ensuringPromise, forkPromise } from "@/effect/promise"
+import { sortFn_basic } from "@tanstack/react-table"
 import {
-  CalendarDays,
   Bot,
+  CalendarDays,
   ChevronLeft,
   ChevronRight,
   CircleGauge,
@@ -16,14 +15,18 @@ import {
   ListFilter,
   Network,
   RefreshCw,
-  Search,
   TerminalSquare,
   UserRound,
   X,
 } from "lucide-react"
 
+import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
-import { Input } from "@workspace/ui/components/input"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@workspace/ui/components/popover"
 import {
   Select,
   SelectContent,
@@ -31,40 +34,69 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@workspace/ui/components/select"
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@workspace/ui/components/popover"
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@workspace/ui/components/tooltip"
 import { cn } from "@workspace/ui/lib/utils"
 
-import { ServerScopePicker } from "@/components/server-scope-picker"
+import { DataTableEmptyState } from "@/components/data-table"
+import { DataTable } from "@/components/data-table-view"
+import {
+  DataTableToolbar,
+  DataTableWorkspace,
+} from "@/components/data-table-workspace"
+import { IdentityName } from "@/components/identity-name"
+import { InfraSyncButton } from "@/components/infra-sync-button"
 import {
   InstanceCard,
-  type InstanceNameInstance,
+  type InstanceIdentity,
 } from "@/components/instance-card"
+import { RelayKindIcon, ServerKindIcon } from "@/components/instance-kind-icon"
+import {
+  ServerScopePicker,
+  type ServerPickerOption,
+} from "@/components/server-scope-picker"
+import { UserIdentity } from "@/components/user-identity"
+import { UserProfilesContext } from "@/components/user-table-parts"
 import {
   activityLocalRangeToUtc,
   activityTypes,
   isActivitySource,
   isActivityType,
 } from "@/lib/activity"
-import type { ActivitySource, ActivityType } from "@/lib/activity"
-import { activityQueryOptions } from "@/lib/query-options"
+import type {
+  ActivityScopeKind,
+  ActivitySource,
+  ActivityType,
+} from "@/lib/activity"
+import {
+  infraAppsCollectionOptions,
+  infraDatabasesCollectionOptions,
+  infraServersCollectionOptions,
+} from "@/lib/collections/infra-directories"
+import {
+  createDataTableColumnHelper,
+  dataTableColumnMeta,
+  defineDataTable,
+} from "@/lib/data-table"
+import {
+  createDataTableSearchStore,
+  type DataTableSearchStore,
+} from "@/lib/data-table-search"
+import type { DataTableSource } from "@/lib/data-table-source"
+import {
+  accessCapabilitiesQueryOptions,
+  activityQueryOptions,
+} from "@/lib/query-options"
 import { relayInstanceRouteId } from "@/lib/relay-fleet"
 import type { ActivityData, ActivityEntry } from "@/server/activity"
+import { getUserMinecraftProfiles } from "@/server/users"
 
 export interface ActivityFilters {
-  // A database's ID, from its Info page; there's no picker for it.
+  app?: string
   database?: string
   from?: string
   q?: string
   relay?: string
+  /** Every instance of one kind, from the scope picker's kind groups. */
+  scope?: ActivityScopeKind
   server?: string
   source?: ActivitySource
   to?: string
@@ -145,16 +177,16 @@ export function createActivityFiltersStore(initialFilters: ActivityFilters) {
 
 type ActivityDataStore = ReturnType<typeof createActivityDataStore>
 
+// The parts of the activity response the controls around the table read, so
+// a refetch repaints a control only when its part changed.
 function createActivityDataStore(initialData: ActivityData) {
   let data = initialData
   let actors = activityActors(initialData)
   let actorsVersion = 0
   let relayVersion = 0
-  let serverVersion = 0
   let statusVersion = 0
   const actorsListeners = new Set<() => void>()
   const relayListeners = new Set<() => void>()
-  const serverListeners = new Set<() => void>()
   const statusListeners = new Set<() => void>()
   const subscribe = (listeners: Set<() => void>, listener: () => void) => {
     listeners.add(listener)
@@ -166,7 +198,6 @@ function createActivityDataStore(initialData: ActivityData) {
     getActorsSnapshot: () => actorsVersion,
     getData: () => data,
     getRelaySnapshot: () => relayVersion,
-    getServerSnapshot: () => serverVersion,
     getStatusSnapshot: () => statusVersion,
     setData: (nextData: ActivityData) => {
       if (data === nextData) return
@@ -176,10 +207,6 @@ function createActivityDataStore(initialData: ActivityData) {
       const relaysChanged = !activityRelayArraysEqual(
         previousData.relays,
         nextData.relays
-      )
-      const serversChanged = !activityServerArraysEqual(
-        previousData.servers,
-        nextData.servers
       )
       const statusChanged =
         relaysChanged ||
@@ -194,13 +221,9 @@ function createActivityDataStore(initialData: ActivityData) {
         actorsVersion += 1
         for (const listener of actorsListeners) listener()
       }
-      if (relaysChanged || serversChanged) {
+      if (relaysChanged) {
         relayVersion += 1
         for (const listener of relayListeners) listener()
-      }
-      if (serversChanged || relaysChanged) {
-        serverVersion += 1
-        for (const listener of serverListeners) listener()
       }
       if (statusChanged) {
         statusVersion += 1
@@ -211,74 +234,8 @@ function createActivityDataStore(initialData: ActivityData) {
       subscribe(actorsListeners, listener),
     subscribeRelay: (listener: () => void) =>
       subscribe(relayListeners, listener),
-    subscribeServer: (listener: () => void) =>
-      subscribe(serverListeners, listener),
     subscribeStatus: (listener: () => void) =>
       subscribe(statusListeners, listener),
-  }
-}
-
-type ActivityResultsStore = ReturnType<typeof createActivityResultsStore>
-
-function createActivityResultsStore(
-  initialData: ActivityData,
-  initialFilters: ActivityFilters
-) {
-  let entries = filterActivity(
-    initialData.entries,
-    initialFilters,
-    initialFilters.q ?? ""
-  )
-  let entriesById = new Map(entries.map((entry) => [entry.id, entry]))
-  let filtered = activityFilterCount(initialFilters) > 0
-  let listVersion = 0
-  const entryVersions = new Map<string, number>()
-  const listListeners = new Set<() => void>()
-  const entryListeners = new Map<string, Set<() => void>>()
-
-  return {
-    getEntries: () => entries,
-    getEntry: (id: string) => entriesById.get(id),
-    getEntrySnapshot: (id: string) => entryVersions.get(id) ?? 0,
-    getFiltered: () => filtered,
-    getListSnapshot: () => listVersion,
-    setResult: (data: ActivityData, filters: ActivityFilters) => {
-      const nextEntries = filterActivity(data.entries, filters, filters.q ?? "")
-      const nextFiltered = activityFilterCount(filters) > 0
-      const listChanged =
-        !activityEntryIdArraysEqual(entries, nextEntries) ||
-        (entries.length === 0 && filtered !== nextFiltered)
-      const previousEntries = new Map(entries.map((entry) => [entry.id, entry]))
-
-      entries = nextEntries
-      entriesById = new Map(nextEntries.map((entry) => [entry.id, entry]))
-      filtered = nextFiltered
-      for (const entry of nextEntries) {
-        const previousEntry = previousEntries.get(entry.id)
-        if (previousEntry && activityEntriesEqual(previousEntry, entry)) {
-          continue
-        }
-        entryVersions.set(entry.id, (entryVersions.get(entry.id) ?? 0) + 1)
-        for (const listener of entryListeners.get(entry.id) ?? []) listener()
-      }
-      if (listChanged) {
-        listVersion += 1
-        for (const listener of listListeners) listener()
-      }
-    },
-    subscribeEntry: (id: string, listener: () => void) => {
-      const listeners = entryListeners.get(id) ?? new Set<() => void>()
-      listeners.add(listener)
-      entryListeners.set(id, listeners)
-      return () => {
-        listeners.delete(listener)
-        if (listeners.size === 0) entryListeners.delete(id)
-      }
-    },
-    subscribeList: (listener: () => void) => {
-      listListeners.add(listener)
-      return () => listListeners.delete(listener)
-    },
   }
 }
 
@@ -329,11 +286,7 @@ const activityCalendarDay = new Intl.DateTimeFormat(undefined, {
 
 const activityCalendarWeekdays = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"]
 
-const minimumActivitySyncFeedbackMs = 500
-const subscribeToHydration = () => () => {}
-const getClientHydrationSnapshot = () => true
-const getServerHydrationSnapshot = () => false
-const activityTableBottomPadding = 12
+const activitySearchDelayMs = 180
 
 export const ActivityPage = React.memo(function ActivityPage({
   initialData,
@@ -341,151 +294,192 @@ export const ActivityPage = React.memo(function ActivityPage({
   onFiltersChange,
 }: ActivityPageProps) {
   const [dataStore] = React.useState(() => createActivityDataStore(initialData))
-  const [resultsStore] = React.useState(() =>
-    createActivityResultsStore(initialData, filterStore.getSnapshot())
+  const [searchStore] = React.useState(() =>
+    createDataTableSearchStore(filterStore.getSnapshot().q ?? "")
   )
   return (
     <div className="mx-auto flex h-full min-h-[34rem] w-full max-w-[90rem] flex-col px-3 pt-3 pb-3 sm:px-5 sm:pt-5 sm:pb-5">
-      <ActivityPageContent
-        dataStore={dataStore}
-        filterStore={filterStore}
-        onFiltersChange={onFiltersChange}
-        resultsStore={resultsStore}
-      />
-    </div>
-  )
-})
-
-interface ActivityPageContentProps {
-  dataStore: ActivityDataStore
-  filterStore: ActivityFiltersStore
-  onFiltersChange: (change: Partial<ActivityFilters>) => void
-  resultsStore: ActivityResultsStore
-}
-
-const ActivityPageContent = React.memo(function ActivityPageContent({
-  dataStore,
-  filterStore,
-  onFiltersChange,
-  resultsStore,
-}: ActivityPageContentProps) {
-  return (
-    <>
       <ActivityDataBridge
         dataStore={dataStore}
         filterStore={filterStore}
-        resultsStore={resultsStore}
+        searchStore={searchStore}
       />
-      <ActivityServerFilterController
+      <ActivityScopeController
         dataStore={dataStore}
         filterStore={filterStore}
         onFiltersChange={onFiltersChange}
       />
-
-      <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border bg-card/45 [contain:paint]">
-        <ActivityFiltersToolbar
-          dataStore={dataStore}
-          filterStore={filterStore}
-          onFiltersChange={onFiltersChange}
-        />
-
+      <DataTableWorkspace
+        toolbar={
+          <ActivityToolbar
+            dataStore={dataStore}
+            filterStore={filterStore}
+            searchStore={searchStore}
+            onFiltersChange={onFiltersChange}
+          />
+        }
+      >
         <ActivityStatusController dataStore={dataStore} />
-        <ActivityResults resultsStore={resultsStore} />
-      </section>
-    </>
-  )
-})
-
-interface ActivityFiltersToolbarProps {
-  dataStore: ActivityDataStore
-  filterStore: ActivityFiltersStore
-  onFiltersChange: (change: Partial<ActivityFilters>) => void
-}
-
-const ActivityFiltersToolbar = React.memo(function ActivityFiltersToolbar({
-  dataStore,
-  filterStore,
-  onFiltersChange,
-}: ActivityFiltersToolbarProps) {
-  return (
-    <div className="border-b bg-background/15 p-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <ActivitySyncButtonController filterStore={filterStore} />
-        <ActivitySearchController
-          filterStore={filterStore}
-          onFiltersChange={onFiltersChange}
-        />
-        <ActivityTypeFilter
-          filterStore={filterStore}
-          onFiltersChange={onFiltersChange}
-        />
-        <ActivitySourceFilter
-          filterStore={filterStore}
-          onFiltersChange={onFiltersChange}
-        />
-        <ActivityUserFilter
-          dataStore={dataStore}
-          filterStore={filterStore}
-          onFiltersChange={onFiltersChange}
-        />
-        <ActivityRelayFilter
-          dataStore={dataStore}
-          filterStore={filterStore}
-          onFiltersChange={onFiltersChange}
-        />
-
-        <ActivityDateRangeController
-          filterStore={filterStore}
-          onChange={onFiltersChange}
-        />
-        <ActivityClearFilters
-          filterStore={filterStore}
-          onFiltersChange={onFiltersChange}
-        />
-      </div>
+        <ActivityActorProfiles dataStore={dataStore}>
+          <ActivityTable filterStore={filterStore} searchStore={searchStore} />
+        </ActivityActorProfiles>
+      </DataTableWorkspace>
     </div>
-  )
-})
-
-const ActivitySearchController = React.memo(function ActivitySearchController({
-  filterStore,
-  onFiltersChange,
-}: {
-  filterStore: ActivityFiltersStore
-  onFiltersChange: (change: Partial<ActivityFilters>) => void
-}) {
-  const query = useActivityFilterValue(filterStore, "q") ?? ""
-  return (
-    <ActivitySearch
-      key={query}
-      initialValue={query}
-      onFiltersChange={onFiltersChange}
-    />
   )
 })
 
 const ActivityDataBridge = React.memo(function ActivityDataBridge({
   dataStore,
   filterStore,
-  resultsStore,
+  searchStore,
 }: {
   dataStore: ActivityDataStore
   filterStore: ActivityFiltersStore
-  resultsStore: ActivityResultsStore
+  searchStore: DataTableSearchStore
 }) {
-  const filters = React.useSyncExternalStore(
-    filterStore.subscribe,
-    filterStore.getSnapshot,
-    filterStore.getSnapshot
-  )
   const data = useActivityData(filterStore)
   React.useLayoutEffect(() => {
-    if (!data) return
-    dataStore.setData(data)
-    resultsStore.setResult(data, filters)
-  }, [data, dataStore, filters, resultsStore])
+    if (data) dataStore.setData(data)
+  }, [data, dataStore])
+  // Follow a search set from outside the input, such as Clear or a link.
+  // Typing reaches `q` trimmed, so compare trimmed to keep trailing spaces.
+  const query = useActivityFilterValue(filterStore, "q") ?? ""
+  React.useLayoutEffect(() => {
+    if (searchStore.getSnapshot().trim() !== query) searchStore.set(query)
+  }, [query, searchStore])
   return null
 })
+
+const ActivityToolbar = React.memo(function ActivityToolbar({
+  dataStore,
+  filterStore,
+  searchStore,
+  onFiltersChange,
+}: {
+  dataStore: ActivityDataStore
+  filterStore: ActivityFiltersStore
+  searchStore: DataTableSearchStore
+  onFiltersChange: (change: Partial<ActivityFilters>) => void
+}) {
+  // The table filters as you type; the URL trails behind.
+  const searchTimer = React.useRef<number>(undefined)
+  React.useEffect(
+    () => () => window.clearTimeout(searchTimer.current),
+    []
+  )
+  const search = React.useMemo(
+    () => ({
+      ariaLabel: "Search activity",
+      closeMobileWhenEmpty: true,
+      id: "activity-search",
+      placeholder: "Search actions, people, instances…",
+      store: searchStore,
+      onValueChange: (value: string) => {
+        window.clearTimeout(searchTimer.current)
+        searchTimer.current = window.setTimeout(() => {
+          onFiltersChange({ q: value.trim() || undefined })
+        }, activitySearchDelayMs)
+      },
+    }),
+    [onFiltersChange, searchStore]
+  )
+  return (
+    <DataTableToolbar
+      controls={
+        <>
+          <ActivityFiltersMenu
+            dataStore={dataStore}
+            filterStore={filterStore}
+            onFiltersChange={onFiltersChange}
+          />
+          <ActivityDateRangeController
+            filterStore={filterStore}
+            onChange={onFiltersChange}
+          />
+          <ActivityClearFilters
+            filterStore={filterStore}
+            onFiltersChange={onFiltersChange}
+          />
+        </>
+      }
+      leading={<ActivitySyncButtonController filterStore={filterStore} />}
+      search={search}
+    />
+  )
+})
+
+// Type, source, and user share one menu so the toolbar fits a phone.
+const ActivityFiltersMenu = React.memo(function ActivityFiltersMenu({
+  dataStore,
+  filterStore,
+  onFiltersChange,
+}: {
+  dataStore: ActivityDataStore
+  filterStore: ActivityFiltersStore
+  onFiltersChange: (change: Partial<ActivityFilters>) => void
+}) {
+  const type = useActivityFilterValue(filterStore, "type")
+  const source = useActivityFilterValue(filterStore, "source")
+  const user = useActivityFilterValue(filterStore, "user")
+  const count = [type, source, user].filter(Boolean).length
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button
+          aria-label="Filter activity"
+          type="button"
+          variant={count ? "secondary" : "outline"}
+        >
+          <ListFilter />
+          <span className="hidden lg:inline">Filters</span>
+          {count ? (
+            <Badge variant="outline" className="type-meta h-4 px-1 font-mono">
+              {count}
+            </Badge>
+          ) : null}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" sideOffset={6} className="grid w-64 gap-3 p-3">
+        <ActivityFilterField label="Type">
+          <ActivityTypeFilter
+            filterStore={filterStore}
+            onFiltersChange={onFiltersChange}
+          />
+        </ActivityFilterField>
+        <ActivityFilterField label="Source">
+          <ActivitySourceFilter
+            filterStore={filterStore}
+            onFiltersChange={onFiltersChange}
+          />
+        </ActivityFilterField>
+        <ActivityFilterField label="User">
+          <ActivityUserFilter
+            dataStore={dataStore}
+            filterStore={filterStore}
+            onFiltersChange={onFiltersChange}
+          />
+        </ActivityFilterField>
+      </PopoverContent>
+    </Popover>
+  )
+})
+
+function ActivityFilterField({
+  children,
+  label,
+}: {
+  children: React.ReactNode
+  label: string
+}) {
+  return (
+    <div className="grid gap-1.5">
+      <span className="type-technical-label text-muted-foreground">
+        {label}
+      </span>
+      {children}
+    </div>
+  )
+}
 
 const ActivityTypeFilter = React.memo(function ActivityTypeFilter({
   filterStore,
@@ -585,57 +579,21 @@ const ActivityUserFilter = React.memo(function ActivityUserFilter({
   )
 })
 
-const ActivityRelayFilter = React.memo(function ActivityRelayFilter({
-  dataStore,
-  filterStore,
-  onFiltersChange,
-}: {
-  dataStore: ActivityDataStore
-  filterStore: ActivityFiltersStore
-  onFiltersChange: (change: Partial<ActivityFilters>) => void
-}) {
-  React.useSyncExternalStore(
-    dataStore.subscribeRelay,
-    dataStore.getRelaySnapshot,
-    dataStore.getRelaySnapshot
-  )
-  const data = dataStore.getData()
-  const relay = useActivityFilterValue(filterStore, "relay")
-  const server = useActivityFilterValue(filterStore, "server")
-  const update = React.useCallback(
-    (nextValue: string) =>
-      onFiltersChange({
-        relay: nextValue || undefined,
-        server:
-          server &&
-          data.servers.some(
-            (candidate) =>
-              candidate.id === server &&
-              (!nextValue || candidate.relayId === nextValue)
-          )
-            ? server
-            : undefined,
-      }),
-    [data.servers, onFiltersChange, server]
-  )
-
-  if (data.relays.length <= 1) return null
-  return (
-    <ActivitySelect
-      ariaLabel="Filter activity by Relay"
-      icon={<RelayKindIcon />}
-      value={relay ?? ""}
-      onChange={update}
-    >
-      <SelectItem value={allActivityFiltersValue}>All Relays</SelectItem>
-      {data.relays.map((candidate) => (
-        <SelectItem key={candidate.id} value={candidate.id}>
-          {candidate.name}
-        </SelectItem>
-      ))}
-    </ActivitySelect>
-  )
-})
+const clearedActivityFilters: {
+  [Key in keyof Required<ActivityFilters>]: undefined
+} = {
+  app: undefined,
+  database: undefined,
+  from: undefined,
+  q: undefined,
+  relay: undefined,
+  scope: undefined,
+  server: undefined,
+  source: undefined,
+  to: undefined,
+  type: undefined,
+  user: undefined,
+}
 
 const ActivityClearFilters = React.memo(function ActivityClearFilters({
   filterStore,
@@ -652,110 +610,162 @@ const ActivityClearFilters = React.memo(function ActivityClearFilters({
   if (activeFilterCount === 0) return null
   return (
     <Button
+      aria-label={`Clear ${activeFilterCount} ${activeFilterCount === 1 ? "filter" : "filters"}`}
       type="button"
       size="sm"
       variant="ghost"
-      onClick={() =>
-        onFiltersChange({
-          database: undefined,
-          from: undefined,
-          q: undefined,
-          relay: undefined,
-          server: undefined,
-          source: undefined,
-          to: undefined,
-          type: undefined,
-          user: undefined,
-        })
-      }
+      onClick={() => onFiltersChange(clearedActivityFilters)}
     >
       <X />
-      Clear {activeFilterCount}
+      <span className="hidden sm:inline">Clear {activeFilterCount}</span>
     </Button>
   )
 })
 
-interface ActivityServerFilterProps {
-  data: ActivityData
-  filters: ActivityFilters
-  onFiltersChange: (change: Partial<ActivityFilters>) => void
-}
+type ActivityScopeOption = ServerPickerOption<ActivityScopeKind>
 
-const ActivityServerFilterController = React.memo(
-  function ActivityServerFilterController({
-    dataStore,
-    filterStore,
-    onFiltersChange,
-  }: {
-    dataStore: ActivityDataStore
-    filterStore: ActivityFiltersStore
-    onFiltersChange: (change: Partial<ActivityFilters>) => void
-  }) {
-    React.useSyncExternalStore(
-      dataStore.subscribeServer,
-      dataStore.getServerSnapshot,
-      dataStore.getServerSnapshot
-    )
-    const data = dataStore.getData()
-    const relay = useActivityFilterValue(filterStore, "relay")
-    const server = useActivityFilterValue(filterStore, "server")
-    return (
-      <ActivityServerFilter
-        data={data}
-        filters={{ relay, server }}
-        onFiltersChange={onFiltersChange}
-      />
-    )
-  }
-)
+const clearedActivityScope = {
+  app: undefined,
+  database: undefined,
+  relay: undefined,
+  scope: undefined,
+  server: undefined,
+} satisfies Partial<ActivityFilters>
 
-const ActivityServerFilter = React.memo(function ActivityServerFilter({
-  data,
-  filters,
+// Every instance the person can see, like Backups: a Relay shows everything
+// on it, an instance shows its own activity, and a kind group every instance
+// of that kind.
+const ActivityScopeController = React.memo(function ActivityScopeController({
+  dataStore,
+  filterStore,
   onFiltersChange,
-}: ActivityServerFilterProps) {
-  const relayNameById = React.useMemo(
-    () => new Map(data.relays.map((relay) => [relay.id, relay.name])),
-    [data.relays]
+}: {
+  dataStore: ActivityDataStore
+  filterStore: ActivityFiltersStore
+  onFiltersChange: (change: Partial<ActivityFilters>) => void
+}) {
+  React.useSyncExternalStore(
+    dataStore.subscribeRelay,
+    dataStore.getRelaySnapshot,
+    dataStore.getRelaySnapshot
   )
-  const servers = React.useMemo(
-    () =>
-      data.servers.flatMap((server) => {
-        if (filters.relay && server.relayId !== filters.relay) return []
-
-        const relayName = relayNameById.get(server.relayId) ?? "Relay"
-        return [
-          {
-            id: server.id,
-            name: server.name,
-            relayId: server.relayId,
-            relayName,
-          },
-        ]
-      }),
-    [data.servers, filters.relay, relayNameById]
+  const relays = dataStore.getData().relays
+  const { data: servers } = useLiveSuspenseQuery({
+    query: (query) =>
+      query
+        .from({ server: infraServersCollectionOptions })
+        .orderBy(({ server }) => server.name),
+  })
+  const { data: apps } = useLiveSuspenseQuery({
+    query: (query) =>
+      query
+        .from({ app: infraAppsCollectionOptions })
+        .orderBy(({ app }) => app.name),
+  })
+  const { data: databases } = useLiveSuspenseQuery({
+    query: (query) =>
+      query
+        .from({ database: infraDatabasesCollectionOptions })
+        .orderBy(({ database }) => database.name),
+  })
+  const options = React.useMemo(
+    (): Array<ActivityScopeOption> => [
+      ...relays.map(
+        (relay): ActivityScopeOption => ({
+          id: relay.id,
+          kind: "relay",
+          name: relay.name,
+          relayId: relay.id,
+          relayName: relay.name,
+        })
+      ),
+      ...servers.map(
+        (server): ActivityScopeOption => ({
+          id: server.id,
+          kind: "server",
+          name: server.name,
+          relayId: server.relayId,
+          relayName: server.relayName,
+        })
+      ),
+      ...apps.map(
+        (app): ActivityScopeOption => ({
+          id: app.id,
+          kind: "app",
+          name: app.name,
+          relayId: app.relayId,
+          relayName: app.relayName,
+        })
+      ),
+      ...databases.map(
+        (database): ActivityScopeOption => ({
+          id: database.id,
+          kind: "database",
+          name: database.name,
+          relayId: database.relayId,
+          relayName: database.relayName,
+        })
+      ),
+    ],
+    [apps, databases, relays, servers]
   )
-  const selectedServer =
-    servers.find((server) => server.id === filters.server) ?? null
-  const selectedRelayName = filters.relay
-    ? relayNameById.get(filters.relay)
-    : undefined
-  const selectServer = React.useCallback(
-    (server: (typeof servers)[number] | null) => {
-      onFiltersChange({ server: server?.id })
+  const scope = useActivityFilterValue(filterStore, "scope") ?? null
+  const relay = useActivityFilterValue(filterStore, "relay")
+  const server = useActivityFilterValue(filterStore, "server")
+  const app = useActivityFilterValue(filterStore, "app")
+  const database = useActivityFilterValue(filterStore, "database")
+  const selected = React.useMemo(() => {
+    const [selectedKind, id] = server
+      ? (["server", server] as const)
+      : app
+        ? (["app", app] as const)
+        : database
+          ? (["database", database] as const)
+          : relay
+            ? (["relay", relay] as const)
+            : [null, null]
+    if (!selectedKind) return null
+    return (
+      options.find(
+        (option) =>
+          option.kind === selectedKind &&
+          option.id === id &&
+          (!relay || option.relayId === relay)
+      ) ?? null
+    )
+  }, [app, database, options, relay, server])
+  const select = React.useCallback(
+    (option: ActivityScopeOption | null) => {
+      if (!option) return onFiltersChange(clearedActivityScope)
+      onFiltersChange({
+        ...clearedActivityScope,
+        relay: option.relayId,
+        ...(option.kind === "relay" ? {} : { [option.kind ?? "server"]: option.id }),
+      })
     },
+    [onFiltersChange]
+  )
+  const selectKind = React.useCallback(
+    (nextKind: ActivityScopeKind) =>
+      onFiltersChange({ ...clearedActivityScope, scope: nextKind }),
     [onFiltersChange]
   )
 
   return (
-    <ServerScopePicker
-      selectedRelayName={selectedRelayName}
-      selectedServer={selectedServer}
-      servers={servers}
-      onSelect={selectServer}
+    <ServerScopePicker<ActivityScopeKind>
+      allLabel="All instances"
+      ariaLabel="Accessible instances"
+      changeLabel="Change scope"
+      chooseLabel="Choose scope"
+      emptyMessage="No accessible instances found."
+      selectedKind={selected ? null : scope}
+      selectedServer={selected}
+      servers={options}
+      onSelect={select}
+      onSelectKind={selectKind}
     />
   )
-}, areActivityServerFilterPropsEqual)
+})
 
 const ActivitySyncButtonController = React.memo(
   function ActivitySyncButtonController({
@@ -788,71 +798,12 @@ const ActivitySyncButton = React.memo(function ActivitySyncButton({
   from?: string
   to?: string
 }) {
-  const { fetchStatus, refetch } = useQuery({
+  const { refetch } = useQuery({
     ...activityQueryOptions(from, to),
-    notifyOnChangeProps: ["fetchStatus"],
+    notifyOnChangeProps: [],
   })
-  const hydrated = React.useSyncExternalStore(
-    subscribeToHydration,
-    getClientHydrationSnapshot,
-    getServerHydrationSnapshot
-  )
-  const [manualSyncing, setManualSyncing] = React.useState(false)
-  const manualSyncingRef = React.useRef(false)
-  const feedbackTimeoutRef = React.useRef<number>(undefined)
-  const mountedRef = React.useRef(true)
-  const syncing = manualSyncing || (hydrated && fetchStatus === "fetching")
-
-  React.useEffect(() => {
-    mountedRef.current = true
-    return () => {
-      mountedRef.current = false
-      if (feedbackTimeoutRef.current !== undefined) {
-        window.clearTimeout(feedbackTimeoutRef.current)
-      }
-    }
-  }, [])
-
-  const syncActivity = React.useCallback(() => {
-    if (manualSyncingRef.current) return
-    manualSyncingRef.current = true
-    setManualSyncing(true)
-    const startedAt = performance.now()
-
-    forkPromise(() =>
-      ensuringPromise(refetch, () => {
-        if (!mountedRef.current) return
-        const elapsed = performance.now() - startedAt
-        const remaining = Math.max(0, minimumActivitySyncFeedbackMs - elapsed)
-        feedbackTimeoutRef.current = window.setTimeout(() => {
-          manualSyncingRef.current = false
-          setManualSyncing(false)
-          feedbackTimeoutRef.current = undefined
-        }, remaining)
-      })
-    )
-  }, [refetch])
-
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          type="button"
-          size="icon"
-          variant="outline"
-          aria-label="Sync activity"
-          aria-busy={syncing}
-          disabled={syncing}
-          onClick={syncActivity}
-        >
-          <RefreshCw className={syncing ? "animate-spin" : ""} />
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent side="bottom" sideOffset={6}>
-        Sync activity
-      </TooltipContent>
-    </Tooltip>
-  )
+  const sync = React.useCallback(() => refetch(), [refetch])
+  return <InfraSyncButton label="Sync activity" sync={sync} />
 })
 
 const allActivityFiltersValue = "__all_activity_filters__"
@@ -879,7 +830,7 @@ function ActivitySelect({
     >
       <SelectTrigger
         aria-label={ariaLabel}
-        className="h-8 min-w-0 gap-1.5 px-2 text-xs [&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:flex-1 [&_[data-slot=select-value]]:truncate [&_[data-slot=select-value]]:whitespace-nowrap"
+        className="h-8 w-full min-w-0 gap-1.5 px-2 text-left text-xs [&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:flex-1 [&_[data-slot=select-value]]:truncate [&_[data-slot=select-value]]:whitespace-nowrap"
       >
         <span className="shrink-0 text-muted-foreground [&_svg]:size-3.5">
           {icon}
@@ -892,63 +843,6 @@ function ActivitySelect({
     </Select>
   )
 }
-
-const ActivitySearch = React.memo(function ActivitySearch({
-  initialValue,
-  onFiltersChange,
-}: {
-  initialValue: string
-  onFiltersChange: (change: Partial<ActivityFilters>) => void
-}) {
-  const [value, setValue] = React.useState(initialValue)
-  const searchTimer = React.useRef<number>(undefined)
-
-  React.useEffect(
-    () => () => {
-      if (searchTimer.current !== undefined) {
-        window.clearTimeout(searchTimer.current)
-      }
-    },
-    []
-  )
-
-  const update = React.useCallback(
-    (nextValue: string) => {
-      setValue(nextValue)
-      if (searchTimer.current !== undefined) {
-        window.clearTimeout(searchTimer.current)
-      }
-      searchTimer.current = window.setTimeout(() => {
-        onFiltersChange({ q: nextValue.trim() || undefined })
-      }, 180)
-    },
-    [onFiltersChange]
-  )
-
-  return (
-    <div className="relative min-w-[14rem] flex-1 sm:max-w-md">
-      <Search className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground" />
-      <Input
-        type="search"
-        value={value}
-        onChange={(event) => update(event.currentTarget.value)}
-        placeholder="Search actions, people, game servers…"
-        aria-label="Search activity"
-        className="pr-8 pl-9 text-base md:text-sm"
-      />
-      {value ? (
-        <button
-          type="button"
-          aria-label="Clear activity search"
-          className="absolute top-1/2 right-2 grid size-6 -translate-y-1/2 place-items-center text-muted-foreground hover:text-foreground"
-          onClick={() => update("")}
-        >
-          <X className="size-3.5" />
-        </button>
-      ) : null}
-    </div>
-  )
-})
 
 type ActivityDateRangeValue = { from: Date | undefined; to?: Date } | undefined
 type ActivityDateBoundary = "from" | "to"
@@ -1460,7 +1354,7 @@ const ActivityStatus = React.memo(function ActivityStatus({
   return (
     <div
       role="status"
-      className="type-meta border-b border-primary/15 bg-primary/6 px-3 py-2 font-mono text-muted-foreground"
+      className="type-meta shrink-0 border-b border-primary/15 bg-primary/6 px-3 py-2 font-mono text-muted-foreground"
     >
       {unavailable.length > 0
         ? `Could not reach ${unavailable.map((relay) => relay.name).join(", ")}. `
@@ -1485,291 +1379,330 @@ const ActivityStatusController = React.memo(function ActivityStatusController({
   return <ActivityStatus data={dataStore.getData()} />
 })
 
-const ActivityResults = React.memo(function ActivityResults({
-  resultsStore,
+const noActorProfiles: Record<string, string> = {}
+
+// Minecraft heads for the people in the log. Only platform administrators
+// may look up anyone's; others see initials. Heads arrive after the rows and
+// repaint only the user cells.
+const ActivityActorProfiles = React.memo(function ActivityActorProfiles({
+  children,
+  dataStore,
 }: {
-  resultsStore: ActivityResultsStore
+  children: React.ReactNode
+  dataStore: ActivityDataStore
 }) {
   React.useSyncExternalStore(
-    resultsStore.subscribeList,
-    resultsStore.getListSnapshot,
-    resultsStore.getListSnapshot
+    dataStore.subscribeActors,
+    dataStore.getActorsSnapshot,
+    dataStore.getActorsSnapshot
   )
-  const entries = resultsStore.getEntries()
-  const filtered = resultsStore.getFiltered()
-  const parentRef = React.useRef<HTMLDivElement>(null)
-  const rowVirtualizer = useVirtualizer({
-    count: entries.length,
-    estimateSize: () => 64,
-    getScrollElement: () => parentRef.current,
-    getItemKey: (index) => entries[index]?.id ?? index,
-    overscan: 14,
+  const actors = dataStore.getActors()
+  const { data: platformAdmin = false } = useQuery({
+    ...accessCapabilitiesQueryOptions(),
+    select: selectPlatformAdmin,
   })
+  const userIds = React.useMemo(
+    () => actors.slice(0, 100).map((actor) => actor.id),
+    [actors]
+  )
+  const { data: profiles = noActorProfiles } = useQuery({
+    queryKey: ["users", "minecraft-profiles", userIds.join(",")],
+    queryFn: () => getUserMinecraftProfiles({ data: { userIds } }),
+    enabled: platformAdmin && userIds.length > 0,
+    staleTime: 60 * 60_000,
+  })
+  return (
+    <UserProfilesContext.Provider value={profiles}>
+      {children}
+    </UserProfilesContext.Provider>
+  )
+})
 
-  if (entries.length === 0) {
-    return (
-      <div className="grid min-h-0 flex-1 place-items-center p-8 text-center">
-        <div>
-          <span className="mx-auto mb-3 grid size-10 place-items-center border border-border bg-muted/35 text-muted-foreground">
-            <FileClock className="size-4" />
-          </span>
-          <p className="text-sm font-medium">
-            {filtered ? "No activity matches these filters" : "No activity yet"}
-          </p>
-          <p className="mt-1 max-w-sm text-xs leading-relaxed text-muted-foreground">
-            {filtered
+const ActivityTable = React.memo(function ActivityTable({
+  filterStore,
+  searchStore,
+}: {
+  filterStore: ActivityFiltersStore
+  searchStore: DataTableSearchStore
+}) {
+  const data = useActivityData(filterStore)
+  const filters = useActivityRowFilters(filterStore)
+  const rows = React.useMemo(
+    () => (data ? filterActivity(data.entries, filters) : []),
+    [data, filters]
+  )
+  const source = React.useMemo(
+    (): DataTableSource<ActivityEntry> => ({
+      body: data ? { kind: "ready" } : { kind: "loading" },
+      refreshing: false,
+      rows,
+    }),
+    [data, rows]
+  )
+  const filtered = activityFilterCount(filters) > 0
+  const emptyState = React.useCallback(
+    ({ searchActive }: { searchActive: boolean }) => (
+      <DataTableEmptyState
+        description={
+          <span className="block max-w-sm">
+            {searchActive || filtered
               ? "Clear a filter or choose a wider date range."
               : "Tracked Relay actions will appear here as they happen."}
-          </p>
-        </div>
-      </div>
-    )
-  }
-
+          </span>
+        }
+        icon={<FileClock className="size-6 text-muted-foreground/45" />}
+        title={
+          searchActive || filtered
+            ? "No activity matches these filters"
+            : "No activity yet"
+        }
+      />
+    ),
+    [filtered]
+  )
   return (
-    <div className="relative min-h-0 flex-1">
-      <div
-        aria-hidden="true"
-        className="type-technical-label absolute inset-x-0 top-0 z-10 grid h-9 grid-cols-[5.5rem_minmax(0,1fr)] items-center border-b bg-card/95 px-3 text-muted-foreground backdrop-blur md:grid-cols-[7rem_minmax(8rem,11rem)_minmax(8rem,10rem)_minmax(12rem,1fr)] lg:grid-cols-[8rem_minmax(10rem,14rem)_minmax(9rem,12rem)_minmax(15rem,1fr)]"
-      >
-        <span>Time</span>
-        <span className="hidden md:block">Where</span>
-        <span className="hidden md:block">User</span>
-        <span>Action</span>
-      </div>
-      <div
-        ref={parentRef}
-        role="feed"
-        aria-label="Activity history"
-        className="absolute inset-0 overflow-y-auto overscroll-contain pt-8"
-      >
-        <div
-          className="relative w-full"
-          style={{
-            height: `${
-              rowVirtualizer.getTotalSize() + activityTableBottomPadding
-            }px`,
-          }}
-        >
-          {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-            const entry = entries[virtualRow.index]
-            if (!entry) return null
-            return (
-              <ActivityRowController
-                key={entry.id}
-                id={entry.id}
-                index={virtualRow.index}
-                measureElement={rowVirtualizer.measureElement}
-                resultsStore={resultsStore}
-                start={virtualRow.start}
-              />
-            )
-          })}
-        </div>
-      </div>
-    </div>
-  )
-})
-
-const ActivityRowController = React.memo(function ActivityRowController({
-  id,
-  index,
-  measureElement,
-  resultsStore,
-  start,
-}: {
-  id: string
-  index: number
-  measureElement: (node: Element | null) => void
-  resultsStore: ActivityResultsStore
-  start: number
-}) {
-  const subscribe = React.useCallback(
-    (listener: () => void) => resultsStore.subscribeEntry(id, listener),
-    [id, resultsStore]
-  )
-  const getSnapshot = React.useCallback(
-    () => resultsStore.getEntrySnapshot(id),
-    [id, resultsStore]
-  )
-  React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
-  const entry = resultsStore.getEntry(id)
-  return entry ? (
-    <ActivityRow
-      entry={entry}
-      index={index}
-      measureElement={measureElement}
-      start={start}
+    <DataTable
+      definition={activityTableDefinition}
+      emptyState={emptyState}
+      searchStore={searchStore}
+      source={source}
     />
-  ) : null
+  )
 })
 
-interface ActivityRowProps {
-  entry: ActivityEntry
-  index: number
-  measureElement: (node: Element | null) => void
-  start: number
+const activityColumnHelper = createDataTableColumnHelper<ActivityEntry>()
+
+const activityTableDefinition = defineDataTable({
+  ariaLabel: "Activity history",
+  columns: activityColumnHelper.columns([
+    activityColumnHelper.accessor((entry) => entry.occurredAt, {
+      id: "time",
+      header: "Time",
+      sortDescFirst: true,
+      sortFn: sortFn_basic,
+      cell: ({ row }) => <ActivityTime occurredAt={row.original.occurredAt} />,
+      meta: dataTableColumnMeta({
+        width: { base: "7rem", lg: "8rem" },
+      }),
+    }),
+    activityColumnHelper.accessor(activityWhereName, {
+      id: "where",
+      header: "Where",
+      sortFn: "text",
+      cell: ({ row }) => <ActivityWhere entry={row.original} />,
+      meta: dataTableColumnMeta(
+        { hideBelow: "md", width: "minmax(0,1fr)" },
+        { cellClassName: "px-0" }
+      ),
+    }),
+    activityColumnHelper.accessor((entry) => entry.actor.name, {
+      id: "user",
+      header: "User",
+      sortFn: "text",
+      cell: ({ row }) => (
+        <ActivityUser
+          actor={row.original.actor}
+          source={row.original.source}
+        />
+      ),
+      meta: dataTableColumnMeta({ hideBelow: "md", width: "minmax(0,0.9fr)" }),
+    }),
+    activityColumnHelper.accessor((entry) => entry.label, {
+      id: "action",
+      header: "Action",
+      sortFn: "text",
+      cell: ({ row }) => <ActivityAction entry={row.original} />,
+      meta: dataTableColumnMeta({
+        width: { base: "minmax(0,1fr)", md: "minmax(0,1.4fr)" },
+      }),
+    }),
+  ]),
+  getRowId: (entry) => entry.id,
+  model: { initialState: { sorting: [{ desc: true, id: "time" }] } },
+  search: {
+    fields: [
+      (entry) => entry.label,
+      (entry) => entry.rawEvent,
+      (entry) => entry.actor.name,
+      (entry) => entry.actor.email,
+      (entry) => entry.relay.name,
+      (entry) => entry.target?.name,
+      (entry) => entry.target?.id,
+      (entry) => entry.permission,
+    ],
+  },
+  virtualization: true,
+})
+
+function ActivityTime({ occurredAt }: { occurredAt: number }) {
+  const date = new Date(occurredAt)
+  return (
+    <time
+      dateTime={date.toISOString()}
+      className="type-meta flex min-w-0 flex-col font-mono whitespace-nowrap text-muted-foreground"
+    >
+      <span className="text-foreground/85" suppressHydrationWarning>
+        {activityTime.format(date)}
+      </span>
+      <span className="truncate" suppressHydrationWarning>
+        {activityDay.format(date)}
+      </span>
+    </time>
+  )
 }
 
-const ActivityRow = React.memo(function ActivityRow({
-  entry,
-  index,
-  measureElement,
-  start,
-}: ActivityRowProps) {
-  const details = typeDetails[entry.type]
-  const Icon = details.icon
-  const date = new Date(entry.occurredAt)
-
-  return (
-    <article
-      ref={measureElement}
-      data-index={index}
-      className="absolute top-0 left-0 grid w-full grid-cols-[5.5rem_minmax(0,1fr)] items-center border-b border-border/65 px-3 py-2.5 transition-colors hover:bg-accent/18 md:grid-cols-[7rem_minmax(8rem,11rem)_minmax(8rem,10rem)_minmax(12rem,1fr)] lg:grid-cols-[8rem_minmax(10rem,14rem)_minmax(9rem,12rem)_minmax(15rem,1fr)]"
-      style={{ transform: `translateY(${start}px)` }}
-    >
-      <time
-        dateTime={date.toISOString()}
-        className="type-meta pr-2 font-mono text-muted-foreground"
-      >
-        <span className="block md:hidden" suppressHydrationWarning>
-          {activityDay.format(date)}
-        </span>
-        <span suppressHydrationWarning>{activityTime.format(date)}</span>
-        <span className="hidden md:block" suppressHydrationWarning>
-          {activityDay.format(date)}
-        </span>
-      </time>
-
-      <div className="hidden min-w-0 md:block">
-        <ActivityWhereLink entry={entry} />
-      </div>
-
-      <div className="hidden min-w-0 pr-3 md:block">
-        <p className="type-label truncate">{entry.actor.name}</p>
-        <p className="type-meta truncate font-mono text-muted-foreground">
-          {entry.source === "cli" ? "CLI · " : ""}
-          {entry.actor.email ?? "service activity"}
-        </p>
-      </div>
-
-      <div className="flex min-w-0 items-start gap-2.5">
-        <span className="mt-0.5 grid size-7 shrink-0 place-items-center border border-primary/18 bg-primary/7 text-primary/85">
-          <Icon className="size-3.5" />
-        </span>
-        <div className="min-w-0">
-          <p className="type-label truncate text-foreground">{entry.label}</p>
-          <p className="type-meta mt-1 truncate font-mono text-primary">
-            <span className="tracking-[0.06em] uppercase">{details.label}</span>
-            {entry.permission ? (
-              <>
-                <span aria-hidden="true" className="px-1 text-muted-foreground">
-                  /
-                </span>
-                <code className="text-muted-foreground">
-                  {entry.permission}
-                </code>
-              </>
-            ) : null}
-          </p>
-          <div className="type-technical-label mt-0.5 flex min-w-0 items-center gap-1.5 text-muted-foreground md:hidden">
-            <ActivityWhereLink entry={entry} compact />
-            <span aria-hidden="true">·</span>
-            <span className="truncate">{entry.actor.name}</span>
-          </div>
-        </div>
-      </div>
-    </article>
-  )
-}, areActivityRowPropsEqual)
-
-function ActivityWhereLink({
-  compact = false,
+// The instance an event acted on, or its Relay for Relay-wide events.
+const ActivityWhere = React.memo(function ActivityWhere({
   entry,
 }: {
-  compact?: boolean
   entry: ActivityEntry
 }) {
-  if (compact) {
-    return entry.server ? (
-      <Link
-        to="/server/$serverId/console"
-        params={{
-          serverId: relayInstanceRouteId(
-            entry.relay.id,
-            entry.server.id.slice(0, 8)
-          ),
-        }}
-        preload="intent"
-        className="min-w-0 truncate text-muted-foreground hover:text-primary"
-        aria-label={`Open ${entry.server.name}`}
-      >
-        {entry.server.name}
-      </Link>
-    ) : (
-      <Link
-        to="/infra/servers"
-        search={{ search: entry.relay.name }}
-        preload="intent"
-        className="min-w-0 truncate text-muted-foreground hover:text-primary"
-        aria-label={`View game servers on ${entry.relay.name}`}
-      >
-        {entry.relay.name}
-      </Link>
-    )
-  }
-
-  const instance: InstanceNameInstance = entry.server
-    ? {
-        id: entry.server.id,
-        kind: "server",
-        relayId: entry.relay.id,
-      }
-    : {
-        id: entry.relay.id,
-        kind: "relay",
-        relayId: entry.relay.id,
-      }
-  const identity = (
+  const { relay, target } = entry
+  const card = (
     <InstanceCard
-      instance={instance}
-      name={entry.server?.name ?? entry.relay.name}
-      nameClassName="transition-colors group-hover/where-link:text-primary"
-      meta={entry.server ? entry.relay.name : "Relay-wide"}
+      className="min-w-0 flex-1"
+      instance={activityWhereIdentity(entry)}
+      meta={target ? relay.name : "Relay-wide"}
       metaClassName="font-mono"
+      name={activityWhereName(entry)}
+      nameClassName="transition-colors group-hover/where-link:text-primary"
+      showFavorite={false}
+      showStatus={false}
     />
   )
   const className =
-    "group/where-link -my-2.5 flex min-h-16 min-w-0 items-center py-2.5 pr-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
-
-  if (entry.server) {
-    return (
-      <Link
-        to="/server/$serverId/console"
-        params={{
-          serverId: relayInstanceRouteId(
-            entry.relay.id,
-            entry.server.id.slice(0, 8)
-          ),
-        }}
-        preload="intent"
-        className={className}
-      >
-        {identity}
-      </Link>
-    )
+    "group/where-link flex min-h-14 w-full min-w-0 items-center px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
+  switch (target?.kind) {
+    case "server":
+      return (
+        <Link
+          to="/server/$serverId/console"
+          params={{
+            serverId: relayInstanceRouteId(relay.id, target.id.slice(0, 8)),
+          }}
+          preload="intent"
+          className={className}
+        >
+          {card}
+        </Link>
+      )
+    case "app":
+      return (
+        <Link
+          to="/app/$appId"
+          params={{ appId: target.id }}
+          preload="intent"
+          className={className}
+        >
+          {card}
+        </Link>
+      )
+    case "database":
+      return (
+        <Link
+          to="/db/$databaseId"
+          params={{ databaseId: target.id }}
+          preload="intent"
+          className={className}
+        >
+          {card}
+        </Link>
+      )
+    default:
+      return (
+        <Link
+          to="/relay/$relayId"
+          params={{ relayId: relay.id }}
+          preload="intent"
+          className={className}
+        >
+          {card}
+        </Link>
+      )
   }
+})
 
+const ActivityUser = React.memo(function ActivityUser({
+  actor,
+  source,
+}: {
+  actor: ActivityEntry["actor"]
+  source: ActivitySource
+}) {
+  const profileId = React.useContext(UserProfilesContext)[actor.id]
   return (
-    <Link
-      to="/infra/servers"
-      search={{ search: entry.relay.name }}
-      preload="intent"
-      className={className}
-    >
-      {identity}
-    </Link>
+    <UserIdentity
+      accessory={
+        source === "cli" ? (
+          <Badge variant="outline" className="h-4 px-1 font-mono text-[10px]">
+            CLI
+          </Badge>
+        ) : null
+      }
+      avatarClassName="size-8"
+      email={actor.email}
+      name={actor.name}
+      profileId={profileId}
+    />
   )
+})
+
+// What happened: its type's icon, the event, and its type and permission.
+// Narrow screens hide Where and User, so their names stand in for the type.
+const ActivityAction = React.memo(function ActivityAction({
+  entry,
+}: {
+  entry: ActivityEntry
+}) {
+  const details = typeDetails[entry.type]
+  const Icon = details.icon
+  return (
+    <IdentityName
+      icon={<Icon className="size-3.5" />}
+      iconClassName="border-primary/18 bg-primary/7 text-primary/85"
+      meta={
+        <>
+          <span className="md:hidden">
+            {activityWhereName(entry)} · {entry.actor.name}
+          </span>
+          <span className="hidden md:inline">
+            <span className="tracking-[0.06em] text-primary uppercase">
+              {details.label}
+            </span>
+            {entry.permission ? (
+              <>
+                <span aria-hidden="true" className="px-1">
+                  /
+                </span>
+                <code>{entry.permission}</code>
+              </>
+            ) : null}
+          </span>
+        </>
+      }
+      metaClassName="font-mono"
+      name={entry.label}
+    />
+  )
+})
+
+function activityWhereName({ relay, target }: ActivityEntry): string {
+  return target?.name ?? relay.name
+}
+
+function activityWhereIdentity({
+  relay,
+  target,
+}: ActivityEntry): InstanceIdentity {
+  return target
+    ? { id: target.id, kind: target.kind, relayId: relay.id }
+    : { id: relay.id, kind: "relay", relayId: relay.id }
+}
+
+function selectPlatformAdmin(capabilities: {
+  isPlatformAdmin: boolean
+}): boolean {
+  return capabilities.isPlatformAdmin
 }
 
 function activityActors(data: ActivityData): Array<ActivityEntry["actor"]> {
@@ -1782,7 +1715,9 @@ function activityActors(data: ActivityData): Array<ActivityEntry["actor"]> {
 
 function activityFilterCount(filters: ActivityFilters): number {
   return [
+    filters.app,
     filters.database,
+    filters.scope,
     filters.q,
     filters.type,
     filters.user,
@@ -1807,6 +1742,26 @@ function useActivityFilterValue<Key extends keyof ActivityFilters>(
     [filterStore, key]
   )
   return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+}
+
+// Every filter but the search, which the table applies itself: typing then
+// refilters without rebuilding the rows.
+function useActivityRowFilters(
+  filterStore: ActivityFiltersStore
+): Omit<ActivityFilters, "q"> {
+  const getSnapshot = React.useCallback(() => {
+    const { q: _query, ...filters } = filterStore.getSnapshot()
+    return JSON.stringify(filters)
+  }, [filterStore])
+  const key = React.useSyncExternalStore(
+    filterStore.subscribe,
+    getSnapshot,
+    getSnapshot
+  )
+  return React.useMemo(
+    () => JSON.parse(key) as Omit<ActivityFilters, "q">,
+    [key]
+  )
 }
 
 function useActivityData(
@@ -1837,19 +1792,6 @@ function useActivityDateFilters(filterStore: ActivityFiltersStore): {
   return { from, to }
 }
 
-function areActivityServerFilterPropsEqual(
-  previous: ActivityServerFilterProps,
-  next: ActivityServerFilterProps
-): boolean {
-  return (
-    previous.onFiltersChange === next.onFiltersChange &&
-    previous.filters.relay === next.filters.relay &&
-    previous.filters.server === next.filters.server &&
-    activityRelayArraysEqual(previous.data.relays, next.data.relays) &&
-    activityServerArraysEqual(previous.data.servers, next.data.servers)
-  )
-}
-
 function areActivityStatusPropsEqual(
   previous: { data: ActivityData },
   next: { data: ActivityData }
@@ -1861,47 +1803,6 @@ function areActivityStatusPropsEqual(
       next.data.truncatedRelayIds
     )
   )
-}
-
-function areActivityRowPropsEqual(
-  previous: ActivityRowProps,
-  next: ActivityRowProps
-): boolean {
-  return (
-    previous.index === next.index &&
-    previous.start === next.start &&
-    activityEntriesEqual(previous.entry, next.entry)
-  )
-}
-
-function activityEntriesEqual(
-  previousEntry: ActivityEntry,
-  nextEntry: ActivityEntry
-): boolean {
-  return (
-    previousEntry.id === nextEntry.id &&
-    previousEntry.label === nextEntry.label &&
-    previousEntry.occurredAt === nextEntry.occurredAt &&
-    previousEntry.permission === nextEntry.permission &&
-    previousEntry.rawEvent === nextEntry.rawEvent &&
-    previousEntry.source === nextEntry.source &&
-    previousEntry.type === nextEntry.type &&
-    previousEntry.actor.id === nextEntry.actor.id &&
-    previousEntry.actor.name === nextEntry.actor.name &&
-    previousEntry.actor.email === nextEntry.actor.email &&
-    previousEntry.relay.id === nextEntry.relay.id &&
-    previousEntry.relay.name === nextEntry.relay.name &&
-    previousEntry.relay.unavailable === nextEntry.relay.unavailable &&
-    previousEntry.server?.id === nextEntry.server?.id &&
-    previousEntry.server?.name === nextEntry.server?.name
-  )
-}
-
-function activityEntryIdArraysEqual(
-  previous: Array<ActivityEntry>,
-  next: Array<ActivityEntry>
-): boolean {
-  return arraysEqual(previous, next, (left, right) => left.id === right.id)
 }
 
 function activityActorArraysEqual(
@@ -1932,20 +1833,6 @@ function activityRelayArraysEqual(
   )
 }
 
-function activityServerArraysEqual(
-  previous: ActivityData["servers"],
-  next: ActivityData["servers"]
-): boolean {
-  return arraysEqual(
-    previous,
-    next,
-    (left, right) =>
-      left.id === right.id &&
-      left.name === right.name &&
-      left.relayId === right.relayId
-  )
-}
-
 function stringArraysEqual(
   previous: Array<string>,
   next: Array<string>
@@ -1970,32 +1857,41 @@ function arraysEqual<Value>(
 
 function filterActivity(
   entries: Array<ActivityEntry>,
-  filters: ActivityFilters,
-  query: string
+  filters: Omit<ActivityFilters, "q">
 ): Array<ActivityEntry> {
-  const normalized = query.trim().toLowerCase()
   const from = filters.from ? Date.parse(filters.from) : undefined
   const to = filters.to ? Date.parse(filters.to) : undefined
   return entries.filter((entry) => {
+    const { target } = entry
     if (from !== undefined && entry.occurredAt < from) return false
     if (to !== undefined && entry.occurredAt > to) return false
     if (filters.type && entry.type !== filters.type) return false
     if (filters.user && entry.actor.id !== filters.user) return false
-    if (filters.relay && entry.relay.id !== filters.relay) return false
-    if (filters.server && entry.server?.id !== filters.server) return false
-    if (filters.database && entry.databaseId !== filters.database) return false
     if (filters.source && entry.source !== filters.source) return false
-    if (!normalized) return true
-    return [
-      entry.label,
-      entry.rawEvent,
-      entry.actor.name,
-      entry.actor.email,
-      entry.relay.name,
-      entry.server?.name,
-      entry.server?.id,
-    ].some((value) => value?.toLowerCase().includes(normalized))
+    if (filters.relay && entry.relay.id !== filters.relay) return false
+    if (filters.server && !targetIs(target, "server", filters.server)) {
+      return false
+    }
+    if (filters.app && !targetIs(target, "app", filters.app)) return false
+    if (filters.database && !targetIs(target, "database", filters.database)) {
+      return false
+    }
+    // The Relay kind is activity on the Relay itself, not on an instance.
+    if (filters.scope) {
+      return filters.scope === "relay"
+        ? target === null
+        : target?.kind === filters.scope
+    }
+    return true
   })
+}
+
+function targetIs(
+  target: ActivityEntry["target"],
+  kind: NonNullable<ActivityEntry["target"]>["kind"],
+  id: string
+): boolean {
+  return target?.kind === kind && target.id === id
 }
 
 function selectedDateRange(

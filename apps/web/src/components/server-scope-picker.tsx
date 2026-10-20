@@ -89,7 +89,7 @@ interface ServerScopePickerProps<K extends ScopeKind> {
   manageSettingsTooltip?: string
   onSelect: (server: ServerPickerOption<K> | null) => void
   /** Enables whole-type scopes such as "All databases". */
-  onSelectKind?: (kind: Exclude<K, "app">) => void
+  onSelectKind?: (kind: K) => void
   selectedKind?: K | null
   selectedRelayName?: string
   selectedServer: ServerPickerOption<K> | null
@@ -149,9 +149,9 @@ function ServerScopePickerView<K extends ScopeKind>({
   )
   const selectGroup = React.useCallback(
     (group: InstancePickerGroup) => {
+      // Kind groups only show for kinds the options include.
       if (group === "all") onSelect(null)
-      // Apps have no backups or activity to scope to.
-      else if (group !== "app") onSelectKind?.(group as Exclude<K, "app">)
+      else onSelectKind?.(group as K)
       setPickerOpen(false)
     },
     [onSelect, onSelectKind]

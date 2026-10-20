@@ -17,6 +17,11 @@ export type ActivityType = (typeof activityTypes)[number]
 
 export const activitySources = ["web", "cli"] as const
 export type ActivitySource = (typeof activitySources)[number]
+
+// The Activity page's whole-kind scopes; "relay" is activity on no instance.
+export const activityScopeKinds = ["app", "database", "relay", "server"] as const
+export type ActivityScopeKind = (typeof activityScopeKinds)[number]
+
 const activitySourceValues: ReadonlySet<string> = new Set(activitySources)
 
 export function isActivitySource(value: string): value is ActivitySource {
@@ -47,6 +52,10 @@ export function auditDatabaseId(audit: RelayAuditRecord): string | null {
   return typeof audit.details.databaseId === "string"
     ? audit.details.databaseId
     : null
+}
+
+export function auditAppId(audit: RelayAuditRecord): string | null {
+  return typeof audit.details.appId === "string" ? audit.details.appId : null
 }
 
 export function auditInstanceCreatorId(

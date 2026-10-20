@@ -184,10 +184,6 @@ describeMysql("Activity permission boundary", () => {
           const result = yield* activityFor(user)
 
           assert.deepEqual(
-            result.servers.map((server) => server.id),
-            ["server-a"]
-          )
-          assert.deepEqual(
             result.entries.map((entry) => entry.id),
             ["relay-a:server-a-event"]
           )
