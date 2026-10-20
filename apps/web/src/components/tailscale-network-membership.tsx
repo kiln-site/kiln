@@ -923,7 +923,7 @@ const ConfigureMemberDialog = React.memo(function ConfigureMemberDialog({
                 autoComplete="off"
                 className="min-w-0 rounded-r-none font-mono"
               />
-              <span className="flex h-9 shrink-0 items-center border border-l-0 border-input bg-muted/30 px-3 font-mono text-xs text-muted-foreground">
+              <span className="flex h-8 shrink-0 items-center border border-l-0 border-input bg-muted/30 px-3 font-mono text-xs text-muted-foreground">
                 .{domain}
               </span>
             </div>
@@ -1210,7 +1210,7 @@ const JoinNetworkDialog = React.memo(function JoinNetworkDialog({
                 onChange={(event) => setHostname(event.target.value)}
                 className="min-w-0 rounded-r-none font-mono"
               />
-              <span className="flex h-9 shrink-0 items-center border border-l-0 border-input bg-muted/30 px-3 font-mono text-xs text-muted-foreground">
+              <span className="flex h-8 shrink-0 items-center border border-l-0 border-input bg-muted/30 px-3 font-mono text-xs text-muted-foreground">
                 .{network.domain}
               </span>
             </div>
