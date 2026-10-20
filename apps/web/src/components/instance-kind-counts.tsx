@@ -10,33 +10,42 @@ export interface InstanceKindCountValues {
   relays: number
 }
 
-// The same icons and colours as the infrastructure map's Relay cards.
+// Fixed colours, so a custom accent can't change them or make two kinds match.
+// Light mode takes darker shades so the icons keep their contrast.
+export const instanceKindTones = {
+  relays: "text-orange-700 dark:text-orange-400",
+  instances: "text-emerald-700 dark:text-emerald-300",
+  apps: "text-red-600 dark:text-red-300",
+  databases: "text-blue-600 dark:text-blue-300",
+} as const
+
+// The same icons as the infrastructure map's Relay cards.
 const instanceKinds = [
   {
     key: "relays",
     icon: RadioTower,
-    tone: "text-primary",
+    tone: instanceKindTones.relays,
     one: "Relay",
     other: "Relays",
   },
   {
     key: "instances",
     icon: Server,
-    tone: "text-emerald-300",
+    tone: instanceKindTones.instances,
     one: "game server",
     other: "game servers",
   },
   {
     key: "apps",
     icon: Boxes,
-    tone: "text-red-300",
+    tone: instanceKindTones.apps,
     one: "app",
     other: "apps",
   },
   {
     key: "databases",
     icon: Database,
-    tone: "text-blue-300",
+    tone: instanceKindTones.databases,
     one: "database",
     other: "databases",
   },
