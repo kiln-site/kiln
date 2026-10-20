@@ -37,6 +37,8 @@ const config = defineConfig(({ command }) => ({
   },
   ssr: command === "serve" ? {} : { noExternal: true },
   server: {
+    // Lets a phone on the same tailnet open the dev server by MagicDNS name.
+    allowedHosts: [".ts.net"],
     forwardConsole: false,
     host: "0.0.0.0",
   },
