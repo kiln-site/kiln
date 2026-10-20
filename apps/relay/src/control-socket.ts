@@ -1143,33 +1143,13 @@ function authenticateSocket(
   }
 }
 
-// Runs a request in its lane, noting on the request's span how long it
-// waited for its turn.
+// Runs a request in its lane; the lane notes on the request's span how long
+// it waited for its turn.
 function runInLane<A, E>(
   ticket: LaneTicket | null,
   execution: EffectType.Effect<A, E>
 ): EffectType.Effect<A, E | LaneRejectedError> {
-  if (!ticket) return execution
-  return Effect.suspend(() => {
-    const queuedAt = Date.now()
-    let startedAt: number | undefined
-    return ticket
-      .run(
-        Effect.sync(() => {
-          startedAt = Date.now()
-        }).pipe(Effect.andThen(execution))
-      )
-      .pipe(
-        Effect.ensuring(
-          Effect.suspend(() =>
-            Effect.annotateCurrentSpan(
-              "relay.lanes.wait_ms",
-              (startedAt ?? Date.now()) - queuedAt
-            )
-          )
-        )
-      )
-  })
+  return ticket ? ticket.run(execution) : execution
 }
 
 function reverseRequestCancellationGraceMs(

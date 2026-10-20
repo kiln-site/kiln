@@ -56,7 +56,11 @@ import {
   forkPromise,
   promiseEffect,
 } from "./effect/promise.js"
-import { reportRelayError, traceRelayPromise } from "./effect/runtime.js"
+import {
+  reportRelayError,
+  traceRelayEffect,
+  traceRelayPromise,
+} from "./effect/runtime.js"
 import type { RelayStateStore } from "./effect/state.js"
 import { directoryApparentSizeEffect } from "./disk-usage.js"
 import {
@@ -415,6 +419,15 @@ export class AppDriver {
             },
             promiseEffect(() => this.#runDeployment(input, deployment))
           )
+          // The whole deployment, from its wait for the app's lifecycle lock
+          // through each step.
+          .pipe((run) =>
+            traceRelayEffect("relay.apps.deployment", run, {
+              "relay.app_id": input.appId,
+              "relay.app.deployment_id": deployment.id,
+              "relay.app.source": input.config.sourceType,
+            })
+          )
           .pipe(
             // Refused before it ran, as when the Relay is too busy or paused.
             Effect.catch((cause) =>
@@ -547,7 +560,11 @@ export class AppDriver {
     for (const [appId, limitBytes] of diskLimits) {
       // One app that can't be measured doesn't keep the rest unchecked.
       await Effect.runPromise(
-        this.#enforceDiskLimit(appId, limitBytes).pipe(
+        traceRelayEffect(
+          "relay.apps.diskLimit.check",
+          this.#enforceDiskLimit(appId, limitBytes),
+          { "relay.app_id": appId, "relay.disk.limit_bytes": limitBytes }
+        ).pipe(
           Effect.catch((cause) =>
             Effect.sync(() =>
               reportRelayError(cause, {
@@ -579,6 +596,7 @@ export class AppDriver {
     return Effect.gen({ self: this }, function* () {
       const usedBytes = yield* measure
       diskUsage.set(appId, usedBytes)
+      yield* Effect.annotateCurrentSpan("relay.disk.used_bytes", usedBytes)
       if (usedBytes <= limitBytes) return
       const [, running] = yield* current()
       if (running.length === 0) return
@@ -590,6 +608,7 @@ export class AppDriver {
           const measured = yield* measure
           diskUsage.set(appId, measured)
           if (measured <= limit) return
+          yield* Effect.annotateCurrentSpan("relay.disk.stopped", true)
           yield* Effect.logWarning(
             `Stopping app ${appId}: its data exceeded its disk limit`
           )
@@ -620,19 +639,23 @@ export class AppDriver {
     apply: () => Promise<A>
   ): Promise<A> {
     return Effect.runPromise(
-      this.#lanes.runNested(
-        {
-          label: "app.allocations",
-          locks: [exclusive(laneKeys.allocations)],
-        },
-        promiseEffect(async () => {
-          await this.#assertLimitsFit(appId, diskLimitBytes, services)
-          const applied = await apply()
-          await Effect.runPromise(
-            this.#limits.state.setDiskLimit(APP_KIND, appId, diskLimitBytes)
-          )
-          return applied
-        })
+      traceRelayEffect(
+        "relay.apps.reserve",
+        this.#lanes.runNested(
+          {
+            label: "app.allocations",
+            locks: [exclusive(laneKeys.allocations)],
+          },
+          promiseEffect(async () => {
+            await this.#assertLimitsFit(appId, diskLimitBytes, services)
+            const applied = await apply()
+            await Effect.runPromise(
+              this.#limits.state.setDiskLimit(APP_KIND, appId, diskLimitBytes)
+            )
+            return applied
+          })
+        ),
+        { "relay.app_id": appId, "relay.app.services": services.length }
       )
     )
   }
@@ -954,8 +977,12 @@ export class AppDriver {
           } else {
             const image =
               config.sourceType === "image"
-                ? await this.#pullImage(input, deployment)
-                : await this.#buildImage(input, deployment)
+                ? await traceRelayPromise("relay.apps.deployment.pull", () =>
+                    this.#pullImage(input, deployment)
+                  )
+                : await traceRelayPromise("relay.apps.deployment.build", () =>
+                    this.#buildImage(input, deployment)
+                  )
             // Its one service's limits count once the image is ready.
             await this.#reserving(
               input.appId,
@@ -966,7 +993,10 @@ export class AppDriver {
                   memoryBytes: null,
                 },
               ],
-              () => this.#replaceContainer(input, deployment, image, host)
+              () =>
+                traceRelayPromise("relay.apps.deployment.replace", () =>
+                  this.#replaceContainer(input, deployment, image, host)
+                )
             )
           }
         })
@@ -1335,12 +1365,16 @@ export class AppDriver {
     const compose = ["--ansi", "never", "-p", project]
     compose.push("--project-directory", directory, "-f", "-")
     log("Reading Compose file")
-    const normalized = await composeConfig(
-      [...compose, "config", "--format", "json"],
-      input.config.compose,
-      environment,
-      deployment.abort.signal,
-      (line) => this.#logOutput(input.appId, deployment, line, "warn")
+    const normalized = await traceRelayPromise(
+      "relay.apps.deployment.composeConfig",
+      () =>
+        composeConfig(
+          [...compose, "config", "--format", "json"],
+          input.config.compose,
+          environment,
+          deployment.abort.signal,
+          (line) => this.#logOutput(input.appId, deployment, line, "warn")
+        )
     )
     const databases = await this.#connectableDatabases(
       input.appId,
@@ -1370,8 +1404,10 @@ export class AppDriver {
       input.config.diskLimitBytes,
       Object.values(prepared.services).map(composeServiceLimits),
       () =>
-        this.#replacing(input.appId, deployment, previous, [], () =>
-          this.#composeUp(input, deployment, compose, environment, prepared)
+        traceRelayPromise("relay.apps.deployment.composeUp", () =>
+          this.#replacing(input.appId, deployment, previous, [], () =>
+            this.#composeUp(input, deployment, compose, environment, prepared)
+          )
         )
     )
   }

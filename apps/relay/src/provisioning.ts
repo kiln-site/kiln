@@ -1,4 +1,4 @@
-import { Effect, Queue } from "effect"
+import { Effect, Fiber, Queue, type Tracer } from "effect"
 
 import type {
   ProvisioningPhase,
@@ -103,6 +103,9 @@ function placeholderAt<Kind extends RelayProvisioningKind>(
 export class ProvisioningManager {
   readonly #adapters: ProvisioningAdapters
   readonly #lanes: OperationLanes
+  // The span of the request that claimed each job, so the job's own span
+  // continues the trace of the create that started it. Lost on restart.
+  readonly #claims = new Map<string, Tracer.AnySpan>()
   readonly #state: RelayStateStore["Service"]
   readonly #wake: Queue.Queue<void>
 
@@ -173,6 +176,10 @@ export class ProvisioningManager {
           placeholder,
           Date.now()
         )
+        const claimedBy = yield* Effect.option(Effect.currentSpan)
+        if (claimedBy._tag === "Some") {
+          this.#claims.set(instanceId, claimedBy.value)
+        }
         yield* Queue.offer(this.#wake, undefined)
       }
       yield* this.#announce(kind)
@@ -186,6 +193,7 @@ export class ProvisioningManager {
         kind,
         instanceId
       )
+      if (cancelled) this.#claims.delete(instanceId)
       if (cancelled) yield* this.#announce(kind)
       return cancelled
     })
@@ -227,6 +235,7 @@ export class ProvisioningManager {
       yield* this.#announce(kind)
       yield* Effect.tryPromise({ try: cleanup, catch: (cause) => cause })
       yield* this.#state.cancelProvisioningJob(kind, instanceId)
+      this.#claims.delete(instanceId)
       yield* this.#announce(kind)
       return true
     })
@@ -254,6 +263,10 @@ export class ProvisioningManager {
         const job = yield* this.#state.claimNextProvisioningJob(Date.now())
         if (!job) return
         const adapter = adapterFor(this.#adapters, job)
+        const claimedBy = this.#claims.get(job.instanceId)
+        this.#claims.delete(job.instanceId)
+        // The whole job, from its wait for the instance's lanes through each
+        // phase, in the trace of the request that claimed it.
         const refused = yield* this.#lanes
           .run(
             { label: adapter.label, locks: adapter.locks(job.instanceId) },
@@ -263,7 +276,15 @@ export class ProvisioningManager {
             Effect.as(null),
             Effect.catchTag("LaneRejectedError", (error) =>
               Effect.succeed(error)
-            )
+            ),
+            Effect.withSpan("relay.provisioning.job", {
+              attributes: {
+                "relay.instance_id": job.instanceId,
+                "relay.provisioning.attempt": job.attempt,
+                "relay.provisioning.kind": job.kind,
+              },
+              ...(claimedBy ? { parent: claimedBy } : {}),
+            })
           )
         if (!refused) continue
         // Refused before it started, as when the Relay was paused or too
@@ -280,28 +301,47 @@ export class ProvisioningManager {
     const adapters = this.#adapters
     const state = this.#state
     let failedPhase: WorkPhase = "preparing"
-    return Effect.tryPromise({
-      try: async () => {
-        const onPhase = async (phase: WorkPhase) => {
-          failedPhase = phase
-          await Effect.runPromise(
-            state.updateProvisioningJobPlaceholder(
-              job.instanceId,
-              placeholderAt(
-                adapters,
-                job,
-                provisioningState(phase, job.attempt)
-              ),
-              Date.now()
+    return Effect.gen({ self: this }, function* () {
+      // The adapter reports each phase as it starts; each phase's span runs
+      // until the next one starts or the work ends.
+      const phases = yield* Queue.unbounded<WorkPhase | null>()
+      const work = yield* Effect.tryPromise({
+        try: async () => {
+          const onPhase = async (phase: WorkPhase) => {
+            failedPhase = phase
+            await Effect.runPromise(Queue.offer(phases, phase))
+            await Effect.runPromise(
+              state.updateProvisioningJobPlaceholder(
+                job.instanceId,
+                placeholderAt(
+                  adapters,
+                  job,
+                  provisioningState(phase, job.attempt)
+                ),
+                Date.now()
+              )
             )
-          )
-          await Effect.runPromise(this.#announce(job.kind))
-        }
-        await adapterFor(adapters, job).provision(job, onPhase)
-        await Effect.runPromise(state.completeProvisioningJob(job.instanceId))
-        await Effect.runPromise(this.#announce(job.kind))
-      },
-      catch: (cause) => cause,
+            await Effect.runPromise(this.#announce(job.kind))
+          }
+          await adapterFor(adapters, job).provision(job, onPhase)
+        },
+        catch: (cause) => cause,
+      }).pipe(
+        Effect.ensuring(Queue.offer(phases, null)),
+        Effect.forkChild
+      )
+      let phase = yield* Queue.take(phases)
+      while (phase !== null) {
+        phase = yield* Queue.take(phases).pipe(
+          Effect.withSpan("relay.provisioning.phase", {
+            attributes: { "relay.provisioning.phase": phase },
+          })
+        )
+      }
+      yield* Fiber.join(work)
+      yield* state.completeProvisioningJob(job.instanceId)
+      yield* this.#announce(job.kind)
+      yield* Effect.annotateCurrentSpan("relay.provisioning.outcome", "succeeded")
     }).pipe(
       Effect.catch((cause) => {
         const message = provisioningErrorMessage(cause)
@@ -318,6 +358,12 @@ export class ProvisioningManager {
           )
           .pipe(
             Effect.tap(() => this.#announce(job.kind)),
+            Effect.tap(() =>
+              Effect.annotateCurrentSpan({
+                "relay.provisioning.failed_phase": failedPhase,
+                "relay.provisioning.outcome": "failed",
+              })
+            ),
             Effect.tap(() =>
               Effect.logError("Relay provisioning failed", {
                 cause,

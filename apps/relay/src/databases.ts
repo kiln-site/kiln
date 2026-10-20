@@ -29,7 +29,7 @@ import {
 } from "@workspace/contracts"
 import { Effect, Option, Result } from "effect"
 
-import { traceRelayPromise } from "./effect/runtime.js"
+import { traceRelayEffect, traceRelayPromise } from "./effect/runtime.js"
 import type { DatabaseConnections } from "./database-connections.js"
 import type { RelayConfig } from "./config.js"
 import type { DockerDriver } from "./docker.js"
@@ -506,7 +506,12 @@ export class DatabaseDriver {
     const removed = (key: "cpuMillis" | "memoryBytes") =>
       current[key] !== null && next[key] === null
     if (removed("cpuMillis") || removed("memoryBytes")) {
-      await this.#replaceContainer(container, next)
+      // The slow path: a new container over the same data, ready again.
+      await traceRelayPromise(
+        "relay.databases.replaceContainer",
+        () => this.#replaceContainer(container, next),
+        { "relay.database_id": input.databaseId }
+      )
     } else if (
       next.cpuMillis !== current.cpuMillis ||
       next.memoryBytes !== current.memoryBytes
@@ -1011,8 +1016,13 @@ export class DatabaseDriver {
     ) {
       return
     }
+    // Docker walks every volume, so this is the slow part of reading
+    // databases' disk use.
     this.#diskUsageRefresh = Effect.runPromise(
-      this.#engine.volumeUsage({ timeout: 60_000 }).pipe(
+      traceRelayEffect(
+        "relay.databases.diskUsage",
+        this.#engine.volumeUsage({ timeout: 60_000 })
+      ).pipe(
         Effect.map((volumes) => this.#recordDiskUsage(volumes)),
         Effect.ignore,
         Effect.ensuring(

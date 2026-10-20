@@ -263,8 +263,19 @@ export class OperationLanes {
   ): Effect.Effect<A, E | LaneRejectedError> {
     return Effect.uninterruptibleMask((restore) =>
       Effect.gen({ self: this }, function* () {
+        // The span the work runs in notes how long it waited its turn, for
+        // a request or a background worker alike.
+        const queuedAt = Date.now()
         yield* restore(Deferred.await(waiter.granted)).pipe(
-          Effect.onInterrupt(() => Effect.sync(() => this.#cancel(waiter)))
+          Effect.onInterrupt(() => Effect.sync(() => this.#cancel(waiter))),
+          Effect.ensuring(
+            Effect.suspend(() =>
+              Effect.annotateCurrentSpan(
+                "relay.lanes.wait_ms",
+                Date.now() - queuedAt
+              )
+            )
+          )
         )
         if (waiter.state !== "granted") {
           return yield* (waiter.refusal ??

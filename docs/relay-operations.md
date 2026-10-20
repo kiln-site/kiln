@@ -235,12 +235,25 @@ A change is one trace from Hearth to the Relay, sampled once at its start:
 - `relay.control.request` on the Relay covers the whole request: the client
   check, the journal (`relay.state.get_operation`,
   `relay.state.start_operation`, `relay.state.finish_operation`), the turn in
-  the lanes, and the reply. `relay.lanes.wait_ms` records how long it waited
-  for its turn.
+  the lanes, and the reply.
 - `relay.control.execute` is the work itself.
 
+Every span that runs work in a lane notes how long it waited for its turn
+as `relay.lanes.wait_ms`, whether it's a request's or a worker's.
+
 Requests from the browser socket, SFTP, and the Relay's own workers start
-their own traces.
+their own traces, except provisioning, which continues the trace of the
+request that claimed it:
+
+| Span | What it times |
+| --- | --- |
+| `relay.provisioning.job` | One instance's create, from its wait for the instance's lanes to its last phase. Under the claim's `relay.control.request`; `relay.provisioning.kind`, `.attempt`, `.outcome`, and `.failed_phase` |
+| `relay.provisioning.phase` | Each phase: `preparing`, `pulling_image`, `creating_container`, `finalizing` |
+| `relay.apps.deployment` | An App deployment, with `.pull`, `.build`, `.composeConfig`, `.composeUp`, and `.replace` for its steps |
+| `relay.apps.reserve` | Checking an App's limits against the node and applying them, holding the allocations lane |
+| `relay.apps.diskLimit.check` | Measuring one App's data, and stopping it if it's past its limit (`relay.disk.stopped`) |
+| `relay.databases.replaceContainer` | Recreating a database's container to remove a limit |
+| `relay.databases.diskUsage` | Docker measuring every volume, for databases' disk use |
 
 ## Limits
 
