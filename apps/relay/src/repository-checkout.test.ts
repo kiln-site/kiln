@@ -137,6 +137,24 @@ describe("repository checkouts", () => {
     expect(summary.skipped).toBe(4)
   })
 
+  it("keeps a chain of links whichever order the archive lists them in", async () => {
+    const { destination, summary } = await checkout([
+      { name: "repo-sha/", type: "directory" },
+      { name: "repo-sha/releases/", type: "directory" },
+      { name: "repo-sha/releases/v1/", type: "directory" },
+      { body: "<h1>v1</h1>", name: "repo-sha/releases/v1/index.html" },
+      // Leads through a link the archive only lists after it.
+      { linkname: "releases/latest", name: "repo-sha/current", type: "symlink" },
+      { linkname: "v1", name: "repo-sha/releases/latest", type: "symlink" },
+      { linkname: "current/index.html", name: "repo-sha/home.html", type: "symlink" },
+    ])
+
+    expect(summary.skipped).toBe(0)
+    expect(await readFile(join(destination, "home.html"), "utf8")).toBe(
+      "<h1>v1</h1>"
+    )
+  })
+
   it("finds a Dockerfile or Compose file only inside the checkout", async () => {
     const { destination } = await checkout([
       { name: "repo-sha/", type: "directory" },

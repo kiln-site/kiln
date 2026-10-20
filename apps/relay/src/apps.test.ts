@@ -1068,6 +1068,45 @@ describe("rolling deployments", () => {
     await removeCompose()
   })
 
+  it("keeps the running project when one new service fails its health check while another is still starting", async () => {
+    const removeCompose = await composeConfigCommand()
+    const harness = await createdApp()
+    const first =
+      "services:\n  web:\n    image: nginx:alpine\n  worker:\n    image: nginx:alpine\n"
+    await deploy(harness, { compose: first, sourceType: "compose" })
+    const before = appContainers().map((container) => container.id)
+    for (const image of ["site:web", "site:worker"]) {
+      fakeDocker.images.set(image, {})
+      fakeDocker.imageConfigs.set(image, {
+        Healthcheck: { Test: ["CMD", "true"] },
+      })
+    }
+    // The web service passes, then fails while the worker is still starting.
+    fakeDocker.healthTimelines.set("site:web", [
+      { afterMs: 0, health: "healthy" },
+      { afterMs: 8_000, health: "unhealthy" },
+    ])
+    fakeDocker.healthTimelines.set("site:worker", [
+      { afterMs: 0, health: "starting" },
+      { afterMs: 30_000, health: "healthy" },
+    ])
+
+    const app = await deploy(harness, {
+      compose:
+        "services:\n  web:\n    image: site:web\n  worker:\n    image: site:worker\n",
+      sourceType: "compose",
+    })
+
+    expect(app.deployment).toMatchObject({
+      error: expect.stringContaining("failed its health check"),
+      state: "failed",
+    })
+    expect(appContainers().map((container) => container.id).sort()).toEqual(
+      [...before].sort()
+    )
+    await removeCompose()
+  })
+
   it("removes the old project's own networks after rolling over, and leaves networks the file names", async () => {
     const removeCompose = await composeConfigCommand()
     const harness = await createdApp()
@@ -1238,6 +1277,36 @@ describe("GitHub deployments", () => {
     await expect(access(join(checkout, "deploy/nginx.conf"))).resolves.toBe(
       undefined
     )
+    await removeCompose()
+  })
+
+  it("keeps the checkout that the containers a failed deployment left running bind files from", async () => {
+    const removeCompose = await composeConfigCommand()
+    const harness = await createdApp()
+    // A volume makes Compose replace its containers rather than roll, so a
+    // failed deployment leaves its own running.
+    const compose = (image: string) =>
+      `services:\n  web:\n    image: ${image}\n    volumes:\n      - type: volume\n        source: data\n        target: /data\n      - type: bind\n        source: ./public\n        target: /usr/share/nginx/html\nvolumes:\n  data: {}\n`
+    await serveRepository({ "compose.yaml": compose("nginx:alpine") })
+    await deployGitHub(harness, githubDeployment("compose", "compose.yaml"))
+    fakeDocker.images.set("site:broken", {})
+    fakeDocker.imageConfigs.set("site:broken", {
+      Healthcheck: { Test: ["CMD", "false"] },
+    })
+    fakeDocker.unhealthyImages.add("site:broken")
+    await serveRepository({ "compose.yaml": compose("site:broken") })
+
+    const failed = await deployGitHub(
+      harness,
+      githubDeployment("compose", "compose.yaml")
+    )
+
+    expect(failed.deployment).toMatchObject({ state: "failed" })
+    const [running] = appContainers()
+    expect(running?.labels["kiln.app.deployment"]).toBe(failed.deployment!.id)
+    expect(
+      await readdir(join(harness.config.dataDirectory, "app-sources", appId))
+    ).toEqual([failed.deployment!.id])
     await removeCompose()
   })
 

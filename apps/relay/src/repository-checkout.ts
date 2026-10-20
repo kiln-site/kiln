@@ -187,41 +187,61 @@ export async function extractRepositoryArchive(
             : undefined,
     })
   }
-  for (const link of links) {
-    if (await createContainedLink(root, link.path, link.target)) continue
-    summary.skipped += 1
-  }
+  summary.skipped += await createContainedLinks(root, links)
   return summary
 }
 
-// Makes a link only where its folder is inside the checkout and it leads to
+// Makes the links whose folders are inside the checkout and that lead to
 // something inside it, checked on disk, since a chain of links that each
-// look inside can lead out.
-async function createContainedLink(
+// look inside can lead out. A link may lead through others in any order, so
+// they're made in rounds, then any that dangle or lead out are removed until
+// none do. Returns how many were left out.
+async function createContainedLinks(
   root: string,
-  path: string,
-  target: string
-): Promise<boolean> {
-  if (isAbsolute(target)) return false
-  const folder = await recoverPromise(
-    () => realpath(dirname(path)),
-    () => null
-  )
-  if (!folder || !contained(root, folder)) return false
-  const placed = join(folder, basename(path))
-  if (!contained(root, resolve(folder, target))) return false
-  const created = await recoverPromise(
-    () => symlink(target, placed).then(() => true),
-    () => false
-  )
-  if (!created) return false
-  const leadsTo = await recoverPromise(
-    () => realpath(placed),
-    () => null
-  )
-  if (leadsTo && contained(root, leadsTo)) return true
-  await rm(placed, { force: true })
-  return false
+  links: ReadonlyArray<{ path: string; target: string }>
+): Promise<number> {
+  let pending = links.filter((link) => !isAbsolute(link.target))
+  const placed: Array<string> = []
+  for (let round = 0; round <= links.length && pending.length > 0; round += 1) {
+    const waiting: typeof pending = []
+    for (const link of pending) {
+      // Its folder may be a link a later round makes.
+      const folder = await recoverPromise(
+        () => realpath(dirname(link.path)),
+        () => null
+      )
+      if (!folder || !contained(root, folder)) {
+        waiting.push(link)
+        continue
+      }
+      const path = join(folder, basename(link.path))
+      if (!contained(root, resolve(folder, link.target))) continue
+      const created = await recoverPromise(
+        () => symlink(link.target, path).then(() => true),
+        () => false
+      )
+      if (created) placed.push(path)
+    }
+    if (waiting.length === pending.length) break
+    pending = waiting
+  }
+  // Removing one can leave another dangling, so this repeats until none
+  // dangle or lead out.
+  let kept = placed
+  for (;;) {
+    const next: Array<string> = []
+    for (const path of kept) {
+      const leadsTo = await recoverPromise(
+        () => realpath(path),
+        () => null
+      )
+      if (leadsTo && contained(root, leadsTo)) next.push(path)
+      else await rm(path, { force: true })
+    }
+    if (next.length === kept.length) break
+    kept = next
+  }
+  return links.length - kept.length
 }
 
 /**

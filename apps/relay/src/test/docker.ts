@@ -229,6 +229,14 @@ export class FakeDocker {
   /** Images whose health check fails once they start. */
   readonly unhealthyImages = new Set<string>()
   /**
+   * How a health-checked container of an image reports its health as it
+   * runs: each entry holds from `afterMs` past its start.
+   */
+  readonly healthTimelines = new Map<
+    string,
+    Array<{ afterMs: number; health: "healthy" | "starting" | "unhealthy" }>
+  >()
+  /**
    * Images whose process exits as soon as it starts. Under a restart policy
    * Docker keeps restarting them, reporting them running and restarting.
    */
@@ -301,6 +309,7 @@ export class FakeDocker {
     this.imageConfigs.clear()
     this.imageTags.clear()
     this.unhealthyImages.clear()
+    this.healthTimelines.clear()
     this.crashingImages.clear()
     this.programFailures.clear()
     this.streamErrors.clear()
@@ -776,6 +785,14 @@ export class FakeDocker {
   // ------------------------------------------------------------- inspection
 
   #containerObject(reference: string): unknown {
+    const found = this.container(reference)
+    const timeline = found && this.healthTimelines.get(found.image)
+    if (found?.state.running && found.healthCheck && timeline) {
+      const running = Date.now() - Date.parse(found.state.startedAt)
+      found.state.health =
+        [...timeline].reverse().find((entry) => entry.afterMs <= running)
+          ?.health ?? "starting"
+    }
     const container = this.container(reference)
     if (!container) return undefined
     const binds = container.mounts

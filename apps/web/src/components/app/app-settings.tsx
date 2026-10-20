@@ -26,6 +26,7 @@ import {
   type AppDocumentKind,
   type EditableAppConfig,
 } from "@/components/app/app-config-dialogs"
+import { useAppRunsCompose } from "@/components/app/app-compose"
 import { useAppContainerSelection } from "@/components/app/app-container-selection"
 import {
   appAddresses,
@@ -831,6 +832,7 @@ export function AppLimitsSection({
   editable: boolean
 }) {
   const queryClient = useQueryClient()
+  const compose = useAppRunsCompose(app, config.sourceType)
   const { data: capacity = null } = useQuery({
     ...resourceLimitsCapacityQueryOptions(app.relayId, "app", app.id),
     enabled: editable && available,
@@ -840,9 +842,9 @@ export function AppLimitsSection({
       ...app.containers.map((container) => container.service),
       ...Object.keys(config.serviceLimits),
     ])
-    if (names.size === 0 && config.sourceType !== "compose") names.add("app")
+    if (names.size === 0 && !compose) names.add("app")
     return [...names].sort()
-  }, [app.containers, config.serviceLimits, config.sourceType])
+  }, [app.containers, compose, config.serviceLimits])
   const groups = React.useMemo<Array<ResourceLimitsGroup>>(
     () => [
       {
@@ -854,12 +856,11 @@ export function AppLimitsSection({
       ...services.map((service) => ({
         fields: ["memory", "cpu"] as const,
         key: `service:${service}`,
-        label:
-          config.sourceType === "compose" ? `Service ${service}` : "Container",
+        label: compose ? `Service ${service}` : "Container",
         limits: { ...NO_RESOURCE_LIMITS, ...config.serviceLimits[service] },
       })),
     ],
-    [config.diskLimitBytes, config.serviceLimits, config.sourceType, services]
+    [compose, config.diskLimitBytes, config.serviceLimits, services]
   )
   const save = React.useCallback(
     async (limits: Readonly<Record<string, ResourceLimits>>) => {
@@ -909,7 +910,7 @@ export function AppLimitsSection({
       editable={editable}
       groups={groups}
       hint={
-        config.sourceType === "compose" && services.length === 0
+        compose && services.length === 0
           ? "Deploy the app once to set each service's memory and CPU."
           : "Memory and CPU apply to running containers at once; removing one applies on the next deploy. Past its disk limit, the app is stopped."
       }

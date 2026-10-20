@@ -1032,7 +1032,7 @@ export class AppDriver {
         })
       )
     )
-    await this.#cleanCheckouts(input, deployment, Result.isSuccess(outcome))
+    await this.#cleanCheckouts(input.appId)
     const seconds = ((Date.now() - startedAt) / 1_000).toFixed(1)
     const message = Result.isSuccess(outcome)
       ? null
@@ -1205,20 +1205,22 @@ export class AppDriver {
     return directory
   }
 
-  // A deployment that succeeded keeps only its own checkout, and only for
-  // Compose, whose services may bind its files; one that failed leaves the
-  // checkout of whatever still runs.
-  async #cleanCheckouts(
-    input: RelayDeployApp,
-    deployment: Deployment,
-    succeeded: boolean
-  ) {
-    const root = join(this.#config.dataDirectory, "app-sources", input.appId)
-    const keepOwn = succeeded && input.github?.build === "compose"
+  // Keeps the checkouts the app's Compose containers were deployed from,
+  // whose services may bind files from them, whichever deployment left
+  // them running; removes every other, a Dockerfile's once it's built.
+  async #cleanCheckouts(appId: string) {
+    const root = join(this.#config.dataDirectory, "app-sources", appId)
     await Effect.runPromise(
       promiseEffect(async () => {
+        const inUse = new Set(
+          (await this.#appContainers(appId)).flatMap((container) =>
+            container.labels[COMPOSE_PROJECT_LABEL] && container.deploymentId
+              ? [container.deploymentId]
+              : []
+          )
+        )
         for (const entry of await readdir(root)) {
-          if (entry === deployment.id ? keepOwn : !succeeded) continue
+          if (inUse.has(entry)) continue
           await rm(join(root, entry), { force: true, recursive: true })
         }
       }).pipe(Effect.ignore)
@@ -1466,10 +1468,11 @@ export class AppDriver {
     await sleep(SETTLE_MS, deployment.abort.signal)
     const deadline = Date.now() + HEALTH_TIMEOUT_MS
     const waiting = new Set<string>()
-    let pending = [...names]
-    while (pending.length > 0) {
-      const next: Array<string> = []
-      for (const name of pending) {
+    // Every container is checked each round, so one that passed and then
+    // failed while another started can't hand over a broken project.
+    for (;;) {
+      const starting: Array<string> = []
+      for (const name of names) {
         const [container] = this.#appContainer(
           await docker(this.#engine.inspectContainer<ContainerInspect>(name))
         )
@@ -1515,14 +1518,13 @@ export class AppDriver {
               `Waiting for ${name} to pass its health check`
             )
           }
-          next.push(name)
+          starting.push(name)
         }
       }
-      pending = next
-      if (pending.length === 0) break
+      if (starting.length === 0) break
       if (Date.now() >= deadline) {
         throw new Error(
-          `${pending[0]} didn't pass its health check within 10 minutes`
+          `${starting[0]} didn't pass its health check within 10 minutes`
         )
       }
       await sleep(HEALTH_POLL_MS, deployment.abort.signal)

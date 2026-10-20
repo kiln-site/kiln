@@ -44,6 +44,7 @@ import {
   showAppOperationError,
   type App,
 } from "@/components/app/app-presentation"
+import { useAppRunsCompose } from "@/components/app/app-compose"
 import { useAppWorkspace } from "@/components/app/app-workspace-context"
 import { CopyMetaRow, InfoCard, InfoCardHeader } from "@/components/info-card"
 import { TailscaleMembershipSection } from "@/components/tailscale-network-membership"
@@ -68,6 +69,11 @@ import {
 export function AppNetworkPage() {
   const { app } = useAppWorkspace()
   const config = useQuery(appConfigQueryOptions(app.relayId, app.id))
+  // A repository's Compose file publishes its own ports, like a pasted one.
+  const compose = useAppRunsCompose(
+    app,
+    config.data?.config.sourceType ?? "image"
+  )
   const canManage =
     appRelayAvailable(app) && app.permissions.includes("app.manage")
 
@@ -106,7 +112,7 @@ export function AppNetworkPage() {
             <AppWebRoutes
               app={app}
               canManage={canManage}
-              compose={config.data.config.sourceType === "compose"}
+              compose={compose}
             />
             <PublishedPorts
               // A fresh form when the saved ports change, and only then:
@@ -114,7 +120,7 @@ export function AppNetworkPage() {
               key={JSON.stringify(config.data.config.ports)}
               app={app}
               canManage={canManage}
-              compose={config.data.config.sourceType === "compose"}
+              compose={compose}
               saved={config.data.config.ports}
             />
             <ConnectedDatabases
@@ -124,7 +130,7 @@ export function AppNetworkPage() {
             />
             <AppTailscale
               app={app}
-              compose={config.data.config.sourceType === "compose"}
+              compose={compose}
             />
           </>
         ) : (

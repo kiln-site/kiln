@@ -86,13 +86,19 @@ export function useAppConfigSave(
           environmentHidden: current?.environmentHidden ?? false,
         })
       )
-      await queryClient.invalidateQueries({
-        queryKey: instanceInventoryScope({
-          kind: "app",
-          relayId: app.relayId,
-          id: app.id,
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: instanceInventoryScope({
+            kind: "app",
+            relayId: app.relayId,
+            id: app.id,
+          }),
         }),
-      })
+        // Its rail shows the repository only while GitHub is its source.
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.appDeployments.summary(app.relayId, app.id),
+        }),
+      ])
       // Follow the deployment as it happens.
       if (next === "deploy" && app.permissions.includes("app.logs.read")) {
         await navigate({

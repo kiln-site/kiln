@@ -105,7 +105,16 @@ export const startAppDeploymentEffect = Effect.fn("Apps.deploy")(function* (
   }
   const github =
     app.config.sourceType === "github"
-      ? yield* githubCommit(relay, request)
+      ? yield* githubCommit(relay, request).pipe(
+          // A push or a deploy waiting on provisioning that fails before it
+          // knows its commit, as when the branch is gone, is recorded; a
+          // poll would record it every minute, so it isn't.
+          Effect.tapError((cause) =>
+            request.trigger === "push" || request.background
+              ? recordRefusal(request, relay.id, cause)
+              : Effect.void
+          )
+        )
       : null
   // A commit deployed again, as a rollback, holds until a new one lands.
   if (github && automatic) {
@@ -200,6 +209,38 @@ export const startAppDeploymentEffect = Effect.fn("Apps.deploy")(function* (
   followAppDeployment(record)
   return { app: deployed, deployment: record }
 })
+
+// A GitHub deployment that failed before it knew what it deploys.
+const recordRefusal = (
+  request: AppDeploymentRequest,
+  relayId: string,
+  cause: unknown
+) =>
+  Clock.currentTimeMillis.pipe(
+    Effect.flatMap((now) =>
+      insertAppDeploymentEffect({
+        appId: request.appId,
+        branch: null,
+        commitAuthor: null,
+        commitMessage: null,
+        commitSha: null,
+        error: cause instanceof Error ? cause.message : String(cause),
+        finishedAt: new Date(now).toISOString(),
+        id: randomUUID(),
+        relayDeploymentId: null,
+        relayId,
+        repository: null,
+        rolling: null,
+        sourceType: "github",
+        startedAt: new Date(now).toISOString(),
+        status: "failed",
+        trigger: request.trigger,
+        triggeredBy: request.userId,
+      })
+    ),
+    Effect.andThen(Effect.sync(() => publishAppDeploymentChange(relayId))),
+    Effect.ignore
+  )
 
 // What a GitHub app deploys: its branch's head, or the commit asked for,
 // and how to get a token that reads only its repository.
