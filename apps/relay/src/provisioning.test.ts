@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -5,11 +6,15 @@ import { join } from "node:path"
 import { assert, it as effectIt } from "@effect/vitest"
 import { Deferred, Effect, Exit, Fiber } from "effect"
 import { TestClock } from "effect/testing"
-import { describe, expect, it } from "vite-plus/test"
+import { describe, expect, it, vi } from "vite-plus/test"
+
+vi.mock("./command.js", () => import("./test/docker.js"))
 
 import {
+  relayCreateDatabaseSchema,
   relayCreateInstanceSchema,
   relayInstanceSchema,
+  relayManagedDatabaseSchema,
 } from "@workspace/contracts"
 
 import { appProvisioning } from "./app-provisioning.js"
@@ -25,6 +30,11 @@ import {
   ProvisioningManager,
 } from "./provisioning.js"
 import { serverProvisioning } from "./server-provisioning.js"
+import {
+  provisioningWorker,
+  relayHarness,
+  serverRecipe,
+} from "./test/relay.js"
 
 const pullFailure = new Error(
   "Command failed: docker pull private.example/image --env TOKEN=secret\nError response from daemon: manifest unknown\n"
@@ -85,11 +95,47 @@ describe("provisioning worker", () => {
 
   const serverInput = (instanceId: string) => ({
     kind: "server" as const,
-    idempotencyKey: `55000000-0000-4000-8000-${instanceId.slice(0, 12)}`,
+    idempotencyKey: randomUUID(),
     input,
     instanceId,
     placeholder: { ...placeholder, directory: instanceId, id: instanceId },
   })
+
+  const databaseInput = (instanceId: string) => {
+    const input = relayCreateDatabaseSchema.parse({
+      databaseName: "kiln_app",
+      engine: "postgres",
+      id: instanceId,
+      name: `Database ${instanceId.slice(0, 4)}`,
+      password: "correct-horse-battery-staple-1",
+      username: "kiln_user",
+    })
+    return {
+      kind: "database" as const,
+      idempotencyKey: randomUUID(),
+      input,
+      instanceId,
+      placeholder: relayManagedDatabaseSchema.parse({
+        connectedInstanceIds: [],
+        containerId: null,
+        createdAt: new Date().toISOString(),
+        databaseName: input.databaseName,
+        diskUsedBytes: null,
+        engine: input.engine,
+        hostname: `database-${instanceId}`,
+        id: instanceId,
+        image: "postgres:17",
+        internalPort: 5432,
+        limits: { cpuMillis: null, diskBytes: null, memoryBytes: null },
+        name: input.name,
+        observedState: "provisioning",
+        provisioning: { attempt: 0, error: null, phase: "awaiting_claim" },
+        shortId: instanceId.slice(0, 8),
+        status: "Waiting for Hearth",
+        supportsImportExport: true,
+      }),
+    }
+  }
 
   // Waits for the worker, which runs on its own fibers, to catch up.
   const until = (done: () => boolean) =>
@@ -112,7 +158,7 @@ describe("provisioning worker", () => {
   })
 
   // A worker over a fresh Relay state, where Docker is the one thing faked:
-  // creating a game server runs `create`.
+  // creating a game server or database runs `create`.
   const withWorker = <A, E>(
     capacity: ProvisioningCapacity,
     create: (instanceId: string) => Promise<void>,
@@ -134,11 +180,16 @@ describe("provisioning worker", () => {
               return placeholder
             },
           } as unknown as LifecycleDriver
+          const databases = {
+            create: async (input: { id: string }) => {
+              await create(input.id)
+            },
+          } as unknown as DatabaseDriver
           const manager = yield* ProvisioningManager.make({
             adapters: {
-              // Only game servers provision here.
+              // Only game servers and databases provision here.
               app: appProvisioning({} as AppDriver),
-              database: databaseProvisioning({} as DatabaseDriver),
+              database: databaseProvisioning(databases),
               server: serverProvisioning({
                 lifecycle,
                 refreshSnapshot: async () => undefined,
@@ -212,7 +263,7 @@ describe("provisioning worker", () => {
   )
 
   effectIt.effect(
-    "creates different instances at once, up to its slots, and starts the next as one fails",
+    "creates different databases at once, up to its slots, and starts the next as one fails",
     () => {
       const [first, second, third] = ["a", "b", "c"].map((id) =>
         id.repeat(40)
@@ -229,8 +280,8 @@ describe("provisioning worker", () => {
         ({ manager, state }) =>
           Effect.gen(function* () {
             for (const id of [first, second, third]) {
-              yield* manager.prepare(serverInput(id))
-              yield* manager.claim("server", id)
+              yield* manager.prepare(databaseInput(id))
+              yield* manager.claim("database", id)
             }
             yield* until(() => started.length === 2)
             // The third waits for a free slot.
@@ -281,8 +332,8 @@ describe("provisioning worker", () => {
         ({ manager }) =>
           Effect.gen(function* () {
             for (const id of [first, second]) {
-              yield* manager.prepare(serverInput(id))
-              yield* manager.claim("server", id)
+              yield* manager.prepare(databaseInput(id))
+              yield* manager.claim("database", id)
             }
             // The first job always starts, so the queue keeps moving.
             yield* until(() => started.length === 1)
@@ -299,4 +350,86 @@ describe("provisioning worker", () => {
       )
     }
   )
+
+  effectIt.effect(
+    "creates game servers one at a time, while a database queued after one goes ahead",
+    () => {
+      const [first, second, database] = ["1", "2", "3"].map((id) =>
+        id.repeat(40)
+      ) as [string, string, string]
+      const started: Array<string> = []
+      const finish = new Map<string, () => void>()
+      return withWorker(
+        { busy: () => false, slots: 4 },
+        (id) =>
+          new Promise<void>((resolve) => {
+            started.push(id)
+            finish.set(id, resolve)
+          }),
+        ({ manager }) =>
+          Effect.gen(function* () {
+            yield* manager.prepare(serverInput(first))
+            yield* manager.prepare(serverInput(second))
+            yield* manager.prepare(databaseInput(database))
+            yield* manager.claim("server", first)
+            yield* manager.claim("server", second)
+            yield* manager.claim("database", database)
+            yield* until(() => started.length === 2)
+            yield* settle
+            assert.deepStrictEqual(started, [first, database])
+
+            finish.get(first)!()
+            yield* until(() => started.length === 3)
+            assert.deepStrictEqual(started, [first, database, second])
+          })
+      )
+    }
+  )
+})
+
+describe("provisioning game servers", () => {
+  // Game servers share the Relay's game network and DNS, which creates
+  // running side by side raced to set up.
+  it("creates two game servers queued together", async () => {
+    const harness = await relayHarness()
+    const manager = await provisioningWorker(harness)
+    const recipe = await harness.publishRecipe(serverRecipe())
+    const ids = ["f".repeat(40), "e".repeat(40)]
+    for (const id of ids) {
+      const input = relayCreateInstanceSchema.parse({
+        diskLimitBytes: 1024 ** 3,
+        recipe,
+        start: false,
+        variables: {},
+      })
+      await Effect.runPromise(
+        manager.prepare({
+          kind: "server",
+          idempotencyKey: randomUUID(),
+          input,
+          instanceId: id,
+          placeholder: await harness.lifecycle.prepareInstance(id, input),
+        })
+      )
+    }
+    for (const id of ids) {
+      await Effect.runPromise(manager.claim("server", id))
+    }
+
+    for (const id of ids) {
+      for (let tries = 0; ; tries += 1) {
+        if (tries > 10_000) throw new Error("Timed out waiting")
+        const job = await Effect.runPromise(
+          harness.state.getProvisioningJob(id)
+        )
+        if (!job) break
+        expect(job.error).toBeNull()
+        await new Promise((resolve) => setImmediate(resolve))
+      }
+    }
+    const created = (await harness.docker.inspectInstances()).map(
+      (instance) => instance.id
+    )
+    expect(created).toEqual(expect.arrayContaining(ids))
+  })
 })

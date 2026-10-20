@@ -76,7 +76,10 @@ worker locks the work when it runs it:
   the host's load average is under one per core, so provisioning doesn't
   slow running game servers; while it isn't, the worker checks again every
   five seconds or when a job finishes. Jobs start in the order they were
-  queued.
+  queued, except that game servers are created one at a time, since creating
+  one changes what they all share (the game network, the Relay's DNS records,
+  and private hostnames); databases and Apps queued after a waiting game
+  server go ahead of it.
 - **App deployments** hold the App's lifecycle lock for the whole build. An
   App delete stops a running deployment before it waits, so it doesn't wait
   for the build it's removing.

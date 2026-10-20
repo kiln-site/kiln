@@ -17,6 +17,9 @@ export function serverProvisioning(options: {
     announce: options.refreshSnapshot,
     label: "instance.provision",
     locks: instanceReplaceLocks,
+    // Creating a game server changes what they all share: the game network,
+    // the Relay's DNS records, and their private hostnames.
+    oneAtATime: true,
     withState: (placeholder, state) => ({
       ...placeholder,
       observedState: state.phase === "failed" ? "failed" : "provisioning",

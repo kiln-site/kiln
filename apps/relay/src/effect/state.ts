@@ -561,8 +561,13 @@ export class RelayStateStore extends Context.Service<
       instanceId: string,
       now: number
     ) => Effect.Effect<RelayProvisioningJob | null, RelayStateError>
+    /**
+     * Takes the oldest queued job, passing over the kinds in `exceptKinds`,
+     * as one whose kind runs a job at a time while one is running.
+     */
     readonly claimNextProvisioningJob: (
-      now: number
+      now: number,
+      exceptKinds?: ReadonlyArray<RelayProvisioningKind>
     ) => Effect.Effect<RelayProvisioningJob | null, RelayStateError>
     readonly cancelProvisioningJob: (
       kind: RelayProvisioningKind,
@@ -2394,7 +2399,7 @@ const makeRelayStateStore = Effect.gen(function* () {
           })
         )
       ),
-    claimNextProvisioningJob: (now) =>
+    claimNextProvisioningJob: (now, exceptKinds = []) =>
       run(
         "claim_next_provisioning_job",
         sql.withTransaction(
@@ -2409,6 +2414,7 @@ const makeRelayStateStore = Effect.gen(function* () {
                 SELECT instance_id
                 FROM relay_instance_provisioning_jobs
                 WHERE status = 'queued'
+                  ${exceptKinds.length > 0 ? sql`AND kind NOT IN ${sql.in(exceptKinds)}` : sql``}
                 ORDER BY created_at ASC, instance_id ASC
                 LIMIT 1
               )
