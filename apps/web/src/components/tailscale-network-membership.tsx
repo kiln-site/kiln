@@ -17,7 +17,11 @@ import {
 
 import { Button } from "@workspace/ui/components/button"
 import { ServerKindIcon } from "@/components/instance-kind-icon"
-import { forkPromise, recoverPromise } from "@/effect/promise"
+import {
+  ensuringPromise,
+  forkPromise,
+  recoverPromise,
+} from "@/effect/promise"
 import {
   Dialog,
   DialogContent,
@@ -236,12 +240,13 @@ const ConnectedServersTableContent = React.memo(
     ) => {
       if (saving.current) return
       saving.current = true
-      try {
-        await save.mutateAsync({ bindings, stack })
-        finishDialog(target)
-      } finally {
-        saving.current = false
-      }
+      await ensuringPromise(
+        () => save.mutateAsync({ bindings, stack }),
+        () => {
+          saving.current = false
+        }
+      )
+      finishDialog(target)
     }
     // Apply only the fields the dialog changed to the current binding, so a
     // change made elsewhere since it opened is kept.
