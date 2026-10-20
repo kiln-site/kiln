@@ -291,10 +291,8 @@ export const updateAppLimits = createServerFn({ method: "POST" })
       diskLimitBytes: data.diskLimitBytes,
       serviceLimits: data.serviceLimits,
     })
-    await runAppEffect(
-      "apps.config.save",
-      saveAppConfigEffect(data.relayId, data.appId, config)
-    )
+    // Saved once the Relay applies them, so limits it refuses aren't used
+    // by the next deployment.
     const updated = relayAppSchema.parse(
       await databaseRpc(
         relay,
@@ -307,6 +305,10 @@ export const updateAppLimits = createServerFn({ method: "POST" })
         60_000,
         user.id
       )
+    )
+    await runAppEffect(
+      "apps.config.save",
+      saveAppConfigEffect(data.relayId, data.appId, config)
     )
     publishAppChange(relay.id, false)
     return updated

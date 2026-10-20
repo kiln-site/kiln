@@ -304,7 +304,7 @@ export function runWithInput(
  * optional binary unit, `b`, `k`, `m`, `g`, `t`, or `p`, case-insensitive,
  * optionally followed by `b` or `ib`.
  */
-function ramInBytes(value: string): number {
+export function ramInBytes(value: string): number {
   const match = /^(\d+(?:\.\d+)?) ?([kmgtp])?(?:i?b)?$/iu.exec(value.trim())
   const amount = Number(match?.[1])
   if (!match || !Number.isFinite(amount)) {

@@ -34,6 +34,7 @@ it exclusive, which waits for every part.
 | `database:<id>`                                    | Exclusive to database changes; shared by dumps and backups                                                                                           |
 | `relay:routes`                                     | Shared by starts; exclusive to route, port, proxy, and networking writes                                                                             |
 | `relay:tailscale`                                  | Exclusive to the Relay's Tailscale settings; shared by stack changes                                                                                 |
+| `relay:allocations`                                | Exclusive to anything that reserves the node's memory, CPU, or disk: limit changes, and starting a deployment's containers                           |
 | `relay:host-files`                                 | The host file root                                                                                                                                   |
 
 `apps/relay/src/operation-plans.ts` maps each control operation to its keys.

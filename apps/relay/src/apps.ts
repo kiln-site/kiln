@@ -44,7 +44,7 @@ import {
   MAX_CONSOLE_HISTORY_CHARACTERS,
   type DockerConsoleSession,
 } from "./docker.js"
-import { createContainer } from "./docker-container-spec.js"
+import { createContainer, ramInBytes } from "./docker-container-spec.js"
 import {
   DockerEngine,
   isDockerNotFound,
@@ -58,7 +58,11 @@ import {
 import { reportRelayError, traceRelayPromise } from "./effect/runtime.js"
 import type { RelayStateStore } from "./effect/state.js"
 import { directoryApparentSizeEffect } from "./disk-usage.js"
-import type { OperationLanes } from "./operation-lanes.js"
+import {
+  exclusive,
+  laneKeys,
+  type OperationLanes,
+} from "./operation-lanes.js"
 import { appLifecycleLocks } from "./operation-plans.js"
 import {
   assertResourceLimitsFit,
@@ -403,7 +407,8 @@ export class AppDriver {
   /**
    * Saves an app's limits and applies what Docker can change in place to
    * its containers. Removing a service's memory or CPU limit applies when
-   * the app next deploys, since Docker can't remove one from a container.
+   * the app next deploys, since Docker can't remove one from a container,
+   * so until then the container's limit still counts.
    */
   async setLimits(input: RelayAppLimits): Promise<RelayApp> {
     const containers = await this.#appContainers(input.appId)
@@ -413,45 +418,43 @@ export class AppDriver {
     ) {
       throw new Error("App not found")
     }
-    await this.#assertLimitsFit(
+    const engine = this.#engine
+    await this.#reserving(
       input.appId,
       input.diskLimitBytes,
-      containers.map(
-        (container) => input.serviceLimits[container.service] ?? null
-      )
-    )
-    await Effect.runPromise(
-      this.#limits.state.setDiskLimit(
-        APP_KIND,
-        input.appId,
-        input.diskLimitBytes
-      )
-    )
-    const engine = this.#engine
-    await docker(
-      Effect.forEach(
-        containers,
-        (container) => {
-          const next = input.serviceLimits[container.service]
-          const spec = containerLimitSpec({
-            ...NO_RESOURCE_LIMITS,
-            ...next,
-          })
-          return next &&
-            (next.memoryBytes !== container.limits.memoryBytes ||
-              next.cpuMillis !== container.limits.cpuMillis)
-            ? engine.updateContainerResources(container.id, {
-                ...(next.memoryBytes !== null && {
-                  memoryBytes: next.memoryBytes,
-                }),
-                ...(spec.nanoCpus !== undefined && {
-                  nanoCpus: spec.nanoCpus,
-                }),
+      containers.map((container) => {
+        const next = input.serviceLimits[container.service]
+        return {
+          cpuMillis: next?.cpuMillis ?? container.limits.cpuMillis,
+          memoryBytes: next?.memoryBytes ?? container.limits.memoryBytes,
+        }
+      }),
+      () =>
+        docker(
+          Effect.forEach(
+            containers,
+            (container) => {
+              const next = input.serviceLimits[container.service]
+              const spec = containerLimitSpec({
+                ...NO_RESOURCE_LIMITS,
+                ...next,
               })
-            : Effect.void
-        },
-        { concurrency: "unbounded", discard: true }
-      )
+              return next &&
+                (next.memoryBytes !== container.limits.memoryBytes ||
+                  next.cpuMillis !== container.limits.cpuMillis)
+                ? engine.updateContainerResources(container.id, {
+                    ...(next.memoryBytes !== null && {
+                      memoryBytes: next.memoryBytes,
+                    }),
+                    ...(spec.nanoCpus !== undefined && {
+                      nanoCpus: spec.nanoCpus,
+                    }),
+                  })
+                : Effect.void
+            },
+            { concurrency: "unbounded", discard: true }
+          )
+        )
     )
     this.#wake(input.appId)
     return this.get(input.appId)
@@ -460,9 +463,9 @@ export class AppDriver {
   /**
    * Measures the data directories of apps with a disk limit and stops a
    * running app that's past its limit, in its lifecycle lane so it can't
-   * interleave with a deploy or a start. It measures again once its turn
-   * comes. Docker leaves a stopped container stopped under its
-   * `unless-stopped` policy.
+   * interleave with a deploy or a start. Once its turn comes it reads the
+   * limit and the containers again, and measures again. Docker leaves a
+   * stopped container stopped under its `unless-stopped` policy.
    */
   async enforceDiskLimits(): Promise<void> {
     const diskLimits = await this.#diskLimits()
@@ -470,56 +473,100 @@ export class AppDriver {
       if (!diskLimits.has(appId)) this.#diskUsage.delete(appId)
     }
     for (const [appId, limitBytes] of diskLimits) {
-      const measure = directoryApparentSizeEffect(this.#appDirectory(appId))
-      const usedBytes = await Effect.runPromise(measure)
-      this.#diskUsage.set(appId, usedBytes)
-      if (usedBytes <= limitBytes) continue
-      const running = (await this.#appContainers(appId)).filter(
-        (container) => container.running
-      )
-      if (running.length === 0) continue
-      const engine = this.#engine
-      const diskUsage = this.#diskUsage
+      // One app that can't be measured doesn't keep the rest unchecked.
       await Effect.runPromise(
-        this.#lanes
-          .run(
-            {
-              label: "app.disk-limit.stop",
-              locks: appLifecycleLocks(appId),
-            },
-            Effect.gen(function* () {
-              const measured = yield* measure
-              diskUsage.set(appId, measured)
-              if (measured <= limitBytes) return
-              yield* Effect.logWarning(
-                `Stopping app ${appId}: its data exceeded its disk limit`
-              )
-              yield* Effect.forEach(
-                running,
-                ({ id }) =>
-                  engine.stopContainer(id, { seconds: 30, timeout: 90_000 }),
-                { concurrency: "unbounded", discard: true }
-              )
-            })
-          )
-          .pipe(
-            Effect.catch((cause) =>
-              Effect.sync(() =>
-                reportRelayError(cause, {
-                  operation: "relay.apps.diskLimitStop",
-                })
-              )
+        this.#enforceDiskLimit(appId, limitBytes).pipe(
+          Effect.catch((cause) =>
+            Effect.sync(() =>
+              reportRelayError(cause, {
+                operation: "relay.apps.diskLimitStop",
+              })
             )
           )
+        )
       )
-      this.#wake(appId)
     }
+  }
+
+  #enforceDiskLimit(appId: string, limitBytes: number) {
+    const measure = directoryApparentSizeEffect(this.#appDirectory(appId))
+    const diskUsage = this.#diskUsage
+    const engine = this.#engine
+    const current = () =>
+      Effect.all([
+        promiseEffect(() => this.#diskLimits()).pipe(
+          Effect.map((limits) => limits.get(appId) ?? null)
+        ),
+        promiseEffect(() => this.#appContainers(appId)).pipe(
+          Effect.map((containers) =>
+            containers.filter((container) => container.running)
+          )
+        ),
+      ])
+    const wake = () => this.#wake(appId)
+    return Effect.gen({ self: this }, function* () {
+      const usedBytes = yield* measure
+      diskUsage.set(appId, usedBytes)
+      if (usedBytes <= limitBytes) return
+      const [, running] = yield* current()
+      if (running.length === 0) return
+      yield* this.#lanes.run(
+        { label: "app.disk-limit.stop", locks: appLifecycleLocks(appId) },
+        Effect.gen(function* () {
+          const [limit, running] = yield* current()
+          if (limit === null || running.length === 0) return
+          const measured = yield* measure
+          diskUsage.set(appId, measured)
+          if (measured <= limit) return
+          yield* Effect.logWarning(
+            `Stopping app ${appId}: its data exceeded its disk limit`
+          )
+          yield* Effect.forEach(
+            running,
+            ({ id }) =>
+              engine.stopContainer(id, { seconds: 30, timeout: 90_000 }),
+            { concurrency: "unbounded", discard: true }
+          )
+        })
+      )
+      wake()
+    })
+  }
+
+  /**
+   * Checks an app's limits against every instance's, runs `apply`, and then
+   * saves its disk limit, all holding the node's allocations, so no other
+   * change can claim the same capacity in between. Callers hold the app's
+   * lifecycle lock.
+   */
+  #reserving<A>(
+    appId: string,
+    diskLimitBytes: number | null,
+    services: ReadonlyArray<ServiceResourceLimits>,
+    apply: () => Promise<A>
+  ): Promise<A> {
+    return Effect.runPromise(
+      this.#lanes.run(
+        {
+          label: "app.allocations",
+          locks: [exclusive(laneKeys.allocations)],
+        },
+        promiseEffect(async () => {
+          await this.#assertLimitsFit(appId, diskLimitBytes, services)
+          const applied = await apply()
+          await Effect.runPromise(
+            this.#limits.state.setDiskLimit(APP_KIND, appId, diskLimitBytes)
+          )
+          return applied
+        })
+      )
+    )
   }
 
   async #assertLimitsFit(
     appId: string,
     diskLimitBytes: number | null,
-    services: ReadonlyArray<ServiceResourceLimits | null>
+    services: ReadonlyArray<ServiceResourceLimits>
   ): Promise<void> {
     const [filesystem, others, current] = await Promise.all([
       statfs(this.#config.rootDirectory),
@@ -612,6 +659,10 @@ export class AppDriver {
       force: true,
       recursive: true,
     })
+    await Effect.runPromise(
+      this.#limits.state.setDiskLimit(APP_KIND, input.appId, null)
+    )
+    this.#diskUsage.delete(input.appId)
     this.#deployments.delete(input.appId)
     this.#wake(input.appId)
     return { appId: input.appId, deleted: true }
@@ -807,18 +858,6 @@ export class AppDriver {
           log(`Deploying ${input.name} (deployment ${deployment.id})`)
           log(`Source: ${describeSource(config)}`)
           await this.#ensureResources(input.appId)
-          await this.#assertLimitsFit(
-            input.appId,
-            config.diskLimitBytes,
-            Object.values(config.serviceLimits)
-          )
-          await Effect.runPromise(
-            this.#limits.state.setDiskLimit(
-              APP_KIND,
-              input.appId,
-              config.diskLimitBytes
-            )
-          )
           const host = await this.#hostDataDirectory()
           if (config.sourceType === "compose") {
             await this.#deployCompose(input, deployment, host)
@@ -827,7 +866,18 @@ export class AppDriver {
               config.sourceType === "image"
                 ? await this.#pullImage(input, deployment)
                 : await this.#buildImage(input, deployment)
-            await this.#replaceContainer(input, deployment, image, host)
+            // Its one service's limits count once the image is ready.
+            await this.#reserving(
+              input.appId,
+              config.diskLimitBytes,
+              [
+                config.serviceLimits[APP_SERVICE] ?? {
+                  cpuMillis: null,
+                  memoryBytes: null,
+                },
+              ],
+              () => this.#replaceContainer(input, deployment, image, host)
+            )
           }
         })
       )
@@ -1223,8 +1273,16 @@ export class AppDriver {
     const previous = (await this.#appContainers(input.appId)).filter(
       (container) => container.labels[COMPOSE_PROJECT_LABEL] !== project
     )
-    await this.#replacing(input.appId, deployment, previous, [], () =>
-      this.#composeUp(input, deployment, compose, environment, prepared)
+    // Every service counts, with the limits the Compose file sets for those
+    // Kiln leaves alone.
+    await this.#reserving(
+      input.appId,
+      input.config.diskLimitBytes,
+      Object.values(prepared.services).map(composeServiceLimits),
+      () =>
+        this.#replacing(input.appId, deployment, previous, [], () =>
+          this.#composeUp(input, deployment, compose, environment, prepared)
+        )
     )
   }
 
@@ -2042,6 +2100,39 @@ function sleep(milliseconds: number, signal: AbortSignal): Promise<void> {
 
 function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause)
+}
+
+// The memory and CPU limits a prepared Compose service starts with, from
+// `mem_limit` and `cpus` or else its `deploy.resources.limits`.
+function composeServiceLimits(service: ComposeService): ServiceResourceLimits {
+  const deploy = Predicate.isObject(service.deploy) ? service.deploy : null
+  const resources =
+    deploy && Predicate.isObject(deploy.resources) ? deploy.resources : null
+  const limits =
+    resources && Predicate.isObject(resources.limits) ? resources.limits : null
+  const memory = composeNumber(service.mem_limit ?? limits?.memory, ramInBytes)
+  const cpus = composeNumber(service.cpus ?? limits?.cpus, Number)
+  return {
+    cpuMillis:
+      cpus === null || cpus <= 0
+        ? null
+        : Math.round(cpus * CPU_LIMIT_MILLIS_PER_CORE),
+    memoryBytes: memory === null || memory <= 0 ? null : memory,
+  }
+}
+
+// Compose writes sizes and counts as numbers or as strings.
+function composeNumber(
+  value: unknown,
+  parse: (value: string) => number
+): number | null {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null
+  if (typeof value !== "string" || value.trim() === "") return null
+  // Compose itself refuses what it can't read.
+  const parsed = Result.try(() => parse(value))
+  return Result.isSuccess(parsed) && Number.isFinite(parsed.success)
+    ? parsed.success
+    : null
 }
 
 // A service's limits as Compose sets them; a limit Kiln doesn't set leaves

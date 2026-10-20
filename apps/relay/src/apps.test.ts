@@ -7,7 +7,7 @@ import {
   truncate,
   writeFile,
 } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { tmpdir, totalmem } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -92,17 +92,20 @@ let clock = 0
 // deployment finishes.
 async function deploy(
   harness: RelayHarness,
-  config: Partial<AppConfig>
+  config: Partial<AppConfig>,
+  id = appId
 ): Promise<RelayApp> {
   useDeploymentClock()
-  await harness.apps.deploy(
-    relayDeployAppSchema.parse({
-      appId,
-      config: { ...defaultAppConfig, image: "nginx:alpine", ...config },
-      name: "Website",
-    })
-  )
-  return settledDeployment(harness)
+  await harness.apps.deploy(deployment(config, id))
+  return settledDeployment(harness, id)
+}
+
+function deployment(config: Partial<AppConfig>, id = appId) {
+  return relayDeployAppSchema.parse({
+    appId: id,
+    config: { ...defaultAppConfig, image: "nginx:alpine", ...config },
+    name: "Website",
+  })
 }
 
 function useDeploymentClock() {
@@ -112,11 +115,14 @@ function useDeploymentClock() {
   })
 }
 
-async function settledDeployment(harness: RelayHarness): Promise<RelayApp> {
+async function settledDeployment(
+  harness: RelayHarness,
+  id = appId
+): Promise<RelayApp> {
   // Docker and the filesystem are real I/O; each step lets them progress
   // before the clock moves on.
   for (let step = 0; step < 10_000; step += 1) {
-    const app = await harness.apps.get(appId)
+    const app = await harness.apps.get(id)
     if (app.deployment?.state !== "running") {
       clock = Date.now()
       vi.useRealTimers()
@@ -128,9 +134,32 @@ async function settledDeployment(harness: RelayHarness): Promise<RelayApp> {
   throw new Error("The deployment never finished")
 }
 
-function appContainers() {
+// `docker-compose config`, which Relay runs to read a Compose file: the file
+// on stdin as JSON. Compose's `up` and buildx's `build` go through the fake
+// daemon's `command()` boundary, which refuses the docker CLI.
+async function composeConfigCommand(): Promise<() => Promise<void>> {
+  const bin = await mkdtemp(join(tmpdir(), "kiln-compose-bin-"))
+  const relay = fileURLToPath(new URL("../package.json", import.meta.url))
+  await writeFile(
+    join(bin, "docker-compose"),
+    [
+      "#!/usr/bin/env node",
+      `const { parse } = require("module").createRequire(${JSON.stringify(relay)})("yaml")`,
+      "const args = process.argv.slice(2)",
+      'if (args.at(-3) !== "config") process.exit(1)',
+      'let input = ""',
+      'process.stdin.on("data", (chunk) => (input += chunk))',
+      'process.stdin.on("end", () => process.stdout.write(JSON.stringify({ name: args[args.indexOf("-p") + 1], ...parse(input) })))',
+    ].join("\n")
+  )
+  await chmod(join(bin, "docker-compose"), 0o755)
+  vi.stubEnv("PATH", `${bin}:${process.env.PATH ?? ""}`)
+  return () => rm(bin, { force: true, recursive: true })
+}
+
+function appContainers(id = appId) {
   return [...fakeDocker.containers.values()].filter(
-    (container) => container.labels["kiln.app.id"] === appId
+    (container) => container.labels["kiln.app.id"] === id
   )
 }
 
@@ -411,25 +440,7 @@ describe("apps", () => {
   })
 
   it("builds a Dockerfile with buildx and runs a Compose file with the standalone Compose binary", async () => {
-    // `docker-compose config`, which Relay runs to read a Compose file: the
-    // file on stdin as JSON. Compose's `up` and buildx's `build` go through
-    // the fake daemon's `command()` boundary, which refuses the docker CLI.
-    const bin = await mkdtemp(join(tmpdir(), "kiln-compose-bin-"))
-    const relay = fileURLToPath(new URL("../package.json", import.meta.url))
-    await writeFile(
-      join(bin, "docker-compose"),
-      [
-        "#!/usr/bin/env node",
-        `const { parse } = require("module").createRequire(${JSON.stringify(relay)})("yaml")`,
-        "const args = process.argv.slice(2)",
-        'if (args.at(-3) !== "config") process.exit(1)',
-        'let input = ""',
-        'process.stdin.on("data", (chunk) => (input += chunk))',
-        'process.stdin.on("end", () => process.stdout.write(JSON.stringify({ name: args[args.indexOf("-p") + 1], ...parse(input) })))',
-      ].join("\n")
-    )
-    await chmod(join(bin, "docker-compose"), 0o755)
-    vi.stubEnv("PATH", `${bin}:${process.env.PATH ?? ""}`)
+    const removeCompose = await composeConfigCommand()
     const harness = await createdApp()
 
     const built = await deploy(harness, {
@@ -458,7 +469,7 @@ describe("apps", () => {
         container.nanoCpus,
       ])
     ).toEqual([["web", true, 256 * MIB, 2.5e8]])
-    await rm(bin, { force: true, recursive: true })
+    await removeCompose()
   })
 
   it("applies each service's limits when it deploys and changes them in place", async () => {
@@ -512,6 +523,142 @@ describe("apps", () => {
       diskUsedBytes: 200 * MIB,
       observedState: "stopped",
     })
+  })
+
+  it("counts every service a Compose deployment starts, and limits Docker keeps until it redeploys", async () => {
+    const removeCompose = await composeConfigCommand()
+    const harness = await createdApp()
+    // Over half the node, so two such limits can't both fit.
+    const most = Math.ceil((totalmem() * 0.6) / MIB) * MIB
+    const compose = [
+      "services:",
+      "  web:",
+      "    image: nginx:alpine",
+      "  worker:",
+      "    image: nginx:alpine",
+      `    mem_limit: ${most}`,
+    ].join("\n")
+
+    // The worker's own limit, from its Compose file, counts with the web
+    // service's.
+    const refused = await deploy(harness, {
+      compose,
+      serviceLimits: { web: { cpuMillis: null, memoryBytes: most } },
+      sourceType: "compose",
+    })
+    expect(refused.deployment?.error).toMatch(/Memory limit exceeds/u)
+    expect(appContainers()).toHaveLength(0)
+
+    // A limit saved for a service the file no longer has doesn't count.
+    const deployed = await deploy(harness, {
+      compose,
+      serviceLimits: {
+        gone: { cpuMillis: null, memoryBytes: most },
+        web: { cpuMillis: null, memoryBytes: 64 * MIB },
+      },
+      sourceType: "compose",
+    })
+    expect(deployed.deployment).toMatchObject({ state: "succeeded" })
+
+    // Removing the worker's limit waits for a redeploy, so it still holds
+    // its memory, and the web service can't take as much again.
+    await expect(
+      harness.apps.setLimits({
+        appId,
+        diskLimitBytes: null,
+        serviceLimits: {
+          web: { cpuMillis: null, memoryBytes: most },
+          worker: { cpuMillis: null, memoryBytes: null },
+        },
+      })
+    ).rejects.toThrow(/Memory limit exceeds/u)
+    expect(
+      appContainers().map((container) => container.memoryBytes)
+    ).toContain(64 * MIB)
+    await removeCompose()
+  })
+
+  it("lets only one of two deployments that each fit alone take the node's memory", async () => {
+    const harness = await createdApp()
+    const otherId = "e".repeat(40)
+    await harness.apps.create({ id: otherId, name: "Other" })
+    const most = Math.ceil((totalmem() * 0.6) / MIB) * MIB
+    const limits = { app: { cpuMillis: null, memoryBytes: most } }
+
+    useDeploymentClock()
+    await harness.apps.deploy(deployment({ serviceLimits: limits }))
+    await harness.apps.deploy(deployment({ serviceLimits: limits }, otherId))
+    const outcomes = [
+      await settledDeployment(harness),
+      await settledDeployment(harness, otherId),
+    ].map((app) => app.deployment?.state)
+
+    expect([...outcomes].sort()).toEqual(["failed", "succeeded"])
+    expect(
+      [...appContainers(), ...appContainers(otherId)].filter(
+        (container) => container.memoryBytes === most
+      )
+    ).toHaveLength(1)
+  })
+
+  it("keeps checking disk limits after a limited app is deleted", async () => {
+    const harness = await createdApp()
+    const otherId = "e".repeat(40)
+    await harness.apps.create({ id: otherId, name: "Other" })
+    await deploy(harness, {})
+    await deploy(harness, {}, otherId)
+    for (const id of [appId, otherId]) {
+      await harness.apps.setLimits({
+        appId: id,
+        diskLimitBytes: 128 * MIB,
+        serviceLimits: {},
+      })
+    }
+    await harness.apps.delete({ appId, deleteData: true })
+    const data = join(harness.config.dataDirectory, "apps", otherId, "big.bin")
+    await writeFile(data, "")
+    await truncate(data, 200 * MIB)
+
+    await harness.apps.enforceDiskLimits()
+
+    expect(appContainers(otherId)[0]?.state.running).toBe(false)
+  })
+
+  it("doesn't stop an app whose disk limit was raised while its stop waited", async () => {
+    const harness = await createdApp()
+    await deploy(harness, {})
+    await harness.apps.setLimits({
+      appId,
+      diskLimitBytes: 128 * MIB,
+      serviceLimits: {},
+    })
+    const data = join(harness.config.dataDirectory, "apps", appId, "big.bin")
+    await writeFile(data, "")
+    await truncate(data, 200 * MIB)
+    let release: () => void = () => undefined
+    const held = Effect.runPromise(
+      harness.lanes.run(
+        { label: "app.action", locks: appLifecycleLocks(appId) },
+        Effect.promise(
+          () =>
+            new Promise<void>((resolve) => {
+              release = resolve
+            })
+        )
+      )
+    )
+
+    const enforcing = harness.apps.enforceDiskLimits()
+    await harness.apps.setLimits({
+      appId,
+      diskLimitBytes: 1024 * MIB,
+      serviceLimits: {},
+    })
+    release()
+    await held
+    await enforcing
+
+    expect(appContainers()[0]?.state.running).toBe(true)
   })
 
   it("doesn't recreate an App deleted while its deployment waited", async () => {
