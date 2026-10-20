@@ -168,10 +168,15 @@ const VolumesToolbar = React.memo(function VolumesToolbar({
   onCreate: () => void
 }) {
   const queryClient = useQueryClient()
+  // Older Relays can't make volumes; the table says to update them.
+  const { data: supported = true } = useQuery({
+    ...relayVolumesQueryOptions(relayId),
+    select: selectSupported,
+  })
   return (
     <DataTableToolbar
       actions={
-        canManage ? (
+        canManage && supported ? (
           <Button aria-label="New volume" onClick={onCreate}>
             <Plus />
             <span className="hidden sm:inline">New volume</span>
@@ -198,6 +203,10 @@ const VolumesToolbar = React.memo(function VolumesToolbar({
     />
   )
 })
+
+function selectSupported(data: { supported: boolean }): boolean {
+  return data.supported
+}
 
 function VolumesTable({
   canManage,

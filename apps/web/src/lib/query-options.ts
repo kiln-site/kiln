@@ -904,12 +904,14 @@ export function relayWebRoutesQueryOptions(relayId: string) {
   })
 }
 
-// Sizes are Docker's last measure; changes refresh it through the
-// `relay-volumes` topic.
+// Sizes are Docker's last measure, taken in the background; changes
+// refresh the list through the `relay-volumes` topic.
 export function relayVolumesQueryOptions(relayId: string) {
   return queryOptions({
     queryFn: () => getRelayVolumes({ data: { relayId } }),
     queryKey: queryKeys.relayVolumes(relayId),
+    // Docker measures sizes in the background; check back until it's done.
+    refetchInterval: (query) => (query.state.data?.measuring ? 2_000 : false),
     retry: false,
     staleTime: 30_000,
   })

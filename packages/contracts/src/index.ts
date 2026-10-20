@@ -452,6 +452,8 @@ export const relayVolumeSchema = z.object({
   sizeBytes: z.number().int().nonnegative().nullable(),
 })
 export const relayVolumesSchema = z.object({
+  // Whether Docker is measuring the volumes, so sizes are on their way.
+  measuring: z.boolean(),
   volumes: z.array(relayVolumeSchema),
 })
 // The part of a volume's Docker name its name gives: lowercase letters,

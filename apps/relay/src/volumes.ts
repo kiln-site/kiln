@@ -12,6 +12,7 @@ import type {
   DockerVolume,
 } from "./docker-engine.js"
 import type { RelayStateStore } from "./effect/state.js"
+import { traceRelayEffect } from "./effect/runtime.js"
 import { relayOwnerLabels, relayOwnsLabels } from "./relay-resources.js"
 
 const KIND_LABEL = "kiln.resource.kind"
@@ -19,6 +20,10 @@ const VOLUME_KIND = "volume"
 const ID_LABEL = "kiln.volume.id"
 // The name it was made with, for when the Relay's own record of it is gone.
 const NAME_LABEL = "kiln.volume.name"
+// How often Docker measures every volume, and how soon it measures again
+// for a volume it hasn't measured yet, such as a new one.
+const SIZE_REFRESH_MS = 60_000
+const UNMEASURED_RETRY_MS = 5_000
 
 export class RelayVolumeError extends Schema.TaggedError<RelayVolumeError>()(
   "RelayVolumeError",
@@ -34,6 +39,12 @@ export class RelayVolumes {
   readonly #config: RelayConfig
   readonly #engine: DockerEngine
   readonly #state: RelayStateStore["Service"]
+  // Sizes from Docker's last measure of every volume, by Docker name.
+  #sizes: { measuredAt: number; values: ReadonlyMap<string, number> } = {
+    measuredAt: 0,
+    values: new Map(),
+  }
+  #measuring: Promise<void> | null = null
 
   constructor(
     config: RelayConfig,
@@ -48,30 +59,20 @@ export class RelayVolumes {
   /** Every volume, the Relay's own first, with what mounts each. */
   list() {
     return Effect.gen({ self: this }, function* () {
-    const [volumes, own, containers, sizes, names] = yield* Effect.all(
+    const [volumes, own, containers, names] = yield* Effect.all(
       [
         this.#volumes(),
         this.#ownVolume(),
         this.#engine.listContainers({ all: true }),
-        // Docker walks every volume to measure them; sizes wait for the
-        // next read when it can't.
-        this.#engine.volumeUsage({ timeout: 60_000 }).pipe(
-          Effect.map(
-            (usage) =>
-              new Map(
-                usage.flatMap((volume) =>
-                  (volume.UsageData?.Size ?? -1) >= 0
-                    ? [[volume.Name, volume.UsageData!.Size] as const]
-                    : []
-                )
-              )
-          ),
-          Effect.orElseSucceed(() => new Map<string, number>())
-        ),
         this.#state.listVolumeNames(),
       ],
       { concurrency: "unbounded" }
     )
+    const measuring = this.#measureSizes([
+      ...(own ? [own.Name] : []),
+      ...volumes.map((volume) => volume.Name),
+    ])
+    const sizes = this.#sizes.values
     const named = new Map(names.map((entry) => [entry.volumeId, entry.name]))
     const mounts = volumeMounts(containers, ownContainerId())
     const view = (
@@ -95,12 +96,15 @@ export class RelayVolumes {
         sizeBytes: sizes.get(volume.Name) ?? null,
       }
     }
-    return [
-      ...(own ? [view(own, "relay")] : []),
-      ...volumes
-        .map((volume) => view(volume, "volume"))
-        .sort((left, right) => left.name.localeCompare(right.name)),
-    ]
+    return {
+      measuring,
+      volumes: [
+        ...(own ? [view(own, "relay")] : []),
+        ...volumes
+          .map((volume) => view(volume, "volume"))
+          .sort((left, right) => left.name.localeCompare(right.name)),
+      ],
+    }
     }).pipe(Effect.withSpan("RelayVolumes.list"))
   }
 
@@ -112,6 +116,16 @@ export class RelayVolumes {
     return Effect.gen({ self: this }, function* () {
     yield* Effect.annotateCurrentSpan({ "kiln.volume_id": id })
     const dockerName = this.dockerName(id, name)
+    // An ID names one volume: a retry finds the one it made, and anything
+    // else asking for the same ID is refused.
+    const existing = (yield* this.#volumes()).find(
+      (volume) => volume.Labels?.[ID_LABEL] === id
+    )
+    if (existing && existing.Name !== dockerName) {
+      return yield* new RelayVolumeError({
+        message: "Another volume already has this ID",
+      })
+    }
     const created = yield* this.#engine.createVolume({
       labels: {
         [KIND_LABEL]: VOLUME_KIND,
@@ -167,6 +181,51 @@ export class RelayVolumes {
     yield* this.#engine.removeVolume(volume.Name)
     yield* this.#state.deleteVolumeName(id)
     }).pipe(Effect.withSpan("RelayVolumes.delete"))
+  }
+
+  /**
+   * Measures every volume in the background when the last measure is old,
+   * or sooner for a volume it hasn't measured, so listing never waits on
+   * Docker walking every volume. Whether a measure is running.
+   */
+  #measureSizes(names: ReadonlyArray<string>): boolean {
+    if (this.#measuring) return true
+    const age = Date.now() - this.#sizes.measuredAt
+    const unmeasured = names.some((name) => !this.#sizes.values.has(name))
+    if (
+      age < SIZE_REFRESH_MS &&
+      !(unmeasured && age >= UNMEASURED_RETRY_MS)
+    ) {
+      return false
+    }
+    this.#measuring = Effect.runPromise(
+      traceRelayEffect(
+        "RelayVolumes.measure",
+        this.#engine.volumeUsage({ timeout: 60_000 })
+      ).pipe(
+        Effect.map((usage) => {
+          this.#sizes = {
+            measuredAt: Date.now(),
+            values: new Map(
+              usage.flatMap((volume) => {
+                const size = volume.UsageData?.Size
+                // Docker reports -1 for a volume it can't measure.
+                return size !== undefined && size >= 0
+                  ? [[volume.Name, size] as const]
+                  : []
+              })
+            ),
+          }
+        }),
+        Effect.ignore,
+        Effect.ensuring(
+          Effect.sync(() => {
+            this.#measuring = null
+          })
+        )
+      )
+    )
+    return true
   }
 
   /** `[namespace-]kiln-<short ID>-<slug>`, as the volume's made with. */

@@ -491,7 +491,6 @@ export function relayControlDeadlineMs(
   if (operation === "database.dump.export") return 120_000
   // Docker walks every volume to measure them.
   if (operation === "database.inspect") return 75_000
-  if (operation === "relay.volumes.read") return 75_000
   if (operation === "database.wipe") return 120_000
   if (operation === "database.dump.import") return 120_000
   if (operation === "instance.action") return 180_000

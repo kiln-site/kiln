@@ -1691,9 +1691,7 @@ async function executeControlRequest(
       return proxy
     }
     case "relay.volumes.read":
-      return {
-        volumes: await runRelayEffect("relay.volumes.read", volumes.list()),
-      }
+      return runRelayEffect("relay.volumes.read", volumes.list())
     case "relay.volumes.create": {
       const input = relayVolumeCreateSchema.parse(request.payload)
       return runRelayEffect(

@@ -26,6 +26,10 @@ function run<A, E>(effect: Effect.Effect<A, E>): Promise<A> {
   return Effect.runPromise(effect)
 }
 
+async function listed(volumes: RelayVolumes) {
+  return (await run(volumes.list())).volumes
+}
+
 describe("Relay volumes", () => {
   it("makes a Docker volume named after its ID and name, labeled as the Relay's", async () => {
     const volumes = await relayVolumes()
@@ -39,7 +43,7 @@ describe("Relay volumes", () => {
       "kiln.volume.id": volumeId,
       "kiln.volume.name": "Postgres Data!",
     })
-    expect(await run(volumes.list())).toEqual([
+    expect(await listed(volumes)).toEqual([
       expect.objectContaining({
         dockerName,
         id: volumeId,
@@ -58,10 +62,47 @@ describe("Relay volumes", () => {
     await expect(run(volumes.create(volumeId, "data"))).resolves.toMatchObject(
       { id: volumeId }
     )
+    // Another ID with the same short ID, whose name a volume already has.
     fakeDocker.addVolume({ name: `${TEST_NAMESPACE}-kiln-3f9a21c4-cache` })
-    await expect(run(volumes.create(volumeId, "cache"))).rejects.toThrow(
-      "already exists"
+    await expect(
+      run(volumes.create("3f9a21c4".padEnd(40, "1"), "cache"))
+    ).rejects.toThrow("already exists")
+  })
+
+  it("refuses a second volume under an ID another volume has", async () => {
+    const volumes = await relayVolumes()
+    await run(volumes.create(volumeId, "data"))
+
+    await expect(run(volumes.create(volumeId, "uploads"))).rejects.toThrow(
+      "Another volume already has this ID"
     )
+    expect(
+      [...fakeDocker.volumes.values()].filter(
+        (volume) => volume.labels["kiln.volume.id"] === volumeId
+      )
+    ).toHaveLength(1)
+  })
+
+  it("lists volumes without waiting on Docker to measure them, then reports their sizes", async () => {
+    const volumes = await relayVolumes()
+    const created = await run(volumes.create(volumeId, "data"))
+    fakeDocker.volumes.get(created.dockerName)!.files.set("/a", "hello")
+
+    const first = await run(volumes.list())
+    expect(first).toMatchObject({
+      measuring: true,
+      volumes: [{ sizeBytes: null }],
+    })
+
+    let latest = first
+    for (let tries = 0; tries < 100 && latest.measuring; tries += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      latest = await run(volumes.list())
+    }
+    expect(latest).toMatchObject({
+      measuring: false,
+      volumes: [{ sizeBytes: 5 }],
+    })
   })
 
   it("lists only its own volumes, with the containers that mount each", async () => {
@@ -90,10 +131,10 @@ describe("Relay volumes", () => {
       running: true,
     })
 
-    const [listed, ...others] = await run(volumes.list())
+    const [shared, ...others] = await listed(volumes)
 
     expect(others).toEqual([])
-    expect(listed?.mounts).toEqual([
+    expect(shared?.mounts).toEqual([
       {
         container: "web",
         destination: "/srv",
@@ -111,7 +152,7 @@ describe("Relay volumes", () => {
 
     await run(volumes.rename(volumeId, "Uploads"))
 
-    expect(await run(volumes.list())).toEqual([
+    expect(await listed(volumes)).toEqual([
       expect.objectContaining({
         dockerName: created.dockerName,
         name: "Uploads",
@@ -138,7 +179,7 @@ describe("Relay volumes", () => {
     await run(volumes.delete(volumeId))
 
     expect(fakeDocker.volumes.has(created.dockerName)).toBe(false)
-    expect(await run(volumes.list())).toEqual([])
+    expect(await listed(volumes)).toEqual([])
   })
 
   it("lists the Relay's own data volume, which no request can name to delete", async () => {
@@ -162,7 +203,7 @@ describe("Relay volumes", () => {
     })
     vi.stubEnv("HOSTNAME", relay.id.slice(0, 12))
 
-    expect(await run(volumes.list())).toEqual([
+    expect(await listed(volumes)).toEqual([
       expect.objectContaining({
         dockerName: "kiln_relay-data",
         id: null,

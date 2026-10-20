@@ -23,16 +23,13 @@ export const getRelayVolumes = createServerFn({ method: "GET" })
   .validator(targetSchema)
   .handler(async ({ data }) => {
     const { relay } = await authorizedRelay(data.relayId, "relay.read")
-    const { relayConnectionFeatures } = await import("@/lib/relay-connection")
-    const features = relayConnectionFeatures(relay.id)
-    // An offline Relay has no features yet; asking it says why.
-    if (features.size > 0 && !features.has(relayVolumesV1Feature)) {
-      return { supported: false, volumes: [] }
+    if (!(await relayHasVolumes(relay.id))) {
+      return { measuring: false, supported: false, volumes: [] }
     }
-    const { volumes } = relayVolumesSchema.parse(
-      await databaseRpc(relay, "relay.volumes.read", {}, 75_000)
+    const { measuring, volumes } = relayVolumesSchema.parse(
+      await databaseRpc(relay, "relay.volumes.read", {}, 30_000)
     )
-    return { supported: true, volumes }
+    return { measuring, supported: true, volumes }
   })
 
 export const createRelayVolume = createServerFn({ method: "POST" })
@@ -42,6 +39,7 @@ export const createRelayVolume = createServerFn({ method: "POST" })
       data.relayId,
       "relay.configure"
     )
+    await requireRelayVolumes(relay.id)
     const volume = relayVolumeSchema.parse(
       await databaseRpc(
         relay,
@@ -62,6 +60,7 @@ export const renameRelayVolume = createServerFn({ method: "POST" })
       data.relayId,
       "relay.configure"
     )
+    await requireRelayVolumes(relay.id)
     await databaseRpc(
       relay,
       "relay.volumes.rename",
@@ -80,6 +79,7 @@ export const deleteRelayVolume = createServerFn({ method: "POST" })
       data.relayId,
       "relay.configure"
     )
+    await requireRelayVolumes(relay.id)
     await databaseRpc(
       relay,
       "relay.volumes.delete",
@@ -90,6 +90,20 @@ export const deleteRelayVolume = createServerFn({ method: "POST" })
     publishRelayVolumesChange(relay.id)
     return { deleted: true }
   })
+
+// An offline Relay has no features yet; asking it says why it can't answer.
+async function relayHasVolumes(relayId: string): Promise<boolean> {
+  const { relayConnectionFeatures } = await import("@/lib/relay-connection")
+  const features = relayConnectionFeatures(relayId)
+  return features.size === 0 || features.has(relayVolumesV1Feature)
+}
+
+// An older Relay doesn't know the operation, and wouldn't answer it.
+async function requireRelayVolumes(relayId: string): Promise<void> {
+  if (!(await relayHasVolumes(relayId))) {
+    throw new Error("Update this Relay to manage its volumes.")
+  }
+}
 
 function publishRelayVolumesChange(relayId: string): void {
   publishRealtimeChange({
