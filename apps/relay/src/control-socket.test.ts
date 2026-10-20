@@ -1007,7 +1007,19 @@ describe("Relay control socket", () => {
   })
 
   it("frees the place of a request Hearth cancels before it starts", async () => {
-    const relay = await startRelay()
+    const release = deferred<void>()
+    onTestFinished(() => release.resolve())
+    const running = new Map<string, () => void>()
+    const relay = await startRelay({
+      execute: async (request) => {
+        const started = running.get(request.id)
+        if (started) {
+          started()
+          await release.promise
+        }
+        return { ok: true }
+      },
+    })
     const { inbox, socket } = await relay.connect(await relay.pair())
 
     // A Relay that stalled reads Hearth's backlog in one go: each request,
@@ -1033,17 +1045,47 @@ describe("Relay control socket", () => {
     }
     transport.uncork()
 
-    // The cancelled requests give up their places as they unwind, so the
-    // connection serves Hearth again, rather than refusing it until it
-    // reconnects.
-    let reply: RelayControlServerMessage | undefined
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const id = sendRequest(socket, "relay.snapshot", {})
-      do reply = await inbox.next()
-      while (!("replyTo" in reply) || reply.replyTo !== id)
-      if (reply.type === "response") break
+    // The cancelled requests give up their places as they unwind, so every
+    // place takes a request again. Until they have, the Relay may still say
+    // it's full, but nothing else.
+    const held: Array<string> = []
+    let reply = inbox.next()
+    for (let attempt = 0; held.length < 32 && attempt < 64; attempt++) {
+      const id = randomBytes(12).toString("hex")
+      const started = new Promise<"started">((resolve) =>
+        running.set(id, () => resolve("started"))
+      )
+      sendRequest(socket, "relay.snapshot", {}, { id })
+      const outcome = await Promise.race([started, reply])
+      if (outcome === "started") {
+        held.push(id)
+        continue
+      }
+      expect(outcome).toMatchObject({
+        code: "too_many_requests",
+        replyTo: id,
+        type: "error",
+      })
+      reply = inbox.next()
     }
-    expect(reply).toMatchObject({ type: "response" })
+    expect(held).toHaveLength(32)
+
+    const overflowId = sendRequest(socket, "relay.snapshot", {})
+    expect(await reply).toMatchObject({
+      code: "too_many_requests",
+      replyTo: overflowId,
+      type: "error",
+    })
+    release.resolve()
+    const answered = new Set<string>()
+    for (const _ of held) {
+      const response = await inbox.next()
+      expect(response).toMatchObject({ type: "response" })
+      if ("replyTo" in response && response.replyTo) {
+        answered.add(response.replyTo)
+      }
+    }
+    expect([...answered].sort()).toEqual([...held].sort())
   })
 
   it("enforces the relative request timeout", async () => {
