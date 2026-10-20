@@ -392,7 +392,6 @@ describe("instance status reads while Hearth renders a page", () => {
     endpoint.read.mockImplementation(
       async ({ data }: { data: Array<InstanceInventoryRequest> }) => {
         const reader = request.getStore()
-        await new Promise((resolve) => setTimeout(resolve, 20))
         return data.map((lookup) => ({
           request: lookup,
           value: {
