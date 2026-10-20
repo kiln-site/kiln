@@ -11,6 +11,8 @@ import {
   relayInstanceSchema,
 } from "@workspace/contracts"
 
+import { databaseProvisioning } from "./database-provisioning.js"
+import type { DatabaseDriver } from "./databases.js"
 import { makeRelayStateLayer, RelayStateStore } from "./effect/state.js"
 import type { LifecycleDriver } from "./lifecycle.js"
 import { exclusive, laneKeys, OperationLanes } from "./operation-lanes.js"
@@ -93,7 +95,11 @@ describe("provisioning worker", () => {
               },
             } as unknown as LifecycleDriver
             const manager = yield* ProvisioningManager.make({
-              adapters: { server: serverProvisioning({ lifecycle, state }) },
+              adapters: {
+                // Only game servers provision here.
+                database: databaseProvisioning({} as DatabaseDriver),
+                server: serverProvisioning({ lifecycle, state }),
+              },
               lanes,
               refreshSnapshot: async () => undefined,
             })

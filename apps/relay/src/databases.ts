@@ -15,6 +15,7 @@ import type {
   RelayManagedDatabase,
   RelayRotateDatabaseCredentials,
   InstanceObservedState,
+  ProvisioningWorkPhase,
   RelayInventoryLookup,
   RelayInventoryItem,
   ResourceLimits,
@@ -22,6 +23,7 @@ import type {
 import {
   databaseEngineSupportsLogicalBackups,
   databaseEngineSchema,
+  NO_RESOURCE_LIMITS,
   relayManagedDatabaseSchema,
   resolveResourceLimits,
 } from "@workspace/contracts"
@@ -42,6 +44,7 @@ import {
   type DockerContainerSummary,
   type DockerExecProcess,
 } from "./docker-engine.js"
+import { provisioningStatus } from "./provisioning.js"
 import { relayOwnerLabel, relayOwnsLabels } from "./relay-resources.js"
 import {
   assertResourceLimitsFit,
@@ -194,11 +197,21 @@ export class DatabaseDriver {
     this.#docker = docker
     this.#engine = new DockerEngine(config.dockerSocket)
     docker.allocations.register(DATABASE_KIND, async () =>
-      (await this.list()).map(({ id, limits }) => ({ id, limits }))
+      (await this.#existing()).map(({ id, limits }) => ({ id, limits }))
     )
   }
 
+  /** Every database, with the placeholders of those still provisioning. */
   async list(): Promise<Array<RelayManagedDatabase>> {
+    const [databases, provisioning] = await Promise.all([
+      this.#existing(),
+      this.#provisioning(),
+    ])
+    return withProvisioning(databases, provisioning)
+  }
+
+  // The databases that exist, as their containers report them.
+  async #existing(): Promise<Array<RelayManagedDatabase>> {
     this.#refreshDiskUsage()
     const [containers, diskLimits] = await Promise.all([
       this.#discover(),
@@ -209,6 +222,42 @@ export class DatabaseDriver {
         this.#toManagedDatabase(container, diskLimits)
       )
     )
+  }
+
+  // Databases still provisioning, by ID: what each shows until it exists.
+  async #provisioning(): Promise<ReadonlyMap<string, RelayManagedDatabase>> {
+    const jobs = await Effect.runPromise(
+      this.connections.state.listProvisioningJobs()
+    )
+    return new Map(
+      jobs.flatMap((job) =>
+        job.kind === "database" ? [[job.instanceId, job.placeholder]] : []
+      )
+    )
+  }
+
+  /** What a database shows from its create request until it exists. */
+  placeholder(input: RelayCreateDatabase): RelayManagedDatabase {
+    const spec = engineSpecs[input.engine]
+    return relayManagedDatabaseSchema.parse({
+      connectedInstanceIds: [],
+      containerId: null,
+      createdAt: new Date().toISOString(),
+      databaseName: input.databaseName,
+      diskUsedBytes: null,
+      engine: input.engine,
+      hostname: databaseHostname(input.id),
+      id: input.id,
+      image: spec.image,
+      internalPort: spec.internalPort,
+      limits: NO_RESOURCE_LIMITS,
+      name: input.name,
+      observedState: "provisioning",
+      provisioning: { attempt: 0, error: null, phase: "awaiting_claim" },
+      shortId: input.id.slice(0, 8),
+      status: provisioningStatus("awaiting_claim", "database"),
+      supportsImportExport: databaseEngineSupportsLogicalBackups(input.engine),
+    })
   }
 
   /** Only the requested views of the requested databases. */
@@ -229,22 +278,43 @@ export class DatabaseDriver {
             container,
           ])
         )
+        const provisioning = await this.#provisioning()
         const items = await Promise.all(
           requests.map(async ({ id, view }) => {
             const container = byId.get(id)
-            if (!container) return []
+            const placeholder = provisioning.get(id)
+            if (!container) {
+              return placeholder
+                ? [
+                    {
+                      id,
+                      view,
+                      observedState: placeholder.observedState,
+                      ...(view === "detail" && { database: placeholder }),
+                    },
+                  ]
+                : []
+            }
             const item: RelayInventoryItem = {
               id,
               view,
-              observedState: databaseObservedState(container),
+              observedState:
+                placeholder?.observedState ?? databaseObservedState(container),
             }
             // Only the detail view needs the network's attached containers.
-            if (view === "detail")
-              item.database = await this.#toManagedDatabase(
-                container,
-                await this.#diskLimits(),
-                signal
+            if (view === "detail") {
+              const [database] = withProvisioning(
+                [
+                  await this.#toManagedDatabase(
+                    container,
+                    await this.#diskLimits(),
+                    signal
+                  ),
+                ],
+                provisioning
               )
+              item.database = database
+            }
             return [item]
           })
         )
@@ -323,8 +393,16 @@ export class DatabaseDriver {
     return database
   }
 
-  async create(input: RelayCreateDatabase): Promise<RelayManagedDatabase> {
-    if ((await this.list()).some((database) => database.id === input.id)) {
+  /**
+   * Creates a database and waits until it accepts connections, calling
+   * `onPhase` as each step starts. A failed create removes what it made.
+   */
+  async create(
+    input: RelayCreateDatabase,
+    onPhase: (phase: ProvisioningWorkPhase) => Promise<void> = async () => {}
+  ): Promise<RelayManagedDatabase> {
+    await onPhase("preparing")
+    if ((await this.#discover([input.id])).length > 0) {
       throw new Error("Database already exists")
     }
     const spec = engineSpecs[input.engine]
@@ -338,7 +416,9 @@ export class DatabaseDriver {
     let volumeCreated = false
 
     const created = await promiseResult(async () => {
+      await onPhase("pulling_image")
       await Effect.runPromise(ensureImage(this.#engine, spec.image))
+      await onPhase("creating_container")
       await Effect.runPromise(
         this.#engine.createVolume({ labels, name: volume })
       )
@@ -371,6 +451,7 @@ export class DatabaseDriver {
         })
       )
       containerCreated = true
+      await onPhase("finalizing")
       await Effect.runPromise(
         this.#engine.startContainer(container, { timeout: 120_000 })
       )
@@ -639,7 +720,7 @@ export class DatabaseDriver {
   }
 
   async #delete(input: RelayDeleteDatabase) {
-    const database = (await this.list()).find(
+    const database = (await this.#existing()).find(
       (candidate) => candidate.id === input.databaseId
     )
     const labels = database ? await this.#labels(input.databaseId) : {}
@@ -863,7 +944,7 @@ export class DatabaseDriver {
   }
 
   async #required(id: string): Promise<RelayManagedDatabase> {
-    const database = (await this.list()).find(
+    const database = (await this.#existing()).find(
       (candidate) => candidate.id === id
     )
     if (!database) throw new Error("Database not found")
@@ -1380,4 +1461,26 @@ function safeFileName(name: string): string {
       .replace(/[^a-z0-9]+/gu, "-")
       .replace(/^-+|-+$/gu, "") || "database"
   )
+}
+
+// Databases with the state of any still provisioning: one whose container
+// exists shows its provisioning until the job finishes, and one without a
+// container yet shows its placeholder.
+function withProvisioning(
+  databases: ReadonlyArray<RelayManagedDatabase>,
+  placeholders: ReadonlyMap<string, RelayManagedDatabase>
+): Array<RelayManagedDatabase> {
+  const pending = new Map(placeholders)
+  const listed = databases.map((database) => {
+    const placeholder = pending.get(database.id)
+    if (!placeholder) return database
+    pending.delete(database.id)
+    return {
+      ...database,
+      observedState: placeholder.observedState,
+      provisioning: placeholder.provisioning,
+      status: placeholder.status,
+    }
+  })
+  return [...listed, ...pending.values()]
 }

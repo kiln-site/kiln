@@ -177,6 +177,8 @@ function pollInterval(
   inventory: InstanceInventory | undefined
 ) {
   if (kind === "server" || kind === "relay") return false
+  // Provisioning moves through its phases in seconds.
+  if (inventory?.observation.runtime === "provisioning") return 1_000
   if (
     inventory?.kind === "app" &&
     ((inventory.view === "table" && inventory.data?.deploying) ||

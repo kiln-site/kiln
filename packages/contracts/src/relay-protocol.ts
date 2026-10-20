@@ -3,7 +3,7 @@ import { Schema } from "effect"
 export const relayControlProtocol = "kiln-relay.v1" as const
 // Release compatibility level for response-shape changes. Keep this separate
 // from the WebSocket subprotocol so Hearth can be upgraded before Relay.
-export const relayControlProtocolVersion = 5 as const
+export const relayControlProtocolVersion = 6 as const
 export const relayBrowserProtocol = "kiln-relay-browser.v1" as const
 export const relayBrowserConsoleProtocol = "kiln-relay-browser.v2" as const
 export const relayBrowserConsoleProtocols = [
@@ -46,6 +46,9 @@ export const relayDatabaseLimitsV1Feature = "database-limits-v1"
 // The Relay applies app configs' `serviceLimits` and `diskLimitBytes`, and
 // answers `app.limits.write`.
 export const relayAppLimitsV1Feature = "app-limits-v1"
+// The Relay provisions databases in the background through
+// `database.provision.*`, showing a placeholder until each one exists.
+export const relayDatabaseProvisioningV1Feature = "database-provisioning-v1"
 export const relayBrowserAuthorizationReviseMaxItems = 256
 
 export const relayControlOperations = [
@@ -91,6 +94,9 @@ export const relayControlOperations = [
   "database.list",
   "database.inspect",
   "database.create",
+  "database.provision.prepare",
+  "database.provision.claim",
+  "database.provision.cancel",
   "database.wipe",
   "database.delete",
   "database.action",
@@ -208,6 +214,9 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "instance.network.routes.write",
   "instance.network.databases.remove",
   "database.create",
+  "database.provision.prepare",
+  "database.provision.claim",
+  "database.provision.cancel",
   "database.delete",
   "database.wipe",
   "database.action",
@@ -328,6 +337,9 @@ export function relayControlOperationChanges(
     case "relay.clients.revoke":
     case "browser.authorization.revise":
     case "database.create":
+    case "database.provision.prepare":
+    case "database.provision.claim":
+    case "database.provision.cancel":
     case "database.wipe":
     case "database.delete":
     case "database.action":

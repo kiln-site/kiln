@@ -718,7 +718,11 @@ function CreateDatabaseDialog({
       await queryClient.invalidateQueries({
         queryKey: queryKeys.databases.all,
       })
-      showToast({ message: `${name.trim()} is ready`, type: "success" })
+      // A database the Relay provisions in the background opens on its
+      // provisioning page instead.
+      if (created.observedState !== "provisioning") {
+        showToast({ message: `${name.trim()} is ready`, type: "success" })
+      }
       onOpenChange(false)
       await navigate({
         params: { databaseId: created.id },

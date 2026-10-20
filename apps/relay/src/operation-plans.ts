@@ -251,9 +251,14 @@ export function controlRequestLocks(
     case "schedule.run":
     case "schedule.remove":
     case "schedule.overview":
+    // Provisioning only records and claims jobs; the worker takes each new
+    // instance's locks for the create itself.
     case "instance.provision.prepare":
     case "instance.provision.claim":
     case "instance.provision.cancel":
+    case "database.provision.prepare":
+    case "database.provision.claim":
+    case "database.provision.cancel":
       return null
 
     // A new game server gets an ID only the create itself knows.

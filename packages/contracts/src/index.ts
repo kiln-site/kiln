@@ -165,7 +165,15 @@ export const relayManagedDatabaseSchema = z
     /** The data volume's size when the Relay last measured it. */
     diskUsedBytes: z.number().int().nonnegative().nullable().default(null),
     name: relayDatabaseNameSchema,
-    observedState: z.enum(["starting", "running", "stopped", "failed"]),
+    observedState: z.enum([
+      "provisioning",
+      "starting",
+      "running",
+      "stopped",
+      "failed",
+    ]),
+    /** Where its provisioning is, until the database exists. */
+    provisioning: provisioningStateSchema.optional(),
     shortId: z.string().regex(/^[a-f0-9]{8}$/u),
     status: z.string().min(1).max(280),
     supportsImportExport: z.boolean(),
@@ -181,6 +189,14 @@ export const relayCreateDatabaseSchema = z
     password: z.string().min(24).max(256),
     username: z.string().regex(/^[a-z][a-z0-9_]{0,31}$/u),
   })
+  .strict()
+
+export const relayPrepareDatabaseSchema = relayCreateDatabaseSchema.extend({
+  idempotencyKey: z.uuid(),
+})
+
+export const relayProvisionDatabaseSchema = z
+  .object({ databaseId: databaseIdSchema })
   .strict()
 
 export const relayDatabaseActionSchema = z

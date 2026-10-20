@@ -155,12 +155,15 @@ const COPY: Readonly<Record<ProvisioningKind, ProvisioningCopy>> = {
 }
 
 export const ProvisioningProgress = React.memo(function ProvisioningProgress({
+  failedActions,
   id,
   kind,
   name,
   provisioning,
   relayId,
 }: {
+  /** What a failed one offers beside its diagnostics, such as deleting it. */
+  failedActions?: React.ReactNode
   id: string
   kind: ProvisioningKind
   name: string
@@ -257,16 +260,18 @@ export const ProvisioningProgress = React.memo(function ProvisioningProgress({
                 <p className="mt-2 text-sm leading-6 text-muted-foreground">
                   {failureGuidance}
                 </p>
-                <Button
-                  className="mt-4"
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={copyDiagnostics}
-                >
-                  <Copy />
-                  Copy diagnostics
-                </Button>
+                <div className="mt-4 flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={copyDiagnostics}
+                  >
+                    <Copy />
+                    Copy diagnostics
+                  </Button>
+                  {failedActions}
+                </div>
               </div>
             </div>
           ) : (

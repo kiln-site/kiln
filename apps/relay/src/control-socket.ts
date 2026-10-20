@@ -42,6 +42,7 @@ import {
   relayResourceLimitsV1Feature,
   relayDatabaseLimitsV1Feature,
   relayAppLimitsV1Feature,
+  relayDatabaseProvisioningV1Feature,
   appIdFromFileRoot,
   isRelayFileRoot,
   relayFileRequestReplayV1Feature,
@@ -1021,6 +1022,7 @@ function authenticateSocket(
           relayResourceLimitsV1Feature,
           relayDatabaseLimitsV1Feature,
           relayAppLimitsV1Feature,
+          relayDatabaseProvisioningV1Feature,
         ],
         protocol: relayControlProtocol,
         relayBuild: relayBuildLabel(),
@@ -1218,7 +1220,8 @@ function auditDetailsForRequest(
     details.appId = payload.id
   }
   if (
-    request.operation === "database.create" &&
+    (request.operation === "database.create" ||
+      request.operation === "database.provision.prepare") &&
     typeof payload.id === "string"
   ) {
     details.databaseId = payload.id
@@ -1404,9 +1407,12 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     // Limits are part of what a database is created with, as a game
     // server's startup settings are.
     case "database.create":
+    case "database.provision.prepare":
+    case "database.provision.claim":
     case "database.limits.write":
       return "database.create"
     // Wiping deletes all of a database's data, so it takes deletion.
+    case "database.provision.cancel":
     case "database.delete":
     case "database.wipe":
       return "database.delete"

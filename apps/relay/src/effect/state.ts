@@ -22,8 +22,10 @@ import {
   backupTaskResultSchema,
   omitBackupSecrets,
   relayBackupTaskSchema,
+  relayCreateDatabaseSchema,
   relayCreateInstanceSchema,
   relayInstanceSchema,
+  relayManagedDatabaseSchema,
   resticSnapshotIdSchema,
 } from "@workspace/contracts"
 
@@ -153,8 +155,12 @@ export type RelayProvisioningJobStatus =
   | "failed"
 
 // What each kind of instance provisions from, and what it shows until it
-// exists: a game server's create request and its placeholder instance.
+// exists: its create request and its placeholder.
 const provisioningSchemas = {
+  database: {
+    input: relayCreateDatabaseSchema,
+    placeholder: relayManagedDatabaseSchema,
+  },
   server: { input: relayCreateInstanceSchema, placeholder: relayInstanceSchema },
 }
 
@@ -379,7 +385,7 @@ const RelayProvisioningJobRowSchema = Schema.Struct({
   idempotencyKey: Schema.String,
   inputJson: Schema.String,
   instanceId: Schema.String,
-  kind: Schema.Literals(["server"]),
+  kind: Schema.Literals(["server", "database"]),
   placeholderJson: Schema.String,
   status: RelayProvisioningJobStatusSchema,
   updatedAt: Schema.Number,
@@ -1542,6 +1548,8 @@ const makeRelayStateStore = Effect.gen(function* () {
         Effect.try({
           try: (): RelayProvisioningJob => {
             const schemas = provisioningSchemas[row.kind]
+            // Each kind's input and placeholder parse with its own schemas,
+            // which TypeScript can't follow through the indexed lookup.
             return {
               attempt: row.attempt,
               createdAt: row.createdAt,
@@ -1555,7 +1563,7 @@ const makeRelayStateStore = Effect.gen(function* () {
               ),
               status: row.status,
               updatedAt: row.updatedAt,
-            }
+            } as RelayProvisioningJob
           },
           catch: (cause) => cause,
         })

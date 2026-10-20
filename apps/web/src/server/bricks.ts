@@ -40,6 +40,11 @@ import type { PersistedRelay } from "@/lib/relay-registry"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { listMcJarVersionsEffect } from "@/effect/mcjarfiles"
 import { promiseEffect } from "@/effect/promise"
+import {
+  claimPreparedProvisioning,
+  compensatePreparedProvisioning,
+  provisioningInstanceId,
+} from "@/lib/provisioning.server"
 import { forkAppEffect, runAppEffect } from "@/effect/runtime"
 import {
   registerPreparedInstance,
@@ -268,6 +273,8 @@ export const createBrickInstance = createServerFn({ method: "POST" })
     )
     await claimPreparedProvisioning({
       cancel,
+      unconfirmed:
+        "Retry the unchanged request to resume the same server.",
       claim: () =>
         requestRelay(
           relay,
@@ -290,61 +297,6 @@ export const createBrickInstance = createServerFn({ method: "POST" })
     })
     return instance
   })
-
-export function compensatePreparedProvisioning(
-  cancel: () => Promise<boolean>,
-  unregister: () => Promise<void>
-) {
-  return promiseEffect(cancel).pipe(
-    Effect.flatMap((cancelled) =>
-      cancelled ? promiseEffect(unregister) : Effect.void
-    ),
-    Effect.catch(() => Effect.void)
-  )
-}
-
-export function provisioningInstanceId(idempotencyKey: string): string {
-  const hex = idempotencyKey.replaceAll("-", "")
-  return `${hex}${hex.slice(0, 8)}`
-}
-
-export function claimPreparedProvisioning(input: {
-  cancel: () => Promise<boolean>
-  claim: () => Promise<unknown>
-  unregister: () => Promise<void>
-}): Promise<void> {
-  return Effect.runPromise(
-    promiseEffect(input.claim).pipe(
-      Effect.asVoid,
-      Effect.matchEffect({
-        onFailure: (claimFailure) =>
-          promiseEffect(input.cancel).pipe(
-            Effect.matchEffect({
-              onFailure: () =>
-                Effect.fail(
-                  new Error(
-                    `Kiln could not confirm whether Relay accepted provisioning. Retry the unchanged request to resume the same server. ${
-                      claimFailure instanceof Error
-                        ? claimFailure.message
-                        : "Relay claim failed"
-                    }`,
-                    { cause: claimFailure }
-                  )
-                ),
-              onSuccess: (cancelled) =>
-                cancelled
-                  ? promiseEffect(input.unregister).pipe(
-                      Effect.catch(() => Effect.void),
-                      Effect.andThen(Effect.fail(claimFailure))
-                    )
-                  : Effect.void,
-            })
-          ),
-        onSuccess: () => Effect.void,
-      })
-    )
-  )
-}
 
 export const getInstanceRecipe = createServerFn({ method: "GET" })
   .validator(instanceInputSchema)

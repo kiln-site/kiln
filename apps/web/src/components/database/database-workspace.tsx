@@ -5,17 +5,25 @@ import { inventoryInstanceState } from "@/lib/instance-state"
 import { instanceStatePresentation } from "@/lib/instance-state-presentation"
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Database } from "lucide-react"
+import { useNavigate } from "@tanstack/react-router"
+import { Database, Trash2 } from "lucide-react"
 
+import { Button } from "@workspace/ui/components/button"
+
+import { DeleteDatabaseDialog } from "@/components/database/database-dialogs"
 import {
   databaseRelayAvailable,
   engineLabel,
   showDatabaseOperationError,
+  type ManagedDatabase,
 } from "@/components/database/database-presentation"
 import {
   DatabaseWorkspaceContext,
+  useDatabaseWorkspace,
   type DatabaseWorkspaceDatabase,
 } from "@/components/database/database-workspace-context"
+import { PageContent } from "@/components/page-content"
+import { ProvisioningProgress } from "@/components/provisioning-progress"
 import {
   ResourceWorkspaceBoundary,
   WorkspaceRouteTitle,
@@ -59,13 +67,73 @@ export const DatabaseWorkspaceShell = React.memo(
             noun={{ one: "database", other: "databases" }}
             workspace={workspace}
           >
-            {children}
+            <DatabaseProvisioningBoundary>{children}</DatabaseProvisioningBoundary>
           </ResourceWorkspaceBoundary>
         </div>
       </WorkspaceFrame>
     )
   }
 )
+
+// Until the Relay has created the database, every page shows how far it
+// got, and one that failed can be deleted from there.
+function DatabaseProvisioningBoundary({
+  children,
+}: {
+  children: React.ReactNode
+}) {
+  const { database } = useDatabaseWorkspace()
+  if (!database.provisioning) return children
+  return (
+    <>
+      <PageContent
+        view={
+          database.provisioning.phase === "failed" ? "unavailable" : "waiting"
+        }
+      />
+      <ProvisioningProgress
+        failedActions={
+          database.permissions.includes("database.delete") ? (
+            <DeleteFailedDatabase database={database} />
+          ) : null
+        }
+        id={database.id}
+        kind="database"
+        name={database.name}
+        provisioning={database.provisioning}
+        relayId={database.relayId}
+      />
+    </>
+  )
+}
+
+function DeleteFailedDatabase({ database }: { database: ManagedDatabase }) {
+  const navigate = useNavigate()
+  const [open, setOpen] = React.useState(false)
+  return (
+    <>
+      <Button
+        size="sm"
+        type="button"
+        variant="destructive"
+        onClick={() => setOpen(true)}
+      >
+        <Trash2 />
+        Delete database
+      </Button>
+      {open ? (
+        <DeleteDatabaseDialog
+          database={database}
+          open
+          onDeleted={() =>
+            void navigate({ to: "/infra/databases", replace: true })
+          }
+          onOpenChange={setOpen}
+        />
+      ) : null}
+    </>
+  )
+}
 
 function useDatabaseWorkspaceQuery(
   routeId: string | undefined
@@ -263,7 +331,11 @@ function DatabasePowerControls({
       action={action.isPending ? action.variables : null}
       noun="database"
       powerPermissions={powerPermissions}
-      target={{ name: database.name, observedState: database.observedState }}
+      target={{
+        name: database.name,
+        observedState: database.observedState,
+        provisioning: database.provisioning ?? null,
+      }}
       relayConnected={databaseRelayAvailable(database)}
       onAction={handleAction}
     />
