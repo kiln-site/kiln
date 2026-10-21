@@ -70,6 +70,10 @@ function MenuButton({
   )
 }
 
+// What the demo can't open stays in place, so the sidebar reads as Hearth's,
+// but dimmed and out of reach, so nobody expects a click to work.
+const unavailable = { className: "opacity-40", inert: true } as const
+
 const paperIcon = officialBricks.find((brick) => brick.name === "Paper")!.icon
 
 const infrastructure = [
@@ -99,46 +103,20 @@ const manage = [
 ]
 
 // Hearth's sidebar as it looks with a game server open. Console and Files
-// switch the demo's page; the rest are there so it reads as the panel.
+// switch the demo's page.
 export const DemoSidebar = React.memo(function DemoSidebar({
   collapsed,
   className,
   onViewChange,
-  overlay = false,
   running,
   view,
 }: {
   collapsed: boolean
   className?: string
   onViewChange: (view: DemoView) => void
-  overlay?: boolean
   running: boolean
   view: DemoView
 }) {
-  // Sliding over a short window, the server's pages come before Manage.
-  const manageGroup = (
-    <>
-      <SidebarSeparator />
-      <SidebarGroup className="p-0">
-        <SidebarGroupLabel className="type-technical-label">
-          Manage
-        </SidebarGroupLabel>
-        <SidebarGroupContent>
-          <SidebarMenu>
-            {manage.map((item) => (
-              <SidebarMenuItem key={item.label}>
-                <MenuButton>
-                  <item.icon />
-                  <span>{item.label}</span>
-                </MenuButton>
-              </SidebarMenuItem>
-            ))}
-          </SidebarMenu>
-        </SidebarGroupContent>
-      </SidebarGroup>
-    </>
-  )
-
   return (
     <nav
       aria-label="Hearth"
@@ -159,9 +137,10 @@ export const DemoSidebar = React.memo(function DemoSidebar({
               </span>
             </div>
             <button
+              inert
               type="button"
               aria-label="Notifications"
-              className="mr-1 grid size-8 shrink-0 place-items-center text-sidebar-foreground/60 transition-colors group-data-[collapsible=icon]:hidden hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+              className="mr-1 grid size-8 shrink-0 place-items-center text-sidebar-foreground/60 opacity-40 transition-colors group-data-[collapsible=icon]:hidden hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
             >
               <Bell className="size-4" />
             </button>
@@ -171,7 +150,7 @@ export const DemoSidebar = React.memo(function DemoSidebar({
 
       <div className="shrink-0 p-2 group-data-[collapsible=icon]:px-0">
         <SidebarMenu>
-          <SidebarMenuItem>
+          <SidebarMenuItem {...unavailable}>
             <MenuButton
               aria-label="Search Kiln"
               className="h-8 w-full justify-start gap-2.5 bg-black/25 px-2 shadow-[0_0_0_0.5px_color-mix(in_oklab,var(--sidebar-foreground)_16%,transparent)]! group-data-[collapsible=icon]:justify-center hover:bg-black/35 hover:shadow-[0_0_0_0.5px_color-mix(in_oklab,var(--sidebar-foreground)_24%,transparent)]!"
@@ -199,7 +178,7 @@ export const DemoSidebar = React.memo(function DemoSidebar({
           <SidebarGroupContent>
             <SidebarMenu>
               {infrastructure.map((item) => (
-                <SidebarMenuItem key={item.label}>
+                <SidebarMenuItem key={item.label} {...unavailable}>
                   <MenuButton>
                     <item.icon />
                     <span>{item.label}</span>
@@ -217,7 +196,7 @@ export const DemoSidebar = React.memo(function DemoSidebar({
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu>
-              <SidebarMenuItem>
+              <SidebarMenuItem {...unavailable}>
                 <MenuButton
                   aria-label={`Switch game server. ${demoServer.name}`}
                   className="mb-1.5 h-auto border border-sidebar-border/75 bg-background/35 px-2 py-2 group-data-[collapsible=icon]:h-[40px]! group-data-[collapsible=icon]:overflow-visible group-data-[collapsible=icon]:bg-black/25 hover:border-sidebar-border hover:bg-sidebar-accent"
@@ -242,7 +221,10 @@ export const DemoSidebar = React.memo(function DemoSidebar({
                 </MenuButton>
               </SidebarMenuItem>
               {serverTabs.map((tab) => (
-                <SidebarMenuItem key={tab.label}>
+                <SidebarMenuItem
+                  key={tab.label}
+                  {...(tab.view ? {} : unavailable)}
+                >
                   <MenuButton
                     active={tab.view === view}
                     onClick={
@@ -257,15 +239,34 @@ export const DemoSidebar = React.memo(function DemoSidebar({
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
-        {overlay ? manageGroup : null}
       </SidebarContent>
 
       <SidebarFooter>
-        {overlay ? null : manageGroup}
+        <SidebarSeparator />
+        <SidebarGroup className="p-0">
+          <SidebarGroupLabel className="type-technical-label">
+            Manage
+          </SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {manage.map((item) => (
+                <SidebarMenuItem key={item.label} {...unavailable}>
+                  <MenuButton>
+                    <item.icon />
+                    <span>{item.label}</span>
+                  </MenuButton>
+                </SidebarMenuItem>
+              ))}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
         <SidebarSeparator />
         <SidebarMenu>
           <SidebarMenuItem>
-            <div className="flex h-11 items-center gap-1 px-2 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0">
+            <div
+              inert
+              className="flex h-11 items-center gap-1 px-2 opacity-40 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
+            >
               <span className="flex min-w-0 flex-1 items-center gap-2 group-data-[collapsible=icon]:flex-none">
                 <Avatar aria-hidden="true" className="rounded-none">
                   <AvatarFallback className="type-label rounded-none bg-primary/12 font-bold text-primary">

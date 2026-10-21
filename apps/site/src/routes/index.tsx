@@ -76,11 +76,9 @@ function Hero() {
         </div>
 
         <figure className="mt-12 sm:mt-16">
-          <div className="h-[40rem] sm:h-[44rem] lg:h-[50rem]">
-            <ClientDemo fallback={<DemoFrame label="Opening Hearth…" />}>
-              <HearthDemo />
-            </ClientDemo>
-          </div>
+          <ClientDemo fallback={<DemoFrame label="Opening Hearth…" />}>
+            <HearthDemo />
+          </ClientDemo>
           <figcaption className="type-support mt-3 max-w-xl text-muted-foreground">
             This is Hearth, running in your browser on a simulated server.
             Search its 100,000 lines of output, send{" "}
@@ -93,10 +91,14 @@ function Hero() {
   )
 }
 
+// Holds the demo's place while it loads: its window, and the line under it.
 function DemoFrame({ label }: { label: string }) {
   return (
-    <div className="grid h-full place-items-center border border-border bg-card">
-      <p className="type-support text-muted-foreground">{label}</p>
+    <div className="flex flex-col gap-3">
+      <div className="grid h-[51rem] place-items-center border border-border bg-card">
+        <p className="type-support text-muted-foreground">{label}</p>
+      </div>
+      <div className="h-4" />
     </div>
   )
 }

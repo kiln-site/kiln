@@ -14,7 +14,7 @@ export function ClientDemo({
   React.useEffect(() => setMounted(true), [])
 
   return (
-    <div className="h-full">
+    <div>
       {mounted ? (
         <React.Suspense fallback={fallback}>{children}</React.Suspense>
       ) : (

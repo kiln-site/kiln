@@ -64,11 +64,12 @@ export default function HearthDemo({ className }: { className?: string }) {
 
   return (
     <TooltipProvider delayDuration={250}>
-      <div className="flex h-full flex-col gap-3">
+      <div className="flex flex-col gap-3">
+        {/* Tall enough for all of Hearth's sidebar, so it never scrolls. */}
         <div
           ref={windowRef}
           className={cn(
-            "@container/window relative flex min-h-0 flex-1 overflow-hidden border border-border bg-background text-left shadow-2xl shadow-black/40",
+            "@container/window relative flex h-[51rem] overflow-hidden border border-border bg-background text-left shadow-2xl shadow-black/40",
             className
           )}
         >
@@ -84,7 +85,6 @@ export default function HearthDemo({ className }: { className?: string }) {
               <DemoSidebar
                 className="relative shadow-2xl shadow-black/60"
                 collapsed={false}
-                overlay
                 running={running}
                 view={view}
                 onViewChange={changeView}
