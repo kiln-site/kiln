@@ -117,8 +117,14 @@ export function AppMountsDialog({
         : { problem: null, text: savedCompose },
     [composeDirty, composeEdits, editing, savedCompose]
   )
+  // Edits name mounts by their place in the file as it was when the dialog
+  // opened; if it has changed since, they could land on another mount.
+  const [openedCompose] = React.useState(savedCompose)
   const problem =
     mountsProblem(draft) ??
+    (composeDirty && savedCompose !== openedCompose
+      ? "The Compose file changed since this opened. Reopen it to change its mounts."
+      : null) ??
     composeMountsProblem(editing, composeMounts, composeEdits) ??
     composeDraft.problem
   const dirty = JSON.stringify(draft) !== JSON.stringify(saved) || composeDirty

@@ -416,7 +416,7 @@ secrets:
       })
     ).toBe(
       text
-        .replace("target: /logs\n        read_only: true\n", "target: /var/log\n")
+        .replace("target: /logs\n        read_only: true\n", "target: /var/log\n        read_only: false\n")
     )
     expect(
       changeComposeMount(text, keyAt("/scratch"), {
@@ -570,5 +570,40 @@ configs:
         })
       ).toThrow()
     }
+  })
+
+  it("reads ro and rw as Compose does, and leaves a mode with both alone", () => {
+    const text = `services:
+  app:
+    image: app
+    volumes:
+      - data:/data:ro,rw
+      - logs:/logs:rw,ro
+      - type: volume
+        read_only: false
+        source: cache
+        target: /cache
+      - !reset /scratch
+volumes:
+  data: {}
+  logs: {}
+  cache: {}
+`
+    const found = composeMounts(text, project)!
+    expect(
+      found.map((mount) => [mount.target, mount.readOnly, mount.editable])
+    ).toEqual([
+      ["/data", false, false],
+      ["/logs", true, false],
+      ["/cache", false, true],
+      ["/scratch", false, false],
+    ])
+    // An explicit false that comes first stays put through a change.
+    const changed = changeComposeMount(text, found[2]!.key, {
+      readOnly: false,
+      source: "cache",
+      target: "/var/cache",
+    })
+    expect(changed).toBe(text.replace("target: /cache", "target: /var/cache"))
   })
 })

@@ -329,7 +329,13 @@ function changeVolume(
     ...declared,
     ...setPair(text, entry, "source", source || null),
     ...setPair(text, entry, "target", change.target),
-    ...setPair(text, entry, "read_only", change.readOnly ? true : null),
+    // An explicit false stays, written as false.
+    ...setPair(
+      text,
+      entry,
+      "read_only",
+      change.readOnly ? true : entry.has("read_only") ? false : null
+    ),
   ]
 }
 
@@ -552,6 +558,8 @@ function ownNode(
   if ([services, definition, list].some((node) => node.anchor)) return false
   // Its lines are what's rewritten, so they're the block style's own.
   if ([services, definition, list].some((node) => node.flow)) return false
+  // Compose gives tags like !reset and !override meanings of their own.
+  if ([services, definition, list].some((node) => node.tag)) return false
   if (unreadableSettings(entry)) return false
   let shared = false
   visit(entry, {
@@ -560,7 +568,7 @@ function ownNode(
       return visit.BREAK
     },
     Node: (_, node) => {
-      if (node.anchor) {
+      if (node.anchor || node.tag) {
         shared = true
         return visit.BREAK
       }
@@ -585,10 +593,15 @@ function unreadableSettings(entry: Node): boolean {
       return true
     }
     const [first, target, mode] = splitShort(entry.value)
+    const access = new Set(
+      (mode ?? "").split(",").filter((flag) => flag === "ro" || flag === "rw")
+    )
     return (
       (target === undefined && first.includes("$")) ||
       (target ?? "").includes("$") ||
-      (mode ?? "").includes("$")
+      (mode ?? "").includes("$") ||
+      // Both, where which wins is easy to misread.
+      access.size > 1
     )
   }
   if (!isMap(entry) || entry.flow) return true
@@ -674,7 +687,7 @@ function volumeMount(
       dockerName: kind === "volume" ? volumeName(file, project, source) : null,
       kind,
       origin: null,
-      readOnly: (mode ?? "").split(",").includes("ro"),
+      readOnly: shortReadOnly(mode),
       source,
       target,
     }
@@ -751,6 +764,14 @@ function defaultFileTarget(section: "configs" | "secrets", name: string) {
 // else as a volume's name. A variable is most often a path.
 function sourceKind(source: string): "bind" | "volume" {
   return /^[./~$]/u.test(source) ? "bind" : "volume"
+}
+
+// Compose takes the last of ro and rw in a mode.
+function shortReadOnly(mode: string | undefined): boolean {
+  const access = (mode ?? "")
+    .split(",")
+    .filter((flag) => flag === "ro" || flag === "rw")
+  return access.at(-1) === "ro"
 }
 
 // "source:target:mode", where a ${VAR:-default} may hold colons of its own.
