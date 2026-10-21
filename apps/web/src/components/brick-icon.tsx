@@ -1,7 +1,8 @@
 import * as React from "react"
 import { Box } from "lucide-react"
 
-const BRICK_COLOR_PALETTE = [
+// The colours a Brick without one of its own is drawn in.
+export const BRICK_COLOR_PALETTE = [
   "#e67e7e",
   "#dc895c",
   "#c49528",

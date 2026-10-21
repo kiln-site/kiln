@@ -21,6 +21,7 @@ import {
   DatabaseKindIcon,
   ServerKindIcon,
 } from "@/components/instance-kind-icon"
+import { BRICK_COLOR_PALETTE } from "@/components/brick-icon"
 
 import { BrickMark, officialBricks } from "~/components/brick-mark"
 import { KilnMark } from "~/components/kiln-mark"
@@ -133,7 +134,15 @@ function BrickWall() {
         {wall.map((row, index) => (
           <div key={index} className="flex shrink-0 gap-2">
             {row.map((name, column) => (
-              <WallBrick key={column} name={name} />
+              <WallBrick
+                key={column}
+                name={name}
+                tint={
+                  BRICK_COLOR_PALETTE[
+                    (index * 4 + column * 7) % BRICK_COLOR_PALETTE.length
+                  ]!
+                }
+              />
             ))}
           </div>
         ))}
@@ -142,10 +151,19 @@ function BrickWall() {
   )
 }
 
-function WallBrick({ name }: { name: WallSlot }) {
+// An empty brick takes `tint` for its border, so the wall's edges read as
+// more Bricks rather than blanks.
+function WallBrick({ name, tint }: { name: WallSlot; tint: string }) {
   const base = "flex h-14 w-36 shrink-0 items-center gap-2 px-3"
   if (name === null) {
-    return <div className={cn(base, "border border-border/70")} />
+    return (
+      <div
+        className={cn(base, "border bg-card/60")}
+        style={{
+          borderColor: `color-mix(in oklab, ${tint} 35%, transparent)`,
+        }}
+      />
+    )
   }
   if (name === "own") {
     return (
