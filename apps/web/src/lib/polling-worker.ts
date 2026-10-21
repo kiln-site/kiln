@@ -1,4 +1,4 @@
-import { Effect, Metric } from "effect"
+import { Clock, Effect, Fiber, Metric, Queue } from "effect"
 
 import { promiseEffect } from "@/effect/promise"
 import { forkAppWorker, reportAppError } from "@/effect/runtime"
@@ -10,45 +10,125 @@ const passes = Metric.counter("hearth.worker.passes", {
   incremental: true,
 })
 
-/** Whether a pass found due jobs. */
-export type WorkerPassOutcome = "idle" | "worked"
+/** Hearth's workers that poll MySQL for due jobs. */
+export type PollingWorkerName = "Instances.postProvision" | "TailscaleCleanup"
 
 /**
- * Runs `pass` every `intervalMs`, forever, for a worker that polls MySQL for
- * due jobs. The pass checks for work untraced and traces only a pass that
- * has some, so an idle Hearth exports no traces. Every pass is counted
- * instead. A failing pass is reported once, until one succeeds.
+ * What a pass found: due jobs it worked through, or none, with when the next
+ * queued job is due (null when none is queued).
+ */
+export type WorkerPass =
+  | { readonly outcome: "worked" }
+  | { readonly outcome: "idle"; readonly nextAttemptAt: number | null }
+
+// The quickest a worker looks again, as while it works through a backlog or
+// its queue is failing; and the longest, for jobs queued without a wake, such
+// as by a Hearth that stopped before its worker saw them.
+const MIN_INTERVAL_MS = 2_000
+const MAX_INTERVAL_MS = 30_000
+
+interface PollingWorker {
+  fiber: Fiber.Fiber<void> | null
+  readonly wake: Queue.Queue<void>
+}
+
+// Global, so a dev reload's new code reaches the same wakes and replaces the
+// old worker.
+const state = globalThis as typeof globalThis & {
+  kilnPollingWorkers?: Map<PollingWorkerName, PollingWorker>
+}
+
+function pollingWorker(name: PollingWorkerName): PollingWorker {
+  state.kilnPollingWorkers ??= new Map()
+  let worker = state.kilnPollingWorkers.get(name)
+  if (!worker) {
+    // One pending wake is enough: the next pass sees every job queued so far.
+    worker = { fiber: null, wake: Effect.runSync(Queue.dropping<void>(1)) }
+    state.kilnPollingWorkers.set(name, worker)
+  }
+  return worker
+}
+
+/**
+ * Has a worker look for due jobs now, as after queueing one, rather than at
+ * its next scheduled pass. Call it once the job is committed.
+ */
+export function wakePollingWorker(name: PollingWorkerName): void {
+  Queue.offerUnsafe(pollingWorker(name).wake, undefined)
+}
+
+/**
+ * Runs `pass` whenever a job is queued or due, for a worker that polls MySQL
+ * for due jobs. Between jobs it sleeps until the next one is due, or until
+ * woken, looking again at least every 30 seconds. The pass checks for work
+ * untraced and traces only a pass that has some, so an idle Hearth exports
+ * no traces. Every pass is counted instead. A failing pass is reported once,
+ * until one succeeds. Starting a worker again replaces the running one.
  */
 export function startPollingWorker(
-  worker: string,
-  pass: () => Promise<WorkerPassOutcome>,
-  intervalMs: number
-) {
+  name: PollingWorkerName,
+  pass: () => Promise<WorkerPass>
+): void {
+  const worker = pollingWorker(name)
+  const previous = worker.fiber
   let lastFailure: string | null = null
-  const count = (outcome: WorkerPassOutcome | "failed") =>
+  const count = (outcome: WorkerPass["outcome"] | "failed") =>
     Metric.update(
-      Metric.withAttributes(passes, { "hearth.worker": worker, outcome }),
+      Metric.withAttributes(passes, { "hearth.worker": name, outcome }),
       1
     )
-  return forkAppWorker(
-    promiseEffect(pass).pipe(
-      Effect.flatMap((outcome) => {
-        lastFailure = null
-        return count(outcome)
-      }),
-      Effect.catch((cause) => {
-        const message = cause instanceof Error ? cause.message : String(cause)
-        // A pass fails again every interval while MySQL is down; only a new
-        // failure reaches telemetry.
-        if (message !== lastFailure) {
-          lastFailure = message
-          console.warn(`[Kiln] ${worker} pass failed:`, cause)
-          reportAppError(cause, { operation: `${worker}.poll` })
-        }
-        return count("failed")
-      }),
-      Effect.andThen(Effect.sleep(intervalMs)),
-      Effect.forever
+  const runPass = promiseEffect(pass).pipe(
+    Effect.tap((result) => {
+      lastFailure = null
+      return count(result.outcome)
+    }),
+    Effect.catch((cause) => {
+      const message = cause instanceof Error ? cause.message : String(cause)
+      // A pass fails again every few seconds while MySQL is down; only a new
+      // failure reaches telemetry.
+      if (message !== lastFailure) {
+        lastFailure = message
+        console.warn(`[Kiln] ${name} pass failed:`, cause)
+        reportAppError(cause, { operation: `${name}.poll` })
+      }
+      return count("failed").pipe(Effect.as(null))
+    })
+  )
+  const loop = Effect.gen(function* () {
+    while (true) {
+      // Wakes from before this pass are answered by it; one during it
+      // starts the next.
+      yield* Queue.clear(worker.wake)
+      const result = yield* runPass
+      const now = yield* Clock.currentTimeMillis
+      const delay =
+        result?.outcome === "idle"
+          ? Math.min(
+              MAX_INTERVAL_MS,
+              Math.max(
+                MIN_INTERVAL_MS,
+                (result.nextAttemptAt ?? Infinity) - now
+              )
+            )
+          : MIN_INTERVAL_MS
+      yield* Effect.raceFirst(Effect.sleep(delay), Queue.take(worker.wake))
+    }
+  })
+  worker.fiber = forkAppWorker(
+    (previous ? Fiber.interrupt(previous) : Effect.void).pipe(
+      Effect.andThen(loop)
     )
   )
+}
+
+/** Stops every worker, as when Hearth shuts down. */
+export function stopPollingWorkers(): Promise<void> {
+  const fibers = [...(state.kilnPollingWorkers?.values() ?? [])].flatMap(
+    (worker) => {
+      const fiber = worker.fiber
+      worker.fiber = null
+      return fiber ? [fiber] : []
+    }
+  )
+  return Effect.runPromise(Fiber.interruptAll(fibers))
 }

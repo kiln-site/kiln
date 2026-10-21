@@ -1,6 +1,7 @@
 import type { RowDataPacket } from "mysql2/promise"
 import { relaySnapshotSchema } from "@workspace/contracts"
 import { Clock, Effect } from "effect"
+import type { Tracer } from "effect"
 
 import { Database } from "@/effect/database"
 import { promiseEffect } from "@/effect/promise"
@@ -11,10 +12,7 @@ import {
 } from "@/effect/runtime"
 import { databaseTable } from "@/lib/database-config"
 import { relayRpc } from "@/lib/relay-connection"
-import {
-  startPollingWorker,
-  type WorkerPassOutcome,
-} from "@/lib/polling-worker"
+import { startPollingWorker, type WorkerPass } from "@/lib/polling-worker"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { provisionInstanceDomain } from "@/server/domains.server"
 
@@ -24,21 +22,39 @@ interface PostProvisionRow extends RowDataPacket {
   relay_id: string
 }
 
-const POLL_INTERVAL_MS = 2_000
-let workerStarted = false
+interface NextAttemptRow extends RowDataPacket {
+  next_attempt_at: number | string | null
+}
 
 export function scheduleInstancePostProvisionProcessing(): void {
-  if (workerStarted) return
-  workerStarted = true
   startPollingWorker(
     "Instances.postProvision",
-    processInstancePostProvisionJobs,
-    POLL_INTERVAL_MS
+    processInstancePostProvisionJobs
   )
 }
 
-async function processInstancePostProvisionJobs(): Promise<WorkerPassOutcome> {
-  const rows = await runAppEffectUntraced(
+async function processInstancePostProvisionJobs(): Promise<WorkerPass> {
+  const nextAttemptAt = await runAppEffectUntraced(
+    Effect.gen(function* () {
+      const database = yield* Database
+      const [row] = yield* database.queryRows<NextAttemptRow>(
+        "instances.postProvision.nextAttempt",
+        `SELECT MIN(next_attempt_at) AS next_attempt_at
+           FROM ${databaseTable("instance_post_provision")}`
+      )
+      return row?.next_attempt_at == null ? null : Number(row.next_attempt_at)
+    })
+  )
+  if (nextAttemptAt === null || nextAttemptAt > Date.now()) {
+    return { outcome: "idle", nextAttemptAt }
+  }
+  await traceAppPromise("Instances.postProvision.pass", processDueJobs)
+  return { outcome: "worked" }
+}
+
+async function processDueJobs(span: Tracer.Span): Promise<void> {
+  const rows = await runAppEffect(
+    "instances.postProvision.list",
     Effect.gen(function* () {
       const database = yield* Database
       const now = yield* Clock.currentTimeMillis
@@ -53,15 +69,8 @@ async function processInstancePostProvisionJobs(): Promise<WorkerPassOutcome> {
       )
     })
   )
-  if (rows.length === 0) return "idle"
-  await traceAppPromise(
-    "Instances.postProvision.pass",
-    () => processRows(rows),
-    {
-      "instance.count": rows.length,
-    }
-  )
-  return "worked"
+  span.attribute("instance.count", rows.length)
+  if (rows.length > 0) await processRows(rows)
 }
 
 async function processRows(

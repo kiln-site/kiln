@@ -12,6 +12,7 @@ import { scheduleBackupCopyProcessing } from "./lib/backup-copy"
 import { stopWarmCacheRefreshes } from "./lib/cache"
 import { wakePendingAuthorizationDelivery } from "./lib/authorization-delivery"
 import { scheduleInstancePostProvisionProcessing } from "./lib/instance-post-provision"
+import { stopPollingWorkers } from "./lib/polling-worker"
 import { startKilnUpdateNotifications } from "./lib/kiln-update-notifications"
 import {
   startInstanceDirectorySync,
@@ -95,6 +96,7 @@ export function shutdownHearth(): Promise<void> {
     stopInstanceDirectorySync(),
     stopGitHubSyncPolling(),
     stopAppDeploymentPolling(),
+    stopPollingWorkers(),
     stopRelayMetrics(),
   ])
     .then(() => Effect.runPromise(stopWarmCacheRefreshes))

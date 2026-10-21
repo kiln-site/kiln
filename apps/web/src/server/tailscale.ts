@@ -48,6 +48,7 @@ import { isPlatformAdmin } from "@/lib/access-control"
 import { invalidateRelayCache, relayCachePolicy } from "@/lib/relay-client"
 import { relayRpc } from "@/lib/relay-connection"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
+import { wakePollingWorker } from "@/lib/polling-worker"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { requireEligibleResourceUser } from "@/server/auth"
@@ -633,6 +634,7 @@ export const removeTailscaleStack = createServerFn({ method: "POST" })
       "tailscale.cleanup.request",
       requestTailscaleNetworkCleanupEffect(data.id, user.id, deployments)
     )
+    wakePollingWorker("TailscaleCleanup")
     publishTailscaleChange()
     return loadTailscaleStacks()
   })

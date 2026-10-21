@@ -8,6 +8,7 @@ import {
   type DirectoryInstance,
 } from "@/lib/instance-directory"
 import { databaseTable } from "@/lib/database-config"
+import { wakePollingWorker } from "@/lib/polling-worker"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 
 export function backfillInstanceSourceNames(
@@ -170,6 +171,7 @@ export const registerPreparedInstanceEffect = Effect.fn(
       })
     )
   )
+  yield* Effect.sync(() => wakePollingWorker("Instances.postProvision"))
 })
 
 export const unregisterInstanceEffect = Effect.fn(

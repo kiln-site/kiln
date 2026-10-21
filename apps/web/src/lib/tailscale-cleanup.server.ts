@@ -28,35 +28,23 @@ import {
 import { invalidateRelayCache, relayCachePolicy } from "@/lib/relay-client"
 import { relayRpc } from "@/lib/relay-connection"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
-import {
-  startPollingWorker,
-  type WorkerPassOutcome,
-} from "@/lib/polling-worker"
+import { startPollingWorker, type WorkerPass } from "@/lib/polling-worker"
 import { listPersistedRelays, type PersistedRelay } from "@/lib/relay-registry"
 
-const TAILSCALE_CLEANUP_POLL_INTERVAL_MS = 2_000
-const workerState = globalThis as typeof globalThis & {
-  __kilnTailscaleCleanupWorkerStarted?: boolean
-}
-
 export function scheduleTailscaleCleanupProcessing(): void {
-  if (workerState.__kilnTailscaleCleanupWorkerStarted) return
-  workerState.__kilnTailscaleCleanupWorkerStarted = true
-  startPollingWorker(
-    "TailscaleCleanup",
-    processTailscaleCleanupJobs,
-    TAILSCALE_CLEANUP_POLL_INTERVAL_MS
-  )
+  startPollingWorker("TailscaleCleanup", processTailscaleCleanupJobs)
 }
 
 /** Cleans up what's due for networks being deleted, if anything is. */
-export async function processTailscaleCleanupJobs(): Promise<WorkerPassOutcome> {
+export async function processTailscaleCleanupJobs(): Promise<WorkerPass> {
   const nextAttemptAt = await runAppEffectUntraced(
     nextTailscaleCleanupAttemptEffect()
   )
-  if (nextAttemptAt === null || nextAttemptAt > Date.now()) return "idle"
+  if (nextAttemptAt === null || nextAttemptAt > Date.now()) {
+    return { outcome: "idle", nextAttemptAt }
+  }
   await traceAppPromise("TailscaleCleanup.pass", processDueCleanups)
-  return "worked"
+  return { outcome: "worked" }
 }
 
 async function processDueCleanups(): Promise<void> {
