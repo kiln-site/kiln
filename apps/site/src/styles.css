@@ -62,3 +62,13 @@
     padding-inline: clamp(1.25rem, 4vw, 2.5rem);
   }
 }
+
+/* A pulse travelling along a line, left to right. */
+@keyframes site-flow {
+  from {
+    background-position: -60% 0;
+  }
+  to {
+    background-position: 160% 0;
+  }
+}
