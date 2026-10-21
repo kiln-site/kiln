@@ -79,22 +79,25 @@ function composeProject(app: App): string {
   return label?.replace(/-\d{14}$/u, "") ?? `kiln-app-${app.id}`
 }
 
-// The mount as the service's running container has it: what a variable
-// in the file made it, and a volume's real name. Otherwise the file, which
-// may have changed since the deploy, says what it is.
+// What a variable in the file made a mount, as the service's running
+// container has it: whether it's a volume, and the volume's name. A mount
+// the file names itself is as the file says, which may be ahead of what's
+// deployed: a volume renamed there is a new one, though the container
+// still has the old.
 function runningMount(
   containers: App["containers"],
   mount: ComposeMount
 ): ComposeMount {
-  // An anonymous volume's name is a new one each time; it stays unnamed.
   if (mount.kind !== "bind" && mount.kind !== "volume") return mount
-  if (!mount.source) return mount
+  if (!mount.source.includes("$")) return mount
   const running = containers
     .find((container) => container.service === mount.service)
     ?.mounts?.find((candidate) => candidate.destination === mount.target)
-  if (running?.type !== "bind" && running?.type !== "volume") return mount
-  if (!mount.source.includes("$") && running.type !== mount.kind) return mount
-  return running.type === "volume"
-    ? { ...mount, dockerName: running.source, kind: "volume" }
-    : { ...mount, dockerName: null, kind: "bind" }
+  if (running?.type === "volume") {
+    return { ...mount, dockerName: running.source, kind: "volume" }
+  }
+  if (running?.type === "bind") {
+    return { ...mount, dockerName: null, kind: "bind" }
+  }
+  return mount
 }
