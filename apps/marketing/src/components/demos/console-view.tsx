@@ -27,22 +27,18 @@ import {
   ConsoleSelectionControl,
   ConsoleTimestampButton,
   ConsoleWrapButton,
-  copyToClipboard,
 } from "@/components/console/console-toolbar-actions"
 import {
   mclogsShareLabel,
   mclogsShareTooltip,
-  useMclogsShareAction,
 } from "@/components/use-mclogs-share-action"
 
+import { useDemoShare } from "~/components/demos/demo-share"
 import { demoServer, type DemoServer } from "~/components/demos/demo-server"
 import { historyLines, type StatsStore } from "~/components/demos/console-stats"
 import { createServerLog } from "~/components/demos/server-log"
 
 const historyChunk = 25_000
-// What the demo's mclo.gs button uploads in place of the log, which is a
-// hundred thousand made-up lines mclo.gs has no use for.
-const shareContent = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 const streamInterval = 700
 // How long the console streams with nobody touching it.
 const idleLimit = 2 * 60_000
@@ -333,13 +329,9 @@ function respond(input: string): Output {
   }
 }
 
-// Hearth's mclo.gs button, uploading `shareContent` instead of the log. One
-// upload serves the whole visit, so clicking again copies the same link.
+// Hearth's mclo.gs button. It shares the demo link, not the log.
 function ShareButton() {
-  const { share, state } = useMclogsShareAction(async () => {
-    sharedUrl ??= await uploadShareContent()
-    await copyToClipboard(sharedUrl)
-  })
+  const { share, state } = useDemoShare()
   return (
     <ConsoleTooltip content={mclogsShareTooltip(state)}>
       <Button
@@ -368,27 +360,4 @@ function ShareButton() {
       </Button>
     </ConsoleTooltip>
   )
-}
-
-// The link this visit's upload made. The button is off while it uploads,
-// so only one is ever in flight.
-let sharedUrl: string | null = null
-
-// A form post, which mclo.gs answers to any origin without a preflight.
-async function uploadShareContent(): Promise<string> {
-  const response = await fetch("https://api.mclo.gs/1/log", {
-    method: "POST",
-    body: new URLSearchParams({ content: shareContent }),
-  })
-  const result: unknown = await response.json()
-  if (
-    !response.ok ||
-    typeof result !== "object" ||
-    result === null ||
-    !("url" in result) ||
-    typeof result.url !== "string"
-  ) {
-    throw new Error(`mclo.gs returned HTTP ${response.status}`)
-  }
-  return result.url
 }

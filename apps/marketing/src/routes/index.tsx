@@ -1,5 +1,6 @@
 import * as React from "react"
 import { Link, createFileRoute } from "@tanstack/react-router"
+import { Braces, Database, FolderTree, Search, Share2 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 
@@ -101,12 +102,6 @@ function Hero() {
           >
             <HearthDemo view="console" />
           </ClientDemo>
-          <figcaption className="type-support mt-3 max-w-xl text-muted-foreground">
-            This is Hearth, running in your browser on a simulated server.
-            Search its 100,000 lines of output, send{" "}
-            <code className="type-code text-foreground">list</code>, or restart
-            it.
-          </figcaption>
         </figure>
       </div>
     </section>
@@ -155,34 +150,32 @@ function Kinds() {
   )
 }
 
+const editorFeatures = [
+  { icon: FolderTree, label: "File tree" },
+  { icon: Search, label: "Search files" },
+  { icon: Share2, label: "One-click share" },
+  { icon: Braces, label: "View and edit NBT" },
+  { icon: Database, label: "View and edit SQLite" },
+]
+
 function Editor() {
   return (
     <section className="border-t border-border">
       <div className="site-container py-20 sm:py-28">
-        <div className="grid gap-10 lg:grid-cols-12 lg:gap-16">
-          <div className="lg:col-span-5">
-            <SectionHeading title="Edit config files where they live">
-              Open any file on any server and change it in the browser. This is
-              Hearth’s file editor, so try it.
-            </SectionHeading>
-          </div>
-          <ul className="site-copy grid gap-6 text-muted-foreground sm:grid-cols-3 lg:col-span-7 lg:pt-2">
-            <EditorPoint title="Changes stay marked">
-              Edited lines are flagged against the saved file until you save or
-              discard them.
-            </EditorPoint>
-            <EditorPoint title="Addresses stay hidden">
-              IP addresses are masked on screen, like{" "}
-              <code className="type-code text-foreground">server-ip</code>, so a
-              screenshot or a stream doesn’t give them away.
-            </EditorPoint>
-            <EditorPoint title="NBT opens as text">
-              Binary files like{" "}
-              <code className="type-code text-foreground">level.dat</code> open
-              as SNBT and are checked as you type.
-            </EditorPoint>
-          </ul>
-        </div>
+        <SectionHeading title="A file editor in your browser">
+          Browse, edit, and share every file on your servers.
+        </SectionHeading>
+        <ul className="mt-8 flex flex-wrap gap-x-8 gap-y-4">
+          {editorFeatures.map(({ icon: Icon, label }) => (
+            <li
+              key={label}
+              className="flex items-center gap-2.5 text-[0.9375rem] font-medium text-foreground"
+            >
+              <Icon className="size-[18px] shrink-0 text-primary" />
+              {label}
+            </li>
+          ))}
+        </ul>
         <div className="mt-12">
           <ClientDemo
             fallback={
@@ -198,20 +191,6 @@ function Editor() {
         </div>
       </div>
     </section>
-  )
-}
-
-function EditorPoint({
-  title,
-  children,
-}: {
-  title: string
-  children: React.ReactNode
-}) {
-  return (
-    <li className="border-l-2 border-primary/70 pl-4">
-      <span className="font-medium text-foreground">{title}.</span> {children}
-    </li>
   )
 }
 

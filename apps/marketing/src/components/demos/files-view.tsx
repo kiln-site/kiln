@@ -1,13 +1,16 @@
 import * as React from "react"
+import { QueryClientProvider } from "@tanstack/react-query"
 import { prepareFileTreeInput } from "@pierre/trees"
 import { FileTree, useFileTree, useFileTreeSearch } from "@pierre/trees/react"
 import {
+  Check,
   Download,
   EllipsisVertical,
   EyeOff,
   FileQuestion,
   FolderTree,
   House,
+  LoaderCircle,
   PanelLeftClose,
   Plus,
   RefreshCw,
@@ -28,7 +31,12 @@ import {
 import { useIsMobile } from "@workspace/ui/hooks/use-mobile"
 import { cn } from "@workspace/ui/lib/utils"
 
+import { DatabaseViewer } from "@/components/database-viewer/database-viewer"
 import { EditorTooltip } from "@/components/files/editor-tooltip"
+import { DirectoryView } from "@/components/files/file-directory-view"
+import { PanelResizeHandle } from "@/components/panel-resize-handle"
+import { FileTypeIconSprite } from "@/components/files/file-type-icon"
+import type { FileActionsController } from "@/components/files/file-tree-utils"
 import {
   FileToolbarIdentity,
   FileTreeRevealButton,
@@ -36,8 +44,17 @@ import {
   fileEditorHeaderContentClassName,
 } from "@/components/files/file-viewer-toolbar"
 import { SyntaxCodeEditor } from "@/components/syntax-code-editor"
+import { isDatabaseFilePath } from "@/lib/database-files"
 import { fileLanguageForPath } from "@/lib/file-language"
+import {
+  mclogsShareLabel,
+  mclogsShareTooltip,
+} from "@/components/use-mclogs-share-action"
 
+import { createDemoDatabaseSource } from "~/components/demos/demo-database"
+import { createDemoFiles } from "~/components/demos/demo-file-index"
+import { useDemoShare } from "~/components/demos/demo-share"
+import { demoServer } from "~/components/demos/demo-server"
 import {
   demoFiles,
   demoTreePaths,
@@ -80,14 +97,46 @@ const treeLayoutCss = `
   [data-icon-name="file-tree-icon-chevron"] { width: 14px; height: 14px; }
 `
 
-// Hearth's Files page for one server: its file tree, the editor, and the
-// editor's toolbar. Files open from the tree; edits stay in this tab.
+// The demo's file actions: reading only, so the menus offer what needs no
+// server.
+const readOnlyActions: FileActionsController = {
+  busy: false,
+  canWrite: false,
+  instance: { id: demoServer.id, relayId: demoServer.relayId },
+  request: () => {},
+  move: async () => false,
+}
+
+const liveServerWarning = {
+  detail:
+    "Plugins may cache or overwrite rows while the server runs. Stop the server for reliable edits.",
+  label: "Server running",
+}
+
+// Hearth's Files page for one server: its file tree, and what the selected
+// path opens in. Folders list their contents, SQLite files open as tables,
+// and text opens in the editor. Edits stay in this tab.
 export default function FilesView() {
+  const [demo] = React.useState(createDemoFiles)
+  return (
+    <QueryClientProvider client={demo.queryClient}>
+      <FileTypeIconSprite />
+      <Files fileIndex={demo.fileIndex} />
+    </QueryClientProvider>
+  )
+}
+
+function Files({
+  fileIndex,
+}: {
+  fileIndex: ReturnType<typeof createDemoFiles>["fileIndex"]
+}) {
   const [path, setPath] = React.useState(initialFilePath)
   const [redact, setRedact] = React.useState(true)
   const [wrap, setWrap] = React.useState(false)
   const [treeCollapsed, setTreeCollapsed] = React.useState(false)
   const [mobileTreeOpen, setMobileTreeOpen] = React.useState(false)
+  const treeResize = useTreeResize()
   const [files, setFiles] = React.useState<Record<string, FileState>>(() =>
     Object.fromEntries(
       Object.entries(demoFiles).map(([filePath, file]) => [
@@ -100,9 +149,8 @@ export default function FilesView() {
     prepareFileTreeInput(demoTreePaths)
   )
   const selectPath = React.useRef((selected: string) => {
-    if (selected.endsWith("/")) return
     setPath(selected)
-    setMobileTreeOpen(false)
+    if (!selected.endsWith("/")) setMobileTreeOpen(false)
   })
   const { model } = useFileTree({
     preparedInput,
@@ -123,9 +171,10 @@ export default function FilesView() {
   return (
     <div className="relative flex min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden @3xl/window:flex-row">
       <aside
+        ref={treeResize.panelRef}
         aria-label="Files"
         className={cn(
-          "absolute inset-0 z-20 flex-col bg-card @3xl/window:relative @3xl/window:inset-auto @3xl/window:z-auto @3xl/window:w-[17rem] @3xl/window:shrink-0 @3xl/window:border-r @3xl/window:border-border/80 @5xl/window:w-[19rem]",
+          "absolute inset-0 z-20 flex-col bg-card [--file-tree-width:280px] @3xl/window:relative @3xl/window:inset-auto @3xl/window:z-auto @3xl/window:w-[var(--file-tree-width)] @3xl/window:shrink-0 @3xl/window:border-r @3xl/window:border-border/80",
           mobileTreeOpen ? "flex" : "hidden",
           treeCollapsed ? "@3xl/window:hidden" : "@3xl/window:flex"
         )}
@@ -137,6 +186,10 @@ export default function FilesView() {
               size="icon-sm"
               className="shrink-0 shadow-none"
               aria-label="Files home"
+              onClick={() => {
+                setPath("")
+                setMobileTreeOpen(false)
+              }}
             >
               <House className="size-[18px]" />
             </Button>
@@ -181,62 +234,92 @@ export default function FilesView() {
             style={treeStyle}
           />
         </div>
+        <PanelResizeHandle
+          aria-label="Resize file tree"
+          aria-valuemin={treeMinWidth}
+          aria-valuemax={treeMaxWidth}
+          className="hidden @3xl/window:flex"
+          {...treeResize.handleProps}
+        />
       </aside>
 
       <section className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-card">
-        <div className={fileEditorHeaderClassName}>
-          {treeCollapsed ? (
-            <FileTreeRevealButton onClick={() => setTreeCollapsed(false)} />
-          ) : null}
-          <div className={fileEditorHeaderContentClassName}>
-            <FileToolbarIdentity path={path} />
+        {path === "" || path.endsWith("/") ? (
+          <DirectoryView
+            actions={readOnlyActions}
+            canWrite={false}
+            fileIndex={fileIndex}
+            path={path}
+            treeCollapsed={treeCollapsed}
+            uploading={false}
+            onOpen={setPath}
+            onTreeExpand={() => setTreeCollapsed(false)}
+            onUploadFiles={async () => {}}
+          />
+        ) : isDatabaseFilePath(path) ? (
+          <DemoDatabase
+            key={path}
+            path={path}
+            treeCollapsed={treeCollapsed}
+            onTreeExpand={() => setTreeCollapsed(false)}
+          />
+        ) : (
+          <>
+            <div className={fileEditorHeaderClassName}>
+              {treeCollapsed ? (
+                <FileTreeRevealButton onClick={() => setTreeCollapsed(false)} />
+              ) : null}
+              <div className={fileEditorHeaderContentClassName}>
+                <FileToolbarIdentity path={path} />
+                {file ? (
+                  <EditorActions
+                    file={file}
+                    redact={redact}
+                    wrap={wrap}
+                    onRedactChange={setRedact}
+                    onWrapChange={setWrap}
+                    onRevert={() =>
+                      setFiles((current) => ({
+                        ...current,
+                        [path]: { ...file, value: file.saved },
+                      }))
+                    }
+                    onSave={() =>
+                      setFiles((current) => ({
+                        ...current,
+                        [path]: { saved: file.value, value: file.value },
+                      }))
+                    }
+                  />
+                ) : null}
+              </div>
+            </div>
             {file ? (
-              <EditorActions
+              <DemoEditor
+                key={path}
                 file={file}
+                path={path}
                 redact={redact}
                 wrap={wrap}
-                onRedactChange={setRedact}
-                onWrapChange={setWrap}
-                onRevert={() =>
+                onChange={(value) =>
                   setFiles((current) => ({
                     ...current,
-                    [path]: { ...file, value: file.saved },
-                  }))
-                }
-                onSave={() =>
-                  setFiles((current) => ({
-                    ...current,
-                    [path]: { saved: file.value, value: file.value },
+                    [path]: { ...current[path]!, value },
                   }))
                 }
               />
-            ) : null}
-          </div>
-        </div>
-        {file ? (
-          <DemoEditor
-            key={path}
-            file={file}
-            path={path}
-            redact={redact}
-            wrap={wrap}
-            onChange={(value) =>
-              setFiles((current) => ({
-                ...current,
-                [path]: { ...current[path]!, value },
-              }))
-            }
-          />
-        ) : (
-          <div className="grid min-h-0 flex-1 place-items-center px-6 text-center">
-            <div className="flex max-w-xs flex-col items-center gap-2">
-              <FileQuestion className="size-6 text-muted-foreground" />
-              <p className="text-sm font-medium">This file isn’t text</p>
-              <p className="type-support text-muted-foreground">
-                Download it to open it on your computer.
-              </p>
-            </div>
-          </div>
+            ) : (
+              <div className="grid min-h-0 flex-1 place-items-center px-6 text-center">
+                <div className="flex max-w-xs flex-col items-center gap-2">
+                  <FileQuestion className="size-6 text-muted-foreground" />
+                  <p className="text-sm font-medium">This file isn’t text</p>
+                  <p className="type-support text-muted-foreground">
+                    Download it to open it on your computer.
+                  </p>
+                </div>
+              </div>
+            )}
+          </>
         )}
         <button
           type="button"
@@ -305,15 +388,7 @@ function EditorActions({
   const dirty = file.value !== file.saved
   return (
     <div className="ml-auto flex max-w-full min-w-0 shrink-0 items-center justify-end gap-1">
-      <EditorTooltip content="Upload to mclo.gs">
-        <Button
-          variant="ghost"
-          className="hidden h-8 shrink-0 gap-1.5 px-2.5 text-xs shadow-none @3xl/window:inline-flex"
-        >
-          <Share2 className="size-[17px]" />
-          <span>Share</span>
-        </Button>
-      </EditorTooltip>
+      <ShareButton />
       <EditorTooltip content="Download">
         <Button
           variant="ghost"
@@ -497,4 +572,141 @@ function DemoEditor({
       </div>
     </>
   )
+}
+
+// Hearth's database viewer on the demo's LuckPerms database.
+function DemoDatabase({
+  onTreeExpand,
+  path,
+  treeCollapsed,
+}: {
+  onTreeExpand: () => void
+  path: string
+  treeCollapsed: boolean
+}) {
+  const [source] = React.useState(() => createDemoDatabaseSource(path))
+  const identity = React.useCallback(
+    ({ readOnly }: { readOnly: boolean | null }) => (
+      <FileToolbarIdentity path={path} readOnly={readOnly === true} />
+    ),
+    [path]
+  )
+  return (
+    <DatabaseViewer
+      editWarning={liveServerWarning}
+      identity={identity}
+      leading={
+        treeCollapsed ? <FileTreeRevealButton onClick={onTreeExpand} /> : null
+      }
+      source={source}
+    />
+  )
+}
+
+// Hearth's Share, which uploads the file to mclo.gs. It shares the demo
+// link, not the file.
+function ShareButton() {
+  const { share, state } = useDemoShare()
+  return (
+    <EditorTooltip content={mclogsShareTooltip(state)}>
+      <Button
+        variant={
+          state === "copied"
+            ? "secondary"
+            : state === "error"
+              ? "destructive"
+              : "ghost"
+        }
+        className="hidden h-8 shrink-0 gap-1.5 px-2.5 text-xs shadow-none @3xl/window:inline-flex"
+        disabled={state === "uploading"}
+        onClick={share}
+      >
+        {state === "uploading" ? (
+          <LoaderCircle className="size-[17px] animate-spin" />
+        ) : state === "copied" ? (
+          <Check className="size-[17px]" />
+        ) : (
+          <Share2 className="size-[17px]" />
+        )}
+        <span>{state === "idle" ? "Share" : mclogsShareLabel(state)}</span>
+      </Button>
+    </EditorTooltip>
+  )
+}
+
+const treeMinWidth = 224
+const treeMaxWidth = 480
+const treeDefaultWidth = 280
+
+// Hearth's file tree handle: drag or use the arrow keys to resize the tree,
+// double-click to put it back. It never takes more than 45% of the window.
+function useTreeResize() {
+  const panelRef = React.useRef<HTMLElement>(null)
+  const width = React.useRef(treeDefaultWidth)
+  const drag = React.useRef<{
+    pointerId: number
+    startX: number
+    startWidth: number
+  } | null>(null)
+
+  function apply(next: number) {
+    const panel = panelRef.current
+    const available = panel?.parentElement?.getBoundingClientRect().width ?? 0
+    const maximum = Math.max(
+      treeMinWidth,
+      Math.min(treeMaxWidth, available * 0.45)
+    )
+    width.current = Math.min(maximum, Math.max(treeMinWidth, next))
+    panel?.style.setProperty("--file-tree-width", `${width.current}px`)
+  }
+
+  const handleProps: React.ComponentProps<"div"> = {
+    onPointerDown(event) {
+      if (event.button !== 0 || !panelRef.current) return
+      event.preventDefault()
+      drag.current = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startWidth: panelRef.current.getBoundingClientRect().width,
+      }
+      event.currentTarget.dataset.resizing = "true"
+      event.currentTarget.setPointerCapture(event.pointerId)
+    },
+    onPointerMove(event) {
+      const session = drag.current
+      if (session?.pointerId !== event.pointerId) return
+      apply(session.startWidth + event.clientX - session.startX)
+    },
+    onPointerUp(event) {
+      if (drag.current?.pointerId !== event.pointerId) return
+      drag.current = null
+      delete event.currentTarget.dataset.resizing
+    },
+    onLostPointerCapture(event) {
+      drag.current = null
+      delete event.currentTarget.dataset.resizing
+    },
+    onDoubleClick(event) {
+      event.preventDefault()
+      apply(treeDefaultWidth)
+    },
+    onKeyDown(event) {
+      const step = event.shiftKey ? 32 : 16
+      const next =
+        event.key === "ArrowLeft"
+          ? width.current - step
+          : event.key === "ArrowRight"
+            ? width.current + step
+            : event.key === "Home"
+              ? treeMinWidth
+              : event.key === "End"
+                ? treeMaxWidth
+                : null
+      if (next === null) return
+      event.preventDefault()
+      apply(next)
+    },
+  }
+
+  return { handleProps, panelRef }
 }

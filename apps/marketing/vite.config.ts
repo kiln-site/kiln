@@ -5,6 +5,8 @@ import { tanstackStart } from "@tanstack/react-start/plugin/vite"
 import viteReact from "@vitejs/plugin-react"
 import tailwindcss from "@tailwindcss/vite"
 
+import { stubHearthServer } from "./stub-hearth-server"
+
 const contractsSource = resolve(
   import.meta.dirname,
   "../../packages/contracts/src/index.ts"
@@ -46,7 +48,12 @@ const config = defineConfig(({ command }) => ({
     forwardConsole: false,
     host: "0.0.0.0",
   },
-  plugins: lazyPlugins(() => [tailwindcss(), tanstackStart(), viteReact()]),
+  plugins: lazyPlugins(() => [
+    stubHearthServer(),
+    tailwindcss(),
+    tanstackStart(),
+    viteReact(),
+  ]),
 }))
 
 export default config

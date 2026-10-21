@@ -1,3 +1,5 @@
+import type { RelayFileEntry } from "@workspace/contracts"
+
 export interface DemoFile {
   saved: string
   // Starts unsaved, so the change markers show before anyone types.
@@ -193,21 +195,68 @@ export const demoFiles: Record<string, DemoFile> = {
   "world/level.dat": { saved: levelDat, encoding: "1,284 B GZIP NBT" },
 }
 
-// Everything the tree lists. Files missing from demoFiles are binary, and
-// open the way Hearth shows a file it can't edit.
+// The LuckPerms SQLite database, opened in Hearth's database viewer. Its
+// tables live in demo-database.ts.
+export const demoDatabasePath = "plugins/LuckPerms/luckperms-sqlite.db"
+
+// Files Hearth can't edit, with the size each would have on disk.
+const binaryFiles: Record<string, number> = {
+  "cache/mojang_1.21.4.jar": 51_627_904,
+  "libraries/com/mojang/brigadier/1.3.10/brigadier-1.3.10.jar": 77_392,
+  "logs/2026-10-19-1.log.gz": 18_402,
+  "paper.jar": 49_210_377,
+  "plugins/EssentialsX-2.20.1.jar": 3_126_490,
+  "plugins/LuckPerms-Bukkit-5.4.145.jar": 2_314_883,
+  [demoDatabasePath]: 98_304,
+  "versions/1.21.4/paper-1.21.4.jar": 52_431_104,
+  "world/region/r.0.0.mca": 9_461_760,
+  "world/region/r.-1.0.mca": 7_225_344,
+  "world_nether/DIM-1/region/r.0.0.mca": 2_449_408,
+  "world_the_end/DIM1/region/r.0.0.mca": 1_118_208,
+}
+
+// Everything the tree lists. Files missing from demoFiles open in the
+// viewer Hearth uses for them: a database, or a notice that it isn't text.
 export const demoTreePaths = [
   ...Object.keys(demoFiles),
-  "cache/mojang_1.21.4.jar",
-  "libraries/com/mojang/brigadier/1.3.10/brigadier-1.3.10.jar",
-  "logs/2026-10-19-1.log.gz",
-  "paper.jar",
-  "plugins/EssentialsX-2.20.1.jar",
-  "plugins/LuckPerms-Bukkit-5.4.145.jar",
-  "versions/1.21.4/paper-1.21.4.jar",
-  "world/region/r.0.0.mca",
-  "world/region/r.-1.0.mca",
-  "world_nether/DIM-1/region/r.0.0.mca",
-  "world_the_end/DIM1/region/r.0.0.mca",
+  ...Object.keys(binaryFiles),
 ]
 
 export const initialFilePath = "server.properties"
+
+const now = Date.now()
+const encoder = new TextEncoder()
+
+// What each folder holds, as the Relay measures it.
+export const demoDirectorySizes: Record<string, number> = {}
+
+// Each path as the Relay lists it, folders included. Times step back from
+// now so the newest files are the ones a server writes as it runs.
+export const demoEntries: ReadonlyArray<RelayFileEntry> = (() => {
+  const files = demoTreePaths.map((path, index) => ({
+    kind: "file" as const,
+    modifiedAt: now - (index * 7 + 3) * 3_600_000,
+    path,
+    size:
+      binaryFiles[path] ?? encoder.encode(demoFiles[path]?.saved ?? "").length,
+  }))
+  files.find((file) => file.path === "logs/latest.log")!.modifiedAt =
+    now - 90_000
+  const directories = new Map<string, RelayFileEntry>()
+  for (const file of files) {
+    const segments = file.path.split("/")
+    for (let depth = 1; depth < segments.length; depth++) {
+      const path = `${segments.slice(0, depth).join("/")}/`
+      const modifiedAt = directories.get(path)?.modifiedAt ?? 0
+      // The Relay lists folders without a size; they're measured apart.
+      directories.set(path, {
+        kind: "directory",
+        modifiedAt: Math.max(modifiedAt, file.modifiedAt),
+        path,
+        size: null,
+      })
+      demoDirectorySizes[path] = (demoDirectorySizes[path] ?? 0) + file.size
+    }
+  }
+  return [...directories.values(), ...files]
+})()
