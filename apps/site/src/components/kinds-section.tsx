@@ -74,9 +74,9 @@ export function KindsSection() {
         id="kinds-note"
         className="type-meta mx-auto mt-5 max-w-4xl text-center text-balance text-muted-foreground/70"
       >
-        * Some games shown don't have an official Brick yet. Kiln isn't
-        affiliated with or endorsed by any game, studio, or company shown,
-        including Mojang and Microsoft. All trademarks belong to their owners.
+        * Kiln isn't affiliated with or endorsed by any game, studio, or company
+        shown, including Mojang and Microsoft. All trademarks belong to their
+        owners.
       </p>
     </>
   )
