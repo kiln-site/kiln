@@ -37,14 +37,15 @@ function PricingPage() {
 
   return (
     <>
-      <section className="site-container pt-14 pb-12 sm:pt-24 sm:pb-16">
-        <h1 className="site-display max-w-3xl">
-          Pay for the panel, not the hardware.
-        </h1>
-        <p className="site-lede mt-6 max-w-xl text-muted-foreground">
-          Your game servers, apps, and databases run on machines you already
-          have. Self-host all of Kiln for free, or let us run Hearth for you.
-        </p>
+      {/* Short enough that the plans fit on one screen with it. */}
+      <section className="site-container flex flex-col gap-6 pt-10 pb-8 sm:pt-14 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <h1 className="site-title">Pay for the panel, not the hardware.</h1>
+          <p className="site-copy mt-3 max-w-xl text-muted-foreground">
+            Your game servers, apps, and databases run on machines you already
+            have. Self-host all of Kiln for free, or let us run Hearth for you.
+          </p>
+        </div>
         <IntervalSwitch interval={interval} />
       </section>
 
@@ -87,7 +88,7 @@ function IntervalSwitch({ interval }: { interval: BillingInterval }) {
     <div
       role="group"
       aria-label="Billing period"
-      className="mt-10 inline-flex border border-border bg-card p-0.5"
+      className="inline-flex shrink-0 self-start border border-border bg-card p-0.5 lg:self-auto"
     >
       <button
         type="button"
@@ -125,7 +126,7 @@ function PlanColumn({
   return (
     <li
       className={cn(
-        "relative flex flex-col bg-background p-6 sm:p-8",
+        "relative flex flex-col bg-background p-6 sm:p-7",
         recommended && "bg-card"
       )}
     >
@@ -147,7 +148,7 @@ function PlanColumn({
         {plan.summary}
       </p>
 
-      <p className="mt-8 flex items-baseline gap-2">
+      <p className="mt-5 flex items-baseline gap-2">
         <span className="text-5xl font-semibold tracking-[-0.05em] tabular-nums">
           ${formatPrice(price)}
         </span>
@@ -166,7 +167,7 @@ function PlanColumn({
       <Button
         asChild
         variant={recommended ? "default" : "outline"}
-        className="mt-8 h-11 w-full text-[0.9375rem]"
+        className="mt-6 h-11 w-full text-[0.9375rem]"
       >
         {free ? (
           <a href={new URL("/self-hosting", docsUrl).toString()} {...newTab}>
@@ -179,7 +180,7 @@ function PlanColumn({
         )}
       </Button>
 
-      <ul className="type-support mt-8 space-y-3 border-t border-border pt-6">
+      <ul className="type-support mt-6 space-y-2.5 border-t border-border pt-5">
         {plan.features.map((feature) => (
           <li key={feature} className="flex gap-2.5">
             <Check className="mt-0.5 size-4 shrink-0 text-primary" />
