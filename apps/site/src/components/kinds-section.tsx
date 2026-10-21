@@ -1,5 +1,18 @@
 import * as React from "react"
-import { ArrowDown, Globe, Plus } from "lucide-react"
+import {
+  ArrowDown,
+  Axe,
+  Bone,
+  Castle,
+  Cog,
+  Factory,
+  Gem,
+  Globe,
+  Plus,
+  Swords,
+  TreePine,
+  type LucideIcon,
+} from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -88,13 +101,29 @@ const bricks = Object.fromEntries(
   officialBricks.map((brick) => [brick.name, brick])
 ) as Record<Brick["name"], Brick>
 
-// Bricks laid as a wall, the official ones lit. Rows alternate seven and
-// six bricks, so centring them offsets each by half a brick, as a wall is.
-const wall: Array<Array<Brick["name"] | "own" | null>> = [
-  [null, null, null, null, null, null, null],
-  [null, null, "Paper", "Fabric", null, null],
-  [null, null, "Velocity", "Folia", "Palworld", null, null],
-  [null, null, "own", null, null, null],
+// Games the wall shows that have no Brick yet. Their marks are stand-ins
+// until each has a Brick and an icon of its own.
+const upcoming = {
+  Rust: { color: "#cd5a3c", icon: Axe },
+  Valheim: { color: "#c9a45c", icon: Swords },
+  ARK: { color: "#5bb3a8", icon: Bone },
+  Terraria: { color: "#8fbf4a", icon: TreePine },
+  Hytale: { color: "#5b9bd5", icon: Castle },
+  Factorio: { color: "#e39827", icon: Cog },
+  Satisfactory: { color: "#e0b43c", icon: Factory },
+  "Core Keeper": { color: "#9b7be0", icon: Gem },
+} satisfies Record<string, { color: string; icon: LucideIcon }>
+
+type WallSlot = Brick["name"] | keyof typeof upcoming | "own" | null
+
+// Bricks laid as a wall. Rows alternate seven and six bricks, so centring
+// them offsets each by half a brick, as a wall is. The best-known games sit
+// nearest the middle, where the wall doesn't fade.
+const wall: Array<Array<WallSlot>> = [
+  [null, null, "Satisfactory", "Rust", "Core Keeper", null, null],
+  [null, "Hytale", "Paper", "Fabric", "Valheim", null],
+  [null, null, "Velocity", "own", "Palworld", null, null],
+  [null, "Factorio", "Folia", "ARK", "Terraria", null],
 ]
 
 function BrickWall() {
@@ -113,8 +142,8 @@ function BrickWall() {
   )
 }
 
-function WallBrick({ name }: { name: Brick["name"] | "own" | null }) {
-  const base = "flex h-14 w-34 shrink-0 items-center gap-2.5 px-3.5"
+function WallBrick({ name }: { name: WallSlot }) {
+  const base = "flex h-14 w-36 shrink-0 items-center gap-2 px-3"
   if (name === null) {
     return <div className={cn(base, "border border-border/70")} />
   }
@@ -131,17 +160,27 @@ function WallBrick({ name }: { name: Brick["name"] | "own" | null }) {
       </div>
     )
   }
-  const brick = bricks[name]
+  const game = name in upcoming ? upcoming[name as keyof typeof upcoming] : null
+  const color = game ? game.color : bricks[name as Brick["name"]].color
   return (
     <div
       className={cn(base, "border bg-card")}
       style={{
-        borderColor: `color-mix(in oklab, ${brick.color} 40%, transparent)`,
-        color: brick.color,
+        borderColor: `color-mix(in oklab, ${color} 40%, transparent)`,
+        color,
       }}
     >
-      <BrickMark icon={brick.icon} className="size-6" />
-      <span className="text-sm font-medium text-foreground">{brick.name}</span>
+      {game ? (
+        <game.icon className="size-6 shrink-0" />
+      ) : (
+        <BrickMark
+          icon={bricks[name as Brick["name"]].icon}
+          className="size-6"
+        />
+      )}
+      <span className="truncate text-sm font-medium text-foreground">
+        {name}
+      </span>
     </div>
   )
 }
