@@ -1,4 +1,5 @@
 import * as React from "react"
+import { flushSync } from "react-dom"
 import type { RelayConsoleLevel } from "@workspace/contracts"
 import { Boxes, Check, ListFilter, Search, X } from "lucide-react"
 
@@ -19,6 +20,11 @@ import { useConsoleCopy } from "@/components/console/console-copy-context"
 import { ConsoleTooltip } from "@/components/console/console-tooltip"
 import { RelayKindIcon } from "@/components/instance-kind-icon"
 
+// Below `sm` the search collapses to an icon so the toolbar fits on one line.
+// Opening it hides the toolbar's other children until the input loses focus.
+export const consoleToolbarClassName =
+  "flex min-h-14 shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2.5 sm:px-4 max-sm:has-data-[console-search-open]:*:not-data-[console-search]:hidden"
+
 export function ConsoleSearchControl({ uiStore }: { uiStore: ConsoleUiStore }) {
   const copy = useConsoleCopy()
   const query = React.useSyncExternalStore(
@@ -26,27 +32,72 @@ export function ConsoleSearchControl({ uiStore }: { uiStore: ConsoleUiStore }) {
     uiStore.getQuerySnapshot,
     uiStore.getQuerySnapshot
   )
+  const [open, setOpen] = React.useState(false)
+  const inputRef = React.useRef<HTMLInputElement>(null)
+
+  function openSearch() {
+    // Focus inside the tap so mobile browsers raise the keyboard.
+    flushSync(() => setOpen(true))
+    inputRef.current?.focus()
+  }
+
   return (
-    <div className="relative min-w-[12rem] flex-1 sm:max-w-sm">
-      <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
-      <Input
-        value={query}
-        onChange={(event) => uiStore.setQuery(event.target.value)}
-        placeholder={copy.search}
-        aria-label={copy.search}
-        className="h-9 border-border/80 bg-background pl-8 text-base shadow-none sm:text-xs"
-      />
-      {query ? (
-        <button
-          type="button"
-          aria-label="Clear search"
-          className="absolute top-1/2 right-2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-          onClick={() => uiStore.setQuery("")}
+    <>
+      <ConsoleTooltip content="Search Console">
+        <Button
+          variant={query ? "secondary" : "ghost"}
+          size="icon"
+          className={`relative size-9 shrink-0 sm:hidden ${open ? "hidden" : ""}`}
+          aria-label={query ? `${copy.search}, filtered` : copy.search}
+          onClick={openSearch}
         >
-          <X className="size-3.5" />
-        </button>
-      ) : null}
-    </div>
+          <Search />
+          {query ? (
+            <span
+              className="absolute top-1 right-1 size-1.5 bg-primary"
+              aria-hidden="true"
+            />
+          ) : null}
+        </Button>
+      </ConsoleTooltip>
+      <div
+        data-console-search=""
+        data-console-search-open={open || undefined}
+        onBlur={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false)
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Escape" && event.target instanceof HTMLElement)
+            event.target.blur()
+        }}
+        className={`relative min-w-[12rem] flex-1 sm:block sm:max-w-sm ${open ? "" : "hidden"}`}
+      >
+        <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          ref={inputRef}
+          value={query}
+          onChange={(event) => uiStore.setQuery(event.target.value)}
+          placeholder={copy.search}
+          aria-label={copy.search}
+          className="h-9 border-border/80 bg-background pl-8 text-base shadow-none sm:text-xs"
+        />
+        {query ? (
+          <button
+            type="button"
+            aria-label="Clear search"
+            className="absolute top-1/2 right-2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            // Keep focus in the input so the search stays open.
+            onPointerDown={(event) => event.preventDefault()}
+            onClick={() => {
+              uiStore.setQuery("")
+              inputRef.current?.focus()
+            }}
+          >
+            <X className="size-3.5" />
+          </button>
+        ) : null}
+      </div>
+    </>
   )
 }
 

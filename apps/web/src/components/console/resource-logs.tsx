@@ -5,6 +5,7 @@ import { ConsoleCopyContext } from "@/components/console/console-copy-context"
 import {
   ConsoleLevelMenu,
   ConsoleSearchControl,
+  consoleToolbarClassName,
 } from "@/components/console/console-filters"
 import { ConsoleLogViewportController } from "@/components/console/console-log-viewport"
 import { ConsoleRetryButton } from "@/components/console/console-retry-button"
@@ -83,7 +84,7 @@ const ResourceLogsToolbar = React.memo(function ResourceLogsToolbar({
   uiStore: ConsoleUiStore
 }) {
   return (
-    <div className="flex min-h-14 shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2.5 sm:px-4">
+    <div className={consoleToolbarClassName}>
       <ConsoleSearchControl uiStore={uiStore} />
       <ConsoleLevelMenu uiStore={uiStore} />
       <ConsoleRetryButton streamStore={streamStore} />

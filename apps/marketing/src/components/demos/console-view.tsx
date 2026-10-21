@@ -14,6 +14,7 @@ import { Input } from "@workspace/ui/components/input"
 import {
   ConsoleLevelMenu,
   ConsoleSearchControl,
+  consoleToolbarClassName,
 } from "@/components/console/console-filters"
 import { ConsoleLogViewportController } from "@/components/console/console-log-viewport"
 import {
@@ -209,7 +210,7 @@ export default function ConsoleView({
       aria-label="Console"
       className="flex min-h-0 flex-1 flex-col bg-card"
     >
-      <div className="flex min-h-14 shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2.5 sm:px-4">
+      <div className={consoleToolbarClassName}>
         <ConsoleSearchControl uiStore={uiStore} />
         <ConsoleLevelMenu uiStore={uiStore} />
         <div className="ml-auto flex items-center gap-1.5">
