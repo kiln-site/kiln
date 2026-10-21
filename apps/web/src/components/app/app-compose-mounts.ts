@@ -89,7 +89,10 @@ function runningMount(
   mount: ComposeMount
 ): ComposeMount {
   if (mount.kind !== "bind" && mount.kind !== "volume") return mount
-  if (!mount.source.includes("$")) return mount
+  // A variable in its source, or in the name it's declared with.
+  if (!mount.source.includes("$") && !mount.dockerName?.includes("$")) {
+    return mount
+  }
   const running = containers
     .find((container) => container.service === mount.service)
     ?.mounts?.find((candidate) => candidate.destination === mount.target)
