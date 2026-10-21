@@ -16,6 +16,8 @@ services:
       KILN_RELAY_TLS_MODE: managed
       KILN_RELAY_NAME: ${KILN_RELAY_NAME:-D001-localdev}
       RESTIC_CACERT: /minio-certs/public.crt
+      # Full-archive uploads go through Node, not restic.
+      NODE_EXTRA_CA_CERTS: /minio-certs/public.crt
     command:
       - /bin/sh
       - -lc

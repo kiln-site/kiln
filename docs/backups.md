@@ -370,9 +370,9 @@ silently orphaning data.
 Development preview (`pnpm dev:docker`) starts a TLS MinIO at
 `https://minio:9000`. Register it as a platform destination with path-style
 access, private-network allowed, bucket `kiln-backups`, region `us-east-1`,
-access key `kiln`, and secret `kilnminiodevpassword`. Hearth trusts the
-generated certificate through `NODE_EXTRA_CA_CERTS`; Relay restic uses
-`RESTIC_CACERT`.
+access key `kiln`, and secret `kilnminiodevpassword`. Hearth and the Relay's
+full-archive uploads trust the generated certificate through
+`NODE_EXTRA_CA_CERTS`; Relay restic uses `RESTIC_CACERT`.
 
 Ceph RGW is already covered by the S3-compatible adapter. CephFS/RBD snapshots
 are infrastructure-specific consistency sources, not a portable backup format,
