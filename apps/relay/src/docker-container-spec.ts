@@ -32,6 +32,8 @@ export interface ContainerMount {
   readonly source: string
   readonly target: string
   readonly readOnly?: boolean
+  /** A volume Docker doesn't fill with the image's files when it's empty. */
+  readonly noCopy?: boolean
 }
 
 export interface ContainerHealthcheck {
@@ -167,6 +169,7 @@ function containerCreateBody(spec: ContainerSpec): unknown {
           Source: mount.source,
           Target: mount.target,
           Type: mount.type,
+          ...(mount.noCopy && { VolumeOptions: { NoCopy: true } }),
         })),
       }),
       ...(network && {

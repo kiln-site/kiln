@@ -1358,6 +1358,9 @@ export class AppDriver {
           ),
         },
         mounts: mounts.map((mount) => ({
+          // Docker leaves a volume it only reads as it is, even empty, so a
+          // new container beside the running one writes nothing to it.
+          noCopy: mount.type === "volume" && mount.readOnly,
           readOnly: mount.readOnly,
           source: mount.source,
           target: mount.target,
@@ -1963,7 +1966,8 @@ export class AppDriver {
       const inspected = await docker(
         this.#engine.inspectContainer<ContainerInspect>(container.id)
       )
-      // Two copies can read the same volume; only writing one is shared.
+      // Kiln mounts a volume a service only reads without the image's
+      // files, so two copies can share it; one either writes is shared.
       if (
         inspected.Mounts?.some(
           (mount) => mount.Type === "volume" && mount.RW !== false
@@ -2065,6 +2069,8 @@ export class AppDriver {
           source: mount.source,
           target: mount.target,
           type: mount.type,
+          ...(mount.type === "volume" &&
+            mount.readOnly && { volume: { nocopy: true } }),
         }))
       const networks: Record<string, unknown> = service.network_mode
         ? {}
@@ -2788,11 +2794,8 @@ function composeRollingBlocker(
   tailscale: ReadonlyArray<{ service: string }>
 ): string | null {
   for (const [name, service] of Object.entries(project.services ?? {})) {
-    if (
-      service.volumes?.some(
-        (volume) => volume.type === "volume" && !volume.read_only
-      )
-    ) {
+    // Even read-only: a rolled project names its own volumes anew.
+    if (service.volumes?.some((volume) => volume.type === "volume")) {
       return `${name} keeps data in a volume`
     }
     if (service.ports?.some((port) => port.published !== undefined)) {

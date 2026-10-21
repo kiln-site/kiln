@@ -1540,17 +1540,61 @@ describe("rolling deployments", () => {
     await removeCompose()
   })
 
-  it("rolls a Compose project over when the volumes it mounts are read-only", async () => {
-    const removeCompose = await composeConfigCommand()
+  it("rolls an image over beside a volume it only reads, without filling the volume", async () => {
     const harness = await createdApp()
     const volumeId = "3f9a21c4".padEnd(40, "0")
+    const volume = `${TEST_NAMESPACE}-kiln-3f9a21c4-media`
     fakeDocker.addVolume({
       labels: {
         "kiln.relay.owner": TEST_NAMESPACE,
         "kiln.resource.kind": "volume",
         "kiln.volume.id": volumeId,
       },
-      name: `${TEST_NAMESPACE}-kiln-3f9a21c4-media`,
+      name: volume,
+    })
+    const mounts = [
+      {
+        id: "media0001",
+        readOnly: true,
+        service: null,
+        source: { type: "volume" as const, volumeId },
+        target: "/media",
+      },
+    ]
+    await deploy(harness, { mounts })
+
+    const app = await deploy(harness, { command: "serve --v2", mounts })
+
+    expect(app.deployment).toMatchObject({ rolling: true, state: "succeeded" })
+    expect(fakeDocker.filledVolumes.has(volume)).toBe(false)
+  })
+
+  it("replaces a Compose project whose file declares a volume, even read-only", async () => {
+    const removeCompose = await composeConfigCommand()
+    const harness = await createdApp()
+    // A rolled project would name the volume anew, without its data.
+    const compose =
+      "services:\n  web:\n    image: nginx:alpine\n    volumes:\n      - type: volume\n        source: data\n        target: /data\n        read_only: true\nvolumes:\n  data: {}\n"
+    await deploy(harness, { compose, sourceType: "compose" })
+
+    const app = await deploy(harness, { compose, sourceType: "compose" })
+
+    expect(app.deployment).toMatchObject({ rolling: false, state: "succeeded" })
+    await removeCompose()
+  })
+
+  it("rolls a Compose project over when the volumes it mounts are read-only", async () => {
+    const removeCompose = await composeConfigCommand()
+    const harness = await createdApp()
+    const volumeId = "3f9a21c4".padEnd(40, "0")
+    const volume = `${TEST_NAMESPACE}-kiln-3f9a21c4-media`
+    fakeDocker.addVolume({
+      labels: {
+        "kiln.relay.owner": TEST_NAMESPACE,
+        "kiln.resource.kind": "volume",
+        "kiln.volume.id": volumeId,
+      },
+      name: volume,
     })
     const config = {
       compose: "services:\n  web:\n    image: nginx:alpine\n",
@@ -1570,6 +1614,8 @@ describe("rolling deployments", () => {
     const app = await deploy(harness, config)
 
     expect(app.deployment).toMatchObject({ rolling: true, state: "succeeded" })
+    // Nothing the new copy's image holds is copied into it.
+    expect(fakeDocker.filledVolumes.has(volume)).toBe(false)
     await removeCompose()
   })
 
