@@ -42,7 +42,10 @@ import { recoverPromise } from "@/effect/promise"
 import { appRouteIdentifier, resolveAppRoute } from "@/lib/app-route"
 import type { ServerAction } from "@/lib/instance-power-state"
 import { appDestinations } from "@/lib/navigation-destinations"
-import { appDirectoryQueryOptions } from "@/lib/query-options"
+import {
+  appDirectoryQueryOptions,
+  appWebRoutesQueryOptions,
+} from "@/lib/query-options"
 import { deployApp, runAppAction } from "@/server/apps"
 
 export const AppWorkspaceShell = React.memo(function AppWorkspaceShell({
@@ -239,10 +242,7 @@ const AppWorkspaceHeader = React.memo(function AppWorkspaceHeader({
             />
             <WorkspaceMetaSeparator />
           </span>
-          <WorkspaceCopyValueButton
-            label="internal address"
-            value={app.hostname}
-          />
+          <AppHeaderAddress app={app} />
         </WorkspaceIdentity>
       }
       actions={
@@ -255,6 +255,23 @@ const AppWorkspaceHeader = React.memo(function AppWorkspaceHeader({
     />
   )
 })
+
+// The app's first domain, where people reach it, or its address inside the
+// Relay's network when it has none.
+function AppHeaderAddress({ app }: { app: App }) {
+  const route = useQuery({
+    ...appWebRoutesQueryOptions(app.relayId, app.id),
+    select: (state) => state.routes[0],
+  }).data
+  return route ? (
+    <WorkspaceCopyValueButton
+      label="domain"
+      value={`${route.hostname}${route.path ?? ""}`}
+    />
+  ) : (
+    <WorkspaceCopyValueButton label="internal address" value={app.hostname} />
+  )
+}
 
 function AppPowerControls({
   onError,
