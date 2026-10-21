@@ -44,6 +44,8 @@ const historyChunk = 25_000
 // hundred thousand made-up lines mclo.gs has no use for.
 const shareContent = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 const streamInterval = 700
+// How long the console streams with nobody touching it.
+const idleLimit = 2 * 60_000
 
 // Hearth's console page, reading a simulated server's output: a long history,
 // new lines while it runs, and replies to a few commands.
@@ -147,13 +149,25 @@ export default function ConsoleView({
     }
   }, [log, publish, statsStore])
 
-  // New output arrives while the server runs and the console is on screen.
+  // New output arrives while the server runs and the console is on screen,
+  // until nobody has touched it for a while. Every line stays, so each one
+  // costs a little more to show; a page left open stops adding them. Any
+  // interaction, scrolling back to it, or starting the server resumes it.
+  const wakeRef = React.useRef<() => void>(undefined)
   React.useEffect(() => {
     const section = sectionRef.current
     if (!section) return
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return
     let timer: number | undefined
+    let visible = false
+    let lastActive = performance.now()
+    function schedule() {
+      window.clearTimeout(timer)
+      timer = window.setTimeout(tick, streamInterval)
+    }
     function tick() {
+      timer = undefined
+      if (performance.now() - lastActive > idleLimit) return
       if (
         runningRef.current &&
         linesRef.current.length >= historyLines &&
@@ -163,18 +177,35 @@ export default function ConsoleView({
         if (Math.random() < 0.35) added.push(log.next())
         append(added)
       }
-      timer = window.setTimeout(tick, streamInterval)
+      schedule()
+    }
+    function wake() {
+      lastActive = performance.now()
+      if (visible && timer === undefined) schedule()
+    }
+    wakeRef.current = wake
+    const activity = ["pointerdown", "pointermove", "keydown", "wheel"]
+    for (const type of activity) {
+      section.addEventListener(type, wake, { passive: true })
     }
     const observer = new IntersectionObserver(([entry]) => {
+      visible = entry?.isIntersecting ?? false
       window.clearTimeout(timer)
-      if (entry?.isIntersecting) timer = window.setTimeout(tick, streamInterval)
+      timer = undefined
+      if (visible) wake()
     })
     observer.observe(section)
     return () => {
       observer.disconnect()
+      for (const type of activity) section.removeEventListener(type, wake)
       window.clearTimeout(timer)
+      wakeRef.current = undefined
     }
   }, [append, log])
+
+  React.useEffect(() => {
+    wakeRef.current?.()
+  }, [running])
 
   return (
     <section
