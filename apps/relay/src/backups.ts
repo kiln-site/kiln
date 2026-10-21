@@ -53,7 +53,10 @@ import {
 import { createEncryptedPlatformBackup } from "./platform-backups.js"
 import { RelayBackupError } from "./effect/errors.js"
 import { promiseEffect, recoverPromise } from "./effect/promise.js"
-import { RelayStateStore } from "./effect/state.js"
+import {
+  RelayStateStore,
+  type ScheduledBackupPrune,
+} from "./effect/state.js"
 import { LaneRejectedError } from "./operation-lanes.js"
 import type { OperationLanes } from "./operation-lanes.js"
 import { backupTaskLocks } from "./operation-plans.js"
@@ -68,6 +71,7 @@ import {
   backupArchivePath,
   backupDestinationFor,
   backupDirectoryPath,
+  resticRepositoryString,
 } from "./backups/destinations/index.js"
 import {
   installPreparedInstanceRestore,
@@ -81,6 +85,7 @@ import {
 import {
   createResticDriver,
   requiredRepositoryPassword,
+  RESTIC_EXIT_REPOSITORY_MISSING,
   resticDriverLocation,
   resticRepositoryPath,
   resticSnapshotSelector,
@@ -97,7 +102,6 @@ const BACKUP_TIMEOUT_REASON =
 const EXPORT_SWEEP_INTERVAL = "1 hour"
 const RESTIC_CACHE_CLEANUP_TIMEOUT_MS = 30_000
 const RESTIC_RECOVERY_TIMEOUT_MS = 30_000
-const RESTIC_RECOVERY_PRUNE_TIMEOUT_MS = 30_000
 const DEFAULT_EXCLUDES = [
   ".DS_Store",
   "Thumbs.db",
@@ -638,40 +642,35 @@ export class BackupManager {
           deleteUpdatedAt = Math.max(Date.now(), deleteUpdatedAt + 1)
           return deleteUpdatedAt
         }
-        const result =
+        const { prune, result } =
           task.input.destination.kind === "restic"
             ? yield* runResticForget(
                 this.#config,
                 this.#restic,
                 task.input,
-                (progress) =>
-                  this.#state.updateBackupTaskProgress(
-                    task.taskId,
-                    progress.completed,
-                    progress.total || null,
-                    progress.phase,
-                    progress.currentPath,
-                    progress.currentArtifactId,
-                    Date.now()
-                  ),
-                createSignal,
-                () => createSignal
+                createSignal
               )
-            : yield* deleteBackupArtifacts(
-                this.#config,
-                task.input,
-                (currentArtifactId, progress) =>
-                  this.#state.updateBackupTaskOperationProgress(
-                    task.taskId,
-                    currentArtifactId,
-                    progress,
-                    nextDeleteUpdatedAt()
-                  )
-              )
+            : {
+                prune: undefined,
+                result: yield* deleteBackupArtifacts(
+                  this.#config,
+                  task.input,
+                  (currentArtifactId, progress) =>
+                    this.#state.updateBackupTaskOperationProgress(
+                      task.taskId,
+                      currentArtifactId,
+                      progress,
+                      nextDeleteUpdatedAt()
+                    )
+                ),
+              }
+        // The forgotten snapshot's data goes in one prune shared with the
+        // repository's other deletes; see `scheduleBackupPrune`.
         const completed = yield* this.#state.completeBackupTask(
           task.taskId,
           result,
-          nextDeleteUpdatedAt()
+          nextDeleteUpdatedAt(),
+          prune
         )
         if (!completed) {
           return yield* backupFailure(
@@ -877,6 +876,7 @@ export class BackupManager {
         input.artifactKind === "restic_snapshot" &&
         input.target.kind === "instance"
       ) {
+        const destination = input.destination
         const result = yield* runResticCreate(
           this.#config,
           this.#restic,
@@ -893,6 +893,23 @@ export class BackupManager {
               Date.now()
             ),
           createSignal
+        ).pipe(
+          // Data a failed backup uploaded belongs to no snapshot; prune it,
+          // unless storage or the repository itself refused the work, which
+          // a prune would hit too.
+          Effect.tapError((cause) =>
+            destination.repositoryPassword &&
+            !refusedByStorage(backupFailureCode(cause))
+              ? this.#state.scheduleBackupPrune(
+                  resticPruneFor(this.#config, {
+                    repository: destination.repository,
+                    repositoryPassword: destination.repositoryPassword,
+                    target: input.target,
+                  }),
+                  Date.now()
+                )
+              : Effect.void
+          )
         )
         const completed = yield* this.#state.completeBackupTask(
           task.taskId,
@@ -914,9 +931,11 @@ export class BackupManager {
                 target: input.target,
                 taskId: randomUUID(),
               },
-              () => Effect.succeed(false),
-              AbortSignal.timeout(RESTIC_RECOVERY_TIMEOUT_MS),
-              () => AbortSignal.timeout(RESTIC_RECOVERY_PRUNE_TIMEOUT_MS)
+              AbortSignal.timeout(RESTIC_RECOVERY_TIMEOUT_MS)
+            ).pipe(
+              Effect.flatMap(({ prune }) =>
+                this.#state.scheduleBackupPrune(prune, Date.now())
+              )
             )
           )
           if (Result.isFailure(cleaned)) {
@@ -1783,7 +1802,7 @@ async function rejectOverLimitSnapshot(
     signal,
     snapshotId: input.snapshotId,
   })
-  await pruneResticAfterRecovery(restic, input)
+  // The failed create queues the prune; see `scheduleBackupPrune`.
   throw backupTooLarge()
 }
 
@@ -1812,37 +1831,6 @@ async function forgetTaskSnapshotsAfterFailedCreate(
       snapshotId: snapshot.id,
     })
   }
-  if (snapshots.length > 0) await pruneResticAfterRecovery(restic, input)
-}
-
-async function pruneResticAfterRecovery(
-  restic: ResticDriver,
-  input: {
-    backupId: string
-    location: ResticDriverLocation
-    password: string
-    taskId: string
-  }
-): Promise<void> {
-  await Effect.runPromise(
-    Effect.tryPromise({
-      try: () =>
-        restic.prune({
-          location: input.location,
-          password: input.password,
-          signal: AbortSignal.timeout(RESTIC_RECOVERY_PRUNE_TIMEOUT_MS),
-        }),
-      catch: (cause) => cause,
-    }).pipe(
-      Effect.catch((cause) =>
-        Effect.logError("Could not prune restic recovery data", {
-          backupId: input.backupId,
-          cause,
-          taskId: input.taskId,
-        })
-      )
-    )
-  )
 }
 
 function runResticRestore(
@@ -1946,15 +1934,15 @@ function runResticRestore(
   )
 }
 
+/**
+ * Forgets a backup's restic snapshot. Its data stays in the repository
+ * until the returned prune runs.
+ */
 function runResticForget(
   config: RelayConfig,
   restic: ResticDriver,
   input: BackupDeleteTaskInput & { kind: "delete" },
-  updateProgress: (
-    progress: BackupProgress
-  ) => ReturnType<RelayStateStore["Service"]["updateBackupTaskProgress"]>,
-  signal: AbortSignal,
-  pruneSignal: () => AbortSignal
+  signal: AbortSignal
 ) {
   return Effect.gen(function* () {
     const destination = input.destination
@@ -2018,47 +2006,57 @@ function runResticForget(
             }),
     })
     yield* promiseEffect(() => removeBackupExport(config, input.backupId))
-    const pruned = yield* Effect.result(
-      runResticPrune(
-        config,
-        restic,
-        {
-          backupId: randomUUID(),
-          kind: "prune",
-          repository: destination.repository,
-          repositoryPassword: password,
-          target: input.target,
-          taskId: randomUUID(),
-        },
-        updateProgress,
-        pruneSignal()
-      )
-    )
-    if (Result.isFailure(pruned)) {
-      yield* Effect.logError(
-        "Could not prune restic after forgetting a snapshot",
-        {
-          backupId: input.backupId,
-          cause: pruned.failure,
-          taskId: input.taskId,
-        }
-      )
-    }
     return {
-      artifacts: input.destination.artifactId
-        ? [
-            {
-              artifactId: input.destination.artifactId,
-              error: null,
-              status: "deleted" as const,
-            },
-          ]
-        : undefined,
-      warnings: Result.isFailure(pruned)
-        ? ["The snapshot was deleted, but unused repository data remains"]
-        : [],
+      prune: resticPruneFor(config, {
+        repository: destination.repository,
+        repositoryPassword: password,
+        target: input.target,
+      }),
+      result: {
+        artifacts: input.destination.artifactId
+          ? [
+              {
+                artifactId: input.destination.artifactId,
+                error: null,
+                status: "deleted" as const,
+              },
+            ]
+          : undefined,
+        warnings: [],
+      },
     }
   })
+}
+
+function refusedByStorage(code: BackupFailureCode | null): boolean {
+  return (
+    code !== null &&
+    (code.startsWith("storage_") || code.startsWith("repository_"))
+  )
+}
+
+/** A prune of one restic repository, to queue with `scheduleBackupPrune`. */
+function resticPruneFor(
+  config: RelayConfig,
+  input: {
+    repository: ResticRepositoryLocation
+    repositoryPassword: string
+    target: BackupTaskInput["target"]
+  }
+): ScheduledBackupPrune {
+  return {
+    input: {
+      backupId: randomUUID(),
+      kind: "prune",
+      repository: input.repository,
+      repositoryPassword: input.repositoryPassword,
+      target: input.target,
+      taskId: randomUUID(),
+    },
+    repositoryKey: resticRepositoryString(
+      resticDriverLocation(config, input.target.id, input.repository)
+    ),
+  }
 }
 
 function runResticPrune(
@@ -2115,6 +2113,12 @@ function runResticPrune(
               cause,
             }),
     }).pipe(
+      // Removed while the prune waited, as when its server was deleted:
+      // nothing is left to prune.
+      Effect.catchIf(
+        (cause) => cause.exitCode === RESTIC_EXIT_REPOSITORY_MISSING,
+        () => Effect.void
+      ),
       Effect.ensuring(Fiber.interrupt(progressFiber)),
       Effect.ensuring(
         cleanupResticCache(config, restic, {

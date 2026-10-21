@@ -328,11 +328,20 @@ expire after five minutes and are swept on Relay startup.
 Delete runs `restic forget` for the cataloged snapshot, or — when a failed
 create never recorded a snapshot ID — forgets snapshots tagged
 `task:<createTaskId>`. A missing snapshot is treated as a successful forget.
-Relay then self-enqueues an internal `prune` task that Hearth never lists.
-Prune on S3 rereads packs and rewrites the repository, so it costs bandwidth.
+The delete completes once the snapshot is forgotten, and in the same journal
+transaction Relay queues an internal `prune` task that Hearth never lists,
+unless one for that repository is already waiting. A prune waits while
+deletes are queued, so deleting many backups of a server runs one prune after
+the last delete; it doesn't wait behind later creates or restores, so space
+is reclaimed even on a busy Relay. Prune on S3 rereads packs and rewrites
+the repository, so it costs bandwidth. A failed or cancelled create also
+queues a prune for data it uploaded without saving a snapshot, or for a
+snapshot it forgot for exceeding the size limit, unless the storage or
+repository refused the work, which a prune would hit too. Recovery never
+prunes inside the create task itself.
 Ordinary snapshot deletion never deletes the repository row; an empty repo is
-the dedup base for later backups and costs a few KiB. A straggling internal
-prune after the repo has been purged simply fails; it is internal and benign.
+the dedup base for later backups and costs a few KiB. A prune whose
+repository was removed while it waited has nothing to do and succeeds.
 
 restic writes a lock file before every command, reads included. When storage
 refuses that write, such as a bucket at its provider's storage cap or a

@@ -852,6 +852,92 @@ describe("Relay state", () => {
     })
   )
 
+  stateTest("queues one prune per repository behind queued deletes", () =>
+    Effect.gen(function* () {
+      const store = yield* RelayStateStore
+      const target = { id: "instance-a", kind: "instance" as const }
+      const deletion = (index: number): BackupTaskInput => ({
+        backupId: `42000000-0000-4000-8000-00000000000${index}`,
+        destination: {
+          kind: "restic",
+          repository: { kind: "local" },
+          repositoryPassword: "repo-secret",
+          snapshotId: `abcdef1${index}`,
+        },
+        kind: "delete",
+        target,
+        taskId: `42000000-0000-4000-8000-00000000001${index}`,
+      })
+      const prune = (index: number) => ({
+        input: {
+          backupId: `42000000-0000-4000-8000-00000000002${index}`,
+          kind: "prune" as const,
+          repository: { kind: "local" as const },
+          repositoryPassword: "repo-secret",
+          target,
+          taskId: `42000000-0000-4000-8000-00000000003${index}`,
+        },
+        repositoryKey: "/data/restic/instance/instance-a",
+      })
+      yield* store.enqueueBackupTask(deletion(1), 500)
+      yield* store.enqueueBackupTask(deletion(2), 501)
+      for (const [index, now] of [
+        [1, 510],
+        [2, 520],
+      ] as const) {
+        const claimed = yield* store.claimNextBackupTask(now)
+        assert.strictEqual(claimed?.taskId, deletion(index).taskId)
+        yield* store.completeBackupTask(
+          deletion(index).taskId,
+          { warnings: [] },
+          now + 1,
+          prune(index)
+        )
+      }
+      // A delete queued after the prune still runs first.
+      yield* store.enqueueBackupTask(deletion(3), 530)
+      assert.strictEqual(
+        (yield* store.claimNextBackupTask(540))?.taskId,
+        deletion(3).taskId
+      )
+      yield* store.completeBackupTask(
+        deletion(3).taskId,
+        { warnings: [] },
+        541,
+        prune(3)
+      )
+      const prunes = (yield* store.listBackupTasks()).filter(
+        (task) => task.kind === "prune"
+      )
+      assert.deepStrictEqual(
+        prunes.map((task) => task.taskId),
+        [prune(1).input.taskId]
+      )
+      // Other work queued after the prune waits its turn behind it.
+      const create: BackupTaskInput = {
+        artifactKind: "restic_snapshot",
+        backupId: "42000000-0000-4000-8000-000000000041",
+        destination: {
+          kind: "restic",
+          repository: { kind: "local" },
+          repositoryPassword: "repo-secret",
+        },
+        exclude: [],
+        kind: "create",
+        maxBytes: null,
+        mode: "incremental",
+        reason: "manual",
+        target,
+        taskId: "42000000-0000-4000-8000-000000000051",
+      }
+      yield* store.enqueueBackupTask(create, 545)
+      assert.strictEqual(
+        (yield* store.claimNextBackupTask(550))?.taskId,
+        prune(1).input.taskId
+      )
+    })
+  )
+
   stateTest("scrubs repository passwords from terminal journal rows", () =>
     Effect.gen(function* () {
       const store = yield* RelayStateStore

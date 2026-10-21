@@ -42,7 +42,7 @@ const RESTIC_ENV_ALLOWLIST = [
 // restic saved the snapshot but couldn't read some of its source files.
 const RESTIC_EXIT_INCOMPLETE = 3
 const MAX_UNREADABLE_FILE_WARNINGS = 25
-const RESTIC_EXIT_REPOSITORY_MISSING = 10
+export const RESTIC_EXIT_REPOSITORY_MISSING = 10
 const RESTIC_EXIT_WRONG_PASSWORD = 12
 
 export type ResticProgress = {
