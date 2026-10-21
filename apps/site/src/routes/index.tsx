@@ -11,8 +11,10 @@ import {
 
 import { BrickMark, officialBricks } from "~/components/brick-mark"
 import { CyclingWord } from "~/components/cycling-word"
+import { ComingSoon } from "~/components/coming-soon"
 import { ClientDemo } from "~/components/demos/client-demo"
 import { signUpUrl } from "~/lib/plans"
+import { comingSoon } from "~/lib/coming-soon"
 import { newTab } from "~/lib/new-tab"
 import { useSiteConfig } from "~/lib/use-site-config"
 
@@ -65,18 +67,22 @@ function Hero() {
               back up everything on them from your browser.
             </p>
             <div className="mt-7 flex flex-wrap gap-3">
-              <Button asChild className="h-11 px-5 text-[0.9375rem]">
-                <a href={signUpUrl(hearthUrl)}>Get started</a>
-              </Button>
-              <Button
-                asChild
-                variant="outline"
-                className="h-11 px-5 text-[0.9375rem]"
-              >
-                <a href={docsUrl} {...newTab}>
-                  Read the docs
-                </a>
-              </Button>
+              <ComingSoon soon={comingSoon.signUp} label="Get started">
+                <Button asChild className="h-11 px-5 text-[0.9375rem]">
+                  <a href={signUpUrl(hearthUrl)}>Get started</a>
+                </Button>
+              </ComingSoon>
+              <ComingSoon soon={comingSoon.docs} label="Read the docs">
+                <Button
+                  asChild
+                  variant="outline"
+                  className="h-11 px-5 text-[0.9375rem]"
+                >
+                  <a href={docsUrl} {...newTab}>
+                    Read the docs
+                  </a>
+                </Button>
+              </ComingSoon>
             </div>
           </div>
         </div>
@@ -381,11 +387,13 @@ function SelfHost() {
             machines stay yours.
           </SectionHeading>
           <div className="mt-8 flex flex-wrap gap-3">
-            <Button asChild className="h-11 px-5 text-[0.9375rem]">
-              <a href={docsUrl} {...newTab}>
-                Install Kiln
-              </a>
-            </Button>
+            <ComingSoon soon={comingSoon.docs} label="Install Kiln">
+              <Button asChild className="h-11 px-5 text-[0.9375rem]">
+                <a href={docsUrl} {...newTab}>
+                  Install Kiln
+                </a>
+              </Button>
+            </ComingSoon>
             <Button
               asChild
               variant="outline"

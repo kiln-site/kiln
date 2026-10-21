@@ -4,12 +4,14 @@ import { Check } from "lucide-react"
 import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
 
+import { ComingSoon } from "~/components/coming-soon"
 import {
   type BillingInterval,
   type Plan,
   planSignupUrl,
   plans,
 } from "~/lib/plans"
+import { comingSoon } from "~/lib/coming-soon"
 import { newTab } from "~/lib/new-tab"
 import { useSiteConfig } from "~/lib/use-site-config"
 
@@ -164,21 +166,32 @@ function PlanColumn({
             : `Or $${plan.yearly} a year`}
       </p>
 
-      <Button
-        asChild
-        variant={recommended ? "default" : "outline"}
-        className="mt-6 h-11 w-full text-[0.9375rem]"
-      >
-        {free ? (
-          <a href={new URL("/self-hosting", docsUrl).toString()} {...newTab}>
-            Read the install guide
-          </a>
-        ) : (
-          <a href={planSignupUrl(hearthUrl, plan.id, interval)}>
-            Choose {plan.name}
-          </a>
-        )}
-      </Button>
+      <div className="mt-6">
+        <ComingSoon
+          soon={free ? comingSoon.docs : comingSoon.paidPlans}
+          label={free ? "Read the install guide" : `Choose ${plan.name}`}
+          className="flex"
+        >
+          <Button
+            asChild
+            variant={recommended ? "default" : "outline"}
+            className="h-11 w-full text-[0.9375rem]"
+          >
+            {free ? (
+              <a
+                href={new URL("/self-hosting", docsUrl).toString()}
+                {...newTab}
+              >
+                Read the install guide
+              </a>
+            ) : (
+              <a href={planSignupUrl(hearthUrl, plan.id, interval)}>
+                {comingSoon.paidPlans ? "Coming soon" : `Choose ${plan.name}`}
+              </a>
+            )}
+          </Button>
+        </ComingSoon>
+      </div>
 
       <ul className="type-support mt-6 space-y-2.5 border-t border-border pt-5">
         {plan.features.map((feature) => (

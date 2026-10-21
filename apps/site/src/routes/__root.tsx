@@ -5,6 +5,7 @@ import {
   Scripts,
   createRootRoute,
 } from "@tanstack/react-router"
+import { TooltipProvider } from "@workspace/ui/components/tooltip"
 import { geistLatin, jetBrainsMonoLatin } from "@workspace/ui/lib/font-assets"
 
 import siteCss from "~/styles.css?url"
@@ -72,7 +73,7 @@ function RootDocument({ children }: { children: ReactNode }) {
 
 function RootLayout() {
   return (
-    <>
+    <TooltipProvider delayDuration={150}>
       <a
         href="#main"
         className="sr-only z-50 bg-primary px-3 py-2 text-primary-foreground focus:not-sr-only focus:fixed focus:top-3 focus:left-3"
@@ -84,6 +85,6 @@ function RootLayout() {
         <Outlet />
       </main>
       <SiteFooter />
-    </>
+    </TooltipProvider>
   )
 }

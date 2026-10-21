@@ -6,7 +6,9 @@ import { Button } from "@workspace/ui/components/button"
 
 import { socialLinks } from "@/lib/social-links"
 
+import { ComingSoon } from "~/components/coming-soon"
 import { KilnMark } from "~/components/kiln-mark"
+import { comingSoon } from "~/lib/coming-soon"
 import { signInUrl, signUpUrl } from "~/lib/plans"
 import { newTab } from "~/lib/new-tab"
 import { useSiteConfig } from "~/lib/use-site-config"
@@ -30,9 +32,11 @@ export function SiteHeader() {
 
         <nav aria-label="Main" className="hidden items-center gap-1 md:flex">
           <HeaderLink to="/pricing">Pricing</HeaderLink>
-          <HeaderAnchor href={docsUrl} {...newTab}>
-            Docs
-          </HeaderAnchor>
+          <ComingSoon soon={comingSoon.docs} label="Docs">
+            <HeaderAnchor href={docsUrl} {...newTab}>
+              Docs
+            </HeaderAnchor>
+          </ComingSoon>
           <HeaderAnchor href={socialLinks.github.href} {...newTab}>
             GitHub
           </HeaderAnchor>
@@ -46,9 +50,11 @@ export function SiteHeader() {
           >
             <a href={signInUrl(hearthUrl)}>Log in</a>
           </Button>
-          <Button asChild className="h-9 px-3.5">
-            <a href={signUpUrl(hearthUrl)}>Sign up</a>
-          </Button>
+          <ComingSoon soon={comingSoon.signUp} label="Sign up">
+            <Button asChild className="h-9 px-3.5">
+              <a href={signUpUrl(hearthUrl)}>Sign up</a>
+            </Button>
+          </ComingSoon>
           <Button
             variant="ghost"
             size="icon-lg"
@@ -73,9 +79,11 @@ export function SiteHeader() {
             <MobileLink to="/pricing" onNavigate={() => setMenuOpen(false)}>
               Pricing
             </MobileLink>
-            <MobileAnchor href={docsUrl} {...newTab}>
-              Docs
-            </MobileAnchor>
+            <ComingSoon soon={comingSoon.docs} label="Docs" className="flex">
+              <MobileAnchor href={docsUrl} {...newTab}>
+                Docs
+              </MobileAnchor>
+            </ComingSoon>
             <MobileAnchor href={socialLinks.github.href} {...newTab}>
               GitHub
             </MobileAnchor>
