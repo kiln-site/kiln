@@ -230,7 +230,7 @@ function Relays() {
             fallback={
               <DemoFrame
                 label="Opening the map…"
-                className="h-[34rem] sm:h-[44rem]"
+                className="h-[30rem] sm:h-[38rem]"
               />
             }
           >
