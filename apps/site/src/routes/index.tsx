@@ -56,28 +56,33 @@ function Hero() {
             </span>
           </h1>
           <div className="lg:col-span-4 lg:pb-2">
-            <p className="site-lede max-w-md text-muted-foreground">
-              Put a Relay on each machine you own, then start, watch, edit, and
-              back up everything on them from your browser.
+            <p className="site-lede max-w-sm text-muted-foreground">
+              Put a Relay on any machine you own and run it all from your
+              browser.
             </p>
-            <div className="mt-7 flex flex-wrap gap-3">
-              <ComingSoon soon={comingSoon.signUp} label="Get started">
+            {comingSoon.signUp ? (
+              // Nothing to click until sign-up opens.
+              <p className="type-label mt-6 inline-flex h-11 items-center border border-border bg-card px-5 text-[0.9375rem] text-muted-foreground">
+                Coming soon
+              </p>
+            ) : (
+              <div className="mt-7 flex flex-wrap gap-3">
                 <Button asChild className="h-11 px-5 text-[0.9375rem]">
                   <a href={signUpUrl(hearthUrl)}>Get started</a>
                 </Button>
-              </ComingSoon>
-              <ComingSoon soon={comingSoon.docs} label="Read the docs">
-                <Button
-                  asChild
-                  variant="outline"
-                  className="h-11 px-5 text-[0.9375rem]"
-                >
-                  <a href={docsUrl} {...newTab}>
-                    Read the docs
-                  </a>
-                </Button>
-              </ComingSoon>
-            </div>
+                <ComingSoon soon={comingSoon.docs} label="Read the docs">
+                  <Button
+                    asChild
+                    variant="outline"
+                    className="h-11 px-5 text-[0.9375rem]"
+                  >
+                    <a href={docsUrl} {...newTab}>
+                      Read the docs
+                    </a>
+                  </Button>
+                </ComingSoon>
+              </div>
+            )}
           </div>
         </div>
 
