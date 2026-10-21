@@ -25,6 +25,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@workspace/ui/components/popover"
+import { useIsMobile } from "@workspace/ui/hooks/use-mobile"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { EditorTooltip } from "@/components/files/editor-tooltip"
@@ -459,6 +460,8 @@ function DemoEditor({
   wrap: boolean
 }) {
   const ignoreSearch = React.useCallback(() => {}, [])
+  // Hearth's defaults: 16px on phones, so iOS doesn't zoom in on focus.
+  const fontSize = useIsMobile() ? 16 : 12
   const encoding = demoFiles[path]?.encoding
   const bytes = React.useMemo(
     () => new TextEncoder().encode(file.saved).length,
@@ -470,7 +473,7 @@ function DemoEditor({
         <SyntaxCodeEditor
           ariaLabel={`Edit ${path}`}
           disabled={false}
-          fontSize={13}
+          fontSize={fontSize}
           onChange={onChange}
           onSearchOpenChange={ignoreSearch}
           originalValue={file.saved}
