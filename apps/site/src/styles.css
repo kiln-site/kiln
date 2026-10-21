@@ -6,14 +6,17 @@
 @source "../../web/src/components/files/file-viewer-toolbar.tsx";
 @source "../../web/src/components/hearth-mark.tsx";
 @source "../../web/src/components/identity-name.tsx";
+@source "../../web/src/components/infra-map-canvas.tsx";
 @source "../../web/src/components/instance-kind-icon.tsx";
 @source "../../web/src/components/overlay-notice.tsx";
 @source "../../web/src/components/resource-history-chart.tsx";
 @source "../../web/src/components/resource-meters.tsx";
+@source "../../web/src/components/status-indicator.tsx";
 @source "../../web/src/components/syntax-code-editor.tsx";
 @source "../../web/src/components/workspace-frame.tsx";
 @source "../../web/src/components/workspace-line-wrap-button.tsx";
 @source "../../web/src/components/workspace-power-controls.tsx";
+@source "../../web/src/components/workspace-summary-card.tsx";
 @source "../../web/src/components/workspace-toolbar-tooltip.tsx";
 
 /*

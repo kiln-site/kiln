@@ -6,7 +6,6 @@ import { Button } from "@workspace/ui/components/button"
 import {
   AppKindIcon,
   DatabaseKindIcon,
-  RelayKindIcon,
   ServerKindIcon,
 } from "@/components/instance-kind-icon"
 
@@ -17,6 +16,9 @@ import { signUpUrl } from "~/lib/plans"
 import { useSiteConfig } from "~/lib/use-site-config"
 
 const HearthDemo = React.lazy(() => import("~/components/demos/hearth-demo"))
+const OverviewDemo = React.lazy(
+  () => import("~/components/demos/overview-demo")
+)
 
 export const Route = createFileRoute("/")({
   component: HomePage,
@@ -76,7 +78,14 @@ function Hero() {
         </div>
 
         <figure className="mt-12 sm:mt-16">
-          <ClientDemo fallback={<DemoFrame label="Opening Hearth…" />}>
+          <ClientDemo
+            fallback={
+              <div className="flex flex-col gap-3">
+                <DemoFrame label="Opening Hearth…" className="h-[51rem]" />
+                <div className="h-4" />
+              </div>
+            }
+          >
             <HearthDemo />
           </ClientDemo>
           <figcaption className="type-support mt-3 max-w-xl text-muted-foreground">
@@ -91,14 +100,13 @@ function Hero() {
   )
 }
 
-// Holds the demo's place while it loads: its window, and the line under it.
-function DemoFrame({ label }: { label: string }) {
+// Holds a demo's place while it loads.
+function DemoFrame({ className, label }: { className: string; label: string }) {
   return (
-    <div className="flex flex-col gap-3">
-      <div className="grid h-[51rem] place-items-center border border-border bg-card">
-        <p className="type-support text-muted-foreground">{label}</p>
-      </div>
-      <div className="h-4" />
+    <div
+      className={`grid place-items-center border border-border bg-card ${className}`}
+    >
+      <p className="type-support text-muted-foreground">{label}</p>
     </div>
   )
 }
@@ -207,41 +215,6 @@ function KindFacts({ facts }: { facts: Array<string> }) {
   )
 }
 
-const relays = [
-  {
-    name: "home-lab",
-    place: "The PC under the desk",
-    instances: [
-      { kind: "server", name: "survival-smp" },
-      { kind: "server", name: "creative" },
-      { kind: "database", name: "luckperms-db" },
-    ],
-  },
-  {
-    name: "fsn1-dedicated",
-    place: "A rented server in Falkenstein",
-    instances: [
-      { kind: "server", name: "velocity-proxy" },
-      { kind: "app", name: "community-site" },
-      { kind: "database", name: "postgres" },
-    ],
-  },
-  {
-    name: "garage-nuc",
-    place: "A spare mini PC",
-    instances: [
-      { kind: "server", name: "palworld" },
-      { kind: "app", name: "discord-bot" },
-    ],
-  },
-] as const
-
-const kindIcons = {
-  app: AppKindIcon,
-  database: DatabaseKindIcon,
-  server: ServerKindIcon,
-}
-
 function Relays() {
   return (
     <section className="border-t border-border">
@@ -252,59 +225,22 @@ function Relays() {
           streams consoles and files straight from it.
         </SectionHeading>
 
-        <div className="mt-14">
-          <div className="flex items-center gap-3 border border-primary/45 bg-card px-5 py-4 md:mx-auto md:w-fit">
-            <span className="text-sm font-semibold">Hearth</span>
-            <span className="type-meta text-muted-foreground">
-              Your panel, in the browser
-            </span>
-          </div>
-          <ol className="relative mt-6 grid gap-4 border-l border-border pl-5 md:mt-0 md:grid-cols-3 md:gap-6 md:border-l-0 md:pt-10 md:pl-0">
-            <span
-              aria-hidden="true"
-              className="absolute top-0 left-1/2 hidden h-5 w-px bg-border md:block"
-            />
-            <span
-              aria-hidden="true"
-              className="absolute top-5 right-[calc((100%-3rem)/6)] left-[calc((100%-3rem)/6)] hidden h-px bg-border md:block"
-            />
-            {relays.map((relay) => (
-              <li key={relay.name} className="relative">
-                <span
-                  aria-hidden="true"
-                  className="absolute -top-5 left-1/2 hidden h-5 w-px bg-border md:block"
-                />
-                <div className="border border-border bg-card">
-                  <div className="flex items-center gap-2.5 border-b px-4 py-3">
-                    <RelayKindIcon className="size-4" />
-                    <span className="text-sm font-medium">{relay.name}</span>
-                    <span
-                      aria-label="Connected"
-                      className="ml-auto size-1.5 bg-emerald-400"
-                    />
-                  </div>
-                  <p className="type-meta px-4 pt-3 text-muted-foreground">
-                    {relay.place}
-                  </p>
-                  <ul className="space-y-2 px-4 pt-3 pb-4">
-                    {relay.instances.map((instance) => {
-                      const Icon = kindIcons[instance.kind]
-                      return (
-                        <li
-                          key={instance.name}
-                          className="type-code flex items-center gap-2 text-foreground"
-                        >
-                          <Icon className="size-3.5" />
-                          {instance.name}
-                        </li>
-                      )
-                    })}
-                  </ul>
-                </div>
-              </li>
-            ))}
-          </ol>
-        </div>
+        <figure className="mt-14">
+          <ClientDemo
+            fallback={
+              <DemoFrame
+                label="Opening the map…"
+                className="h-[34rem] sm:h-[44rem]"
+              />
+            }
+          >
+            <OverviewDemo />
+          </ClientDemo>
+          <figcaption className="type-support mt-3 max-w-xl text-muted-foreground">
+            Hearth’s map of a fleet. Choose a Relay to see what runs on it and
+            how it connects, or drag to look around.
+          </figcaption>
+        </figure>
       </div>
     </section>
   )
