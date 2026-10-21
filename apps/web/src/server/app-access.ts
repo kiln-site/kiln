@@ -1,7 +1,12 @@
 import type { RowDataPacket } from "mysql2/promise"
+import { appConfigSchema, appMountsSchema } from "@workspace/contracts"
+import type { AppConfig, AppMount } from "@workspace/contracts"
 import { Effect } from "effect"
 
-import { loadAppConfigEffect } from "@/effect/managed-apps"
+import {
+  loadAppConfigEffect,
+  updateAppConfigEffect,
+} from "@/effect/managed-apps"
 import { resolveMinecraftProfileEffect } from "@/effect/minecraft-profile"
 import { ownerDisplayName } from "@/effect/relay-owners"
 import { runAppEffect } from "@/effect/runtime"
@@ -27,7 +32,14 @@ export async function authorizedApp(
   data: { appId: string; relayId: string },
   permission: AccessPermission
 ) {
-  const user = await requireEligibleResourceUser()
+  return authorizedAppFor(await requireEligibleResourceUser(), data, permission)
+}
+
+async function authorizedAppFor(
+  user: AuthenticatedUser,
+  data: { appId: string; relayId: string },
+  permission: AccessPermission
+) {
   const relay = await requiredRelay(data.relayId)
   await requireRelayPermission({ permission, relayId: data.relayId, user })
   const app = await runAppEffect(
@@ -36,6 +48,101 @@ export async function authorizedApp(
   )
   if (!app) throw new Error("App not found")
   return { app, relay, user }
+}
+
+// What an edit may change. Databases change through the network, which also
+// connects running containers, and limits through their own update, which
+// applies them to running ones; everything else waits for the next
+// deployment. Mounts have no default, so an edit that leaves them out keeps
+// them.
+export const appConfigPatchSchema = appConfigSchema
+  .omit({ databaseIds: true, diskLimitBytes: true, serviceLimits: true })
+  .partial()
+  .extend({ mounts: appMountsSchema.optional() })
+
+// The app's configuration. Its environment and the files it mounts carry
+// secrets, so only people who can change the app see them.
+export async function getAppConfigHandler(
+  user: AuthenticatedUser,
+  data: { appId: string; relayId: string }
+): Promise<{ config: AppConfig; environmentHidden: boolean }> {
+  const { app } = await authorizedAppFor(user, data, "app.read")
+  const canManage = await Effect.runPromise(
+    Effect.tryPromise({
+      try: () =>
+        requireRelayPermission({
+          permission: "app.manage",
+          relayId: data.relayId,
+          user,
+        }),
+      catch: (cause) => cause,
+    }).pipe(
+      Effect.as(true),
+      Effect.orElseSucceed(() => false)
+    )
+  )
+  return {
+    config: canManage
+      ? app.config
+      : {
+          ...app.config,
+          environment: "",
+          mounts: app.config.mounts.map((mount) =>
+            mount.source.type === "file"
+              ? { ...mount, source: { ...mount.source, content: "" } }
+              : mount
+          ),
+        },
+    environmentHidden: !canManage,
+  }
+}
+
+/**
+ * Saves only the fields an edit changes, into the config saved now. A path
+ * on the node reaches anything on it, so mounting a new one takes the
+ * permission that edits the host's files.
+ */
+export async function updateAppConfigHandler(
+  user: AuthenticatedUser,
+  data: { appId: string; config: unknown; relayId: string }
+): Promise<AppConfig> {
+  const patch = appConfigPatchSchema.parse(data.config)
+  const { app } = await authorizedAppFor(user, data, "app.manage")
+  if (patch.mounts && mountsNewHostPath(app.config, patch.mounts)) {
+    await requireRelayPermission({
+      permission: "relay.files.write",
+      relayId: data.relayId,
+      user,
+    })
+  }
+  return runAppEffect(
+    "apps.config.save",
+    updateAppConfigEffect(data.relayId, data.appId, (current) =>
+      appConfigSchema.parse({ ...current, ...patch })
+    )
+  )
+}
+
+// Whether mounts mount a path on the node the saved config doesn't, in the
+// same place and as read-only.
+function mountsNewHostPath(
+  saved: AppConfig,
+  mounts: ReadonlyArray<AppMount>
+): boolean {
+  const key = (mount: AppMount) =>
+    mount.source.type === "host"
+      ? JSON.stringify([
+          mount.service,
+          mount.target,
+          mount.source.path,
+          mount.readOnly,
+        ])
+      : null
+  const existing = new Set(saved.mounts.map(key))
+  return mounts.some((mount) => {
+    const mounted = key(mount)
+    return mounted !== null && !existing.has(mounted)
+  })
 }
 
 export function hasAppPermission(

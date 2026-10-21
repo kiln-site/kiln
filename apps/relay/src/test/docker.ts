@@ -234,6 +234,11 @@ export class FakeDocker {
   /** Images whose health check fails once they start. */
   readonly unhealthyImages = new Set<string>()
   /**
+   * Anonymous volumes whose container was removed without them, as `docker
+   * rm` without `--volumes` leaves them on disk.
+   */
+  readonly danglingVolumes = new Set<string>()
+  /**
    * How a health-checked container of an image reports its health as it
    * runs: each entry holds from `afterMs` past its start.
    */
@@ -314,6 +319,7 @@ export class FakeDocker {
     this.imageConfigs.clear()
     this.imageTags.clear()
     this.unhealthyImages.clear()
+    this.danglingVolumes.clear()
     this.healthTimelines.clear()
     this.crashingImages.clear()
     this.programFailures.clear()
@@ -1192,7 +1198,11 @@ export class FakeDocker {
     }
   }
 
-  async #removeOne(reference: string, force: boolean): Promise<void> {
+  async #removeOne(
+    reference: string,
+    force: boolean,
+    volumes = false
+  ): Promise<void> {
     await this.#checkpoint("rm", reference)
     const container = this.#requiredContainer(reference)
     if (container.state.running && !force) {
@@ -1203,6 +1213,11 @@ export class FakeDocker {
     }
     this.#endExecs(container)
     this.containers.delete(container.id)
+    if (!volumes) {
+      for (const mount of container.mounts) {
+        if (mount.anonymous) this.danglingVolumes.add(mount.source)
+      }
+    }
     this.#appliedCheckpoint("rm", reference)
   }
 
@@ -1535,7 +1550,7 @@ export class FakeDocker {
       method === "DELETE" &&
       (parameters = route(/^\/containers\/([^/]+)$/u))
     ) {
-      await this.#removeOne(parameters[0] ?? "", flag("force"))
+      await this.#removeOne(parameters[0] ?? "", flag("force"), flag("v"))
       return json(204)
     }
     if (
@@ -1970,7 +1985,16 @@ export class FakeDocker {
         type: mount.Type === "volume" ? ("volume" as const) : ("bind" as const),
       })),
     ]
-    for (const destination of Object.keys(body.Volumes ?? {})) {
+    // Those it asks for, and those its image declares.
+    const imageVolumes = (
+      this.imageConfigs.get(body.Image) as
+        | { Volumes?: Record<string, object> }
+        | undefined
+    )?.Volumes
+    for (const destination of Object.keys({
+      ...body.Volumes,
+      ...imageVolumes,
+    })) {
       if (mounts.some((mount) => mount.destination === destination)) continue
       mounts.push({
         anonymous: true,

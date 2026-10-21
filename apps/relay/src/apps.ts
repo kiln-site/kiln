@@ -70,6 +70,7 @@ import { directoryApparentSizeEffect } from "./disk-usage.js"
 import {
   exclusive,
   laneKeys,
+  shared,
   type OperationLanes,
 } from "./operation-lanes.js"
 import { appLifecycleLocks } from "./operation-plans.js"
@@ -441,7 +442,20 @@ export class AppDriver {
           .run(
             {
               label: "app.deployment",
-              locks: appLifecycleLocks(input.appId),
+              // The volumes it mounts can't be deleted before its containers
+              // mount them.
+              locks: [
+                ...appLifecycleLocks(input.appId),
+                ...[
+                  ...new Set(
+                    input.config.mounts.flatMap((mount) =>
+                      mount.source.type === "volume"
+                        ? [mount.source.volumeId]
+                        : []
+                    )
+                  ),
+                ].map((id) => shared(laneKeys.volume(id))),
+              ],
             },
             promiseEffect(() => this.#runDeployment(input, deployment))
           )
@@ -815,7 +829,11 @@ export class AppDriver {
       Effect.forEach(
         containers,
         ({ id }) =>
-          engine.removeContainer(id, { force: true, timeout: 90_000 }),
+          engine.removeContainer(id, {
+            force: true,
+            timeout: 90_000,
+            volumes: input.deleteData,
+          }),
         { concurrency: "unbounded", discard: true }
       )
     )
@@ -1067,7 +1085,7 @@ export class AppDriver {
           log(`Source: ${describeSource(input)}`)
           await this.#ensureResources(input.appId)
           const host = await this.#hostDataDirectory()
-          const mounts = await this.#configMounts(input, host)
+          const mounts = await this.#configMounts(input, deployment, host)
           const checkout =
             config.sourceType === "github" && input.github
               ? await traceRelayPromise(
@@ -1120,6 +1138,7 @@ export class AppDriver {
       )
     )
     await this.#cleanCheckouts(input.appId)
+    await this.#cleanMountFiles(input.appId)
     const seconds = ((Date.now() - startedAt) / 1_000).toFixed(1)
     const message = Result.isSuccess(outcome)
       ? null
@@ -1304,6 +1323,26 @@ export class AppDriver {
             container.labels[COMPOSE_PROJECT_LABEL] && container.deploymentId
               ? [container.deploymentId]
               : []
+          )
+        )
+        for (const entry of await readdir(root)) {
+          if (inUse.has(entry)) continue
+          await rm(join(root, entry), { force: true, recursive: true })
+        }
+      }).pipe(Effect.ignore)
+    )
+  }
+
+  // Keeps the files each deployment whose containers are left mounts,
+  // whether it succeeded or failed with the earlier ones kept; removes every
+  // other.
+  async #cleanMountFiles(appId: string) {
+    const root = this.#mountDirectory(appId)
+    await Effect.runPromise(
+      promiseEffect(async () => {
+        const inUse = new Set(
+          (await this.#appContainers(appId)).flatMap((container) =>
+            container.deploymentId ? [container.deploymentId] : []
           )
         )
         for (const entry of await readdir(root)) {
@@ -1686,10 +1725,16 @@ export class AppDriver {
     }
   }
 
+  // With its anonymous volumes, such as those its image declares: a
+  // container keeps nothing past its replacement but what the config mounts.
   async #removeContainer(container: string) {
     await docker(
       this.#engine
-        .removeContainer(container, { force: true, timeout: 90_000 })
+        .removeContainer(container, {
+          force: true,
+          timeout: 90_000,
+          volumes: true,
+        })
         .pipe(Effect.ignore)
     )
   }
@@ -2640,14 +2685,15 @@ export class AppDriver {
   }
 
   // The config's mounts as Docker takes them: volumes by their Docker name,
-  // and files written where the host can bind them. Files no mount names
-  // any longer are removed.
+  // and files written where the host can bind them, in a folder of the
+  // deployment's own, so the running containers' files stay as they are
+  // until it replaces them.
   async #configMounts(
     input: RelayDeployApp,
+    deployment: Deployment,
     host: string
   ): Promise<Array<ConfigMount>> {
-    const directory = this.#mountDirectory(input.appId)
-    const files = new Set<string>()
+    const directory = join(this.#mountDirectory(input.appId), deployment.id)
     const mounts: Array<ConfigMount> = []
     for (const mount of input.config.mounts) {
       const { readOnly, service, source, target } = mount
@@ -2682,24 +2728,20 @@ export class AppDriver {
         case "file":
           await mkdir(directory, { recursive: true })
           await writeFile(join(directory, mount.id), source.content)
-          files.add(mount.id)
           mounts.push({
             readOnly,
             service,
-            source: join(host, "app-mounts", input.appId, mount.id),
+            source: join(
+              host,
+              "app-mounts",
+              input.appId,
+              deployment.id,
+              mount.id
+            ),
             target,
             type: "bind",
           })
           break
-      }
-    }
-    const written = await recoverPromise(
-      () => readdir(directory),
-      (): Array<string> => []
-    )
-    for (const name of written) {
-      if (!files.has(name)) {
-        await rm(join(directory, name), { force: true, recursive: true })
       }
     }
     return mounts
