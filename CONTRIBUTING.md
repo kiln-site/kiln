@@ -47,7 +47,8 @@ stack, and worktree cleanup.
 4. Name branches `<type>/<short-kebab-case-task>` (for example,
    `fix/panel-disconnect` or `chore/repo-cleanup`), without personal or agent prefixes.
    Use a short, human PR title in `<type>(<scope>): <title>` format. Scopes are
-   `hearth`, `bricks`, `relay`, and `repo` for repo-wide changes.
+   `hearth`, `bricks`, `relay`, `marketing` for the kiln.site marketing site,
+   and `repo` for repo-wide changes.
 5. Use this description format:
 
    ```md
