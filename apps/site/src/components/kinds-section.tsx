@@ -41,7 +41,7 @@ export function KindsSection() {
       </Card>
       <Card
         icon={<BrandSvg mark={brandMarks.cloudflare} className="size-6" />}
-        title="Domains"
+        title="Domains and Auto SSL"
         visual={<VanityAddress />}
       >
         Connect Cloudflare and your DNS is set up automatically.
