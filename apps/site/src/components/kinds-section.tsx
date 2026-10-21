@@ -31,36 +31,56 @@ import { brandMarks, type BrandMarkDefinition } from "~/lib/brand-marks"
 // The pictures are illustrations, not Hearth's screens.
 export function KindsSection() {
   return (
-    <div className="mt-12 grid gap-px border border-border bg-border lg:grid-cols-2">
-      <Card
-        icon={<ServerKindIcon className="size-6" />}
-        title="Game servers"
-        visual={<BrickWall />}
+    <>
+      <div className="mt-12 grid gap-px border border-border bg-border lg:grid-cols-2">
+        <Card
+          icon={<ServerKindIcon className="size-6" />}
+          title="Game servers"
+          visual={<BrickWall />}
+        >
+          Start from a Brick
+          <a
+            href="#kinds-note"
+            aria-label="See note"
+            className="text-foreground no-underline"
+          >
+            *
+          </a>
+          . Kiln handles the rest.
+        </Card>
+        <Card
+          icon={<AppKindIcon className="size-6" />}
+          title="Apps"
+          visual={<DeployFlow />}
+        >
+          Kiln builds and deploys on every push with zero downtime.
+        </Card>
+        <Card
+          icon={<DatabaseKindIcon className="size-6" />}
+          title="Databases"
+          visual={<EngineRing />}
+        >
+          MySQL, Postgres, Redis, and more.
+        </Card>
+        <Card
+          icon={<BrandSvg mark={brandMarks.cloudflare} className="size-6" />}
+          title="Domains and Auto SSL"
+          visual={<VanityAddress />}
+        >
+          Connect Cloudflare and your DNS is set up automatically.
+        </Card>
+      </div>
+      <p
+        id="kinds-note"
+        className="type-meta mt-4 max-w-3xl text-muted-foreground/80"
       >
-        Start from a Brick. Kiln handles the rest.
-      </Card>
-      <Card
-        icon={<AppKindIcon className="size-6" />}
-        title="Apps"
-        visual={<DeployFlow />}
-      >
-        Kiln builds and deploys on every push with zero downtime.
-      </Card>
-      <Card
-        icon={<DatabaseKindIcon className="size-6" />}
-        title="Databases"
-        visual={<EngineRing />}
-      >
-        MySQL, Postgres, Redis, and more.
-      </Card>
-      <Card
-        icon={<BrandSvg mark={brandMarks.cloudflare} className="size-6" />}
-        title="Domains and Auto SSL"
-        visual={<VanityAddress />}
-      >
-        Connect Cloudflare and your DNS is set up automatically.
-      </Card>
-    </div>
+        * Games without an official Brick are shown as examples. Kiln is not
+        affiliated with or endorsed by the makers of any game or product shown.
+        Not an official Minecraft service. Not approved by or associated with
+        Mojang or Microsoft. All trademarks and logos belong to their respective
+        owners.
+      </p>
+    </>
   )
 }
 
