@@ -151,8 +151,10 @@ function decryptConfig(row: AppConfigRow) {
     catch: (cause) =>
       CredentialError.make({ operation: "decrypt_app_config", cause }),
   }).pipe(
+    // Fields apps no longer have, like the data mount and disk limit, are
+    // dropped from configs saved before.
     Effect.map((decrypted) =>
-      appConfigSchema.parse({
+      appConfigSchema.strip().parse({
         ...defaultAppConfig,
         ...(JSON.parse(decrypted.plaintext) as object),
       })

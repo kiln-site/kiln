@@ -3,10 +3,7 @@ import { randomUUID } from "node:crypto"
 import {
   relayAppGitHubV1Feature,
   relayAppDeploymentLogSchema,
-  relayAppLimitsV1Feature,
-  relayAppMountsV1Feature,
   relayAppSchema,
-  type AppConfig,
   type RelayApp,
   type RelayAppGitHubCheckout,
 } from "@workspace/contracts"
@@ -140,11 +137,6 @@ export const startAppDeploymentEffect = Effect.fn("Apps.deploy")(function* (
     triggeredBy: request.userId,
   }
   const deploy = Effect.gen(function* () {
-    const config = yield* Effect.try({
-      try: () => relayAppConfig(relay.id, app.config),
-      catch: (cause) =>
-        cause instanceof Error ? cause : new Error("The config can't deploy"),
-    })
     // Minted only once there's something to deploy.
     const checkout: RelayAppGitHubCheckout | null = github
       ? {
@@ -162,7 +154,7 @@ export const startAppDeploymentEffect = Effect.fn("Apps.deploy")(function* (
           "app.deploy",
           {
             appId: request.appId,
-            config,
+            config: app.config,
             ...(checkout && { github: checkout }),
             name: app.name,
           },
@@ -308,24 +300,6 @@ const githubCommit = Effect.fnUntraced(function* (
     ),
   }
 })
-
-// The config as the Relay takes it. A Relay without app limits or mounts
-// refuses their fields, so it gets the config without them, or none if it
-// would have to drop any.
-function relayAppConfig(relayId: string, config: AppConfig) {
-  const features = relayConnectionFeatures(relayId)
-  const { mounts, ...withoutMounts } = config
-  if (!features.has(relayAppMountsV1Feature) && mounts.length > 0) {
-    throw new Error("Update this Relay to deploy an app with volumes")
-  }
-  const sent = features.has(relayAppMountsV1Feature) ? config : withoutMounts
-  if (features.has(relayAppLimitsV1Feature)) return sent
-  const { diskLimitBytes, serviceLimits, ...rest } = sent
-  if (diskLimitBytes !== null || Object.keys(serviceLimits).length > 0) {
-    throw new Error("Update this Relay to deploy an app with limits")
-  }
-  return rest
-}
 
 const enabledRelay = Effect.fnUntraced(function* (relayId: string) {
   const relays = yield* listPersistedRelaysEffect()

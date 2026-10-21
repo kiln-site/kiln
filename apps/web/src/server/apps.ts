@@ -72,7 +72,6 @@ const appConfigInputSchema = appInputSchema.extend({
   config: appConfigPatchSchema,
 })
 const appLimitsInputSchema = appInputSchema.extend({
-  diskLimitBytes: appConfigSchema.shape.diskLimitBytes.unwrap(),
   serviceLimits: appServiceLimitsSchema,
 })
 const appRenameInputSchema = appInputSchema.extend({ name: appNameSchema })
@@ -324,7 +323,7 @@ export const updateAppLimits = createServerFn({ method: "POST" })
       throw new Error("Update this Relay to set app limits")
     }
     const limits = appConfigSchema
-      .pick({ diskLimitBytes: true, serviceLimits: true })
+      .pick({ serviceLimits: true })
       .parse(data)
     // Saved once the Relay applies them, so limits it refuses aren't used
     // by the next deployment, and into the config saved by then, so other

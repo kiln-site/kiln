@@ -68,7 +68,7 @@ const mountTypes: Record<
 // Every service, for a Compose app's mounts.
 const ALL_SERVICES = "*"
 
-// What the app mounts besides its data directory, saved together. A file
+// What the app mounts, saved together. A file
 // starts empty; its contents are edited from the Volumes section.
 export function AppMountsDialog({
   app,
@@ -114,8 +114,8 @@ export function AppMountsDialog({
         <DialogHeader>
           <DialogTitle>Volumes</DialogTitle>
           <DialogDescription>
-            What the app mounts besides its data directory. Changes apply on the
-            next deploy.
+            All the app keeps across deploys; anything else in its containers
+            is lost. Changes apply on the next deploy.
           </DialogDescription>
         </DialogHeader>
         <form

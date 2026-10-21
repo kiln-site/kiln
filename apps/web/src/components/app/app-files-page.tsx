@@ -7,8 +7,9 @@ import { useAppWorkspace } from "@/components/app/app-workspace-context"
 import { ResourceFilesPage } from "@/components/files/resource-files-page"
 import type { FileWorkspaceInstance } from "@/lib/relay-selectors"
 
-// An app's data directory in the same file workspace servers use. It is
-// mounted into the app's containers, at its data mount or `${KILN_DATA}`.
+// An app's folder on the Relay in the same file workspace servers use: a
+// Dockerfile's build context and a pasted Compose file's project directory.
+// Its containers don't mount it.
 export function AppFilesPage() {
   const { app, routeId } = useAppWorkspace()
   const filePath = useMatch({

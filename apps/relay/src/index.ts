@@ -414,26 +414,6 @@ const apps = new AppDriver(
   lanes,
   { allocations: docker.allocations, state: startupCore.state }
 )
-// Apps past their disk limit are stopped; each check is its own span.
-const appDiskLimitFiber = forkRelayEffect(
-  "relay.apps.diskLimits",
-  Effect.sleep("1 minute").pipe(
-    Effect.andThen(
-      Effect.tryPromise({
-        try: () => apps.enforceDiskLimits(),
-        catch: (cause) => cause,
-      }).pipe(
-        Effect.withSpan("Apps.enforceDiskLimits"),
-        Effect.catch((cause) =>
-          Effect.sync(() =>
-            reportRelayError(cause, { operation: "relay.apps.diskLimits" })
-          )
-        )
-      )
-    ),
-    Effect.forever
-  )
-)
 lifecycle.useAppServiceContainers(async (appId, service) => {
   await apps.get(appId)
   return (await apps.serviceContainer(appId, service))?.name ?? null
@@ -1057,7 +1037,6 @@ const sftpServer = await Effect.runPromise(
       Effect.sync(() => {
         tailscaleFirewallFiber.interruptUnsafe()
         capacityMetricsFiber.interruptUnsafe()
-        appDiskLimitFiber.interruptUnsafe()
         operationPruneFiber.interruptUnsafe()
         backupFiber.interruptUnsafe()
         provisioningFiber.interruptUnsafe()
@@ -1284,7 +1263,6 @@ function shutdownRelay(signal: NodeJS.Signals): Promise<void> {
         healthServer?.closeAllConnections()
         tailscaleFirewallFiber.interruptUnsafe()
         capacityMetricsFiber.interruptUnsafe()
-        appDiskLimitFiber.interruptUnsafe()
         operationPruneFiber.interruptUnsafe()
         tlsRefreshFiber.interruptUnsafe()
         backupFiber.interruptUnsafe()

@@ -29,9 +29,9 @@ every file, and each is checked on disk, so no entry can write or point
 outside it. A Dockerfile build drops its checkout once it succeeds. A Compose
 deployment keeps its own, since its services may bind files from it, and the
 next successful deployment removes it. Configs and secrets a Compose file
-reads from its folder are bound read-only from the checkout. Persistent
-data belongs in
-`${KILN_DATA}`, the app's data directory, not the checkout.
+reads from its folder are bound read-only from the checkout. Containers
+keep nothing across deployments; data that should last belongs in a volume
+mounted from the app's Volumes section, not the checkout.
 
 Containers carry the commit they were built from in `kiln.app.commit`.
 
@@ -72,16 +72,17 @@ have exited cleanly, before any traffic moves.
 The old containers stop first instead when two copies can't run together:
 
 - the app publishes ports on the Relay, or has a Tailscale address;
+- the app mounts a volume or a path on the node read-write, from its
+  Volumes section: two copies would write to the same data;
 - a Compose service keeps data in a volume, named or declared by its image,
   as databases do: two copies would share or lose it;
 - a Compose service uses another network mode;
 - the node hasn't the memory to hold both copies at once.
 
-The deployment log says which. While the copies overlap they share the
-app's data directory, so an app that can't run twice on its files, such as
-one that writes SQLite without WAL, should publish a port or use Compose
-with a volume to deploy stop-first. A Relay that restarts mid-way leaves
-both copies running until the next deployment replaces them.
+The deployment log says which. Copies share nothing else, so an app whose
+data lives only in its containers loses it on every deployment. A Relay
+that restarts mid-way leaves both copies running until the next deployment
+replaces them.
 
 A Compose project replaced this way deploys as before, under the app's own
 project name, so Compose keeps its volumes. While both copies run, the node

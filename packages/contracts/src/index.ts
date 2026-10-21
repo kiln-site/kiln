@@ -582,8 +582,9 @@ const appContainerPathSchema = z
 // The largest file an app can mount from its config.
 export const APP_MOUNT_FILE_MAX_LENGTH = 100_000
 
-// What an app mounts besides its data directory: one of the Relay's named
-// volumes, a path on the node, or a file kept in the config.
+// What an app mounts into its containers, which keep nothing else across
+// deploys: one of the Relay's named volumes, a path on the node, or a file
+// kept in the config.
 export const appMountSourceSchema = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("volume"), volumeId: relayVolumeIdSchema }),
   z.strictObject({
@@ -628,18 +629,7 @@ export const appConfigSchema = z
     // Replaces the image's command, for images and Dockerfiles.
     command: z.string().max(4_000),
     compose: z.string().max(400_000),
-    // Where the app's data directory is mounted, for images and Dockerfiles.
-    // Compose files mount it themselves through `${KILN_DATA}`.
-    dataMount: appContainerPathSchema,
     databaseIds: z.array(databaseIdSchema).max(32),
-    // The data directory's limit; past it, the app is stopped. Configs saved
-    // before limits have none.
-    diskLimitBytes: z
-      .number()
-      .int()
-      .min(MINIMUM_INSTANCE_DISK_LIMIT_BYTES)
-      .nullable()
-      .default(null),
     dockerfile: z.string().max(200_000),
     // KEY=VALUE lines, as in an env file.
     environment: z.string().max(65_536),
@@ -655,9 +645,7 @@ export const appConfigSchema = z
 export const defaultAppConfig: z.infer<typeof appConfigSchema> = {
   command: "",
   compose: "",
-  dataMount: "/data",
   databaseIds: [],
-  diskLimitBytes: null,
   dockerfile: "",
   environment: "",
   image: "",
@@ -721,13 +709,10 @@ export const relayAppDeploymentSchema = z.object({
 export const relayAppSchema = z.object({
   connectedDatabaseIds: z.array(databaseIdSchema),
   containers: z.array(relayAppContainerSchema),
-  // The app's data directory on the Relay's host.
+  // The app's folder on the Relay's host: a pasted Compose file's project
+  // directory and a Dockerfile's build context.
   dataDirectory: z.string(),
   deployment: relayAppDeploymentSchema.nullable(),
-  // The data directory's limit, and its size when last measured. Absent
-  // from older Relays.
-  diskLimitBytes: z.number().int().positive().nullable().default(null),
-  diskUsedBytes: z.number().int().nonnegative().nullable().default(null),
   // The name its containers answer to on the app's network.
   hostname: z.string(),
   id: appIdSchema,
@@ -776,7 +761,6 @@ export const relayAppDeploymentReadSchema = z
 export const relayAppLimitsSchema = z
   .object({
     appId: appIdSchema,
-    diskLimitBytes: appConfigSchema.shape.diskLimitBytes,
     serviceLimits: appServiceLimitsSchema,
   })
   .strict()

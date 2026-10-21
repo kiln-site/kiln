@@ -78,7 +78,7 @@ describeMysql("managed apps", () => {
             })),
             updateAppConfigEffect(relayOne, appId, (config) => ({
               ...config,
-              diskLimitBytes: 8 * 1024 ** 3,
+              serviceLimits: { app: { cpuMillis: 500, memoryBytes: null } },
             })),
           ],
           { concurrency: "unbounded" }
@@ -86,7 +86,35 @@ describeMysql("managed apps", () => {
 
         const saved = yield* loadAppConfigEffect(relayOne, appId)
         assert.strictEqual(saved?.config.environment, "MODE=production")
-        assert.strictEqual(saved?.config.diskLimitBytes, 8 * 1024 ** 3)
+        assert.deepStrictEqual(saved?.config.serviceLimits, {
+          app: { cpuMillis: 500, memoryBytes: null },
+        })
+      })
+    )
+
+    it.effect("loads a config saved with fields apps no longer have", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        yield* insertRelay(relayOne)
+        const appId = "a".repeat(40)
+        yield* createAppRecordEffect({
+          appId,
+          createdBy: "user-one",
+          name: "Website",
+          relayId: relayOne,
+        })
+        // As saved when apps mounted a data directory with a disk limit.
+        yield* updateAppConfigEffect(relayOne, appId, (config) => ({
+          ...config,
+          dataMount: "/data",
+          diskLimitBytes: 8 * 1024 ** 3,
+          image: "nginx:latest",
+        }))
+
+        const saved = yield* loadAppConfigEffect(relayOne, appId)
+        assert.strictEqual(saved?.config.image, "nginx:latest")
+        assert.notProperty(saved?.config, "dataMount")
+        assert.notProperty(saved?.config, "diskLimitBytes")
       })
     )
 

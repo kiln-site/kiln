@@ -89,7 +89,7 @@ export type InstanceAllocation = {
 /**
  * Every instance's limits on a Relay, whatever its kind: game servers from
  * its snapshot, and the rest from their own lists. An app counts each
- * container's memory and CPU, and its own disk.
+ * container's memory and CPU.
  */
 export async function relayAllocations(
   relay: PersistedRelay,
@@ -119,13 +119,8 @@ export async function relayAllocations(
       kind: "database" as const,
       limits: database.limits,
     })),
-    ...apps.flatMap((app) => [
-      {
-        id: app.id,
-        kind: "app" as const,
-        limits: { ...NO_RESOURCE_LIMITS, diskBytes: app.diskLimitBytes },
-      },
-      ...app.containers.map((container) => ({
+    ...apps.flatMap((app) =>
+      app.containers.map((container) => ({
         id: app.id,
         kind: "app" as const,
         limits: {
@@ -133,8 +128,8 @@ export async function relayAllocations(
           cpuMillis: container.limits?.cpuMillis ?? null,
           memoryBytes: container.limits?.memoryBytes ?? null,
         },
-      })),
-    ]),
+      }))
+    ),
   ]
 }
 

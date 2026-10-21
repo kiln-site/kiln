@@ -56,7 +56,7 @@ async function authorizedAppFor(
 // deployment. Mounts have no default, so an edit that leaves them out keeps
 // them.
 export const appConfigPatchSchema = appConfigSchema
-  .omit({ databaseIds: true, diskLimitBytes: true, serviceLimits: true })
+  .omit({ databaseIds: true, serviceLimits: true })
   .partial()
   .extend({ mounts: appMountsSchema.optional() })
 

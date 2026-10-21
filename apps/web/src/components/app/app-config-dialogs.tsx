@@ -119,7 +119,7 @@ export function useAppConfigSave(
 
 export const appDocuments = {
   compose: {
-    hint: "Services reach each other by name. Mount the app’s data with ${KILN_DATA}, for example ${KILN_DATA}/db:/var/lib/postgresql/data.",
+    hint: "Services reach each other by name. Containers keep nothing across deploys; mount a volume from the Volumes section to keep data.",
     noun: "Compose file",
     path: "compose.yaml",
     placeholder:
@@ -273,7 +273,7 @@ const sourceTypeDetails: Record<AppSourceType, string> = {
 
 type SourceDraft = Pick<
   EditableAppConfig,
-  "command" | "dataMount" | "image" | "sourceType"
+  "command" | "image" | "sourceType"
 >
 
 // What the app deploys from, and how a single container starts. Every
@@ -294,7 +294,6 @@ export function AppSourceDialog({
   const initial = React.useMemo<SourceDraft>(
     () => ({
       command: saved.command,
-      dataMount: saved.dataMount,
       image: saved.image,
       sourceType: saved.sourceType,
     }),
@@ -322,7 +321,6 @@ export function AppSourceDialog({
   const save = useAppConfigSave(app, routeId)
   const dirty =
     draft.command !== initial.command ||
-    draft.dataMount !== initial.dataMount ||
     draft.image !== initial.image ||
     draft.sourceType !== initial.sourceType ||
     (draft.sourceType === "github" && github !== null)
@@ -433,30 +431,17 @@ export function AppSourceDialog({
             </p>
           ) : null}
           {singleContainer ? (
-            <div className="grid gap-4 sm:grid-cols-2">
-              <SourceField label="Start command">
-                <Input
-                  className="font-mono"
-                  placeholder="Image default"
-                  spellCheck={false}
-                  value={draft.command}
-                  onChange={(event) =>
-                    update("command", event.currentTarget.value)
-                  }
-                />
-              </SourceField>
-              <SourceField label="Data mount path">
-                <Input
-                  className="font-mono"
-                  placeholder="/data"
-                  spellCheck={false}
-                  value={draft.dataMount}
-                  onChange={(event) =>
-                    update("dataMount", event.currentTarget.value)
-                  }
-                />
-              </SourceField>
-            </div>
+            <SourceField label="Start command">
+              <Input
+                className="font-mono"
+                placeholder="Image default"
+                spellCheck={false}
+                value={draft.command}
+                onChange={(event) =>
+                  update("command", event.currentTarget.value)
+                }
+              />
+            </SourceField>
           ) : null}
           <DialogFooter>
             <Button

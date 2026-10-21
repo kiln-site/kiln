@@ -6,7 +6,6 @@ import {
   readdir,
   readFile,
   rm,
-  truncate,
   writeFile,
 } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
@@ -286,26 +285,15 @@ describe("apps", () => {
       "kiln.relay.owner": TEST_NAMESPACE,
       "kiln.resource.kind": "app",
     })
-    expect(container!.mounts).toContainEqual(
-      expect.objectContaining({
-        destination: "/data",
-        source: join(harness.config.dataDirectory, "apps", appId),
-      })
-    )
+    // Nothing outlives the container unless the config mounts it.
+    expect(container!.mounts).toEqual([])
   })
 
   it("reports what each container mounts", async () => {
     const harness = await createdApp()
     const image = await deploy(harness, {})
 
-    expect(image.containers[0]?.mounts).toEqual([
-      {
-        destination: "/data",
-        readOnly: false,
-        source: join(harness.config.dataDirectory, "apps", appId),
-        type: "bind",
-      },
-    ])
+    expect(image.containers[0]?.mounts).toEqual([])
 
     // A volume, by the name Docker gives it.
     const removeCompose = await composeConfigCommand()
@@ -853,7 +841,6 @@ describe("apps", () => {
 
     const limited = await harness.apps.setLimits({
       appId,
-      diskLimitBytes: 1024 * MIB,
       serviceLimits: { app: { cpuMillis: 500, memoryBytes: 512 * MIB } },
     })
 
@@ -866,33 +853,6 @@ describe("apps", () => {
           limits: { cpuMillis: 500, diskBytes: null, memoryBytes: 512 * MIB },
         },
       ],
-      diskLimitBytes: 1024 * MIB,
-    })
-  })
-
-  it("stops an app whose data outgrows its disk limit", async () => {
-    const harness = await createdApp()
-    await deploy(harness, {})
-    await harness.apps.setLimits({
-      appId,
-      diskLimitBytes: 128 * MIB,
-      serviceLimits: {},
-    })
-    const data = join(harness.config.dataDirectory, "apps", appId, "big.bin")
-
-    await harness.apps.enforceDiskLimits()
-    expect(appContainers()[0]?.state.running).toBe(true)
-
-    // A sparse file: its apparent size counts, without filling the disk.
-    await writeFile(data, "")
-    await truncate(data, 200 * MIB)
-    await harness.apps.enforceDiskLimits()
-
-    expect(appContainers()[0]?.state.running).toBe(false)
-    expect(await harness.apps.get(appId)).toMatchObject({
-      diskLimitBytes: 128 * MIB,
-      diskUsedBytes: 200 * MIB,
-      observedState: "stopped",
     })
   })
 
@@ -936,7 +896,6 @@ describe("apps", () => {
     await expect(
       harness.apps.setLimits({
         appId,
-        diskLimitBytes: null,
         serviceLimits: {
           web: { cpuMillis: null, memoryBytes: most },
           worker: { cpuMillis: null, memoryBytes: null },
@@ -980,7 +939,6 @@ describe("apps", () => {
     await expect(
       harness.apps.setLimits({
         appId,
-        diskLimitBytes: null,
         serviceLimits: {
           web: { cpuMillis: null, memoryBytes: 64 * MIB },
           worker: { cpuMillis: null, memoryBytes: most },
@@ -1029,7 +987,6 @@ describe("apps", () => {
 
     const shrinking = harness.apps.setLimits({
       appId,
-      diskLimitBytes: null,
       serviceLimits: { app: { cpuMillis: null, memoryBytes: 64 * MIB } },
     })
     await update.reached
@@ -1099,66 +1056,6 @@ describe("apps", () => {
       expect.objectContaining({ memoryBytes: 256 * MIB }),
     ])
     harness.lanes.setPaused(false)
-  })
-
-  it("keeps checking disk limits after a limited app is deleted", async () => {
-    const harness = await createdApp()
-    const otherId = "e".repeat(40)
-    await harness.apps.create({ id: otherId, name: "Other" })
-    await deploy(harness, {})
-    await deploy(harness, {}, otherId)
-    for (const id of [appId, otherId]) {
-      await harness.apps.setLimits({
-        appId: id,
-        diskLimitBytes: 128 * MIB,
-        serviceLimits: {},
-      })
-    }
-    await harness.apps.delete({ appId, deleteData: true })
-    const data = join(harness.config.dataDirectory, "apps", otherId, "big.bin")
-    await writeFile(data, "")
-    await truncate(data, 200 * MIB)
-
-    await harness.apps.enforceDiskLimits()
-
-    expect(appContainers(otherId)[0]?.state.running).toBe(false)
-  })
-
-  it("doesn't stop an app whose disk limit was raised while its stop waited", async () => {
-    const harness = await createdApp()
-    await deploy(harness, {})
-    await harness.apps.setLimits({
-      appId,
-      diskLimitBytes: 128 * MIB,
-      serviceLimits: {},
-    })
-    const data = join(harness.config.dataDirectory, "apps", appId, "big.bin")
-    await writeFile(data, "")
-    await truncate(data, 200 * MIB)
-    let release: () => void = () => undefined
-    const held = Effect.runPromise(
-      harness.lanes.run(
-        { label: "app.action", locks: appLifecycleLocks(appId) },
-        Effect.promise(
-          () =>
-            new Promise<void>((resolve) => {
-              release = resolve
-            })
-        )
-      )
-    )
-
-    const enforcing = harness.apps.enforceDiskLimits()
-    await harness.apps.setLimits({
-      appId,
-      diskLimitBytes: 1024 * MIB,
-      serviceLimits: {},
-    })
-    release()
-    await held
-    await enforcing
-
-    expect(appContainers()[0]?.state.running).toBe(true)
   })
 
   it("doesn't recreate an App deleted while its deployment waited", async () => {
@@ -1381,6 +1278,39 @@ describe("rolling deployments", () => {
     const app = await deploy(harness, { command: "serve --v2", ports })
 
     expect(app.deployment).toMatchObject({ rolling: false, state: "succeeded" })
+    expect(appContainers()).toHaveLength(1)
+  })
+
+  it("stops the running container first when it writes to a mounted path, but not when it only reads one", async () => {
+    const harness = await createdApp()
+    const mounts = (readOnly: boolean) => [
+      {
+        id: "nodepath1",
+        readOnly,
+        service: null,
+        source: { path: "/srv/shared", type: "host" as const },
+        target: "/shared",
+      },
+    ]
+    await deploy(harness, { mounts: mounts(false) })
+
+    const writing = await deploy(harness, {
+      command: "serve --v2",
+      mounts: mounts(false),
+    })
+    expect(writing.deployment).toMatchObject({
+      rolling: false,
+      state: "succeeded",
+    })
+
+    const reading = await deploy(harness, {
+      command: "serve --v3",
+      mounts: mounts(true),
+    })
+    expect(reading.deployment).toMatchObject({
+      rolling: true,
+      state: "succeeded",
+    })
     expect(appContainers()).toHaveLength(1)
   })
 

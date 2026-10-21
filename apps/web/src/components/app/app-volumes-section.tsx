@@ -16,9 +16,10 @@ import { InfoSection } from "@/components/info-page"
 import { relayVolumesQueryOptions } from "@/lib/query-options"
 import { warmSyntaxCodeEditorModule } from "@/lib/syntax-editor-module-preload"
 
-// What the app mounts besides its data directory: the Relay's volumes,
-// paths on the node, and files kept in its config, which open in the code
-// dialog. Configure changes them; they apply on the next deploy.
+// What the app mounts: the Relay's volumes, paths on the node, and files
+// kept in its config, which open in the code dialog. Its containers keep
+// nothing else across deploys. Configure changes them; they apply on the
+// next deploy.
 export function AppVolumesSection({
   app,
   canManage,
@@ -71,8 +72,8 @@ export function AppVolumesSection({
     >
       {mounts.length === 0 ? (
         <p className="text-[0.8125rem] text-muted-foreground">
-          Nothing besides the app’s data directory. Mount a volume to keep or
-          share data, a path on the node, or a file.
+          Nothing yet, so the app keeps no data across deploys. Mount a volume
+          to keep or share data, a path on the node, or a file.
         </p>
       ) : (
         <div className="overflow-x-auto">

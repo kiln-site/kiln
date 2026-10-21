@@ -4,7 +4,7 @@ import { Link } from "@tanstack/react-router"
 import {
   CPU_LIMIT_MILLIS_PER_CORE,
   type AppConfig,
-  type ResourceLimits,
+  type ServiceResourceLimits,
 } from "@workspace/contracts"
 import {
   ChevronLeft,
@@ -41,11 +41,7 @@ import {
   appConfigQueryOptions,
   resourceLimitsCapacityQueryOptions,
 } from "@/lib/query-options"
-import {
-  formatCpuLimit,
-  formatDiskLimit,
-  formatMemoryLimit,
-} from "@/lib/resource-limits"
+import { formatCpuLimit, formatMemoryLimit } from "@/lib/resource-limits"
 
 type AppContainer = App["containers"][number]
 
@@ -287,7 +283,8 @@ function ContainerUptime({ container }: { container: AppContainer }) {
 }
 
 // The container's limits against the node, side by side when there's room:
-// its service's CPU and memory, and the disk the app's data may take.
+// its service's CPU and memory, and how full the node's disk is, since apps
+// have no disk limit of their own.
 const ContainerLimits = React.memo(function ContainerLimits({
   app,
   service,
@@ -296,9 +293,8 @@ const ContainerLimits = React.memo(function ContainerLimits({
   service: string
 }) {
   const select = React.useCallback(
-    ({ config }: { config: AppConfig }): ResourceLimits => ({
+    ({ config }: { config: AppConfig }): ServiceResourceLimits => ({
       cpuMillis: config.serviceLimits[service]?.cpuMillis ?? null,
-      diskBytes: config.diskLimitBytes,
       memoryBytes: config.serviceLimits[service]?.memoryBytes ?? null,
     }),
     [service]
@@ -313,7 +309,7 @@ const ContainerLimits = React.memo(function ContainerLimits({
   })
   const cores = capacity?.cpu.nodeCores
   const memoryTotal = capacity?.memory.nodeTotalBytes
-  const diskTotal = capacity?.storage.nodeTotalBytes
+  const disk = capacity?.storage
 
   return (
     <div className="grid gap-x-8 gap-y-3 py-3 sm:grid-cols-3">
@@ -343,16 +339,15 @@ const ContainerLimits = React.memo(function ContainerLimits({
             : `of ${formatBytes(memoryTotal)}`
         }
       />
-      <LimitBar
+      <UsageBar
+        detail={disk ? `of ${formatBytes(disk.nodeTotalBytes)}` : undefined}
         indicatorClassName="[&_[data-slot=progress-indicator]]:bg-emerald-400/80"
         label="Disk"
-        limit={limits?.diskBytes}
-        title="The app's data, shared by its containers"
-        total={diskTotal}
-        value={formatDiskLimit}
-        detail={
-          diskTotal === undefined ? undefined : `of ${formatBytes(diskTotal)}`
+        percent={
+          disk ? percentOf(disk.nodeUsedBytes, disk.nodeTotalBytes) : undefined
         }
+        title="The node's disk, shared with everything else on it"
+        value={disk ? `${formatBytes(disk.nodeUsedBytes)} used` : "—"}
       />
     </div>
   )
@@ -364,7 +359,6 @@ function LimitBar({
   indicatorClassName,
   label,
   limit,
-  title,
   total,
   value,
 }: {
@@ -373,7 +367,6 @@ function LimitBar({
   label: string
   // `null` for no limit, `undefined` while the config loads.
   limit: number | null | undefined
-  title?: string
   total: number | undefined
   value: (limit: number | null) => string
 }) {
@@ -387,7 +380,6 @@ function LimitBar({
           ? undefined
           : percentOf(limit, total)
       }
-      title={title}
       value={limit === undefined ? "—" : value(limit)}
     />
   )

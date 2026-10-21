@@ -46,7 +46,7 @@ export const relayFilePutV1Feature = "files-put-v1"
 export const relayResourceLimitsV1Feature = "resource-limits-v1"
 // The Relay answers `database.limits.write` and reports databases' limits.
 export const relayDatabaseLimitsV1Feature = "database-limits-v1"
-// The Relay applies app configs' `serviceLimits` and `diskLimitBytes`, and
+// The Relay applies app configs' `serviceLimits`, and
 // answers `app.limits.write`.
 export const relayAppLimitsV1Feature = "app-limits-v1"
 // The Relay provisions databases in the background through
@@ -61,9 +61,6 @@ export const relayAppGitHubV1Feature = "app-github-v1"
 // The Relay lists, creates, renames, and deletes its Docker named volumes
 // through `relay.volumes.*`.
 export const relayVolumesV1Feature = "relay-volumes-v1"
-// The Relay applies app configs' `mounts`: named volumes, paths on the
-// node, and files.
-export const relayAppMountsV1Feature = "app-mounts-v1"
 export const relayBrowserAuthorizationReviseMaxItems = 256
 
 export const relayControlOperations = [

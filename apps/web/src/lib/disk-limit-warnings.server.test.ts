@@ -6,26 +6,21 @@ import { vi } from "vite-plus/test"
 
 import { listNotificationsEffect } from "@/effect/notifications"
 import type { AccessPermission } from "@/lib/permissions"
-import {
-  warnAppsOverDiskLimitEffect,
-  warnDatabasesOverDiskLimitEffect,
-} from "@/lib/disk-limit-warnings.server"
+import { warnDatabasesOverDiskLimitEffect } from "@/lib/disk-limit-warnings.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertGrant, insertRelay, insertRows, insertUser } from "@/test/seed"
 
 // The Relay is the boundary: it reports its databases, their limits, and how
 // much each one's data holds.
 const relay = vi.hoisted(() => ({
-  apps: [] as Array<unknown>,
   databases: [] as Array<unknown>,
 }))
 vi.mock("@/lib/relay-connection", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/relay-connection")>()),
   relayConnectionFeatures: () =>
-    new Set(["resource-limits-v1", "app-limits-v1"]),
+    new Set(["resource-limits-v1"]),
   relayRpc: async (_relay: unknown, operation: string) => {
     if (operation === "database.list") return relay.databases
-    if (operation === "app.list") return relay.apps
     throw new Error(`Unexpected Relay operation ${operation}`)
   },
 }))
@@ -76,23 +71,6 @@ const grant = (
       }))
     )
   })
-
-const appId = "a".repeat(40)
-
-const relayApp = (usedBytes: number) => ({
-  connectedDatabaseIds: [],
-  containers: [],
-  dataDirectory: `/data/apps/${appId}`,
-  deployment: null,
-  diskLimitBytes: GIBIBYTE,
-  diskUsedBytes: usedBytes,
-  hostname: "app-aaaaaaaa",
-  id: appId,
-  network: "kiln-app-network",
-  observedState: "stopped",
-  shortId: appId.slice(0, 8),
-  status: "Stopped",
-})
 
 const warned = (userId: string) =>
   Effect.map(listNotificationsEffect(userId), (notifications) =>
@@ -149,44 +127,6 @@ describeMysql("database disk limit warnings", () => {
           assert.deepInclude(notifications[0]?.content, {
             limitBytes: GIBIBYTE,
             usedBytes: 2 * GIBIBYTE,
-          })
-        }
-        assert.lengthOf(yield* warned("outsider"), 0)
-        assert.lengthOf(yield* warned("creator"), 0)
-      })
-    )
-    it.effect("tells those who can see apps that one was stopped", () =>
-      Effect.gen(function* () {
-        yield* resetDatabase
-        yield* insertRelay(relayId, { created_by: "owner", enabled: true })
-        for (const user of ["owner", "creator", "app-reader", "outsider"]) {
-          yield* insertUser(user)
-        }
-        yield* insertRows("app", {
-          app_id: appId,
-          config_ciphertext: "ciphertext",
-          created_at: 0,
-          created_by: "creator",
-          name: "Website",
-          relay_id: relayId,
-          updated_at: 0,
-        })
-        yield* grant("app-reader", "relay", ["app.read"])
-        yield* grant("outsider", "relay", ["instance.console.read"])
-
-        relay.apps = [relayApp(2 * GIBIBYTE)]
-        yield* warnAppsOverDiskLimitEffect()
-
-        for (const user of ["owner", "app-reader"]) {
-          const notifications = yield* warned(user)
-          assert.lengthOf(notifications, 1, user)
-          assert.deepInclude(notifications[0]?.content, {
-            resource: {
-              id: appId,
-              name: "Website",
-              relayId,
-              type: "app",
-            },
           })
         }
         assert.lengthOf(yield* warned("outsider"), 0)

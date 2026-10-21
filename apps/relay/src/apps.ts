@@ -60,13 +60,8 @@ import {
   promiseEffect,
   recoverPromise,
 } from "./effect/promise.js"
-import {
-  reportRelayError,
-  traceRelayEffect,
-  traceRelayPromise,
-} from "./effect/runtime.js"
+import { traceRelayEffect, traceRelayPromise } from "./effect/runtime.js"
 import type { RelayStateStore } from "./effect/state.js"
-import { directoryApparentSizeEffect } from "./disk-usage.js"
 import {
   exclusive,
   laneKeys,
@@ -227,8 +222,6 @@ export class AppDriver {
   readonly #waiters = new Map<string, Set<() => void>>()
   readonly #lanes: OperationLanes
   readonly #limits: AppLimitStores
-  // Data directory sizes of apps with a disk limit, from the last check.
-  readonly #diskUsage = new Map<string, number>()
 
   /**
    * Callers hold the App's lane locks for each change; a deployment's build
@@ -248,14 +241,10 @@ export class AppDriver {
     this.#lanes = lanes
     this.#limits = limits
     this.#networking = networking
-    // Every container counts its memory and CPU, and the app its disk.
+    // Every container counts its memory and CPU.
     limits.allocations.register(APP_KIND, async () =>
-      (await this.#existing()).flatMap((app) => [
-        {
-          id: app.id,
-          limits: { ...NO_RESOURCE_LIMITS, diskBytes: app.diskLimitBytes },
-        },
-        ...app.containers.map((container) => ({
+      (await this.#existing()).flatMap((app) =>
+        app.containers.map((container) => ({
           id: app.id,
           limits: {
             ...NO_RESOURCE_LIMITS,
@@ -264,8 +253,8 @@ export class AppDriver {
               memoryBytes: container.limits.memoryBytes,
             }),
           },
-        })),
-      ])
+        }))
+      )
     )
   }
 
@@ -314,11 +303,10 @@ export class AppDriver {
 
   // The apps that exist, as their networks and containers report them.
   async #existing(): Promise<Array<RelayApp>> {
-    const [containers, networks, host, diskLimits] = await Promise.all([
+    const [containers, networks, host] = await Promise.all([
       this.#containers(),
       this.#networks(),
       this.#hostDataDirectory(),
-      this.#diskLimits(),
     ])
     const ids = new Set([
       ...networks,
@@ -329,8 +317,7 @@ export class AppDriver {
       this.#toApp(
         id,
         containers.filter((container) => container.appId === id),
-        host,
-        diskLimits
+        host
       )
     )
   }
@@ -345,11 +332,10 @@ export class AppDriver {
       async () => {
         const ids = [...new Set(requests.map((request) => request.id))]
         const detail = requests.some((request) => request.view === "detail")
-        const [containers, networks, host, diskLimits] = await Promise.all([
+        const [containers, networks, host] = await Promise.all([
           this.#containers(undefined, ids, signal),
           this.#networks(signal),
           detail ? this.#hostDataDirectory() : "",
-          detail ? this.#diskLimits() : new Map<string, number>(),
           Promise.all(ids.map((id) => this.#restoreDeployment(id))),
         ])
         const provisioning = await this.#provisioning()
@@ -364,7 +350,7 @@ export class AppDriver {
           const common = { id, view, observedState }
           if (view === "detail") {
             const [app] = withProvisioning(
-              exists ? [this.#toApp(id, owned, host, diskLimits)] : [],
+              exists ? [this.#toApp(id, owned, host)] : [],
               placeholder ? new Map([[id, placeholder]]) : new Map()
             )
             return [{ ...common, app }]
@@ -541,7 +527,6 @@ export class AppDriver {
     const engine = this.#engine
     await this.#reserving(
       input.appId,
-      input.diskLimitBytes,
       containers.map((container) => {
         const next = input.serviceLimits[container.service]
         return {
@@ -597,88 +582,9 @@ export class AppDriver {
   }
 
   /**
-   * Measures the data directories of apps with a disk limit and stops a
-   * running app that's past its limit, in its lifecycle lane so it can't
-   * interleave with a deploy or a start. Once its turn comes it reads the
-   * limit and the containers again, and measures again. Docker leaves a
-   * stopped container stopped under its `unless-stopped` policy.
-   */
-  async enforceDiskLimits(): Promise<void> {
-    const diskLimits = await this.#diskLimits()
-    for (const appId of this.#diskUsage.keys()) {
-      if (!diskLimits.has(appId)) this.#diskUsage.delete(appId)
-    }
-    for (const [appId, limitBytes] of diskLimits) {
-      // One app that can't be measured doesn't keep the rest unchecked.
-      await Effect.runPromise(
-        traceRelayEffect(
-          "relay.apps.diskLimit.check",
-          this.#enforceDiskLimit(appId, limitBytes),
-          { "relay.app_id": appId, "relay.disk.limit_bytes": limitBytes }
-        ).pipe(
-          Effect.catch((cause) =>
-            Effect.sync(() =>
-              reportRelayError(cause, {
-                operation: "relay.apps.diskLimitStop",
-              })
-            )
-          )
-        )
-      )
-    }
-  }
-
-  #enforceDiskLimit(appId: string, limitBytes: number) {
-    const measure = directoryApparentSizeEffect(this.#appDirectory(appId))
-    const diskUsage = this.#diskUsage
-    const engine = this.#engine
-    const current = () =>
-      Effect.all([
-        promiseEffect(() => this.#diskLimits()).pipe(
-          Effect.map((limits) => limits.get(appId) ?? null)
-        ),
-        promiseEffect(() => this.#appContainers(appId)).pipe(
-          Effect.map((containers) =>
-            containers.filter((container) => container.running)
-          )
-        ),
-      ])
-    const wake = () => this.#wake(appId)
-    return Effect.gen({ self: this }, function* () {
-      const usedBytes = yield* measure
-      diskUsage.set(appId, usedBytes)
-      yield* Effect.annotateCurrentSpan("relay.disk.used_bytes", usedBytes)
-      if (usedBytes <= limitBytes) return
-      const [, running] = yield* current()
-      if (running.length === 0) return
-      yield* this.#lanes.run(
-        { label: "app.disk-limit.stop", locks: appLifecycleLocks(appId) },
-        Effect.gen(function* () {
-          const [limit, running] = yield* current()
-          if (limit === null || running.length === 0) return
-          const measured = yield* measure
-          diskUsage.set(appId, measured)
-          if (measured <= limit) return
-          yield* Effect.annotateCurrentSpan("relay.disk.stopped", true)
-          yield* Effect.logWarning(
-            `Stopping app ${appId}: its data exceeded its disk limit`
-          )
-          yield* Effect.forEach(
-            running,
-            ({ id }) =>
-              engine.stopContainer(id, { seconds: 30, timeout: 90_000 }),
-            { concurrency: "unbounded", discard: true }
-          )
-        })
-      )
-      wake()
-    })
-  }
-
-  /**
    * Checks an app's limits against every instance's and reserves them,
-   * holding the node's allocations only that long, then runs `apply` and
-   * saves its disk limit. The reservation stands in for the app's
+   * holding the node's allocations only that long, then runs `apply`. The
+   * reservation stands in for the app's
    * containers until `apply` ends, so no other change claims the same
    * capacity meanwhile, and a deployment waiting on health checks doesn't
    * hold up every other change on the node. Callers hold the app's
@@ -688,7 +594,6 @@ export class AppDriver {
    */
   async #reserving<A>(
     appId: string,
-    diskLimitBytes: number | null,
     services: ReadonlyArray<ServiceResourceLimits>,
     apply: (surge: boolean) => Promise<A>,
     options: {
@@ -708,11 +613,8 @@ export class AppDriver {
             locks: [exclusive(laneKeys.allocations)],
           },
           promiseEffect(async () => {
-            await this.#assertLimitsFit(appId, diskLimitBytes, services)
-            const [containers, diskLimits] = await Promise.all([
-              this.#appContainers(appId),
-              this.#diskLimits(),
-            ])
+            await this.#assertLimitsFit(appId, services)
+            const containers = await this.#appContainers(appId)
             const running = containers
               .filter((container) => container.running)
               .map((container) => container.limits)
@@ -721,19 +623,15 @@ export class AppDriver {
               running.length > 0 &&
               (await recoverPromise(
                 () =>
-                  this.#assertLimitsFit(
-                    appId,
-                    diskLimitBytes,
-                    services,
-                    running
-                  ).then(() => true),
+                  this.#assertLimitsFit(appId, services, running).then(
+                    () => true
+                  ),
                 () => false
               ))
             const current = combinedLimits(
-              containers.map((container) => container.limits),
-              diskLimits.get(appId) ?? null
+              containers.map((container) => container.limits)
             )
-            const requested = combinedLimits(services, diskLimitBytes)
+            const requested = combinedLimits(services)
             // Beside the running containers, both sets of memory count; a
             // smaller limit isn't free until it applies, and may not, so
             // otherwise the wider of the two does.
@@ -757,34 +655,20 @@ export class AppDriver {
         { "relay.app_id": appId, "relay.app.services": services.length }
       )
     )
-    return ensuringPromise(async () => {
-      const applied = await apply(surge)
-      await Effect.runPromise(
-        this.#limits.state.setDiskLimit(APP_KIND, appId, diskLimitBytes)
-      )
-      return applied
-    }, release)
+    return ensuringPromise(() => apply(surge), release)
   }
 
   async #assertLimitsFit(
     appId: string,
-    diskLimitBytes: number | null,
     services: ReadonlyArray<ServiceResourceLimits>,
     // Containers that keep running beside the new ones.
     alongside: ReadonlyArray<ServiceResourceLimits> = []
   ): Promise<void> {
-    const [filesystem, others, current] = await Promise.all([
+    const [filesystem, others] = await Promise.all([
       statfs(this.#config.rootDirectory),
       this.#limits.allocations.others(APP_KIND, appId),
-      this.#diskLimits().then((limits) => limits.get(appId) ?? null),
     ])
     const nodeDiskBytes = filesystem.blocks * filesystem.bsize
-    assertResourceLimitsFit({
-      currentDiskBytes: current,
-      limits: { ...NO_RESOURCE_LIMITS, diskBytes: diskLimitBytes },
-      nodeDiskBytes,
-      others,
-    })
     // Each service's memory counts against the node, with the others'.
     const allocated: Array<typeof NO_RESOURCE_LIMITS> = [
       ...others,
@@ -800,10 +684,6 @@ export class AppDriver {
       })
       allocated.push(limits)
     }
-  }
-
-  #diskLimits(): Promise<ReadonlyMap<string, number>> {
-    return Effect.runPromise(this.#limits.state.listDiskLimits(APP_KIND))
   }
 
   /**
@@ -892,10 +772,6 @@ export class AppDriver {
       force: true,
       recursive: true,
     })
-    await Effect.runPromise(
-      this.#limits.state.setDiskLimit(APP_KIND, input.appId, null)
-    )
-    this.#diskUsage.delete(input.appId)
     this.#deployments.delete(input.appId)
     this.#wake(input.appId)
     return { appId: input.appId, deleted: true }
@@ -1117,7 +993,6 @@ export class AppDriver {
             // Its one service's limits count once the image is ready.
             await this.#reserving(
               input.appId,
-              config.diskLimitBytes,
               [
                 config.serviceLimits[APP_SERVICE] ?? {
                   cpuMillis: null,
@@ -1456,11 +1331,8 @@ export class AppDriver {
         ? "it publishes ports on the Relay"
         : tailscale.length > 0
           ? "it has a Tailscale address"
-          : mounts.some((mount) => mount.type === "volume")
-            ? "it keeps data in a volume"
-            : !surge
-              ? "the node can't hold both copies at once"
-              : null
+          : (mountsRollingBlocker(mounts) ??
+            (!surge ? "the node can't hold both copies at once" : null))
     const rolling = running && blocker === null
     deployment.rolling = rolling
     if (running && blocker) {
@@ -1485,19 +1357,12 @@ export class AppDriver {
             deployment.commit
           ),
         },
-        mounts: [
-          {
-            source: join(host, "apps", input.appId),
-            target: config.dataMount,
-            type: "bind",
-          },
-          ...mounts.map((mount) => ({
-            readOnly: mount.readOnly,
-            source: mount.source,
-            target: mount.target,
-            type: mount.type,
-          })),
-        ],
+        mounts: mounts.map((mount) => ({
+          readOnly: mount.readOnly,
+          source: mount.source,
+          target: mount.target,
+          type: mount.type,
+        })),
         name,
         // Beside the running container, the new one takes the app's name
         // on its network only once it's healthy, so bundled Traefik sends it
@@ -1793,8 +1658,8 @@ export class AppDriver {
     const base = this.#composeProject(input.appId)
     const directory = this.#appDirectory(input.appId)
     const hostDirectory = join(host, "apps", input.appId)
-    // A pasted Compose file's relative paths are in the app's data
-    // directory; a repository's in its own folder of the checkout, so its
+    // A pasted Compose file's relative paths are in the app's own folder on
+    // the Relay; a repository's in its own folder of the checkout, so its
     // builds and binds read the repository's files.
     let file = input.config.compose
     let projectDirectory = directory
@@ -1815,7 +1680,6 @@ export class AppDriver {
       ...process.env,
       ...this.#environment(input.appId, deployment, input.config),
       KILN_APP_ID: input.appId,
-      KILN_DATA: hostDirectory,
     }
     // The standalone Compose binary, which `docker compose` runs.
     const composeArguments = (project: string) => [
@@ -1860,9 +1724,9 @@ export class AppDriver {
     }
     const previous = await this.#appContainers(input.appId)
     const running = previous.some((container) => container.running)
-    const blocker = mounts.some((mount) => mount.type === "volume")
-      ? "it keeps data in a volume"
-      : composeRollingBlocker(normalized, tailscale)
+    const blocker =
+      mountsRollingBlocker(mounts) ??
+      composeRollingBlocker(normalized, tailscale)
     if (running && blocker) {
       log(`Stopping the running containers first, since ${blocker}`)
     }
@@ -1875,7 +1739,6 @@ export class AppDriver {
     ) =>
       this.#reserving(
         input.appId,
-        input.config.diskLimitBytes,
         Object.values(prepared.services).map(composeServiceLimits),
         (fits) =>
           traceRelayPromise("relay.apps.deployment.composeUp", () =>
@@ -2469,8 +2332,7 @@ export class AppDriver {
   #toApp(
     id: string,
     containers: ReadonlyArray<AppContainer>,
-    host: string,
-    diskLimits: ReadonlyMap<string, number>
+    host: string
   ): RelayApp {
     const deployment = this.#deployments.get(id) ?? null
     const { observedState, status } = this.#runtimeState(id, containers)
@@ -2513,8 +2375,6 @@ export class AppDriver {
           status: container.status,
         })),
       dataDirectory: join(host, "apps", id),
-      diskLimitBytes: diskLimits.get(id) ?? null,
-      diskUsedBytes: this.#diskUsage.get(id) ?? null,
       deployment: deployment ? deploymentSummary(deployment) : null,
       hostname: this.#hostname(id),
       id,
@@ -2715,6 +2575,7 @@ export class AppDriver {
             )
           }
           mounts.push({
+            kind: "volume",
             readOnly,
             service,
             source: name,
@@ -2725,6 +2586,7 @@ export class AppDriver {
         }
         case "host":
           mounts.push({
+            kind: "host",
             readOnly,
             service,
             source: source.path,
@@ -2736,6 +2598,7 @@ export class AppDriver {
           await mkdir(directory, { recursive: true })
           await writeFile(join(directory, mount.id), source.content)
           mounts.push({
+            kind: "file",
             readOnly,
             service,
             source: join(
@@ -2789,6 +2652,8 @@ export class AppDriver {
 
 // One of the config's mounts, resolved for Docker.
 interface ConfigMount {
+  // Where it comes from in the config.
+  kind: "file" | "host" | "volume"
   readOnly: boolean
   service: string | null
   source: string
@@ -2932,6 +2797,19 @@ function composeRollingBlocker(
   return null
 }
 
+// Two copies can't both write to a volume or a path on the node. A file is
+// written again for each deployment.
+function mountsRollingBlocker(
+  mounts: ReadonlyArray<ConfigMount>
+): string | null {
+  const written = mounts.filter((mount) => !mount.readOnly)
+  return written.some((mount) => mount.kind === "volume")
+    ? "it keeps data in a volume"
+    : written.some((mount) => mount.kind === "host")
+      ? "it writes to a path on the node"
+      : null
+}
+
 // A missing or invalid source fails before anything is deployed.
 function sourceProblem(input: RelayDeployApp): string | null {
   const { config } = input
@@ -3068,8 +2946,7 @@ function isoTime(value: string | undefined): string | null {
 // One app's containers' limits as one allocation: their memory adds up,
 // and CPU, shared, is its widest.
 function combinedLimits(
-  services: ReadonlyArray<Pick<ServiceResourceLimits, "cpuMillis" | "memoryBytes">>,
-  diskBytes: number | null
+  services: ReadonlyArray<Pick<ServiceResourceLimits, "cpuMillis" | "memoryBytes">>
 ): ResourceLimits {
   return {
     cpuMillis: services.reduce<number | null>(
@@ -3079,7 +2956,7 @@ function combinedLimits(
           : Math.max(widest ?? 0, service.cpuMillis),
       null
     ),
-    diskBytes,
+    diskBytes: null,
     memoryBytes: services.reduce<number | null>(
       (total, service) =>
         service.memoryBytes === null
