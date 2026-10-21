@@ -138,7 +138,8 @@ export function recordBackupTask(
 export function traceResticCommand<T>(
   command: string,
   storageKind: "local" | "s3",
-  run: () => Promise<T>
+  run: () => Promise<T>,
+  noLock = false
 ): Promise<T> {
   const startedAt = performance.now()
   return Effect.runPromise(
@@ -171,7 +172,11 @@ export function traceResticCommand<T>(
           )
         })
       ),
-      { "restic.command": command, "backup.storage.kind": storageKind }
+      {
+        "restic.command": command,
+        "restic.no_lock": noLock,
+        "backup.storage.kind": storageKind,
+      }
     )
   )
 }

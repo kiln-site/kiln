@@ -328,6 +328,14 @@ Ordinary snapshot deletion never deletes the repository row; an empty repo is
 the dedup base for later backups and costs a few KiB. A straggling internal
 prune after the repo has been purged simply fails; it is internal and benign.
 
+restic writes a lock file before every command, reads included. When storage
+refuses that write, such as a bucket at its provider's storage cap or a
+read-only key, commands that only read the repository (snapshot lookups,
+sizes, restores, and export downloads) run again with `--no-lock`, so backups
+stay restorable. That's safe because the Relay's single backup worker is the
+only writer to its repositories. Creates, forgets, and prunes still need the
+lock, so they fail until the storage accepts writes again.
+
 Pre-restore safety backups and final-deletion backups stay full zip archives
 so recovery does not depend on a mutable repository. When an instance is
 finally deleted, Hearth marks remaining incremental catalog rows deleted, nulls

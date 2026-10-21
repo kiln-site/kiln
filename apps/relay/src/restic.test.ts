@@ -260,6 +260,50 @@ describe("restic driver", () => {
     expect(stats.totalSize).toBe(2048)
   })
 
+  it("restores and downloads from a bucket that refuses the lock file", async () => {
+    // What restic prints when Backblaze B2's storage cap is reached.
+    const refused =
+      "Save(<lock/a3e8bb3728>) failed: client.PutObject: Cannot upload files, storage cap exceeded.\nunable to create lock in backend: client.PutObject: Cannot upload files, storage cap exceeded."
+    const { spawn } = fakeRestic((restic) => {
+      if (!restic.args.includes("--no-lock")) {
+        restic.respond({ exitCode: 1, stderr: refused })
+      } else if (restic.command === "snapshots") {
+        restic.respond({ stdout: JSON.stringify([{ id: "abcdef12" }]) })
+      } else {
+        restic.respond({ stdout: "zip-bytes" })
+      }
+    })
+    const driver = createResticDriver({ spawn })
+    const signal = new AbortController().signal
+    await expect(
+      driver.snapshotsByTag({
+        location: localLocation,
+        password: "secret",
+        signal,
+        tag: "task:1",
+      })
+    ).resolves.toEqual([{ id: "abcdef12" }])
+    const destination = join(testDirectory, "export.zip")
+    await driver.dumpZip({
+      destination,
+      location: localLocation,
+      password: "secret",
+      selector: "abcdef12:/srv",
+      signal,
+    })
+    expect(await readFile(destination, "utf8")).toBe("zip-bytes")
+
+    // Deletes still need the lock, so they report the refusal.
+    await expect(
+      driver.forget({
+        location: localLocation,
+        password: "secret",
+        signal,
+        snapshotId: "abcdef12",
+      })
+    ).rejects.toThrow("storage cap exceeded")
+  })
+
   it("treats a missing snapshot as a successful forget", async () => {
     const { spawn } = fakeRestic((restic) =>
       restic.respond({

@@ -23,6 +23,7 @@ import {
   resticS3ProxyToken,
   withResticS3Proxy,
 } from "./backups/destinations/s3/proxy.js"
+import { backupFailureCode } from "./backups/failure.js"
 import { traceResticCommand } from "./backups/telemetry.js"
 
 const RESTIC_BINARY = "restic"
@@ -233,11 +234,26 @@ export function createResticDriver(options?: {
       mutating?: boolean
       onJson?: (value: unknown) => void
       password: string
+      /**
+       * Only reads the repository, so it may read without a lock when
+       * storage refuses the lock file; see `readsWithoutLock`.
+       */
+      readOnly?: boolean
       retryable?: boolean
       signal: AbortSignal
       stdoutPipe?: (stdout: NodeJS.ReadableStream) => Promise<void>
     }
   ) => {
+    const spawnCommand = (commandArgs: ReadonlyArray<string>) =>
+      spawnResticCommand(spawnRestic, commandArgs, {
+        cacheDirectory,
+        cwd: input.cwd,
+        location: input.location,
+        onJson: input.onJson,
+        password: input.password,
+        signal: input.signal,
+        stdoutPipe: input.stdoutPipe,
+      })
     const execute = async () => {
       if (input.mutating && input.location.kind === "s3") {
         await retryResticOperation(() =>
@@ -249,15 +265,9 @@ export function createResticDriver(options?: {
           })
         )
       }
-      return spawnResticCommand(spawnRestic, args, {
-        cacheDirectory,
-        cwd: input.cwd,
-        location: input.location,
-        onJson: input.onJson,
-        password: input.password,
-        signal: input.signal,
-        stdoutPipe: input.stdoutPipe,
-      })
+      return input.readOnly
+        ? readsWithoutLock(args, spawnCommand)
+        : spawnCommand(args)
     }
     return input.retryable ? retryResticOperation(execute) : execute()
   }
@@ -309,6 +319,7 @@ export function createResticDriver(options?: {
         run(["cat", "config"], {
           location: input.location,
           password: input.password,
+          readOnly: true,
           retryable: true,
           signal: input.signal,
         })
@@ -336,40 +347,44 @@ export function createResticDriver(options?: {
     },
     dumpZip: async (input) => {
       await mkdir(dirname(input.destination), { recursive: true, mode: 0o700 })
-      await rm(input.destination, { force: true })
-      const digest = createHash("sha256")
-      let bytes = 0
-      const output = createWriteStream(input.destination, {
-        flags: "wx",
-        mode: 0o600,
-      })
-      const hasher = new Transform({
-        transform(chunk, _encoding, callback) {
-          const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-          bytes += buffer.byteLength
-          digest.update(buffer)
-          input.onProgress?.(bytes)
-          callback(null, buffer)
-        },
-      })
-      const dumped = await resultOf(async () => {
-        await run(["dump", "-a", "zip", input.selector, "/"], {
-          location: input.location,
-          password: input.password,
-          signal: input.signal,
-          stdoutPipe: (stdout) => pipeline(stdout, hasher, output),
-        })
-        return { bytes, checksumSha256: digest.digest("hex") }
-      })
-      if (Result.isFailure(dumped)) {
-        output.destroy()
-        hasher.destroy()
-        // Destruction still waits for a pending file open; so must cleanup.
-        await resultOf(() => finished(output, { cleanup: true }))
+      // Each attempt writes a fresh file: the pipeline ends its output.
+      const attempt = async (args: ReadonlyArray<string>) => {
         await rm(input.destination, { force: true })
-        throw dumped.failure
+        const digest = createHash("sha256")
+        let bytes = 0
+        const output = createWriteStream(input.destination, {
+          flags: "wx",
+          mode: 0o600,
+        })
+        const hasher = new Transform({
+          transform(chunk, _encoding, callback) {
+            const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+            bytes += buffer.byteLength
+            digest.update(buffer)
+            input.onProgress?.(bytes)
+            callback(null, buffer)
+          },
+        })
+        const dumped = await resultOf(async () => {
+          await run(args, {
+            location: input.location,
+            password: input.password,
+            signal: input.signal,
+            stdoutPipe: (stdout) => pipeline(stdout, hasher, output),
+          })
+          return { bytes, checksumSha256: digest.digest("hex") }
+        })
+        if (Result.isFailure(dumped)) {
+          output.destroy()
+          hasher.destroy()
+          // Destruction still waits for a pending file open; so must cleanup.
+          await resultOf(() => finished(output, { cleanup: true }))
+          await rm(input.destination, { force: true })
+          throw dumped.failure
+        }
+        return dumped.success
       }
-      return dumped.success
+      return readsWithoutLock(["dump", "-a", "zip", input.selector, "/"], attempt)
     },
     forget: async (input) => {
       const result = await resultOf(() =>
@@ -415,6 +430,7 @@ export function createResticDriver(options?: {
           location: input.location,
           mutating: true,
           password: input.password,
+          readOnly: true,
           signal: input.signal,
           onJson: (value) => {
             const progress = progressFromResticStatus(value)
@@ -427,6 +443,7 @@ export function createResticDriver(options?: {
       const result = await run(["snapshots", "--json", "--tag", input.tag], {
         location: input.location,
         password: input.password,
+        readOnly: true,
         retryable: true,
         signal: input.signal,
       })
@@ -443,6 +460,7 @@ export function createResticDriver(options?: {
         {
           location: input.location,
           password: input.password,
+          readOnly: true,
           retryable: true,
           signal: input.signal,
         }
@@ -550,7 +568,7 @@ async function spawnResticCommand(
   }
 ): Promise<SpawnedRestic> {
   const location = input.location
-  return traceResticCommand(args[0] ?? "restic", location.kind, () => {
+  const spawnCommand = () => {
     if (location.kind !== "s3") {
       return spawnResticOnce(spawnRestic, args, input)
     }
@@ -564,7 +582,13 @@ async function spawnResticCommand(
       },
       (proxyUrl) => spawnResticOnce(spawnRestic, args, { ...input, proxyUrl })
     )
-  })
+  }
+  return traceResticCommand(
+    args[0] ?? "restic",
+    location.kind,
+    spawnCommand,
+    args.includes("--no-lock")
+  )
 }
 
 async function spawnResticOnce(
@@ -767,6 +791,44 @@ function defaultSpawn(
     shell: false,
     stdio: options.stdio,
   })
+}
+
+/**
+ * Runs a command that only reads the repository. When storage refuses the
+ * lock file restic writes first, such as a bucket at its storage cap or a
+ * read-only key, it runs again without a lock so restores and downloads
+ * keep working. That's safe because the Relay's one backup worker is the
+ * only writer to its repositories, and it isn't writing while it reads.
+ */
+async function readsWithoutLock<T>(
+  args: ReadonlyArray<string>,
+  run: (args: ReadonlyArray<string>) => Promise<T>
+): Promise<T> {
+  const locked = await resultOf(() => run(args))
+  if (Result.isSuccess(locked)) return locked.success
+  if (!isLockRefusedByStorage(locked.failure)) throw locked.failure
+  await Effect.runPromise(
+    Effect.logWarning("Reading the restic repository without a lock", {
+      "backup.failure.code": backupFailureCode(locked.failure),
+      "restic.command": args[0],
+    })
+  )
+  return run([...args, "--no-lock"])
+}
+
+function isLockRefusedByStorage(cause: unknown): boolean {
+  if (
+    !(cause instanceof RelayBackupError) ||
+    !/unable to create lock in backend/iu.test(cause.reason)
+  ) {
+    return false
+  }
+  const code = backupFailureCode(cause)
+  return (
+    code === "storage_full" ||
+    code === "storage_limit_reached" ||
+    code === "storage_access_denied"
+  )
 }
 
 function isMissingSnapshotError(cause: unknown): boolean {
