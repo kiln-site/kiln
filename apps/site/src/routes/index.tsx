@@ -11,6 +11,7 @@ import {
 } from "@/components/instance-kind-icon"
 
 import { BrickMark, officialBricks } from "~/components/brick-mark"
+import { CyclingWord } from "~/components/cycling-word"
 import { ClientDemo } from "~/components/demos/client-demo"
 import { signUpUrl } from "~/lib/plans"
 import { useSiteConfig } from "~/lib/use-site-config"
@@ -26,13 +27,14 @@ function HomePage() {
     <>
       <Hero />
       <Kinds />
-      <Editor />
       <Relays />
       <Features />
       <SelfHost />
     </>
   )
 }
+
+const heroWords = ["game servers", "apps", "Docker", "databases", "everything"]
 
 function Hero() {
   const { docsUrl, hearthUrl } = useSiteConfig()
@@ -45,13 +47,18 @@ function Hero() {
       <div className="site-container relative pt-14 pb-16 sm:pt-24 sm:pb-24">
         <div className="grid gap-8 lg:grid-cols-12 lg:items-end lg:gap-12">
           <h1 className="site-display lg:col-span-8">
-            Run game servers, apps, and databases on machines you own.
+            <span className="sr-only">
+              The panel for game servers, apps, Docker, databases, and more
+            </span>
+            <span aria-hidden="true">The panel for</span>
+            <span className="text-primary">
+              <CyclingWord words={heroWords} />
+            </span>
           </h1>
           <div className="lg:col-span-4 lg:pb-2">
             <p className="site-lede max-w-md text-muted-foreground">
-              Kiln is one panel for everything you host. Put a Relay on each
-              machine, then start, watch, edit, and back up all of it from your
-              browser.
+              Put a Relay on each machine you own, then start, watch, edit, and
+              back up everything on them from your browser.
             </p>
             <div className="mt-7 flex flex-wrap gap-3">
               <Button asChild className="h-11 px-5 text-[0.9375rem]">
@@ -71,7 +78,7 @@ function Hero() {
         <figure className="mt-12 sm:mt-16">
           <div className="h-[40rem] sm:h-[44rem] lg:h-[50rem]">
             <ClientDemo fallback={<DemoFrame label="Opening Hearth…" />}>
-              <HearthDemo id="hero" initialView="console" />
+              <HearthDemo />
             </ClientDemo>
           </div>
           <figcaption className="type-support mt-3 max-w-xl text-muted-foreground">
@@ -195,61 +202,6 @@ function KindFacts({ facts }: { facts: Array<string> }) {
         </li>
       ))}
     </ul>
-  )
-}
-
-function Editor() {
-  return (
-    <section className="border-t border-border">
-      <div className="site-container py-20 sm:py-28">
-        <div className="grid gap-10 lg:grid-cols-12 lg:gap-16">
-          <div className="lg:col-span-5">
-            <SectionHeading title="Edit config files where they live">
-              Open any file on any server and change it in the browser. This is
-              Hearth’s file editor, so try it.
-            </SectionHeading>
-          </div>
-          <ul className="site-copy grid gap-6 text-muted-foreground sm:grid-cols-3 lg:col-span-7 lg:pt-2">
-            <EditorPoint title="Changes stay marked">
-              Edited lines are flagged against the saved file until you save or
-              discard them.
-            </EditorPoint>
-            <EditorPoint title="Addresses stay hidden">
-              IP addresses are masked on screen, like{" "}
-              <code className="type-code text-foreground">server-ip</code>, so a
-              screenshot or a stream doesn’t give them away.
-            </EditorPoint>
-            <EditorPoint title="NBT opens as text">
-              Binary files like{" "}
-              <code className="type-code text-foreground">level.dat</code> open
-              as SNBT and are checked as you type.
-            </EditorPoint>
-          </ul>
-        </div>
-        <div className="mt-12 h-[40rem] sm:h-[44rem] lg:h-[50rem]">
-          <ClientDemo
-            fallback={<DemoFrame label="Opening Hearth…" />}
-            whenVisible
-          >
-            <HearthDemo id="files" initialView="files" />
-          </ClientDemo>
-        </div>
-      </div>
-    </section>
-  )
-}
-
-function EditorPoint({
-  title,
-  children,
-}: {
-  title: string
-  children: React.ReactNode
-}) {
-  return (
-    <li className="border-l-2 border-primary/70 pl-4">
-      <span className="font-medium text-foreground">{title}.</span> {children}
-    </li>
   )
 }
 

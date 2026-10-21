@@ -36,6 +36,10 @@ const config = defineConfig(({ command }) => ({
     tsconfigPaths: true,
   },
   ssr: command === "serve" ? {} : { noExternal: true },
+  // The demo loads parts of Hearth lazily, like its usage charts. Scanning
+  // for their dependencies at startup keeps the dev server from re-bundling
+  // them mid-session and failing the import.
+  optimizeDeps: { entries: ["src/**/*.{ts,tsx}"] },
   server: {
     // Lets a phone on the same tailnet open the dev server by MagicDNS name.
     allowedHosts: [".ts.net"],

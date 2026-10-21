@@ -34,13 +34,10 @@ type ConsoleWrite = (lines: Array<RelayConsoleLine>) => void
 
 // A game server that only lives in the browser. It answers power actions the
 // way a Relay does, reports resources for Hearth's own meters, and writes what
-// it does to the console. Each window on the page runs its own, by `key`.
-export function createDemoServer(key: string) {
+// it does to the console.
+export function createDemoServer() {
   const random = createRandom(11)
-  const history = resourceHistoryStore(
-    demoServer.relayId,
-    `${demoServer.id}:${key}`
-  )
+  const history = resourceHistoryStore(demoServer.relayId, demoServer.id)
   let state: DemoServerState = {
     action: null,
     observedState: "running",

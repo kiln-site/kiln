@@ -18,26 +18,20 @@ import { DemoSidebar, type DemoView } from "~/components/demos/demo-sidebar"
 const FilesView = React.lazy(() => import("~/components/demos/files-view"))
 
 // Hearth as it looks with a game server open, running in the page: the
-// sidebar, the server's header, and its Console or Files page. Each window
-// runs its own simulated server.
-export default function HearthDemo({
-  className,
-  id,
-  initialView,
-}: {
-  className?: string
-  id: string
-  initialView: DemoView
-}) {
-  const [server] = React.useState(() => createDemoServer(id))
+// sidebar, the server's header, and its Console or Files page, for a
+// simulated server.
+export default function HearthDemo({ className }: { className?: string }) {
+  const [server] = React.useState(createDemoServer)
   const state = React.useSyncExternalStore(
     server.subscribe,
     server.getState,
     server.getState
   )
-  const [view, setView] = React.useState(initialView)
+  const [view, setView] = React.useState<DemoView>("console")
   // Pages stay mounted once opened, so switching back keeps their state.
-  const [opened, setOpened] = React.useState(() => new Set([initialView]))
+  const [opened, setOpened] = React.useState(
+    () => new Set<DemoView>(["console"])
+  )
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false)
   const [sidebarOverlay, setSidebarOverlay] = React.useState(false)
   const [statsStore] = React.useState(createStatsStore)
@@ -58,11 +52,14 @@ export default function HearthDemo({
   }, [])
 
   // Hearth's sidebar collapses to icons on a wide screen and slides over the
-  // page on a narrow one. The window decides by its own width.
+  // page on a narrow one. The window's width shows or hides the docked one.
   const toggleSidebar = React.useCallback(() => {
-    const width = windowRef.current?.offsetWidth ?? 0
-    if (width >= 896) setSidebarCollapsed((collapsed) => !collapsed)
-    else setSidebarOverlay((open) => !open)
+    const docked = windowRef.current?.querySelector(":scope > nav")
+    if (docked && getComputedStyle(docked).display !== "none") {
+      setSidebarCollapsed((collapsed) => !collapsed)
+    } else {
+      setSidebarOverlay((open) => !open)
+    }
   }, [])
 
   return (
