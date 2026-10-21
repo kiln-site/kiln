@@ -306,11 +306,8 @@ function respond(input: string): Output {
 // upload serves the whole visit, so clicking again copies the same link.
 function ShareButton() {
   const { share, state } = useMclogsShareAction(async () => {
-    upload ??= uploadShareContent().catch((error: unknown) => {
-      upload = null
-      throw error
-    })
-    await copyToClipboard(await upload)
+    sharedUrl ??= await uploadShareContent()
+    await copyToClipboard(sharedUrl)
   })
   return (
     <ConsoleTooltip content={mclogsShareTooltip(state)}>
@@ -342,7 +339,9 @@ function ShareButton() {
   )
 }
 
-let upload: Promise<string> | null = null
+// The link this visit's upload made. The button is off while it uploads,
+// so only one is ever in flight.
+let sharedUrl: string | null = null
 
 // A form post, which mclo.gs answers to any origin without a preflight.
 async function uploadShareContent(): Promise<string> {
