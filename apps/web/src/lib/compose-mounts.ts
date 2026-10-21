@@ -133,12 +133,104 @@ export function changeComposeMount(
   if (!ownNode(document, [service, section, index])) return text
   const list = document.getIn(["services", service, section], true) as YAMLSeq
   const entry = list.items[index] as Node
-  if (change === null) return removeEntry(text, document, service, section, list, entry)
-  const patches =
-    section === "volumes"
-      ? changeVolume(text, document, entry, change)
-      : changeFile(text, entry, section, change)
-  return applyPatches(text, patches)
+  const changed =
+    change === null
+      ? removeEntry(text, document, service, section, list, entry)
+      : applyPatches(
+          text,
+          section === "volumes"
+            ? changeVolume(text, document, entry, change)
+            : changeFile(text, entry, section, change)
+        )
+  verifyChange(document, changed, [service, section, index], change)
+  return changed
+}
+
+// The file as changed must read as the file before with only that change:
+// the mount as asked, a volume it newly names declared, and nothing else
+// different. Anything else is a change this can't make safely, and the
+// file is left for its author.
+function verifyChange(
+  before: Document,
+  text: string,
+  [service, section, index]: [string, Section, number],
+  change: ComposeMountChange | null
+) {
+  const refuse = () => {
+    throw new Error(
+      "This change would touch more of the Compose file than the mount; make it in the file."
+    )
+  }
+  const after = parseFile(text)
+  if (after.errors.length > 0) refuse()
+  const was = resolved(before)
+  const now = resolved(after)
+  if (!isRecord(was) || !isRecord(now)) return refuse()
+  const expected = structuredClone(was) as Record<string, unknown>
+  const actual = structuredClone(now) as Record<string, unknown>
+  const listOf = (file: Record<string, unknown>) =>
+    ((file.services as Record<string, Record<string, unknown>>)[service] ??
+      {})[section]
+  const expectedList = listOf(expected)
+  const actualList = listOf(actual)
+  if (!Array.isArray(expectedList)) return refuse()
+  if (change === null) {
+    expectedList.splice(index, 1)
+    if (expectedList.length === 0) {
+      delete (expected.services as Record<string, Record<string, unknown>>)[
+        service
+      ]![section]
+    }
+  } else {
+    if (!Array.isArray(actualList)) return refuse()
+    const asked =
+      section === "volumes"
+        ? volumeMount(now, "", actualList[index])
+        : fileMount(now, section, actualList[index])
+    const had =
+      section === "volumes"
+        ? volumeMount(was, "", expectedList[index])
+        : fileMount(was, section, expectedList[index])
+    if (
+      !asked ||
+      !had ||
+      asked.target !== change.target ||
+      (section === "volumes" &&
+        (asked.source !== change.source.trim() ||
+          asked.readOnly !== change.readOnly ||
+          (isRecord(expectedList[index]) && asked.kind !== had.kind))) ||
+      (section !== "volumes" && asked.source !== had.source)
+    ) {
+      return refuse()
+    }
+    expectedList[index] = null
+    actualList[index] = null
+    // A volume the mount newly names, declared for it.
+    const declared = isRecord(actual.volumes) ? actual.volumes : {}
+    const known = isRecord(expected.volumes) ? expected.volumes : {}
+    const added = Object.keys(declared).filter(
+      (name) => !Object.hasOwn(known, name)
+    )
+    if (added.length > 0) {
+      if (added.length > 1 || added[0] !== asked.source) return refuse()
+      expected.volumes = { ...known, [added[0]]: {} }
+    }
+  }
+  if (stableJson(expected) !== stableJson(actual)) refuse()
+}
+
+function stableJson(value: unknown): string {
+  return JSON.stringify(value, (_, inner: unknown) =>
+    isRecord(inner)
+      ? Object.fromEntries(
+          Object.keys(inner)
+            .sort()
+            .map((key) => [key, inner[key]])
+        )
+      : typeof inner === "bigint"
+        ? inner.toString()
+        : inner
+  )
 }
 
 interface Patch {
@@ -163,23 +255,36 @@ function removeEntry(
       (candidate) => isScalar(candidate.key) && candidate.key.value === section
     )
     const keyNode = pair?.key as Node | undefined
-    if (!keyNode?.range || !list.range) return text
+    if (!keyNode?.range) return text
     return applyPatches(text, [
       {
-        end: lineEnd(text, Math.max(list.range[1] - 1, keyNode.range[1])),
+        end: lineEnd(text, contentEnd(entry) - 1),
         start: lineStart(text, keyNode.range[0]),
         text: "",
       },
     ])
   }
-  const range = entry.range!
   return applyPatches(text, [
     {
-      end: lineEnd(text, Math.max(range[1] - 1, range[0])),
-      start: lineStart(text, range[0]),
+      end: lineEnd(text, contentEnd(entry) - 1),
+      start: lineStart(text, entry.range![0]),
       text: "",
     },
   ])
+}
+
+// Where a node's own text ends: its last value, not the comments and
+// indentation that may follow it before the next key.
+function contentEnd(node: Node): number {
+  if (isMap(node) || isSeq(node)) {
+    const last = node.items.at(-1)
+    const inner = isMap(node)
+      ? ((last as { value?: Node | null; key?: Node } | undefined)?.value ??
+        (last as { key?: Node } | undefined)?.key)
+      : (last as Node | undefined)
+    if (isNode(inner) && inner.range) return contentEnd(inner)
+  }
+  return node.range![1]
 }
 
 function changeVolume(
@@ -311,7 +416,7 @@ function declareVolume(
   const indent = " ".repeat(
     firstService?.range ? column(text, firstService.range[0]) || 2 : 2
   )
-  const declaration = `${name}: {}`
+  const declaration = `${scalarText(name)}: {}`
   if (isMap(root) && !hasMerge(root)) {
     const pair = root.items.find(
       (candidate) => isScalar(candidate.key) && candidate.key.value === "volumes"
@@ -369,8 +474,13 @@ function replaceNode(node: Node, text: string): Patch {
 
 // A line of its own at `at`, which starts a line or ends the file.
 function insertLine(text: string, at: number, line: string): Patch {
-  const before = at > 0 && text[at - 1] !== "\n" ? "\n" : ""
-  return { end: at, start: at, text: `${before}${line}\n` }
+  const newline = text.includes("\r\n") ? "\r\n" : "\n"
+  const before = at > 0 && text[at - 1] !== "\n" ? newline : ""
+  return {
+    end: at,
+    start: at,
+    text: `${before}${line.replaceAll("\n", newline)}${newline}`,
+  }
 }
 
 function applyPatches(text: string, patches: ReadonlyArray<Patch>): string {
@@ -389,14 +499,25 @@ function scalarText(value: string | boolean, like?: Scalar): string {
   if (typeof value === "boolean") return String(value)
   if (like?.type === "QUOTE_DOUBLE") return JSON.stringify(value)
   if (like?.type === "QUOTE_SINGLE") return `'${value.replaceAll("'", "''")}'`
-  return new Document(value).toString().trimEnd()
+  // On one line, quoted wherever YAML would read it as something else.
+  const plain = new Document(value).toString({ lineWidth: 0 }).trimEnd()
+  return plain.includes("\n") ? JSON.stringify(value) : plain
 }
 
+// Strings in a flow map are quoted unless they're plainly a path or name,
+// since commas and brackets end values there; JSON's quotes are YAML's
+// double quotes.
 function flowMap(entries: Record<string, string | boolean>): string {
   const pairs = Object.entries(entries).map(
-    ([key, value]) => `${key}: ${scalarText(value)}`
+    ([key, value]) =>
+      `${key}: ${typeof value === "string" ? flowScalar(value) : value}`
   )
   return `{ ${pairs.join(", ")} }`
+}
+
+function flowScalar(value: string): string {
+  const plain = /^[\w./-]+$/u.test(value) && scalarText(value) === value
+  return plain ? value : JSON.stringify(value)
 }
 
 function lineStart(text: string, at: number): number {
@@ -471,6 +592,17 @@ function unreadableSettings(entry: Node): boolean {
     )
   }
   if (!isMap(entry) || entry.flow) return true
+  // A block scalar's range takes the newline after it with it.
+  if (
+    entry.items.some(
+      (pair) =>
+        isScalar(pair.value) &&
+        (pair.value.type === "BLOCK_FOLDED" ||
+          pair.value.type === "BLOCK_LITERAL")
+    )
+  ) {
+    return true
+  }
   const readOnly = entry.items.find(
     (pair) => isScalar(pair.key) && pair.key.value === "read_only"
   )

@@ -483,4 +483,92 @@ volumes:
       ).toBe(text)
     }
   })
+
+  it("removes the last mount and nothing after it", () => {
+    const text = `services:
+  app:
+    image: app
+    volumes:
+      - type: volume
+        target: /data
+        # end of mounts
+    restart: always
+`
+    const [mount] = composeMounts(text, project)!
+    const changed = changeComposeMount(text, mount!.key, null)
+    expect(changed).toContain("    restart: always\n")
+    expect(changed).not.toContain("volumes:")
+  })
+
+  it("leaves alone a long mount with a block scalar in it", () => {
+    const text = `services:
+  app:
+    image: app
+    volumes:
+      - type: bind
+        source: >-
+          ./state
+        target: /data
+`
+    expect(composeMounts(text, project)![0]!.editable).toBe(false)
+  })
+
+  it("writes paths and names YAML would read as something else so they read back as written", () => {
+    const text = `services:
+  app:
+    image: app
+    volumes:
+      - /scratch
+      - ./data:/data
+    configs:
+      - init
+configs:
+  init:
+    file: ./init.sql
+`
+    const keyAt = (target: string) =>
+      composeMounts(text, project)!.find((mount) => mount.target === target)!
+        .key
+    for (const [target, change] of [
+      ["/scratch", { readOnly: true, source: "", target: "/path,other[1]" }],
+      [
+        "/data",
+        {
+          readOnly: false,
+          source: "./data",
+          target: `/${"a very long path with spaces ".repeat(6)}end`,
+        },
+      ],
+      ["/init", { readOnly: true, source: "init", target: "/etc/a, b" }],
+      ["/data", { readOnly: false, source: "001", target: "/data" }],
+      ["/data", { readOnly: false, source: "null", target: "/data" }],
+    ] as const) {
+      const changed = changeComposeMount(text, keyAt(target), change)
+      const after = composeMounts(changed, project)!.find(
+        (mount) => mount.target === change.target
+      )
+      expect(after).toEqual(
+        expect.objectContaining({
+          readOnly: change.readOnly,
+          source: change.source,
+        })
+      )
+    }
+  })
+
+  it("refuses to declare a volume where appending one would break the file", () => {
+    for (const text of [
+      "services:\n  app:\n    image: app\n    volumes:\n      - ./data:/data\n...\n",
+      "  services:\n    app:\n      image: app\n      volumes:\n        - ./data:/data\n",
+    ]) {
+      const [mount] = composeMounts(text, project)!
+      expect(() =>
+        changeComposeMount(text, mount!.key, {
+          readOnly: false,
+          source: "data",
+          target: "/data",
+        })
+      ).toThrow()
+    }
+  })
 })
