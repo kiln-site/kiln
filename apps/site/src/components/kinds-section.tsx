@@ -10,48 +10,45 @@ import {
 } from "@/components/instance-kind-icon"
 
 import { BrickMark, officialBricks } from "~/components/brick-mark"
+import { KilnMark } from "~/components/kiln-mark"
 import { brandMarks, type BrandMarkDefinition } from "~/lib/brand-marks"
 
 // What Kiln runs, one card each: a picture of the idea, then a line on it.
 // The pictures are illustrations, not Hearth's screens.
 export function KindsSection() {
   return (
-    <div className="mt-14 grid gap-px border border-border bg-border lg:grid-cols-2">
+    <div className="mt-12 grid gap-px border border-border bg-border lg:grid-cols-2">
       <Card
         icon={<ServerKindIcon className="size-4" />}
         kind="Game servers"
         title="Start from a Brick"
         visual={<BrickWall />}
       >
-        Pick Paper, Fabric, Palworld, or a Brick of your own. Kiln sets up the
-        ports and the right Java.
+        Paper, Fabric, Palworld, or your own. Kiln handles ports and Java.
       </Card>
       <Card
         icon={<AppKindIcon className="size-4" />}
         kind="Apps"
-        title="Push, and it's live"
+        title="Push to deploy"
         visual={<DeployFlow />}
       >
-        Deploy a GitHub repository or a Docker image. New containers take over
-        once they're healthy, on your own domain.
+        Kiln builds each push and swaps it in once it's healthy.
       </Card>
       <Card
         icon={<DatabaseKindIcon className="size-4" />}
         kind="Databases"
-        title="A database next door"
-        visual={<EngineOrbit />}
+        title="Databases next door"
+        visual={<EngineRing />}
       >
-        MySQL, MariaDB, PostgreSQL, Redis, or Valkey, on the same machine as the
-        app or server that uses it.
+        MySQL, MariaDB, PostgreSQL, Redis, or Valkey, beside what uses them.
       </Card>
       <Card
         icon={<BrandSvg mark={brandMarks.cloudflare} className="size-4" />}
         kind="Domains"
-        title="Addresses players remember"
+        title="Names, not ports"
         visual={<VanityAddress />}
       >
-        Connect Cloudflare and each game server gets its own name. Kiln writes
-        the DNS records, port included.
+        Connect Cloudflare and each game server gets its own address.
       </Card>
     </div>
   )
@@ -74,36 +71,21 @@ function Card({
     <article className="flex flex-col bg-background">
       <div
         aria-hidden="true"
-        className="relative h-64 overflow-hidden border-b border-border sm:h-80"
+        className="relative h-56 overflow-hidden border-b border-border sm:h-64"
       >
-        <div className="absolute inset-0 bg-[image:var(--ambient-grid)] [mask-image:radial-gradient(ellipse_70%_70%_at_50%_50%,black,transparent)] bg-[size:32px_32px] opacity-60" />
         {visual}
       </div>
-      <div className="p-6 sm:p-8">
+      <div className="p-6 sm:px-8 sm:py-7">
         <p className="type-label flex items-center gap-2 text-muted-foreground">
           {icon}
           {kind}
         </p>
-        <h3 className="mt-3 font-heading text-2xl font-semibold tracking-[-0.035em]">
+        <h3 className="mt-2.5 font-heading text-2xl font-semibold tracking-[-0.035em]">
           {title}
         </h3>
-        <p className="site-copy mt-2 max-w-md text-muted-foreground">
-          {children}
-        </p>
+        <p className="site-copy mt-1.5 text-muted-foreground">{children}</p>
       </div>
     </article>
-  )
-}
-
-// A glow of one colour behind a picture.
-function Glow({ className, color }: { className?: string; color: string }) {
-  return (
-    <div
-      className={cn("absolute inset-0", className)}
-      style={{
-        background: `radial-gradient(ellipse 55% 45% at 50% 55%, color-mix(in oklab, ${color} 22%, transparent), transparent)`,
-      }}
-    />
   )
 }
 
@@ -123,27 +105,24 @@ const wall: Array<Array<Brick["name"] | "own" | null>> = [
 
 function BrickWall() {
   return (
-    <>
-      <Glow color="var(--primary)" className="translate-y-1/4" />
-      <div className="absolute inset-0 flex items-center justify-center [mask-image:radial-gradient(ellipse_75%_80%_at_50%_50%,black_40%,transparent)]">
-        <div className="flex shrink-0 flex-col items-center gap-2 max-sm:scale-[0.78]">
-          {wall.map((row, index) => (
-            <div key={index} className="flex shrink-0 gap-2">
-              {row.map((name, column) => (
-                <WallBrick key={column} name={name} />
-              ))}
-            </div>
-          ))}
-        </div>
+    <div className="absolute inset-0 flex items-center justify-center [mask-image:radial-gradient(ellipse_75%_80%_at_50%_50%,black_45%,transparent)]">
+      <div className="flex shrink-0 flex-col items-center gap-2 max-sm:scale-[0.78]">
+        {wall.map((row, index) => (
+          <div key={index} className="flex shrink-0 gap-2">
+            {row.map((name, column) => (
+              <WallBrick key={column} name={name} />
+            ))}
+          </div>
+        ))}
       </div>
-    </>
+    </div>
   )
 }
 
 function WallBrick({ name }: { name: Brick["name"] | "own" | null }) {
-  const base = "flex h-14 w-34 shrink-0 items-center gap-2.5 px-3.5 sm:h-16"
+  const base = "flex h-14 w-34 shrink-0 items-center gap-2.5 px-3.5"
   if (name === null) {
-    return <div className={cn(base, "border border-border/70 bg-card/50")} />
+    return <div className={cn(base, "border border-border/70")} />
   }
   if (name === "own") {
     return (
@@ -161,11 +140,9 @@ function WallBrick({ name }: { name: Brick["name"] | "own" | null }) {
   const brick = bricks[name]
   return (
     <div
-      className={cn(base, "border")}
+      className={cn(base, "border bg-card")}
       style={{
-        backgroundColor: `color-mix(in oklab, ${brick.color} 13%, var(--background))`,
-        borderColor: `color-mix(in oklab, ${brick.color} 45%, transparent)`,
-        boxShadow: `0 0 40px -12px ${brick.color}`,
+        borderColor: `color-mix(in oklab, ${brick.color} 40%, transparent)`,
         color: brick.color,
       }}
     >
@@ -175,27 +152,24 @@ function WallBrick({ name }: { name: Brick["name"] | "own" | null }) {
   )
 }
 
-// A push travels from GitHub through a build to the app's address.
+// A push travels from GitHub to Kiln, which builds it and deploys it.
 function DeployFlow() {
   return (
-    <>
-      <Glow color={brandMarks.docker.color} />
-      <div className="absolute inset-0 flex items-center justify-center px-10 sm:px-16">
-        <div className="flex w-full max-w-md items-start">
-          <FlowNode label="git push">
-            <BrandSvg mark={brandMarks.github} className="size-8" />
-          </FlowNode>
-          <FlowLine delay="0s" />
-          <FlowNode label="Build">
-            <BrandSvg mark={brandMarks.docker} className="size-9" />
-          </FlowNode>
-          <FlowLine delay="-1.2s" />
-          <FlowNode label="shop.example.com" highlight>
-            <Globe className="size-8 text-primary" />
-          </FlowNode>
-        </div>
+    <div className="absolute inset-0 flex items-center justify-center px-10 sm:px-16">
+      <div className="flex w-full max-w-md items-start">
+        <FlowNode label="Push">
+          <BrandSvg mark={brandMarks.github} className="size-7" />
+        </FlowNode>
+        <FlowLine delay="0s" />
+        <FlowNode label="Build" highlight>
+          <KilnMark className="size-8" />
+        </FlowNode>
+        <FlowLine delay="-1.2s" />
+        <FlowNode label="Deploy">
+          <Globe className="size-7 text-foreground" />
+        </FlowNode>
       </div>
-    </>
+    </div>
   )
 }
 
@@ -209,32 +183,23 @@ function FlowNode({
   label: string
 }) {
   return (
-    <div className="flex w-14 shrink-0 flex-col items-center gap-3 sm:w-20">
+    <div className="flex w-14 shrink-0 flex-col items-center gap-3 sm:w-18">
       <div
         className={cn(
-          "grid size-14 place-items-center border bg-card sm:size-20",
-          highlight
-            ? "border-primary/50 shadow-[0_0_48px_-12px_var(--primary)]"
-            : "border-border"
+          "grid size-14 place-items-center border bg-card sm:size-18",
+          highlight ? "border-primary/50" : "border-border"
         )}
       >
         {children}
       </div>
-      <span
-        className={cn(
-          "type-meta font-mono whitespace-nowrap",
-          highlight ? "text-foreground" : "text-muted-foreground"
-        )}
-      >
-        {label}
-      </span>
+      <span className="type-meta text-muted-foreground">{label}</span>
     </div>
   )
 }
 
 function FlowLine({ delay }: { delay: string }) {
   return (
-    <div className="relative mt-7 h-px flex-1 overflow-hidden bg-border sm:mt-10">
+    <div className="relative mt-7 h-px flex-1 overflow-hidden bg-border sm:mt-9">
       <div
         className="absolute inset-0 bg-[linear-gradient(90deg,transparent_0%,var(--primary)_50%,transparent_100%)] bg-[length:35%_100%] bg-no-repeat motion-safe:animate-[site-flow_2.4s_ease-in-out_infinite] motion-reduce:hidden"
         style={{ animationDelay: delay }}
@@ -252,57 +217,47 @@ const engines = [
 ]
 
 // The engines in a ring around the app that uses them.
-function EngineOrbit() {
+function EngineRing() {
   return (
-    <>
-      <Glow color={brandMarks.postgres.color} />
-      <div className="absolute inset-0 grid place-items-center">
-        <div className="relative size-48 sm:size-56">
-          <div className="absolute inset-0 rounded-full border border-dashed border-border" />
-          <div className="absolute inset-[34%] grid place-items-center border border-border bg-card shadow-[0_0_48px_-16px_var(--primary)]">
-            <AppKindIcon className="size-8" />
-          </div>
-          {engines.map((mark, index) => {
-            const angle = (index / engines.length) * 2 * Math.PI - Math.PI / 2
-            return (
-              <div
-                key={mark.title}
-                className="absolute grid size-14 -translate-1/2 place-items-center border border-border bg-card sm:size-16"
-                style={{
-                  left: `${50 + 50 * Math.cos(angle)}%`,
-                  top: `${50 + 50 * Math.sin(angle)}%`,
-                  boxShadow: `0 0 36px -14px ${mark.color === "currentColor" ? "white" : mark.color}`,
-                }}
-              >
-                <BrandSvg mark={mark} className="size-7 sm:size-8" />
-              </div>
-            )
-          })}
+    <div className="absolute inset-0 grid place-items-center">
+      <div className="relative size-40 translate-y-2 sm:size-44">
+        <div className="absolute inset-0 rounded-full border border-dashed border-border" />
+        <div className="absolute inset-[34%] grid place-items-center border border-border bg-card">
+          <AppKindIcon className="size-6" />
         </div>
+        {engines.map((mark, index) => {
+          const angle = (index / engines.length) * 2 * Math.PI - Math.PI / 2
+          return (
+            <div
+              key={mark.title}
+              className="absolute grid size-12 -translate-1/2 place-items-center border border-border bg-card sm:size-14"
+              style={{
+                left: `${50 + 50 * Math.cos(angle)}%`,
+                top: `${50 + 50 * Math.sin(angle)}%`,
+              }}
+            >
+              <BrandSvg mark={mark} className="size-6 sm:size-7" />
+            </div>
+          )
+        })}
       </div>
-    </>
+    </div>
   )
 }
 
 // An address nobody remembers becomes one they do.
 function VanityAddress() {
   return (
-    <>
-      <Glow color={brandMarks.cloudflare.color} />
-      <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 px-6">
-        <span className="font-mono text-base text-muted-foreground line-through decoration-muted-foreground/60 sm:text-lg">
-          203.0.113.24:25565
-        </span>
-        <ArrowDown className="size-4 text-muted-foreground" />
-        <span className="flex items-center gap-3 font-mono text-2xl tracking-[-0.03em] text-foreground sm:text-4xl">
-          <BrandSvg
-            mark={brandMarks.cloudflare}
-            className="size-8 sm:size-10"
-          />
-          smp.example.com
-        </span>
-      </div>
-    </>
+    <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6">
+      <span className="font-mono text-base text-muted-foreground line-through decoration-muted-foreground/60">
+        203.0.113.24:25565
+      </span>
+      <ArrowDown className="size-4 text-muted-foreground" />
+      <span className="flex items-center gap-3 font-mono text-2xl tracking-[-0.03em] text-foreground sm:text-3xl">
+        <BrandSvg mark={brandMarks.cloudflare} className="size-7 sm:size-9" />
+        smp.example.com
+      </span>
+    </div>
   )
 }
 

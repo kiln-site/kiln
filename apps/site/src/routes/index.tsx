@@ -139,9 +139,8 @@ function Kinds() {
   return (
     <section className="border-t border-border">
       <div className="site-container py-20 sm:py-28">
-        <SectionHeading title="Game servers, apps, and databases, side by side">
-          Each runs in its own container on a machine you choose, and each gets
-          the same console, files, backups, and access controls.
+        <SectionHeading title="Everything you run, in one panel">
+          Each in its own container, on a machine you choose.
         </SectionHeading>
 
         <KindsSection />
