@@ -627,4 +627,33 @@ volumes:
       ).toThrow("nocopy")
     }
   })
+
+  it("keeps a path's spaces through a change", () => {
+    const text = `services:
+  app:
+    image: app
+    volumes:
+      - "./state :/state"
+      - type: bind
+        source: "./logs "
+        target: /logs
+`
+    let changed = text
+    for (const mount of composeMounts(text, project)!) {
+      changed = changeComposeMount(changed, mount.key, {
+        readOnly: true,
+        source: mount.source,
+        target: mount.target,
+      })
+    }
+    expect(
+      composeMounts(changed, project)!.map((mount) => [
+        mount.source,
+        mount.readOnly,
+      ])
+    ).toEqual([
+      ["./state ", true],
+      ["./logs ", true],
+    ])
+  })
 })

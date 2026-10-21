@@ -102,10 +102,15 @@ export function composeMountProblem(
   if (mount.kind === "bind" && !change.source.trim()) {
     return "Enter the path each bind mounts."
   }
+  // Written as typed, spaces and all, so only a name or nothing.
+  if (change.source && !change.source.trim()) {
+    return "Enter a name, or leave it empty for a volume of its own."
+  }
   if (change.source.includes(":") && !change.source.includes("${")) {
     return "A source can't contain a colon."
   }
-  const source = change.source.trim()
+  // As written: Compose keeps a path's spaces, so they're the path's.
+  const source = change.source
   if (
     source &&
     !source.includes("$") &&
@@ -196,7 +201,7 @@ function verifyChange(
       !had ||
       asked.target !== change.target ||
       (section === "volumes" &&
-        (asked.source !== change.source.trim() ||
+        (asked.source !== change.source ||
           asked.readOnly !== change.readOnly ||
           (isRecord(expectedList[index]) && asked.kind !== had.kind))) ||
       (section !== "volumes" && asked.source !== had.source)
@@ -293,7 +298,7 @@ function changeVolume(
   entry: Node,
   change: ComposeMountChange
 ): Array<Patch> {
-  const source = change.source.trim()
+  const source = change.source
   if (isScalar(entry) && typeof entry.value === "string") {
     // The short syntax's source says what it is, as Compose reads it.
     const [first, second, mode] = splitShort(entry.value)
