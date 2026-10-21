@@ -57,8 +57,7 @@ function Hero() {
           </h1>
           <div className="lg:col-span-4 lg:pb-2">
             <p className="site-lede max-w-sm text-muted-foreground">
-              Put a Relay on any machine you own and run it all from your
-              browser.
+              Free and open source. Your machines, one panel for all of it.
             </p>
             {comingSoon.signUp ? (
               // Nothing to click until sign-up opens.
