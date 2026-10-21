@@ -35,10 +35,15 @@ import {
 } from "@workspace/ui/components/select"
 import { Switch } from "@workspace/ui/components/switch"
 
+import type {
+  AppComposeMounts,
+  ComposeMountsModule,
+} from "@/components/app/app-compose-mounts"
 import { useAppConfigSave } from "@/components/app/app-config-dialogs"
 import { appServices, type App } from "@/components/app/app-presentation"
 import { CreateVolumeDialog } from "@/components/relay/relay-volume-dialogs"
 import { recoverPromise } from "@/effect/promise"
+import type { ComposeMount, ComposeMountChange } from "@/lib/compose-mounts"
 import { relayVolumesQueryOptions } from "@/lib/query-options"
 
 type MountType = AppMountSource["type"]
@@ -69,29 +74,45 @@ const mountTypes: Record<
 const ALL_SERVICES = "*"
 
 // What the app mounts, saved together. A file
-// starts empty; its contents are edited from the Volumes section.
+// starts empty; its contents are edited from the Volumes section. What a
+// pasted Compose file mounts is changed in the file, saved with them.
 export function AppMountsDialog({
   app,
   compose,
+  composeFile,
   deploying,
   onOpenChange,
   routeId,
   saved,
+  savedCompose,
 }: {
   app: App
   // Whether it runs a Compose file, whose mounts each name a service.
   compose: boolean
+  composeFile: AppComposeMounts | null
   deploying: boolean
   onOpenChange: (open: boolean) => void
   routeId: string
   saved: ReadonlyArray<AppMount>
+  savedCompose: string
 }) {
   const [draft, setDraft] = React.useState<Array<AppMount>>(() => [...saved])
+  // Changes to the Compose file's mounts by their place in it as saved,
+  // null for one removed.
+  const [composeEdits, setComposeEdits] = React.useState<
+    ReadonlyMap<string, ComposeMountChange | null>
+  >(() => new Map())
   const [creatingFor, setCreatingFor] = React.useState<string | null>(null)
   const volumes = useQuery(relayVolumesQueryOptions(app.relayId))
   const save = useAppConfigSave(app, routeId)
-  const problem = mountsProblem(draft)
-  const dirty = JSON.stringify(draft) !== JSON.stringify(saved)
+  const editing =
+    composeFile?.editable && composeFile.module ? composeFile.module : null
+  const composeMounts = composeFile?.mounts ?? []
+  const problem =
+    mountsProblem(draft) ??
+    composeMountsProblem(editing, composeMounts, composeEdits)
+  const composeDirty = editing !== null && composeEdits.size > 0
+  const dirty = JSON.stringify(draft) !== JSON.stringify(saved) || composeDirty
   const pending = save.isPending ? save.variables.next : null
   const services = appServices(app)
   const update = (id: string, change: (mount: AppMount) => AppMount) =>
@@ -102,7 +123,17 @@ export function AppMountsDialog({
     if (problem) return
     const done = await recoverPromise(
       () =>
-        save.mutateAsync({ config: { mounts: draft }, next }).then(() => true),
+        save
+          .mutateAsync({
+            config: {
+              mounts: draft,
+              ...(composeDirty && {
+                compose: applyComposeEdits(editing, savedCompose, composeEdits),
+              }),
+            },
+            next,
+          })
+          .then(() => true),
       () => false
     )
     if (done) onOpenChange(false)
@@ -125,11 +156,12 @@ export function AppMountsDialog({
             void submit("stay")
           }}
         >
-          {draft.length === 0 ? (
+          {draft.length === 0 && composeMounts.length === 0 ? (
             <p className="border border-dashed px-3 py-6 text-center text-xs text-muted-foreground">
               Nothing mounted. Add a volume, a path on the node, or a file.
             </p>
-          ) : (
+          ) : null}
+          {draft.length === 0 ? null : (
             <ul className="flex flex-col gap-3">
               {draft.map((mount) => (
                 <MountFields
@@ -175,7 +207,44 @@ export function AppMountsDialog({
               </Button>
             ))}
           </div>
-          {problem && draft.length > 0 ? (
+          {composeFile && composeMounts.length > 0 ? (
+            <section className="flex flex-col gap-3">
+              <div className="flex flex-col gap-1">
+                <h3 className="text-xs font-medium">In {composeFile.path}</h3>
+                <p className="text-xs text-muted-foreground">
+                  {composeFile.editable
+                    ? "Changes here are made in the Compose file."
+                    : `Change these in ${composeFile.path} in the repository.`}
+                </p>
+              </div>
+              <ul className="flex flex-col gap-3">
+                {composeMounts.map((mount) => {
+                  const edit = composeEdits.get(mount.key)
+                  if (edit === null) return null
+                  return (
+                    <ComposeMountFields
+                      key={mount.key}
+                      change={
+                        edit ?? {
+                          readOnly: mount.readOnly,
+                          source: mount.source,
+                          target: mount.target,
+                        }
+                      }
+                      editable={editing !== null}
+                      mount={mount}
+                      onChange={(change) =>
+                        setComposeEdits((current) =>
+                          new Map(current).set(mount.key, change)
+                        )
+                      }
+                    />
+                  )
+                })}
+              </ul>
+            </section>
+          ) : null}
+          {problem && (draft.length > 0 || composeDirty) ? (
             <p className="text-xs text-muted-foreground">{problem}</p>
           ) : null}
           <DialogFooter>
@@ -226,6 +295,142 @@ export function AppMountsDialog({
         ) : null}
       </DialogContent>
     </Dialog>
+  )
+}
+
+// The saved Compose file with the dialog's changes: each changed in place,
+// then the removed ones from the last, so the places of those left hold.
+function applyComposeEdits(
+  module: ComposeMountsModule | null,
+  text: string,
+  edits: ReadonlyMap<string, ComposeMountChange | null>
+): string {
+  if (!module) return text
+  let next = text
+  for (const [key, change] of edits) {
+    if (change) next = module.changeComposeMount(next, key, change)
+  }
+  const removed = [...edits]
+    .filter(([, change]) => change === null)
+    .map(([key]) => key)
+    .sort((a, b) => keyIndex(b) - keyIndex(a))
+  for (const key of removed) next = module.changeComposeMount(next, key, null)
+  return next
+}
+
+function keyIndex(key: string): number {
+  return (JSON.parse(key) as [string, string, number])[2]
+}
+
+function composeMountsProblem(
+  module: ComposeMountsModule | null,
+  mounts: ReadonlyArray<ComposeMount>,
+  edits: ReadonlyMap<string, ComposeMountChange | null>
+): string | null {
+  if (!module) return null
+  for (const mount of mounts) {
+    const change = edits.get(mount.key)
+    if (!change) continue
+    const problem = module.composeMountProblem(mount, change)
+    if (problem) return problem
+  }
+  return null
+}
+
+const composeKinds: Record<
+  ComposeMount["kind"],
+  { icon: React.ReactNode; label: string }
+> = {
+  bind: { icon: <FolderTree />, label: "Path on the node" },
+  config: { icon: <FileText />, label: "Config" },
+  secret: { icon: <FileText />, label: "Secret" },
+  volume: { icon: <HardDrive />, label: "Volume" },
+}
+
+// One mount the Compose file declares. A config's or secret's source is
+// its name at the top of the file, so only where it's mounted changes.
+function ComposeMountFields({
+  change,
+  editable,
+  mount,
+  onChange,
+}: {
+  change: ComposeMountChange
+  editable: boolean
+  mount: ComposeMount
+  onChange: (change: ComposeMountChange | null) => void
+}) {
+  const kind = composeKinds[mount.kind]
+  const files = mount.kind === "config" || mount.kind === "secret"
+  return (
+    <li className="border bg-muted/10">
+      <div className="flex h-10 items-center gap-2 border-b px-3 text-[0.8125rem] font-medium [&_svg]:size-3.5 [&_svg]:text-muted-foreground">
+        {kind.icon}
+        {kind.label}
+        <span className="font-mono text-xs font-normal text-muted-foreground">
+          {mount.service}
+        </span>
+        {files ? null : (
+          <label className="ml-auto flex items-center gap-2 text-xs font-normal text-muted-foreground">
+            Read-only
+            <Switch
+              checked={change.readOnly}
+              disabled={!editable}
+              onCheckedChange={(readOnly) => onChange({ ...change, readOnly })}
+            />
+          </label>
+        )}
+        {editable ? (
+          <Button
+            aria-label="Remove"
+            className={files ? "ml-auto" : undefined}
+            size="icon-sm"
+            type="button"
+            variant="ghost"
+            onClick={() => onChange(null)}
+          >
+            <Trash2 />
+          </Button>
+        ) : null}
+      </div>
+      <div className="grid gap-3 p-3 sm:grid-cols-2">
+        <Field
+          hint={
+            mount.kind === "volume"
+              ? mount.dockerName
+                ? `${mount.dockerName} in Docker. A new name is a new, empty volume.`
+                : "Empty for a volume of its own, made anew with each container."
+              : mount.kind === "bind" && change.source.startsWith(".")
+                ? "In the app’s folder on the node."
+                : (mount.origin ?? undefined)
+          }
+          label={mount.kind === "bind" ? "Path" : "Name"}
+        >
+          <Input
+            className="font-mono"
+            disabled={!editable || files}
+            spellCheck={false}
+            value={change.source}
+            onChange={(event) => {
+              const source = event.currentTarget.value
+              onChange({ ...change, source })
+            }}
+          />
+        </Field>
+        <Field label="Mounted at">
+          <Input
+            className="font-mono"
+            disabled={!editable}
+            spellCheck={false}
+            value={change.target}
+            onChange={(event) => {
+              const target = event.currentTarget.value
+              onChange({ ...change, target })
+            }}
+          />
+        </Field>
+      </div>
+    </li>
   )
 }
 

@@ -9,17 +9,49 @@ import {
   AppCodeDialog,
   type EditableAppConfig,
 } from "@/components/app/app-config-dialogs"
+import { useAppComposeMounts } from "@/components/app/app-compose-mounts"
 import { AppMountsDialog } from "@/components/app/app-mounts-dialog"
 import type { App } from "@/components/app/app-presentation"
 import { ServiceTag, useAppRunsCompose } from "@/components/app/app-settings"
-import { InfoSection } from "@/components/info-page"
+import { DataTable } from "@/components/data-table-view"
+import { InfoCopyValue, InfoSection } from "@/components/info-page"
+import type { ComposeMount } from "@/lib/compose-mounts"
+import {
+  createDataTableColumnHelper,
+  dataTableColumnMeta,
+  defineDataTable,
+} from "@/lib/data-table"
+import type { DataTableSource } from "@/lib/data-table-source"
 import { relayVolumesQueryOptions } from "@/lib/query-options"
 import { warmSyntaxCodeEditorModule } from "@/lib/syntax-editor-module-preload"
 
+// A mount the config keeps, or one the Compose file declares. Each row
+// carries what its cells need, so the columns don't change with the data.
+type MountRow =
+  | {
+      app: App
+      canManage: boolean
+      id: string
+      kind: "config"
+      mount: AppMount
+      mounts: ReadonlyArray<AppMount>
+      routeId: string
+      volumeNames: ReadonlyMap<string, string> | undefined
+    }
+  | {
+      app: App
+      file: string
+      id: string
+      kind: "compose"
+      mount: ComposeMount
+    }
+
+const mountColumnHelper = createDataTableColumnHelper<MountRow>()
+
 // What the app mounts: the Relay's volumes, paths on the node, and files
-// kept in its config, which open in the code dialog. Its containers keep
-// nothing else across deploys. Configure changes them; they apply on the
-// next deploy.
+// kept in its config, which open in the code dialog, then what its Compose
+// file mounts itself. Its containers keep nothing else across deploys.
+// Configure changes them; they apply on the next deploy.
 export function AppVolumesSection({
   app,
   canManage,
@@ -34,11 +66,35 @@ export function AppVolumesSection({
   const [configuring, setConfiguring] = React.useState(false)
   const compose = useAppRunsCompose(app)
   const { mounts } = config
+  const composeFile = useAppComposeMounts(app, config)
   const { data: volumeNames } = useQuery({
     ...relayVolumesQueryOptions(app.relayId),
     enabled: mounts.some((mount) => mount.source.type === "volume"),
     select: volumeNamesById,
   })
+  const rows = React.useMemo(
+    (): Array<MountRow> => [
+      ...mounts.map((mount) => ({
+        app,
+        canManage,
+        id: `config:${mount.id}`,
+        kind: "config" as const,
+        mount,
+        mounts,
+        routeId,
+        volumeNames,
+      })),
+      ...(composeFile?.mounts ?? []).map((mount) => ({
+        app,
+        file: composeFile?.path ?? "compose.yaml",
+        id: `compose:${mount.key}`,
+        kind: "compose" as const,
+        mount,
+      })),
+    ],
+    [app, canManage, composeFile, mounts, routeId, volumeNames]
+  )
+  const empty = rows.length === 0
   return (
     <InfoSection
       icon={<HardDrive />}
@@ -59,6 +115,8 @@ export function AppVolumesSection({
               <AppMountsDialog
                 app={app}
                 compose={compose}
+                composeFile={composeFile}
+                savedCompose={config.compose}
                 deploying={app.deployment?.state === "running"}
                 routeId={routeId}
                 saved={mounts}
@@ -68,67 +126,184 @@ export function AppVolumesSection({
           </>
         ) : null
       }
-      content={mounts.length === 0 ? true : "flush"}
+      content={empty ? true : "flush"}
     >
-      {mounts.length === 0 ? (
+      {empty ? (
         <p className="text-[0.8125rem] text-muted-foreground">
           Nothing yet, so the app keeps no data across deploys. Mount a volume
           to keep or share data, a path on the node, or a file.
         </p>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-[0.8125rem]">
-            <thead>
-              <tr className="type-technical-label border-b text-left text-muted-foreground/80 [&>th]:px-4 [&>th]:py-2 [&>th]:font-normal">
-                <th>Source</th>
-                <th>Mounted at</th>
-                {compose ? <th>Service</th> : null}
-                <th className="text-right">Access</th>
-              </tr>
-            </thead>
-            <tbody>
-              {mounts.map((mount) => (
-                <tr
-                  key={mount.id}
-                  className="border-b border-border/60 last:border-b-0 [&>td]:h-10 [&>td]:px-4 [&>td]:py-1.5"
-                >
-                  <td className="max-w-0 min-w-48">
-                    <AppMountSource
-                      app={app}
-                      canManage={canManage}
-                      mount={mount}
-                      mounts={mounts}
-                      routeId={routeId}
-                      volumeNames={volumeNames}
-                    />
-                  </td>
-                  <td className="max-w-0 min-w-40">
-                    <span
-                      className="block truncate font-mono text-xs"
-                      title={mount.target}
-                    >
-                      {mount.target}
-                    </span>
-                  </td>
-                  {compose ? (
-                    <td className="whitespace-nowrap">
-                      {mount.service ? (
-                        <ServiceTag app={app} service={mount.service} />
-                      ) : (
-                        <span className="text-muted-foreground">Every</span>
-                      )}
-                    </td>
-                  ) : null}
-                  <td className="text-right whitespace-nowrap text-muted-foreground">
-                    {mount.readOnly ? "Read-only" : "Read-write"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <MountsTable compose={compose} rows={rows} />
       )}
     </InfoSection>
+  )
+}
+
+const MountsTable = React.memo(function MountsTable({
+  compose,
+  rows,
+}: {
+  // Whether it runs a Compose file, so each mount names its service.
+  compose: boolean
+  rows: Array<MountRow>
+}) {
+  const source = React.useMemo(
+    (): DataTableSource<MountRow> => ({
+      body: { kind: "ready" },
+      refreshing: false,
+      rows,
+    }),
+    [rows]
+  )
+  const definition = React.useMemo(
+    () =>
+      defineDataTable({
+        ariaLabel: "Volumes",
+        columns: mountColumnHelper.columns([
+          mountColumnHelper.accessor(mountSourceText, {
+            id: "source",
+            header: "Source",
+            sortFn: "text",
+            cell: ({ row }) => <MountSourceCell row={row.original} />,
+            meta: dataTableColumnMeta({ width: "minmax(0,1.3fr)" }),
+          }),
+          mountColumnHelper.accessor((row) => row.mount.target, {
+            id: "target",
+            header: "Mounted at",
+            sortFn: "text",
+            cell: ({ row }) => (
+              <div className="flex w-full min-w-0">
+                <InfoCopyValue
+                  label="mount path"
+                  value={row.original.mount.target}
+                />
+              </div>
+            ),
+            meta: dataTableColumnMeta({ width: "minmax(0,1fr)" }),
+          }),
+          ...(compose
+            ? [
+                mountColumnHelper.accessor(
+                  (row) => row.mount.service ?? "",
+                  {
+                    id: "service",
+                    header: "Service",
+                    sortFn: "text",
+                    cell: ({ row }) =>
+                      row.original.mount.service ? (
+                        <ServiceTag
+                          app={row.original.app}
+                          service={row.original.mount.service}
+                        />
+                      ) : (
+                        <span className="text-muted-foreground">Every</span>
+                      ),
+                    meta: dataTableColumnMeta({
+                      hideBelow: "sm",
+                      width: "8rem",
+                    }),
+                  }
+                ),
+              ]
+            : []),
+          mountColumnHelper.accessor(
+            (row) => (row.mount.readOnly ? "Read-only" : "Read-write"),
+            {
+              id: "access",
+              header: "Access",
+              sortFn: "text",
+              cell: ({ getValue }) => (
+                <span className="text-muted-foreground">{getValue()}</span>
+              ),
+              meta: dataTableColumnMeta({ hideBelow: "md", width: "7rem" }),
+            }
+          ),
+        ]),
+        getRowId: (row) => row.id,
+      }),
+    [compose]
+  )
+  return <DataTable definition={definition} emptyState={null} source={source} />
+})
+
+function mountSourceText(row: MountRow): string {
+  if (row.kind === "compose") return row.mount.dockerName ?? row.mount.source
+  const { source } = row.mount
+  return source.type === "volume"
+    ? (row.volumeNames?.get(source.volumeId) ?? "")
+    : source.type === "host"
+      ? source.path
+      : fileName(row.mount.target)
+}
+
+function MountSourceCell({ row }: { row: MountRow }) {
+  return row.kind === "config" ? (
+    <AppMountSource
+      app={row.app}
+      canManage={row.canManage}
+      mount={row.mount}
+      mounts={row.mounts}
+      routeId={row.routeId}
+      volumeNames={row.volumeNames}
+    />
+  ) : (
+    <ComposeMountSource file={row.file} mount={row.mount} />
+  )
+}
+
+// A mount the Compose file declares, marked as the file's.
+function ComposeMountSource({
+  file,
+  mount,
+}: {
+  file: string
+  mount: ComposeMount
+}) {
+  const relative = mount.kind === "bind" && mount.source.startsWith(".")
+  const [icon, label, title] =
+    mount.kind === "volume"
+      ? [
+          <HardDrive />,
+          mount.dockerName ?? "Anonymous volume",
+          mount.dockerName
+            ? `Volume ${mount.source}, ${mount.dockerName} in Docker`
+            : "A volume of its own, made anew with each container",
+        ]
+      : mount.kind === "bind"
+        ? [
+            <FolderTree />,
+            mount.source,
+            relative
+              ? `${mount.source} in the app's folder on the node`
+              : `${mount.source} on the node`,
+          ]
+        : [
+            <FileText />,
+            mount.source,
+            `${mount.kind === "config" ? "Config" : "Secret"} ${mount.source}${mount.origin ? `, from ${mount.origin}` : ""}`,
+          ]
+  return (
+    <span className="flex min-w-0 items-center gap-2" title={title}>
+      <span className="shrink-0 text-muted-foreground [&>svg]:size-3.5">
+        {icon}
+      </span>
+      <span
+        className={
+          mount.kind === "volume" && mount.dockerName
+            ? "truncate"
+            : "truncate font-mono text-xs"
+        }
+      >
+        {label}
+      </span>
+      <span
+        className="shrink-0 border px-1 font-mono text-[10px] text-muted-foreground"
+        title={`Declared in ${file}`}
+      >
+        {file}
+      </span>
+    </span>
   )
 }
 
