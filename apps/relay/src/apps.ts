@@ -415,7 +415,7 @@ export class AppDriver {
   async deploy(input: RelayDeployApp): Promise<RelayApp> {
     const problem = sourceProblem(input)
     if (problem) throw new Error(problem)
-    await this.get(input.appId)
+    const app = await this.get(input.appId)
     // Check after the await, so two deploys sent together can't both pass.
     if (this.#deployments.get(input.appId)?.state === "running") {
       throw new Error("A deployment is already running")
@@ -427,7 +427,14 @@ export class AppDriver {
       dropped: 0,
       error: null,
       finishedAt: null,
-      id: deploymentStamp(),
+      // Later than any the app had, so a deployment within a second of
+      // the last doesn't take the name or files its containers still use.
+      id: deploymentStamp([
+        this.#deployments.get(input.appId)?.id,
+        ...app.containers.map(
+          (container) => container.labels[DEPLOYMENT_LABEL]
+        ),
+      ]),
       lines: [],
       rolling: null,
       sourceType: input.config.sourceType,
@@ -3098,8 +3105,24 @@ function deploymentSummary(deployment: Deployment): RelayAppDeployment {
 }
 
 // UTC time to the second, as in kiln-<shortid>-20261009093012.
-function deploymentStamp(): string {
-  return new Date().toISOString().replace(/[-:T]/gu, "").slice(0, 14)
+// The UTC time to the second, as YYYYMMDDHHMMSS, or the second after the
+// latest of `earlier` if that isn't past it yet.
+function deploymentStamp(earlier: ReadonlyArray<string | undefined>): string {
+  const stamp = (time: number) =>
+    new Date(time).toISOString().replace(/[-:T]/gu, "").slice(0, 14)
+  const now = stamp(Date.now())
+  const latest = earlier
+    .filter((id): id is string => id !== undefined && /^\d{14}$/u.test(id))
+    .sort()
+    .at(-1)
+  if (latest === undefined || now > latest) return now
+  const [year, month, day, hour, minute, second] = latest
+    .match(/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})$/u)!
+    .slice(1)
+    .map(Number)
+  return stamp(
+    Date.UTC(year!, month! - 1, day, hour, minute, second! + 1)
+  )
 }
 
 // A directory's deployment logs, newest first: their names are their UTC

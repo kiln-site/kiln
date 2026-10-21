@@ -444,6 +444,35 @@ describe("apps", () => {
     expect(await readdir(files)).toEqual([replaced.deployment!.id])
   })
 
+  it("gives a deployment within a second of the last its own name and files", async () => {
+    const harness = await createdApp()
+    const files = join(harness.config.dataDirectory, "app-mounts", appId)
+    const mount = (content: string) => ({
+      id: "config001",
+      readOnly: true,
+      service: null,
+      source: { content, type: "file" as const },
+      target: "/etc/app.toml",
+    })
+    const first = await deploy(harness, { mounts: [mount("port = 80\n")] })
+    const mounted = join(files, first.deployment!.id, "config001")
+
+    // The same second the first started in.
+    vi.useFakeTimers({
+      now: Date.parse(first.deployment!.startedAt),
+      toFake: ["Date", "setTimeout", "clearTimeout"],
+    })
+    const pull = fakeDocker.hold({ command: "pull" })
+    await harness.apps.deploy(deployment({ mounts: [mount("port = 81\n")] }))
+    await pull.reached
+    expect(await readFile(mounted, "utf8")).toBe("port = 80\n")
+    pull.fail("pull access denied")
+    const retried = await settledDeployment(harness)
+
+    expect(retried.deployment!.id > first.deployment!.id).toBe(true)
+    expect(await readFile(mounted, "utf8")).toBe("port = 80\n")
+  })
+
   it("removes the volumes an image declares with the containers that had them", async () => {
     const harness = await createdApp()
     fakeDocker.images.set("redis:alpine", {})
