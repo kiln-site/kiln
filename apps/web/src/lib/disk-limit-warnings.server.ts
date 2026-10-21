@@ -1,4 +1,3 @@
-import type { RowDataPacket } from "mysql2/promise"
 import { Effect, Schedule } from "effect"
 import {
   relayManagedDatabaseSchema,
@@ -6,22 +5,16 @@ import {
 } from "@workspace/contracts"
 import { z } from "zod"
 
-import { Database } from "@/effect/database"
 import {
   notifyUsersEffect,
-  platformAdminIdsEffect,
   publishNotificationChange,
 } from "@/effect/notifications"
 import { promiseEffect } from "@/effect/promise"
 import { forkAppEffect } from "@/effect/runtime"
-import { databaseTable } from "@/lib/database-config"
 import { relayConnectionFeatures, relayRpc } from "@/lib/relay-connection"
 import { listPersistedRelaysEffect } from "@/lib/relay-registry"
-import {
-  effectiveScopePermissions,
-  loadResourceGrantsEffect,
-  type ResourceScope,
-} from "@/lib/resource-permissions"
+import { resourceAudienceEffect } from "@/lib/resource-audience.server"
+import type { ResourceScope } from "@/lib/resource-permissions"
 
 // Databases keep running past their disk limit. Hearth checks every Relay's
 // databases against their limits and tells everyone who can see one that
@@ -103,50 +96,5 @@ export const warnDatabasesOverDiskLimitEffect = Effect.fn(
   }
 })
 
-/**
- * Everyone who can see an instance: admins, and anyone whose grants or
- * Relay ownership give them `permission` in `scope`. Creating an instance
- * gives no access of its own.
- */
-const audienceEffect = Effect.fn("diskLimits.audience")(function* (
-  scope: ResourceScope,
-  permission: "database.read"
-) {
-  const database = yield* Database
-  const [admins, candidates] = yield* Effect.all([
-    platformAdminIdsEffect(),
-    database.queryRows<RowDataPacket & { user_id: string }>(
-      "diskLimits.candidates",
-      `SELECT user_id FROM ${databaseTable("access_grant")}
-        WHERE state = 'active' AND relay_id = ?
-          AND (resource_type = 'relay'
-            OR (resource_type = ? AND resource_id = ?))
-       UNION
-       SELECT created_by AS user_id FROM ${databaseTable("relay")}
-        WHERE id = ? AND created_by IS NOT NULL`,
-      [scope.relayId, scope.resourceType, scope.resourceId, scope.relayId]
-    ),
-  ])
-  const adminIds = new Set(admins)
-  const readers = yield* Effect.forEach(
-    candidates.filter((row) => !adminIds.has(row.user_id)),
-    (row) =>
-      loadResourceGrantsEffect(
-        row.user_id,
-        scope.relayId,
-        undefined,
-        scope
-      ).pipe(
-        Effect.map((grants) =>
-          effectiveScopePermissions(grants, scope).has(permission)
-            ? [row.user_id]
-            : []
-        )
-      ),
-    { concurrency: 4 }
-  )
-  return [...adminIds, ...readers.flat()]
-})
-
 const databaseAudienceEffect = (scope: ResourceScope) =>
-  audienceEffect(scope, "database.read")
+  resourceAudienceEffect(scope, "database.read")

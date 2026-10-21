@@ -7,6 +7,12 @@ import {
 } from "@workspace/contracts"
 
 import {
+  autoUpdateAt,
+  defaultAppImageUpdatePolicy,
+  loadAppImageUpdateEffect,
+  type AppImageUpdate,
+} from "@/effect/app-image-updates"
+import {
   latestAppDeploymentsEffect,
   listAppDeploymentsEffect,
   loadAppDeploymentEffect,
@@ -150,7 +156,7 @@ export async function getAppDeploymentSummaryHandler(data: {
   relayId: string
 }) {
   const { app, user } = await authorizedApp(data, "app.read")
-  const [source, latest] = await Promise.all([
+  const [source, latest, imageUpdate] = await Promise.all([
     runAppEffect(
       "apps.github.source",
       loadAppGitHubSourceEffect(data.appId)
@@ -159,6 +165,12 @@ export async function getAppDeploymentSummaryHandler(data: {
       "apps.deployments.latest",
       latestAppDeploymentsEffect(data.appId)
     ),
+    app.config.sourceType === "image"
+      ? runAppEffect(
+          "apps.imageUpdates.load",
+          loadAppImageUpdateEffect(data.appId)
+        )
+      : null,
   ])
   const view = source ? await sourceView(user, source) : null
   return {
@@ -176,6 +188,39 @@ export async function getAppDeploymentSummaryHandler(data: {
     source: app.config.sourceType === "github" ? view : null,
     // What the app deploys from now, which its last deployment may not show.
     sourceType: app.config.sourceType,
+    // Nothing to check until it names an image.
+    imageUpdates:
+      app.config.sourceType === "image" && app.config.image !== ""
+        ? imageUpdatesView(app.config.image, imageUpdate)
+        : null,
+  }
+}
+
+/**
+ * What an image app's Deployment card shows of its updates. Only what the
+ * last check found for the image its config names now; one saved since
+ * hasn't been checked.
+ */
+function imageUpdatesView(image: string, update: AppImageUpdate | null) {
+  const policy = {
+    delayHours: update?.delayHours ?? defaultAppImageUpdatePolicy.delayHours,
+    mode: update?.mode ?? defaultAppImageUpdatePolicy.mode,
+  }
+  // A digest never moves, so there's nothing to check.
+  const pinned = image.includes("@")
+  const current = update && update.image === image ? update : null
+  return {
+    ...policy,
+    autoUpdateAt: current && autoUpdateAt(current),
+    checkError: current?.checkError ?? null,
+    checkedAt: current?.checkedAt ?? null,
+    image,
+    latestDigest: current?.latestDigest ?? null,
+    latestSeenAt: current?.latestSeenAt ?? null,
+    pinned,
+    runningDigest: current?.runningDigest ?? null,
+    skippedDigest: current?.skippedDigest ?? null,
+    state: pinned ? null : (current?.state ?? null),
   }
 }
 
@@ -325,6 +370,7 @@ export async function redeployAppDeploymentHandler(data: {
     startAppDeploymentEffect({
       appId: record.appId,
       commit: record.commitSha ?? undefined,
+      imageDigest: record.imageDigest ?? undefined,
       relayId: relay.id,
       trigger: "redeploy",
       userId: user.id,

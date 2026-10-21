@@ -12,6 +12,7 @@ import {
 import { cn } from "@workspace/ui/lib/utils"
 
 import { AppDocumentDialog } from "@/components/app/app-config-dialogs"
+import { AppImageUpdatesFact } from "@/components/app/app-image-updates"
 import {
   deploymentStatusPresentation,
   shortCommit,
@@ -295,6 +296,13 @@ const AppDeploymentCard = React.memo(function AppDeploymentCard({
             <span className="text-muted-foreground">Not running</span>
           )}
         </InfoFact>
+      ) : null}
+      {summary?.imageUpdates ? (
+        <AppImageUpdatesFact
+          app={app}
+          routeId={routeId}
+          updates={summary.imageUpdates}
+        />
       ) : null}
       <InfoFact label={latest?.status === "running" ? "Started" : "Last deploy"}>
         {latest ? (

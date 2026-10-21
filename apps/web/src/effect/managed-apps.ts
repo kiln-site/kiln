@@ -106,6 +106,29 @@ export const loadAppConfigEffect = Effect.fn("apps.config")(function* (
 })
 
 /**
+ * Every app on a Relay with its config. One that can't be read, as when
+ * the secret it was saved with is gone, is left out.
+ */
+export const listRelayAppConfigsEffect = Effect.fn("apps.configs")(function* (
+  relayId: string
+) {
+  const database = yield* Database
+  const rows = yield* database.queryRows<AppConfigRow>(
+    "app_configs",
+    `SELECT app_id, relay_id, name, config_ciphertext, created_by, created_at
+       FROM ${databaseTable("app")}
+      WHERE relay_id = ?`,
+    [relayId]
+  )
+  return yield* Effect.forEach(rows, (row) =>
+    decryptConfig(row).pipe(
+      Effect.map((config) => [{ ...toRecord(row), config }]),
+      Effect.catchCause(() => Effect.succeed([]))
+    )
+  ).pipe(Effect.map((apps) => apps.flat()))
+})
+
+/**
  * Changes part of an app's config against the one saved now, holding its
  * row while it does, so an edit saved meanwhile isn't overwritten.
  */

@@ -45,6 +45,12 @@ export const deploymentTriggerLabels: Record<AppDeploymentTrigger, string> = {
   poll: "New commit",
   push: "Push",
   redeploy: "Redeploy",
+  update: "Image update",
+}
+
+/** An image digest as people compare them: its first 12 hex digits. */
+export function shortDigest(digest: string): string {
+  return digest.replace(/^sha256:/u, "").slice(0, 12)
 }
 
 /** How long it took, as in 1m 12s; null while it runs. */

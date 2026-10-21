@@ -951,6 +951,44 @@ export class DockerEngine {
     })
   }
 
+  /**
+   * What `image`'s tag names in its registry now, without pulling it: the
+   * digest of its manifest, or its index's for a multi-platform image, as
+   * the daemon reads it from the registry with the same credentials a pull
+   * sends. Docker Hub doesn't count this against its pull limits.
+   */
+  distributionDigest(image: string): Effect.Effect<string, DockerEngineError> {
+    const operation = "GET /distribution/{name}/json"
+    return Effect.gen({ self: this }, function* () {
+      const reference = yield* Effect.try({
+        try: () => parseImageReference(image),
+        catch: (cause) =>
+          new DockerEngineError({
+            cause,
+            operation,
+            reason: cause instanceof Error ? cause.message : String(cause),
+          }),
+      })
+      const auth = yield* registryAuthHeader(reference)
+      const answer = yield* this.#json<{
+        Descriptor?: { digest?: unknown }
+      } | null>({
+        ...(auth && { headers: { "X-Registry-Auth": auth } }),
+        method: "GET",
+        path: `/distribution/${imageSegment(normalizedReference(reference))}/json`,
+        timeout: 20_000,
+      })
+      const digest = answer?.Descriptor?.digest
+      if (!Predicate.isString(digest) || !IMAGE_DIGEST.test(digest)) {
+        return yield* new DockerEngineError({
+          operation,
+          reason: `The registry didn't name a digest for ${image}`,
+        })
+      }
+      return digest
+    })
+  }
+
   /** `docker image rm --force`. */
   removeImage(reference: string): Effect.Effect<void, DockerEngineError> {
     return this.#empty({
@@ -1609,6 +1647,8 @@ function segment(value: string): string {
 }
 
 // Image references keep their registry path, tag, and digest separators.
+const IMAGE_DIGEST = /^sha256:[a-f0-9]{64}$/u
+
 function imageSegment(value: string): string {
   return encodeURIComponent(value)
     .replaceAll("%2F", "/")

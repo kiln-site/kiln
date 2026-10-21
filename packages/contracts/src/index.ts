@@ -742,15 +742,63 @@ export const relayProvisionAppSchema = z
   .object({ appId: appIdSchema })
   .strict()
 
+/** A manifest digest, as registries name an image's exact content. */
+export const imageDigestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/u)
+
 export const relayDeployAppSchema = z
   .object({
     appId: appIdSchema,
     config: appConfigSchema,
     // Required when the config's source is GitHub.
     github: relayAppGitHubCheckoutSchema.optional(),
+    // For an image source, the digest to deploy in place of whatever its
+    // tag names when the deployment pulls it.
+    imageDigest: imageDigestSchema.optional(),
     name: appNameSchema,
   })
   .strict()
+
+// What image apps' tags name in their registries now, against the images
+// their containers run. Each app names the image its saved config deploys.
+export const relayAppImageCheckSchema = z
+  .object({
+    apps: z
+      .array(
+        z
+          .object({ appId: appIdSchema, image: z.string().trim().min(1).max(512) })
+          .strict()
+      )
+      .min(1)
+      .max(16),
+  })
+  .strict()
+
+export const relayAppImageCheckResultSchema = z.discriminatedUnion("status", [
+  // The tag's digest now, and the digest the app runs: the one it
+  // deployed, or for a container deployed before Kiln labelled that, the
+  // digests its image was pulled as.
+  z.object({
+    appId: appIdSchema,
+    latestDigest: imageDigestSchema,
+    runningDigests: z.array(imageDigestSchema),
+    status: z.literal("checked"),
+  }),
+  // The app's container runs another image than the one named, as when
+  // its config changed since it deployed.
+  z.object({ appId: appIdSchema, status: z.literal("changed") }),
+  z.object({ appId: appIdSchema, status: z.literal("not_deployed") }),
+  // A deployment is running; its outcome decides what runs.
+  z.object({ appId: appIdSchema, status: z.literal("deploying") }),
+  z.object({
+    appId: appIdSchema,
+    error: z.string().max(500),
+    status: z.literal("error"),
+  }),
+])
+
+export const relayAppImageCheckResultsSchema = z.array(
+  relayAppImageCheckResultSchema
+)
 
 // One of the app's recent deployments, with its log: the running one, or one
 // the Relay kept.
@@ -2425,6 +2473,10 @@ export type RelayAppDeploymentRead = z.infer<
   typeof relayAppDeploymentReadSchema
 >
 export type RelayAppDeploymentLog = z.infer<typeof relayAppDeploymentLogSchema>
+export type RelayAppImageCheck = z.infer<typeof relayAppImageCheckSchema>
+export type RelayAppImageCheckResult = z.infer<
+  typeof relayAppImageCheckResultSchema
+>
 export type RelayAppAction = z.infer<typeof relayAppActionSchema>
 export type RelayDeleteApp = z.infer<typeof relayDeleteAppSchema>
 export type RelayAppNetwork = z.infer<typeof relayAppNetworkSchema>

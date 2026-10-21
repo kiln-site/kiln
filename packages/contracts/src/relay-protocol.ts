@@ -61,6 +61,9 @@ export const relayAppGitHubV1Feature = "app-github-v1"
 // The Relay lists, creates, renames, and deletes its Docker named volumes
 // through `relay.volumes.*`.
 export const relayVolumesV1Feature = "relay-volumes-v1"
+// The Relay answers `app.image.check`, and deploys an image app at the
+// digest `app.deploy`'s `imageDigest` names.
+export const relayAppImageUpdatesV1Feature = "app-image-updates-v1"
 export const relayBrowserAuthorizationReviseMaxItems = 256
 
 export const relayControlOperations = [
@@ -141,6 +144,7 @@ export const relayControlOperations = [
   "app.network.write",
   "app.network.routes.read",
   "app.deployment.read",
+  "app.image.check",
   "app.network.routes.write",
   "app.terminal.attach",
   "app.terminal.heartbeat",
@@ -309,6 +313,7 @@ export function relayControlOperationChanges(
     case "app.list":
     case "app.network.routes.read":
     case "app.deployment.read":
+    case "app.image.check":
     case "backup.task.get":
     case "backup.task.list":
     case "schedule.overview":
@@ -487,6 +492,9 @@ export function relayControlDeadlineMs(
   if (operation === "app.delete") return 180_000
   if (operation === "app.action") return 180_000
   if (operation === "app.create") return 60_000
+  // Up to four registry lookups at a time, each up to 20 seconds; Hearth
+  // sends at most 16 apps per request.
+  if (operation === "app.image.check") return 120_000
   if (operation === "database.action") return 180_000
   // Removing a limit recreates the container and waits for it to be ready.
   if (operation === "database.limits.write") return 240_000

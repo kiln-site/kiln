@@ -13,7 +13,7 @@
  * Only what Relay actually invokes is modelled; anything else fails loudly and
  * is reported by `reset()`.
  */
-import { randomBytes } from "node:crypto"
+import { createHash, randomBytes } from "node:crypto"
 import { rmSync } from "node:fs"
 import {
   createServer,
@@ -30,6 +30,7 @@ import type { CommandOptions, CommandResult } from "../command.js"
 import {
   normalizedReference,
   parseImageReference,
+  repositoryName,
 } from "../docker-reference.js"
 import { CommandError } from "../effect/errors.js"
 
@@ -231,6 +232,16 @@ export class FakeDocker {
   readonly imageConfigs = new Map<string, Record<string, unknown>>()
   /** What each tag points at (`docker image tag`), by full reference. */
   readonly imageTags = new Map<string, string>()
+  /**
+   * The digest each tag names in its registry, by full reference; a tag
+   * not listed names one made from its reference.
+   */
+  readonly registryDigests = new Map<string, string>()
+  // The image each digest a registry named is, so pulling `repo@digest`
+  // gets what the tag named then, health checks and config included.
+  readonly #digestImages = new Map<string, string>()
+  // `RepoDigests` of each local image, by its key in `images`.
+  readonly #repoDigests = new Map<string, Set<string>>()
   /** Images whose health check fails once they start. */
   readonly unhealthyImages = new Set<string>()
   /**
@@ -323,6 +334,9 @@ export class FakeDocker {
     this.pulls.clear()
     this.imageConfigs.clear()
     this.imageTags.clear()
+    this.registryDigests.clear()
+    this.#digestImages.clear()
+    this.#repoDigests.clear()
     this.unhealthyImages.clear()
     this.danglingVolumes.clear()
     this.filledVolumes.clear()
@@ -845,7 +859,8 @@ export class FakeDocker {
 
   #containerObject(reference: string): unknown {
     const found = this.container(reference)
-    const timeline = found && this.healthTimelines.get(found.image)
+    const timeline =
+      found && this.healthTimelines.get(this.#imageName(found.image))
     if (found?.state.running && found.healthCheck && timeline) {
       const running = Date.now() - Date.parse(found.state.startedAt)
       found.state.health =
@@ -963,6 +978,8 @@ export class FakeDocker {
 
   /** The key of a local image `reference` names, as Docker normalizes it. */
   #imageKey(reference: string): string | undefined {
+    const pulled = this.#digestImages.get(digestOf(reference) ?? "")
+    if (pulled !== undefined && this.images.has(pulled)) return pulled
     const wanted = normalizedImage(reference)
     return [...this.images.keys()].find(
       (key) =>
@@ -980,8 +997,23 @@ export class FakeDocker {
       : {
           Config: { ...this.imageConfigs.get(key), Labels: labels },
           Id: this.#imageId(key),
+          RepoDigests: [...(this.#repoDigests.get(key) ?? [])],
           RepoTags: [key],
         }
+  }
+
+  /** The name tests gave the image a digest reference was pulled as. */
+  #imageName(reference: string): string {
+    return this.#digestImages.get(digestOf(reference) ?? "") ?? reference
+  }
+
+  /** The digest `reference`'s tag names in its registry now. */
+  #registryDigest(reference: string): string {
+    const name = normalizedImage(reference)
+    return (
+      this.registryDigests.get(name) ??
+      `sha256:${createHash("sha256").update(name).digest("hex")}`
+    )
   }
 
   /** The image a reference names: its tag's target, or its own ID. */
@@ -1170,14 +1202,14 @@ export class FakeDocker {
       setImmediate(() => this.#finishRunOnce(container))
       return
     }
-    const crashing = this.crashingImages.has(container.image)
+    const crashing = this.crashingImages.has(this.#imageName(container.image))
     container.state.running = true
     container.state.restarting = crashing && container.restartPolicy !== "no"
     container.state.exitCode = crashing ? 1 : 0
     container.state.oomKilled = false
     container.state.startedAt = this.#timestamp()
     container.state.health = container.healthCheck
-      ? this.unhealthyImages.has(container.image)
+      ? this.unhealthyImages.has(this.#imageName(container.image))
         ? "unhealthy"
         : "healthy"
       : undefined
@@ -1797,6 +1829,37 @@ export class FakeDocker {
       await this.#volumeRemove(parameters[0] ?? "")
       return json(204)
     }
+    if (
+      method === "GET" &&
+      (parameters = route(/^\/distribution\/(.+)\/json$/u))
+    ) {
+      const [reference = ""] = parameters
+      await this.#checkpoint("distribution", reference)
+      const named = [...this.unreachableImages].find(
+        (image) => normalizedImage(image) === normalizedImage(reference)
+      )
+      if (named !== undefined) {
+        throw new DockerFailure(
+          `Get "https://registry.example/v2/": net/http: request canceled (registry timeout)`,
+          500
+        )
+      }
+      const digest = this.#registryDigest(reference)
+      this.#digestImages.set(
+        digest,
+        [...this.images.keys(), ...this.pullOutput.keys()].find(
+          (image) => normalizedImage(image) === normalizedImage(reference)
+        ) ?? reference
+      )
+      return json(200, {
+        Descriptor: {
+          digest,
+          mediaType: "application/vnd.oci.image.index.v1+json",
+          size: 1_024,
+        },
+        Platforms: [{ architecture: "amd64", os: "linux" }],
+      })
+    }
     if (method === "POST" && path === "/images/create") {
       const fromImage = url.searchParams.get("fromImage") ?? ""
       const tag = url.searchParams.get("tag") ?? "latest"
@@ -1870,8 +1933,13 @@ export class FakeDocker {
       [...images].find(
         (image) => normalizedImage(image) === normalizedImage(reference)
       )
-    const image = named(this.images.keys()) ?? named(this.pullOutput.keys()) ??
-      named(this.unreachableImages) ?? reference
+    const digest = digestOf(reference)
+    const image =
+      (digest === undefined ? undefined : this.#digestImages.get(digest)) ??
+      named(this.images.keys()) ??
+      named(this.pullOutput.keys()) ??
+      named(this.unreachableImages) ??
+      reference
     await this.#checkpoint("pull", image)
     this.pulls.set(
       normalizedImage(reference),
@@ -1888,6 +1956,13 @@ export class FakeDocker {
       messages.push({ error: message, errorDetail: { message } })
     } else {
       this.images.set(image, this.images.get(image) ?? {})
+      // Docker records the digest it pulled the image as.
+      const pulled = digest ?? this.#registryDigest(reference)
+      this.#digestImages.set(pulled, image)
+      const repository = repositoryName(parseImageReference(reference))
+      const digests = this.#repoDigests.get(image) ?? new Set<string>()
+      digests.add(`${repository}@${pulled}`)
+      this.#repoDigests.set(image, digests)
       messages.push({ status: `Status: Downloaded newer image for ${image}` })
     }
     return {
@@ -2022,7 +2097,7 @@ export class FakeDocker {
     ]
     // Those it asks for, and those its image declares.
     const imageVolumes = (
-      this.imageConfigs.get(body.Image) as
+      this.imageConfigs.get(this.#imageName(body.Image)) as
         | { Volumes?: Record<string, object> }
         | undefined
     )?.Volumes
@@ -2427,6 +2502,12 @@ function clientOf(argv: ReadonlyArray<string>): string {
   return program === "sh" || program === "bash"
     ? (/\bexec (\S+)/u.exec(script)?.[1] ?? program)
     : program
+}
+
+/** The digest a reference names, if it names one. */
+function digestOf(reference: string): string | undefined {
+  const parsed = Result.try(() => parseImageReference(reference))
+  return Result.isSuccess(parsed) ? parsed.success.digest : undefined
 }
 
 /**

@@ -53,6 +53,48 @@ can run what a pasted Compose file could, host binds included. Turn it off,
 or protect the branch, for repositories others can write to. An app
 switched to another source keeps its repository, unused.
 
+## Image updates
+
+An app that deploys from an image runs it by digest. Each deployment asks
+the registry what digest the tag names (Docker's `GET /distribution`, which
+reads the manifest without pulling it), pulls `repository@digest`, and runs
+that. The container keeps the image as its config names it in
+`kiln.app.image`, and the digest in `kiln.app.image.digest`. Another app
+pulling the same tag meanwhile can't change what this one starts. A
+registry that can't name the digest leaves the deployment to pull the tag,
+as before.
+
+Registries have no way to subscribe to a tag, so Hearth asks. Every hour,
+each Relay checks all of its image apps in one `app.image.check` request,
+16 apps at a time. Apps naming the same image share one registry lookup,
+four at a time. The Relay compares the digest the tag names with the one
+the app's container runs. Docker Hub doesn't count these lookups against
+its pull limits. A Relay skips an app that is deploying, runs another image
+than its config names, or names a digest, which never moves. For a
+container deployed before Kiln labelled its digest, it uses the digests
+Docker recorded when it pulled the image.
+
+Each app chooses, from **Updates** on its Deployment card:
+
+- **Notify**, the default: a new image notifies everyone who can deploy
+  the app (`app.manage` on its Relay) once.
+- **Automatic**: also deploys the update once it's been out for the app's
+  wait, three days unless changed. Registries don't say when a tag moved,
+  so the wait counts from when Kiln first saw the digest. A tag that moves
+  again before then offers its newest image and waits again; Kiln never
+  deploys an image the tag has moved past.
+- **Off**: no checks.
+
+**Update now** deploys the image on offer, whatever its wait. **Skip**
+passes over it: it neither notifies nor deploys on its own, and the next
+image the tag names is offered as usual. An automatic update deploys the
+digest Kiln found, checks again when its turn comes that it's still due,
+and isn't tried again for the same digest once it has run, however it
+went. Deploying an image update again from the Deployments list deploys
+its digest, as a rollback, and an automatic update doesn't deploy the
+image it rolled back from again. Unless checks are off, an image deployment checks the app again
+when it ends, so the card shows what it runs.
+
 ## Rolling deployments
 
 When an app is running, a deployment starts its new containers beside the

@@ -69,6 +69,7 @@ function deployment(
     error: null,
     finishedAt: null,
     id: randomUUID(),
+    imageDigest: null,
     relayDeploymentId: "20261020102017",
     relayId,
     repository: "acme/site",

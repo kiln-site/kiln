@@ -4,6 +4,7 @@ import { Link, useNavigate } from "@tanstack/react-router"
 import {
   HardDrive,
   PackageCheck,
+  PackagePlus,
   Rocket,
   UserMinus,
   UserPlus,
@@ -232,6 +233,7 @@ function NotificationActions({
     case "access.removed":
       return null
     case "resource.disk-limit":
+    case "app.image-update":
       return (
         <OpenResourceButton
           resource={content.resource}
@@ -376,6 +378,7 @@ const notificationIcons = {
   "kiln.release": Rocket,
   "kiln.updated": PackageCheck,
   "resource.disk-limit": HardDrive,
+  "app.image-update": PackagePlus,
 } satisfies Record<
   NotificationContent["kind"],
   React.ComponentType<{ className?: string }>
@@ -422,6 +425,8 @@ export function notificationTitle(content: NotificationContent): string {
       return content.resource.type === "app"
         ? `${content.resource.name} was stopped at its disk limit`
         : `${content.resource.name} is over its disk limit`
+    case "app.image-update":
+      return `Update available for ${content.resource.name}`
   }
 }
 
@@ -439,5 +444,7 @@ function notificationDetail(content: NotificationContent): string | null {
       return `by ${content.actorName}`
     case "resource.disk-limit":
       return `${formatBytes(content.usedBytes)} of ${formatBytes(content.limitBytes)}`
+    case "app.image-update":
+      return `New image for ${content.image}`
   }
 }

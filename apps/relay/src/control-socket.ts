@@ -43,6 +43,7 @@ import {
   relayDatabaseLimitsV1Feature,
   relayAppLimitsV1Feature,
   relayAppGitHubV1Feature,
+  relayAppImageUpdatesV1Feature,
   relayVolumesV1Feature,
   relayDatabaseProvisioningV1Feature,
   relayAppProvisioningV1Feature,
@@ -1135,6 +1136,7 @@ function authenticateSocket(
           relayAppProvisioningV1Feature,
           relayAppGitHubV1Feature,
           relayVolumesV1Feature,
+          relayAppImageUpdatesV1Feature,
         ],
         protocol: relayControlProtocol,
         relayBuild: relayBuildLabel(),
@@ -1543,6 +1545,7 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       return "database.dump.import"
     case "app.list":
     case "app.network.routes.read":
+    case "app.image.check":
       return "app.read"
     case "app.deployment.read":
       return "app.logs.read"

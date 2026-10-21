@@ -1838,3 +1838,97 @@ describe("deployment logs", () => {
     ).toBeNull()
   })
 })
+
+describe("image updates", () => {
+  const nginx = "docker.io/library/nginx:alpine"
+  const first = `sha256:${"1".repeat(64)}`
+  const second = `sha256:${"2".repeat(64)}`
+  const check = (harness: RelayHarness, apps: Array<{ appId: string; image: string }>) =>
+    harness.apps.checkImages({ apps }, new AbortController().signal)
+
+  it("runs an image app at the digest its tag names, labelled with the image its config gave", async () => {
+    const harness = await createdApp()
+    fakeDocker.registryDigests.set(nginx, first)
+
+    const app = await deploy(harness, {})
+
+    const [container] = appContainers()
+    expect(container!.image).toBe(`docker.io/library/nginx@${first}`)
+    expect(container!.labels).toMatchObject({
+      "kiln.app.image": "nginx:alpine",
+      "kiln.app.image.digest": first,
+    })
+    // The app still shows the image its config names.
+    expect(app.containers[0]?.image).toBe("nginx:alpine")
+  })
+
+  it("finds a newer image once the tag moves, and asks no registry for an app that runs another image", async () => {
+    const harness = await createdApp()
+    await harness.apps.create({ id: "d".repeat(40), name: "Other" })
+    fakeDocker.registryDigests.set(nginx, first)
+    await deploy(harness, {})
+
+    expect(await check(harness, [{ appId, image: "nginx:alpine" }])).toEqual([
+      { appId, latestDigest: first, runningDigests: [first], status: "checked" },
+    ])
+
+    fakeDocker.registryDigests.set(nginx, second)
+    expect(
+      await check(harness, [
+        { appId, image: "nginx:alpine" },
+        { appId: "d".repeat(40), image: "nginx:alpine" },
+      ])
+    ).toEqual([
+      { appId, latestDigest: second, runningDigests: [first], status: "checked" },
+      { appId: "d".repeat(40), status: "not_deployed" },
+    ])
+    // Its config names another image since it deployed.
+    expect(await check(harness, [{ appId, image: "nginx:1.27" }])).toEqual([
+      { appId, status: "changed" },
+    ])
+
+    fakeDocker.unreachableImages.add("nginx:alpine")
+    expect(await check(harness, [{ appId, image: "nginx:alpine" }])).toEqual([
+      expect.objectContaining({ appId, status: "error" }),
+    ])
+  })
+
+  it("deploys the digest an update names, though its tag has moved on since", async () => {
+    const harness = await createdApp()
+    fakeDocker.registryDigests.set(nginx, first)
+    await deploy(harness, {})
+    fakeDocker.registryDigests.set(nginx, second)
+    // Another app pulls the tag meanwhile.
+    await harness.apps.create({ id: "d".repeat(40), name: "Other" })
+    await deploy(harness, {}, "d".repeat(40))
+
+    useDeploymentClock()
+    await harness.apps.deploy({ ...deployment({}), imageDigest: first })
+    await settledDeployment(harness)
+
+    const [container] = appContainers().filter(
+      (candidate) => candidate.state.running
+    )
+    expect(container!.image).toBe(`docker.io/library/nginx@${first}`)
+    expect(container!.labels["kiln.app.image.digest"]).toBe(first)
+    expect(await check(harness, [{ appId, image: "nginx:alpine" }])).toEqual([
+      { appId, latestDigest: second, runningDigests: [first], status: "checked" },
+    ])
+  })
+
+  it("deploys by tag when the registry can't name a digest, and checks it by the digests it was pulled as", async () => {
+    const harness = await createdApp()
+    fakeDocker.registryDigests.set(nginx, first)
+    fakeDocker.failNext({ command: "distribution" }, "registry unavailable")
+
+    const app = await deploy(harness, {})
+
+    expect(app.deployment?.state).toBe("succeeded")
+    const [container] = appContainers()
+    expect(container!.image).toBe("nginx:alpine")
+    expect(container!.labels["kiln.app.image.digest"]).toBeUndefined()
+    expect(await check(harness, [{ appId, image: "nginx:alpine" }])).toEqual([
+      { appId, latestDigest: first, runningDigests: [first], status: "checked" },
+    ])
+  })
+})

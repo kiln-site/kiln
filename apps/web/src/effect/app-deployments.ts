@@ -9,7 +9,12 @@ import { databaseTable } from "@/lib/database-config"
 // Where apps deploy from on GitHub, and Hearth's record of every app's
 // deployments across its Relays. The Relay keeps each deployment's log.
 
-export type AppDeploymentTrigger = "manual" | "poll" | "push" | "redeploy"
+export type AppDeploymentTrigger =
+  | "manual"
+  | "poll"
+  | "push"
+  | "redeploy"
+  | "update"
 export type AppDeploymentStatus = "failed" | "running" | "succeeded" | "unknown"
 
 /** The repository an app builds, and how. */
@@ -37,6 +42,8 @@ export interface AppDeploymentRecord {
   error: string | null
   finishedAt: string | null
   id: string
+  /** The digest an image update deployed. */
+  imageDigest: string | null
   /** The deployment's ID on its Relay, which names its log there. */
   relayDeploymentId: string | null
   relayId: string
@@ -46,7 +53,7 @@ export interface AppDeploymentRecord {
   startedAt: string
   status: AppDeploymentStatus
   trigger: AppDeploymentTrigger
-  /** The person who deployed; null for pushes and polls. */
+  /** The person who deployed; null for pushes, polls, and updates. */
   triggeredBy: string | null
 }
 
@@ -72,6 +79,7 @@ interface DeploymentRow extends RowDataPacket {
   error: string | null
   finished_at: number | string | null
   id: string
+  image_digest: string | null
   relay_deployment_id: string | null
   relay_id: string
   repository: string | null
@@ -95,8 +103,8 @@ function sourceTable() {
 
 const deploymentColumns = `id, app_id, relay_id, relay_deployment_id,
   source_type, \`trigger\`, triggered_by, repository, branch, commit_sha,
-  commit_message, commit_author, status, rolling, error, started_at,
-  finished_at`
+  commit_message, commit_author, image_digest, status, rolling, error,
+  started_at, finished_at`
 
 // Deployments kept per app, newest first.
 const deploymentsKeptPerApp = 200
@@ -209,8 +217,9 @@ export const insertAppDeploymentEffect = Effect.fn("apps.deployment.insert")(
       `INSERT INTO ${databaseTable("app_deployment")}
          (id, app_id, relay_id, relay_deployment_id, source_type, \`trigger\`,
           triggered_by, repository, branch, commit_sha, commit_message,
-          commit_author, status, rolling, error, started_at, finished_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          commit_author, image_digest, status, rolling, error, started_at,
+          finished_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         record.id,
         record.appId,
@@ -224,6 +233,7 @@ export const insertAppDeploymentEffect = Effect.fn("apps.deployment.insert")(
         record.commitSha,
         record.commitMessage?.slice(0, 255) ?? null,
         record.commitAuthor?.slice(0, 100) ?? null,
+        record.imageDigest,
         record.status,
         record.rolling,
         record.error?.slice(0, 2_000) ?? null,
@@ -408,6 +418,7 @@ function toDeployment(row: DeploymentRow): AppDeploymentRecord {
         ? null
         : new Date(Number(row.finished_at)).toISOString(),
     id: row.id,
+    imageDigest: row.image_digest,
     relayDeploymentId: row.relay_deployment_id,
     relayId: row.relay_id,
     repository: row.repository,

@@ -44,6 +44,7 @@ import {
   relayAppWebRoutesWriteSchema,
   relayDeleteAppSchema,
   relayAppDeploymentReadSchema,
+  relayAppImageCheckSchema,
   relayDeployAppSchema,
   relayDatabaseActionSchema,
   relayDatabaseLimitsSchema,
@@ -2119,6 +2120,11 @@ async function executeControlRequest(
     case "app.deployment.read":
       return apps.readDeployment(
         relayAppDeploymentReadSchema.parse(request.payload)
+      )
+    case "app.image.check":
+      return apps.checkImages(
+        relayAppImageCheckSchema.parse(request.payload),
+        signal
       )
     case "app.action":
       return apps.action(relayAppActionSchema.parse(request.payload))

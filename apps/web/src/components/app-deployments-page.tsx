@@ -43,6 +43,7 @@ import {
   deploymentStatusPresentation,
   deploymentTriggerLabels,
   shortCommit,
+  shortDigest,
 } from "@/components/app/app-deployment-presentation"
 import { sourceTypeLabels } from "@/components/app/app-presentation"
 import { CopyIdentifierMenuItem } from "@/components/copy-identifier-menu-item"
@@ -403,8 +404,18 @@ const DeploymentCommit = React.memo(function DeploymentCommit({
 }) {
   if (!deployment.commitSha) {
     return (
-      <span className="type-meta text-muted-foreground">
-        {sourceTypeLabels[deployment.sourceType]}
+      <span className="flex min-w-0 flex-col gap-0.5">
+        <span className="type-meta text-muted-foreground">
+          {sourceTypeLabels[deployment.sourceType]}
+        </span>
+        {deployment.imageDigest ? (
+          <span
+            className="type-meta truncate font-mono text-muted-foreground"
+            title={deployment.imageDigest}
+          >
+            {shortDigest(deployment.imageDigest)}
+          </span>
+        ) : null}
       </span>
     )
   }
@@ -448,7 +459,11 @@ function DeploymentTrigger({ deployment }: { deployment: Deployment }) {
       </span>
       <span className="type-meta truncate text-muted-foreground">
         {deployment.triggeredByName ??
-          (deployment.commitAuthor ? `by ${deployment.commitAuthor}` : "GitHub")}
+          (deployment.commitAuthor
+            ? `by ${deployment.commitAuthor}`
+            : deployment.trigger === "update"
+              ? "Kiln"
+              : "GitHub")}
       </span>
     </span>
   )
@@ -470,7 +485,9 @@ const DeploymentActions = React.memo(function DeploymentActions({
       showToast({
         message: deployment.commitSha
           ? `Deploying ${shortCommit(deployment.commitSha)} again`
-          : "Deploying again",
+          : deployment.imageDigest
+            ? `Deploying ${shortDigest(deployment.imageDigest)} again`
+            : "Deploying again",
         type: "success",
       })
     },

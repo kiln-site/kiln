@@ -27,6 +27,10 @@ import {
   stopAppDeploymentPolling,
 } from "./lib/app-deployments.server"
 import { scheduleTailscaleCleanupProcessing } from "./lib/tailscale-cleanup.server"
+import {
+  startAppImageUpdateChecks,
+  stopAppImageUpdateChecks,
+} from "./lib/app-image-updates.server"
 import { startDiskLimitWarnings } from "./lib/disk-limit-warnings.server"
 import {
   initializeRelayFromEnvironment,
@@ -42,6 +46,7 @@ await loadInstallationId()
 startInstanceDirectorySync()
 startGitHubSyncPolling()
 startAppDeploymentPolling()
+startAppImageUpdateChecks()
 startRelayMetrics(relayConnectionsCapacity)
 
 await Effect.runPromise(
@@ -96,6 +101,7 @@ export function shutdownHearth(): Promise<void> {
     stopInstanceDirectorySync(),
     stopGitHubSyncPolling(),
     stopAppDeploymentPolling(),
+    stopAppImageUpdateChecks(),
     stopPollingWorkers(),
     stopRelayMetrics(),
   ])

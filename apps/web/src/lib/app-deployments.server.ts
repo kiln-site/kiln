@@ -3,7 +3,9 @@ import { randomUUID } from "node:crypto"
 import {
   relayAppGitHubV1Feature,
   relayAppDeploymentLogSchema,
+  relayAppImageUpdatesV1Feature,
   relayAppSchema,
+  type AppConfig,
   type RelayApp,
   type RelayAppGitHubCheckout,
 } from "@workspace/contracts"
@@ -20,6 +22,11 @@ import {
   type AppDeploymentRecord,
   type AppDeploymentTrigger,
 } from "@/effect/app-deployments"
+import {
+  autoUpdateAt,
+  imageUpdateDeployedEffect,
+  loadAppImageUpdateEffect,
+} from "@/effect/app-image-updates"
 import { ExternalServiceError } from "@/effect/errors"
 import {
   getGitHubCommitEffect,
@@ -52,6 +59,8 @@ export interface AppDeploymentRequest {
   appId: string
   /** A commit to build again; otherwise the head of the app's branch. */
   commit?: string
+  /** An image digest to deploy again, as a rollback of an image update. */
+  imageDigest?: string
   relayId: string
   trigger: AppDeploymentTrigger
   /** Who asked, for the record and the Relay's audit; null for automation. */
@@ -74,7 +83,9 @@ export function publishAppDeploymentChange(relayId: string): void {
  * A push or poll for the branch head the app last tried deploys nothing,
  * and returns null, so a failing commit or a rollback isn't redeployed
  * every minute; nor does a poll while the Relay is offline, which checks
- * again once it's back.
+ * again once it's back. An image update deploys the digest Kiln found its
+ * tag naming; one Kiln starts on its own deploys nothing, either, unless
+ * it's still due when its turn comes.
  */
 export const startAppDeploymentEffect = Effect.fn("Apps.deploy")(function* (
   request: AppDeploymentRequest
@@ -86,8 +97,11 @@ export const startAppDeploymentEffect = Effect.fn("Apps.deploy")(function* (
   })
   const relay = yield* enabledRelay(request.relayId)
   const automatic = request.trigger === "push" || request.trigger === "poll"
+  const autoUpdate = request.trigger === "update" && request.userId === null
+  // Nobody watches these, so a refusal is recorded instead.
+  const unattended = automatic || autoUpdate || request.background === true
   if (
-    request.trigger === "poll" &&
+    (request.trigger === "poll" || autoUpdate) &&
     relayConnectionFeatures(relay.id).size === 0
   ) {
     return null
@@ -96,6 +110,15 @@ export const startAppDeploymentEffect = Effect.fn("Apps.deploy")(function* (
   if (!app) return yield* Effect.fail(new Error("App not found"))
   // An app switched to another source keeps its repository, unused.
   if (automatic && app.config.sourceType !== "github") return null
+  const imageDigest =
+    request.trigger === "update"
+      ? yield* imageUpdateDigest(relay, app.config, request)
+      : request.imageDigest &&
+          app.config.sourceType === "image" &&
+          relayConnectionFeatures(relay.id).has(relayAppImageUpdatesV1Feature)
+        ? request.imageDigest
+        : undefined
+  if (imageDigest === null) return null
   if (request.commit && app.config.sourceType !== "github") {
     return yield* Effect.fail(
       new Error("The app no longer deploys from GitHub")
@@ -129,6 +152,7 @@ export const startAppDeploymentEffect = Effect.fn("Apps.deploy")(function* (
     commitMessage: github?.commit.message ?? null,
     commitSha: github?.commit.sha ?? null,
     id: randomUUID(),
+    imageDigest: imageDigest ?? null,
     relayId: relay.id,
     repository: github?.source.repository ?? null,
     sourceType: app.config.sourceType,
@@ -156,6 +180,7 @@ export const startAppDeploymentEffect = Effect.fn("Apps.deploy")(function* (
             appId: request.appId,
             config: app.config,
             ...(checkout && { github: checkout }),
+            ...(imageDigest && { imageDigest }),
             name: app.name,
           },
           30_000,
@@ -167,10 +192,10 @@ export const startAppDeploymentEffect = Effect.fn("Apps.deploy")(function* (
     return relayAppSchema.parse(response)
   })
   const deployed: RelayApp = yield* deploy.pipe(
-    // Nobody watches a push, poll, or deploy waiting on provisioning, so
-    // its refusal is recorded instead.
+    // Nobody watches a push, poll, update Kiln started, or deploy waiting
+    // on provisioning, so its refusal is recorded instead.
     Effect.tapError((cause) =>
-      automatic || request.background
+      unattended
         ? insertAppDeploymentEffect({
             ...base,
             error: cause instanceof Error ? cause.message : String(cause),
@@ -222,6 +247,7 @@ const recordRefusal = (
         error: cause instanceof Error ? cause.message : String(cause),
         finishedAt: new Date(now).toISOString(),
         id: randomUUID(),
+        imageDigest: null,
         relayDeploymentId: null,
         relayId,
         repository: null,
@@ -299,6 +325,48 @@ const githubCommit = Effect.fnUntraced(function* (
       source.repositoryId
     ),
   }
+})
+
+/**
+ * The digest an image update deploys: the one Kiln last found the app's
+ * tag naming. Kiln's own update checks again when its turn comes, so one
+ * turned off or skipped while it waited doesn't deploy, nor does a digest
+ * an update already tried, however it went.
+ */
+const imageUpdateDigest = Effect.fnUntraced(function* (
+  relay: PersistedRelay,
+  config: AppConfig,
+  request: AppDeploymentRequest
+) {
+  if (!relayConnectionFeatures(relay.id).has(relayAppImageUpdatesV1Feature)) {
+    return yield* Effect.fail(
+      new Error("Update this Relay to deploy image updates")
+    )
+  }
+  const update = yield* loadAppImageUpdateEffect(request.appId)
+  const digest =
+    config.sourceType === "image" &&
+    update?.state === "available" &&
+    update.image === config.image
+      ? update.latestDigest
+      : null
+  if (request.userId !== null) {
+    if (digest === null) {
+      return yield* Effect.fail(new Error("There's no update to deploy"))
+    }
+    return digest
+  }
+  const due = update && autoUpdateAt(update)
+  if (
+    digest === null ||
+    due === null ||
+    due === undefined ||
+    due > (yield* Clock.currentTimeMillis) ||
+    (yield* imageUpdateDeployedEffect(request.appId, digest))
+  ) {
+    return null
+  }
+  return digest
 })
 
 const enabledRelay = Effect.fnUntraced(function* (relayId: string) {
@@ -446,7 +514,16 @@ export function followAppDeployment(record: AppDeploymentRecord): void {
           // An unreachable Relay is checked again next time.
           Effect.catch(() => Effect.succeed(false))
         )
-        if (settled) return
+        if (!settled) continue
+        // An image app's updates follow what it runs now. Imported here,
+        // since image updates deploy through this module.
+        if (record.sourceType === "image") {
+          const { recheckAppImage } = yield* Effect.promise(
+            () => import("@/lib/app-image-updates.server")
+          )
+          recheckAppImage(record.relayId, record.appId)
+        }
+        return
       }
     }).pipe(
       Effect.catchCause((cause) =>
@@ -461,14 +538,14 @@ export function followAppDeployment(record: AppDeploymentRecord): void {
 }
 
 /**
- * Deploys an app's branch head after a push or poll, one deployment at a
- * time per app. A trigger arriving while one waits joins it: the waiting
- * one deploys whatever is newest when it runs.
+ * Deploys an app's branch head after a push or poll, or its image update,
+ * one deployment at a time per app. A trigger arriving while one waits
+ * joins it: the waiting one deploys whatever is newest when it runs.
  */
 export function enqueueAppDeployment(
   appId: string,
   relayId: string,
-  trigger: "poll" | "push"
+  trigger: "poll" | "push" | "update"
 ): void {
   const key = `${relayId}:${appId}`
   if (queued.has(key)) return
@@ -495,7 +572,7 @@ export function enqueueAppDeployment(
             pollFailures.set(key, message)
           }
           return logException(failure, {
-            operation: trigger === "poll" ? "Apps.deploy.poll" : "Apps.deploy.push",
+            operation: `Apps.deploy.${trigger}`,
             attributes: { "app.id": appId, "relay.id": relayId },
           })
         })

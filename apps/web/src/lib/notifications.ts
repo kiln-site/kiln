@@ -53,6 +53,14 @@ export const notificationContentSchema = z.discriminatedUnion("kind", [
     resource: notificationResourceSchema,
     usedBytes: z.number(),
   }),
+  // An image app's tag names a newer image than the one it runs. What
+  // happens next, deploying it or not, is on the app's page.
+  z.object({
+    digest: z.string(),
+    image: z.string(),
+    kind: z.literal("app.image-update"),
+    resource: notificationResourceSchema,
+  }),
 ])
 
 export type NotificationContent = z.infer<typeof notificationContentSchema>

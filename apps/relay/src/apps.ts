@@ -15,6 +15,8 @@ import type {
   RelayApp,
   RelayAppDeploymentLog,
   RelayAppDeploymentRead,
+  RelayAppImageCheck,
+  RelayAppImageCheckResult,
   RelayAppAction,
   RelayAppContainer,
   RelayAppDeployment,
@@ -40,6 +42,12 @@ import {
 import { Effect, Predicate, Result } from "effect"
 
 import { commandLines } from "./command.js"
+import {
+  normalizedReference,
+  parseImageReference,
+  repositoryName,
+  type ImageReference,
+} from "./docker-reference.js"
 import type { RelayConfig } from "./config.js"
 import { consoleLineCharacters } from "./console-frames.js"
 import { parseConsoleLine } from "./console-parsing.js"
@@ -101,6 +109,10 @@ const SERVICE_LABEL = "kiln.app.service"
 const DEPLOYMENT_LABEL = "kiln.app.deployment"
 // The commit a GitHub deployment built.
 const COMMIT_LABEL = "kiln.app.commit"
+// An image app's container runs its image by digest; these keep the
+// reference its config names and the digest that reference named then.
+const IMAGE_LABEL = "kiln.app.image"
+const IMAGE_DIGEST_LABEL = "kiln.app.image.digest"
 const COMPOSE_PROJECT_LABEL = "com.docker.compose.project"
 // The console stream that follows an app's deployments; its services'
 // streams are `service:<name>`.
@@ -132,6 +144,8 @@ interface ContainerInspect {
   Created: string
   HostConfig?: { Memory?: number; NanoCpus?: number; NetworkMode?: string }
   Id: string
+  // The image's ID, whatever name `Config.Image` gave it.
+  Image?: string
   Mounts?: Array<{
     Destination?: string
     Name?: string
@@ -163,6 +177,9 @@ interface AppContainer extends RelayAppContainer {
   mounts: NonNullable<RelayAppContainer["mounts"]>
   deploymentId: string | null
   health: string | null
+  // The digest an image app deployed, from its label.
+  imageDigest: string | null
+  imageId: string | null
   networkMode: string | null
   oomKilled: boolean
   // Exited since it started, and Docker restarted it or is about to.
@@ -989,7 +1006,7 @@ export class AppDriver {
                   )
                 : await traceRelayPromise("relay.apps.deployment.build", () =>
                     this.#buildImage(input, deployment, checkout)
-                  )
+                  ).then((reference) => ({ labels: {}, reference }))
             // Its one service's limits count once the image is ready.
             await this.#reserving(
               input.appId,
@@ -1156,6 +1173,137 @@ export class AppDriver {
     }
   }
 
+  /**
+   * What each image app's tag names in its registry now, against the
+   * digest its container runs. Apps naming the same image share one lookup,
+   * and an app mid-deployment, or whose container runs another image than
+   * the one named, needs none.
+   */
+  async checkImages(
+    input: RelayAppImageCheck,
+    signal: AbortSignal
+  ): Promise<Array<RelayAppImageCheckResult>> {
+    const containers = await this.#containers(
+      undefined,
+      input.apps.map((app) => app.appId),
+      signal
+    )
+    const checks = input.apps.map(({ appId, image }) => {
+      const reference = Result.try(() => parseImageReference(image))
+      // The container serving the app: a deployment's replacement only
+      // takes over once it's healthy, and no check runs during one.
+      const container = containers
+        .filter(
+          (candidate) =>
+            candidate.appId === appId && candidate.service === APP_SERVICE
+        )
+        .sort(
+          (left, right) =>
+            Number(right.running) - Number(left.running) ||
+            newestFirst(left, right)
+        )[0]
+      const deploying = this.#deployments.get(appId)?.state === "running"
+      return { appId, container, deploying, reference }
+    })
+    const wanted = new Set<string>()
+    for (const { container, deploying, reference } of checks) {
+      if (
+        !deploying &&
+        container &&
+        Result.isSuccess(reference) &&
+        reference.success.digest === undefined &&
+        sameImage(container.image, reference.success)
+      ) {
+        wanted.add(normalizedReference(reference.success))
+      }
+    }
+    const latest = new Map(
+      await docker(
+        Effect.forEach(
+          [...wanted],
+          (name) =>
+            this.#engine.distributionDigest(name).pipe(
+              Effect.result,
+              Effect.map((result) => [name, result] as const)
+            ),
+          { concurrency: 4 }
+        ),
+        signal
+      )
+    )
+    return Promise.all(
+      checks.map(
+        async ({
+          appId,
+          container,
+          deploying,
+          reference,
+        }): Promise<RelayAppImageCheckResult> => {
+          if (Result.isFailure(reference)) {
+            return {
+              appId,
+              error: "The image isn't a valid reference",
+              status: "error",
+            }
+          }
+          if (deploying) return { appId, status: "deploying" }
+          if (!container) return { appId, status: "not_deployed" }
+          const found = latest.get(normalizedReference(reference.success))
+          // Another image, or one pinned to a digest, which never moves.
+          if (!found) return { appId, status: "changed" }
+          if (Result.isFailure(found)) {
+            return {
+              appId,
+              error: found.failure.reason.slice(0, 500),
+              status: "error",
+            }
+          }
+          return {
+            appId,
+            latestDigest: found.success,
+            runningDigests: container.imageDigest
+              ? [container.imageDigest]
+              : await this.#repositoryDigests(
+                  container,
+                  reference.success,
+                  signal
+                ),
+            status: "checked",
+          }
+        }
+      )
+    )
+  }
+
+  /**
+   * The digests a container's image was pulled as from its repository, for
+   * one deployed before Kiln labelled the digest it runs.
+   */
+  async #repositoryDigests(
+    container: AppContainer,
+    reference: ImageReference,
+    signal: AbortSignal
+  ): Promise<Array<string>> {
+    if (!container.imageId) return []
+    const image = await docker(
+      this.#engine
+        .inspectImage<{
+          RepoDigests?: Array<string> | null
+        } | null>(container.imageId)
+        .pipe(Effect.catchIf(isDockerNotFound, () => Effect.succeed(null))),
+      signal
+    )
+    const repository = repositoryName(reference)
+    return (image?.RepoDigests ?? []).flatMap((entry) => {
+      const parsed = Result.try(() => parseImageReference(entry))
+      return Result.isSuccess(parsed) &&
+        parsed.success.digest !== undefined &&
+        repositoryName(parsed.success) === repository
+        ? [parsed.success.digest]
+        : []
+    })
+  }
+
   #deploymentDirectory(appId: string): string {
     return join(this.#config.dataDirectory, "app-deployments", appId)
   }
@@ -1235,17 +1383,61 @@ export class AppDriver {
     )
   }
 
-  async #pullImage(input: RelayDeployApp, deployment: Deployment) {
+  /**
+   * Pulls the image app's image at the digest its tag names now, or the
+   * one the deployment names, and runs it by that digest, so another app
+   * pulling the same tag meanwhile can't change what this one starts.
+   */
+  async #pullImage(
+    input: RelayDeployApp,
+    deployment: Deployment
+  ): Promise<DeployedImage> {
     const image = input.config.image
-    this.#log(input.appId, deployment, `Pulling ${image}`)
-    await Effect.runPromise(
-      this.#engine.pullImage(image, {
-        onLine: (line) => this.#logOutput(input.appId, deployment, line),
-        timeout: PULL_TIMEOUT_MS,
-      }),
-      { signal: deployment.abort.signal }
-    )
-    return image
+    const log = (text: string, level: RelayConsoleLevel = "info") =>
+      this.#log(input.appId, deployment, text, level)
+    const signal = deployment.abort.signal
+    const reference = parseImageReference(image)
+    const pull = (name: string) =>
+      docker(
+        this.#engine.pullImage(name, {
+          onLine: (line) => this.#logOutput(input.appId, deployment, line),
+          timeout: PULL_TIMEOUT_MS,
+        }),
+        signal
+      )
+    // A reference that names its digest already runs as it is.
+    if (reference.digest !== undefined) {
+      log(`Pulling ${image}`)
+      await pull(image)
+      return { labels: {}, reference: image }
+    }
+    const digest =
+      input.imageDigest ??
+      (await docker(
+        this.#engine.distributionDigest(image).pipe(
+          Effect.catch((cause) =>
+            Effect.sync(() => {
+              log(`Could not read ${image}'s digest: ${cause.reason}`, "warn")
+              return null
+            })
+          )
+        ),
+        signal
+      ))
+    // A registry that can't say leaves the tag to name it, untracked.
+    if (digest === null) {
+      log(`Pulling ${image}`)
+      await pull(image)
+      return { labels: {}, reference: image }
+    }
+    const pinned = `${repositoryName(reference)}@${digest}`
+    log(`Pulling ${image}`)
+    log(`Digest: ${digest}`)
+    await pull(pinned)
+    return {
+      labels: { [IMAGE_DIGEST_LABEL]: digest, [IMAGE_LABEL]: image },
+      reference: pinned,
+    }
   }
 
   // Builds a pasted Dockerfile with the app's data directory as the
@@ -1301,7 +1493,7 @@ export class AppDriver {
   async #replaceContainer(
     input: RelayDeployApp,
     deployment: Deployment,
-    image: string,
+    image: DeployedImage,
     host: string,
     mounts: ReadonlyArray<ConfigMount>,
     // Whether the node holds the new container beside the running one.
@@ -1343,13 +1535,14 @@ export class AppDriver {
         command: shellWords(config.command),
         env: environment,
         hostname,
-        image,
+        image: image.reference,
         ...containerLimitSpec({
           ...NO_RESOURCE_LIMITS,
           ...config.serviceLimits[APP_SERVICE],
         }),
         labels: {
           ...routes.labels(APP_SERVICE),
+          ...image.labels,
           ...this.#containerLabels(
             input.appId,
             APP_SERVICE,
@@ -2456,7 +2649,9 @@ export class AppDriver {
         exitCode: state.Running ? null : state.ExitCode,
         health: state.Health?.Status ?? null,
         id: container.Id,
-        image: container.Config.Image,
+        image: labels[IMAGE_LABEL] ?? container.Config.Image,
+        imageDigest: labels[IMAGE_DIGEST_LABEL] ?? null,
+        imageId: container.Image ?? null,
         labels: Object.fromEntries(
           Object.entries(labels).flatMap(([key, value]) =>
             value === undefined ? [] : [[key, value]]
@@ -2661,6 +2856,12 @@ export class AppDriver {
   }
 }
 
+// What a deployment runs its container from, and the labels that say so.
+interface DeployedImage {
+  labels: Record<string, string>
+  reference: string
+}
+
 // One of the config's mounts, resolved for Docker.
 interface ConfigMount {
   // Where it comes from in the config.
@@ -2827,9 +3028,13 @@ function sourceProblem(input: RelayDeployApp): string | null {
   const { config } = input
   switch (config.sourceType) {
     case "image":
-      return /^[a-zA-Z0-9][a-zA-Z0-9._\-/:@]*$/u.test(config.image)
-        ? null
-        : "Enter an image to deploy, like nginx:latest"
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9._\-/:@]*$/u.test(config.image)) {
+        return "Enter an image to deploy, like nginx:latest"
+      }
+      // A digest to deploy stands in for the image's tag.
+      return input.imageDigest && config.image.includes("@")
+        ? "The image already names a digest"
+        : null
     case "dockerfile":
       return config.dockerfile.trim() ? null : "Add a Dockerfile to build"
     case "compose":
@@ -2939,6 +3144,16 @@ function joinsNetworks(container: AppContainer): boolean {
   return (
     !container.networkMode ||
     !/^(?:host|none|container:)/u.test(container.networkMode)
+  )
+}
+
+// Whether a container's image is the one `reference` names, as Docker
+// reads both.
+function sameImage(image: string, reference: ImageReference): boolean {
+  const parsed = Result.try(() => parseImageReference(image))
+  return (
+    Result.isSuccess(parsed) &&
+    normalizedReference(parsed.success) === normalizedReference(reference)
   )
 }
 
