@@ -606,4 +606,25 @@ volumes:
     })
     expect(changed).toBe(text.replace("target: /cache", "target: /var/cache"))
   })
+
+  it("won't drop a volume's options by making it anonymous", () => {
+    const text = `services:
+  app:
+    image: app
+    volumes:
+      - data:/data:nocopy
+volumes:
+  data: {}
+`
+    const [mount] = composeMounts(text, project)!
+    for (const readOnly of [false, true]) {
+      expect(() =>
+        changeComposeMount(text, mount!.key, {
+          readOnly,
+          source: "",
+          target: "/data",
+        })
+      ).toThrow("nocopy")
+    }
+  })
 })

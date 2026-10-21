@@ -305,6 +305,12 @@ function changeVolume(
     const flags = (mode ?? "")
       .split(",")
       .filter((flag) => flag && flag !== "ro" && flag !== "rw")
+    // An anonymous volume written here keeps no options, like nocopy.
+    if (!source && flags.length > 0) {
+      throw new Error(
+        `Make a volume with ${flags.join(", ")} anonymous in the Compose file.`
+      )
+    }
     if (change.readOnly) flags.push("ro")
     // An anonymous volume is only its target; a mode would read as one,
     // so a read-only one is written out in full.
