@@ -1646,7 +1646,11 @@ async function createResticSnapshot(
         : undefined,
       bytes: stats.totalSize,
       snapshotId: reuse.id,
-      warnings: translated.warnings,
+      warnings: [
+        ...translated.warnings,
+        // restic's report of files it couldn't read went with the process.
+        "Recovered after the Relay restarted, so files restic couldn't read, if any, aren't listed",
+      ],
     }
   }
   if (location.kind === "local") {
@@ -1736,7 +1740,7 @@ async function createResticSnapshot(
       : undefined,
     bytes: summary.success.totalBytesProcessed,
     snapshotId: summary.success.snapshotId,
-    warnings: translated.warnings,
+    warnings: [...translated.warnings, ...summary.success.warnings],
   }
 }
 

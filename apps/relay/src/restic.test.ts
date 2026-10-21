@@ -104,8 +104,56 @@ describe("restic driver", () => {
       signal: new AbortController().signal,
       tags: ["task:1"],
     })
-    expect(summary).toEqual({ snapshotId: "abc12345", totalBytesProcessed: 40 })
+    expect(summary).toEqual({
+      snapshotId: "abc12345",
+      totalBytesProcessed: 40,
+      warnings: [],
+    })
     expect(progress).toEqual([{ bytesCompleted: 10, bytesTotal: 40 }])
+  })
+
+  it("keeps a snapshot that left out files restic couldn't read", async () => {
+    // restic 0.19's output when one source file is unreadable.
+    const { spawn } = fakeRestic((restic) =>
+      restic.respond({
+        exitCode: 3,
+        stderr: [
+          '{"message_type":"error","error":{"message":"open /srv/world/session.lock: permission denied"},"during":"archival","item":"/srv/world/session.lock"}',
+          '{"message_type":"exit_error","code":3,"message":"Warning: at least one source file could not be read"}',
+        ].join("\n"),
+        stdout: JSON.stringify({
+          message_type: "summary",
+          snapshot_id: "abcdef12",
+          total_bytes_processed: 4096,
+        }),
+      })
+    )
+    const summary = await createResticDriver({ spawn }).backup({
+      cwd: testDirectory,
+      excludes: [],
+      location: localLocation,
+      password: "secret",
+      path: "srv",
+      signal: new AbortController().signal,
+      tags: [],
+    })
+    expect(summary.snapshotId).toBe("abcdef12")
+    expect(summary.warnings.join("\n")).toContain("/srv/world/session.lock")
+
+    const { spawn: withoutSnapshot } = fakeRestic((restic) =>
+      restic.respond({ exitCode: 3, stderr: "unreadable" })
+    )
+    await expect(
+      createResticDriver({ spawn: withoutSnapshot }).backup({
+        cwd: testDirectory,
+        excludes: [],
+        location: localLocation,
+        password: "secret",
+        path: "srv",
+        signal: new AbortController().signal,
+        tags: [],
+      })
+    ).rejects.toThrow()
   })
 
   it("fails a backup that exits cleanly without reporting a snapshot", async () => {

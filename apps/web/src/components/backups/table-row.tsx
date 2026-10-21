@@ -13,6 +13,7 @@ import {
   Plus,
   History as RotateCcwClock,
   Trash2,
+  TriangleAlert,
   X,
 } from "lucide-react"
 
@@ -1125,9 +1126,11 @@ const BackupModeBadge = React.memo(function BackupModeBadge({
 export const BackupSizeDetails = React.memo(function BackupSizeDetails({
   bytes,
   mode,
+  warnings,
 }: {
   bytes: number | null
   mode: Backup["backupMode"]
+  warnings: ReadonlyArray<string>
 }) {
   return (
     <div className="flex items-center gap-1.5 text-xs">
@@ -1135,9 +1138,42 @@ export const BackupSizeDetails = React.memo(function BackupSizeDetails({
         {bytes === null ? "—" : formatBytes(bytes)}
       </span>
       <BackupModeBadge mode={mode} />
+      {warnings.length > 0 ? <BackupWarnings warnings={warnings} /> : null}
     </div>
   )
 })
+
+const maxShownBackupWarnings = 5
+
+/** What a backup left out or couldn't guarantee, such as unreadable files. */
+function BackupWarnings({ warnings }: { warnings: ReadonlyArray<string> }) {
+  const hidden = warnings.length - maxShownBackupWarnings
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <TriangleAlert
+          aria-label={`${warnings.length} backup ${warnings.length === 1 ? "warning" : "warnings"}`}
+          className="size-3.5 shrink-0 text-amber-600 dark:text-amber-400"
+        />
+      </TooltipTrigger>
+      <TooltipContent
+        className="max-w-sm flex-col items-start gap-1 whitespace-normal"
+        side="bottom"
+      >
+        {warnings.slice(0, maxShownBackupWarnings).map((warning, index) => (
+          <p key={index} className="break-words">
+            {warning}
+          </p>
+        ))}
+        {hidden > 0 ? (
+          <p className="text-muted-foreground">
+            {hidden} more {hidden === 1 ? "warning" : "warnings"}
+          </p>
+        ) : null}
+      </TooltipContent>
+    </Tooltip>
+  )
+}
 
 export function backupTargetName(
   backup: Backup,

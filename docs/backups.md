@@ -307,6 +307,12 @@ IP. A derived host allowlist (endpoint, `bucket.endpoint`, and AWS regional /
 dual-stack forms when the endpoint is on `amazonaws.com`) is a secondary
 control that fails closed. TLS stays end-to-end inside the CONNECT tunnel.
 
+A live server can have files restic can't read, such as one locked or
+replaced mid-backup. restic still saves the snapshot and exits with code 3;
+Kiln keeps it and lists the skipped files as the backup's warnings, shown
+beside its size. A snapshot recovered after a Relay restart can't list them,
+so it says so instead.
+
 Quantity limits map to retained snapshot rows. Size limits use each snapshot's
 logical restore size because physical repository bytes are shared. Database
 dumps and platform bundles stay full archives. Incremental backups accept

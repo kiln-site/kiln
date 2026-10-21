@@ -400,6 +400,7 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
               <BackupSizeDetails
                 bytes={backupDisplayBytes(backup)}
                 mode={backup.backupMode}
+                warnings={backup.warnings}
               />
             )
           },
@@ -796,7 +797,11 @@ const BackupMobileRow = React.memo(function BackupMobileRow({
         </div>
       ) : (
         <div className="mt-2.5 grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-end gap-x-3 text-xs text-muted-foreground">
-          <BackupSizeDetails bytes={displayBytes} mode={backup.backupMode} />
+          <BackupSizeDetails
+            bytes={displayBytes}
+            mode={backup.backupMode}
+            warnings={backup.warnings}
+          />
           <BackupCreatedTime createdAt={backup.createdAt} />
         </div>
       )}
