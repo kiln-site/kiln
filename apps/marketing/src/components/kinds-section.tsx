@@ -26,7 +26,8 @@ import { BRICK_COLOR_PALETTE } from "@/components/brick-icon"
 
 import { BrickMark, officialBricks } from "~/components/brick-mark"
 import { KilnMark } from "~/components/kiln-mark"
-import { brandMarks, type BrandMarkDefinition } from "~/lib/brand-marks"
+import { BrandSvg } from "~/components/brand-svg"
+import { brandMarks } from "~/lib/brand-marks"
 
 // What Kiln runs, one card each: a picture of the idea, then a line on it.
 // The pictures are illustrations, not Hearth's screens.
@@ -330,24 +331,5 @@ function VanityAddress() {
         smp.example.com
       </span>
     </div>
-  )
-}
-
-function BrandSvg({
-  className,
-  mark,
-}: {
-  className: string
-  mark: BrandMarkDefinition
-}) {
-  return (
-    <svg
-      aria-hidden="true"
-      viewBox={mark.viewBox}
-      fill={mark.color}
-      className={cn("shrink-0", className)}
-    >
-      <path d={mark.path} fillRule={mark.fillRule} />
-    </svg>
   )
 }

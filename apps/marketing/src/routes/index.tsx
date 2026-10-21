@@ -1,18 +1,33 @@
 import * as React from "react"
 import { Link, createFileRoute } from "@tanstack/react-router"
-import { Braces, Database, FolderTree, Search, Share2 } from "lucide-react"
+import {
+  Braces,
+  CalendarClock,
+  Database,
+  DatabaseBackup,
+  FolderTree,
+  Globe,
+  History,
+  RefreshCw,
+  Search,
+  Share2,
+  SquareTerminal,
+  UserCog,
+} from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 
 import { CyclingWord } from "~/components/cycling-word"
 import { ComingSoon } from "~/components/coming-soon"
 import { ClientDemo } from "~/components/demos/client-demo"
+import { BrandSvg } from "~/components/brand-svg"
 import { KindsSection } from "~/components/kinds-section"
 import {
   sendFilesDemoCommand,
   type FilesDemoCommand,
 } from "~/components/demos/files-demo-commands"
 import { signUpUrl } from "~/lib/plans"
+import { brandMarks } from "~/lib/brand-marks"
 import { comingSoon } from "~/lib/coming-soon"
 import { newTab } from "~/lib/new-tab"
 import { useSiteConfig } from "~/lib/use-site-config"
@@ -39,7 +54,14 @@ function HomePage() {
   )
 }
 
-const heroWords = ["game servers", "apps", "Docker", "databases", "everything"]
+const heroWords = [
+  "game servers",
+  "apps",
+  "Docker",
+  "databases",
+  "your VPS",
+  "everything",
+]
 
 function Hero() {
   const { docsUrl, hearthUrl } = useSiteConfig()
@@ -53,7 +75,8 @@ function Hero() {
         <div className="grid gap-8 lg:grid-cols-12 lg:items-end lg:gap-12">
           <h1 className="site-display lg:col-span-7">
             <span className="sr-only">
-              The panel for game servers, apps, Docker, databases, and more
+              The panel for game servers, apps, Docker, databases, your VPS, and
+              more
             </span>
             <span aria-hidden="true">The panel for</span>
             <span className="text-primary">
@@ -244,37 +267,49 @@ function Relays() {
   )
 }
 
-const features = [
+const features: Array<{
+  description: string
+  icon: React.ReactNode
+  title: string
+}> = [
   {
+    icon: <DatabaseBackup />,
     title: "Backups",
     description:
       "Scheduled backups to S3-compatible storage, restored in place.",
   },
   {
+    icon: <CalendarClock />,
     title: "Schedules",
     description: "Restart, back up, or run a command on a timetable.",
   },
   {
+    icon: <UserCog />,
     title: "Access",
     description: "Invite people and choose what they can do on each instance.",
   },
   {
+    icon: <History />,
     title: "Activity",
     description: "A record of who changed what, and when.",
   },
   {
+    icon: <SquareTerminal />,
     title: "Command line",
     description: "Script power, files, and backups with the kiln CLI.",
   },
   {
+    icon: <BrandSvg mark={brandMarks.tailscale} className="size-5" />,
     title: "Tailscale",
     description: "Reach instances privately over your tailnet.",
   },
   {
+    icon: <Globe />,
     title: "Domains",
     description: "Point your own domains at apps, with HTTPS.",
   },
   {
+    icon: <RefreshCw />,
     title: "Updates",
     description: "Update Hearth and every Relay from the panel.",
   },
@@ -285,16 +320,30 @@ function Features() {
     <section className="border-t border-border">
       <div className="site-container py-20 sm:py-28">
         <SectionHeading title="And the rest of running a server" />
-        <dl className="mt-12 grid gap-x-10 gap-y-8 sm:grid-cols-2 lg:grid-cols-4">
+        <ul className="mt-12 grid gap-px border border-border bg-border sm:grid-cols-2 lg:grid-cols-4">
           {features.map((feature) => (
-            <div key={feature.title} className="border-t border-border pt-4">
-              <dt className="font-medium">{feature.title}</dt>
-              <dd className="type-support mt-1.5 text-muted-foreground">
-                {feature.description}
-              </dd>
-            </div>
+            <li
+              key={feature.title}
+              className="group relative flex flex-col gap-5 overflow-hidden bg-background p-6"
+            >
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_80%_70%_at_0%_0%,hsl(var(--accent-hue)_var(--accent-saturation)_58%/0.06),transparent)] opacity-0 transition-opacity group-hover:opacity-100"
+              />
+              <span className="relative grid size-10 place-items-center border border-primary/25 bg-primary/10 text-primary [&_svg]:size-5">
+                {feature.icon}
+              </span>
+              <div className="relative">
+                <h3 className="font-semibold tracking-[-0.01em] text-foreground">
+                  {feature.title}
+                </h3>
+                <p className="type-support mt-1.5 text-muted-foreground">
+                  {feature.description}
+                </p>
+              </div>
+            </li>
           ))}
-        </dl>
+        </ul>
       </div>
     </section>
   )
@@ -307,9 +356,8 @@ function SelfHost() {
       <div className="site-container grid gap-12 py-20 sm:py-28 lg:grid-cols-12 lg:items-center lg:gap-16">
         <div className="lg:col-span-5">
           <SectionHeading title="Yours to run">
-            Kiln is open source under AGPL-3.0. Run Hearth and your Relays
-            yourself with Docker Compose, or let us host Hearth while your
-            machines stay yours.
+            Open source under AGPL-3.0. Host it yourself, or let us run the
+            panel.
           </SectionHeading>
           <div className="mt-8 flex flex-wrap gap-3">
             <ComingSoon soon={comingSoon.docs} label="Install Kiln">
@@ -332,7 +380,8 @@ function SelfHost() {
           <pre className="overflow-x-auto border border-border bg-card p-5 font-mono text-[0.8125rem] leading-7 sm:p-6">
             <code>
               <span className="text-muted-foreground">
-                # compose.yaml and .env.hearth.example from
+                # Kiln is in early development. To try it anyway, grab
+                {"\n"}# compose.yaml and .env.hearth.example from
                 github.com/kiln-site/kiln
               </span>
               {"\n"}
