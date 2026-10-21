@@ -1540,6 +1540,39 @@ describe("rolling deployments", () => {
     await removeCompose()
   })
 
+  it("rolls a Compose project over when the volumes it mounts are read-only", async () => {
+    const removeCompose = await composeConfigCommand()
+    const harness = await createdApp()
+    const volumeId = "3f9a21c4".padEnd(40, "0")
+    fakeDocker.addVolume({
+      labels: {
+        "kiln.relay.owner": TEST_NAMESPACE,
+        "kiln.resource.kind": "volume",
+        "kiln.volume.id": volumeId,
+      },
+      name: `${TEST_NAMESPACE}-kiln-3f9a21c4-media`,
+    })
+    const config = {
+      compose: "services:\n  web:\n    image: nginx:alpine\n",
+      mounts: [
+        {
+          id: "media0001",
+          readOnly: true,
+          service: null,
+          source: { type: "volume" as const, volumeId },
+          target: "/media",
+        },
+      ],
+      sourceType: "compose" as const,
+    }
+    await deploy(harness, config)
+
+    const app = await deploy(harness, config)
+
+    expect(app.deployment).toMatchObject({ rolling: true, state: "succeeded" })
+    await removeCompose()
+  })
+
   it("replaces a Compose project that keeps data in a volume instead of running two copies", async () => {
     const removeCompose = await composeConfigCommand()
     const harness = await createdApp()

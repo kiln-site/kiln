@@ -1963,7 +1963,12 @@ export class AppDriver {
       const inspected = await docker(
         this.#engine.inspectContainer<ContainerInspect>(container.id)
       )
-      if (inspected.Mounts?.some((mount) => mount.Type === "volume")) {
+      // Two copies can read the same volume; only writing one is shared.
+      if (
+        inspected.Mounts?.some(
+          (mount) => mount.Type === "volume" && mount.RW !== false
+        )
+      ) {
         return container.service
       }
     }
@@ -2783,7 +2788,11 @@ function composeRollingBlocker(
   tailscale: ReadonlyArray<{ service: string }>
 ): string | null {
   for (const [name, service] of Object.entries(project.services ?? {})) {
-    if (service.volumes?.some((volume) => volume.type === "volume")) {
+    if (
+      service.volumes?.some(
+        (volume) => volume.type === "volume" && !volume.read_only
+      )
+    ) {
       return `${name} keeps data in a volume`
     }
     if (service.ports?.some((port) => port.published !== undefined)) {

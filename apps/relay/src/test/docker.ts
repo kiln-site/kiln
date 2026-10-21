@@ -650,6 +650,7 @@ export class FakeDocker {
     const project = arguments_[arguments_.indexOf("-p") + 1] ?? ""
     const definition = JSON.parse(input) as {
       networks?: Record<string, { external?: boolean; name?: string } | null>
+      volumes?: Record<string, { name?: string } | null>
       services: Record<
         string,
         {
@@ -690,15 +691,21 @@ export class FakeDocker {
           "com.docker.compose.service": service,
         },
         mounts: [
-          // Its binds, as the host path Docker gets.
+          // Its binds, as the host path Docker gets, and its named
+          // volumes, by the name the file gives them.
           ...(settings.volumes ?? []).flatMap((volume) =>
-            volume.type === "bind" && volume.source
+            (volume.type === "bind" || volume.type === "volume") &&
+            volume.source
               ? [
                   {
                     destination: volume.target,
                     readOnly: volume.read_only ?? false,
-                    source: volume.source,
-                    type: "bind" as const,
+                    source:
+                      volume.type === "volume"
+                        ? (definition.volumes?.[volume.source]?.name ??
+                          `${project}_${volume.source}`)
+                        : volume.source,
+                    type: volume.type as FakeMount["type"],
                   },
                 ]
               : []
