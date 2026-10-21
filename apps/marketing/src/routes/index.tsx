@@ -130,7 +130,7 @@ function Hero() {
           </div>
         </div>
 
-        <figure className="mt-12 sm:mt-16">
+        <figure className="-mx-3 mt-12 sm:mx-0 sm:mt-16">
           <ClientDemo
             fallback={
               <div className="flex flex-col gap-3">
@@ -233,7 +233,7 @@ function Editor() {
             </li>
           ))}
         </ul>
-        <div className="mt-12">
+        <div className="-mx-3 mt-12 sm:mx-0">
           <ClientDemo
             fallback={
               <DemoFrame
