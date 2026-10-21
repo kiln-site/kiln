@@ -20,6 +20,7 @@ import {
 } from "node:fs/promises"
 import { basename, dirname, relative, resolve, sep } from "node:path"
 import { constants as zlibConstants } from "node:zlib"
+import { logException } from "@workspace/telemetry"
 import { Effect, Fiber, Queue, Result } from "effect"
 import { minimatch } from "minimatch"
 import ZipStream from "zip-stream"
@@ -55,6 +56,8 @@ import { RelayStateStore } from "./effect/state.js"
 import { LaneRejectedError } from "./operation-lanes.js"
 import type { OperationLanes } from "./operation-lanes.js"
 import { backupTaskLocks } from "./operation-plans.js"
+import { backupFailureCode } from "./backups/failure.js"
+import { backupTaskAttributes } from "./backups/telemetry.js"
 import {
   backupArchivePath,
   backupDestinationFor,
@@ -336,10 +339,16 @@ export class BackupManager {
                 .pipe(
                   Effect.tap((failed) =>
                     failed
-                      ? Effect.logError("Relay backup task failed", {
-                          backupId: task.backupId,
-                          cause,
-                          taskId: task.taskId,
+                      ? logException(cause, {
+                          operation: `Backups.${task.kind}`,
+                          attributes: {
+                            ...backupTaskAttributes(task),
+                            "backup.failure.code": backupFailureCode(cause),
+                            "backup.error.code":
+                              cause instanceof RelayBackupError
+                                ? cause.code
+                                : null,
+                          },
                         })
                       : Effect.void
                   ),
@@ -1182,6 +1191,7 @@ function storeCreatedBackup(
     progress.total = result.bytes
     const outcomes: NonNullable<BackupArchiveCreateTaskResult["artifacts"]> = []
     let available = 0
+    let lastFailure: unknown = null
     let lastUploadedArtifactId: string | null = null
     for (const destination of destinations) {
       signal.throwIfAborted()
@@ -1234,6 +1244,7 @@ function storeCreatedBackup(
           status: "failed",
         })
       }
+      if (Result.isFailure(uploaded)) lastFailure = uploaded.failure
     }
     if (
       !destinations.some(
@@ -1247,11 +1258,13 @@ function storeCreatedBackup(
       ).pipe(Effect.ignore)
     }
     if (available === 0) {
-      return yield* backupFailure(
-        "backup_storage_failed",
-        "create.store",
-        "The backup archive could not be stored in any destination"
-      )
+      // Says why, so the task is classified by the destination's failure.
+      return yield* RelayBackupError.make({
+        code: "backup_storage_failed",
+        operation: "create.store",
+        reason: `The backup archive could not be stored in any destination: ${backupErrorMessage(lastFailure)}`,
+        cause: lastFailure,
+      })
     }
     signal.throwIfAborted()
     progress.phase = "finalizing"
@@ -2082,9 +2095,7 @@ function cleanupResticCache(
     catch: (cause) => cause,
   }).pipe(
     Effect.catch((cause) =>
-      Effect.sync(() => {
-        console.error("restic cache cleanup failed", cause)
-      })
+      Effect.logWarning("restic cache cleanup failed", { cause })
     )
   )
 }

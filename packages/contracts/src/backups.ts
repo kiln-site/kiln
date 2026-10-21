@@ -115,6 +115,28 @@ export const backupArtifactStatusSchema = z.enum([
   "deleted",
 ])
 
+/**
+ * Why a backup task failed, when the Relay can tell. Most name something
+ * outside Kiln, such as a storage provider refusing writes, so Hearth can say
+ * where to fix it. Readers treat an unknown code like no code.
+ */
+export const backupFailureCodes = [
+  // The provider's storage cap or quota is reached; it refuses new data.
+  "storage_full",
+  // Another account limit, such as a daily transaction or download cap.
+  "storage_limit_reached",
+  "storage_access_denied",
+  "storage_bucket_missing",
+  "storage_unreachable",
+  // Another restic process holds the repository lock.
+  "repository_locked",
+  "repository_password_incorrect",
+  "relay_disk_full",
+  "timed_out",
+] as const
+
+export type BackupFailureCode = (typeof backupFailureCodes)[number]
+
 export const backupTargetSchema = z
   .object({
     id: z.string().min(1).max(120),

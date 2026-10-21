@@ -27,6 +27,8 @@ import {
 
 const MAX_S3_SINGLE_PUT_BYTES = 5 * 1024 ** 3
 const BACKUP_TRANSFER_IDLE_TIMEOUT_MS = 30_000
+const MAX_S3_RESPONSE_BYTES = 64 * 1024
+const MAX_S3_ERROR_FIELD_LENGTH = 512
 
 export function s3ResticDriverLocation(
   location: Extract<ResticRepositoryLocation, { kind: "s3" }>
@@ -127,7 +129,7 @@ export const s3BackupDestination = defineBackupDestination({
         RelayBackupError.make({
           code: "s3_delete_failed",
           operation: "delete.remote",
-          reason: "The backup archive could not be deleted from S3 storage",
+          reason: `The backup archive could not be deleted from S3 storage: ${errorMessage(cause)}`,
           cause,
         }),
     }).pipe(Effect.as({ warnings: [] })),
@@ -175,7 +177,7 @@ export const s3BackupDestination = defineBackupDestination({
         RelayBackupError.make({
           code: "s3_upload_failed",
           operation: "create.upload",
-          reason: "The backup archive could not be uploaded to S3 storage",
+          reason: `The backup archive could not be uploaded to S3 storage: ${errorMessage(cause)}`,
           cause,
         }),
     }).pipe(Effect.as(result))
@@ -269,12 +271,33 @@ function encodeS3PathSegment(value: string): string {
   )
 }
 
+function errorMessage(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause)
+}
+
 function sha256Hex(value: string): string {
   return createHash("sha256").update(value).digest("hex")
 }
 
 function hmac(key: string | Buffer, value: string): Buffer {
   return createHmac("sha256", key).update(value).digest()
+}
+
+/**
+ * The `Code` and `Message` of an S3 XML error body, such as Backblaze's
+ * "AccessDenied: Cannot upload files, storage cap exceeded", so failures say
+ * what the provider refused. Provider text, so bounded and stripped of markup.
+ */
+function s3ErrorDetail(body: string): string | null {
+  const field = (name: string) =>
+    new RegExp(`<${name}>([^<]{1,${MAX_S3_ERROR_FIELD_LENGTH}})</${name}>`, "u")
+      .exec(body)?.[1]
+      ?.replaceAll(/[\p{Cc}]+/gu, " ")
+      .trim() || null
+  const code = field("Code")
+  const message = field("Message")
+  if (code && message) return `${code}: ${message}`
+  return code ?? message
 }
 
 function sendSignedBackupRequest(input: {
@@ -310,20 +333,31 @@ function sendSignedBackupRequest(input: {
         signal: input.signal,
       },
       (response) => {
+        const chunks: Array<Buffer> = []
         let responseBytes = 0
         response.on("data", (chunk: Buffer) => {
           responseBytes += chunk.byteLength
-          if (responseBytes > 64 * 1024) {
+          if (responseBytes > MAX_S3_RESPONSE_BYTES) {
             response.destroy(new Error("S3 storage response was too large"))
+            return
           }
+          chunks.push(chunk)
         })
         response.once("aborted", () => {
           rejectRequest(new Error("S3 storage closed the response early"))
         })
         response.once("end", () => {
           const status = response.statusCode ?? 0
-          if (status >= 200 && status < 300) resolveRequest()
-          else rejectRequest(new Error(`S3 storage returned HTTP ${status}`))
+          if (status >= 200 && status < 300) {
+            resolveRequest()
+            return
+          }
+          const detail = s3ErrorDetail(Buffer.concat(chunks).toString("utf8"))
+          rejectRequest(
+            new Error(
+              `S3 storage returned HTTP ${status}${detail ? `: ${detail}` : ""}`
+            )
+          )
         })
         response.once("error", rejectRequest)
       }
