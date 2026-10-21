@@ -113,7 +113,8 @@ export const DemoHeader = React.memo(function DemoHeader({
             provisioning: null,
           }}
           onAction={server.power}
-          relayConnected
+          // Power actions play out in the console, so on Files they're off.
+          relayConnected={view === "console"}
         />
       </div>
     </header>

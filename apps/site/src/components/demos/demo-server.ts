@@ -31,6 +31,10 @@ const sampleInterval = 2_000
 const gib = 1024 ** 3
 
 type ConsoleWrite = (lines: Array<RelayConsoleLine>) => void
+type LineFactory = (
+  level: RelayConsoleLine["level"],
+  text: string
+) => RelayConsoleLine
 
 // A game server that only lives in the browser. It answers power actions the
 // way a Relay does, reports resources for Hearth's own meters, and writes what
@@ -48,15 +52,9 @@ export function createDemoServer(key: string) {
   }
   const listeners = new Set<() => void>()
   const writers = new Set<ConsoleWrite>()
-  let line: (
-    level: RelayConsoleLine["level"],
-    text: string
-  ) => RelayConsoleLine = (level, text) => ({
-    id: crypto.randomUUID(),
-    level,
-    text,
-    timestamp: null,
-  })
+  // The console's line factory. Power actions play out in the console, so
+  // they wait for one to attach.
+  let line: LineFactory | null = null
   let received = 48 * gib
   let sent = 71 * gib
 
@@ -108,6 +106,10 @@ export function createDemoServer(key: string) {
     for (const writer of writers) writer(lines)
   }
 
+  function say(level: RelayConsoleLine["level"], text: string) {
+    if (line) write([line(level, text)])
+  }
+
   function transition(observedState: RelayObservedState) {
     set({ observedState })
     write([consoleStateLine(observedState, new Date().toISOString())])
@@ -121,7 +123,7 @@ export function createDemoServer(key: string) {
     transition("stopping")
     for (const text of shutdownLines) {
       await wait(140 + random() * 220)
-      write([line("info", text)])
+      say("info", text)
     }
     history.record([], null)
     set({ startedAt: null })
@@ -133,10 +135,10 @@ export function createDemoServer(key: string) {
     const startedAt = performance.now()
     for (const text of startupLines) {
       await wait(90 + random() * 200)
-      write([line("info", text)])
+      say("info", text)
     }
     const seconds = ((performance.now() - startedAt) / 1_000).toFixed(3)
-    write([line("info", `Done (${seconds}s)! For help, type "help"`)])
+    say("info", `Done (${seconds}s)! For help, type "help"`)
     set({ startedAt: new Date().toISOString() })
     transition("running")
   }
@@ -149,16 +151,16 @@ export function createDemoServer(key: string) {
       return () => listeners.delete(listener)
     },
     // The console's own line factory, so power output reads like the log.
-    attachConsole(factory: typeof line, writer: ConsoleWrite): () => void {
+    attachConsole(factory: LineFactory, writer: ConsoleWrite): () => void {
       line = factory
       writers.add(writer)
       return () => writers.delete(writer)
     },
     async power(action: ServerAction) {
-      if (state.action) return
+      if (state.action || !line) return
       set({ action })
       if (action === "kill") {
-        write([line("warn", "Killed by Kiln")])
+        say("warn", "Killed by Kiln")
         history.record([], null)
         set({ startedAt: null })
         transition("stopped")
