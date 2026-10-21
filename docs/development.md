@@ -54,11 +54,11 @@ Run relevant checks with `vp check`, `vp run -r typecheck`, or targeted
 
 ## Marketing site
 
-`apps/site` is the public site at kiln.site, a separate TanStack Start app with
-no database or Relay. It needs no Docker stack:
+`apps/marketing` is the public site at kiln.site, a separate TanStack Start app
+with no database or Relay. It needs no Docker stack:
 
 ```sh
-pnpm --filter site dev
+pnpm --filter marketing dev
 ```
 
 It serves `http://localhost:3100`. `KILN_HEARTH_URL` (default
@@ -70,7 +70,8 @@ paid plan opens Hearth's sign-up with `plan` and `interval` parameters and a
 
 Its console and editor demos render Hearth's own components from
 `apps/web/src`, which the site resolves through the `@/` alias; site code uses
-`~/`. Build with `vp run site#build` and serve with `pnpm --filter site start`.
+`~/`. Build with `vp run marketing#build` and serve with
+`pnpm --filter marketing start`.
 
 ## PR titles
 
