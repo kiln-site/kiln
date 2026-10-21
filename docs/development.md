@@ -73,6 +73,21 @@ Its console and editor demos render Hearth's own components from
 `~/`. Build with `vp run marketing#build` and serve with
 `pnpm --filter marketing start`.
 
+The **Marketing image** workflow builds `ghcr.io/kiln-site/marketing` on PRs
+that touch the site or the Hearth code it renders, and publishes `latest` and
+`sha-<commit>` from `main`. It isn't part of a Kiln release, so self-hosted
+installs never pull it. The image listens on port 3000 and takes the same two
+URLs:
+
+```sh
+docker run -p 3000:3000 -e KILN_HEARTH_URL=https://panel.kiln.site \
+  ghcr.io/kiln-site/marketing:latest
+```
+
+The first publish creates the GHCR package as private. Make it public in the
+package's settings, as with the other images (see [Forking](forking.md)). Run
+the workflow by hand to publish without a change.
+
 ## PR titles
 
 Use `<type>(<scope>): <short human title>`. Examples:

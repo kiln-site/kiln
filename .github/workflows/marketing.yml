@@ -1,0 +1,58 @@
+name: Marketing image
+
+# The kiln.site image. It isn't part of a Kiln release: self-hosters never run
+# it, so it publishes `latest` straight from main rather than through the
+# release manifest. Run it by hand to publish without a change.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "apps/marketing/**"
+      - "apps/web/**"
+      - "apps/bricks/icons/**"
+      - "packages/**"
+      - "patches/**"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/marketing.yml"
+      - ".github/workflows/reusable-image.yml"
+  pull_request:
+    paths:
+      - "apps/marketing/**"
+      - "apps/web/**"
+      - "apps/bricks/icons/**"
+      - "packages/**"
+      - "patches/**"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/marketing.yml"
+      - ".github/workflows/reusable-image.yml"
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: marketing-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  config:
+    uses: ./.github/workflows/release-config.yml
+
+  image:
+    needs: config
+    uses: ./.github/workflows/reusable-image.yml
+    with:
+      name: Marketing
+      image: ${{ needs.config.outputs.prefix }}/marketing
+      dockerfile: apps/marketing/Dockerfile
+      cache_scope: marketing
+      # Links the package to this repository, not Hearth's legacy source.
+      source_label: ${{ needs.config.outputs.repository }}
+      build_args: |
+        SOURCE_COMMIT=${{ github.sha }}
+        KILN_IMAGE_SOURCE=${{ needs.config.outputs.repository }}
+      tags: |
+        type=raw,value=latest
+        type=sha,prefix=sha-
+      publish: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.PUBLISH_IMAGES == 'true' }}

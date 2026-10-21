@@ -1,4 +1,10 @@
 @import "@workspace/ui/globals.css";
+/*
+ * Builds without a git checkout, like the Docker image, don't read
+ * .gitignore, so the server build would scan the client build's output and
+ * name its stylesheet differently from the one the client ships.
+ */
+@source not "../dist";
 /* The demos render these Hearth components, so their classes must exist. */
 @source "../../web/src/components/console";
 @source "../../web/src/components/files/editor-tooltip.tsx";
