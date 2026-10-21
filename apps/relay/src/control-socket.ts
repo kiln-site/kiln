@@ -126,7 +126,9 @@ export interface ControlSocketOptions {
       operation: RelayControlOperation,
       payload: unknown,
       timeoutMs: number
-    ) => Promise<unknown>
+    ) => Promise<unknown>,
+    /** What the connected Hearth announced it understands. */
+    hearthFeatures: ReadonlySet<string>
   ) => Promise<unknown>
   readonly identity: RelayIdentity
   readonly initialSnapshot: () => Promise<unknown>
@@ -405,6 +407,7 @@ function authenticateSocket(
   let eventSequence = 0
   let previousSnapshot: RelaySnapshot | null = null
   let snapshotDeltasEnabled = false
+  let hearthFeatures: ReadonlySet<string> = new Set()
   let nodeResourceDeltasEnabled = false
   const inFlight = new Map<string, InFlightRequest>()
   const reversePending = new Map<string, Deferred.Deferred<unknown, Error>>()
@@ -653,6 +656,7 @@ function authenticateSocket(
       ) {
         return yield* controlFailure("Invalid Hearth identity proof")
       }
+      hearthFeatures = new Set(features)
       snapshotDeltasEnabled = features.includes(relaySnapshotDeltaFeature)
       nodeResourceDeltasEnabled = features.includes(
         relaySnapshotNodeResourcesFeature
@@ -749,7 +753,8 @@ function authenticateSocket(
                       requestPayload,
                       timeoutMs,
                       request.subject
-                    )
+                    ),
+                  hearthFeatures
                 ),
               { "relay.operation": request.operation }
             )

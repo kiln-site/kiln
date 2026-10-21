@@ -6,6 +6,8 @@ import {
   backupExportTaskInputSchema,
   omitBackupSecrets,
   redactBackupTaskInput,
+  redactRelayBackupTask,
+  relayBackupTaskSchema,
   resticRepositoryLocationSchema,
 } from "./backups.js"
 
@@ -151,5 +153,62 @@ describe("Relay backup task inputs", () => {
     })
 
     expect(JSON.stringify(redacted)).not.toMatch(/AKIAEXAMPLE|s3-secret/u)
+  })
+})
+
+describe("Relay backup task failure codes", () => {
+  const artifactId = "44444444-4444-4444-8444-444444444444"
+  const failedDelete = {
+    backupId,
+    bytesCompleted: 0,
+    bytesTotal: null,
+    createdAt: 1,
+    error: "storage cap exceeded",
+    finishedAt: 2,
+    input: {
+      backupId,
+      destination: { artifactId, kind: "local" },
+      kind: "delete",
+      target,
+      taskId,
+    },
+    inputRefreshRequired: false,
+    kind: "delete",
+    result: {
+      artifacts: [
+        {
+          artifactId,
+          error: "storage cap exceeded",
+          errorCode: "storage_full",
+          status: "failed",
+        },
+      ],
+      warnings: [],
+    },
+    startedAt: 1,
+    status: "failed",
+    taskId,
+    updatedAt: 2,
+  }
+
+  it("reads tasks from Relays that predate failure codes", () => {
+    const { result: _result, ...legacy } = failedDelete
+    expect(
+      relayBackupTaskSchema.parse({ ...legacy, result: null }).errorCode
+    ).toBeNull()
+  })
+
+  it("leaves failure codes out for a Hearth that hasn't announced it reads them", () => {
+    const task = relayBackupTaskSchema.parse({
+      ...failedDelete,
+      errorCode: "storage_full",
+    })
+    expect(
+      JSON.stringify(redactRelayBackupTask(task, { failureCodes: false }))
+    ).not.toContain("errorCode")
+    expect(redactRelayBackupTask(task, { failureCodes: true })).toMatchObject({
+      errorCode: "storage_full",
+      result: { artifacts: [{ errorCode: "storage_full" }] },
+    })
   })
 })

@@ -761,6 +761,7 @@ describeMysql("backup reconciliation", () => {
           currentArtifactId: null,
           currentPath: null,
           error: null,
+          errorCode: null,
           finishedAt: Date.UTC(2026, 7, 21, 10, 29, 20),
           input: {
             artifactKind: "archive",
@@ -845,6 +846,7 @@ describeMysql("backup reconciliation", () => {
             currentArtifactId: null,
             currentPath: null,
             error: null,
+            errorCode: null,
             finishedAt: 200,
             input: {
               artifactKind: "archive",

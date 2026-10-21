@@ -3,6 +3,7 @@ import type { z } from "zod"
 import { Context, Effect, Layer, Result, Schema } from "effect"
 import * as SqlClient from "effect/sql/SqlClient"
 import type {
+  BackupFailureCode,
   BackupTaskInput,
   BackupTaskPhase,
   BackupTaskResult,
@@ -368,6 +369,7 @@ const RelayBackupTaskRowSchema = Schema.Struct({
   currentArtifactId: Schema.NullOr(Schema.String),
   currentPath: Schema.NullOr(Schema.String),
   error: Schema.NullOr(Schema.String),
+  errorCode: Schema.NullOr(Schema.String),
   finishedAt: Schema.NullOr(Schema.Number),
   inputRefreshRequired: Schema.Number,
   inputJson: Schema.String,
@@ -539,7 +541,8 @@ export class RelayStateStore extends Context.Service<
     readonly cancelBackupTask: (
       taskId: string,
       now: number,
-      reason?: string
+      reason?: string,
+      errorCode?: BackupFailureCode | null
     ) => Effect.Effect<boolean, RelayStateError>
     readonly completeBackupTask: (
       taskId: string,
@@ -549,7 +552,8 @@ export class RelayStateStore extends Context.Service<
     readonly failBackupTask: (
       taskId: string,
       error: string,
-      now: number
+      now: number,
+      errorCode?: BackupFailureCode | null
     ) => Effect.Effect<boolean, RelayStateError>
     readonly requeueInterruptedBackupTasks: (
       now: number
@@ -1243,6 +1247,16 @@ const migrations = SqliteMigrator.fromRecord({
       updated_at INTEGER NOT NULL
     ) STRICT`
   }),
+  // Why a backup task failed, when the Relay can tell; see
+  // `backupFailureCodes`.
+  "24_backup_task_error_codes": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    const columns = yield* sql<{
+      name: string
+    }>`PRAGMA table_info(relay_backup_tasks)`
+    if (columns.some((column) => column.name === "error_code")) return
+    yield* sql`ALTER TABLE relay_backup_tasks ADD COLUMN error_code TEXT`
+  }),
 })
 
 function scrubBackupTaskInputJson(inputJson: string): string {
@@ -1434,6 +1448,7 @@ const makeRelayStateStore = Effect.gen(function* () {
         currentArtifactId: row.currentArtifactId,
         currentPath: row.currentPath,
         error: row.error,
+        errorCode: row.errorCode,
         finishedAt: row.finishedAt,
         input,
         inputRefreshRequired: row.inputRefreshRequired === 1,
@@ -1469,6 +1484,7 @@ const makeRelayStateStore = Effect.gen(function* () {
             current_artifact_id AS currentArtifactId,
             current_path AS currentPath,
             error,
+            error_code AS errorCode,
             created_at AS createdAt,
             started_at AS startedAt,
             finished_at AS finishedAt,
@@ -1493,6 +1509,7 @@ const makeRelayStateStore = Effect.gen(function* () {
               current_artifact_id AS currentArtifactId,
               current_path AS currentPath,
               error,
+              error_code AS errorCode,
               created_at AS createdAt,
               started_at AS startedAt,
               finished_at AS finishedAt,
@@ -1515,6 +1532,7 @@ const makeRelayStateStore = Effect.gen(function* () {
               current_artifact_id AS currentArtifactId,
               current_path AS currentPath,
               error,
+              error_code AS errorCode,
               created_at AS createdAt,
               started_at AS startedAt,
               finished_at AS finishedAt,
@@ -2014,6 +2032,7 @@ const makeRelayStateStore = Effect.gen(function* () {
                   SET input_json = ${JSON.stringify(input)},
                       input_refresh_required = 0,
                       error = NULL,
+                      error_code = NULL,
                       phase = NULL,
                       current_artifact_id = NULL,
                       current_path = NULL,
@@ -2100,6 +2119,7 @@ const makeRelayStateStore = Effect.gen(function* () {
                     started_at = COALESCE(started_at, ${now}),
                     updated_at = ${now},
                     error = NULL,
+                    error_code = NULL,
                     phase = 'preparing',
                     current_artifact_id = NULL,
                     current_path = NULL,
@@ -2209,7 +2229,12 @@ const makeRelayStateStore = Effect.gen(function* () {
           })
         )
       ),
-    cancelBackupTask: (taskId, now, reason = "Cancelled by user") =>
+    cancelBackupTask: (
+      taskId,
+      now,
+      reason = "Cancelled by user",
+      errorCode = null
+    ) =>
       run(
         "cancel_backup_task",
         sql.withTransaction(
@@ -2230,6 +2255,7 @@ const makeRelayStateStore = Effect.gen(function* () {
                   result_json = NULL,
                   current_artifact_id = NULL,
                   error = ${reason.slice(0, 2_048)},
+                  error_code = ${errorCode},
                   finished_at = ${now},
                   updated_at = ${now}
               WHERE task_id = ${taskId}
@@ -2261,6 +2287,7 @@ const makeRelayStateStore = Effect.gen(function* () {
                   bytes_completed = ${bytes},
                   bytes_total = ${bytes},
                   error = NULL,
+                  error_code = NULL,
                   phase = NULL,
                   current_artifact_id = NULL,
                   current_path = NULL,
@@ -2273,7 +2300,7 @@ const makeRelayStateStore = Effect.gen(function* () {
           })
         )
       ),
-    failBackupTask: (taskId, error, now) =>
+    failBackupTask: (taskId, error, now, errorCode = null) =>
       run(
         "fail_backup_task",
         sql.withTransaction(
@@ -2293,6 +2320,7 @@ const makeRelayStateStore = Effect.gen(function* () {
                   result_json = NULL,
                   current_artifact_id = NULL,
                   error = ${error.slice(0, 4_096)},
+                  error_code = ${errorCode},
                   finished_at = ${now},
                   updated_at = ${now}
               WHERE task_id = ${taskId}

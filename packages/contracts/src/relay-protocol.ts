@@ -36,6 +36,9 @@ export const relayRestartV1Feature = "relay-restart-v1"
 // The Relay reports its own usage in `node.relayResources`, and its recent
 // samples through `relay.resources.read`.
 export const relayResourcesV1Feature = "relay-resources-v1"
+// Hearth reads `errorCode` on backup tasks and their artifact outcomes, so
+// the Relay may send it.
+export const relayBackupFailureCodesV1Feature = "backup-failure-codes-v1"
 // The Relay answers `instance.files.put`, creating or replacing one file.
 export const relayFilePutV1Feature = "files-put-v1"
 // The Relay applies memory, CPU, and disk limits from a request's `limits`,

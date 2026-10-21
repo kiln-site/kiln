@@ -297,12 +297,14 @@ export class BackupManager {
                   ? this.#state.cancelBackupTask(
                       task.taskId,
                       Date.now(),
-                      BACKUP_TIMEOUT_REASON
+                      BACKUP_TIMEOUT_REASON,
+                      "timed_out"
                     )
                   : this.#state.failBackupTask(
                       task.taskId,
                       BACKUP_TIMEOUT_REASON,
-                      Date.now()
+                      Date.now(),
+                      "timed_out"
                     )
               )
             ),
@@ -357,7 +359,8 @@ export class BackupManager {
                 .failBackupTask(
                   task.taskId,
                   backupErrorMessage(cause),
-                  Date.now()
+                  Date.now(),
+                  backupFailureCode(cause)
                 )
                 .pipe(
                   Effect.flatMap((failed): Effect.Effect<BackupTaskEnd> => {
@@ -1291,6 +1294,7 @@ function storeCreatedBackup(
         outcomes.push({
           artifactId: destination.artifactId,
           error: backupErrorMessage(uploaded.failure),
+          errorCode: backupFailureCode(uploaded.failure),
           status: "failed",
         })
       }
@@ -1353,11 +1357,7 @@ function deleteBackupArtifacts(
   >
 ) {
   return Effect.gen(function* () {
-    const outcomes: Array<{
-      artifactId: string
-      error: string | null
-      status: "deleted" | "failed"
-    }> = []
+    const outcomes: NonNullable<BackupOperationTaskResult["artifacts"]> = []
     for (const destination of [input.destination, ...(input.replicas ?? [])]) {
       const currentArtifactId = destination.artifactId ?? null
       const started = yield* updateProgress(currentArtifactId, {
@@ -1394,6 +1394,7 @@ function deleteBackupArtifacts(
           : {
               artifactId: destination.artifactId,
               error: backupErrorMessage(deleted.failure),
+              errorCode: backupFailureCode(deleted.failure),
               status: "failed",
             }
       )

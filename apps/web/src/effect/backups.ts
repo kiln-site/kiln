@@ -13,6 +13,7 @@ import type {
 } from "@workspace/contracts"
 import {
   backupArtifactFilename,
+  backupFailureCodeFromMessage,
   BACKUP_EXPORT_TTL_MAX_MS,
   BACKUP_EXPORT_TTL_MIN_MS,
   isArchiveCreateTaskResult,
@@ -939,7 +940,8 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
           `UPDATE ${databaseTable("backup_task")}
               SET status = ?, bytes_completed = ?, bytes_total = ?,
                   phase = ?, current_artifact_id = ?, current_path = ?, error = ?,
-                  started_at = ?, finished_at = ?, relay_updated_at_ms = ?,
+                  error_code = ?, started_at = ?, finished_at = ?,
+                  relay_updated_at_ms = ?,
                   updated_at = ?
             WHERE id = ? AND backup_id = ?`,
           [
@@ -950,6 +952,7 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
             task.currentArtifactId,
             task.currentPath,
             task.error,
+            task.errorCode ?? null,
             task.startedAt,
             task.finishedAt,
             task.updatedAt,
@@ -983,7 +986,8 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
             if (task.currentArtifactId) {
               yield* transaction.execute(
                 `UPDATE ${databaseTable("backup_artifact")}
-                    SET status = 'deleting', error = NULL, updated_at = ?
+                    SET status = 'deleting', error = NULL, error_code = NULL,
+                        updated_at = ?
                   WHERE id = ? AND backup_id = ? AND status <> 'deleted'`,
                 [now, task.currentArtifactId, task.backupId]
               )
@@ -993,7 +997,7 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
                 outcome.status === "deleted" ? "deleted" : "available"
               yield* transaction.execute(
                 `UPDATE ${databaseTable("backup_artifact")}
-                    SET status = ?, error = ?,
+                    SET status = ?, error = ?, error_code = ?,
                         deleted_at = CASE WHEN ? = 'deleted'
                           THEN ? ELSE NULL END,
                         updated_at = ?
@@ -1001,6 +1005,7 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
                 [
                   artifactStatus,
                   outcome.error,
+                  outcome.errorCode ?? null,
                   artifactStatus,
                   task.updatedAt,
                   now,
@@ -1028,7 +1033,7 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
                   outcome.status === "deleted" ? "deleted" : "available"
                 yield* transaction.execute(
                   `UPDATE ${databaseTable("backup_artifact")}
-                      SET status = ?, error = ?,
+                      SET status = ?, error = ?, error_code = ?,
                           deleted_at = CASE WHEN ? = 'deleted'
                             THEN ? ELSE NULL END,
                           updated_at = ?
@@ -1036,6 +1041,7 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
                   [
                     artifactStatus,
                     outcome.error,
+                    outcome.errorCode ?? null,
                     artifactStatus,
                     task.finishedAt ?? now,
                     now,
@@ -1074,9 +1080,10 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
             )
             yield* transaction.execute(
               `UPDATE ${databaseTable("backup_artifact")}
-                  SET status = 'available', error = ?, updated_at = ?
+                  SET status = 'available', error = ?, error_code = ?,
+                      updated_at = ?
                 WHERE backup_id = ? AND status = 'deleting'`,
-              [task.error, now, task.backupId]
+              [task.error, task.errorCode ?? null, now, task.backupId]
             )
           }
           return
@@ -1130,7 +1137,8 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
             yield* transaction.execute(
               `UPDATE ${databaseTable("backup_artifact")}
                   SET status = 'available', filename = ?, bytes = ?,
-                      checksum_sha256 = ?, error = NULL, completed_at = ?,
+                      checksum_sha256 = ?, error = NULL, error_code = NULL,
+                      completed_at = ?,
                       updated_at = ?
                 WHERE backup_id = ?`,
               [
@@ -1149,7 +1157,8 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
                     SET status = ?, filename = ?,
                         bytes = CASE WHEN ? = 'available' THEN ? ELSE NULL END,
                         checksum_sha256 = CASE WHEN ? = 'available' THEN ? ELSE NULL END,
-                        error = ?, completed_at = ?, updated_at = ?
+                        error = ?, error_code = ?, completed_at = ?,
+                        updated_at = ?
                   WHERE id = ? AND backup_id = ?`,
                 [
                   outcome.status,
@@ -1159,6 +1168,7 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
                   outcome.status,
                   checksum,
                   outcome.error,
+                  outcome.errorCode ?? null,
                   task.finishedAt ?? now,
                   now,
                   outcome.artifactId,
@@ -1201,10 +1211,16 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
           )
           yield* transaction.execute(
             `UPDATE ${databaseTable("backup_artifact")}
-                SET status = 'failed', error = ?, completed_at = ?,
-                    updated_at = ?
+                SET status = 'failed', error = ?, error_code = ?,
+                    completed_at = ?, updated_at = ?
               WHERE backup_id = ? AND status IN ('queued', 'running')`,
-            [task.error, task.finishedAt ?? now, now, task.backupId]
+            [
+              task.error,
+              task.errorCode ?? null,
+              task.finishedAt ?? now,
+              now,
+              task.backupId,
+            ]
           )
         }
       })
@@ -2597,7 +2613,8 @@ export const reserveBackupCopyEffect = Effect.fn("backups.reserveCopy")(
           yield* transaction.execute(
             `UPDATE ${databaseTable("backup_artifact")}
                 SET status = 'queued', object_key = ?, filename = ?,
-                    error = NULL, completed_at = NULL, deleted_at = NULL,
+                    error = NULL, error_code = NULL, completed_at = NULL,
+                    deleted_at = NULL,
                     updated_at = ?
               WHERE id = ?`,
             [objectKey, input.filename, now, artifactId]
@@ -2710,7 +2727,8 @@ export const claimBackupCopyTaskEffect = Effect.fn("backups.claimCopy")(
         )
         yield* transaction.execute(
           `UPDATE ${databaseTable("backup_artifact")}
-              SET status = 'running', error = NULL, updated_at = ?
+              SET status = 'running', error = NULL, error_code = NULL,
+                  updated_at = ?
             WHERE id = ?`,
           [now, task.destination_artifact_id]
         )
@@ -2759,7 +2777,7 @@ export const completeBackupCopyTaskEffect = Effect.fn("backups.completeCopy")(
         yield* transaction.execute(
           `UPDATE ${databaseTable("backup_artifact")}
               SET status = ?, filename = ?, bytes = ?, checksum_sha256 = ?,
-                  error = ?, completed_at = ?, updated_at = ?
+                  error = ?, error_code = ?, completed_at = ?, updated_at = ?
             WHERE id = ? AND backup_id = ?`,
           [
             input.ok ? "available" : "failed",
@@ -2767,6 +2785,7 @@ export const completeBackupCopyTaskEffect = Effect.fn("backups.completeCopy")(
             input.ok ? input.bytes : null,
             input.ok ? input.checksumSha256 : null,
             input.error,
+            input.error ? backupFailureCodeFromMessage(input.error) : null,
             now,
             now,
             input.artifactId,

@@ -17,6 +17,7 @@ import {
   createRelaySnapshotDelta,
   isAuditedRelayControlOperation,
   relayAuthenticationWindowMs,
+  relayBackupFailureCodesV1Feature,
   relayBrowserCapabilityV2Feature,
   relayBrowserLeaseRenewalV1Feature,
   relayFileRequestReplayV1Feature,
@@ -1262,6 +1263,7 @@ class RelayConnection {
           relayBrowserCapabilityV2Feature,
           relayBrowserLeaseRenewalV1Feature,
           relayFileRequestReplayV1Feature,
+          relayBackupFailureCodesV1Feature,
         ],
         signature: sign(
           null,

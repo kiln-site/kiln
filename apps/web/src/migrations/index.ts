@@ -18,6 +18,7 @@ import { domainZones } from "./0015_domain_zones"
 import { githubSync } from "./0016_github_sync"
 import { auditEvents } from "./0017_audit_events"
 import { appDeployments } from "./0018_app_deployments"
+import { backupErrorCodes } from "./0019_backup_error_codes"
 
 // Append new migrations with the next id. Never edit or reorder applied ones.
 export const migrations: ReadonlyArray<Migration> = [
@@ -39,4 +40,5 @@ export const migrations: ReadonlyArray<Migration> = [
   githubSync,
   auditEvents,
   appDeployments,
+  backupErrorCodes,
 ]

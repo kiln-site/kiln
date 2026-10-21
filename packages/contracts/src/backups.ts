@@ -137,6 +137,52 @@ export const backupFailureCodes = [
 
 export type BackupFailureCode = (typeof backupFailureCodes)[number]
 
+// Checked in order: providers refuse an over-cap write with a 403, so the cap
+// patterns must win over access denied.
+const backupFailurePatterns: ReadonlyArray<
+  readonly [BackupFailureCode, RegExp]
+> = [
+  [
+    "storage_full",
+    // Backblaze B2, S3 and MinIO, in that order.
+    /storage cap exceeded|QuotaExceeded|XMinioStorageFull|minimum free drive threshold|InsufficientStorage|\bHTTP 507\b|quota (?:has been )?exceeded/iu,
+  ],
+  // Backblaze B2's daily transaction and download bandwidth caps; its
+  // storage cap matched above.
+  ["storage_limit_reached", /cap exceeded/iu],
+  [
+    "storage_bucket_missing",
+    /NoSuchBucket|bucket does not exist|bucket not found/iu,
+  ],
+  [
+    "storage_access_denied",
+    /AccessDenied|Access Denied|InvalidAccessKeyId|SignatureDoesNotMatch|InvalidToken|ExpiredToken|access key id you provided does not exist|\bHTTP 40[13]\b|\b403 Forbidden\b/iu,
+  ],
+  ["repository_locked", /repository is already locked/iu],
+  ["relay_disk_full", /no space left on device|\bENOSPC\b/iu],
+  [
+    "storage_unreachable",
+    /no such host|connection refused|network is unreachable|i\/o timeout|tls handshake|connection reset|dial tcp|S3 backup request timed out/iu,
+  ],
+]
+
+/**
+ * Names a failure from its message when it matches one a storage provider,
+ * restic, or the filesystem is known to give, such as Backblaze's
+ * "storage cap exceeded".
+ */
+export function backupFailureCodeFromMessage(
+  message: string
+): BackupFailureCode | null {
+  for (const [code, pattern] of backupFailurePatterns) {
+    if (pattern.test(message)) return code
+  }
+  return null
+}
+
+// A string rather than the enum, so codes a newer Relay sends still parse.
+const backupFailureCodeWireSchema = z.string().min(1).max(64)
+
 export const backupTargetSchema = z
   .object({
     id: z.string().min(1).max(120),
@@ -503,6 +549,7 @@ const backupArtifactOutcomeSchema = z
   .object({
     artifactId: z.uuid(),
     error: z.string().max(4_096).nullable(),
+    errorCode: backupFailureCodeWireSchema.nullable().optional(),
     status: z.enum(["available", "failed"]),
   })
   .strict()
@@ -694,6 +741,7 @@ export const backupOperationTaskResultSchema = z
           .object({
             artifactId: z.uuid(),
             error: z.string().max(4_096).nullable(),
+            errorCode: backupFailureCodeWireSchema.nullable().optional(),
             status: z.enum(["deleted", "failed"]),
           })
           .strict()
@@ -720,6 +768,9 @@ export const relayBackupTaskSchema = z
     currentArtifactId: z.uuid().nullable().default(null),
     currentPath: z.string().max(2_048).nullable().default(null),
     error: z.string().max(4_096).nullable(),
+    // Sent only to a Hearth that announced `relayBackupFailureCodesV1Feature`:
+    // older ones reject unknown fields.
+    errorCode: backupFailureCodeWireSchema.nullable().default(null),
     finishedAt: z.number().int().nonnegative().nullable(),
     input: backupTaskInputSchema,
     inputRefreshRequired: z.boolean(),
@@ -876,11 +927,33 @@ export function redactBackupTaskInput(input: BackupTaskInput): BackupTaskInput {
   return backupTaskInputSchema.parse(omitBackupSecrets(input))
 }
 
-export function redactRelayBackupTask(task: RelayBackupTask): RelayBackupTask {
-  return relayBackupTaskSchema.parse({
+/**
+ * A task as a Relay sends it: without secrets, and without failure codes
+ * for a Hearth that hasn't announced it reads them, since it would reject
+ * the unknown fields.
+ */
+export function redactRelayBackupTask(
+  task: RelayBackupTask,
+  options: { failureCodes: boolean }
+): unknown {
+  const redacted = relayBackupTaskSchema.parse({
     ...task,
     input: redactBackupTaskInput(task.input),
   })
+  if (options.failureCodes) return redacted
+  const { errorCode: _errorCode, result, ...legacy } = redacted
+  return {
+    ...legacy,
+    result:
+      result && "artifacts" in result && result.artifacts
+        ? {
+            ...result,
+            artifacts: result.artifacts.map(
+              ({ errorCode: _artifactErrorCode, ...artifact }) => artifact
+            ),
+          }
+        : result,
+  }
 }
 
 export function omitBackupSecrets(value: unknown): unknown {
