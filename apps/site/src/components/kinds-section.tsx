@@ -19,36 +19,32 @@ export function KindsSection() {
   return (
     <div className="mt-12 grid gap-px border border-border bg-border lg:grid-cols-2">
       <Card
-        icon={<ServerKindIcon className="size-4" />}
-        kind="Game servers"
-        title="Start from a Brick"
+        icon={<ServerKindIcon className="size-6" />}
+        title="Game servers"
         visual={<BrickWall />}
       >
-        Paper, Fabric, Palworld, or your own. Kiln handles ports and Java.
+        Start from a Brick. Kiln handles the rest.
       </Card>
       <Card
-        icon={<AppKindIcon className="size-4" />}
-        kind="Apps"
-        title="Push to deploy"
+        icon={<AppKindIcon className="size-6" />}
+        title="Apps"
         visual={<DeployFlow />}
       >
-        Kiln builds each push and swaps it in once it's healthy.
+        Kiln builds and deploys on every push with zero downtime.
       </Card>
       <Card
-        icon={<DatabaseKindIcon className="size-4" />}
-        kind="Databases"
-        title="Databases next door"
+        icon={<DatabaseKindIcon className="size-6" />}
+        title="Databases"
         visual={<EngineRing />}
       >
-        MySQL, MariaDB, PostgreSQL, Redis, or Valkey, beside what uses them.
+        MySQL, Postgres, Redis, and more.
       </Card>
       <Card
-        icon={<BrandSvg mark={brandMarks.cloudflare} className="size-4" />}
-        kind="Domains"
-        title="Names, not ports"
+        icon={<BrandSvg mark={brandMarks.cloudflare} className="size-6" />}
+        title="Domains"
         visual={<VanityAddress />}
       >
-        Connect Cloudflare and each game server gets its own address.
+        Connect Cloudflare and your DNS is set up automatically.
       </Card>
     </div>
   )
@@ -57,13 +53,11 @@ export function KindsSection() {
 function Card({
   children,
   icon,
-  kind,
   title,
   visual,
 }: {
   children: React.ReactNode
   icon: React.ReactNode
-  kind: string
   title: string
   visual: React.ReactNode
 }) {
@@ -73,17 +67,17 @@ function Card({
         aria-hidden="true"
         className="relative h-56 overflow-hidden border-b border-border sm:h-64"
       >
+        {/* The hero's grid and warmth, fainter. */}
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_70%_60%_at_50%_0%,hsl(var(--accent-hue)_var(--accent-saturation)_58%/0.07),transparent)]" />
+        <div className="absolute inset-0 bg-[image:var(--ambient-grid)] [mask-image:radial-gradient(ellipse_80%_70%_at_50%_0%,black,transparent)] bg-[size:32px_32px]" />
         {visual}
       </div>
       <div className="p-6 sm:px-8 sm:py-7">
-        <p className="type-label flex items-center gap-2 text-muted-foreground">
+        <h3 className="flex items-center gap-3 font-heading text-2xl font-semibold tracking-[-0.035em]">
           {icon}
-          {kind}
-        </p>
-        <h3 className="mt-2.5 font-heading text-2xl font-semibold tracking-[-0.035em]">
           {title}
         </h3>
-        <p className="site-copy mt-1.5 text-muted-foreground">{children}</p>
+        <p className="site-copy mt-2 text-muted-foreground">{children}</p>
       </div>
     </article>
   )
