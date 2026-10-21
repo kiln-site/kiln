@@ -117,6 +117,36 @@ export const requestTailscaleNetworkCleanupEffect = Effect.fn(
   )
 })
 
+interface NextAttemptRow extends RowDataPacket {
+  next_attempt_at: number | string | null
+}
+
+/**
+ * When cleanup next has work: the earliest Relay removal due for a network
+ * being deleted, or, for one with no Relays left, its finalization. Null when
+ * no network is being deleted.
+ */
+export const nextTailscaleCleanupAttemptEffect = Effect.fn(
+  "tailscaleCleanup.nextAttempt"
+)(function* () {
+  const database = yield* Database
+  // A network's own retry applies only once its Relays are cleaned up, as
+  // the worker finalizes it then.
+  const [row] = yield* database.queryRows<NextAttemptRow>(
+    "tailscaleCleanup.nextAttempt",
+    `SELECT MIN(COALESCE(
+              (SELECT MIN(deployment.cleanup_next_attempt_at)
+                 FROM ${databaseTable("tailscale_network_deployment")} deployment
+                WHERE deployment.network_id = network.id),
+              network.cleanup_next_attempt_at,
+              0
+            )) AS next_attempt_at
+       FROM ${databaseTable("tailscale_network")} network
+      WHERE network.deletion_requested_at IS NOT NULL`
+  )
+  return row?.next_attempt_at == null ? null : Number(row.next_attempt_at)
+})
+
 export const loadPendingTailscaleCleanupsEffect = Effect.fn(
   "tailscaleCleanup.loadPending"
 )(function* (limit = 10) {

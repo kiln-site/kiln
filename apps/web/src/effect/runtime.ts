@@ -59,6 +59,13 @@ export function runAppEffect<TResult, TError>(
   )
 }
 
+/** Runs a background check, such as a worker's idle poll, without tracing it. */
+export function runAppEffectUntraced<TResult, TError>(
+  effect: Effect.Effect<TResult, TError, AppCache | Database>
+): Promise<TResult> {
+  return runtime.runPromise(Effect.withTracerEnabled(effect, false))
+}
+
 export function forkAppEffect<TResult, TError>(
   name: string,
   effect: Effect.Effect<TResult, TError, AppCache | Database>

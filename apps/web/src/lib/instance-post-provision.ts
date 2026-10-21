@@ -4,9 +4,17 @@ import { Clock, Effect } from "effect"
 
 import { Database } from "@/effect/database"
 import { promiseEffect } from "@/effect/promise"
-import { runAppEffect } from "@/effect/runtime"
+import {
+  runAppEffect,
+  runAppEffectUntraced,
+  traceAppPromise,
+} from "@/effect/runtime"
 import { databaseTable } from "@/lib/database-config"
 import { relayRpc } from "@/lib/relay-connection"
+import {
+  startPollingWorker,
+  type WorkerPassOutcome,
+} from "@/lib/polling-worker"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { provisionInstanceDomain } from "@/server/domains.server"
 
@@ -22,22 +30,15 @@ let workerStarted = false
 export function scheduleInstancePostProvisionProcessing(): void {
   if (workerStarted) return
   workerStarted = true
-  Effect.runFork(
-    promiseEffect(processInstancePostProvisionJobs).pipe(
-      Effect.catch((cause) =>
-        Effect.sync(() =>
-          console.warn("[Kiln] Deferred server setup pass failed:", cause)
-        )
-      ),
-      Effect.andThen(Effect.sleep(POLL_INTERVAL_MS)),
-      Effect.forever
-    )
+  startPollingWorker(
+    "Instances.postProvision",
+    processInstancePostProvisionJobs,
+    POLL_INTERVAL_MS
   )
 }
 
-async function processInstancePostProvisionJobs(): Promise<void> {
-  const rows = await runAppEffect(
-    "instances.postProvision.list",
+async function processInstancePostProvisionJobs(): Promise<WorkerPassOutcome> {
+  const rows = await runAppEffectUntraced(
     Effect.gen(function* () {
       const database = yield* Database
       const now = yield* Clock.currentTimeMillis
@@ -52,8 +53,20 @@ async function processInstancePostProvisionJobs(): Promise<void> {
       )
     })
   )
-  if (rows.length === 0) return
+  if (rows.length === 0) return "idle"
+  await traceAppPromise(
+    "Instances.postProvision.pass",
+    () => processRows(rows),
+    {
+      "instance.count": rows.length,
+    }
+  )
+  return "worked"
+}
 
+async function processRows(
+  rows: ReadonlyArray<PostProvisionRow>
+): Promise<void> {
   const relays = new Map(
     (await listPersistedRelays()).map((relay) => [relay.id, relay])
   )
