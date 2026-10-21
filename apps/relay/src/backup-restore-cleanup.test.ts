@@ -98,7 +98,13 @@ describe("Relay backup restore cleanup", () => {
       cleanupFailure.remaining = 1
       const outcome = yield* Effect.exit(
         Effect.tryPromise({
-          try: () => restorePortableInstanceBackup(config, restore, instance),
+          try: () =>
+            restorePortableInstanceBackup(
+              config,
+              restore,
+              instance,
+              () => undefined
+            ),
           catch: (cause) => cause,
         })
       )

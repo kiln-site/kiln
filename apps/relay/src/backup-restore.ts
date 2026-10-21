@@ -60,7 +60,8 @@ export interface RestorePaths {
 export async function restorePortableInstanceBackup(
   config: RelayConfig,
   input: BackupRestoreTaskInput & { kind: "restore" },
-  instance: RelayInstanceConfig
+  instance: RelayInstanceConfig,
+  beginInstall: RestoreInstallGate
 ): Promise<{ warnings: Array<string> }> {
   const prepared = await prepareInstanceRestoreStaging(
     config,
@@ -84,7 +85,7 @@ export async function restorePortableInstanceBackup(
           input,
           instance
         )
-        await installPreparedInstanceRestore(prepared)
+        await installPreparedInstanceRestore(prepared, beginInstall)
         return { warnings }
       },
       catch: (cause) => cause,
@@ -125,9 +126,20 @@ export async function prepareInstanceRestoreStaging(
   return { journal, paths }
 }
 
+/**
+ * Called just before a restore swaps its files in for the server's own.
+ * Throws when the restore was stopped, as by its timeout, so the server's
+ * files stay as they were; otherwise the restore is committed to finishing,
+ * and its timeout no longer stops it.
+ */
+export type RestoreInstallGate = () => void
+
+/** Swaps the restored files in for the server's own. */
 export async function installPreparedInstanceRestore(
-  prepared: PreparedInstanceRestore
+  prepared: PreparedInstanceRestore,
+  beginInstall: RestoreInstallGate
 ): Promise<void> {
+  beginInstall()
   prepared.journal = {
     ...prepared.journal,
     phase: "prepared",

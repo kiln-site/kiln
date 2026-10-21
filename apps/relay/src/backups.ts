@@ -81,6 +81,7 @@ import {
   requireRestoreSpace,
   restorePortableInstanceBackup,
   settleRestoreJournal,
+  type RestoreInstallGate,
 } from "./backup-restore.js"
 import {
   createResticDriver,
@@ -293,11 +294,26 @@ export class BackupManager {
           startedAt - task.createdAt
         )
         let timedOut = false
+        // A restore that has started swapping its files in finishes; before
+        // then its deadline stops it. Each side decides synchronously, before
+        // it awaits anything, so exactly one wins.
+        let installing = false
+        let deadlinePassed = false
+        const beginInstall = () => {
+          if (deadlinePassed || controller.signal.aborted) {
+            throw controller.signal.aborted
+              ? backupAbortError(controller.signal)
+              : new Error(BACKUP_TIMEOUT_REASON)
+          }
+          installing = true
+        }
         const timeoutFiber = yield* Effect.forkChild(
           Effect.sleep(this.#config.backupTimeoutMs).pipe(
             Effect.andThen(
-              Effect.suspend(() =>
-                task.kind === "create"
+              Effect.suspend(() => {
+                if (installing) return Effect.succeed(false)
+                deadlinePassed = true
+                return task.kind === "create"
                   ? this.#state.cancelBackupTask(
                       task.taskId,
                       Date.now(),
@@ -310,7 +326,7 @@ export class BackupManager {
                       Date.now(),
                       "timed_out"
                     )
-              )
+              })
             ),
             Effect.tap((stopped) =>
               stopped
@@ -341,7 +357,7 @@ export class BackupManager {
                     )
               ),
             },
-            this.#execute(task, controller.signal)
+            this.#execute(task, controller.signal, beginInstall)
           )
           .pipe(
             Effect.as<BackupTaskEnd>({ outcome: "succeeded", failure: null }),
@@ -426,9 +442,13 @@ export class BackupManager {
     })
   }
 
-  #execute(task: RelayBackupTask, signal?: AbortSignal) {
+  #execute(
+    task: RelayBackupTask,
+    signal: AbortSignal,
+    beginInstall: RestoreInstallGate
+  ) {
     return Effect.gen({ self: this }, function* () {
-      const createSignal = signal ?? new AbortController().signal
+      const createSignal = signal
       if (task.input.kind === "export") {
         const result = yield* runResticExport(
           this.#config,
@@ -603,14 +623,16 @@ export class BackupManager {
               this.#restic,
               input,
               instance,
-              createSignal
+              createSignal,
+              beginInstall
             )
           : Effect.tryPromise({
               try: () =>
                 restorePortableInstanceBackup(
                   this.#config,
                   { ...input, kind: "restore" },
-                  instance
+                  instance,
+                  beginInstall
                 ),
               catch: (cause) =>
                 cause instanceof RelayBackupError
@@ -1838,7 +1860,8 @@ function runResticRestore(
   restic: ResticDriver,
   input: Extract<BackupTaskInput, { kind: "restore" }>,
   instance: RelayInstanceConfig,
-  signal: AbortSignal
+  signal: AbortSignal,
+  beginInstall: RestoreInstallGate
 ) {
   return Effect.tryPromise({
     try: async () => {
@@ -1896,7 +1919,7 @@ function runResticRestore(
                 prepared.paths.staging,
                 instance.limits
               )
-              await installPreparedInstanceRestore(prepared)
+              await installPreparedInstanceRestore(prepared, beginInstall)
               return { warnings: validated.warnings }
             },
             catch: (cause) => cause,

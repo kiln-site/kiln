@@ -816,7 +816,8 @@ describe("Relay archive restores", () => {
               target: input.target,
               taskId: "20000000-0000-4000-8000-000000000008",
             },
-            testInstance()
+            testInstance(),
+            () => undefined
           )
         )
       )
@@ -824,6 +825,59 @@ describe("Relay archive restores", () => {
       assert.isTrue(Exit.isFailure(restored))
       assert.isFalse(existsSync(resolve(directory, "evil.txt")))
       assert.isFalse(existsSync(resolve(config.rootDirectory, "evil.txt")))
+    })
+  )
+
+  it.effect("leaves the server's files when a restore stops before installing", () =>
+    Effect.gen(function* () {
+      const directory = yield* scratchDirectory("kiln-backup-restore-stopped-")
+      const config = testRelayConfig(directory)
+      const input = backupInput(9)
+      const archivePath = backupArchivePath(config, input.backupId)
+      const instanceRoot = resolve(config.rootDirectory, "instance-1")
+      yield* Effect.promise(async () => {
+        await Promise.all([
+          mkdir(instanceRoot, { recursive: true }),
+          mkdir(resolve(directory, "backups"), { recursive: true }),
+        ])
+        await writeFile(resolve(instanceRoot, "server.txt"), "current")
+        await writeTestArchive(archivePath, "restored.txt")
+      })
+      const archive = yield* Effect.promise(() => readFile(archivePath))
+      // Its timeout fired while it extracted, which already failed its task.
+      const timedOut = () => {
+        throw new Error("Cancelled after reaching the configured backup timeout")
+      }
+
+      const restored = yield* Effect.exit(
+        Effect.tryPromise(() =>
+          restorePortableInstanceBackup(
+            config,
+            {
+              backupId: input.backupId,
+              kind: "restore",
+              source: {
+                bytes: archive.byteLength,
+                checksumSha256: sha256(archive),
+                kind: "local",
+              },
+              target: input.target,
+              taskId: "20000000-0000-4000-8000-000000000009",
+            },
+            testInstance(),
+            timedOut
+          )
+        )
+      )
+
+      assert.isTrue(Exit.isFailure(restored))
+      assert.strictEqual(
+        yield* Effect.promise(() =>
+          readFile(resolve(instanceRoot, "server.txt"), "utf8")
+        ),
+        "current"
+      )
+      assert.isFalse(existsSync(resolve(instanceRoot, "restored.txt")))
     })
   )
 })
