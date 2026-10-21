@@ -131,7 +131,9 @@ describe("polling worker", () => {
     startPollingWorker("TailscaleCleanup", pass)
     await vi.advanceTimersByTimeAsync(10)
 
-    // As a dev reload does.
+    // As dev reloads do, twice before the running pass ends.
+    startPollingWorker("TailscaleCleanup", pass)
+    await vi.advanceTimersByTimeAsync(10)
     startPollingWorker("TailscaleCleanup", pass)
     jobs.queue("second")
     await vi.advanceTimersByTimeAsync(10)
@@ -142,7 +144,7 @@ describe("polling worker", () => {
     expect(overlapped).toBe(false)
   })
 
-  it("lets a running pass finish when stopped", async () => {
+  it("lets a running pass finish when stopped, even mid-restart", async () => {
     const jobs = jobQueue()
     let finishPass = () => {}
     jobs.blockNextPass(
@@ -151,6 +153,9 @@ describe("polling worker", () => {
       })
     )
     jobs.queue("in flight")
+    startPollingWorker("TailscaleCleanup", jobs.pass)
+    await vi.advanceTimersByTimeAsync(10)
+    // A restart still waiting for that pass.
     startPollingWorker("TailscaleCleanup", jobs.pass)
     await vi.advanceTimersByTimeAsync(10)
 

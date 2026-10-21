@@ -117,10 +117,13 @@ export function startPollingWorker(
       yield* Effect.raceFirst(Effect.sleep(delay), Queue.take(worker.wake))
     }
   })
+  // Waiting out the replaced worker can't be cut short either, so a chain of
+  // restarts still finishes one pass before the next begins.
   worker.fiber = forkAppWorker(
-    (previous ? Fiber.interrupt(previous) : Effect.void).pipe(
-      Effect.andThen(loop)
-    )
+    (previous
+      ? Effect.uninterruptible(Fiber.interrupt(previous))
+      : Effect.void
+    ).pipe(Effect.andThen(loop))
   )
 }
 
