@@ -231,7 +231,7 @@ export function AppMountsDialog({
                           target: mount.target,
                         }
                       }
-                      editable={editing !== null}
+                      editable={editing !== null && mount.editable}
                       mount={mount}
                       onChange={(change) =>
                         setComposeEdits((current) =>
@@ -393,6 +393,12 @@ function ComposeMountFields({
           </Button>
         ) : null}
       </div>
+      {mount.editable ? null : (
+        <p className="border-b px-3 py-2 text-xs text-muted-foreground">
+          A YAML anchor or merge shares it with another part of the file, so
+          change it in the Compose file.
+        </p>
+      )}
       <div className="grid gap-3 p-3 sm:grid-cols-2">
         <Field
           hint={

@@ -1,4 +1,12 @@
-import { isMap, isScalar, isSeq, parseDocument, type Document } from "yaml"
+import {
+  isAlias,
+  isMap,
+  isNode,
+  isScalar,
+  isSeq,
+  parseDocument,
+  type Document,
+} from "yaml"
 
 // What a Compose file mounts into its services, read from the file as
 // written, and changed in place so the rest of it, comments included,
@@ -22,6 +30,9 @@ export interface ComposeMount {
   dockerName: string | null
   // Where a config or secret is read from, as the file says.
   origin: string | null
+  // Whether it's changed here: not one a YAML anchor or alias shares with
+  // another part of the file, or a merge brings in from one.
+  editable: boolean
 }
 
 export interface ComposeMountChange {
@@ -40,7 +51,7 @@ export function composeMounts(
   text: string,
   project: string
 ): ReadonlyArray<ComposeMount> | null {
-  const document = parseDocument(text)
+  const document = parseFile(text)
   if (document.errors.length > 0) return null
   const file: unknown = document.toJS()
   if (!isRecord(file) || !isRecord(file.services)) return null
@@ -56,7 +67,14 @@ export function composeMounts(
           section === "volumes"
             ? volumeMount(file, project, entry)
             : fileMount(file, section, entry)
-        if (mount) mounts.push({ ...mount, key, service })
+        if (mount) {
+          mounts.push({
+            ...mount,
+            editable: ownNode(document, [service, section, index]),
+            key,
+            service,
+          })
+        }
       })
     }
   }
@@ -86,11 +104,11 @@ export function changeComposeMount(
   key: string,
   change: ComposeMountChange | null
 ): string {
-  const document = parseDocument(text)
+  const document = parseFile(text)
   const [service, section, index] = parseKey(key)
+  if (!ownNode(document, [service, section, index])) return text
   const path = ["services", service, section, index]
   const node = document.getIn(path, true)
-  if (node === undefined) return text
   if (change === null) {
     document.deleteIn(path)
     // An empty list reads as an error to Compose.
@@ -101,7 +119,7 @@ export function changeComposeMount(
     return document.toString()
   }
   if (section === "volumes") {
-    changeVolume(document, node, change)
+    changeVolume(document, path, node, change)
   } else {
     changeFile(document, path, node, section, change)
   }
@@ -110,27 +128,53 @@ export function changeComposeMount(
 
 function changeVolume(
   document: Document,
+  path: ReadonlyArray<string | number>,
   node: unknown,
   change: ComposeMountChange
 ) {
   const source = change.source.trim()
-  const kind = source ? sourceKind(source) : "volume"
-  if (kind === "volume" && source) declareVolume(document, source)
   if (isScalar(node) && typeof node.value === "string") {
-    const [, , mode] = splitShort(node.value)
+    // The short syntax's source says what it is, as Compose reads it.
+    const [first, second, mode] = splitShort(node.value)
+    const before = second === undefined ? "" : first
+    if (source && source !== before && sourceKind(source) === "volume") {
+      declareVolume(document, source)
+    }
     const flags = (mode ?? "")
       .split(",")
       .filter((flag) => flag && flag !== "ro" && flag !== "rw")
     if (change.readOnly) flags.push("ro")
-    // An anonymous volume is only its target; a mode would read as one.
-    node.value = !source
-      ? change.target
-      : [source, change.target, ...(flags.length ? [flags.join(",")] : [])]
-          .join(":")
+    if (!source) {
+      // An anonymous volume is only its target; a mode would read as one,
+      // so a read-only one is written out in full.
+      document.setIn(
+        path,
+        change.readOnly
+          ? document.createNode({
+              type: "volume",
+              target: change.target,
+              read_only: true,
+            })
+          : change.target
+      )
+      return
+    }
+    node.value = [
+      source,
+      change.target,
+      ...(flags.length ? [flags.join(",")] : []),
+    ].join(":")
     return
   }
   if (!isMap(node)) return
-  node.set("type", kind)
+  // The long syntax names its type, which stays as it is.
+  if (
+    node.get("type") === "volume" &&
+    source &&
+    source !== node.get("source")
+  ) {
+    declareVolume(document, source)
+  }
   if (source) node.set("source", source)
   else node.delete("source")
   node.set("target", change.target)
@@ -164,19 +208,52 @@ function changeFile(
 
 // A named volume Compose doesn't know of yet, declared at the top level,
 // so the file still deploys.
+// One declared through an alias or merge is already known, and a list of
+// declarations an alias shares is left alone: changing it would change
+// the other side too.
 function declareVolume(document: Document, name: string) {
-  if (name.includes("$") || document.hasIn(["volumes", name])) return
-  if (!isMap(document.get("volumes", true))) {
-    document.set("volumes", document.createNode({}))
+  if (name.includes("$")) return
+  const file: unknown = document.toJS()
+  const declared = isRecord(file) ? file.volumes : undefined
+  if (isRecord(declared) && name in declared) return
+  const volumes = document.get("volumes", true)
+  if (volumes === undefined || (isScalar(volumes) && volumes.value === null)) {
+    document.set("volumes", document.createNode({ [name]: {} }))
+    return
   }
-  document.setIn(["volumes", name], document.createNode({}))
+  if (isMap(volumes) && !volumes.anchor) {
+    volumes.set(name, document.createNode({}))
+  }
+}
+
+// Whether the entry, the list it's in, and the service it's for are the
+// file's own nodes, written where they are, and not shared through an
+// anchor or alias or brought in by a merge.
+function ownNode(
+  document: Document,
+  [service, section, index]: [string, Section, number]
+): boolean {
+  const nodes = [
+    document.get("services", true),
+    document.getIn(["services", service], true),
+    document.getIn(["services", service, section], true),
+    document.getIn(["services", service, section, index], true),
+  ]
+  return nodes.every(
+    (node) => isNode(node) && !isAlias(node) && !node.anchor
+  )
+}
+
+function parseFile(text: string) {
+  // Compose reads YAML merge keys (<<), so their entries count.
+  return parseDocument(text, { merge: true })
 }
 
 function volumeMount(
   file: Record<string, unknown>,
   project: string,
   entry: unknown
-): Omit<ComposeMount, "key" | "service"> | null {
+): Omit<ComposeMount, "editable" | "key" | "service"> | null {
   if (typeof entry === "string") {
     const [first, second, mode] = splitShort(entry)
     // "/data" alone: an anonymous volume.
@@ -210,7 +287,7 @@ function fileMount(
   file: Record<string, unknown>,
   section: "configs" | "secrets",
   entry: unknown
-): Omit<ComposeMount, "key" | "service"> | null {
+): Omit<ComposeMount, "editable" | "key" | "service"> | null {
   const name =
     typeof entry === "string"
       ? entry

@@ -124,4 +124,105 @@ describe("compose mounts", () => {
       "/run/password",
     ])
   })
+
+  it("keeps a volume declared through an alias when a mount changes", () => {
+    const aliased = `x-volumes: &volumes
+  data:
+    name: production-data
+services:
+  app:
+    image: app
+    volumes:
+      - data:/data
+volumes: *volumes
+`
+    const [mount] = composeMounts(aliased, project)!
+    const changed = changeComposeMount(aliased, mount!.key, {
+      readOnly: true,
+      source: "data",
+      target: "/data",
+    })
+    expect(changed).toBe(aliased.replace("data:/data", "data:/data:ro"))
+    expect(composeMounts(changed, project)![0]!.dockerName).toBe(
+      "production-data"
+    )
+  })
+
+  it("keeps a long mount's type through a change", () => {
+    const long = `services:
+  app:
+    image: app
+    volumes:
+      - type: bind
+        source: state
+        target: /state
+      - type: volume
+        source: \${VOLUME:-data}
+        target: /data
+volumes:
+  data: {}
+`
+    let changed = long
+    for (const mount of composeMounts(long, project)!) {
+      changed = changeComposeMount(changed, mount.key, {
+        readOnly: true,
+        source: mount.source,
+        target: mount.target,
+      })
+    }
+    expect(
+      composeMounts(changed, project)!.map((mount) => [
+        mount.kind,
+        mount.readOnly,
+      ])
+    ).toEqual([
+      ["bind", true],
+      ["volume", true],
+    ])
+  })
+
+  it("leaves alone what an anchor shares with another service", () => {
+    const anchored = `services:
+  web:
+    image: web
+    volumes:
+      - &shared data:/data
+  worker:
+    image: worker
+    volumes:
+      - *shared
+volumes:
+  data: {}
+`
+    const found = composeMounts(anchored, project)!
+    expect(found.map((mount) => [mount.service, mount.editable])).toEqual([
+      ["web", false],
+      ["worker", false],
+    ])
+    for (const mount of found) {
+      expect(
+        changeComposeMount(anchored, mount.key, {
+          readOnly: false,
+          source: "other",
+          target: "/data",
+        })
+      ).toBe(anchored)
+      expect(changeComposeMount(anchored, mount.key, null)).toBe(anchored)
+    }
+  })
+
+  it("makes an anonymous volume read-only", () => {
+    const changed = changeComposeMount(file, keyOf("/scratch"), {
+      readOnly: true,
+      source: "",
+      target: "/scratch",
+    })
+    expect(
+      composeMounts(changed, project)!.find(
+        (mount) => mount.target === "/scratch"
+      )
+    ).toEqual(
+      expect.objectContaining({ kind: "volume", readOnly: true, source: "" })
+    )
+  })
 })
