@@ -38,7 +38,7 @@ export default function HearthDemo({ view }: { view: DemoView }) {
       <div className="flex flex-col gap-3">
         <div
           ref={windowRef}
-          className="@container/window flex h-[40rem] flex-col overflow-hidden border border-border bg-background text-left shadow-2xl shadow-black/40 sm:h-[44rem]"
+          className="@container/window flex h-[40rem] flex-col overflow-hidden border border-border bg-background pb-2 text-left shadow-2xl shadow-black/40 sm:h-[44rem]"
         >
           <WorkspaceFrame
             header={<DemoHeader server={server} state={state} view={view} />}
@@ -55,31 +55,10 @@ export default function HearthDemo({ view }: { view: DemoView }) {
               </React.Suspense>
             )}
           </WorkspaceFrame>
-          <PanelFooter />
         </div>
         {view === "console" ? <ConsoleStatus statsStore={statsStore} /> : null}
       </div>
     </TooltipProvider>
-  )
-}
-
-// Hearth's footer, without the links that only make sense in the panel.
-function PanelFooter() {
-  return (
-    <footer className="type-meta grid h-2 shrink-0 bg-background text-center tracking-wide text-muted-foreground @3xl/window:h-14 @3xl/window:grid-rows-2">
-      <p className="hidden items-center justify-center gap-1.5 self-end pb-0.5 @3xl/window:flex">
-        Kiln · Hearth Panel
-        <span className="font-mono text-primary/80">0.1.0</span>
-      </p>
-      <p className="hidden items-center justify-center gap-x-2 self-start pt-0.5 @3xl/window:flex">
-        QuartzDev © 2026
-        <span className="text-border" aria-hidden="true">
-          /
-        </span>
-        Terms of Use
-        <span>Privacy Policy</span>
-      </p>
-    </footer>
   )
 }
 
