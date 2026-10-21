@@ -23,6 +23,7 @@ import {
   resticS3ProxyToken,
   withResticS3Proxy,
 } from "./backups/destinations/s3/proxy.js"
+import { traceResticCommand } from "./backups/telemetry.js"
 
 const RESTIC_BINARY = "restic"
 const MAX_JSON_LINE_BYTES = 64 * 1024
@@ -548,19 +549,22 @@ async function spawnResticCommand(
     stdoutPipe?: (stdout: NodeJS.ReadableStream) => Promise<void>
   }
 ): Promise<SpawnedRestic> {
-  if (input.location.kind !== "s3") {
-    return spawnResticOnce(spawnRestic, args, input)
-  }
-  const token = resticS3ProxyToken()
-  return withResticS3Proxy(
-    {
-      allowPrivateNetwork: input.location.allowPrivateNetwork,
-      allowedHosts: resticS3ProxyAllowedHosts(input.location),
-      endpointPort: resticDestinationEndpointPort(input.location) ?? 443,
-      token,
-    },
-    (proxyUrl) => spawnResticOnce(spawnRestic, args, { ...input, proxyUrl })
-  )
+  const location = input.location
+  return traceResticCommand(args[0] ?? "restic", location.kind, () => {
+    if (location.kind !== "s3") {
+      return spawnResticOnce(spawnRestic, args, input)
+    }
+    const token = resticS3ProxyToken()
+    return withResticS3Proxy(
+      {
+        allowPrivateNetwork: location.allowPrivateNetwork,
+        allowedHosts: resticS3ProxyAllowedHosts(location),
+        endpointPort: resticDestinationEndpointPort(location) ?? 443,
+        token,
+      },
+      (proxyUrl) => spawnResticOnce(spawnRestic, args, { ...input, proxyUrl })
+    )
+  })
 }
 
 async function spawnResticOnce(

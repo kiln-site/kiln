@@ -33,6 +33,7 @@ import {
   type BackupCreateTaskResult,
   type BackupDeleteTaskInput,
   type BackupExportTaskResult,
+  type BackupFailureCode,
   type BackupResticCreateTaskResult,
   type BackupTaskInput,
   type BackupTaskPhase,
@@ -57,7 +58,12 @@ import { LaneRejectedError } from "./operation-lanes.js"
 import type { OperationLanes } from "./operation-lanes.js"
 import { backupTaskLocks } from "./operation-plans.js"
 import { backupFailureCode } from "./backups/failure.js"
-import { backupTaskAttributes } from "./backups/telemetry.js"
+import {
+  backupTaskAttributes,
+  type BackupTaskOutcome,
+  recordBackupTask,
+  recordBackupTaskQueued,
+} from "./backups/telemetry.js"
 import {
   backupArchivePath,
   backupDestinationFor,
@@ -124,6 +130,11 @@ type ArchiveEntry = {
   modifiedAt: number
   name: string
   size: number
+}
+
+type BackupTaskEnd = {
+  outcome: BackupTaskOutcome
+  failure: BackupFailureCode | null
 }
 
 export class BackupManager {
@@ -271,6 +282,13 @@ export class BackupManager {
         this.#activeCreates.set(task.taskId, controller)
         const current = yield* this.#state.getBackupTask(task.taskId)
         if (!current || current.status !== "running") controller.abort()
+        const startedAt = Date.now()
+        yield* recordBackupTaskQueued(
+          this.#config.nodeId,
+          task,
+          startedAt - task.createdAt
+        )
+        let timedOut = false
         const timeoutFiber = yield* Effect.forkChild(
           Effect.sleep(this.#config.backupTimeoutMs).pipe(
             Effect.andThen(
@@ -289,7 +307,12 @@ export class BackupManager {
               )
             ),
             Effect.tap((stopped) =>
-              stopped ? Effect.sync(() => controller.abort()) : Effect.void
+              stopped
+                ? Effect.sync(() => {
+                    timedOut = true
+                    controller.abort()
+                  })
+                : Effect.void
             ),
             Effect.asVoid
           )
@@ -315,7 +338,7 @@ export class BackupManager {
             this.#execute(task, controller.signal)
           )
           .pipe(
-            Effect.as("ran" as const),
+            Effect.as<BackupTaskEnd>({ outcome: "succeeded", failure: null }),
             // Withdrawn by a pause before it started: it goes back in line
             // and starts once the Relay is resumed.
             Effect.catch((cause) =>
@@ -337,23 +360,47 @@ export class BackupManager {
                   Date.now()
                 )
                 .pipe(
-                  Effect.tap((failed) =>
-                    failed
-                      ? logException(cause, {
-                          operation: `Backups.${task.kind}`,
-                          attributes: {
-                            ...backupTaskAttributes(task),
-                            "backup.failure.code": backupFailureCode(cause),
-                            "backup.error.code":
-                              cause instanceof RelayBackupError
-                                ? cause.code
-                                : null,
-                          },
-                        })
-                      : Effect.void
-                  ),
-                  Effect.as("ran" as const)
+                  Effect.flatMap((failed): Effect.Effect<BackupTaskEnd> => {
+                    // Cancelled by a user, or stopped by its deadline, which
+                    // already recorded the timeout.
+                    if (!failed && !timedOut) {
+                      return Effect.succeed({
+                        outcome: "cancelled",
+                        failure: null,
+                      })
+                    }
+                    const failure = failed
+                      ? backupFailureCode(cause)
+                      : "timed_out"
+                    return logException(cause, {
+                      operation: `Backups.${task.kind}`,
+                      attributes: {
+                        ...backupTaskAttributes(task),
+                        "backup.failure.code": failure,
+                        "backup.error.code":
+                          cause instanceof RelayBackupError ? cause.code : null,
+                      },
+                    }).pipe(Effect.as({ outcome: "failed", failure }))
+                  })
                 )
+            ),
+            Effect.tap((ended) =>
+              ended === "paused"
+                ? Effect.void
+                : Effect.annotateCurrentSpan({
+                    "backup.task.outcome": ended.outcome,
+                    "backup.failure.code": ended.failure,
+                  }).pipe(
+                    Effect.andThen(
+                      recordBackupTask(
+                        this.#config.nodeId,
+                        task,
+                        ended.outcome,
+                        ended.failure,
+                        Date.now() - startedAt
+                      )
+                    )
+                  )
             ),
             Effect.ensuring(
               timeoutFiber ? Fiber.interrupt(timeoutFiber) : Effect.void
@@ -362,7 +409,10 @@ export class BackupManager {
               controller
                 ? Effect.sync(() => this.#activeCreates.delete(task.taskId))
                 : Effect.void
-            )
+            ),
+            Effect.withSpan(`Backups.${task.kind}`, {
+              attributes: backupTaskAttributes(task),
+            })
           )
         if (outcome === "paused") return
       }
