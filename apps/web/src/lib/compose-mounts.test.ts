@@ -225,4 +225,81 @@ volumes:
       expect.objectContaining({ kind: "volume", readOnly: true, source: "" })
     )
   })
+
+  it("leaves alone a mount that shares or inherits any part of itself", () => {
+    const shared = `x-mount: &mount
+  type: volume
+  source: data
+  target: /data
+  read_only: true
+x-base: &base
+  image: base
+  volumes:
+    - data:/data
+services:
+  web:
+    image: web
+    volumes:
+      - type: volume
+        source: &source data
+        target: /data
+  api:
+    image: api
+    volumes:
+      - type: volume
+        source: *source
+        target: /data
+  worker:
+    image: worker
+    volumes:
+      - <<: *mount
+  job:
+    <<: *base
+    volumes:
+      - cache:/cache
+volumes:
+  data: {}
+  cache: {}
+`
+    const found = composeMounts(shared, project)!
+    expect(found.map((mount) => [mount.service, mount.editable])).toEqual([
+      ["web", false],
+      ["api", false],
+      ["worker", false],
+      ["job", false],
+    ])
+    for (const mount of found) {
+      expect(
+        changeComposeMount(shared, mount.key, {
+          readOnly: false,
+          source: "other",
+          target: "/other",
+        })
+      ).toBe(shared)
+      expect(changeComposeMount(shared, mount.key, null)).toBe(shared)
+    }
+  })
+
+  it("won't name a volume it can't declare without changing shared declarations", () => {
+    for (const declarations of [
+      "x-volumes: &volumes\n  data: {}\nvolumes: *volumes\n",
+      "x-volumes: &volumes\n  data: {}\nvolumes:\n  <<: *volumes\n",
+      "x-root: &root\n  volumes:\n    data: {}\n<<: *root\n",
+    ]) {
+      const text = `services:
+  app:
+    image: app
+    volumes:
+      - data:/data
+${declarations}`
+      const [mount] = composeMounts(text, project)!
+      expect(() =>
+        changeComposeMount(text, mount!.key, {
+          readOnly: false,
+          source: "new-data",
+          target: "/data",
+        })
+      ).toThrow("Declare the volume new-data")
+    }
+  })
 })

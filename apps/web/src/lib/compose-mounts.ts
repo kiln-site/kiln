@@ -5,7 +5,9 @@ import {
   isScalar,
   isSeq,
   parseDocument,
+  visit,
   type Document,
+  type YAMLMap,
 } from "yaml"
 
 // What a Compose file mounts into its services, read from the file as
@@ -99,6 +101,8 @@ export function composeMountProblem(
 }
 
 // The file with one mount changed, or removed when `change` is null.
+// Throws, with why, a change it can't make without changing more of the
+// file than the mount.
 export function changeComposeMount(
   text: string,
   key: string,
@@ -207,41 +211,79 @@ function changeFile(
 }
 
 // A named volume Compose doesn't know of yet, declared at the top level,
-// so the file still deploys.
-// One declared through an alias or merge is already known, and a list of
-// declarations an alias shares is left alone: changing it would change
-// the other side too.
+// so the file still deploys. One declared through an alias or merge is
+// already known. Declarations shared with another part of the file, or
+// brought in by a merge, aren't changed; the file needs it declared by
+// hand first.
 function declareVolume(document: Document, name: string) {
   if (name.includes("$")) return
   const file: unknown = document.toJS()
   const declared = isRecord(file) ? file.volumes : undefined
   if (isRecord(declared) && name in declared) return
   const volumes = document.get("volumes", true)
-  if (volumes === undefined || (isScalar(volumes) && volumes.value === null)) {
-    document.set("volumes", document.createNode({ [name]: {} }))
-    return
+  if (isMap(document.contents) && !hasMerge(document.contents)) {
+    if (volumes === undefined || (isScalar(volumes) && volumes.value === null)) {
+      document.set("volumes", document.createNode({ [name]: {} }))
+      return
+    }
+    if (isMap(volumes) && !volumes.anchor && !hasMerge(volumes)) {
+      volumes.set(name, document.createNode({}))
+      return
+    }
   }
-  if (isMap(volumes) && !volumes.anchor) {
-    volumes.set(name, document.createNode({}))
-  }
+  throw new Error(
+    `Declare the volume ${name} under volumes in the Compose file first.`
+  )
 }
 
-// Whether the entry, the list it's in, and the service it's for are the
-// file's own nodes, written where they are, and not shared through an
-// anchor or alias or brought in by a merge.
+// Whether the entry is the file's own to change: it, the list it's in, and
+// the service it's for are written where they are, none of it shared
+// through an anchor or alias, and nothing merged in from elsewhere, which
+// a change could reveal or leave in force.
 function ownNode(
   document: Document,
   [service, section, index]: [string, Section, number]
 ): boolean {
-  const nodes = [
-    document.get("services", true),
-    document.getIn(["services", service], true),
-    document.getIn(["services", service, section], true),
-    document.getIn(["services", service, section, index], true),
-  ]
-  return nodes.every(
-    (node) => isNode(node) && !isAlias(node) && !node.anchor
-  )
+  const services = document.get("services", true)
+  const definition = document.getIn(["services", service], true)
+  const list = document.getIn(["services", service, section], true)
+  const entry = document.getIn(["services", service, section, index], true)
+  if (!isMap(services) || !isMap(definition) || !isSeq(list)) return false
+  if (!isNode(entry) || isAlias(entry)) return false
+  if (hasMerge(services) || hasMerge(definition)) return false
+  if ([services, definition, list].some((node) => node.anchor)) return false
+  let shared = false
+  visit(entry, {
+    Alias: () => {
+      shared = true
+      return visit.BREAK
+    },
+    Node: (_, node) => {
+      if (node.anchor) {
+        shared = true
+        return visit.BREAK
+      }
+    },
+    Pair: (_, pair) => {
+      if (isMergeKey(pair.key)) {
+        shared = true
+        return visit.BREAK
+      }
+    },
+  })
+  return !shared
+}
+
+function hasMerge(map: YAMLMap): boolean {
+  return map.items.some((pair) => isMergeKey(pair.key))
+}
+
+// A merge key parses as a symbol, or as "<<" where merges are off.
+function isMergeKey(key: unknown): boolean {
+  if (!isScalar(key)) return false
+  return typeof key.value === "symbol"
+    ? key.value.description === "<<"
+    : key.value === "<<"
 }
 
 function parseFile(text: string) {

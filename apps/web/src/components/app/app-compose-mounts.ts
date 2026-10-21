@@ -54,10 +54,11 @@ export function useAppComposeMounts(
   const project = composeProject(app)
   const mounts = React.useMemo(() => {
     if (!module || text === null) return null
-    return module.composeMounts(text, project)?.map((mount) => ({
-      ...mount,
-      dockerName: mount.dockerName && dockerVolume(app.containers, mount),
-    })) ?? null
+    return (
+      module
+        .composeMounts(text, project)
+        ?.map((mount) => runningMount(app.containers, mount)) ?? null
+    )
   }, [app.containers, module, project, text])
   if (!pasted && github === null) return null
   return {
@@ -78,19 +79,22 @@ function composeProject(app: App): string {
   return label?.replace(/-\d{14}$/u, "") ?? `kiln-app-${app.id}`
 }
 
-// The volume a running container really mounts there, over the name the
-// file implies, which a variable or an earlier deploy may have changed.
-function dockerVolume(
+// The mount as the service's running container has it: what a variable
+// in the file made it, and a volume's real name. Otherwise the file, which
+// may have changed since the deploy, says what it is.
+function runningMount(
   containers: App["containers"],
   mount: ComposeMount
-): string | null {
-  const container = containers.find(
-    (candidate) => candidate.service === mount.service
-  )
-  return (
-    container?.mounts?.find(
-      (candidate) =>
-        candidate.type === "volume" && candidate.destination === mount.target
-    )?.source ?? mount.dockerName
-  )
+): ComposeMount {
+  // An anonymous volume's name is a new one each time; it stays unnamed.
+  if (mount.kind !== "bind" && mount.kind !== "volume") return mount
+  if (!mount.source) return mount
+  const running = containers
+    .find((container) => container.service === mount.service)
+    ?.mounts?.find((candidate) => candidate.destination === mount.target)
+  if (running?.type !== "bind" && running?.type !== "volume") return mount
+  if (!mount.source.includes("$") && running.type !== mount.kind) return mount
+  return running.type === "volume"
+    ? { ...mount, dockerName: running.source, kind: "volume" }
+    : { ...mount, dockerName: null, kind: "bind" }
 }

@@ -1,5 +1,6 @@
 import * as React from "react"
 import { useQuery, type UseQueryResult } from "@tanstack/react-query"
+import { Result } from "effect"
 import {
   appMountsSchema,
   type AppMount,
@@ -108,10 +109,18 @@ export function AppMountsDialog({
   const editing =
     composeFile?.editable && composeFile.module ? composeFile.module : null
   const composeMounts = composeFile?.mounts ?? []
+  const composeDirty = editing !== null && composeEdits.size > 0
+  const composeDraft = React.useMemo(
+    () =>
+      composeDirty
+        ? applyComposeEdits(editing, savedCompose, composeEdits)
+        : { problem: null, text: savedCompose },
+    [composeDirty, composeEdits, editing, savedCompose]
+  )
   const problem =
     mountsProblem(draft) ??
-    composeMountsProblem(editing, composeMounts, composeEdits)
-  const composeDirty = editing !== null && composeEdits.size > 0
+    composeMountsProblem(editing, composeMounts, composeEdits) ??
+    composeDraft.problem
   const dirty = JSON.stringify(draft) !== JSON.stringify(saved) || composeDirty
   const pending = save.isPending ? save.variables.next : null
   const services = appServices(app)
@@ -127,9 +136,7 @@ export function AppMountsDialog({
           .mutateAsync({
             config: {
               mounts: draft,
-              ...(composeDirty && {
-                compose: applyComposeEdits(editing, savedCompose, composeEdits),
-              }),
+              ...(composeDirty && { compose: composeDraft.text }),
             },
             next,
           })
@@ -300,22 +307,36 @@ export function AppMountsDialog({
 
 // The saved Compose file with the dialog's changes: each changed in place,
 // then the removed ones from the last, so the places of those left hold.
+// A change the file can't take says why instead.
 function applyComposeEdits(
   module: ComposeMountsModule | null,
   text: string,
   edits: ReadonlyMap<string, ComposeMountChange | null>
-): string {
-  if (!module) return text
-  let next = text
-  for (const [key, change] of edits) {
-    if (change) next = module.changeComposeMount(next, key, change)
-  }
+): { problem: string | null; text: string } {
+  if (!module) return { problem: null, text }
   const removed = [...edits]
     .filter(([, change]) => change === null)
     .map(([key]) => key)
     .sort((a, b) => keyIndex(b) - keyIndex(a))
-  for (const key of removed) next = module.changeComposeMount(next, key, null)
-  return next
+  const result = Result.try(() => {
+    let next = text
+    for (const [key, change] of edits) {
+      if (change) next = module.changeComposeMount(next, key, change)
+    }
+    for (const key of removed) {
+      next = module.changeComposeMount(next, key, null)
+    }
+    return next
+  })
+  return Result.isSuccess(result)
+    ? { problem: null, text: result.success }
+    : {
+        problem:
+          result.failure instanceof Error
+            ? result.failure.message
+            : String(result.failure),
+        text,
+      }
 }
 
 function keyIndex(key: string): number {
