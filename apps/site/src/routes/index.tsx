@@ -13,6 +13,7 @@ import { BrickMark, officialBricks } from "~/components/brick-mark"
 import { CyclingWord } from "~/components/cycling-word"
 import { ClientDemo } from "~/components/demos/client-demo"
 import { signUpUrl } from "~/lib/plans"
+import { newTab } from "~/lib/new-tab"
 import { useSiteConfig } from "~/lib/use-site-config"
 
 const HearthDemo = React.lazy(() => import("~/components/demos/hearth-demo"))
@@ -72,7 +73,9 @@ function Hero() {
                 variant="outline"
                 className="h-11 px-5 text-[0.9375rem]"
               >
-                <a href={docsUrl}>Read the docs</a>
+                <a href={docsUrl} {...newTab}>
+                  Read the docs
+                </a>
               </Button>
             </div>
           </div>
@@ -379,7 +382,9 @@ function SelfHost() {
           </SectionHeading>
           <div className="mt-8 flex flex-wrap gap-3">
             <Button asChild className="h-11 px-5 text-[0.9375rem]">
-              <a href={docsUrl}>Install Kiln</a>
+              <a href={docsUrl} {...newTab}>
+                Install Kiln
+              </a>
             </Button>
             <Button
               asChild

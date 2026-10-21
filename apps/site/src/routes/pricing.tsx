@@ -10,6 +10,7 @@ import {
   planSignupUrl,
   plans,
 } from "~/lib/plans"
+import { newTab } from "~/lib/new-tab"
 import { useSiteConfig } from "~/lib/use-site-config"
 
 export const Route = createFileRoute("/pricing")({
@@ -168,7 +169,7 @@ function PlanColumn({
         className="mt-8 h-11 w-full text-[0.9375rem]"
       >
         {free ? (
-          <a href={new URL("/self-hosting", docsUrl).toString()}>
+          <a href={new URL("/self-hosting", docsUrl).toString()} {...newTab}>
             Read the install guide
           </a>
         ) : (

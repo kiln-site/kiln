@@ -5,6 +5,7 @@ import { socialLinks } from "@/lib/social-links"
 
 import { KilnMark } from "~/components/kiln-mark"
 import { signInUrl } from "~/lib/plans"
+import { newTab } from "~/lib/new-tab"
 import { useSiteConfig } from "~/lib/use-site-config"
 
 export function SiteFooter() {
@@ -29,7 +30,9 @@ export function SiteFooter() {
               <Link to="/pricing">Pricing</Link>
             </FooterLink>
             <FooterLink>
-              <a href={docsUrl}>Docs</a>
+              <a href={docsUrl} {...newTab}>
+                Docs
+              </a>
             </FooterLink>
             <FooterLink>
               <a href={signInUrl(hearthUrl)}>Log in</a>
@@ -37,13 +40,19 @@ export function SiteFooter() {
           </FooterGroup>
           <FooterGroup title="Community">
             <FooterLink>
-              <a href={socialLinks.github.href}>GitHub</a>
+              <a href={socialLinks.github.href} {...newTab}>
+                GitHub
+              </a>
             </FooterLink>
             <FooterLink>
-              <a href={socialLinks.discord.href}>Discord</a>
+              <a href={socialLinks.discord.href} {...newTab}>
+                Discord
+              </a>
             </FooterLink>
             <FooterLink>
-              <a href={socialLinks.x.href}>X</a>
+              <a href={socialLinks.x.href} {...newTab}>
+                X
+              </a>
             </FooterLink>
           </FooterGroup>
           <FooterGroup title="Legal">

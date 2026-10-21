@@ -8,6 +8,7 @@ import { socialLinks } from "@/lib/social-links"
 
 import { KilnMark } from "~/components/kiln-mark"
 import { signInUrl, signUpUrl } from "~/lib/plans"
+import { newTab } from "~/lib/new-tab"
 import { useSiteConfig } from "~/lib/use-site-config"
 
 export function SiteHeader() {
@@ -29,8 +30,12 @@ export function SiteHeader() {
 
         <nav aria-label="Main" className="hidden items-center gap-1 md:flex">
           <HeaderLink to="/pricing">Pricing</HeaderLink>
-          <HeaderAnchor href={docsUrl}>Docs</HeaderAnchor>
-          <HeaderAnchor href={socialLinks.github.href}>GitHub</HeaderAnchor>
+          <HeaderAnchor href={docsUrl} {...newTab}>
+            Docs
+          </HeaderAnchor>
+          <HeaderAnchor href={socialLinks.github.href} {...newTab}>
+            GitHub
+          </HeaderAnchor>
         </nav>
 
         <div className="ml-auto flex items-center gap-2">
@@ -68,8 +73,12 @@ export function SiteHeader() {
             <MobileLink to="/pricing" onNavigate={() => setMenuOpen(false)}>
               Pricing
             </MobileLink>
-            <MobileAnchor href={docsUrl}>Docs</MobileAnchor>
-            <MobileAnchor href={socialLinks.github.href}>GitHub</MobileAnchor>
+            <MobileAnchor href={docsUrl} {...newTab}>
+              Docs
+            </MobileAnchor>
+            <MobileAnchor href={socialLinks.github.href} {...newTab}>
+              GitHub
+            </MobileAnchor>
             <MobileAnchor href={signInUrl(hearthUrl)}>Log in</MobileAnchor>
           </div>
         </nav>
@@ -99,18 +108,8 @@ function HeaderLink({
   )
 }
 
-function HeaderAnchor({
-  href,
-  children,
-}: {
-  href: string
-  children: React.ReactNode
-}) {
-  return (
-    <a href={href} className={headerLinkClassName}>
-      {children}
-    </a>
-  )
+function HeaderAnchor(props: React.ComponentProps<"a">) {
+  return <a {...props} className={headerLinkClassName} />
 }
 
 const mobileLinkClassName =
@@ -132,16 +131,6 @@ function MobileLink({
   )
 }
 
-function MobileAnchor({
-  href,
-  children,
-}: {
-  href: string
-  children: React.ReactNode
-}) {
-  return (
-    <a href={href} className={mobileLinkClassName}>
-      {children}
-    </a>
-  )
+function MobileAnchor(props: React.ComponentProps<"a">) {
+  return <a {...props} className={mobileLinkClassName} />
 }
