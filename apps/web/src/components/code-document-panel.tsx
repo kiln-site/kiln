@@ -39,6 +39,7 @@ export function CodeDocumentPanel({
   languagePath,
   noun,
   onShare,
+  sourceLabel,
   sourceUrl,
   title,
 }: {
@@ -55,6 +56,8 @@ export function CodeDocumentPanel({
   // Lowercase, as in "Copy recipe".
   noun: string
   onShare?: (content: string) => Promise<string>
+  // What the source link says; "View <noun> URL" when left out.
+  sourceLabel?: string
   sourceUrl?: string | null
   title: string
 }) {
@@ -199,13 +202,15 @@ export function CodeDocumentPanel({
                     href={sourceUrl}
                     target="_blank"
                     rel="noreferrer"
-                    aria-label={`View ${noun} URL`}
+                    aria-label={sourceLabel ?? `View ${noun} URL`}
                   >
                     <ExternalLink />
                   </a>
                 </Button>
               </TooltipTrigger>
-              <TooltipContent side="bottom">View {noun} URL</TooltipContent>
+              <TooltipContent side="bottom">
+                {sourceLabel ?? `View ${noun} URL`}
+              </TooltipContent>
             </Tooltip>
           ) : null}
 

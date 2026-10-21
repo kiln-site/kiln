@@ -145,13 +145,8 @@ export type AppDocumentKind = keyof typeof appDocuments
 // A Dockerfile, Compose file, or the environment, read or edited in the
 // code dialog a Brick recipe opens in.
 export function AppDocumentDialog({
-  app,
-  canManage,
-  deploying,
   kind,
-  onOpenChange,
-  routeId,
-  saved,
+  ...props
 }: {
   app: Pick<App, "id" | "permissions" | "relayId">
   canManage: boolean
@@ -161,14 +156,43 @@ export function AppDocumentDialog({
   routeId: string
   saved: string
 }) {
-  const document = appDocuments[kind]
+  return (
+    <AppCodeDialog
+      {...props}
+      configFor={(draft) => ({ [kind]: draft })}
+      document={appDocuments[kind]}
+    />
+  )
+}
+
+// Any text the app's config keeps, read or edited in the code dialog, and
+// saved into the config as `configFor` places it.
+export function AppCodeDialog({
+  app,
+  canManage,
+  configFor,
+  deploying,
+  document,
+  onOpenChange,
+  routeId,
+  saved,
+}: {
+  app: Pick<App, "id" | "permissions" | "relayId">
+  canManage: boolean
+  configFor: (draft: string) => Partial<EditableAppConfig>
+  deploying: boolean
+  document: { hint: string; noun: string; path: string; placeholder: string }
+  onOpenChange: (open: boolean) => void
+  routeId: string
+  saved: string
+}) {
   const [draft, setDraft] = React.useState(saved)
   const save = useAppConfigSave(app, routeId)
   const submit = async (next: SaveNext) => {
     // The mutation reports failures; the dialog stays open for them.
     const done = await recoverPromise(
       () =>
-        save.mutateAsync({ config: { [kind]: draft }, next }).then(() => true),
+        save.mutateAsync({ config: configFor(draft), next }).then(() => true),
       () => false
     )
     if (done) onOpenChange(false)

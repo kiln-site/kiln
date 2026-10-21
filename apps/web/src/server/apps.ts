@@ -18,7 +18,7 @@ import {
   relayAppWebRouteStateSchema,
   relayIdSchema,
 } from "@workspace/contracts"
-import type { RelayApp } from "@workspace/contracts"
+import type { AppConfig, AppMount, RelayApp } from "@workspace/contracts"
 import { Effect, Result } from "effect"
 import { z } from "zod"
 
@@ -134,8 +134,8 @@ export const getAppDirectory = createServerFn({ method: "GET" }).handler(
   }
 )
 
-// The app's configuration. Its environment carries secrets, so only people
-// who can change the app see it.
+// The app's configuration. Its environment and the files it mounts carry
+// secrets, so only people who can change the app see them.
 export const getAppConfig = createServerFn({ method: "GET" })
   .validator(appInputSchema)
   .handler(async ({ data }) => {
@@ -155,7 +155,17 @@ export const getAppConfig = createServerFn({ method: "GET" })
       )
     )
     return {
-      config: canManage ? app.config : { ...app.config, environment: "" },
+      config: canManage
+        ? app.config
+        : {
+            ...app.config,
+            environment: "",
+            mounts: app.config.mounts.map((mount) =>
+              mount.source.type === "file"
+                ? { ...mount, source: { ...mount.source, content: "" } }
+                : mount
+            ),
+          },
       environmentHidden: !canManage,
     }
   })
@@ -289,7 +299,19 @@ export const createApp = createServerFn({ method: "POST" })
 export const updateAppConfig = createServerFn({ method: "POST" })
   .validator(appConfigInputSchema)
   .handler(async ({ data }) => {
-    await authorizedApp(data, "app.manage")
+    const { app, user } = await authorizedApp(data, "app.manage")
+    // A path on the node reaches anything on it, so mounting a new one
+    // takes the permission that edits the host's files.
+    if (
+      data.config.mounts &&
+      mountsNewHostPath(app.config, data.config.mounts)
+    ) {
+      await requireRelayPermission({
+        permission: "relay.files.write",
+        relayId: data.relayId,
+        user,
+      })
+    }
     // Only the fields this edit changes, into the config saved now.
     const config = await runAppEffect(
       "apps.config.save",
@@ -300,6 +322,28 @@ export const updateAppConfig = createServerFn({ method: "POST" })
     publishAppChange(data.relayId, false)
     return { config }
   })
+
+// Whether mounts mount a path on the node the saved config doesn't, in the
+// same place and as read-only.
+function mountsNewHostPath(
+  saved: AppConfig,
+  mounts: ReadonlyArray<AppMount>
+): boolean {
+  const key = (mount: AppMount) =>
+    mount.source.type === "host"
+      ? JSON.stringify([
+          mount.service,
+          mount.target,
+          mount.source.path,
+          mount.readOnly,
+        ])
+      : null
+  const existing = new Set(saved.mounts.map(key))
+  return mounts.some((mount) => {
+    const mounted = key(mount)
+    return mounted !== null && !existing.has(mounted)
+  })
+}
 
 // Hearth keeps the name, so renaming doesn't need the Relay. It's
 // configuring the app, so it takes the permission that does.

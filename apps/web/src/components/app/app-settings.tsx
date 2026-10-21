@@ -4,11 +4,11 @@ import type { RelayAppWebRoute } from "@workspace/contracts"
 import {
   Cable,
   FileCode2,
-  Globe2,
-  KeyRound,
+  GitBranch,
   LoaderCircle,
   Rocket,
   Settings2,
+  ToyBrick,
 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
@@ -22,22 +22,17 @@ import {
   type EditableAppConfig,
 } from "@/components/app/app-config-dialogs"
 import { useAppContainerSelection } from "@/components/app/app-container-selection"
+import { AppGitHubFileDialog } from "@/components/app/app-github-file-dialog"
 import {
-  appAddresses,
-  appContainers,
   appRelayAvailable,
   appServices,
   appStatusPresentation,
   showAppOperationError,
-  sourceTypeLabels,
   type App,
 } from "@/components/app/app-presentation"
 import {
   InfoCopyValue,
-  InfoDetails,
   InfoFact,
-  InfoGridFact,
-  InfoHint,
   InfoSection,
   InfoSectionLink,
 } from "@/components/info-page"
@@ -47,6 +42,7 @@ import { AppKindIcon } from "@/components/instance-kind-icon"
 import { RenameButton } from "@/components/rename-dialog"
 import { StatusIndicator } from "@/components/status-indicator"
 import {
+  appConfigQueryOptions,
   appDeploymentSummaryQueryOptions,
   appWebRoutesQueryOptions,
   queryKeys,
@@ -68,8 +64,8 @@ export function AppGeneralSettings({
   app: App
   canRename: boolean
 }) {
-  const running = app.containers.filter((container) => container.running)
   const available = appRelayAvailable(app)
+  const compose = useAppRunsCompose(app)
   return (
     <InfoSection
       icon={<AppKindIcon />}
@@ -91,20 +87,43 @@ export function AppGeneralSettings({
       <InfoFact label="Kiln ID">
         <InfoCopyValue label="app ID" value={app.id} />
       </InfoFact>
-      <InfoFact label="Containers">
-        {!available ? (
-          <span className="text-muted-foreground">
-            {appStatusPresentation(app).label}
-          </span>
-        ) : app.containers.length === 0 ? (
-          <span className="text-muted-foreground">Not deployed</span>
-        ) : (
-          <span className="tabular-nums">
-            {running.length} of {app.containers.length} running
-          </span>
-        )}
-      </InfoFact>
+      {/* Only a Compose file runs more than one container. */}
+      {compose ? (
+        <InfoFact label="Containers">
+          {!available ? (
+            <span className="text-muted-foreground">
+              {appStatusPresentation(app).label}
+            </span>
+          ) : app.containers.length === 0 ? (
+            <span className="text-muted-foreground">Not deployed</span>
+          ) : (
+            <span className="flex min-w-0 flex-wrap justify-end gap-1">
+              {appServices(app).map((service) => (
+                <ServiceTag key={service} app={app} service={service} />
+              ))}
+            </span>
+          )}
+        </InfoFact>
+      ) : null}
     </InfoSection>
+  )
+}
+
+// Whether the app deploys a Compose file, its own or one in a repository.
+// Read from the cached config and deployment summary, so it doesn't wait on
+// the containers.
+export function useAppRunsCompose(app: App): boolean {
+  const { data: sourceType } = useQuery({
+    ...appConfigQueryOptions(app.relayId, app.id),
+    select: ({ config }) => config.sourceType,
+  })
+  const { data: build } = useQuery({
+    ...appDeploymentSummaryQueryOptions(app.relayId, app.id),
+    enabled: sourceType === "github",
+    select: (summary) => summary.source?.build ?? null,
+  })
+  return (
+    sourceType === "compose" || (sourceType === "github" && build === "compose")
   )
 }
 
@@ -131,8 +150,8 @@ function AppRenameButton({ app }: { app: App }) {
   )
 }
 
-// What the app deploys from. The Dockerfile or Compose file opens in the
-// code dialog; Configure changes the rest.
+// What the app runs, the same rows for every kind: where it comes from,
+// then what it deploys, an image or a file to open. Configure changes it.
 export function AppSourceSettings({
   app,
   canManage,
@@ -147,45 +166,18 @@ export function AppSourceSettings({
   const [configuring, setConfiguring] = React.useState(false)
   const deploying =
     appRelayAvailable(app) && app.deployment?.state === "running"
-  const kind =
-    config.sourceType === "image" || config.sourceType === "github"
-      ? null
-      : config.sourceType
   const github = useQuery({
     ...appDeploymentSummaryQueryOptions(app.relayId, app.id),
     enabled: config.sourceType === "github",
     select: (summary) => summary.source,
   })
-  const singleContainer =
-    config.sourceType === "github"
-      ? github.data?.build !== "compose"
-      : config.sourceType !== "compose"
-  const services = appServices(app)
 
   return (
     <InfoSection
-      grid
-      icon={<FileCode2 />}
-      title="Source"
-      status={
-        <span className="border bg-muted/30 px-1.5 py-0.5 text-[11px] text-muted-foreground">
-          {sourceTypeLabels[config.sourceType]}
-        </span>
-      }
+      icon={<ToyBrick />}
+      title="Brick"
       action={
         <>
-          {kind ? (
-            <AppDocumentButton
-              // Another document closes this one's editor, so a draft can't
-              // save into the source that replaced it.
-              key={kind}
-              app={app}
-              canManage={canManage}
-              kind={kind}
-              routeId={routeId}
-              saved={config[kind]}
-            />
-          ) : null}
           {canManage ? (
             <Button
               type="button"
@@ -210,121 +202,133 @@ export function AppSourceSettings({
       }
     >
       {config.sourceType === "github" ? (
-        <AppGitHubSourceFacts source={github.data} />
-      ) : kind ? (
-        <InfoGridFact label={kind === "compose" ? "Compose file" : "Dockerfile"}>
-          <span className="font-mono text-xs">{appDocuments[kind].path}</span>
-          <span className="text-xs text-muted-foreground tabular-nums">
-            {lineCount(config[kind])}
-          </span>
-        </InfoGridFact>
+        <AppGitHubSourceFacts app={app} source={github.data} />
       ) : (
-        <InfoGridFact label="Image">
-          {config.image ? (
-            <InfoCopyValue label="image" value={config.image} />
-          ) : (
-            <span className="text-muted-foreground">Not set</span>
-          )}
-        </InfoGridFact>
-      )}
-      {/* A Compose file names its own services; others run one, "app". */}
-      {!singleContainer && services.length > 0 ? (
-        <InfoGridFact label="Services" wide>
-          <span className="flex min-w-0 flex-wrap gap-1">
-            {services.map((service) => (
-              <ServiceTag key={service} app={app} service={service} />
-            ))}
-          </span>
-        </InfoGridFact>
-      ) : null}
-      {singleContainer ? (
         <>
-          <InfoGridFact label="Start command">
-            {config.command ? (
-              <InfoCopyValue label="start command" value={config.command} />
-            ) : (
-              <span className="text-muted-foreground">Image default</span>
-            )}
-          </InfoGridFact>
-          <InfoGridFact label="Data mount">
-            <InfoCopyValue label="data mount path" value={config.dataMount} />
-          </InfoGridFact>
+          <InfoFact label="Type">Standalone Docker</InfoFact>
+          {config.sourceType === "image" ? (
+            <InfoFact label="Image">
+              {config.image ? (
+                <InfoCopyValue label="image" value={config.image} />
+              ) : (
+                <span className="text-muted-foreground">Not set</span>
+              )}
+            </InfoFact>
+          ) : (
+            <InfoFact label="Build Strategy">
+              <AppDocumentButton
+                // Another document closes this one's editor, so a draft
+                // can't save into the source that replaced it.
+                key={config.sourceType}
+                app={app}
+                canManage={canManage}
+                kind={config.sourceType}
+                routeId={routeId}
+                saved={config[config.sourceType]}
+                size="xs"
+              >
+                <FileCode2 />
+                {appDocuments[config.sourceType].path}
+                {config.sourceType === "compose" ? (
+                  <span className="text-muted-foreground tabular-nums">
+                    {lineCount(config.compose)}
+                  </span>
+                ) : null}
+              </AppDocumentButton>
+            </InfoFact>
+          )}
         </>
-      ) : null}
+      )}
     </InfoSection>
   )
 }
 
-// The repository a GitHub app builds, and which file in it. Its cells hold
-// their places while it loads.
+// The repository a GitHub app builds and its branch, then the file in it,
+// which opens in the code viewer. Its rows hold their places while it loads.
 function AppGitHubSourceFacts({
+  app,
   source,
 }: {
+  app: App
   source: AppGitHubSourceView | null | undefined
 }) {
-  if (source === null) {
-    return (
-      <InfoGridFact label="Repository">
-        <span className="text-muted-foreground">Not chosen</span>
-      </InfoGridFact>
-    )
-  }
   const loading = <span className="text-muted-foreground">…</span>
   return (
     <>
-      <InfoGridFact label="Repository">
+      <InfoFact label="Type">GitHub App</InfoFact>
+      <InfoFact label="Repo">
         {source ? (
-          <a
-            className="flex min-w-0 items-center gap-1.5 hover:text-primary"
-            href={source.repositoryUrl}
-            rel="noreferrer"
-            target="_blank"
-            title={source.repository}
-          >
-            <GitHubMark className="size-3.5 shrink-0" />
-            <span className="truncate font-mono text-xs">
-              {source.repository}
+          <span className="flex min-w-0 items-center gap-3">
+            <a
+              className="flex min-w-0 items-center gap-1.5 hover:text-primary"
+              href={source.repositoryUrl}
+              rel="noreferrer"
+              target="_blank"
+              title={source.repository}
+            >
+              <GitHubMark className="size-3.5 shrink-0" />
+              <span className="truncate font-mono text-xs">
+                {source.repository}
+              </span>
+            </a>
+            <span
+              className="flex max-w-[45%] shrink-0 items-center gap-1 text-muted-foreground"
+              title={`Deploys from ${source.branch}`}
+            >
+              <GitBranch className="size-3.5 shrink-0" />
+              <span className="truncate font-mono text-xs">
+                {source.branch}
+              </span>
             </span>
-          </a>
-        ) : (
-          loading
-        )}
-      </InfoGridFact>
-      <InfoGridFact label="Branch">
-        {source ? (
-          <span className="truncate font-mono text-xs" title={source.branch}>
-            {source.branch}
           </span>
+        ) : source === null ? (
+          <span className="text-muted-foreground">Not chosen</span>
         ) : (
           loading
         )}
-      </InfoGridFact>
-      <InfoGridFact
-        label={source?.build === "compose" ? "Compose file" : "Dockerfile"}
-      >
-        {source ? (
-          <span className="truncate font-mono text-xs" title={source.path}>
-            {source.path}
-          </span>
-        ) : (
-          loading
-        )}
-      </InfoGridFact>
-      <InfoGridFact label="Deploy on push">
-        {source ? (
-          <span
-            className={source.autoDeploy ? undefined : "text-muted-foreground"}
-          >
-            {source.autoDeploy ? "On" : "Off"}
-          </span>
-        ) : (
-          loading
-        )}
-      </InfoGridFact>
+      </InfoFact>
+      {source === null ? null : (
+        <InfoFact label="Build Strategy">
+          {source ? <AppGitHubFileButton app={app} source={source} /> : loading}
+        </InfoFact>
+      )}
       {source?.connectionId === null ? (
-        <InfoGridFact label="Connection">
+        <InfoFact label="Connection">
           <span className="text-destructive">Removed; choose another</span>
-        </InfoGridFact>
+        </InfoFact>
+      ) : null}
+    </>
+  )
+}
+
+function AppGitHubFileButton({
+  app,
+  source,
+}: {
+  app: App
+  source: AppGitHubSourceView
+}) {
+  const [open, setOpen] = React.useState(false)
+  return (
+    <>
+      <Button
+        type="button"
+        size="xs"
+        variant="outline"
+        className="min-w-0"
+        title={`${source.path} on ${source.branch}`}
+        onPointerEnter={warmSyntaxCodeEditorModule}
+        onFocus={warmSyntaxCodeEditorModule}
+        onClick={() => {
+          warmSyntaxCodeEditorModule()
+          setOpen(true)
+        }}
+      >
+        <FileCode2 />
+        <span className="truncate">{source.path}</span>
+      </Button>
+      {open ? (
+        <AppGitHubFileDialog app={app} source={source} onOpenChange={setOpen} />
       ) : null}
     </>
   )
@@ -339,6 +343,7 @@ function AppDocumentButton({
   kind,
   routeId,
   saved,
+  size = "sm",
 }: {
   app: App
   canManage: boolean
@@ -346,13 +351,14 @@ function AppDocumentButton({
   kind: AppDocumentKind
   routeId: string
   saved: string
+  size?: "sm" | "xs"
 }) {
   const [open, setOpen] = React.useState(false)
   return (
     <>
       <Button
         type="button"
-        size="sm"
+        size={size}
         variant="outline"
         onPointerEnter={warmSyntaxCodeEditorModule}
         onFocus={warmSyntaxCodeEditorModule}
@@ -383,153 +389,8 @@ function AppDocumentButton({
   )
 }
 
-// Variables by name only; their values open with the editor. Only those who
-// manage the app get its environment at all.
-export function AppEnvironmentSettings({
-  app,
-  canManage,
-  environment,
-  hidden,
-  routeId,
-}: {
-  app: App
-  canManage: boolean
-  environment: string
-  hidden: boolean
-  routeId: string
-}) {
-  const names = React.useMemo(
-    () => environmentVariableNames(environment),
-    [environment]
-  )
-  return (
-    <InfoSection
-      icon={<KeyRound />}
-      title="Environment"
-      action={
-        hidden ? null : (
-          <AppDocumentButton
-            app={app}
-            canManage={canManage}
-            kind="environment"
-            routeId={routeId}
-            saved={environment}
-          >
-            <FileCode2 />
-            {canManage ? "Edit .env" : "View .env"}
-          </AppDocumentButton>
-        )
-      }
-    >
-      <InfoFact label="Variables">
-        {hidden ? (
-          <>
-            <span className="text-muted-foreground">Hidden</span>
-            <InfoHint label="Why the environment is hidden" title="Hidden">
-              <p>Only people who can configure this app see its environment.</p>
-            </InfoHint>
-          </>
-        ) : names.length === 0 ? (
-          <span className="text-muted-foreground">None</span>
-        ) : (
-          <InfoDetails
-            title="Variables"
-            trigger={
-              <span className="tabular-nums">
-                {names.length === 1
-                  ? "1 variable"
-                  : `${names.length} variables`}
-              </span>
-            }
-          >
-            <p>Passed to every container. Values show in the editor.</p>
-            <ul className="flex flex-wrap gap-1">
-              {names.map((name) => (
-                <li
-                  key={name}
-                  className="border bg-muted/30 px-1.5 py-0.5 font-mono text-[11px] text-foreground"
-                >
-                  {name}
-                </li>
-              ))}
-            </ul>
-          </InfoDetails>
-        )}
-      </InfoFact>
-    </InfoSection>
-  )
-}
-
-// How the app's containers are reached: by name from inside the Relay, and
-// on the Relay's ports for those it publishes.
-export function AppConnectionSettings({
-  app,
-  routeId,
-}: {
-  app: App
-  routeId: string
-}) {
-  // Each Compose service answers to its own name.
-  const addresses = appAddresses(app)
-  const ports = React.useMemo(
-    () =>
-      appContainers(app).flatMap((container) =>
-        container.ports.map((port) => ({ port, service: container.service }))
-      ),
-    [app]
-  )
-  const databases = app.connectedDatabaseIds.length
-  return (
-    <InfoSection
-      icon={<Cable />}
-      title="Connection"
-      action={
-        <InfoSectionLink to="/app/$appId/network" params={{ appId: routeId }}>
-          Network
-        </InfoSectionLink>
-      }
-    >
-      {addresses.map(({ address, service }) =>
-        service ? (
-          <InfoFact key={service} label={`${service} address`}>
-            <InfoCopyValue label={`${service} address`} value={address} />
-          </InfoFact>
-        ) : (
-          <InfoFact key="app" label="Internal address">
-            <InfoCopyValue label="internal address" value={address} />
-          </InfoFact>
-        )
-      )}
-      <InfoFact label="Docker network">
-        {app.network ? (
-          <InfoCopyValue label="Docker network" value={app.network} />
-        ) : (
-          <span className="text-muted-foreground">Not created</span>
-        )}
-      </InfoFact>
-      {ports.map(({ port, service }) => (
-        <InfoFact
-          key={`${port.hostPort}/${port.protocol}`}
-          label={`Port ${port.hostPort}`}
-        >
-          <ServiceTarget
-            app={app}
-            port={`${port.containerPort}/${port.protocol}`}
-            service={service}
-          />
-        </InfoFact>
-      ))}
-      <InfoFact label="Databases">
-        <span className={databases === 0 ? "text-muted-foreground" : undefined}>
-          {databases === 0 ? "None connected" : `${databases} connected`}
-        </span>
-      </InfoFact>
-    </InfoSection>
-  )
-}
-
-// Domains Traefik serves, each tagged with the service it reaches. The
-// Network page adds and edits them.
+// How the app is reached: the domains Traefik serves, each tagged with the
+// service it reaches. The Network page adds and edits them.
 export function AppWebRouteSettings({
   app,
   canManage,
@@ -545,8 +406,8 @@ export function AppWebRouteSettings({
 
   return (
     <InfoSection
-      icon={<Globe2 />}
-      title="Web routes"
+      icon={<Cable />}
+      title="Connection"
       status={
         state.data && routes.length > 0 ? (
           <StatusIndicator status={webRouteStatus(state.data)} />
@@ -668,8 +529,8 @@ function ServiceTarget({
 }
 
 // A service, with whether its container runs. It shows that container in
-// the rail's Container card.
-function ServiceTag({ app, service }: { app: App; service: string }) {
+// the Container section.
+export function ServiceTag({ app, service }: { app: App; service: string }) {
   const selection = useAppContainerSelection()
   const container = app.containers.find(
     (candidate) => candidate.service === service
@@ -721,16 +582,3 @@ function lineCount(content: string): string {
   const lines = content.replace(/\n$/u, "").split("\n").length
   return lines === 1 ? "1 line" : `${lines} lines`
 }
-
-function environmentVariableNames(environment: string): Array<string> {
-  return environment.split("\n").flatMap((line) => {
-    const trimmed = line.trim()
-    if (!trimmed || trimmed.startsWith("#")) return []
-    const name = trimmed
-      .replace(/^export\s+/u, "")
-      .split("=")[0]
-      ?.trim()
-    return name ? [name] : []
-  })
-}
-

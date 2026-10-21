@@ -4,6 +4,7 @@ import {
   mkdir,
   mkdtemp,
   readdir,
+  readFile,
   rm,
   truncate,
   writeFile,
@@ -318,6 +319,110 @@ describe("apps", () => {
       },
     ])
     await removeCompose()
+  })
+
+  it("mounts the config's volumes, node paths, and files, each in the services it names", async () => {
+    const harness = await createdApp()
+    const volumeId = "3f9a21c4".padEnd(40, "0")
+    const volume = `${TEST_NAMESPACE}-kiln-3f9a21c4-media`
+    fakeDocker.addVolume({
+      labels: {
+        "kiln.relay.owner": TEST_NAMESPACE,
+        "kiln.resource.kind": "volume",
+        "kiln.volume.id": volumeId,
+      },
+      name: volume,
+    })
+    const files = join(harness.config.dataDirectory, "app-mounts", appId)
+    const mounts: AppConfig["mounts"] = [
+      {
+        id: "media0001",
+        readOnly: false,
+        service: null,
+        source: { type: "volume", volumeId },
+        target: "/media",
+      },
+      {
+        id: "certs0001",
+        readOnly: true,
+        service: null,
+        source: { path: "/etc/ssl/certs", type: "host" },
+        target: "/certs",
+      },
+      {
+        id: "config001",
+        readOnly: true,
+        service: "app",
+        source: { content: "port = 80\n", type: "file" },
+        target: "/etc/app.toml",
+      },
+    ]
+
+    const app = await deploy(harness, { mounts })
+
+    expect(app.deployment).toMatchObject({ state: "succeeded" })
+    expect(appContainers()[0]?.mounts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          destination: "/media",
+          source: volume,
+          type: "volume",
+        }),
+        expect.objectContaining({
+          destination: "/certs",
+          readOnly: true,
+          source: "/etc/ssl/certs",
+        }),
+        expect.objectContaining({
+          destination: "/etc/app.toml",
+          readOnly: true,
+          source: join(files, "config001"),
+        }),
+      ])
+    )
+    expect(await readFile(join(files, "config001"), "utf8")).toBe("port = 80\n")
+
+    // A Compose app's mount goes only in the service it names, and a file
+    // no mount names any longer is removed.
+    const removeCompose = await composeConfigCommand()
+    const compose = await deploy(harness, {
+      compose:
+        "services:\n  web:\n    image: nginx:alpine\n  worker:\n    image: nginx:alpine\n",
+      mounts: [{ ...mounts[1]!, service: "worker" }],
+      sourceType: "compose",
+    })
+
+    expect(compose.deployment).toMatchObject({ state: "succeeded" })
+    const mounted = (service: string) =>
+      appContainers()
+        .find((container) => container.labels["kiln.app.service"] === service)
+        ?.mounts.map((mount) => mount.destination)
+    expect(mounted("worker")).toContain("/certs")
+    expect(mounted("web")).not.toContain("/certs")
+    expect(await readdir(files)).toEqual([])
+    await removeCompose()
+  })
+
+  it("fails a deployment that mounts a volume no longer on the Relay", async () => {
+    const harness = await createdApp()
+
+    const app = await deploy(harness, {
+      mounts: [
+        {
+          id: "media0001",
+          readOnly: false,
+          service: null,
+          source: { type: "volume", volumeId: "a".repeat(40) },
+          target: "/media",
+        },
+      ],
+    })
+
+    expect(app.deployment).toMatchObject({
+      error: expect.stringContaining("no longer exists"),
+      state: "failed",
+    })
+    expect(appContainers()).toEqual([])
   })
 
   it("refuses a second deployment sent while the first is starting", async () => {

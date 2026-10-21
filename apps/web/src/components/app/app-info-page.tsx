@@ -1,22 +1,22 @@
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
-import { FileCode2, LoaderCircle } from "lucide-react"
+import { LoaderCircle, ToyBrick } from "lucide-react"
 
 import { DeleteAppDialog } from "@/components/app/app-dialogs"
 import {
   AppContainerSelectionContext,
   createAppContainerSelection,
 } from "@/components/app/app-container-selection"
+import { AppContainerSection } from "@/components/app/app-container-section"
 import { AppInfoRail } from "@/components/app/app-info-rail"
 import { appRelayAvailable, type App } from "@/components/app/app-presentation"
 import {
-  AppConnectionSettings,
-  AppEnvironmentSettings,
   AppGeneralSettings,
   AppSourceSettings,
   AppWebRouteSettings,
 } from "@/components/app/app-settings"
+import { AppVolumesSection } from "@/components/app/app-volumes-section"
 import { useAppWorkspace } from "@/components/app/app-workspace-context"
 import {
   InfoDangerAction,
@@ -26,9 +26,9 @@ import {
 } from "@/components/info-page"
 import { appConfigQueryOptions } from "@/lib/query-options"
 
-// The app's details and what it runs, each section with the actions that
-// change it, and a rail summing up where it runs, who owns it, and its
-// containers. An app opens here.
+// The app's details, its containers, and what it runs, each section with
+// the actions that change it, and a rail summing up where it runs, who owns
+// it, and its deployment. An app opens here.
 export function AppInfoPage() {
   const { app, routeId } = useAppWorkspace()
   // Another app is a fresh page, so an open dialog's draft and the selected
@@ -51,43 +51,50 @@ function AppInfoContent({ app, routeId }: { app: App; routeId: string }) {
   return (
     <AppContainerSelectionContext.Provider value={selection}>
       <InfoPage rail={<AppInfoRail app={app} routeId={routeId} />}>
-        <AppGeneralSettings
-          app={app}
-          canRename={app.permissions.includes("app.manage")}
-        />
-        {config.data ? (
-          <>
-            <AppSourceSettings
+        {/* What the app is and what it runs, side by side when there's
+            room. */}
+        <div className="@container">
+          <div className="grid gap-4 @2xl:grid-cols-2">
+            <AppGeneralSettings
               app={app}
-              canManage={canManage}
-              config={config.data.config}
-              routeId={routeId}
+              canRename={app.permissions.includes("app.manage")}
             />
-            <AppEnvironmentSettings
-              app={app}
-              canManage={canManage}
-              environment={config.data.config.environment}
-              hidden={config.data.environmentHidden}
-              routeId={routeId}
-            />
-          </>
-        ) : (
-          <InfoSection icon={<FileCode2 />} title="Source" content>
-            {config.isError ? (
-              <p className="text-xs text-destructive">{config.error.message}</p>
+            {config.data ? (
+              <AppSourceSettings
+                app={app}
+                canManage={canManage}
+                config={config.data.config}
+                routeId={routeId}
+              />
             ) : (
-              <div className="grid h-16 place-items-center">
-                <LoaderCircle className="size-4 animate-spin text-muted-foreground" />
-              </div>
+              <InfoSection icon={<ToyBrick />} title="Brick" content>
+                {config.isError ? (
+                  <p className="text-xs text-destructive">
+                    {config.error.message}
+                  </p>
+                ) : (
+                  <div className="grid h-16 place-items-center">
+                    <LoaderCircle className="size-4 animate-spin text-muted-foreground" />
+                  </div>
+                )}
+              </InfoSection>
             )}
-          </InfoSection>
-        )}
+          </div>
+        </div>
+        <AppContainerSection app={app} routeId={routeId} />
+        {config.data ? (
+          <AppVolumesSection
+            app={app}
+            canManage={canManage}
+            config={config.data.config}
+            routeId={routeId}
+          />
+        ) : null}
         <AppWebRouteSettings
           app={app}
           canManage={canManage}
           routeId={routeId}
         />
-        <AppConnectionSettings app={app} routeId={routeId} />
         {app.permissions.includes("app.delete") ? (
           <AppDangerZone app={app} />
         ) : null}

@@ -58,6 +58,9 @@ export const relayAppGitHubV1Feature = "app-github-v1"
 // The Relay lists, creates, renames, and deletes its Docker named volumes
 // through `relay.volumes.*`.
 export const relayVolumesV1Feature = "relay-volumes-v1"
+// The Relay applies app configs' `mounts`: named volumes, paths on the
+// node, and files.
+export const relayAppMountsV1Feature = "app-mounts-v1"
 export const relayBrowserAuthorizationReviseMaxItems = 256
 
 export const relayControlOperations = [

@@ -113,6 +113,7 @@ import {
   getAppDeploymentLog,
   getAppDeployments,
   getAppDeploymentSummary,
+  getAppGitHubSourceFile,
 } from "@/server/app-deployments"
 import {
   getAppConfig,
@@ -193,6 +194,14 @@ export const queryKeys = {
     directory: ["servers", "directory"] as const,
     navigation: ["servers", "navigation"] as const,
   },
+  // Apart from the app's other keys, so its changes don't fetch the file
+  // from GitHub again.
+  appGitHubSourceFile: (
+    relayId: string,
+    appId: string,
+    branch: string,
+    path: string
+  ) => ["app-github-source-file", relayId, appId, branch, path] as const,
   appDeployments: {
     list: (scope: { appId?: string; relayId?: string }) =>
       ["app-deployments", "list", scope] as const,
@@ -1075,6 +1084,24 @@ export function appDeploymentSummaryQueryOptions(
   return queryOptions({
     queryKey: queryKeys.appDeployments.summary(relayId, appId),
     queryFn: () => getAppDeploymentSummary({ data: { appId, relayId } }),
+  })
+}
+
+// The file a GitHub app deploys, as its branch has it now.
+export function appGitHubSourceFileQueryOptions(
+  relayId: string,
+  appId: string,
+  source: { branch: string; path: string }
+) {
+  return queryOptions({
+    queryKey: queryKeys.appGitHubSourceFile(
+      relayId,
+      appId,
+      source.branch,
+      source.path
+    ),
+    queryFn: () => getAppGitHubSourceFile({ data: { appId, relayId } }),
+    staleTime: 60_000,
   })
 }
 

@@ -9,6 +9,7 @@ import type { RelayConfig } from "./config.js"
 import type {
   DockerContainerSummary,
   DockerEngine,
+  DockerEngineError,
   DockerVolume,
 } from "./docker-engine.js"
 import type { RelayStateStore } from "./effect/state.js"
@@ -294,6 +295,26 @@ export class RelayVolumes {
       Effect.orElseSucceed(() => null)
     )
   }
+}
+
+// The Docker name of the volume Kiln made on this Relay with an ID, or null
+// when there's none, for what mounts it by ID.
+export function relayVolumeDockerName(
+  config: RelayConfig,
+  engine: DockerEngine,
+  id: string
+): Effect.Effect<string | null, DockerEngineError> {
+  return engine
+    .listVolumes({
+      filters: { label: [`${KIND_LABEL}=${VOLUME_KIND}`, `${ID_LABEL}=${id}`] },
+    })
+    .pipe(
+      Effect.map(
+        (volumes) =>
+          volumes.find((volume) => relayOwnsLabels(config, volume.Labels))
+            ?.Name ?? null
+      )
+    )
 }
 
 // Docker names a container's host after its ID.

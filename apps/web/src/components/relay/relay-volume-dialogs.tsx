@@ -35,9 +35,12 @@ function useRefreshVolumes(relayId: string) {
 export function CreateVolumeDialog({
   relayId,
   onClose,
+  onCreated,
 }: {
   relayId: string
   onClose: () => void
+  // Such as choosing it for what asked for it.
+  onCreated?: (volume: RelayVolume) => void
 }) {
   const refresh = useRefreshVolumes(relayId)
   const [name, setName] = React.useState("")
@@ -47,6 +50,7 @@ export function CreateVolumeDialog({
     onSuccess: async (volume) => {
       await refresh()
       showToast({ message: `${volume.name} created`, type: "success" })
+      onCreated?.(volume)
       onClose()
     },
   })

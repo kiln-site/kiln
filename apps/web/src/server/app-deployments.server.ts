@@ -15,8 +15,15 @@ import {
   type AppDeploymentRecord,
   type AppGitHubSource,
 } from "@/effect/app-deployments"
-import { getGitHubRepositoryEffect } from "@/effect/github-api"
-import { loadGitHubConnectionsEffect } from "@/effect/github-sync"
+import {
+  getGitHubFileEffect,
+  getGitHubRepositoryEffect,
+  githubInstallationTokenEffect,
+} from "@/effect/github-api"
+import {
+  loadGitHubConnectionCredentialEffect,
+  loadGitHubConnectionsEffect,
+} from "@/effect/github-sync"
 import { listAppRecordsEffect, updateAppConfigEffect } from "@/effect/managed-apps"
 import { attachRelayOwnersEffect } from "@/effect/relay-owners"
 import { runAppEffect } from "@/effect/runtime"
@@ -170,6 +177,69 @@ export async function getAppDeploymentSummaryHandler(data: {
     // What the app deploys from now, which its last deployment may not show.
     sourceType: app.config.sourceType,
   }
+}
+
+/**
+ * The Dockerfile or Compose file a GitHub app deploys, at its branch's
+ * head, for anyone who can read the app. Only that file: the path comes
+ * from the app's source, never the request.
+ */
+export async function getAppGitHubSourceFileHandler(data: {
+  appId: string
+  relayId: string
+}) {
+  const { app } = await authorizedApp(data, "app.read")
+  const source =
+    app.config.sourceType === "github"
+      ? await runAppEffect(
+          "apps.github.source",
+          loadAppGitHubSourceEffect(data.appId)
+        )
+      : null
+  if (!source) throw new Error("This app doesn't deploy from GitHub")
+  if (!source.connectionId) {
+    throw new Error("The app's GitHub source was removed; choose another")
+  }
+  const connection = await runAppEffect(
+    "github.connection.credential",
+    loadGitHubConnectionCredentialEffect({ id: source.connectionId })
+  )
+  const installation = connection.installation
+  if (!installation || installation.suspended) {
+    throw new Error("The GitHub App can't read this repository")
+  }
+  const token = await runAppEffect(
+    "github.app.installationToken",
+    githubInstallationTokenEffect(
+      { appId: connection.appId, privateKey: connection.privateKey },
+      installation.id
+    )
+  )
+  const content = await runAppEffect(
+    "github.file.get",
+    getGitHubFileEffect(
+      token,
+      source.repository,
+      source.path,
+      source.branch,
+      appSourceFileMaxBytes[source.build]
+    )
+  )
+  return {
+    branch: source.branch,
+    content,
+    path: source.path,
+    url: `https://github.com/${source.repository}/blob/${source.branch
+      .split("/")
+      .map(encodeURIComponent)
+      .join("/")}/${source.path.split("/").map(encodeURIComponent).join("/")}`,
+  }
+}
+
+// As large as the app's own Dockerfile and Compose file may be.
+const appSourceFileMaxBytes: Record<AppGitHubBuild, number> = {
+  compose: 400_000,
+  dockerfile: 200_000,
 }
 
 /**

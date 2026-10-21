@@ -4,6 +4,7 @@ import {
   relayAppGitHubV1Feature,
   relayAppDeploymentLogSchema,
   relayAppLimitsV1Feature,
+  relayAppMountsV1Feature,
   relayAppSchema,
   type AppConfig,
   type RelayApp,
@@ -308,14 +309,18 @@ const githubCommit = Effect.fnUntraced(function* (
   }
 })
 
-// The config as the Relay takes it. A Relay without app limits refuses
-// their fields, so it gets the config without them, or none if it would
-// have to drop limits.
+// The config as the Relay takes it. A Relay without app limits or mounts
+// refuses their fields, so it gets the config without them, or none if it
+// would have to drop any.
 function relayAppConfig(relayId: string, config: AppConfig) {
-  if (relayConnectionFeatures(relayId).has(relayAppLimitsV1Feature)) {
-    return config
+  const features = relayConnectionFeatures(relayId)
+  const { mounts, ...withoutMounts } = config
+  if (!features.has(relayAppMountsV1Feature) && mounts.length > 0) {
+    throw new Error("Update this Relay to deploy an app with volumes")
   }
-  const { diskLimitBytes, serviceLimits, ...rest } = config
+  const sent = features.has(relayAppMountsV1Feature) ? config : withoutMounts
+  if (features.has(relayAppLimitsV1Feature)) return sent
+  const { diskLimitBytes, serviceLimits, ...rest } = sent
   if (diskLimitBytes !== null || Object.keys(serviceLimits).length > 0) {
     throw new Error("Update this Relay to deploy an app with limits")
   }

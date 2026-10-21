@@ -107,6 +107,15 @@ const BlobSchema = Schema.Struct({
   size: Schema.Number,
 })
 
+// A file from the contents API. GitHub leaves out the content of files over
+// a megabyte, with an encoding of "none".
+const FileContentSchema = Schema.Struct({
+  content: Schema.String,
+  encoding: Schema.String,
+  size: Schema.Number,
+  type: Schema.Literal("file"),
+})
+
 const ErrorBodySchema = Schema.Struct({ message: Schema.String })
 const decodeErrorBody = Schema.decodeUnknownOption(ErrorBodySchema)
 
@@ -365,6 +374,31 @@ export const getGitHubBlobEffect = Effect.fn("github.blob.get")(function* (
     })
   }
   return Buffer.from(blob.content.replace(/\s+/gu, ""), "base64")
+})
+
+/** A file's text at a branch or commit, refused past `maxBytes`. */
+export const getGitHubFileEffect = Effect.fn("github.file.get")(function* (
+  token: string,
+  repository: string,
+  path: string,
+  ref: string,
+  maxBytes: number
+) {
+  const file = yield* githubRequest(
+    "GET",
+    `/repos/${pathSegments(repository)}/contents/${pathSegments(path)}?ref=${encodeURIComponent(ref)}`,
+    FileContentSchema,
+    { token }
+  )
+  if (file.size > maxBytes || file.encoding !== "base64") {
+    return yield* ExternalServiceError.make({
+      message: `${path} is too large to show`,
+      service: "GitHub",
+    })
+  }
+  return Buffer.from(file.content.replace(/\s+/gu, ""), "base64").toString(
+    "utf8"
+  )
 })
 
 // Branch names can hold slashes, which GitHub's paths take as they are.

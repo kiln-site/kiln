@@ -78,7 +78,6 @@ export function InfoSection({
   action,
   children,
   content = false,
-  grid = false,
   icon,
   status,
   title,
@@ -86,10 +85,9 @@ export function InfoSection({
   action?: React.ReactNode
   // Left out when the header says it all, such as actions alone.
   children?: React.ReactNode
-  // Holds something other than facts, such as a drop zone.
-  content?: boolean
-  // Lays its InfoGridFacts out in columns, as many as fit.
-  grid?: boolean
+  // Holds something other than facts, such as a drop zone; "flush" runs it
+  // to the section's edges, such as a table.
+  content?: boolean | "flush"
   icon?: React.ReactNode
   // Beside the title, such as a status indicator.
   status?: React.ReactNode
@@ -116,18 +114,12 @@ export function InfoSection({
           </div>
         ) : null}
       </header>
-      {children == null ? null : content ? (
+      {children == null ? null : content === "flush" ? (
+        <div className="min-w-0">{children}</div>
+      ) : content ? (
         <div className="p-4">{children}</div>
-      ) : grid ? (
-        // Each fact rules its left and bottom edges; the outer ones are
-        // pulled under the section's border.
-        <div className="@container overflow-hidden">
-          <dl className="-mb-px -ml-px grid grid-cols-2 @xl:grid-cols-3">
-            {children}
-          </dl>
-        </div>
       ) : (
-        <dl className="px-4">{children}</dl>
+        <dl className="@container px-4">{children}</dl>
       )}
     </section>
   )
@@ -175,28 +167,12 @@ export function InfoFact({
   )
 }
 
-// One fact in an InfoSection's grid: its label above its value. `wide`
-// takes the whole row, for a value such as a list of tags.
-export function InfoGridFact({
-  children,
-  label,
-  wide = false,
-}: {
-  children: React.ReactNode
-  label: string
-  wide?: boolean
-}) {
+// Two InfoFacts side by side when their section has room, stacked when it
+// doesn't.
+export function InfoFactPair({ children }: { children: React.ReactNode }) {
   return (
-    <div
-      className={cn(
-        "min-w-0 border-b border-l border-border/60 px-4 py-2.5",
-        wide && "col-span-full"
-      )}
-    >
-      <dt className="truncate text-xs text-muted-foreground">{label}</dt>
-      <dd className="mt-1 flex min-h-5 min-w-0 items-center gap-1.5 text-[0.8125rem]">
-        {children}
-      </dd>
+    <div className="border-b border-border/60 last:border-b-0 @lg:grid @lg:grid-cols-2 @lg:gap-x-8 [&>div]:border-b-0 @lg:[&>div]:min-w-0 @max-lg:[&>div:first-child]:border-b">
+      {children}
     </div>
   )
 }
@@ -639,6 +615,37 @@ const InfoRailLinkAnchor = React.forwardRef<
 })
 
 export const InfoRailLink = createLink(InfoRailLinkAnchor)
+
+// A rail row that opens something in place, such as a dialog, rather than a
+// page.
+export function InfoRailButton({
+  children,
+  className,
+  detail,
+  leading,
+  ...props
+}: Omit<React.ComponentPropsWithoutRef<"button">, "type"> & {
+  detail?: React.ReactNode
+  leading: React.ReactNode
+}) {
+  return (
+    <button
+      {...props}
+      type="button"
+      className={cn(
+        useInfoRailRowClassName(),
+        infoRailLinkClassName,
+        "w-full text-left",
+        className
+      )}
+    >
+      <InfoRailRowContent detail={detail} leading={leading}>
+        {children}
+      </InfoRailRowContent>
+      <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/70 transition-transform group-hover:translate-x-0.5" />
+    </button>
+  )
+}
 
 export function InfoRailCard({
   action,

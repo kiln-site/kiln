@@ -12,6 +12,7 @@ import {
   getAppDeploymentLogHandler,
   getAppDeploymentsHandler,
   getAppDeploymentSummaryHandler,
+  getAppGitHubSourceFileHandler,
   redeployAppDeploymentHandler,
   saveAppGitHubSourceHandler,
 } from "@/server/app-deployments.server"
@@ -57,6 +58,10 @@ export const getAppDeployments = createServerFn({ method: "GET" })
 export const getAppDeploymentSummary = createServerFn({ method: "GET" })
   .validator(appInputSchema)
   .handler(({ data }) => getAppDeploymentSummaryHandler(data))
+
+export const getAppGitHubSourceFile = createServerFn({ method: "GET" })
+  .validator(appInputSchema)
+  .handler(({ data }) => getAppGitHubSourceFileHandler(data))
 
 export const saveAppGitHubSource = createServerFn({ method: "POST" })
   .validator(saveSourceInputSchema)

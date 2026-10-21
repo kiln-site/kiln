@@ -93,6 +93,7 @@ import {
   relayResourceNames,
   type RelayResourceNames,
 } from "./relay-resources.js"
+import { relayVolumeDockerName } from "./volumes.js"
 
 // Apps are found by their labels, like databases: the Relay keeps nothing
 // about them besides their data directory and the logs of their recent
@@ -848,6 +849,10 @@ export class AppDriver {
         )
     )
     await rm(this.#dockerfilePath(input.appId), { force: true })
+    await rm(this.#mountDirectory(input.appId), {
+      force: true,
+      recursive: true,
+    })
     if (input.deleteData) {
       await rm(this.#appDirectory(input.appId), {
         force: true,
@@ -1062,6 +1067,7 @@ export class AppDriver {
           log(`Source: ${describeSource(input)}`)
           await this.#ensureResources(input.appId)
           const host = await this.#hostDataDirectory()
+          const mounts = await this.#configMounts(input, host)
           const checkout =
             config.sourceType === "github" && input.github
               ? await traceRelayPromise(
@@ -1073,7 +1079,7 @@ export class AppDriver {
             config.sourceType === "compose" ||
             input.github?.build === "compose"
           ) {
-            await this.#deployCompose(input, deployment, host, checkout)
+            await this.#deployCompose(input, deployment, host, checkout, mounts)
           } else {
             const image =
               config.sourceType === "image"
@@ -1095,7 +1101,17 @@ export class AppDriver {
               ],
               (surge) =>
                 traceRelayPromise("relay.apps.deployment.replace", () =>
-                  this.#replaceContainer(input, deployment, image, host, surge)
+                  this.#replaceContainer(
+                    input,
+                    deployment,
+                    image,
+                    host,
+                    mounts.filter(
+                      (mount) =>
+                        mount.service === null || mount.service === APP_SERVICE
+                    ),
+                    surge
+                  )
                 ),
               { surge: true }
             )
@@ -1366,6 +1382,7 @@ export class AppDriver {
     deployment: Deployment,
     image: string,
     host: string,
+    mounts: ReadonlyArray<ConfigMount>,
     // Whether the node holds the new container beside the running one.
     surge: boolean
   ) {
@@ -1387,15 +1404,17 @@ export class AppDriver {
     )
     const running = previous.some((container) => container.running)
     // Two containers can't hold the same host port or Tailscale address,
-    // or memory the node doesn't have for both.
+    // share a volume's data, or take memory the node doesn't have for both.
     const blocker =
       config.ports.length > 0
         ? "it publishes ports on the Relay"
         : tailscale.length > 0
           ? "it has a Tailscale address"
-          : !surge
-            ? "the node can't hold both copies at once"
-            : null
+          : mounts.some((mount) => mount.type === "volume")
+            ? "it keeps data in a volume"
+            : !surge
+              ? "the node can't hold both copies at once"
+              : null
     const rolling = running && blocker === null
     deployment.rolling = rolling
     if (running && blocker) {
@@ -1426,6 +1445,12 @@ export class AppDriver {
             target: config.dataMount,
             type: "bind",
           },
+          ...mounts.map((mount) => ({
+            readOnly: mount.readOnly,
+            source: mount.source,
+            target: mount.target,
+            type: mount.type,
+          })),
         ],
         name,
         // Beside the running container, the new one takes the app's name
@@ -1708,7 +1733,8 @@ export class AppDriver {
     input: RelayDeployApp,
     deployment: Deployment,
     host: string,
-    checkout: string | null
+    checkout: string | null,
+    mounts: ReadonlyArray<ConfigMount>
   ) {
     const log = (text: string, level: RelayConsoleLevel = "info") =>
       this.#log(input.appId, deployment, text, level)
@@ -1775,13 +1801,16 @@ export class AppDriver {
       commit: deployment.commit,
       databases,
       deploymentId: deployment.id,
+      mounts,
       routes,
       serviceLimits: input.config.serviceLimits,
       tailscale,
     }
     const previous = await this.#appContainers(input.appId)
     const running = previous.some((container) => container.running)
-    const blocker = composeRollingBlocker(normalized, tailscale)
+    const blocker = mounts.some((mount) => mount.type === "volume")
+      ? "it keeps data in a volume"
+      : composeRollingBlocker(normalized, tailscale)
     if (running && blocker) {
       log(`Stopping the running containers first, since ${blocker}`)
     }
@@ -2072,6 +2101,8 @@ export class AppDriver {
       databases: ReadonlyArray<string>
       deferAliases: boolean
       deploymentId: string
+      // The config's mounts, beside the Compose file's own.
+      mounts: ReadonlyArray<ConfigMount>
       routes: AppRoutePlan
       serviceLimits: AppConfig["serviceLimits"]
       tailscale: ReadonlyArray<{
@@ -2094,12 +2125,27 @@ export class AppDriver {
       )
       return bind ? `${bind.host}${source.slice(bind.relay.length)}` : null
     }
+    for (const mount of options.mounts) {
+      if (mount.service !== null && !normalized.services?.[mount.service]) {
+        throw new Error(
+          `The Compose file has no "${mount.service}" service to mount ${mount.target} in`
+        )
+      }
+    }
     const services: Record<string, ComposeService> = {}
     for (const [name, service] of Object.entries(normalized.services ?? {})) {
       if (!appServiceNameSchema.safeParse(name).success) {
         throw new Error(`Rename the "${name}" service: use letters and digits`)
       }
       const mounts = fileMounts(service, normalized, hostPath)
+      const configured = options.mounts
+        .filter((mount) => mount.service === null || mount.service === name)
+        .map((mount) => ({
+          read_only: mount.readOnly,
+          source: mount.source,
+          target: mount.target,
+          type: mount.type,
+        }))
       const networks: Record<string, unknown> = service.network_mode
         ? {}
         : {
@@ -2153,7 +2199,7 @@ export class AppDriver {
         restart: service.restart ?? "unless-stopped",
         ...(service.network_mode ? {} : { networks }),
         ...mounts,
-        ...(service.volumes || mounts.volumes
+        ...(service.volumes || mounts.volumes || configured.length > 0
           ? {
               volumes: [
                 ...(service.volumes ?? []).map((volume) => {
@@ -2167,6 +2213,7 @@ export class AppDriver {
                   return host ? { ...volume, source: host } : volume
                 }),
                 ...(mounts.volumes ?? []),
+                ...configured,
               ],
             }
           : {}),
@@ -2175,8 +2222,21 @@ export class AppDriver {
     if (Object.keys(services).length === 0) {
       throw new Error("The Compose file has no services")
     }
+    const volumes = options.mounts.filter((mount) => mount.type === "volume")
     return {
       ...normalized,
+      ...(volumes.length > 0 && {
+        // Kiln's volumes exist already, outside the project.
+        volumes: {
+          ...normalized.volumes,
+          ...Object.fromEntries(
+            volumes.map((mount) => [
+              mount.source,
+              { external: true, name: mount.source },
+            ])
+          ),
+        },
+      }),
       networks: {
         ...normalized.networks,
         kiln_app: { external: true, name: this.#networkName(options.appId) },
@@ -2573,6 +2633,78 @@ export class AppDriver {
     return join(this.#config.dataDirectory, "app-builds", `${appId}.Dockerfile`)
   }
 
+  // Where the files an app's config mounts are written, apart from its data
+  // directory so the app can't reach them there.
+  #mountDirectory(appId: string): string {
+    return join(this.#config.dataDirectory, "app-mounts", appId)
+  }
+
+  // The config's mounts as Docker takes them: volumes by their Docker name,
+  // and files written where the host can bind them. Files no mount names
+  // any longer are removed.
+  async #configMounts(
+    input: RelayDeployApp,
+    host: string
+  ): Promise<Array<ConfigMount>> {
+    const directory = this.#mountDirectory(input.appId)
+    const files = new Set<string>()
+    const mounts: Array<ConfigMount> = []
+    for (const mount of input.config.mounts) {
+      const { readOnly, service, source, target } = mount
+      switch (source.type) {
+        case "volume": {
+          const name = await docker(
+            relayVolumeDockerName(this.#config, this.#engine, source.volumeId)
+          )
+          if (!name) {
+            throw new Error(
+              `The volume mounted at ${target} no longer exists; choose another`
+            )
+          }
+          mounts.push({
+            readOnly,
+            service,
+            source: name,
+            target,
+            type: "volume",
+          })
+          break
+        }
+        case "host":
+          mounts.push({
+            readOnly,
+            service,
+            source: source.path,
+            target,
+            type: "bind",
+          })
+          break
+        case "file":
+          await mkdir(directory, { recursive: true })
+          await writeFile(join(directory, mount.id), source.content)
+          files.add(mount.id)
+          mounts.push({
+            readOnly,
+            service,
+            source: join(host, "app-mounts", input.appId, mount.id),
+            target,
+            type: "bind",
+          })
+          break
+      }
+    }
+    const written = await recoverPromise(
+      () => readdir(directory),
+      (): Array<string> => []
+    )
+    for (const name of written) {
+      if (!files.has(name)) {
+        await rm(join(directory, name), { force: true, recursive: true })
+      }
+    }
+    return mounts
+  }
+
   #resourceLabels(appId: string): Record<string, string> {
     const labels: Record<string, string> = {
       [ID_LABEL]: appId,
@@ -2606,6 +2738,15 @@ export class AppDriver {
   }
 }
 
+// One of the config's mounts, resolved for Docker.
+interface ConfigMount {
+  readOnly: boolean
+  service: string | null
+  source: string
+  target: string
+  type: "bind" | "volume"
+}
+
 interface ComposeFileReference {
   source: string
   target?: string
@@ -2628,6 +2769,7 @@ interface ComposeService {
 interface ComposeProject {
   configs?: Record<string, { file?: unknown; [key: string]: unknown }>
   networks?: Record<string, unknown>
+  volumes?: Record<string, unknown>
   secrets?: Record<string, { file?: unknown; [key: string]: unknown }>
   services: Record<string, ComposeService>
   [key: string]: unknown

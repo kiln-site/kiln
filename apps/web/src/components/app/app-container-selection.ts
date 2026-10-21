@@ -1,8 +1,8 @@
 import * as React from "react"
 
-// Which container the Info rail's Container card shows. The card pages
+// Which container the Info page's Container section shows. It pages
 // through them by ID, and the page's service tags, such as a route's
-// target, pick a service's container. Only the card subscribes, so
+// target, pick a service's container. Only the section subscribes, so
 // selecting re-renders nothing else.
 export interface AppContainerTarget {
   // While a redeploy replaces a container, two share a service, so paging
