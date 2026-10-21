@@ -13,22 +13,21 @@ import {
 } from "~/lib/plans"
 import { comingSoon } from "~/lib/coming-soon"
 import { newTab } from "~/lib/new-tab"
+import { pageHead } from "~/lib/seo"
 import { useSiteConfig } from "~/lib/use-site-config"
 
 export const Route = createFileRoute("/pricing")({
   // Monthly is the default, so only a yearly choice shows in the URL.
   validateSearch: (search: Record<string, unknown>): { interval?: "year" } =>
     search.interval === "year" ? { interval: "year" } : {},
-  head: () => ({
-    meta: [
-      { title: "Pricing | Kiln" },
-      {
-        name: "description",
-        content:
-          "Self-host Kiln for free, or let us run Hearth while your machines run everything else.",
-      },
-    ],
-  }),
+  head: ({ matches }) =>
+    pageHead({
+      description:
+        "Self-host Kiln for free, or let us run the panel while your machines run everything else.",
+      matches,
+      path: "/pricing",
+      title: "Pricing | Kiln",
+    }),
   component: PricingPage,
 })
 

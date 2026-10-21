@@ -14,6 +14,7 @@ import faviconSvg from "~/assets/favicon.svg?no-inline"
 import { NotFoundPage } from "~/components/not-found-page"
 import { SiteFooter } from "~/components/site-footer"
 import { SiteHeader } from "~/components/site-header"
+import { siteName } from "~/lib/seo"
 import { getSiteConfig } from "~/lib/site-config"
 
 export const Route = createRootRoute({
@@ -24,12 +25,9 @@ export const Route = createRootRoute({
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       { name: "theme-color", content: "#121010" },
-      { title: "Kiln / The Everything Panel" },
-      {
-        name: "description",
-        content:
-          "Kiln is one panel for the game servers, apps, and databases you run on your own hardware.",
-      },
+      // Pages set their own title, description, and preview; a page
+      // without one, like a 404, is still Kiln.
+      { title: siteName },
     ],
     links: [
       {

@@ -1,0 +1,29 @@
+# Kiln
+
+> Kiln is a free, open-source panel for game servers, apps, Docker, and databases, running on machines you own. It is in early development.
+
+Kiln has two parts. Hearth is the web panel. A Relay runs on each machine you own and runs the containers. Everything runs in its own container on a machine you choose, with the same console, files, backups, and access controls.
+
+## What it runs
+
+- Game servers, started from Bricks: Paper, Fabric, Folia, and Velocity for Minecraft, and Palworld. Kiln sets up ports and the right Java version. You can write your own Bricks or add community catalogs.
+- Apps, deployed from a GitHub repository, a Docker image, or a Compose file. Kiln builds each push and switches over once the new containers are healthy.
+- Databases: MySQL, MariaDB, PostgreSQL, Redis, and Valkey, next to the app or server that uses them.
+
+## Features
+
+- A live console with search across long logs, and a file editor with a file tree, file search, one-click sharing to mclo.gs, NBT editing (such as level.dat), and SQLite editing.
+- Backups to S3-compatible storage, schedules, per-instance access control, and an activity history.
+- Cloudflare DNS for game server addresses, automatic HTTPS for app domains, Tailscale, a command-line tool, and updates from the panel.
+
+## Pricing and license
+
+- Self-hosting is free, with no limits. Hosted plans, where Kiln runs Hearth while your machines run everything else, are coming soon.
+- Kiln is open source under AGPL-3.0, with a commercial license available.
+
+## Links
+
+- [Website](https://kiln.site/)
+- [Pricing](https://kiln.site/pricing)
+- [Source code](https://github.com/kiln-site/kiln)
+- [Discord](https://discord.gg/gu76VAtSK5)

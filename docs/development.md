@@ -63,8 +63,11 @@ pnpm --filter marketing dev
 
 It serves `http://localhost:3100`. `KILN_HEARTH_URL` (default
 `https://panel.kiln.site`) is where Log in, Sign up, and plan buttons point, and
-`KILN_DOCS_URL` (default `https://docs.kiln.site`) is where docs links point.
-Both are read when the site serves a request, not at build time. Choosing a
+`KILN_DOCS_URL` (default `https://docs.kiln.site`) is where docs links point,
+and `KILN_SITE_URL` (default `https://kiln.site`) is the site's own address for
+canonical links and link previews. All three are read when the site serves a
+request, not at build time. `robots.txt`, `sitemap.xml`, and `llms.txt` in
+`apps/marketing/public` name `https://kiln.site` directly. Choosing a
 paid plan opens Hearth's sign-up with `plan` and `interval` parameters and a
 `redirect` to `/settings/billing` carrying the same choice.
 

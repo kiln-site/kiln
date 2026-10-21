@@ -17,6 +17,8 @@ import {
 
 import { Button } from "@workspace/ui/components/button"
 
+import { socialLinks } from "@/lib/social-links"
+
 import { CyclingWord } from "~/components/cycling-word"
 import { ComingSoon } from "~/components/coming-soon"
 import { ClientDemo } from "~/components/demos/client-demo"
@@ -30,6 +32,7 @@ import { signUpUrl } from "~/lib/plans"
 import { brandMarks } from "~/lib/brand-marks"
 import { comingSoon } from "~/lib/coming-soon"
 import { newTab } from "~/lib/new-tab"
+import { pageHead, siteName, siteStructuredData, siteUrlOf } from "~/lib/seo"
 import { useSiteConfig } from "~/lib/use-site-config"
 
 const HearthDemo = React.lazy(() => import("~/components/demos/hearth-demo"))
@@ -38,6 +41,18 @@ const OverviewDemo = React.lazy(
 )
 
 export const Route = createFileRoute("/")({
+  head: ({ matches }) => ({
+    ...pageHead({ matches, path: "/", title: siteName }),
+    scripts: [
+      {
+        type: "application/ld+json",
+        children: siteStructuredData(
+          siteUrlOf(matches),
+          Object.values(socialLinks).map((link) => link.href)
+        ),
+      },
+    ],
+  }),
   component: HomePage,
 })
 
