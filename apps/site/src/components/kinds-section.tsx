@@ -72,13 +72,11 @@ export function KindsSection() {
       </div>
       <p
         id="kinds-note"
-        className="type-meta mt-4 max-w-3xl text-muted-foreground/80"
+        className="type-meta mx-auto mt-5 max-w-4xl text-center text-balance text-muted-foreground/70"
       >
-        * Games without an official Brick are shown as examples. Kiln is not
-        affiliated with or endorsed by the makers of any game or product shown.
-        Not an official Minecraft service. Not approved by or associated with
-        Mojang or Microsoft. All trademarks and logos belong to their respective
-        owners.
+        * Some games shown don't have an official Brick yet. Kiln isn't
+        affiliated with or endorsed by any game, studio, or company shown,
+        including Mojang and Microsoft. All trademarks belong to their owners.
       </p>
     </>
   )
