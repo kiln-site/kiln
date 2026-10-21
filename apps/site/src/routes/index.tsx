@@ -29,6 +29,7 @@ function HomePage() {
     <>
       <Hero />
       <Kinds />
+      <Editor />
       <Relays />
       <Features />
       <SelfHost />
@@ -81,18 +82,21 @@ function Hero() {
           <ClientDemo
             fallback={
               <div className="flex flex-col gap-3">
-                <DemoFrame label="Opening Hearth…" className="h-[51rem]" />
+                <DemoFrame
+                  label="Opening Hearth…"
+                  className="h-[40rem] sm:h-[44rem]"
+                />
                 <div className="h-4" />
               </div>
             }
           >
-            <HearthDemo />
+            <HearthDemo view="console" />
           </ClientDemo>
           <figcaption className="type-support mt-3 max-w-xl text-muted-foreground">
             This is Hearth, running in your browser on a simulated server.
             Search its 100,000 lines of output, send{" "}
-            <code className="type-code text-foreground">list</code>, restart it,
-            or open its files.
+            <code className="type-code text-foreground">list</code>, or restart
+            it.
           </figcaption>
         </figure>
       </div>
@@ -212,6 +216,66 @@ function KindFacts({ facts }: { facts: Array<string> }) {
         </li>
       ))}
     </ul>
+  )
+}
+
+function Editor() {
+  return (
+    <section className="border-t border-border">
+      <div className="site-container py-20 sm:py-28">
+        <div className="grid gap-10 lg:grid-cols-12 lg:gap-16">
+          <div className="lg:col-span-5">
+            <SectionHeading title="Edit config files where they live">
+              Open any file on any server and change it in the browser. This is
+              Hearth’s file editor, so try it.
+            </SectionHeading>
+          </div>
+          <ul className="site-copy grid gap-6 text-muted-foreground sm:grid-cols-3 lg:col-span-7 lg:pt-2">
+            <EditorPoint title="Changes stay marked">
+              Edited lines are flagged against the saved file until you save or
+              discard them.
+            </EditorPoint>
+            <EditorPoint title="Addresses stay hidden">
+              IP addresses are masked on screen, like{" "}
+              <code className="type-code text-foreground">server-ip</code>, so a
+              screenshot or a stream doesn’t give them away.
+            </EditorPoint>
+            <EditorPoint title="NBT opens as text">
+              Binary files like{" "}
+              <code className="type-code text-foreground">level.dat</code> open
+              as SNBT and are checked as you type.
+            </EditorPoint>
+          </ul>
+        </div>
+        <div className="mt-12">
+          <ClientDemo
+            fallback={
+              <DemoFrame
+                label="Opening Hearth…"
+                className="h-[40rem] sm:h-[44rem]"
+              />
+            }
+            whenVisible
+          >
+            <HearthDemo view="files" />
+          </ClientDemo>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function EditorPoint({
+  title,
+  children,
+}: {
+  title: string
+  children: React.ReactNode
+}) {
+  return (
+    <li className="border-l-2 border-primary/70 pl-4">
+      <span className="font-medium text-foreground">{title}.</span> {children}
+    </li>
   )
 }
 

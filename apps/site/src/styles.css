@@ -1,6 +1,5 @@
 @import "@workspace/ui/globals.css";
 /* The demos render these Hearth components, so their classes must exist. */
-@source "../../web/src/components/backup-icon.tsx";
 @source "../../web/src/components/console";
 @source "../../web/src/components/files/editor-tooltip.tsx";
 @source "../../web/src/components/files/file-viewer-toolbar.tsx";

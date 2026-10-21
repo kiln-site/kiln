@@ -33,12 +33,10 @@ const streamInterval = 700
 // Hearth's console page, reading a simulated server's output: a long history,
 // new lines while it runs, and replies to a few commands.
 export default function ConsoleView({
-  active,
   running,
   server,
   statsStore,
 }: {
-  active: boolean
   running: boolean
   server: DemoServer
   statsStore: StatsStore
@@ -137,7 +135,7 @@ export default function ConsoleView({
   // New output arrives while the server runs and the console is on screen.
   React.useEffect(() => {
     const section = sectionRef.current
-    if (!section || !active) return
+    if (!section) return
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return
     let timer: number | undefined
     function tick() {
@@ -161,7 +159,7 @@ export default function ConsoleView({
       observer.disconnect()
       window.clearTimeout(timer)
     }
-  }, [active, append, log])
+  }, [append, log])
 
   return (
     <section
@@ -183,14 +181,14 @@ export default function ConsoleView({
               mclo.gs
             </Button>
           </ConsoleTooltip>
-          <ConsoleSelectionControl active={active} uiStore={uiStore} />
+          <ConsoleSelectionControl active uiStore={uiStore} />
           <ConsoleRedactButton uiStore={uiStore} />
           <ConsoleWrapButton uiStore={uiStore} />
           <ConsoleTimestampButton uiStore={uiStore} />
         </div>
       </div>
       <ConsoleLogViewportController
-        active={active}
+        active
         streamStore={streamStore}
         uiStore={uiStore}
       />

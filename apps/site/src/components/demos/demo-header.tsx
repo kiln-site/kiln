@@ -1,7 +1,6 @@
 import * as React from "react"
 import { Check, Copy, PanelLeftIcon } from "lucide-react"
 
-import { Button } from "@workspace/ui/components/button"
 import {
   Tooltip,
   TooltipContent,
@@ -22,7 +21,8 @@ import {
   type DemoServer,
   type DemoServerState,
 } from "~/components/demos/demo-server"
-import type { DemoView } from "~/components/demos/demo-sidebar"
+
+export type DemoView = "console" | "files"
 
 const resourceIds: Array<ResourceId> = ["cpu", "memory", "storage", "network"]
 const powerPermissions = { kill: true, restart: true, start: true, stop: true }
@@ -34,39 +34,28 @@ const viewTitles: Record<DemoView, string> = {
 // Hearth's workspace header for a game server: its name and page, the live
 // resource meters, and power controls.
 export const DemoHeader = React.memo(function DemoHeader({
-  onToggleSidebar,
   server,
   state,
   view,
 }: {
-  onToggleSidebar: () => void
   server: DemoServer
   state: DemoServerState
   view: DemoView
 }) {
   const running = state.observedState === "running"
-  const onAction = React.useCallback(server.power, [server])
 
   return (
     <header className="@container/workspace-header shrink-0 border-b bg-background/90 backdrop-blur-xl">
       <div className="flex items-center gap-3 px-3 py-3 sm:px-5 @[64rem]/workspace-header:min-h-20 @[64rem]/workspace-header:py-2">
         <div className="flex min-w-0 flex-1 items-center gap-4">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                className="-mr-1.5 -ml-2.5 size-8 shrink-0 text-muted-foreground shadow-none hover:bg-accent/70 hover:text-foreground"
-                aria-label="Toggle sidebar"
-                onClick={onToggleSidebar}
-              >
-                <PanelLeftIcon />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom" sideOffset={6}>
-              Toggle Sidebar
-            </TooltipContent>
-          </Tooltip>
+          {/* The demo has no sidebar; the toggle stays so the header reads
+              as Hearth's. */}
+          <span
+            aria-hidden="true"
+            className="-mr-1.5 -ml-2.5 grid size-8 shrink-0 place-items-center text-muted-foreground [&_svg]:size-4"
+          >
+            <PanelLeftIcon />
+          </span>
           <span className="h-8 w-px shrink-0 bg-border/80" aria-hidden="true" />
           <div className="@container min-w-0 flex-1">
             <p className="flex min-w-0 items-baseline gap-1.5 font-heading tracking-[-0.03em]">
@@ -123,7 +112,7 @@ export const DemoHeader = React.memo(function DemoHeader({
             observedState: state.observedState,
             provisioning: null,
           }}
-          onAction={onAction}
+          onAction={server.power}
           relayConnected
         />
       </div>

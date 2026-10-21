@@ -1,7 +1,6 @@
 import * as React from "react"
 
 import { TooltipProvider } from "@workspace/ui/components/tooltip"
-import { cn } from "@workspace/ui/lib/utils"
 
 import { WorkspaceFrame } from "@/components/workspace-frame"
 
@@ -11,143 +10,56 @@ import {
   type StatsStore,
 } from "~/components/demos/console-stats"
 import ConsoleView from "~/components/demos/console-view"
-import { DemoHeader } from "~/components/demos/demo-header"
+import { DemoHeader, type DemoView } from "~/components/demos/demo-header"
 import { createDemoServer } from "~/components/demos/demo-server"
-import { DemoSidebar, type DemoView } from "~/components/demos/demo-sidebar"
 
 const FilesView = React.lazy(() => import("~/components/demos/files-view"))
 
-// Hearth as it looks with a game server open, running in the page: the
-// sidebar, the server's header, and its Console or Files page, for a
-// simulated server.
-export default function HearthDemo({ className }: { className?: string }) {
-  const [server] = React.useState(createDemoServer)
+// One of Hearth's pages for a game server, running in the page: the
+// server's header and its Console or Files, for a simulated server. Each
+// window runs its own.
+export default function HearthDemo({ view }: { view: DemoView }) {
+  const [server] = React.useState(() => createDemoServer(view))
   const state = React.useSyncExternalStore(
     server.subscribe,
     server.getState,
     server.getState
   )
-  const [view, setView] = React.useState<DemoView>("console")
-  // Pages stay mounted once opened, so switching back keeps their state.
-  const [opened, setOpened] = React.useState(
-    () => new Set<DemoView>(["console"])
-  )
-  const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false)
-  const [sidebarOverlay, setSidebarOverlay] = React.useState(false)
   const [statsStore] = React.useState(createStatsStore)
   const windowRef = React.useRef<HTMLDivElement>(null)
-  const running = state.observedState === "running"
 
   React.useEffect(() => {
     const element = windowRef.current
     return element ? server.sampleWhileVisible(element) : undefined
   }, [server])
 
-  const changeView = React.useCallback((next: DemoView) => {
-    setView(next)
-    setOpened((current) =>
-      current.has(next) ? current : new Set([...current, next])
-    )
-    setSidebarOverlay(false)
-  }, [])
-
-  // Hearth's sidebar collapses to icons on a wide screen and slides over the
-  // page on a narrow one. The window's width shows or hides the docked one.
-  const toggleSidebar = React.useCallback(() => {
-    const docked = windowRef.current?.querySelector(":scope > nav")
-    if (docked && getComputedStyle(docked).display !== "none") {
-      setSidebarCollapsed((collapsed) => !collapsed)
-    } else {
-      setSidebarOverlay((open) => !open)
-    }
-  }, [])
-
   return (
     <TooltipProvider delayDuration={250}>
       <div className="flex flex-col gap-3">
-        {/* Tall enough for all of Hearth's sidebar, so it never scrolls. */}
         <div
           ref={windowRef}
-          className={cn(
-            "@container/window relative flex h-[51rem] overflow-hidden border border-border bg-background text-left shadow-2xl shadow-black/40",
-            className
-          )}
+          className="@container/window flex h-[40rem] flex-col overflow-hidden border border-border bg-background text-left shadow-2xl shadow-black/40 sm:h-[44rem]"
         >
-          <DemoSidebar
-            className="hidden @4xl/window:flex"
-            collapsed={sidebarCollapsed}
-            running={running}
-            view={view}
-            onViewChange={changeView}
-          />
-          {sidebarOverlay ? (
-            <div className="absolute inset-0 z-40 flex @4xl/window:hidden">
-              <DemoSidebar
-                className="relative shadow-2xl shadow-black/60"
-                collapsed={false}
-                running={running}
-                view={view}
-                onViewChange={changeView}
+          <WorkspaceFrame
+            header={<DemoHeader server={server} state={state} view={view} />}
+          >
+            {view === "console" ? (
+              <ConsoleView
+                running={state.observedState === "running"}
+                server={server}
+                statsStore={statsStore}
               />
-              <button
-                type="button"
-                aria-label="Close sidebar"
-                className="flex-1 bg-black/50"
-                onClick={() => setSidebarOverlay(false)}
-              />
-            </div>
-          ) : null}
-          <div className="flex min-w-0 flex-1 flex-col">
-            <WorkspaceFrame
-              header={
-                <DemoHeader
-                  server={server}
-                  state={state}
-                  view={view}
-                  onToggleSidebar={toggleSidebar}
-                />
-              }
-            >
-              {opened.has("console") ? (
-                <Page shown={view === "console"}>
-                  <ConsoleView
-                    active={view === "console"}
-                    running={running}
-                    server={server}
-                    statsStore={statsStore}
-                  />
-                </Page>
-              ) : null}
-              {opened.has("files") ? (
-                <Page shown={view === "files"}>
-                  <React.Suspense fallback={<div className="flex-1 bg-card" />}>
-                    <FilesView />
-                  </React.Suspense>
-                </Page>
-              ) : null}
-            </WorkspaceFrame>
-            <PanelFooter />
-          </div>
+            ) : (
+              <React.Suspense fallback={<div className="flex-1 bg-card" />}>
+                <FilesView />
+              </React.Suspense>
+            )}
+          </WorkspaceFrame>
+          <PanelFooter />
         </div>
-        {opened.has("console") ? (
-          <ConsoleStatus statsStore={statsStore} />
-        ) : null}
+        {view === "console" ? <ConsoleStatus statsStore={statsStore} /> : null}
       </div>
     </TooltipProvider>
-  )
-}
-
-function Page({
-  children,
-  shown,
-}: {
-  children: React.ReactNode
-  shown: boolean
-}) {
-  return (
-    <div className={shown ? "flex min-h-0 min-w-0 flex-1" : "hidden"}>
-      {children}
-    </div>
   )
 }
 
