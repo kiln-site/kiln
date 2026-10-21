@@ -108,6 +108,64 @@ describe("polling worker", () => {
     expect(jobs.done).toEqual(["left by an earlier Hearth"])
   })
 
+  it("lets a running pass finish before a restarted worker starts its own", async () => {
+    const jobs = jobQueue()
+    let running = 0
+    let overlapped = false
+    const pass = async () => {
+      running += 1
+      overlapped ||= running > 1
+      try {
+        return await jobs.pass()
+      } finally {
+        running -= 1
+      }
+    }
+    let finishPass = () => {}
+    jobs.blockNextPass(
+      new Promise((resolve) => {
+        finishPass = resolve
+      })
+    )
+    jobs.queue("first")
+    startPollingWorker("TailscaleCleanup", pass)
+    await vi.advanceTimersByTimeAsync(10)
+
+    // As a dev reload does.
+    startPollingWorker("TailscaleCleanup", pass)
+    jobs.queue("second")
+    await vi.advanceTimersByTimeAsync(10)
+    finishPass()
+    await vi.advanceTimersByTimeAsync(10)
+
+    expect(jobs.done).toEqual(["first", "second"])
+    expect(overlapped).toBe(false)
+  })
+
+  it("lets a running pass finish when stopped", async () => {
+    const jobs = jobQueue()
+    let finishPass = () => {}
+    jobs.blockNextPass(
+      new Promise((resolve) => {
+        finishPass = resolve
+      })
+    )
+    jobs.queue("in flight")
+    startPollingWorker("TailscaleCleanup", jobs.pass)
+    await vi.advanceTimersByTimeAsync(10)
+
+    let stopped = false
+    const stopping = stopPollingWorkers().then(() => {
+      stopped = true
+    })
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(stopped).toBe(false)
+    finishPass()
+    await stopping
+
+    expect(jobs.done).toEqual(["in flight"])
+  })
+
   it("keeps working after a pass fails", async () => {
     const jobs = jobQueue()
     let failing = true

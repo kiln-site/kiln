@@ -673,6 +673,9 @@ async function loadTailscaleStacks(): Promise<TailscaleStacksResult> {
           observeTailscaleDeploymentsEffect(observed)
         )
       ).pipe(
+        Effect.map((added) => {
+          if (added > 0) wakePollingWorker("TailscaleCleanup")
+        }),
         Effect.catch((cause) =>
           Effect.sync(() =>
             console.warn(

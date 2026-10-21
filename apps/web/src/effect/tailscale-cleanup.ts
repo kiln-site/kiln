@@ -41,21 +41,25 @@ interface DeploymentRow extends RowDataPacket {
   requested_by: string
 }
 
+/**
+ * Records the deployments Hearth saw on Relays. Returns how many it hadn't
+ * seen before; one belonging to a network being deleted is due for cleanup.
+ */
 export const observeTailscaleDeploymentsEffect = Effect.fn(
   "tailscaleCleanup.observeDeployments"
 )(function* (deployments: ReadonlyArray<PersistedTailscaleDeployment>) {
-  if (deployments.length === 0) return
+  if (deployments.length === 0) return 0
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
-  yield* database.transaction("tailscaleCleanup.observeDeployments", (tx) =>
-    Effect.forEach(
-      deployments,
-      (deployment) => upsertDeployment(tx, deployment, now),
-      {
-        discard: true,
-      }
-    )
+  const results = yield* database.transaction(
+    "tailscaleCleanup.observeDeployments",
+    (tx) =>
+      Effect.forEach(deployments, (deployment) =>
+        upsertDeployment(tx, deployment, now)
+      )
   )
+  // MySQL counts an upsert's insert as one affected row and an update as two.
+  return results.filter((result) => result.affectedRows === 1).length
 })
 
 export const reconcileTailscaleDeploymentsEffect = Effect.fn(

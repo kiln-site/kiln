@@ -99,7 +99,10 @@ export function startPollingWorker(
       // Wakes from before this pass are answered by it; one during it
       // starts the next.
       yield* Queue.clear(worker.wake)
-      const result = yield* runPass
+      // A pass runs to its end, so a replacement or shutdown never overlaps
+      // one still working through jobs; only the wait between passes is cut
+      // short.
+      const result = yield* Effect.uninterruptible(runPass)
       const now = yield* Clock.currentTimeMillis
       const delay =
         result?.outcome === "idle"
@@ -121,7 +124,10 @@ export function startPollingWorker(
   )
 }
 
-/** Stops every worker, as when Hearth shuts down. */
+/**
+ * Stops every worker, as when Hearth shuts down, letting a running pass
+ * finish for up to 5 seconds of Hearth's 10-second shutdown.
+ */
 export function stopPollingWorkers(): Promise<void> {
   const fibers = [...(state.kilnPollingWorkers?.values() ?? [])].flatMap(
     (worker) => {
@@ -130,5 +136,10 @@ export function stopPollingWorkers(): Promise<void> {
       return fiber ? [fiber] : []
     }
   )
-  return Effect.runPromise(Fiber.interruptAll(fibers))
+  return Effect.runPromise(
+    Fiber.interruptAll(fibers).pipe(
+      Effect.timeoutOption("5 seconds"),
+      Effect.asVoid
+    )
+  )
 }
