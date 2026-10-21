@@ -3,16 +3,10 @@ import { Link, createFileRoute } from "@tanstack/react-router"
 
 import { Button } from "@workspace/ui/components/button"
 
-import {
-  AppKindIcon,
-  DatabaseKindIcon,
-  ServerKindIcon,
-} from "@/components/instance-kind-icon"
-
-import { BrickMark, officialBricks } from "~/components/brick-mark"
 import { CyclingWord } from "~/components/cycling-word"
 import { ComingSoon } from "~/components/coming-soon"
 import { ClientDemo } from "~/components/demos/client-demo"
+import { KindsSection } from "~/components/kinds-section"
 import { signUpUrl } from "~/lib/plans"
 import { comingSoon } from "~/lib/coming-soon"
 import { newTab } from "~/lib/new-tab"
@@ -150,81 +144,9 @@ function Kinds() {
           the same console, files, backups, and access controls.
         </SectionHeading>
 
-        <div className="mt-14 grid gap-px border border-border bg-border md:grid-cols-3">
-          <Kind
-            icon={<ServerKindIcon className="size-5" />}
-            title="Game servers"
-            description="Pick a Brick and Kiln sets up the server, its ports, and the right Java for you."
-          >
-            <ul className="flex flex-wrap gap-2" aria-label="Official Bricks">
-              {officialBricks.map((brick) => (
-                <li
-                  key={brick.name}
-                  className="type-label flex items-center gap-1.5 border border-border px-2 py-1 text-foreground"
-                >
-                  <BrickMark icon={brick.icon} />
-                  {brick.name}
-                </li>
-              ))}
-            </ul>
-          </Kind>
-          <Kind
-            icon={<AppKindIcon className="size-5" />}
-            title="Apps"
-            description="Deploy from a GitHub repository with a Dockerfile or Compose file. Pushes roll out as rolling deployments, on your own domains."
-          >
-            <KindFacts facts={["Dockerfile", "Compose", "Custom domains"]} />
-          </Kind>
-          <Kind
-            icon={<DatabaseKindIcon className="size-5" />}
-            title="Databases"
-            description="Start a database next to the app or server that needs it, and browse its tables from Hearth."
-          >
-            <KindFacts
-              facts={["MySQL", "MariaDB", "PostgreSQL", "Redis", "Valkey"]}
-            />
-          </Kind>
-        </div>
+        <KindsSection />
       </div>
     </section>
-  )
-}
-
-function Kind({
-  icon,
-  title,
-  description,
-  children,
-}: {
-  icon: React.ReactNode
-  title: string
-  description: string
-  children: React.ReactNode
-}) {
-  return (
-    <div className="flex flex-col gap-4 bg-background p-6 sm:p-8">
-      <div className="flex items-center gap-2.5">
-        {icon}
-        <h3 className="text-lg font-semibold tracking-[-0.02em]">{title}</h3>
-      </div>
-      <p className="site-copy text-muted-foreground">{description}</p>
-      <div className="mt-auto pt-2">{children}</div>
-    </div>
-  )
-}
-
-function KindFacts({ facts }: { facts: Array<string> }) {
-  return (
-    <ul className="flex flex-wrap gap-2">
-      {facts.map((fact) => (
-        <li
-          key={fact}
-          className="type-label border border-border px-2 py-1 text-foreground"
-        >
-          {fact}
-        </li>
-      ))}
-    </ul>
   )
 }
 
