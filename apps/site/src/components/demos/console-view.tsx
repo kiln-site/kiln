@@ -1,6 +1,12 @@
 import * as React from "react"
 import type { RelayConsoleLine } from "@workspace/contracts"
-import { CornerDownLeft, Share2 } from "lucide-react"
+import {
+  Check,
+  CornerDownLeft,
+  LoaderCircle,
+  Share2,
+  TriangleAlert,
+} from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
@@ -21,13 +27,22 @@ import {
   ConsoleSelectionControl,
   ConsoleTimestampButton,
   ConsoleWrapButton,
+  copyToClipboard,
 } from "@/components/console/console-toolbar-actions"
+import {
+  mclogsShareLabel,
+  mclogsShareTooltip,
+  useMclogsShareAction,
+} from "@/components/use-mclogs-share-action"
 
 import { demoServer, type DemoServer } from "~/components/demos/demo-server"
 import { historyLines, type StatsStore } from "~/components/demos/console-stats"
 import { createServerLog } from "~/components/demos/server-log"
 
 const historyChunk = 25_000
+// What the demo's mclo.gs button uploads in place of the log, which is a
+// hundred thousand made-up lines mclo.gs has no use for.
+const shareContent = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 const streamInterval = 700
 
 // Hearth's console page, reading a simulated server's output: a long history,
@@ -171,16 +186,7 @@ export default function ConsoleView({
         <ConsoleSearchControl uiStore={uiStore} />
         <ConsoleLevelMenu uiStore={uiStore} />
         <div className="ml-auto flex items-center gap-1.5">
-          <ConsoleTooltip content="Upload to mclo.gs">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="type-control-sm h-8 gap-1.5 px-2.5"
-            >
-              <Share2 />
-              mclo.gs
-            </Button>
-          </ConsoleTooltip>
+          <ShareButton />
           <ConsoleSelectionControl active uiStore={uiStore} />
           <ConsoleRedactButton uiStore={uiStore} />
           <ConsoleWrapButton uiStore={uiStore} />
@@ -294,4 +300,65 @@ function respond(input: string): Output {
         ],
       ]
   }
+}
+
+// Hearth's mclo.gs button, uploading `shareContent` instead of the log. One
+// upload serves the whole visit, so clicking again copies the same link.
+function ShareButton() {
+  const { share, state } = useMclogsShareAction(async () => {
+    upload ??= uploadShareContent().catch((error: unknown) => {
+      upload = null
+      throw error
+    })
+    await copyToClipboard(await upload)
+  })
+  return (
+    <ConsoleTooltip content={mclogsShareTooltip(state)}>
+      <Button
+        variant={
+          state === "copied"
+            ? "secondary"
+            : state === "error"
+              ? "destructive"
+              : "ghost"
+        }
+        size="sm"
+        className="type-control-sm h-8 gap-1.5 px-2.5"
+        disabled={state === "uploading"}
+        onClick={share}
+      >
+        {state === "uploading" ? (
+          <LoaderCircle className="animate-spin" />
+        ) : state === "copied" ? (
+          <Check />
+        ) : state === "error" ? (
+          <TriangleAlert />
+        ) : (
+          <Share2 />
+        )}
+        {mclogsShareLabel(state)}
+      </Button>
+    </ConsoleTooltip>
+  )
+}
+
+let upload: Promise<string> | null = null
+
+// A form post, which mclo.gs answers to any origin without a preflight.
+async function uploadShareContent(): Promise<string> {
+  const response = await fetch("https://api.mclo.gs/1/log", {
+    method: "POST",
+    body: new URLSearchParams({ content: shareContent }),
+  })
+  const result: unknown = await response.json()
+  if (
+    !response.ok ||
+    typeof result !== "object" ||
+    result === null ||
+    !("url" in result) ||
+    typeof result.url !== "string"
+  ) {
+    throw new Error(`mclo.gs returned HTTP ${response.status}`)
+  }
+  return result.url
 }
