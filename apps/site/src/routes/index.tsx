@@ -46,7 +46,7 @@ function Hero() {
       />
       <div className="site-container relative pt-14 pb-16 sm:pt-24 sm:pb-24">
         <div className="grid gap-8 lg:grid-cols-12 lg:items-end lg:gap-12">
-          <h1 className="site-display lg:col-span-8">
+          <h1 className="site-display lg:col-span-7">
             <span className="sr-only">
               The panel for game servers, apps, Docker, databases, and more
             </span>
@@ -55,9 +55,11 @@ function Hero() {
               <CyclingWord words={heroWords} />
             </span>
           </h1>
-          <div className="lg:col-span-4 lg:pb-2">
-            <p className="site-lede max-w-sm text-muted-foreground">
-              Free and open source. Your machines, one panel for all of it.
+          <div className="lg:col-span-5 lg:pb-2">
+            <p className="site-lede max-w-md text-muted-foreground">
+              100% free and open source.
+              <br />
+              Your machines, one panel for all of it.
             </p>
             {comingSoon.signUp ? (
               // Nothing to click until sign-up opens.
