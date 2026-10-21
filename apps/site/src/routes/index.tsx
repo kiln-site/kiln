@@ -15,8 +15,7 @@ import { ClientDemo } from "~/components/demos/client-demo"
 import { signUpUrl } from "~/lib/plans"
 import { useSiteConfig } from "~/lib/use-site-config"
 
-const ConsoleDemo = React.lazy(() => import("~/components/demos/console-demo"))
-const EditorDemo = React.lazy(() => import("~/components/demos/editor-demo"))
+const HearthDemo = React.lazy(() => import("~/components/demos/hearth-demo"))
 
 export const Route = createFileRoute("/")({
   component: HomePage,
@@ -70,19 +69,16 @@ function Hero() {
         </div>
 
         <figure className="mt-12 sm:mt-16">
-          <div className="h-[30rem] sm:h-[36rem]">
-            <ClientDemo fallback={<DemoFrame label="Opening the console…" />}>
-              <ConsoleDemo />
+          <div className="h-[40rem] sm:h-[44rem] lg:h-[50rem]">
+            <ClientDemo fallback={<DemoFrame label="Opening Hearth…" />}>
+              <HearthDemo id="hero" initialView="console" />
             </ClientDemo>
           </div>
-          <figcaption className="type-support mt-4 max-w-xl text-muted-foreground">
-            This is Hearth’s console, running in your browser on a simulated
-            server. Search the output, send{" "}
-            <code className="type-code text-foreground">list</code>
-            <span className="hidden sm:inline">
-              , or load a million lines and search those
-            </span>
-            .
+          <figcaption className="type-support mt-3 max-w-xl text-muted-foreground">
+            This is Hearth, running in your browser on a simulated server.
+            Search its 100,000 lines of output, send{" "}
+            <code className="type-code text-foreground">list</code>, restart it,
+            or open its files.
           </figcaption>
         </figure>
       </div>
@@ -205,34 +201,37 @@ function KindFacts({ facts }: { facts: Array<string> }) {
 function Editor() {
   return (
     <section className="border-t border-border">
-      <div className="site-container grid gap-12 py-20 sm:py-28 lg:grid-cols-12 lg:gap-16">
-        <div className="lg:col-span-5">
-          <SectionHeading title="Edit config files where they live">
-            Open any file on any server and change it in the browser. This is
-            the editor Hearth uses, so try it.
-          </SectionHeading>
-          <ul className="site-copy mt-8 space-y-4 text-muted-foreground">
+      <div className="site-container py-20 sm:py-28">
+        <div className="grid gap-10 lg:grid-cols-12 lg:gap-16">
+          <div className="lg:col-span-5">
+            <SectionHeading title="Edit config files where they live">
+              Open any file on any server and change it in the browser. This is
+              Hearth’s file editor, so try it.
+            </SectionHeading>
+          </div>
+          <ul className="site-copy grid gap-6 text-muted-foreground sm:grid-cols-3 lg:col-span-7 lg:pt-2">
             <EditorPoint title="Changes stay marked">
               Edited lines are flagged against the saved file until you save or
-              revert.
+              discard them.
             </EditorPoint>
             <EditorPoint title="Addresses stay hidden">
               IP addresses are masked on screen, like{" "}
-              <code className="type-code text-foreground">server-ip</code> here,
-              so a screenshot or a stream doesn’t give them away.
+              <code className="type-code text-foreground">server-ip</code>, so a
+              screenshot or a stream doesn’t give them away.
             </EditorPoint>
-            <EditorPoint title="Mistakes show up early">
-              SNBT files are checked as you type. Delete a bracket in the quest
-              file to see it.
+            <EditorPoint title="NBT opens as text">
+              Binary files like{" "}
+              <code className="type-code text-foreground">level.dat</code> open
+              as SNBT and are checked as you type.
             </EditorPoint>
           </ul>
         </div>
-        <div className="h-[28rem] min-w-0 sm:h-[32rem] lg:col-span-7">
+        <div className="mt-12 h-[40rem] sm:h-[44rem] lg:h-[50rem]">
           <ClientDemo
-            fallback={<DemoFrame label="Opening the editor…" />}
+            fallback={<DemoFrame label="Opening Hearth…" />}
             whenVisible
           >
-            <EditorDemo />
+            <HearthDemo id="files" initialView="files" />
           </ClientDemo>
         </div>
       </div>

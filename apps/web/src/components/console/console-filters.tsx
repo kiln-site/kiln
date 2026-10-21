@@ -1,5 +1,4 @@
 import * as React from "react"
-import { useQuery } from "@tanstack/react-query"
 import type { RelayConsoleLevel } from "@workspace/contracts"
 import { Boxes, Check, ListFilter, Search, X } from "lucide-react"
 
@@ -19,10 +18,6 @@ import {
 import { useConsoleCopy } from "@/components/console/console-copy-context"
 import { ConsoleTooltip } from "@/components/console/console-tooltip"
 import { RelayKindIcon } from "@/components/instance-kind-icon"
-import { tailscaleStacksQueryOptions } from "@/lib/query-options"
-import type { TailscaleStackOverview } from "@/server/tailscale"
-
-const emptyTailscaleStacks: Array<TailscaleStackOverview> = []
 
 export function ConsoleSearchControl({ uiStore }: { uiStore: ConsoleUiStore }) {
   const copy = useConsoleCopy()
@@ -171,37 +166,7 @@ function ConsoleLevelFilterAction({
   )
 }
 
-export function TailscaleConsoleFilterMenus({
-  instanceId,
-  uiStore,
-}: {
-  instanceId: string
-  uiStore: ConsoleUiStore
-}) {
-  const { data } = useQuery({
-    ...tailscaleStacksQueryOptions(),
-    notifyOnChangeProps: ["data"],
-  })
-  const stacks = data?.stacks ?? emptyTailscaleStacks
-  const relays = React.useMemo(() => {
-    const stack = stacks.find((candidate) => candidate.id === instanceId)
-    return (
-      stack?.deployments.map(({ relayId, relayName }) => ({
-        id: relayId,
-        label: relayName,
-      })) ?? []
-    )
-  }, [instanceId, stacks])
-
-  return (
-    <>
-      <ConsoleRelayMenu relays={relays} uiStore={uiStore} />
-      <ConsoleServiceMenu uiStore={uiStore} />
-    </>
-  )
-}
-
-function ConsoleRelayMenu({
+export function ConsoleRelayMenu({
   relays,
   uiStore,
 }: {
@@ -270,7 +235,7 @@ function ConsoleRelayMenu({
   )
 }
 
-function ConsoleServiceMenu({ uiStore }: { uiStore: ConsoleUiStore }) {
+export function ConsoleServiceMenu({ uiStore }: { uiStore: ConsoleUiStore }) {
   const selected = React.useSyncExternalStore(
     uiStore.subscribe,
     uiStore.getServicesSnapshot,

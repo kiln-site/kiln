@@ -1,15 +1,6 @@
 import * as React from "react"
 import { Effect } from "effect"
-import {
-  Check,
-  Clock3,
-  Copy,
-  EyeOff,
-  LoaderCircle,
-  Share2,
-  TriangleAlert,
-  X,
-} from "lucide-react"
+import { Check, Clock3, Copy, EyeOff, X } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import {
@@ -18,82 +9,9 @@ import {
   PopoverContent,
 } from "@workspace/ui/components/popover"
 
-import type {
-  ConsoleStreamStore,
-  ConsoleUiStore,
-} from "@/components/console/console-stores"
+import type { ConsoleUiStore } from "@/components/console/console-stores"
 import { ConsoleTooltip } from "@/components/console/console-tooltip"
-import { useInstanceRelayConnected } from "@/components/instance-workspace-context"
-import {
-  mclogsShareLabel,
-  mclogsShareTooltip,
-  useMclogsShareAction,
-} from "@/components/use-mclogs-share-action"
 import { WorkspaceLineWrapButton } from "@/components/workspace-line-wrap-button"
-import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
-import { uploadConsoleLogToMclogs } from "@/server/relay"
-
-export function ConsoleShareButton({
-  canShare,
-  instance,
-  streamStore,
-  uiStore,
-}: {
-  canShare: boolean
-  instance: InstanceWorkspaceInstance
-  streamStore: ConsoleStreamStore
-  uiStore: ConsoleUiStore
-}) {
-  const relayConnected = useInstanceRelayConnected()
-  const hasLines = React.useSyncExternalStore(
-    streamStore.subscribe,
-    streamStore.getHasLinesSnapshot,
-    streamStore.getHasLinesSnapshot
-  )
-  const { share, state } = useMclogsShareAction(async () => {
-    const result = await uploadConsoleLogToMclogs({
-      data: {
-        instanceId: instance.id,
-        relayId: instance.relayId,
-        implementation: instance.implementation,
-        version: instance.version,
-        redactSensitive: uiStore.getRedactSensitiveSnapshot(),
-      },
-    })
-    await copyToClipboard(result.url)
-  })
-
-  if (!canShare || !relayConnected) return null
-
-  return (
-    <ConsoleTooltip content={mclogsShareTooltip(state)}>
-      <Button
-        variant={
-          state === "copied"
-            ? "secondary"
-            : state === "error"
-              ? "destructive"
-              : "ghost"
-        }
-        size="sm"
-        className="type-control-sm h-8 gap-1.5 px-2.5"
-        disabled={state === "uploading" || !hasLines}
-        onClick={share}
-      >
-        {state === "uploading" ? (
-          <LoaderCircle className="animate-spin" />
-        ) : state === "copied" ? (
-          <Check />
-        ) : state === "error" ? (
-          <TriangleAlert />
-        ) : (
-          <Share2 />
-        )}
-        {mclogsShareLabel(state)}
-      </Button>
-    </ConsoleTooltip>
-  )
-}
 
 export function ConsoleSelectionControl({
   active,
@@ -261,7 +179,7 @@ export function ConsoleTimestampButton({
   )
 }
 
-async function copyToClipboard(value: string) {
+export async function copyToClipboard(value: string) {
   await Effect.runPromise(
     Effect.tryPromise({
       try: () => navigator.clipboard.writeText(value),

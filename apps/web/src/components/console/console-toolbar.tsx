@@ -7,7 +7,6 @@ import {
 import {
   ConsoleLevelMenu,
   ConsoleSearchControl,
-  TailscaleConsoleFilterMenus,
 } from "@/components/console/console-filters"
 import { consoleRuntimeReasonDelayRemaining } from "@/components/console/console-lifecycle"
 import type {
@@ -17,10 +16,11 @@ import type {
 import {
   ConsoleRedactButton,
   ConsoleSelectionControl,
-  ConsoleShareButton,
   ConsoleTimestampButton,
   ConsoleWrapButton,
 } from "@/components/console/console-toolbar-actions"
+import { ConsoleShareButton } from "@/components/console/console-share-button"
+import { TailscaleConsoleFilterMenus } from "@/components/console/console-tailscale-filters"
 import { ConsoleWarning } from "@/components/console/console-warning"
 import { ConsoleRetryButton } from "@/components/console/console-retry-button"
 import { useServerSnapshot } from "@/lib/use-server-workspace"

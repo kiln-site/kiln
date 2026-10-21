@@ -85,10 +85,12 @@ function nextEntry(random: Random): [RelayConsoleLevel, string] {
       "info",
       `${player}[/10.0.${Math.floor(random() * 255)}.${Math.floor(random() * 255)}:${49152 + Math.floor(random() * 16000)}] logged in with entity id ${Math.floor(random() * 90000)} at ([world]${coordinate(random, 3000)}, ${Math.floor(random() * 120) - 20}.0, ${coordinate(random, 3000)})`,
     ]
+  if (roll < 0.74)
+    return ["info", `UUID of player ${player} is ${uuid(random)}`]
   if (roll < 0.8)
     return [
-      "debug",
-      `Saved chunk [${Math.floor(random() * 400) - 200}, ${Math.floor(random() * 400) - 200}] in ${(random() * 4).toFixed(2)}ms`,
+      "info",
+      `[LuckPerms] ${player} was granted permission essentials.home`,
     ]
   if (roll < 0.88) return ["info", "Saving the game (this may take a moment!)"]
   if (roll < 0.94)
@@ -96,10 +98,15 @@ function nextEntry(random: Random): [RelayConsoleLevel, string] {
       "info",
       `Saved the game in ${Math.floor(40 + random() * 160)}ms, ${Math.floor(800 + random() * 4000)} chunks across 3 worlds`,
     ]
-  if (roll < 0.985)
+  if (roll < 0.97)
     return [
       "warn",
       `${player} moved too quickly! ${coordinate(random, 12)},${coordinate(random, 4)},${coordinate(random, 12)}`,
+    ]
+  if (roll < 0.985)
+    return [
+      "warn",
+      `Can't keep up! Is the server overloaded? Running ${Math.floor(2000 + random() * 3000)}ms or ${Math.floor(40 + random() * 60)} ticks behind`,
     ]
   return [
     "error",
@@ -107,18 +114,55 @@ function nextEntry(random: Random): [RelayConsoleLevel, string] {
   ]
 }
 
-export function createServerLog(seed = 7) {
+function uuid(random: Random) {
+  const hex = () =>
+    Math.floor(random() * 0x10000)
+      .toString(16)
+      .padStart(4, "0")
+  return `${hex()}${hex()}-${hex()}-4${hex().slice(1)}-a${hex().slice(1)}-${hex()}${hex()}${hex()}`
+}
+
+const levelLabels: Record<RelayConsoleLevel, string> = {
+  debug: "DEBUG",
+  error: "ERROR",
+  info: "INFO",
+  trace: "TRACE",
+  warn: "WARN",
+}
+
+function clockTime(at: number) {
+  const date = new Date(at)
+  const pad = (value: number) => String(value).padStart(2, "0")
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
+const lineSpacing = 1_700
+
+// `historyLines` sets how far back the history starts, so its last line
+// lands at about the current time.
+export function createServerLog({
+  historyLines,
+  seed = 7,
+}: {
+  historyLines: number
+  seed?: number
+}) {
   const random = createRandom(seed)
   let nextId = 0
+  const historyStart = Date.now() - historyLines * lineSpacing
 
-  // Hearth hides timestamps by default; leaving them out keeps a million
-  // lines light.
-  function line(level: RelayConsoleLevel, text: string): RelayConsoleLine {
+  // Paper prints its own time and level on each line, as Hearth shows it.
+  // Leaving Hearth's timestamps off keeps a long history light.
+  function line(
+    level: RelayConsoleLevel,
+    text: string,
+    at = Date.now()
+  ): RelayConsoleLine {
     nextId += 1
     return {
       id: String(nextId),
       level,
-      text,
+      text: `[${clockTime(at)} ${levelLabels[level]}]: ${text}`,
       timestamp: null,
     }
   }
@@ -128,7 +172,10 @@ export function createServerLog(seed = 7) {
     fill(lines: Array<RelayConsoleLine>, count: number) {
       for (let index = 0; index < count; index += 1) {
         const [level, text] = nextEntry(random)
-        lines.push(line(level, text))
+        // Timed by position, so a history written again starts over.
+        lines.push(
+          line(level, text, historyStart + (lines.length + 1) * lineSpacing)
+        )
       }
     },
     next(): RelayConsoleLine {
