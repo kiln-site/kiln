@@ -265,6 +265,18 @@ const runCommandEffect = Effect.fn("cli.command")(function* (
           backup.id,
         ])
       )
+      // Every finished task's error: a timed-out create is cancelled, and a
+      // delete that left a copy behind succeeded.
+      const failures = result.backups.filter(
+        (backup) =>
+          backup.taskError &&
+          backup.taskStatus !== "queued" &&
+          backup.taskStatus !== "running"
+      )
+      if (failures.length > 0) writeLine("")
+      for (const backup of failures) {
+        writeLine(`${backup.name} (${backup.id}): ${backup.taskError}`)
+      }
     }
     return
   }

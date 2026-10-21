@@ -23,7 +23,10 @@ import {
   SlidersHorizontal,
   Trash2,
 } from "lucide-react"
-import type { BackupTarget } from "@workspace/contracts"
+import {
+  backupStorageProviderName,
+  type BackupTarget,
+} from "@workspace/contracts"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import {
@@ -417,12 +420,19 @@ export const BackupsPage = React.memo(function BackupsPage({
   )
   const availabilityDestinations = React.useMemo(
     (): Array<BackupAvailabilityDestination> => [
-      { enabled: true, id: null, name: "Local", ownerUserId: null },
+      {
+        enabled: true,
+        id: null,
+        name: "Local",
+        ownerUserId: null,
+        provider: null,
+      },
       ...storage.map((destination) => ({
         enabled: destination.enabled && !destination.deleting,
         id: destination.id,
         name: destination.name,
         ownerUserId: destination.ownerUserId,
+        provider: backupStorageProviderName(destination.endpoint),
       })),
     ],
     [storage]

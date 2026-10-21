@@ -17,6 +17,7 @@ type BackupProgressPresentation = BackupUploadPhasePresentation & {
 }
 
 type BackupTaskFeedbackPresentation = BackupUploadPhasePresentation & {
+  artifacts: ReadonlyArray<{ error: string | null; status: string }>
   taskError: string | null
   taskKind: BackupTaskKind | null
   taskStatus: BackupTaskStatus | null
@@ -65,7 +66,12 @@ export function backupShowsArchivedLocalArtifact(
 export function backupHasPrimaryTaskFeedback(
   backup: BackupTaskFeedbackPresentation
 ): boolean {
-  if (backup.taskKind === null || backup.taskKind === "delete") return false
+  if (backup.taskKind === null) return false
+  // A failed delete leaves the backup in place; say why it wasn't deleted.
+  if (backup.taskKind === "delete") {
+    if (backup.taskStatus === "failed") return Boolean(backup.taskError)
+    return backupFailedDeleteCopy(backup) !== undefined
+  }
   if (backup.taskStatus === "queued" || backup.taskStatus === "running") {
     return true
   }
@@ -125,5 +131,24 @@ function backupShowsUploadArtifact(
   return (
     backup.taskPhase === "uploading" ||
     (backup.taskPhase === "finalizing" && backup.taskCurrentArtifactId !== null)
+  )
+}
+
+/**
+ * A copy a finished delete couldn't remove: the delete succeeded for the
+ * backup's other copies, and this one stays available.
+ */
+export function backupFailedDeleteCopy<
+  TArtifact extends { error: string | null; status: string },
+>(backup: {
+  artifacts: ReadonlyArray<TArtifact>
+  taskKind: BackupTaskKind | null
+  taskStatus: BackupTaskStatus | null
+}): TArtifact | undefined {
+  if (backup.taskKind !== "delete" || backup.taskStatus !== "succeeded") {
+    return undefined
+  }
+  return backup.artifacts.find(
+    (artifact) => artifact.status === "available" && artifact.error
   )
 }

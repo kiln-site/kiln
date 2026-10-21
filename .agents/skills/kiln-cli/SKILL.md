@@ -225,7 +225,10 @@ kiln backups list --limit 200
 The `DEST` column consolidates the logical backup's destinations, such as
 `local+s3`; it does not repeat a backup once per destination. The `MODE`
 column is `incremental` (restic snapshots, the server default) or `full`
-(portable zip archives).
+(portable zip archives). Below the table, each backup whose latest task failed
+gets a line with the reason. When the cause is known, such as a storage
+provider's cap being reached, the line says what happened and where to fix it,
+followed by the Relay's own message.
 
 Create a manual backup with a reference from `backups targets`. Server backups
 default to incremental restic snapshots stored on the Relay or an S3

@@ -7,6 +7,7 @@ import {
   CircleOff,
   CircleStop,
   Download,
+  Info,
   LoaderCircle,
   Pencil,
   Plus,
@@ -36,6 +37,11 @@ import {
   type InstanceNameInstance,
 } from "@/components/instance-card"
 import {
+  backupArtifactFailure,
+  backupLatestFailure,
+  type BackupFailure,
+} from "@/lib/backup-failure-presentation"
+import {
   backupShowsArchivedLocalArtifact,
   backupTaskUploadProgressPercent,
 } from "@/lib/backup-progress-presentation"
@@ -57,6 +63,7 @@ import { formatBytes } from "@/lib/format-bytes"
 
 type BackupAvailabilityTagView = {
   error: string | null
+  failure: BackupFailure | null
   key: string
   kind: "local" | "remote"
   label: string
@@ -92,15 +99,33 @@ const backupDayMs = 24 * backupHourMs
 
 export const BackupTaskFeedback = React.memo(function BackupTaskFeedback({
   backup,
+  destinations,
 }: {
   backup: Backup
+  destinations: ReadonlyArray<BackupAvailabilityDestination>
 }) {
   const active =
     backup.taskStatus === "queued" || backup.taskStatus === "running"
   if (active) {
     return <ActiveBackupTaskState backup={backup} />
   }
-  if (!backup.taskError) return null
+  const latest = backupLatestFailure(backup, (storageId) =>
+    destinationProvider(destinations, storageId)
+  )
+  if (!latest) return null
+  const { explained: failure, message: error } = latest
+  if (failure) {
+    return (
+      <BackupFailureNote
+        failure={failure}
+        title={
+          backup.taskKind === "delete"
+            ? `Couldn't delete: ${failure.title}`
+            : failure.title
+        }
+      />
+    )
+  }
   const cancelled = backup.taskStatus === "cancelled"
   return (
     <Tooltip>
@@ -113,20 +138,96 @@ export const BackupTaskFeedback = React.memo(function BackupTaskFeedback({
           ) : (
             <CircleAlert className="size-3 shrink-0" />
           )}
-          <span className="truncate">{backup.taskError}</span>
+          <span className="truncate">
+            {backup.taskKind === "delete" ? `Couldn't delete: ${error}` : error}
+          </span>
         </p>
       </TooltipTrigger>
       <TooltipContent className="max-w-sm whitespace-normal" side="bottom">
         {backup.taskPhase ? `${backupTaskPhaseLabel(backup.taskPhase)} · ` : ""}
         {backup.taskCurrentPath ? `${backup.taskCurrentPath} · ` : ""}
-        {backup.taskError}
+        {error}
       </TooltipContent>
     </Tooltip>
   )
 })
 
+/**
+ * A failure Kiln can explain: a short summary, and on hover what happened,
+ * what to do, and the Relay's own message. An info icon marks one that came
+ * from outside Kiln, such as a storage provider's cap.
+ */
+const BackupFailureNote = React.memo(function BackupFailureNote({
+  failure,
+  title,
+}: {
+  failure: BackupFailure
+  title: string
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <p className="flex min-w-0 items-center gap-1.5 text-xs text-destructive">
+          <CircleAlert className="size-3 shrink-0" />
+          <span className="truncate">{title}</span>
+          {failure.external ? (
+            <Info
+              aria-label="Not a Kiln error"
+              className="size-3 shrink-0 text-muted-foreground"
+            />
+          ) : null}
+        </p>
+      </TooltipTrigger>
+      <BackupFailureDetails failure={failure} />
+    </Tooltip>
+  )
+})
+
+function BackupFailureDetails({
+  failure,
+  heading,
+}: {
+  failure: BackupFailure
+  heading?: string
+}) {
+  return (
+    <TooltipContent
+      className="max-w-sm flex-col items-start gap-1.5 whitespace-normal"
+      side="bottom"
+    >
+      {heading ? <p className="font-medium">{heading}</p> : null}
+      <p>{failure.detail}</p>
+      {failure.external ? (
+        <p className="text-muted-foreground">
+          This isn't a Kiln error: the storage provider refused the request,
+          so it's fixed in the provider's account.
+        </p>
+      ) : null}
+      <p className="font-mono text-[0.6875rem] break-all text-muted-foreground">
+        {failure.raw}
+      </p>
+    </TooltipContent>
+  )
+}
+
+function destinationProvider(
+  destinations: ReadonlyArray<BackupAvailabilityDestination>,
+  storageId: string
+): string | null {
+  return (
+    destinations.find((destination) => destination.id === storageId)
+      ?.provider ?? null
+  )
+}
+
 export const DesktopBackupTaskFeedback = React.memo(
-  function DesktopBackupTaskFeedback({ backup }: { backup: Backup }) {
+  function DesktopBackupTaskFeedback({
+    backup,
+    destinations,
+  }: {
+    backup: Backup
+    destinations: ReadonlyArray<BackupAvailabilityDestination>
+  }) {
     const feedbackRef = React.useRef<HTMLDivElement>(null)
     React.useLayoutEffect(() => {
       const feedback = feedbackRef.current
@@ -166,7 +267,7 @@ export const DesktopBackupTaskFeedback = React.memo(
     }, [backup.taskStatus])
     return (
       <div ref={feedbackRef} className="relative z-10 min-w-0">
-        <BackupTaskFeedback backup={backup} />
+        <BackupTaskFeedback backup={backup} destinations={destinations} />
       </div>
     )
   }
@@ -685,6 +786,11 @@ export const BackupAvailabilityTags = React.memo(
 function BackupAvailabilityTag({ tag }: { tag: BackupAvailabilityTagView }) {
   const working = tag.state === "working"
   const deleting = tag.state === "deleting"
+  const summary = `${tag.name} · ${
+    tag.uploadPercent === null
+      ? availabilityStateLabel(tag.state)
+      : `Uploading · ${tag.uploadPercent}%`
+  }`
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -708,14 +814,25 @@ function BackupAvailabilityTag({ tag }: { tag: BackupAvailabilityTagView }) {
           <span className="truncate">{tag.label}</span>
         </span>
       </TooltipTrigger>
-      <TooltipContent side="top">
-        {tag.tooltip ??
-          `${tag.name} · ${
-            tag.uploadPercent === null
-              ? availabilityStateLabel(tag.state)
-              : `Uploading · ${tag.uploadPercent}%`
-          }${tag.error ? ` · ${tag.error}` : ""}`}
-      </TooltipContent>
+      {tag.failure ? (
+        <BackupFailureDetails
+          failure={tag.failure}
+          heading={`${summary} · ${
+            tag.state === "available"
+              ? `Couldn't delete: ${tag.failure.title}`
+              : tag.failure.title
+          }`}
+        />
+      ) : (
+        <TooltipContent side="top">
+          {tag.tooltip ??
+            `${summary}${
+              tag.error
+                ? ` · ${tag.state === "available" ? "Couldn't delete: " : ""}${tag.error}`
+                : ""
+            }`}
+        </TooltipContent>
+      )}
     </Tooltip>
   )
 }
@@ -1086,6 +1203,9 @@ function backupAvailabilityTags(
       const state = backupArtifactAvailabilityState(backup, artifact, kind)
       return {
         error: artifact?.error ?? null,
+        failure: artifact
+          ? backupArtifactFailure(artifact, destination.provider)
+          : null,
         key,
         kind,
         label: destination.id ? destination.name : "Local",
@@ -1108,6 +1228,7 @@ function backupAvailabilityTags(
     const state = backupArtifactAvailabilityState(backup, artifact, kind)
     tags.push({
       error: artifact.error,
+      failure: backupArtifactFailure(artifact, null),
       key,
       kind,
       label: artifact.storageId ? "S3" : "Local",
@@ -1127,6 +1248,7 @@ function backupAvailabilityTags(
   if (!incremental && !s3Configured) {
     tags.push({
       error: null,
+      failure: null,
       key: "s3",
       kind: "remote",
       label: "S3",
@@ -1224,8 +1346,9 @@ function artifactAvailabilityState(
   ) {
     return "cancelled"
   }
-  if (artifact?.error) return "failed"
+  // A failed delete leaves its copy available, with the error kept.
   if (status === "available") return "available"
+  if (artifact?.error) return "failed"
   if (status === "failed") return "failed"
   if (status === "queued" || status === "running") {
     return "working"

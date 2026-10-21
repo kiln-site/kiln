@@ -273,6 +273,7 @@ function backupRun(
     taskCurrentArtifactId: null,
     taskCurrentPath: null,
     taskError: null,
+    taskErrorCode: null,
     taskId: "task-a",
     taskKind: "create",
     taskPhase: null,

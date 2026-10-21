@@ -73,6 +73,7 @@ interface BackupArtifactRow extends RowDataPacket {
   bytes: number | string | null
   checksum_sha256: string | null
   error: string | null
+  error_code: string | null
   filename: string | null
   id: string
   object_key: string | null
@@ -139,6 +140,7 @@ interface BackupRow extends RowDataPacket {
   target_id: string
   target_kind: "database" | "instance" | "platform"
   task_error: string | null
+  task_error_code: string | null
   task_bytes_completed: number | string
   task_bytes_total: number | string | null
   task_current_artifact_id: string | null
@@ -279,6 +281,7 @@ export interface BackupCatalogRecord {
   taskCurrentArtifactId: string | null
   taskCurrentPath: string | null
   taskError: string | null
+  taskErrorCode: string | null
   taskId: string
   taskKind: BackupRow["task_kind"]
   taskPhase: BackupTaskPhase | null
@@ -292,6 +295,7 @@ export interface BackupArtifactRecord {
   bytes: number | null
   checksumSha256: string | null
   error: string | null
+  errorCode: string | null
   filename: string | null
   id: string
   objectKey: string | null
@@ -1241,6 +1245,7 @@ const backupCatalogColumns = `backup.id, backup.relay_id, backup.target_kind, ba
             task.bytes_total AS task_bytes_total, task.phase AS task_phase,
             task.current_artifact_id AS task_current_artifact_id,
             task.current_path AS task_current_path, task.error AS task_error,
+            task.error_code AS task_error_code,
             task.started_at AS task_started_at_ms,
             task.updated_at AS task_updated_at_ms`
 
@@ -1308,7 +1313,8 @@ export const listBackupCatalogEffect = Effect.fn("backups.list")(function* () {
     "backup_artifact_catalog_list",
     `SELECT artifact.id, artifact.backup_id, artifact.storage_id,
             artifact.status, artifact.filename, artifact.object_key,
-            artifact.bytes, artifact.checksum_sha256, artifact.error
+            artifact.bytes, artifact.checksum_sha256, artifact.error,
+            artifact.error_code
        FROM ${databaseTable("backup_artifact")} artifact
        JOIN ${databaseTable("backup")} backup ON backup.id = artifact.backup_id
       WHERE backup.status <> 'deleted' AND artifact.status <> 'deleted'
@@ -1321,6 +1327,7 @@ export const listBackupCatalogEffect = Effect.fn("backups.list")(function* () {
       bytes: nullableDatabaseNumber(artifact.bytes, "backup artifact bytes"),
       checksumSha256: artifact.checksum_sha256,
       error: artifact.error,
+      errorCode: artifact.error_code ?? null,
       filename: artifact.filename,
       id: artifact.id,
       objectKey: artifact.object_key,
@@ -1369,6 +1376,7 @@ function backupCatalogRecordFromRow(
     taskCurrentArtifactId: row.task_current_artifact_id,
     taskCurrentPath: row.task_current_path,
     taskError: row.task_error,
+    taskErrorCode: row.task_error_code,
     taskId: row.task_id,
     taskKind: row.task_kind,
     taskPhase: row.task_phase,
@@ -1403,7 +1411,7 @@ export const getBackupCatalogRecordEffect = Effect.fn("backups.get")(function* (
   const artifacts = yield* database.queryRows<BackupArtifactRow>(
     "backup_artifact_catalog_get",
     `SELECT id, backup_id, storage_id, status, filename, object_key,
-            bytes, checksum_sha256, error
+            bytes, checksum_sha256, error, error_code
        FROM ${databaseTable("backup_artifact")}
       WHERE backup_id = ? AND status <> 'deleted'
       ORDER BY created_at ASC, id ASC`,
@@ -1543,7 +1551,7 @@ export const listBackupCatalogPageEffect = Effect.fn("backups.page")(function* (
     const artifactRows = yield* database.queryRows<BackupArtifactRow>(
       "backup_artifact_catalog_page",
       `SELECT id, backup_id, storage_id, status, filename, object_key,
-                bytes, checksum_sha256, error
+                bytes, checksum_sha256, error, error_code
            FROM ${databaseTable("backup_artifact")}
           WHERE backup_id IN (${placeholders}) AND status <> 'deleted'
           ORDER BY created_at ASC, id ASC`,
@@ -1573,6 +1581,7 @@ function backupArtifactFromRow(row: BackupArtifactRow): BackupArtifactRecord {
     bytes: nullableDatabaseNumber(row.bytes, "backup artifact bytes"),
     checksumSha256: row.checksum_sha256,
     error: row.error,
+    errorCode: row.error_code ?? null,
     filename: row.filename,
     id: row.id,
     objectKey: row.object_key,
@@ -1700,7 +1709,8 @@ export const listDispatchableBackupTasksEffect = Effect.fn(
     "backup_dispatchable_artifacts",
     `SELECT artifact.id, artifact.backup_id, artifact.storage_id,
             artifact.status, artifact.filename, artifact.object_key,
-            artifact.bytes, artifact.checksum_sha256, artifact.error
+            artifact.bytes, artifact.checksum_sha256, artifact.error,
+            artifact.error_code
        FROM ${databaseTable("backup_artifact")} artifact
        JOIN ${databaseTable("backup")} backup ON backup.id = artifact.backup_id
       WHERE backup.relay_id = ? AND artifact.status <> 'deleted'
@@ -1849,7 +1859,8 @@ export const reserveBackupRestoreEffect = Effect.fn("backups.reserveRestore")(
             ? yield* transaction.queryRows<BackupArtifactRow>(
                 `SELECT artifact.id, artifact.backup_id, artifact.storage_id,
                         artifact.status, artifact.filename, artifact.object_key,
-                        artifact.bytes, artifact.checksum_sha256, artifact.error
+                        artifact.bytes, artifact.checksum_sha256, artifact.error,
+            artifact.error_code
                    FROM ${databaseTable("backup_artifact")} artifact
                   WHERE artifact.backup_id = ? AND artifact.status = 'available'
                   ORDER BY (artifact.storage_id IS NULL) DESC, artifact.created_at ASC
@@ -2037,7 +2048,8 @@ export const reserveBackupDeleteEffect = Effect.fn("backups.reserveDelete")(
           artifacts: (yield* transaction.queryRows<BackupArtifactRow>(
             `SELECT artifact.id, artifact.backup_id, artifact.storage_id,
                       artifact.status, artifact.filename, artifact.object_key,
-                      artifact.bytes, artifact.checksum_sha256, artifact.error
+                      artifact.bytes, artifact.checksum_sha256, artifact.error,
+            artifact.error_code
                  FROM ${databaseTable("backup_artifact")} artifact
                 WHERE artifact.backup_id = ? AND artifact.status <> 'deleted'
                 ORDER BY (artifact.storage_id IS NULL) DESC, artifact.created_at ASC`,
@@ -2578,7 +2590,8 @@ export const reserveBackupCopyEffect = Effect.fn("backups.reserveCopy")(
         const existing = (yield* transaction.queryRows<BackupArtifactRow>(
           `SELECT artifact.id, artifact.backup_id, artifact.storage_id,
                     artifact.status, artifact.filename, artifact.object_key,
-                    artifact.bytes, artifact.checksum_sha256, artifact.error
+                    artifact.bytes, artifact.checksum_sha256, artifact.error,
+            artifact.error_code
                FROM ${databaseTable("backup_artifact")} artifact
               WHERE artifact.backup_id = ? AND artifact.destination_key = ?
               LIMIT 1`,

@@ -41,6 +41,8 @@ export interface BackupRunArtifact {
   bytes: number | null
   checksumSha256: string | null
   error: string | null
+  /** Why this copy failed, when the Relay could tell; see `backupFailureCodes`. */
+  errorCode: string | null
   filename: string | null
   id: string
   status: "available" | "deleted" | "deleting" | "failed" | "queued" | "running"
@@ -76,6 +78,8 @@ export interface BackupRun {
   taskCurrentArtifactId: string | null
   taskCurrentPath: string | null
   taskError: string | null
+  /** Why the task failed, when the Relay could tell; see `backupFailureCodes`. */
+  taskErrorCode: string | null
   taskId: string
   taskKind: "create" | "delete" | "export" | "restore"
   taskPhase:

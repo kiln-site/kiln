@@ -37,6 +37,7 @@ import {
   relayConsoleSchema,
   relayFileContentSchema,
   relayFileTreeSchema,
+  backupStorageProviderName,
   relayInstanceSchema,
   relayRemoteFileUploadSchema,
   relayRemoteFileUploadResultSchema,
@@ -63,9 +64,11 @@ import {
   type BackupDispatch,
 } from "@/effect/backups"
 import {
+  listBackupStorageEffect,
   loadBackupStorageCredentialEffect,
   loadBackupStorageEffect,
 } from "@/backups/destinations/s3"
+import { backupLatestFailure } from "@/lib/backup-failure-presentation"
 import { CliAccessError, RelayUnavailableError } from "@/effect/errors"
 import {
   allowedInstanceIdsEffect,
@@ -314,13 +317,24 @@ export const listCliBackupsEffect = Effect.fn("cli.api.backups.list")(
       { concurrency: 4 }
     )
     const reconciled = yield* loadCliBackupCatalogEffect()
+    const providers = new Map(
+      (yield* listBackupStorageEffect()).map((storage) => [
+        storage.id,
+        backupStorageProviderName(storage.endpoint),
+      ])
+    )
     return cliBackupsResponseSchema.parse({
       backups: reconciled
         .filter((backup) =>
           hasBackupPermission(principal.user, grants, backup, "backup.read")
         )
         .slice(0, limit)
-        .map(cliBackupSummary),
+        .map((backup) =>
+          cliBackupSummary(
+            backup,
+            (storageId) => providers.get(storageId) ?? null
+          )
+        ),
     })
   }
 )
@@ -1462,7 +1476,14 @@ function mapCliBackupFailure<TResult, TError, TRequirements>(
   )
 }
 
-function cliBackupSummary(backup: BackupCatalogRecord) {
+function cliBackupSummary(
+  backup: BackupCatalogRecord,
+  providerFor: (storageId: string) => string | null
+) {
+  // The CLI shows this as is; older CLIs reject new fields, so the
+  // explanation travels in the message.
+  const latest = backupLatestFailure(backup, providerFor)
+  const failure = latest?.explained
   return {
     artifactKind: backup.artifactKind,
     backupMode: backup.backupMode,
@@ -1482,7 +1503,13 @@ function cliBackupSummary(backup: BackupCatalogRecord) {
     status: backup.status,
     targetId: backup.targetId,
     targetKind: backup.targetKind,
-    taskError: backup.taskError,
+    taskError: latest
+      ? `${backup.taskKind === "delete" ? "Couldn't delete: " : ""}${
+          failure
+            ? `${failure.title}. ${failure.detail} (${failure.raw})`
+            : latest.message
+        }`
+      : null,
     taskStatus: backup.taskStatus,
   }
 }

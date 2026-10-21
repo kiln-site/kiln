@@ -10,6 +10,8 @@ export type BackupAvailabilityDestination = {
   id: string | null
   name: string
   ownerUserId: string | null
+  /** The storage provider behind it, such as "Backblaze B2", when known. */
+  provider: string | null
 }
 export interface BackupFilters {
   kind?: "database" | "relay" | "server"
