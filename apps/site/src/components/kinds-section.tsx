@@ -1,4 +1,5 @@
 import * as React from "react"
+import { Link } from "@tanstack/react-router"
 import {
   ArrowDown,
   Axe,
@@ -39,13 +40,15 @@ export function KindsSection() {
           visual={<BrickWall />}
         >
           Start from a Brick
-          <a
-            href="#kinds-note"
+          <Link
+            to="."
+            hash="kinds-note"
+            resetScroll={false}
             aria-label="See note"
             className="text-foreground no-underline"
           >
             *
-          </a>
+          </Link>
           . Kiln handles the rest.
         </Card>
         <Card

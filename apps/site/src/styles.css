@@ -17,6 +17,13 @@
 @source "../../web/src/components/workspace-power-controls.tsx";
 @source "../../web/src/components/workspace-toolbar-tooltip.tsx";
 
+/* Sections reached by a link clear the sticky header. */
+@layer base {
+  html {
+    scroll-padding-top: 5rem;
+  }
+}
+
 /*
  * The site shares Hearth's palette, flat corners, and type roles. These add
  * the few marketing-only scales Hearth has no use for.
