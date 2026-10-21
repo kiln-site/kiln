@@ -7,8 +7,10 @@ import {
   parseDocument,
   visit,
   type Document,
+  type Node,
   type YAMLMap,
 } from "yaml"
+import { Result } from "effect"
 
 // What a Compose file mounts into its services, read from the file as
 // written, and changed in place so the rest of it, comments included,
@@ -55,7 +57,7 @@ export function composeMounts(
 ): ReadonlyArray<ComposeMount> | null {
   const document = parseFile(text)
   if (document.errors.length > 0) return null
-  const file: unknown = document.toJS()
+  const file = resolved(document)
   if (!isRecord(file) || !isRecord(file.services)) return null
   const mounts: Array<ComposeMount> = []
   for (const [service, definition] of Object.entries(file.services)) {
@@ -90,6 +92,10 @@ export function composeMountProblem(
 ): string | null {
   if (!change.target.startsWith("/")) {
     return "Mount each at an absolute path, like /data."
+  }
+  // The short syntax would read what follows a colon as the mode.
+  if (change.target.includes(":")) {
+    return "A path it's mounted at can't contain a colon."
   }
   if (mount.kind === "bind" && !change.source.trim()) {
     return "Enter the path each bind mounts."
@@ -217,9 +223,12 @@ function changeFile(
 // hand first.
 function declareVolume(document: Document, name: string) {
   if (name.includes("$")) return
-  const file: unknown = document.toJS()
+  const file = resolved(document)
+  if (file === null) {
+    throw new Error("The Compose file has too many aliases to change here.")
+  }
   const declared = isRecord(file) ? file.volumes : undefined
-  if (isRecord(declared) && name in declared) return
+  if (isRecord(declared) && Object.hasOwn(declared, name)) return
   const volumes = document.get("volumes", true)
   if (isMap(document.contents) && !hasMerge(document.contents)) {
     if (volumes === undefined || (isScalar(volumes) && volumes.value === null)) {
@@ -252,6 +261,7 @@ function ownNode(
   if (!isNode(entry) || isAlias(entry)) return false
   if (hasMerge(services) || hasMerge(definition)) return false
   if ([services, definition, list].some((node) => node.anchor)) return false
+  if (interpolatedSettings(entry)) return false
   let shared = false
   visit(entry, {
     Alias: () => {
@@ -272,6 +282,44 @@ function ownNode(
     },
   })
   return !shared
+}
+
+// Settings a variable decides, like `read_only: ${READ_ONLY:-true}`, which
+// this can't read, so a change here could undo them.
+function interpolatedSettings(entry: unknown): boolean {
+  if (isScalar(entry)) {
+    return typeof entry.value === "string" &&
+      (splitShort(entry.value)[2] ?? "").includes("$")
+  }
+  if (!isMap(entry)) return false
+  return entry.items.some(
+    (pair) =>
+      isScalar(pair.key) &&
+      pair.key.value !== "source" &&
+      pair.key.value !== "target" &&
+      isNode(pair.value) &&
+      hasVariable(pair.value)
+  )
+}
+
+function hasVariable(node: Node): boolean {
+  let found = false
+  visit(node, {
+    Scalar: (_, scalar) => {
+      if (typeof scalar.value === "string" && scalar.value.includes("$")) {
+        found = true
+        return visit.BREAK
+      }
+    },
+  })
+  return found
+}
+
+// The file as plain values, or null when its aliases expand past what the
+// parser allows.
+function resolved(document: Document): unknown {
+  const result = Result.try(() => document.toJS() as unknown)
+  return Result.isSuccess(result) ? result.success : null
 }
 
 function hasMerge(map: YAMLMap): boolean {

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test"
 
-import { changeComposeMount, composeMounts } from "./compose-mounts"
+import {
+  changeComposeMount,
+  composeMountProblem,
+  composeMounts,
+} from "./compose-mounts"
 
 const project = "kiln-app-abc"
 
@@ -301,5 +305,68 @@ ${declarations}`
         })
       ).toThrow("Declare the volume new-data")
     }
+  })
+
+  it("leaves alone a mount whose settings a variable decides", () => {
+    const text = `services:
+  app:
+    image: app
+    volumes:
+      - type: bind
+        source: ./state
+        target: /state
+        read_only: \${READ_ONLY:-true}
+      - data:/data:\${MODE:-ro}
+volumes:
+  data: {}
+`
+    const found = composeMounts(text, project)!
+    expect(found.map((mount) => mount.editable)).toEqual([false, false])
+    for (const mount of found) {
+      expect(
+        changeComposeMount(text, mount.key, {
+          readOnly: false,
+          source: mount.source,
+          target: "/elsewhere",
+        })
+      ).toBe(text)
+    }
+  })
+
+  it("refuses a path with a colon, which the short syntax reads as its mode", () => {
+    const [mount] = mounts()
+    expect(
+      composeMountProblem(mount!, {
+        readOnly: false,
+        source: mount!.source,
+        target: "/data:ro",
+      })
+    ).not.toBeNull()
+  })
+
+  it("reads no mounts, rather than failing, from a file of too many aliases", () => {
+    const services = Array.from(
+      { length: 101 },
+      (_, at) => `  app${at}: *base`
+    ).join("\n")
+    const text = `x-base: &base
+  image: app
+  volumes:
+    - data:/data
+services:
+${services}
+volumes:
+  data: {}
+`
+    expect(composeMounts(text, project)).toBeNull()
+  })
+
+  it("declares a volume named like an object's own property", () => {
+    const changed = changeComposeMount(file, keyOf("/cache"), {
+      readOnly: false,
+      source: "constructor",
+      target: "/cache",
+    })
+    expect(changed).toMatch(/^ {2}constructor: \{\}$/mu)
   })
 })
