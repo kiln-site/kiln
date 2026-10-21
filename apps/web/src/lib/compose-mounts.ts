@@ -1,4 +1,5 @@
 import {
+  Document,
   isAlias,
   isMap,
   isNode,
@@ -6,9 +7,10 @@ import {
   isSeq,
   parseDocument,
   visit,
-  type Document,
   type Node,
+  type Scalar,
   type YAMLMap,
+  type YAMLSeq,
 } from "yaml"
 import { Result } from "effect"
 
@@ -103,12 +105,24 @@ export function composeMountProblem(
   if (change.source.includes(":") && !change.source.includes("${")) {
     return "A source can't contain a colon."
   }
+  const source = change.source.trim()
+  if (
+    source &&
+    !source.includes("$") &&
+    sourceKind(source) === "volume" &&
+    !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/u.test(source)
+  ) {
+    return "Name a volume with letters, digits, and . _ - only."
+  }
   return null
 }
 
-// The file with one mount changed, or removed when `change` is null.
-// Throws, with why, a change it can't make without changing more of the
-// file than the mount.
+// The file with one mount changed, or removed when `change` is null. Only
+// the text of what changes is rewritten; every other byte of the file stays
+// as it was, since a YAML library writing the whole file anew can change
+// values it never meant to, like long numbers and octal modes. Throws, with
+// why, a change it can't make without changing more of the file than the
+// mount.
 export function changeComposeMount(
   text: string,
   key: string,
@@ -117,103 +131,161 @@ export function changeComposeMount(
   const document = parseFile(text)
   const [service, section, index] = parseKey(key)
   if (!ownNode(document, [service, section, index])) return text
-  const path = ["services", service, section, index]
-  const node = document.getIn(path, true)
-  if (change === null) {
-    document.deleteIn(path)
-    // An empty list reads as an error to Compose.
-    const rest = document.getIn(["services", service, section], true)
-    if (isSeq(rest) && rest.items.length === 0) {
-      document.deleteIn(["services", service, section])
-    }
-    return document.toString()
+  const list = document.getIn(["services", service, section], true) as YAMLSeq
+  const entry = list.items[index] as Node
+  if (change === null) return removeEntry(text, document, service, section, list, entry)
+  const patches =
+    section === "volumes"
+      ? changeVolume(text, document, entry, change)
+      : changeFile(text, entry, section, change)
+  return applyPatches(text, patches)
+}
+
+interface Patch {
+  end: number
+  start: number
+  text: string
+}
+
+function removeEntry(
+  text: string,
+  document: Document,
+  service: string,
+  section: Section,
+  list: YAMLSeq,
+  entry: Node
+): string {
+  // An empty list reads as an error to Compose, so the last one takes its
+  // key with it.
+  if (list.items.length === 1) {
+    const definition = document.getIn(["services", service], true) as YAMLMap
+    const pair = definition.items.find(
+      (candidate) => isScalar(candidate.key) && candidate.key.value === section
+    )
+    const keyNode = pair?.key as Node | undefined
+    if (!keyNode?.range || !list.range) return text
+    return applyPatches(text, [
+      {
+        end: lineEnd(text, Math.max(list.range[1] - 1, keyNode.range[1])),
+        start: lineStart(text, keyNode.range[0]),
+        text: "",
+      },
+    ])
   }
-  if (section === "volumes") {
-    changeVolume(document, path, node, change)
-  } else {
-    changeFile(document, path, node, section, change)
-  }
-  return document.toString()
+  const range = entry.range!
+  return applyPatches(text, [
+    {
+      end: lineEnd(text, Math.max(range[1] - 1, range[0])),
+      start: lineStart(text, range[0]),
+      text: "",
+    },
+  ])
 }
 
 function changeVolume(
+  text: string,
   document: Document,
-  path: ReadonlyArray<string | number>,
-  node: unknown,
+  entry: Node,
   change: ComposeMountChange
-) {
+): Array<Patch> {
   const source = change.source.trim()
-  if (isScalar(node) && typeof node.value === "string") {
+  if (isScalar(entry) && typeof entry.value === "string") {
     // The short syntax's source says what it is, as Compose reads it.
-    const [first, second, mode] = splitShort(node.value)
+    const [first, second, mode] = splitShort(entry.value)
     const before = second === undefined ? "" : first
-    if (source && source !== before && sourceKind(source) === "volume") {
-      declareVolume(document, source)
-    }
+    const declared =
+      source && source !== before && sourceKind(source) === "volume"
+        ? declareVolume(text, document, source)
+        : []
     const flags = (mode ?? "")
       .split(",")
       .filter((flag) => flag && flag !== "ro" && flag !== "rw")
     if (change.readOnly) flags.push("ro")
-    if (!source) {
-      // An anonymous volume is only its target; a mode would read as one,
-      // so a read-only one is written out in full.
-      document.setIn(
-        path,
-        change.readOnly
-          ? document.createNode({
-              type: "volume",
-              target: change.target,
-              read_only: true,
-            })
-          : change.target
-      )
-      return
-    }
-    node.value = [
-      source,
-      change.target,
-      ...(flags.length ? [flags.join(",")] : []),
-    ].join(":")
-    return
+    // An anonymous volume is only its target; a mode would read as one,
+    // so a read-only one is written out in full.
+    const replacement = !source
+      ? change.readOnly
+        ? flowMap({ type: "volume", target: change.target, read_only: true })
+        : scalarText(change.target, entry)
+      : scalarText(
+          [source, change.target, ...(flags.length ? [flags.join(",")] : [])]
+            .join(":"),
+          entry
+        )
+    return [...declared, replaceNode(entry, replacement)]
   }
-  if (!isMap(node)) return
+  if (!isMap(entry)) return []
   // The long syntax names its type, which stays as it is.
-  if (
-    node.get("type") === "volume" &&
-    source &&
-    source !== node.get("source")
-  ) {
-    declareVolume(document, source)
-  }
-  if (source) node.set("source", source)
-  else node.delete("source")
-  node.set("target", change.target)
-  if (change.readOnly) node.set("read_only", true)
-  else node.delete("read_only")
+  const declared =
+    entry.get("type") === "volume" && source && source !== entry.get("source")
+      ? declareVolume(text, document, source)
+      : []
+  return [
+    ...declared,
+    ...setPair(text, entry, "source", source || null),
+    ...setPair(text, entry, "target", change.target),
+    ...setPair(text, entry, "read_only", change.readOnly ? true : null),
+  ]
 }
 
 function changeFile(
-  document: Document,
-  path: ReadonlyArray<string | number>,
-  node: unknown,
+  text: string,
+  entry: Node,
   section: "configs" | "secrets",
   change: ComposeMountChange
-) {
-  const name = isScalar(node)
-    ? String(node.value)
-    : isMap(node)
-      ? String(node.get("source"))
-      : ""
-  if (!name) return
-  if (isScalar(node)) {
-    if (change.target === defaultFileTarget(section, name)) return
-    document.setIn(
-      path,
-      document.createNode({ source: name, target: change.target })
-    )
-    return
+): Array<Patch> {
+  if (isScalar(entry)) {
+    const name = String(entry.value)
+    if (change.target === defaultFileTarget(section, name)) return []
+    return [replaceNode(entry, flowMap({ source: name, target: change.target }))]
   }
-  if (isMap(node)) node.set("target", change.target)
+  if (!isMap(entry)) return []
+  return setPair(text, entry, "target", change.target)
+}
+
+// A map's key set to a value, added after its last key, or removed when the
+// value is null.
+function setPair(
+  text: string,
+  map: YAMLMap,
+  key: string,
+  value: string | boolean | null
+): Array<Patch> {
+  const pair = map.items.find(
+    (candidate) => isScalar(candidate.key) && candidate.key.value === key
+  )
+  const first = map.items[0]?.key as Node | undefined
+  if (pair) {
+    const keyNode = pair.key as Node
+    const valueNode = pair.value as Node | null
+    if (value !== null) {
+      if (isScalar(valueNode) && valueNode.value === value) return []
+      if (!isScalar(valueNode)) {
+        throw new Error(`Change ${key} in the Compose file.`)
+      }
+      return [replaceNode(valueNode, scalarText(value, valueNode))]
+    }
+    // The first key shares its line with the list's dash.
+    if (keyNode === first || !keyNode.range) {
+      throw new Error(`Remove ${key} in the Compose file.`)
+    }
+    const end = valueNode?.range ? valueNode.range[1] : keyNode.range[1]
+    return [
+      {
+        end: lineEnd(text, Math.max(end - 1, keyNode.range[0])),
+        start: lineStart(text, keyNode.range[0]),
+        text: "",
+      },
+    ]
+  }
+  if (value === null || !first?.range || !map.range) return []
+  return [
+    insertLine(
+      text,
+      map.range[1],
+      `${" ".repeat(column(text, first.range[0]))}${key}: ${scalarText(value)}`
+    ),
+  ]
 }
 
 // A named volume Compose doesn't know of yet, declared at the top level,
@@ -221,28 +293,124 @@ function changeFile(
 // already known. Declarations shared with another part of the file, or
 // brought in by a merge, aren't changed; the file needs it declared by
 // hand first.
-function declareVolume(document: Document, name: string) {
-  if (name.includes("$")) return
+function declareVolume(
+  text: string,
+  document: Document,
+  name: string
+): Array<Patch> {
+  if (name.includes("$")) return []
   const file = resolved(document)
   if (file === null) {
     throw new Error("The Compose file has too many aliases to change here.")
   }
   const declared = isRecord(file) ? file.volumes : undefined
-  if (isRecord(declared) && Object.hasOwn(declared, name)) return
-  const volumes = document.get("volumes", true)
-  if (isMap(document.contents) && !hasMerge(document.contents)) {
-    if (volumes === undefined || (isScalar(volumes) && volumes.value === null)) {
-      document.set("volumes", document.createNode({ [name]: {} }))
-      return
+  if (isRecord(declared) && Object.hasOwn(declared, name)) return []
+  const root = document.contents
+  const firstService = (document.get("services", true) as YAMLMap).items[0]
+    ?.key as Node | undefined
+  const indent = " ".repeat(
+    firstService?.range ? column(text, firstService.range[0]) || 2 : 2
+  )
+  const declaration = `${name}: {}`
+  if (isMap(root) && !hasMerge(root)) {
+    const pair = root.items.find(
+      (candidate) => isScalar(candidate.key) && candidate.key.value === "volumes"
+    )
+    const keyNode = pair?.key as Node | undefined
+    const volumes = pair?.value as Node | null | undefined
+    if (!pair) {
+      return [
+        insertLine(text, text.length, `volumes:\n${indent}${declaration}`),
+      ]
     }
-    if (isMap(volumes) && !volumes.anchor && !hasMerge(volumes)) {
-      volumes.set(name, document.createNode({}))
-      return
+    // "volumes:" with nothing after it.
+    if (
+      keyNode?.range &&
+      (volumes === null ||
+        (isScalar(volumes) &&
+          volumes.value === null &&
+          volumes.range?.[0] === volumes.range?.[1]))
+    ) {
+      return [
+        insertLine(
+          text,
+          lineEnd(text, keyNode.range[1]),
+          `${indent}${declaration}`
+        ),
+      ]
+    }
+    const first = isMap(volumes) ? (volumes.items[0]?.key as Node) : undefined
+    if (
+      isMap(volumes) &&
+      !volumes.flow &&
+      !volumes.anchor &&
+      !hasMerge(volumes) &&
+      volumes.range &&
+      first?.range
+    ) {
+      return [
+        insertLine(
+          text,
+          volumes.range[1],
+          `${" ".repeat(column(text, first.range[0]))}${declaration}`
+        ),
+      ]
     }
   }
   throw new Error(
     `Declare the volume ${name} under volumes in the Compose file first.`
   )
+}
+
+function replaceNode(node: Node, text: string): Patch {
+  const [start, end] = node.range!
+  return { end, start, text }
+}
+
+// A line of its own at `at`, which starts a line or ends the file.
+function insertLine(text: string, at: number, line: string): Patch {
+  const before = at > 0 && text[at - 1] !== "\n" ? "\n" : ""
+  return { end: at, start: at, text: `${before}${line}\n` }
+}
+
+function applyPatches(text: string, patches: ReadonlyArray<Patch>): string {
+  return [...patches]
+    .sort((a, b) => b.start - a.start)
+    .reduce(
+      (current, patch) =>
+        current.slice(0, patch.start) + patch.text + current.slice(patch.end),
+      text
+    )
+}
+
+// A value written as YAML would read it back, in the quotes the value it
+// replaces used.
+function scalarText(value: string | boolean, like?: Scalar): string {
+  if (typeof value === "boolean") return String(value)
+  if (like?.type === "QUOTE_DOUBLE") return JSON.stringify(value)
+  if (like?.type === "QUOTE_SINGLE") return `'${value.replaceAll("'", "''")}'`
+  return new Document(value).toString().trimEnd()
+}
+
+function flowMap(entries: Record<string, string | boolean>): string {
+  const pairs = Object.entries(entries).map(
+    ([key, value]) => `${key}: ${scalarText(value)}`
+  )
+  return `{ ${pairs.join(", ")} }`
+}
+
+function lineStart(text: string, at: number): number {
+  return text.lastIndexOf("\n", at - 1) + 1
+}
+
+// Past the end of the line `at` is on, its newline included.
+function lineEnd(text: string, at: number): number {
+  const end = text.indexOf("\n", at)
+  return end === -1 ? text.length : end + 1
+}
+
+function column(text: string, at: number): number {
+  return at - lineStart(text, at)
 }
 
 // Whether the entry is the file's own to change: it, the list it's in, and
@@ -261,7 +429,9 @@ function ownNode(
   if (!isNode(entry) || isAlias(entry)) return false
   if (hasMerge(services) || hasMerge(definition)) return false
   if ([services, definition, list].some((node) => node.anchor)) return false
-  if (interpolatedSettings(entry)) return false
+  // Its lines are what's rewritten, so they're the block style's own.
+  if ([services, definition, list].some((node) => node.flow)) return false
+  if (unreadableSettings(entry)) return false
   let shared = false
   visit(entry, {
     Alias: () => {
@@ -284,14 +454,32 @@ function ownNode(
   return !shared
 }
 
-// Settings a variable decides, like `read_only: ${READ_ONLY:-true}`, which
-// this can't read, so a change here could undo them.
-function interpolatedSettings(entry: unknown): boolean {
+// Settings this can't read for certain, so a change here could undo them:
+// what a variable decides, like `read_only: ${READ_ONLY:-true}` or a whole
+// mount in one variable, and a read_only that isn't plainly true or false.
+function unreadableSettings(entry: Node): boolean {
   if (isScalar(entry)) {
-    return typeof entry.value === "string" &&
-      (splitShort(entry.value)[2] ?? "").includes("$")
+    if (typeof entry.value !== "string") return true
+    if (entry.type === "BLOCK_FOLDED" || entry.type === "BLOCK_LITERAL") {
+      return true
+    }
+    const [first, target, mode] = splitShort(entry.value)
+    return (
+      (target === undefined && first.includes("$")) ||
+      (target ?? "").includes("$") ||
+      (mode ?? "").includes("$")
+    )
   }
-  if (!isMap(entry)) return false
+  if (!isMap(entry) || entry.flow) return true
+  const readOnly = entry.items.find(
+    (pair) => isScalar(pair.key) && pair.key.value === "read_only"
+  )
+  if (
+    readOnly &&
+    !(isScalar(readOnly.value) && typeof readOnly.value.value === "boolean")
+  ) {
+    return true
+  }
   return entry.items.some(
     (pair) =>
       isScalar(pair.key) &&
@@ -367,7 +555,8 @@ function volumeMount(
       entry.type === "volume" ? volumeName(file, project, source) : null,
     kind: entry.type,
     origin: null,
-    readOnly: entry.read_only === true,
+    // Compose takes "true" for true too.
+    readOnly: entry.read_only === true || entry.read_only === "true",
     source,
     target: entry.target,
   }

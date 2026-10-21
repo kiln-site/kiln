@@ -369,4 +369,118 @@ volumes:
     })
     expect(changed).toMatch(/^ {2}constructor: \{\}$/mu)
   })
+
+  it("writes only what changes, leaving every other byte as it was", () => {
+    const text = `services:
+  bot:
+    image: bot
+    entrypoint: ["/bin/sh", "-ec"]
+    environment:
+      DISCORD_GUILD_ID: 1234567890123456789
+    volumes:
+      - data:/data   # kept
+      - type: volume
+        source: logs
+        target: /logs
+        read_only: true
+      - /scratch
+    secrets:
+      - source: token
+        mode: 0440
+volumes:
+  data: {}
+  logs: {}
+secrets:
+  token:
+    file: ./token
+`
+    const keyAt = (target: string) =>
+      composeMounts(text, project)!.find((mount) => mount.target === target)!
+        .key
+    expect(
+      changeComposeMount(text, keyAt("/data"), {
+        readOnly: true,
+        source: "cache",
+        target: "/data",
+      })
+    ).toBe(
+      text
+        .replace("data:/data   # kept", "cache:/data:ro   # kept")
+        .replace("  logs: {}\n", "  logs: {}\n  cache: {}\n")
+    )
+    expect(
+      changeComposeMount(text, keyAt("/logs"), {
+        readOnly: false,
+        source: "logs",
+        target: "/var/log",
+      })
+    ).toBe(
+      text
+        .replace("target: /logs\n        read_only: true\n", "target: /var/log\n")
+    )
+    expect(
+      changeComposeMount(text, keyAt("/scratch"), {
+        readOnly: true,
+        source: "",
+        target: "/scratch",
+      })
+    ).toBe(
+      text.replace(
+        "- /scratch",
+        "- { type: volume, target: /scratch, read_only: true }"
+      )
+    )
+    expect(changeComposeMount(text, keyAt("/scratch"), null)).toBe(
+      text.replace("      - /scratch\n", "")
+    )
+    expect(changeComposeMount(text, keyAt("/run/secrets/token"), null)).toBe(
+      text.replace("    secrets:\n      - source: token\n        mode: 0440\n", "")
+    )
+  })
+
+  it("declares a volume where the file has none declared yet", () => {
+    for (const [declarations, expected] of [
+      ["", "volumes:\n  data: {}\n"],
+      ["volumes:\n", "volumes:\n  data: {}\n"],
+    ] as const) {
+      const text = `services:\n  app:\n    image: app\n    volumes:\n      - ./data:/data\n${declarations}`
+      const [mount] = composeMounts(text, project)!
+      expect(
+        changeComposeMount(text, mount!.key, {
+          readOnly: false,
+          source: "data",
+          target: "/data",
+        })
+      ).toBe(
+        `services:\n  app:\n    image: app\n    volumes:\n      - data:/data\n${expected}`
+      )
+    }
+  })
+
+  it("leaves alone a mount written whole in a variable, or whose access isn't plainly true or false", () => {
+    const text = `services:
+  db:
+    image: postgres
+    volumes:
+      - \${DB_MOUNT:-data:/var/lib/postgresql/data:ro}
+      - type: volume
+        source: data
+        target: /data
+        read_only: "true"
+volumes:
+  data: {}
+`
+    const found = composeMounts(text, project)!
+    expect(found.map((mount) => mount.editable)).toEqual([false, false])
+    expect(found[1]!.readOnly).toBe(true)
+    for (const mount of found) {
+      expect(
+        changeComposeMount(text, mount.key, {
+          readOnly: false,
+          source: "data",
+          target: "/elsewhere",
+        })
+      ).toBe(text)
+    }
+  })
 })
