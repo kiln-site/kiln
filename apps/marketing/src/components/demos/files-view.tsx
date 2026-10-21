@@ -57,9 +57,11 @@ import { useDemoShare } from "~/components/demos/demo-share"
 import { demoServer } from "~/components/demos/demo-server"
 import {
   demoFiles,
+  demoDatabasePath,
   demoTreePaths,
   initialFilePath,
 } from "~/components/demos/editor-files"
+import { onFilesDemoCommand } from "~/components/demos/files-demo-commands"
 
 interface FileState {
   saved: string
@@ -168,8 +170,51 @@ function Files({
 
   const file = files[path]
 
+  // The feature list above the demo opens the tree, focuses its search, or
+  // opens a file, as clicking in the demo would.
+  const rootRef = React.useRef<HTMLDivElement>(null)
+  const searchRef = React.useRef<HTMLInputElement>(null)
+  React.useEffect(
+    () =>
+      onFilesDemoCommand((command) => {
+        const root = rootRef.current
+        root?.scrollIntoView({
+          behavior: window.matchMedia("(prefers-reduced-motion: reduce)")
+            .matches
+            ? "auto"
+            : "smooth",
+          block: "nearest",
+        })
+        const treeShown = () =>
+          treeResize.panelRef.current?.checkVisibility() ?? false
+        const showTree = () => {
+          setTreeCollapsed(false)
+          // Narrow windows show the tree over the file instead.
+          if (!treeShown()) setMobileTreeOpen(true)
+        }
+        if (command === "open-tree") {
+          if (!treeShown()) showTree()
+          return
+        }
+        if (command === "search") {
+          showTree()
+          window.requestAnimationFrame(() => searchRef.current?.focus())
+          return
+        }
+        const target =
+          command === "open-nbt" ? "world/level.dat" : demoDatabasePath
+        revealPath(model, target)
+        setPath(target)
+        setMobileTreeOpen(false)
+      }),
+    [model, treeResize.panelRef]
+  )
+
   return (
-    <div className="relative flex min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden @3xl/window:flex-row">
+    <div
+      ref={rootRef}
+      className="relative flex min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden @3xl/window:flex-row"
+    >
       <aside
         ref={treeResize.panelRef}
         aria-label="Files"
@@ -194,7 +239,7 @@ function Files({
               <House className="size-[18px]" />
             </Button>
           </EditorTooltip>
-          <TreeSearch model={model} />
+          <TreeSearch inputRef={searchRef} model={model} />
           <div className="flex shrink-0 items-center gap-0.5">
             <Button variant="ghost" size="icon-sm" aria-label="New">
               <Plus className="size-[18px]" />
@@ -336,8 +381,10 @@ function Files({
 }
 
 function TreeSearch({
+  inputRef,
   model,
 }: {
+  inputRef: React.Ref<HTMLInputElement>
   model: ReturnType<typeof useFileTree>["model"]
 }) {
   const search = useFileTreeSearch(model)
@@ -345,6 +392,7 @@ function TreeSearch({
     <label className="flex h-full min-w-0 flex-1 items-center">
       <Search className="ml-1 size-[18px] shrink-0 text-foreground/90 md:ml-1.5" />
       <input
+        ref={inputRef}
         type="search"
         value={search.value}
         placeholder="Search files…"
@@ -709,4 +757,24 @@ function useTreeResize() {
   }
 
   return { handleProps, panelRef }
+}
+
+// Selects a path in the tree the way Hearth reveals one: its folders open,
+// the old selection clears, and the tree scrolls to it.
+function revealPath(
+  model: ReturnType<typeof useFileTree>["model"],
+  path: string
+) {
+  const segments = path.split("/")
+  for (let depth = 1; depth < segments.length; depth++) {
+    const parent = model.getItem(`${segments.slice(0, depth).join("/")}/`)
+    if (parent && "isExpanded" in parent && !parent.isExpanded()) {
+      parent.expand()
+    }
+  }
+  for (const selected of model.getSelectedPaths()) {
+    model.getItem(selected)?.deselect()
+  }
+  model.getItem(path)?.select()
+  model.scrollToPath(path, { focus: false, offset: "nearest" })
 }

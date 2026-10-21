@@ -8,6 +8,10 @@ import { CyclingWord } from "~/components/cycling-word"
 import { ComingSoon } from "~/components/coming-soon"
 import { ClientDemo } from "~/components/demos/client-demo"
 import { KindsSection } from "~/components/kinds-section"
+import {
+  sendFilesDemoCommand,
+  type FilesDemoCommand,
+} from "~/components/demos/files-demo-commands"
 import { signUpUrl } from "~/lib/plans"
 import { comingSoon } from "~/lib/coming-soon"
 import { newTab } from "~/lib/new-tab"
@@ -150,12 +154,17 @@ function Kinds() {
   )
 }
 
-const editorFeatures = [
-  { icon: FolderTree, label: "File tree" },
-  { icon: Search, label: "Search files" },
-  { icon: Share2, label: "One-click share" },
-  { icon: Braces, label: "View and edit NBT" },
-  { icon: Database, label: "View and edit SQLite" },
+// Each opens its part of the files demo below, except share.
+const editorFeatures: Array<{
+  command: FilesDemoCommand | null
+  icon: typeof FolderTree
+  label: string
+}> = [
+  { command: "open-tree", icon: FolderTree, label: "File tree" },
+  { command: "search", icon: Search, label: "Search files" },
+  { command: null, icon: Share2, label: "One-click share" },
+  { command: "open-nbt", icon: Braces, label: "View and edit NBT" },
+  { command: "open-sqlite", icon: Database, label: "View and edit SQLite" },
 ]
 
 function Editor() {
@@ -166,13 +175,23 @@ function Editor() {
           Browse, edit, and share every file on your servers.
         </SectionHeading>
         <ul className="mt-8 flex flex-wrap gap-x-8 gap-y-4">
-          {editorFeatures.map(({ icon: Icon, label }) => (
-            <li
-              key={label}
-              className="flex items-center gap-2.5 text-[0.9375rem] font-medium text-foreground"
-            >
-              <Icon className="size-[18px] shrink-0 text-primary" />
-              {label}
+          {editorFeatures.map(({ command, icon: Icon, label }) => (
+            <li key={label}>
+              {command ? (
+                <button
+                  type="button"
+                  className="flex items-center gap-2.5 text-[0.9375rem] font-medium text-foreground underline-offset-4 outline-none hover:underline focus-visible:underline"
+                  onClick={() => sendFilesDemoCommand(command)}
+                >
+                  <Icon className="size-[18px] shrink-0 text-primary" />
+                  {label}
+                </button>
+              ) : (
+                <span className="flex items-center gap-2.5 text-[0.9375rem] font-medium text-foreground">
+                  <Icon className="size-[18px] shrink-0 text-primary" />
+                  {label}
+                </span>
+              )}
             </li>
           ))}
         </ul>
