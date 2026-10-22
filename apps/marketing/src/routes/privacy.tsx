@@ -72,6 +72,10 @@ function PrivacyRoute() {
           with the application secret, but no internet service can promise
           perfect security.
         </p>
+        <p>
+          This website uses self-hosted, cookieless web analytics to count page
+          visits. It does not set tracking cookies.
+        </p>
       </LegalSection>
 
       <LegalSection title="Your choices">

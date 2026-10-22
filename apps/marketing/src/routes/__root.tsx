@@ -16,6 +16,7 @@ import { SiteFooter } from "~/components/site-footer"
 import { SiteHeader } from "~/components/site-header"
 import { siteName } from "~/lib/seo"
 import { getSiteConfig } from "~/lib/site-config"
+import { useSiteConfig } from "~/lib/use-site-config"
 
 export const Route = createRootRoute({
   loader: () => getSiteConfig(),
@@ -56,7 +57,7 @@ export const Route = createRootRoute({
 })
 
 function RootDocument({ children }: { children: ReactNode }) {
-  const { analytics } = Route.useLoaderData()
+  const { analytics } = useSiteConfig()
 
   return (
     <html lang="en" className="dark">
