@@ -66,11 +66,15 @@ function updateStatus(updates: AppImageUpdates): {
     if (updates.latestDigest === updates.skippedDigest) {
       return { label: "Skipped", tone: "muted" }
     }
-    return updates.autoUpdateAt !== null
-      ? {
-          label: `Deploys ${dateFormatter.format(updates.autoUpdateAt)}`,
-          tone: "attention",
-        }
+    if (updates.autoUpdateAt !== null) {
+      return {
+        label: `Deploys ${dateFormatter.format(updates.autoUpdateAt)}`,
+        tone: "attention",
+      }
+    }
+    // An automatic update waits for a check that gets through.
+    return updates.mode === "auto" && updates.checkError
+      ? { label: "Check failed", tone: "problem" }
       : { label: "Update available", tone: "attention" }
   }
   if (updates.checkError) return { label: "Check failed", tone: "problem" }

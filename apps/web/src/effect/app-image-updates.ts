@@ -264,11 +264,15 @@ function nextUpdate(
   }
 }
 
-/** When an update deploys on its own: once it's been out the app's wait. */
+/**
+ * When an update deploys on its own: once it's been out the app's wait,
+ * and the last check got through, so it's still what the tag names.
+ */
 export function autoUpdateAt(update: AppImageUpdate): number | null {
   if (
     update.mode !== "auto" ||
     update.state !== "available" ||
+    update.checkError !== null ||
     update.latestDigest === null ||
     update.latestSeenAt === null ||
     update.latestDigest === update.skippedDigest

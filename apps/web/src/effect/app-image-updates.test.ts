@@ -111,6 +111,17 @@ describeMysql("App image updates", () => {
           const waiting = yield* checked(2, [1])
           assert.strictEqual(autoUpdateAt(waiting.update), start + 72 * hour)
 
+          // A failed check can't say the tag still names it, so it waits for
+          // one that gets through, its wait kept.
+          const failed = yield* recordAppImageCheckEffect(appId, image, {
+            appId,
+            error: "ghcr.io answered 503",
+            status: "error",
+          })
+          assert.isNull(autoUpdateAt(failed.update))
+          const recovered = yield* checked(2, [1])
+          assert.strictEqual(autoUpdateAt(recovered.update), start + 72 * hour)
+
           assert.isTrue(yield* skipAppImageUpdateEffect(appId, digest(2)))
           const skipped = yield* checked(2, [1])
           assert.isNull(autoUpdateAt(skipped.update))

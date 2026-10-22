@@ -1203,20 +1203,22 @@ export class AppDriver {
             newestFirst(left, right)
         )[0]
       const deploying = this.#deployments.get(appId)?.state === "running"
-      return { appId, container, deploying, reference }
-    })
-    const wanted = new Set<string>()
-    for (const { container, deploying, reference } of checks) {
-      if (
+      // The name to look up, while the container runs the image its config
+      // names by tag: another image, or a digest, which never moves, has
+      // nothing to compare.
+      const lookup =
         !deploying &&
         container &&
         Result.isSuccess(reference) &&
         reference.success.digest === undefined &&
         sameImage(container.image, reference.success)
-      ) {
-        wanted.add(normalizedReference(reference.success))
-      }
-    }
+          ? normalizedReference(reference.success)
+          : null
+      return { appId, container, deploying, lookup, reference }
+    })
+    const wanted = new Set(
+      checks.flatMap(({ lookup }) => (lookup === null ? [] : [lookup]))
+    )
     const latest = new Map(
       await docker(
         Effect.forEach(
@@ -1237,6 +1239,7 @@ export class AppDriver {
           appId,
           container,
           deploying,
+          lookup,
           reference,
         }): Promise<RelayAppImageCheckResult> => {
           if (Result.isFailure(reference)) {
@@ -1248,8 +1251,9 @@ export class AppDriver {
           }
           if (deploying) return { appId, status: "deploying" }
           if (!container) return { appId, status: "not_deployed" }
-          const found = latest.get(normalizedReference(reference.success))
-          // Another image, or one pinned to a digest, which never moves.
+          // Its own lookup only: another app naming the same image says
+          // nothing of what this one runs.
+          const found = lookup === null ? undefined : latest.get(lookup)
           if (!found) return { appId, status: "changed" }
           if (Result.isFailure(found)) {
             return {

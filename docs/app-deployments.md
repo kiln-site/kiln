@@ -82,7 +82,8 @@ Each app chooses, from **Updates** on its Deployment card:
   wait, three days unless changed. Registries don't say when a tag moved,
   so the wait counts from when Kiln first saw the digest. A tag that moves
   again before then offers its newest image and waits again; Kiln never
-  deploys an image the tag has moved past.
+  deploys an image the tag has moved past. While the registry can't be
+  reached, the update waits for a check that gets through.
 - **Off**: no checks.
 
 **Update now** deploys the image on offer, whatever its wait. **Skip**
@@ -92,8 +93,10 @@ digest Kiln found, checks again when its turn comes that it's still due,
 and isn't tried again for the same digest once it has run, however it
 went. Deploying an image update again from the Deployments list deploys
 its digest, as a rollback, and an automatic update doesn't deploy the
-image it rolled back from again. Unless checks are off, an image deployment checks the app again
-when it ends, so the card shows what it runs.
+image it rolled back from again. A Relay too old to deploy by digest
+refuses the rollback rather than pull the tag. Unless checks are off, an
+image deployment checks the app again when it ends, so the card shows what
+it runs.
 
 ## Rolling deployments
 

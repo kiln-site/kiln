@@ -1887,6 +1887,19 @@ describe("image updates", () => {
       { appId, status: "changed" },
     ])
 
+    // One running another image than its config names learns nothing from
+    // an app that runs that image, checked beside it.
+    await deploy(harness, { image: "redis:7" }, "d".repeat(40))
+    expect(
+      await check(harness, [
+        { appId, image: "nginx:alpine" },
+        { appId: "d".repeat(40), image: "nginx:alpine" },
+      ])
+    ).toEqual([
+      { appId, latestDigest: second, runningDigests: [first], status: "checked" },
+      { appId: "d".repeat(40), status: "changed" },
+    ])
+
     fakeDocker.unreachableImages.add("nginx:alpine")
     expect(await check(harness, [{ appId, image: "nginx:alpine" }])).toEqual([
       expect.objectContaining({ appId, status: "error" }),

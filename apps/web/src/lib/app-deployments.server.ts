@@ -110,20 +110,30 @@ export const startAppDeploymentEffect = Effect.fn("Apps.deploy")(function* (
   if (!app) return yield* Effect.fail(new Error("App not found"))
   // An app switched to another source keeps its repository, unused.
   if (automatic && app.config.sourceType !== "github") return null
-  const imageDigest =
-    request.trigger === "update"
-      ? yield* imageUpdateDigest(relay, app.config, request)
-      : request.imageDigest &&
-          app.config.sourceType === "image" &&
-          relayConnectionFeatures(relay.id).has(relayAppImageUpdatesV1Feature)
-        ? request.imageDigest
-        : undefined
-  if (imageDigest === null) return null
   if (request.commit && app.config.sourceType !== "github") {
     return yield* Effect.fail(
       new Error("The app no longer deploys from GitHub")
     )
   }
+  // A rollback deploys its digest or nothing: pulling the tag instead could
+  // deploy the very image it rolls back from.
+  if (request.imageDigest !== undefined) {
+    if (app.config.sourceType !== "image") {
+      return yield* Effect.fail(
+        new Error("The app no longer deploys from an image")
+      )
+    }
+    if (!relayConnectionFeatures(relay.id).has(relayAppImageUpdatesV1Feature)) {
+      return yield* Effect.fail(
+        new Error("Update this Relay to deploy an image by its digest")
+      )
+    }
+  }
+  const imageDigest =
+    request.trigger === "update"
+      ? yield* imageUpdateDigest(relay, app.config, request)
+      : request.imageDigest
+  if (imageDigest === null) return null
   const prepared =
     app.config.sourceType === "github"
       ? yield* githubCommit(relay, request).pipe(
