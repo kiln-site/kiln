@@ -124,15 +124,14 @@ const kindOrder: ReadonlyArray<InstancePickerKind> = [
 const emptyGroups: ReadonlySet<InstancePickerGroup> = new Set()
 const emptyGroupList: ReadonlyArray<InstancePickerGroup> = []
 
-// Whether the surrounding picker opens as a phone drawer, and its trigger;
-// set by InstancePickerPopover, read by its trigger, content, and the list.
+// Whether the surrounding picker opens as a phone drawer, its trigger, and a
+// callback for when its surface has finished closing; set by
+// InstancePickerPopover, read by its trigger, content, and the list.
 const InstancePickerSurfaceContext = React.createContext<{
+  closed: () => void
   drawer: boolean
   triggerRef: React.RefObject<HTMLElement | null>
-}>({ drawer: false, triggerRef: { current: null } })
-
-const pickerSurfaceSelector =
-  '[data-slot="drawer-content"],[data-slot="popover-content"]'
+}>({ closed: () => undefined, drawer: false, triggerRef: { current: null } })
 
 /**
  * A popover for an instance picker that opens as a bottom drawer on phones,
@@ -150,26 +149,42 @@ export function InstancePickerPopover({
 }) {
   const isMobile = useIsMobile()
   const [drawer, setDrawer] = React.useState(isMobile)
+  // Swap between popover and drawer only while closed, so rotating a phone
+  // past the breakpoint keeps an open picker and its search. A picker that
+  // closes with a swap pending waits until its surface has finished closing
+  // and handed focus back, then swaps.
+  const [closing, setClosing] = React.useState(false)
+  const [wasOpen, setWasOpen] = React.useState(open)
+  if (wasOpen !== open) {
+    setWasOpen(open)
+    setClosing(!open && drawer !== isMobile)
+  }
+  const closed = React.useCallback(() => setClosing(false), [])
   const triggerRef = React.useRef<HTMLElement | null>(null)
   const refocusTrigger = React.useRef(false)
-  // Swap between popover and drawer only while closed, so rotating a phone
-  // past the breakpoint keeps an open picker and its search. Swapping rebuilds
-  // the trigger, so focus that was on the picker moves to the new one.
   React.useLayoutEffect(() => {
-    if (open || drawer === isMobile) return
+    if (open || closing || drawer === isMobile) return
+    // Swapping rebuilds the trigger; keep focus on it if it had focus.
     const active = document.activeElement
     refocusTrigger.current =
-      active instanceof HTMLElement &&
-      (triggerRef.current?.contains(active) === true ||
-        active.closest(pickerSurfaceSelector) !== null)
+      active !== null && triggerRef.current?.contains(active) === true
     setDrawer(isMobile)
-  }, [drawer, isMobile, open])
+  }, [closing, drawer, isMobile, open])
   React.useLayoutEffect(() => {
     if (!refocusTrigger.current) return
     refocusTrigger.current = false
     triggerRef.current?.focus({ preventScroll: true })
   }, [drawer])
-  const surface = React.useMemo(() => ({ drawer, triggerRef }), [drawer])
+  // In case a surface closes without reporting it.
+  React.useEffect(() => {
+    if (!closing) return
+    const timeout = window.setTimeout(closed, 1000)
+    return () => window.clearTimeout(timeout)
+  }, [closed, closing])
+  const surface = React.useMemo(
+    () => ({ closed, drawer, triggerRef }),
+    [closed, drawer]
+  )
   const Root = drawer ? Drawer : Popover
   return (
     <InstancePickerSurfaceContext.Provider value={surface}>
@@ -210,15 +225,25 @@ export function InstancePickerPopoverContent({
   title,
   ...props
 }: React.ComponentProps<typeof PopoverContent> & { title: string }) {
-  if (!React.useContext(InstancePickerSurfaceContext).drawer) {
+  const { closed, drawer } = React.useContext(InstancePickerSurfaceContext)
+  // Runs once the surface has unmounted, just before focus returns to the
+  // trigger unless the caller prevents it.
+  const handleCloseAutoFocus = React.useCallback(
+    (event: Event) => {
+      onCloseAutoFocus?.(event)
+      closed()
+    },
+    [closed, onCloseAutoFocus]
+  )
+  if (!drawer) {
     return (
-      <PopoverContent onCloseAutoFocus={onCloseAutoFocus} {...props}>
+      <PopoverContent onCloseAutoFocus={handleCloseAutoFocus} {...props}>
         {children}
       </PopoverContent>
     )
   }
   return (
-    <DrawerContent onCloseAutoFocus={onCloseAutoFocus}>
+    <DrawerContent onCloseAutoFocus={handleCloseAutoFocus}>
       <DrawerTitle className="sr-only">{title}</DrawerTitle>
       {children}
     </DrawerContent>
