@@ -6,7 +6,7 @@ import { Check, LoaderCircle, UserRoundPlus, Users } from "lucide-react"
 import { showToast } from "@workspace/ui/components/sonner"
 import { cn } from "@workspace/ui/lib/utils"
 
-import { AccountAvatar } from "@/components/account-avatar"
+import { AccountAvatar, UserAvatar } from "@/components/account-avatar"
 import { recoverPromise } from "@/effect/promise"
 import { clearAppearanceCache } from "@/lib/appearance"
 import { authClient } from "@/lib/auth-client"
@@ -130,7 +130,10 @@ export const AccountSwitcherSection = React.memo(
                   })
                 }}
               >
-                <AccountAvatar name={account.name} />
+                <UserAvatar
+                  name={account.name}
+                  profileId={account.minecraftProfileId ?? undefined}
+                />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate">{account.name}</span>
                   <span className="block truncate text-xs text-muted-foreground">

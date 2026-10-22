@@ -5,7 +5,7 @@ import { ChevronRight, LoaderCircle, LogOut, UserRoundPlus } from "lucide-react"
 import { Button } from "@workspace/ui/components/button"
 import { showToast } from "@workspace/ui/components/sonner"
 
-import { AccountAvatar } from "@/components/account-avatar"
+import { UserAvatar } from "@/components/account-avatar"
 import {
   addAccountHref,
   signOutAllAccounts,
@@ -101,7 +101,10 @@ export function BrowserAccountsPage({
                 })
               }}
             >
-              <AccountAvatar name={account.name} />
+              <UserAvatar
+                name={account.name}
+                profileId={account.minecraftProfileId ?? undefined}
+              />
               <span className="min-w-0 flex-1">
                 <span className="flex items-center gap-2">
                   <span className="truncate text-sm font-medium">
