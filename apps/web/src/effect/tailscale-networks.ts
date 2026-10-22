@@ -100,7 +100,8 @@ export const createTailscaleNetworkDefinitionEffect = Effect.fn(
 )(function* (
   definition: Omit<TailscaleNetworkDefinition, "cleanup" | "integration">,
   credential: Omit<TailscaleOAuthCredential, "clientSecret">,
-  clientSecret: string
+  clientSecret: string,
+  ownerId: string
 ) {
   const database = yield* Database
   const ciphertext = yield* encryptTailscaleClientSecretEffect(clientSecret)
@@ -108,13 +109,15 @@ export const createTailscaleNetworkDefinitionEffect = Effect.fn(
   yield* database.execute(
     "tailscaleNetworks.create",
     `INSERT INTO ${databaseTable("tailscale_network")}
-       (id, name, domain, oauth_client_id, oauth_client_secret_ciphertext,
-        oauth_scopes, oauth_tags, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, name, domain, owner_id, oauth_client_id,
+        oauth_client_secret_ciphertext, oauth_scopes, oauth_tags, created_at,
+        updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       definition.id,
       definition.name,
       definition.domain,
+      ownerId,
       credential.clientId,
       ciphertext,
       JSON.stringify(credential.scopes),
@@ -127,7 +130,7 @@ export const createTailscaleNetworkDefinitionEffect = Effect.fn(
 
 export const saveTailscaleNetworkDefinitionEffect = Effect.fn(
   "tailscaleNetworks.save"
-)(function* (definition: TailscaleNetworkDefinition) {
+)(function* (definition: TailscaleNetworkDefinition, ownerId: string) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
   yield* database.transaction("tailscaleNetworks.save", (transaction) =>
@@ -151,9 +154,9 @@ export const saveTailscaleNetworkDefinitionEffect = Effect.fn(
       }
       yield* transaction.execute(
         `INSERT INTO ${databaseTable("tailscale_network")}
-         (id, name, domain, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?)`,
-        [definition.id, definition.name, definition.domain, now, now]
+         (id, name, domain, owner_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+        [definition.id, definition.name, definition.domain, ownerId, now, now]
       )
     })
   )

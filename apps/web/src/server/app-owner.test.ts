@@ -34,7 +34,8 @@ const sessionUser = (id: string): AuthenticatedUser => ({
   twoFactorEnabled: false,
 })
 
-// App permissions are granted on a Relay, for every app on it.
+// App permissions are granted on a Relay, for every app on it, or by owning
+// the app.
 const grant = (
   userId: string,
   grantRelayId: string,
@@ -67,6 +68,7 @@ const insertApp = (id: string, createdBy: string) =>
     name: id.slice(0, 8),
     config_ciphertext: "unused",
     created_by: createdBy,
+    owner_id: createdBy,
     created_at: 0,
     updated_at: 0,
   })
@@ -110,8 +112,8 @@ describeMysql("app owner", () => {
           const owner = yield* ownerFor("manager")
 
           assert.deepStrictEqual(owner, {
-            email: "owner@example.test",
-            name: "Steve",
+            canTransfer: false,
+            owner: { email: "owner@example.test", name: "Steve" },
           })
         })
     )
@@ -124,7 +126,10 @@ describeMysql("app owner", () => {
 
           const owner = yield* ownerFor("viewer")
 
-          assert.deepStrictEqual(owner, { email: null, name: "Steve" })
+          assert.deepStrictEqual(owner, {
+            canTransfer: false,
+            owner: { email: null, name: "Steve" },
+          })
         })
     )
 
@@ -164,13 +169,26 @@ describeMysql("app owner", () => {
       })
     )
 
-    it.effect("an app whose creator is gone has no owner", () =>
+    it.effect("an app whose owner is gone has no owner", () =>
       Effect.gen(function* () {
         yield* seed
 
         const owner = yield* ownerFor("viewer", orphanedId)
 
-        assert.isNull(owner)
+        assert.isNull(owner.owner)
+      })
+    )
+
+    it.effect("the owner sees their app and may hand it on", () =>
+      Effect.gen(function* () {
+        yield* seed
+
+        const owner = yield* ownerFor("owner")
+
+        assert.deepStrictEqual(owner, {
+          canTransfer: true,
+          owner: { email: null, name: "Steve" },
+        })
       })
     )
   })

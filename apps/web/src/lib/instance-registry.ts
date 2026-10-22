@@ -243,25 +243,33 @@ export const updateInstanceSourceNameEffect = Effect.fn(
 })
 
 // Records each instance's name and stable metadata, creating missing rows.
+// A new row belongs to `ownerId`, or to the Relay's owner when Hearth doesn't
+// know who made it; an existing row keeps its owner.
 function upsertInstancesStatement(
   relayId: string,
   instances: ReadonlyArray<DirectoryInstance>,
-  now: number
+  now: number,
+  ownerId?: string
 ) {
+  const owner = ownerId
+    ? "?"
+    : `(SELECT created_by FROM ${databaseTable("relay")} WHERE id = ?)`
   return [
     `INSERT INTO ${databaseTable("instance")}
        (relay_id, instance_id, display_name, source_name, directory_metadata,
-        created_at, updated_at)
-     VALUES ${instances.map(() => "(?, ?, NULL, ?, ?, ?, ?)").join(", ")}
+        owner_id, created_at, updated_at)
+     VALUES ${instances.map(() => `(?, ?, NULL, ?, ?, ${owner}, ?, ?)`).join(", ")}
      ON DUPLICATE KEY UPDATE
        source_name = VALUES(source_name),
        directory_metadata = VALUES(directory_metadata),
+       owner_id = COALESCE(owner_id, VALUES(owner_id)),
        updated_at = VALUES(updated_at)`,
     instances.flatMap((instance) => [
       relayId,
       instance.id,
       instance.name.slice(0, 255),
       instanceDirectoryMetadata(instance),
+      ownerId ?? relayId,
       now,
       now,
     ]),
@@ -311,13 +319,17 @@ export const updateInstanceDirectoryEffect = Effect.fn(
 /** Records a server Hearth created outside the provisioning flow. */
 export const recordCreatedInstanceEffect = Effect.fn(
   "instances.registry.recordCreated"
-)(function* (relayId: string, instance: DirectoryInstance) {
+)(function* (
+  relayId: string,
+  instance: DirectoryInstance,
+  ownerId: string
+) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
   yield* lifecycleWrite(relayId, { created: instance.id })(
     database.execute(
       "instances.registry.recordCreated",
-      ...upsertInstancesStatement(relayId, [instance], now)
+      ...upsertInstancesStatement(relayId, [instance], now, ownerId)
     )
   )
   yield* publishDirectoryChange(relayId)

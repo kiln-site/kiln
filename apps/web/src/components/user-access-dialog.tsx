@@ -274,7 +274,9 @@ function AccessForm({
             ? "game server"
             : resource.scope.resourceType === "database"
               ? "database"
-              : "Relay"
+              : resource.scope.resourceType === "app"
+                ? "app"
+                : "Relay"
         }. Transfer ownership to change this.`,
         selections: [],
         presetIds: [],

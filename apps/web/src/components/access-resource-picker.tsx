@@ -19,20 +19,28 @@ import {
   ServerKindIcon,
 } from "@/components/instance-kind-icon"
 import type { PermissionContext } from "@/components/permission-editor"
-import type { ResourceScope } from "@/lib/resource-permissions"
+import type {
+  AccessGrantScope,
+  ResourceScope,
+} from "@/lib/resource-permissions"
 import type { getAccessResources } from "@/server/resource-access"
 
 export type Resource = Awaited<
   ReturnType<typeof getAccessResources>
 >["resources"][number]
-export type AccessScope = ResourceScope & { name?: string; relayName?: string }
+export type AccessScope = AccessGrantScope & {
+  name?: string
+  relayName?: string
+}
 export const EMPTY_RESOURCES: Array<Resource> = []
 
 export const scopeKey = (scope: ResourceScope) =>
   `${scope.relayId}:${scope.resourceType}:${scope.resourceId}`
 
 /** The context chips for a scope, from whichever names are known. */
-export function contextFor(scope: AccessScope): PermissionContext {
+export function contextFor(
+  scope: ResourceScope & { name?: string; relayName?: string }
+): PermissionContext {
   return {
     scope: {
       relayId: scope.relayId,

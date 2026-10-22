@@ -71,14 +71,15 @@ export const createAppRecordEffect = Effect.fn("apps.create")(
     yield* database.execute(
       "app_create",
       `INSERT INTO ${databaseTable("app")}
-      (app_id, relay_id, name, config_ciphertext, created_by, created_at,
-       updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      (app_id, relay_id, name, config_ciphertext, created_by, owner_id,
+       created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         input.appId,
         input.relayId,
         input.name,
         ciphertext,
+        input.createdBy,
         input.createdBy,
         now,
         now,

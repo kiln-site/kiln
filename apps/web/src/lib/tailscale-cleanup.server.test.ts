@@ -119,7 +119,8 @@ const seedNetworkBeingDeleted = Effect.gen(function* () {
   yield* createTailscaleNetworkDefinitionEffect(
     { domain, id: networkId, name: "Private Network" },
     { clientId: "tailscale-client", scopes: [], tags: ["tag:kiln"] },
-    fake.tailnetSecret
+    fake.tailnetSecret,
+    "user-one"
   )
   yield* requestTailscaleNetworkCleanupEffect(networkId, "user-one", [
     deployment(),
@@ -203,7 +204,8 @@ describeMysql("Tailscale cleanup worker", () => {
           yield* createTailscaleNetworkDefinitionEffect(
             { domain, id: networkId, name: "Private Network" },
             { clientId: "tailscale-client", scopes: [], tags: ["tag:kiln"] },
-            fake.tailnetSecret
+            fake.tailnetSecret,
+            "user-one"
           )
           yield* requestTailscaleNetworkCleanupEffect(networkId, "user-one", [])
           fake.tailnetDown = false
@@ -241,7 +243,7 @@ describeMysql("Tailscale cleanup worker", () => {
             id: networkId,
             integration: null,
             name: "Private Network",
-          })
+          }, "user-one")
           yield* requestTailscaleNetworkCleanupEffect(networkId, "user-one", [])
           yield* insertRows("tailscale_network_deployment", {
             network_id: networkId,

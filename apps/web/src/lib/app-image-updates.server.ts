@@ -109,7 +109,7 @@ const announce = Effect.fnUntraced(function* (
     return
   }
   const recipients = yield* resourceAudienceEffect(
-    { relayId: relay.id, resourceId: relay.id, resourceType: "relay" },
+    { relayId: relay.id, resourceId: update.appId, resourceType: "app" },
     "app.manage"
   )
   const delivered = yield* notifyUsersEffect(

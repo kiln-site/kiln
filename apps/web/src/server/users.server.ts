@@ -15,6 +15,7 @@ import { peopleFilter } from "@/server/resource-access.server"
 import {
   effectiveScopePermissions,
   loadResourceGrantsEffect,
+  type AccessGrantScope,
   type ResourceScope,
 } from "@/lib/resource-permissions"
 
@@ -50,7 +51,7 @@ export interface ManagedUser {
   access: {
     relays: number
     instances: number
-    /** Apps have no grants of their own, so only those they created. */
+    /** Apps have no grants of their own, so only those they own. */
     apps: number
     databases: number
     /** Of those, how many they own; ownership must be transferred first. */
@@ -82,11 +83,10 @@ interface UserRow extends RowDataPacket {
 
 interface HoldingRow extends RowDataPacket {
   user_id: string
-  resource_type: ResourceScope["resourceType"] | "app"
+  resource_type: ResourceScope["resourceType"]
   relay_id: string
   resource_id: string
-  /** Apps have no grants or owner; creating one is all that links a person to it. */
-  state: "pending" | "active" | "created" | "owner"
+  state: "pending" | "active" | "owner"
   relay_enabled: number
 }
 
@@ -107,7 +107,8 @@ const holdsSomething = `(${hasCredential}
   OR EXISTS (SELECT 1 FROM ${databaseTable("invitation")} i WHERE i.user_id = u.id AND ${openInvitation("i")})
   OR EXISTS (SELECT 1 FROM ${databaseTable("access_grant")} g WHERE g.user_id = u.id AND g.state <> 'revoked')
   OR EXISTS (SELECT 1 FROM ${databaseTable("instance")} s WHERE s.owner_id = u.id)
-  OR EXISTS (SELECT 1 FROM ${databaseTable("database")} d WHERE d.created_by = u.id)
+  OR EXISTS (SELECT 1 FROM ${databaseTable("database")} d WHERE d.owner_id = u.id)
+  OR EXISTS (SELECT 1 FROM ${databaseTable("app")} a WHERE a.owner_id = u.id)
   OR EXISTS (SELECT 1 FROM ${databaseTable("relay")} r WHERE r.created_by = u.id))`
 
 export async function listManagedUsersHandler(
@@ -155,9 +156,9 @@ export async function listManagedUsersHandler(
 async function userHoldings(userIds: ReadonlyArray<string>) {
   const result = new Map<string, Array<HoldingRow>>()
   if (!userIds.length) return result
-  // Ownership follows authority: a Relay's creator and a game server's
-  // owner. Databases have no owner, so their creators aren't listed.
-  // Disabled Relays are kept so ownership there still blocks removal.
+  // Ownership follows authority: a Relay's creator and the owner of a game
+  // server, database or app. Disabled Relays are kept so ownership there
+  // still blocks removal.
   const [rows] = await databasePool.query<Array<HoldingRow>>(
     `SELECT g.user_id, g.resource_type, g.relay_id, g.resource_id, g.state, r.enabled AS relay_enabled
        FROM ${databaseTable("access_grant")} g
@@ -171,17 +172,22 @@ async function userHoldings(userIds: ReadonlyArray<string>) {
        JOIN ${databaseTable("relay")} r ON r.id = s.relay_id
       WHERE s.owner_id IN (?)
      UNION ALL
-     SELECT a.created_by, 'app', a.relay_id, a.app_id, 'created', r.enabled
+     SELECT d.owner_id, 'database', d.relay_id, d.database_id, 'owner', r.enabled
+       FROM ${databaseTable("database")} d
+       JOIN ${databaseTable("relay")} r ON r.id = d.relay_id
+      WHERE d.owner_id IN (?)
+     UNION ALL
+     SELECT a.owner_id, 'app', a.relay_id, a.app_id, 'owner', r.enabled
        FROM ${databaseTable("app")} a
        JOIN ${databaseTable("relay")} r ON r.id = a.relay_id
-      WHERE a.created_by IN (?)
+      WHERE a.owner_id IN (?)
      UNION ALL
      SELECT r.created_by, 'relay', r.id, r.id, 'owner', r.enabled
        FROM ${databaseTable("relay")} r
       WHERE r.created_by IN (?)`,
-    [userIds, Date.now(), userIds, userIds, userIds]
+    [userIds, Date.now(), userIds, userIds, userIds, userIds]
   )
-  const strength = { pending: 0, created: 1, active: 2, owner: 3 } as const
+  const strength = { pending: 0, active: 1, owner: 2 } as const
   const strongest = new Map<string, HoldingRow>()
   for (const row of rows) {
     const key = `${row.user_id}|${row.resource_type}|${row.relay_id}|${row.resource_id}`
@@ -275,7 +281,7 @@ interface GrantRow extends RowDataPacket {
   revision: number
   state: "pending" | "active"
   relay_id: string
-  resource_type: ResourceScope["resourceType"]
+  resource_type: AccessGrantScope["resourceType"]
   resource_id: string
   resource_name: string | null
   relay_name: string
@@ -286,7 +292,7 @@ export interface UserAccessGrant {
   id: string
   revision: number
   state: "pending" | "active"
-  scope: ResourceScope
+  scope: AccessGrantScope
   resourceName: string
   relayName: string
   selections: Array<PermissionSelection>
@@ -403,8 +409,16 @@ export async function getUserAccessHandler(
      UNION ALL
      SELECT s.relay_id, 'instance', s.instance_id, COALESCE(s.display_name, s.source_name, s.instance_id), r.name
        FROM ${databaseTable("instance")} s JOIN ${databaseTable("relay")} r ON r.id = s.relay_id AND r.enabled = TRUE
-      WHERE s.owner_id = ?`,
-    [userId, userId]
+      WHERE s.owner_id = ?
+     UNION ALL
+     SELECT d.relay_id, 'database', d.database_id, d.name, r.name
+       FROM ${databaseTable("database")} d JOIN ${databaseTable("relay")} r ON r.id = d.relay_id AND r.enabled = TRUE
+      WHERE d.owner_id = ?
+     UNION ALL
+     SELECT a.relay_id, 'app', a.app_id, a.name, r.name
+       FROM ${databaseTable("app")} a JOIN ${databaseTable("relay")} r ON r.id = a.relay_id AND r.enabled = TRUE
+      WHERE a.owner_id = ?`,
+    [userId, userId, userId, userId]
   )
   const holdings = await userHoldings([userId])
   return {
@@ -463,7 +477,7 @@ export async function getUserMinecraftProfilesHandler(
   actor: AuthenticatedUser,
   userIds: ReadonlyArray<string>,
   /** Outside the platform view: a resource whose people the actor can read. */
-  scope?: ResourceScope
+  scope?: AccessGrantScope
 ): Promise<Record<string, string>> {
   const admin = isPlatformAdmin(actor)
   if (!admin) {

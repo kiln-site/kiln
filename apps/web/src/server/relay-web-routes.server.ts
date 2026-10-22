@@ -48,7 +48,7 @@ export async function relayWebRoutesHandler(
   const canRead = (owner: RelayWebRoute["owner"]) =>
     isPlatformAdmin(user) ||
     (owner.kind === "app"
-      ? hasAppPermission(user, grants, relayId, "app.read")
+      ? hasAppPermission(user, grants, { appId: owner.id, relayId }, "app.read")
       : effectiveScopePermissions(grants, {
           relayId,
           resourceType: "instance",

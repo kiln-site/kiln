@@ -179,7 +179,7 @@ export function redirectToFirstAccessibleDatabaseDestination(
 
 export function requireAppDestinationAccess(
   queryClient: QueryClient,
-  app: { relayId: string },
+  app: { id: string; relayId: string },
   destinationId: AppDestinationId,
   routeId: string
 ): Promise<void> {
@@ -193,7 +193,7 @@ export function requireAppDestinationAccess(
 
 export function redirectToFirstAccessibleAppDestination(
   queryClient: QueryClient,
-  app: { relayId: string },
+  app: { id: string; relayId: string },
   routeId: string
 ): Promise<void> {
   return requireResourceDestination(

@@ -63,7 +63,7 @@ import {
   type PermissionAssignment,
 } from "@/components/permission-editor"
 import { UserAccessDialog } from "@/components/user-access-dialog"
-import { transferInstanceOwnership } from "@/server/access"
+import { transferResourceOwnership } from "@/server/access"
 import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
 import type { ResourceScope } from "@/lib/resource-permissions"
 import {
@@ -359,7 +359,7 @@ function ResourceAccessPanel({
     },
   })
   const transfer = useMutation({
-    mutationFn: transferInstanceOwnership,
+    mutationFn: transferResourceOwnership,
     onError: errorToast,
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["resource-access"] })
@@ -434,8 +434,13 @@ function ResourceAccessPanel({
           <DialogHeader>
             <DialogTitle>Transfer ownership?</DialogTitle>
             <DialogDescription>
-              {transferTarget?.name} will become the only owner of this server.
-              Your remaining access follows your assignments.
+              {transferTarget?.name} will become the only owner of this{" "}
+              {scope.resourceType === "instance"
+                ? "game server"
+                : scope.resourceType === "database"
+                  ? "database"
+                  : "Relay"}
+              . Your remaining access follows your assignments.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -454,7 +459,8 @@ function ResourceAccessPanel({
                 transfer.mutate({
                   data: {
                     relayId: scope.relayId,
-                    instanceId: scope.resourceId,
+                    resourceType: scope.resourceType,
+                    resourceId: scope.resourceId,
                     userId: transferTarget.userId,
                   },
                 })

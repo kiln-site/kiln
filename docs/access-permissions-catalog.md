@@ -104,7 +104,7 @@ operation payloads, not inferred from names.
 | database.dump.import               | Import data; supported engines only.                                                                                                                 |
 | database.logs.read                 | Watch the database container's live output.                                                                                                          |
 | database.limits.write              | Change the database's memory, CPU, and disk limits.                                                                                                  |
-| app.read                           | View apps, their containers, and configuration (environment needs app.manage). Relay scope only.                                                     |
+| app.read                           | View apps, their containers, and configuration (environment needs app.manage). Granted at Relay scope; an app's owner holds it on that app.        |
 | app.create                         | Relay-scoped app creation.                                                                                                                           |
 | app.manage                         | Configure, deploy, start/stop, network, and set limits for apps.                                                                                    |
 | app.delete                         | Delete apps, their containers, and data.                                                                                                             |
@@ -180,7 +180,20 @@ They must not disappear merely because the new catalog replaces accessRoles.
 
 Platform-admin acceptance, verification, disable/enable, and platform role changes
 are not granted by an instance/Relay ALL. Resource owners are protected separately;
-a full preset does not transfer ownership. New permission collections do not
+a full preset does not transfer ownership.
+
+Every Relay, game server, database, and app has an owner, who holds ALL on it:
+the person who paired the Relay or created the resource. Ownership is its own
+source of authority, so it survives narrowed or revoked Relay grants. Apps have
+no grants of their own, so ownership is the only app-scoped authority; it covers
+the app permissions on that one app, never people, presets, backups, or
+schedules. Only the owner or an administrator transfers ownership, to someone
+who already has access there: a grant on the Relay or the resource, or Relay
+ownership. Someone who owns anything can't be removed until it is transferred.
+Tailscale networks record the administrator who added them; they stay
+administrator-only. Resources from before owners existed went to their creator
+when that was an administrator or the Relay's owner, and otherwise to the
+Relay's owner, so nobody gained access. New permission collections do not
 bypass resource limits, storage-destination checks, or platform policy.
 
 ## 6. Implication graph and operation conditions

@@ -1,8 +1,18 @@
 import { z } from "zod"
 
-export const permissionScopeTypes = ["relay", "instance", "database"] as const
+export const permissionScopeTypes = [
+  "relay",
+  "instance",
+  "database",
+  "app",
+] as const
 export const permissionScopeTypeSchema = z.enum(permissionScopeTypes)
 export type PermissionScopeType = (typeof permissionScopeTypes)[number]
+// Scopes people can be invited to. An app is reached only through its Relay
+// or by owning it.
+export const accessGrantScopeTypes = ["relay", "instance", "database"] as const
+export const accessGrantScopeTypeSchema = z.enum(accessGrantScopeTypes)
+export type AccessGrantScopeType = (typeof accessGrantScopeTypes)[number]
 
 export const permissionSelectionSchema = z
   .object({
@@ -139,8 +149,10 @@ export interface PermissionPreset extends PermissionCollection {
 }
 
 const allScopes = Object.freeze([...permissionScopeTypes])
+const grantScopes = Object.freeze([...accessGrantScopeTypes])
 const instanceScopes = Object.freeze(["relay", "instance"] as const)
 const databaseScopes = Object.freeze(["relay", "database"] as const)
+const appScopes = Object.freeze(["relay", "app"] as const)
 const relayScopes = Object.freeze(["relay"] as const)
 
 const implicationEdges: Partial<
@@ -272,8 +284,10 @@ const familyScopes: Record<PermissionFamily, readonly PermissionScopeType[]> = {
   relay: relayScopes,
   instance: instanceScopes,
   database: databaseScopes,
-  app: relayScopes,
-  shared: allScopes,
+  app: appScopes,
+  // People, presets, backups and schedules live on resources people can be
+  // invited to, never on one app.
+  shared: grantScopes,
 }
 
 /** Base visibility a family always carries; shared permissions take the target's. */
@@ -890,7 +904,7 @@ export const builtinPermissionPresets: readonly PermissionPreset[] =
       label: "Observer",
       description:
         "Inspect status, console, configuration, networks, backups, and schedules. Does not include downloading files, backups, or credentials.",
-      scopeTypes: allScopes,
+      scopeTypes: grantScopes,
       selections: Object.freeze(
         [
           "overview.all",
@@ -912,7 +926,7 @@ export const builtinPermissionPresets: readonly PermissionPreset[] =
       label: "Operator",
       description:
         "Operate servers, files, networks, backups, and schedules without managing people or deleting resources.",
-      scopeTypes: allScopes,
+      scopeTypes: grantScopes,
       selections: Object.freeze(
         [
           "overview.all",
@@ -937,7 +951,7 @@ export const builtinPermissionPresets: readonly PermissionPreset[] =
       label: "Administrator",
       description:
         "All current and future permissions in this scope. Does not transfer ownership or grant platform authority.",
-      scopeTypes: allScopes,
+      scopeTypes: grantScopes,
       selections: Object.freeze([selection("collection", "all")]),
     }),
   ])

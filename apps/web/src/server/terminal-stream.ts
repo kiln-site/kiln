@@ -125,6 +125,7 @@ export function appTerminalTarget(
     },
     authorize: (current) =>
       requireRelayPermission({
+        appId,
         permission: "app.terminal",
         relayId: relay.id,
         user: current,

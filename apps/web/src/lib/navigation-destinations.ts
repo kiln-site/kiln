@@ -66,7 +66,7 @@ export interface NavigationAccessCapabilities {
   grants: ReadonlyArray<{
     relayId: string
     resourceId: string
-    resourceType: "database" | "instance" | "relay"
+    resourceType: "app" | "database" | "instance" | "relay"
     permissions: readonly AccessPermission[]
   }>
   isPlatformAdmin: boolean
@@ -507,17 +507,24 @@ export const appDestinations = [
   },
 ] as const satisfies ReadonlyArray<AppDestination>
 
-// App permissions are granted on a Relay, for all of its apps.
+// Granted on the app's Relay, for all of its apps, or by owning the app.
 export function canAccessAppPermission(
   capabilities: NavigationAccessCapabilities,
-  app: { relayId: string },
+  app: { id: string; relayId: string },
   permission: AccessPermission
 ): boolean {
-  return canAccessRelayPermission(capabilities, app.relayId, permission)
+  if (capabilities.isPlatformAdmin) return true
+  return capabilities.grants.some(
+    (grant) =>
+      grant.relayId === app.relayId &&
+      (grant.resourceType === "relay" ||
+        (grant.resourceType === "app" && grant.resourceId === app.id)) &&
+      grantHasPermission(grant, permission)
+  )
 }
 
 export function accessibleDestinationsForApp(
-  app: { relayId: string },
+  app: { id: string; relayId: string },
   capabilities: NavigationAccessCapabilities
 ): ReadonlyArray<AppDestination> {
   const destinations: ReadonlyArray<AppDestination> = appDestinations
@@ -664,7 +671,7 @@ export function canAccessInfrastructureDestination(
   // action is what they came for.
   if (destination.access === "app-read") {
     return (
-      hasScopedPermission(capabilities, "app.read", ["relay"]) ||
+      hasScopedPermission(capabilities, "app.read", ["relay", "app"]) ||
       hasScopedPermission(capabilities, "app.create", ["relay"])
     )
   }

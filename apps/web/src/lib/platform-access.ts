@@ -18,13 +18,14 @@ import {
   advanceSubjectAcrossEnabledRelaysEffect,
 } from "@/lib/authorization-revision"
 import { databaseTable } from "@/lib/database-config"
+import type { ResourceScope } from "@/lib/resource-permissions"
 
 interface PlatformRoleUserRow extends RowDataPacket, AccountPolicy {
   id: string
   email: string
   role: string | null
 }
-interface InstanceOwnerGrantRow extends RowDataPacket {
+interface OwnerGrantRow extends RowDataPacket {
   user_id: string
 }
 
@@ -216,31 +217,60 @@ function advancePlatformAuthorization(
   })
 }
 
-export function transferInstanceOwnershipEffect(
+// What each kind of resource is called in errors, and where its owner is
+// written.
+const ownedResources = {
+  app: {
+    label: "app",
+    write: `UPDATE ${databaseTable("app")} SET owner_id = ? WHERE relay_id = ? AND app_id = ?`,
+  },
+  database: {
+    label: "database",
+    write: `UPDATE ${databaseTable("database")} SET owner_id = ? WHERE relay_id = ? AND database_id = ?`,
+  },
+  instance: { label: "game server", write: null },
+  relay: {
+    label: "Relay",
+    write: `UPDATE ${databaseTable("relay")} SET created_by = ? WHERE id = ? AND id = ?`,
+  },
+} as const
+
+/**
+ * Makes `userId` the owner of a Relay, game server, database or app. Only an
+ * administrator or the current owner may, and the new owner needs an active
+ * account and access there already: to own the Relay or hold a grant on it
+ * or on the resource. Apps have no grants of their own, so their new owner
+ * needs Relay access.
+ */
+export function transferResourceOwnershipEffect(
   user: AuthenticatedUser,
-  data: { relayId: string; instanceId: string; userId: string }
+  data: ResourceScope & { userId: string }
 ) {
+  const resource = ownedResources[data.resourceType]
   return Effect.gen(function* () {
     const database = yield* Database
     return yield* database.transaction(
-      "access.instance.transferOwnership",
+      "access.resource.transferOwnership",
       (transaction) =>
         Effect.gen(function* () {
           const actor = yield* lockAccessActorEffect(transaction, user)
-          const resource = yield* lockAccessScopeEffect(transaction, {
+          const scope: ResourceScope = {
             relayId: data.relayId,
-            resourceType: "instance",
-            resourceId: data.instanceId,
-          })
-          const ownerId = resource.owner_id
+            resourceType: data.resourceType,
+            resourceId: data.resourceId,
+          }
+          const ownerId = (yield* lockAccessScopeEffect(transaction, scope))
+            .owner_id
           if (!isPlatformAdmin(actor) && ownerId !== actor.id) {
             return yield* Effect.fail(
-              new Error("Only the server owner can transfer ownership")
+              new Error(
+                `Only the ${resource.label} owner can transfer ownership`
+              )
             )
           }
           if (ownerId === data.userId) {
             return yield* Effect.fail(
-              new Error("This user already owns the server")
+              new Error(`This user already owns the ${resource.label}`)
             )
           }
 
@@ -258,36 +288,61 @@ export function transferInstanceOwnershipEffect(
               new Error("The new owner must have an enabled, verified account")
             )
           }
-          const targetGrants =
-            yield* transaction.queryRows<InstanceOwnerGrantRow>(
-              `SELECT user_id FROM ${databaseTable("access_grant")} WHERE user_id = ? AND relay_id = ?
-                  AND state = 'active' AND (resource_type = 'relay' OR (resource_type = 'instance' AND resource_id = ?)) LIMIT 1 FOR UPDATE`,
-              [data.userId, data.relayId, data.instanceId]
-            )
-          if (target.role !== "admin" && !targetGrants[0])
+          const resourceGrant =
+            data.resourceType === "relay" || data.resourceType === "app"
+              ? ""
+              : " OR (resource_type = ? AND resource_id = ?)"
+          const targetGrants = yield* transaction.queryRows<OwnerGrantRow>(
+            `SELECT user_id FROM ${databaseTable("access_grant")} WHERE user_id = ? AND relay_id = ?
+                AND state = 'active' AND (resource_type = 'relay'${resourceGrant}) LIMIT 1 FOR UPDATE`,
+            [
+              data.userId,
+              data.relayId,
+              ...(resourceGrant ? [data.resourceType, data.resourceId] : []),
+            ]
+          )
+          const relayOwners = yield* transaction.queryRows<OwnerGrantRow>(
+            `SELECT created_by AS user_id FROM ${databaseTable("relay")} WHERE id = ? AND created_by = ?`,
+            [data.relayId, data.userId]
+          )
+          if (target.role !== "admin" && !targetGrants[0] && !relayOwners[0])
             return yield* Effect.fail(
               new Error(
-                "Give this user active server access before transferring ownership"
+                data.resourceType === "relay" || data.resourceType === "app"
+                  ? "Give this user access to the Relay before transferring ownership"
+                  : `Give this user access to the ${resource.label} before transferring ownership`
               )
             )
 
           const now = yield* Clock.currentTimeMillis
+          if (resource.write) {
+            yield* transaction.execute(resource.write, [
+              data.userId,
+              data.relayId,
+              data.resourceId,
+            ])
+          } else {
+            yield* transaction.execute(
+              `INSERT INTO ${databaseTable("instance")}
+                     (relay_id, instance_id, display_name, owner_id, created_at, updated_at)
+                   VALUES (?, ?, NULL, ?, ?, ?)
+                   ON DUPLICATE KEY UPDATE owner_id = VALUES(owner_id), updated_at = VALUES(updated_at)`,
+              [data.relayId, data.resourceId, data.userId, now, now]
+            )
+          }
           yield* transaction.execute(
-            `INSERT INTO ${databaseTable("instance")}
-                   (relay_id, instance_id, display_name, owner_id, created_at, updated_at)
-                 VALUES (?, ?, NULL, ?, ?, ?)
-                 ON DUPLICATE KEY UPDATE owner_id = VALUES(owner_id), updated_at = VALUES(updated_at)`,
-            [data.relayId, data.instanceId, data.userId, now, now]
-          )
-          yield* transaction.execute(
-            `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, metadata, created_at) VALUES (?, 'instance.ownership.transferred', ?, ?)`,
+            `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, metadata, created_at) VALUES (?, ?, ?, ?)`,
             [
               data.userId,
+              `${data.resourceType}.ownership.transferred`,
               JSON.stringify({
                 actorId: actor.id,
                 oldOwnerId: ownerId,
                 relayId: data.relayId,
-                instanceId: data.instanceId,
+                resourceId: data.resourceId,
+                ...(data.resourceType === "instance"
+                  ? { instanceId: data.resourceId }
+                  : {}),
               }),
               now,
             ]
@@ -298,7 +353,10 @@ export function transferInstanceOwnershipEffect(
               targets: [
                 {
                   relayId: data.relayId,
-                  scope: { instanceId: data.instanceId, kind: "instance" },
+                  scope:
+                    data.resourceType === "instance"
+                      ? { instanceId: data.resourceId, kind: "instance" }
+                      : { kind: "subject_relay" },
                 },
               ],
               userId: changedUserId,

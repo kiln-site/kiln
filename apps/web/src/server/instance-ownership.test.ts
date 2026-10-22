@@ -3,7 +3,7 @@ import { Effect } from "effect"
 import { TestClock } from "effect/testing"
 
 import type { AuthenticatedUser } from "@/lib/auth-session"
-import { transferInstanceOwnershipEffect } from "@/lib/platform-access"
+import { transferResourceOwnershipEffect } from "@/lib/platform-access"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import {
   insertGrant,
@@ -16,7 +16,12 @@ import {
 const now = Date.UTC(2026, 8, 9)
 const relayId = "r".repeat(43)
 const instanceId = "a".repeat(40)
-const input = { relayId, instanceId, userId: "recipient" }
+const input = {
+  relayId,
+  resourceType: "instance" as const,
+  resourceId: instanceId,
+  userId: "recipient",
+}
 
 // The session still says Platform Admin and enabled; the database is current.
 const actor: AuthenticatedUser = {
@@ -70,7 +75,7 @@ describeMysql("ownership transfer fresh authority", () => {
         Effect.gen(function* () {
           yield* seed({ actor: { status: "disabled" }, ownerId: "actor" })
 
-          const error = yield* transferInstanceOwnershipEffect(
+          const error = yield* transferResourceOwnershipEffect(
             actor,
             input
           ).pipe(Effect.flip)
@@ -89,7 +94,7 @@ describeMysql("ownership transfer fresh authority", () => {
             ownerId: "actor",
           })
 
-          const error = yield* transferInstanceOwnershipEffect(
+          const error = yield* transferResourceOwnershipEffect(
             { ...actor, statusExpiresAt: "2000-01-01T00:00:00Z" },
             input
           ).pipe(Effect.flip)
@@ -105,12 +110,12 @@ describeMysql("ownership transfer fresh authority", () => {
         Effect.gen(function* () {
           yield* seed({ ownerId: "owner" })
 
-          const error = yield* transferInstanceOwnershipEffect(
+          const error = yield* transferResourceOwnershipEffect(
             actor,
             input
           ).pipe(Effect.flip)
 
-          assert.include(error.message, "Only the server owner")
+          assert.include(error.message, "Only the game server owner")
           assert.strictEqual(yield* instanceOwner, "owner")
         })
     )
@@ -119,11 +124,11 @@ describeMysql("ownership transfer fresh authority", () => {
       Effect.gen(function* () {
         yield* seed({ ownerId: "actor", recipientGrant: "pending" })
 
-        const error = yield* transferInstanceOwnershipEffect(actor, input).pipe(
+        const error = yield* transferResourceOwnershipEffect(actor, input).pipe(
           Effect.flip
         )
 
-        assert.include(error.message, "active server access")
+        assert.include(error.message, "access to the game server")
         assert.strictEqual(yield* instanceOwner, "actor")
       })
     )
@@ -134,7 +139,7 @@ describeMysql("ownership transfer fresh authority", () => {
         Effect.gen(function* () {
           yield* seed({ ownerId: "actor" })
 
-          const result = yield* transferInstanceOwnershipEffect(actor, input)
+          const result = yield* transferResourceOwnershipEffect(actor, input)
 
           assert.deepEqual(result, {
             transferred: true,

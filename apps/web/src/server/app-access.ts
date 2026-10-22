@@ -19,6 +19,7 @@ import type { AccessGrant } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { databaseTable } from "@/lib/database-config"
 import { databasePool } from "@/lib/database"
+import { transferResourceOwnershipEffect } from "@/lib/platform-access"
 import { grantHasPermission } from "@/lib/permissions"
 import type { AccessPermission } from "@/lib/permissions"
 import { requireEligibleResourceUser } from "@/server/auth"
@@ -41,7 +42,12 @@ async function authorizedAppFor(
   permission: AccessPermission
 ) {
   const relay = await requiredRelay(data.relayId)
-  await requireRelayPermission({ permission, relayId: data.relayId, user })
+  await requireRelayPermission({
+    appId: data.appId,
+    permission,
+    relayId: data.relayId,
+    user,
+  })
   const app = await runAppEffect(
     "apps.config.internal",
     loadAppConfigEffect(data.relayId, data.appId)
@@ -71,6 +77,7 @@ export async function getAppConfigHandler(
     Effect.tryPromise({
       try: () =>
         requireRelayPermission({
+          appId: data.appId,
           permission: "app.manage",
           relayId: data.relayId,
           user,
@@ -145,17 +152,23 @@ function mountsNewHostPath(
   })
 }
 
+/**
+ * Whether grants allow a permission on one app, or on every app on a Relay
+ * when `appId` is left out. A Relay grant covers its apps; owning an app
+ * covers that app.
+ */
 export function hasAppPermission(
   user: AuthenticatedUser,
   grants: ReadonlyArray<AccessGrant>,
-  relayId: string,
+  app: { appId?: string; relayId: string },
   permission: AccessPermission
 ): boolean {
   if (isPlatformAdmin(user)) return true
   return grants.some(
     (grant) =>
-      grant.relayId === relayId &&
-      grant.resourceType === "relay" &&
+      grant.relayId === app.relayId &&
+      (grant.resourceType === "relay" ||
+        (grant.resourceType === "app" && grant.resourceId === app.appId)) &&
       grantHasPermission(grant, permission)
   )
 }
@@ -175,39 +188,83 @@ async function readableAppOwner(
   const grants = isPlatformAdmin(user)
     ? []
     : await listUserGrants(user.id, data.relayId)
-  if (!hasAppPermission(user, grants, data.relayId, "app.read")) {
+  if (!hasAppPermission(user, grants, data, "app.read")) {
     throw new Error("App not found")
   }
   const [apps] = await databasePool.query<
-    Array<RowDataPacket & { created_by: string }>
+    Array<RowDataPacket & { owner_id: string | null }>
   >(
-    `SELECT created_by FROM ${databaseTable("app")} WHERE relay_id = ? AND app_id = ?`,
+    `SELECT owner_id FROM ${databaseTable("app")} WHERE relay_id = ? AND app_id = ?`,
     [data.relayId, data.appId]
   )
   const app = apps[0]
   if (!app) throw new Error("App not found")
   const [rows] = await databasePool.query<Array<AppOwnerRow>>(
     `SELECT id, name, email FROM ${databaseTable("user")} WHERE id = ?`,
-    [app.created_by]
+    [app.owner_id]
   )
   return {
-    canReadPeople: hasAppPermission(user, grants, data.relayId, "access.read"),
+    canReadPeople: hasAppPermission(user, grants, data, "access.read"),
     row: rows[0],
   }
 }
 
 // The app's owner as its Info rail shows them, or null when their account is
-// gone.
+// gone, and whether the viewer may hand the app to someone else.
 export async function getAppOwnerHandler(
   user: AuthenticatedUser,
   data: { appId: string; relayId: string }
-): Promise<{ email: string | null; name: string } | null> {
+): Promise<{
+  canTransfer: boolean
+  owner: { email: string | null; name: string } | null
+}> {
   const { canReadPeople, row } = await readableAppOwner(user, data)
-  if (!row) return null
   return {
-    email: canReadPeople ? row.email : null,
-    name: ownerDisplayName(row, canReadPeople),
+    canTransfer: isPlatformAdmin(user) || row?.id === user.id,
+    owner: row
+      ? {
+          email: canReadPeople ? row.email : null,
+          name: ownerDisplayName(row, canReadPeople),
+        }
+      : null,
   }
+}
+
+/**
+ * Makes the account with `email` the app's owner. The transfer admits only
+ * an administrator or the app's owner, and a new owner with Relay access.
+ * Asking by email keeps the Relay's people out of the owner's view.
+ */
+export async function transferAppOwnershipHandler(
+  user: AuthenticatedUser,
+  data: { appId: string; email: string; relayId: string }
+): Promise<{ previousOwnerId: string | null; userId: string }> {
+  const [rows] = await databasePool.query<
+    Array<RowDataPacket & { id: string }>
+  >(`SELECT id FROM ${databaseTable("user")} WHERE email = ? LIMIT 1`, [
+    data.email,
+  ])
+  // One answer for a missing, ineligible or Relay-less account, so this
+  // doesn't tell an app's owner who has an account here.
+  const noRecipient = "No account with access to this Relay uses that email"
+  const recipient = rows[0]
+  if (!recipient) throw new Error(noRecipient)
+  const result = await runAppEffect(
+    "access.app.transferOwnership",
+    transferResourceOwnershipEffect(user, {
+      relayId: data.relayId,
+      resourceType: "app",
+      resourceId: data.appId,
+      userId: recipient.id,
+    }).pipe(
+      Effect.mapError((error) =>
+        /access to the Relay|enabled, verified account/u.test(error.message)
+          ? new Error(noRecipient)
+          : error
+      )
+    )
+  )
+  return { previousOwnerId: result.previousOwnerId, userId: recipient.id }
 }
 
 // The owner's Minecraft profile ID, for their avatar. Only a stored display

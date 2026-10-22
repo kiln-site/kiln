@@ -91,20 +91,29 @@ export async function getAppDeploymentsHandler(data: {
   const relayNames = new Map(
     relays
       .filter(
-        (relay) =>
-          relay.enabled &&
-          (!data.relayId || relay.id === data.relayId) &&
-          hasAppPermission(user, grants, relay.id, "app.read")
+        (relay) => relay.enabled && (!data.relayId || relay.id === data.relayId)
       )
       .map((relay) => [relay.id, relay.name])
+  )
+  // Every app on a Relay the person reads apps on, and the apps they own
+  // elsewhere.
+  const relayIds = [...relayNames.keys()].filter((relayId) =>
+    hasAppPermission(user, grants, { relayId }, "app.read")
   )
   const records = await runAppEffect(
     "apps.deployments.list",
     listAppDeploymentsEffect({
       appId: data.appId,
+      appIds: apps.flatMap((app) =>
+        relayNames.has(app.relayId) &&
+        !relayIds.includes(app.relayId) &&
+        hasAppPermission(user, grants, app, "app.read")
+          ? [app.appId]
+          : []
+      ),
       before: data.before,
       limit: deploymentPageSize + 1,
-      relayIds: [...relayNames.keys()],
+      relayIds,
     })
   )
   const page = records.slice(0, deploymentPageSize)
@@ -122,18 +131,8 @@ export async function getAppDeploymentsHandler(data: {
       (record, index): AppDeploymentView => ({
         ...record,
         appName: appNames.get(record.appId) ?? record.appId.slice(0, 8),
-        canManage: hasAppPermission(
-          user,
-          grants,
-          record.relayId,
-          "app.manage"
-        ),
-        canReadLogs: hasAppPermission(
-          user,
-          grants,
-          record.relayId,
-          "app.logs.read"
-        ),
+        canManage: hasAppPermission(user, grants, record, "app.manage"),
+        canReadLogs: hasAppPermission(user, grants, record, "app.logs.read"),
         commitUrl: commitUrl(record),
         relayName: relayNames.get(record.relayId) ?? "Relay",
         triggeredByName: record.triggeredBy

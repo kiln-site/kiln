@@ -1,3 +1,4 @@
+import type { ReactNode } from "react"
 import { BadgeCheck } from "lucide-react"
 
 import { HearthMark } from "@/components/hearth-mark"
@@ -7,10 +8,13 @@ import { UserIdentity } from "@/components/user-identity"
 // clicked. A resource no one owns, like a Relay set up with Kiln itself, is
 // the platform's.
 export function OwnerCard({
+  action,
   email,
   name,
   profileId,
 }: {
+  // Beside the label, such as a way to transfer ownership.
+  action?: ReactNode
   // Only for those who may see it.
   email: string | null
   // Null when the platform manages the resource.
@@ -46,9 +50,12 @@ export function OwnerCard({
           </div>
         </>
       )}
-      <span className="type-technical-label shrink-0 self-start text-muted-foreground/80 light:text-muted-foreground/90">
-        Owner
-      </span>
+      <div className="flex shrink-0 flex-col items-end gap-1 self-start">
+        <span className="type-technical-label text-muted-foreground/80 light:text-muted-foreground/90">
+          Owner
+        </span>
+        {action}
+      </div>
     </section>
   )
 }

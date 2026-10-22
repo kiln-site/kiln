@@ -2,6 +2,7 @@ import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import {
+  ArrowRightLeft,
   GitCommitHorizontal,
   History,
   KeyRound,
@@ -9,6 +10,7 @@ import {
   ScrollText,
 } from "lucide-react"
 
+import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { AppDocumentDialog } from "@/components/app/app-config-dialogs"
@@ -162,6 +164,12 @@ function environmentSummary({
   return { count, environment: config.environment, hidden: environmentHidden }
 }
 
+// Loaded on first click, so the rail doesn't carry it.
+const AppTransferOwnershipDialog = React.lazy(async () => ({
+  default: (await import("@/components/app/app-transfer-ownership-dialog"))
+    .AppTransferOwnershipDialog,
+}))
+
 // Shows once the owner loads, so it doesn't stand in for the platform first.
 const AppOwner = React.memo(function AppOwner({
   appId,
@@ -170,18 +178,48 @@ const AppOwner = React.memo(function AppOwner({
   appId: string
   relayId: string
 }) {
-  const { data: owner } = useQuery(appOwnerQueryOptions(relayId, appId))
+  const { data } = useQuery(appOwnerQueryOptions(relayId, appId))
+  const owner = data?.owner
   const { data: profileId } = useQuery({
     ...appOwnerMinecraftProfileQueryOptions(relayId, appId, owner?.name ?? ""),
     enabled: Boolean(owner),
   })
-  if (owner === undefined) return null
+  const [transferring, setTransferring] = React.useState(false)
+  const [transferMounted, setTransferMounted] = React.useState(false)
+  if (data === undefined) return null
   return (
-    <OwnerCard
-      email={owner?.email ?? null}
-      name={owner?.name ?? null}
-      profileId={profileId}
-    />
+    <>
+      <OwnerCard
+        action={
+          data.canTransfer ? (
+            <Button
+              size="xs"
+              type="button"
+              variant="ghost"
+              onClick={() => {
+                setTransferMounted(true)
+                setTransferring(true)
+              }}
+            >
+              <ArrowRightLeft /> Transfer
+            </Button>
+          ) : null
+        }
+        email={owner?.email ?? null}
+        name={owner?.name ?? null}
+        profileId={profileId}
+      />
+      {transferMounted ? (
+        <React.Suspense fallback={null}>
+          <AppTransferOwnershipDialog
+            appId={appId}
+            open={transferring}
+            relayId={relayId}
+            onOpenChange={setTransferring}
+          />
+        </React.Suspense>
+      ) : null}
+    </>
   )
 })
 

@@ -1,7 +1,12 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto"
 
 import { createServerFn } from "@tanstack/react-start"
-import { relayAuditRecordSchema, relayIdSchema } from "@workspace/contracts"
+import {
+  appIdSchema,
+  permissionScopeTypeSchema,
+  relayAuditRecordSchema,
+  relayIdSchema,
+} from "@workspace/contracts"
 import { Effect } from "effect"
 import type { RowDataPacket } from "mysql2/promise"
 import { Resend } from "resend"
@@ -28,10 +33,8 @@ import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { getCurrentUser, requireEligibleResourceUser } from "@/server/auth"
-import {
-  instanceScope,
-  resolveScopeAuthorization,
-} from "@/lib/scope-authorization.server"
+import { resolveScopeAuthorization } from "@/lib/scope-authorization.server"
+import { transferAppOwnershipHandler } from "@/server/app-access"
 import {
   isAccountEnabled,
   isAccountVerified,
@@ -43,16 +46,15 @@ import {
   cancelPlatformInvitationEffect,
   assignPlatformAccessEffect,
   removePlatformAccessEffect,
-  transferInstanceOwnershipEffect,
+  transferResourceOwnershipEffect,
 } from "@/lib/platform-access"
 
 const tokenSchema = z.object({ token: z.string().min(32).max(256) })
 const accessTypeSchema = z.enum(["platform_admin", "relay_creator", "scoped"])
-const instanceScopeSchema = z.object({
-  instanceId: z.string().regex(/^[a-f0-9]{40}$/u),
+const transferResourceOwnershipSchema = z.object({
   relayId: relayIdSchema,
-})
-const transferInstanceOwnershipSchema = instanceScopeSchema.extend({
+  resourceType: permissionScopeTypeSchema,
+  resourceId: z.string().min(1).max(64),
   userId: z.string().min(1).max(36),
 })
 const accessAssignmentSchema = z.discriminatedUnion("accessType", [
@@ -501,23 +503,30 @@ export const removePlatformAccess = createServerFn({ method: "POST" })
     return result
   })
 
-export const transferInstanceOwnership = createServerFn({ method: "POST" })
-  .validator(transferInstanceOwnershipSchema)
+export const transferResourceOwnership = createServerFn({ method: "POST" })
+  .validator(transferResourceOwnershipSchema)
   .handler(async ({ data }) => {
     const user = await requireEligibleResourceUser()
     const relay = await requiredRelay(data.relayId)
+    if (data.resourceType === "relay" && data.resourceId !== relay.id)
+      throw new Error("Resource not found")
     // Authorize before resolving ownership: that lookup may call the Relay
     // and backfill owner_id, which no unprivileged caller should trigger.
-    const authorization = await resolveScopeAuthorization({
-      user,
-      scope: instanceScope(relay.id, data.instanceId),
-    })
-    authorization.require("access.manage")
-    await instanceOwnerId(relay, data.instanceId)
+    // Apps have no people of their own; the transfer itself admits only an
+    // administrator or the app's owner.
+    if (data.resourceType !== "app") {
+      const authorization = await resolveScopeAuthorization({
+        user,
+        scope: data,
+      })
+      authorization.require("access.manage")
+    }
+    if (data.resourceType === "instance")
+      await instanceOwnerId(relay, data.resourceId)
 
     const result = await runAppEffect(
-      "access.instance.transferOwnership",
-      transferInstanceOwnershipEffect(user, data)
+      "access.resource.transferOwnership",
+      transferResourceOwnershipEffect(user, data)
     )
     publishAccessPolicyChange(
       [result.previousOwnerId, data.userId].filter(
@@ -527,6 +536,28 @@ export const transferInstanceOwnership = createServerFn({ method: "POST" })
       relay.id
     )
     return { transferred: result.transferred }
+  })
+
+const transferAppOwnershipSchema = z.object({
+  appId: appIdSchema,
+  email: z.email().transform((value) => value.trim().toLowerCase()),
+  relayId: relayIdSchema,
+})
+
+export const transferAppOwnership = createServerFn({ method: "POST" })
+  .validator(transferAppOwnershipSchema)
+  .handler(async ({ data }) => {
+    const user = await requireEligibleResourceUser()
+    await requiredRelay(data.relayId)
+    const result = await transferAppOwnershipHandler(user, data)
+    publishAccessPolicyChange(
+      [result.previousOwnerId, result.userId].filter(
+        (userId): userId is string => userId !== null
+      ),
+      false,
+      data.relayId
+    )
+    return { transferred: true }
   })
 
 export const revokeAccessInvitation = createServerFn({ method: "POST" })

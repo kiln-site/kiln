@@ -1534,8 +1534,10 @@ async function checkFilePermission(
     })
     return
   }
-  if (appIdFromFileRoot(instanceId)) {
+  const appId = appIdFromFileRoot(instanceId)
+  if (appId) {
     await requireRelayPermission({
+      appId,
       permission:
         permission === "instance.files.read"
           ? "app.files.read"

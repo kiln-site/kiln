@@ -42,7 +42,7 @@ export const getResourceLimitsCapacity = createServerFn({ method: "GET" })
             relayId: relay.id,
             user,
           }
-        : { permission: "app.read", relayId: relay.id, user }
+        : { appId: data.id, permission: "app.read", relayId: relay.id, user }
     )
     const grants = isPlatformAdmin(user)
       ? []

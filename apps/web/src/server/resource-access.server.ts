@@ -16,12 +16,13 @@ import { runAppEffect } from "@/effect/runtime"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { databaseTable } from "@/lib/database-config"
 import { databasePool } from "@/lib/database"
+import { resourceOwnerQuery } from "@/lib/resource-owners"
 import type { AccessPermission } from "@/lib/permissions"
 import {
   databaseScopeCapabilities,
   effectiveScopePermissions,
   loadResourceGrantsEffect,
-  type ResourceScope,
+  type AccessGrantScope,
 } from "@/lib/resource-permissions"
 
 // Who the Access page lists for a scope. The server functions in
@@ -61,7 +62,7 @@ const inheritedPeopleSelectors = new Map(
 
 // The grants the Access page lists for a scope: invited and accepted people
 // on it and, below a Relay, those whose Relay access lets them read it.
-export function peopleFilter(scope: ResourceScope): {
+export function peopleFilter(scope: AccessGrantScope): {
   sql: string
   values: Array<unknown>
 } {
@@ -100,34 +101,12 @@ export function peopleFilter(scope: ResourceScope): {
   }
 }
 
-// Who owns each kind of resource.
-function ownerIdQuery(scope: ResourceScope): {
-  sql: string
-  values: Array<unknown>
-} {
-  if (scope.resourceType === "relay") {
-    return {
-      sql: `SELECT created_by AS user_id FROM ${databaseTable("relay")} WHERE id = ?`,
-      values: [scope.relayId],
-    }
-  }
-  return scope.resourceType === "instance"
-    ? {
-        sql: `SELECT owner_id AS user_id FROM ${databaseTable("instance")} WHERE relay_id = ? AND instance_id = ?`,
-        values: [scope.relayId, scope.resourceId],
-      }
-    : {
-        sql: `SELECT created_by AS user_id FROM ${databaseTable("database")} WHERE relay_id = ? AND database_id = ?`,
-        values: [scope.relayId, scope.resourceId],
-      }
-}
-
 // How many people the Access page lists for a scope, with its owner: those
 // invited or with access, not platform admins who only see it as admins.
 // Null for those who can't read its people.
 export async function getResourceUserCountHandler(
   user: AuthenticatedUser,
-  data: ResourceScope
+  data: AccessGrantScope
 ): Promise<number | null> {
   if (data.resourceType === "relay" && data.resourceId !== data.relayId)
     throw new Error("Resource not found")
@@ -142,7 +121,7 @@ export async function getResourceUserCountHandler(
     }
   }
   const people = peopleFilter(data)
-  const owner = ownerIdQuery(data)
+  const owner = resourceOwnerQuery(data)
   const [rows] = await databasePool.query<
     Array<RowDataPacket & { count: number | string }>
   >(
@@ -169,7 +148,7 @@ interface ResourceOwnerRow extends RowDataPacket {
 // page reads them: Relay access that doesn't reach this kind of resource,
 // or this database's engine, doesn't count.
 export async function supportedScopePermissions(
-  data: ResourceScope,
+  data: AccessGrantScope,
   permissions: ReadonlyArray<AccessPermission>
 ): Promise<{
   permissions: Array<AccessPermission>
@@ -202,7 +181,7 @@ export async function supportedScopePermissions(
 // it, only those who can read its people see the owner's email.
 async function readableResourceOwner(
   user: AuthenticatedUser,
-  data: ResourceScope
+  data: AccessGrantScope
 ): Promise<{ canReadPeople: boolean; row: ResourceOwnerRow } | null> {
   if (data.resourceType === "relay" && data.resourceId !== data.relayId)
     throw new Error("Resource not found")
@@ -223,7 +202,7 @@ async function readableResourceOwner(
       ]
   const supported = await supportedScopePermissions(data, permissions)
   if (!supported.permissions.length) throw new Error("Resource not found")
-  const owner = ownerIdQuery(data)
+  const owner = resourceOwnerQuery(data)
   const [rows] = await databasePool.query<Array<ResourceOwnerRow>>(
     `SELECT u.id, u.name, u.email FROM (${owner.sql}) owner
        JOIN ${databaseTable("user")} u ON u.id = owner.user_id`,
@@ -239,7 +218,7 @@ async function readableResourceOwner(
 // and the platform manages it.
 export async function getResourceOwnerHandler(
   user: AuthenticatedUser,
-  data: ResourceScope
+  data: AccessGrantScope
 ): Promise<{ email: string | null; name: string } | null> {
   const owner = await readableResourceOwner(user, data)
   if (!owner) return null
@@ -253,7 +232,7 @@ export async function getResourceOwnerHandler(
 // name reaches Mojang, never one derived from an email.
 export async function getResourceOwnerMinecraftProfileIdHandler(
   user: AuthenticatedUser,
-  data: ResourceScope
+  data: AccessGrantScope
 ): Promise<string | null> {
   const owner = await readableResourceOwner(user, data)
   const name = owner?.row.name?.trim()

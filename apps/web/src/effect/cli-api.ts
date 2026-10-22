@@ -824,7 +824,11 @@ export const createCliServerEffect = Effect.fn("cli.api.servers.create")(
     // The server exists on the Relay now; a failed record only delays its
     // directory row until Hearth next reconciles, so it does not fail the
     // request.
-    yield* recordCreatedInstanceEffect(relay.id, instance).pipe(
+    yield* recordCreatedInstanceEffect(
+      relay.id,
+      instance,
+      principal.user.id
+    ).pipe(
       Effect.retry(Schedule.exponential(100).pipe(Schedule.upTo({ times: 3 }))),
       Effect.catch((error) =>
         logException(error, {

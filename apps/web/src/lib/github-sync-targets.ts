@@ -14,7 +14,7 @@ export interface GitHubSyncTargetAccess {
   /** The Relay file root the sync writes through. */
   fileRootId: string
   read: AccessPermission
-  scope: { instanceId?: string; relayId: string }
+  scope: { appId?: string; instanceId?: string; relayId: string }
   write: AccessPermission
 }
 
@@ -44,8 +44,7 @@ export function githubSyncTargetAccess(
     ? {
         fileRootId: appFileRootId(target.id),
         read: "app.files.read",
-        // App permissions are granted on the Relay, for every app on it.
-        scope: { relayId: target.relayId },
+        scope: { appId: target.id, relayId: target.relayId },
         write: "app.files.write",
       }
     : {

@@ -41,11 +41,19 @@ interface FreshAuthorizationUserRow extends RowDataPacket {
 export type AccessGrant = Omit<ResolvedAccessGrant, "source"> &
   Partial<Pick<ResolvedAccessGrant, "source">>
 
-/** Whether a loaded grant set allows a permission at a Relay, instance, or database target. */
+/**
+ * Whether a loaded grant set allows a permission at a Relay, instance,
+ * database, or app target.
+ */
 export function grantsAllowPermission(
   grants: ReadonlyArray<AccessGrant>,
   permission: AccessPermission,
-  target: { relayId: string; instanceId?: string; databaseId?: string }
+  target: {
+    relayId: string
+    instanceId?: string
+    databaseId?: string
+    appId?: string
+  }
 ): boolean {
   return grants.some((grant) => {
     if (grant.relayId !== target.relayId) return false
@@ -57,7 +65,10 @@ export function grantsAllowPermission(
         grant.resourceId === target.instanceId) ||
       (grant.resourceType === "database" &&
         target.databaseId &&
-        grant.resourceId === target.databaseId)
+        grant.resourceId === target.databaseId) ||
+      (grant.resourceType === "app" &&
+        target.appId &&
+        grant.resourceId === target.appId)
     )
   })
 }
@@ -112,6 +123,7 @@ export async function requireRelayPermission(input: {
   user: AuthenticatedUser
   relayId: string
   permission: AccessPermission
+  appId?: string
   databaseId?: string
   instanceId?: string
 }): Promise<void> {
@@ -127,6 +139,7 @@ export const requireRelayPermissionEffect = Effect.fn(
   user: AuthenticatedUser
   relayId: string
   permission: AccessPermission
+  appId?: string
   databaseId?: string
   instanceId?: string
 }) {
@@ -142,6 +155,7 @@ export const requireRelayPermissionsEffect = Effect.fn(
   user: AuthenticatedUser
   relayId: string
   permissions: ReadonlyArray<AccessPermission>
+  appId?: string
   databaseId?: string
   instanceId?: string
 }) {
@@ -166,8 +180,11 @@ export const requireRelayPermissionsEffect = Effect.fn(
         ? "instance"
         : input.databaseId
           ? "database"
-          : "relay",
-      resourceId: input.instanceId ?? input.databaseId ?? input.relayId,
+          : input.appId
+            ? "app"
+            : "relay",
+      resourceId:
+        input.instanceId ?? input.databaseId ?? input.appId ?? input.relayId,
     }
   )
   const allowed = input.permissions.every((permission) =>

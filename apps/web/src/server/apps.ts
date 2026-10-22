@@ -110,7 +110,7 @@ export const getAppDirectory = createServerFn({ method: "GET" }).handler(
       const relayName = relayNames.get(record.relayId)
       if (
         !relayName ||
-        !hasAppPermission(user, grants, record.relayId, "app.read")
+        !hasAppPermission(user, grants, record, "app.read")
       ) {
         return []
       }
@@ -119,7 +119,7 @@ export const getAppDirectory = createServerFn({ method: "GET" }).handler(
           id: record.appId,
           createdAt: record.createdAt,
           permissions: appPermissions.filter((permission) =>
-            hasAppPermission(user, grants, record.relayId, permission)
+            hasAppPermission(user, grants, record, permission)
           ),
           name: record.name,
           relayId: record.relayId,

@@ -279,7 +279,8 @@ describeMysql("instance registry", () => {
         yield* seedRelay
         yield* recordCreatedInstanceEffect(
           "relay-one",
-          server({ id: "cli-server", name: "From the CLI" })
+          server({ id: "cli-server", name: "From the CLI" }),
+          "user-one"
         )
         assert.deepStrictEqual(
           (yield* listInstanceDirectoryEffect()).map((row) => row.name),
@@ -324,7 +325,8 @@ describeMysql("instance registry", () => {
           const lobby = server({ id: "lobby", name: "Lobby" })
           yield* recordCreatedInstanceEffect(
             "relay-startup-create",
-            server({ id: "fresh", name: "Fresh" })
+            server({ id: "fresh", name: "Fresh" }),
+            "user-one"
           )
           yield* syncInstanceRegistryEffect("relay-startup-create", [lobby])
           assert.deepStrictEqual(Object.keys(yield* instances).sort(), [
@@ -355,7 +357,8 @@ describeMysql("instance registry", () => {
           )
           yield* recordCreatedInstanceEffect(
             "relay-notify",
-            server({ id: "cli-server", name: "From the CLI" })
+            server({ id: "cli-server", name: "From the CLI" }),
+            "user-one"
           )
           yield* removeDeletedInstanceEffect("relay-notify", "cli-server")
           assert.deepStrictEqual(changed, ["relay-notify", "relay-notify"])

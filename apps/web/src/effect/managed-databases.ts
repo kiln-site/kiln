@@ -132,8 +132,8 @@ export const createManagedDatabaseRecordEffect = Effect.fn(
     "managed_databases_create",
     `INSERT INTO ${databaseTable("database")}
       (database_id, relay_id, name, engine, database_name, username,
-       password_ciphertext, created_by, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       password_ciphertext, created_by, owner_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       input.databaseId,
       input.relayId,
@@ -142,6 +142,7 @@ export const createManagedDatabaseRecordEffect = Effect.fn(
       input.databaseName,
       input.username,
       ciphertext,
+      input.createdBy,
       input.createdBy,
       now,
       now,

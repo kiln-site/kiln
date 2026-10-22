@@ -162,7 +162,7 @@ export const getTailscaleStacks = createServerFn({ method: "GET" }).handler(
 export const createTailscaleNetwork = createServerFn({ method: "POST" })
   .validator(createTailscaleNetworkSchema)
   .handler(async ({ data }) => {
-    await requireTailscaleAdministrator()
+    const user = await requireTailscaleAdministrator()
     const definitions = await loadTailscaleNetworkDefinitions()
     const domainOwner = definitions.find(
       (definition) => definition.domain === data.domain
@@ -187,7 +187,8 @@ export const createTailscaleNetwork = createServerFn({ method: "POST" })
           name: data.name,
         },
         verified,
-        data.clientSecret
+        data.clientSecret,
+        user.id
       )
     )
     publishTailscaleChange()
@@ -535,7 +536,7 @@ export const saveTailscaleStack = createServerFn({ method: "POST" })
           }
           await Effect.runPromise(
             promiseEffect(() =>
-              saveTailscaleNetworkDefinition(nextDefinition)
+              saveTailscaleNetworkDefinition(nextDefinition, user.id)
             ).pipe(
               Effect.catch((cause) =>
                 Effect.gen(function* () {
@@ -930,11 +931,12 @@ function loadTailscaleNetworkDefinitions() {
 }
 
 function saveTailscaleNetworkDefinition(
-  definition: TailscaleNetworkDefinition
+  definition: TailscaleNetworkDefinition,
+  ownerId: string
 ) {
   return runAppEffect(
     "tailscale.networks.save",
-    saveTailscaleNetworkDefinitionEffect(definition)
+    saveTailscaleNetworkDefinitionEffect(definition, ownerId)
   )
 }
 

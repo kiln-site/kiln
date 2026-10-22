@@ -725,8 +725,9 @@ function resourceScope(resource: RelayConsoleResource) {
       return { instanceId: resource.id }
     case "database":
       return { databaseId: resource.id }
-    // App and Relay permissions are granted on the Relay.
+    // An app's files are addressed by its data directory (`app:<appId>`).
     case "app":
+      return { appId: appIdFromFileRoot(resource.id) ?? resource.id }
     case "relay":
       return {}
     default:

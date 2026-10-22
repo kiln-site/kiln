@@ -315,15 +315,24 @@ export const listAppDeploymentsEffect = Effect.fn("apps.deployments.list")(
     appId?: string
     before?: { id: string; startedAt: string }
     limit: number
-    /** Only these Relays' apps. */
+    /** Every app on these Relays. */
     relayIds: ReadonlyArray<string>
+    /** And these apps, wherever they are. */
+    appIds?: ReadonlyArray<string>
   }) {
-    if (input.relayIds.length === 0) return []
+    const appIds = input.appIds ?? []
+    if (input.relayIds.length === 0 && appIds.length === 0) return []
     const database = yield* Database
-    const conditions = [
-      `relay_id IN (${input.relayIds.map(() => "?").join(", ")})`,
+    const reachable = [
+      ...(input.relayIds.length
+        ? [`relay_id IN (${input.relayIds.map(() => "?").join(", ")})`]
+        : []),
+      ...(appIds.length
+        ? [`app_id IN (${appIds.map(() => "?").join(", ")})`]
+        : []),
     ]
-    const parameters: Array<number | string> = [...input.relayIds]
+    const conditions = [`(${reachable.join(" OR ")})`]
+    const parameters: Array<number | string> = [...input.relayIds, ...appIds]
     if (input.appId) {
       conditions.push("app_id = ?")
       parameters.push(input.appId)
