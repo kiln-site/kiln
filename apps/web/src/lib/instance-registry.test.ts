@@ -1,5 +1,6 @@
 import { assert, layer } from "@effect/vitest"
 import { Effect } from "effect"
+import { SqlClient } from "effect/sql"
 import * as TestClock from "effect/testing/TestClock"
 
 import {
@@ -12,6 +13,7 @@ import {
   updateInstanceSourceNameEffect,
   updateInstanceDirectoryEffect,
 } from "@/lib/instance-registry"
+import { databaseTableName } from "@/lib/database-config"
 import type { DirectoryInstance } from "@/lib/instance-directory"
 import { listInstanceDirectoryEffect } from "@/lib/instance-directory"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
@@ -309,6 +311,28 @@ describeMysql("instance registry", () => {
           assert.strictEqual(
             (yield* instances)["cli-server"]?.ownerId,
             "user-one"
+          )
+        })
+    )
+
+    it.effect(
+      "keeps an owner the server was transferred to before its creator was recorded",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* insertRelay("relay-race", { created_by: "relay-owner" })
+          const created = server({ id: "cli-server", name: "From the CLI" })
+          yield* syncInstanceRegistryEffect("relay-race", [created])
+          const sql = yield* SqlClient.SqlClient
+          yield* sql`UPDATE ${sql(databaseTableName("instance"))} SET owner_id = 'recipient' WHERE instance_id = 'cli-server'`
+
+          yield* recordCreatedInstanceEffect("relay-race", created, "user-one")
+          // A retried record changes nothing either.
+          yield* recordCreatedInstanceEffect("relay-race", created, "user-one")
+
+          assert.strictEqual(
+            (yield* instances)["cli-server"]?.ownerId,
+            "recipient"
           )
         })
     )

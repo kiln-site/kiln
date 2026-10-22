@@ -243,9 +243,10 @@ export const updateInstanceSourceNameEffect = Effect.fn(
 })
 
 // Records each instance's name and stable metadata, creating missing rows.
-// A row belongs to `ownerId`, who just created it: a snapshot read since
-// may already have recorded it for the Relay's owner. Without one, a new
-// row goes to the Relay's owner and an existing row keeps its owner.
+// Without `ownerId`, a new row goes to the Relay's owner, a stand-in until
+// Hearth knows who made it, and an existing row keeps its owner. With it, the
+// person who just created the server replaces that stand-in, which a snapshot
+// read since may have recorded, but not an owner someone transferred it to.
 function upsertInstancesStatement(
   relayId: string,
   instances: ReadonlyArray<DirectoryInstance>,
@@ -263,7 +264,11 @@ function upsertInstancesStatement(
      ON DUPLICATE KEY UPDATE
        source_name = VALUES(source_name),
        directory_metadata = VALUES(directory_metadata),
-       owner_id = ${ownerId ? "VALUES(owner_id)" : "COALESCE(owner_id, VALUES(owner_id))"},
+       owner_id = ${
+         ownerId
+           ? `IF(owner_id IS NULL OR owner_id <=> (SELECT created_by FROM ${databaseTable("relay")} WHERE id = relay_id), VALUES(owner_id), owner_id)`
+           : "COALESCE(owner_id, VALUES(owner_id))"
+       },
        updated_at = VALUES(updated_at)`,
     instances.flatMap((instance) => [
       relayId,
