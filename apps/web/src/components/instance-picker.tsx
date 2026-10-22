@@ -376,7 +376,8 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
           aria-hidden="true"
         />
         <Input
-          autoFocus
+          // On phones, wait for a tap so the keyboard doesn't cover the list.
+          autoFocus={!searchAtBottom}
           type="search"
           role="combobox"
           aria-autocomplete="list"
