@@ -187,7 +187,10 @@ the person who paired the Relay or created the resource. Ownership is its own
 source of authority, so it survives narrowed or revoked Relay grants. Apps have
 no grants of their own, so ownership is the only app-scoped authority; it covers
 the app permissions on that one app, never people, presets, backups, or
-schedules. Only the owner or an administrator transfers ownership, to someone
+schedules. A Compose file can reach the Relay's node (host paths, the Docker
+socket, privileged containers), so choosing one, pasted or from a repository,
+also takes Host files write, like mounting a path on the node; owning the app
+isn't enough. Only the owner or an administrator transfers ownership, to someone
 who already has access there: a grant on the Relay or the resource, or Relay
 ownership. Someone who owns anything can't be removed until it is transferred.
 Tailscale networks record the administrator who added them; they stay

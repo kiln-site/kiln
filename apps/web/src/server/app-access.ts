@@ -14,6 +14,7 @@ import {
   isPlatformAdmin,
   listUserGrants,
   requireRelayPermission,
+  requireRelayPermissionEffect,
 } from "@/lib/access-control"
 import type { AccessGrant } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
@@ -122,10 +123,45 @@ export async function updateAppConfigHandler(
       user,
     })
   }
+  const next = { ...app.config, ...patch }
+  if (
+    next.sourceType === "compose" &&
+    (app.config.sourceType !== "compose" ||
+      next.compose !== app.config.compose)
+  ) {
+    await requireComposeAuthority(user, data.relayId)
+  }
   return runAppEffect(
     "apps.config.save",
     updateAppConfigEffect(data.relayId, data.appId, (current) =>
       appConfigSchema.parse({ ...current, ...patch })
+    )
+  )
+}
+
+/**
+ * A Compose file can set anything Docker can: paths on the node, the Docker
+ * socket, privileged containers, the node's network. So, like mounting a
+ * path on the node, choosing what one runs takes the permission that edits
+ * the host's files, whoever owns the app.
+ */
+export async function requireComposeAuthority(
+  user: AuthenticatedUser,
+  relayId: string
+): Promise<void> {
+  return runAppEffect(
+    "apps.compose.authorize",
+    requireRelayPermissionEffect({
+      permission: "relay.files.write",
+      relayId,
+      user,
+    }).pipe(
+      Effect.mapError(
+        () =>
+          new Error(
+            "A Compose file can reach the Relay's node, so it takes permission to edit the Relay's host files"
+          )
+      )
     )
   )
 }

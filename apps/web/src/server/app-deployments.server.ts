@@ -44,7 +44,11 @@ import { publishGitHubSyncChange } from "@/lib/github-sync.server"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { relayConnectionFeatures } from "@/lib/relay-connection"
 import { listPersistedRelays } from "@/lib/relay-registry"
-import { authorizedApp, hasAppPermission } from "@/server/app-access"
+import {
+  authorizedApp,
+  hasAppPermission,
+  requireComposeAuthority,
+} from "@/server/app-access"
 import { requireEligibleResourceUser } from "@/server/auth"
 import { connectionToken } from "@/server/github-sync.server"
 import { databaseRpc } from "@/server/managed-database-access"
@@ -302,6 +306,7 @@ export async function saveAppGitHubSourceHandler(data: {
   repository: string
 }) {
   const { relay, user } = await authorizedApp(data, "app.manage")
+  if (data.build === "compose") await requireComposeAuthority(user, relay.id)
   if (!relayConnectionFeatures(relay.id).has(relayAppGitHubV1Feature)) {
     throw new Error(
       relayConnectionFeatures(relay.id).size === 0
