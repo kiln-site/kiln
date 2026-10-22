@@ -55,6 +55,7 @@ function DrawerOverlay({
 function DrawerContent({
   className,
   children,
+  onOpenAutoFocus,
   ref,
   ...props
 }: React.ComponentProps<typeof DrawerPrimitive.Content>) {
@@ -86,6 +87,17 @@ function DrawerContent({
         )}
         {...props}
         ref={contentRef}
+        onOpenAutoFocus={(event) => {
+          onOpenAutoFocus?.(event)
+          if (event.defaultPrevented) return
+          // Vaul leaves focus on the trigger behind the drawer. Focus the
+          // drawer itself so keyboard and screen reader users land in it,
+          // without focusing a field that would open a phone's keyboard.
+          event.preventDefault()
+          if (event.target instanceof HTMLElement) {
+            event.target.focus({ preventScroll: true })
+          }
+        }}
       >
         <div
           aria-hidden="true"

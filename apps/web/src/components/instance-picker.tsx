@@ -142,7 +142,12 @@ export function InstancePickerPopover({
   onOpenChange?: (open: boolean) => void
   open?: boolean
 }) {
-  const drawer = useIsMobile()
+  const isMobile = useIsMobile()
+  // Keep the surface while open, so rotating a phone past the breakpoint
+  // doesn't swap it and lose the search.
+  const [drawerWhileOpen, setDrawerWhileOpen] = React.useState(isMobile)
+  if (!open && drawerWhileOpen !== isMobile) setDrawerWhileOpen(isMobile)
+  const drawer = open ? drawerWhileOpen : isMobile
   const Root = drawer ? Drawer : Popover
   return (
     <InstancePickerDrawerContext.Provider value={drawer}>

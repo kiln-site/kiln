@@ -162,7 +162,7 @@ export const DatabaseNetworkPicker = React.memo(function DatabaseNetworkPicker({
         align="end"
         className="w-[min(32rem,calc(100vw-2rem))] overflow-hidden p-0"
       >
-        {open ? <DatabaseServerPicker database={database} /> : null}
+        <DatabaseServerPicker database={database} />
       </InstancePickerPopoverContent>
     </InstancePickerPopover>
   )
