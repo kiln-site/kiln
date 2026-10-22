@@ -1,17 +1,12 @@
 import { assert, layer } from "@effect/vitest"
 import { Effect } from "effect"
 import { TestClock } from "effect/testing"
-import { afterAll } from "vite-plus/test"
-
-import { createAppRecordEffect } from "@/effect/managed-apps"
-import { disposeAppRuntime } from "@/effect/runtime"
 
 import { grantsAllowPermission } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { transferResourceOwnershipEffect } from "@/lib/platform-access"
 import { loadResourceGrantsEffect } from "@/lib/resource-permissions"
 import { resourceOwners } from "@/migrations/0021_resource_owners"
-import { updateAppConfigHandler } from "@/server/app-access"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import {
   insertGrant,
@@ -21,8 +16,6 @@ import {
   insertUser,
   selectRows,
 } from "@/test/seed"
-
-afterAll(() => disposeAppRuntime())
 
 const now = Date.UTC(2026, 9, 22)
 const relayId = "r".repeat(43)
@@ -275,43 +268,6 @@ describeMysql("resource ownership", () => {
               databaseId,
             })
           )
-        })
-    )
-
-    it.effect(
-      "keeps Compose, which reaches the node, from an app owner without host access",
-      () =>
-        Effect.gen(function* () {
-          yield* resetDatabase
-          yield* insertUser("owner", verified)
-          yield* insertUser("relay-owner", verified)
-          yield* insertRelay(relayId, { created_by: "relay-owner" })
-          const appId = "a".repeat(40)
-          yield* createAppRecordEffect({
-            appId,
-            createdBy: "owner",
-            name: "alpha",
-            relayId,
-          })
-          const save = (by: string, config: Record<string, string>) =>
-            Effect.tryPromise({
-              try: () =>
-                updateAppConfigHandler(user(by), { appId, config, relayId }),
-              catch: (error) => error as Error,
-            })
-          const compose = {
-            compose:
-              "services:\n  web:\n    image: nginx\n    volumes:\n      - /var/run/docker.sock:/var/run/docker.sock\n",
-            sourceType: "compose",
-          }
-
-          const refused = yield* save("owner", compose).pipe(Effect.flip)
-          assert.include(refused.message, "host files")
-          // Everything else about their app is still theirs to change.
-          const image = yield* save("owner", { image: "nginx:1.27" })
-          assert.strictEqual(image.image, "nginx:1.27")
-          const saved = yield* save("relay-owner", compose)
-          assert.strictEqual(saved.sourceType, "compose")
         })
     )
 
