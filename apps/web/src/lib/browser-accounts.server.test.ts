@@ -22,9 +22,13 @@ class Browser {
     })
   }
 
-  async request(path: string, init: { body?: unknown; method?: string } = {}) {
+  async request(
+    path: string,
+    init: { body?: unknown; headers?: HeadersInit; method?: string } = {}
+  ) {
     const { auth } = await import("@/lib/auth")
     const headers = this.headers()
+    for (const [name, value] of new Headers(init.headers)) headers.set(name, value)
     if (init.body) headers.set("content-type", "application/json")
     const response = await auth.handler(
       new Request(`${origin}/api/auth${path}`, {
@@ -207,6 +211,43 @@ describeMysql("browser accounts", () => {
             "alice",
             "bob",
           ])
+        }),
+      { timeout: 30_000 }
+    )
+
+    it.effect(
+      "refuses account changes from a tab rendering another account",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* seedAccount("alice")
+          yield* seedAccount("bob")
+          const browser = new Browser()
+          yield* Effect.promise(() => browser.signIn("alice@example.test"))
+          // Another tab adds Bob, who becomes active for the whole browser.
+          yield* Effect.promise(() => browser.signIn("bob@example.test"))
+
+          const stale = yield* Effect.promise(() =>
+            browser.request("/update-user", {
+              method: "POST",
+              headers: { "x-kiln-account": "alice" },
+              body: { name: "Renamed" },
+            })
+          )
+          expect(stale.status).toBe(409)
+          const current = yield* Effect.promise(() =>
+            browser.request("/update-user", {
+              method: "POST",
+              headers: { "x-kiln-account": "bob" },
+              body: { name: "Robert" },
+            })
+          )
+          expect(current.status).toBe(200)
+
+          const users = yield* selectRows<{ id: string; name: string }>("user")
+          expect(
+            Object.fromEntries(users.map(({ id, name }) => [id, name]))
+          ).toEqual({ alice: "alice", bob: "Robert" })
         }),
       { timeout: 30_000 }
     )

@@ -42,6 +42,8 @@ export const accountChangedMessage = "kiln:account-changed"
 let renderedAccount: string | null = null
 
 export function setRenderedAccount(userId: string | null) {
+  // Server rendering shares this module across requests.
+  if (typeof window === "undefined") return
   renderedAccount = userId
 }
 

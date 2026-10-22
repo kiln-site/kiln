@@ -2,20 +2,13 @@ import { Result } from "effect"
 import { withRenderedAccount } from "@/lib/browser-accounts"
 import { memo, useEffect } from "react"
 
-import { useFollowActiveAccount } from "@/components/use-follow-active-account"
-
 export const AccountStatusSync = memo(function AccountStatusSync({
   restricted = false,
   resumePath = "/",
-  userId,
 }: {
   restricted?: boolean
   resumePath?: string
-  userId: string
 }) {
-  // Every tab in this browser shares the active account; follow it when
-  // another tab switches, adds, or signs out an account.
-  useFollowActiveAccount(userId)
   useEffect(() => {
     const source = new EventSource(withRenderedAccount("/api/account-status"))
     let previousVerification: boolean | null = null

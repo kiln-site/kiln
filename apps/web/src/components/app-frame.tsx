@@ -1,8 +1,7 @@
 import { AccountStatusSync } from "@/components/account-status-sync"
 import * as React from "react"
 import { useSuspenseQuery } from "@tanstack/react-query"
-import { useRouter, useRouterState } from "@tanstack/react-router"
-import type { RouterState } from "@tanstack/react-router"
+import { useRouter } from "@tanstack/react-router"
 
 import {
   SidebarInset,
@@ -30,13 +29,6 @@ function selectAppFramePreferences(preferences: UiPreferences) {
   }
 }
 
-function selectAppFrameUserId(state: RouterState): string | null {
-  for (const match of state.matches) {
-    if (match.routeId === "/_app") return match.context.user?.id ?? null
-  }
-  return null
-}
-
 export const AppFrame = React.memo(function AppFrame({
   children,
 }: {
@@ -46,14 +38,13 @@ export const AppFrame = React.memo(function AppFrame({
     ...uiPreferencesQueryOptions(),
     select: selectAppFramePreferences,
   })
-  const userId = useRouterState({ select: selectAppFrameUserId })
 
   return (
     <SidebarProvider defaultOpen={uiPreferences.sidebarOpen}>
       <AppearanceHydrator appearance={uiPreferences.appearance} />
       <InfraUpdateDialogProvider>
         <NotificationsProvider>
-          {userId ? <AccountStatusSync userId={userId} /> : null}
+          <AccountStatusSync />
           <RealtimeSync />
           <RelayConnectionToastMonitor />
           <MobileSidebarNavigationDismiss />

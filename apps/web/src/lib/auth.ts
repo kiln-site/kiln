@@ -20,6 +20,7 @@ import { isAccountVerified } from "@/lib/account-policy"
 import { AuthCodeEmail } from "@/emails/auth-code-email"
 import { databasePool } from "@/lib/database"
 import { databaseTable, databaseTableName } from "@/lib/database-config"
+import { developmentBypassUserId } from "@/lib/development-bypass"
 import { parseDisplayName } from "@/lib/display-name"
 import {
   betterAuthSecrets,
@@ -31,7 +32,11 @@ import {
 } from "@/lib/environment"
 import { passwordConfirmation } from "@/lib/password-confirmation"
 import { browserAccountMemory } from "@/lib/browser-account-memory"
-import { maximumBrowserAccounts } from "@/lib/browser-accounts"
+import {
+  accountChangedMessage,
+  maximumBrowserAccounts,
+  renderedAccountHeader,
+} from "@/lib/browser-accounts"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 
 const publicUrl = kilnPublicUrl()
@@ -243,6 +248,18 @@ export const auth = betterAuth({
       // another account's session token to page scripts.
       if (context.path.startsWith("/multi-session/") && context.request) {
         throw new APIError("NOT_FOUND")
+      }
+      // A tab that has not yet followed an account switch must not act as
+      // the account the shared cookie now belongs to.
+      const renderedAccount = context.request?.headers.get(
+        renderedAccountHeader
+      )
+      if (
+        renderedAccount &&
+        renderedAccount !== developmentBypassUserId &&
+        ((await getSessionFromCtx(context))?.user.id ?? "") !== renderedAccount
+      ) {
+        throw new APIError("CONFLICT", { message: accountChangedMessage })
       }
 
       const onboardingPaths = new Set([

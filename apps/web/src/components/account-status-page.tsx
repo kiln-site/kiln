@@ -24,11 +24,7 @@ export function AccountStatusPage({
   const verified = isAccountVerified(user)
   return (
     <AuthPageShell wide={verified}>
-      <AccountStatusSync
-        restricted
-        resumePath={resumePath}
-        userId={user.id}
-      />
+      <AccountStatusSync restricted resumePath={resumePath} />
       <div>
         <header className="mb-8 grid justify-items-center gap-4 text-center">
           <AuthBrand />

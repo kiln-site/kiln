@@ -4,6 +4,7 @@ import { ensuringPromise, recoverPromise } from "@/effect/promise"
 import {
   activeAccountStorageKey,
   announceActiveAccount,
+  getRenderedAccount,
   readActiveAccount,
   setRenderedAccount,
 } from "@/lib/browser-accounts"
@@ -22,6 +23,7 @@ export function useFollowActiveAccount(userId: string | null) {
   // Set during render so requests from this tab's first effects carry it.
   setRenderedAccount(userId)
   useEffect(() => {
+    setRenderedAccount(userId)
     announceActiveAccount(userId)
     const expected = userId ?? ""
     let checking = false
@@ -77,6 +79,8 @@ export function useFollowActiveAccount(userId: string | null) {
     window.addEventListener("focus", onResume)
     document.addEventListener("visibilitychange", onResume)
     return () => {
+      // A follower for another account may already have taken over.
+      if (getRenderedAccount() === userId) setRenderedAccount(null)
       clearTimeout(trailing)
       window.removeEventListener("storage", onStorage)
       window.removeEventListener("pageshow", onResume)
