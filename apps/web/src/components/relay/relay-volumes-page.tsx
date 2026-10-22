@@ -328,7 +328,9 @@ function VolumesTable({
               ? "Volumes keep data across deployments, and apps on this Relay can share them."
               : "Update this Relay to manage its volumes from Hearth."
         }
-        icon={<HardDrive className="size-6 text-muted-foreground/45" />}
+        icon={
+          <HardDrive className="size-6 text-muted-foreground/45 light:text-muted-foreground/72" />
+        }
         title={
           searchActive
             ? "No volumes match your search"
@@ -657,7 +659,7 @@ const VolumeActions = React.memo(function VolumeActions({
           {canBrowse && volume.mountpoint ? (
             <Button
               asChild
-              className="text-muted-foreground hover:text-primary"
+              className="text-muted-foreground hover:text-primary-ink"
               size="icon-sm"
               variant="ghost"
             >
@@ -701,7 +703,7 @@ const VolumeActions = React.memo(function VolumeActions({
             >
               <Button
                 aria-label={`Delete ${volume.name}`}
-                className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                className="text-destructive hover:bg-destructive/10 hover:text-destructive light:hover:bg-destructive/20"
                 disabled={deleteBlocked !== null}
                 size="icon-sm"
                 type="button"

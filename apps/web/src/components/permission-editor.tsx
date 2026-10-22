@@ -236,7 +236,7 @@ export const PermissionEditor = memo(function PermissionEditor({
       {unsupportedCount ? (
         <p
           role="alert"
-          className="type-support m-3 mb-0 flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-destructive"
+          className="type-support m-3 mb-0 flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-destructive light:bg-destructive/10"
         >
           <TriangleAlert className="mt-0.5 size-4 shrink-0" />
           {unsupportedCount === 1
@@ -460,7 +460,7 @@ const ContextGroup = memo(function ContextGroup({
             target.status.tone === "warning" &&
               "border-amber-500/40 text-amber-700 dark:text-amber-300",
             target.status.tone === "info" &&
-              "bg-sky-500/10 text-sky-700 dark:text-sky-300"
+              "bg-sky-500/10 text-sky-700 dark:text-sky-300 light:bg-sky-500/20"
           )}
         >
           {target.status.label}
@@ -1014,7 +1014,7 @@ function ItemDetails({
           : option!.description}
       </p>
       {host.length ? (
-        <p className="type-support flex gap-2 rounded-lg border border-destructive/40 bg-destructive/5 p-2.5 text-destructive">
+        <p className="type-support flex gap-2 rounded-lg border border-destructive/40 bg-destructive/5 p-2.5 text-destructive light:bg-destructive/10">
           <TriangleAlert className="mt-0.5 size-4 shrink-0" />
           Reaches the Relay's host node, outside Kiln's own resources. Only
           grant this to people you'd trust with root on that machine.

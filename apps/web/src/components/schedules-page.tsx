@@ -570,7 +570,9 @@ const ScheduleTable = React.memo(function ScheduleTable({
                 : "Create Relay-owned automation that keeps running when Hearth is offline."}
           </span>
         }
-        icon={<Play className="size-6 text-muted-foreground/45" />}
+        icon={
+          <Play className="size-6 text-muted-foreground/45 light:text-muted-foreground/72" />
+        }
         title={
           searchActive
             ? "No schedules match your search"
@@ -634,7 +636,7 @@ const ScheduleName = React.memo(function ScheduleName({
       name={schedule.name}
       nameClassName={
         canEdit
-          ? "transition-colors group-hover/schedule-name:text-primary"
+          ? "transition-colors group-hover/schedule-name:text-primary-ink"
           : undefined
       }
     />
@@ -762,11 +764,7 @@ const ScheduleActions = React.memo(function ScheduleActions({
           disabled={running}
           onClick={() => runMutation.mutate()}
         >
-          {running ? (
-            <LoaderCircle className="animate-spin" />
-          ) : (
-            <Play />
-          )}
+          {running ? <LoaderCircle className="animate-spin" /> : <Play />}
           Run now
         </Button>
       ) : null}
@@ -795,7 +793,7 @@ const ScheduleActions = React.memo(function ScheduleActions({
               type="button"
               size="icon-sm"
               variant="ghost"
-              className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+              className="text-destructive hover:bg-destructive/10 hover:text-destructive light:hover:bg-destructive/20"
               aria-label={`Delete ${schedule.name}`}
               onClick={() => onDelete(schedule)}
             >
@@ -1525,7 +1523,9 @@ const ScheduleHistoryTable = React.memo(function ScheduleHistoryTable({
                 : "Completed and attempted automation runs will appear here."}
             </span>
           }
-          icon={<Play className="size-6 text-muted-foreground/45" />}
+          icon={
+            <Play className="size-6 text-muted-foreground/45 light:text-muted-foreground/72" />
+          }
           title={
             searchActive
               ? "No runs match your search"
@@ -1601,7 +1601,7 @@ const HistoryAutomation = React.memo(function HistoryAutomation({
         icon={<Icon className="size-4" aria-hidden="true" />}
         meta={meta}
         name={entry.name}
-        nameClassName="transition-colors group-hover/automation-link:text-primary"
+        nameClassName="transition-colors group-hover/automation-link:text-primary-ink"
       />
     </Link>
   )
@@ -1625,7 +1625,7 @@ const HistoryRelay = React.memo(function HistoryRelay({
         meta={relayId.slice(0, 8)}
         metaClassName="font-mono"
         name={relayName}
-        nameClassName="transition-colors group-hover/relay-link:text-primary"
+        nameClassName="transition-colors group-hover/relay-link:text-primary-ink"
         showFavorite={false}
       />
     </Link>
@@ -2098,7 +2098,7 @@ function TargetRunAudit({
         <RunResultIcon status={run.status} className="size-4 shrink-0" />
       </header>
       {run.error ? (
-        <p className="type-meta border-b border-destructive/20 bg-destructive/5 px-3 py-2 text-destructive">
+        <p className="type-meta border-b border-destructive/20 bg-destructive/5 px-3 py-2 text-destructive light:bg-destructive/10">
           {run.error}
         </p>
       ) : null}
@@ -2137,7 +2137,7 @@ function ActionAttemptAudit({
             </span>
             <ActionIcon
               type={attempt.actionType}
-              className="mt-1 size-3.5 shrink-0 text-primary"
+              className="mt-1 size-3.5 shrink-0 text-primary-ink"
             />
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -2154,7 +2154,7 @@ function ActionAttemptAudit({
                 {durationLabel(attempt.finishedAt - attempt.startedAt)}
               </p>
               {attempt.error ? (
-                <p className="type-meta mt-2 rounded-md border border-destructive/20 bg-destructive/5 px-2.5 py-2 text-destructive">
+                <p className="type-meta mt-2 rounded-md border border-destructive/20 bg-destructive/5 px-2.5 py-2 text-destructive light:bg-destructive/10">
                   {attempt.error}
                 </p>
               ) : null}
@@ -2403,7 +2403,7 @@ function ScheduleEditorDialog({
             <Button
               aria-label={`Schedule is ${enabled ? "enabled" : "disabled"}. Click to ${enabled ? "disable" : "enable"}.`}
               aria-pressed={enabled}
-              className={`mr-auto ${enabled ? "border-emerald-500/35 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/15 hover:text-emerald-300" : "text-muted-foreground"}`}
+              className={`mr-auto ${enabled ? "border-emerald-500/35 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/15 hover:text-emerald-300 light:bg-emerald-500/20 light:text-emerald-700 light:hover:bg-emerald-500/30 light:hover:text-emerald-700" : "text-muted-foreground"}`}
               size="sm"
               type="button"
               variant="outline"
@@ -2657,7 +2657,7 @@ const ScheduleDetailsFields = React.memo(function ScheduleDetailsFields({
           />
         </Field>
         <div
-          className={`flex min-h-8 items-center rounded-lg border px-3 py-1 text-xs leading-5 ${cronSummary !== null ? "bg-muted/25 text-foreground" : "border-destructive/35 bg-destructive/5 text-destructive"}`}
+          className={`flex min-h-8 items-center rounded-lg border px-3 py-1 text-xs leading-5 ${cronSummary !== null ? "bg-muted/25 text-foreground" : "border-destructive/35 bg-destructive/5 text-destructive light:bg-destructive/10"}`}
           role={cronSummary === null ? "alert" : undefined}
         >
           {cronSummary ?? "Enter a valid five-part cron expression."}
@@ -3333,7 +3333,7 @@ function ActionCompatibilityWarning({
       <TooltipTrigger asChild>
         <button
           aria-label="Action compatibility warning"
-          className="grid size-7 shrink-0 place-items-center rounded-md text-amber-400 outline-none hover:bg-amber-400/10 focus-visible:ring-2 focus-visible:ring-ring/40"
+          className="grid size-7 shrink-0 place-items-center rounded-md text-amber-400 outline-none hover:bg-amber-400/10 focus-visible:ring-2 focus-visible:ring-ring/40 light:text-amber-700 light:hover:bg-amber-400/20"
           type="button"
         >
           <TriangleAlert className="size-4" />
@@ -3385,7 +3385,7 @@ const ScheduleActionTypeSelect = React.memo(function ScheduleActionTypeSelect({
           <>
             <ActionIcon
               type={action.type}
-              className="size-4 shrink-0 text-primary"
+              className="size-4 shrink-0 text-primary-ink"
             />
             <SelectValue>{actionLabel(action.type)}</SelectValue>
           </>
@@ -3615,17 +3615,25 @@ function RunResultIcon({
   className?: string
 }) {
   if (status === "succeeded") {
-    return <CircleCheck className={`${className ?? ""} text-emerald-400`} />
+    return (
+      <CircleCheck
+        className={`${className ?? ""} text-emerald-400 light:text-emerald-700`}
+      />
+    )
   }
   if (status === "running") {
     return (
       <LoaderCircle
-        className={`${className ?? ""} animate-spin text-amber-300`}
+        className={`${className ?? ""} animate-spin text-amber-300 light:text-amber-700`}
       />
     )
   }
   if (status === "partial") {
-    return <CircleX className={`${className ?? ""} text-amber-300`} />
+    return (
+      <CircleX
+        className={`${className ?? ""} text-amber-300 light:text-amber-700`}
+      />
+    )
   }
   if (status === "noop" || status.startsWith("skipped")) {
     return (

@@ -487,7 +487,7 @@ export function RepositoryPicker({
                 href={manageUrl}
                 target="_blank"
                 rel="noreferrer"
-                className="text-primary hover:underline"
+                className="text-primary-ink hover:underline"
               >
                 Give the app access on GitHub
               </a>

@@ -108,7 +108,7 @@ export function BrowserAccountsPage({
                     {account.name}
                   </span>
                   {account.active ? (
-                    <span className="type-technical-label shrink-0 border border-primary/25 bg-primary/8 px-1.5 py-0.5 text-primary">
+                    <span className="type-technical-label shrink-0 border border-primary/25 bg-primary/8 px-1.5 py-0.5 text-primary-ink">
                       Active
                     </span>
                   ) : null}

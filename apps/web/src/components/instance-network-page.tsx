@@ -275,7 +275,7 @@ function DatabaseConnectionWarnings() {
   return (
     <div
       role="status"
-      className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4 text-sm"
+      className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4 text-sm light:bg-amber-500/10"
     >
       <p className="font-medium">Some database connections are unavailable</p>
       <p className="mt-1 text-muted-foreground">
@@ -854,11 +854,11 @@ const ConfiguredRoutesSection = React.memo(function ConfiguredRoutesSection({
       </div>
 
       {!relayConnected ? (
-        <p className="type-support border-t border-amber-400/20 bg-amber-400/5 px-4 py-2 text-amber-100">
+        <p className="type-support border-t border-amber-400/20 bg-amber-400/5 px-4 py-2 text-amber-100 light:bg-amber-400/10 light:text-amber-800">
           Port changes are unavailable while this Relay is disconnected.
         </p>
       ) : (update.error || routeError) && dialog === null ? (
-        <p className="border-t border-destructive/20 bg-destructive/5 px-4 py-2 text-xs text-destructive">
+        <p className="border-t border-destructive/20 bg-destructive/5 px-4 py-2 text-xs text-destructive light:bg-destructive/10">
           {errorMessage(update.error ?? routeError)}
         </p>
       ) : null}
@@ -1087,7 +1087,7 @@ const ConfiguredRoutesTable = React.memo(function ConfiguredRoutesTable({
                     : "Not configured"}
                 </span>
               </div>
-              <span className="type-technical-label shrink-0 self-center border border-primary/30 bg-primary/8 px-2 py-1 text-primary">
+              <span className="type-technical-label shrink-0 self-center border border-primary/30 bg-primary/8 px-2 py-1 text-primary-ink">
                 Primary
               </span>
             </div>
@@ -1783,7 +1783,7 @@ const RouteRowIcon = React.memo(function RouteRowIcon({
     return (
       <div
         aria-label={busyLabel}
-        className="grid size-7 shrink-0 place-items-center border border-primary/30 bg-primary/5 text-primary"
+        className="grid size-7 shrink-0 place-items-center border border-primary/30 bg-primary/5 text-primary-ink"
         role="status"
       >
         <LoaderCircle className="size-3.5 animate-spin" />
@@ -1796,8 +1796,8 @@ const RouteRowIcon = React.memo(function RouteRowIcon({
       <div
         className={`grid size-7 shrink-0 place-items-center border ${
           kind === "primary"
-            ? "border-primary/30 bg-primary/5 text-primary"
-            : "border-emerald-400/25 bg-emerald-400/5 text-emerald-300"
+            ? "border-primary/30 bg-primary/5 text-primary-ink"
+            : "border-emerald-400/25 bg-emerald-400/5 text-emerald-300 light:bg-emerald-400/10 light:text-emerald-700"
         }`}
       >
         <Icon className="size-3.5" />
@@ -1818,8 +1818,8 @@ const RouteRowIcon = React.memo(function RouteRowIcon({
           }
           className={`grid size-7 shrink-0 place-items-center border transition-colors ${
             pending
-              ? "border-amber-400/30 bg-amber-400/5 text-amber-300 hover:bg-amber-400/10"
-              : "border-destructive/35 bg-destructive/5 text-destructive hover:bg-destructive/10"
+              ? "border-amber-400/30 bg-amber-400/5 text-amber-300 hover:bg-amber-400/10 light:bg-amber-400/10 light:text-amber-700 light:hover:bg-amber-400/20"
+              : "border-destructive/35 bg-destructive/5 text-destructive hover:bg-destructive/10 light:bg-destructive/10 light:hover:bg-destructive/20"
           }`}
           onClick={() => {
             if (errorMessage) {
@@ -1894,7 +1894,9 @@ const PublicAddressCopy = React.memo(function PublicAddressCopy({
           className={`flex max-w-full items-center gap-1 font-mono transition-colors ${
             prominent ? "type-control" : "type-meta"
           } ${
-            copied ? "text-emerald-400" : "text-primary/75 hover:text-primary"
+            copied
+              ? "text-emerald-400"
+              : "text-primary-ink/75 hover:text-primary-ink"
           }`}
           onClick={() => {
             void copy()
@@ -2332,7 +2334,7 @@ function AddNetworkRouteDialog({
     >
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <p className="type-technical-label text-primary">
+          <p className="type-technical-label text-primary-ink">
             {webRoute ? "Web route" : "New route"}
           </p>
           <DialogTitle>
@@ -2635,7 +2637,7 @@ function PortAllocationDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <p className="type-technical-label text-primary">
+          <p className="type-technical-label text-primary-ink">
             {isDefaultServer
               ? "Default Server"
               : editing
@@ -2845,7 +2847,7 @@ function RouteStatusButton({
           }
           className={
             pending
-              ? "w-7 border-amber-400/30 bg-amber-400/5 px-0 text-amber-200 hover:bg-amber-400/10 hover:text-amber-100 sm:w-auto sm:px-3"
+              ? "w-7 border-amber-400/30 bg-amber-400/5 px-0 text-amber-200 hover:bg-amber-400/10 hover:text-amber-100 sm:w-auto sm:px-3 light:bg-amber-400/10 light:text-amber-800 light:hover:bg-amber-400/20 light:hover:text-amber-800"
               : "w-7 px-0 sm:w-auto sm:px-3"
           }
           onClick={() => {

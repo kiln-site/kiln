@@ -129,7 +129,7 @@ export function WorkspaceCopyValueButton({
       <TooltipTrigger asChild>
         <button
           type="button"
-          className={`flex min-w-0 items-center gap-1 truncate font-mono transition-colors ${copied ? "text-emerald-400" : "text-primary/75 hover:text-primary"}`}
+          className={`flex min-w-0 items-center gap-1 truncate font-mono transition-colors ${copied ? "text-emerald-400" : "text-primary-ink/75 hover:text-primary-ink"}`}
           aria-label={`Copy ${label} ${value}`}
           onClick={() => void copy()}
         >

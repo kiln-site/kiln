@@ -282,7 +282,9 @@ const UserTable = memo(function UserTable({
         source={source}
         emptyState={
           <DataTableEmptyState
-            icon={<Users className="size-6 text-muted-foreground/45" />}
+            icon={
+              <Users className="size-6 text-muted-foreground/45 light:text-muted-foreground/72" />
+            }
             title={search ? "No users match your search" : "No users"}
             description={
               search
@@ -344,7 +346,9 @@ const UserRole = memo(function UserRole({ user }: { user: ManagedUser }) {
       <span
         className={cn(
           "type-meta block truncate",
-          user.role === "admin" ? "font-medium text-primary" : "text-foreground"
+          user.role === "admin"
+            ? "font-medium text-primary-ink"
+            : "text-foreground"
         )}
       >
         {roleLabel(user.role)}
@@ -399,7 +403,7 @@ const UserHoldings = memo(function UserHoldings({
             <button
               type="button"
               aria-label={`Accept ${pending} invitation${pending === 1 ? "" : "s"} for ${user.name}`}
-              className="relative z-10 -mx-1 flex h-7 items-center gap-1 rounded-md px-1 text-amber-700 tabular-nums transition-colors hover:bg-amber-500/10 dark:text-amber-300"
+              className="relative z-10 -mx-1 flex h-7 items-center gap-1 rounded-md px-1 text-amber-700 tabular-nums transition-colors hover:bg-amber-500/10 dark:text-amber-300 light:hover:bg-amber-500/20"
               onClick={() => onAction({ kind: "accept", user })}
             >
               <Mail className="size-3.5" aria-hidden="true" />

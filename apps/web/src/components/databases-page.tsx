@@ -397,7 +397,7 @@ const DatabaseTable = React.memo(function DatabaseTable({
                     relayId: database.relayId,
                   }}
                   name={database.name}
-                  nameClassName="transition-colors group-hover/database-link:text-primary"
+                  nameClassName="transition-colors group-hover/database-link:text-primary-ink"
                   meta={database.shortId}
                   metaClassName="font-mono"
                   showFavorite={false}
@@ -581,7 +581,7 @@ const DatabaseActions = React.memo(function DatabaseActions({
           <TooltipTrigger asChild>
             <Button
               aria-label={`Delete ${database.name}`}
-              className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+              className="text-destructive hover:bg-destructive/10 hover:text-destructive light:hover:bg-destructive/20"
               disabled={busy}
               size="icon-sm"
               type="button"
@@ -677,7 +677,7 @@ function ActionIconButton({
       <TooltipTrigger asChild>
         <Button
           aria-label={label}
-          className="text-muted-foreground hover:text-primary"
+          className="text-muted-foreground hover:text-primary-ink"
           disabled={disabled}
           size="icon-sm"
           type="button"

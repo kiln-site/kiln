@@ -29,13 +29,15 @@ export const engineOptions: ReadonlyArray<{
 
 export const engineBadgeClasses: Record<DatabaseEngine, string> = {
   mariadb:
-    "border-amber-500/35 bg-amber-500/10 text-amber-700 dark:text-amber-300",
-  mysql: "border-sky-500/35 bg-sky-500/10 text-sky-700 dark:text-sky-300",
+    "border-amber-500/35 bg-amber-500/10 light:bg-amber-500/20 text-amber-700 dark:text-amber-300",
+  mysql:
+    "border-sky-500/35 bg-sky-500/10 light:bg-sky-500/20 text-sky-700 dark:text-sky-300",
   postgres:
-    "border-emerald-500/35 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
-  redis: "border-red-500/35 bg-red-500/10 text-red-700 dark:text-red-300",
+    "border-emerald-500/35 bg-emerald-500/10 light:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300",
+  redis:
+    "border-red-500/35 bg-red-500/10 light:bg-red-500/20 text-red-700 dark:text-red-300",
   valkey:
-    "border-violet-500/35 bg-violet-500/10 text-violet-700 dark:text-violet-300",
+    "border-violet-500/35 bg-violet-500/10 light:bg-violet-500/20 text-violet-700 dark:text-violet-300",
 }
 
 export function databaseStatusPresentation(

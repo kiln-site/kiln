@@ -55,10 +55,7 @@ import {
 } from "@/components/data-table-workspace"
 import { IdentityName } from "@/components/identity-name"
 import { InfraSyncButton } from "@/components/infra-sync-button"
-import {
-  InstanceCard,
-  type InstanceIdentity,
-} from "@/components/instance-card"
+import { InstanceCard, type InstanceIdentity } from "@/components/instance-card"
 import { RelayKindIcon, ServerKindIcon } from "@/components/instance-kind-icon"
 import { RelativeTime } from "@/components/relative-time"
 import {
@@ -363,10 +360,7 @@ const ActivityToolbar = React.memo(function ActivityToolbar({
 }) {
   // The table filters as you type; the URL trails behind.
   const searchTimer = React.useRef<number>(undefined)
-  React.useEffect(
-    () => () => window.clearTimeout(searchTimer.current),
-    []
-  )
+  React.useEffect(() => () => window.clearTimeout(searchTimer.current), [])
   const search = React.useMemo(
     () => ({
       ariaLabel: "Search activity",
@@ -439,7 +433,11 @@ const ActivityFiltersMenu = React.memo(function ActivityFiltersMenu({
           ) : null}
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" sideOffset={6} className="grid w-64 gap-3 p-3">
+      <PopoverContent
+        align="end"
+        sideOffset={6}
+        className="grid w-64 gap-3 p-3"
+      >
         <ActivityFilterField label="Type">
           <ActivityTypeFilter
             filterStore={filterStore}
@@ -670,42 +668,34 @@ const ActivityScopeController = React.memo(function ActivityScopeController({
   })
   const options = React.useMemo(
     (): Array<ActivityScopeOption> => [
-      ...relays.map(
-        (relay): ActivityScopeOption => ({
-          id: relay.id,
-          kind: "relay",
-          name: relay.name,
-          relayId: relay.id,
-          relayName: relay.name,
-        })
-      ),
-      ...servers.map(
-        (server): ActivityScopeOption => ({
-          id: server.id,
-          kind: "server",
-          name: server.name,
-          relayId: server.relayId,
-          relayName: server.relayName,
-        })
-      ),
-      ...apps.map(
-        (app): ActivityScopeOption => ({
-          id: app.id,
-          kind: "app",
-          name: app.name,
-          relayId: app.relayId,
-          relayName: app.relayName,
-        })
-      ),
-      ...databases.map(
-        (database): ActivityScopeOption => ({
-          id: database.id,
-          kind: "database",
-          name: database.name,
-          relayId: database.relayId,
-          relayName: database.relayName,
-        })
-      ),
+      ...relays.map((relay): ActivityScopeOption => ({
+        id: relay.id,
+        kind: "relay",
+        name: relay.name,
+        relayId: relay.id,
+        relayName: relay.name,
+      })),
+      ...servers.map((server): ActivityScopeOption => ({
+        id: server.id,
+        kind: "server",
+        name: server.name,
+        relayId: server.relayId,
+        relayName: server.relayName,
+      })),
+      ...apps.map((app): ActivityScopeOption => ({
+        id: app.id,
+        kind: "app",
+        name: app.name,
+        relayId: app.relayId,
+        relayName: app.relayName,
+      })),
+      ...databases.map((database): ActivityScopeOption => ({
+        id: database.id,
+        kind: "database",
+        name: database.name,
+        relayId: database.relayId,
+        relayName: database.relayName,
+      })),
     ],
     [apps, databases, relays, servers]
   )
@@ -740,7 +730,9 @@ const ActivityScopeController = React.memo(function ActivityScopeController({
       onFiltersChange({
         ...clearedActivityScope,
         relay: option.relayId,
-        ...(option.kind === "relay" ? {} : { [option.kind ?? "server"]: option.id }),
+        ...(option.kind === "relay"
+          ? {}
+          : { [option.kind ?? "server"]: option.id }),
       })
     },
     [onFiltersChange]
@@ -1088,7 +1080,7 @@ const ActivityDatePresetButton = React.memo(function ActivityDatePresetButton({
       variant="outline"
       size="xs"
       aria-pressed={pressed}
-      className="type-meta font-mono tracking-[0.04em] aria-pressed:border-primary/30 aria-pressed:bg-primary/10 aria-pressed:text-primary"
+      className="type-meta font-mono tracking-[0.04em] aria-pressed:border-primary/30 aria-pressed:bg-primary/10 aria-pressed:text-primary-ink"
       onClick={() => store.selectRecentRange(days)}
     >
       {days} days
@@ -1450,7 +1442,9 @@ const ActivityTable = React.memo(function ActivityTable({
               : "Tracked Relay actions will appear here as they happen."}
           </span>
         }
-        icon={<FileClock className="size-6 text-muted-foreground/45" />}
+        icon={
+          <FileClock className="size-6 text-muted-foreground/45 light:text-muted-foreground/72" />
+        }
         title={
           searchActive || filtered
             ? "No activity matches these filters"
@@ -1503,10 +1497,7 @@ const activityTableDefinition = defineDataTable({
       header: "User",
       sortFn: "text",
       cell: ({ row }) => (
-        <ActivityUser
-          actor={row.original.actor}
-          source={row.original.source}
-        />
+        <ActivityUser actor={row.original.actor} source={row.original.source} />
       ),
       meta: dataTableColumnMeta({ hideBelow: "md", width: "minmax(0,0.9fr)" }),
     }),
@@ -1561,7 +1552,7 @@ const ActivityWhere = React.memo(function ActivityWhere({
       meta={target ? relay.name : "Relay-wide"}
       metaClassName="font-mono"
       name={activityWhereName(entry)}
-      nameClassName="transition-colors group-hover/where-link:text-primary"
+      nameClassName="transition-colors group-hover/where-link:text-primary-ink"
       showFavorite={false}
       showStatus={false}
     />
@@ -1655,14 +1646,14 @@ const ActivityAction = React.memo(function ActivityAction({
   return (
     <IdentityName
       icon={<Icon className="size-3.5" />}
-      iconClassName="border-primary/18 bg-primary/7 text-primary/85"
+      iconClassName="border-primary/18 bg-primary/7 text-primary-ink/85"
       meta={
         <>
           <span className="md:hidden">
             {activityWhereName(entry)} · {entry.actor.name}
           </span>
           <span className="hidden md:inline">
-            <span className="tracking-[0.06em] text-primary uppercase">
+            <span className="tracking-[0.06em] text-primary-ink uppercase">
               {details.label}
             </span>
             {entry.permission ? (
@@ -1734,7 +1725,10 @@ const ActivityRowActions = React.memo(function ActivityRowActions({
               <DropdownMenuSeparator />
               <CopyIdentifierMenuItem label="User ID" value={actor.id} />
               {actor.email ? (
-                <CopyIdentifierMenuItem label="User email" value={actor.email} />
+                <CopyIdentifierMenuItem
+                  label="User email"
+                  value={actor.email}
+                />
               ) : null}
             </>
           ) : null}

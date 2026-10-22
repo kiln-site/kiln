@@ -141,7 +141,7 @@ export const NotificationRow = React.memo(function NotificationRow({
       <span
         className={cn(
           "grid size-8 shrink-0 place-items-center rounded-md border border-border/70 bg-muted/40 text-muted-foreground",
-          highlighted && "border-primary/30 bg-primary/10 text-primary"
+          highlighted && "border-primary/30 bg-primary/10 text-primary-ink"
         )}
       >
         <Icon className="size-4" aria-hidden />

@@ -471,7 +471,8 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
           <Star
             className={cn(
               "size-3.5",
-              favoritesOnly && "fill-amber-400 text-amber-400"
+              favoritesOnly &&
+                "fill-amber-400 text-amber-400 light:text-amber-500"
             )}
             aria-hidden="true"
           />
@@ -621,7 +622,8 @@ function instancePickerOptionId(listId: string, key: string) {
 
 const toolButtonClassName =
   "relative grid shrink-0 place-items-center rounded-md border border-border/70 text-muted-foreground transition-colors outline-none hover:bg-muted/55 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 data-[state=open]:bg-muted/55 data-[state=open]:text-foreground"
-const activeToolButtonClassName = "border-primary/45 bg-primary/8 text-primary"
+const activeToolButtonClassName =
+  "border-primary/45 bg-primary/8 text-primary-ink"
 const toolButtonSize = (touch: boolean) => (touch ? "size-10" : "size-8")
 // A tap moves focus to what it lands on, closing a phone's keyboard; cancelling
 // it keeps the search field focused while filtering.
@@ -907,11 +909,11 @@ const InstancePickerRowButton = React.memo(function InstancePickerRowButton({
       />
       {pending ? (
         <LoaderCircle
-          className="size-3.5 shrink-0 animate-spin text-primary"
+          className="size-3.5 shrink-0 animate-spin text-primary-ink"
           aria-hidden="true"
         />
       ) : showKind ? (
-        <span className="shrink-0 text-muted-foreground/70">
+        <span className="shrink-0 text-muted-foreground/70 light:text-muted-foreground/85">
           <kind.Icon className="size-3.5" aria-hidden="true" />
           <span className="sr-only">{kind.label}</span>
         </span>
@@ -929,7 +931,7 @@ function InstancePickerCheckbox({ state }: { state: "all" | "none" | "some" }) {
         state === "all"
           ? "border-primary bg-primary text-primary-foreground"
           : state === "some"
-            ? "border-primary text-primary"
+            ? "border-primary text-primary-ink"
             : "border-input"
       )}
     >

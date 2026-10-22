@@ -296,7 +296,7 @@ export function FileDropOverlay({ directory }: { directory: string }) {
   return (
     <div className="pointer-events-none absolute inset-2 z-50 hidden place-items-center border border-primary/55 bg-card/88 shadow-[inset_0_0_0_1px_color-mix(in_oklch,var(--primary),transparent_75%)] backdrop-blur-sm group-data-[file-drop-active=true]/drop:grid">
       <div className="text-center">
-        <div className="mx-auto grid size-10 place-items-center border border-primary/35 bg-primary/10 text-primary">
+        <div className="mx-auto grid size-10 place-items-center border border-primary/35 bg-primary/10 text-primary-ink">
           <Upload className="size-5" />
         </div>
         <p className="mt-3 text-sm font-semibold">Drop files to upload</p>

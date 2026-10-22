@@ -279,7 +279,7 @@ function FilesHomeButton({
       <Button
         variant="ghost"
         size="icon-sm"
-        className={`shrink-0 shadow-none ${active ? "text-primary hover:bg-transparent hover:text-primary focus-visible:bg-transparent" : ""}`}
+        className={`shrink-0 shadow-none ${active ? "text-primary-ink hover:bg-transparent hover:text-primary-ink focus-visible:bg-transparent" : ""}`}
         aria-label="Files home"
         aria-current={active ? "page" : undefined}
         onClick={onClick}
@@ -366,7 +366,7 @@ function FileTreeSearchInput({
   return (
     <label className="flex h-full min-w-0 flex-1 items-center">
       {searching ? (
-        <LoaderCircle className="ml-1 size-[18px] shrink-0 animate-spin text-primary md:ml-1.5" />
+        <LoaderCircle className="ml-1 size-[18px] shrink-0 animate-spin text-primary-ink md:ml-1.5" />
       ) : (
         <Search className="ml-1 size-[18px] shrink-0 text-foreground/90 md:ml-1.5" />
       )}
@@ -548,7 +548,7 @@ function FileUploadPickerAction({
       <span className="min-w-0 flex-1 text-foreground">
         {uploading ? "Uploading…" : label}
       </span>
-      <span className="type-technical-label text-primary">Direct</span>
+      <span className="type-technical-label text-primary-ink">Direct</span>
     </button>
   )
 }
@@ -1413,7 +1413,7 @@ export function FileTreePanel({
         className={`${mobileContentVisible ? "flex" : "hidden"} order-1 h-12 shrink-0 items-center border-b border-border/80 bg-card px-3 md:hidden`}
       >
         <div className="flex min-w-0 flex-1 items-center gap-2.5">
-          <FolderTree className="size-[18px] shrink-0 text-primary" />
+          <FolderTree className="size-[18px] shrink-0 text-primary-ink" />
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold">Browse files</p>
             <p className="type-code truncate text-muted-foreground">
@@ -1607,14 +1607,14 @@ export function FileTreePanel({
       </div>
 
       <div className="pointer-events-none absolute right-2 bottom-12 left-2 z-50 hidden items-center gap-2 border border-primary/35 bg-popover/95 px-3 py-2 text-xs shadow-xl backdrop-blur-sm group-data-[file-drop-active=true]/tree-drop:flex md:bottom-2">
-        <Upload className="size-4 shrink-0 text-primary group-data-[file-drop-mode=move]/tree-drop:hidden" />
-        <FolderInput className="hidden size-4 shrink-0 text-primary group-data-[file-drop-mode=move]/tree-drop:block" />
+        <Upload className="size-4 shrink-0 text-primary-ink group-data-[file-drop-mode=move]/tree-drop:hidden" />
+        <FolderInput className="hidden size-4 shrink-0 text-primary-ink group-data-[file-drop-mode=move]/tree-drop:block" />
         <span ref={dropActionLabelRef} className="min-w-0 flex-1 truncate">
           Upload to
         </span>
         <span
           ref={dropPathLabelRef}
-          className="type-code max-w-[65%] truncate text-primary"
+          className="type-code max-w-[65%] truncate text-primary-ink"
         >
           {rootPath}/
         </span>

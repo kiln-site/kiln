@@ -283,21 +283,21 @@ export function PowerActionButton({
     default: "text-foreground hover:bg-popover-accent/80",
     start: disabled
       ? "text-muted-foreground/35"
-      : "text-blue-300 hover:bg-blue-500/10",
+      : "text-blue-300 light:text-blue-700 hover:bg-blue-500/10 light:hover:bg-blue-500/20",
     stop: disabled
       ? "text-muted-foreground/35"
-      : "text-red-400 hover:bg-red-500/10",
-    kill: "text-red-400 hover:bg-red-500/10",
+      : "text-red-400 light:text-red-700 hover:bg-red-500/10 light:hover:bg-red-500/20",
+    kill: "text-red-400 light:text-red-700 hover:bg-red-500/10 light:hover:bg-red-500/20",
   }[tone]
   const iconClassName = {
     default: "border-border bg-card text-muted-foreground",
     start: disabled
       ? "border-border/55 bg-muted/15"
-      : "border-blue-500/25 bg-blue-500/5",
+      : "border-blue-500/25 bg-blue-500/5 light:bg-blue-500/10",
     stop: disabled
       ? "border-border/55 bg-muted/15"
-      : "border-red-500/25 bg-red-500/5",
-    kill: "border-red-500/25 bg-red-500/5",
+      : "border-red-500/25 bg-red-500/5 light:bg-red-500/10",
+    kill: "border-red-500/25 bg-red-500/5 light:bg-red-500/10",
   }[tone]
   return (
     <button

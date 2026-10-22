@@ -423,7 +423,7 @@ export function RootDirectoryList({
   return (
     <div className="mt-5">
       <div className="mb-2 flex min-h-8 items-center gap-2 px-1">
-        <Folder className="size-3.5 text-primary" />
+        <Folder className="size-3.5 text-primary-ink" />
         <h2 className="type-technical-label text-muted-foreground">
           Root · {rootPath || "/"}
         </h2>
@@ -503,7 +503,7 @@ export function RootDirectoryList({
                 onClick={() => onOpen(entry.path)}
               >
                 {entry.kind === "directory" ? (
-                  <Folder className="size-4 shrink-0 text-primary/80" />
+                  <Folder className="size-4 shrink-0 text-primary-ink/80" />
                 ) : (
                   <FileTypeIcon path={entry.path} />
                 )}
@@ -527,7 +527,7 @@ export function RootDirectoryList({
         ))}
         {loadError ? (
           <div
-            className="flex min-h-10 items-center justify-center gap-1.5 border-t border-destructive/30 bg-destructive/5 px-6 text-xs text-destructive"
+            className="flex min-h-10 items-center justify-center gap-1.5 border-t border-destructive/30 bg-destructive/5 px-6 text-xs text-destructive light:bg-destructive/10"
             role="alert"
           >
             {retrying ? (
@@ -550,13 +550,13 @@ export function RootDirectoryList({
           </div>
         ) : directory.loading && !hasBufferedEntries ? (
           <div className="flex min-h-10 items-center justify-center gap-2 border-t border-border/55 px-6 text-xs text-muted-foreground">
-            <LoaderCircle className="size-3.5 animate-spin text-primary" />
+            <LoaderCircle className="size-3.5 animate-spin text-primary-ink" />
             Loading more files
           </div>
         ) : hasMoreEntries ? (
           <button
             type="button"
-            className="flex min-h-10 w-full items-center justify-center gap-2 border-t border-border/55 px-6 text-xs font-medium text-primary transition-colors hover:bg-accent/30 focus-visible:bg-accent/40 focus-visible:outline-none"
+            className="flex min-h-10 w-full items-center justify-center gap-2 border-t border-border/55 px-6 text-xs font-medium text-primary-ink transition-colors hover:bg-accent/30 focus-visible:bg-accent/40 focus-visible:outline-none"
             onClick={revealMore}
           >
             {directory.loading ? (
@@ -566,7 +566,7 @@ export function RootDirectoryList({
           </button>
         ) : null}
         {!loadError && directory.error ? (
-          <div className="border-t border-destructive/30 bg-destructive/5 px-4 py-3 text-xs text-destructive">
+          <div className="border-t border-destructive/30 bg-destructive/5 px-4 py-3 text-xs text-destructive light:bg-destructive/10">
             {directory.error.message || "Could not load this directory"}
           </div>
         ) : null}
@@ -783,7 +783,7 @@ function DirectoryViewContent({
               <ArrowUp className="size-4" />
             </span>
             <span className="flex min-w-0 items-center gap-2.5 text-sm font-medium">
-              <Folder className="size-4 shrink-0 text-primary/80" />
+              <Folder className="size-4 shrink-0 text-primary-ink/80" />
               <span className="truncate">...</span>
             </span>
             <span className="type-code text-muted-foreground">—</span>
@@ -817,7 +817,7 @@ function DirectoryViewContent({
                   onClick={() => onOpen(entry.path)}
                 >
                   {entry.kind === "directory" ? (
-                    <Folder className="size-4 shrink-0 text-primary/80" />
+                    <Folder className="size-4 shrink-0 text-primary-ink/80" />
                   ) : (
                     <FileTypeIcon path={entry.path} />
                   )}
@@ -842,13 +842,13 @@ function DirectoryViewContent({
 
           {directory.loading && !hasBufferedEntries ? (
             <div className="flex min-h-11 items-center justify-center gap-2 border-t border-border/55 px-6 text-xs text-muted-foreground">
-              <LoaderCircle className="size-3.5 animate-spin text-primary" />
+              <LoaderCircle className="size-3.5 animate-spin text-primary-ink" />
               Loading more files
             </div>
           ) : hasMoreEntries ? (
             <button
               type="button"
-              className="flex min-h-11 w-full items-center justify-center gap-2 border-t border-border/55 px-6 text-xs font-medium text-primary transition-colors hover:bg-accent/30 focus-visible:bg-accent/40 focus-visible:outline-none"
+              className="flex min-h-11 w-full items-center justify-center gap-2 border-t border-border/55 px-6 text-xs font-medium text-primary-ink transition-colors hover:bg-accent/30 focus-visible:bg-accent/40 focus-visible:outline-none"
               onClick={revealMore}
             >
               {directory.loading ? (
@@ -859,7 +859,7 @@ function DirectoryViewContent({
           ) : null}
 
           {directory.error ? (
-            <div className="border-t border-destructive/30 bg-destructive/5 px-4 py-3 text-xs text-destructive">
+            <div className="border-t border-destructive/30 bg-destructive/5 px-4 py-3 text-xs text-destructive light:bg-destructive/10">
               {directory.error.message || "Could not load this directory"}
             </div>
           ) : null}
@@ -867,7 +867,7 @@ function DirectoryViewContent({
           {!entries.length && directory.complete ? (
             <div className="grid min-h-40 place-items-center px-6 text-center">
               <div>
-                <Folder className="mx-auto size-6 text-muted-foreground/60" />
+                <Folder className="mx-auto size-6 text-muted-foreground/60 light:text-muted-foreground/80" />
                 <p className="mt-3 text-sm font-medium">
                   This directory is empty
                 </p>

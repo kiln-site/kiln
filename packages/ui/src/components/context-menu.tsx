@@ -53,7 +53,7 @@ function ContextMenuItem({
       data-slot="context-menu-item"
       data-variant={variant}
       className={cn(
-        "type-menu relative flex cursor-default items-center gap-1.5 rounded-md px-1.5 py-1 outline-hidden transition-colors duration-100 select-none focus:bg-popover-accent focus:text-popover-accent-foreground not-data-[variant=destructive]:focus:**:text-popover-accent-foreground data-[variant=destructive]:text-destructive data-[variant=destructive]:focus:bg-destructive/10 data-[variant=destructive]:focus:text-destructive dark:data-[variant=destructive]:focus:bg-destructive/20 data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 data-[variant=destructive]:*:[svg]:text-destructive",
+        "type-menu relative flex cursor-default items-center gap-1.5 rounded-md px-1.5 py-1 outline-hidden transition-colors duration-100 select-none focus:bg-popover-accent focus:text-popover-accent-foreground not-data-[variant=destructive]:focus:**:text-popover-accent-foreground data-[variant=destructive]:text-destructive data-[variant=destructive]:focus:bg-destructive/10 data-[variant=destructive]:focus:text-destructive dark:data-[variant=destructive]:focus:bg-destructive/20 data-disabled:pointer-events-none data-disabled:opacity-50 light:data-[variant=destructive]:focus:bg-destructive/20 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 data-[variant=destructive]:*:[svg]:text-destructive",
         className
       )}
       {...props}

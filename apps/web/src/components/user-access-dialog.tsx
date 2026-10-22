@@ -705,7 +705,7 @@ export const UserBadges = memo(function UserBadges({
       variant="outline"
       className={cn(
         "shrink-0",
-        user.role === "admin" && "border-primary/40 text-primary"
+        user.role === "admin" && "border-primary/40 text-primary-ink"
       )}
     >
       {role}

@@ -64,12 +64,12 @@ export const UserRowIdentity = React.memo(function UserRowIdentity({
 
 const actionTones = {
   danger:
-    "text-destructive/85 hover:bg-destructive/10 hover:text-destructive disabled:text-muted-foreground",
+    "text-destructive/85 hover:bg-destructive/10 light:hover:bg-destructive/20 hover:text-destructive disabled:text-muted-foreground",
   warning:
-    "text-amber-600/90 hover:bg-amber-500/10 hover:text-amber-500 dark:text-amber-400/90",
+    "text-amber-600/90 hover:bg-amber-500/10 light:hover:bg-amber-500/20 hover:text-amber-500 dark:text-amber-400/90",
   success:
-    "text-emerald-600/90 hover:bg-emerald-500/10 hover:text-emerald-500 dark:text-emerald-400/90",
-  info: "text-sky-600/90 hover:bg-sky-500/10 hover:text-sky-500 dark:text-sky-400/90",
+    "text-emerald-600/90 hover:bg-emerald-500/10 light:hover:bg-emerald-500/20 hover:text-emerald-500 dark:text-emerald-400/90",
+  info: "text-sky-600/90 hover:bg-sky-500/10 light:hover:bg-sky-500/20 hover:text-sky-500 dark:text-sky-400/90",
 } as const
 
 /** An icon action in a user row, coloured by what it does. */

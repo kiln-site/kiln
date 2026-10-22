@@ -37,8 +37,13 @@ larger screens.
 
 - Use `text-foreground` for titles, primary copy, values, and active controls.
 - Use `text-muted-foreground` for supporting copy, labels, and metadata.
-- Use semantic status colors such as `text-primary` and `text-destructive` only
-  when the text communicates that status.
+- Use semantic status colors such as `text-primary-ink` and `text-destructive`
+  only when the text communicates that status.
+- Accent text, links, and icons use `text-primary-ink`, which light mode
+  darkens to stay readable. Fills, borders, and rings keep `primary`, the same
+  accent in both modes.
+- Light mode maps the 200–400 shades of Tailwind's chromatic colors to deep
+  ones, so a `text-sky-400` written for dark surfaces needs no light variant.
 - Do not add alpha to readable muted text. `text-muted-foreground/70`, nested
   opacity, and similar combinations lose contrast in the light theme.
 - Opacity communicates state only: disabled, unavailable, transitioning, or

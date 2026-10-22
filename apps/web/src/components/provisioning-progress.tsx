@@ -230,7 +230,7 @@ export const ProvisioningProgress = React.memo(function ProvisioningProgress({
     <div className="flex min-h-0 w-full flex-1 overflow-y-auto">
       <div className="m-auto grid w-full max-w-5xl gap-10 px-6 py-12 lg:grid-cols-[minmax(0,1fr)_22rem] lg:px-10">
         <section className="self-center">
-          <div className="type-technical-label mb-5 flex items-center gap-2 text-primary">
+          <div className="type-technical-label mb-5 flex items-center gap-2 text-primary-ink">
             {failed ? (
               <TriangleAlert className="size-4" />
             ) : (
@@ -247,7 +247,7 @@ export const ProvisioningProgress = React.memo(function ProvisioningProgress({
             {failed ? copy.failure : copy.summary}
           </p>
           {failed ? (
-            <div className="mt-7 max-w-2xl border border-destructive/30 bg-destructive/6">
+            <div className="mt-7 max-w-2xl border border-destructive/30 bg-destructive/6 light:bg-destructive/12">
               <div className="border-b border-destructive/20 p-4">
                 <p className="type-technical-label text-destructive">
                   Failed during {activeStep?.label ?? "provisioning"}
@@ -312,9 +312,9 @@ export const ProvisioningProgress = React.memo(function ProvisioningProgress({
                         complete
                           ? "border-primary bg-primary text-primary-foreground"
                           : failedStep
-                            ? "border-destructive bg-destructive/10 text-destructive"
+                            ? "border-destructive bg-destructive/10 text-destructive light:bg-destructive/20"
                             : active
-                              ? "border-primary bg-primary/10 text-primary"
+                              ? "border-primary bg-primary/10 text-primary-ink"
                               : "border-border text-muted-foreground"
                       }`}
                     >
@@ -336,7 +336,7 @@ export const ProvisioningProgress = React.memo(function ProvisioningProgress({
                         failedStep
                           ? "text-destructive"
                           : active
-                            ? "text-primary"
+                            ? "text-primary-ink"
                             : "text-foreground"
                       }`}
                     >

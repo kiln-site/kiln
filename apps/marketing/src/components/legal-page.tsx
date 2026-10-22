@@ -12,14 +12,14 @@ export function LegalPage({
   return (
     <article className="site-container py-16 sm:py-24">
       <div className="mx-auto max-w-2xl">
-        <p className="type-technical-label text-primary">Legal</p>
+        <p className="type-technical-label text-primary-ink">Legal</p>
         <h1 className="site-title mt-3">{title}</h1>
         {updated ? (
           <p className="type-support mt-3 text-muted-foreground">
             Effective {updated}
           </p>
         ) : null}
-        <div className="site-copy mt-10 max-w-[65ch] space-y-8 text-muted-foreground [&_a]:text-foreground [&_a]:underline [&_a]:underline-offset-4 [&_a]:hover:text-primary">
+        <div className="site-copy mt-10 max-w-[65ch] space-y-8 text-muted-foreground [&_a]:text-foreground [&_a]:underline [&_a]:underline-offset-4 [&_a]:hover:text-primary-ink">
           {children}
         </div>
       </div>
@@ -46,7 +46,7 @@ export function LegalSection({
 
 export function LegalList({ children }: { children: ReactNode }) {
   return (
-    <ul className="list-disc space-y-1.5 pl-5 marker:text-primary/70">
+    <ul className="list-disc space-y-1.5 pl-5 marker:text-primary-ink/70">
       {children}
     </ul>
   )
@@ -54,7 +54,5 @@ export function LegalList({ children }: { children: ReactNode }) {
 
 // The address for questions, account requests, and licensing.
 export function ContactEmail() {
-  return (
-    <a href="mailto:contact@kiln.site">contact@kiln.site</a>
-  )
+  return <a href="mailto:contact@kiln.site">contact@kiln.site</a>
 }

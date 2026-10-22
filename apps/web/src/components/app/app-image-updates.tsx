@@ -112,9 +112,9 @@ export const AppImageUpdatesFact = React.memo(function AppImageUpdatesFact({
         <button
           type="button"
           className={cn(
-            "flex min-w-0 items-center gap-1.5 rounded-sm outline-none hover:text-primary focus-visible:ring-1 focus-visible:ring-ring",
+            "flex min-w-0 items-center gap-1.5 rounded-sm outline-none hover:text-primary-ink focus-visible:ring-1 focus-visible:ring-ring",
             status.tone === "muted" && "text-muted-foreground",
-            status.tone === "attention" && "text-primary",
+            status.tone === "attention" && "text-primary-ink",
             status.tone === "problem" && "text-destructive"
           )}
           title={updates.checkError ?? undefined}

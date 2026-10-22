@@ -255,7 +255,7 @@ export const BrickVersionPicker = React.memo(function BrickVersionPicker({
                       {version}
                     </span>
                     {selected ? (
-                      <Check className="size-3.5 shrink-0 text-primary" />
+                      <Check className="size-3.5 shrink-0 text-primary-ink" />
                     ) : null}
                   </button>
                 )

@@ -187,7 +187,6 @@ const inactiveUpdateBatch = inactiveSystemUpdateBatch<
   HearthUpdateCompletion
 >()
 
-
 type UpdateDialogViewStore = ReturnType<typeof createUpdateDialogViewStore>
 
 const updateFailureStorageKey = "kiln.system-update-failures"
@@ -1342,7 +1341,7 @@ const UpdaterHeader = React.memo(function UpdaterHeader({
   return (
     <div className="flex h-14 items-center justify-between gap-3 border-b pr-3 pl-5">
       <DialogTitle className="flex items-center gap-2.5 text-lg">
-        <CloudDownload className="size-4 text-primary" />
+        <CloudDownload className="size-4 text-primary-ink" />
         Kiln Updater
       </DialogTitle>
       <div className="flex shrink-0 items-center gap-0.5">
@@ -1437,7 +1436,9 @@ const UpdaterCheck = React.memo(function UpdaterCheck({
         onNotice={showNotice}
       />
       {notice ? (
-        <span className="truncate text-amber-200">{notice}</span>
+        <span className="truncate text-amber-200 light:text-amber-800">
+          {notice}
+        </span>
       ) : (
         <LastCheckedLabel activityStore={activityStore} open={open} />
       )}
@@ -1929,7 +1930,7 @@ function UpdateTargetOwner({
         <span className="type-meta flex max-w-44 min-w-0 shrink-0 cursor-default items-center gap-1 text-muted-foreground">
           <UserRound
             aria-hidden="true"
-            className="size-3.5 shrink-0 text-primary"
+            className="size-3.5 shrink-0 text-primary-ink"
           />
           <span className="truncate">{viewer ? "You" : name}</span>
         </span>
@@ -2037,7 +2038,7 @@ function UpdateTargetIcon({ target }: { target: UpdateTarget }) {
     <span
       className={`grid size-8 shrink-0 place-items-center border ${
         target.component === "hearth"
-          ? "border-primary/25 bg-primary/[0.07] text-primary"
+          ? "border-primary/25 bg-primary/[0.07] text-primary-ink"
           : "bg-background/55 text-muted-foreground"
       }`}
     >
@@ -2049,10 +2050,10 @@ function UpdateTargetIcon({ target }: { target: UpdateTarget }) {
 type StatusTone = "failed" | "info" | "muted" | "warning"
 
 const statusToneClassName: Readonly<Record<StatusTone, string>> = {
-  failed: "text-red-300",
-  info: "text-sky-200",
+  failed: "text-red-300 light:text-red-700",
+  info: "text-sky-200 light:text-sky-800",
   muted: "text-muted-foreground",
-  warning: "text-amber-200",
+  warning: "text-amber-200 light:text-amber-800",
 }
 
 function StatusText({
@@ -2215,7 +2216,7 @@ const UpdateTargetAction = React.memo(function UpdateTargetAction({
   if (state === "running") {
     return (
       <Button
-        className="w-24 border-primary/25 bg-primary/10 text-primary disabled:opacity-100"
+        className="w-24 border-primary/25 bg-primary/10 text-primary-ink disabled:opacity-100"
         disabled
         size="sm"
         type="button"
@@ -2228,7 +2229,7 @@ const UpdateTargetAction = React.memo(function UpdateTargetAction({
   if (state === "done") {
     return (
       <Button
-        className="w-24 text-emerald-200 disabled:opacity-100"
+        className="w-24 text-emerald-200 disabled:opacity-100 light:text-emerald-800"
         disabled
         size="sm"
         type="button"
@@ -2331,7 +2332,7 @@ const UpdaterFooter = React.memo(function UpdaterFooter({
     return (
       <UpdaterFooterBar tone="primary">
         <span className="flex min-w-0 items-center gap-2">
-          <ShieldCheck className="size-4 shrink-0 text-primary" />
+          <ShieldCheck className="size-4 shrink-0 text-primary-ink" />
           <span className="truncate">
             <span className="font-medium text-foreground">
               Update {label} to{" "}
@@ -2379,7 +2380,7 @@ const UpdaterFooter = React.memo(function UpdaterFooter({
     return (
       <UpdaterFooterBar>
         <span className="flex min-w-0 items-center gap-2">
-          <ShieldCheck className="size-4 shrink-0 text-primary" />
+          <ShieldCheck className="size-4 shrink-0 text-primary-ink" />
           <span className="truncate">
             Safe to close. Updates keep running in the background.
           </span>
@@ -2398,9 +2399,11 @@ const UpdaterFooter = React.memo(function UpdaterFooter({
     <UpdaterFooterBar tone={checkFailed ? "warning" : "default"}>
       {checkFailed ? (
         <span className="flex min-w-0 items-center gap-2">
-          <TriangleAlert className="size-4 shrink-0 text-amber-300" />
+          <TriangleAlert className="size-4 shrink-0 text-amber-300 light:text-amber-700" />
           <span className="truncate">
-            <span className="text-amber-200">Couldn’t check for updates.</span>{" "}
+            <span className="text-amber-200 light:text-amber-800">
+              Couldn’t check for updates.
+            </span>{" "}
             Showing earlier results.
           </span>
         </span>
@@ -2560,9 +2563,9 @@ const changeGroupLabel: Readonly<Record<ReleaseChangeGroup, string>> = {
 }
 
 const changeGroupClassName: Readonly<Record<ReleaseChangeGroup, string>> = {
-  fixed: "text-amber-200/90",
-  improved: "text-sky-200/90",
-  new: "text-emerald-200/90",
+  fixed: "text-amber-200/90 light:text-amber-800/90",
+  improved: "text-sky-200/90 light:text-sky-800/90",
+  new: "text-emerald-200/90 light:text-emerald-800/90",
   other: "text-muted-foreground",
 }
 
@@ -3300,7 +3303,7 @@ const ChangelogRow = React.memo(function ChangelogRow({
       {change.pullRequest ? (
         <a
           aria-label={`Pull request #${change.pullRequest}`}
-          className="type-meta inline-flex items-center gap-1 font-mono text-muted-foreground transition-colors hover:text-primary"
+          className="type-meta inline-flex items-center gap-1 font-mono text-muted-foreground transition-colors hover:text-primary-ink"
           href={`${gitRepository}/pull/${change.pullRequest}`}
           rel="noreferrer"
           target="_blank"
@@ -3665,7 +3668,7 @@ const ActiveUpdatesFallback = React.memo(function ActiveUpdatesFallback({
       {active.map((update) => (
         <div className={updateRowClassName} key={update.operationId}>
           <span className="grid size-8 shrink-0 place-items-center border bg-background/55">
-            <LoaderCircle className="size-4 animate-spin text-primary" />
+            <LoaderCircle className="size-4 animate-spin text-primary-ink" />
           </span>
           <div className="min-w-0">
             <div className="flex h-5 min-w-0 items-center">
@@ -3696,7 +3699,7 @@ function UpdateDialogError({
   return (
     <div className="grid h-full min-h-80 place-items-center p-6 text-center">
       <div className="max-w-sm">
-        <TriangleAlert className="mx-auto size-6 text-amber-300" />
+        <TriangleAlert className="mx-auto size-6 text-amber-300 light:text-amber-700" />
         <p className="mt-3 text-sm font-semibold">
           Update information is unavailable
         </p>
@@ -4305,7 +4308,7 @@ function linkedMarkdownText(text: string): React.ReactNode {
     if (githubUsername) {
       content.push(
         <a
-          className="text-primary underline decoration-primary/35 underline-offset-2 transition-colors hover:decoration-primary"
+          className="text-primary-ink underline decoration-primary-ink/35 underline-offset-2 transition-colors hover:decoration-primary-ink"
           href={`https://github.com/${githubUsername}`}
           key={`${index}:github:${githubUsername}`}
           rel="noreferrer"
@@ -4326,7 +4329,7 @@ function linkedMarkdownText(text: string): React.ReactNode {
       (markdownLabel ? stripInlineMarkdown(markdownLabel) : url)
     content.push(
       <a
-        className="text-primary underline decoration-primary/35 underline-offset-2 transition-colors hover:decoration-primary"
+        className="text-primary-ink underline decoration-primary-ink/35 underline-offset-2 transition-colors hover:decoration-primary-ink"
         href={url}
         key={`${index}:${url}`}
         rel="noreferrer"

@@ -251,7 +251,7 @@ const TailscaleNetworkPicker = React.memo(function TailscaleNetworkPicker({
             </div>
           }
           icon={<Network className="size-5" />}
-          iconClassName={selectedStack ? "text-primary" : undefined}
+          iconClassName={selectedStack ? "text-primary-ink" : undefined}
           title={
             selectedStack
               ? selectedStack.name
@@ -323,7 +323,7 @@ const TailscaleNetworkPicker = React.memo(function TailscaleNetworkPicker({
                   </span>
                 </span>
                 {stack.id === selectedStack?.id ? (
-                  <Check className="size-4 shrink-0 text-primary" />
+                  <Check className="size-4 shrink-0 text-primary-ink" />
                 ) : null}
               </button>
             ))}
@@ -433,7 +433,7 @@ const RemoveNetworkDialog = React.memo(function RemoveNetworkDialog({
         <DialogHeader>
           <DialogTitle>Delete {stack.name}?</DialogTitle>
         </DialogHeader>
-        <div className="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm">
+        <div className="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm light:bg-destructive/10">
           <CircleAlert className="mt-0.5 size-4 shrink-0 text-destructive" />
           Tailscale, CoreDNS, and the private Docker network will be removed
           from every node. Offline Relays will clean up automatically when they
@@ -591,7 +591,7 @@ const NetworkForm = React.memo(function NetworkForm({
     >
       <section className="min-w-0 p-5 sm:p-6">
         <div className="flex items-center gap-3">
-          <span className="grid size-10 shrink-0 place-items-center rounded-lg border bg-background text-primary">
+          <span className="grid size-10 shrink-0 place-items-center rounded-lg border bg-background text-primary-ink">
             <Network className="size-4" />
           </span>
           <h2 className="font-heading text-lg font-semibold">
@@ -669,7 +669,7 @@ const NetworkForm = React.memo(function NetworkForm({
 
         {save.error ? (
           <p
-            className="mt-4 border border-destructive/30 bg-destructive/5 px-3 py-2.5 text-xs text-destructive"
+            className="mt-4 border border-destructive/30 bg-destructive/5 px-3 py-2.5 text-xs text-destructive light:bg-destructive/10"
             role="alert"
           >
             {save.error.message}
@@ -681,7 +681,7 @@ const NetworkForm = React.memo(function NetworkForm({
             <Button
               type="button"
               variant="ghost"
-              className="mr-auto text-destructive hover:bg-destructive/10 hover:text-destructive"
+              className="mr-auto text-destructive hover:bg-destructive/10 hover:text-destructive light:hover:bg-destructive/20"
               onClick={onRemove}
             >
               <Trash2 />
@@ -747,7 +747,9 @@ const NetworkForm = React.memo(function NetworkForm({
                   aria-hidden="true"
                   className="pointer-events-none size-3.5 accent-primary"
                 />
-                <span className="type-technical-label text-primary">Write</span>
+                <span className="type-technical-label text-primary-ink">
+                  Write
+                </span>
               </span>
             </li>
           ))}

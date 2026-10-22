@@ -61,7 +61,7 @@ function PricingPage() {
           build on Kiln? Email{" "}
           <a
             href="mailto:contact@kiln.site"
-            className="text-foreground underline underline-offset-4 hover:text-primary"
+            className="text-foreground underline underline-offset-4 hover:text-primary-ink"
           >
             contact@kiln.site
           </a>
@@ -106,7 +106,7 @@ function IntervalSwitch({ interval }: { interval: BillingInterval }) {
         onClick={() => choose("year")}
       >
         Yearly
-        <span className="type-label text-primary">2 months free</span>
+        <span className="type-label text-primary-ink">2 months free</span>
       </button>
     </div>
   )
@@ -142,7 +142,7 @@ function PlanColumn({
           {plan.name}
         </h2>
         {recommended ? (
-          <span className="type-label text-primary">Recommended</span>
+          <span className="type-label text-primary-ink">Recommended</span>
         ) : null}
       </div>
       <p className="type-support mt-2 min-h-10 text-muted-foreground">
@@ -195,7 +195,7 @@ function PlanColumn({
       <ul className="type-support mt-6 space-y-2.5 border-t border-border pt-5">
         {plan.features.map((feature) => (
           <li key={feature} className="flex gap-2.5">
-            <Check className="mt-0.5 size-4 shrink-0 text-primary" />
+            <Check className="mt-0.5 size-4 shrink-0 text-primary-ink" />
             {feature}
           </li>
         ))}
@@ -239,7 +239,7 @@ function Questions() {
         <div className="divide-y divide-border border-y border-border lg:col-span-8">
           {questions.map((item) => (
             <details key={item.question} className="group">
-              <summary className="flex cursor-pointer list-none items-center justify-between gap-6 py-5 text-base font-medium outline-none focus-visible:text-primary [&::-webkit-details-marker]:hidden">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-6 py-5 text-base font-medium outline-none focus-visible:text-primary-ink [&::-webkit-details-marker]:hidden">
                 {item.question}
                 <span
                   aria-hidden="true"

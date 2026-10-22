@@ -238,7 +238,10 @@ const AppDeploymentCard = React.memo(function AppDeploymentCard({
             </Link>
           ) : (
             <span
-              className={cn(railFooterLinkClassName, "pointer-events-none opacity-50")}
+              className={cn(
+                railFooterLinkClassName,
+                "pointer-events-none opacity-50"
+              )}
             >
               <ScrollText />
               Logs
@@ -250,7 +253,7 @@ const AppDeploymentCard = React.memo(function AppDeploymentCard({
       <InfoFact label="Source">
         {source ? (
           <a
-            className="flex min-w-0 items-center gap-1.5 hover:text-primary"
+            className="flex min-w-0 items-center gap-1.5 hover:text-primary-ink"
             href={source.repositoryUrl}
             rel="noreferrer"
             target="_blank"
@@ -272,26 +275,28 @@ const AppDeploymentCard = React.memo(function AppDeploymentCard({
       {summary?.sourceType === "github" ? (
         <InfoFact label="Running">
           {runningCommit ? (
-          <a
-            className="flex min-w-0 items-center gap-1.5 hover:text-primary"
-            href={
-              current?.commitUrl ??
-              (source ? `${source.repositoryUrl}/commit/${runningCommit}` : undefined)
-            }
-            rel="noreferrer"
-            target="_blank"
-            title={current?.commitMessage ?? runningCommit}
-          >
-            <GitCommitHorizontal className="size-3.5 shrink-0 text-muted-foreground" />
-            <span className="shrink-0 font-mono text-xs">
-              {shortCommit(runningCommit)}
-            </span>
-            {current?.commitMessage ? (
-              <span className="truncate text-xs text-muted-foreground">
-                {current.commitMessage}
+            <a
+              className="flex min-w-0 items-center gap-1.5 hover:text-primary-ink"
+              href={
+                current?.commitUrl ??
+                (source
+                  ? `${source.repositoryUrl}/commit/${runningCommit}`
+                  : undefined)
+              }
+              rel="noreferrer"
+              target="_blank"
+              title={current?.commitMessage ?? runningCommit}
+            >
+              <GitCommitHorizontal className="size-3.5 shrink-0 text-muted-foreground" />
+              <span className="shrink-0 font-mono text-xs">
+                {shortCommit(runningCommit)}
               </span>
-            ) : null}
-          </a>
+              {current?.commitMessage ? (
+                <span className="truncate text-xs text-muted-foreground">
+                  {current.commitMessage}
+                </span>
+              ) : null}
+            </a>
           ) : (
             <span className="text-muted-foreground">Not running</span>
           )}
@@ -304,7 +309,9 @@ const AppDeploymentCard = React.memo(function AppDeploymentCard({
           updates={summary.imageUpdates}
         />
       ) : null}
-      <InfoFact label={latest?.status === "running" ? "Started" : "Last deploy"}>
+      <InfoFact
+        label={latest?.status === "running" ? "Started" : "Last deploy"}
+      >
         {latest ? (
           <RelativeTime timestamp={Date.parse(latest.startedAt)} />
         ) : (

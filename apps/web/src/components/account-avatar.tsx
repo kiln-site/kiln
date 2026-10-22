@@ -51,7 +51,7 @@ export const UserAvatar = React.memo(function UserAvatar({
       ) : null}
       <AvatarFallback
         className={cn(
-          "type-label rounded-none bg-primary/12 font-bold text-primary",
+          "type-label rounded-none bg-primary/12 font-bold text-primary-ink",
           fallbackClassName
         )}
       >

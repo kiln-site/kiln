@@ -436,7 +436,7 @@ export function FileActionDialogHost({
               {rootPath}/{dialog.path}
             </dd>
             <dt className="text-muted-foreground">To</dt>
-            <dd className="truncate text-primary">
+            <dd className="truncate text-primary-ink">
               {rootPath}/{dialog.destination}
             </dd>
           </dl>
@@ -570,7 +570,7 @@ export function FileActionMenuItem({
       onClick={onClick}
     >
       <span
-        className={`grid size-7 shrink-0 place-items-center border transition-colors [&_svg]:size-3.5 ${active ? "border-primary/30 bg-primary/12 text-primary" : "border-border/60 bg-muted/20 text-muted-foreground group-hover:text-foreground"}`}
+        className={`grid size-7 shrink-0 place-items-center border transition-colors [&_svg]:size-3.5 ${active ? "border-primary/30 bg-primary/12 text-primary-ink" : "border-border/60 bg-muted/20 text-muted-foreground group-hover:text-foreground"}`}
       >
         {icon}
       </span>
@@ -582,7 +582,7 @@ export function FileActionMenuItem({
           {detail}
         </span>
       </span>
-      {active ? <Check className="size-3.5 shrink-0 text-primary" /> : null}
+      {active ? <Check className="size-3.5 shrink-0 text-primary-ink" /> : null}
     </button>
   )
 }

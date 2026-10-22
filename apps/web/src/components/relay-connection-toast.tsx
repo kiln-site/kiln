@@ -98,7 +98,9 @@ export const RelayConnectionToastMonitor = React.memo(
             type: "warning",
             message: <RelayToastTitle name={relay.name} state="disconnected" />,
             id: disconnectToastId,
-            icon: <WifiOff className="size-4 text-amber-300" />,
+            icon: (
+              <WifiOff className="size-4 text-amber-300 light:text-amber-700" />
+            ),
             description: "Kiln will keep trying to reconnect...",
             duration: Infinity,
             action: {
@@ -117,7 +119,9 @@ export const RelayConnectionToastMonitor = React.memo(
             type: "success",
             message: <RelayToastTitle name={relay.name} state="reconnected" />,
             id: reconnectToastId,
-            icon: <Wifi className="size-4 text-emerald-400" />,
+            icon: (
+              <Wifi className="size-4 text-emerald-400 light:text-emerald-700" />
+            ),
             description: "Hearth is receiving live Relay data again.",
             duration: 4_000,
           })
@@ -233,7 +237,7 @@ function useApplicationConnectionToasts({
         type: "loading",
         message: "Reconnecting to Kiln",
         id: applicationConnectionToastId,
-        icon: <LoaderCircle className="size-4 animate-spin text-primary" />,
+        icon: <LoaderCircle className="size-4 animate-spin text-primary-ink" />,
         description: "Checking whether Hearth is available...",
         duration: Infinity,
       })
@@ -267,7 +271,9 @@ function useApplicationConnectionToasts({
         type: "success",
         message: "Connected to Kiln",
         id: applicationReconnectedToastId,
-        icon: <Wifi className="size-4 text-emerald-400" />,
+        icon: (
+          <Wifi className="size-4 text-emerald-400 light:text-emerald-700" />
+        ),
         description: "Hearth is available again.",
         duration: 4_000,
       })

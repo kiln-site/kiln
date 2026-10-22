@@ -22,7 +22,7 @@ export function ConsoleWarning({
           aria-label={label}
           variant="ghost"
           size={action.text ? "sm" : "icon-sm"}
-          className="text-amber-300"
+          className="text-amber-300 light:text-amber-700"
           onClick={action.onClick}
         >
           {warningIcon}
@@ -31,7 +31,7 @@ export function ConsoleWarning({
       ) : (
         <span
           aria-label={label}
-          className="inline-flex shrink-0 items-center text-amber-300 outline-none"
+          className="inline-flex shrink-0 items-center text-amber-300 outline-none light:text-amber-700"
           role="status"
           tabIndex={0}
         >

@@ -79,7 +79,7 @@ function FilesRoute() {
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             <div className="flex h-14 shrink-0 border-b">
               <div className="flex min-w-0 flex-1 items-center gap-2.5 px-3 md:gap-3">
-                <FileCode2 className="size-5 shrink-0 text-primary" />
+                <FileCode2 className="size-5 shrink-0 text-primary-ink" />
                 {filePath ? (
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-semibold">

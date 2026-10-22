@@ -782,8 +782,8 @@ function AuthHeading({
         : lockedEmail
           ? "Sign in to your account to continue."
           : signupEnabled
-          ? "Sign in or create a new account."
-          : "Sign in to your control plane.",
+            ? "Sign in or create a new account."
+            : "Sign in to your control plane.",
     },
     "sign-up": {
       title: "Create your Kiln account",
@@ -1037,10 +1037,10 @@ function StateHeading({
 }) {
   return (
     <div>
-      <div className="grid size-11 place-items-center rounded-xl border border-primary/25 bg-primary/8 text-primary">
+      <div className="grid size-11 place-items-center rounded-xl border border-primary/25 bg-primary/8 text-primary-ink">
         <Icon className="size-5" />
       </div>
-      <p className="type-technical-label mt-7 text-primary">{eyebrow}</p>
+      <p className="type-technical-label mt-7 text-primary-ink">{eyebrow}</p>
       <h2 className="mt-2 font-heading text-3xl font-semibold tracking-[-0.045em]">
         {title}
       </h2>
@@ -1087,7 +1087,7 @@ function Notice({
   return (
     <div
       role={destructive ? "alert" : "status"}
-      className={`flex items-start gap-2 rounded-lg border px-3 py-2.5 text-xs leading-5 ${destructive ? "border-destructive/30 bg-destructive/8 text-red-300" : "border-emerald-400/20 bg-emerald-400/7 text-emerald-300"}`}
+      className={`flex items-start gap-2 rounded-lg border px-3 py-2.5 text-xs leading-5 ${destructive ? "border-destructive/30 bg-destructive/8 text-red-300 light:bg-destructive/16 light:text-red-700" : "border-emerald-400/20 bg-emerald-400/7 text-emerald-300 light:bg-emerald-400/14 light:text-emerald-700"}`}
     >
       {Icon ? <Icon className="mt-0.5 size-3.5 shrink-0" /> : null}
       {children}

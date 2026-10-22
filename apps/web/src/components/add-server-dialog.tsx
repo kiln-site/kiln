@@ -118,10 +118,10 @@ const AddServerDialog = React.memo(function AddServerDialog({
         {!catalogQuery.data ? (
           <div className="grid min-h-56 place-items-center text-center">
             {catalogQuery.isPending ? (
-              <LoaderCircle className="size-5 animate-spin text-primary" />
+              <LoaderCircle className="size-5 animate-spin text-primary-ink" />
             ) : (
               <div className="max-w-sm">
-                <CircleAlert className="mx-auto size-5 text-amber-300" />
+                <CircleAlert className="mx-auto size-5 text-amber-300 light:text-amber-700" />
                 <p className="mt-2 text-sm font-semibold">
                   Brick catalog unavailable
                 </p>
@@ -432,20 +432,20 @@ const AddServerConfiguration = React.memo(function AddServerConfiguration({
       </label>
 
       {error ? (
-        <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/8 px-3 py-2 text-xs text-destructive">
+        <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/8 px-3 py-2 text-xs text-destructive light:bg-destructive/16">
           <CircleAlert className="mt-0.5 size-3.5 shrink-0" />
           {error}
         </div>
       ) : null}
 
       {relayCompatible && !relayConnected && relayId ? (
-        <p className="text-xs leading-relaxed text-amber-300">
+        <p className="text-xs leading-relaxed text-amber-300 light:text-amber-700">
           Selected Relay is not connected.
         </p>
       ) : null}
 
       {selectedRelay && !relayCompatible ? (
-        <div className="flex items-start gap-2 rounded-lg border border-amber-400/30 bg-amber-400/8 px-3 py-2 text-xs leading-relaxed text-amber-200">
+        <div className="flex items-start gap-2 rounded-lg border border-amber-400/30 bg-amber-400/8 px-3 py-2 text-xs leading-relaxed text-amber-200 light:bg-amber-400/16 light:text-amber-800">
           <CircleAlert className="mt-0.5 size-3.5 shrink-0" />
           <span>
             {selectedRelay.name} runs{" "}

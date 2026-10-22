@@ -1,13 +1,7 @@
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
-import {
-  Cloud,
-  Container,
-  Globe2,
-  Router,
-  Triangle,
-} from "lucide-react"
+import { Cloud, Container, Globe2, Router, Triangle } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -60,13 +54,17 @@ export const kindPresentation: Record<
  * databases blue.
  */
 export const kindTone = {
-  kiln: "border-primary/35 bg-primary/10 text-primary",
-  relay: "border-orange-400/35 bg-orange-400/10",
-  server: "border-emerald-400/35 bg-emerald-400/10 text-emerald-300",
-  app: "border-red-400/35 bg-red-400/10 text-red-300",
-  database: "border-blue-400/35 bg-blue-400/10 text-blue-300",
-  proxy: "border-violet-400/35 bg-violet-400/10 text-violet-300",
-  cloudflare: "border-orange-400/35 bg-orange-400/10 text-orange-300",
+  kiln: "border-primary/35 bg-primary/10 text-primary-ink",
+  relay: "border-orange-400/35 bg-orange-400/10 light:bg-orange-400/20",
+  server:
+    "border-emerald-400/35 bg-emerald-400/10 light:bg-emerald-400/20 text-emerald-300 light:text-emerald-700",
+  app: "border-red-400/35 bg-red-400/10 light:bg-red-400/20 text-red-300 light:text-red-700",
+  database:
+    "border-blue-400/35 bg-blue-400/10 light:bg-blue-400/20 text-blue-300 light:text-blue-700",
+  proxy:
+    "border-violet-400/35 bg-violet-400/10 light:bg-violet-400/20 text-violet-300 light:text-violet-700",
+  cloudflare:
+    "border-orange-400/35 bg-orange-400/10 light:bg-orange-400/20 text-orange-300 light:text-orange-700",
 } as const
 
 /** The box around a kind's lane, and a Compose app's box. */
@@ -94,7 +92,9 @@ export const MapNode = React.memo(function MapNode({
 }) {
   switch (node.type) {
     case "edge":
-      return <EdgeNode includeDomains={includeDomains} node={node} rect={rect} />
+      return (
+        <EdgeNode includeDomains={includeDomains} node={node} rect={rect} />
+      )
     case "hearth":
       return <HearthNode node={node} rect={rect} />
     case "relay-summary":
@@ -159,7 +159,7 @@ function StackGroup({
   const title = (
     <>
       <AppKindIcon className="size-3.5 shrink-0" aria-hidden="true" />
-      <span className="type-label min-w-0 truncate text-foreground transition-colors group-hover/stack:text-primary">
+      <span className="type-label min-w-0 truncate text-foreground transition-colors group-hover/stack:text-primary-ink">
         {app.name}
       </span>
       <span className="type-meta shrink-0 tabular-nums">
@@ -376,8 +376,7 @@ function EdgeNode({
       {content}
     </Link>
   ) : (
-    <div className={className} data-node-id={node.id}
-      style={nodeStyle(rect)}>
+    <div className={className} data-node-id={node.id} style={nodeStyle(rect)}>
       {content}
     </div>
   )
@@ -429,8 +428,7 @@ function RelayConnections({ total }: { total: number }) {
   if (total === 0) return <span className="type-meta">No Relays</span>
   return (
     <span className="type-meta">
-      {connected ?? "—"} of {total} {total === 1 ? "Relay" : "Relays"}{" "}
-      connected
+      {connected ?? "—"} of {total} {total === 1 ? "Relay" : "Relays"} connected
     </span>
   )
 }
@@ -480,10 +478,7 @@ const RelaySummaryNode = React.memo(function RelaySummaryNode({
           </span>
         }
       />
-      <RelayMeters
-        connected={status.tone === "success"}
-        relayId={relay.id}
-      />
+      <RelayMeters connected={status.tone === "success"} relayId={relay.id} />
       <span className="mt-auto flex items-center gap-3 border-t border-border/60 pt-2 text-muted-foreground">
         {(["server", "app", "database"] as const).map((kind) => {
           const { icon: Icon, one, other } = kindPresentation[kind]
@@ -501,7 +496,7 @@ const RelaySummaryNode = React.memo(function RelaySummaryNode({
         })}
         {proxy ? (
           <span
-            className="type-meta ml-auto flex min-w-0 items-center gap-1 rounded-md border border-violet-400/30 bg-violet-400/10 px-1.5 text-violet-300"
+            className="type-meta ml-auto flex min-w-0 items-center gap-1 rounded-md border border-violet-400/30 bg-violet-400/10 px-1.5 text-violet-300 light:bg-violet-400/20 light:text-violet-700"
             title={proxy}
           >
             <Router className="size-3 shrink-0" aria-hidden="true" />
@@ -529,8 +524,9 @@ const relayStatusPresentation = {
 /** One shared poll answers every Relay, so a fleet costs one request. */
 function useRelayStatus(relay: InfraMapRelay): IdentityStatusPresentation {
   const select = React.useCallback(
-    (relays: ReadonlyArray<{ id: string; status: "connected" | "unreachable" }>) =>
-      relays.find((candidate) => candidate.id === relay.id)?.status,
+    (
+      relays: ReadonlyArray<{ id: string; status: "connected" | "unreachable" }>
+    ) => relays.find((candidate) => candidate.id === relay.id)?.status,
     [relay.id]
   )
   const { data: reachability } = useQuery({
@@ -602,7 +598,7 @@ const RelayNode = React.memo(function RelayNode({
       meta={relay.address}
       metaClassName="font-mono"
       name={relay.name}
-      nameClassName="transition-colors group-hover/node:text-primary"
+      nameClassName="transition-colors group-hover/node:text-primary-ink"
       showFavorite={false}
       state={state}
     />
@@ -724,12 +720,12 @@ const ResourceNode = React.memo(function ResourceNode({
       nameAccessory={
         node.hasDomain ? (
           <Globe2
-            className="size-3 shrink-0 text-orange-400"
+            className="size-3 shrink-0 text-orange-400 light:text-orange-700"
             aria-label="Has a managed domain"
           />
         ) : null
       }
-      nameClassName="transition-colors group-hover/node:text-primary"
+      nameClassName="transition-colors group-hover/node:text-primary-ink"
       showFavorite={false}
     />
   )

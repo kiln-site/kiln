@@ -227,10 +227,10 @@ function CopyRelayIdButton({ relayId }: { relayId: string }) {
       aria-label={`Copy Relay ID ${relayId}`}
       title={relayId}
       className={cn(
-        "flex items-center gap-1.5 px-2 text-xs transition-colors outline-none focus-visible:text-primary",
+        "flex items-center gap-1.5 px-2 text-xs transition-colors outline-none focus-visible:text-primary-ink",
         copied
-          ? "text-emerald-400"
-          : "text-muted-foreground/80 hover:text-primary"
+          ? "text-emerald-400 light:text-emerald-700"
+          : "text-muted-foreground/80 hover:text-primary-ink light:text-muted-foreground/90"
       )}
       onClick={() => void copy()}
     >
@@ -361,7 +361,10 @@ function BackupCount({ resource }: { resource: RailResource }) {
     data.quantityLimit !== null && data.quantityUsed >= data.quantityLimit
   return (
     <span
-      className={cn("tabular-nums", full && "text-amber-300")}
+      className={cn(
+        "tabular-nums",
+        full && "text-amber-300 light:text-amber-700"
+      )}
       title={
         data.quantityLimit === null
           ? "Backups kept, with no limit"

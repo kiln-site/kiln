@@ -297,7 +297,8 @@ const SyncToolbar = React.memo(function SyncToolbar({
 const SyncRefreshButton = React.memo(function SyncRefreshButton() {
   const queryClient = useQueryClient()
   const refresh = React.useCallback(
-    () => queryClient.invalidateQueries({ queryKey: queryKeys.github.overview }),
+    () =>
+      queryClient.invalidateQueries({ queryKey: queryKeys.github.overview }),
     [queryClient]
   )
   return <InfraSyncButton label="Refresh syncs" sync={refresh} />
@@ -466,7 +467,9 @@ const SyncTable = React.memo(function SyncTable({
                   : "Syncs copy files into a game server or app. Create one you can edit files on first."}
           </span>
         }
-        icon={<FolderGit2 className="size-6 text-muted-foreground/45" />}
+        icon={
+          <FolderGit2 className="size-6 text-muted-foreground/45 light:text-muted-foreground/72" />
+        }
         title={
           searchActive
             ? "No syncs match your search"
@@ -505,7 +508,7 @@ const SyncSource = React.memo(function SyncSource({
         icon={<GitHubMark className="size-4" />}
         meta={syncSourceMeta(sync)}
         name={syncName(sync)}
-        nameClassName="transition-colors group-hover/source-link:text-primary"
+        nameClassName="transition-colors group-hover/source-link:text-primary-ink"
       />
     </a>
   )
@@ -609,7 +612,7 @@ function syncDestinationCardProps(sync: GitHubSyncView) {
     metaClassName: "font-mono",
     name: sync.target.name,
     nameClassName:
-      "transition-colors group-hover/destination-link:text-primary",
+      "transition-colors group-hover/destination-link:text-primary-ink",
     showFavorite: false,
   }
 }
@@ -663,15 +666,15 @@ function SyncLatestCommit({ sync }: { sync: GitHubSyncView }) {
       rel="noreferrer"
       className="group/commit-link block min-w-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
     >
-      <span className="block truncate text-xs font-medium text-foreground transition-colors group-hover/commit-link:text-primary">
+      <span className="block truncate text-xs font-medium text-foreground transition-colors group-hover/commit-link:text-primary-ink">
         {sync.lastCommitMessage?.split("\n", 1)[0] || "No commit message"}
       </span>
       <span className="type-meta flex min-w-0 items-center gap-1.5 overflow-hidden text-muted-foreground">
         <GitCommitHorizontal
-          className="size-3 shrink-0 text-primary"
+          className="size-3 shrink-0 text-primary-ink"
           aria-hidden="true"
         />
-        <span className="shrink-0 font-mono text-primary">
+        <span className="shrink-0 font-mono text-primary-ink">
           {sync.lastCommitSha.slice(0, 7)}
         </span>
         <span aria-hidden="true">·</span>
@@ -744,7 +747,7 @@ const SyncActions = React.memo(function SyncActions({
               type="button"
               size="icon-sm"
               variant="ghost"
-              className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+              className="text-destructive hover:bg-destructive/10 hover:text-destructive light:hover:bg-destructive/20"
               aria-label={`Delete sync from ${name}`}
               onClick={() => onDelete(sync)}
             >

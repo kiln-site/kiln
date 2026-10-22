@@ -573,7 +573,7 @@ function RelayTable({
                   }
                   metaClassName="font-mono"
                   name={relay.name}
-                  nameClassName="transition-colors group-hover/relay-link:text-primary"
+                  nameClassName="transition-colors group-hover/relay-link:text-primary-ink"
                   showFavorite={false}
                 />
               </Link>
@@ -946,7 +946,7 @@ function AddRelayDialog({
     <Dialog open={open} onOpenChange={changeOpen}>
       <DialogContent className="sm:max-w-xl">
         <DialogHeader>
-          <p className="type-technical-label text-primary">
+          <p className="type-technical-label text-primary-ink">
             {reviewedPairing?.preview.mode === "repair"
               ? "Existing connection"
               : "New connection"}
@@ -1059,11 +1059,13 @@ function PairingReview({
     <div className="rounded-lg border border-primary/20 bg-primary/[0.045] p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
-          <span className="flex size-8 shrink-0 items-center justify-center rounded-md border border-primary/20 bg-primary/10 text-primary">
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-md border border-primary/20 bg-primary/10 text-primary-ink">
             <Fingerprint className="size-4" />
           </span>
           <div className="min-w-0">
-            <p className="type-technical-label text-primary">Verify identity</p>
+            <p className="type-technical-label text-primary-ink">
+              Verify identity
+            </p>
             <p className="mt-0.5 truncate text-sm font-semibold">
               {pairing.relayName}
             </p>
@@ -1075,7 +1077,7 @@ function PairingReview({
       </div>
       {pairing.mode === "repair" ? (
         <div className="mt-4 flex gap-2.5 rounded-md border border-primary/20 bg-background/55 p-3">
-          <RefreshCw className="mt-0.5 size-3.5 shrink-0 text-primary" />
+          <RefreshCw className="mt-0.5 size-3.5 shrink-0 text-primary-ink" />
           <div>
             <p className="type-label text-foreground">
               Existing Relay identity found
@@ -1250,7 +1252,9 @@ export function EditRelayDialog({
     >
       <DialogContent className="sm:max-w-xl">
         <DialogHeader>
-          <p className="type-technical-label text-primary">Edit connection</p>
+          <p className="type-technical-label text-primary-ink">
+            Edit connection
+          </p>
           <DialogTitle>{relay.name}</DialogTitle>
           <DialogDescription>
             Update the Relay identity, control endpoint, and edge proxy
@@ -1299,7 +1303,7 @@ export function EditRelayDialog({
           </div>
 
           <div className="border-t border-border/70 pt-4">
-            <p className="type-technical-label mb-3 text-primary">Proxy</p>
+            <p className="type-technical-label mb-3 text-primary-ink">Proxy</p>
             <RelayProxyFields relayEnabled={relay.enabled} relayId={relay.id} />
           </div>
 
@@ -1404,7 +1408,7 @@ const RelayProxyFields = React.memo(function RelayProxyFields({
         </div>
       </div>
       {!relayEnabled ? (
-        <p className="type-meta mt-2 text-sky-300">
+        <p className="type-meta mt-2 text-sky-300 light:text-sky-700">
           Resume this Relay to edit its proxy configuration.
         </p>
       ) : null}

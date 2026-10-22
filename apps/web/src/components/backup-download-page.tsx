@@ -77,7 +77,7 @@ export const BackupDownloadPage = React.memo(function BackupDownloadPage({
             aria-label="Go to Kiln"
           >
             <HearthMark className="size-9 rounded-xl" />
-            <span className="mt-2 px-4 py-1 font-heading text-lg font-semibold tracking-[-0.035em] transition-colors group-hover:text-primary">
+            <span className="mt-2 px-4 py-1 font-heading text-lg font-semibold tracking-[-0.035em] transition-colors group-hover:text-primary-ink">
               Kiln
             </span>
           </a>
@@ -86,7 +86,7 @@ export const BackupDownloadPage = React.memo(function BackupDownloadPage({
         <section className="overflow-hidden rounded-2xl border border-border/75 bg-card/70 shadow-2xl shadow-black/20 backdrop-blur-md">
           <div className="p-5 sm:p-6">
             <div className="flex min-w-0 items-center gap-4">
-              <div className="grid size-12 shrink-0 place-items-center rounded-xl border bg-background/70 text-primary">
+              <div className="grid size-12 shrink-0 place-items-center rounded-xl border bg-background/70 text-primary-ink">
                 <TypeIcon className="size-5" strokeWidth={1.7} />
               </div>
               <div className="min-w-0 flex-1">
@@ -110,7 +110,7 @@ export const BackupDownloadPage = React.memo(function BackupDownloadPage({
             </dl>
 
             <div className="mt-4 flex items-center gap-3 px-1">
-              <div className="type-label grid size-8 shrink-0 place-items-center rounded-full bg-primary/10 font-heading font-bold text-primary">
+              <div className="type-label grid size-8 shrink-0 place-items-center rounded-full bg-primary/10 font-heading font-bold text-primary-ink">
                 {initials(share.sharedBy)}
               </div>
               <div className="min-w-0">

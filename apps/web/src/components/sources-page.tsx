@@ -335,7 +335,9 @@ const SourcesTable = React.memo(function SourcesTable({
               : "Add an account Kiln can read repositories from, so apps can deploy from them and syncs can copy their files."}
           </span>
         }
-        icon={<FolderGit2 className="size-6 text-muted-foreground/45" />}
+        icon={
+          <FolderGit2 className="size-6 text-muted-foreground/45 light:text-muted-foreground/72" />
+        }
         title={searchActive ? "No sources match your search" : "No sources yet"}
       />
     ),
@@ -395,7 +397,7 @@ function UsageCell({ source }: { source: Source }) {
     <span className="type-meta flex min-w-0 flex-col items-start gap-0.5">
       <Link
         to="/automations/sync"
-        className="inline-flex items-center gap-1.5 hover:text-primary"
+        className="inline-flex items-center gap-1.5 hover:text-primary-ink"
       >
         <FolderSync className="size-3 text-muted-foreground" />
         <span className="tabular-nums">{source.syncCount}</span>
@@ -403,7 +405,7 @@ function UsageCell({ source }: { source: Source }) {
       </Link>
       <Link
         to="/infra/deployments"
-        className="inline-flex items-center gap-1.5 hover:text-primary"
+        className="inline-flex items-center gap-1.5 hover:text-primary-ink"
       >
         <Rocket className="size-3 text-muted-foreground" />
         <span className="tabular-nums">{source.deploymentCount}</span>
@@ -427,7 +429,7 @@ const SourceActions = React.memo(function SourceActions({
         <TooltipTrigger asChild>
           <Button
             asChild
-            className="text-muted-foreground hover:text-primary"
+            className="text-muted-foreground hover:text-primary-ink"
             size="icon-sm"
             variant="ghost"
           >
@@ -449,7 +451,7 @@ const SourceActions = React.memo(function SourceActions({
         <TooltipTrigger asChild>
           <Button
             aria-label={`Delete ${name}`}
-            className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+            className="text-destructive hover:bg-destructive/10 hover:text-destructive light:hover:bg-destructive/20"
             size="icon-sm"
             type="button"
             variant="ghost"

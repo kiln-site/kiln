@@ -51,11 +51,17 @@ const Toaster = React.memo(function Toaster({
       style={{ ...defaultToasterStyle, ...style }}
       containerAriaLabel="Notifications"
       icons={{
-        success: <CircleCheckIcon className="size-4 text-emerald-400" />,
-        info: <InfoIcon className="size-4 text-sky-400" />,
-        warning: <TriangleAlertIcon className="size-4 text-amber-300" />,
+        success: (
+          <CircleCheckIcon className="size-4 text-emerald-400 light:text-emerald-700" />
+        ),
+        info: <InfoIcon className="size-4 text-sky-400 light:text-sky-700" />,
+        warning: (
+          <TriangleAlertIcon className="size-4 text-amber-300 light:text-amber-700" />
+        ),
         error: <OctagonXIcon className="size-4 text-destructive" />,
-        loading: <Loader2Icon className="size-4 animate-spin text-primary" />,
+        loading: (
+          <Loader2Icon className="size-4 animate-spin text-primary-ink" />
+        ),
         close: <XIcon className="size-4" />,
       }}
       {...props}

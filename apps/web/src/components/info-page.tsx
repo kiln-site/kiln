@@ -212,7 +212,7 @@ export function InfoHint({
     <Popover>
       <PopoverTrigger
         aria-label={label}
-        className="grid size-5 shrink-0 place-items-center text-muted-foreground/70 transition-colors outline-none hover:text-primary focus-visible:text-primary data-[state=open]:text-primary"
+        className="grid size-5 shrink-0 place-items-center text-muted-foreground/70 transition-colors outline-none hover:text-primary-ink focus-visible:text-primary-ink data-[state=open]:text-primary-ink light:text-muted-foreground/85"
       >
         <Info className="size-3.5" />
       </PopoverTrigger>
@@ -283,7 +283,9 @@ export function InfoCopyValue({
           className={cn(
             "flex min-w-0 items-center gap-1.5 transition-colors",
             mono && "font-mono text-xs",
-            copied ? "text-emerald-400" : "hover:text-primary",
+            copied
+              ? "text-emerald-400 light:text-emerald-700"
+              : "hover:text-primary-ink",
             !copied && className
           )}
           onClick={() => void copy()}
@@ -417,10 +419,10 @@ function InfoIconButton({
           aria-label={label}
           aria-pressed={pressed}
           className={cn(
-            "grid size-6 shrink-0 place-items-center transition-colors outline-none focus-visible:text-primary [&_svg]:size-3.5",
+            "grid size-6 shrink-0 place-items-center transition-colors outline-none focus-visible:text-primary-ink [&_svg]:size-3.5",
             tone === "success"
-              ? "text-emerald-400"
-              : "text-muted-foreground hover:text-primary"
+              ? "text-emerald-400 light:text-emerald-700"
+              : "text-muted-foreground hover:text-primary-ink"
           )}
           onClick={onClick}
         >
@@ -455,7 +457,7 @@ export function InfoRailGroup({
   return (
     <section className="mt-6 first:mt-0">
       {title ? (
-        <h3 className="type-technical-label mb-1 text-muted-foreground/80">
+        <h3 className="type-technical-label mb-1 text-muted-foreground/80 light:text-muted-foreground/90">
           {title}
         </h3>
       ) : null}
@@ -522,7 +524,7 @@ function InfoRailRowContent({
             "shrink-0 pr-2",
             inCard
               ? "text-[0.8125rem] font-semibold text-foreground tabular-nums"
-              : "text-xs text-muted-foreground/80"
+              : "text-xs text-muted-foreground/80 light:text-muted-foreground/90"
           )}
         >
           {detail}
@@ -573,7 +575,7 @@ const InfoRailLinkAnchor = React.forwardRef<
 ) {
   const rowClassName = useInfoRailRowClassName()
   const chevron = (
-    <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/70 transition-transform group-hover:translate-x-0.5" />
+    <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/70 transition-transform group-hover:translate-x-0.5 light:text-muted-foreground/85" />
   )
   if (action) {
     return (
@@ -642,7 +644,7 @@ export function InfoRailButton({
       <InfoRailRowContent detail={detail} leading={leading}>
         {children}
       </InfoRailRowContent>
-      <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/70 transition-transform group-hover:translate-x-0.5" />
+      <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/70 transition-transform group-hover:translate-x-0.5 light:text-muted-foreground/85" />
     </button>
   )
 }
@@ -711,7 +713,7 @@ export function InfoRailCardSection({
   return (
     <section className={cn("border-t px-3 pb-3", className)}>
       <div className="flex h-9 shrink-0 items-center gap-2">
-        <h4 className="type-technical-label text-muted-foreground/80">
+        <h4 className="type-technical-label text-muted-foreground/80 light:text-muted-foreground/90">
           {title}
         </h4>
         {action ? (

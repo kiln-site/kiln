@@ -42,7 +42,7 @@ export function InfoCardHeader({
 }) {
   return (
     <div className="flex min-h-12 items-center justify-between gap-3 border-b px-4 py-2.5">
-      <div className="flex items-center gap-2 text-primary [&_svg]:size-4">
+      <div className="flex items-center gap-2 text-primary-ink [&_svg]:size-4">
         {icon}
         <h3 className="text-sm font-semibold text-foreground">{title}</h3>
       </div>
@@ -108,7 +108,11 @@ export function CopyMetaRow({
         aria-label={`Copy ${label.toLowerCase()}`}
         onClick={() => void copyValue()}
       >
-        {copied ? <Check className="text-emerald-400" /> : <Copy />}
+        {copied ? (
+          <Check className="text-emerald-400 light:text-emerald-700" />
+        ) : (
+          <Copy />
+        )}
       </Button>
     </div>
   )
@@ -129,12 +133,12 @@ export function DangerZone({
   return (
     <div
       className={cn(
-        "mt-4 flex flex-col gap-3 rounded-xl border border-destructive/25 bg-destructive/4 px-4 py-3.5 sm:flex-row sm:items-center",
+        "mt-4 flex flex-col gap-3 rounded-xl border border-destructive/25 bg-destructive/4 px-4 py-3.5 sm:flex-row sm:items-center light:bg-destructive/8",
         className
       )}
     >
       <div className="flex min-w-0 flex-1 items-center gap-3">
-        <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-destructive/20 bg-destructive/10 text-destructive">
+        <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-destructive/20 bg-destructive/10 text-destructive light:bg-destructive/20">
           <TriangleAlert className="size-4" />
         </span>
         <div className="min-w-0">

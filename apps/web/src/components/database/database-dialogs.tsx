@@ -497,7 +497,7 @@ export function WipeDatabaseDialog({
             credentials, and its game server connections stay.
           </DialogDescription>
         </DialogHeader>
-        <div className="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs">
+        <div className="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs light:bg-destructive/10">
           <CircleAlert className="mt-0.5 size-4 shrink-0 text-destructive" />
           This action cannot be undone. Export a SQL dump first if you need a
           recovery copy.
@@ -578,7 +578,7 @@ export function DeleteDatabaseDialog({
             credentials, and access grants will be permanently removed.
           </DialogDescription>
         </DialogHeader>
-        <div className="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs">
+        <div className="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs light:bg-destructive/10">
           <CircleAlert className="mt-0.5 size-4 shrink-0 text-destructive" />
           This action cannot be undone. Export a SQL dump first if you need a
           recovery copy.

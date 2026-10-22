@@ -178,7 +178,9 @@ export const BackupTable = React.memo(function BackupTable({
     (searchActive: boolean, filterActive: boolean) => (
       <DataTableEmptyState
         description="Manual backups appear here as soon as Relay accepts them."
-        icon={<Archive className="size-7 text-muted-foreground/45" />}
+        icon={
+          <Archive className="size-7 text-muted-foreground/45 light:text-muted-foreground/72" />
+        }
         title={
           searchActive
             ? "No backups match this search"
@@ -989,22 +991,21 @@ export const BackupBulkActions = React.memo(function BackupBulkActions({
           }),
         4
       )
-      return settlements.map(
-        (settlement): BackupBulkDeleteOutcome =>
-          settlement.status === "fulfilled"
-            ? {
-                backup: settlement.input,
-                result: settlement.value,
-                status: "deleted",
-              }
-            : {
-                backup: settlement.input,
-                message:
-                  settlement.reason instanceof Error
-                    ? settlement.reason.message
-                    : "Could not delete this backup",
-                status: "failed",
-              }
+      return settlements.map((settlement): BackupBulkDeleteOutcome =>
+        settlement.status === "fulfilled"
+          ? {
+              backup: settlement.input,
+              result: settlement.value,
+              status: "deleted",
+            }
+          : {
+              backup: settlement.input,
+              message:
+                settlement.reason instanceof Error
+                  ? settlement.reason.message
+                  : "Could not delete this backup",
+              status: "failed",
+            }
       )
     },
     onSuccess: async (outcomes) => {
@@ -1126,7 +1127,7 @@ export const BackupBulkActions = React.memo(function BackupBulkActions({
             </ul>
           </div>
           {failedOutcomes.length > 0 ? (
-            <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+            <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive light:bg-destructive/10">
               {failedOutcomes.map((outcome) => (
                 <p key={outcome.backup.id}>
                   <span className="font-semibold">{outcome.backup.name}:</span>{" "}

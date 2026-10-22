@@ -859,7 +859,7 @@ export function DomainConfigurationDialog({
                   Cloudflare API token
                 </label>
                 <a
-                  className="type-label inline-flex items-center gap-1 text-primary hover:underline"
+                  className="type-label inline-flex items-center gap-1 text-primary-ink hover:underline"
                   href="https://dash.cloudflare.com/profile/api-tokens"
                   rel="noreferrer"
                   target="_blank"
@@ -1145,8 +1145,9 @@ const DomainZoneRow = React.memo(function DomainZoneRow({
                 </span>
               </TooltipTrigger>
               <TooltipContent side="top">
-                Its {usage} game server {usage === 1 ? "domain keeps" : "domains keep"}{" "}
-                working. New game servers won&apos;t get it.
+                Its {usage} game server{" "}
+                {usage === 1 ? "domain keeps" : "domains keep"} working. New
+                game servers won&apos;t get it.
               </TooltipContent>
             </Tooltip>
           ) : null}
@@ -1232,12 +1233,12 @@ function CloudflarePermissionsPreview({ domain }: { domain: string }) {
     <div className="space-y-4">
       <CloudflarePermissionPolicy domain={domain} />
 
-      <div className="flex gap-2 border border-amber-500/25 bg-amber-400/8 p-3 text-amber-950/85 dark:border-amber-400/20 dark:bg-amber-400/5 dark:text-amber-100/85">
+      <div className="flex gap-2 border border-amber-500/25 bg-amber-400/8 p-3 text-amber-950/85 dark:border-amber-400/20 dark:bg-amber-400/5 dark:text-amber-100/85 light:bg-amber-400/16">
         <KeyRound className="mt-0.5 size-3.5 shrink-0 text-amber-700 dark:text-amber-300" />
         <p className="type-meta">
-          Add every zone Kiln should use to the token, or choose all zones.
-          Kiln encrypts the token at rest, never returns it to the browser, and
-          keeps every managed record DNS-only.
+          Add every zone Kiln should use to the token, or choose all zones. Kiln
+          encrypts the token at rest, never returns it to the browser, and keeps
+          every managed record DNS-only.
         </p>
       </div>
     </div>
@@ -1397,7 +1398,7 @@ function PermissionAccess({
 
 function ConfigurationError({ error }: { error: Error }) {
   return (
-    <p className="border border-destructive/25 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+    <p className="border border-destructive/25 bg-destructive/5 px-3 py-2 text-xs text-destructive light:bg-destructive/10">
       {errorMessage(error)}
     </p>
   )

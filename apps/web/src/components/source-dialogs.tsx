@@ -261,7 +261,7 @@ function ChoiceCard({
       <span
         className={cn(
           "mt-0.5 shrink-0",
-          checked ? "text-primary" : "text-muted-foreground"
+          checked ? "text-primary-ink" : "text-muted-foreground"
         )}
       >
         {icon}

@@ -108,9 +108,9 @@ export function RelayPauseDialog({
         <DialogHeader>
           <DialogTitle>Pause {relay.name}?</DialogTitle>
           <DialogDescription>
-            Game servers keep running, but nothing on this Relay changes
-            until you resume it: no power or file changes, schedules,
-            backups, or crash recovery.
+            Game servers keep running, but nothing on this Relay changes until
+            you resume it: no power or file changes, schedules, backups, or
+            crash recovery.
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
@@ -195,7 +195,7 @@ export const RelayDeleteButton = React.memo(function RelayDeleteButton({
             size="icon-sm"
             variant="ghost"
             aria-label={`Remove ${name}`}
-            className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+            className="text-destructive hover:bg-destructive/10 hover:text-destructive light:hover:bg-destructive/20"
             onClick={() => setOpen(true)}
           >
             <Trash2 />
@@ -474,7 +474,7 @@ async function performRelayResume(
     type: "success",
     message: <RelayToastTitle name={relay.name} state="resumed" />,
     id: relayResumedToastId(relay.id),
-    icon: <Play className="size-4 text-emerald-400" />,
+    icon: <Play className="size-4 text-emerald-400 light:text-emerald-700" />,
     description: "Hearth has resumed requesting Relay data.",
     duration: 4_000,
   })
@@ -488,7 +488,7 @@ function showPausedRelayToast(
     type: "info",
     message: <RelayToastTitle name={relay.name} state="paused" />,
     id: relayPausedToastId(relay.id),
-    icon: <Pause className="size-4 text-sky-400" />,
+    icon: <Pause className="size-4 text-sky-400 light:text-sky-700" />,
     description: "Hearth stopped requesting data. The Relay remains online.",
     duration: Infinity,
     action: {

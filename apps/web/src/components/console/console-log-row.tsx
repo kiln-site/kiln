@@ -109,15 +109,15 @@ function lineTone(
   if (selected) return "border-primary bg-primary/10"
   if (stateLine) return "bg-transparent hover:bg-transparent"
   if (level === "error")
-    return "border-red-400/65 bg-red-500/7 hover:bg-red-500/12"
+    return "border-red-400/65 bg-red-500/7 light:bg-red-500/14 hover:bg-red-500/12 light:hover:bg-red-500/24"
   if (level === "warn")
-    return "border-amber-400/45 bg-amber-400/5 hover:bg-amber-400/10"
+    return "border-amber-400/45 bg-amber-400/5 light:bg-amber-400/10 hover:bg-amber-400/10 light:hover:bg-amber-400/20"
   return "border-transparent hover:bg-white/[0.025]"
 }
 
 function lineTextTone(level: RelayConsoleLevel): string {
-  if (level === "error") return "text-red-200"
-  if (level === "warn") return "text-amber-100"
+  if (level === "error") return "text-red-200 light:text-red-800"
+  if (level === "warn") return "text-amber-100 light:text-amber-800"
   if (level === "debug" || level === "trace") return "text-muted-foreground"
   return "text-foreground/88"
 }
@@ -130,7 +130,7 @@ function ConsoleTimestamp({ timestamp }: { timestamp: string | null }) {
   )
 
   return (
-    <span className="mr-2 ml-3 w-[3.25rem] shrink-0 text-left text-[0.5625rem] leading-[18px] text-muted-foreground/65 tabular-nums">
+    <span className="mr-2 ml-3 w-[3.25rem] shrink-0 text-left text-[0.5625rem] leading-[18px] text-muted-foreground/65 tabular-nums light:text-muted-foreground/82">
       {formattedTimestamp}
     </span>
   )
@@ -234,7 +234,7 @@ function renderConsoleTextPart(
         tabIndex={0}
         title="IP address redacted"
         aria-label="IP address redacted"
-        className="cursor-help text-muted-foreground/75 transition-colors hover:text-foreground/85 focus-visible:ring-1 focus-visible:ring-ring/40 focus-visible:outline-none"
+        className="cursor-help text-muted-foreground/75 transition-colors hover:text-foreground/85 focus-visible:ring-1 focus-visible:ring-ring/40 focus-visible:outline-none light:text-muted-foreground/88"
       >
         {text.slice(redaction.from, redaction.to)}
       </span>
@@ -269,7 +269,7 @@ function renderConsoleSegment(
           href={part}
           target="_blank"
           rel="noreferrer"
-          className="text-sky-400 underline decoration-sky-400/30 underline-offset-2 hover:text-sky-300"
+          className="text-sky-400 underline decoration-sky-400/30 underline-offset-2 hover:text-sky-300 light:text-sky-700 light:decoration-sky-700/30 light:hover:text-sky-700"
           onClick={(event) => event.stopPropagation()}
         >
           {part}

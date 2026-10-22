@@ -57,15 +57,8 @@ import {
   type DirectoryServer,
 } from "@/components/domains-shared"
 import { WorkspacePage } from "@/components/workspace-page"
-import type {
-  DomainIntegration,
-  ManagedDomain,
-} from "@/effect/domains"
-import {
-  ensuringPromise,
-  forkPromise,
-  tapPromiseError,
-} from "@/effect/promise"
+import type { DomainIntegration, ManagedDomain } from "@/effect/domains"
+import { ensuringPromise, forkPromise, tapPromiseError } from "@/effect/promise"
 import {
   createDataTableColumnHelper,
   dataTableColumnMeta,
@@ -231,39 +224,39 @@ export const DomainsPage = React.memo(function DomainsPage({
       </DataTableWorkspace>
 
       <React.Suspense fallback={null}>
-      {dialog?.kind === "configure" ? (
-        <DomainConfigurationDialog
-          domainUsage={domainUsage}
-          hearthDomain={data.hearthDomain}
-          integration={data.integration}
-          onOpenChange={closeDialog}
-        />
-      ) : null}
-      {dialog?.kind === "create" ? (
-        <CreateDomainDialog
-          domains={enabledDomains}
-          initialServerKey={
-            scope?.relayId ? serverKey(scope.relayId, scope.instanceId) : null
-          }
-          managedDomains={data.managedDomains}
-          onOpenChange={closeDialog}
-        />
-      ) : null}
-      {dialog?.kind === "edit" ? (
-        <EditDomainDialog
-          key={dialog.domain.id}
-          domain={dialog.domain}
-          domains={enabledDomains}
-          onOpenChange={closeDialog}
-        />
-      ) : null}
-      {dialog?.kind === "delete" ? (
-        <DeleteDomainDialog
-          key={dialog.domain.id}
-          domain={dialog.domain}
-          onOpenChange={closeDialog}
-        />
-      ) : null}
+        {dialog?.kind === "configure" ? (
+          <DomainConfigurationDialog
+            domainUsage={domainUsage}
+            hearthDomain={data.hearthDomain}
+            integration={data.integration}
+            onOpenChange={closeDialog}
+          />
+        ) : null}
+        {dialog?.kind === "create" ? (
+          <CreateDomainDialog
+            domains={enabledDomains}
+            initialServerKey={
+              scope?.relayId ? serverKey(scope.relayId, scope.instanceId) : null
+            }
+            managedDomains={data.managedDomains}
+            onOpenChange={closeDialog}
+          />
+        ) : null}
+        {dialog?.kind === "edit" ? (
+          <EditDomainDialog
+            key={dialog.domain.id}
+            domain={dialog.domain}
+            domains={enabledDomains}
+            onOpenChange={closeDialog}
+          />
+        ) : null}
+        {dialog?.kind === "delete" ? (
+          <DeleteDomainDialog
+            key={dialog.domain.id}
+            domain={dialog.domain}
+            onOpenChange={closeDialog}
+          />
+        ) : null}
       </React.Suspense>
     </WorkspacePage>
   )
@@ -374,7 +367,7 @@ function VanityDomainList({
               target="_blank"
             >
               <span className="min-w-0 flex-1 truncate">{domain.domain}</span>
-              <ExternalLink className="size-3 shrink-0 text-muted-foreground/40 transition-colors group-hover:text-primary group-focus-visible:text-primary" />
+              <ExternalLink className="size-3 shrink-0 text-muted-foreground/40 transition-colors group-hover:text-primary-ink group-focus-visible:text-primary-ink" />
             </a>
           </li>
         ))}
@@ -673,7 +666,7 @@ const DomainServerCell = React.memo(function DomainServerCell({
         }
         metaClassName="font-mono"
         name={server.name}
-        nameClassName="transition-colors group-hover/server-link:text-primary"
+        nameClassName="transition-colors group-hover/server-link:text-primary-ink"
         showFavorite={false}
         showStatus={false}
       />
@@ -717,7 +710,7 @@ const DomainActions = React.memo(function DomainActions({
         <TooltipTrigger asChild>
           <Button
             aria-label={`Edit ${hostname}`}
-            className="text-muted-foreground hover:text-primary"
+            className="text-muted-foreground hover:text-primary-ink"
             // A domain being deleted can only be deleted again.
             disabled={domain.status === "removing"}
             size="icon-sm"
@@ -734,7 +727,7 @@ const DomainActions = React.memo(function DomainActions({
         <TooltipTrigger asChild>
           <Button
             aria-label={`Delete ${hostname}`}
-            className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+            className="text-destructive hover:bg-destructive/10 hover:text-destructive light:hover:bg-destructive/20"
             size="icon-sm"
             type="button"
             variant="ghost"
@@ -750,7 +743,7 @@ const DomainActions = React.memo(function DomainActions({
           <TooltipTrigger asChild>
             <Button
               asChild
-              className="text-muted-foreground hover:text-primary"
+              className="text-muted-foreground hover:text-primary-ink"
               size="icon-sm"
               variant="ghost"
             >
@@ -781,14 +774,15 @@ function renderEmptyDomains({ searchActive }: { searchActive: boolean }) {
             : "Create a domain for a game server, or turn on automatic provisioning to give new game servers one."}
         </span>
       }
-      icon={<Globe2 className="size-6 text-muted-foreground/45" />}
+      icon={
+        <Globe2 className="size-6 text-muted-foreground/45 light:text-muted-foreground/72" />
+      }
       title={
         searchActive ? "No domains match your search" : "No Active Domains"
       }
     />
   )
 }
-
 
 function srvRecordLabel(domain: ManagedDomainOverview): string {
   return domain.srvActive

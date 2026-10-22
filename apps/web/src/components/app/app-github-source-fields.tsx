@@ -100,7 +100,7 @@ export function GitHubSourceFields({
         <Link
           to="/infra/sources"
           search={{ add: true }}
-          className="text-primary hover:underline"
+          className="text-primary-ink hover:underline"
         >
           Add a source
         </Link>
@@ -148,8 +148,9 @@ export function GitHubSourceFields({
             onChange={(repository) =>
               update({
                 branch:
-                  repositories.data?.find((item) => item.fullName === repository)
-                    ?.defaultBranch ?? "",
+                  repositories.data?.find(
+                    (item) => item.fullName === repository
+                  )?.defaultBranch ?? "",
                 repository,
               })
             }

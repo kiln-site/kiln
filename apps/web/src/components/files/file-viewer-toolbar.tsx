@@ -56,7 +56,7 @@ export function FileTreeRevealButton({ onClick }: { onClick: () => void }) {
         <TooltipTrigger asChild>
           <button
             type="button"
-            className="grid size-full place-items-center text-primary transition-colors outline-none hover:bg-accent/45 hover:text-primary focus-visible:bg-accent/55 focus-visible:ring-1 focus-visible:ring-ring/60 focus-visible:ring-inset"
+            className="grid size-full place-items-center text-primary-ink transition-colors outline-none hover:bg-accent/45 hover:text-primary-ink focus-visible:bg-accent/55 focus-visible:ring-1 focus-visible:ring-ring/60 focus-visible:ring-inset"
             aria-label="Open file tree"
             onClick={onClick}
           >
@@ -107,7 +107,7 @@ function FilePathCopyButton({ path }: { path: string }) {
       >
         <span className="truncate">{fullFilePath}</span>
         {copyState === "copied" ? (
-          <Check className="size-3.5 shrink-0 text-primary" />
+          <Check className="size-3.5 shrink-0 text-primary-ink" />
         ) : (
           <Copy className="size-3.5 shrink-0 opacity-65 transition-opacity group-hover/path:opacity-100" />
         )}
@@ -131,9 +131,9 @@ export const FileToolbarIdentity = React.memo(function FileToolbarIdentity({
   return (
     <div className="flex min-w-0 flex-1 items-center gap-2.5 md:gap-3">
       {directory ? (
-        <Folder className="size-5 shrink-0 text-primary" />
+        <Folder className="size-5 shrink-0 text-primary-ink" />
       ) : (
-        <FileCode2 className="size-5 shrink-0 text-primary" />
+        <FileCode2 className="size-5 shrink-0 text-primary-ink" />
       )}
       <div className="min-w-0 flex-1">
         <div className="mb-1 flex min-w-0 items-center gap-2.5">
@@ -141,7 +141,7 @@ export const FileToolbarIdentity = React.memo(function FileToolbarIdentity({
             {formatName(path)}
           </p>
           {readOnly ? (
-            <span className="type-technical-label hidden shrink-0 border border-primary/20 bg-primary/8 px-2 py-0.5 text-primary sm:inline-flex">
+            <span className="type-technical-label hidden shrink-0 border border-primary/20 bg-primary/8 px-2 py-0.5 text-primary-ink sm:inline-flex">
               READ ONLY
             </span>
           ) : null}

@@ -173,7 +173,7 @@ const PendingRow = memo(function PendingRow({
         </td>
       ) : null}
       <td
-        className="pointer-events-none flex items-center justify-end px-3 text-xs font-medium text-primary"
+        className="pointer-events-none flex items-center justify-end px-3 text-xs font-medium text-primary-ink"
         role="cell"
       >
         Review invitation
@@ -225,7 +225,7 @@ export const PendingResourceInvitationBadge = memo(
               type="button"
               size="icon-sm"
               variant="ghost"
-              className="shrink-0 text-amber-700 hover:bg-amber-500/10 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-400"
+              className="shrink-0 text-amber-700 hover:bg-amber-500/10 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-400 light:hover:bg-amber-500/20"
               aria-label={`Review pending invitation to ${invitation.resourceName}`}
               onClick={(event) => {
                 event.stopPropagation()

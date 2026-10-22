@@ -234,7 +234,11 @@ function CopyConnectionUrlButton({ url }: { url: string | null }) {
       size="sm"
       variant="outline"
       disabled={!url}
-      className={copied ? "text-emerald-400 hover:text-emerald-400" : undefined}
+      className={
+        copied
+          ? "text-emerald-400 hover:text-emerald-400 light:text-emerald-700 light:hover:text-emerald-700"
+          : undefined
+      }
       onClick={() => void copy()}
     >
       Connection URL
@@ -244,7 +248,9 @@ function CopyConnectionUrlButton({ url }: { url: string | null }) {
 }
 
 function CredentialPending() {
-  return <LoaderCircle className="size-3.5 animate-spin text-muted-foreground" />
+  return (
+    <LoaderCircle className="size-3.5 animate-spin text-muted-foreground" />
+  )
 }
 
 // Data in and out: drop a SQL dump to import it, export one, or restore a

@@ -386,7 +386,7 @@ function ConsoleLevelFilter({
       onClick={onClick}
     >
       <span
-        className={`grid size-4 shrink-0 place-items-center border ${active ? "border-primary/45 bg-primary/12 text-primary" : "border-border bg-background text-transparent"}`}
+        className={`grid size-4 shrink-0 place-items-center border ${active ? "border-primary/45 bg-primary/12 text-primary-ink" : "border-border bg-background text-transparent"}`}
       >
         <Check className="size-3" />
       </span>

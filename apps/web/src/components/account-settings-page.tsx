@@ -1501,7 +1501,8 @@ type StatusTone = "muted" | "success"
 
 const statusPillClass: Record<StatusTone, string> = {
   muted: "border-border bg-background/50 text-muted-foreground",
-  success: "border-emerald-500/25 bg-emerald-500/8 text-emerald-500",
+  success:
+    "border-emerald-500/25 bg-emerald-500/8 light:bg-emerald-500/16 text-emerald-500 light:text-emerald-700",
 }
 
 function StatusPill({

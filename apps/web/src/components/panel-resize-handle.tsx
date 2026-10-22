@@ -37,7 +37,7 @@ export function PanelResizeHandle({
       />
       <span
         className={cn(
-          "relative grid place-items-center overflow-hidden border border-primary/35 bg-background text-primary opacity-0 shadow-[0_0_14px_color-mix(in_oklch,var(--primary),transparent_70%)] transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100 group-data-[resizing=true]:opacity-100",
+          "relative grid place-items-center overflow-hidden border border-primary/35 bg-background text-primary-ink opacity-0 shadow-[0_0_14px_color-mix(in_oklch,var(--primary),transparent_70%)] transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100 group-data-[resizing=true]:opacity-100",
           vertical ? "h-9 w-2.5" : "h-2.5 w-9"
         )}
       >

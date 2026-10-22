@@ -103,7 +103,7 @@ export const AccountSwitcherSection = React.memo(
               {user.email}
             </p>
           </div>
-          <Check className="size-4 shrink-0 text-primary" aria-hidden />
+          <Check className="size-4 shrink-0 text-primary-ink" aria-hidden />
         </div>
         {user.isDevelopmentBypass ? null : (
           <>
@@ -144,8 +144,8 @@ export const AccountSwitcherSection = React.memo(
             ))}
             {atLimit ? (
               <p className="px-2 py-2 text-xs text-muted-foreground">
-                Up to {maximumBrowserAccounts} accounts can be signed in on
-                this browser.
+                Up to {maximumBrowserAccounts} accounts can be signed in on this
+                browser.
               </p>
             ) : (
               <a

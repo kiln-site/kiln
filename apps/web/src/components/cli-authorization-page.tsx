@@ -115,7 +115,7 @@ export function CliAuthorizationPage({
           <Terminal className="size-5" />
         </span>
         <div className="min-w-0">
-          <p className="type-technical-label text-primary">
+          <p className="type-technical-label text-primary-ink">
             Device authorization
           </p>
           <h1 className="mt-1 truncate font-heading text-2xl font-semibold tracking-[-0.04em]">
@@ -151,7 +151,8 @@ export function CliAuthorizationPage({
           />
           <span>
             <span className="flex items-center gap-2 text-sm font-medium">
-              <ShieldCheck className="size-4 text-primary" /> Read-only access
+              <ShieldCheck className="size-4 text-primary-ink" /> Read-only
+              access
             </span>
             <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
               Allow discovery, logs, and file reads. Block power, console, file
@@ -240,7 +241,7 @@ function CliCodeEntry({
           onSubmit(code)
         }}
       >
-        <Terminal className="size-6 text-primary" />
+        <Terminal className="size-6 text-primary-ink" />
         <h1 className="mt-5 font-heading text-2xl font-semibold tracking-[-0.04em]">
           Link a CLI
         </h1>

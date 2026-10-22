@@ -1,11 +1,7 @@
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type { RelayHostFiles } from "@workspace/contracts"
-import {
-  HardDrive,
-  LoaderCircle,
-  TriangleAlert,
-} from "lucide-react"
+import { HardDrive, LoaderCircle, TriangleAlert } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import {
@@ -260,7 +256,7 @@ export function HostFilesLimitation({
   limitation: NonNullable<RelayHostFiles["limitation"]>
 }) {
   return (
-    <div className="flex shrink-0 items-start gap-2 border-b border-amber-500/35 bg-amber-500/10 px-4 py-2 text-xs leading-relaxed text-amber-700 dark:text-amber-300">
+    <div className="flex shrink-0 items-start gap-2 border-b border-amber-500/35 bg-amber-500/10 px-4 py-2 text-xs leading-relaxed text-amber-700 dark:text-amber-300 light:bg-amber-500/20">
       <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
       {limitationMessages[limitation]}
     </div>

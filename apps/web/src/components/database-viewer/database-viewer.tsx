@@ -204,7 +204,7 @@ const noTables: ReadonlyArray<DatabaseTable> = []
 function DatabaseMetaLabel({ source }: { source: DatabaseSource }) {
   const meta = useQuery({ ...overviewQueryOptions(source), select: selectMeta })
   return (
-    <p className="type-meta min-w-0 truncate px-2 font-mono text-[0.6875rem] text-muted-foreground/75">
+    <p className="type-meta min-w-0 truncate px-2 font-mono text-[0.6875rem] text-muted-foreground/75 light:text-muted-foreground/88">
       {meta.data ?? ""}
     </p>
   )
@@ -765,7 +765,7 @@ function TableListBody({
           value={filter}
           placeholder={`Filter ${allTables.length} tables`}
           aria-label="Filter tables"
-          className="h-full min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground/70"
+          className="h-full min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground/70 light:placeholder:text-muted-foreground/85"
           onChange={(event) => setFilter(event.target.value)}
         />
         {trailing}
@@ -821,7 +821,7 @@ function HeaderTablePicker({
           className="hidden max-w-56 gap-1.5 px-2.5 text-xs md:inline-flex"
           aria-label="Choose table"
         >
-          <Icon className="size-3.5 shrink-0 text-primary" />
+          <Icon className="size-3.5 shrink-0 text-primary-ink" />
           <span className="truncate">{current?.name ?? "Tables"}</span>
           <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
         </Button>
@@ -870,7 +870,7 @@ function TablesRevealButton({ onClick }: { onClick: () => void }) {
       <Button
         variant="ghost"
         size="icon-sm"
-        className="hidden shrink-0 text-primary md:inline-flex"
+        className="hidden shrink-0 text-primary-ink md:inline-flex"
         aria-label="Show tables"
         onClick={onClick}
       >
@@ -922,7 +922,7 @@ function TableListSection({
   if (tables.length === 0) return null
   return (
     <div className="mb-1.5">
-      <p className="type-technical-label px-3 pt-1.5 pb-1 text-[0.625rem] text-muted-foreground/70">
+      <p className="type-technical-label px-3 pt-1.5 pb-1 text-[0.625rem] text-muted-foreground/70 light:text-muted-foreground/85">
         {label}
       </p>
       {tables.map((table) => {
@@ -937,7 +937,7 @@ function TableListSection({
             className={cn(
               "flex h-7 w-full items-center gap-2 px-3 text-left text-xs outline-none hover:bg-accent/45 focus-visible:bg-accent/55",
               active
-                ? "bg-primary/12 font-medium text-primary"
+                ? "bg-primary/12 font-medium text-primary-ink"
                 : "text-foreground/85"
             )}
             onClick={() => onSelect(table.name)}
@@ -945,7 +945,7 @@ function TableListSection({
             <Icon
               className={cn(
                 "size-3.5 shrink-0",
-                active ? "text-primary" : "text-muted-foreground"
+                active ? "text-primary-ink" : "text-muted-foreground"
               )}
             />
             <span className="truncate">{table.name}</span>
@@ -1046,7 +1046,7 @@ const TableView = React.memo(function TableView({
             value={searchText}
             placeholder={`Search ${table.name}`}
             aria-label={`Search ${table.name}`}
-            className="h-full min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground/70"
+            className="h-full min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground/70 light:placeholder:text-muted-foreground/85"
             onChange={(event) => setSearchText(event.target.value)}
           />
         </label>
@@ -1214,7 +1214,7 @@ function ColumnVisibilityMenu({
             size="icon-sm"
             className={cn(
               "relative shrink-0",
-              hidden.size > 0 && "text-primary"
+              hidden.size > 0 && "text-primary-ink"
             )}
             aria-label="Choose columns"
           >
@@ -1233,7 +1233,7 @@ function ColumnVisibilityMenu({
           <p className="type-technical-label text-muted-foreground">Columns</p>
           <button
             type="button"
-            className="text-xs text-primary outline-none hover:underline focus-visible:underline disabled:pointer-events-none disabled:opacity-40"
+            className="text-xs text-primary-ink outline-none hover:underline focus-visible:underline disabled:pointer-events-none disabled:opacity-40"
             disabled={hidden.size === 0}
             onClick={() => onHiddenChange(new Set())}
           >
@@ -1294,7 +1294,7 @@ function TableStructureButton({ table }: { table: DatabaseTable }) {
         <DialogContent className="flex max-h-[80vh] flex-col gap-0 p-0 sm:max-w-3xl">
           <DialogHeader className="border-b border-border px-4 py-3">
             <DialogTitle className="flex items-center gap-2">
-              <TableProperties className="size-4 text-primary" />
+              <TableProperties className="size-4 text-primary-ink" />
               {table.name}
             </DialogTitle>
             <DialogDescription>
@@ -1492,7 +1492,7 @@ function TableFooter({
         <div className="ml-auto flex items-center gap-2">
           {editWarning ? (
             <EditorTooltip content={editWarning.detail}>
-              <span className="type-meta hidden items-center gap-1 text-amber-500 lg:flex">
+              <span className="type-meta hidden items-center gap-1 text-amber-500 lg:flex light:text-amber-700">
                 <TriangleAlert className="size-3.5" /> {editWarning.label}
               </span>
             </EditorTooltip>
@@ -1551,7 +1551,7 @@ function TableStructure({ table }: { table: DatabaseTable }) {
               <td className="px-3 py-2">
                 <span className="flex items-center gap-1.5 font-medium">
                   {column.primaryKey > 0 ? (
-                    <KeyRound className="size-3 text-primary" />
+                    <KeyRound className="size-3 text-primary-ink" />
                   ) : null}
                   {column.name}
                   {column.generated ? (
@@ -1638,7 +1638,7 @@ function SqlConsole({
           <TablesRevealButton onClick={onRevealTables} />
         ) : null}
         <span className="flex items-center gap-1.5 px-1 text-xs font-medium">
-          <Code2 className="size-3.5 text-primary" /> Query
+          <Code2 className="size-3.5 text-primary-ink" /> Query
         </span>
         <div className="ml-auto flex items-center gap-3">
           {writable ? (

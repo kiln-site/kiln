@@ -42,12 +42,12 @@ export function TwoFactorPage() {
             <HearthMark />
             <span className="font-heading text-sm font-semibold">Kiln</span>
           </div>
-          <span className="type-technical-label border border-primary/20 bg-primary/8 px-2 py-1 text-primary">
+          <span className="type-technical-label border border-primary/20 bg-primary/8 px-2 py-1 text-primary-ink">
             Step 2 of 2
           </span>
         </div>
 
-        <div className="mt-9 grid size-10 place-items-center rounded-xl border border-primary/25 bg-primary/8 text-primary">
+        <div className="mt-9 grid size-10 place-items-center rounded-xl border border-primary/25 bg-primary/8 text-primary-ink">
           <ShieldCheck className="size-5" />
         </div>
         <h1 className="mt-5 font-heading text-2xl font-semibold tracking-[-0.04em]">
@@ -62,7 +62,7 @@ export function TwoFactorPage() {
         {error ? (
           <p
             role="alert"
-            className="mt-4 rounded-lg border border-destructive/30 bg-destructive/8 px-3 py-2.5 text-xs text-red-300"
+            className="mt-4 rounded-lg border border-destructive/30 bg-destructive/8 px-3 py-2.5 text-xs text-red-300 light:bg-destructive/16 light:text-red-700"
           >
             {error}
           </p>

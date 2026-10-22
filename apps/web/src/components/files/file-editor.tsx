@@ -251,7 +251,7 @@ function Editor({
         {loading ? (
           <div className="absolute inset-y-0 right-0 left-[var(--file-editor-gutter-width,3rem)] z-20 grid place-items-center bg-card/75 backdrop-blur-[2px]">
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <LoaderCircle className="size-4 animate-spin text-primary" />
+              <LoaderCircle className="size-4 animate-spin text-primary-ink" />
               Reading from Relay
             </div>
           </div>

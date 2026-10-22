@@ -260,7 +260,7 @@ function AppGitHubSourceFacts({
         {source ? (
           <span className="flex min-w-0 items-center gap-3">
             <a
-              className="flex min-w-0 items-center gap-1.5 hover:text-primary"
+              className="flex min-w-0 items-center gap-1.5 hover:text-primary-ink"
               href={source.repositoryUrl}
               rel="noreferrer"
               target="_blank"
@@ -459,7 +459,7 @@ const WebRouteFact = React.memo(function WebRouteFact({
     <div className="flex min-h-10 items-center gap-3 border-b border-border/60 py-1.5 text-[0.8125rem] last:border-b-0">
       <dt className="flex min-w-0 flex-1 items-baseline gap-2">
         <a
-          className="truncate font-medium transition-colors hover:text-primary"
+          className="truncate font-medium transition-colors hover:text-primary-ink"
           href={`https://${address}`}
           rel="noreferrer"
           target="_blank"
@@ -547,7 +547,7 @@ export function ServiceTag({ app, service }: { app: App; service: string }) {
     <button
       type="button"
       title={`${service}: ${state}. Show its container.`}
-      className="inline-flex items-center gap-1.5 border bg-muted/30 px-1.5 py-0.5 font-mono text-[11px] text-foreground transition-colors outline-none hover:border-primary/60 hover:text-primary focus-visible:border-primary"
+      className="inline-flex items-center gap-1.5 border bg-muted/30 px-1.5 py-0.5 font-mono text-[11px] text-foreground transition-colors outline-none hover:border-primary/60 hover:text-primary-ink focus-visible:border-primary"
       onClick={() => selection?.select({ service })}
     >
       <span

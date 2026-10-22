@@ -88,7 +88,9 @@ function ConsoleStatus({ statsStore }: { statsStore: StatsStore }) {
           {stats.searchedIn !== null ? (
             <span>
               {stats.matches.toLocaleString("en-US")} matches in{" "}
-              <span className="text-primary">{formatMs(stats.searchedIn)}</span>
+              <span className="text-primary-ink">
+                {formatMs(stats.searchedIn)}
+              </span>
             </span>
           ) : null}
         </>

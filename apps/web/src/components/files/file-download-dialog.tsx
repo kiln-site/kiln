@@ -237,7 +237,7 @@ export const FileDownloadDialog = React.memo(function FileDownloadDialog({
       >
         <DialogHeader className="border-b border-border/70 px-4 pt-4 pb-3">
           <div className="flex items-center gap-2.5">
-            <span className="grid size-8 shrink-0 place-items-center border border-primary/30 bg-primary/10 text-primary">
+            <span className="grid size-8 shrink-0 place-items-center border border-primary/30 bg-primary/10 text-primary-ink">
               <FileDown className="size-4" aria-hidden="true" />
             </span>
             <div className="min-w-0">
@@ -252,7 +252,7 @@ export const FileDownloadDialog = React.memo(function FileDownloadDialog({
         {previewQuery.isPending ? (
           <div className="grid min-h-40 place-items-center px-5 py-8 text-center">
             <div>
-              <LoaderCircle className="mx-auto size-5 animate-spin text-primary" />
+              <LoaderCircle className="mx-auto size-5 animate-spin text-primary-ink" />
               <p className="mt-3 text-xs font-medium">Inspecting file</p>
               <p className="type-meta mt-1 text-muted-foreground">
                 Estimating transfer size at the Relay.
@@ -529,7 +529,7 @@ function DownloadMetric({
   return (
     <div className="flex min-w-0 items-center gap-2.5 border-l border-border/75 px-3 py-2.5 first:border-l-0">
       <span
-        className={`grid size-7 shrink-0 place-items-center border [&_svg]:size-3 ${accent ? "border-primary/35 bg-primary/10 text-primary" : "border-border/70 bg-card text-muted-foreground"}`}
+        className={`grid size-7 shrink-0 place-items-center border [&_svg]:size-3 ${accent ? "border-primary/35 bg-primary/10 text-primary-ink" : "border-border/70 bg-card text-muted-foreground"}`}
       >
         {icon}
       </span>
@@ -541,7 +541,7 @@ function DownloadMetric({
           {value}
         </span>
         {detail ? (
-          <span className="type-meta block text-primary">{detail}</span>
+          <span className="type-meta block text-primary-ink">{detail}</span>
         ) : null}
       </span>
     </div>

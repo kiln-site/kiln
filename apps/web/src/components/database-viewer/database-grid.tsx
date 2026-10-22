@@ -650,15 +650,15 @@ const GridHeader = React.memo(function GridHeader({
                   }
                 >
                   {column.primaryKey ? (
-                    <KeyRound className="size-3 shrink-0 text-primary" />
+                    <KeyRound className="size-3 shrink-0 text-primary-ink" />
                   ) : null}
                   <span className="truncate text-xs font-semibold text-foreground">
                     {column.name}
                   </span>
                   {sorted === "asc" ? (
-                    <ArrowUp className="ml-auto size-3.5 shrink-0 text-primary" />
+                    <ArrowUp className="ml-auto size-3.5 shrink-0 text-primary-ink" />
                   ) : sorted === "desc" ? (
-                    <ArrowDown className="ml-auto size-3.5 shrink-0 text-primary" />
+                    <ArrowDown className="ml-auto size-3.5 shrink-0 text-primary-ink" />
                   ) : null}
                 </button>
               </TooltipTrigger>
@@ -753,9 +753,9 @@ const GridRow = React.memo(function GridRow({
     >
       <div
         className={cn(
-          "type-code sticky left-0 z-10 flex shrink-0 items-center justify-end border-r border-border bg-card pr-2.5 text-[0.6875rem] text-muted-foreground/65 tabular-nums",
+          "type-code sticky left-0 z-10 flex shrink-0 items-center justify-end border-r border-border bg-card pr-2.5 text-[0.6875rem] text-muted-foreground/65 tabular-nums light:text-muted-foreground/82",
           rowIndex % 2 === 1 && stripedRowClassName,
-          inserted && "text-emerald-500",
+          inserted && "text-emerald-500 light:text-emerald-700",
           deleted && "text-destructive"
         )}
         style={gutterStyle}
@@ -821,16 +821,20 @@ const GridCell = React.memo(function GridCell({
       className={cn(
         "type-code flex shrink-0 items-center overflow-hidden border-r border-border px-2.5 text-[0.8125rem] leading-none whitespace-nowrap select-none",
         numeric && "justify-end tabular-nums",
-        edited && "bg-primary/12 text-primary"
+        edited && "bg-primary/12 text-primary-ink"
       )}
       style={style}
     >
       {display === undefined ? (
-        <span className="text-muted-foreground/45 italic">DEFAULT</span>
+        <span className="text-muted-foreground/45 italic light:text-muted-foreground/72">
+          DEFAULT
+        </span>
       ) : display === null ? (
-        <span className="text-muted-foreground/45 italic">NULL</span>
+        <span className="text-muted-foreground/45 italic light:text-muted-foreground/72">
+          NULL
+        </span>
       ) : isBlobValue(display) ? (
-        <span className="text-muted-foreground/70">
+        <span className="text-muted-foreground/70 light:text-muted-foreground/85">
           {formatCellValue(display)}
         </span>
       ) : (

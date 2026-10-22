@@ -1577,7 +1577,7 @@ function BackupSettingsEditor({
       {!isPlatformAdmin &&
       (policy.adminQuantityLimit !== null ||
         policy.adminSizeLimitBytes !== null) ? (
-        <div className="type-meta rounded-lg border border-amber-500/25 bg-amber-500/8 p-3 text-muted-foreground sm:col-span-2">
+        <div className="type-meta rounded-lg border border-amber-500/25 bg-amber-500/8 p-3 text-muted-foreground sm:col-span-2 light:bg-amber-500/16">
           Platform ceiling: {policy.adminQuantityLimit ?? "unlimited"} backups ·{" "}
           {policy.adminSizeLimitBytes === null
             ? " unlimited size"
@@ -2262,7 +2262,7 @@ function DeleteBackupDialog({
         </DialogHeader>
         {!backup.relayPresent ? (
           <div className="flex gap-2.5 rounded-lg border border-primary/25 bg-primary/[0.06] px-3 py-2.5 text-xs leading-5">
-            <CircleAlert className="mt-0.5 size-4 shrink-0 text-primary" />
+            <CircleAlert className="mt-0.5 size-4 shrink-0 text-primary-ink" />
             <p>
               Forgetting removes this backup’s history from Hearth. Any stored
               files are left untouched.

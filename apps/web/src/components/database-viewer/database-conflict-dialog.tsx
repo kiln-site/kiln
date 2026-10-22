@@ -130,15 +130,19 @@ function ConflictRow({
                 <ValueCell value={original} />
                 <ValueCell
                   value={now}
-                  className={changedUnderneath ? "text-amber-500" : undefined}
+                  className={
+                    changedUnderneath
+                      ? "text-amber-500 light:text-amber-700"
+                      : undefined
+                  }
                 />
                 {name in edits ? (
                   <ValueCell
                     value={edits[name] ?? null}
-                    className="text-primary"
+                    className="text-primary-ink"
                   />
                 ) : (
-                  <div className="border-t border-border px-2.5 py-1.5 text-muted-foreground/45">
+                  <div className="border-t border-border px-2.5 py-1.5 text-muted-foreground/45 light:text-muted-foreground/72">
                     Unchanged
                   </div>
                 )}
@@ -172,7 +176,8 @@ function ValueCell({
       title={text}
       className={cn(
         "type-code truncate border-t border-border px-2.5 py-1.5",
-        value === null && "text-muted-foreground/45 italic",
+        value === null &&
+          "text-muted-foreground/45 italic light:text-muted-foreground/72",
         className
       )}
     >

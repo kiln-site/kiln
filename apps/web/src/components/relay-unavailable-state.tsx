@@ -41,12 +41,12 @@ export function RelayUnavailableState({
             <span className="size-1.5 rounded-full bg-amber-400 shadow-[0_0_12px_rgba(251,191,36,0.65)]" />
             Control plane status
           </span>
-          <span className="type-technical-label text-amber-400">
+          <span className="type-technical-label text-amber-400 light:text-amber-700">
             {paused ? "Paused" : configured ? "Disconnected" : "Setup required"}
           </span>
         </div>
         <div className="p-6 sm:p-8">
-          <div className="grid size-12 place-items-center rounded-xl border border-amber-400/25 bg-amber-400/8 text-amber-300">
+          <div className="grid size-12 place-items-center rounded-xl border border-amber-400/25 bg-amber-400/8 text-amber-300 light:bg-amber-400/16 light:text-amber-700">
             {paused ? (
               <CirclePause className="size-5" />
             ) : configured ? (
@@ -55,7 +55,7 @@ export function RelayUnavailableState({
               <Cable className="size-5" />
             )}
           </div>
-          <p className="type-technical-label mt-6 text-primary">
+          <p className="type-technical-label mt-6 text-primary-ink">
             {configured ? connection.relay.name : "Relay enrollment"}
           </p>
           <h1 className="mt-2 font-heading text-2xl font-semibold tracking-[-0.04em] sm:text-3xl">

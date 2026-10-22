@@ -253,7 +253,7 @@ function ConsoleCommand({
   return (
     <div className="shrink-0 border-t bg-background/80 px-3 py-3 sm:px-4">
       <form className="flex items-center gap-2" onSubmit={send}>
-        <span className="hidden font-mono text-xs font-semibold text-primary sm:inline">
+        <span className="hidden font-mono text-xs font-semibold text-primary-ink sm:inline">
           &gt;
         </span>
         <Input

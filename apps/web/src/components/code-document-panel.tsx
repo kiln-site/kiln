@@ -113,7 +113,7 @@ export function CodeDocumentPanel({
     <section className="flex h-[min(72dvh,42rem)] min-h-80 min-w-0 flex-col overflow-hidden bg-card">
       <div className="flex min-h-14 shrink-0 items-center gap-2 border-b px-3 py-2 pr-12 sm:gap-3">
         <div className="flex min-w-0 flex-1 items-center gap-2.5">
-          <FileCode2 className="size-5 shrink-0 text-primary" />
+          <FileCode2 className="size-5 shrink-0 text-primary-ink" />
           <p className="truncate text-sm font-semibold">{title}</p>
         </div>
 

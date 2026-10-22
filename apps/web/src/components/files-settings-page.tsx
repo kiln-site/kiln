@@ -123,7 +123,7 @@ const ArchiveFormatButton = React.memo(function ArchiveFormatButton({
       )}
       onClick={() => onSelect(format)}
     >
-      <Icon className={cn("size-4", active && "text-primary")} />
+      <Icon className={cn("size-4", active && "text-primary-ink")} />
       <span className="min-w-0">
         <span className="block text-xs font-medium">{label}</span>
         <span className="type-meta block text-muted-foreground">

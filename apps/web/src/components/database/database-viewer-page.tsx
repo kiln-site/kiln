@@ -39,7 +39,7 @@ export function DatabaseViewerPage() {
           <div className="mb-1 flex min-w-0 items-center gap-2.5">
             <p className="min-w-0 truncate text-sm font-semibold">Tables</p>
             {readOnly ? (
-              <span className="type-technical-label hidden shrink-0 border border-primary/20 bg-primary/8 px-2 py-0.5 text-primary sm:inline-flex">
+              <span className="type-technical-label hidden shrink-0 border border-primary/20 bg-primary/8 px-2 py-0.5 text-primary-ink sm:inline-flex">
                 READ ONLY
               </span>
             ) : null}

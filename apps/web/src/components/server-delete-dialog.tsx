@@ -167,7 +167,7 @@ export const ServerDeleteDialog = React.memo(function ServerDeleteDialog({
     <Dialog open={open} onOpenChange={changeOpen}>
       <DialogContent className="sm:max-w-xl" showCloseButton={!pending}>
         <DialogHeader>
-          <div className="mb-2 flex size-9 items-center justify-center rounded-lg border border-destructive/25 bg-destructive/10 text-destructive">
+          <div className="mb-2 flex size-9 items-center justify-center rounded-lg border border-destructive/25 bg-destructive/10 text-destructive light:bg-destructive/20">
             <TriangleAlert className="size-4" />
           </div>
           <DialogTitle>Delete {target.name}?</DialogTitle>
@@ -187,7 +187,7 @@ export const ServerDeleteDialog = React.memo(function ServerDeleteDialog({
             </span>
             <button
               type="button"
-              className="group flex min-w-0 items-center gap-3 rounded-lg border border-border/80 bg-background/55 px-3 py-2.5 text-left transition-colors outline-none hover:border-destructive/30 hover:bg-destructive/5 focus-visible:border-ring/70 focus-visible:ring-2 focus-visible:ring-ring/35"
+              className="group flex min-w-0 items-center gap-3 rounded-lg border border-border/80 bg-background/55 px-3 py-2.5 text-left transition-colors outline-none hover:border-destructive/30 hover:bg-destructive/5 focus-visible:border-ring/70 focus-visible:ring-2 focus-visible:ring-ring/35 light:hover:bg-destructive/10"
               aria-label="Copy server ID"
               onClick={() => void copyServerId()}
             >
@@ -196,7 +196,7 @@ export const ServerDeleteDialog = React.memo(function ServerDeleteDialog({
               </code>
               <span className="grid size-7 shrink-0 place-items-center rounded-md border bg-background text-muted-foreground group-hover:text-foreground">
                 {copied ? (
-                  <Check className="size-3.5 text-emerald-400" />
+                  <Check className="size-3.5 text-emerald-400 light:text-emerald-700" />
                 ) : (
                   <Copy className="size-3.5" />
                 )}

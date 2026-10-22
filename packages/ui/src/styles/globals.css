@@ -5,6 +5,9 @@
 @import "@fontsource-variable/jetbrains-mono";
 
 @custom-variant dark (&:is(.dark *));
+/* Light-mode overrides for colors picked against dark surfaces: deeper status
+   text and stronger tints, which wash out on light backgrounds. */
+@custom-variant light (&:is(.light *));
 /* A workspace header's resource meters stack into rows when collapsed, and
    always when the header is too narrow to fit them beside the name. */
 @custom-variant meters-collapsed {
@@ -50,6 +53,7 @@
   --color-secondary-foreground: var(--secondary-foreground);
   --color-secondary: var(--secondary);
   --color-primary-foreground: var(--primary-foreground);
+  --color-primary-ink: var(--primary-ink);
   --color-primary: var(--primary);
   --color-popover-foreground: var(--popover-foreground);
   --color-popover: var(--popover);
@@ -122,6 +126,9 @@
   --popover-accent-foreground: hsl(var(--accent-hue) 10% 95%);
   --primary: hsl(var(--accent-hue) var(--accent-saturation) 58%);
   --primary-foreground: hsl(var(--accent-hue) 24% 8%);
+  /* The accent as text, links, and icons. Light mode darkens it to read on
+     light surfaces while fills keep --primary. */
+  --primary-ink: var(--primary);
   --secondary: hsl(var(--accent-hue) 18% 14%);
   --secondary-foreground: hsl(var(--accent-hue) 8% 91%);
   --muted: hsl(var(--accent-hue) 13% 13.5%);
@@ -152,37 +159,41 @@
 
 .light {
   color-scheme: light;
-  --surface-base: hsl(var(--accent-hue) 14% 96%);
-  --surface-low: hsl(var(--accent-hue) 16% 98%);
-  --surface: hsl(var(--accent-hue) 18% 99.2%);
-  --surface-raised: hsl(var(--accent-hue) 16% 94%);
-  --surface-overlay: hsl(var(--accent-hue) 18% 99.5%);
-  --surface-border: hsl(var(--accent-hue) 16% 82%);
-  --surface-input: hsl(var(--accent-hue) 18% 76%);
-  --text-strong: hsl(var(--accent-hue) 16% 12%);
-  --text-subtle: hsl(var(--accent-hue) 12% 38%);
-  --accent-border: hsl(var(--accent-hue) var(--accent-saturation) 42%);
+  /*
+   * Light surfaces sit a few steps below white with the accent's hue, so the
+   * page isn't glaring. As in dark mode, the sidebar and cards rise above
+   * the page, and hovers take the accent's tint rather than gray.
+   */
+  --surface-base: hsl(var(--accent-hue) 30% 91.5%);
+  --surface-low: hsl(var(--accent-hue) 36% 95.5%);
+  --surface: hsl(var(--accent-hue) 36% 96.5%);
+  --surface-raised: hsl(var(--accent-hue) 26% 88%);
+  --surface-overlay: hsl(var(--accent-hue) 36% 97.5%);
+  --surface-border: hsl(var(--accent-hue) 28% 80%);
+  --surface-input: hsl(var(--accent-hue) 28% 72%);
+  --text-strong: hsl(var(--accent-hue) 18% 11%);
+  --text-subtle: hsl(var(--accent-hue) 14% 29%);
   --ambient-gradient:
     radial-gradient(
       circle at 78% -18%,
-      hsl(var(--accent-hue) 72% 52% / 0.1),
+      hsl(var(--accent-hue) 72% 55% / 0.12),
       transparent 32rem
     ),
-    linear-gradient(hsl(var(--accent-hue) 32% 92% / 0.28), transparent 24rem);
+    linear-gradient(hsl(var(--accent-hue) 30% 95% / 0.4), transparent 24rem);
   --ambient-grid:
     linear-gradient(
       to right,
-      hsl(var(--accent-hue) 22% 32% / 0.055) 1px,
+      hsl(var(--accent-hue) 22% 32% / 0.06) 1px,
       transparent 1px
     ),
     linear-gradient(
       to bottom,
-      hsl(var(--accent-hue) 22% 32% / 0.045) 1px,
+      hsl(var(--accent-hue) 22% 32% / 0.05) 1px,
       transparent 1px
     );
   --ambient-spotlight: radial-gradient(
     circle at 50% -10%,
-    hsl(var(--accent-hue) var(--accent-saturation) 58% / 0.14),
+    hsl(var(--accent-hue) var(--accent-saturation) 58% / 0.16),
     transparent 34rem
   );
   --brand-shadow: 0 5px 14px
@@ -192,29 +203,37 @@
   --card: var(--surface);
   --card-foreground: var(--text-strong);
   --popover: var(--surface-overlay);
-  --popover-foreground: hsl(var(--accent-hue) 16% 10%);
-  --popover-accent: hsl(var(--accent-hue) 38% 91%);
-  --popover-accent-foreground: hsl(var(--accent-hue) 18% 12%);
-  --primary: hsl(var(--accent-hue) var(--accent-saturation) 22%);
-  --primary-foreground: hsl(var(--accent-hue) 18% 98%);
-  --secondary: hsl(var(--accent-hue) 20% 91%);
-  --secondary-foreground: hsl(var(--accent-hue) 18% 14%);
-  --muted: hsl(var(--accent-hue) 16% 92%);
+  --popover-foreground: hsl(var(--accent-hue) 18% 10%);
+  --popover-accent: hsl(var(--accent-hue) 75% 92%);
+  --popover-accent-foreground: hsl(var(--accent-hue) 20% 11%);
+  /* Without relative colors, mixing toward black in OKLab keeps the hue. */
+  --primary-ink: color-mix(in oklab, var(--primary) 69%, black);
+  --secondary: hsl(var(--accent-hue) 30% 88%);
+  --secondary-foreground: hsl(var(--accent-hue) 18% 13%);
+  --muted: hsl(var(--accent-hue) 28% 89%);
   --muted-foreground: var(--text-subtle);
-  --accent: hsl(var(--accent-hue) 38% 90%);
-  --accent-foreground: hsl(var(--accent-hue) 18% 12%);
+  --accent: hsl(var(--accent-hue) 75% 91%);
+  --destructive: oklch(0.55 0.21 27);
+  --accent-foreground: hsl(var(--accent-hue) 20% 11%);
   --border: var(--surface-border);
   --input: var(--surface-input);
-  --ring: hsl(var(--accent-hue) var(--accent-saturation) 44%);
   --sidebar: var(--surface-low);
-  --sidebar-foreground: hsl(var(--accent-hue) 16% 16%);
+  --sidebar-foreground: hsl(var(--accent-hue) 18% 14%);
   --sidebar-muted-foreground: var(--text-subtle);
   --sidebar-primary: var(--primary);
   --sidebar-primary-foreground: var(--primary-foreground);
-  --sidebar-accent: hsl(var(--accent-hue) 34% 90%);
-  --sidebar-accent-foreground: hsl(var(--accent-hue) 18% 12%);
-  --sidebar-border: hsl(var(--accent-hue) 16% 84%);
+  --sidebar-accent: hsl(var(--accent-hue) 75% 91%);
+  --sidebar-accent-foreground: hsl(var(--accent-hue) 20% 11%);
+  --sidebar-border: hsl(var(--accent-hue) 24% 84%);
   --sidebar-ring: var(--ring);
+}
+
+/* OKLCH lightness tracks luminance across hues, so capping it at 0.5 gives
+   any accent about 4.5:1 against light surfaces while keeping its hue. */
+@supports (color: oklch(from red l c h)) {
+  :root.light {
+    --primary-ink: oklch(from var(--primary) min(l, 0.5) c h);
+  }
 }
 
 /*
@@ -506,6 +525,30 @@ html {
 .kiln-toaster[data-sonner-toaster]
   [data-sonner-toast][data-styled="true"][data-type="loading"] {
   --kiln-toast-accent: var(--primary);
+}
+
+.light
+  .kiln-toaster[data-sonner-toaster]
+  [data-sonner-toast][data-styled="true"][data-type="success"] {
+  --kiln-toast-accent: oklch(50.8% 0.118 165.612);
+}
+
+.light
+  .kiln-toaster[data-sonner-toaster]
+  [data-sonner-toast][data-styled="true"][data-type="info"] {
+  --kiln-toast-accent: oklch(50% 0.134 242.749);
+}
+
+.light
+  .kiln-toaster[data-sonner-toaster]
+  [data-sonner-toast][data-styled="true"][data-type="warning"] {
+  --kiln-toast-accent: oklch(55.5% 0.163 48.998);
+}
+
+.light
+  .kiln-toaster[data-sonner-toaster]
+  [data-sonner-toast][data-styled="true"][data-type="loading"] {
+  --kiln-toast-accent: var(--primary-ink);
 }
 
 .kiln-toaster[data-sonner-toaster]

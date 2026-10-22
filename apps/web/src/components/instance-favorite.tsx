@@ -82,7 +82,7 @@ export const InstanceFavoriteStar = React.memo(function InstanceFavoriteStar({
     <>
       <Star
         className={cn(
-          "size-[1em] shrink-0 fill-amber-400 text-amber-400",
+          "size-[1em] shrink-0 fill-amber-400 text-amber-400 light:text-amber-500",
           className
         )}
         aria-hidden="true"
@@ -107,7 +107,11 @@ export const InstanceFavoriteMenuItem = React.memo(
 
     return (
       <DropdownMenuItem onSelect={select}>
-        <Star className={cn(starred && "fill-amber-400 text-amber-400")} />
+        <Star
+          className={cn(
+            starred && "fill-amber-400 text-amber-400 light:text-amber-500"
+          )}
+        />
         {starred ? "Remove from favorites" : "Add to favorites"}
       </DropdownMenuItem>
     )
@@ -133,7 +137,11 @@ export const InstanceFavoriteButton = React.memo(
         aria-pressed={starred}
         onClick={() => toggle.mutate({ favorite, starred: !starred })}
       >
-        <Star className={cn(starred && "fill-amber-400 text-amber-400")} />
+        <Star
+          className={cn(
+            starred && "fill-amber-400 text-amber-400 light:text-amber-500"
+          )}
+        />
         {starred ? "Favorited" : "Favorite"}
       </Button>
     )
@@ -202,9 +210,10 @@ export const InstanceFavoriteToggle = React.memo(
             }
             aria-pressed={starred}
             className={cn(
-              "text-muted-foreground/45 hover:text-amber-400",
-              starred && "text-amber-400",
-              confirming && "bg-amber-400/12 hover:bg-amber-400/18"
+              "text-muted-foreground/45 hover:text-amber-400 light:text-muted-foreground/72 light:hover:text-amber-600",
+              starred && "text-amber-400 light:text-amber-500",
+              confirming &&
+                "bg-amber-400/12 hover:bg-amber-400/18 light:bg-amber-400/24"
             )}
             onBlur={cancelConfirm}
             onClick={click}
@@ -364,12 +373,15 @@ export const FavoritesOnlyButton = React.memo(function FavoritesOnlyButton({
           aria-pressed={favoritesOnly}
           className={cn(
             favoritesOnly &&
-              "border-primary/45 bg-primary/8 text-primary hover:border-primary/55 hover:bg-primary/12 hover:text-primary"
+              "border-primary/45 bg-primary/8 text-primary-ink hover:border-primary/55 hover:bg-primary/12 hover:text-primary-ink"
           )}
           onClick={toggle}
         >
           <Star
-            className={cn(favoritesOnly && "fill-amber-400 text-amber-400")}
+            className={cn(
+              favoritesOnly &&
+                "fill-amber-400 text-amber-400 light:text-amber-500"
+            )}
             aria-hidden="true"
           />
         </Button>

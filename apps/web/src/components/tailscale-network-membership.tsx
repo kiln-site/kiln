@@ -17,11 +17,7 @@ import {
 
 import { Button } from "@workspace/ui/components/button"
 import { ServerKindIcon } from "@/components/instance-kind-icon"
-import {
-  ensuringPromise,
-  forkPromise,
-  recoverPromise,
-} from "@/effect/promise"
+import { ensuringPromise, forkPromise, recoverPromise } from "@/effect/promise"
 import {
   Dialog,
   DialogContent,
@@ -283,7 +279,7 @@ const ConnectedServersTableContent = React.memo(
       <>
         {save.error ? (
           <p
-            className="shrink-0 border-b border-destructive/25 bg-destructive/5 px-4 py-2 text-xs text-destructive"
+            className="shrink-0 border-b border-destructive/25 bg-destructive/5 px-4 py-2 text-xs text-destructive light:bg-destructive/10"
             role="alert"
           >
             {errorMessage(save.error)}
@@ -530,7 +526,7 @@ export function TailscaleMembershipSection({
     <section className="overflow-hidden border border-border/80 bg-card/45">
       <div className="flex min-h-12 items-center justify-between gap-3 border-b border-border/70 px-4 py-3">
         <div className="flex min-w-0 items-center gap-2.5">
-          <Network className="size-4 shrink-0 text-primary" />
+          <Network className="size-4 shrink-0 text-primary-ink" />
           <h2 className="truncate text-sm font-semibold">{title}</h2>
           <span className="grid size-4 shrink-0 place-items-center">
             {relayUnsupported ? (
@@ -600,7 +596,7 @@ export function TailscaleMembershipSection({
       )}
       {save.error ? (
         <p
-          className="border-t border-destructive/25 bg-destructive/5 px-4 py-2 text-xs text-destructive"
+          className="border-t border-destructive/25 bg-destructive/5 px-4 py-2 text-xs text-destructive light:bg-destructive/10"
           role="alert"
         >
           {errorMessage(save.error)}
@@ -755,7 +751,9 @@ const TailscaleMembersTable = React.memo(function TailscaleMembersTable({
               : "Connect a game server to reach it through this tailnet."}
           </span>
         }
-        icon={<ServerKindIcon className="size-6 text-muted-foreground/45" />}
+        icon={
+          <ServerKindIcon className="size-6 text-muted-foreground/45 light:text-muted-foreground/72" />
+        }
         title={
           searchActive
             ? "No game servers match your search"
@@ -819,7 +817,7 @@ const MemberInstance = React.memo(function MemberInstance({
             </span>
           )
         }
-        nameClassName="transition-colors group-hover/server-link:text-primary"
+        nameClassName="transition-colors group-hover/server-link:text-primary-ink"
         showFavorite={false}
       />
     </Link>
@@ -838,7 +836,11 @@ const MemberRelay = React.memo(function MemberRelay({
       className="group/relay-link flex max-w-full min-w-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
     >
       <InstanceCard
-        instance={{ id: server.relayId, kind: "relay", relayId: server.relayId }}
+        instance={{
+          id: server.relayId,
+          kind: "relay",
+          relayId: server.relayId,
+        }}
         meta={server.relayId.slice(0, 8)}
         metaClassName="font-mono"
         name={server.relayName}
@@ -847,7 +849,7 @@ const MemberRelay = React.memo(function MemberRelay({
             <TailscaleRelayUpdateHint relayName={server.relayName} />
           )
         }
-        nameClassName="transition-colors group-hover/relay-link:text-primary"
+        nameClassName="transition-colors group-hover/relay-link:text-primary-ink"
         showFavorite={false}
       />
     </Link>
@@ -891,7 +893,7 @@ const MemberActions = React.memo(function MemberActions({
             type="button"
             size="icon-sm"
             variant="ghost"
-            className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+            className="text-destructive hover:bg-destructive/10 hover:text-destructive light:hover:bg-destructive/20"
             aria-label={`Disconnect ${server.name}`}
             disabled={disabled}
             onClick={() => onDisconnect(row)}
@@ -944,9 +946,7 @@ const ConfigureMemberDialog = React.memo(function ConfigureMemberDialog({
   const hostnameChanged = nextHostname !== binding.hostname
   const enabledChanged = enabled !== binding.enabled
   const canSave =
-    !pending &&
-    nextHostname.length > 0 &&
-    (hostnameChanged || enabledChanged)
+    !pending && nextHostname.length > 0 && (hostnameChanged || enabledChanged)
   const connectionLabelId = React.useId()
 
   return (
@@ -1151,7 +1151,7 @@ const MembershipRow = React.memo(function MembershipRow({
                 type="button"
                 size="sm"
                 variant="ghost"
-                className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                className="text-destructive hover:bg-destructive/10 hover:text-destructive light:hover:bg-destructive/20"
                 disabled={disabled}
                 onClick={() => setLeaveOpen(true)}
               >
@@ -1575,14 +1575,14 @@ function TailscaleCleanupState({ stack }: { stack: TailscaleStackOverview }) {
 
   return (
     <div className="flex min-h-64 flex-col items-center justify-center px-6 py-12 text-center">
-      <LoaderCircle className="size-6 animate-spin text-primary" />
+      <LoaderCircle className="size-6 animate-spin text-primary-ink" />
       <p className="mt-3 text-sm font-semibold">Removing {stack.name}</p>
       <p className="type-support mt-1 text-muted-foreground">
         {pendingRelays}. Cleanup will continue automatically.
       </p>
       {cleanup.lastError ? (
         <div
-          className="mt-4 flex max-w-lg items-start gap-2.5 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2.5 text-left"
+          className="mt-4 flex max-w-lg items-start gap-2.5 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2.5 text-left light:bg-destructive/10"
           role="status"
         >
           <CircleAlert className="mt-0.5 size-4 shrink-0 text-destructive" />
@@ -1622,7 +1622,7 @@ function TailscaleEmptyTable({
 
   return (
     <div className="flex min-h-64 flex-col items-center justify-center px-6 py-12 text-center">
-      <Icon className="size-6 text-muted-foreground/45" />
+      <Icon className="size-6 text-muted-foreground/45 light:text-muted-foreground/72" />
       <p className="mt-3 text-sm font-semibold">{title}</p>
       <p className="type-support mt-1 max-w-sm text-muted-foreground">
         {description}

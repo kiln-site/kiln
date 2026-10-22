@@ -54,22 +54,22 @@ function clampResourcePercent(value: number | null | undefined): number {
 const RESOURCE_STYLES = {
   cpu: {
     indicator: "bg-sky-400/85",
-    value: "text-sky-300/95",
+    value: "text-sky-300/95 light:text-sky-700/95",
     chart: "oklch(0.74 0.13 235)",
   },
   memory: {
     indicator: "bg-violet-400/85",
-    value: "text-violet-300/95",
+    value: "text-violet-300/95 light:text-violet-700/95",
     chart: "oklch(0.7 0.15 292)",
   },
   storage: {
     indicator: "bg-emerald-400/80",
-    value: "text-emerald-300/95",
+    value: "text-emerald-300/95 light:text-emerald-700/95",
     chart: "oklch(0.72 0.13 160)",
   },
   network: {
     indicator: "bg-cyan-300/85",
-    value: "text-cyan-200/95",
+    value: "text-cyan-200/95 light:text-cyan-800/95",
     chart: "oklch(0.78 0.11 205)",
   },
 } as const
@@ -299,7 +299,7 @@ function NetworkTransferValue({
   const isReceived = sampleSequence % 2 === 0
   return (
     <span
-      className={`col-start-2 row-start-1 min-w-0 truncate text-right font-medium tracking-[-0.045em] tabular-nums meters-collapsed:col-start-3 ${isReceived ? "text-cyan-200/95" : "text-primary/90"}`}
+      className={`col-start-2 row-start-1 min-w-0 truncate text-right font-medium tracking-[-0.045em] tabular-nums meters-collapsed:col-start-3 ${isReceived ? "text-cyan-200/95" : "text-primary-ink/90"}`}
       aria-label={`Download ${received}, upload ${sent}`}
     >
       {isReceived ? "↓" : "↑"} {isReceived ? received : sent}
@@ -824,7 +824,7 @@ function NetworkHistoryValue({
         {direction === "down" ? "↓ In" : "↑ Out"}
       </span>
       <span
-        className={`type-code truncate leading-none font-medium tracking-[-0.035em] tabular-nums ${direction === "down" ? "text-cyan-200" : "text-primary"}`}
+        className={`type-code truncate leading-none font-medium tracking-[-0.035em] tabular-nums ${direction === "down" ? "text-cyan-200" : "text-primary-ink"}`}
       >
         {value === null ? "—" : formatBytesPerSecond(value)}
       </span>

@@ -180,7 +180,7 @@ function PagerButton({
       type="button"
       aria-label={label}
       title={label}
-      className="grid size-6 place-items-center text-muted-foreground transition-colors outline-none hover:bg-muted/60 hover:text-foreground focus-visible:text-primary focus-visible:ring-1 focus-visible:ring-ring [&_svg]:size-3.5!"
+      className="grid size-6 place-items-center text-muted-foreground transition-colors outline-none hover:bg-muted/60 hover:text-foreground focus-visible:text-primary-ink focus-visible:ring-1 focus-visible:ring-ring [&_svg]:size-3.5!"
       onClick={onClick}
     >
       {children}

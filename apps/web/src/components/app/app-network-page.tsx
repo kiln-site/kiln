@@ -109,11 +109,7 @@ export function AppNetworkPage() {
 
         {config.data ? (
           <>
-            <AppWebRoutes
-              app={app}
-              canManage={canManage}
-              compose={compose}
-            />
+            <AppWebRoutes app={app} canManage={canManage} compose={compose} />
             <PublishedPorts
               // A fresh form when the saved ports change, and only then:
               // refetches of the same ports keep unsaved edits.
@@ -128,10 +124,7 @@ export function AppNetworkPage() {
               canManage={canManage}
               databaseIds={config.data.config.databaseIds}
             />
-            <AppTailscale
-              app={app}
-              compose={compose}
-            />
+            <AppTailscale app={app} compose={compose} />
           </>
         ) : (
           <div className="grid h-40 place-items-center">
@@ -228,7 +221,7 @@ function AppWebRoutes({
               <span className="min-w-0 flex-1">
                 <span className="flex items-center gap-2">
                   <a
-                    className="truncate text-sm font-medium hover:text-primary"
+                    className="truncate text-sm font-medium hover:text-primary-ink"
                     href={`https://${route.hostname}${route.path ?? ""}`}
                     rel="noreferrer"
                     target="_blank"
@@ -811,7 +804,7 @@ function ConnectedDatabases({
                 <span className="min-w-0 flex-1">
                   {database ? (
                     <Link
-                      className="text-sm font-medium hover:text-primary"
+                      className="text-sm font-medium hover:text-primary-ink"
                       params={{ databaseId: id }}
                       to="/db/$databaseId"
                     >

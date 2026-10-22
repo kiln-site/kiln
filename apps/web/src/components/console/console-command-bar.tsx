@@ -46,7 +46,7 @@ export const ConsoleCommandBar = React.memo(function ConsoleCommandBar({
     <div className="shrink-0 border-t bg-background/80 px-3 py-3 sm:px-4">
       {canWrite ? (
         <form className="flex items-center gap-2" onSubmit={command.submit}>
-          <span className="hidden font-mono text-xs font-semibold text-primary sm:inline">
+          <span className="hidden font-mono text-xs font-semibold text-primary-ink sm:inline">
             &gt;
           </span>
           <Popover
@@ -111,7 +111,7 @@ export const ConsoleCommandBar = React.memo(function ConsoleCommandBar({
                   role="status"
                   className="flex items-center gap-2 px-2.5 py-2 font-mono text-xs text-muted-foreground"
                 >
-                  <LoaderCircle className="size-3.5 animate-spin text-primary/75" />
+                  <LoaderCircle className="size-3.5 animate-spin text-primary-ink/75" />
                   Waiting for completions…
                 </div>
               ) : command.completions?.status === "empty" ? (

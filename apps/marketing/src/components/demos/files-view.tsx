@@ -372,7 +372,7 @@ function Files({
           aria-expanded={mobileTreeOpen}
           onClick={() => setMobileTreeOpen(true)}
         >
-          <FolderTree className="size-[18px] shrink-0 text-primary" />
+          <FolderTree className="size-[18px] shrink-0 text-primary-ink" />
           Browse files
         </button>
       </section>
@@ -557,7 +557,7 @@ function MenuItem({
       onClick={onClick}
     >
       <span
-        className={`grid size-7 shrink-0 place-items-center border [&>svg]:size-3.5 ${active ? "border-primary/35 bg-primary/10 text-primary" : "border-border/70 bg-card text-muted-foreground"}`}
+        className={`grid size-7 shrink-0 place-items-center border [&>svg]:size-3.5 ${active ? "border-primary/35 bg-primary/10 text-primary-ink" : "border-border/70 bg-card text-muted-foreground"}`}
       >
         {icon}
       </span>

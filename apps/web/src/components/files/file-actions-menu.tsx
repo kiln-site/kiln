@@ -120,7 +120,7 @@ function FileActionMenuItem({
       type="button"
       role="menuitem"
       disabled={disabled}
-      className="type-menu flex w-full cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-1 text-left outline-hidden transition-colors duration-100 select-none hover:bg-popover-accent focus-visible:bg-popover-accent focus-visible:text-popover-accent-foreground focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50 data-[variant=destructive]:text-destructive data-[variant=destructive]:hover:bg-destructive/10 data-[variant=destructive]:focus-visible:bg-destructive/10 data-[variant=destructive]:focus-visible:text-destructive [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0"
+      className="type-menu flex w-full cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-1 text-left outline-hidden transition-colors duration-100 select-none hover:bg-popover-accent focus-visible:bg-popover-accent focus-visible:text-popover-accent-foreground focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50 data-[variant=destructive]:text-destructive data-[variant=destructive]:hover:bg-destructive/10 data-[variant=destructive]:focus-visible:bg-destructive/10 data-[variant=destructive]:focus-visible:text-destructive light:data-[variant=destructive]:hover:bg-destructive/20 light:data-[variant=destructive]:focus-visible:bg-destructive/20 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0"
       data-variant={variant}
       onClick={() => {
         close?.({ restoreFocus })

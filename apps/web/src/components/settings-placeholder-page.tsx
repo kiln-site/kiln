@@ -13,7 +13,7 @@ export function SettingsPlaceholderPage({
     <div className="mx-auto w-full max-w-[90rem] px-3 pt-4 pb-10 sm:px-5 sm:pt-5">
       <section className="grid min-h-56 place-items-center rounded-xl border border-dashed bg-card/25 px-6 text-center">
         <div className="max-w-sm">
-          <Icon className="mx-auto size-5 text-primary" />
+          <Icon className="mx-auto size-5 text-primary-ink" />
           <h2 className="mt-4 font-heading text-xl font-semibold">{title}</h2>
           <p className="mt-2 text-xs leading-5 text-muted-foreground">
             {description}

@@ -37,7 +37,7 @@ export function OwnerCard({
               Kiln
               <BadgeCheck
                 aria-label="Verified"
-                className="size-3.5 shrink-0 text-primary"
+                className="size-3.5 shrink-0 text-primary-ink"
               />
             </span>
             <span className="truncate text-xs text-muted-foreground">
@@ -46,7 +46,7 @@ export function OwnerCard({
           </div>
         </>
       )}
-      <span className="type-technical-label shrink-0 self-start text-muted-foreground/80">
+      <span className="type-technical-label shrink-0 self-start text-muted-foreground/80 light:text-muted-foreground/90">
         Owner
       </span>
     </section>

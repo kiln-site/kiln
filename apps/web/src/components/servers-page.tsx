@@ -424,7 +424,7 @@ const ServerDataTable = React.memo(function ServerDataTable({
                     relayId: server.relayId,
                   }}
                   name={server.name}
-                  nameClassName="transition-colors group-hover/server-link:text-primary"
+                  nameClassName="transition-colors group-hover/server-link:text-primary-ink"
                   meta={
                     [server.game, server.implementation]
                       .filter(Boolean)
@@ -592,7 +592,7 @@ const ServerActions = React.memo(function ServerActions({
               size="icon-sm"
               variant="ghost"
               aria-label={`Delete ${server.name}`}
-              className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+              className="text-destructive hover:bg-destructive/10 hover:text-destructive light:hover:bg-destructive/20"
               disabled={!deleteEnabled}
               onClick={() =>
                 onDelete({
@@ -682,7 +682,7 @@ const ServerActionLink = React.memo(function ServerActionLink({
           asChild
           size="icon-sm"
           variant="ghost"
-          className="text-muted-foreground hover:text-primary"
+          className="text-muted-foreground hover:text-primary-ink"
         >
           {link}
         </Button>

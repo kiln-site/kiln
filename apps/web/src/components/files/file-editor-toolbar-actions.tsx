@@ -300,7 +300,7 @@ function ForceSaveDialog({
               : "Kiln will write your changes even if the SNBT is invalid. Minecraft may not load this file until it is repaired."}
           </DialogDescription>
         </DialogHeader>
-        <div className="rounded-lg border border-destructive/25 bg-destructive/8 px-3 py-2.5 text-xs leading-relaxed text-muted-foreground">
+        <div className="rounded-lg border border-destructive/25 bg-destructive/8 px-3 py-2.5 text-xs leading-relaxed text-muted-foreground light:bg-destructive/16">
           A normal save is safer and preserves the file&apos;s binary format.
         </div>
         <DialogFooter>

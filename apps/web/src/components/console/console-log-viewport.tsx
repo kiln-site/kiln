@@ -303,7 +303,7 @@ function ConsoleLogViewport({
       {loading && !consoleData ? (
         <div className="absolute inset-0 grid place-items-center bg-card/70 backdrop-blur-[2px]">
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <LoaderCircle className="size-4 animate-spin text-primary" />
+            <LoaderCircle className="size-4 animate-spin text-primary-ink" />
             Opening live {copy.stream}
           </div>
         </div>

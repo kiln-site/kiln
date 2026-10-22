@@ -219,12 +219,14 @@ export const NotificationsBell = React.memo(function NotificationsBell({
             <button
               type="button"
               className={cn(
-                "relative grid size-8 shrink-0 place-items-center text-sidebar-foreground/55 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring/45 focus-visible:outline-none data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground",
+                "relative grid size-8 shrink-0 place-items-center text-sidebar-foreground/55 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring/45 focus-visible:outline-none data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground light:text-sidebar-foreground/78",
                 className
               )}
               aria-label={unreadLabel(unread)}
             >
-              <Bell className={cn("size-4", unread > 0 && "text-primary")} />
+              <Bell
+                className={cn("size-4", unread > 0 && "text-primary-ink")}
+              />
               {unread > 0 ? (
                 <UnreadCountBadge
                   count={unread}
@@ -416,7 +418,7 @@ function NotificationsPopoverPanel({ onNavigate }: { onNavigate: () => void }) {
       </div>
       <Link
         to="/notifications"
-        className="flex h-10 shrink-0 items-center justify-center border-t border-border/70 text-sm font-medium text-primary transition-colors hover:bg-accent/50 focus-visible:bg-accent/50 focus-visible:outline-none"
+        className="flex h-10 shrink-0 items-center justify-center border-t border-border/70 text-sm font-medium text-primary-ink transition-colors hover:bg-accent/50 focus-visible:bg-accent/50 focus-visible:outline-none"
         onClick={onNavigate}
       >
         View all notifications
@@ -428,7 +430,10 @@ function NotificationsPopoverPanel({ onNavigate }: { onNavigate: () => void }) {
 export function NotificationsEmptyState() {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center">
-      <Bell className="size-5 text-muted-foreground/70" aria-hidden />
+      <Bell
+        className="size-5 text-muted-foreground/70 light:text-muted-foreground/85"
+        aria-hidden
+      />
       <p className="text-sm font-medium">You're all caught up</p>
     </div>
   )

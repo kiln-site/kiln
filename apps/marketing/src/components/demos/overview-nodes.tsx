@@ -45,7 +45,7 @@ const kindPresentation: Record<
 }
 
 const kindTone = {
-  kiln: "border-primary/35 bg-primary/10 text-primary",
+  kiln: "border-primary/35 bg-primary/10 text-primary-ink",
   relay: "border-orange-400/35 bg-orange-400/10",
   server: "border-emerald-400/35 bg-emerald-400/10 text-emerald-300",
   app: "border-red-400/35 bg-red-400/10 text-red-300",
@@ -127,7 +127,7 @@ export const MapGroup = React.memo(function MapGroup({
     const title = (
       <>
         <AppKindIcon className="size-3.5 shrink-0" aria-hidden="true" />
-        <span className="type-label min-w-0 truncate text-foreground transition-colors group-hover/stack:text-primary">
+        <span className="type-label min-w-0 truncate text-foreground transition-colors group-hover/stack:text-primary-ink">
           {app.name}
         </span>
         <span className="type-meta shrink-0 tabular-nums">
@@ -359,7 +359,7 @@ function RelayNode({
         meta={relay.address}
         metaClassName="font-mono"
         name={relay.name}
-        nameClassName="transition-colors group-hover/node:text-primary"
+        nameClassName="transition-colors group-hover/node:text-primary-ink"
         status={online}
       />
       <RelayMeters relayId={relay.id} />
@@ -459,7 +459,7 @@ function ResourceNode({
       meta={resource.meta}
       metaClassName="font-mono"
       name={resource.name}
-      nameClassName="transition-colors group-hover/node:text-primary"
+      nameClassName="transition-colors group-hover/node:text-primary-ink"
       status={stoppedResources.has(resource.id) ? stopped : running}
     />
   )

@@ -271,13 +271,13 @@ export const RouteCommandMenuTrigger = React.memo(
           <SidebarMenuButton
             aria-keyshortcuts="Control+K Meta+K"
             aria-label={`Search Kiln, ${shortcutLabel}`}
-            className="h-8 w-full justify-start gap-2.5 bg-black/10 px-2 shadow-[0_0_0_0.5px_color-mix(in_oklab,var(--sidebar-foreground)_16%,transparent)]! group-data-[collapsible=icon]:justify-center hover:bg-black/15 hover:shadow-[0_0_0_0.5px_color-mix(in_oklab,var(--sidebar-foreground)_24%,transparent)]! dark:bg-black/25 dark:hover:bg-black/35"
+            className="h-8 w-full justify-start gap-2.5 bg-card px-2 shadow-[0_0_0_0.5px_color-mix(in_oklab,var(--sidebar-foreground)_16%,transparent)]! group-data-[collapsible=icon]:justify-center hover:bg-sidebar-accent hover:shadow-[0_0_0_0.5px_color-mix(in_oklab,var(--sidebar-foreground)_24%,transparent)]! dark:bg-black/25 dark:hover:bg-black/35"
             tooltip={`Search Kiln · ${shortcutLabel}`}
             type="button"
             onClick={openMenu}
           >
             <Search />
-            <span className="min-w-0 flex-1 truncate text-sidebar-foreground/60 group-data-[collapsible=icon]:sr-only">
+            <span className="min-w-0 flex-1 truncate text-sidebar-foreground/60 group-data-[collapsible=icon]:sr-only light:text-sidebar-foreground/80">
               Search Kiln...
             </span>
             <Kbd

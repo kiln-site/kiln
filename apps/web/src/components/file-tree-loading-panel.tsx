@@ -18,7 +18,7 @@ export function FileWorkspaceLoadingState({
   return (
     <div className="max-w-xs" role="status" aria-live="polite">
       <div className="mx-auto mb-4 grid size-11 place-items-center rounded-xl border bg-muted/20 text-muted-foreground">
-        <LoaderCircle className="size-5 animate-spin text-primary" />
+        <LoaderCircle className="size-5 animate-spin text-primary-ink" />
       </div>
       <p className="text-sm font-semibold">{title}</p>
       <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">

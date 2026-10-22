@@ -144,7 +144,7 @@ function TraefikConfigLink({
           relayId: routeId,
           _splat: files.traefikConfig,
         }}
-        className="group flex min-w-0 items-center gap-1.5 font-mono text-xs transition-colors hover:text-primary"
+        className="group flex min-w-0 items-center gap-1.5 font-mono text-xs transition-colors hover:text-primary-ink"
       >
         <span className="truncate">traefik.yaml</span>
         <ArrowRight className="size-3.5 shrink-0 transition-transform group-hover:translate-x-0.5" />
@@ -190,7 +190,9 @@ function ProxyPorts({ ports }: { ports: RelayProxyDiagnostics["ports"] }) {
 function ProxyModeCoverageList({ coverage }: { coverage: ProxyModeCoverage }) {
   return (
     <>
-      <p className="type-technical-label text-muted-foreground/80">Proxies</p>
+      <p className="type-technical-label text-muted-foreground/80 light:text-muted-foreground/90">
+        Proxies
+      </p>
       <ul className="flex flex-col gap-1.5">
         {coverage.items.map(({ covered, label }) => (
           <li
@@ -203,12 +205,12 @@ function ProxyModeCoverageList({ coverage }: { coverage: ProxyModeCoverage }) {
             {covered ? (
               <Check
                 aria-label="Yes"
-                className="size-3.5 shrink-0 text-emerald-400"
+                className="size-3.5 shrink-0 text-emerald-400 light:text-emerald-700"
               />
             ) : (
               <X
                 aria-label="No"
-                className="size-3.5 shrink-0 text-muted-foreground/70"
+                className="size-3.5 shrink-0 text-muted-foreground/70 light:text-muted-foreground/85"
               />
             )}
             {label}

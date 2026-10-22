@@ -74,8 +74,8 @@ export function WebRouteFields({
         />
         Strip the configured path before forwarding
       </label>
-      <div className="type-meta flex gap-2 border border-amber-400/20 bg-amber-400/5 px-3 py-2 text-amber-100">
-        <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-300" />
+      <div className="type-meta flex gap-2 border border-amber-400/20 bg-amber-400/5 px-3 py-2 text-amber-100 light:bg-amber-400/10 light:text-amber-800">
+        <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-300 light:text-amber-700" />
         Point this hostname at the Relay before applying the route.
       </div>
     </>

@@ -256,7 +256,9 @@ const DeploymentsTable = React.memo(function DeploymentsTable({
         header: () => <span className="sr-only sm:not-sr-only">Status</span>,
         sortFn: "text",
         cell: ({ row }) => (
-          <StatusIndicator status={deploymentStatusPresentation(row.original)} />
+          <StatusIndicator
+            status={deploymentStatusPresentation(row.original)}
+          />
         ),
         meta: dataTableColumnMeta(
           { width: { base: "2.5rem", sm: statusColumnWidth } },
@@ -345,7 +347,9 @@ const DeploymentsTable = React.memo(function DeploymentsTable({
               : "Each time an app deploys, by hand or from a push to GitHub, it shows here."}
           </span>
         }
-        icon={<Rocket className="size-6 text-muted-foreground/45" />}
+        icon={
+          <Rocket className="size-6 text-muted-foreground/45 light:text-muted-foreground/72" />
+        }
         title={
           searchActive ? "No deployments match your search" : "No deployments"
         }
@@ -389,7 +393,7 @@ const DeploymentApp = React.memo(function DeploymentApp({
         meta={deployment.relayName}
         metaClassName="font-mono"
         name={deployment.appName}
-        nameClassName="transition-colors group-hover/app-link:text-primary"
+        nameClassName="transition-colors group-hover/app-link:text-primary-ink"
         showFavorite={false}
         showStatus={false}
       />
@@ -434,7 +438,7 @@ const DeploymentCommit = React.memo(function DeploymentCommit({
             href={deployment.commitUrl}
             rel="noreferrer"
             target="_blank"
-            className="shrink-0 font-mono hover:text-primary"
+            className="shrink-0 font-mono hover:text-primary-ink"
           >
             {shortCommit(deployment.commitSha)}
           </a>
@@ -491,8 +495,7 @@ const DeploymentActions = React.memo(function DeploymentActions({
         type: "success",
       })
     },
-    onError: (error) =>
-      showToast({ message: error.message, type: "error" }),
+    onError: (error) => showToast({ message: error.message, type: "error" }),
   })
   return (
     <DataTableActionGroup>
@@ -501,7 +504,7 @@ const DeploymentActions = React.memo(function DeploymentActions({
           <TooltipTrigger asChild>
             <Button
               aria-label={`Log of ${deployment.appName}'s deployment`}
-              className="text-muted-foreground hover:text-primary"
+              className="text-muted-foreground hover:text-primary-ink"
               size="icon-sm"
               type="button"
               variant="ghost"
@@ -597,7 +600,9 @@ function DeploymentLogDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             {deployment.appName}
-            <StatusIndicator status={deploymentStatusPresentation(deployment)} />
+            <StatusIndicator
+              status={deploymentStatusPresentation(deployment)}
+            />
           </DialogTitle>
           <DialogDescription className="flex flex-wrap items-center gap-x-3 gap-y-1">
             <span>
@@ -614,7 +619,7 @@ function DeploymentLogDialog({
                 to="/app/$appId/logs"
                 params={{ appId: deployment.appId }}
                 search={{ stream: "deployment" }}
-                className="text-primary hover:underline"
+                className="text-primary-ink hover:underline"
               >
                 Follow it live
               </Link>
@@ -646,7 +651,8 @@ function DeploymentLogDialog({
                   className={cn(
                     "break-words whitespace-pre-wrap",
                     line.level === "error" && "text-destructive",
-                    line.level === "warn" && "text-amber-500"
+                    line.level === "warn" &&
+                      "text-amber-500 light:text-amber-700"
                   )}
                 >
                   {line.text}

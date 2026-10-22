@@ -125,7 +125,7 @@ export function InvitationPage({
           </div>
         ) : accepted ? (
           <div className="py-12 text-center">
-            <div className="mx-auto grid size-12 place-items-center bg-emerald-500/12 text-emerald-400">
+            <div className="mx-auto grid size-12 place-items-center bg-emerald-500/12 text-emerald-400 light:bg-emerald-500/24 light:text-emerald-700">
               <Check className="size-5" />
             </div>
             <h1 className="mt-5 font-heading text-2xl font-semibold tracking-[-0.04em]">
@@ -138,7 +138,7 @@ export function InvitationPage({
         ) : (
           <>
             <div className="mt-10">
-              <p className="type-technical-label text-primary">
+              <p className="type-technical-label text-primary-ink">
                 Access request
               </p>
               <h1 className="mt-2 font-heading text-3xl font-semibold tracking-[-0.05em]">
@@ -165,9 +165,9 @@ export function InvitationPage({
               {preview.accessType === "relay_creator" ? (
                 <RelayKindIcon className="mt-0.5 size-4" />
               ) : platformInvitation ? (
-                <ShieldCheck className="mt-0.5 size-4 text-primary" />
+                <ShieldCheck className="mt-0.5 size-4 text-primary-ink" />
               ) : (
-                <Server className="mt-0.5 size-4 text-primary" />
+                <Server className="mt-0.5 size-4 text-primary-ink" />
               )}
               <span className="text-xs font-medium">{preview.relayName}</span>
               <span />
@@ -183,7 +183,7 @@ export function InvitationPage({
             </div>
 
             {error ? (
-              <p className="mt-4 rounded-lg border border-destructive/30 bg-destructive/8 px-3 py-2 text-xs text-destructive">
+              <p className="mt-4 rounded-lg border border-destructive/30 bg-destructive/8 px-3 py-2 text-xs text-destructive light:bg-destructive/16">
                 {error}
               </p>
             ) : null}

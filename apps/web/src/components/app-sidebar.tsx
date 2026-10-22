@@ -227,12 +227,7 @@ const AppSidebarView = React.memo(function AppSidebarView({
 function HeaderNotificationsBell() {
   const { isMobile, state } = useSidebar()
   if (state === "collapsed" && !isMobile) return null
-  return (
-    <NotificationsBell
-      className="mr-1"
-      tooltipHidden={isMobile}
-    />
-  )
+  return <NotificationsBell className="mr-1" tooltipHidden={isMobile} />
 }
 
 function InfrastructureNavigation({
@@ -287,7 +282,11 @@ function InfrastructureNavigation({
   )
 }
 
-function RelaysNavigationItem({ relayConfigured }: { relayConfigured: boolean }) {
+function RelaysNavigationItem({
+  relayConfigured,
+}: {
+  relayConfigured: boolean
+}) {
   return (
     <SidebarMenuItem>
       <SidebarMenuButton asChild tooltip="Relays">
@@ -850,8 +849,7 @@ function SidebarServerNavigation({
 }) {
   const { data, isPending, selectedRouteId, serverId } =
     useSidebarServerNavigation(initialSelectedInstanceRouteId, relayConfigured)
-  if (!data || data.serverCount === 0)
-    return isPending ? null : emptyFallback
+  if (!data || data.serverCount === 0) return isPending ? null : emptyFallback
   const { instance, routeId: instanceRouteId } = data
 
   return (
@@ -1149,7 +1147,7 @@ const InstanceSelector = React.memo(function InstanceSelector({
             }
             onFocus={warmPicker}
             onPointerEnter={warmPicker}
-            className="mb-1.5 h-auto border border-sidebar-border/75 bg-background/35 px-2 py-2 group-data-[collapsible=icon]:h-[40px]! group-data-[collapsible=icon]:overflow-visible group-data-[collapsible=icon]:bg-black/10 hover:border-sidebar-border hover:bg-sidebar-accent group-data-[collapsible=icon]:hover:bg-black/15 data-[state=open]:border-sidebar-border data-[state=open]:bg-sidebar-accent dark:group-data-[collapsible=icon]:bg-black/25 dark:group-data-[collapsible=icon]:hover:bg-black/35"
+            className="mb-1.5 h-auto border border-sidebar-border/75 bg-background/35 px-2 py-2 group-data-[collapsible=icon]:h-[40px]! group-data-[collapsible=icon]:overflow-visible group-data-[collapsible=icon]:bg-card hover:border-sidebar-border hover:bg-sidebar-accent group-data-[collapsible=icon]:hover:bg-sidebar-accent data-[state=open]:border-sidebar-border data-[state=open]:bg-sidebar-accent dark:group-data-[collapsible=icon]:bg-black/25 dark:group-data-[collapsible=icon]:hover:bg-black/35"
           >
             {instance ? (
               <SelectorInstanceName
@@ -1191,10 +1189,7 @@ const InstanceSelector = React.memo(function InstanceSelector({
             ) : (
               <>
                 <span className="relative grid size-8 shrink-0 place-items-center rounded-md border border-sidebar-border/70 bg-background/25 group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:inset-0 group-data-[collapsible=icon]:size-full group-data-[collapsible=icon]:rounded-none group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent">
-                  <ServerKindIcon
-                    className="size-4"
-                    aria-hidden="true"
-                  />
+                  <ServerKindIcon className="size-4" aria-hidden="true" />
                 </span>
                 <span className="flex min-w-0 flex-1 flex-col items-start group-data-[collapsible=icon]:hidden">
                   <span className="type-control-sm w-full truncate">
@@ -1208,7 +1203,7 @@ const InstanceSelector = React.memo(function InstanceSelector({
                 </span>
               </>
             )}
-            <ChevronsUpDown className="ml-auto size-3.5! text-sidebar-foreground/60 group-data-[collapsible=icon]:hidden" />
+            <ChevronsUpDown className="ml-auto size-3.5! text-sidebar-foreground/60 group-data-[collapsible=icon]:hidden light:text-sidebar-foreground/80" />
           </SidebarMenuButton>
         </InstancePickerPopoverTrigger>
         <InstancePickerPopoverContent
@@ -1251,7 +1246,7 @@ function SelectorInstanceName({
       <span className="sr-only">{label} </span>
       <InstanceCard
         className="min-w-0 flex-1 gap-2 group-data-[collapsible=icon]:gap-0"
-        iconClassName="border-sidebar-border/70 bg-background/25 text-sidebar-foreground/85 group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:inset-0 group-data-[collapsible=icon]:size-full group-data-[collapsible=icon]:rounded-none group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent"
+        iconClassName="border-sidebar-border/70 bg-background/25 text-sidebar-foreground/85 light:text-sidebar-foreground/92 group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:inset-0 group-data-[collapsible=icon]:size-full group-data-[collapsible=icon]:rounded-none group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent"
         iconSizeClassName="group-data-[collapsible=icon]:size-5!"
         instance={instance}
         meta={meta}
@@ -1392,7 +1387,9 @@ function selectSidebarRelayPickerItems(
     identity: { id: relay.id, kind: "relay", relayId: relay.id },
     key: sidebarPickerKey("relay", relay.id, relay.id),
     meta: `${relay.nodeArch ?? "unknown"} · ${
-      relay.nodeVersion ? kilnReleaseLabel(relay.nodeVersion) : relay.id.slice(0, 8)
+      relay.nodeVersion
+        ? kilnReleaseLabel(relay.nodeVersion)
+        : relay.id.slice(0, 8)
     }`,
     name: relay.name,
     searchText: `${relay.id} ${relay.nodeVersion ?? ""}`,
@@ -1723,7 +1720,7 @@ function ExpandedAccountRow({
             <span className="min-w-0 flex-1 truncate text-xs font-semibold">
               {user.name}
             </span>
-            <ChevronsUpDown className="size-3.5 shrink-0 text-sidebar-foreground/55" />
+            <ChevronsUpDown className="size-3.5 shrink-0 text-sidebar-foreground/55 light:text-sidebar-foreground/78" />
           </button>
         </PopoverTrigger>
         <PopoverContent
@@ -1751,7 +1748,7 @@ function SettingsIconButton({ tooltipHidden }: { tooltipHidden: boolean }) {
         <Link
           to="/settings/account"
           preload="intent"
-          className="grid size-7 shrink-0 place-items-center text-sidebar-foreground/55 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring/45 focus-visible:outline-none"
+          className="grid size-7 shrink-0 place-items-center text-sidebar-foreground/55 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring/45 focus-visible:outline-none light:text-sidebar-foreground/78"
           aria-label="Settings"
         >
           <Settings className="size-4" />
@@ -1778,7 +1775,7 @@ function SignOutButton({
       <TooltipTrigger asChild>
         <button
           type="button"
-          className="ml-auto grid size-7 shrink-0 place-items-center text-sidebar-foreground/55 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring/45 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45"
+          className="ml-auto grid size-7 shrink-0 place-items-center text-sidebar-foreground/55 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring/45 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45 light:text-sidebar-foreground/78"
           aria-label={signingOut ? "Signing out" : "Sign out"}
           disabled={signingOut}
           onClick={() => {
@@ -1857,9 +1854,7 @@ function instanceTabFromPathname(pathname: string): InstanceTab | null {
 
 function appTabFromPathname(pathname: string): AppDestinationId | null {
   const match =
-    /^\/app\/[^/]+\/(files|info|logs|network|terminal)(?:\/|$)/.exec(
-      pathname
-    )
+    /^\/app\/[^/]+\/(files|info|logs|network|terminal)(?:\/|$)/.exec(pathname)
   return match ? (match[1] as AppDestinationId) : null
 }
 

@@ -110,7 +110,7 @@ export function ResetPasswordPage({
             {error ? (
               <div
                 role="alert"
-                className="mb-5 flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/8 px-3 py-2.5 text-xs leading-5 text-red-300"
+                className="mb-5 flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/8 px-3 py-2.5 text-xs leading-5 text-red-300 light:bg-destructive/16 light:text-red-700"
               >
                 {error}
               </div>
@@ -213,10 +213,10 @@ function RecoveryState({
 }) {
   return (
     <div>
-      <div className="grid size-11 place-items-center rounded-xl border border-primary/25 bg-primary/8 text-primary">
+      <div className="grid size-11 place-items-center rounded-xl border border-primary/25 bg-primary/8 text-primary-ink">
         <Icon className="size-5" />
       </div>
-      <p className="type-technical-label mt-7 text-primary">{eyebrow}</p>
+      <p className="type-technical-label mt-7 text-primary-ink">{eyebrow}</p>
       <h1 className="mt-2 font-heading text-3xl font-semibold tracking-[-0.045em]">
         {title}
       </h1>

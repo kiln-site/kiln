@@ -265,7 +265,9 @@ export const ResourcePeopleTable = memo(function ResourcePeopleTable({
           source={source}
           emptyState={
             <DataTableEmptyState
-              icon={<Users className="size-6 text-muted-foreground/45" />}
+              icon={
+                <Users className="size-6 text-muted-foreground/45 light:text-muted-foreground/72" />
+              }
               title={
                 search ? "No users match your search" : "No additional users"
               }
@@ -637,7 +639,9 @@ export const ResourcePresetsTable = memo(function ResourcePresetsTable({
         searchStore={searchStore}
         emptyState={
           <DataTableEmptyState
-            icon={<Shield className="size-6 text-muted-foreground/45" />}
+            icon={
+              <Shield className="size-6 text-muted-foreground/45 light:text-muted-foreground/72" />
+            }
             title="No presets match your search"
             description="Try a different preset name."
           />

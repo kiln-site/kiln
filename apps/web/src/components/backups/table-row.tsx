@@ -200,8 +200,8 @@ function BackupFailureDetails({
       <p>{failure.detail}</p>
       {failure.external ? (
         <p className="text-muted-foreground">
-          This isn't a Kiln error: the storage provider refused the request,
-          so it's fixed in the provider's account.
+          This isn't a Kiln error: the storage provider refused the request, so
+          it's fixed in the provider's account.
         </p>
       ) : null}
       <p className="font-mono text-[0.6875rem] break-all text-muted-foreground">
@@ -936,7 +936,7 @@ export const BackupTargetLink = React.memo(function BackupTargetLink({
       name={name}
       nameClassName={
         available
-          ? "transition-colors group-hover/target-link:text-primary"
+          ? "transition-colors group-hover/target-link:text-primary-ink"
           : "text-muted-foreground"
       }
       meta={`${kindLabel} · ${displayId.slice(0, 8)}`}
@@ -1394,16 +1394,16 @@ function artifactAvailabilityState(
 
 function availabilityTagClassName(state: BackupAvailabilityState): string {
   if (state === "available") {
-    return "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+    return "border-emerald-500/30 bg-emerald-500/10 light:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300"
   }
   if (state === "working") {
-    return "border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300"
+    return "border-sky-500/30 bg-sky-500/10 light:bg-sky-500/20 text-sky-700 dark:text-sky-300"
   }
   if (state === "deleting") {
-    return "border-amber-500/35 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+    return "border-amber-500/35 bg-amber-500/10 light:bg-amber-500/20 text-amber-700 dark:text-amber-300"
   }
   if (state === "failed" || state === "cancelled") {
-    return "border-destructive/30 bg-destructive/10 text-destructive"
+    return "border-destructive/30 bg-destructive/10 light:bg-destructive/20 text-destructive"
   }
   return "border-border/70 bg-muted/40 text-muted-foreground"
 }

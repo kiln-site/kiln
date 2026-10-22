@@ -89,7 +89,7 @@ function FileActivityRow({
     >
       <span className="grid size-7 place-items-center border border-border/70 bg-muted/20 transition-colors group-hover:border-primary/25">
         {directory ? (
-          <Folder className="size-4 text-primary/80" />
+          <Folder className="size-4 text-primary-ink/80" />
         ) : (
           <FileTypeIcon path={entry.path} />
         )}
@@ -120,7 +120,7 @@ function FileActivityRow({
         )}
         {entry.pinned ? (
           <Pin
-            className="size-3.5 fill-primary/15 text-primary"
+            className="size-3.5 fill-primary/15 text-primary-ink"
             aria-label="Pinned"
           />
         ) : null}
@@ -187,7 +187,7 @@ export function FilesHome({
         {treeCollapsed ? <FileTreeRevealButton onClick={onTreeExpand} /> : null}
         <div className={fileEditorHeaderContentClassName}>
           <div className="flex min-w-0 flex-1 items-center gap-2.5 md:gap-3">
-            <Clock3 className="size-5 shrink-0 text-primary" />
+            <Clock3 className="size-5 shrink-0 text-primary-ink" />
             <p className="truncate text-sm font-semibold">Files</p>
           </div>
         </div>
@@ -198,14 +198,14 @@ export function FilesHome({
           {loading ? (
             <div className="grid min-h-44 place-items-center border border-border/70 bg-muted/5">
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <LoaderCircle className="size-4 animate-spin text-primary" />
+                <LoaderCircle className="size-4 animate-spin text-primary-ink" />
                 Loading file activity
               </div>
             </div>
           ) : null}
 
           {!loading && error ? (
-            <div className="border border-destructive/30 bg-destructive/5 px-4 py-3 text-xs text-destructive">
+            <div className="border border-destructive/30 bg-destructive/5 px-4 py-3 text-xs text-destructive light:bg-destructive/10">
               {error}
             </div>
           ) : null}
@@ -213,7 +213,7 @@ export function FilesHome({
           {!loading && !error && pinned.length > 0 ? (
             <div className="mb-4">
               <div className="mb-1.5 flex items-center gap-2 px-1">
-                <Pin className="size-3.5 text-primary" />
+                <Pin className="size-3.5 text-primary-ink" />
                 <h2 className="type-technical-label text-muted-foreground">
                   Pinned
                 </h2>
@@ -233,7 +233,7 @@ export function FilesHome({
           {!loading && !error && recent.length > 0 ? (
             <div>
               <div className="mb-1.5 flex items-center gap-2 px-1">
-                <Clock3 className="size-3.5 text-primary" />
+                <Clock3 className="size-3.5 text-primary-ink" />
                 <h2 className="type-technical-label text-muted-foreground">
                   Recent
                 </h2>

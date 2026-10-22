@@ -94,7 +94,7 @@ function Hero() {
               more
             </span>
             <span aria-hidden="true">The panel for</span>
-            <span className="text-primary">
+            <span className="text-primary-ink">
               <CyclingWord words={heroWords} />
             </span>
           </h1>
@@ -221,12 +221,12 @@ function Editor() {
                   className="flex items-center gap-2.5 text-[0.9375rem] font-medium text-foreground underline-offset-4 outline-none hover:underline focus-visible:underline"
                   onClick={() => sendFilesDemoCommand(command)}
                 >
-                  <Icon className="size-[18px] shrink-0 text-primary" />
+                  <Icon className="size-[18px] shrink-0 text-primary-ink" />
                   {label}
                 </button>
               ) : (
                 <span className="flex items-center gap-2.5 text-[0.9375rem] font-medium text-foreground">
-                  <Icon className="size-[18px] shrink-0 text-primary" />
+                  <Icon className="size-[18px] shrink-0 text-primary-ink" />
                   {label}
                 </span>
               )}
@@ -345,7 +345,7 @@ function Features() {
                 aria-hidden="true"
                 className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_80%_70%_at_0%_0%,hsl(var(--accent-hue)_var(--accent-saturation)_58%/0.06),transparent)] opacity-0 transition-opacity group-hover:opacity-100"
               />
-              <span className="relative grid size-10 place-items-center border border-primary/25 bg-primary/10 text-primary [&_svg]:size-5">
+              <span className="relative grid size-10 place-items-center border border-primary/25 bg-primary/10 text-primary-ink [&_svg]:size-5">
                 {feature.icon}
               </span>
               <div className="relative">
@@ -400,9 +400,9 @@ function SelfHost() {
                 github.com/kiln-site/kiln
               </span>
               {"\n"}
-              <span className="text-primary">$</span> cp .env.hearth.example
+              <span className="text-primary-ink">$</span> cp .env.hearth.example
               .env{"\n"}
-              <span className="text-primary">$</span> docker compose up -d
+              <span className="text-primary-ink">$</span> docker compose up -d
             </code>
           </pre>
         </div>

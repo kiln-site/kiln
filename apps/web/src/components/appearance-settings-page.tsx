@@ -1,13 +1,6 @@
 import * as React from "react"
 import { useQueryClient, useSuspenseQuery } from "@tanstack/react-query"
-import {
-  Check,
-  Monitor,
-  Moon,
-  Palette,
-  Pencil,
-  Sun,
-} from "lucide-react"
+import { Check, Monitor, Moon, Palette, Pencil, Sun } from "lucide-react"
 
 import { ColorPicker } from "@workspace/ui/components/color-picker"
 import { Switch } from "@workspace/ui/components/switch"
@@ -537,7 +530,7 @@ const CustomColorControl = React.memo(function CustomColorControl({
         <button
           type="button"
           aria-label={`Edit custom color ${index + 1}`}
-          className="grid size-9 place-items-center border border-dashed border-input bg-input/10 text-muted-foreground transition-[color,background-color,border-color,transform] outline-none hover:scale-105 hover:border-primary/50 hover:bg-primary/6 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring/45"
+          className="grid size-9 place-items-center border border-dashed border-input bg-input/10 text-muted-foreground transition-[color,background-color,border-color,transform] outline-none hover:scale-105 hover:border-primary/50 hover:bg-primary/6 hover:text-primary-ink focus-visible:ring-2 focus-visible:ring-ring/45"
         >
           <Pencil className="size-3.5" aria-hidden="true" />
         </button>
@@ -649,7 +642,7 @@ const ModeButton = React.memo(function ModeButton({
       type="button"
       aria-pressed={active}
       onClick={select}
-      className="flex h-9 items-center justify-center gap-2 border bg-input/15 px-2 text-xs font-medium text-muted-foreground transition-[color,background-color,border-color,box-shadow] outline-none hover:border-primary/35 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/35 aria-pressed:border-primary/55 aria-pressed:bg-primary/8 aria-pressed:text-primary"
+      className="flex h-9 items-center justify-center gap-2 border bg-input/15 px-2 text-xs font-medium text-muted-foreground transition-[color,background-color,border-color,box-shadow] outline-none hover:border-primary/35 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/35 aria-pressed:border-primary/55 aria-pressed:bg-primary/8 aria-pressed:text-primary-ink"
     >
       <Icon className="size-3.5" aria-hidden="true" />
       <span>{label}</span>

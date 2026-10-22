@@ -416,7 +416,7 @@ function BackupDestinationChoice({
       <span
         className={`grid size-8 shrink-0 place-items-center rounded-md border ${
           checked
-            ? "border-primary/30 bg-primary/10 text-primary"
+            ? "border-primary/30 bg-primary/10 text-primary-ink"
             : "text-muted-foreground"
         }`}
       >

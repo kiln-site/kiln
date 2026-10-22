@@ -251,7 +251,7 @@ function StatusPanel({
             Kiln
           </span>
         </div>
-        <div className="type-technical-label col-span-2 row-start-2 flex items-center gap-2 justify-self-center text-primary sm:col-span-1 sm:col-start-2 sm:row-start-1">
+        <div className="type-technical-label col-span-2 row-start-2 flex items-center gap-2 justify-self-center text-primary-ink sm:col-span-1 sm:col-start-2 sm:row-start-1">
           <TriangleAlert className="size-3.5 shrink-0" />
           <span className="text-center">{eyebrow}</span>
         </div>
@@ -286,7 +286,7 @@ function StatusPanel({
             </div>
           ) : null}
           {detail ? (
-            <pre className="type-code mt-5 max-h-32 overflow-auto border border-destructive/20 bg-destructive/5 p-3 whitespace-pre-wrap text-destructive">
+            <pre className="type-code mt-5 max-h-32 overflow-auto border border-destructive/20 bg-destructive/5 p-3 whitespace-pre-wrap text-destructive light:bg-destructive/10">
               {detail}
             </pre>
           ) : null}

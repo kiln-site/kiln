@@ -336,7 +336,7 @@ const AppTable = React.memo(function AppTable({
                 className="min-w-0 flex-1"
                 instance={{ id: app.id, kind: "app", relayId: app.relayId }}
                 name={app.name}
-                nameClassName="transition-colors group-hover/app-link:text-primary"
+                nameClassName="transition-colors group-hover/app-link:text-primary-ink"
                 meta={app.shortId}
                 metaClassName="font-mono"
                 showFavorite={false}
@@ -474,7 +474,7 @@ const AppActions = React.memo(function AppActions({
           <TooltipTrigger asChild>
             <Button
               aria-label={`Deploy ${app.name}`}
-              className="text-muted-foreground hover:text-primary"
+              className="text-muted-foreground hover:text-primary-ink"
               disabled={!available || !app.detail || busy || deploying}
               size="icon-sm"
               type="button"
@@ -498,7 +498,7 @@ const AppActions = React.memo(function AppActions({
           <TooltipTrigger asChild>
             <Button
               aria-label={`Delete ${app.name}`}
-              className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+              className="text-destructive hover:bg-destructive/10 hover:text-destructive light:hover:bg-destructive/20"
               disabled={busy}
               size="icon-sm"
               type="button"
@@ -668,7 +668,7 @@ function CreateAppDialog({
                   type="button"
                   onClick={() => setKind(option.id)}
                 >
-                  <option.icon className="mt-0.5 size-4 shrink-0 text-primary" />
+                  <option.icon className="mt-0.5 size-4 shrink-0 text-primary-ink" />
                   <span>
                     <span className="type-card-title block">
                       {option.label}

@@ -141,8 +141,8 @@ const ArchitectureTag = React.memo(function ArchitectureTag({
       className={cn(
         "type-meta inline-flex h-5 items-center gap-0.5 rounded-md border px-1 font-mono font-semibold",
         supported
-          ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
-          : "border-destructive/30 bg-destructive/10 text-destructive"
+          ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 light:bg-emerald-500/20"
+          : "border-destructive/30 bg-destructive/10 text-destructive light:bg-destructive/20"
       )}
     >
       {supported ? (
@@ -295,7 +295,7 @@ const BrickTabSidebar = React.memo(function BrickTabSidebar({
             disabled && "pointer-events-none opacity-50"
           )}
         >
-          <Library className="size-3.5 shrink-0 text-primary" />
+          <Library className="size-3.5 shrink-0 text-primary-ink" />
           Catalogs
         </button>
         {canAddCustomBrick ? (
@@ -311,7 +311,7 @@ const BrickTabSidebar = React.memo(function BrickTabSidebar({
               disabled && "pointer-events-none opacity-50"
             )}
           >
-            <PackagePlus className="size-3.5 shrink-0 text-primary" />
+            <PackagePlus className="size-3.5 shrink-0 text-primary-ink" />
             Custom Brick
           </button>
         ) : null}
@@ -585,7 +585,7 @@ export const BrickCatalogBrowser = React.memo(function BrickCatalogBrowser({
                 <div className="grid h-full place-items-center px-4 py-8 text-center">
                   <div className="max-w-xs">
                     {customOpen ? (
-                      <PackagePlus className="mx-auto size-5 text-primary" />
+                      <PackagePlus className="mx-auto size-5 text-primary-ink" />
                     ) : null}
                     <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
                       {customOpen
@@ -647,7 +647,7 @@ export const BrickCatalogBrowser = React.memo(function BrickCatalogBrowser({
                           ) : verified ? (
                             <Badge
                               variant="outline"
-                              className="type-meta h-6 shrink-0 gap-1 border-primary/35 bg-primary/10 px-1.5 font-mono text-primary"
+                              className="type-meta h-6 shrink-0 gap-1 border-primary/35 bg-primary/10 px-1.5 font-mono text-primary-ink"
                             >
                               <BadgeCheck className="size-3" />
                               Verified
@@ -829,7 +829,7 @@ const BrickCatalogManager = React.memo(function BrickCatalogManager({
                 target="_blank"
                 rel="noreferrer"
                 aria-label="View the example catalog on GitHub"
-                className="text-foreground underline underline-offset-2 hover:text-primary"
+                className="text-foreground underline underline-offset-2 hover:text-primary-ink"
               >
                 here
               </a>
@@ -841,7 +841,7 @@ const BrickCatalogManager = React.memo(function BrickCatalogManager({
         <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
           {catalogsQuery.isPending ? (
             <div className="grid h-full place-items-center">
-              <LoaderCircle className="size-5 animate-spin text-primary" />
+              <LoaderCircle className="size-5 animate-spin text-primary-ink" />
             </div>
           ) : catalogs.length === 0 ? (
             <div className="grid h-full place-items-center p-6 text-center text-xs text-muted-foreground">
@@ -866,7 +866,7 @@ const BrickCatalogManager = React.memo(function BrickCatalogManager({
                       onClick={() => setSelectedId(catalog.id)}
                       className="flex min-w-0 flex-1 items-center gap-3 text-left"
                     >
-                      <span className="grid size-8 shrink-0 place-items-center rounded-md border border-border/70 bg-background/70 text-primary">
+                      <span className="grid size-8 shrink-0 place-items-center rounded-md border border-border/70 bg-background/70 text-primary-ink">
                         {catalog.visibility === "community" ? (
                           <Globe2 className="size-4" />
                         ) : catalog.isDefault ? (
@@ -900,7 +900,7 @@ const BrickCatalogManager = React.memo(function BrickCatalogManager({
                             target="_blank"
                             rel="noreferrer"
                             aria-label={`Open ${catalogDisplayName(catalog)} documentation`}
-                            className="type-control-sm inline-flex h-7 items-center gap-1.5 rounded-md border border-border/70 bg-muted/25 px-2 transition-colors hover:border-primary/35 hover:bg-primary/8 hover:text-primary"
+                            className="type-control-sm inline-flex h-7 items-center gap-1.5 rounded-md border border-border/70 bg-muted/25 px-2 transition-colors hover:border-primary/35 hover:bg-primary/8 hover:text-primary-ink"
                           >
                             <BookOpen className="size-3" />
                             Docs
@@ -912,7 +912,7 @@ const BrickCatalogManager = React.memo(function BrickCatalogManager({
                             target="_blank"
                             rel="noreferrer"
                             aria-label={`Open ${catalogDisplayName(catalog)} support`}
-                            className="type-control-sm inline-flex h-7 items-center gap-1.5 rounded-md border border-border/70 bg-muted/25 px-2 transition-colors hover:border-primary/35 hover:bg-primary/8 hover:text-primary"
+                            className="type-control-sm inline-flex h-7 items-center gap-1.5 rounded-md border border-border/70 bg-muted/25 px-2 transition-colors hover:border-primary/35 hover:bg-primary/8 hover:text-primary-ink"
                           >
                             <LifeBuoy className="size-3" />
                             Support
@@ -982,7 +982,7 @@ const BrickCatalogManager = React.memo(function BrickCatalogManager({
                       commit {selected.revisionSha.slice(0, 10)}
                     </span>
                   </span>
-                  <ExternalLink className="size-3.5 text-primary" />
+                  <ExternalLink className="size-3.5 text-primary-ink" />
                 </a>
               ) : selected.snapshotSha256 ? (
                 <div className="mt-3 rounded-md border border-border/70 bg-muted/30 px-2.5 py-2">
@@ -999,7 +999,7 @@ const BrickCatalogManager = React.memo(function BrickCatalogManager({
             <div className="min-h-0 flex-1 overflow-y-auto p-3">
               {detailsQuery.isPending ? (
                 <div className="grid h-full place-items-center">
-                  <LoaderCircle className="size-4 animate-spin text-primary" />
+                  <LoaderCircle className="size-4 animate-spin text-primary-ink" />
                 </div>
               ) : detailsQuery.isError ? (
                 <p className="text-xs text-destructive">
@@ -1180,7 +1180,7 @@ function CatalogTrustBadge({
     return (
       <Badge
         variant="outline"
-        className="type-meta h-6 shrink-0 gap-1 border-primary/35 bg-primary/10 px-1.5 text-primary"
+        className="type-meta h-6 shrink-0 gap-1 border-primary/35 bg-primary/10 px-1.5 text-primary-ink"
       >
         <BadgeCheck className="size-3" />
         Verified
@@ -1345,7 +1345,7 @@ const BrickDetailsPanel = React.memo(function BrickDetailsPanel({
               ) : verified ? (
                 <Badge
                   variant="outline"
-                  className="type-meta h-6 gap-1 border-primary/35 bg-primary/10 px-1.5 text-primary"
+                  className="type-meta h-6 gap-1 border-primary/35 bg-primary/10 px-1.5 text-primary-ink"
                 >
                   <BadgeCheck className="size-3" />
                   Verified

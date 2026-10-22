@@ -145,7 +145,7 @@ export const DatabaseNetworkPicker = React.memo(function DatabaseNetworkPicker({
               <Button
                 aria-label={`Connect game servers to ${database.name}`}
                 aria-expanded={open}
-                className="text-muted-foreground hover:text-primary"
+                className="text-muted-foreground hover:text-primary-ink"
                 size="icon-sm"
                 type="button"
                 variant="ghost"

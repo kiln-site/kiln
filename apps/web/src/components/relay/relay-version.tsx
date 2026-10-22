@@ -66,7 +66,7 @@ function RelayUpdateWarning({
     <Popover>
       <PopoverTrigger
         aria-label={`Update available: ${update.name}`}
-        className="grid size-5 shrink-0 place-items-center text-amber-400 transition-colors outline-none hover:text-amber-300 focus-visible:text-amber-300"
+        className="grid size-5 shrink-0 place-items-center text-amber-400 transition-colors outline-none hover:text-amber-300 focus-visible:text-amber-300 light:text-amber-700 light:hover:text-amber-700 light:focus-visible:text-amber-700"
       >
         <TriangleAlert className="size-3.5" />
       </PopoverTrigger>

@@ -54,11 +54,14 @@ const statusToneClasses: Record<
   { dot: string; text: string }
 > = {
   danger: { dot: "bg-destructive", text: "text-destructive" },
-  info: { dot: "bg-sky-400", text: "text-sky-300" },
+  info: { dot: "bg-sky-400", text: "text-sky-300 light:text-sky-700" },
   neutral: {
     dot: "bg-muted-foreground/50",
     text: "text-muted-foreground",
   },
-  success: { dot: "bg-emerald-400", text: "text-emerald-300" },
-  warning: { dot: "bg-amber-400", text: "text-amber-300" },
+  success: {
+    dot: "bg-emerald-400",
+    text: "text-emerald-300 light:text-emerald-700",
+  },
+  warning: { dot: "bg-amber-400", text: "text-amber-300 light:text-amber-700" },
 }
