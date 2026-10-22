@@ -249,6 +249,15 @@ export const auth = betterAuth({
       if (context.path.startsWith("/multi-session/") && context.request) {
         throw new APIError("NOT_FOUND")
       }
+      // Passkey sign-in options name only the signed-in user's passkeys when
+      // a session is present, which would stop adding another account by
+      // passkey. Signing in never needs the current session, so leave it out
+      // before any check below loads and caches it.
+      if (context.path === "/passkey/generate-authenticate-options") {
+        // Better Auth merges hook headers into the request's, so blank the
+        // cookie rather than deleting it.
+        return { context: { headers: new Headers({ cookie: "" }) } }
+      }
       // A tab that has not yet followed an account switch must not act as
       // the account the shared cookie now belongs to.
       const renderedAccount = context.request?.headers.get(

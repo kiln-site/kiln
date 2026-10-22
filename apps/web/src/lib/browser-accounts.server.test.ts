@@ -251,5 +251,39 @@ describeMysql("browser accounts", () => {
         }),
       { timeout: 30_000 }
     )
+
+    it.effect(
+      "offers every passkey when adding an account",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* seedAccount("alice")
+          yield* seedAccount("bob")
+          const passkey = (userId: string) => ({
+            id: `passkey-${userId}`,
+            publicKey: "public-key",
+            userId,
+            credentialID: `credential-${userId}`,
+            counter: 0,
+            deviceType: "multiDevice",
+            backedUp: true,
+            createdAt: new Date(),
+          })
+          yield* insertRows("passkey", [passkey("alice"), passkey("bob")])
+          const browser = new Browser()
+          yield* Effect.promise(() => browser.signIn("alice@example.test"))
+
+          const response = yield* Effect.promise(() =>
+            browser.request("/passkey/generate-authenticate-options", {
+              headers: { "x-kiln-account": "alice" },
+            })
+          )
+          expect(response.status).toBe(200)
+          const options = yield* Effect.promise(() => response.json())
+          // No allow list lets the browser offer Bob's passkey too.
+          expect(options.allowCredentials ?? []).toEqual([])
+        }),
+      { timeout: 30_000 }
+    )
   })
 })
