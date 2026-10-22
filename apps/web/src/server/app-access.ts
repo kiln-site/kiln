@@ -239,6 +239,17 @@ export async function transferAppOwnershipHandler(
   user: AuthenticatedUser,
   data: { appId: string; email: string; relayId: string }
 ): Promise<{ previousOwnerId: string | null; userId: string }> {
+  // Only the owner or an administrator learns anything about the email; the
+  // transfer checks this again while it holds the app.
+  const [apps] = await databasePool.query<
+    Array<RowDataPacket & { owner_id: string | null }>
+  >(
+    `SELECT owner_id FROM ${databaseTable("app")} WHERE relay_id = ? AND app_id = ?`,
+    [data.relayId, data.appId]
+  )
+  if (!apps[0]) throw new Error("App not found")
+  if (!isPlatformAdmin(user) && apps[0].owner_id !== user.id)
+    throw new Error("Only the app owner can transfer ownership")
   const [rows] = await databasePool.query<
     Array<RowDataPacket & { id: string }>
   >(`SELECT id FROM ${databaseTable("user")} WHERE email = ? LIMIT 1`, [

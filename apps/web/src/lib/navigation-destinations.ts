@@ -732,7 +732,7 @@ function canUseSyncs(capabilities: NavigationAccessCapabilities): boolean {
       "instance",
       "relay",
     ]) ||
-    hasScopedPermission(capabilities, "app.files.write", ["relay"]) ||
+    hasScopedPermission(capabilities, "app.files.write", ["relay", "app"]) ||
     hasScopedPermission(capabilities, "relay.files.write", ["relay"])
   )
 }
