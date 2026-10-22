@@ -24,7 +24,7 @@ import {
 } from "@/effect/app-deployments"
 import {
   autoUpdateAt,
-  imageUpdateDeployedEffect,
+  claimImageUpdateEffect,
   loadAppImageUpdateEffect,
 } from "@/effect/app-image-updates"
 import { ExternalServiceError } from "@/effect/errors"
@@ -364,6 +364,9 @@ const imageUpdateDigest = Effect.fnUntraced(function* (
     if (digest === null) {
       return yield* Effect.fail(new Error("There's no update to deploy"))
     }
+    // Someone asked: it deploys whatever came of it before, and an
+    // automatic update won't try it again.
+    yield* claimImageUpdateEffect(request.appId, digest)
     return digest
   }
   const due = update && autoUpdateAt(update)
@@ -371,12 +374,13 @@ const imageUpdateDigest = Effect.fnUntraced(function* (
     digest === null ||
     due === null ||
     due === undefined ||
-    due > (yield* Clock.currentTimeMillis) ||
-    (yield* imageUpdateDeployedEffect(request.appId, digest))
+    due > (yield* Clock.currentTimeMillis)
   ) {
     return null
   }
-  return digest
+  // Claimed before the Relay hears of it, so no failure after can deploy
+  // it twice.
+  return (yield* claimImageUpdateEffect(request.appId, digest)) ? digest : null
 })
 
 const enabledRelay = Effect.fnUntraced(function* (relayId: string) {

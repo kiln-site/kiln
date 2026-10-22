@@ -241,17 +241,6 @@ export const insertAppDeploymentEffect = Effect.fn("apps.deployment.insert")(
         record.finishedAt === null ? null : Date.parse(record.finishedAt),
       ]
     )
-    // Kept past the record, which is pruned, so an automatic update never
-    // deploys the same digest twice.
-    if (record.trigger === "update" && record.imageDigest !== null) {
-      yield* database.execute(
-        "apps.imageUpdates.attempt",
-        `INSERT IGNORE INTO ${databaseTable("app_image_update_attempt")}
-           (app_id, digest, attempted_at)
-         VALUES (?, ?, ?)`,
-        [record.appId, record.imageDigest, Date.parse(record.startedAt)]
-      )
-    }
     // The oldest past what each app keeps.
     yield* database.execute(
       "apps.deployment.prune",

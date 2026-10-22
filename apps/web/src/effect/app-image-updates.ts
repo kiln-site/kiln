@@ -282,19 +282,26 @@ export function autoUpdateAt(update: AppImageUpdate): number | null {
   return update.latestSeenAt + update.delayHours * 3_600_000
 }
 
-/** Whether an image update already deployed `digest`, however it went. */
-export const imageUpdateDeployedEffect = Effect.fn(
-  "apps.imageUpdates.deployed"
-)(function* (appId: string, digest: string) {
-  const database = yield* Database
-  const rows = yield* database.queryRows<RowDataPacket>(
-    "apps.imageUpdates.deployed",
-    `SELECT 1 FROM ${databaseTable("app_image_update_attempt")}
-      WHERE app_id = ? AND digest = ?`,
-    [appId, digest]
-  )
-  return rows.length > 0
-})
+/**
+ * Claims `digest` for an image update to deploy, before it's sent to the
+ * Relay. False if an update already claimed it, however that went, so an
+ * automatic update never deploys the same digest twice. Kept apart from
+ * the deployment history, which is pruned.
+ */
+export const claimImageUpdateEffect = Effect.fn("apps.imageUpdates.claim")(
+  function* (appId: string, digest: string) {
+    const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
+    const result = yield* database.execute(
+      "apps.imageUpdates.claim",
+      `INSERT IGNORE INTO ${databaseTable("app_image_update_attempt")}
+         (app_id, digest, attempted_at)
+       VALUES (?, ?, ?)`,
+      [appId, digest, now]
+    )
+    return result.affectedRows === 1
+  }
+)
 
 function toUpdate(row: UpdateRow): AppImageUpdate {
   const time = (value: number | string | null) =>
