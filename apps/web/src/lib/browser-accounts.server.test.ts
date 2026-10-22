@@ -185,7 +185,7 @@ describeMysql("browser accounts", () => {
           const browser = new Browser()
           yield* Effect.promise(() => browser.signIn("alice@example.test"))
           // Earlier releases set only the session cookie.
-          for (const name of [...browser.cookies.keys()])
+          for (const name of browser.cookies.keys())
             if (name.includes("_multi-")) browser.cookies.delete(name)
 
           const { auth } = yield* Effect.promise(() => import("@/lib/auth"))
