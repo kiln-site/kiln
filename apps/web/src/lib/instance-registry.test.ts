@@ -316,6 +316,26 @@ describeMysql("instance registry", () => {
     )
 
     it.effect(
+      "gives a server to its creator even if its Relay changed hands first",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* insertRelay("relay-race", { created_by: "relay-owner" })
+          const created = server({ id: "cli-server", name: "From the CLI" })
+          yield* syncInstanceRegistryEffect("relay-race", [created])
+          const sql = yield* SqlClient.SqlClient
+          yield* sql`UPDATE ${sql(databaseTableName("relay"))} SET created_by = 'next-owner' WHERE id = 'relay-race'`
+
+          yield* recordCreatedInstanceEffect("relay-race", created, "user-one")
+
+          assert.strictEqual(
+            (yield* instances)["cli-server"]?.ownerId,
+            "user-one"
+          )
+        })
+    )
+
+    it.effect(
       "keeps an owner the server was transferred to before its creator was recorded",
       () =>
         Effect.gen(function* () {
@@ -324,7 +344,8 @@ describeMysql("instance registry", () => {
           const created = server({ id: "cli-server", name: "From the CLI" })
           yield* syncInstanceRegistryEffect("relay-race", [created])
           const sql = yield* SqlClient.SqlClient
-          yield* sql`UPDATE ${sql(databaseTableName("instance"))} SET owner_id = 'recipient' WHERE instance_id = 'cli-server'`
+          // As a transfer writes it.
+          yield* sql`UPDATE ${sql(databaseTableName("instance"))} SET owner_id = 'recipient', owner_provisional = 0 WHERE instance_id = 'cli-server'`
 
           yield* recordCreatedInstanceEffect("relay-race", created, "user-one")
           // A retried record changes nothing either.

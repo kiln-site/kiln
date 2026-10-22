@@ -143,6 +143,18 @@ describeMysql("resource ownership", () => {
           assert.strictEqual(apps.get(ids("0")), "admin")
           const instances = yield* owners("instance", "instance_id")
           assert.strictEqual(instances.get(ids("1")), "relay-owner")
+          // Until its Relay's audit log names who made it.
+          const provisional = new Map(
+            (yield* selectRows<{
+              instance_id: string
+              owner_provisional: number
+            }>("instance")).map((row) => [
+              row.instance_id,
+              Boolean(row.owner_provisional),
+            ])
+          )
+          assert.isTrue(provisional.get(ids("1")))
+          assert.isFalse(provisional.get(ids("2")))
           assert.strictEqual(instances.get(ids("2")), "creator")
           assert.strictEqual(instances.get(ids("3")), null)
         })

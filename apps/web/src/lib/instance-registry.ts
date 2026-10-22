@@ -95,6 +95,15 @@ export function updateInstanceSourceName(
   )
 }
 
+/**
+ * Upsert assignments that give a game server to the person known to have
+ * created it. They replace only a stand-in: no owner yet, or the Relay's
+ * owner recorded provisionally until Hearth learned who made it. An owner
+ * chosen since, like a transfer's recipient, stays.
+ */
+export const claimInstanceOwner = `owner_id = IF(owner_id IS NULL OR owner_provisional, VALUES(owner_id), owner_id),
+       owner_provisional = IF(owner_id <=> VALUES(owner_id), 0, owner_provisional)`
+
 export function reservePreparedInstance(
   relayId: string,
   instance: Pick<RelayInstance, "id">,
@@ -122,7 +131,7 @@ export const reservePreparedInstanceEffect = Effect.fn(
         provisioning_reserved_until, created_at, updated_at)
      VALUES (?, ?, NULL, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE
-       owner_id = COALESCE(owner_id, VALUES(owner_id)),
+       ${claimInstanceOwner},
        provisioning_reserved_until = VALUES(provisioning_reserved_until),
        updated_at = VALUES(updated_at)`,
     [relayId, instance.id, ownerId, now + 2 * 60_000, now, now]
@@ -145,7 +154,7 @@ export const registerPreparedInstanceEffect = Effect.fn(
          ON DUPLICATE KEY UPDATE
            source_name = VALUES(source_name),
            directory_metadata = VALUES(directory_metadata),
-           owner_id = COALESCE(owner_id, VALUES(owner_id)),
+           ${claimInstanceOwner},
            provisioning_reserved_until = NULL,
            updated_at = VALUES(updated_at)`,
           [
@@ -243,10 +252,9 @@ export const updateInstanceSourceNameEffect = Effect.fn(
 })
 
 // Records each instance's name and stable metadata, creating missing rows.
-// Without `ownerId`, a new row goes to the Relay's owner, a stand-in until
-// Hearth knows who made it, and an existing row keeps its owner. With it, the
-// person who just created the server replaces that stand-in, which a snapshot
-// read since may have recorded, but not an owner someone transferred it to.
+// Without `ownerId`, a new row goes to the Relay's owner provisionally, a
+// stand-in until Hearth knows who made it, and an existing row keeps its
+// owner. With it, the person who just created the server claims it.
 function upsertInstancesStatement(
   relayId: string,
   instances: ReadonlyArray<DirectoryInstance>,
@@ -259,15 +267,16 @@ function upsertInstancesStatement(
   return [
     `INSERT INTO ${databaseTable("instance")}
        (relay_id, instance_id, display_name, source_name, directory_metadata,
-        owner_id, created_at, updated_at)
-     VALUES ${instances.map(() => `(?, ?, NULL, ?, ?, ${owner}, ?, ?)`).join(", ")}
+        owner_id, owner_provisional, created_at, updated_at)
+     VALUES ${instances.map(() => `(?, ?, NULL, ?, ?, ${owner}, ${ownerId ? 0 : 1}, ?, ?)`).join(", ")}
      ON DUPLICATE KEY UPDATE
        source_name = VALUES(source_name),
        directory_metadata = VALUES(directory_metadata),
-       owner_id = ${
+       ${
          ownerId
-           ? `IF(owner_id IS NULL OR owner_id <=> (SELECT created_by FROM ${databaseTable("relay")} WHERE id = relay_id), VALUES(owner_id), owner_id)`
-           : "COALESCE(owner_id, VALUES(owner_id))"
+           ? claimInstanceOwner
+           : `owner_provisional = IF(owner_id IS NULL, 1, owner_provisional),
+       owner_id = COALESCE(owner_id, VALUES(owner_id))`
        },
        updated_at = VALUES(updated_at)`,
     instances.flatMap((instance) => [

@@ -5,14 +5,16 @@ import type { Migration } from "@/effect/migrations"
 import { databaseTableName } from "@/lib/database-config"
 
 // Databases, apps and Tailscale networks get an owner, as Relays and game
-// servers have. An owner holds every permission on what they own.
+// servers have. An owner holds every permission on a database they own, and
+// less on an app (see resource-permissions.ts).
 //
 // Existing rows go to someone who already holds every permission on them, so
 // nobody gains access: their creator when that's an administrator or the
 // Relay's owner, otherwise the Relay's owner. A creator whose Relay access
 // was narrowed or revoked doesn't get it back. Game servers without an owner
-// go to the Relay's owner the same way. Tailscale networks never recorded who
-// added them and stay unowned.
+// go to the Relay's owner provisionally, until the person its Relay's audit
+// log says created one claims it, as before. Tailscale networks never
+// recorded who added them and stay unowned.
 export const resourceOwners: Migration = {
   id: 21,
   name: "resource_owners",
@@ -48,9 +50,21 @@ export const resourceOwners: Migration = {
   WHERE t.owner_id IS NULL`)
     }
 
+    // Hearth can still learn who made one from its Relay's audit log, so the
+    // Relay's owner holds it provisionally.
+    const provisional = yield* sql<{ columnName: string }>`
+      SELECT column_name AS columnName
+      FROM information_schema.columns
+      WHERE table_schema = DATABASE() AND table_name = ${instance}
+        AND column_name = 'owner_provisional'
+    `
+    if (provisional.length === 0) {
+      yield* sql.unsafe(`ALTER TABLE \`${instance}\`
+  ADD COLUMN \`owner_provisional\` tinyint(1) NOT NULL DEFAULT '0' AFTER \`owner_id\``)
+    }
     yield* sql.unsafe(`UPDATE \`${instance}\` i
   JOIN \`${relay}\` r ON r.id = i.relay_id
-  SET i.owner_id = r.created_by
+  SET i.owner_id = r.created_by, i.owner_provisional = 1
   WHERE i.owner_id IS NULL AND r.created_by IS NOT NULL`)
 
     const tailscaleNetwork = databaseTableName("tailscale_network")

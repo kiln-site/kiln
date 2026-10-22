@@ -1192,14 +1192,18 @@ function contextKind(scopeType: PermissionScopeType) {
     ? "game server"
     : scopeType === "database"
       ? "database"
-      : "relay"
+      : scopeType === "app"
+        ? "app"
+        : "relay"
 }
 function scopeNoun(scopeType: PermissionScopeType) {
   return scopeType === "instance"
     ? "a game server"
     : scopeType === "database"
       ? "a database"
-      : "a Relay"
+      : scopeType === "app"
+        ? "an app"
+        : "a Relay"
 }
 export function contextLabel(context: PermissionContext) {
   const relay = context.relayName ?? context.scope.relayId

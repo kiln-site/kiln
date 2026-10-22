@@ -33,6 +33,7 @@ import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { getCurrentUser, requireEligibleResourceUser } from "@/server/auth"
+import { claimInstanceOwner } from "@/lib/instance-registry"
 import { resolveScopeAuthorization } from "@/lib/scope-authorization.server"
 import { transferAppOwnershipHandler } from "@/server/app-access"
 import {
@@ -134,6 +135,7 @@ interface ExistingAccessUserRow extends RowDataPacket {
 
 interface InstanceOwnerRow extends RowDataPacket {
   owner_id: string | null
+  owner_provisional?: number
 }
 
 export const getAccessCapabilities = createServerFn({ method: "GET" }).handler(
@@ -654,22 +656,24 @@ async function instanceOwnerId(
   instanceId: string
 ): Promise<string | null> {
   const [persistedRows] = await databasePool.query<Array<InstanceOwnerRow>>(
-    `SELECT owner_id FROM ${databaseTable("instance")}
+    `SELECT owner_id, owner_provisional FROM ${databaseTable("instance")}
       WHERE relay_id = ? AND instance_id = ? LIMIT 1`,
     [relay.id, instanceId]
   )
-  const persistedOwnerId = persistedRows[0]?.owner_id
-  if (persistedOwnerId) return persistedOwnerId
+  const persisted = persistedRows[0]
+  // The Relay's owner stands in until its audit log names who made it.
+  if (persisted?.owner_id && !persisted.owner_provisional)
+    return persisted.owner_id
 
   const initialOwnerId = await instanceInitialOwnerId(relay, instanceId)
-  if (!initialOwnerId) return null
+  if (!initialOwnerId) return persisted?.owner_id ?? null
 
   const now = Date.now()
   await databasePool.execute(
     `INSERT INTO ${databaseTable("instance")}
        (relay_id, instance_id, display_name, owner_id, created_at, updated_at)
      VALUES (?, ?, NULL, ?, ?, ?)
-     ON DUPLICATE KEY UPDATE owner_id = COALESCE(owner_id, VALUES(owner_id)),
+     ON DUPLICATE KEY UPDATE ${claimInstanceOwner},
        updated_at = VALUES(updated_at)`,
     [relay.id, instanceId, initialOwnerId, now, now]
   )

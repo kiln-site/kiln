@@ -326,7 +326,8 @@ export function transferResourceOwnershipEffect(
               `INSERT INTO ${databaseTable("instance")}
                      (relay_id, instance_id, display_name, owner_id, created_at, updated_at)
                    VALUES (?, ?, NULL, ?, ?, ?)
-                   ON DUPLICATE KEY UPDATE owner_id = VALUES(owner_id), updated_at = VALUES(updated_at)`,
+                   ON DUPLICATE KEY UPDATE owner_id = VALUES(owner_id), owner_provisional = 0,
+                     updated_at = VALUES(updated_at)`,
               [data.relayId, data.resourceId, data.userId, now, now]
             )
           }
