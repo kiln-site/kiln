@@ -103,6 +103,11 @@ without editing recipes. An explicit `KILN_BRICKS_CATALOG_URL` retains that
 catalog's original images; use this to intentionally share upstream or another
 catalog. Existing server image selections are not automatically rewritten.
 
+Kiln's Terms of Use and Privacy Policy don't cover a fork's panel. Its footer
+links open `kiln.site/forks-legal`, which tells visitors that QuartzDev doesn't
+run the panel and to contact its operator. Publish your own terms and privacy
+policy at `/terms` and `/privacy` on a site, and set `KILN_MARKETING_URL` to it.
+
 ## Publish the CLI
 
 Choose an available npm name, such as `@your-npm-org/my-panel-cli`. Your npm scope

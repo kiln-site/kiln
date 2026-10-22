@@ -70,8 +70,13 @@ request, not at build time. `robots.txt`, `sitemap.xml`, and `llms.txt` in
 `apps/marketing/public` name `https://kiln.site` directly.
 
 The site serves the Terms of Use and Privacy Policy at `/terms` and `/privacy`.
-Hearth's footer links to them through `KILN_MARKETING_URL` (default
-`https://kiln.site`), and Hearth's own `/terms` and `/privacy` redirect there. Choosing a
+Hearth's footer links to them, and Hearth's own `/terms` and `/privacy`
+redirect there, on any panel running Kiln's official images, since those send
+QuartzDev telemetry. A fork's panel (one whose repository, `KILN_GIT_REPO` or the
+one built into its image, isn't `kiln-site/kiln`) links to `/forks-legal`
+instead: an unindexed page saying Kiln doesn't run that panel, with `from` set
+to the panel's `KILN_URL`. `KILN_MARKETING_URL` overrides both with another
+site's `/terms` and `/privacy`. Choosing a
 paid plan opens Hearth's sign-up with `plan` and `interval` parameters and a
 `redirect` to `/settings/billing` carrying the same choice.
 

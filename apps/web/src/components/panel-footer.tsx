@@ -1,13 +1,13 @@
 import { cn } from "@workspace/ui/lib/utils"
 
 import { useKilnGitRepository } from "@/lib/git-repository"
-import { useKilnMarketingUrl } from "@/lib/marketing-url"
+import { useKilnLegalUrl } from "@/lib/legal-urls"
 import { footerSocialLinkIds, socialLinks } from "@/lib/social-links"
 
 export function PanelFooter({ className }: { className?: string }) {
   const gitRepository = useKilnGitRepository()
-  const termsUrl = useKilnMarketingUrl("/terms")
-  const privacyUrl = useKilnMarketingUrl("/privacy")
+  const termsUrl = useKilnLegalUrl("terms")
+  const privacyUrl = useKilnLegalUrl("privacy")
   const commit = import.meta.env.VITE_KILN_BUILD_SHA.trim()
   const commitUrl = commit ? `${gitRepository}/commit/${commit}` : null
   const shortCommit = commit.slice(0, 7)

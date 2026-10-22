@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router"
 
-import { redirectToMarketing } from "@/lib/marketing-url"
+import { redirectToLegalPage } from "@/lib/legal-urls"
 
 export const Route = createFileRoute("/privacy")({
-  loader: () => redirectToMarketing("/privacy"),
+  loader: () => redirectToLegalPage("privacy"),
 })

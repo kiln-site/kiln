@@ -1,6 +1,7 @@
 import { Option, Schema } from "effect"
 
 import {
+  DEFAULT_KILN_GIT_REPO,
   isKilnInstallationId,
   kilnGitRepositoryRawUrl,
   resolveKilnGitRepository,
@@ -34,12 +35,32 @@ export function kilnGitRepository(): string {
   )
 }
 
-/** Kiln's website, which hosts the Terms of Use and Privacy Policy. */
-export function kilnMarketingUrl(): string {
+export interface KilnLegalUrls {
+  privacy: string
+  terms: string
+}
+
+/**
+ * Where the panel's Terms of Use and Privacy Policy links go: the site
+ * KILN_MARKETING_URL names, or Kiln's website on official images, since
+ * they send QuartzDev telemetry. A fork's panel links to a page saying Kiln
+ * doesn't run it, naming the panel it came from.
+ */
+export function kilnLegalUrls(): KilnLegalUrls {
   const configured = process.env.KILN_MARKETING_URL?.trim()
-  const url =
-    configured && URL.canParse(configured) ? configured : "https://kiln.site"
-  return url.replace(/\/+$/u, "")
+  const site =
+    configured && URL.canParse(configured)
+      ? configured.replace(/\/+$/u, "")
+      : kilnGitRepository() === DEFAULT_KILN_GIT_REPO
+        ? "https://kiln.site"
+        : null
+  if (site) return { privacy: `${site}/privacy`, terms: `${site}/terms` }
+  const notice = new URL("https://kiln.site/forks-legal")
+  const panel = process.env.KILN_URL?.trim()
+  if (panel && URL.canParse(panel)) {
+    notice.searchParams.set("from", new URL(panel).origin)
+  }
+  return { privacy: notice.href, terms: notice.href }
 }
 
 export function kilnBrickCatalogUrl(): string {

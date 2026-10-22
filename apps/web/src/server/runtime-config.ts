@@ -2,7 +2,7 @@ import { createServerFn } from "@tanstack/react-start"
 
 export const getPublicRuntimeConfig = createServerFn({ method: "GET" }).handler(
   async () => {
-    const [{ kilnGitRepository, kilnMarketingUrl }, { otlpTarget }, { Effect, Option }] =
+    const [{ kilnGitRepository, kilnLegalUrls }, { otlpTarget }, { Effect, Option }] =
       await Promise.all([
         import("@/lib/environment"),
         import("@workspace/telemetry"),
@@ -23,7 +23,7 @@ export const getPublicRuntimeConfig = createServerFn({ method: "GET" }).handler(
         onSome: browserTraceSampleRatio,
       }),
       gitRepository: kilnGitRepository(),
-      marketingUrl: kilnMarketingUrl(),
+      legalUrls: kilnLegalUrls(),
     }
   }
 )
