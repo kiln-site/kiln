@@ -149,7 +149,7 @@ describeMysql("resource ownership", () => {
     )
 
     it.effect(
-      "gives owners every permission on what they own and nothing else",
+      "gives owners authority over what they own and nothing else",
       () =>
         Effect.gen(function* () {
           yield* resetDatabase
@@ -184,12 +184,26 @@ describeMysql("resource ownership", () => {
               databaseId: otherDatabase,
             })
           )
-          assert.isTrue(
-            grantsAllowPermission(grants, "app.manage", {
-              relayId,
-              appId: ownApp,
-            })
-          )
+          for (const permission of ["app.read", "app.delete"] as const)
+            assert.isTrue(
+              grantsAllowPermission(grants, permission, {
+                relayId,
+                appId: ownApp,
+              })
+            )
+          // What an app runs can reach the node, so changing it, its shell,
+          // and its files still take app permissions on the Relay.
+          for (const permission of [
+            "app.manage",
+            "app.terminal",
+            "app.files.write",
+          ] as const)
+            assert.isFalse(
+              grantsAllowPermission(grants, permission, {
+                relayId,
+                appId: ownApp,
+              })
+            )
           assert.isFalse(
             grantsAllowPermission(grants, "app.read", {
               relayId,

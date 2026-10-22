@@ -42,6 +42,8 @@ const hearthRealtimeQueryScopes = {
     prefix(["instance-inventory"]),
     exact(queryKeys.access.capabilities),
     prefix(["resource-access"]),
+    // Who owns an app, and whether the viewer may hand it on.
+    prefix(["app-owner"]),
     prefix(["access-resources"]),
     prefix(["my-resource-invitations"]),
     prefix(["resource-invitation"]),

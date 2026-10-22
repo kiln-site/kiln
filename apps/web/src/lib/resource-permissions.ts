@@ -47,6 +47,17 @@ interface SelectionRow extends RowDataPacket {
   selection_key: string
 }
 
+// What an app's owner holds on it. Configuring and deploying an app, its
+// shell, and its files can reach the Relay's node (a Compose file, its
+// environment and the files it includes, other apps' volumes), so those
+// still take app permissions on the Relay until apps are confined to
+// themselves.
+const appOwnerSelections: ReadonlyArray<PermissionSelection> = [
+  { kind: "permission", key: "app.read" },
+  { kind: "permission", key: "app.logs.read" },
+  { kind: "permission", key: "app.delete" },
+]
+
 /** Load live selections in batches; never turn an empty selection into a role. */
 export const loadResourceGrantsEffect = Effect.fn("access.resolveGrants")(
   function* (
@@ -161,9 +172,12 @@ export const loadResourceGrantsEffect = Effect.fn("access.resolveGrants")(
         relayId: row.relay_id,
         resourceId: row.resource_id,
         resourceType: row.resource_type,
-        permissions: expandResourceGrantPermissions(row, [
-          { kind: "collection", key: "all" },
-        ]),
+        permissions: expandResourceGrantPermissions(
+          row,
+          row.resource_type === "app"
+            ? appOwnerSelections
+            : [{ kind: "collection", key: "all" }]
+        ),
         source: "owner",
       })
     }

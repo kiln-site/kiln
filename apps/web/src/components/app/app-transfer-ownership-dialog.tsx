@@ -61,9 +61,9 @@ export function AppTransferOwnershipDialog({
           <DialogHeader>
             <DialogTitle>Transfer ownership?</DialogTitle>
             <DialogDescription>
-              They become the app's only owner, with every permission on it.
-              They need access to its Relay. Your remaining access follows your
-              Relay permissions.
+              They become the app's owner, who can see it and its logs, delete
+              it, and hand it on. They need access to its Relay. Your remaining
+              access follows your Relay permissions.
             </DialogDescription>
           </DialogHeader>
           <Input

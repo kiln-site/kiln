@@ -182,12 +182,17 @@ Platform-admin acceptance, verification, disable/enable, and platform role chang
 are not granted by an instance/Relay ALL. Resource owners are protected separately;
 a full preset does not transfer ownership.
 
-Every Relay, game server, database, and app has an owner, who holds ALL on it:
-the person who paired the Relay or created the resource. Ownership is its own
-source of authority, so it survives narrowed or revoked Relay grants. Apps have
-no grants of their own, so ownership is the only app-scoped authority; it covers
-the app permissions on that one app, never people, presets, backups, or
-schedules. Only the owner or an administrator transfers ownership, to someone
+Every Relay, game server, database, and app has an owner: the person who
+paired the Relay or created the resource. Ownership is its own source of
+authority, so it survives narrowed or revoked Relay grants. Owners of a Relay,
+game server, or database hold ALL on it. Apps have no grants of their own, so
+ownership is the only app-scoped authority, and it is narrower: an app's owner
+can view it and its logs, delete it, and transfer it. Configuring and
+deploying an app, its shell, and its files can reach the Relay's node (a
+Compose file, its environment and included files, other apps' volumes), so
+those still take app permissions on the Relay until apps are confined to
+themselves. App ownership never covers people, presets, backups, or schedules.
+Only the owner or an administrator transfers ownership, to someone
 who already has access there: a grant on the Relay or the resource, or Relay
 ownership. Someone who owns anything can't be removed until it is transferred.
 Tailscale networks record the administrator who added them; they stay
