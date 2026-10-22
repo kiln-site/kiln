@@ -6,6 +6,11 @@ import { TestClock } from "effect/testing"
 import { vi } from "vite-plus/test"
 
 import {
+  insertAppDeploymentEffect,
+  listAppDeploymentsEffect,
+  type AppDeploymentRecord,
+} from "@/effect/app-deployments"
+import {
   autoUpdateAt,
   imageUpdateDeployedEffect,
   recordAppImageCheckEffect,
@@ -15,7 +20,7 @@ import {
 import { createAppRecordEffect } from "@/effect/managed-apps"
 import { resourceAudienceEffect } from "@/lib/resource-audience.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
-import { insertRelay, insertRows, insertUser } from "@/test/seed"
+import { insertRelay, insertUser } from "@/test/seed"
 
 vi.stubEnv("BETTER_AUTH_SECRETS", `1:${"x".repeat(32)}`)
 
@@ -132,16 +137,47 @@ describeMysql("App image updates", () => {
           assert.isFalse(yield* skipAppImageUpdateEffect(appId, digest(2)))
 
           assert.isFalse(yield* imageUpdateDeployedEffect(appId, digest(3)))
-          yield* insertRows("app_deployment", {
-            app_id: appId,
+          const deployment = (
+            at: number,
+            trigger: AppDeploymentRecord["trigger"],
+            imageDigest: string | null
+          ): AppDeploymentRecord => ({
+            appId,
+            branch: null,
+            commitAuthor: null,
+            commitMessage: null,
+            commitSha: null,
+            error: null,
+            finishedAt: new Date(at).toISOString(),
             id: randomUUID(),
-            image_digest: digest(3),
-            relay_id: relayId,
-            source_type: "image",
-            started_at: start,
+            imageDigest,
+            relayDeploymentId: null,
+            relayId,
+            repository: null,
+            rolling: null,
+            sourceType: "image",
+            startedAt: new Date(at).toISOString(),
             status: "failed",
-            trigger: "update",
+            trigger,
+            triggeredBy: null,
           })
+          yield* insertAppDeploymentEffect(
+            deployment(start, "update", digest(3))
+          )
+          assert.isTrue(yield* imageUpdateDeployedEffect(appId, digest(3)))
+
+          // Still, once its record is pruned from the app's history.
+          for (let index = 1; index <= 200; index += 1) {
+            yield* insertAppDeploymentEffect(
+              deployment(start + index * 1_000, "manual", null)
+            )
+          }
+          const history = yield* listAppDeploymentsEffect({
+            appId,
+            limit: 500,
+            relayIds: [relayId],
+          })
+          assert.isFalse(history.some((item) => item.trigger === "update"))
           assert.isTrue(yield* imageUpdateDeployedEffect(appId, digest(3)))
         })
     )

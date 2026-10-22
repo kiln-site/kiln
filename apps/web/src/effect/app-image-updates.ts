@@ -287,11 +287,10 @@ export const imageUpdateDeployedEffect = Effect.fn(
   "apps.imageUpdates.deployed"
 )(function* (appId: string, digest: string) {
   const database = yield* Database
-  const rows = yield* database.queryRows<RowDataPacket & { id: string }>(
+  const rows = yield* database.queryRows<RowDataPacket>(
     "apps.imageUpdates.deployed",
-    `SELECT id FROM ${databaseTable("app_deployment")}
-      WHERE app_id = ? AND \`trigger\` = 'update' AND image_digest = ?
-      LIMIT 1`,
+    `SELECT 1 FROM ${databaseTable("app_image_update_attempt")}
+      WHERE app_id = ? AND digest = ?`,
     [appId, digest]
   )
   return rows.length > 0

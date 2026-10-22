@@ -6,14 +6,15 @@ import { databaseTableName } from "@/lib/database-config"
 
 // Whether each image app's tag names a newer image than the one it runs,
 // and what to do about it: tell the people who can deploy it, or deploy it
-// once it's been out a while. Deployments record the digest an image
-// update deployed, so a failed one isn't tried again.
+// once it's been out a while. Each digest an image update deployed is
+// kept, so a failed one isn't tried again.
 export const appImageUpdates: Migration = {
   id: 20,
   name: "app_image_updates",
   run: Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient
     const updates = databaseTableName("app_image_update")
+    const attempts = databaseTableName("app_image_update_attempt")
     const appTable = databaseTableName("app")
     const deployment = databaseTableName("app_deployment")
 
@@ -32,6 +33,16 @@ export const appImageUpdates: Migration = {
   \`updated_at\` bigint unsigned NOT NULL,
   PRIMARY KEY (\`app_id\`),
   CONSTRAINT \`${updates}_app_fk\` FOREIGN KEY (\`app_id\`) REFERENCES \`${appTable}\` (\`app_id\`) ON DELETE CASCADE
+)`)
+
+    // Every digest an image update deployed, however it went, so one isn't
+    // deployed on its own again after its record is pruned.
+    yield* sql.unsafe(`CREATE TABLE IF NOT EXISTS \`${attempts}\` (
+  \`app_id\` char(40) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  \`digest\` char(71) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  \`attempted_at\` bigint unsigned NOT NULL,
+  PRIMARY KEY (\`app_id\`, \`digest\`),
+  CONSTRAINT \`${attempts}_app_fk\` FOREIGN KEY (\`app_id\`) REFERENCES \`${appTable}\` (\`app_id\`) ON DELETE CASCADE
 )`)
 
     const columns = yield* sql<{ columnName: string }>`
