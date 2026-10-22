@@ -261,6 +261,12 @@ export function acknowledgeAuthorizationDeliveryEffect(
 ) {
   return Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis
+    // The Relay before its deliveries, as access changes and ownership
+    // claims take them.
+    yield* connection.queryRows(
+      `SELECT id FROM ${databaseTable("relay")} WHERE id = ? FOR UPDATE`,
+      [relayId]
+    )
     for (const item of result.items) {
       const [kind, scopeId] = encodeScope(item.scope)
       yield* connection.execute(

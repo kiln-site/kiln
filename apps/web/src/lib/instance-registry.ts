@@ -133,6 +133,17 @@ export function claimInstanceOwnerEffect<E, R>(
       `SELECT id FROM ${databaseTable("relay")} WHERE id = ? FOR SHARE`,
       [scope.relayId]
     )
+    // Create a new server's row, or take the existing one exclusively, before
+    // reading it: concurrent claims then lock their own rows, never the gap
+    // between them, and never upgrade a shared lock.
+    const now = yield* Clock.currentTimeMillis
+    yield* transaction.execute(
+      `INSERT INTO ${databaseTable("instance")}
+         (relay_id, instance_id, display_name, created_at, updated_at)
+       VALUES (?, ?, NULL, ?, ?)
+       ON DUPLICATE KEY UPDATE relay_id = relay_id`,
+      [scope.relayId, scope.instanceId, now, now]
+    )
     const [before] = yield* transaction.queryRows<InstanceOwnerRow>(
       `SELECT owner_id, owner_provisional FROM ${databaseTable("instance")}
         WHERE relay_id = ? AND instance_id = ? FOR UPDATE`,

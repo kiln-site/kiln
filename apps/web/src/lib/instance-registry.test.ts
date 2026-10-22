@@ -324,6 +324,25 @@ describeMysql("instance registry", () => {
         })
     )
 
+    it.effect("reserves servers being provisioned at the same time", () =>
+      Effect.gen(function* () {
+        yield* seedRelay
+        yield* Effect.all(
+          ["a", "b", "c", "d"].map((id) =>
+            reservePreparedInstanceEffect(
+              "relay-one",
+              { id: id.repeat(40) },
+              `user-${id}`
+            )
+          ),
+          { concurrency: "unbounded" }
+        )
+        const owners = yield* instances
+        for (const id of ["a", "b", "c", "d"])
+          assert.strictEqual(owners[id.repeat(40)]?.ownerId, `user-${id}`)
+      })
+    )
+
     it.effect(
       "gives a server to its creator even if its Relay changed hands first",
       () =>
