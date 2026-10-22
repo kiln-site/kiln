@@ -175,6 +175,7 @@ export const getAccessCapabilities = createServerFn({ method: "GET" }).handler(
       user,
       canManageAccess:
         platformAdmin ||
+        isRelayCreator(user) ||
         grants.some(
           (grant) =>
             enabledRelayIds.has(grant.relayId) &&
@@ -190,6 +191,7 @@ export const getAccessCapabilities = createServerFn({ method: "GET" }).handler(
             ).some((permission) => grantHasPermission(grant, permission))
         ),
       isPlatformAdmin: platformAdmin,
+      isRelayCreator: isRelayCreator(user),
       canManageRelays:
         platformAdmin ||
         isRelayCreator(user) ||

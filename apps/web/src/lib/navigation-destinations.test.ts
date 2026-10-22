@@ -1,9 +1,16 @@
 import { describe, expect, it } from "vite-plus/test"
+import {
+  accessPermissionSupported,
+  accessPermissions,
+} from "@workspace/contracts"
 
 import {
   accessibleDestinationsForServer,
   accessibleInfrastructureDestinations,
+  canAccessAccessManagement,
   canAccessActivity,
+  canAccessAutomations,
+  canAccessBackups,
   canAccessInstancePermission,
   serverDestinationHref,
   serverDestinations,
@@ -27,6 +34,7 @@ const operatorRelayAccess = {
     },
   ],
   isPlatformAdmin: false,
+  isRelayCreator: false,
 } satisfies NavigationAccessCapabilities
 
 const databaseViewerAccess = {
@@ -41,6 +49,7 @@ const databaseViewerAccess = {
     },
   ],
   isPlatformAdmin: false,
+  isRelayCreator: false,
 } satisfies NavigationAccessCapabilities
 
 describe("navigation destinations", () => {
@@ -143,6 +152,7 @@ describe("navigation destinations", () => {
       canManageAccess: false,
       canManageRelays: false,
       isPlatformAdmin: false,
+      isRelayCreator: false,
       grants: [],
       pendingScopes: [
         {
@@ -162,6 +172,101 @@ describe("navigation destinations", () => {
         pending
       )
     ).toEqual([])
+  })
+
+  it.each([
+    ["database.create", ["/infra/databases"]],
+    ["app.create", ["/infra/apps", "/infra/deployments"]],
+    ["instance.create", ["/infra/servers"]],
+    // Relay access alone doesn't open a list of what it can't reach.
+    ["database.read", ["/infra/databases"]],
+  ] as const)(
+    "opens the lists a Relay grant of %s can use",
+    (permission, lists) => {
+      const access: NavigationAccessCapabilities = {
+        ...operatorRelayAccess,
+        // Every Relay grant reveals the Relay itself.
+        canManageRelays: true,
+        grants: [
+          {
+            relayId: "relay-one",
+            resourceId: "relay-one",
+            resourceType: "relay",
+            permissions: [permission, "relay.read"],
+          },
+        ],
+      }
+      expect(
+        accessibleInfrastructureDestinations(access)
+          .map(({ to }) => to)
+          .filter((to) =>
+            [
+              "/infra/databases",
+              "/infra/servers",
+              "/infra/apps",
+              "/infra/deployments",
+            ].includes(to)
+          )
+      ).toEqual(lists)
+    }
+  )
+
+  it("shows a Relay Creator the workspace their first Relay will open", () => {
+    const relayCreator: NavigationAccessCapabilities = {
+      canManageAccess: true,
+      canManageRelays: true,
+      grants: [],
+      isPlatformAdmin: false,
+      isRelayCreator: true,
+    }
+    // Pairing a Relay adds an owner grant with every Relay permission.
+    const relayOwner: NavigationAccessCapabilities = {
+      ...relayCreator,
+      grants: [
+        {
+          relayId: "relay-one",
+          resourceId: "relay-one",
+          resourceType: "relay",
+          permissions: accessPermissions.filter((permission) =>
+            accessPermissionSupported(permission, "relay")
+          ),
+        },
+      ],
+    }
+    const navigation = (capabilities: NavigationAccessCapabilities) => ({
+      access: canAccessAccessManagement(capabilities),
+      activity: canAccessActivity(capabilities),
+      automations: canAccessAutomations(capabilities),
+      backups: canAccessBackups(capabilities),
+      infrastructure: accessibleInfrastructureDestinations(capabilities).map(
+        ({ to }) => to
+      ),
+    })
+
+    expect(navigation(relayCreator)).toEqual(navigation(relayOwner))
+    expect(navigation(relayCreator)).toEqual({
+      access: true,
+      activity: true,
+      automations: true,
+      backups: true,
+      infrastructure: [
+        "/infra/overview",
+        "/infra/relays",
+        "/infra/databases",
+        "/infra/servers",
+        "/infra/apps",
+        "/infra/sources",
+        "/infra/deployments",
+      ],
+    })
+    // The role grants nothing on Relays it doesn't own.
+    expect(
+      canAccessInstancePermission(
+        relayCreator,
+        { id: "server-one", relayId: "relay-two" },
+        "instance.read"
+      )
+    ).toBe(false)
   })
 
   it("builds encoded server destination URLs", () => {

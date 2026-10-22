@@ -22,6 +22,7 @@ import {
   Waypoints,
 } from "lucide-react"
 import {
+  accessPermissionSupported,
   builtinTailscaleBrickId,
   type DatabaseEngine,
   type RelayInstance,
@@ -69,6 +70,7 @@ export interface NavigationAccessCapabilities {
     permissions: readonly AccessPermission[]
   }>
   isPlatformAdmin: boolean
+  isRelayCreator: boolean
 }
 
 // Tabs render in this order, with a divider wherever `group` changes.
@@ -658,23 +660,32 @@ export function canAccessInfrastructureDestination(
     // Sources feed syncs. Each person's sources are their own.
     return canUseSyncs(capabilities)
   }
+  // Each list also opens for people who can only create there; its create
+  // action is what they came for.
   if (destination.access === "app-read") {
-    return hasScopedPermission(capabilities, "app.read", ["relay"])
+    return (
+      hasScopedPermission(capabilities, "app.read", ["relay"]) ||
+      hasScopedPermission(capabilities, "app.create", ["relay"])
+    )
   }
   if (destination.access === "instance-read") {
     return (
-      capabilities.canManageRelays ||
       capabilities.pendingScopes?.some(
         (scope) => scope.resourceType === "instance"
       ) === true ||
-      hasScopedPermission(capabilities, "instance.read", ["instance", "relay"])
+      hasScopedPermission(capabilities, "instance.read", [
+        "instance",
+        "relay",
+      ]) ||
+      hasScopedPermission(capabilities, "instance.create", ["relay"])
     )
   }
   return (
     capabilities.pendingScopes?.some(
       (scope) => scope.resourceType === "database"
     ) === true ||
-    hasScopedPermission(capabilities, "database.read", ["database", "relay"])
+    hasScopedPermission(capabilities, "database.read", ["database", "relay"]) ||
+    hasScopedPermission(capabilities, "database.create", ["relay"])
   )
 }
 
@@ -755,6 +766,15 @@ function hasScopedPermission(
 ): boolean {
   if (capabilities.isPlatformAdmin) return true
   const allowedResourceTypes = resourceTypes ? new Set(resourceTypes) : null
+  // A Relay Creator owns every Relay they pair, with every Relay permission.
+  // Show that workspace from the start instead of after the first pairing.
+  if (
+    capabilities.isRelayCreator &&
+    (!allowedResourceTypes || allowedResourceTypes.has("relay")) &&
+    accessPermissionSupported(permission, "relay")
+  ) {
+    return true
+  }
   return capabilities.grants.some(
     (grant) =>
       (!allowedResourceTypes || allowedResourceTypes.has(grant.resourceType)) &&

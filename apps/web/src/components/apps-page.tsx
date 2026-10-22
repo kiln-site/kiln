@@ -65,6 +65,10 @@ import {
   DataTableEmptyState,
   DataTableTextCell,
 } from "@/components/data-table"
+import {
+  AddFirstRelayButton,
+  useAwaitingFirstRelay,
+} from "@/components/relay/pair-first-relay"
 import { DataTable } from "@/components/data-table-view"
 import {
   DataTableToolbar,
@@ -758,13 +762,16 @@ function EmptyAppTable({
   onCreate: () => void
   searchActive: boolean
 }) {
+  const awaitingFirstRelay = useAwaitingFirstRelay()
   return (
     <DataTableEmptyState
       action={
-        !searchActive && canCreate ? (
+        searchActive ? null : canCreate ? (
           <Button size="sm" type="button" onClick={onCreate}>
             <Plus /> Add App
           </Button>
+        ) : awaitingFirstRelay ? (
+          <AddFirstRelayButton />
         ) : null
       }
       description={
@@ -773,7 +780,9 @@ function EmptyAppTable({
             ? "Try an app name, ID, Relay, container, or image."
             : canCreate
               ? "Deploy a Docker image, a Dockerfile, or a Compose project."
-              : "No apps have been assigned to your account yet."}
+              : awaitingFirstRelay
+                ? "Pair a Relay to start deploying apps."
+                : "No apps have been assigned to your account yet."}
         </span>
       }
       icon={<AppKindIcon className="size-6" />}

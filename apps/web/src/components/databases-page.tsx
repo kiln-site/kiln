@@ -84,6 +84,10 @@ import {
   useFavoritesOnly,
   useFavoritesOnlySource,
 } from "@/components/instance-favorite"
+import {
+  AddFirstRelayButton,
+  useAwaitingFirstRelay,
+} from "@/components/relay/pair-first-relay"
 import { DataTable } from "@/components/data-table-view"
 import {
   DataTableToolbar,
@@ -835,13 +839,16 @@ function EmptyDatabaseTable({
   onCreate: () => void
   searchActive: boolean
 }) {
+  const awaitingFirstRelay = useAwaitingFirstRelay()
   return (
     <DataTableEmptyState
       action={
-        !searchActive && canCreate ? (
+        searchActive ? null : canCreate ? (
           <Button size="sm" type="button" onClick={onCreate}>
             <Plus /> Add Database
           </Button>
+        ) : awaitingFirstRelay ? (
+          <AddFirstRelayButton />
         ) : null
       }
       description={
@@ -850,7 +857,9 @@ function EmptyDatabaseTable({
             ? "Try a database name, engine, ID, Relay, or internal hostname."
             : canCreate
               ? "Provision a private MySQL, MariaDB, PostgreSQL, Redis, or Valkey database."
-              : "No databases have been assigned to your account yet."}
+              : awaitingFirstRelay
+                ? "Pair a Relay to start provisioning databases."
+                : "No databases have been assigned to your account yet."}
         </span>
       }
       icon={<DatabaseKindIcon className="size-6" />}

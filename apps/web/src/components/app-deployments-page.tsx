@@ -51,6 +51,10 @@ import {
   DataTableActionGroup,
   DataTableEmptyState,
 } from "@/components/data-table"
+import {
+  AddFirstRelayButton,
+  useAwaitingFirstRelay,
+} from "@/components/relay/pair-first-relay"
 import { DataTable } from "@/components/data-table-view"
 import {
   DataTableToolbar,
@@ -337,35 +341,45 @@ const DeploymentsTable = React.memo(function DeploymentsTable({
       search: { fields: searchFields },
     })
   }, [onOpenLog])
-  const emptyState = React.useCallback(
-    ({ searchActive }: { searchActive: boolean }) => (
-      <DataTableEmptyState
-        description={
-          <span className="block max-w-sm">
-            {searchActive
-              ? "Try an app, commit, branch, or who deployed it."
-              : "Each time an app deploys, by hand or from a push to GitHub, it shows here."}
-          </span>
-        }
-        icon={
-          <Rocket className="size-6 text-muted-foreground/45 light:text-muted-foreground/72" />
-        }
-        title={
-          searchActive ? "No deployments match your search" : "No deployments"
-        }
-      />
-    ),
-    []
-  )
   return (
     <DataTable
       definition={definition}
-      emptyState={emptyState}
+      emptyState={deploymentsEmptyState}
       searchStore={searchStore}
       source={source}
     />
   )
 })
+
+function deploymentsEmptyState({ searchActive }: { searchActive: boolean }) {
+  return <EmptyDeploymentTable searchActive={searchActive} />
+}
+
+function EmptyDeploymentTable({ searchActive }: { searchActive: boolean }) {
+  const awaitingFirstRelay = useAwaitingFirstRelay()
+  return (
+    <DataTableEmptyState
+      action={
+        !searchActive && awaitingFirstRelay ? <AddFirstRelayButton /> : null
+      }
+      description={
+        <span className="block max-w-sm">
+          {searchActive
+            ? "Try an app, commit, branch, or who deployed it."
+            : awaitingFirstRelay
+              ? "Pair a Relay and deploy an app to see its deployments here."
+              : "Each time an app deploys, by hand or from a push to GitHub, it shows here."}
+        </span>
+      }
+      icon={
+        <Rocket className="size-6 text-muted-foreground/45 light:text-muted-foreground/72" />
+      }
+      title={
+        searchActive ? "No deployments match your search" : "No deployments"
+      }
+    />
+  )
+}
 
 function deploymentKey(deployment: Deployment): string {
   return deployment.id

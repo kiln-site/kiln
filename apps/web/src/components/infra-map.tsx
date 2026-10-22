@@ -5,7 +5,13 @@ import type { InstanceInventory, RelayProxyMode } from "@workspace/contracts"
 import { useIsMobile } from "@workspace/ui/hooks/use-mobile"
 
 import { engineLabel } from "@/components/database/database-presentation"
+import { DataTableEmptyState } from "@/components/data-table"
+import { RelayKindIcon } from "@/components/instance-kind-icon"
 import { MapLinks, MapViewport } from "@/components/infra-map-canvas"
+import {
+  AddFirstRelayButton,
+  useAwaitingFirstRelay,
+} from "@/components/relay/pair-first-relay"
 import {
   MapGroup,
   MapNode,
@@ -180,36 +186,60 @@ const InfraMap = React.memo(function InfraMap({
   return (
     <>
       <InfraMapScopePicker data={data} scope={scope} onSelect={onSelect} />
-      <MapViewport
-        fitKey={infraMapScopeKey(scope)}
-        width={layout.width}
-        height={layout.height}
-      >
-        {layout.groups.map((group) => {
-          const label = view.groupLabels.get(group.id)
-          return group.labelled && label ? (
-            <MapGroup
-              key={group.id}
-              label={label}
-              rect={group.rect}
+      {data.relays.length === 0 && data.resources.length === 0 ? (
+        <EmptyInfraMap />
+      ) : (
+        <MapViewport
+          fitKey={infraMapScopeKey(scope)}
+          width={layout.width}
+          height={layout.height}
+        >
+          {layout.groups.map((group) => {
+            const label = view.groupLabels.get(group.id)
+            return group.labelled && label ? (
+              <MapGroup
+                key={group.id}
+                label={label}
+                rect={group.rect}
+                onSelect={onSelect}
+              />
+            ) : null
+          })}
+          <MapLinks layout={layout} />
+          {[...layout.nodes].map(([id, rect]) => (
+            <MapNode
+              key={id}
+              includeDomains={includeDomains}
+              node={view.nodes.get(id)!}
+              rect={rect}
               onSelect={onSelect}
             />
-          ) : null
-        })}
-        <MapLinks layout={layout} />
-        {[...layout.nodes].map(([id, rect]) => (
-          <MapNode
-            key={id}
-            includeDomains={includeDomains}
-            node={view.nodes.get(id)!}
-            rect={rect}
-            onSelect={onSelect}
-          />
-        ))}
-      </MapViewport>
+          ))}
+        </MapViewport>
+      )}
     </>
   )
 })
+
+function EmptyInfraMap() {
+  const awaitingFirstRelay = useAwaitingFirstRelay()
+  return (
+    <div className="flex min-h-0 flex-1 items-center justify-center rounded-xl border border-border/75 bg-card/25">
+      <DataTableEmptyState
+        action={awaitingFirstRelay ? <AddFirstRelayButton /> : null}
+        description={
+          <span className="block max-w-sm">
+            {awaitingFirstRelay
+              ? "Pair a Relay to see its game servers, databases, and apps mapped here."
+              : "No instances have been assigned to your account yet."}
+          </span>
+        }
+        icon={<RelayKindIcon className="size-6" />}
+        title="Nothing to map yet"
+      />
+    </div>
+  )
+}
 
 const InfraMapScopePicker = React.memo(function InfraMapScopePicker({
   data,
