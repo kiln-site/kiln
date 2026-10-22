@@ -8,6 +8,7 @@ import { Resend } from "resend"
 import { z } from "zod"
 
 import { AccessInvitationEmail } from "@/emails/access-invitation-email"
+import { kilnEmailAttachments } from "@/emails/kiln-email"
 import { Database } from "@/effect/database"
 import { runAppEffect } from "@/effect/runtime"
 import { forkPromise } from "@/effect/promise"
@@ -339,15 +340,17 @@ export const grantOrInviteAccess = createServerFn({ method: "POST" })
           to: [data.email],
           subject: "You've been invited to Kiln",
           react: AccessInvitationEmail({
+            hearthUrl: publicUrl(),
             inviteUrl: inviteUrl.toString(),
             inviterName: user.name,
             resourceName: "Kiln",
             role:
               data.accessType === "platform_admin"
-                ? "platform administrator"
-                : "Relay creator",
+                ? "a platform administrator"
+                : "a Relay creator",
             scope: "platform",
           }),
+          attachments: kilnEmailAttachments,
         },
         { idempotencyKey: `access-invitation/${id}` }
       )

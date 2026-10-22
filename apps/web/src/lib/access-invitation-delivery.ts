@@ -2,6 +2,7 @@ import { Resend } from "resend"
 import type { RowDataPacket } from "mysql2/promise"
 import { Effect, Schedule } from "effect"
 import { AccessInvitationEmail } from "@/emails/access-invitation-email"
+import { kilnEmailAttachments } from "@/emails/kiln-email"
 import { databasePool } from "@/lib/database"
 import { databaseTable } from "@/lib/database-config"
 import { emailDeliveryConfig, kilnPublicUrl } from "@/lib/environment"
@@ -41,9 +42,11 @@ export async function deliverAccessInvitations(
             subject: `You've been invited to ${invitation.resourceName}`,
             react: AccessInvitationEmail({
               ...invitation,
+              hearthUrl: kilnPublicUrl().toString(),
               inviteUrl: inviteUrl.toString(),
               role: "a member",
             }),
+            attachments: kilnEmailAttachments,
           },
           { idempotencyKey: `access-invitation/${invitation.id}` }
         )

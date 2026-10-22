@@ -5,6 +5,8 @@ import type { RowDataPacket } from "mysql2/promise"
 import { Resend } from "resend"
 
 import { Database, type DatabaseTransaction } from "@/effect/database"
+import { AccountClaimEmail } from "@/emails/account-claim-email"
+import { kilnEmailAttachments } from "@/emails/kiln-email"
 import { runAppEffect } from "@/effect/runtime"
 import {
   isAccountEnabled,
@@ -118,7 +120,13 @@ export async function requestEmailAccountClaim(
     {
       from: delivery.from,
       to: [result.email],
-      subject: "Claim your Kiln account",
+      subject: "Set up your Kiln account",
+      react: AccountClaimEmail({
+        claimUrl: claimUrl.toString(),
+        email: result.email,
+        hearthUrl: kilnPublicUrl().toString(),
+      }),
+      attachments: kilnEmailAttachments,
       text: `Use this link to verify your email and set up your Kiln account. It expires in 30 minutes.\n\n${claimUrl.toString()}\n\nIf you did not request this, you can ignore this email.`,
     },
     { idempotencyKey: `account-claim/${result.id}` }

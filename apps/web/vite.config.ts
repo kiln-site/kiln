@@ -9,6 +9,8 @@ import { tanstackStart } from "@tanstack/react-start/plugin/vite"
 import viteReact from "@vitejs/plugin-react"
 import tailwindcss from "@tailwindcss/vite"
 
+import { emailTheme } from "./scripts/email-theme"
+
 const repositoryRoot = resolve(import.meta.dirname, "../..")
 const release = JSON.parse(
   readFileSync(resolve(repositoryRoot, "release.json"), "utf8")
@@ -16,6 +18,10 @@ const release = JSON.parse(
 const contractsSource = resolve(
   repositoryRoot,
   "packages/contracts/src/index.ts"
+)
+const hearthStylesheet = resolve(
+  repositoryRoot,
+  "packages/ui/src/styles/globals.css"
 )
 const brandingDirectory = resolve(import.meta.dirname, "src/assets/branding")
 const reactScanProductionShim = resolve(
@@ -74,6 +80,8 @@ const config = defineConfig(({ command }) => {
       "import.meta.env.VITE_KILN_VERSION": JSON.stringify(
         process.env.KILN_VERSION?.trim() || release.releaseLine
       ),
+      // Hearth's colors as hex for emails; see scripts/email-theme.ts.
+      __KILN_EMAIL_THEME__: JSON.stringify(emailTheme(hearthStylesheet)),
       // Not under import.meta.env: that object reaches browser bundles.
       __KILN_TELEMETRY_DEFAULTS__: JSON.stringify(
         Object.fromEntries(

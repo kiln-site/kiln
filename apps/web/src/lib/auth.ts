@@ -17,6 +17,7 @@ import { Effect } from "effect"
 import { reportAppError } from "@/effect/runtime"
 import { isAccountVerified } from "@/lib/account-policy"
 import { AuthCodeEmail } from "@/emails/auth-code-email"
+import { kilnEmailAttachments } from "@/emails/kiln-email"
 import { databasePool } from "@/lib/database"
 import { databaseTable, databaseTableName } from "@/lib/database-config"
 import { parseDisplayName } from "@/lib/display-name"
@@ -331,7 +332,13 @@ export const auth = betterAuth({
                 type === "forget-password"
                   ? "Reset your Kiln password"
                   : "Your Kiln verification code",
-              react: AuthCodeEmail({ code: otp, purpose: type }),
+              react: AuthCodeEmail({
+                code: otp,
+                email,
+                hearthUrl: publicUrl.toString(),
+                purpose: type,
+              }),
+              attachments: kilnEmailAttachments,
             },
             { idempotencyKey: `auth-code/${type}/${fingerprint}` }
           )
