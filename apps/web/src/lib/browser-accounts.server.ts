@@ -23,12 +23,12 @@ export async function listBrowserAccounts(
     auth.api.getSession({ headers }),
   ])
   await forgetEndedSessions(headers, sessions)
-  // An account signed in past the browser limit is active without being
-  // remembered for switching.
-  const listed =
+  const unremembered =
     current && !sessions.some(({ session }) => session.id === current.session.id)
-      ? [...sessions, current]
-      : sessions
+  if (unremembered) await rememberActiveBrowserAccount(headers)
+  // An account signed in past the browser limit stays active without being
+  // remembered for switching.
+  const listed = unremembered ? [...sessions, current] : sessions
   const accounts = listed.map(
     ({ session, user }): BrowserAccount => ({
       active: session.id === current?.session.id,
@@ -43,6 +43,16 @@ export async function listBrowserAccounts(
       Number(right.active) - Number(left.active) ||
       left.name.localeCompare(right.name)
   )
+}
+
+/**
+ * Remembers the active session for switching before another account signs
+ * in. Sessions from before multiple accounts lack that record.
+ */
+export async function rememberActiveBrowserAccount(
+  headers: Headers
+): Promise<void> {
+  await auth.api.rememberActiveBrowserSession({ headers })
 }
 
 export async function switchBrowserAccount(

@@ -30,6 +30,7 @@ import {
   publicSignupEnabled,
 } from "@/lib/environment"
 import { passwordConfirmation } from "@/lib/password-confirmation"
+import { browserAccountMemory } from "@/lib/browser-account-memory"
 import { maximumBrowserAccounts } from "@/lib/browser-accounts"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 
@@ -261,6 +262,7 @@ export const auth = betterAuth({
         "/multi-session/list-device-sessions",
         "/multi-session/set-active",
         "/multi-session/revoke",
+        "/multi-session/remember-active",
       ])
       if (!onboardingPaths.has(context.path)) {
         const session = await getSessionFromCtx(context)
@@ -377,6 +379,7 @@ export const auth = betterAuth({
     }),
     passwordConfirmation(),
     multiSession({ maximumSessions: maximumBrowserAccounts }),
+    browserAccountMemory(),
     tanstackStartCookies(),
   ],
 })

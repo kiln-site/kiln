@@ -12,6 +12,7 @@ import {
   switchToAccount,
 } from "@/components/account-switcher"
 import { AuthBrand, AuthPageShell } from "@/components/auth-page-shell"
+import { useFollowActiveAccount } from "@/components/use-follow-active-account"
 import { recoverPromise } from "@/effect/promise"
 import { clearAppearanceCache } from "@/lib/appearance"
 import {
@@ -30,7 +31,7 @@ export function BrowserAccountsPage({
   const [pending, setPending] = React.useState<string | null>(null)
   const activeUserId =
     accounts.find((account) => account.active)?.userId ?? null
-  React.useEffect(() => announceActiveAccount(activeUserId), [activeUserId])
+  useFollowActiveAccount(activeUserId)
 
   async function signOutAccount(account: BrowserAccount) {
     setPending(`sign-out:${account.sessionId}`)

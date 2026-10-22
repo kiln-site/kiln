@@ -4,11 +4,12 @@ import { z } from "zod"
 
 import {
   listBrowserAccounts,
+  rememberActiveBrowserAccount,
   resumeBrowserAccount,
   signOutBrowserAccount,
   switchBrowserAccount,
 } from "@/lib/browser-accounts.server"
-import { requireAuthenticatedUser } from "@/server/auth"
+import { getCurrentUser, requireAuthenticatedUser } from "@/server/auth"
 
 const browserSessionInput = z.object({
   sessionId: z.string().min(1).max(128),
@@ -34,3 +35,14 @@ export const signOutBrowserAccountSession = createServerFn({ method: "POST" })
 export const resumeBrowserAccountSession = createServerFn({
   method: "POST",
 }).handler(() => resumeBrowserAccount(getRequestHeaders()))
+
+export const rememberActiveBrowserAccountSession = createServerFn({
+  method: "POST",
+}).handler(async () => {
+  await requireAuthenticatedUser()
+  await rememberActiveBrowserAccount(getRequestHeaders())
+})
+
+export const getActiveBrowserAccountId = createServerFn({
+  method: "GET",
+}).handler(async () => (await getCurrentUser())?.id ?? null)

@@ -33,7 +33,12 @@ class Browser {
         body: init.body ? JSON.stringify(init.body) : undefined,
       })
     )
-    for (const cookie of response.headers.getSetCookie()) {
+    this.store(response.headers)
+    return response
+  }
+
+  store(headers: Headers) {
+    for (const cookie of headers.getSetCookie()) {
       const [pair] = cookie.split(";")
       const index = pair.indexOf("=")
       const name = pair.slice(0, index)
@@ -41,7 +46,6 @@ class Browser {
       if (value && !/max-age=0/i.test(cookie)) this.cookies.set(name, value)
       else this.cookies.delete(name)
     }
-    return response
   }
 
   signIn(email: string) {
@@ -167,6 +171,42 @@ describeMysql("browser accounts", () => {
 
           const sessions = yield* selectRows<{ userId: string }>("session")
           expect(sessions.map(({ userId }) => userId)).toEqual(["bob"])
+        }),
+      { timeout: 30_000 }
+    )
+
+    it.effect(
+      "keeps a session from before multiple accounts when adding another",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* seedAccount("alice")
+          yield* seedAccount("bob")
+          const browser = new Browser()
+          yield* Effect.promise(() => browser.signIn("alice@example.test"))
+          // Earlier releases set only the session cookie.
+          for (const name of [...browser.cookies.keys()])
+            if (name.includes("_multi-")) browser.cookies.delete(name)
+
+          const { auth } = yield* Effect.promise(() => import("@/lib/auth"))
+          const remembered = yield* Effect.promise(() =>
+            auth.api.rememberActiveBrowserSession({
+              headers: browser.headers(),
+              returnHeaders: true,
+            })
+          )
+          browser.store(remembered.headers)
+          yield* Effect.promise(() => browser.signIn("bob@example.test"))
+
+          const { listBrowserAccounts } =
+            yield* Effect.promise(() => import("@/lib/browser-accounts.server"))
+          const accounts = yield* Effect.promise(() =>
+            listBrowserAccounts(browser.headers())
+          )
+          expect(accounts.map(({ userId }) => userId).sort()).toEqual([
+            "alice",
+            "bob",
+          ])
         }),
       { timeout: 30_000 }
     )

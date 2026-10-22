@@ -40,10 +40,8 @@ export function useBrowserAccounts(enabled = true) {
 
 /** Makes `account` active for every Kiln tab and opens it here. */
 export async function switchToAccount(account: BrowserAccount) {
-  if (account.active) {
-    window.location.assign("/")
-    return true
-  }
+  // Even the account shown as active is activated again: another tab may
+  // have switched since this list loaded.
   const result = await recoverPromise(
     async () => {
       await switchBrowserAccountSession({

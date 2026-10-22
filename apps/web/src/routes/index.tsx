@@ -21,7 +21,10 @@ import {
 } from "@/lib/relay-selectors"
 import { getInvitationPreview } from "@/server/access"
 import { getAuthState } from "@/server/auth"
-import { resumeBrowserAccountSession } from "@/server/browser-accounts"
+import {
+  rememberActiveBrowserAccountSession,
+  resumeBrowserAccountSession,
+} from "@/server/browser-accounts"
 import { getUiPreferences } from "@/server/preferences"
 
 export const Route = createFileRoute("/")({
@@ -41,6 +44,7 @@ export const Route = createFileRoute("/")({
       throw redirect({ href: search.redirect?.startsWith("/") ? search.redirect : "/" })
     }
     if (state.user && search.addAccount && !state.user.isDevelopmentBypass) {
+      await rememberActiveBrowserAccountSession()
       return {
         ...state,
         addingAccount: true,
