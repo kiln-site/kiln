@@ -37,6 +37,7 @@ type VerificationState = {
 }
 
 export function AuthPage({
+  addingAccount = false,
   redirectPath,
   developmentBypassEnabled = false,
   emailDeliveryEnabled = false,
@@ -49,6 +50,7 @@ export function AuthPage({
   startWithSignup,
   verified,
 }: {
+  addingAccount?: boolean
   redirectPath?: string
   developmentBypassEnabled?: boolean
   emailDeliveryEnabled?: boolean
@@ -463,6 +465,7 @@ export function AuthPage({
       ) : (
         <>
           <AuthHeading
+            addingAccount={addingAccount}
             lockedEmail={lockedEmail}
             mode={mode}
             signupEnabled={signupEnabled}
@@ -710,6 +713,15 @@ export function AuthPage({
             </p>
           ) : null}
 
+          {addingAccount ? (
+            <a
+              href="/"
+              className="mt-3 block text-center text-xs text-muted-foreground transition-colors hover:text-foreground"
+            >
+              Cancel
+            </a>
+          ) : null}
+
           {developmentBypassEnabled && mode !== "forgot-password" ? (
             <>
               <div className="my-6 flex items-center gap-3">
@@ -740,10 +752,12 @@ export function AuthPage({
 }
 
 function AuthHeading({
+  addingAccount,
   lockedEmail,
   mode,
   signupEnabled,
 }: {
+  addingAccount: boolean
   lockedEmail?: string
   mode: AuthMode
   signupEnabled: boolean
@@ -758,10 +772,16 @@ function AuthHeading({
       description: "Create the first administrator account.",
     },
     "sign-in": {
-      title: lockedEmail ? "Sign in to continue" : "Welcome to Kiln",
-      description: lockedEmail
-        ? "Sign in to your account to continue."
-        : signupEnabled
+      title: addingAccount
+        ? "Add another account"
+        : lockedEmail
+          ? "Sign in to continue"
+          : "Welcome to Kiln",
+      description: addingAccount
+        ? "Your other accounts stay signed in on this browser."
+        : lockedEmail
+          ? "Sign in to your account to continue."
+          : signupEnabled
           ? "Sign in or create a new account."
           : "Sign in to your control plane.",
     },

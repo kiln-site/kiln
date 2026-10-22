@@ -9,6 +9,7 @@ import {
 } from "better-auth/api"
 import { admin } from "better-auth/plugins/admin"
 import { emailOTP } from "better-auth/plugins/email-otp"
+import { multiSession } from "better-auth/plugins/multi-session"
 import { twoFactor } from "better-auth/plugins/two-factor"
 import { tanstackStartCookies } from "better-auth/tanstack-start"
 import { Resend } from "resend"
@@ -29,6 +30,7 @@ import {
   publicSignupEnabled,
 } from "@/lib/environment"
 import { passwordConfirmation } from "@/lib/password-confirmation"
+import { maximumBrowserAccounts } from "@/lib/browser-accounts"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 
 const publicUrl = kilnPublicUrl()
@@ -236,6 +238,11 @@ export const auth = betterAuth({
           message: "Use Kiln user management.",
         })
       }
+      // Browser accounts go through Kiln's server functions, which never hand
+      // another account's session token to page scripts.
+      if (context.path.startsWith("/multi-session/") && context.request) {
+        throw new APIError("NOT_FOUND")
+      }
 
       const onboardingPaths = new Set([
         "/get-session",
@@ -250,6 +257,10 @@ export const auth = betterAuth({
         "/email-otp/reset-password",
         "/request-password-reset",
         "/reset-password",
+        // A disabled or unverified account can still switch to another.
+        "/multi-session/list-device-sessions",
+        "/multi-session/set-active",
+        "/multi-session/revoke",
       ])
       if (!onboardingPaths.has(context.path)) {
         const session = await getSessionFromCtx(context)
@@ -365,6 +376,7 @@ export const auth = betterAuth({
       },
     }),
     passwordConfirmation(),
+    multiSession({ maximumSessions: maximumBrowserAccounts }),
     tanstackStartCookies(),
   ],
 })

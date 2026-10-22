@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as AccountStatusRouteImport } from './routes/account-status'
+import { Route as AccountsRouteImport } from './routes/accounts'
 import { Route as ClaimRouteImport } from './routes/claim'
 import { Route as ConsoleRouteImport } from './routes/console'
 import { Route as DiscordRouteImport } from './routes/discord'
@@ -130,6 +131,11 @@ const AppRoute = AppRouteImport.update({
 const AccountStatusRoute = AccountStatusRouteImport.update({
   id: '/account-status',
   path: '/account-status',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AccountsRoute = AccountsRouteImport.update({
+  id: '/accounts',
+  path: '/accounts',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ClaimRoute = ClaimRouteImport.update({
@@ -668,6 +674,7 @@ const AppServerServerIdFilesSplatRoute =
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/account-status': typeof AccountStatusRoute
+  '/accounts': typeof AccountsRoute
   '/claim': typeof ClaimRoute
   '/console': typeof ConsoleRoute
   '/discord': typeof DiscordRoute
@@ -777,6 +784,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/account-status': typeof AccountStatusRoute
+  '/accounts': typeof AccountsRoute
   '/claim': typeof ClaimRoute
   '/console': typeof ConsoleRoute
   '/discord': typeof DiscordRoute
@@ -880,6 +888,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/_app': typeof AppRouteWithChildren
   '/account-status': typeof AccountStatusRoute
+  '/accounts': typeof AccountsRoute
   '/claim': typeof ClaimRoute
   '/console': typeof ConsoleRoute
   '/discord': typeof DiscordRoute
@@ -991,6 +1000,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/account-status'
+    | '/accounts'
     | '/claim'
     | '/console'
     | '/discord'
@@ -1100,6 +1110,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/account-status'
+    | '/accounts'
     | '/claim'
     | '/console'
     | '/discord'
@@ -1202,6 +1213,7 @@ export interface FileRouteTypes {
     | '/'
     | '/_app'
     | '/account-status'
+    | '/accounts'
     | '/claim'
     | '/console'
     | '/discord'
@@ -1313,6 +1325,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AppRoute: typeof AppRouteWithChildren
   AccountStatusRoute: typeof AccountStatusRoute
+  AccountsRoute: typeof AccountsRoute
   ClaimRoute: typeof ClaimRoute
   ConsoleRoute: typeof ConsoleRoute
   DiscordRoute: typeof DiscordRoute
@@ -1366,6 +1379,13 @@ declare module '@tanstack/react-router' {
       path: '/account-status'
       fullPath: '/account-status'
       preLoaderRoute: typeof AccountStatusRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/accounts': {
+      id: '/accounts'
+      path: '/accounts'
+      fullPath: '/accounts'
+      preLoaderRoute: typeof AccountsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/claim': {
@@ -2377,6 +2397,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AppRoute: AppRouteWithChildren,
   AccountStatusRoute: AccountStatusRoute,
+  AccountsRoute: AccountsRoute,
   ClaimRoute: ClaimRoute,
   ConsoleRoute: ConsoleRoute,
   DiscordRoute: DiscordRoute,

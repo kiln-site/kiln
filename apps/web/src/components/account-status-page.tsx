@@ -9,6 +9,7 @@ import { AccountStatusSync } from "@/components/account-status-sync"
 import { AuthBrand, AuthPageShell } from "@/components/auth-page-shell"
 import { isAccountVerified } from "@/lib/account-policy"
 import { authClient } from "@/lib/auth-client"
+import { announceActiveAccount } from "@/lib/browser-accounts"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 
 export function AccountStatusPage({
@@ -23,7 +24,11 @@ export function AccountStatusPage({
   const verified = isAccountVerified(user)
   return (
     <AuthPageShell wide={verified}>
-      <AccountStatusSync restricted resumePath={resumePath} />
+      <AccountStatusSync
+        restricted
+        resumePath={resumePath}
+        userId={user.id}
+      />
       <div>
         <header className="mb-8 grid justify-items-center gap-4 text-center">
           <AuthBrand />
@@ -38,21 +43,29 @@ export function AccountStatusPage({
           {user.statusReason ? (
             <p className="text-sm">{user.statusReason}</p>
           ) : null}
-          <Button
-            variant="outline"
-            className="w-fit"
-            onClick={async () => {
-              const result = await authClient.signOut()
-              if (result.error)
-                showToast({
-                  type: "error",
-                  message: result.error.message ?? "Could not sign out",
-                })
-              else window.location.assign("/")
-            }}
-          >
-            Sign out
-          </Button>
+          <div className="flex flex-wrap justify-center gap-2">
+            <Button asChild variant="outline" className="w-fit">
+              <a href="/accounts">Switch account</a>
+            </Button>
+            <Button
+              variant="outline"
+              className="w-fit"
+              onClick={async () => {
+                const result = await authClient.signOut()
+                if (result.error)
+                  showToast({
+                    type: "error",
+                    message: result.error.message ?? "Could not sign out",
+                  })
+                else {
+                  announceActiveAccount(null)
+                  window.location.assign("/")
+                }
+              }}
+            >
+              Sign out
+            </Button>
+          </div>
         </header>
         {verified ? (
           <AccountSettingsPage user={user} />

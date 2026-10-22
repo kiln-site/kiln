@@ -44,9 +44,14 @@ import { ensuringPromise, recoverPromise } from "@/effect/promise"
 import { authClient } from "@/lib/auth-client"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { clearAppearanceCache } from "@/lib/appearance"
+import { announceActiveAccount } from "@/lib/browser-accounts"
 import { DISPLAY_NAME_MAX_LENGTH, parseDisplayName } from "@/lib/display-name"
 import { queryKeys } from "@/lib/query-options"
 import { getCliCredentials, revokeCliCredential } from "@/server/cli"
+import {
+  resumeBrowserAccountSession,
+  signOutBrowserAccountSession,
+} from "@/server/browser-accounts"
 import { getActiveSessions, revokeActiveSession } from "@/server/sessions"
 import type { AccountSessionSummary } from "@/effect/account-sessions"
 
@@ -1211,8 +1216,10 @@ function SessionsPanel({ enabled }: { enabled: boolean }) {
       const result = await recoverPromise(
         async () => {
           if (isCurrent) {
-            const signOutResult = await authClient.signOut()
-            if (signOutResult.error) throw signOutResult.error
+            // Other accounts signed in on this browser stay signed in.
+            await signOutBrowserAccountSession({
+              data: { sessionId: activeSession.id },
+            })
           } else {
             await revokeActiveSession({
               data: { sessionId: activeSession.id },
@@ -1232,6 +1239,7 @@ function SessionsPanel({ enabled }: { enabled: boolean }) {
         return
       }
       if (isCurrent) {
+        announceActiveAccount(null)
         clearAppearanceCache()
         window.location.assign("/")
         return
@@ -1260,10 +1268,12 @@ function SessionsPanel({ enabled }: { enabled: boolean }) {
       })
       return
     }
+    // This browser's other accounts stay signed in; one of them becomes active.
     await recoverPromise(
-      () => authClient.signOut(),
-      () => ({ data: null, error: null })
+      () => resumeBrowserAccountSession(),
+      () => null
     )
+    announceActiveAccount(null)
     clearAppearanceCache()
     window.location.assign("/")
   }

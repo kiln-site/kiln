@@ -42,6 +42,11 @@ import {
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
 import { AccountAvatar } from "@/components/account-avatar"
+import {
+  AccountSwitcherSection,
+  signOutAllAccounts,
+  useBrowserAccountsPrefetch,
+} from "@/components/account-switcher"
 import { HearthMark } from "@/components/hearth-mark"
 import {
   CollapsedNotificationsAnchor,
@@ -68,7 +73,6 @@ import {
   InstancePickerPopoverContent,
   InstancePickerPopoverTrigger,
 } from "@/components/instance-picker"
-import { authClient } from "@/lib/auth-client"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { clearAppearanceCache } from "@/lib/appearance"
 import {
@@ -1630,6 +1634,7 @@ function AccountNavigation({
 
 function CollapsedAccountMenu({ user }: { user: AuthenticatedUser }) {
   const [open, setOpen] = React.useState(false)
+  const prefetchAccounts = useBrowserAccountsPrefetch(!user.isDevelopmentBypass)
   const [signingOut, setSigningOut] = React.useState(false)
   const closeMenu = React.useCallback(() => setOpen(false), [])
 
@@ -1641,6 +1646,7 @@ function CollapsedAccountMenu({ user }: { user: AuthenticatedUser }) {
             type="button"
             className="relative grid size-[40px] place-items-center transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring/45 focus-visible:outline-none data-[state=open]:bg-sidebar-accent"
             aria-label={`Open account menu for ${user.name}`}
+            {...prefetchAccounts}
           >
             <AccountAvatar
               className="data-[size=sm]:size-[30px]"
@@ -1653,12 +1659,10 @@ function CollapsedAccountMenu({ user }: { user: AuthenticatedUser }) {
           aria-label="Account menu"
           side="right"
           align="end"
-          className="w-48 p-1"
+          className="w-64 p-1"
         >
-          <p className="truncate px-2 py-2 text-xs text-muted-foreground">
-            {user.name}
-          </p>
-          <div className="-mx-1 mb-1 h-px bg-border" />
+          <AccountSwitcherSection user={user} onNavigate={closeMenu} />
+          <div className="-mx-1 my-1 h-px bg-border" />
           <NotificationsMenuItem onSelect={closeMenu} />
           <Link
             to="/settings/account"
@@ -1702,18 +1706,35 @@ function ExpandedAccountRow({
   isMobile: boolean
   user: AuthenticatedUser
 }) {
+  const [open, setOpen] = React.useState(false)
+  const closeMenu = React.useCallback(() => setOpen(false), [])
+  const prefetchAccounts = useBrowserAccountsPrefetch(!user.isDevelopmentBypass)
   return (
     <div className="flex h-11 items-center gap-1 px-2">
-      <Link
-        to="/settings/account"
-        preload="intent"
-        className="flex min-w-0 flex-1 items-center gap-2 text-sidebar-foreground transition-colors hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring/45 focus-visible:outline-none"
-      >
-        <AccountAvatar name={user.name} />
-        <span className="min-w-0 flex-1 truncate text-xs font-semibold">
-          {user.name}
-        </span>
-      </Link>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            className="-ml-1 flex h-9 min-w-0 flex-1 items-center gap-2 px-1 text-left text-sidebar-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring/45 focus-visible:outline-none data-[state=open]:bg-sidebar-accent"
+            aria-label={`Open account menu for ${user.name}`}
+            {...prefetchAccounts}
+          >
+            <AccountAvatar name={user.name} />
+            <span className="min-w-0 flex-1 truncate text-xs font-semibold">
+              {user.name}
+            </span>
+            <ChevronsUpDown className="size-3.5 shrink-0 text-sidebar-foreground/55" />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent
+          aria-label="Account menu"
+          side="top"
+          align="start"
+          className="w-64 p-1"
+        >
+          <AccountSwitcherSection user={user} onNavigate={closeMenu} />
+        </PopoverContent>
+      </Popover>
       <SettingsIconButton tooltipHidden={isMobile} />
       <SignOutButton
         developmentBypass={user.isDevelopmentBypass}
@@ -1802,8 +1823,8 @@ function AccessNavigationButton() {
 }
 
 async function signOut(isDevelopmentBypass: boolean) {
-  if (isDevelopmentBypass) await disableDevelopmentBypass()
-  else await authClient.signOut()
+  if (!isDevelopmentBypass) return signOutAllAccounts()
+  await disableDevelopmentBypass()
   clearAppearanceCache()
   window.location.assign("/")
 }

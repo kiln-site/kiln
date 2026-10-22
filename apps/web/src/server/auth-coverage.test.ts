@@ -21,6 +21,12 @@ const publicServerFunctions: Record<string, string> = {
   "users.ts:prepareAccountSignup": "Signed-out sign-up check, rate limited",
   "users.ts:getAccountClaimPreview": "Authorized by the emailed claim token",
   "users.ts:claimAccount": "Authorized by the emailed claim token",
+  "browser-accounts.ts:getBrowserAccounts":
+    "Lists only accounts this browser holds signed session cookies for",
+  "browser-accounts.ts:switchBrowserAccountSession":
+    "Authorized by this browser's signed cookie for the chosen session",
+  "browser-accounts.ts:resumeBrowserAccountSession":
+    "Activates a session this browser already holds a signed cookie for",
   "backup-downloads.ts:getBackupDownloadShare":
     "Authorized by the unguessable share link",
 }

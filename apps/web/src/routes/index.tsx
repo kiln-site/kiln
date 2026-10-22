@@ -21,10 +21,12 @@ import {
 } from "@/lib/relay-selectors"
 import { getInvitationPreview } from "@/server/access"
 import { getAuthState } from "@/server/auth"
+import { resumeBrowserAccountSession } from "@/server/browser-accounts"
 import { getUiPreferences } from "@/server/preferences"
 
 export const Route = createFileRoute("/")({
   validateSearch: z.object({
+    addAccount: z.union([z.literal(true), z.literal("true")]).optional(),
     email: z.string().optional(),
     forgot: z.union([z.literal(true), z.literal("true")]).optional(),
     redirect: z.string().optional(),
@@ -33,6 +35,19 @@ export const Route = createFileRoute("/")({
   }),
   beforeLoad: async ({ context, search }) => {
     const state = await getAuthState()
+    // A sign-in abandoned at two-factor, or a revoked session, can leave
+    // other accounts signed in on this browser with none active.
+    if (!state.user && (await resumeBrowserAccountSession())) {
+      throw redirect({ href: search.redirect?.startsWith("/") ? search.redirect : "/" })
+    }
+    if (state.user && search.addAccount && !state.user.isDevelopmentBypass) {
+      return {
+        ...state,
+        addingAccount: true,
+        invitationEmail: undefined,
+        invitationSignup: false,
+      }
+    }
     if (!state.user) {
       const reference = invitationReferenceFromRedirect(search.redirect)
       const invitation = reference
@@ -44,6 +59,7 @@ export const Route = createFileRoute("/")({
       const invitationSignup = Boolean(invitation && !invitation.accountExists)
       return {
         ...state,
+        addingAccount: false,
         invitationEmail: invitation?.email,
         invitationSignup,
       }
@@ -141,7 +157,11 @@ export const Route = createFileRoute("/")({
     meta: [
       {
         title: pageTitle(
-          match.context.invitationSignup ? "Create Account" : "Sign In"
+          match.context.invitationSignup
+            ? "Create Account"
+            : match.context.addingAccount
+              ? "Add Account"
+              : "Sign In"
         ),
       },
     ],
@@ -152,6 +172,7 @@ export const Route = createFileRoute("/")({
 function LoginRoute() {
   const search = Route.useSearch()
   const {
+    addingAccount,
     developmentBypassEnabled,
     emailDeliveryEnabled,
     invitationEmail,
@@ -161,8 +182,9 @@ function LoginRoute() {
   } = Route.useRouteContext()
   return (
     <AuthPage
+      addingAccount={addingAccount}
       key={`${invitationEmail ?? ""}:${invitationSignup ? "signup" : "signin"}:${search.forgot ? "forgot" : ""}`}
-      developmentBypassEnabled={developmentBypassEnabled}
+      developmentBypassEnabled={developmentBypassEnabled && !addingAccount}
       emailDeliveryEnabled={emailDeliveryEnabled}
       initialEmail={invitationEmail ?? search.email}
       lockedEmail={invitationSignup ? invitationEmail : undefined}
