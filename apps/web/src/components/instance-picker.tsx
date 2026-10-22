@@ -124,9 +124,15 @@ const kindOrder: ReadonlyArray<InstancePickerKind> = [
 const emptyGroups: ReadonlySet<InstancePickerGroup> = new Set()
 const emptyGroupList: ReadonlyArray<InstancePickerGroup> = []
 
-// Whether the surrounding picker opened as a phone drawer; set by
-// InstancePickerPopover, read by its trigger, content, and the picker list.
-const InstancePickerDrawerContext = React.createContext(false)
+// Whether the surrounding picker opens as a phone drawer, and its trigger;
+// set by InstancePickerPopover, read by its trigger, content, and the list.
+const InstancePickerSurfaceContext = React.createContext<{
+  drawer: boolean
+  triggerRef: React.RefObject<HTMLElement | null>
+}>({ drawer: false, triggerRef: { current: null } })
+
+const pickerSurfaceSelector =
+  '[data-slot="drawer-content"],[data-slot="popover-content"]'
 
 /**
  * A popover for an instance picker that opens as a bottom drawer on phones,
@@ -139,32 +145,58 @@ export function InstancePickerPopover({
   open,
 }: {
   children: React.ReactNode
-  onOpenChange?: (open: boolean) => void
-  open?: boolean
+  onOpenChange: (open: boolean) => void
+  open: boolean
 }) {
   const isMobile = useIsMobile()
-  // Keep the surface while open, so rotating a phone past the breakpoint
-  // doesn't swap it and lose the search.
-  const [drawerWhileOpen, setDrawerWhileOpen] = React.useState(isMobile)
-  if (!open && drawerWhileOpen !== isMobile) setDrawerWhileOpen(isMobile)
-  const drawer = open ? drawerWhileOpen : isMobile
+  const [drawer, setDrawer] = React.useState(isMobile)
+  const triggerRef = React.useRef<HTMLElement | null>(null)
+  const refocusTrigger = React.useRef(false)
+  // Swap between popover and drawer only while closed, so rotating a phone
+  // past the breakpoint keeps an open picker and its search. Swapping rebuilds
+  // the trigger, so focus that was on the picker moves to the new one.
+  React.useLayoutEffect(() => {
+    if (open || drawer === isMobile) return
+    const active = document.activeElement
+    refocusTrigger.current =
+      active instanceof HTMLElement &&
+      (triggerRef.current?.contains(active) === true ||
+        active.closest(pickerSurfaceSelector) !== null)
+    setDrawer(isMobile)
+  }, [drawer, isMobile, open])
+  React.useLayoutEffect(() => {
+    if (!refocusTrigger.current) return
+    refocusTrigger.current = false
+    triggerRef.current?.focus({ preventScroll: true })
+  }, [drawer])
+  const surface = React.useMemo(() => ({ drawer, triggerRef }), [drawer])
   const Root = drawer ? Drawer : Popover
   return (
-    <InstancePickerDrawerContext.Provider value={drawer}>
+    <InstancePickerSurfaceContext.Provider value={surface}>
       <Root open={open} onOpenChange={onOpenChange}>
         {children}
       </Root>
-    </InstancePickerDrawerContext.Provider>
+    </InstancePickerSurfaceContext.Provider>
   )
 }
 
-export function InstancePickerPopoverTrigger(
-  props: React.ComponentProps<typeof PopoverTrigger>
-) {
-  return React.useContext(InstancePickerDrawerContext) ? (
-    <DrawerTrigger {...props} />
+export function InstancePickerPopoverTrigger({
+  ref,
+  ...props
+}: React.ComponentProps<typeof PopoverTrigger>) {
+  const { drawer, triggerRef } = React.useContext(InstancePickerSurfaceContext)
+  const setTrigger = React.useCallback(
+    (node: HTMLButtonElement | null) => {
+      triggerRef.current = node
+      if (typeof ref === "function") ref(node)
+      else if (ref) ref.current = node
+    },
+    [ref, triggerRef]
+  )
+  return drawer ? (
+    <DrawerTrigger ref={setTrigger} {...props} />
   ) : (
-    <PopoverTrigger {...props} />
+    <PopoverTrigger ref={setTrigger} {...props} />
   )
 }
 
@@ -178,7 +210,7 @@ export function InstancePickerPopoverContent({
   title,
   ...props
 }: React.ComponentProps<typeof PopoverContent> & { title: string }) {
-  if (!React.useContext(InstancePickerDrawerContext)) {
+  if (!React.useContext(InstancePickerSurfaceContext).drawer) {
     return (
       <PopoverContent onCloseAutoFocus={onCloseAutoFocus} {...props}>
         {children}
@@ -366,7 +398,7 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
   const activeItem = visibleItems[activeItemIndex]
   // In a phone drawer the search field sits last, next to the keyboard, and
   // the list fills the drawer.
-  const searchAtBottom = React.useContext(InstancePickerDrawerContext)
+  const searchAtBottom = React.useContext(InstancePickerSurfaceContext).drawer
 
   const searchBar = (
     <div
