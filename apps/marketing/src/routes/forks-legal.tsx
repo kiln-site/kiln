@@ -26,7 +26,7 @@ function ForksLegalPage() {
       <p>
         You followed a legal link from{" "}
         {panel ? (
-          <span className="font-mono text-foreground">{panel}</span>
+          <span className="font-mono break-all text-foreground">{panel}</span>
         ) : (
           "a panel"
         )}

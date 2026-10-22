@@ -47,20 +47,25 @@ export interface KilnLegalUrls {
  * doesn't run it, naming the panel it came from.
  */
 export function kilnLegalUrls(): KilnLegalUrls {
-  const configured = process.env.KILN_MARKETING_URL?.trim()
-  const site =
-    configured && URL.canParse(configured)
-      ? configured.replace(/\/+$/u, "")
-      : kilnGitRepository() === DEFAULT_KILN_GIT_REPO
-        ? "https://kiln.site"
-        : null
+  const configured = webUrl(process.env.KILN_MARKETING_URL)
+  const site = configured
+    ? configured.href.replace(/\/+$/u, "")
+    : kilnGitRepository() === DEFAULT_KILN_GIT_REPO
+      ? "https://kiln.site"
+      : null
   if (site) return { privacy: `${site}/privacy`, terms: `${site}/terms` }
   const notice = new URL("https://kiln.site/forks-legal")
-  const panel = process.env.KILN_URL?.trim()
-  if (panel && URL.canParse(panel)) {
-    notice.searchParams.set("from", new URL(panel).origin)
-  }
+  const panel = webUrl(process.env.KILN_URL)
+  if (panel) notice.searchParams.set("from", panel.origin)
   return { privacy: notice.href, terms: notice.href }
+}
+
+// An http or https address, so a link built from it can't run script.
+function webUrl(value: string | undefined): URL | null {
+  const trimmed = value?.trim()
+  if (!trimmed || !URL.canParse(trimmed)) return null
+  const url = new URL(trimmed)
+  return url.protocol === "https:" || url.protocol === "http:" ? url : null
 }
 
 export function kilnBrickCatalogUrl(): string {
