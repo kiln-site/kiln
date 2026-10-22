@@ -12,6 +12,7 @@ const nestedFloatingSelector = [
   "[data-slot=popover-content]",
   "[data-slot=combobox-content]",
   "[data-radix-popper-content-wrapper]",
+  "[data-slot=drawer-content]",
 ].join(",")
 
 function Dialog({ onOpenChange, ...props }: DialogPrimitive.Root.Props) {

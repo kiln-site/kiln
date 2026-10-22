@@ -23,11 +23,6 @@ import {
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@workspace/ui/components/popover"
-import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
@@ -47,7 +42,12 @@ import {
 import { IdentityName } from "@/components/identity-name"
 import { InfoCopyValue } from "@/components/info-page"
 import { InfraSyncButton } from "@/components/infra-sync-button"
-import { InstancePickerContent } from "@/components/instance-picker"
+import {
+  InstancePickerContent,
+  InstancePickerPopover,
+  InstancePickerPopoverContent,
+  InstancePickerPopoverTrigger,
+} from "@/components/instance-picker"
 import { AppKindIcon, RelayKindIcon } from "@/components/instance-kind-icon"
 import { relayHostAccessQueryOptions } from "@/components/relay/relay-host-access"
 import { useRelayPermission } from "@/components/relay/relay-settings"
@@ -441,8 +441,8 @@ const VolumeMounts = React.memo(function VolumeMounts({
   ).size
   const containers = volume.mounts.length
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
+    <InstancePickerPopover open={open} onOpenChange={setOpen}>
+      <InstancePickerPopoverTrigger asChild>
         <button
           type="button"
           aria-label={`${apps} ${apps === 1 ? "app" : "apps"}, ${containers} ${containers === 1 ? "container" : "containers"} mount ${volume.name}`}
@@ -456,8 +456,9 @@ const VolumeMounts = React.memo(function VolumeMounts({
             other="containers"
           />
         </button>
-      </PopoverTrigger>
-      <PopoverContent
+      </InstancePickerPopoverTrigger>
+      <InstancePickerPopoverContent
+        title="Mounts"
         aria-label="Mounts"
         align="start"
         sideOffset={6}
@@ -469,8 +470,8 @@ const VolumeMounts = React.memo(function VolumeMounts({
           volume={volume}
           onNavigate={close}
         />
-      </PopoverContent>
-    </Popover>
+      </InstancePickerPopoverContent>
+    </InstancePickerPopover>
   )
 })
 

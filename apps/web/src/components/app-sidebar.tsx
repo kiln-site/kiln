@@ -22,12 +22,6 @@ import {
   PopoverTrigger,
 } from "@workspace/ui/components/popover"
 import {
-  Drawer,
-  DrawerContent,
-  DrawerTitle,
-  DrawerTrigger,
-} from "@workspace/ui/components/drawer"
-import {
   Sidebar,
   SidebarContent,
   SidebarFooter,
@@ -70,6 +64,9 @@ import {
 import {
   InstancePickerContent,
   type InstancePickerItem,
+  InstancePickerPopover,
+  InstancePickerPopoverContent,
+  InstancePickerPopoverTrigger,
 } from "@/components/instance-picker"
 import { authClient } from "@/lib/auth-client"
 import type { AuthenticatedUser } from "@/lib/auth-session"
@@ -985,7 +982,6 @@ const InstanceSelector = React.memo(function InstanceSelector({
   navigateToTab?: (tab: InstanceTab, serverId: string) => void
   selection: InstanceSelection
 }) {
-  const { isMobile } = useSidebar()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [open, setOpen] = React.useState(false)
@@ -1128,14 +1124,11 @@ const InstanceSelector = React.memo(function InstanceSelector({
     [selectedKey]
   )
   const instance = selection.kind === "server" ? selection.instance : null
-  // On phones the picker opens as a drawer from the bottom instead.
-  const PickerRoot = isMobile ? Drawer : Popover
-  const PickerTrigger = isMobile ? DrawerTrigger : PopoverTrigger
 
   return (
     <SidebarMenuItem>
-      <PickerRoot open={open} onOpenChange={handleOpenChange}>
-        <PickerTrigger asChild>
+      <InstancePickerPopover open={open} onOpenChange={handleOpenChange}>
+        <InstancePickerPopoverTrigger asChild>
           <SidebarMenuButton
             size="lg"
             tooltip={
@@ -1213,36 +1206,24 @@ const InstanceSelector = React.memo(function InstanceSelector({
             )}
             <ChevronsUpDown className="ml-auto size-3.5! text-sidebar-foreground/60 group-data-[collapsible=icon]:hidden" />
           </SidebarMenuButton>
-        </PickerTrigger>
-        {isMobile ? (
-          <DrawerContent onCloseAutoFocus={handleCloseAutoFocus}>
-            <DrawerTitle className="sr-only">Switch instance</DrawerTitle>
-            <SidebarInstancePicker
-              capabilities={capabilities}
-              searchPlacement="bottom"
-              selectedKeys={selectedKeys}
-              onNavigate={closePicker}
-              onSelect={selectInstance}
-            />
-          </DrawerContent>
-        ) : (
-          <PopoverContent
-            aria-label="Instances"
-            side="right"
-            align="start"
-            sideOffset={6}
-            className="w-72 max-w-[calc(100vw-1rem)] overflow-hidden p-0"
-            onCloseAutoFocus={handleCloseAutoFocus}
-          >
-            <SidebarInstancePicker
-              capabilities={capabilities}
-              selectedKeys={selectedKeys}
-              onNavigate={closePicker}
-              onSelect={selectInstance}
-            />
-          </PopoverContent>
-        )}
-      </PickerRoot>
+        </InstancePickerPopoverTrigger>
+        <InstancePickerPopoverContent
+          title="Switch instance"
+          aria-label="Instances"
+          side="right"
+          align="start"
+          sideOffset={6}
+          className="w-72 max-w-[calc(100vw-1rem)] overflow-hidden p-0"
+          onCloseAutoFocus={handleCloseAutoFocus}
+        >
+          <SidebarInstancePicker
+            capabilities={capabilities}
+            selectedKeys={selectedKeys}
+            onNavigate={closePicker}
+            onSelect={selectInstance}
+          />
+        </InstancePickerPopoverContent>
+      </InstancePickerPopover>
     </SidebarMenuItem>
   )
 })
@@ -1300,13 +1281,11 @@ const SidebarInstancePicker = React.memo(function SidebarInstancePicker({
   capabilities,
   onNavigate,
   onSelect,
-  searchPlacement,
   selectedKeys,
 }: {
   capabilities: NavigationAccessCapabilities
   onNavigate: () => void
   onSelect: (item: InstancePickerItem) => void
-  searchPlacement?: "bottom" | "top"
   selectedKeys: ReadonlySet<string>
 }) {
   const destinations = accessibleInfrastructureDestinations(capabilities)
@@ -1366,7 +1345,6 @@ const SidebarInstancePicker = React.memo(function SidebarInstancePicker({
       ariaLabel="Instances"
       emptyMessage="No managed instances"
       items={items}
-      searchPlacement={searchPlacement}
       selectedKeys={selectedKeys}
       viewAll
       onNavigate={onNavigate}

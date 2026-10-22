@@ -15,6 +15,12 @@ import {
 import type { LucideProps } from "lucide-react"
 
 import {
+  Drawer,
+  DrawerContent,
+  DrawerTitle,
+  DrawerTrigger,
+} from "@workspace/ui/components/drawer"
+import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
@@ -28,6 +34,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@workspace/ui/components/popover"
+import { useIsMobile } from "@workspace/ui/hooks/use-mobile"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { useInstanceFavoriteKeys } from "@/components/instance-favorite"
@@ -83,11 +90,6 @@ interface InstancePickerContentProps {
   includeKindGroups?: boolean
   /** Row being saved; shows a spinner and locks every row until it settles. */
   pendingKey?: string
-  /**
-   * "bottom" puts the search field last, next to a phone's keyboard, and lets
-   * the list fill the height its container allows.
-   */
-  searchPlacement?: "bottom" | "top"
   selectedGroups?: ReadonlySet<InstancePickerGroup>
   selectedKeys: ReadonlySet<string>
   /** Shows a "View all" footer that follows the active type filter. */
@@ -122,6 +124,70 @@ const kindOrder: ReadonlyArray<InstancePickerKind> = [
 const emptyGroups: ReadonlySet<InstancePickerGroup> = new Set()
 const emptyGroupList: ReadonlyArray<InstancePickerGroup> = []
 
+// Whether the surrounding picker opened as a phone drawer; set by
+// InstancePickerPopover, read by its trigger, content, and the picker list.
+const InstancePickerDrawerContext = React.createContext(false)
+
+/**
+ * A popover for an instance picker that opens as a bottom drawer on phones,
+ * with the search field next to the keyboard. Use with
+ * InstancePickerPopoverTrigger and InstancePickerPopoverContent.
+ */
+export function InstancePickerPopover({
+  children,
+  onOpenChange,
+  open,
+}: {
+  children: React.ReactNode
+  onOpenChange?: (open: boolean) => void
+  open?: boolean
+}) {
+  const drawer = useIsMobile()
+  const Root = drawer ? Drawer : Popover
+  return (
+    <InstancePickerDrawerContext.Provider value={drawer}>
+      <Root open={open} onOpenChange={onOpenChange}>
+        {children}
+      </Root>
+    </InstancePickerDrawerContext.Provider>
+  )
+}
+
+export function InstancePickerPopoverTrigger(
+  props: React.ComponentProps<typeof PopoverTrigger>
+) {
+  return React.useContext(InstancePickerDrawerContext) ? (
+    <DrawerTrigger {...props} />
+  ) : (
+    <PopoverTrigger {...props} />
+  )
+}
+
+/**
+ * The popover's content on desktop. On phones the drawer ignores the popover's
+ * placement and sizing, and `title` names it for screen readers.
+ */
+export function InstancePickerPopoverContent({
+  children,
+  onCloseAutoFocus,
+  title,
+  ...props
+}: React.ComponentProps<typeof PopoverContent> & { title: string }) {
+  if (!React.useContext(InstancePickerDrawerContext)) {
+    return (
+      <PopoverContent onCloseAutoFocus={onCloseAutoFocus} {...props}>
+        {children}
+      </PopoverContent>
+    )
+  }
+  return (
+    <DrawerContent onCloseAutoFocus={onCloseAutoFocus}>
+      <DrawerTitle className="sr-only">{title}</DrawerTitle>
+      {children}
+    </DrawerContent>
+  )
+}
+
 export const InstancePickerContent = React.memo(function InstancePickerContent({
   ariaLabel = "Instances",
   emptyMessage = "No instances found",
@@ -135,7 +201,6 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
   onSelectGroup,
   onSelectMany,
   pendingKey,
-  searchPlacement = "top",
   selectedGroups = emptyGroups,
   selectedKeys,
   viewAll = false,
@@ -294,7 +359,9 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
       ? (activeTypeFilters[0]?.id as InstancePickerKind)
       : undefined
   const activeItem = visibleItems[activeItemIndex]
-  const searchAtBottom = searchPlacement === "bottom"
+  // In a phone drawer the search field sits last, next to the keyboard, and
+  // the list fills the drawer.
+  const searchAtBottom = React.useContext(InstancePickerDrawerContext)
 
   const searchBar = (
     <div

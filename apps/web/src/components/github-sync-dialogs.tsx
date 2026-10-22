@@ -62,6 +62,9 @@ import { SourceAccount } from "@/components/source-account"
 import {
   InstancePickerContent,
   type InstancePickerItem,
+  InstancePickerPopover,
+  InstancePickerPopoverContent,
+  InstancePickerPopoverTrigger,
 } from "@/components/instance-picker"
 import {
   githubBranchesQueryOptions,
@@ -620,8 +623,8 @@ function TargetPicker({
   )
   const TargetIcon = value ? targetIcon[value.kind] : Layers
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
+    <InstancePickerPopover open={open} onOpenChange={setOpen}>
+      <InstancePickerPopoverTrigger asChild>
         <Button
           type="button"
           variant="outline"
@@ -638,8 +641,9 @@ function TargetPicker({
           </span>
           <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
         </Button>
-      </PopoverTrigger>
-      <PopoverContent
+      </InstancePickerPopoverTrigger>
+      <InstancePickerPopoverContent
+        title="Instances"
         align="start"
         className="z-[70] w-[min(34rem,calc(100vw-2rem))] overflow-hidden p-0"
       >
@@ -656,8 +660,8 @@ function TargetPicker({
             setOpen(false)
           }}
         />
-      </PopoverContent>
-    </Popover>
+      </InstancePickerPopoverContent>
+    </InstancePickerPopover>
   )
 }
 

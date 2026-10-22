@@ -4,11 +4,6 @@ import { ArrowLeftRight, Layers } from "lucide-react"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@workspace/ui/components/popover"
-import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
@@ -24,6 +19,9 @@ import {
   InstancePickerContent,
   type InstancePickerGroup,
   type InstancePickerItem,
+  InstancePickerPopover,
+  InstancePickerPopoverContent,
+  InstancePickerPopoverTrigger,
 } from "@/components/instance-picker"
 import { WorkspaceSummaryCard } from "@/components/workspace-summary-card"
 
@@ -174,7 +172,7 @@ function ServerScopePickerView<K extends ScopeKind>({
 
   return (
     <div className="mb-3">
-      <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
+      <InstancePickerPopover open={pickerOpen} onOpenChange={setPickerOpen}>
         <WorkspaceSummaryCard
           action={
             <div className="flex shrink-0 items-center gap-2">
@@ -188,7 +186,7 @@ function ServerScopePickerView<K extends ScopeKind>({
                   </TooltipContent>
                 </Tooltip>
               ) : null}
-              <PopoverTrigger asChild>
+              <InstancePickerPopoverTrigger asChild>
                 <Button
                   type="button"
                   variant="outline"
@@ -198,7 +196,7 @@ function ServerScopePickerView<K extends ScopeKind>({
                   <ArrowLeftRight />
                   {selectedServer || kindScope ? changeLabel : chooseLabel}
                 </Button>
-              </PopoverTrigger>
+              </InstancePickerPopoverTrigger>
             </div>
           }
           icon={<ScopeIcon className="size-5" />}
@@ -217,7 +215,8 @@ function ServerScopePickerView<K extends ScopeKind>({
             {selectionMetadata}
           </p>
         </WorkspaceSummaryCard>
-        <PopoverContent
+        <InstancePickerPopoverContent
+          title={ariaLabel}
           align="end"
           className="w-[min(32rem,calc(100vw-2rem))] overflow-hidden p-0"
         >
@@ -232,8 +231,8 @@ function ServerScopePickerView<K extends ScopeKind>({
             onSelect={selectServer}
             onSelectGroup={allowAll || onSelectKind ? selectGroup : undefined}
           />
-        </PopoverContent>
-      </Popover>
+        </InstancePickerPopoverContent>
+      </InstancePickerPopover>
     </div>
   )
 }

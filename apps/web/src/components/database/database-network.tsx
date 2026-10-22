@@ -11,11 +11,6 @@ import { Network } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@workspace/ui/components/popover"
-import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
@@ -28,6 +23,9 @@ import {
 import {
   InstancePickerContent,
   type InstancePickerItem,
+  InstancePickerPopover,
+  InstancePickerPopoverContent,
+  InstancePickerPopoverTrigger,
 } from "@/components/instance-picker"
 import { canAccessInstancePermission } from "@/lib/navigation-destinations"
 import {
@@ -127,9 +125,9 @@ export const DatabaseNetworkPicker = React.memo(function DatabaseNetworkPicker({
   const [open, setOpen] = React.useState(false)
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <InstancePickerPopover open={open} onOpenChange={setOpen}>
       {variant === "button" ? (
-        <PopoverTrigger asChild>
+        <InstancePickerPopoverTrigger asChild>
           <Button
             aria-expanded={open}
             size="sm"
@@ -139,11 +137,11 @@ export const DatabaseNetworkPicker = React.memo(function DatabaseNetworkPicker({
             <Network />
             Connect servers
           </Button>
-        </PopoverTrigger>
+        </InstancePickerPopoverTrigger>
       ) : (
         <Tooltip>
           <TooltipTrigger asChild>
-            <PopoverTrigger asChild>
+            <InstancePickerPopoverTrigger asChild>
               <Button
                 aria-label={`Connect game servers to ${database.name}`}
                 aria-expanded={open}
@@ -154,18 +152,19 @@ export const DatabaseNetworkPicker = React.memo(function DatabaseNetworkPicker({
               >
                 <Network />
               </Button>
-            </PopoverTrigger>
+            </InstancePickerPopoverTrigger>
           </TooltipTrigger>
           <TooltipContent side="bottom">Connect game servers</TooltipContent>
         </Tooltip>
       )}
-      <PopoverContent
+      <InstancePickerPopoverContent
+        title={`Connect game servers to ${database.name}`}
         align="end"
         className="w-[min(32rem,calc(100vw-2rem))] overflow-hidden p-0"
       >
         {open ? <DatabaseServerPicker database={database} /> : null}
-      </PopoverContent>
-    </Popover>
+      </InstancePickerPopoverContent>
+    </InstancePickerPopover>
   )
 })
 

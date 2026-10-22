@@ -37,11 +37,6 @@ import {
 } from "@workspace/ui/components/dropdown-menu"
 import { Input } from "@workspace/ui/components/input"
 import { Skeleton } from "@workspace/ui/components/skeleton"
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@workspace/ui/components/popover"
 import { Switch } from "@workspace/ui/components/switch"
 import {
   Tooltip,
@@ -61,6 +56,9 @@ import { statusColumnWidth } from "@/components/instance-name-presentation"
 import {
   InstancePickerContent,
   type InstancePickerItem,
+  InstancePickerPopover,
+  InstancePickerPopoverContent,
+  InstancePickerPopoverTrigger,
 } from "@/components/instance-picker"
 import { StatusIndicator } from "@/components/status-indicator"
 import { TailscaleRelayUpdateHint } from "@/components/tailscale-relay-update-hint"
@@ -408,8 +406,11 @@ export const TailscaleConnectServersPopover = React.memo(
     )
 
     return (
-      <Popover open={open && Boolean(stack)} onOpenChange={onOpenChange}>
-        <PopoverTrigger asChild>
+      <InstancePickerPopover
+        open={open && Boolean(stack)}
+        onOpenChange={onOpenChange}
+      >
+        <InstancePickerPopoverTrigger asChild>
           <Button
             type="button"
             size="sm"
@@ -422,8 +423,9 @@ export const TailscaleConnectServersPopover = React.memo(
             )}
             Connect Game Servers
           </Button>
-        </PopoverTrigger>
-        <PopoverContent
+        </InstancePickerPopoverTrigger>
+        <InstancePickerPopoverContent
+          title="Connect game servers"
           align="end"
           className="w-[min(28rem,calc(100vw-2rem))] overflow-hidden p-0"
         >
@@ -447,8 +449,8 @@ export const TailscaleConnectServersPopover = React.memo(
               {errorMessage(save.error)}
             </p>
           ) : null}
-        </PopoverContent>
-      </Popover>
+        </InstancePickerPopoverContent>
+      </InstancePickerPopover>
     )
   }
 )
