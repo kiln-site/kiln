@@ -290,6 +290,30 @@ describeMysql("instance registry", () => {
     )
 
     it.effect(
+      "gives a server to the person who created it even if a snapshot recorded it first",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* insertRelay("relay-race", { created_by: "relay-owner" })
+          const created = server({ id: "cli-server", name: "From the CLI" })
+          // A snapshot read after the create lands first: the Relay's owner
+          // holds it until Hearth records who made it.
+          yield* syncInstanceRegistryEffect("relay-race", [created])
+          assert.strictEqual(
+            (yield* instances)["cli-server"]?.ownerId,
+            "relay-owner"
+          )
+
+          yield* recordCreatedInstanceEffect("relay-race", created, "user-one")
+
+          assert.strictEqual(
+            (yield* instances)["cli-server"]?.ownerId,
+            "user-one"
+          )
+        })
+    )
+
+    it.effect(
       "keeps Hearth's deletion when a startup snapshot from before it commits later",
       () =>
         Effect.gen(function* () {

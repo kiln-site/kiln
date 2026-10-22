@@ -140,6 +140,7 @@ function queryScopes(
       prefix(["instance-inventory"]),
       exact(queryKeys.access.capabilities),
       prefix(["resource-access", scope.relayId]),
+      prefix(["app-owner", scope.relayId]),
       prefix(["access-resources"]),
       prefix(["my-resource-invitations"]),
       prefix(["resource-invitation"]),
