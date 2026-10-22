@@ -150,14 +150,14 @@ export function InstancePickerPopover({
   const isMobile = useIsMobile()
   const [drawer, setDrawer] = React.useState(isMobile)
   // Swap between popover and drawer only while closed, so rotating a phone
-  // past the breakpoint keeps an open picker and its search. A picker that
-  // closes with a swap pending waits until its surface has finished closing
-  // and handed focus back, then swaps.
+  // past the breakpoint keeps an open picker and its search. A closing picker
+  // waits until its surface has finished closing and handed focus back, even
+  // if the breakpoint changes mid-close.
   const [closing, setClosing] = React.useState(false)
   const [wasOpen, setWasOpen] = React.useState(open)
   if (wasOpen !== open) {
     setWasOpen(open)
-    setClosing(!open && drawer !== isMobile)
+    setClosing(!open)
   }
   const closed = React.useCallback(() => setClosing(false), [])
   const triggerRef = React.useRef<HTMLElement | null>(null)
