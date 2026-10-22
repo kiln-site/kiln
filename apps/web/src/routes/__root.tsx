@@ -35,6 +35,11 @@ export const Route = createRootRouteWithContext<AppRouterContext>()({
         title: "Kiln",
       },
       {
+        // The label under the Home Screen icon on iPhone and iPad.
+        name: "apple-mobile-web-app-title",
+        content: "Kiln",
+      },
+      {
         name: "description",
         content:
           "Deploy and operate reproducible game server instances with Kiln.",

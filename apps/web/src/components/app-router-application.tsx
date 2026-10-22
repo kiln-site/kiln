@@ -5,6 +5,7 @@ import { AppDocument } from "@/components/app-document"
 import { AppRouterErrorBoundary } from "@/components/app-error-page"
 import { AppFrame } from "@/components/app-frame"
 import { PageTimingMonitor } from "@/components/page-timing-monitor"
+import { ServiceWorker } from "@/components/service-worker"
 import { useFollowActiveAccount } from "@/components/use-follow-active-account"
 
 export function AppRouterApplication() {
@@ -19,6 +20,7 @@ export function AppRouterApplication() {
     <AppDocument>
       {userId ? <ActiveAccountFollower userId={userId} /> : null}
       <PageTimingMonitor />
+      <ServiceWorker />
       <AppRouterErrorBoundary>
         {usesAppFrame ? (
           <AppFrame>

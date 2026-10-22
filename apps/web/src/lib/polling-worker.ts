@@ -11,7 +11,10 @@ const passes = Metric.counter("hearth.worker.passes", {
 })
 
 /** Hearth's workers that poll MySQL for due jobs. */
-export type PollingWorkerName = "Instances.postProvision" | "TailscaleCleanup"
+export type PollingWorkerName =
+  | "Instances.postProvision"
+  | "Notifications.push"
+  | "TailscaleCleanup"
 
 /**
  * What a pass found: due jobs it worked through, or none, with when the next

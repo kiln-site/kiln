@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>Kiln is offline</title>
+    <!-- Served by the service worker when a page can't reach Hearth, so it
+         stands alone: no fonts, scripts, or images from elsewhere. -->
+    <style>
+      :root {
+        color-scheme: dark;
+        --background: hsl(24.6 8% 6.5%);
+        --card: hsl(24.6 9% 9% / 0.8);
+        --border: hsl(24.6 12% 17%);
+        --foreground: hsl(24.6 8% 92%);
+        --muted: hsl(24.6 10% 64%);
+        --primary: hsl(24.6 95% 58%);
+        --primary-foreground: hsl(24.6 24% 8%);
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100dvh;
+        display: grid;
+        place-items: center;
+        padding: 1rem 0.75rem;
+        background: var(--background);
+        color: var(--foreground);
+        font-family:
+          system-ui,
+          -apple-system,
+          "Segoe UI",
+          sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      .backdrop {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        background:
+          radial-gradient(
+            circle at 50% 50%,
+            hsl(24.6 95% 58% / 0.05),
+            transparent 19rem
+          ),
+          linear-gradient(var(--border), var(--border)) 50% 50% / 1px 100%
+            no-repeat,
+          linear-gradient(var(--border), var(--border)) 50% 50% / 100% 1px
+            no-repeat;
+        opacity: 0.6;
+      }
+      main {
+        position: relative;
+        width: 100%;
+        max-width: 36rem;
+        border: 1px solid var(--border);
+        background: var(--card);
+        box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.25);
+        backdrop-filter: blur(4px);
+      }
+      header,
+      footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        padding: 0.75rem 1rem;
+        border-color: var(--border);
+        border-style: solid;
+        border-width: 0;
+      }
+      header {
+        border-bottom-width: 1px;
+      }
+      footer {
+        border-top-width: 1px;
+        background: hsl(24.6 13% 13.5% / 0.1);
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        font-size: 0.875rem;
+        font-weight: 600;
+      }
+      .mark {
+        width: 1.75rem;
+        height: 1.75rem;
+      }
+      .label {
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+        font-size: 0.6875rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .status {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        color: var(--primary);
+      }
+      .pulse {
+        width: 0.375rem;
+        height: 0.375rem;
+        background: var(--primary);
+        box-shadow: 0 0 12px var(--primary);
+        animation: pulse 1.6s ease-in-out infinite;
+      }
+      @keyframes pulse {
+        50% {
+          opacity: 0.3;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .pulse {
+          animation: none;
+        }
+      }
+      .content {
+        padding: 1.25rem;
+      }
+      h1 {
+        margin: 0;
+        max-width: 28rem;
+        font-size: 1.5rem;
+        line-height: 1.2;
+        font-weight: 600;
+        letter-spacing: -0.035em;
+        text-wrap: balance;
+      }
+      p {
+        margin: 1rem 0 0;
+        max-width: 28rem;
+        font-size: 0.875rem;
+        line-height: 1.5rem;
+        color: var(--muted);
+      }
+      button {
+        margin-top: 1.5rem;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.5rem;
+        height: 2.25rem;
+        padding: 0 1rem;
+        border: 0;
+        background: var(--primary);
+        color: var(--primary-foreground);
+        font: inherit;
+        font-size: 0.875rem;
+        font-weight: 500;
+        cursor: pointer;
+      }
+      button:focus-visible {
+        outline: 2px solid var(--foreground);
+        outline-offset: 2px;
+      }
+      @media (max-width: 639px) {
+        button {
+          width: 100%;
+        }
+      }
+      @media (min-width: 640px) {
+        body {
+          padding: 2.5rem 1.25rem;
+        }
+        header,
+        footer {
+          padding: 0.75rem 1.25rem;
+        }
+        .content {
+          padding: 1.75rem;
+        }
+        h1 {
+          font-size: 1.875rem;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="backdrop"></div>
+    <main>
+      <header>
+        <span class="brand"><svg class="mark" aria-hidden="true" viewBox="1208 1208 9396 9396" xmlns="http://www.w3.org/2000/svg" style="fill-rule:evenodd;clip-rule:evenodd;stroke-linejoin:round;stroke-miterlimit:2;fill:#e9842b;"><g transform="matrix(1.75,0,0,1.790281,-4429.133858,-4233.542099)"><g><g><g transform="matrix(0.522766,0,0,0.306408,2644.498296,3261.60539)"><g><path d="M9627,3714L9627,6605L2849,6605L2849,3714L9627,3714ZM9175.133,4581.3L8271.4,4581.3L8271.4,5737.7L9175.133,5737.7L9175.133,4581.3ZM5560.2,4966.767L3300.867,4966.767L3300.867,5352.233L5560.2,5352.233L5560.2,4966.767Z"/></g></g><g transform="matrix(0.522766,0,0,0.306408,2644.498296,5387.589641)"><g><path d="M9627,3714L9627,6605L2849,6605L2849,3714L9627,3714ZM9175.133,4581.3L8271.4,4581.3L8271.4,5737.7L9175.133,5737.7L9175.133,4581.3ZM5560.2,4966.767L3300.867,4966.767L3300.867,5352.233L5560.2,5352.233L5560.2,4966.767Z"/></g></g><g transform="matrix(0.522766,0,0,0.306408,2644.498296,4324.597516)"><g><path d="M9627,3714L9627,6605L2849,6605L2849,3714L9627,3714ZM9175.133,4581.3L8271.4,4581.3L8271.4,5737.7L9175.133,5737.7L9175.133,4581.3ZM5560.2,4966.767L3300.867,4966.767L3300.867,5352.233L5560.2,5352.233L5560.2,4966.767Z"/></g></g></g></g><g transform="matrix(0.975151,0,0,1.005805,19.503011,44.916375)"><rect x="5279" y="3807" width="1514" height="411"/></g><g transform="matrix(1.248193,0,0,1.005805,-1628.579453,-474.768665)"><rect x="5279" y="3807" width="1514" height="411"/></g><g transform="matrix(3.120482,0,0,1.149491,-12929.716348,3123.88643)"><rect x="5279" y="3807" width="1514" height="411"/></g></g></svg> Kiln</span>
+        <span class="label status"><span class="pulse"></span>Reconnecting</span>
+      </header>
+      <div class="content">
+        <h1>Your Kiln is out of reach</h1>
+        <p>
+          This device is offline, or Hearth isn't answering. Kiln picks up
+          where you left off as soon as it's back.
+        </p>
+        <button type="button" onclick="location.reload()">Try again</button>
+      </div>
+      <footer class="label">Hearth interface / offline</footer>
+    </main>
+    <script>
+      // Reloads once Hearth answers again, as when the network returns or
+      // Hearth finishes restarting.
+      let checking = false
+      async function check() {
+        if (checking || !navigator.onLine) return
+        checking = true
+        try {
+          const response = await fetch(location.href, {
+            cache: "no-store",
+            method: "HEAD",
+          })
+          if (response.status < 500) location.reload()
+        } catch {
+          // Still unreachable.
+        } finally {
+          checking = false
+        }
+      }
+      addEventListener("online", check)
+      setInterval(check, 5000)
+    </script>
+  </body>
+</html>

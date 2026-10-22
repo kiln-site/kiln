@@ -20,6 +20,7 @@ import { auditEvents } from "./0017_audit_events"
 import { appDeployments } from "./0018_app_deployments"
 import { backupErrorCodes } from "./0019_backup_error_codes"
 import { appImageUpdates } from "./0020_app_image_updates"
+import { pushSubscriptions } from "./0021_push_subscriptions"
 
 // Append new migrations with the next id. Never edit or reorder applied ones.
 export const migrations: ReadonlyArray<Migration> = [
@@ -43,4 +44,5 @@ export const migrations: ReadonlyArray<Migration> = [
   appDeployments,
   backupErrorCodes,
   appImageUpdates,
+  pushSubscriptions,
 ]

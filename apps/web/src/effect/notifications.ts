@@ -14,6 +14,7 @@ import {
   type KilnNotification,
   type NotificationContent,
 } from "@/lib/notifications"
+import { wakePollingWorker } from "@/lib/polling-worker"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 
 interface NotificationRow extends RowDataPacket {
@@ -92,9 +93,13 @@ export const resolveInvitationNotificationsEffect = Effect.fn(
   )
 })
 
-/** Tells the users' open tabs to reload their notifications. */
+/**
+ * Tells the users' open tabs to reload their notifications, and pushes new
+ * ones to their devices. Call it once the change is committed.
+ */
 export function publishNotificationChange(userIds: ReadonlyArray<string>) {
   if (!userIds.length) return
+  wakePollingWorker("Notifications.push")
   publishRealtimeChange({
     audience: { kind: "users", userIds: [...new Set(userIds)] },
     topics: ["notifications"],
@@ -122,7 +127,7 @@ export const listNotificationsEffect = Effect.fn("notifications.list")(
     )
     const notifications = rows.flatMap((row): Array<KilnNotification> => {
       // Rows outlive Kiln versions; skip kinds this version can't show.
-      const content = decodeContent(row)
+      const content = decodeNotificationContent(row.kind, row.data)
       return Option.isSome(content)
         ? [
             {
@@ -279,20 +284,20 @@ const decodeJsonString = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Unknown)
 )
 
-function decodeContent(
-  row: NotificationRow
+/**
+ * A stored notification's content, or none for a kind or shape this version
+ * of Kiln can't show.
+ */
+export function decodeNotificationContent(
+  kind: string,
+  data: unknown
 ): Option.Option<NotificationContent> {
-  const data =
-    typeof row.data === "string"
-      ? decodeJsonString(row.data)
-      : Option.some(row.data)
-  return data.pipe(
+  const value =
+    typeof data === "string" ? decodeJsonString(data) : Option.some(data)
+  return value.pipe(
     Option.filter(Predicate.isObject),
     Option.flatMap((value) => {
-      const parsed = notificationContentSchema.safeParse({
-        ...value,
-        kind: row.kind,
-      })
+      const parsed = notificationContentSchema.safeParse({ ...value, kind })
       return parsed.success ? Option.some(parsed.data) : Option.none()
     })
   )

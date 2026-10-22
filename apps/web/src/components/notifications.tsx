@@ -24,7 +24,6 @@ import {
   NotificationGroupLabel,
   NotificationRow,
   notificationListItems,
-  notificationTitle,
   useNotificationClearing,
 } from "@/components/notification-list"
 import {
@@ -33,6 +32,7 @@ import {
   notificationsPopoverLimit,
   notificationsQueryOptions,
 } from "@/lib/collections/notifications"
+import { notificationTitle } from "@/lib/notification-text"
 import type { NotificationContent } from "@/lib/notifications"
 
 interface NotificationsPopoverStore {

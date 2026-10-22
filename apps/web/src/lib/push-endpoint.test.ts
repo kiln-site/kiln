@@ -1,0 +1,37 @@
+import { describe, expect, it } from "vite-plus/test"
+
+import { isPushServiceEndpoint } from "@/lib/push-endpoint"
+
+// Hearth posts to whatever endpoint a browser hands it, so only real push
+// services may get through.
+describe("isPushServiceEndpoint", () => {
+  it("accepts the push services browsers subscribe with", () => {
+    for (const endpoint of [
+      "https://fcm.googleapis.com/fcm/send/abc:APA91b",
+      "https://updates.push.services.mozilla.com/wpush/v2/gAAAAA",
+      "https://web.push.apple.com/QGuQyavXutnMH",
+      "https://api.push.apple.com/3/device/abc",
+      "https://wns2-par02p.notify.windows.com/w/?token=BQYAAA",
+    ])
+      expect(isPushServiceEndpoint(endpoint), endpoint).toBe(true)
+  })
+
+  it("refuses anything that could reach another host", () => {
+    for (const endpoint of [
+      "http://fcm.googleapis.com/fcm/send/abc",
+      "https://fcm.googleapis.com:8443/fcm/send/abc",
+      "https://user:pass@fcm.googleapis.com/fcm/send/abc",
+      "https://fcm.googleapis.com.attacker.test/fcm/send/abc",
+      "https://attackerpush.apple.com/abc",
+      "https://notify.windows.com.attacker.test/w",
+      "https://127.0.0.1/abc",
+      "https://[::1]/abc",
+      "https://localhost/abc",
+      "https://mysql:3306/",
+      "file:///etc/passwd",
+      "not a url",
+      "",
+    ])
+      expect(isPushServiceEndpoint(endpoint), endpoint).toBe(false)
+  })
+})

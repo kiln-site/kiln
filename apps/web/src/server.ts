@@ -32,6 +32,7 @@ import {
   stopAppImageUpdateChecks,
 } from "./lib/app-image-updates.server"
 import { startDiskLimitWarnings } from "./lib/disk-limit-warnings.server"
+import { startNotificationPushes } from "./lib/notification-pushes.server"
 import {
   initializeRelayFromEnvironment,
   maintainPersistedRelayConnections,
@@ -87,6 +88,7 @@ scheduleInstancePostProvisionProcessing()
 scheduleTailscaleCleanupProcessing()
 startKilnUpdateNotifications()
 startDiskLimitWarnings()
+startNotificationPushes()
 forkPromise(wakePendingAuthorizationDelivery, (cause) => {
   reportAppError(cause, { operation: "authorization.delivery.recover" })
 })
