@@ -55,8 +55,22 @@ function DrawerOverlay({
 function DrawerContent({
   className,
   children,
+  ref,
   ...props
 }: React.ComponentProps<typeof DrawerPrimitive.Content>) {
+  // Vaul merges refs without passing on a ref callback's cleanup, so React
+  // never runs it; stop following the keyboard here when the node goes away.
+  const stopFollowing = React.useRef<(() => void) | undefined>(undefined)
+  const contentRef = React.useCallback(
+    (node: HTMLDivElement | null) => {
+      stopFollowing.current?.()
+      stopFollowing.current = node ? followKeyboard(node) : undefined
+      if (typeof ref === "function") ref(node)
+      else if (ref) ref.current = node
+    },
+    [ref]
+  )
+
   return (
     <DrawerPortal>
       <DrawerOverlay />
@@ -71,7 +85,7 @@ function DrawerContent({
           className
         )}
         {...props}
-        ref={followKeyboard}
+        ref={contentRef}
       >
         <div
           aria-hidden="true"
@@ -84,11 +98,12 @@ function DrawerContent({
 }
 
 // Keeps a bottom drawer inside the part of the screen the on-screen keyboard
-// leaves visible: its bottom sits on the keyboard and its top stays on screen. Writes styles
-// directly so the keyboard doesn't render React.
-function followKeyboard(content: HTMLDivElement | null) {
+// leaves visible: its bottom sits on the keyboard and its top stays on screen.
+// Writes styles directly so the keyboard doesn't render React. Returns a
+// cleanup.
+function followKeyboard(content: HTMLDivElement) {
   const viewport = window.visualViewport
-  if (!content || !viewport) return
+  if (!viewport) return undefined
   let request: number | null = null
   const update = () => {
     request = null

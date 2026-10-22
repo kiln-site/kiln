@@ -497,6 +497,11 @@ const toolButtonSize = (touch: boolean) => (touch ? "size-10" : "size-8")
 // it keeps the search field focused while filtering.
 const keepSearchFocus = (event: React.SyntheticEvent | Event) =>
   event.preventDefault()
+// Closing returns focus to the trigger; skip that while the search field still
+// has it, but let a keyboard user who moved into the popover get it back.
+const keepTypingFocus = (event: Event) => {
+  if (document.activeElement instanceof HTMLInputElement) event.preventDefault()
+}
 
 const InstancePickerToolButton = React.memo(function InstancePickerToolButton({
   active,
@@ -580,8 +585,9 @@ const InstancePickerTypeMenu = React.memo(function InstancePickerTypeMenu({
         <PopoverContent
           align="end"
           side="top"
+          aria-label="Filter by type"
           className="z-[80] w-48 p-1"
-          onCloseAutoFocus={keepSearchFocus}
+          onCloseAutoFocus={keepTypingFocus}
           onOpenAutoFocus={keepSearchFocus}
         >
           {filters.map((filter) => {
