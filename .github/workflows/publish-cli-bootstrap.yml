@@ -1,0 +1,43 @@
+name: Publish npm CLI bootstrap
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: kiln-cli-npm-bootstrap
+  cancel-in-progress: false
+  queue: max
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main' && vars.NPM_PACKAGE != ''
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Configure npm trusted publishing
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Build npm bootstrap
+        env:
+          KILN_GIT_REPO: https://github.com/${{ github.repository }}
+          KILN_CLI_PACKAGE: ${{ vars.NPM_PACKAGE }}
+          KILN_CLI_DEFAULT_URL: ${{ vars.CLI_DEFAULT_URL }}
+        run: node apps/cli/scripts/package.mjs
+      - name: Verify package contents
+        run: |
+          diff -ru .agents/skills/kiln-cli apps/cli/dist/npm/skills/kiln-cli
+          npm pack --dry-run ./apps/cli/dist/npm
+      - name: Publish npm bootstrap
+        env:
+          KILN_GIT_REPO: https://github.com/${{ github.repository }}
+          KILN_CLI_PACKAGE: ${{ vars.NPM_PACKAGE }}
+        run: node apps/cli/scripts/publish.mjs

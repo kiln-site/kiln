@@ -1,4 +1,4 @@
-import { mkdir, rm } from "node:fs/promises"
+import { copyFile, mkdir, rm } from "node:fs/promises"
 import { join } from "node:path"
 import {
   binaryName,
@@ -6,9 +6,9 @@ import {
   dist,
   gitRepository,
   root,
+  repositoryRoot,
   version,
 } from "./distribution.mjs"
-import { packageMain, packagePlatform } from "./package.mjs"
 
 await rm(dist, { force: true, recursive: true })
 await mkdir(dist, { recursive: true })
@@ -53,5 +53,11 @@ if (process.platform === "darwin") {
     process.exit(signing.exitCode)
   }
 }
-await packagePlatform()
-await packageMain()
+await Promise.all([
+  copyFile(join(root, "README.md"), join(dist, "README.md")),
+  copyFile(join(repositoryRoot, "LICENSE"), join(dist, "LICENSE")),
+  copyFile(
+    join(repositoryRoot, "COMMERCIAL_LICENSE.md"),
+    join(dist, "COMMERCIAL_LICENSE.md")
+  ),
+])

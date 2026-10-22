@@ -17,7 +17,7 @@ Under **Settings → Secrets and variables → Actions → Variables**, configur
 | ---------------------- | -------------------------------------------------------------------------------------------------------- | ---------------------------------- |
 | `PUBLISH_IMAGES`       | Set to `true` to publish releases and images. Unset means checks/builds only.                            | `true`                             |
 | `INITIAL_RELEASE_LINE` | Optional starting version before the first stable promotion; defaults to `0.1.0`.                        | Leave unset                        |
-| `NPM_PACKAGE`          | npm package you own. Enables npm publishing; CLI release downloads are always attached.                  | `kiln-cli`                         |
+| `NPM_PACKAGE`          | npm bootstrap package you own. Used only by Publish npm CLI bootstrap; binary releases are always attached.                  | `kiln-cli`                         |
 | `CLI_DEFAULT_URL`      | Optional default panel URL embedded in the CLI. Fork builds without this require a URL or saved profile. | `https://kiln.site`                |
 | `BUILD_RUNNER_AMD64`   | Optional Linux x64 runner label for push-triggered image builds and all native CLI checks/builds.        | `blacksmith-4vcpu-ubuntu-2404`     |
 | `BUILD_RUNNER_ARM64`   | Optional Linux ARM64 runner label for push-triggered image builds and all native CLI checks/builds.      | `blacksmith-4vcpu-ubuntu-2404-arm` |
@@ -116,40 +116,33 @@ repository and optional default panel URL. Native binaries embed this repository
 as their update source. The command is still named `kiln`, so install one
 distribution globally at a time.
 
-Bootstrap the launcher and five platform package names once using your own npm
-login. Platform package names append `-linux-x64`, `-linux-arm64`, `-darwin-x64`,
-`-darwin-arm64`, and `-windows-x64` to your chosen package name. On each supported
-platform, build and publish its package (or publish the matching platform tarball
-from a GitHub release):
+Publish the bootstrap package once using your npm login. It contains no native
+binaries and needs no platform packages. Set `apps/cli/npm/version.json` to an
+available semver version higher than your previous npm publications:
 
 ```sh
 KILN_GIT_REPO=https://github.com/example/my-panel \
 KILN_CLI_PACKAGE=@your-npm-org/my-panel-cli \
-KILN_VERSION=1.0.0-test.20260930.000000 \
-  vp run -F kiln-cli build
-npm publish ./apps/cli/dist/npm-platform --access public --tag test
-# After all five platform packages exist at that version:
-npm publish ./apps/cli/dist/npm --access public --tag test
+  vp run -F kiln-cli build:npm
+npm publish ./apps/cli/dist/npm --access public --tag latest
 ```
 
-On npm, configure GitHub trusted publishers on **all six packages** for your
-owner/repository and these workflow filenames, allowing `npm publish`:
+On npm, configure a GitHub trusted publisher on this one package for your
+owner/repository and **`publish-cli-bootstrap.yml`**, allowing `npm publish`.
+Run **Publish npm CLI bootstrap** from `main` for later bootstrap updates, after
+bumping its version. No npm token is needed in GitHub, and npm publishing has its
+own queue. Normal nightly and stable releases never publish npm packages.
+See [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/).
 
-- `nightly-release.yml` for continuous releases;
-- `stable-release.yml` for stable promotions;
-- `publish-cli.yml` for manual retries.
-
-npm validates the **calling** workflow when using a reusable workflow. Keep the
-existing `publish-cli.yml` publisher on Kiln and add the other two; no npm token is
-needed in GitHub. See [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/).
-
-Install with `npm install --global @your-npm-org/my-panel-cli`, with optional
-dependencies enabled. `kiln update` downloads the matching native executable from
-your fork's GitHub releases, preserving the stable/nightly channel; it never
-invokes a package manager. `npm install --global @your-npm-org/my-panel-cli@latest`
-continues to install from npm. Set `KILN_GIT_REPO` for local builds; release workflows
-set it to their own repository automatically. Login uses an explicit URL,
-`KILN_URL`, the selected saved profile, then the build's default URL. Forks with
+Install with `npm install --global @your-npm-org/my-panel-cli`. First invocation
+downloads a verified binary from your fork's public GitHub releases, defaulting
+to the newest complete nightly. For a fresh installation, `KILN_CLI_CHANNEL=stable`
+selects stable or `KILN_CLI_VERSION=<version-without-v>` pins an exact release.
+`kiln update` subsequently preserves that binary's stable/nightly channel; it never
+invokes a package manager. The bootstrap has its own version: npm version pins
+select the bootstrap, not the native binary. Set `KILN_GIT_REPO` for local builds;
+release workflows set it to their own repository automatically.
+Login uses an explicit URL, `KILN_URL`, the selected saved profile, then the build's default URL. Forks with
 no default get an instruction to supply their panel URL. Credentials remain
 scoped to the existing URL/profile system.
 
@@ -175,8 +168,9 @@ scoped to the existing URL/profile system.
   optionally overrides the `0.1.0` default. Display
   numbers use the workflow run number; they no longer reset at each release line.
 - CLI publication follows the exact app release tag. It no longer publishes
-  independently while the corresponding app build might still fail. As before,
-  both nightly and stable CLI publications use npm's `latest` tag.
+  independently while the corresponding app build might still fail. Both
+  nightly and stable CLI binaries are attached to GitHub releases. npm
+  bootstrap publication runs separately only when its installer needs an update.
 - Stable promotion accepts the newest nightly in the chosen release line and a
   `next_release` version, just like the previous promotion form.
   It reuses image digests, verifies provenance metadata in the release manifest,
@@ -191,8 +185,9 @@ scoped to the existing URL/profile system.
   select a higher starting version once; after promotion, release metadata takes
   precedence over that bootstrap setting.
 - Retrying a release preserves published image digests. A retry can finish
-  rolling-tag updates after a partial failure. Use **Publish CLI** with the exact
-  release tag to retry CLI release downloads and npm separately.
+  rolling-tag updates after a partial failure. Use **Publish CLI release assets**
+  with the exact release tag to retry CLI downloads. **Publish npm CLI bootstrap** retries npm
+  independently, without holding the app release queue.
 - Nightly configuration resolves the version only on the initial attempt. For
   downstream failures, use **Re-run failed jobs** to reuse the successful
   configuration job's outputs. Full nightly reruns, or rerunning configuration

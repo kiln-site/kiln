@@ -1,8 +1,13 @@
 import { execFile } from "node:child_process"
+import { readFile } from "node:fs/promises"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { promisify } from "node:util"
-import { dist, packageName, platforms, version } from "./distribution.mjs"
+import { dist, packageName, root } from "./distribution.mjs"
+
+const { version } = JSON.parse(
+  await readFile(join(root, "npm", "version.json"), "utf8")
+)
 
 const execFileAsync = promisify(execFile)
 const retryDelay = 10_000
@@ -71,7 +76,7 @@ export async function publishPackages(run = runNpm) {
         const output = `${error.message}\n${error.stderr ?? ""}`
         if (output.includes("Cannot publish over previously staged version")) {
           // npm accepted an earlier upload but has not exposed it to npm view.
-          // Do not upload it again or publish the launcher until it is visible.
+          // Do not upload the accepted package again.
           await waitForPublished(name, error)
           return
         }
@@ -91,20 +96,6 @@ export async function publishPackages(run = runNpm) {
     }
   }
 
-  // Finish all in-flight uploads before failing or making the launcher discoverable.
-  const results = await Promise.allSettled(
-    platforms.map((platform) => {
-      const name = `${packageName}-${platform.name}`
-      const tarball = `${name.replace(/^@/u, "").replace("/", "-")}-${version}.tgz`
-      return publish(name, join(dist, "platform-packages", tarball))
-    })
-  )
-  const failures = results.filter((result) => result.status === "rejected")
-  if (failures.length > 0)
-    throw new AggregateError(
-      failures.map((result) => result.reason),
-      "Failed to publish native CLI packages"
-    )
   await publish(packageName, join(dist, "npm"))
 }
 

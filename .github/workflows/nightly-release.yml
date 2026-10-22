@@ -96,7 +96,6 @@ jobs:
   cli:
     permissions:
       contents: write
-      id-token: write
     needs: [release, cli_build]
     uses: ./.github/workflows/publish-cli.yml
     with:

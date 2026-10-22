@@ -1,17 +1,20 @@
-import { chmod, cp, copyFile, mkdir, rm, writeFile } from "node:fs/promises"
+import {
+  chmod,
+  cp,
+  copyFile,
+  mkdir,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { npmRegistryVersion } from "./version.mjs"
 import {
-  binaryName,
   dist,
-  packageName,
-  platform,
-  platforms,
+  gitRepository,
   publishedManifest,
   repositoryRoot,
   root,
-  version,
 } from "./distribution.mjs"
 
 async function prepare(directory, manifest) {
@@ -33,18 +36,20 @@ async function prepare(directory, manifest) {
 
 export async function packageMain() {
   const directory = join(dist, "npm")
+  const { version } = JSON.parse(
+    await readFile(join(root, "npm", "version.json"), "utf8")
+  )
+  if (!/^\d+\.\d+\.\d+$/u.test(version))
+    throw new Error("Invalid npm bootstrap version")
   await prepare(directory, {
     ...publishedManifest(),
+    version,
+    kilnBootstrap: {
+      repository: gitRepository.slice("https://github.com/".length),
+    },
     bin: { kiln: "kiln.cjs" },
     engines: { node: ">=20" },
     files: ["kiln.cjs", "install.cjs", "skills", "COMMERCIAL_LICENSE.md"],
-    scripts: { postinstall: "node install.cjs" },
-    optionalDependencies: Object.fromEntries(
-      platforms.map((entry) => [
-        `${packageName}-${entry.name}`,
-        npmRegistryVersion(version),
-      ])
-    ),
   })
   await Promise.all([
     copyFile(join(root, "npm", "kiln.cjs"), join(directory, "kiln.cjs")),
@@ -56,24 +61,6 @@ export async function packageMain() {
     ),
   ])
   await chmod(join(directory, "kiln.cjs"), 0o755)
-}
-
-export async function packagePlatform() {
-  if (!platform)
-    throw new Error(
-      `Unsupported CLI platform: ${process.platform}/${process.arch}`
-    )
-  const directory = join(dist, "npm-platform")
-  await prepare(directory, {
-    ...publishedManifest(),
-    name: `${packageName}-${platform.name}`,
-    os: [platform.os],
-    cpu: [platform.cpu],
-    files: ["bin", "COMMERCIAL_LICENSE.md"],
-  })
-  await mkdir(join(directory, "bin"))
-  await copyFile(join(dist, binaryName), join(directory, "bin", binaryName))
-  await chmod(join(directory, "bin", binaryName), 0o755)
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1])

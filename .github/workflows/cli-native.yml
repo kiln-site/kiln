@@ -9,6 +9,8 @@ on:
       - .github/workflows/build-cli.yml
       - .github/workflows/nightly-release.yml
       - .github/workflows/publish-cli.yml
+      - .github/workflows/publish-cli-bootstrap.yml
+      - .github/workflows/stable-release.yml
       - pnpm-lock.yaml
   workflow_dispatch:
 

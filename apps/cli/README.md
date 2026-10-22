@@ -13,15 +13,30 @@ npx kiln-cli login
 ```
 
 Or install it globally. The npm package is named `kiln-cli`; both installation
-methods expose the `kiln` command. npm installs the native binary for your OS and
-architecture through an optional platform package. A small Node.js launcher starts
-that binary; the CLI itself runs on its bundled Bun runtime. Keep optional
-dependencies enabled. Installation also works when lifecycle scripts are disabled.
+methods expose the `kiln` command. The package is a small bootstrap: on first use,
+it downloads the newest complete nightly binary for your OS and architecture from
+GitHub and verifies its SHA-256 digest, size, and version. Later invocations start
+that local binary without a network check. Node.js 20+ runs the launcher; the CLI
+itself runs on its bundled Bun runtime. Installation works with lifecycle scripts
+disabled. GitHub must be reachable on first use and the package directory writable.
 
 ```sh
 npm install --global kiln-cli
 kiln login
 ```
+
+For a fresh install, select stable with `KILN_CLI_CHANNEL=stable`, or pin an exact
+GitHub release with `KILN_CLI_VERSION` (without the leading `v`):
+
+```sh
+KILN_CLI_CHANNEL=stable npx kiln-cli --version
+# Or, in a fresh npm installation/cache:
+KILN_CLI_VERSION=0.1.0-nightly.20261022.075517 npx kiln-cli --version
+```
+
+These settings apply only to the first download. The npm version identifies the
+bootstrap, so pinning an npm version does not pin the CLI binary. A cached `npx`
+installation keeps its binary until updated with `kiln update` or reinstalled.
 
 For a standalone installation, download the archive for your OS and architecture
 from your distribution's GitHub release: Linux and macOS use `.tar.gz` (x64 or
@@ -52,11 +67,11 @@ version before replacing the installed binary. It never runs npm, pnpm, or Bun.
 The installation directory must be writable. This updates only the CLI, not
 Hearth or any Relay, and does not require a Kiln login.
 
-For npm installations, the updater replaces a private copy inside the CLI package,
-leaving the platform package unchanged. You can still use
-`npm install --global kiln-cli@latest` (or your distribution's package) to install
-from npm again. npm's recorded package version changes only when npm installs a
-package; `kiln --version` reports the executable's actual version.
+For npm installations, the updater replaces the private binary inside the CLI
+package. New CLI releases do not require new npm publications. Reinstalling the
+bootstrap with `npm install --global kiln-cli@latest` (or your distribution's
+package) lets a fresh installation download from GitHub again. npm records the
+bootstrap version; `kiln --version` reports the executable's actual version.
 
 On Windows, the running executable is moved to a `.old` file until a later update
 can remove it. An interrupted download leaves the current executable in place.

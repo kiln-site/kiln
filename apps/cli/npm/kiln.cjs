@@ -2,8 +2,8 @@
 const { spawn } = require("node:child_process")
 const { installBinary } = require("./install.cjs")
 
-try {
-  const child = spawn(installBinary(), process.argv.slice(2), {
+async function main() {
+  const child = spawn(await installBinary(), process.argv.slice(2), {
     stdio: "inherit",
   })
   // Windows delivers Ctrl+C to the child itself, and child.kill() there is a
@@ -25,7 +25,9 @@ try {
     process.exitCode =
       code ?? (signal === "SIGINT" ? 130 : signal === "SIGTERM" ? 143 : 1)
   })
-} catch (error) {
+}
+
+main().catch((error) => {
   console.error(error.message)
   process.exitCode = 1
-}
+})

@@ -90,23 +90,22 @@ jobs:
           mkdir -p apps/cli/dist/assets
           tar -czf "apps/cli/dist/assets/$ASSET" \
             -C apps/cli/dist "$BINARY" \
-            -C npm README.md LICENSE COMMERCIAL_LICENSE.md
+            README.md LICENSE COMMERCIAL_LICENSE.md
 
       - name: Package Windows binary
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force apps/cli/dist/assets
-          Compress-Archive -Path "apps/cli/dist/$env:BINARY", apps/cli/dist/npm/README.md, apps/cli/dist/npm/LICENSE, apps/cli/dist/npm/COMMERCIAL_LICENSE.md -DestinationPath "apps/cli/dist/assets/$env:ASSET"
+          Compress-Archive -Path "apps/cli/dist/$env:BINARY", apps/cli/dist/README.md, apps/cli/dist/LICENSE, apps/cli/dist/COMMERCIAL_LICENSE.md -DestinationPath "apps/cli/dist/assets/$env:ASSET"
 
-      - name: Prepare shared binary and native npm package
+      - name: Prepare raw update binary
         env:
           PLATFORM: ${{ matrix.platform }}
         run: |
           extension=""
           if [ "$RUNNER_OS" = "Windows" ]; then extension=".exe"; fi
           cp "apps/cli/dist/$BINARY" "apps/cli/dist/assets/kiln-$RELEASE_TAG-$PLATFORM$extension"
-          npm pack ./apps/cli/dist/npm-platform --pack-destination apps/cli/dist/assets
 
       - name: Save CLI release assets
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

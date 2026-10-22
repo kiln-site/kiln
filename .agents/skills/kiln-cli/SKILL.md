@@ -49,10 +49,15 @@ kiln whoami
 
 If the binary is missing, report that before suggesting installation. GitHub
 releases include standalone archives for Linux/macOS (x64 and ARM64) and Windows
-(x64), plus an npm package tarball. Extract `kiln` or `kiln.exe` onto `PATH` for
-an installation without Node.js or Bun. npm installs the same native binaries
-through platform packages and a small Node.js launcher. Keep optional dependencies
-enabled. `kiln update` works for both installation methods.
+(x64). Extract `kiln` or `kiln.exe` onto `PATH` for an installation without Node.js
+or Bun. The npm package is a small Node.js bootstrap that fetches the newest complete nightly binary from the distribution's GitHub releases
+on first use, verifying its SHA-256 digest, size, and version. Later launches use
+the local binary without a network check. It works with lifecycle scripts disabled.
+GitHub must be reachable on first use and the package directory writable.
+For a fresh installation, `KILN_CLI_CHANNEL=stable` selects stable and
+`KILN_CLI_VERSION=<exact-version-without-v>` pins the initial binary. These settings
+only apply before the first download. npm's version identifies the bootstrap,
+not the native CLI. `kiln update` works for both installation methods.
 macOS binaries are not notarized: download with `curl`, or run
 `xattr -d com.apple.quarantine kiln` after extracting a browser download.
 If authentication is missing, use the appropriate login flow:

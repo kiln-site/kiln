@@ -2,16 +2,10 @@
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { createHash } from "node:crypto"
-import {
-  cp,
-  copyFile,
-  mkdtemp,
-  readFile,
-  rm,
-  writeFile,
-} from "node:fs/promises"
+import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { binaryName, dist, platform, root, version } from "./distribution.mjs"
+import { packageMain } from "./package.mjs"
 
 // Bun's final compile rename cannot cross Windows drives; keep fixtures on the build volume.
 const directory = await mkdtemp(join(dist, "native-e2e-"))
@@ -41,11 +35,6 @@ const npm = (args, cwd = directory) =>
 try {
   assert.ok(platform)
   assert.equal(run(join(dist, binaryName), ["--version"]), `kiln ${version}`)
-  assert.equal(
-    digest(await readFile(join(dist, binaryName))),
-    digest(await readFile(join(dist, "npm-platform", "bin", binaryName))),
-    "npm must contain exactly the release binary"
-  )
   const fixtureSource = join(directory, "fixture.ts")
   await writeFile(
     fixtureSource,
@@ -110,28 +99,40 @@ if (process.argv[2] === "--version") {
   )
   const env = { ...process.env, KILN_TEST_NEXT: newBinary }
 
+  await packageMain()
   const mainPackage = join(directory, "main-package")
-  const platformPackage = join(directory, "platform-package")
   await cp(join(dist, "npm"), mainPackage, { recursive: true })
-  await cp(join(dist, "npm-platform"), platformPackage, { recursive: true })
-  // Fixtures exercise updates without publishing test releases or changing a real install.
-  await copyFile(oldBinary, join(platformPackage, "bin", binaryName))
   const mainManifest = JSON.parse(
     await readFile(join(mainPackage, "package.json"), "utf8")
   )
-  const platformManifest = JSON.parse(
-    await readFile(join(platformPackage, "package.json"), "utf8")
-  )
-  const nativeTarball = JSON.parse(
-    npm(["pack", "./platform-package", "--json"])
-  )[0].filename
-  mainManifest.optionalDependencies = {
-    [platformManifest.name]: `file:${join(directory, nativeTarball)}`,
-  }
+  mainManifest.kilnBootstrap.repository = "example/native-fixture"
   await writeFile(
     join(mainPackage, "package.json"),
     JSON.stringify(mainManifest)
   )
+  const preload = join(directory, "github.cjs")
+  await writeFile(
+    preload,
+    `
+const { readFileSync } = require("node:fs")
+const { createHash } = require("node:crypto")
+const bytes = readFileSync(${JSON.stringify(oldBinary)})
+const name = "kiln-v1.0.0-${platform.name}${process.platform === "win32" ? ".exe" : ""}"
+const assetUrl = "https://github.com/example/native-fixture/releases/download/v1.0.0/" + name
+globalThis.fetch = async (url) => {
+  if (url === "https://api.github.com/repos/example/native-fixture/releases/tags/v1.0.0")
+    return Response.json({ tag_name: "v1.0.0", draft: false, prerelease: false,
+      assets: [{ name, size: bytes.length, digest: "sha256:" + createHash("sha256").update(bytes).digest("hex"), browser_download_url: assetUrl }] })
+  if (url === assetUrl) return new Response(bytes)
+  throw new Error("Unexpected GitHub request: " + url)
+}
+`
+  )
+  const launch = (launcher, args, options = {}) =>
+    run(node, ["--require", preload, launcher, ...args], {
+      ...options,
+      env: { ...env, KILN_CLI_VERSION: "1.0.0", ...options.env },
+    })
   const mainTarball = JSON.parse(npm(["pack", "./main-package", "--json"]))[0]
     .filename
   const prefix = join(directory, "installation")
@@ -146,26 +147,23 @@ if (process.argv[2] === "--version") {
   const installed = join(prefix, "node_modules", mainManifest.name)
   const launcher = join(installed, "kiln.cjs")
   // --ignore-scripts matches package managers that disable dependency lifecycle scripts.
-  assert.equal(run(node, [launcher, "--version"]), "kiln 1.0.0")
-  assert.deepEqual(JSON.parse(run(node, [launcher, "update"], { env })), {
+  assert.equal(launch(launcher, ["--version"]), "kiln 1.0.0")
+  assert.deepEqual(JSON.parse(launch(launcher, ["update"], { env })), {
     updated: true,
     version: "1.1.0",
   })
-  assert.equal(run(node, [launcher, "--version"]), "kiln 1.1.0")
+  assert.equal(launch(launcher, ["--version"]), "kiln 1.1.0")
   assert.equal(
-    run(
-      join(prefix, "node_modules", platformManifest.name, "bin", binaryName),
-      ["--version"]
-    ),
-    "kiln 1.0.0",
-    "updating must leave npm's binary unchanged"
+    digest(await readFile(join(mainPackage, "kiln.cjs"))),
+    digest(await readFile(launcher)),
+    "updating must leave the npm launcher unchanged"
   )
-  assert.deepEqual(JSON.parse(run(node, [launcher, "update"], { env })), {
+  assert.deepEqual(JSON.parse(launch(launcher, ["update"], { env })), {
     updated: false,
     version: "1.1.0",
   })
 
-  // Reinstalling a newer npm package takes ownership of the selected version again.
+  // A newer bootstrap downloads the selected GitHub version again.
   mainManifest.version = "9.0.0"
   await writeFile(
     join(mainPackage, "package.json"),
@@ -174,7 +172,7 @@ if (process.argv[2] === "--version") {
   const reinstall = JSON.parse(npm(["pack", "./main-package", "--json"]))[0]
     .filename
   npm(["install", "--prefix", prefix, "--offline", join(directory, reinstall)])
-  assert.equal(run(node, [launcher, "--version"]), "kiln 1.0.0")
+  assert.equal(launch(launcher, ["--version"]), "kiln 1.0.0")
 
   // The direct GitHub-download installation follows the identical replacement path.
   assert.deepEqual(JSON.parse(run(oldBinary, ["update"], { env })), {
@@ -183,7 +181,7 @@ if (process.argv[2] === "--version") {
   })
   assert.equal(run(oldBinary, ["--version"]), "kiln 1.1.0")
   console.log(
-    "Native npm installation, GitHub self-update, npm reinstall, and standalone replacement passed."
+    "GitHub bootstrap installation, self-update, npm reinstall, and standalone replacement passed."
   )
 } finally {
   await rm(directory, { recursive: true, force: true })
