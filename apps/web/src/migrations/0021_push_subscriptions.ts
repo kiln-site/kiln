@@ -7,8 +7,10 @@ import { databaseTableName } from "@/lib/database-config"
 // Devices that asked for push notifications, one row per user and browser
 // push endpoint. Each row belongs to the sign-in that turned push on, so
 // signing out or revoking that session stops pushes to the device.
-// `pushed_at` marks notifications Hearth has already pushed, or decided not
-// to; ones delivered before push existed count as done.
+// `push_pending` marks notifications waiting to be pushed. Only new ones set
+// it, so existing rows need no backfill: adding the column is instant and the
+// index builds online, and each step is skipped once done, so a migration
+// that stopped partway finishes on the next start.
 export const pushSubscriptions: Migration = {
   id: 21,
   name: "push_subscriptions",
@@ -35,12 +37,20 @@ export const pushSubscriptions: Migration = {
       FROM information_schema.columns
       WHERE table_schema = DATABASE() AND table_name = ${notification}
     `
-    if (!columns.some((column) => column.columnName === "pushed_at")) {
+    if (!columns.some((column) => column.columnName === "push_pending")) {
       yield* sql.unsafe(`ALTER TABLE \`${notification}\`
-  ADD COLUMN \`pushed_at\` bigint unsigned DEFAULT NULL AFTER \`dismissed_at\`,
-  ADD KEY \`${notification}_push_idx\` (\`pushed_at\`)`)
-      yield* sql.unsafe(`UPDATE \`${notification}\`
-  SET \`pushed_at\` = \`created_at\` WHERE \`pushed_at\` IS NULL`)
+  ADD COLUMN \`push_pending\` tinyint unsigned DEFAULT NULL`)
+    }
+    const indexes = yield* sql<{ indexName: string }>`
+      SELECT index_name AS indexName
+      FROM information_schema.statistics
+      WHERE table_schema = DATABASE() AND table_name = ${notification}
+    `
+    if (
+      !indexes.some((index) => index.indexName === `${notification}_push_idx`)
+    ) {
+      yield* sql.unsafe(`ALTER TABLE \`${notification}\`
+  ADD KEY \`${notification}_push_idx\` (\`push_pending\`)`)
     }
   }),
 }

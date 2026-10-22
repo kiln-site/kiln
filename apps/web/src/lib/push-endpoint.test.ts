@@ -28,6 +28,13 @@ describe("isPushServiceEndpoint", () => {
       "https://[::1]/abc",
       "https://localhost/abc",
       "https://mysql:3306/",
+      // Escapes in the host that WHATWG URL decodes into an allowed host, but
+      // Node's legacy parser, which web-push uses, stops at.
+      "https://127.0.0.1%2eweb.push.apple.com/probe",
+      "https://mysql%2enotify.windows.com/probe",
+      "https://FCM.googleapis.com/fcm/send/abc",
+      "https://fcm.googleapis.com./fcm/send/abc",
+      "https://fcm.googleapis.com\\@127.0.0.1/abc",
       "file:///etc/passwd",
       "not a url",
       "",

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto"
+import { parse as parseLegacyUrl } from "node:url"
 
 import type { RowDataPacket } from "mysql2/promise"
 import webpush from "web-push"
@@ -15,6 +16,7 @@ import {
   developmentBypassEnabled,
   kilnPublicUrl,
 } from "@/lib/environment"
+import { accountPolicyFromRow, isEligibleAccount } from "@/lib/account-policy"
 import { notificationDetail, notificationTitle } from "@/lib/notification-text"
 import { isPushServiceEndpoint } from "@/lib/push-endpoint"
 
@@ -59,32 +61,44 @@ export class WebPush extends Context.Service<
     WebPush,
     WebPush.of({
       send: (subscription, message, vapid) =>
-        Effect.tryPromise({
-          try: () =>
-            webpush.sendNotification(subscription, JSON.stringify(message), {
-              TTL: 24 * 60 * 60,
-              timeout: 10_000,
-              vapidDetails: { subject: vapidSubject(), ...vapid },
-            }),
-          catch: (cause) => cause,
-        }).pipe(
-          Effect.as("delivered" as const),
-          Effect.catch((cause) =>
-            cause instanceof webpush.WebPushError &&
-            (cause.statusCode === 404 || cause.statusCode === 410)
-              ? Effect.succeed("gone" as const)
-              : Effect.fail(
-                  ExternalServiceError.make({
-                    cause,
-                    message:
-                      cause instanceof webpush.WebPushError
-                        ? `Push service answered ${cause.statusCode}`
-                        : "Push service could not be reached",
-                    service: "web-push",
-                  })
-                )
+        Effect.gen(function* () {
+          // web-push requests what Node's legacy parser reads; refuse an
+          // endpoint it would aim anywhere but the host that was checked.
+          if (
+            parseLegacyUrl(subscription.endpoint).hostname !==
+            new URL(subscription.endpoint).hostname
           )
-        ),
+            return yield* ExternalServiceError.make({
+              message: "Push endpoint host is ambiguous",
+              service: "web-push",
+            })
+          return yield* Effect.tryPromise({
+            try: () =>
+              webpush.sendNotification(subscription, JSON.stringify(message), {
+                TTL: 24 * 60 * 60,
+                timeout: 10_000,
+                vapidDetails: { subject: vapidSubject(), ...vapid },
+              }),
+            catch: (cause) => cause,
+          }).pipe(
+            Effect.as("delivered" as const),
+            Effect.catch((cause) =>
+              cause instanceof webpush.WebPushError &&
+              (cause.statusCode === 404 || cause.statusCode === 410)
+                ? Effect.succeed("gone" as const)
+                : Effect.fail(
+                    ExternalServiceError.make({
+                      cause,
+                      message:
+                        cause instanceof webpush.WebPushError
+                          ? `Push service answered ${cause.statusCode}`
+                          : "Push service could not be reached",
+                      service: "web-push",
+                    })
+                  )
+            )
+          )
+        }),
     })
   )
 }
@@ -110,15 +124,21 @@ const decodeStoredVapidKeysJson = Schema.decodeUnknownOption(
   Schema.fromJsonString(StoredVapidKeys)
 )
 
-let vapidKeys: VapidKeys | undefined
+// The last decryption, by ciphertext and the newest secret's version, so a
+// key another Hearth re-encrypted, or a new secret that calls for
+// re-encrypting, is read again rather than served from memory.
+let decryptedVapidKeys:
+  | { ciphertext: string; keys: VapidKeys; secretVersion: number }
+  | undefined
 
 /**
  * This installation's VAPID keys, made on first use. Every subscription is
  * bound to the public key, so they are kept for good; the private key is
- * stored encrypted with Hearth's secrets.
+ * stored encrypted with Hearth's secrets, and re-encrypted with the newest
+ * secret once it was encrypted with an older one, so retiring that secret
+ * keeps push working.
  */
 export const vapidKeysEffect = Effect.fnUntraced(function* () {
-  if (vapidKeys) return vapidKeys
   const database = yield* Database
   const load = database
     .queryRows<RowDataPacket & { setting_value: unknown }>(
@@ -175,18 +195,55 @@ export const vapidKeysEffect = Effect.fnUntraced(function* () {
     })
   }
   const { privateKeyCiphertext, publicKey } = stored.value
+  const secrets = betterAuthSecrets()
+  const secretVersion = secrets[0]?.version ?? -1
+  if (
+    decryptedVapidKeys?.ciphertext === privateKeyCiphertext &&
+    decryptedVapidKeys.secretVersion === secretVersion
+  )
+    return decryptedVapidKeys.keys
   const decrypted = yield* Effect.try({
     try: () =>
       decryptWithKeyring(
         privateKeyCiphertext,
-        betterAuthSecrets(),
+        secrets,
         VAPID_PRIVATE_KEY_PURPOSE
       ),
     catch: (cause) =>
       CredentialError.make({ cause, operation: "decrypt_vapid_key" }),
   })
-  vapidKeys = { privateKey: decrypted.plaintext, publicKey }
-  return vapidKeys
+  const keys = { privateKey: decrypted.plaintext, publicKey }
+  if (decrypted.needsRotation) {
+    const rotated = yield* Effect.try({
+      try: () =>
+        encryptWithKeyring(
+          decrypted.plaintext,
+          secrets,
+          VAPID_PRIVATE_KEY_PURPOSE
+        ),
+      catch: (cause) =>
+        CredentialError.make({ cause, operation: "encrypt_vapid_key" }),
+    })
+    const now = yield* Clock.currentTimeMillis
+    // Only if no other Hearth replaced it meanwhile.
+    yield* database.execute(
+      "notifications.push.rotateVapidKey",
+      `UPDATE ${databaseTable("setting")}
+          SET setting_value = ?, updated_at = ?
+        WHERE id = ? AND user_id IS NULL AND setting_key = ?
+          AND JSON_UNQUOTE(JSON_EXTRACT(setting_value, '$.privateKeyCiphertext')) = ?`,
+      [
+        JSON.stringify({ privateKeyCiphertext: rotated, publicKey }),
+        new Date(now),
+        vapidSettingId,
+        vapidSettingKey,
+        privateKeyCiphertext,
+      ]
+    )
+    return keys
+  }
+  decryptedVapidKeys = { ciphertext: privateKeyCiphertext, keys, secretVersion }
+  return keys
 })
 
 // One row per user and endpoint, so subscribing again from the same browser
@@ -276,15 +333,25 @@ export const pushSubscribedEffect = Effect.fn("notifications.push.state")(
 
 interface SubscriptionRow extends RowDataPacket {
   auth: string
+  emailVerifiedAt: Date | string | null
   endpoint: string
   id: string
+  legacyVerificationRecordedAt: Date | string | null
+  manuallyVerifiedAt: Date | string | null
   p256dh: string
+  session_active: number | string
+  session_id: string
+  status: string | null
+  statusExpiresAt: Date | string | null
   user_id: string
 }
 
-// The users' subscriptions whose sign-in is still active. The development
-// sign-in has no session row.
-const activeSubscriptionsEffect = Effect.fnUntraced(function* (
+// The users' subscriptions that may get pushes now: the sign-in that made
+// them is still active and the account may still read its inbox. The
+// development sign-in has no session or user row. `stale` ones, whose
+// sign-in ended or whose endpoint isn't a push service, can go; ones whose
+// account is disabled or unverified are kept for when it can sign in again.
+const deliverableSubscriptionsEffect = Effect.fnUntraced(function* (
   userIds: ReadonlyArray<string>
 ) {
   const database = yield* Database
@@ -292,33 +359,37 @@ const activeSubscriptionsEffect = Effect.fnUntraced(function* (
   const developmentSession = developmentBypassEnabled()
     ? `development:${developmentBypassUserId}`
     : null
-  const rows = yield* database.queryRows<
-    SubscriptionRow & { active: number | string }
-  >(
+  const rows = yield* database.queryRows<SubscriptionRow>(
     "notifications.push.subscriptions",
-    `SELECT push.id, push.user_id, push.endpoint, push.p256dh, push.auth,
-            (auth_session.id IS NOT NULL${
-              developmentSession ? " OR push.session_id = ?" : ""
-            }) AS active
+    `SELECT push.id, push.user_id, push.session_id, push.endpoint,
+            push.p256dh, push.auth,
+            (auth_session.id IS NOT NULL) AS session_active,
+            auth_user.status, auth_user.statusExpiresAt,
+            auth_user.emailVerifiedAt, auth_user.manuallyVerifiedAt,
+            auth_user.legacyVerificationRecordedAt
        FROM ${databaseTable("push_subscription")} AS push
        LEFT JOIN ${databaseTable("session")} AS auth_session
          ON auth_session.id = push.session_id
         AND auth_session.userId = push.user_id
         AND auth_session.expiresAt > ?
+       LEFT JOIN ${databaseTable("user")} AS auth_user
+         ON auth_user.id = push.user_id
       WHERE push.user_id IN (${userIds.map(() => "?").join(", ")})`,
-    [
-      ...(developmentSession ? [developmentSession] : []),
-      new Date(now),
-      ...userIds,
-    ]
+    [new Date(now), ...userIds]
   )
+  const development = (row: SubscriptionRow) =>
+    developmentSession !== null && row.session_id === developmentSession
   // Endpoints were checked when saved; checking again keeps a row written
   // any other way from aiming Hearth at another host.
-  const usable = (row: (typeof rows)[number]) =>
-    Number(row.active) === 1 && isPushServiceEndpoint(row.endpoint)
+  const stale = (row: SubscriptionRow) =>
+    !isPushServiceEndpoint(row.endpoint) ||
+    (!development(row) && Number(row.session_active) !== 1)
+  const eligible = (row: SubscriptionRow) =>
+    development(row) ||
+    (row.status !== null && isEligibleAccount(accountPolicyFromRow(row)))
   return {
-    active: rows.filter(usable),
-    unusable: rows.filter((row) => !usable(row)),
+    deliverable: rows.filter((row) => !stale(row) && eligible(row)),
+    stale: rows.filter(stale),
   }
 })
 
@@ -343,23 +414,34 @@ export const hasPendingPushesEffect = Effect.fnUntraced(function* () {
   const rows = yield* database.queryRows<RowDataPacket>(
     "notifications.push.pending",
     `SELECT 1 FROM ${databaseTable("notification")}
-      WHERE pushed_at IS NULL
+      WHERE push_pending = 1
       LIMIT 1`
   )
   return rows.length > 0
 })
 
 /**
- * Pushes notifications that haven't been pushed to their users' signed-in
- * devices, each once even with several Hearths. Ones already read, cleared,
- * or too old are marked without sending. Subscriptions the push service no
- * longer knows, or whose sign-in ended, are deleted.
+ * Pushes notifications waiting to be pushed to their users' devices, each
+ * once even with several Hearths. Ones already read, cleared, or too old are
+ * let go without sending. Subscriptions the push service no longer knows, or
+ * whose sign-in ended, are deleted.
+ *
+ * Delivery is best effort: a notification is claimed before sending, so one
+ * a push service drops, or a Hearth that stops mid-pass, isn't retried. The
+ * inbox still has it.
  */
 export const pushPendingNotificationsEffect = Effect.fn("notifications.push")(
   function* () {
     const database = yield* Database
     const now = yield* Clock.currentTimeMillis
     const table = databaseTable("notification")
+    // Keys that can't be read, as with the wrong secrets, fail the pass
+    // before anything is claimed, so those notifications wait for a fix.
+    const anySubscriptions = yield* database.queryRows<RowDataPacket>(
+      "notifications.push.anySubscription",
+      `SELECT 1 FROM ${databaseTable("push_subscription")} LIMIT 1`
+    )
+    const vapid = anySubscriptions.length ? yield* vapidKeysEffect() : null
     const claimed = yield* database.transaction(
       "notifications.push.claim",
       (tx) =>
@@ -367,16 +449,16 @@ export const pushPendingNotificationsEffect = Effect.fn("notifications.push")(
           const rows = yield* tx.queryRows<PendingNotificationRow>(
             `SELECT id, user_id, kind, data, created_at, read_at, dismissed_at
                FROM ${table}
-              WHERE pushed_at IS NULL
+              WHERE push_pending = 1
               ORDER BY created_at
               LIMIT ${pushBatchSize}
               FOR UPDATE SKIP LOCKED`
           )
           if (rows.length)
             yield* tx.execute(
-              `UPDATE ${table} SET pushed_at = ?
+              `UPDATE ${table} SET push_pending = NULL
                 WHERE id IN (${rows.map(() => "?").join(", ")})`,
-              [now, ...rows.map((row) => row.id)]
+              rows.map((row) => row.id)
             )
           return rows
         })
@@ -403,16 +485,16 @@ export const pushPendingNotificationsEffect = Effect.fn("notifications.push")(
           ]
         : []
     })
-    if (!pending.length) return claimed.length
+    if (!pending.length || !vapid) return claimed.length
 
     const userIds = [...new Set(pending.map((entry) => entry.userId))]
-    const { active, unusable } = yield* activeSubscriptionsEffect(userIds)
-    const gone = unusable.map((row) => row.id)
-    if (active.length) {
-      const vapid = yield* vapidKeysEffect()
+    const { deliverable, stale } =
+      yield* deliverableSubscriptionsEffect(userIds)
+    const gone = stale.map((row) => row.id)
+    if (deliverable.length) {
       const webPush = yield* WebPush
       const deliveries = pending.flatMap(({ message, userId }) =>
-        active
+        deliverable
           .filter((subscription) => subscription.user_id === userId)
           .map((subscription) => ({ message, subscription }))
       )

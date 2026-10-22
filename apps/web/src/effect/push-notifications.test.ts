@@ -1,5 +1,6 @@
 import { assert, layer } from "@effect/vitest"
 import { Effect, Layer } from "effect"
+import { SqlClient } from "effect/sql"
 import { TestClock } from "effect/testing"
 import { vi } from "vite-plus/test"
 
@@ -8,12 +9,20 @@ import {
   WebPush,
   pushPendingNotificationsEffect,
   savePushSubscriptionEffect,
+  vapidKeysEffect,
 } from "@/effect/push-notifications"
+import { databaseTableName } from "@/lib/database-config"
 import type { NotificationContent } from "@/lib/notifications"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRows, insertUser, selectRows } from "@/test/seed"
 
-vi.stubEnv("BETTER_AUTH_SECRETS", `1:${"s".repeat(32)}`)
+const firstSecret = `1:${"s".repeat(32)}`
+const secondSecret = `2:${"t".repeat(32)}`
+vi.stubEnv("BETTER_AUTH_SECRETS", firstSecret)
+
+// A verified account that may read its inbox.
+const insertMember = (id: string, row: Record<string, string | Date> = {}) =>
+  insertUser(id, { emailVerifiedAt: new Date(0), ...row })
 
 const removed: NotificationContent = {
   actorName: "Owner",
@@ -64,8 +73,8 @@ describeMysql("push notifications", () => {
       () =>
         Effect.gen(function* () {
           yield* resetDatabase
-          yield* insertUser("user-a")
-          yield* insertUser("user-b")
+          yield* insertMember("user-a")
+          yield* insertMember("user-b")
           yield* TestClock.setTime(1_000_000)
           yield* insertSession("session-a", "user-a", 2_000_000)
           yield* insertSession("expired-a", "user-a", 500_000)
@@ -113,7 +122,7 @@ describeMysql("push notifications", () => {
       () =>
         Effect.gen(function* () {
           yield* resetDatabase
-          yield* insertUser("user-a")
+          yield* insertMember("user-a")
           yield* TestClock.setTime(10_000_000)
           yield* insertSession("session-a", "user-a", 20_000_000)
           for (const name of ["phone", "uninstalled"])
@@ -136,6 +145,7 @@ describeMysql("push notifications", () => {
             data: JSON.stringify({ ...removed, kind: undefined }),
             created_at: 10_000_000 + 7_200_000,
             read_at: 10_000_000 + 7_200_000,
+            push_pending: 1,
           })
           yield* notifyUsersEffect(["user-a"], "removed:new", removed)
           yield* pushPendingNotificationsEffect().pipe(
@@ -148,6 +158,86 @@ describeMysql("push notifications", () => {
             subscription("phone").endpoint,
           ])
         })
+    )
+
+    it.effect("pushes nothing to an account that was disabled", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        yield* insertMember("user-a")
+        yield* TestClock.setTime(1_000_000)
+        yield* insertSession("session-a", "user-a", 2_000_000)
+        yield* savePushSubscriptionEffect(
+          "user-a",
+          "session-a",
+          subscription("phone")
+        )
+        const push = fakePushService()
+
+        yield* notifyUsersEffect(["user-a"], "removed:1", removed)
+        // Disabling an account leaves its sessions in place.
+        yield* SqlClient.SqlClient.pipe(
+          Effect.flatMap(
+            (sql) =>
+              sql`UPDATE ${sql(databaseTableName("user"))} SET status = 'disabled' WHERE id = 'user-a'`
+          )
+        )
+        yield* pushPendingNotificationsEffect().pipe(
+          Effect.provide(push.layer)
+        )
+
+        assert.deepStrictEqual(push.sent, [])
+        // The device is kept for when the account is enabled again.
+        assert.deepStrictEqual(yield* subscriptionEndpoints, [
+          subscription("phone").endpoint,
+        ])
+      })
+    )
+
+    it.effect("pushes once when two Hearths pass at the same time", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        yield* insertMember("user-a")
+        yield* TestClock.setTime(1_000_000)
+        yield* insertSession("session-a", "user-a", 2_000_000)
+        yield* savePushSubscriptionEffect(
+          "user-a",
+          "session-a",
+          subscription("phone")
+        )
+        const push = fakePushService()
+
+        for (const key of ["removed:1", "removed:2", "removed:3"])
+          yield* notifyUsersEffect(["user-a"], key, removed)
+        yield* Effect.all(
+          [
+            pushPendingNotificationsEffect(),
+            pushPendingNotificationsEffect(),
+          ],
+          { concurrency: "unbounded" }
+        ).pipe(Effect.provide(push.layer))
+
+        assert.strictEqual(push.sent.length, 3)
+      })
+    )
+
+    it.effect("keeps its keys when Hearth's secret is replaced", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        vi.stubEnv("BETTER_AUTH_SECRETS", firstSecret)
+        const created = yield* vapidKeysEffect()
+
+        // A new secret is added, then the old one retired.
+        vi.stubEnv("BETTER_AUTH_SECRETS", `${secondSecret},${firstSecret}`)
+        yield* vapidKeysEffect()
+        vi.stubEnv("BETTER_AUTH_SECRETS", secondSecret)
+        const afterRotation = yield* vapidKeysEffect()
+
+        assert.deepStrictEqual(afterRotation, created)
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => vi.stubEnv("BETTER_AUTH_SECRETS", firstSecret))
+        )
+      )
     )
   })
 })

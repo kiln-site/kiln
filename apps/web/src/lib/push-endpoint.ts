@@ -16,6 +16,10 @@ const pushServiceHostSuffixes = [".push.apple.com", ".notify.windows.com"]
 export function isPushServiceEndpoint(endpoint: string): boolean {
   if (!URL.canParse(endpoint)) return false
   const url = new URL(endpoint)
+  // Browsers hand out canonical URLs. Anything else, such as a host with
+  // escapes like `127.0.0.1%2eweb.push.apple.com`, could reach another host
+  // through a parser that reads it differently.
+  if (url.href !== endpoint) return false
   if (url.protocol !== "https:" || url.port || url.username || url.password)
     return false
   const host = url.hostname

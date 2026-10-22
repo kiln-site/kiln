@@ -45,8 +45,8 @@ export const notifyUsersEffect = Effect.fn("notifications.notify")(function* (
   const result = yield* database.execute(
     "notifications.notify",
     `INSERT INTO ${databaseTable("notification")}
-       (id, user_id, kind, source_key, data, created_at)
-     VALUES ${recipients.map(() => "(?, ?, ?, ?, ?, ?)").join(", ")}
+       (id, user_id, kind, source_key, data, created_at, push_pending)
+     VALUES ${recipients.map(() => "(?, ?, ?, ?, ?, ?, 1)").join(", ")}
      ON DUPLICATE KEY UPDATE id = id`,
     recipients.flatMap((userId) => [
       randomUUID(),

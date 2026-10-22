@@ -92,9 +92,27 @@ self.addEventListener("notificationclick", (event) => {
       )
       if (!open) return self.clients.openWindow(url.href)
       await open.focus()
-      // The page navigates in place, without a reload; see
-      // `useServiceWorkerNavigation`.
-      open.postMessage({ type: "kiln.navigate", href: url.pathname + url.search })
+      // A Kiln page navigates in place, without a reload, and says so (see
+      // `ServiceWorker` in service-worker.tsx). Any other page, such as the
+      // offline page, is navigated instead.
+      if (await askToNavigate(open, url.pathname + url.search)) return
+      try {
+        await open.navigate(url.href)
+      } catch {
+        await self.clients.openWindow(url.href)
+      }
     })()
   )
 })
+
+function askToNavigate(client, href) {
+  return new Promise((resolve) => {
+    const channel = new MessageChannel()
+    const timer = setTimeout(() => resolve(false), 1000)
+    channel.port1.onmessage = () => {
+      clearTimeout(timer)
+      resolve(true)
+    }
+    client.postMessage({ type: "kiln.navigate", href }, [channel.port2])
+  })
+}

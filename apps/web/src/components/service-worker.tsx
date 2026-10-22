@@ -23,8 +23,10 @@ export const ServiceWorker = React.memo(function ServiceWorker() {
         Predicate.isString(data.href) &&
         data.href.startsWith("/") &&
         !data.href.startsWith("//")
-      )
+      ) {
+        event.ports[0]?.postMessage("navigating")
         void router.navigate({ href: data.href })
+      }
     }
     container.addEventListener("message", onMessage)
     container.startMessages()
