@@ -78,6 +78,11 @@ interface InstancePickerContentProps {
   includeKindGroups?: boolean
   /** Row being saved; shows a spinner and locks every row until it settles. */
   pendingKey?: string
+  /**
+   * "bottom" puts the search field last, next to a phone's keyboard, and lets
+   * the list fill the height its container allows.
+   */
+  searchPlacement?: "bottom" | "top"
   selectedGroups?: ReadonlySet<InstancePickerGroup>
   selectedKeys: ReadonlySet<string>
   /** Shows a "View all" footer that follows the active type filter. */
@@ -125,6 +130,7 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
   onSelectGroup,
   onSelectMany,
   pendingKey,
+  searchPlacement = "top",
   selectedGroups = emptyGroups,
   selectedKeys,
   viewAll = false,
@@ -283,59 +289,74 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
       ? (activeTypeFilters[0]?.id as InstancePickerKind)
       : undefined
   const activeItem = visibleItems[activeItemIndex]
+  const searchAtBottom = searchPlacement === "bottom"
+
+  const searchBar = (
+    <div
+      className={cn(
+        "flex shrink-0 items-center gap-1.5 border-border/70 p-2",
+        searchAtBottom ? "border-t" : "border-b"
+      )}
+    >
+      <div className="relative min-w-0 flex-1">
+        <Search
+          className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
+          aria-hidden="true"
+        />
+        <Input
+          autoFocus
+          type="search"
+          role="combobox"
+          aria-autocomplete="list"
+          aria-controls={listId}
+          aria-expanded="true"
+          aria-activedescendant={
+            activeItem
+              ? instancePickerOptionId(listId, activeItem.key)
+              : undefined
+          }
+          value={search}
+          onChange={handleSearchChange}
+          onKeyDown={handleSearchKeyDown}
+          placeholder={`Search ${ariaLabel.toLocaleLowerCase()}`}
+          aria-label={`Search ${ariaLabel.toLocaleLowerCase()}`}
+          className={cn(
+            "bg-input/14 pr-2 pl-8",
+            searchAtBottom ? "h-10" : "h-8 text-sm"
+          )}
+        />
+      </div>
+      {favoritesFilter ? (
+        <InstancePickerToolButton
+          active={favoritesOnly}
+          label="Show favorites only"
+          large={searchAtBottom}
+          onClick={toggleFavorites}
+        >
+          <Star
+            className={cn(
+              "size-3.5",
+              favoritesOnly && "fill-amber-400 text-amber-400"
+            )}
+            aria-hidden="true"
+          />
+        </InstancePickerToolButton>
+      ) : null}
+      {typeFilters.length > 0 ? (
+        <InstancePickerTypeMenu
+          activeFilters={activeTypeFilters}
+          filters={typeFilters}
+          large={searchAtBottom}
+          onShowAll={showAllTypes}
+          onToggle={toggleFilter}
+        />
+      ) : null}
+    </div>
+  )
 
   return (
     <>
-      <div className="flex items-center gap-1.5 border-b border-border/70 p-2">
-        <div className="relative min-w-0 flex-1">
-          <Search
-            className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
-            aria-hidden="true"
-          />
-          <Input
-            autoFocus
-            type="search"
-            role="combobox"
-            aria-autocomplete="list"
-            aria-controls={listId}
-            aria-expanded="true"
-            aria-activedescendant={
-              activeItem
-                ? instancePickerOptionId(listId, activeItem.key)
-                : undefined
-            }
-            value={search}
-            onChange={handleSearchChange}
-            onKeyDown={handleSearchKeyDown}
-            placeholder={`Search ${ariaLabel.toLocaleLowerCase()}`}
-            aria-label={`Search ${ariaLabel.toLocaleLowerCase()}`}
-            className="h-8 bg-input/14 pr-2 pl-8 text-sm"
-          />
-        </div>
-        {favoritesFilter ? (
-          <InstancePickerToolButton
-            active={favoritesOnly}
-            label="Show favorites only"
-            onClick={toggleFavorites}
-          >
-            <Star
-              className={cn(
-                "size-3.5",
-                favoritesOnly && "fill-amber-400 text-amber-400"
-              )}
-              aria-hidden="true"
-            />
-          </InstancePickerToolButton>
-        ) : null}
-        {typeFilters.length > 0 ? (
-          <InstancePickerTypeMenu
-            activeFilters={activeTypeFilters}
-            filters={typeFilters}
-            onShowAll={showAllTypes}
-            onToggle={toggleFilter}
-          />
-        ) : null}
-      </div>
+      {searchAtBottom ? null : searchBar}
       {multiple && onSelectMany ? (
         <InstancePickerBulkBar
           itemKeys={selectableVisibleKeys}
@@ -358,7 +379,10 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
           role="listbox"
           aria-label={ariaLabel}
           aria-multiselectable={multiple || undefined}
-          className="max-h-72 overflow-y-auto overscroll-contain p-1.5"
+          className={cn(
+            "overflow-y-auto overscroll-contain p-1.5",
+            searchAtBottom ? "min-h-0" : "max-h-72"
+          )}
         >
           <div
             className="relative w-full"
@@ -412,6 +436,7 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
           onNavigate={onNavigate}
         />
       ) : null}
+      {searchAtBottom ? searchBar : null}
     </>
   )
 })
@@ -460,18 +485,21 @@ function instancePickerOptionId(listId: string, key: string) {
 }
 
 const toolButtonClassName =
-  "relative grid size-8 shrink-0 place-items-center rounded-md border border-border/70 text-muted-foreground transition-colors outline-none hover:bg-muted/55 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 data-[state=open]:bg-muted/55 data-[state=open]:text-foreground"
+  "relative grid shrink-0 place-items-center rounded-md border border-border/70 text-muted-foreground transition-colors outline-none hover:bg-muted/55 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 data-[state=open]:bg-muted/55 data-[state=open]:text-foreground"
 const activeToolButtonClassName = "border-primary/45 bg-primary/8 text-primary"
+const toolButtonSize = (large: boolean) => (large ? "size-10" : "size-8")
 
 const InstancePickerToolButton = React.memo(function InstancePickerToolButton({
   active,
   children,
   label,
+  large,
   onClick,
 }: {
   active: boolean
   children: React.ReactNode
   label: string
+  large: boolean
   onClick: () => void
 }) {
   return (
@@ -480,7 +508,11 @@ const InstancePickerToolButton = React.memo(function InstancePickerToolButton({
       aria-label={label}
       aria-pressed={active}
       title={label}
-      className={cn(toolButtonClassName, active && activeToolButtonClassName)}
+      className={cn(
+        toolButtonClassName,
+        toolButtonSize(large),
+        active && activeToolButtonClassName
+      )}
       onClick={onClick}
     >
       {children}
@@ -491,11 +523,14 @@ const InstancePickerToolButton = React.memo(function InstancePickerToolButton({
 const InstancePickerTypeMenu = React.memo(function InstancePickerTypeMenu({
   activeFilters,
   filters,
+  large,
   onShowAll,
   onToggle,
 }: {
   activeFilters: ReadonlyArray<InstancePickerFilter>
   filters: ReadonlyArray<InstancePickerFilter>
+  /** Sized for touch and opening upward, for a search bar at the bottom. */
+  large: boolean
   onShowAll: () => void
   onToggle: (filterId: string, checked: boolean) => void
 }) {
@@ -516,13 +551,18 @@ const InstancePickerTypeMenu = React.memo(function InstancePickerTypeMenu({
           title="Filter by type"
           className={cn(
             toolButtonClassName,
+            toolButtonSize(large),
             filtered && activeToolButtonClassName
           )}
         >
           <ListFilter className="size-3.5" aria-hidden="true" />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="z-[80] w-44 p-1">
+      <DropdownMenuContent
+        align="end"
+        side={large ? "top" : "bottom"}
+        className="z-[80] w-44 p-1"
+      >
         {filters.map((filter) => {
           const { Icon } = kindPresentation[filter.id as InstancePickerKind]
           return (
