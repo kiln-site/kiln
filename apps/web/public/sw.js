@@ -91,12 +91,13 @@ self.addEventListener("notificationclick", (event) => {
         (client) => new URL(client.url).origin === url.origin
       )
       if (!open) return self.clients.openWindow(url.href)
-      await open.focus()
       // A Kiln page navigates in place, without a reload, and says so (see
       // `ServiceWorker` in service-worker.tsx). Any other page, such as the
-      // offline page, is navigated instead.
-      if (await askToNavigate(open, url.pathname + url.search)) return
+      // offline page, is navigated instead, and a window that closed
+      // meanwhile is replaced by a new one.
       try {
+        await open.focus()
+        if (await askToNavigate(open, url.pathname + url.search)) return
         await open.navigate(url.href)
       } catch {
         await self.clients.openWindow(url.href)
