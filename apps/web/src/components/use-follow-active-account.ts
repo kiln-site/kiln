@@ -1,6 +1,6 @@
 import { useEffect } from "react"
 
-import { recoverPromise } from "@/effect/promise"
+import { ensuringPromise, recoverPromise } from "@/effect/promise"
 import {
   activeAccountStorageKey,
   announceActiveAccount,
@@ -33,13 +33,18 @@ export function useFollowActiveAccount(userId: string | null) {
       reloadIfChanged(readActiveAccount())
       if (checking || Date.now() - checkedAt < resumeCheckIntervalMs) return
       checking = true
-      void recoverPromise(
-        async () => reloadIfChanged((await getActiveBrowserAccountId()) ?? ""),
-        () => undefined
-      ).finally(() => {
-        checking = false
-        checkedAt = Date.now()
-      })
+      void ensuringPromise(
+        () =>
+          recoverPromise(
+            async () =>
+              reloadIfChanged((await getActiveBrowserAccountId()) ?? ""),
+            () => undefined
+          ),
+        () => {
+          checking = false
+          checkedAt = Date.now()
+        }
+      )
     }
     window.addEventListener("storage", onStorage)
     window.addEventListener("pageshow", onResume)
