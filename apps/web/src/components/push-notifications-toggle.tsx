@@ -6,10 +6,15 @@ import { showToast } from "@workspace/ui/components/sonner"
 
 import { recoverPromise } from "@/effect/promise"
 import {
-  getPushNotificationState,
-  subscribePushNotifications,
-  unsubscribePushNotifications,
-} from "@/server/push-notifications"
+  isAppleMobile,
+  pushChangedEvent,
+  pushRegistration,
+  pushSupported,
+  showPushFailure,
+  subscribeThisDevice,
+  unsubscribeThisDevice,
+} from "@/lib/push-subscription"
+import { getPushNotificationState } from "@/server/push-notifications"
 
 type PushState =
   | { status: "checking" | "unsupported" | "install" | "blocked" | "busy" }
@@ -26,14 +31,20 @@ export const PushNotificationsToggle = React.memo(
       status: "checking",
     })
 
+    // Loads again when push changes elsewhere, as from the installed app's
+    // prompt.
     React.useEffect(() => {
       let cancelled = false
-      void recoverPromise(
-        loadPushState,
-        (): PushState => ({ status: "unsupported" })
-      ).then((next) => !cancelled && setState(next))
+      const load = () =>
+        void recoverPromise(
+          loadPushState,
+          (): PushState => ({ status: "unsupported" })
+        ).then((next) => !cancelled && setState(next))
+      load()
+      window.addEventListener(pushChangedEvent, load)
       return () => {
         cancelled = true
+        window.removeEventListener(pushChangedEvent, load)
       }
     }, [])
 
@@ -46,7 +57,14 @@ export const PushNotificationsToggle = React.memo(
       setState({ status: "busy" })
       setState(
         await recoverPromise(
-          () => turnPushOn(publicKey, permission),
+          async (): Promise<PushState> => {
+            const answer = await subscribeThisDevice(permission, publicKey)
+            return answer === "granted"
+              ? { status: "on", publicKey }
+              : answer === "denied"
+                ? { status: "blocked" }
+                : { status: "off", publicKey }
+          },
           (error): PushState => {
             showPushFailure("turn on push notifications", error)
             return { status: "off", publicKey }
@@ -59,7 +77,10 @@ export const PushNotificationsToggle = React.memo(
       setState({ status: "busy" })
       setState(
         await recoverPromise(
-          () => turnPushOff(publicKey),
+          async (): Promise<PushState> => {
+            await unsubscribeThisDevice()
+            return { status: "off", publicKey }
+          },
           (error): PushState => {
             showPushFailure("turn off push notifications", error)
             return { status: "on", publicKey }
@@ -110,27 +131,11 @@ export const PushNotificationsToggle = React.memo(
 )
 
 async function loadPushState(): Promise<PushState> {
-  if (
-    !("serviceWorker" in navigator) ||
-    !("PushManager" in window) ||
-    !("Notification" in window)
-  ) {
-    // Safari in a tab on iPhone and iPad has no push at all. iPads say
-    // they're Macs.
-    const appleMobile =
-      /iPhone|iPad/u.test(navigator.userAgent) ||
-      (/Macintosh/u.test(navigator.userAgent) && navigator.maxTouchPoints > 1)
-    return appleMobile ? { status: "install" } : { status: "unsupported" }
-  }
+  if (!pushSupported())
+    // Safari in a tab on iPhone and iPad has no push at all.
+    return isAppleMobile() ? { status: "install" } : { status: "unsupported" }
   if (Notification.permission === "denied") return { status: "blocked" }
-  // The worker registers once the page loads; one that never does, as in a
-  // private window, means no push here.
-  const registration = await Promise.race([
-    navigator.serviceWorker.ready,
-    new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error("No service worker")), 10_000)
-    ),
-  ])
+  const registration = await pushRegistration()
   const subscription = await registration.pushManager.getSubscription()
   const { publicKey, subscribed } = await getPushNotificationState({
     data: { endpoint: subscription?.endpoint ?? null },
@@ -140,73 +145,4 @@ async function loadPushState(): Promise<PushState> {
       subscribed && Notification.permission === "granted" ? "on" : "off",
     publicKey,
   }
-}
-
-async function turnPushOn(
-  publicKey: string,
-  permission: Promise<NotificationPermission>
-): Promise<PushState> {
-  const answer = await permission
-  if (answer !== "granted")
-    return answer === "denied"
-      ? { status: "blocked" }
-      : { status: "off", publicKey }
-  const subscription = await browserSubscription(publicKey)
-  const { endpoint, keys } = subscription.toJSON()
-  if (!endpoint || !keys?.auth || !keys.p256dh)
-    throw new Error("The browser returned an incomplete subscription")
-  await subscribePushNotifications({
-    data: { endpoint, keys: { auth: keys.auth, p256dh: keys.p256dh } },
-  })
-  return { status: "on", publicKey }
-}
-
-async function turnPushOff(publicKey: string): Promise<PushState> {
-  const registration = await navigator.serviceWorker.ready
-  const subscription = await registration.pushManager.getSubscription()
-  // The browser's subscription stays, for other Kiln accounts signed in here
-  // that use it; this account just stops sending to it.
-  if (subscription)
-    await unsubscribePushNotifications({
-      data: { endpoint: subscription.endpoint },
-    })
-  return { status: "off", publicKey }
-}
-
-// This browser's subscription for Kiln's key, replacing one made for another
-// key, as before the database was reset.
-async function browserSubscription(publicKey: string) {
-  const registration = await navigator.serviceWorker.ready
-  const applicationServerKey = base64UrlBytes(publicKey)
-  const existing = await registration.pushManager.getSubscription()
-  if (existing) {
-    const key = existing.options.applicationServerKey
-    if (key && sameBytes(new Uint8Array(key), applicationServerKey))
-      return existing
-    await existing.unsubscribe()
-  }
-  return registration.pushManager.subscribe({
-    applicationServerKey,
-    userVisibleOnly: true,
-  })
-}
-
-function base64UrlBytes(value: string) {
-  const base64 = value.replace(/-/g, "+").replace(/_/g, "/")
-  const binary = atob(base64.padEnd(Math.ceil(base64.length / 4) * 4, "="))
-  return Uint8Array.from(binary, (character) => character.charCodeAt(0))
-}
-
-function sameBytes(left: Uint8Array, right: Uint8Array) {
-  return (
-    left.length === right.length &&
-    left.every((byte, index) => byte === right[index])
-  )
-}
-
-function showPushFailure(action: string, error: unknown) {
-  showToast({
-    message: `Could not ${action}: ${error instanceof Error ? error.message : String(error)}`,
-    type: "error",
-  })
 }

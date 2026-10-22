@@ -14,6 +14,7 @@ import { AppSidebar } from "@/components/app-sidebar"
 import { InfraUpdateDialogProvider } from "@/components/infra-update-dialog-provider"
 import { NotificationsProvider } from "@/components/notifications"
 import { PanelFooter } from "@/components/panel-footer"
+import { PushNotificationsPrompt } from "@/components/push-notifications-prompt"
 import { RealtimeSync } from "@/components/realtime-sync"
 import { RelayConnectionToastMonitor } from "@/components/relay-connection-toast"
 import { applyAppearance, saveAppearanceCache } from "@/lib/appearance"
@@ -47,6 +48,7 @@ export const AppFrame = React.memo(function AppFrame({
           <AccountStatusSync />
           <RealtimeSync />
           <RelayConnectionToastMonitor />
+          <PushNotificationsPrompt />
           <MobileSidebarNavigationDismiss />
           <AppSidebar
             initialSelectedInstanceRouteId={
