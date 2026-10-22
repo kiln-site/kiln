@@ -107,6 +107,10 @@ export function updateInstanceSourceName(
 export const claimInstanceOwner = `owner_id = IF(owner_id IS NULL OR owner_provisional, VALUES(owner_id), owner_id),
        owner_provisional = IF(owner_id <=> VALUES(owner_id), 0, owner_provisional)`
 
+interface RelayOwnerRow extends RowDataPacket {
+  created_by: string | null
+}
+
 interface InstanceOwnerRow extends RowDataPacket {
   owner_id: string | null
   owner_provisional: number
@@ -124,6 +128,11 @@ export function claimInstanceOwnerEffect<E, R>(
   claim: Effect.Effect<unknown, E, R>
 ) {
   return Effect.gen(function* () {
+    // The Relay first, then the server, as access changes take them.
+    yield* transaction.queryRows(
+      `SELECT id FROM ${databaseTable("relay")} WHERE id = ? FOR SHARE`,
+      [scope.relayId]
+    )
     const [before] = yield* transaction.queryRows<InstanceOwnerRow>(
       `SELECT owner_id, owner_provisional FROM ${databaseTable("instance")}
         WHERE relay_id = ? AND instance_id = ? FOR UPDATE`,
@@ -323,31 +332,29 @@ export const updateInstanceSourceNameEffect = Effect.fn(
 })
 
 // Records each instance's name and stable metadata, creating missing rows.
-// Without `ownerId`, a new row goes to the Relay's owner provisionally, a
-// stand-in until Hearth knows who made it, and an existing row keeps its
-// owner. With it, the person who just created the server claims it.
+// A stand-in owner, the Relay's owner when Hearth doesn't know who made a
+// server, goes on new rows provisionally and leaves existing owners alone.
+// Otherwise the owner is the person who just created the server, who claims
+// it.
 function upsertInstancesStatement(
   relayId: string,
   instances: ReadonlyArray<DirectoryInstance>,
   now: number,
-  ownerId?: string
+  owner: { id: string | null; standIn: boolean }
 ) {
-  const owner = ownerId
-    ? "?"
-    : `(SELECT created_by FROM ${databaseTable("relay")} WHERE id = ?)`
   return [
     `INSERT INTO ${databaseTable("instance")}
        (relay_id, instance_id, display_name, source_name, directory_metadata,
         owner_id, owner_provisional, created_at, updated_at)
-     VALUES ${instances.map(() => `(?, ?, NULL, ?, ?, ${owner}, ${ownerId ? 0 : 1}, ?, ?)`).join(", ")}
+     VALUES ${instances.map(() => "(?, ?, NULL, ?, ?, ?, ?, ?, ?)").join(", ")}
      ON DUPLICATE KEY UPDATE
        source_name = VALUES(source_name),
        directory_metadata = VALUES(directory_metadata),
        ${
-         ownerId
-           ? claimInstanceOwner
-           : `owner_provisional = IF(owner_id IS NULL, 1, owner_provisional),
+         owner.standIn
+           ? `owner_provisional = IF(owner_id IS NULL, 1, owner_provisional),
        owner_id = COALESCE(owner_id, VALUES(owner_id))`
+           : claimInstanceOwner
        },
        updated_at = VALUES(updated_at)`,
     instances.flatMap((instance) => [
@@ -355,7 +362,8 @@ function upsertInstancesStatement(
       instance.id,
       instance.name.slice(0, 255),
       instanceDirectoryMetadata(instance),
-      ownerId ?? relayId,
+      owner.id,
+      owner.standIn ? 1 : 0,
       now,
       now,
     ]),
@@ -417,7 +425,12 @@ export const recordCreatedInstanceEffect = Effect.fn(
       claimInstanceOwnerEffect(
         tx,
         { instanceId: instance.id, ownerId, relayId },
-        tx.execute(...upsertInstancesStatement(relayId, [instance], now, ownerId))
+        tx.execute(
+          ...upsertInstancesStatement(relayId, [instance], now, {
+            id: ownerId,
+            standIn: false,
+          })
+        )
       )
     )
   )
@@ -460,11 +473,22 @@ export const syncInstanceRegistryEffect = Effect.fn("instances.registry.sync")(
             ...lifecycle.created,
           ]),
         ]
+        // A server Hearth didn't make goes to the Relay's owner as a stand-in.
+        const [relay] = listed.length
+          ? yield* database.queryRows<RelayOwnerRow>(
+              "instances.registry.relayOwner",
+              `SELECT created_by FROM ${databaseTable("relay")} WHERE id = ?`,
+              [relayId]
+            )
+          : []
         yield* database.transaction("instances.registry.sync", (transaction) =>
           Effect.gen(function* () {
             if (listed.length)
               yield* transaction.execute(
-                ...upsertInstancesStatement(relayId, listed, now)
+                ...upsertInstancesStatement(relayId, listed, now, {
+                  id: relay?.created_by ?? null,
+                  standIn: true,
+                })
               )
             yield* transaction.execute(
               `DELETE FROM ${databaseTable("instance")}
