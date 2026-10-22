@@ -22,10 +22,11 @@ import {
   PopoverTrigger,
 } from "@workspace/ui/components/popover"
 import {
-  KeyboardSheet,
-  KeyboardSheetContent,
-  KeyboardSheetTrigger,
-} from "@workspace/ui/components/keyboard-sheet"
+  Drawer,
+  DrawerContent,
+  DrawerTitle,
+  DrawerTrigger,
+} from "@workspace/ui/components/drawer"
 import {
   Sidebar,
   SidebarContent,
@@ -1127,9 +1128,9 @@ const InstanceSelector = React.memo(function InstanceSelector({
     [selectedKey]
   )
   const instance = selection.kind === "server" ? selection.instance : null
-  // On phones the picker opens as a sheet above the keyboard instead.
-  const PickerRoot = isMobile ? KeyboardSheet : Popover
-  const PickerTrigger = isMobile ? KeyboardSheetTrigger : PopoverTrigger
+  // On phones the picker opens as a drawer from the bottom instead.
+  const PickerRoot = isMobile ? Drawer : Popover
+  const PickerTrigger = isMobile ? DrawerTrigger : PopoverTrigger
 
   return (
     <SidebarMenuItem>
@@ -1214,10 +1215,8 @@ const InstanceSelector = React.memo(function InstanceSelector({
           </SidebarMenuButton>
         </PickerTrigger>
         {isMobile ? (
-          <KeyboardSheetContent
-            title="Switch instance"
-            onCloseAutoFocus={handleCloseAutoFocus}
-          >
+          <DrawerContent onCloseAutoFocus={handleCloseAutoFocus}>
+            <DrawerTitle className="sr-only">Switch instance</DrawerTitle>
             <SidebarInstancePicker
               capabilities={capabilities}
               searchPlacement="bottom"
@@ -1225,7 +1224,7 @@ const InstanceSelector = React.memo(function InstanceSelector({
               onNavigate={closePicker}
               onSelect={selectInstance}
             />
-          </KeyboardSheetContent>
+          </DrawerContent>
         ) : (
           <PopoverContent
             aria-label="Instances"
