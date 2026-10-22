@@ -31,3 +31,42 @@ export function readActiveAccount(): string | null {
     () => null
   )
 }
+
+// Each tab tells Hearth which account it renders. A request whose shared
+// cookie now belongs to another account is refused, so a tab that has not yet
+// followed a switch cannot read or change anything as the new account.
+export const renderedAccountHeader = "x-kiln-account"
+const renderedAccountParam = "kilnAccount"
+export const accountChangedMessage = "kiln:account-changed"
+
+let renderedAccount: string | null = null
+
+export function setRenderedAccount(userId: string | null) {
+  renderedAccount = userId
+}
+
+export function getRenderedAccount(): string | null {
+  return renderedAccount
+}
+
+/** Adds the rendered account to a stream URL, which cannot carry headers. */
+export function withRenderedAccount(url: string): string {
+  if (renderedAccount === null) return url
+  const separator = url.includes("?") ? "&" : "?"
+  return `${url}${separator}${renderedAccountParam}=${encodeURIComponent(renderedAccount)}`
+}
+
+/** Whether a request claims to come from a tab rendering another account. */
+export function rendersOtherAccount(
+  request: Request,
+  userId: string | null
+): boolean {
+  const claimed =
+    request.headers.get(renderedAccountHeader) ??
+    new URL(request.url).searchParams.get(renderedAccountParam)
+  return claimed !== null && claimed !== (userId ?? "")
+}
+
+export function isAccountChangedError(cause: unknown): boolean {
+  return cause instanceof Error && cause.message === accountChangedMessage
+}

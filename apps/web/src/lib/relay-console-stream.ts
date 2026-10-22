@@ -1,3 +1,4 @@
+import { withRenderedAccount } from "@/lib/browser-accounts"
 import {
   relayBrowserConsoleProtocol,
   relayBrowserConsoleProtocols,
@@ -685,7 +686,9 @@ function hearthConsoleStreamUrl(
   const search = new URLSearchParams({ relayId })
   if (resource.kind !== "instance") search.set("kind", resource.kind)
   if (resource.stream) search.set("stream", resource.stream)
-  return `/api/console/${encodeURIComponent(resource.id)}?${search}`
+  return withRenderedAccount(
+    `/api/console/${encodeURIComponent(resource.id)}?${search}`
+  )
 }
 
 function sameRelayBrowserEndpoint(left: string, right: string): boolean {

@@ -1,4 +1,5 @@
 import { Result } from "effect"
+import { withRenderedAccount } from "@/lib/browser-accounts"
 import { memo, useEffect } from "react"
 
 import { useFollowActiveAccount } from "@/components/use-follow-active-account"
@@ -16,7 +17,7 @@ export const AccountStatusSync = memo(function AccountStatusSync({
   // another tab switches, adds, or signs out an account.
   useFollowActiveAccount(userId)
   useEffect(() => {
-    const source = new EventSource("/api/account-status")
+    const source = new EventSource(withRenderedAccount("/api/account-status"))
     let previousVerification: boolean | null = null
     const onMessage = (event: MessageEvent<string>) => {
       Result.try(() => {

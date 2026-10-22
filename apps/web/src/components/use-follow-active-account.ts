@@ -5,6 +5,7 @@ import {
   activeAccountStorageKey,
   announceActiveAccount,
   readActiveAccount,
+  setRenderedAccount,
 } from "@/lib/browser-accounts"
 import { getActiveBrowserAccountId } from "@/server/browser-accounts"
 
@@ -14,14 +15,19 @@ const resumeCheckIntervalMs = 2_000
  * Keeps a tab rendering `userId` from acting for a different account after
  * another tab switches, signs in, or signs out. Storage events wake other tabs
  * at once; a tab that regains focus also asks Hearth which account is active,
- * since storage can be unavailable or skipped by a frozen tab.
+ * since storage can be unavailable or skipped by a frozen tab. Hearth refuses
+ * this tab's requests meanwhile, see `rendersOtherAccount`.
  */
 export function useFollowActiveAccount(userId: string | null) {
+  // Set during render so requests from this tab's first effects carry it.
+  setRenderedAccount(userId)
   useEffect(() => {
     announceActiveAccount(userId)
     const expected = userId ?? ""
     let checking = false
+    let recheck = false
     let checkedAt = 0
+    let trailing: ReturnType<typeof setTimeout> | undefined
     const reloadIfChanged = (active: string | null) => {
       if (active !== null && active !== expected) window.location.reload()
     }
@@ -31,7 +37,23 @@ export function useFollowActiveAccount(userId: string | null) {
     const onResume = () => {
       if (document.visibilityState !== "visible") return
       reloadIfChanged(readActiveAccount())
-      if (checking || Date.now() - checkedAt < resumeCheckIntervalMs) return
+      checkWithHearth()
+    }
+    // Coalesces resume events without dropping any: a resume during or just
+    // after a check runs one more check once it is allowed.
+    const checkWithHearth = () => {
+      if (checking) {
+        recheck = true
+        return
+      }
+      const wait = checkedAt + resumeCheckIntervalMs - Date.now()
+      if (wait > 0) {
+        trailing ??= setTimeout(() => {
+          trailing = undefined
+          checkWithHearth()
+        }, wait)
+        return
+      }
       checking = true
       void ensuringPromise(
         () =>
@@ -43,6 +65,10 @@ export function useFollowActiveAccount(userId: string | null) {
         () => {
           checking = false
           checkedAt = Date.now()
+          if (recheck) {
+            recheck = false
+            checkWithHearth()
+          }
         }
       )
     }
@@ -51,6 +77,7 @@ export function useFollowActiveAccount(userId: string | null) {
     window.addEventListener("focus", onResume)
     document.addEventListener("visibilitychange", onResume)
     return () => {
+      clearTimeout(trailing)
       window.removeEventListener("storage", onStorage)
       window.removeEventListener("pageshow", onResume)
       window.removeEventListener("focus", onResume)

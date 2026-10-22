@@ -9,7 +9,8 @@ import {
   signOutBrowserAccount,
   switchBrowserAccount,
 } from "@/lib/browser-accounts.server"
-import { getCurrentUser, requireAuthenticatedUser } from "@/server/auth"
+import { getAuthenticatedUserFromHeaders } from "@/lib/auth-session"
+import { requireAuthenticatedUser } from "@/server/auth"
 
 const browserSessionInput = z.object({
   sessionId: z.string().min(1).max(128),
@@ -43,6 +44,11 @@ export const rememberActiveBrowserAccountSession = createServerFn({
   await rememberActiveBrowserAccount(getRequestHeaders())
 })
 
+// Tabs that may render a stale account ask this, so it skips the rendered
+// account check that the session helpers apply.
 export const getActiveBrowserAccountId = createServerFn({
   method: "GET",
-}).handler(async () => (await getCurrentUser())?.id ?? null)
+}).handler(
+  async () =>
+    (await getAuthenticatedUserFromHeaders(getRequestHeaders()))?.id ?? null
+)

@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router"
+import { rendersOtherAccount } from "@/lib/browser-accounts"
 
 import { isEligibleAccount } from "@/lib/account-policy"
 import { getAuthenticatedRealtimeIdentityFromHeaders } from "@/lib/auth-session"
@@ -11,6 +12,12 @@ export const Route = createFileRoute("/api/realtime")({
         const identity = await getAuthenticatedRealtimeIdentityFromHeaders(
           request.headers
         )
+        if (rendersOtherAccount(request, identity?.user.id ?? null)) {
+          return Response.json(
+            { code: "account_changed", error: "The active account changed." },
+            { status: 409 }
+          )
+        }
         if (!identity) {
           return Response.json(
             {

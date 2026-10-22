@@ -25,6 +25,8 @@ const publicServerFunctions: Record<string, string> = {
     "Lists only accounts this browser holds signed session cookies for",
   "browser-accounts.ts:switchBrowserAccountSession":
     "Authorized by this browser's signed cookie for the chosen session",
+  "browser-accounts.ts:getActiveBrowserAccountId":
+    "Returns only the id of the account this browser's cookie belongs to",
   "browser-accounts.ts:resumeBrowserAccountSession":
     "Activates a session this browser already holds a signed cookie for",
   "backup-downloads.ts:getBackupDownloadShare":

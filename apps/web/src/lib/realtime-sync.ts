@@ -1,4 +1,5 @@
 import type { QueryClient } from "@tanstack/react-query"
+import { withRenderedAccount } from "@/lib/browser-accounts"
 
 import { ensuringPromise, recoverPromise } from "@/effect/promise"
 import { recheckServerWorkspaces } from "@/lib/server-workspace"
@@ -423,7 +424,7 @@ export function startRealtimeSync(
   }
   const connectSource = () => {
     if (closed) return
-    const nextSource = new EventSource("/api/realtime")
+    const nextSource = new EventSource(withRenderedAccount("/api/realtime"))
     source = nextSource
     lastStreamActivityAt = Date.now()
     nextSource.addEventListener("kiln", handleEvent)

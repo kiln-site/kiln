@@ -1,4 +1,5 @@
 import { Effect } from "effect"
+import { rendersOtherAccount } from "@/lib/browser-accounts"
 import { createFileRoute } from "@tanstack/react-router"
 import { isAccountEnabled, isAccountVerified } from "@/lib/account-policy"
 import { getAuthenticatedRealtimeIdentityFromHeaders } from "@/lib/auth-session"
@@ -14,6 +15,12 @@ export const Route = createFileRoute("/api/account-status")({
           request.headers
         )
         if (!identity) return new Response(null, { status: 401 })
+        // The tab renders an account this browser has switched away from;
+        // report it signed out so the tab leaves.
+        const rendersSwitchedAccount = rendersOtherAccount(
+          request,
+          identity.user.id
+        )
         const sessionId = identity.sessionId
         const userId = identity.user.id
         let cleanup = () => {}
@@ -41,7 +48,9 @@ export const Route = createFileRoute("/api/account-status")({
                       )
                     if (!closed) {
                       const value = JSON.stringify(
-                        current && current.sessionId === sessionId
+                        current &&
+                          current.sessionId === sessionId &&
+                          !rendersSwitchedAccount
                           ? {
                               authenticated: true,
                               enabled: isAccountEnabled(current.user),
@@ -58,7 +67,12 @@ export const Route = createFileRoute("/api/account-status")({
                         controller.enqueue(encoder.encode(`data: ${value}\n\n`))
                       } else
                         controller.enqueue(encoder.encode(": keepalive\n\n"))
-                      if (!current || current.sessionId !== sessionId) close()
+                      if (
+                        !current ||
+                        current.sessionId !== sessionId ||
+                        rendersSwitchedAccount
+                      )
+                        close()
                     }
                   },
                   catch: (cause) => cause,

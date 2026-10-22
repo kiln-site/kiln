@@ -6,6 +6,11 @@ import {
 } from "@tanstack/react-start"
 
 import { tapPromiseError } from "./effect/promise"
+import {
+  getRenderedAccount,
+  isAccountChangedError,
+  renderedAccountHeader,
+} from "./lib/browser-accounts"
 import { reportAppError, traceAppPromise } from "./effect/runtime"
 import { requestSpanName } from "./observability/request-span"
 
@@ -41,9 +46,34 @@ const errorMiddleware = createMiddleware({ type: "function" }).server(
     )
 )
 
+// Hearth refuses calls from a tab that still renders an account the browser
+// has switched away from; that tab reloads as the active account.
+const renderedAccountMiddleware = createMiddleware({ type: "function" }).client(
+  ({ next }) => {
+    const account = getRenderedAccount()
+    return tapPromiseError(
+      () =>
+        next(
+          account === null
+            ? undefined
+            : { headers: { [renderedAccountHeader]: account } }
+        ),
+      (cause) => {
+        if (isAccountChangedError(cause)) window.location.reload()
+      }
+    )
+  }
+)
+
 function reportRequestError(cause: unknown, operation: string): void {
-  // Redirects, not-found results, and thrown responses are control flow.
-  if (isRedirect(cause) || isNotFound(cause) || cause instanceof Response) {
+  // Redirects, not-found results, thrown responses, and calls from a tab that
+  // has not yet followed an account switch are control flow.
+  if (
+    isRedirect(cause) ||
+    isNotFound(cause) ||
+    cause instanceof Response ||
+    isAccountChangedError(cause)
+  ) {
     return
   }
   reportAppError(cause, { operation })
@@ -51,5 +81,5 @@ function reportRequestError(cause: unknown, operation: string): void {
 
 export const startInstance = createStart(() => ({
   requestMiddleware: [tracingMiddleware, csrfMiddleware],
-  functionMiddleware: [errorMiddleware],
+  functionMiddleware: [renderedAccountMiddleware, errorMiddleware],
 }))

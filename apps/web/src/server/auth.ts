@@ -1,24 +1,42 @@
 import { createServerFn, createServerOnlyFn } from "@tanstack/react-start"
 import { z } from "zod"
 
+import {
+  accountChangedMessage,
+  rendersOtherAccount,
+} from "@/lib/browser-accounts"
+
 export const getCurrentUser = createServerOnlyFn(async () => {
-  const [{ getRequestHeaders }, { getAuthenticatedUserFromHeaders }] =
+  const [{ getRequest }, { getAuthenticatedUserFromHeaders }] =
     await Promise.all([
       import("@tanstack/react-start/server"),
       import("@/lib/auth-session"),
     ])
-  return getAuthenticatedUserFromHeaders(getRequestHeaders())
+  const request = getRequest()
+  const user = await getAuthenticatedUserFromHeaders(request.headers)
+  requireRenderedAccount(request, user?.id ?? null)
+  return user
 })
 
+// The shared session cookie may have moved to another account since the
+// calling tab loaded; refuse to act as that account on the tab's behalf.
+function requireRenderedAccount(request: Request, userId: string | null) {
+  if (rendersOtherAccount(request, userId))
+    throw new Error(accountChangedMessage)
+}
+
 const getCurrentIdentity = createServerOnlyFn(async () => {
-  const [
-    { getRequestHeaders },
-    { getAuthenticatedRealtimeIdentityFromHeaders },
-  ] = await Promise.all([
-    import("@tanstack/react-start/server"),
-    import("@/lib/auth-session"),
-  ])
-  return getAuthenticatedRealtimeIdentityFromHeaders(getRequestHeaders())
+  const [{ getRequest }, { getAuthenticatedRealtimeIdentityFromHeaders }] =
+    await Promise.all([
+      import("@tanstack/react-start/server"),
+      import("@/lib/auth-session"),
+    ])
+  const request = getRequest()
+  const identity = await getAuthenticatedRealtimeIdentityFromHeaders(
+    request.headers
+  )
+  requireRenderedAccount(request, identity?.user.id ?? null)
+  return identity
 })
 
 const setDevelopmentBypass = createServerOnlyFn(async (enabled: boolean) => {
