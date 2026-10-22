@@ -7,6 +7,7 @@ dist-ssr
 .env*
 !.env.hearth.example
 !.env.relay.example
+!.env.marketing.example
 .tanstack
 .wrangler
 .output

@@ -69,6 +69,22 @@ canonical links and link previews. All three are read when the site serves a
 request, not at build time. `robots.txt`, `sitemap.xml`, and `llms.txt` in
 `apps/marketing/public` name `https://kiln.site` directly.
 
+Optional Umami tracking uses two runtime environment variables on the marketing
+app (see `.env.marketing.example`):
+
+```sh
+KILN_WEB_ANALYTICS_URL=https://stats.example.com/script.js
+KILN_WEB_ANALYTICS_WEBSITE_ID=your-umami-website-id
+```
+
+Use the full tracker script URL from Umami's website settings, including any
+custom `TRACKER_SCRIPT_NAME`, and that website's ID. Both values are public.
+The script loads with `defer` and Umami tracks client-side page navigations
+automatically. Leaving either variable unset disables tracking; invalid or
+non-HTTP(S) URLs also disable it. No rebuild is needed when changing these
+variables; restart the marketing app. Umami's database URL and authentication
+secrets belong on the Umami app, not the marketing app.
+
 The site serves the Terms of Use and Privacy Policy at `/terms` and `/privacy`.
 Hearth's footer links to them, and Hearth's own `/terms` and `/privacy`
 redirect there, on any panel running Kiln's official images, since those send

@@ -56,10 +56,19 @@ export const Route = createRootRoute({
 })
 
 function RootDocument({ children }: { children: ReactNode }) {
+  const { analytics } = Route.useLoaderData()
+
   return (
     <html lang="en" className="dark">
       <head>
         <HeadContent />
+        {analytics && (
+          <script
+            defer
+            src={analytics.scriptUrl}
+            data-website-id={analytics.websiteId}
+          />
+        )}
       </head>
       <body className="min-h-dvh antialiased">
         {children}
