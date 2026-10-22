@@ -148,13 +148,16 @@ globalThis.fetch = async (url) => {
   const launcher = join(installed, "kiln.cjs")
   // --ignore-scripts matches package managers that disable dependency lifecycle scripts.
   assert.equal(launch(launcher, ["--version"]), "kiln 1.0.0")
+  // npm may rewrite the installed launcher (line endings on Windows checkouts),
+  // so compare it with itself rather than with the source.
+  const installedLauncher = digest(await readFile(launcher))
   assert.deepEqual(JSON.parse(launch(launcher, ["update"], { env })), {
     updated: true,
     version: "1.1.0",
   })
   assert.equal(launch(launcher, ["--version"]), "kiln 1.1.0")
   assert.equal(
-    digest(await readFile(join(mainPackage, "kiln.cjs"))),
+    installedLauncher,
     digest(await readFile(launcher)),
     "updating must leave the npm launcher unchanged"
   )
