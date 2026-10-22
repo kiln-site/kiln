@@ -23,6 +23,11 @@ import {
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
 import { Input } from "@workspace/ui/components/input"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@workspace/ui/components/popover"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { useInstanceFavoriteKeys } from "@/components/instance-favorite"
@@ -330,7 +335,7 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
         <InstancePickerToolButton
           active={favoritesOnly}
           label="Show favorites only"
-          large={searchAtBottom}
+          touch={searchAtBottom}
           onClick={toggleFavorites}
         >
           <Star
@@ -346,7 +351,7 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
         <InstancePickerTypeMenu
           activeFilters={activeTypeFilters}
           filters={typeFilters}
-          large={searchAtBottom}
+          touch={searchAtBottom}
           onShowAll={showAllTypes}
           onToggle={toggleFilter}
         />
@@ -487,20 +492,25 @@ function instancePickerOptionId(listId: string, key: string) {
 const toolButtonClassName =
   "relative grid shrink-0 place-items-center rounded-md border border-border/70 text-muted-foreground transition-colors outline-none hover:bg-muted/55 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 data-[state=open]:bg-muted/55 data-[state=open]:text-foreground"
 const activeToolButtonClassName = "border-primary/45 bg-primary/8 text-primary"
-const toolButtonSize = (large: boolean) => (large ? "size-10" : "size-8")
+const toolButtonSize = (touch: boolean) => (touch ? "size-10" : "size-8")
+// A tap moves focus to what it lands on, closing a phone's keyboard; cancelling
+// it keeps the search field focused while filtering.
+const keepSearchFocus = (event: React.SyntheticEvent | Event) =>
+  event.preventDefault()
 
 const InstancePickerToolButton = React.memo(function InstancePickerToolButton({
   active,
   children,
   label,
-  large,
   onClick,
+  touch,
 }: {
   active: boolean
   children: React.ReactNode
   label: string
-  large: boolean
   onClick: () => void
+  /** Touch-sized, and leaves the search field focused. */
+  touch: boolean
 }) {
   return (
     <button
@@ -510,10 +520,11 @@ const InstancePickerToolButton = React.memo(function InstancePickerToolButton({
       title={label}
       className={cn(
         toolButtonClassName,
-        toolButtonSize(large),
+        toolButtonSize(touch),
         active && activeToolButtonClassName
       )}
       onClick={onClick}
+      onMouseDown={touch ? keepSearchFocus : undefined}
     >
       {children}
     </button>
@@ -523,46 +534,101 @@ const InstancePickerToolButton = React.memo(function InstancePickerToolButton({
 const InstancePickerTypeMenu = React.memo(function InstancePickerTypeMenu({
   activeFilters,
   filters,
-  large,
   onShowAll,
   onToggle,
+  touch,
 }: {
   activeFilters: ReadonlyArray<InstancePickerFilter>
   filters: ReadonlyArray<InstancePickerFilter>
-  /** Sized for touch and opening upward, for a search bar at the bottom. */
-  large: boolean
   onShowAll: () => void
   onToggle: (filterId: string, checked: boolean) => void
+  /**
+   * For a search bar above a phone's keyboard: touch-sized, opens upward, and
+   * leaves the search field focused so the keyboard stays open.
+   */
+  touch: boolean
 }) {
   const filtered = activeFilters.length > 0
+  const trigger = (
+    <button
+      type="button"
+      aria-label={
+        filtered
+          ? `Filter by type, showing ${activeFilters
+              .map((filter) => filter.label.toLocaleLowerCase())
+              .join(" and ")}`
+          : "Filter by type"
+      }
+      title="Filter by type"
+      className={cn(
+        toolButtonClassName,
+        toolButtonSize(touch),
+        filtered && activeToolButtonClassName
+      )}
+      onMouseDown={touch ? keepSearchFocus : undefined}
+    >
+      <ListFilter className="size-3.5" aria-hidden="true" />
+    </button>
+  )
+
+  // A menu moves focus into itself, which would close the keyboard; a popover
+  // can open without taking focus.
+  if (touch) {
+    return (
+      <Popover>
+        <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+        <PopoverContent
+          align="end"
+          side="top"
+          className="z-[80] w-48 p-1"
+          onCloseAutoFocus={keepSearchFocus}
+          onOpenAutoFocus={keepSearchFocus}
+        >
+          {filters.map((filter) => {
+            const { Icon } = kindPresentation[filter.id as InstancePickerKind]
+            const checked = activeFilters.includes(filter)
+            return (
+              <button
+                key={filter.id}
+                type="button"
+                aria-pressed={checked}
+                className={touchMenuItemClassName}
+                onClick={() => onToggle(filter.id, !checked)}
+                onMouseDown={keepSearchFocus}
+              >
+                <Icon className="size-4" aria-hidden="true" />
+                {filter.label}
+                {checked ? (
+                  <Check
+                    className="absolute right-2.5 size-4"
+                    aria-hidden="true"
+                  />
+                ) : null}
+              </button>
+            )
+          })}
+          {filtered ? (
+            <>
+              <div className="-mx-1 my-1 h-px bg-border" />
+              <button
+                type="button"
+                className={cn(touchMenuItemClassName, "text-muted-foreground")}
+                onClick={onShowAll}
+                onMouseDown={keepSearchFocus}
+              >
+                Show all types
+              </button>
+            </>
+          ) : null}
+        </PopoverContent>
+      </Popover>
+    )
+  }
 
   return (
     <DropdownMenu modal={false}>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          aria-label={
-            filtered
-              ? `Filter by type, showing ${activeFilters
-                  .map((filter) => filter.label.toLocaleLowerCase())
-                  .join(" and ")}`
-              : "Filter by type"
-          }
-          title="Filter by type"
-          className={cn(
-            toolButtonClassName,
-            toolButtonSize(large),
-            filtered && activeToolButtonClassName
-          )}
-        >
-          <ListFilter className="size-3.5" aria-hidden="true" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="end"
-        side={large ? "top" : "bottom"}
-        className="z-[80] w-44 p-1"
-      >
+      <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="z-[80] w-44 p-1">
         {filters.map((filter) => {
           const { Icon } = kindPresentation[filter.id as InstancePickerKind]
           return (
@@ -595,6 +661,9 @@ const InstancePickerTypeMenu = React.memo(function InstancePickerTypeMenu({
     </DropdownMenu>
   )
 })
+
+const touchMenuItemClassName =
+  "type-menu relative flex h-10 w-full items-center gap-2 rounded-md pr-9 pl-2.5 text-left outline-none select-none active:bg-popover-accent active:text-popover-accent-foreground focus-visible:bg-popover-accent"
 
 const InstancePickerBulkBar = React.memo(function InstancePickerBulkBar({
   itemKeys,
