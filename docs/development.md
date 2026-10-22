@@ -67,7 +67,11 @@ It serves `http://localhost:3100`. `KILN_HEARTH_URL` (default
 and `KILN_SITE_URL` (default `https://kiln.site`) is the site's own address for
 canonical links and link previews. All three are read when the site serves a
 request, not at build time. `robots.txt`, `sitemap.xml`, and `llms.txt` in
-`apps/marketing/public` name `https://kiln.site` directly. Choosing a
+`apps/marketing/public` name `https://kiln.site` directly.
+
+The site serves the Terms of Use and Privacy Policy at `/terms` and `/privacy`.
+Hearth's footer links to them through `KILN_MARKETING_URL` (default
+`https://kiln.site`), and Hearth's own `/terms` and `/privacy` redirect there. Choosing a
 paid plan opens Hearth's sign-up with `plan` and `interval` parameters and a
 `redirect` to `/settings/billing` carrying the same choice.
 

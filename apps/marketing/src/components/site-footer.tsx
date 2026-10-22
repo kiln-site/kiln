@@ -61,10 +61,10 @@ export function SiteFooter() {
           </FooterGroup>
           <FooterGroup title="Legal">
             <FooterLink>
-              <a href={new URL("/terms", hearthUrl).toString()}>Terms</a>
+              <Link to="/terms">Terms</Link>
             </FooterLink>
             <FooterLink>
-              <a href={new URL("/privacy", hearthUrl).toString()}>Privacy</a>
+              <Link to="/privacy">Privacy</Link>
             </FooterLink>
           </FooterGroup>
         </div>

@@ -34,6 +34,14 @@ export function kilnGitRepository(): string {
   )
 }
 
+/** Kiln's website, which hosts the Terms of Use and Privacy Policy. */
+export function kilnMarketingUrl(): string {
+  const configured = process.env.KILN_MARKETING_URL?.trim()
+  const url =
+    configured && URL.canParse(configured) ? configured : "https://kiln.site"
+  return url.replace(/\/+$/u, "")
+}
+
 export function kilnBrickCatalogUrl(): string {
   return (
     process.env.KILN_BRICKS_CATALOG_URL?.trim() ||

@@ -1,10 +1,13 @@
 import { cn } from "@workspace/ui/lib/utils"
 
 import { useKilnGitRepository } from "@/lib/git-repository"
+import { useKilnMarketingUrl } from "@/lib/marketing-url"
 import { footerSocialLinkIds, socialLinks } from "@/lib/social-links"
 
 export function PanelFooter({ className }: { className?: string }) {
   const gitRepository = useKilnGitRepository()
+  const termsUrl = useKilnMarketingUrl("/terms")
+  const privacyUrl = useKilnMarketingUrl("/privacy")
   const commit = import.meta.env.VITE_KILN_BUILD_SHA.trim()
   const commitUrl = commit ? `${gitRepository}/commit/${commit}` : null
   const shortCommit = commit.slice(0, 7)
@@ -43,8 +46,8 @@ export function PanelFooter({ className }: { className?: string }) {
         <span className="text-border" aria-hidden="true">
           /
         </span>
-        <FooterLink href="/terms">Terms of Use</FooterLink>
-        <FooterLink href="/privacy">Privacy Policy</FooterLink>
+        <FooterLink href={termsUrl}>Terms of Use</FooterLink>
+        <FooterLink href={privacyUrl}>Privacy Policy</FooterLink>
       </div>
       <div className="col-start-2 row-span-2 row-start-1 flex h-full justify-self-end px-1 sm:col-start-3">
         <FooterBrandLink
@@ -99,6 +102,8 @@ function FooterLink({ children, href }: { children: string; href: string }) {
   return (
     <a
       href={href}
+      target="_blank"
+      rel="noreferrer"
       className="transition-colors outline-none hover:text-foreground focus-visible:text-foreground focus-visible:ring-1 focus-visible:ring-ring/40"
     >
       {children}

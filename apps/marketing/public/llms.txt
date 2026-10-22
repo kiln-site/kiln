@@ -25,5 +25,8 @@ Kiln has two parts. Hearth is the web panel. A Relay runs on each machine you ow
 
 - [Website](https://kiln.site/)
 - [Pricing](https://kiln.site/pricing)
+- [Terms of Use](https://kiln.site/terms)
+- [Privacy Policy](https://kiln.site/privacy)
 - [Source code](https://github.com/kiln-site/kiln)
 - [Discord](https://discord.gg/gu76VAtSK5)
+- Contact: contact@kiln.site
