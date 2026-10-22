@@ -74,6 +74,10 @@ function DatabaseTerminalSession({
       claim: (input) =>
         claimDatabaseTerminal({ data: { ...target, ...input } }),
       noun: "database",
+      startFailure: {
+        title: "Client couldn't start",
+        detail: "The database's container couldn't run its client.",
+      },
       restart: () => restartDatabaseTerminal({ data: target }),
       streamUrl: (size) => databaseTerminalStreamUrl({ ...target, ...size }),
       write: (sessionId, data) =>

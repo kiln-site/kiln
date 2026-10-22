@@ -31,6 +31,10 @@ function RelayTerminalSession({ relayId }: { relayId: string }) {
     () => ({
       claim: (input) => claimRelayTerminal({ data: { relayId, ...input } }),
       noun: "host shell",
+      startFailure: {
+        title: "Host shell couldn't start",
+        detail: "The Relay couldn't start a shell on its node.",
+      },
       restart: () => restartRelayTerminal({ data: { relayId } }),
       streamUrl: (size) => relayTerminalStreamUrl({ relayId, ...size }),
       write: (sessionId, data) =>

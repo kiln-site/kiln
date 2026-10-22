@@ -51,6 +51,9 @@ export interface TerminalBackend {
   }) => Promise<{ seq: number }>
   // Lowercase, as in "the database stopped".
   readonly noun: string
+  // Shown when the container couldn't start the client, as when it has no
+  // shell.
+  readonly startFailure: { readonly title: string; readonly detail: string }
   readonly restart: () => Promise<unknown>
   readonly streamUrl: (size: { cols: number; rows: number }) => string
   readonly write: (sessionId: string, data: string) => Promise<unknown>
@@ -212,6 +215,7 @@ export function TerminalSession({
         />
         <TerminalOverlay
           noun={backend.noun}
+          startFailure={backend.startFailure}
           status={status}
           onReconnect={reconnect}
         />
@@ -413,10 +417,12 @@ const otherTabIcon = <AppWindow className="size-3" />
 function TerminalOverlay({
   noun,
   onReconnect,
+  startFailure,
   status,
 }: {
   noun: string
   onReconnect: () => void
+  startFailure: TerminalBackend["startFailure"]
   status: TerminalStatus
 }) {
   if (status.kind === "connecting") {
@@ -436,8 +442,10 @@ function TerminalOverlay({
   ) {
     return null
   }
-  const [title, detail, action, onAction] =
-    status.kind === "ended"
+  const unstarted = status.kind === "ended" && status.ended.reason === "failed"
+  const [title, detail, action, onAction] = unstarted
+    ? [startFailure.title, startFailure.detail, "Try again", onReconnect]
+    : status.kind === "ended"
       ? [
           "Session ended",
           endedDescription(status.ended, noun),
@@ -456,7 +464,7 @@ function TerminalOverlay({
     <div className="absolute inset-0 z-20 grid place-items-center bg-card/80 px-6 backdrop-blur-[2px]">
       <div className="max-w-sm text-center">
         <div className="mx-auto mb-4 grid size-11 place-items-center rounded-xl border bg-muted/20 text-muted-foreground">
-          {status.kind === "ended" ? (
+          {status.kind === "ended" && !unstarted ? (
             <TerminalSquare className="size-5" />
           ) : (
             <TriangleAlert className="size-5" />
@@ -486,7 +494,7 @@ function endedDescription(ended: DatabaseTerminalEnd, noun: string) {
     case "restarted":
       return "The session was restarted."
     case "failed":
-      return "The client stopped unexpectedly."
+      return "The client couldn't start."
   }
 }
 
@@ -502,7 +510,7 @@ function endedLabel(ended: DatabaseTerminalEnd, noun: string) {
     case "restarted":
       return "RESTARTED FROM ANOTHER PAGE"
     case "failed":
-      return "THE CLIENT STOPPED UNEXPECTEDLY"
+      return "THE LAST ONE COULDN'T START"
   }
 }
 
@@ -783,27 +791,31 @@ class TerminalConnection {
     this.#claim = { request, seq: null }
     this.#showControl()
     if (this.#claimTimer) clearTimeout(this.#claimTimer)
+    const dropClaim = () => {
+      if (this.#claim?.request !== request) return
+      this.#claim = null
+      this.#takingOver = false
+      this.#resizedDuringClaim = false
+      this.#showControl()
+    }
     this.#claimTimer = setTimeout(() => {
       this.#claimTimer = null
-      forkPromise(
-        async () => {
-          const { seq } = await this.#backend.claim({
-            ...size,
-            attachmentId,
-            sessionId,
-          })
-          if (this.#claim?.request !== request) return
-          this.#claim.seq = seq
-          this.#settleClaim()
-        },
-        () => {
-          if (this.#claim?.request !== request) return
-          this.#claim = null
-          this.#takingOver = false
-          this.#resizedDuringClaim = false
-          this.#showControl()
-        }
-      )
+      // The session ended while the claim waited, as one whose client
+      // couldn't start does right away.
+      if (this.#sessionId !== sessionId) {
+        dropClaim()
+        return
+      }
+      forkPromise(async () => {
+        const { seq } = await this.#backend.claim({
+          ...size,
+          attachmentId,
+          sessionId,
+        })
+        if (this.#claim?.request !== request) return
+        this.#claim.seq = seq
+        this.#settleClaim()
+      }, dropClaim)
     }, CLAIM_DEBOUNCE_MS)
   }
 

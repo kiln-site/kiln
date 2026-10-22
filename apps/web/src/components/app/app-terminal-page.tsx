@@ -142,6 +142,11 @@ function AppTerminalSession({
     return {
       claim: (input) => claimAppTerminal({ data: { ...target, ...input } }),
       noun: "app",
+      startFailure: {
+        title: "Couldn't start a shell",
+        detail:
+          "This container most likely has no shell (sh). Minimal images, like distroless or scratch, leave it out.",
+      },
       restart: () => restartAppTerminal({ data: target }),
       streamUrl: (size) => appTerminalStreamUrl({ ...target, ...size }),
       write: (sessionId, data) =>

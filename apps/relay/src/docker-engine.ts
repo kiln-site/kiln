@@ -729,6 +729,23 @@ export class DockerEngine {
     })
   }
 
+  // `Pid` stays 0 for an exec Docker couldn't start, such as one whose
+  // program the container doesn't have.
+  inspectExec(id: string): Effect.Effect<
+    {
+      readonly ExitCode: number | null
+      readonly Pid: number
+      readonly Running: boolean
+    },
+    DockerEngineError
+  > {
+    return this.#json({
+      method: "GET",
+      path: `/exec/${segment(id)}/json`,
+      timeout: 10_000,
+    })
+  }
+
   // The output ends as the process exits; Docker records its code just
   // after, which can take a while on a busy host.
   #execExitCode(id: string): Effect.Effect<number, DockerEngineError> {

@@ -489,6 +489,9 @@ export class ContainerTerminals {
     const hangUp = reason !== null
     if (reason === null && !(await this.#containerRunning(session))) {
       session.ending = "database-stopped"
+    } else if (reason === null && (await this.#programMissing(session))) {
+      // The container can't run the client, as when it has no shell.
+      session.ending = "failed"
     }
     session.ended = { at: new Date().toISOString(), reason: session.ending }
     if (session.idleTimer) clearTimeout(session.idleTimer)
@@ -503,6 +506,8 @@ export class ContainerTerminals {
     }
     // Viewers get the remaining output and then the ending.
     this.#flush(session)
+    // A client that never started wrote no PID file.
+    if (session.ending === "failed") return
     forkPromise(() =>
       this.#runDetached(session.containerId, [
         "sh",
@@ -621,6 +626,16 @@ export class ContainerTerminals {
       () => null
     )
     return state?.State.Running === true
+  }
+
+  // Docker never started the exec (no PID) because it couldn't find what to
+  // run (code 127), rather than the client exiting with that code.
+  async #programMissing(session: TerminalSession) {
+    const exec = await recoverPromise(
+      () => Effect.runPromise(this.#docker.inspectExec(session.execId)),
+      () => null
+    )
+    return exec?.Pid === 0 && exec.ExitCode === 127
   }
 
   // Clients left by a Relay that stopped while terminals were open, in

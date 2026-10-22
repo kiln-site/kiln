@@ -546,13 +546,21 @@ describe("database terminal sessions", () => {
     ).toEqual({ accepted: true })
   })
 
-  it("says why a session ended: its client exited, or the database stopped", async () => {
+  it("says why a session ended: its client exited, couldn't start, or the database stopped", async () => {
     const harness = await relayHarness()
     const database = await runningDatabase(harness)
     const terminals = new ContainerTerminals(harness.config)
+    // A container without a shell can't start the client.
+    fakeDocker.missingPrograms.add("sh")
+    const unstarted = viewer()
+    await attach(terminals, alice, database, unstarted)
+    await vi.waitFor(() => expect(unstarted.ended?.reason).toBe("failed"))
+    expect(unstarted.output).toContain("executable file not found")
+    fakeDocker.missingPrograms.clear()
+
     const exiting = viewer()
     await attach(terminals, alice, database, exiting)
-    fakeDocker.exitExec(clientExecs()[0]!.id)
+    fakeDocker.exitExec(clientExecs().at(-1)!.id)
     await vi.waitFor(() => expect(exiting.ended?.reason).toBe("exited"))
 
     const stopping = viewer()

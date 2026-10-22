@@ -127,6 +127,8 @@ export interface FakeExec {
   running: boolean
   /** Set once a non-interactive exec has run. */
   exitCode: number | null
+  /** 0 until the process starts, and for good if it never does. */
+  pid: number
 }
 
 export interface FakeNetwork {
@@ -214,6 +216,11 @@ export class FakeDocker {
    */
   readonly programFailures = new Map<string, string>()
   /**
+   * Programs no container has, such as `sh` in a distroless image; Docker
+   * can't start an interactive exec of one.
+   */
+  readonly missingPrograms = new Set<string>()
+  /**
    * Programs whose exec stream Docker breaks with an error frame (as it does
    * for an error it hits after answering) instead of their output; for a
    * one-off container (`run --rm -i`), its image.
@@ -287,6 +294,7 @@ export class FakeDocker {
   #lastTimestamp = 0
   #socketPath: string | null = null
   readonly #execSockets = new Map<string, Duplex>()
+  #nextPid = 100
   /** `POST /containers/{id}/wait` requests, resolved as containers exit. */
   readonly #exitWaiters = new Map<string, Array<(exitCode: number) => void>>()
   /** Responses following a running container's logs. */
@@ -326,6 +334,7 @@ export class FakeDocker {
     this.containers.clear()
     this.execs.clear()
     this.execGreeting = ""
+    this.missingPrograms.clear()
     this.networks.clear()
     this.volumes.clear()
     this.images.clear()
@@ -1702,6 +1711,7 @@ export class FakeDocker {
         ),
         exitCode: null,
         id: randomBytes(32).toString("hex"),
+        pid: 0,
         running: false,
         size: null,
         tty: input.Tty ?? false,
@@ -1738,7 +1748,11 @@ export class FakeDocker {
     if (method === "GET" && (parameters = route(/^\/exec\/([^/]+)\/json$/u))) {
       const exec = this.execs.get(parameters[0] ?? "")
       if (!exec) throw new DockerFailure("No such exec instance", 404)
-      return json(200, { ExitCode: exec.exitCode, Running: exec.running })
+      return json(200, {
+        ExitCode: exec.exitCode,
+        Pid: exec.pid,
+        Running: exec.running,
+      })
     }
     if (method === "GET" && path === "/networks") {
       await this.#checkpoint("network ls")
@@ -2227,11 +2241,21 @@ export class FakeDocker {
       this.#startStreamedExec(exec, request, socket, head)
       return
     }
+    const upgraded =
+      "HTTP/1.1 101 UPGRADED\r\nContent-Type: application/vnd.docker.raw-stream\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n"
+    const program = exec.cmd[0] ?? ""
+    if (this.missingPrograms.has(program)) {
+      // Docker reports the failure in the stream it already upgraded.
+      exec.exitCode = 127
+      socket.end(
+        `${upgraded}OCI runtime exec failed: exec failed: unable to start container process: exec: "${program}": executable file not found in $PATH\r\n`
+      )
+      return
+    }
     exec.running = true
+    exec.pid = this.#nextPid++
     this.#execSockets.set(execId, socket)
-    socket.write(
-      `HTTP/1.1 101 UPGRADED\r\nContent-Type: application/vnd.docker.raw-stream\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n${exec.tty ? this.execGreeting : ""}`
-    )
+    socket.write(`${upgraded}${this.execGreeting}`)
     // The start options arrive as a body ahead of the TTY stream.
     let options = Buffer.alloc(0)
     let optionsLength = Number(request.headers["content-length"] ?? 0)
@@ -2276,6 +2300,7 @@ export class FakeDocker {
     head: Buffer
   ) {
     exec.running = true
+    exec.pid = this.#nextPid++
     this.#execSockets.set(exec.id, socket)
     socket.write(
       "HTTP/1.1 101 UPGRADED\r\nContent-Type: application/vnd.docker.multiplexed-stream\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n"
