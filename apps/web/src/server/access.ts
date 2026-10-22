@@ -33,7 +33,11 @@ import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { getCurrentUser, requireEligibleResourceUser } from "@/server/auth"
-import { claimInstanceOwner } from "@/lib/instance-registry"
+import {
+  claimInstanceOwner,
+  claimInstanceOwnerEffect,
+  wakeDisplacedOwnerDelivery,
+} from "@/lib/instance-registry"
 import { resolveScopeAuthorization } from "@/lib/scope-authorization.server"
 import { transferAppOwnershipHandler } from "@/server/app-access"
 import {
@@ -669,13 +673,28 @@ async function instanceOwnerId(
   if (!initialOwnerId) return persisted?.owner_id ?? null
 
   const now = Date.now()
-  await databasePool.execute(
-    `INSERT INTO ${databaseTable("instance")}
-       (relay_id, instance_id, display_name, owner_id, created_at, updated_at)
-     VALUES (?, ?, NULL, ?, ?, ?)
-     ON DUPLICATE KEY UPDATE ${claimInstanceOwner},
-       updated_at = VALUES(updated_at)`,
-    [relay.id, instanceId, initialOwnerId, now, now]
+  await runAppEffect(
+    "access.instance.claimOwner",
+    Effect.gen(function* () {
+      const database = yield* Database
+      const displaced = yield* database.transaction(
+        "access.instance.claimOwner",
+        (tx) =>
+          claimInstanceOwnerEffect(
+            tx,
+            { instanceId, ownerId: initialOwnerId, relayId: relay.id },
+            tx.execute(
+              `INSERT INTO ${databaseTable("instance")}
+                 (relay_id, instance_id, display_name, owner_id, created_at, updated_at)
+               VALUES (?, ?, NULL, ?, ?, ?)
+               ON DUPLICATE KEY UPDATE ${claimInstanceOwner},
+                 updated_at = VALUES(updated_at)`,
+              [relay.id, instanceId, initialOwnerId, now, now]
+            )
+          )
+      )
+      yield* wakeDisplacedOwnerDelivery(displaced)
+    })
   )
   const [resolvedRows] = await databasePool.query<Array<InstanceOwnerRow>>(
     `SELECT owner_id FROM ${databaseTable("instance")}

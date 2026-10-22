@@ -312,6 +312,15 @@ describeMysql("instance registry", () => {
             (yield* instances)["cli-server"]?.ownerId,
             "user-one"
           )
+          // The stand-in's sessions on it end: their Relay hears of it.
+          const deliveries = yield* selectRows<{
+            subject_id: string
+            scope_id: string
+          }>("authorization_delivery")
+          assert.deepEqual(
+            deliveries.map(({ subject_id, scope_id }) => [subject_id, scope_id]),
+            [["relay-owner", "cli-server"]]
+          )
         })
     )
 

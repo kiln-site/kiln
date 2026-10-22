@@ -1,12 +1,15 @@
 import type { RelayInstance } from "@workspace/contracts"
 import { Clock, Effect, Schedule, Semaphore } from "effect"
 
-import { Database } from "@/effect/database"
+import type { RowDataPacket } from "mysql2/promise"
+
+import { Database, type DatabaseTransaction } from "@/effect/database"
 import { runAppEffect } from "@/effect/runtime"
 import {
   instanceDirectoryMetadata,
   type DirectoryInstance,
 } from "@/lib/instance-directory"
+import { advanceAuthorizationRevisionEffect } from "@/lib/authorization-revision"
 import { databaseTable } from "@/lib/database-config"
 import { wakePollingWorker } from "@/lib/polling-worker"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
@@ -104,6 +107,60 @@ export function updateInstanceSourceName(
 export const claimInstanceOwner = `owner_id = IF(owner_id IS NULL OR owner_provisional, VALUES(owner_id), owner_id),
        owner_provisional = IF(owner_id <=> VALUES(owner_id), 0, owner_provisional)`
 
+interface InstanceOwnerRow extends RowDataPacket {
+  owner_id: string | null
+  owner_provisional: number
+}
+
+/**
+ * Runs `claim`, an upsert with `claimInstanceOwner`, in `transaction`. A
+ * provisional owner it displaces loses the authority they held, so their
+ * Relays hear of it once `transaction` commits: pass the result to
+ * `wakeDisplacedOwnerDelivery` after it does.
+ */
+export function claimInstanceOwnerEffect<E, R>(
+  transaction: DatabaseTransaction,
+  scope: { instanceId: string; ownerId: string; relayId: string },
+  claim: Effect.Effect<unknown, E, R>
+) {
+  return Effect.gen(function* () {
+    const [before] = yield* transaction.queryRows<InstanceOwnerRow>(
+      `SELECT owner_id, owner_provisional FROM ${databaseTable("instance")}
+        WHERE relay_id = ? AND instance_id = ? FOR UPDATE`,
+      [scope.relayId, scope.instanceId]
+    )
+    yield* claim
+    const displaced =
+      before?.owner_id &&
+      before.owner_provisional &&
+      before.owner_id !== scope.ownerId
+        ? before.owner_id
+        : null
+    if (displaced)
+      yield* advanceAuthorizationRevisionEffect(transaction, {
+        targets: [
+          {
+            relayId: scope.relayId,
+            scope: { instanceId: scope.instanceId, kind: "instance" },
+          },
+        ],
+        userId: displaced,
+      })
+    return displaced !== null
+  })
+}
+
+/** Delivers a displaced owner's revoked authority once the claim commits. */
+export function wakeDisplacedOwnerDelivery(displaced: boolean) {
+  return displaced
+    ? Effect.promise(async () => {
+        const { wakePendingAuthorizationDelivery } =
+          await import("@/lib/authorization-delivery")
+        await wakePendingAuthorizationDelivery()
+      })
+    : Effect.void
+}
+
 export function reservePreparedInstance(
   relayId: string,
   instance: Pick<RelayInstance, "id">,
@@ -124,18 +181,26 @@ export const reservePreparedInstanceEffect = Effect.fn(
 ) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
-  yield* database.execute(
+  const displaced = yield* database.transaction(
     "instances.registry.reservePrepared",
-    `INSERT INTO ${databaseTable("instance")}
-       (relay_id, instance_id, display_name, owner_id,
-        provisioning_reserved_until, created_at, updated_at)
-     VALUES (?, ?, NULL, ?, ?, ?, ?)
-     ON DUPLICATE KEY UPDATE
-       ${claimInstanceOwner},
-       provisioning_reserved_until = VALUES(provisioning_reserved_until),
-       updated_at = VALUES(updated_at)`,
-    [relayId, instance.id, ownerId, now + 2 * 60_000, now, now]
+    (tx) =>
+      claimInstanceOwnerEffect(
+        tx,
+        { instanceId: instance.id, ownerId, relayId },
+        tx.execute(
+          `INSERT INTO ${databaseTable("instance")}
+             (relay_id, instance_id, display_name, owner_id,
+              provisioning_reserved_until, created_at, updated_at)
+           VALUES (?, ?, NULL, ?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE
+             ${claimInstanceOwner},
+             provisioning_reserved_until = VALUES(provisioning_reserved_until),
+             updated_at = VALUES(updated_at)`,
+          [relayId, instance.id, ownerId, now + 2 * 60_000, now, now]
+        )
+      )
   )
+  yield* wakeDisplacedOwnerDelivery(displaced)
 })
 
 export const registerPreparedInstanceEffect = Effect.fn(
@@ -143,29 +208,33 @@ export const registerPreparedInstanceEffect = Effect.fn(
 )(function* (relayId: string, instance: DirectoryInstance, ownerId: string) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
-  yield* lifecycleWrite(relayId, { created: instance.id })(
+  const displaced = yield* lifecycleWrite(relayId, { created: instance.id })(
     database.transaction("instances.registry.registerPrepared", (tx) =>
       Effect.gen(function* () {
-        yield* tx.execute(
-          `INSERT INTO ${databaseTable("instance")}
-           (relay_id, instance_id, display_name, source_name, directory_metadata, owner_id,
-            created_at, updated_at)
-         VALUES (?, ?, NULL, ?, ?, ?, ?, ?)
-         ON DUPLICATE KEY UPDATE
-           source_name = VALUES(source_name),
-           directory_metadata = VALUES(directory_metadata),
-           ${claimInstanceOwner},
-           provisioning_reserved_until = NULL,
-           updated_at = VALUES(updated_at)`,
-          [
-            relayId,
-            instance.id,
-            instance.name.slice(0, 255),
-            instanceDirectoryMetadata(instance),
-            ownerId,
-            now,
-            now,
-          ]
+        const displaced = yield* claimInstanceOwnerEffect(
+          tx,
+          { instanceId: instance.id, ownerId, relayId },
+          tx.execute(
+            `INSERT INTO ${databaseTable("instance")}
+             (relay_id, instance_id, display_name, source_name, directory_metadata, owner_id,
+              created_at, updated_at)
+           VALUES (?, ?, NULL, ?, ?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE
+             source_name = VALUES(source_name),
+             directory_metadata = VALUES(directory_metadata),
+             ${claimInstanceOwner},
+             provisioning_reserved_until = NULL,
+             updated_at = VALUES(updated_at)`,
+            [
+              relayId,
+              instance.id,
+              instance.name.slice(0, 255),
+              instanceDirectoryMetadata(instance),
+              ownerId,
+              now,
+              now,
+            ]
+          )
         )
         yield* tx.execute(
           `INSERT INTO ${databaseTable("instance_post_provision")}
@@ -177,9 +246,11 @@ export const registerPreparedInstanceEffect = Effect.fn(
            updated_at = VALUES(updated_at)`,
           [relayId, instance.id, now, now, now]
         )
+        return displaced
       })
     )
   )
+  yield* wakeDisplacedOwnerDelivery(displaced)
   yield* Effect.sync(() => wakePollingWorker("Instances.postProvision"))
 })
 
@@ -341,12 +412,16 @@ export const recordCreatedInstanceEffect = Effect.fn(
 ) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
-  yield* lifecycleWrite(relayId, { created: instance.id })(
-    database.execute(
-      "instances.registry.recordCreated",
-      ...upsertInstancesStatement(relayId, [instance], now, ownerId)
+  const displaced = yield* lifecycleWrite(relayId, { created: instance.id })(
+    database.transaction("instances.registry.recordCreated", (tx) =>
+      claimInstanceOwnerEffect(
+        tx,
+        { instanceId: instance.id, ownerId, relayId },
+        tx.execute(...upsertInstancesStatement(relayId, [instance], now, ownerId))
+      )
     )
   )
+  yield* wakeDisplacedOwnerDelivery(displaced)
   yield* publishDirectoryChange(relayId)
 })
 
