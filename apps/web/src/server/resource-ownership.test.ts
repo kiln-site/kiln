@@ -6,7 +6,7 @@ import { grantsAllowPermission } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { transferResourceOwnershipEffect } from "@/lib/platform-access"
 import { loadResourceGrantsEffect } from "@/lib/resource-permissions"
-import { resourceOwners } from "@/migrations/0021_resource_owners"
+import { resourceOwners } from "@/migrations/0022_resource_owners"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import {
   insertGrant,

@@ -16,7 +16,7 @@ import { databaseTableName } from "@/lib/database-config"
 // log says created one claims it, as before. Tailscale networks never
 // recorded who added them and stay unowned.
 export const resourceOwners: Migration = {
-  id: 21,
+  id: 22,
   name: "resource_owners",
   run: Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient
