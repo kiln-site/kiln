@@ -723,22 +723,22 @@ function EmptyServerTable({
   return (
     <DataTableEmptyState
       action={
-        searchActive ? null : canProvision ? (
+        searchActive ? null : awaitingFirstRelay ? (
+          <AddFirstRelayButton />
+        ) : canProvision ? (
           <Button type="button" size="sm" onClick={dialogStore.open}>
             <Plus /> Add Game Server
           </Button>
-        ) : awaitingFirstRelay ? (
-          <AddFirstRelayButton />
         ) : null
       }
       description={
         <span className="block max-w-sm">
           {searchActive
             ? "Try a game server name, short ID, Relay, address, game, implementation, or version."
-            : canProvision
-              ? "Provision the first game server managed by Hearth."
-              : awaitingFirstRelay
-                ? "Pair a Relay to start hosting game servers."
+            : awaitingFirstRelay
+              ? "Pair a Relay to start hosting game servers."
+              : canProvision
+                ? "Provision the first game server managed by Hearth."
                 : "No game servers have been assigned to your account yet."}
         </span>
       }
