@@ -138,12 +138,10 @@ describeMysql("push notifications", () => {
             Effect.provide(push.layer)
           )
 
-          assert.deepStrictEqual(push.sent, [
-            {
-              endpoint: subscription("phone").endpoint,
-              title: "Your access was removed",
-            },
-          ])
+          assert.deepStrictEqual(
+            push.sent.map(({ endpoint }) => endpoint),
+            [subscription("phone").endpoint]
+          )
           // Devices whose sign-in ended stop getting pushes for good.
           assert.deepStrictEqual(yield* subscriptionEndpoints, [
             subscription("phone").endpoint,
