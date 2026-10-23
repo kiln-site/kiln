@@ -3,6 +3,7 @@ import {
   useMemo,
   useState,
   useSyncExternalStore,
+  type MouseEvent,
   type ReactNode,
 } from "react"
 import { useQuery } from "@tanstack/react-query"
@@ -154,6 +155,11 @@ const PendingRow = memo(function PendingRow({
   invitation: ResourceInvitation
   onOpen: (id: string) => void
 }) {
+  // A raised detail, like a tooltip trigger, still opens the invitation when
+  // clicked. A button of its own, like the email's reveal, keeps its action.
+  const openFromDetail = (event: MouseEvent<HTMLTableCellElement>) => {
+    if (!(event.target as Element).closest("button")) onOpen(invitation.id)
+  }
   return (
     <tr
       className="relative grid grid-cols-[var(--data-table-grid-base)] border-b border-border/70 bg-amber-500/[0.025] text-sm hover:bg-muted/20 sm:grid-cols-[var(--data-table-grid-sm)] md:grid-cols-[var(--data-table-grid-md)] lg:grid-cols-[var(--data-table-grid-lg)] xl:grid-cols-[var(--data-table-grid-xl)]"
@@ -192,6 +198,7 @@ const PendingRow = memo(function PendingRow({
                 "justify-end text-xs font-medium text-primary-ink"
             )}
             role="cell"
+            onClick={openFromDetail}
           >
             {column.id === "actions"
               ? "Review invitation"
@@ -207,7 +214,8 @@ const PendingRow = memo(function PendingRow({
 
 /**
  * Lifts a pending row's detail, such as a tooltip trigger or a blurred email,
- * above the row's button so it still takes the pointer.
+ * above the row's button so it still takes the pointer. Clicking it opens the
+ * invitation unless it's a button of its own.
  */
 export const pendingRowDetailClassName = "pointer-events-auto relative z-20"
 

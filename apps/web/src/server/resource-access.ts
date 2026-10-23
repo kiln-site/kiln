@@ -177,6 +177,7 @@ interface InvitationRow extends RowDataPacket {
   acceptance_method: string | null
   declined_at: number | null
   revoked_at: number | null
+  cancelled_at: number | null
   expires_at: number
   created_at: number
   resource_name: string | null
@@ -420,6 +421,7 @@ function invitationView(row: InvitationRow) {
       !row.accepted_at &&
       !row.declined_at &&
       !row.revoked_at &&
+      !row.cancelled_at &&
       row.expires_at > Date.now(),
   }
 }
@@ -573,6 +575,7 @@ export const decideResourceInvitation = createServerFn({ method: "POST" })
             invitation.accepted_at ||
             invitation.declined_at ||
             invitation.revoked_at ||
+            invitation.cancelled_at ||
             invitation.expires_at <= now
           )
             return yield* Effect.fail(
