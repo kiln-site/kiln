@@ -156,9 +156,15 @@ duration() {
 # ---------------------------------------------------------------- the log
 
 # Readable only by this user, since a failed step adds the Relay's own logs.
-# A log it can't own, such as another user's, gives way to a new one.
+# A log someone else owns, or a link to one, gives way to a new file: even
+# root's chmod wouldn't keep its owner out.
 log_file="${KILN_INSTALL_LOG:-${HOME:-/tmp}/kiln-install.log}"
-if ! (umask 077 && : >>"$log_file") 2>/dev/null || ! chmod 600 "$log_file" 2>/dev/null; then
+owned_by_me() {
+  # shellcheck disable=SC2012 # one path, and only its owner's uid
+  [ "$(ls -ldn -- "$1" 2>/dev/null | awk '{print $3}')" = "$(id -u)" ]
+}
+if [ -L "$log_file" ] || { [ -e "$log_file" ] && ! owned_by_me "$log_file"; } ||
+  ! (umask 077 && : >>"$log_file") 2>/dev/null || ! chmod 600 "$log_file" 2>/dev/null; then
   log_file=$(mktemp "${TMPDIR:-/tmp}/kiln-install.XXXXXX") || {
     printf 'kiln: there is nowhere to write the install log\n' >&2
     exit 1
