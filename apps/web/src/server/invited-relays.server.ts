@@ -47,7 +47,8 @@ export const listInvitedRelaysEffect = Effect.fn(
        JOIN ${databaseTable("relay")} r ON r.id = i.relay_id
       WHERE i.user_id = ? AND i.access_type = 'scoped'
         AND i.accepted_at IS NULL AND i.declined_at IS NULL
-        AND i.revoked_at IS NULL AND i.expires_at > ?
+        AND i.revoked_at IS NULL AND i.cancelled_at IS NULL
+        AND i.expires_at > ?
         AND g.state = 'pending' AND g.resource_type = 'relay'
         AND r.enabled = TRUE`,
     [userId, now]

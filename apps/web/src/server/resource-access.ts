@@ -103,7 +103,12 @@ const cancelPendingInvitationsEffect = Effect.fnUntraced(function* (
 })
 
 const currentAttemptFor = (alias = "") =>
-  ["accepted_at IS NULL", "declined_at IS NULL", "revoked_at IS NULL"]
+  [
+    "accepted_at IS NULL",
+    "declined_at IS NULL",
+    "revoked_at IS NULL",
+    "cancelled_at IS NULL",
+  ]
     .map((column) => `${alias}${column}`)
     .join(" AND ") + ` AND ${alias}expires_at > ?`
 const currentAttempt = currentAttemptFor()

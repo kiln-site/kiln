@@ -3,6 +3,7 @@ import {
   PendingInvitationCard,
   PendingResourceInvitations,
   PendingResourceInvitationBadge,
+  pendingRowDetailClassName,
   resourceInvitationScopeKey,
   type PendingInvitationCells,
 } from "@/components/pending-resource-invitations"
@@ -411,13 +412,13 @@ const FilteredRelayTable = React.memo(function FilteredRelayTable({
           useTls: relay.useTls,
         })),
   })
-  const { data: invitedRelays = noInvitedRelays } = useQuery({
+  const { data: invitedOwners = noInvitedOwners } = useQuery({
     ...myInvitationsQueryOptions(),
-    select: selectInvitedRelays,
+    select: selectInvitedOwners,
   })
   const ownerNames = React.useMemo(
-    () => relayOwnerNamesKey([...data, ...invitedRelays]),
-    [data, invitedRelays]
+    () => relayOwnerNamesKey([...data, ...invitedOwners]),
+    [data, invitedOwners]
   )
   const source = useInfraTableSource({ rows: data, reference: relayReference })
 
@@ -789,21 +790,26 @@ const RelayEditButton = React.memo(function RelayEditButton({
   )
 })
 
-const noInvitedRelays: ReadonlyArray<{ ownerName: string | null }> = []
-const selectInvitedRelays = (invitations: Array<ResourceInvitation>) =>
+const noInvitedOwners: ReadonlyArray<{ ownerName: string | null }> = []
+// Owners only, so a pending Relay's new memory reading doesn't re-render the
+// table.
+const selectInvitedOwners = (invitations: Array<ResourceInvitation>) =>
   invitations.flatMap((invitation) =>
-    invitation.relay ? [invitation.relay] : []
+    invitation.relay ? [{ ownerName: invitation.relay.ownerName }] : []
   )
 
 // A pending Relay shows what its row will once accepted.
 const relayPendingCells: PendingInvitationCells = {
   relay: (invitation) => <PendingInvitationCard invitation={invitation} />,
   memory: (invitation) => (
-    <RelayMemoryValue memory={invitation.relay?.memory} />
+    <span className={pendingRowDetailClassName}>
+      <RelayMemoryValue memory={invitation.relay?.memory} />
+    </span>
   ),
   host: ({ relay }) =>
     relay ? (
       <DataTableTextCell
+        className={pendingRowDetailClassName}
         monospace
         title={relayAddress(relay)}
         value={relay.hostname}
@@ -826,8 +832,7 @@ const RelayOwnerCell = React.memo(function RelayOwnerCell({
   return ownerName ? (
     <UserIdentity
       className="w-full"
-      // Above a pending row's button, so the email can still be revealed.
-      emailClassName="pointer-events-auto relative z-20"
+      emailClassName={pendingRowDetailClassName}
       email={ownerEmail}
       name={ownerName}
       profileId={profileIds.get(minecraftUsernameKey(ownerName))}

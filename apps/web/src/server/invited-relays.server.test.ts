@@ -11,6 +11,7 @@ import { insertGrant, insertRelay, insertRows, insertUser } from "@/test/seed"
 const now = Date.UTC(2026, 5, 1)
 
 const invite = Effect.fnUntraced(function* (input: {
+  readonly grantState?: "pending" | "revoked"
   readonly relayId: string
   readonly resourceType?: "relay" | "instance"
   readonly userId?: string
@@ -25,7 +26,7 @@ const invite = Effect.fnUntraced(function* (input: {
     resourceId: resourceType === "relay" ? input.relayId : "server-1",
     resourceType,
     role: "viewer",
-    state: "pending",
+    state: input.grantState ?? "pending",
     userId,
   })
   yield* insertRows("invitation", {
@@ -58,6 +59,9 @@ const seed = Effect.gen(function* () {
     "relay-accepted",
     "relay-declined",
     "relay-expired",
+    "relay-cancelled",
+    "relay-revoked",
+    "relay-grant-revoked",
     "relay-disabled",
     "relay-server-only",
     "relay-not-mine",
@@ -82,6 +86,16 @@ const seed = Effect.gen(function* () {
     relayId: "relay-expired",
     invitation: { expires_at: now - 1 },
   })
+  // Cancelling sets revoked_at too; either alone must hide the invitation.
+  yield* invite({
+    relayId: "relay-cancelled",
+    invitation: { cancelled_at: now - 500 },
+  })
+  yield* invite({
+    relayId: "relay-revoked",
+    invitation: { revoked_at: now - 500 },
+  })
+  yield* invite({ relayId: "relay-grant-revoked", grantState: "revoked" })
   yield* invite({ relayId: "relay-disabled" })
   yield* invite({ relayId: "relay-server-only", resourceType: "instance" })
   yield* invite({ relayId: "relay-not-mine", userId: "someone-else" })

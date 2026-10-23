@@ -205,6 +205,12 @@ const PendingRow = memo(function PendingRow({
   )
 })
 
+/**
+ * Lifts a pending row's detail, such as a tooltip trigger or a blurred email,
+ * above the row's button so it still takes the pointer.
+ */
+export const pendingRowDetailClassName = "pointer-events-auto relative z-20"
+
 const pendingInvitationStatus = {
   label: "Pending invitation",
   tone: "warning",
