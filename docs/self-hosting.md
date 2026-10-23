@@ -124,9 +124,18 @@ they don't.
   one of its names that isn't labeled for its installation stops it with a
   message instead.
 - **It leaves updates alone.** The Relay changes a container only while
-  holding the same lock Kiln's updater takes to replace it, so a pass never
-  recreates, starts, or stops a container mid-update, and an update waits for
-  a repair to finish.
+  holding the same lock, taken the same way, that Kiln's updater takes to
+  replace it, so a pass never recreates, starts, or stops a container
+  mid-update, and an update waits for a repair to finish.
+- **Maintenance holds.** While `stop-hearth` holds Hearth stopped, passes keep
+  it stopped, restarts and Kiln's updates refuse to start it, and `stop-hearth`
+  itself fails rather than claim success while an update still holds Hearth.
+  On a Relay that installed Kiln, `kiln-relay platform-backup restore` runs
+  only in maintenance, holding Hearth's update lock throughout.
+- **One change at a time.** The running Relay and `kiln-relay platform`
+  commands take an exclusive lock in the data volume that the kernel holds
+  for the process and releases if it dies, so nothing ever times out or is
+  taken over.
 - **Only the Hearth it installed manages them.** Restart and repair requests
   are accepted only from a Hearth client that paired through an invitation the
   Relay made for its own Hearth. Another Hearth paired with the same Relay can

@@ -10,16 +10,15 @@ import { DockerEngine } from "./docker-engine.js"
 import {
   addOwnerInvitation,
   isPlatformOwner,
+  platformUpdateRefusal,
+  restartPlatformService,
+  withPlatformRestoreHold,
   platformStatus,
   reconcilePlatform,
   runPlatformCli,
   startPlatform,
 } from "./platform.js"
-import {
-  readPlatformState,
-  withPlatformLock,
-  writePlatformState,
-} from "./platform-state.js"
+import { readPlatformState, withPlatformLock } from "./platform-state.js"
 import { fakeDocker } from "./test/docker.js"
 import { relayHarness, TEST_NAMESPACE } from "./test/relay.js"
 
@@ -72,6 +71,25 @@ async function platformRelay(environment: Record<string, string> = {}) {
       return printed.join("\n")
     },
   }
+}
+
+// A record of Kiln's updater replacing Hearth, as it writes them.
+function writeUpdateRecord(directory: string, id: string, status: string) {
+  return writeFile(
+    join(directory, `${id}.json`),
+    JSON.stringify({
+      component: "hearth",
+      error: null,
+      finishedAt: status === "running" ? null : new Date().toISOString(),
+      id,
+      previousImage: "ghcr.io/kiln-site/hearth:latest",
+      requestedImage: "ghcr.io/kiln-site/hearth:latest",
+      startedAt: new Date().toISOString(),
+      status,
+      targetContainer: names.hearth,
+      version: "0.1.0",
+    })
+  )
 }
 
 function env(name: string) {
@@ -247,10 +265,7 @@ describe("platform mode", () => {
     const updates = join(relay.config.dataDirectory, "updates")
     await mkdir(updates, { recursive: true })
     await writeFile(join(updates, `${names.hearth}.lock`), "finished\n")
-    await writeFile(
-      join(updates, "finished.json"),
-      JSON.stringify({ startedAt: new Date().toISOString(), status: "succeeded" })
-    )
+    await writeUpdateRecord(updates, "finished", "succeeded")
     fakeDocker.removeContainer(names.hearth)
 
     await relay.pass()
@@ -266,10 +281,7 @@ describe("platform mode", () => {
     const updates = join(relay.config.dataDirectory, "updates")
     await mkdir(updates, { recursive: true })
     await writeFile(join(updates, `${names.hearth}.lock`), "running\n")
-    await writeFile(
-      join(updates, "running.json"),
-      JSON.stringify({ startedAt: new Date().toISOString(), status: "running" })
-    )
+    await writeUpdateRecord(updates, "running", "running")
 
     await relay.start({ environment: { RESEND_FROM_EMAIL: "kiln@example.test" } })
     await relay.pass()
@@ -292,32 +304,76 @@ describe("platform mode", () => {
     expect(relay.config.platformBackupKey).toBe(state?.secrets.platformBackupKey)
   })
 
-  it("won't save the record once another process has taken over its lock", async () => {
+  it("lets one process at a time change the installation", async () => {
     const relay = await platformRelay()
     await relay.start()
-    const lock = join(relay.config.dataDirectory, "platform", "lock")
+    let release!: () => void
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const holder = run(
+      withPlatformLock(relay.config.dataDirectory, Effect.promise(() => held))
+    )
+    await new Promise((resolve) => setTimeout(resolve, 50))
 
-    const write = run(
-      withPlatformLock(
-        relay.config.dataDirectory,
-        Effect.gen(function* () {
-          const state = yield* readPlatformState(relay.config.dataDirectory)
-          // Stalled long enough for another process to take the lock over.
-          yield* Effect.promise(() => writeFile(lock, '{"id":"someone-else"}'))
-          yield* writePlatformState(relay.config.dataDirectory, {
-            ...state!,
-            phase: "ready",
-          })
+    await expect(
+      run(
+        withPlatformLock(relay.config.dataDirectory, Effect.void, {
+          waitMs: 300,
         })
       )
-    )
+    ).rejects.toThrow("Another Relay process")
 
-    await expect(write).rejects.toThrow("no longer holds")
-    expect(await run(readPlatformState(relay.config.dataDirectory))).toMatchObject({
-      phase: "installing",
-    })
-    // Its release leaves the new holder's lock in place.
-    expect(await readFile(lock, "utf8")).toBe('{"id":"someone-else"}')
+    release()
+    await holder
+    await run(withPlatformLock(relay.config.dataDirectory, Effect.void))
+  })
+
+  it("holds maintenance through updates, restarts, and restores", async () => {
+    const relay = await platformRelay()
+    await relay.start()
+    await relay.pass()
+    const updates = join(relay.config.dataDirectory, "updates")
+    await mkdir(updates, { recursive: true })
+    const lock = join(updates, `${names.hearth}.lock`)
+
+    // An update holds Hearth: stop-hearth says it couldn't stop it yet.
+    await writeFile(lock, "running\n")
+    await writeUpdateRecord(updates, "running", "running")
+    await expect(relay.cli("stop-hearth")).rejects.toThrow("being updated")
+    await expect(
+      run(
+        withPlatformRestoreHold(relay.config, Effect.succeed("restored"))
+      )
+    ).rejects.toThrow("being updated")
+
+    // Once it finishes, Hearth stops and stays stopped.
+    await writeUpdateRecord(updates, "running", "succeeded")
+    await relay.cli("stop-hearth")
+    expect(fakeDocker.container(names.hearth)?.state.running).toBe(false)
+    await expect(
+      run(restartPlatformService(relay.context, "hearth"))
+    ).rejects.toThrow("maintenance")
+    expect(
+      await run(platformUpdateRefusal(relay.config.dataDirectory, names.hearth))
+    ).toContain("maintenance")
+    expect(fakeDocker.container(names.hearth)?.state.running).toBe(false)
+
+    // A restore runs holding Hearth's update lock, which it gives back.
+    const restored = await run(
+      withPlatformRestoreHold(
+        relay.config,
+        Effect.promise(() => readFile(lock, "utf8"))
+      )
+    )
+    expect(restored).toMatch(/^platform-/u)
+    expect(await readFile(lock, "utf8").catch(() => null)).toBeNull()
+
+    await relay.cli("start-hearth")
+    expect(fakeDocker.container(names.hearth)?.state.running).toBe(true)
+    await expect(
+      run(withPlatformRestoreHold(relay.config, Effect.void))
+    ).rejects.toThrow("stop-hearth")
   })
 
   it("doesn't touch another installation's container", async () => {

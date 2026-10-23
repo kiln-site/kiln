@@ -9,12 +9,12 @@
  * The format is read by other Relay versions and by recovery kits; change it
  * only by adding a new `formatVersion`.
  */
-import { randomBytes, randomUUID } from "node:crypto"
-import { mkdir, open, readFile, rm, stat, utimes } from "node:fs/promises"
-import { hostname } from "node:os"
+import { randomBytes } from "node:crypto"
+import { mkdir, readFile, utimes } from "node:fs/promises"
 import { join } from "node:path"
+import { DatabaseSync } from "node:sqlite"
 
-import { Effect, Fiber, Predicate, Schema } from "effect"
+import { Effect, Predicate, Result, Schema } from "effect"
 
 import { writeFileAtomic } from "./effect/atomic-file.js"
 
@@ -126,7 +126,7 @@ function statePath(dataDirectory: string): string {
 }
 
 function lockPath(dataDirectory: string): string {
-  return join(platformDirectory(dataDirectory), "lock")
+  return join(platformDirectory(dataDirectory), "lock.sqlite")
 }
 
 /** The saved installation, or null when this Relay hasn't installed Kiln. */
@@ -162,7 +162,6 @@ export const readPlatformState = Effect.fn("Relay.platform.state.read")(
 
 export const writePlatformState = Effect.fn("Relay.platform.state.write")(
   function* (dataDirectory: string, state: PlatformState) {
-    yield* requireLease(dataDirectory)
     yield* Effect.tryPromise({
       try: () =>
         mkdir(platformDirectory(dataDirectory), {
@@ -211,33 +210,23 @@ export function updatePlatformState(
   )
 }
 
-// The lock is a lease: its holder renews it while it runs, however long a
-// pass takes (pulling an image on a slow link), and only a lease nobody has
-// renewed for a minute, left by a process that died, is taken over.
-const LEASE_RENEW_MS = 10_000
-const LEASE_EXPIRES_MS = 60_000
 const LOCK_RETRY_MS = 250
 
-// Leases this process holds, so a write can check it still holds one.
-const heldLeases = new Set<string>()
-
 /**
- * Runs `effect` holding the installation's lock, a file in the Relay's data
- * volume. The running Relay and `kiln-relay platform` commands, in the same
- * container or a recovery container sharing the volume, take it for every
- * change to Kiln's services, so one never undoes what another is doing.
+ * Runs `effect` holding the installation's lock. The running Relay and
+ * `kiln-relay platform` commands, in the same container or a recovery
+ * container sharing the volume, take it for every change to Kiln's
+ * services, so one never undoes what another is doing.
+ *
+ * The lock is an exclusive SQLite transaction on a file in the data volume.
+ * The kernel holds it for as long as the holder's process lives and drops
+ * it when the process dies, so there is nothing to time out or reclaim.
  */
 export function withPlatformLock<A, E, R>(
   dataDirectory: string,
   effect: Effect.Effect<A, E, R>,
   options: { readonly waitMs?: number } = {}
 ): Effect.Effect<A, E | PlatformError, R> {
-  const path = lockPath(dataDirectory)
-  const lease = JSON.stringify({
-    host: hostname(),
-    id: randomUUID(),
-    pid: process.pid,
-  })
   const acquire = Effect.gen(function* () {
     yield* Effect.tryPromise({
       try: () =>
@@ -251,22 +240,27 @@ export function withPlatformLock<A, E, R>(
           cause,
         }),
     })
+    const database = yield* Effect.try({
+      try: () => new DatabaseSync(lockPath(dataDirectory), { timeout: 0 }),
+      catch: (cause) =>
+        PlatformError.make({
+          reason: "Kiln's installation lock can't be opened",
+          cause,
+        }),
+    })
     const deadline = Date.now() + (options.waitMs ?? 10 * 60_000)
     while (true) {
-      const taken = yield* createExclusive(path, lease).pipe(
-        Effect.mapError((cause) =>
-          PlatformError.make({
-            reason: "Kiln's installation lock can't be taken",
-            cause,
-          })
-        )
-      )
-      if (taken) break
-      if (yield* leaseExpired(path)) {
-        yield* Effect.promise(() => rm(path, { force: true }))
-        continue
+      const taken = Result.try(() => database.exec("BEGIN EXCLUSIVE"))
+      if (Result.isSuccess(taken)) return database
+      if (!isBusy(taken.failure)) {
+        database.close()
+        return yield* PlatformError.make({
+          reason: "Kiln's installation lock can't be taken",
+          cause: taken.failure,
+        })
       }
       if (Date.now() >= deadline) {
+        database.close()
         return yield* PlatformError.make({
           reason:
             "Another Relay process is changing Kiln's services; try again once it finishes",
@@ -274,51 +268,31 @@ export function withPlatformLock<A, E, R>(
       }
       yield* Effect.sleep(LOCK_RETRY_MS)
     }
-    heldLeases.add(lease)
-    return yield* Effect.forkDetach(renewLease(path, lease))
   })
   return Effect.acquireUseRelease(
     acquire,
     () => effect,
-    (renewal) =>
-      Fiber.interrupt(renewal).pipe(
-        Effect.andThen(
-          Effect.sync(() => {
-            heldLeases.delete(lease)
-          })
-        ),
-        Effect.andThen(releaseIfOwned(path, lease))
-      )
+    (database) =>
+      Effect.sync(() => {
+        Result.try(() => database.exec("ROLLBACK"))
+        database.close()
+      })
   )
 }
 
-/** Creates the file with `content`, or answers false when it exists. */
-export function createExclusive(
-  path: string,
-  content: string
-): Effect.Effect<boolean, unknown> {
-  return Effect.acquireUseRelease(
-    Effect.tryPromise({
-      try: () => open(path, "wx", 0o600),
-      catch: (cause) => cause,
-    }),
-    (file) =>
-      Effect.tryPromise({
-        try: () => file.writeFile(content),
-        catch: (cause) => cause,
-      }),
-    (file) => Effect.promise(() => file.close())
-  ).pipe(
-    Effect.as(true),
-    Effect.catch((cause) =>
-      errorCode(cause) === "EEXIST" ? Effect.succeed(false) : Effect.fail(cause)
-    )
+function isBusy(cause: unknown): boolean {
+  return (
+    Predicate.hasProperty(cause, "errcode") &&
+    (cause.errcode === 5 || cause.errcode === 6)
   )
 }
 
-/** Keeps a lease's file fresh while its holder runs. */
+/**
+ * Keeps a lock file's modification time fresh while its holder runs, so
+ * Kiln's updater doesn't take it for one a dead process left.
+ */
 export function renewLease(path: string, content: string): Effect.Effect<void> {
-  return Effect.sleep(LEASE_RENEW_MS).pipe(
+  return Effect.sleep(10_000).pipe(
     Effect.andThen(
       readOptional(() => readFile(path, "utf8")).pipe(
         Effect.flatMap((current) =>
@@ -334,46 +308,6 @@ export function renewLease(path: string, content: string): Effect.Effect<void> {
     Effect.forever
   )
 }
-
-/** Removes the lease's file if it's still this holder's. */
-export function releaseIfOwned(
-  path: string,
-  content: string
-): Effect.Effect<void> {
-  return readOptional(() => readFile(path, "utf8")).pipe(
-    Effect.flatMap((current) =>
-      current === content
-        ? Effect.promise(() => rm(path, { force: true }))
-        : Effect.void
-    )
-  )
-}
-
-/** Whether a lease's holder has stopped renewing it. */
-export function leaseExpired(
-  path: string,
-  expiresMs = LEASE_EXPIRES_MS
-): Effect.Effect<boolean> {
-  return readOptional(() => stat(path)).pipe(
-    Effect.map(
-      (metadata) => !metadata || Date.now() - metadata.mtimeMs > expiresMs
-    )
-  )
-}
-
-// Before every write: a holder whose lease was taken over, as when it was
-// stalled for over a minute, must not write over its successor's changes.
-const requireLease = Effect.fnUntraced(function* (dataDirectory: string) {
-  const current = yield* readOptional(() =>
-    readFile(lockPath(dataDirectory), "utf8")
-  )
-  if (current === null || !heldLeases.has(current)) {
-    return yield* PlatformError.make({
-      reason:
-        "This process no longer holds Kiln's installation lock; the change wasn't saved",
-    })
-  }
-})
 
 export function readOptional<A>(
   read: () => Promise<A>

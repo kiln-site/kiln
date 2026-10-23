@@ -237,15 +237,19 @@ import { serverProvisioning } from "./server-provisioning.js"
 import { SystemUpdateManager } from "./system-updates.js"
 import {
   addOwnerInvitation,
+  checkHearthRestart,
   externalPlatformPresent,
   isPlatformOwner,
   platformAction,
   platformLogs,
   platformSetupUrl,
   platformStatus,
+  platformUpdateRefusal,
   reconcilePlatform,
+  restartPlatformService,
   runPlatformCli,
   startPlatform,
+  withPlatformRestoreHold,
   type PlatformContext,
   type PlatformPassResult,
 } from "./platform.js"
@@ -378,7 +382,11 @@ await databases.recoverReplacements()
 const hostShell = new HostShell(config)
 const relayEngine = new DockerEngine(config.dockerSocket)
 const terminals = new ContainerTerminals(config)
-const systemUpdates = new SystemUpdateManager(config)
+const systemUpdates = new SystemUpdateManager({
+  ...config,
+  refuseTarget: (container) =>
+    platformUpdateRefusal(config.dataDirectory, container),
+})
 // Set once a restart of the Relay or its host is under way, so a second
 // request in the moment before the Relay goes down doesn't start another.
 let restarting = false
@@ -928,10 +936,19 @@ async function runRelayCli(arguments_: ReadonlyArray<string>): Promise<void> {
       confirmIndex === -1 ? undefined : arguments_[confirmIndex + 1],
       "--confirm installation ID"
     )
-    const restored = await restoreEncryptedPlatformBackup(
-      config,
-      source,
-      confirmedInstallationId
+    // On a Relay that installed Kiln, only while Hearth is held stopped.
+    const restored = await runRelayEffect(
+      "relay.cli.platformBackup.restore",
+      withPlatformRestoreHold(
+        config,
+        Effect.tryPromise(() =>
+          restoreEncryptedPlatformBackup(
+            config,
+            source,
+            confirmedInstallationId
+          )
+        )
+      )
     )
     console.log(
       `Restored Kiln platform backup for ${restored.installationId}. Start Hearth and verify the installation before resuming operations.`
@@ -3009,16 +3026,49 @@ async function executeControlRequest(
     case "relay.platform.action": {
       const input = relayPlatformActionInputSchema.parse(request.payload)
       const record = await clientRecord(client.id)
-      if (!platformStartup.state || !isPlatformOwner(platformPass.state ?? platformStartup.state, record)) {
+      if (
+        !platformStartup.state ||
+        !isPlatformOwner(platformPass.state ?? platformStartup.state, record)
+      ) {
         throw new Error(
           "Only the Hearth this Relay installed can restart or repair Kiln's services"
         )
       }
-      const result = await runRelayEffect(
-        "relay.platform.action",
-        platformAction(platformContext, input)
-      )
-      if (input.action === "repair") notePlatformPass(result)
+      if (input.action === "restart" && input.role === "hearth") {
+        await runRelayEffect(
+          "relay.platform.checkRestart",
+          checkHearthRestart(platformContext)
+        )
+        // Hearth is the one asking: it restarts once it has its answer,
+        // taking its turn in the lanes then.
+        forkRelayEffect(
+          "relay.platform.restartHearth",
+          Effect.sleep("1 second").pipe(
+            Effect.andThen(
+              lanes.run(
+                {
+                  label: "platform.restart",
+                  locks: [exclusive(laneKeys.platform)],
+                },
+                restartPlatformService(platformContext, "hearth")
+              )
+            ),
+            Effect.catch((cause) =>
+              Effect.sync(() => {
+                reportRelayError(cause, {
+                  operation: "relay.platform.restartHearth",
+                })
+              })
+            )
+          )
+        )
+      } else {
+        const result = await runRelayEffect(
+          "relay.platform.action",
+          platformAction(platformContext, input)
+        )
+        if (input.action === "repair") notePlatformPass(result)
+      }
       await appendRelayAudit("platform.action", client.id, request.id, {
         action: input.action,
         ...(input.action === "restart" ? { role: input.role } : {}),

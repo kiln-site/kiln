@@ -114,13 +114,19 @@ export class SystemUpdateManager {
   // so `status` doesn't take its absence for a helper that stopped.
   readonly #starting = new Set<string>()
 
+  // Why a container may not be updated now, such as a Hearth held stopped
+  // for an offline restore; null when it may.
+  readonly #refuseTarget: (container: string) => Effect.Effect<string | null>
+
   constructor(config: {
     dataDirectory: string
     dockerSocket?: string
     gitRepository?: string
     installationId?: string | null
     installationIdConfigured?: boolean
+    refuseTarget?: (container: string) => Effect.Effect<string | null>
   }) {
+    this.#refuseTarget = config.refuseTarget ?? (() => Effect.succeed(null))
     this.#engine = new DockerEngine(
       config.dockerSocket ?? "/var/run/docker.sock"
     )
@@ -231,6 +237,14 @@ export class SystemUpdateManager {
             ),
           { concurrency: "unbounded" }
         )
+        for (const target of preparedTargets) {
+          const refusal = yield* this.#refuseTarget(
+            target.operation.targetContainer
+          )
+          if (refusal) {
+            return yield* systemUpdateFailure("start.validate", refusal)
+          }
+        }
         const prepared = preparedTargets.sort((left, right) =>
           left.operation.component === right.operation.component
             ? 0
@@ -1058,9 +1072,14 @@ function releaseImageComponent(
   return null
 }
 
-function acquireTargetLockEffect(
+/**
+ * Takes `updates/<container>.lock` for `operation`. A Relay in platform mode
+ * takes the same lock, by the same protocol, while it changes one of Kiln's
+ * services (platform.ts), so the two never act on a container at once.
+ */
+export function acquireTargetLockEffect(
   directory: string,
-  operation: UpdateOperation
+  operation: Pick<UpdateOperation, "id" | "targetContainer">
 ): Effect.Effect<void, RelaySystemUpdateError> {
   const path = targetLockPath(directory, operation.targetContainer)
   return Effect.suspend(() => {
@@ -1147,7 +1166,7 @@ function lockIsOrphanedEffect(
   )
 }
 
-function releaseTargetLockEffect(
+export function releaseTargetLockEffect(
   directory: string,
   targetContainer: string,
   operationId: string

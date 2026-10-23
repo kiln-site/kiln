@@ -16,7 +16,7 @@
  * run beside it, deployed with Compose or Coolify, but only reads them.
  */
 import { createHash, randomUUID } from "node:crypto"
-import { mkdir, readFile } from "node:fs/promises"
+import { mkdir, readFile, stat } from "node:fs/promises"
 import { hostname } from "node:os"
 import { join } from "node:path"
 
@@ -44,11 +44,8 @@ import {
 import type { RelayClientRecord } from "./effect/state.js"
 import { relayOwnerLabels } from "./relay-resources.js"
 import {
-  createExclusive,
   decodePlatformRecoveryKit,
-  leaseExpired,
   readOptional,
-  releaseIfOwned,
   renewLease,
   PLATFORM_STATE_FORMAT_VERSION,
   PlatformError,
@@ -60,6 +57,10 @@ import {
   withPlatformLock,
   writePlatformState,
 } from "./platform-state.js"
+import {
+  acquireTargetLockEffect,
+  releaseTargetLockEffect,
+} from "./system-updates.js"
 import { KILN_INSTALLATION_LABEL } from "./update-container.js"
 
 export { PlatformError, type PlatformState } from "./platform-state.js"
@@ -539,8 +540,8 @@ export const reconcilePlatform = Effect.fn("Relay.platform.reconcile")(
         }
 
         if (state.phase === "maintenance") {
-          yield* stopForMaintenance(engine, config, state)
-          return passed(state)
+          const issue = yield* stopForMaintenance(engine, config, state)
+          return issue ? waiting(state, issue) : passed(state)
         }
 
         const invitationId = yield* context.beforeHearth ?? Effect.succeed(null)
@@ -710,7 +711,7 @@ const stopForMaintenance = Effect.fnUntraced(function* (
   config: Pick<RelayConfig, "dataDirectory">,
   state: PlatformState
 ) {
-  yield* withServiceLock(
+  const result = yield* withServiceLock(
     config.dataDirectory,
     state.names.hearth,
     Effect.gen(function* () {
@@ -726,30 +727,36 @@ const stopForMaintenance = Effect.fnUntraced(function* (
       yield* engine.stopContainer(hearth.Id, { seconds: 30, timeout: 45_000 })
     })
   )
+  return result === BUSY
+    ? "Hearth is being updated; it will be stopped once the update finishes"
+    : null
 })
 
 // Kiln's updater holds `updates/<container>.lock` while it replaces a
-// container. Passes and actions take the same lock while they change one,
-// so neither ever acts on a container the other is halfway through.
+// container. Passes, restarts, and restores take the same lock, through the
+// updater's own protocol, while they change one, so neither ever acts on a
+// container the other is halfway through.
 const UPDATE_LOCK_ORPHANED_MS = 30_000
-const UPDATE_STALE_MS = 30 * 60_000
 const PLATFORM_LOCK_PREFIX = "platform-"
 const BUSY = Symbol("busy")
 
 const decodeUpdateRecord = Schema.decodeUnknownOption(
-  Schema.fromJsonString(
-    Schema.Struct({ startedAt: Schema.String, status: Schema.String })
-  )
+  Schema.fromJsonString(Schema.Struct({ status: Schema.String }))
 )
 
+function updatesDirectory(dataDirectory: string): string {
+  return join(dataDirectory, "updates")
+}
+
 function updateLockPath(dataDirectory: string, container: string): string {
-  return join(dataDirectory, "updates", `${container}.lock`)
+  return join(updatesDirectory(dataDirectory), `${container}.lock`)
 }
 
 /**
  * Whether Kiln's updater is replacing the container: its lock names an
- * update still running, or one just starting. A lock left by an update that
- * finished, or by an updater that died, doesn't count.
+ * update whose record says it's running, or one just starting. The Relay
+ * marks an update whose helper died as failed, so a record never stays
+ * running for good. A lock a finished update left behind doesn't count.
  */
 const updateRunning = Effect.fnUntraced(function* (
   dataDirectory: string,
@@ -759,57 +766,69 @@ const updateRunning = Effect.fnUntraced(function* (
   const owner = (yield* readOptional(() => readFile(path, "utf8")))?.trim()
   if (!owner || owner.startsWith(PLATFORM_LOCK_PREFIX)) return false
   const record = yield* readOptional(() =>
-    readFile(join(dataDirectory, "updates", `${owner}.json`), "utf8")
+    readFile(join(updatesDirectory(dataDirectory), `${owner}.json`), "utf8")
   )
   if (record === null) {
-    return !(yield* leaseExpired(path, UPDATE_LOCK_ORPHANED_MS))
+    const metadata = yield* readOptional(() => stat(path))
+    return (
+      metadata !== null &&
+      Date.now() - metadata.mtimeMs <= UPDATE_LOCK_ORPHANED_MS
+    )
   }
-  const operation = Option.getOrNull(decodeUpdateRecord(record))
-  return (
-    operation?.status === "running" &&
-    Date.now() - Date.parse(operation.startedAt) < UPDATE_STALE_MS
-  )
+  return Option.getOrNull(decodeUpdateRecord(record))?.status === "running"
 })
 
 /**
  * Runs `effect` holding the container's update lock, or answers BUSY while
- * an update holds it. The lock is renewed while `effect` runs.
+ * an update (or a process that died moments ago) holds it. The lock is
+ * renewed while `effect` runs, so the updater never takes it for orphaned.
  */
 function withServiceLock<A, E, R>(
   dataDirectory: string,
   container: string,
   effect: Effect.Effect<A, E, R>
 ): Effect.Effect<A | typeof BUSY, E | PlatformError, R> {
-  const path = updateLockPath(dataDirectory, container)
-  const content = `${PLATFORM_LOCK_PREFIX}${randomUUID()}\n`
+  const id = `${PLATFORM_LOCK_PREFIX}${randomUUID()}`
   const acquire = Effect.gen(function* () {
     yield* Effect.tryPromise({
       try: () =>
-        mkdir(join(dataDirectory, "updates"), { recursive: true, mode: 0o700 }),
+        mkdir(updatesDirectory(dataDirectory), {
+          recursive: true,
+          mode: 0o700,
+        }),
       catch: (cause) =>
-        new PlatformError({ reason: "Kiln's update folder can't be created", cause }),
+        new PlatformError({
+          reason: "Kiln's update folder can't be created",
+          cause,
+        }),
     })
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const taken = yield* createExclusive(path, content).pipe(
-        Effect.mapError(
-          (cause) =>
-            new PlatformError({
-              reason: `The update lock for ${container} can't be taken`,
-              cause,
-            })
+    const taken = yield* acquireTargetLockEffect(
+      updatesDirectory(dataDirectory),
+      { id, targetContainer: container }
+    ).pipe(
+      Effect.as(true),
+      Effect.catch((cause) =>
+        // Held: by an update, or by a holder that died under 30 seconds ago.
+        readOptional(() =>
+          readFile(updateLockPath(dataDirectory, container), "utf8")
+        ).pipe(
+          Effect.flatMap((holder) =>
+            holder !== null
+              ? Effect.succeed(false)
+              : Effect.fail(
+                  new PlatformError({
+                    reason: `The update lock for ${container} can't be taken`,
+                    cause,
+                  })
+                )
+          )
         )
       )
-      if (taken) return yield* Effect.forkDetach(renewLease(path, content))
-      const holder = yield* readOptional(() => readFile(path, "utf8"))
-      if (holder === null) continue
-      const busy = holder.trim().startsWith(PLATFORM_LOCK_PREFIX)
-        ? !(yield* leaseExpired(path, UPDATE_LOCK_ORPHANED_MS))
-        : yield* updateRunning(dataDirectory, container)
-      if (busy) return null
-      // Left by an update that finished, or a holder that died.
-      yield* releaseIfOwned(path, holder)
-    }
-    return null
+    )
+    if (!taken) return null
+    return yield* Effect.forkDetach(
+      renewLease(updateLockPath(dataDirectory, container), `${id}\n`)
+    )
   })
   return Effect.acquireUseRelease(
     acquire,
@@ -818,7 +837,14 @@ function withServiceLock<A, E, R>(
     (renewal) =>
       renewal
         ? Fiber.interrupt(renewal).pipe(
-            Effect.andThen(releaseIfOwned(path, content))
+            Effect.andThen(
+              releaseTargetLockEffect(
+                updatesDirectory(dataDirectory),
+                container,
+                id
+              )
+            ),
+            Effect.ignore
           )
         : Effect.void
   )
@@ -1068,55 +1094,158 @@ export const platformAction = Effect.fn("Relay.platform.action")(function* (
   context: PlatformContext,
   input: RelayPlatformActionInput
 ) {
-  const { config, engine } = context
   if (input.action === "repair") return yield* reconcilePlatform(context)
-  const state = yield* readPlatformState(config.dataDirectory)
-  if (!state) {
-    return yield* new PlatformError({ reason: "This Relay hasn't installed Kiln" })
-  }
-  const name = state.names[input.role]
-  const busy = new PlatformError({
-    reason: `${name} is being updated; try again once the update finishes`,
-  })
-  const restart = withServiceLock(
-    config.dataDirectory,
-    name,
-    Effect.gen(function* () {
-      const container = yield* inspectOptional(engine.inspectContainer(name))
-      if (
-        !container ||
-        container.Config.Labels?.[KILN_INSTALLATION_LABEL] !==
-          state.installationId
-      ) {
-        return yield* new PlatformError({
-          reason: `${name} is missing; repair Kiln's services to recreate it`,
-        })
-      }
-      yield* engine.restartContainer(container.Id, {
-        seconds: 30,
-        timeout: 90_000,
-      })
-    })
-  ).pipe(
-    Effect.flatMap((result) =>
-      result === BUSY ? Effect.fail(busy) : Effect.void
-    )
-  )
-  if (input.role === "hearth") {
-    if (yield* updateRunning(config.dataDirectory, name)) {
-      return yield* busy
-    }
-    // Hearth is the one asking: answer before it goes down.
-    yield* Effect.sleep(1_000).pipe(
-      Effect.andThen(restart),
-      Effect.catch((cause) => Effect.logError("Hearth restart failed", cause)),
-      Effect.forkDetach
-    )
-  } else {
-    yield* restart
-  }
-  return passed(state)
+  return yield* restartPlatformService(context, input.role)
 })
+
+/**
+ * Checks Hearth can be restarted now, so Hearth hears why not before it
+ * asks; `restartPlatformService` restarts it once Hearth has its answer.
+ */
+export const checkHearthRestart = Effect.fn("Relay.platform.checkRestart")(
+  function* (context: PlatformContext) {
+    const { config, engine } = context
+    const state = yield* readPlatformState(config.dataDirectory)
+    if (!state) {
+      return yield* new PlatformError({
+        reason: "This Relay hasn't installed Kiln",
+      })
+    }
+    if (state.phase === "maintenance") {
+      return yield* new PlatformError({
+        reason:
+          "Hearth is held stopped for maintenance; run `kiln-relay platform start-hearth` on the Relay's host",
+      })
+    }
+    if (yield* updateRunning(config.dataDirectory, state.names.hearth)) {
+      return yield* new PlatformError({
+        reason: `${state.names.hearth} is being updated; try again once the update finishes`,
+      })
+    }
+    const container = yield* inspectOptional(
+      engine.inspectContainer(state.names.hearth)
+    )
+    if (
+      !container ||
+      container.Config.Labels?.[KILN_INSTALLATION_LABEL] !==
+        state.installationId
+    ) {
+      return yield* new PlatformError({
+        reason: `${state.names.hearth} is missing; repair Kiln's services to recreate it`,
+      })
+    }
+    return passed(state)
+  }
+)
+
+/**
+ * Restarts one of Kiln's services, holding the installation lock and the
+ * container's update lock. Hearth isn't restarted while maintenance holds
+ * it stopped, which an operator may have started since it was asked for.
+ */
+export const restartPlatformService = Effect.fn("Relay.platform.restart")(
+  function* (context: PlatformContext, role: RelayPlatformServiceRole) {
+    const { config, engine } = context
+    return yield* withPlatformLock(
+      config.dataDirectory,
+      Effect.gen(function* () {
+        const state = yield* readPlatformState(config.dataDirectory)
+        if (!state) {
+          return yield* new PlatformError({
+            reason: "This Relay hasn't installed Kiln",
+          })
+        }
+        if (role === "hearth" && state.phase === "maintenance") {
+          return yield* new PlatformError({
+            reason: "Hearth is held stopped for maintenance",
+          })
+        }
+        const name = state.names[role]
+        const result = yield* withServiceLock(
+          config.dataDirectory,
+          name,
+          Effect.gen(function* () {
+            const container = yield* inspectOptional(
+              engine.inspectContainer(name)
+            )
+            if (
+              !container ||
+              container.Config.Labels?.[KILN_INSTALLATION_LABEL] !==
+                state.installationId
+            ) {
+              return yield* new PlatformError({
+                reason: `${name} is missing; repair Kiln's services to recreate it`,
+              })
+            }
+            yield* engine.restartContainer(container.Id, {
+              seconds: 30,
+              timeout: 90_000,
+            })
+          })
+        )
+        if (result === BUSY) {
+          return yield* new PlatformError({
+            reason: `${name} is being updated; try again once the update finishes`,
+          })
+        }
+        return passed(state)
+      })
+    )
+  }
+)
+
+/**
+ * Runs an offline restore of Hearth's database: only while maintenance
+ * holds Hearth stopped, and holding Hearth's update lock throughout, so
+ * neither a pass, a restart, nor an update starts Hearth mid-restore.
+ * Installations this Relay didn't install run it as before.
+ */
+export const withPlatformRestoreHold = <A, E, R>(
+  config: Pick<RelayConfig, "dataDirectory">,
+  effect: Effect.Effect<A, E, R>
+) =>
+  Effect.gen(function* () {
+    const installed = yield* readPlatformState(config.dataDirectory)
+    if (!installed) return yield* effect
+    return yield* withPlatformLock(
+      config.dataDirectory,
+      Effect.gen(function* () {
+        const state = yield* readPlatformState(config.dataDirectory)
+        if (state?.phase !== "maintenance") {
+          return yield* new PlatformError({
+            reason:
+              "Run `kiln-relay platform stop-hearth` first, so Hearth stays stopped while its database is restored",
+          })
+        }
+        const result = yield* withServiceLock(
+          config.dataDirectory,
+          state.names.hearth,
+          effect
+        )
+        if (result === BUSY) {
+          return yield* new PlatformError({
+            reason: "Hearth is being updated; restore once the update finishes",
+          })
+        }
+        return result
+      })
+    )
+  })
+
+/**
+ * Why Kiln's updater may not update a container now: the Hearth a Relay
+ * installed is held stopped for maintenance, such as an offline restore.
+ */
+export const platformUpdateRefusal = Effect.fn("Relay.platform.updateRefusal")(
+  function* (dataDirectory: string, container: string) {
+    const state = yield* readPlatformState(dataDirectory).pipe(
+      Effect.catch(() => Effect.succeed(null))
+    )
+    return state?.phase === "maintenance" && state.names.hearth === container
+      ? "Kiln's Hearth is held stopped for maintenance; run `kiln-relay platform start-hearth` before updating it"
+      : null
+  }
+)
 
 // --------------------------------------------------------------- lifecycle
 
@@ -1328,7 +1457,8 @@ export const runPlatformCli = Effect.fn("Relay.platform.cli")(function* (
       return
     case "repair": {
       const result = yield* reconcilePlatform(context)
-      print(result.issue ?? "Kiln's services are running")
+      if (result.issue) return yield* new PlatformError({ reason: result.issue })
+      print("Kiln's services are running")
       return
     }
     case "stop-hearth":
@@ -1338,11 +1468,11 @@ export const runPlatformCli = Effect.fn("Relay.platform.cli")(function* (
         current.phase === phase ? current : { ...current, phase }
       )
       const result = yield* reconcilePlatform(context)
+      if (result.issue) return yield* new PlatformError({ reason: result.issue })
       print(
-        result.issue ??
-          (phase === "maintenance"
-            ? "Hearth is stopped and stays stopped until `kiln-relay platform start-hearth`"
-            : "Hearth is starting")
+        phase === "maintenance"
+          ? "Hearth is stopped and stays stopped until `kiln-relay platform start-hearth`"
+          : "Hearth is running"
       )
       return
     }
@@ -1359,9 +1489,9 @@ export const runPlatformCli = Effect.fn("Relay.platform.cli")(function* (
         phase: "maintenance",
       }))
       const result = yield* reconcilePlatform(context)
+      if (result.issue) return yield* new PlatformError({ reason: result.issue })
       print(
-        result.issue ??
-          `Hearth's database is empty and Hearth is held stopped. Restore a platform backup with \`kiln-relay platform-backup restore <backup> --confirm ${state.installationId}\`, then run \`kiln-relay platform start-hearth\`.`
+        `Hearth's database is empty and Hearth is held stopped. Restore a platform backup with \`kiln-relay platform-backup restore <backup> --confirm ${state.installationId}\`, then run \`kiln-relay platform start-hearth\`.`
       )
       return
     }
