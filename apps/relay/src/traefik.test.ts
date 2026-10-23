@@ -65,7 +65,10 @@ function dynamicConfiguration(environment: Record<string, string> = {}) {
 
 describe("bundled Traefik configuration", () => {
   it("obtains certificates over HTTP-01 without access to the Docker socket", () => {
-    const configuration = parse(traefikStaticConfiguration(settings, null)) as {
+    const configuration = parse(traefikStaticConfiguration(settings, {
+        platformEdge: null,
+        traefikAcmeCaServer: null,
+      })) as {
       certificatesResolvers: { kiln: { acme: Record<string, unknown> } }
       providers: Record<string, unknown>
     }

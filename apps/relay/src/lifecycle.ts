@@ -369,6 +369,8 @@ export class LifecycleDriver {
   #edgeReconciliationFiber: Fiber.Fiber<void> | null = null
   #hostDataDirectoryPromise: Promise<string> | null = null
   #listenerMode: RelayProxySettings["mode"] | null = null
+  // The last reason Traefik couldn't serve Hearth, logged once.
+  #platformEdgeError: string | null = null
   readonly #gamePortSemaphore = Semaphore.makeUnsafe(1)
   // The Tailscale CoreDNS container is shared by every server; starts on
   // different servers can refresh it at once.
@@ -1164,42 +1166,65 @@ export class LifecycleDriver {
   }
 
   /**
-   * Joins bundled Traefik to Kiln's network, which the platform pass creates
-   * after the Relay starts, so it can reach Hearth.
+   * After each platform pass: starts bundled Traefik for Hearth if it isn't
+   * running, such as after ports 80 and 443 were busy, and joins it to
+   * Kiln's network, which the pass creates after the Relay starts.
    */
-  async connectPlatformEdge(): Promise<void> {
+  async reconcilePlatformEdge(): Promise<void> {
     const edge = this.#config.platformEdge
-    if (!edge || !(await this.#containerRunning(this.#resources.traefikContainer))) {
+    if (!edge || this.#config.proxyMode === "traefik") return
+    const settings = await this.proxySettings()
+    const running = await recoverPromise(
+      () =>
+        runLifecycle(
+          this.#engine.inspectContainer(this.#resources.traefikContainer)
+        ),
+      () => null
+    )
+    if (
+      running?.State.Running &&
+      running.Config.Image === settings.traefikImage
+    ) {
+      await connectNetwork(
+        this.#engine,
+        this.#resources.traefikContainer,
+        edge.network
+      )
       return
     }
-    await connectNetwork(
-      this.#engine,
-      this.#resources.traefikContainer,
-      edge.network
-    )
+    await this.#ensurePlatformTraefik(settings, this.#webRoutes)
   }
 
   // In platform mode Traefik serves Hearth whatever the Relay's own proxy
   // mode. Without ports 80 and 443 Hearth stays at its own port, so the
-  // Relay starts anyway.
+  // Relay starts anyway and the next platform pass tries again.
   async #ensurePlatformTraefik(
     settings: RelayProxySettings,
     routes: ReadonlyArray<RelayStoredWebRoute>
   ): Promise<void> {
-    await recoverPromise(
-      async () => {
-        await this.#ensureTraefik(settings, routes, false)
-        await recoverPromise(
-          () => this.connectPlatformEdge(),
-          () => undefined
-        )
-      },
-      (cause) => {
-        console.error(
-          "Bundled Traefik could not start, so Hearth is only at its own port:",
-          cause instanceof Error ? cause.message : cause
-        )
-      }
+    const edge = this.#config.platformEdge
+    if (!edge) return
+    await this.#serializeEdgeMutation(() =>
+      recoverPromise(
+        async () => {
+          await this.#ensureTraefik(settings, routes, false)
+          await connectNetwork(
+            this.#engine,
+            this.#resources.traefikContainer,
+            edge.network
+          )
+          this.#platformEdgeError = null
+        },
+        (cause) => {
+          const message = cause instanceof Error ? cause.message : String(cause)
+          if (message === this.#platformEdgeError) return
+          this.#platformEdgeError = message
+          console.error(
+            "Bundled Traefik isn't serving Hearth, so Hearth is only at its own port:",
+            message
+          )
+        }
+      )
     )
   }
 
@@ -3239,7 +3264,7 @@ export class LifecycleDriver {
     ])
     const staticConfiguration = traefikStaticConfiguration(
       settings,
-      this.#config.traefikAcmeCaServer
+      this.#config
     )
     // Traefik reads its static configuration only when it starts.
     const staticChanged = await recoverPromise(
@@ -3275,11 +3300,23 @@ export class LifecycleDriver {
       ],
       restart: "unless-stopped",
     }
+    // A stopped Traefik, such as one whose ports were busy, or one on
+    // another image than the settings name is replaced.
+    const existing = await recoverPromise(
+      () =>
+        runLifecycle(
+          this.#engine.inspectContainer(this.#resources.traefikContainer)
+        ),
+      () => null
+    )
+    const stale =
+      existing !== null &&
+      (!existing.State.Running || existing.Config.Image !== settings.traefikImage)
     await runLifecycle(
       lifecycleOperation(async () => {
         await this.#ensureContainer(
           this.#resources.traefikContainer,
-          replace || staticChanged,
+          replace || staticChanged || stale,
           traefik
         )
         await connectNetwork(

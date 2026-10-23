@@ -1786,7 +1786,7 @@ async function executeControlRequest(
           }
         }),
         staticConfiguration: bundled
-          ? traefikStaticConfiguration(settings, config.traefikAcmeCaServer)
+          ? traefikStaticConfiguration(settings, config)
           : null,
       })
     }
@@ -3168,11 +3168,11 @@ function platformLoop() {
     )
     .pipe(
       Effect.tap((result) => Effect.sync(() => notePlatformPass(result))),
-      // Kiln's network exists once a pass has run.
+      // Kiln's network exists once a pass has run; Traefik retries here.
       Effect.tap(() =>
-        Effect.tryPromise(() => lifecycle.connectPlatformEdge()).pipe(
+        Effect.tryPromise(() => lifecycle.reconcilePlatformEdge()).pipe(
           Effect.catch((cause) =>
-            Effect.logWarning("Traefik couldn't join Kiln's network", cause)
+            Effect.logWarning("Traefik couldn't serve Hearth", cause)
           )
         )
       ),

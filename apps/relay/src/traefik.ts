@@ -140,16 +140,29 @@ function withWebRouteRevision(
 
 export function traefikStaticConfiguration(
   settings: RelayProxySettings,
-  caServer: string | null
+  config: Pick<RelayConfig, "platformEdge" | "traefikAcmeCaServer">
 ): string {
   const email = settings.acmeEmail
     ? `      email: ${JSON.stringify(settings.acmeEmail)}\n`
     : ""
-  const directory = caServer
-    ? `      caServer: ${JSON.stringify(caServer)}\n`
+  const directory = config.traefikAcmeCaServer
+    ? `      caServer: ${JSON.stringify(config.traefikAcmeCaServer)}\n`
     : ""
   // Let's Encrypt issues certificates for an IP address only from its
-  // six-day profile, and without the address as the Common Name.
+  // six-day profile, and without the address as the Common Name. Only a
+  // platform Relay serving Hearth at an address gets the resolver: older
+  // Traefik versions a Relay may be pinned to can't load it.
+  const ipResolver = isPlatformIpEdge(config)
+    ? `  kiln-ip:
+    acme:
+${email}${directory}      profile: shortlived
+      disableCommonName: true
+      certificatesDuration: 160
+      storage: /var/lib/traefik/acme.json
+      httpChallenge:
+        entryPoint: web
+`
+    : ""
   return `entryPoints:
   web:
     address: ":80"
@@ -173,15 +186,7 @@ certificatesResolvers:
 ${email}${directory}      storage: /var/lib/traefik/acme.json
       httpChallenge:
         entryPoint: web
-  kiln-ip:
-    acme:
-${email}${directory}      profile: shortlived
-      disableCommonName: true
-      certificatesDuration: 160
-      storage: /var/lib/traefik/acme.json
-      httpChallenge:
-        entryPoint: web
-
+${ipResolver}
 api:
   dashboard: false
 log:
@@ -245,7 +250,7 @@ export function traefikDynamicConfiguration(
     )
   }
   const edge = config.platformEdge
-  const ipEdge = edge !== null && isIP(edge.host) !== 0
+  const ipEdge = isPlatformIpEdge(config)
   if (edge) {
     lines.push(
       "    kiln-hearth:",
@@ -345,6 +350,10 @@ export function traefikDynamicConfiguration(
   }
   lines.push("")
   return `${lines.join("\n")}\n`
+}
+
+function isPlatformIpEdge(config: Pick<RelayConfig, "platformEdge">): boolean {
+  return config.platformEdge !== null && isIP(config.platformEdge.host) !== 0
 }
 
 function traefikRouteName(id: string): string {
