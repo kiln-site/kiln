@@ -2,6 +2,7 @@ import * as React from "react"
 import { useSuspenseQuery } from "@tanstack/react-query"
 import { Link, Outlet, useNavigate, useSearch } from "@tanstack/react-router"
 
+import { SectionNavigation } from "@/components/section-navigation"
 import type { ServerPickerOption } from "@/components/server-scope-picker"
 import { ServerScopePicker } from "@/components/server-scope-picker"
 import {
@@ -131,39 +132,24 @@ export function AutomationsRouteOutlet() {
 
 const AutomationsNavigation = React.memo(function AutomationsNavigation() {
   return (
-    <nav
-      aria-label="Automation sections"
-      className="mb-6 no-scrollbar flex gap-1 overflow-x-auto overflow-y-hidden border-b"
-    >
-      {automationDestinations.map((tab, index) => (
-        <React.Fragment key={tab.to}>
-          {index > 0 &&
-          automationDestinations[index - 1]?.group !== tab.group ? (
-            <span
-              aria-hidden
-              className="mx-1 h-4 w-px shrink-0 self-center bg-border"
-            />
-          ) : null}
-          <Link
-            to={tab.to}
-            activeOptions={{ exact: false }}
-            search={(previous) => ({
-              kind: previous.kind,
-              relay: previous.relay,
-              target: previous.target,
-            })}
-            className="relative flex h-10 shrink-0 items-center gap-2 px-3 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
-            activeProps={{
-              className:
-                "text-foreground after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:bg-primary",
-            }}
-          >
-            <tab.icon className="size-3.5" />
-            {tab.label}
-          </Link>
-        </React.Fragment>
-      ))}
-    </nav>
+    <SectionNavigation
+      className="mb-6"
+      label="Automation sections"
+      sections={automationDestinations}
+      title="Automations"
+      renderLink={(tab, props) => (
+        <Link
+          to={tab.to}
+          activeOptions={{ exact: false }}
+          search={(previous) => ({
+            kind: previous.kind,
+            relay: previous.relay,
+            target: previous.target,
+          })}
+          {...props}
+        />
+      )}
+    />
   )
 })
 

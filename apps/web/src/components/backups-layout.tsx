@@ -2,6 +2,8 @@ import * as React from "react"
 import { Link, Outlet } from "@tanstack/react-router"
 import { CloudCog, History, SlidersHorizontal } from "lucide-react"
 
+import { SectionNavigation } from "@/components/section-navigation"
+
 const backupDestinations = [
   { icon: History, label: "Runs", to: "/backups/runs" },
   { icon: CloudCog, label: "Destinations", to: "/backups/destinations" },
@@ -34,13 +36,13 @@ export function BackupsRouteOutlet() {
 
 const BackupsNavigation = React.memo(function BackupsNavigation() {
   return (
-    <nav
-      aria-label="Backup sections"
-      className="mb-6 no-scrollbar flex gap-1 overflow-x-auto overflow-y-hidden border-b"
-    >
-      {backupDestinations.map((tab) => (
+    <SectionNavigation
+      className="mb-6"
+      label="Backup sections"
+      sections={backupDestinations}
+      title="Backups"
+      renderLink={(tab, props) => (
         <Link
-          key={tab.to}
           to={tab.to}
           activeOptions={{ exact: true, includeSearch: false }}
           search={(previous) => ({
@@ -48,16 +50,9 @@ const BackupsNavigation = React.memo(function BackupsNavigation() {
             relay: previous.relay,
             server: previous.server,
           })}
-          className="relative flex h-10 shrink-0 items-center gap-2 px-3 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
-          activeProps={{
-            className:
-              "text-foreground after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:bg-primary",
-          }}
-        >
-          <tab.icon className="size-3.5" />
-          {tab.label}
-        </Link>
-      ))}
-    </nav>
+          {...props}
+        />
+      )}
+    />
   )
 })

@@ -12,6 +12,7 @@ import {
 
 import { HearthMark } from "@/components/hearth-mark"
 import { useInfraUpdateDialogStore } from "@/components/infra-update-dialog-provider"
+import { SectionNavigation } from "@/components/section-navigation"
 import { accessibleInfrastructureDestinations } from "@/lib/navigation-destinations"
 import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
 
@@ -46,34 +47,13 @@ const InfraNavigation = React.memo(function InfraNavigation() {
   const destinations = accessibleInfrastructureDestinations(capabilities)
 
   return (
-    <div className="mb-6 flex min-w-0 items-center border-b">
-      <nav
-        aria-label="Infrastructure sections"
-        className="no-scrollbar flex min-w-0 flex-1 gap-1 overflow-x-auto overflow-y-hidden"
-      >
-        {destinations.map((tab, index) => (
-          <React.Fragment key={tab.to}>
-            {index > 0 && destinations[index - 1]?.group !== tab.group ? (
-              <span
-                aria-hidden
-                className="mx-1 h-4 w-px shrink-0 self-center bg-border"
-              />
-            ) : null}
-            <Link
-              to={tab.to}
-              className="relative flex h-10 shrink-0 items-center gap-2 px-3 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
-              activeProps={{
-                className:
-                  "text-foreground after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:bg-primary",
-              }}
-            >
-              <tab.icon className="size-3.5" />
-              {tab.label}
-            </Link>
-          </React.Fragment>
-        ))}
-      </nav>
-    </div>
+    <SectionNavigation
+      className="mb-6"
+      label="Infrastructure sections"
+      sections={destinations}
+      title="Infrastructure"
+      renderLink={(tab, props) => <Link to={tab.to} {...props} />}
+    />
   )
 })
 
