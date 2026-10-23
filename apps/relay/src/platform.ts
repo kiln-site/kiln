@@ -17,7 +17,6 @@
  */
 import { createHash, randomUUID } from "node:crypto"
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import {
@@ -645,8 +644,8 @@ const attachRelay = Effect.fnUntraced(function* (
  * The Relay's own container, or null when it can't be proven:
  * `KILN_RELAY_CONTAINER` when the operator named it, or else the container
  * its hostname file is mounted from, once Docker confirms that container
- * holds a file this process just wrote to its own filesystem. A container
- * that shares the Relay's network, hostname, or volumes doesn't have it.
+ * holds a file this process just wrote to the root of its own filesystem. A
+ * container that shares the Relay's network, hostname, or volumes doesn't.
  */
 export const ownContainer = Effect.fnUntraced(function* (
   engine: DockerEngine,
@@ -662,7 +661,9 @@ export const ownContainer = Effect.fnUntraced(function* (
   if (!id) return null
   const candidate = yield* inspectOptional(engine.inspectContainer(id))
   if (candidate?.Id !== id) return null
-  const proof = join(tmpdir(), `kiln-relay-self-${randomUUID()}`)
+  // In the root of its own filesystem, which no mount can share with another
+  // container (unlike /tmp or TMPDIR). A read-only root fails closed.
+  const proof = `/.kiln-relay-self-${randomUUID()}`
   const written = yield* Effect.tryPromise(() =>
     writeFile(proof, "", { flag: "wx", mode: 0o600 })
   ).pipe(

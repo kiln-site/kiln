@@ -123,8 +123,8 @@ they don't.
   until an operator runs `kiln-relay platform recover`.
 - **It joins only itself to Kiln's network.** It takes the container Docker
   mounts its hostname from as a candidate, then has Docker confirm that
-  container holds a file it just wrote to its own filesystem, which a
-  container sharing its network or volumes doesn't. It never goes by name or
+  container holds a file it just wrote to the root of its own filesystem,
+  which no container sharing its network or volumes has. It never goes by name or
   hostname, and joins nothing when it can't prove it.
 - **It touches only its own containers.** A container, volume, or network with
   one of its names that isn't labeled for its installation stops it with a
