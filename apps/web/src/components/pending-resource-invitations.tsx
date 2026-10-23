@@ -9,6 +9,7 @@ import {
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
 
+import { InstanceCard } from "@/components/instance-card"
 import { ResourceInvitationDialog } from "@/components/resource-invitation-dialog"
 import type { DataTableSearchStore } from "@/lib/data-table-search"
 import {
@@ -127,6 +128,7 @@ const PendingRow = memo(function PendingRow({
   invitation: ResourceInvitation
   onOpen: (id: string) => void
 }) {
+  const type = invitation.scope.resourceType
   return (
     <tr
       className="relative grid min-h-14 grid-cols-[var(--data-table-grid-base)] border-b border-border/70 bg-amber-500/[0.025] text-sm hover:bg-muted/20 sm:grid-cols-[var(--data-table-grid-sm)] md:grid-cols-[var(--data-table-grid-md)] lg:grid-cols-[var(--data-table-grid-lg)] xl:grid-cols-[var(--data-table-grid-xl)]"
@@ -146,16 +148,25 @@ const PendingRow = memo(function PendingRow({
         <span className="hidden sm:inline">Pending</span>
       </td>
       <td
-        className="pointer-events-none col-[3/-2] row-start-1 flex min-w-0 flex-col justify-center px-3"
+        className="pointer-events-none col-[3/-2] row-start-1 flex min-w-0 items-center px-3"
         role="cell"
       >
-        <span className="truncate font-medium">{invitation.resourceName}</span>
-        <span className="truncate text-xs text-muted-foreground">
-          Invited {invitation.createdAt.slice(0, 10)}
-          {invitation.scope.resourceType === "relay"
-            ? null
-            : ` · ${invitation.relayName}`}
-        </span>
+        <InstanceCard
+          className="min-w-0 flex-1"
+          instance={{
+            id: invitation.scope.resourceId,
+            kind: type === "instance" ? "server" : type,
+            relayId: invitation.scope.relayId,
+          }}
+          meta={
+            type === "relay"
+              ? `Invited ${invitation.createdAt.slice(0, 10)}`
+              : `Invited ${invitation.createdAt.slice(0, 10)} · ${invitation.relayName}`
+          }
+          name={invitation.resourceName}
+          showFavorite={false}
+          showStatus={false}
+        />
       </td>
       <td
         className="pointer-events-none col-[-2/-1] row-start-1 flex items-center justify-end px-3 text-xs font-medium text-primary-ink"
