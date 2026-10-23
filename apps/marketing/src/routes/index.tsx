@@ -21,6 +21,10 @@ import { socialLinks } from "@/lib/social-links"
 
 import { CyclingWord } from "~/components/cycling-word"
 import { ComingSoon } from "~/components/coming-soon"
+import {
+  InstallCommand,
+  useInstallCommand,
+} from "~/components/install-command"
 import { ClientDemo } from "~/components/demos/client-demo"
 import { BrandSvg } from "~/components/brand-svg"
 import { KindsSection } from "~/components/kinds-section"
@@ -104,12 +108,8 @@ function Hero() {
               <br />
               Your machines, one panel for all of it.
             </p>
-            {comingSoon.signUp ? (
-              // Nothing to click until sign-up opens.
-              <p className="type-label mt-6 inline-flex h-11 items-center border border-border bg-card px-5 text-[0.9375rem] text-muted-foreground">
-                Coming soon
-              </p>
-            ) : (
+            <HeroInstall />
+            {comingSoon.signUp ? null : (
               <div className="mt-7 flex flex-wrap gap-3">
                 <Button asChild className="h-11 px-5 text-[0.9375rem]">
                   <a href={signUpUrl(hearthUrl)}>Get started</a>
@@ -251,6 +251,22 @@ function Editor() {
   )
 }
 
+// Self-hosting is the way in until sign-up opens, so the command leads.
+function HeroInstall() {
+  const command = useInstallCommand()
+  return (
+    <div className="mt-7 max-w-md">
+      <p className="type-label text-muted-foreground">
+        Install it on any machine with Docker
+      </p>
+      <InstallCommand
+        command={command}
+        className="mt-2 border border-border bg-card py-1.5 pr-1.5 pl-4"
+      />
+    </div>
+  )
+}
+
 function Relays() {
   return (
     <section className="border-t border-border">
@@ -366,6 +382,8 @@ function Features() {
 
 function SelfHost() {
   const { docsUrl } = useSiteConfig()
+  const installCommand = useInstallCommand()
+  const nodeCommand = useInstallCommand({ node: true })
   return (
     <section className="border-t border-border">
       <div className="site-container grid gap-12 py-20 sm:py-28 lg:grid-cols-12 lg:items-center lg:gap-16">
@@ -392,19 +410,20 @@ function SelfHost() {
           </div>
         </div>
         <div className="min-w-0 lg:col-span-7">
-          <pre className="overflow-x-auto border border-border bg-card p-5 font-mono text-[0.8125rem] leading-7 sm:p-6">
-            <code>
-              <span className="text-muted-foreground">
-                # Kiln is in early development. To try it anyway, grab
-                {"\n"}# compose.yaml and .env.hearth.example from
-                github.com/kiln-site/kiln
-              </span>
-              {"\n"}
-              <span className="text-primary-ink">$</span> cp .env.hearth.example
-              .env{"\n"}
-              <span className="text-primary-ink">$</span> docker compose up -d
-            </code>
-          </pre>
+          <div className="border border-border bg-card p-5 sm:p-6">
+            <p className="font-mono text-[0.8125rem] leading-7 text-muted-foreground">
+              # On the machine that will run Kiln. All it needs is Docker.
+            </p>
+            <InstallCommand command={installCommand} />
+            <p className="mt-4 font-mono text-[0.8125rem] leading-7 text-muted-foreground">
+              # Then on each other machine, to add it as a Relay
+            </p>
+            <InstallCommand command={nodeCommand} />
+          </div>
+          <p className="type-support mt-3 text-muted-foreground">
+            It installs Hearth, its database, and a Relay, then prints a link
+            to create your account. Kiln is in early development.
+          </p>
         </div>
       </div>
     </section>
