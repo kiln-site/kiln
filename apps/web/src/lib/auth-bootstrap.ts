@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from "node:crypto"
 import { Clock, Effect } from "effect"
 import type {
   PoolConnection,
@@ -62,22 +63,47 @@ export async function ensureConfiguredSuperUser(): Promise<void> {
 export async function installationState(): Promise<{
   emailDeliveryEnabled: boolean
   setupRequired: boolean
+  setupTokenRequired: boolean
 }> {
   await ensureConfiguredSuperUser()
   const [rows] = await databasePool.query<Array<UserCountRow>>(
     `SELECT COUNT(*) AS user_count FROM ${databaseTable("user")}`
   )
+  const setupRequired = Number(rows[0]?.user_count ?? 0) === 0
   return {
     emailDeliveryEnabled: emailDeliveryConfig() !== null,
-    setupRequired: Number(rows[0]?.user_count ?? 0) === 0,
+    setupRequired,
+    setupTokenRequired: setupRequired && configuredSetupToken() !== null,
   }
+}
+
+/**
+ * The setup code a Relay that installed Kiln gave Hearth. With one set, only
+ * someone holding it, from the Relay's console or the installer's output, can
+ * create the first administrator, so publishing a new Hearth doesn't race
+ * whoever finds it first.
+ */
+function configuredSetupToken(): string | null {
+  return process.env.KILN_SETUP_TOKEN?.trim() || null
+}
+
+function setupTokenMatches(expected: string, provided: string | undefined) {
+  const digest = (value: string) => createHash("sha256").update(value).digest()
+  return timingSafeEqual(digest(expected), digest(provided?.trim() ?? ""))
 }
 
 export async function createInitialAdministrator(input: {
   displayName: string
   email: string
   password: string
+  setupToken?: string | undefined
 }): Promise<{ email: string; verificationRequired: boolean }> {
+  const setupToken = configuredSetupToken()
+  if (setupToken && !setupTokenMatches(setupToken, input.setupToken)) {
+    throw new Error(
+      "That setup code isn't right. Open the setup link the installer printed, or run `kiln-relay platform setup-url` on the Relay."
+    )
+  }
   const email = emailSchema.parse(input.email)
   const verificationRequired = emailDeliveryConfig() !== null
   const created = await createFirstUser({

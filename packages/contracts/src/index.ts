@@ -1944,6 +1944,89 @@ export const relaySftpSnapshotSchema = z.object({
   publication: relaySftpPublicationStatusSchema.default("unknown"),
 })
 
+/**
+ * Kiln's own services on a Relay's Docker host: Hearth, its MySQL database,
+ * and its cache. A Relay in platform mode installed them and manages them
+ * (`relay`); otherwise they were deployed some other way, such as Compose or
+ * Coolify, and the Relay only reports them (`external`).
+ */
+export const relayPlatformManagementSchema = z.enum(["relay", "external"])
+
+export const relayPlatformServiceRoleSchema = z.enum([
+  "hearth",
+  "database",
+  "cache",
+])
+
+export const relayPlatformServiceSchema = z.object({
+  /** Actions this Hearth may take on it. Empty for external services. */
+  actions: z.array(z.enum(["restart"])).max(4),
+  container: z.string().min(1).max(255).nullable(),
+  health: z.enum(["healthy", "starting", "unhealthy"]).nullable(),
+  image: z.string().min(1).max(500).nullable(),
+  role: relayPlatformServiceRoleSchema,
+  startedAt: z.string().datetime().nullable(),
+  state: z.enum([
+    "running",
+    "starting",
+    "unhealthy",
+    "restarting",
+    "stopped",
+    "missing",
+    "updating",
+  ]),
+  version: z.string().min(1).max(100).nullable(),
+})
+
+export const relayPlatformStatusSchema = z.object({
+  /** Whether this Hearth may restart and repair them. */
+  canManage: z.boolean(),
+  checkedAt: z.string().datetime(),
+  hearthUrl: z.string().max(2_000).nullable(),
+  installationId: z.string().min(1).max(120).nullable(),
+  /** Why the Relay is holding off, such as a missing database volume. */
+  issue: z.string().max(2_000).nullable(),
+  management: relayPlatformManagementSchema,
+  /**
+   * `installing` until Hearth first starts, `maintenance` while an operator
+   * holds Hearth stopped from the Relay's command line, `blocked` when the
+   * Relay won't continue without one.
+   */
+  phase: z.enum(["installing", "ready", "maintenance", "blocked"]),
+  services: z.array(relayPlatformServiceSchema).max(8),
+})
+
+export const relayPlatformLogsInputSchema = z.object({
+  lines: z.number().int().min(1).max(2_000).default(500),
+  role: relayPlatformServiceRoleSchema,
+})
+
+export const relayPlatformLogsSchema = z.object({
+  lines: z.array(z.string()).max(2_000),
+  role: relayPlatformServiceRoleSchema,
+})
+
+export const relayPlatformActionInputSchema = z.discriminatedUnion("action", [
+  z.object({
+    action: z.literal("restart"),
+    role: relayPlatformServiceRoleSchema,
+  }),
+  // Recreates whatever is missing and starts whatever stopped.
+  z.object({ action: z.literal("repair") }),
+])
+
+export type RelayPlatformManagement = z.infer<
+  typeof relayPlatformManagementSchema
+>
+export type RelayPlatformStatus = z.infer<typeof relayPlatformStatusSchema>
+export type RelayPlatformService = z.infer<typeof relayPlatformServiceSchema>
+export type RelayPlatformServiceRole = z.infer<
+  typeof relayPlatformServiceRoleSchema
+>
+export type RelayPlatformActionInput = z.infer<
+  typeof relayPlatformActionInputSchema
+>
+
 const relaySnapshotRelaySchema = z.object({
   browserOrigin: relayProxyBrowserMetadataSchema.shape.browserOrigin.optional(),
   id: relayIdSchema,
@@ -1951,6 +2034,13 @@ const relaySnapshotRelaySchema = z.object({
   // Held paused by a Hearth, so it runs no changes. See
   // `relayControlOperationRefusedWhilePaused`.
   paused: z.boolean().optional(),
+  /**
+   * Present when Kiln's own services run on this Relay's Docker host. See
+   * `relay.platform.read`.
+   */
+  platform: z
+    .object({ management: relayPlatformManagementSchema })
+    .optional(),
   proxyMode: relayProxyModeSchema.optional(),
   sftp: relaySftpSnapshotSchema,
   tls: z

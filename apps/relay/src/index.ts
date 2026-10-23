@@ -108,6 +108,8 @@ import {
   RelayBrowserAuthorizationReviseSchema,
   relayBrowserAuthorizationReviseMaxItems,
   relayBackupFailureCodesV1Feature,
+  relayPlatformActionInputSchema,
+  relayPlatformLogsInputSchema,
 } from "@workspace/contracts"
 import { relayScheduleProjectionSchema } from "@workspace/contracts/schedules"
 import type {
@@ -207,6 +209,7 @@ import { attachSftpServer } from "./sftp-server.js"
 import {
   exclusive,
   laneKeys,
+  LaneRejectedError,
   OperationLanes,
   type LaneAdmission,
 } from "./operation-lanes.js"
@@ -232,6 +235,20 @@ import { appProvisioning } from "./app-provisioning.js"
 import { databaseProvisioning } from "./database-provisioning.js"
 import { serverProvisioning } from "./server-provisioning.js"
 import { SystemUpdateManager } from "./system-updates.js"
+import {
+  addOwnerInvitation,
+  externalPlatformPresent,
+  isPlatformOwner,
+  platformAction,
+  platformLogs,
+  platformSetupUrl,
+  platformStatus,
+  reconcilePlatform,
+  runPlatformCli,
+  startPlatform,
+  type PlatformContext,
+  type PlatformPassResult,
+} from "./platform.js"
 import { ScheduleManager } from "./schedules.js"
 import { assignRelayWebRouteIds } from "./web-route-ids.js"
 import { planWebRouteRecovery } from "./web-route-labels.js"
@@ -277,6 +294,21 @@ const startupCore = await runRelayEffect(
   })
 )
 const cliArguments = process.argv.slice(2)
+// Before pairing, so the bootstrap invitation expects the token the
+// installed Hearth is given.
+const platformStartup = await runRelayEffect(
+  "relay.startup.platform",
+  Effect.gen(function* () {
+    const clients = yield* startupCore.state.listClients()
+    return yield* startPlatform(config, new DockerEngine(config.dockerSocket), {
+      pairedClients: clients.length,
+      saveInputs: cliArguments.length === 0,
+    })
+  })
+)
+if (platformStartup.refused && cliArguments.length === 0) {
+  console.error(platformStartup.refused)
+}
 let relayIdentity = startupCore.identity
 config.nodeId = relayIdentity.fingerprint
 config.nodeName = relayIdentity.name
@@ -486,13 +518,14 @@ const startup = { ...startupCore, tls: activeTls }
 if (
   cliArguments[0] === "pair" ||
   cliArguments[0] === "hearth" ||
+  cliArguments[0] === "platform" ||
   cliArguments[0] === "platform-backup"
 ) {
   await runRelayCli(cliArguments)
   await disposeRelayRuntime()
   process.exit(0)
 }
-const initialPairing = await runRelayEffect(
+let initialPairing = await runRelayEffect(
   "relay.startup.pairing",
   initializePairing({
     config,
@@ -507,6 +540,24 @@ if (initialPairing.kind === "automatic") {
   )
 } else if (initialPairing.invitation) {
   console.log(renderPairingInvitation(initialPairing.invitation))
+}
+if (
+  platformStartup.state &&
+  initialPairing.kind === "automatic" &&
+  initialPairing.invitation
+) {
+  await runRelayEffect(
+    "relay.startup.platform.owner",
+    addOwnerInvitation(
+      config.dataDirectory,
+      initialPairing.invitation.envelope.invitationId
+    )
+  )
+}
+if (platformStartup.state?.phase === "installing") {
+  console.log(
+    `Kiln is installing. Once Hearth is up, create its administrator at:\n  ${platformSetupUrl(platformStartup.state)}`
+  )
 }
 await lifecycle.initializeProxy(
   await loadStartupWebRoutes(),
@@ -738,6 +789,40 @@ async function loadStartupWebRoutes() {
 async function runRelayCli(arguments_: ReadonlyArray<string>): Promise<void> {
   const [resource, command = resource === "pair" ? "create" : "list"] =
     arguments_
+  if (resource === "platform" && command === "pair") {
+    // An invitation for the installed Hearth, such as one restored onto a
+    // new host, which then manages Kiln's services as the original did.
+    const invitation = await runRelayEffect(
+      "relay.cli.platform.pair",
+      Effect.gen(function* () {
+        const created = yield* createPairingInvitation({
+          config,
+          identity: relayIdentity,
+          role: "full_access",
+          state: startup.state,
+          tls: startup.tls,
+        })
+        yield* addOwnerInvitation(
+          config.dataDirectory,
+          created.envelope.invitationId
+        )
+        return created
+      })
+    )
+    console.log(renderPairingInvitation(invitation))
+    return
+  }
+  if (resource === "platform") {
+    await runRelayEffect(
+      "relay.cli.platform",
+      runPlatformCli(
+        arguments_,
+        { config, engine: relayEngine },
+        (text) => console.log(text)
+      )
+    )
+    return
+  }
   if (resource === "pair" && command === "create") {
     const role = arguments_.includes("--read-only")
       ? "read_only"
@@ -1076,6 +1161,21 @@ const tlsRefreshFiber = forkRelayEffect(
   "relay.tls.refreshLoop",
   tlsRefreshLoop()
 )
+// The last pass over Kiln's services, reported in snapshots and to Hearth.
+let platformPass: PlatformPassResult = {
+  blocked: false,
+  issue: null,
+  state: platformStartup.state,
+}
+// Without platform mode: whether Hearth runs beside this Relay anyway.
+let externalPlatform = false
+const platformContext: PlatformContext = {
+  attachRelay: true,
+  beforeHearth: Effect.suspend(() => ensurePlatformInvitation()),
+  config,
+  engine: relayEngine,
+}
+const platformFiber = forkRelayEffect("relay.platform", platformLoop())
 
 let shutdownStarted = false
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
@@ -1266,6 +1366,7 @@ function shutdownRelay(signal: NodeJS.Signals): Promise<void> {
         capacityMetricsFiber.interruptUnsafe()
         operationPruneFiber.interruptUnsafe()
         tlsRefreshFiber.interruptUnsafe()
+        platformFiber.interruptUnsafe()
         backupFiber.interruptUnsafe()
         provisioningFiber.interruptUnsafe()
         scheduleFiber.interruptUnsafe()
@@ -1362,6 +1463,11 @@ async function relaySnapshot() {
       id: relayIdentity.fingerprint,
       name: relayIdentity.name,
       paused: lanes.paused,
+      ...(platformStartup.state
+        ? { platform: { management: "relay" as const } }
+        : externalPlatform
+          ? { platform: { management: "external" as const } }
+          : {}),
       proxyMode: config.proxyMode,
       sftp: {
         developmentAuthentication: config.sftpDevAuthentication,
@@ -2887,6 +2993,41 @@ async function executeControlRequest(
       )
       return lifecycle.webRouteState(instance.id, routes)
     }
+    case "relay.platform.read":
+      return runRelayEffect(
+        "relay.platform.read",
+        platformStatus(platformReadContext(), await clientRecord(client.id))
+      )
+    case "relay.platform.logs": {
+      const input = relayPlatformLogsInputSchema.parse(request.payload)
+      await requirePlatformReader(client.id)
+      return runRelayEffect(
+        "relay.platform.logs",
+        platformLogs(platformReadContext(), input.role, input.lines)
+      )
+    }
+    case "relay.platform.action": {
+      const input = relayPlatformActionInputSchema.parse(request.payload)
+      const record = await clientRecord(client.id)
+      if (!platformStartup.state || !isPlatformOwner(platformPass.state ?? platformStartup.state, record)) {
+        throw new Error(
+          "Only the Hearth this Relay installed can restart or repair Kiln's services"
+        )
+      }
+      const result = await runRelayEffect(
+        "relay.platform.action",
+        platformAction(platformContext, input)
+      )
+      if (input.action === "repair") notePlatformPass(result)
+      await appendRelayAudit("platform.action", client.id, request.id, {
+        action: input.action,
+        ...(input.action === "restart" ? { role: input.role } : {}),
+      })
+      return runRelayEffect(
+        "relay.platform.read",
+        platformStatus(platformReadContext(), record)
+      )
+    }
     case "relay.rename": {
       relayIdentity = await runRelayEffect(
         "relay.control.rename",
@@ -2907,6 +3048,136 @@ async function executeControlRequest(
     case "sftp.authorization.resolve":
       throw new Error(`${request.operation} is not available yet`)
   }
+}
+
+function platformReadContext() {
+  return {
+    blocked: platformPass.blocked,
+    config,
+    engine: relayEngine,
+    issue: platformPass.issue,
+  }
+}
+
+function clientRecord(clientId: string) {
+  return runRelayEffect(
+    "relay.platform.client",
+    startup.state.findClientById(clientId)
+  )
+}
+
+// Hearth's logs: the installed Hearth's, or, for services this Relay only
+// reports, a full-access Hearth's.
+async function requirePlatformReader(clientId: string): Promise<void> {
+  const record = await clientRecord(clientId)
+  const allowed = platformStartup.state
+    ? isPlatformOwner(platformPass.state ?? platformStartup.state, record)
+    : record?.role === "full_access"
+  if (!allowed) {
+    throw new Error("Only the Hearth this Relay installed can read Kiln's logs")
+  }
+}
+
+function notePlatformPass(result: PlatformPassResult): void {
+  if (result.issue !== platformPass.issue) {
+    if (result.issue) console.warn(`Kiln's services: ${result.issue}`)
+    else if (platformPass.issue) console.log("Kiln's services are running")
+  }
+  platformPass = {
+    ...result,
+    state: result.state ?? platformPass.state,
+  }
+}
+
+/**
+ * Passes over Kiln's services every 30 seconds in platform mode. Otherwise
+ * looks once a minute for a Hearth beside this Relay, to report it. Each pass
+ * waits its turn in the lanes, so a paused Relay leaves them alone.
+ */
+function platformLoop() {
+  if (!platformStartup.state) {
+    return externalPlatformPresent(relayEngine, config).pipe(
+      Effect.tap((present) =>
+        Effect.sync(() => {
+          if (present !== externalPlatform) {
+            externalPlatform = present
+            void snapshotHub.refresh()
+          }
+        })
+      ),
+      Effect.ignore,
+      Effect.andThen(Effect.sleep("1 minute")),
+      Effect.forever
+    )
+  }
+  return lanes
+    .run(
+      { label: "platform.reconcile", locks: [exclusive(laneKeys.platform)] },
+      reconcilePlatform(platformContext)
+    )
+    .pipe(
+      Effect.tap((result) => Effect.sync(() => notePlatformPass(result))),
+      Effect.catchIf(
+        (cause) => cause instanceof LaneRejectedError,
+        () => Effect.void
+      ),
+      Effect.andThen(Effect.sleep("30 seconds")),
+      Effect.forever
+    )
+}
+
+/**
+ * Before Hearth starts, while it hasn't paired yet, makes sure the bootstrap
+ * invitation it pairs with hasn't expired: Hearth may start long after the
+ * Relay, after a slow image pull or a stop for maintenance. Returns a new
+ * invitation's ID, for the pass to record as the installed Hearth's.
+ */
+function ensurePlatformInvitation(): Effect.Effect<string | null> {
+  return Effect.gen(function* () {
+    const token = config.bootstrapToken
+    if (!token) return null
+    const clients = yield* startup.state.listClients()
+    if (clients.length > 0) return null
+    const current = initialPairing.invitation
+    if (
+      initialPairing.kind === "automatic" &&
+      current &&
+      current.envelope.expiresAt - Date.now() > 5 * 60_000
+    ) {
+      return null
+    }
+    if (current) {
+      yield* startup.state.revokeInvitation(
+        current.envelope.invitationId,
+        Date.now()
+      )
+    }
+    const invitation = yield* createPairingInvitation({
+      config,
+      identity: relayIdentity,
+      role: "full_access",
+      state: startup.state,
+      tls: activeTls,
+      token,
+    })
+    yield* startup.state.setMetadata(
+      "networking_initial_invitation",
+      JSON.stringify({
+        createdAt: Date.now(),
+        invitationId: invitation.envelope.invitationId,
+        kind: "automatic",
+      })
+    )
+    initialPairing = { invitation, kind: "automatic" }
+    return invitation.envelope.invitationId
+  }).pipe(
+    Effect.catch((cause) =>
+      Effect.sync(() => {
+        reportRelayError(cause, { operation: "relay.platform.invitation" })
+        return null
+      })
+    )
+  )
 }
 
 function relayClientRole(value: unknown): RelayClientRole {

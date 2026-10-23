@@ -44,6 +44,7 @@ import {
   relayAppLimitsV1Feature,
   relayAppGitHubV1Feature,
   relayAppImageUpdatesV1Feature,
+  relayPlatformV1Feature,
   relayVolumesV1Feature,
   relayDatabaseProvisioningV1Feature,
   relayAppProvisioningV1Feature,
@@ -1137,6 +1138,7 @@ function authenticateSocket(
           relayAppGitHubV1Feature,
           relayVolumesV1Feature,
           relayAppImageUpdatesV1Feature,
+          relayPlatformV1Feature,
         ],
         protocol: relayControlProtocol,
         relayBuild: relayBuildLabel(),
@@ -1496,6 +1498,14 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       return "relay.pairing.revoke"
     case "relay.clients.list":
       return "relay.clients.list"
+    // Hearth's logs can hold anything it printed. Only the Hearth this
+    // Relay installed may restart or repair it; the Relay checks that too.
+    case "relay.platform.read":
+      return "relay.read"
+    case "relay.platform.logs":
+      return "relay.logs.read"
+    case "relay.platform.action":
+      return "relay.update"
     case "relay.clients.update":
       return "relay.clients.update"
     case "relay.clients.revoke":

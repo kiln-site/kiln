@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs"
 import { Resolver } from "node:dns/promises"
+import { isIP } from "node:net"
 import { hostname } from "node:os"
 import { Effect, Result } from "effect"
 
@@ -49,6 +50,12 @@ export interface RelayInstanceConfig {
 }
 
 export type RelayTlsMode = "development" | "external" | "managed"
+/**
+ * `node` runs game servers, Apps, and databases for a Hearth. `platform` also
+ * installs and runs Kiln itself on this host: Hearth, its database, and its
+ * cache. See platform.ts.
+ */
+export type RelayMode = "node" | "platform"
 export type RelayProxyMode = "coolify" | "hearth" | "none" | "traefik"
 export type RelayGameHostSource = "configured" | "public_ip" | "relay"
 
@@ -103,6 +110,7 @@ export interface RelayConfig {
   installationIdConfigured: boolean
   managedLabel: string
   mclogsApiUrl: string
+  mode: RelayMode
   serverIdLabel: string
   nodeId: string
   nodeName: string
@@ -127,8 +135,13 @@ export interface RelayConfig {
 }
 
 export function loadConfig(
-  environment: NodeJS.ProcessEnv = process.env
+  configuredEnvironment: NodeJS.ProcessEnv = process.env
 ): RelayConfig {
+  const mode = relayMode(configuredEnvironment)
+  const environment =
+    mode === "platform"
+      ? platformEnvironment(configuredEnvironment)
+      : configuredEnvironment
   const dataDirectory = environment.KILN_RELAY_DATA_DIR?.trim() || "/data"
   const proxyMode = relayProxyMode(environment)
   const port = parsePort(environment, "KILN_RELAY_PORT", 4100)
@@ -243,6 +256,7 @@ export function loadConfig(
     managedLabel: "kiln.relay.managed=true",
     mclogsApiUrl:
       environment.MCLOGS_API_URL?.trim() || "https://api.mclo.gs/1/log",
+    mode,
     nodeId: "kiln-relay",
     nodeName: environment.KILN_RELAY_NAME?.trim() || "",
     port,
@@ -284,6 +298,35 @@ export function loadConfig(
     tlsMode,
     traefikAcmeEmail: environment.KILN_RELAY_ACME_EMAIL?.trim() || null,
     traefikImage: traefikImage(environment),
+  }
+}
+
+function relayMode(environment: NodeJS.ProcessEnv): RelayMode {
+  const value = environment.KILN_RELAY_MODE?.trim() || "node"
+  if (value === "node" || value === "platform") return value
+  throw new Error("KILN_RELAY_MODE must be node or platform")
+}
+
+/**
+ * A Relay that hosts Kiln is reached by Hearth on Kiln's own Docker network,
+ * under this name, which its certificate is issued for. Browsers reach it
+ * through Hearth, so it needs no public address of its own.
+ */
+export const PLATFORM_RELAY_HOST = "kiln-relay"
+
+function platformEnvironment(
+  environment: NodeJS.ProcessEnv
+): NodeJS.ProcessEnv {
+  const host = environment.KILN_RELAY_HOST?.trim() || PLATFORM_RELAY_HOST
+  if (isIP(host)) {
+    throw new Error(
+      "With KILN_RELAY_MODE=platform, KILN_RELAY_HOST must be a hostname: Hearth reaches the Relay by that name on Kiln's network"
+    )
+  }
+  return {
+    ...environment,
+    KILN_RELAY_HOST: host,
+    KILN_RELAY_PROXY: environment.KILN_RELAY_PROXY?.trim() || "hearth",
   }
 }
 

@@ -64,6 +64,10 @@ export const relayVolumesV1Feature = "relay-volumes-v1"
 // The Relay answers `app.image.check`, and deploys an image app at the
 // digest `app.deploy`'s `imageDigest` names.
 export const relayAppImageUpdatesV1Feature = "app-image-updates-v1"
+// The Relay reports the Kiln services on its Docker host (Hearth, its
+// database, and its cache) through `relay.platform.*`, and, when it installed
+// them itself, restarts and repairs them.
+export const relayPlatformV1Feature = "relay-platform-v1"
 export const relayBrowserAuthorizationReviseMaxItems = 256
 
 export const relayControlOperations = [
@@ -107,6 +111,9 @@ export const relayControlOperations = [
   "relay.clients.list",
   "relay.clients.update",
   "relay.clients.revoke",
+  "relay.platform.read",
+  "relay.platform.logs",
+  "relay.platform.action",
   "browser.authorization.revise",
   "brick.catalog",
   "brick.recipe",
@@ -221,6 +228,7 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "relay.tailscale.stack.remove",
   "relay.tailscale.write",
   "relay.proxy.write",
+  "relay.platform.action",
   "relay.terminal.attach",
   "relay.terminal.restart",
   "instance.create",
@@ -304,6 +312,8 @@ export function relayControlOperationChanges(
     case "relay.volumes.read":
     case "relay.pairing.list":
     case "relay.clients.list":
+    case "relay.platform.read":
+    case "relay.platform.logs":
     case "brick.catalog":
     case "brick.recipe":
     case "database.list":
@@ -371,6 +381,7 @@ export function relayControlOperationChanges(
     case "relay.pairing.revoke":
     case "relay.clients.update":
     case "relay.clients.revoke":
+    case "relay.platform.action":
     case "browser.authorization.revise":
     case "database.create":
     case "database.provision.prepare":
@@ -485,6 +496,8 @@ export function relayControlDeadlineMs(
   if (operation === "relay.networking.write") return 240_000
   if (operation === "relay.tailscale.write") return 90_000
   if (operation === "relay.host.files.mount") return 60_000
+  // A repair can wait for MySQL to become healthy.
+  if (operation === "relay.platform.action") return 240_000
   if (operation === "hearth.tailscale.instance.detach") return 60_000
   if (operation === "instance.delete") return 360_000
   if (operation === "database.create") return 360_000

@@ -41,6 +41,7 @@ import type {
   RelayControlOperation,
   RelayControlRequest,
   RelayNode,
+  RelayPlatformManagement,
   RelayProxyBrowserMetadata,
   RelayProxyMode,
   RelaySnapshot,
@@ -368,6 +369,20 @@ export function relayConnectionProxyMode(
   relayId: string
 ): RelayProxyMode | null {
   return connections.get(relayId)?.pushedSnapshot?.relay?.proxyMode ?? null
+}
+
+/**
+ * How Kiln's own services run on the Relay's host, from its last snapshot:
+ * `relay` when the Relay installed them, `external` when it only reports
+ * them. Null when they aren't there, or this process isn't connected.
+ */
+export function relayConnectionPlatform(
+  relayId: string
+): RelayPlatformManagement | null {
+  return (
+    connections.get(relayId)?.pushedSnapshot?.relay?.platform?.management ??
+    null
+  )
 }
 
 /**

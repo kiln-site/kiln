@@ -198,6 +198,9 @@ The bundle is a backup of Kiln's Hearth catalog, not its deployment
 configuration. Operators must retain the Compose environment, TLS material,
 and platform recovery key separately; rotating or losing application encryption
 secrets can make restored secret-bearing catalog values unusable.
+A Relay in platform mode keeps that configuration itself and exports it as a
+recovery kit (`kiln-relay platform export-kit`); see
+[Self-hosting](self-hosting.md#recovery).
 
 Every artifact gets a manifest containing format version, target identity,
 created time, engine/Brick metadata, exclusions, consistency warnings, logical

@@ -190,6 +190,8 @@ export function controlRequestLocks(
     case "relay.clients.list":
     case "relay.clients.update":
     case "relay.clients.revoke":
+    case "relay.platform.read":
+    case "relay.platform.logs":
     case "browser.authorization.revise":
     case "brick.catalog":
     case "brick.recipe":
@@ -237,6 +239,11 @@ export function controlRequestLocks(
     case "app.terminal.claim":
     case "app.terminal.restart":
       return null
+
+    // Restarting or repairing Kiln's services, one change at a time, as the
+    // Relay's own passes over them run.
+    case "relay.platform.action":
+      return [exclusive(laneKeys.platform)]
 
     // Updates and restarts replace the Relay itself and reserve themselves.
     case "relay.update.apply":

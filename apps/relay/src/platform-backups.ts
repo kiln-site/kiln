@@ -22,6 +22,7 @@ import {
 } from "@workspace/contracts"
 
 import type { RelayConfig } from "./config.js"
+import { relayOwnsLabels } from "./relay-resources.js"
 import {
   DockerEngine,
   type DockerContainerSummary,
@@ -353,11 +354,18 @@ async function hearthDatabaseContainer(
   config: RelayConfig,
   installationId: string
 ): Promise<string> {
-  const containers = await runningHearthContainers(
+  const matching = await runningHearthContainers(
     config,
     installationId,
     "hearth-database"
   )
+  // A Relay in platform mode labels the database it installed with its
+  // resource namespace; prefer it over another deployment's.
+  const owned = matching.filter((candidate) =>
+    relayOwnsLabels(config, candidate.Labels)
+  )
+  const containers =
+    config.resourceNamespace && owned.length > 0 ? owned : matching
   const [container] = containers
   if (!container || containers.length > 1) {
     throw new Error(

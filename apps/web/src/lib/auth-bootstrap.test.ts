@@ -1,8 +1,11 @@
 import { expect, layer } from "@effect/vitest"
 import { Effect } from "effect"
-import { vi } from "vite-plus/test"
+import { afterEach, describe, it as plainIt, vi } from "vite-plus/test"
 
-import { replacePendingAccountEmailEffect } from "@/lib/auth-bootstrap"
+import {
+  createInitialAdministrator,
+  replacePendingAccountEmailEffect,
+} from "@/lib/auth-bootstrap"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRows, insertUser, selectRows } from "@/test/seed"
 
@@ -106,5 +109,28 @@ describeMysql("pending email correction race", () => {
           })
         })
     )
+  })
+})
+
+describe("initial administrator setup code", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  // A Relay that installed Hearth gives it a setup code; without it, nobody
+  // can claim the new installation.
+  plainIt("refuses to create the administrator without the right code", async () => {
+    vi.stubEnv("KILN_SETUP_TOKEN", "the-code-the-relay-generated")
+    const administrator = {
+      displayName: "Admin",
+      email: "admin@example.test",
+      password: "correct horse battery",
+    }
+
+    for (const setupToken of [undefined, "", "a-guess"]) {
+      await expect(
+        createInitialAdministrator({ ...administrator, setupToken })
+      ).rejects.toThrow("setup code")
+    }
   })
 })

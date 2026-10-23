@@ -46,6 +46,8 @@ export function AuthPage({
   initialMode,
   lockedEmail,
   setupRequired = false,
+  setupToken,
+  setupTokenRequired = false,
   signupEnabled = false,
   startWithSignup,
   verified,
@@ -59,6 +61,8 @@ export function AuthPage({
   initialMode?: "claim"
   lockedEmail?: string
   setupRequired?: boolean
+  setupToken?: string
+  setupTokenRequired?: boolean
   signupEnabled?: boolean
   startWithSignup?: boolean
   verified?: boolean
@@ -130,7 +134,14 @@ export function AuthPage({
 
             if (mode === "setup") {
               const result = await createInitialAdministrator({
-                data: { displayName, email, password },
+                data: {
+                  displayName,
+                  email,
+                  password,
+                  setupToken: setupTokenRequired
+                    ? String(form.get("setupToken") ?? "")
+                    : undefined,
+                },
               })
               if (result.verificationRequired) {
                 setVerification({
@@ -508,6 +519,30 @@ export function AuthPage({
             method="post"
             onSubmit={handleSubmit}
           >
+            {mode === "setup" && setupTokenRequired ? (
+              setupToken ? (
+                <input type="hidden" name="setupToken" value={setupToken} />
+              ) : (
+                <Field label="Setup code" htmlFor="setup-token">
+                  <Input
+                    id="setup-token"
+                    name="setupToken"
+                    type="password"
+                    autoComplete="off"
+                    placeholder="From the installer"
+                    required
+                    className="h-11 bg-card/60 font-mono"
+                  />
+                  <p className="text-xs leading-5 text-muted-foreground">
+                    The installer printed a setup link. To see it again, run{" "}
+                    <code className="font-mono">
+                      docker exec kiln-relay kiln-relay platform setup-url
+                    </code>{" "}
+                    on the Relay's host.
+                  </p>
+                </Field>
+              )
+            ) : null}
             {mode === "setup" || mode === "sign-up" ? (
               <Field label="Display Name" htmlFor="display-name">
                 <Input

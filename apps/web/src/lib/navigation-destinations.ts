@@ -2,6 +2,7 @@ import type { ComponentType } from "react"
 import {
   CalendarDays,
   CircleUserRound,
+  Cpu,
   CreditCard,
   Folder,
   FolderDown,
@@ -80,6 +81,23 @@ export const infrastructureDestinations = [
     keywords: ["infrastructure", "summary", "setup"],
     label: "Overview",
     to: "/infra/overview",
+  },
+  {
+    access: "platform-admin",
+    group: "overview",
+    icon: Cpu,
+    keywords: [
+      "kiln",
+      "hearth",
+      "panel",
+      "mysql",
+      "valkey",
+      "cache",
+      "platform",
+      "recovery",
+    ],
+    label: "System",
+    to: "/infra/platform",
   },
   {
     access: "manage-relays",

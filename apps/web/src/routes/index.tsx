@@ -33,6 +33,8 @@ export const Route = createFileRoute("/")({
     email: z.string().optional(),
     forgot: z.union([z.literal(true), z.literal("true")]).optional(),
     redirect: z.string().optional(),
+    // The setup code from a Relay-installed Hearth's setup link.
+    setup: z.string().max(256).optional(),
     signup: z.union([z.literal(true), z.literal("true")]).optional(),
     verified: z.union([z.literal(true), z.literal("true")]).optional(),
   }),
@@ -182,6 +184,7 @@ function LoginRoute() {
     invitationEmail,
     invitationSignup,
     setupRequired,
+    setupTokenRequired,
     signupEnabled,
   } = Route.useRouteContext()
   return (
@@ -196,6 +199,8 @@ function LoginRoute() {
       forgotPassword={Boolean(search.forgot)}
       redirectPath={search.redirect}
       setupRequired={setupRequired}
+      setupToken={search.setup}
+      setupTokenRequired={setupTokenRequired}
       signupEnabled={signupEnabled || invitationSignup}
       verified={Boolean(search.verified)}
     />

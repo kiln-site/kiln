@@ -1,6 +1,6 @@
 import { createStartHandler } from "@tanstack/react-start/server"
 import { createServerEntry } from "@tanstack/react-start/server-entry"
-import { Effect } from "effect"
+import { Effect, Schedule } from "effect"
 
 import { hearthStreamHandler } from "./app-server-handler"
 import { loadInstallationId } from "./effect/installation"
@@ -49,34 +49,56 @@ startAppDeploymentPolling()
 startAppImageUpdateChecks()
 startRelayMetrics(relayConnectionsCapacity)
 
+const pairRelayFromEnvironment = Effect.tryPromise({
+  try: initializeRelayFromEnvironment,
+  catch: (cause) => cause,
+}).pipe(
+  Effect.tap((relay) =>
+    Effect.sync(() => {
+      if (relay) console.log(`Automatically paired Relay ${relay.name}`)
+    })
+  ),
+  Effect.tap(() =>
+    Effect.tryPromise({
+      try: maintainPersistedRelayConnections,
+      catch: (cause) => cause,
+    }).pipe(
+      Effect.catch((cause) =>
+        Effect.sync(() => {
+          reportAppError(cause, { operation: "relay.connection.maintain" })
+        })
+      ),
+      Effect.forkDetach
+    )
+  )
+)
+
 await Effect.runPromise(
-  Effect.tryPromise({
-    try: initializeRelayFromEnvironment,
-    catch: (cause) => cause,
-  }).pipe(
-    Effect.tap((relay) =>
-      Effect.sync(() => {
-        if (relay) console.log(`Automatically paired Relay ${relay.name}`)
-      })
-    ),
-    Effect.tap(() =>
-      Effect.tryPromise({
-        try: maintainPersistedRelayConnections,
-        catch: (cause) => cause,
-      }).pipe(
-        Effect.catch((cause) =>
-          Effect.sync(() => {
-            reportAppError(cause, { operation: "relay.connection.maintain" })
-          })
-        ),
-        Effect.forkDetach
-      )
-    ),
+  pairRelayFromEnvironment.pipe(
     Effect.catch((cause) =>
       Effect.sync(() => {
         reportAppError(cause, { operation: "relay.bootstrap" })
         console.warn("Automatic Relay pairing did not complete:", cause)
-      })
+      }).pipe(
+        // The Relay may still be starting, as when one that installed Kiln
+        // restarts beside it. Keep trying for half an hour.
+        Effect.andThen(
+          pairRelayFromEnvironment.pipe(
+            Effect.delay("15 seconds"),
+            Effect.retry({ schedule: Schedule.spaced("15 seconds"), times: 120 }),
+            Effect.catch((retryCause) =>
+              Effect.sync(() => {
+                reportAppError(retryCause, { operation: "relay.bootstrap" })
+                console.warn(
+                  "Automatic Relay pairing gave up; pair the Relay from the Relays page:",
+                  retryCause
+                )
+              })
+            ),
+            Effect.forkDetach
+          )
+        )
+      )
     )
   )
 )

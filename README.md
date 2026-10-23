@@ -24,9 +24,24 @@ ghcr.io/kiln-site/bricks-steamcmd:latest
 See [Publishing an independent distribution](docs/forking.md) for repository settings,
 CLI publishing, self-updates, and merging upstream without workflow patches.
 
+## Install
+
+Kiln needs only Docker. On the machine that will host Hearth:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/kiln-site/kiln/main/scripts/install.sh | sh
+```
+
+This starts a Relay in platform mode, which installs Hearth, its MySQL
+database, and a Valkey cache, pairs with that Hearth, keeps them running, and
+prints a link that creates the administrator. Add other machines with
+`install.sh --node`. See [Self-hosting](docs/self-hosting.md) for how it works,
+its settings, and recovery.
+
 ## Configuration
 
-Start from `.env.hearth.example`. These are the values worth setting for a first install:
+To deploy the pieces yourself with Compose instead, start from
+`.env.hearth.example`. These are the values worth setting for a first install:
 
 ```env
 KILN_URL=https://hearth.example.com

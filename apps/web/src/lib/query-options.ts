@@ -6,6 +6,7 @@ import {
 import type { QueryClient } from "@tanstack/react-query"
 import type {
   BackupTarget,
+  RelayPlatformServiceRole,
   RelayConsoleResource,
   RelayFileEntry,
   RelayInstance,
@@ -19,6 +20,7 @@ import {
   getBackupUsage,
 } from "@/server/backups"
 import { getBackupStorage } from "@/server/backup-storage"
+import { getKilnPlatform, getKilnPlatformLogs } from "@/server/platform"
 import {
   getBrickCatalog,
   getBrickIconPresentations,
@@ -283,6 +285,11 @@ export const queryKeys = {
     ["relays", "host-files", relayId] as const,
   tailscale: (relayId: string) => ["tailscale", "relays", relayId] as const,
   tailscaleStacks: ["tailscale", "stacks"] as const,
+  kilnPlatform: {
+    all: ["kiln-platform"] as const,
+    logs: (relayId: string, role: RelayPlatformServiceRole) =>
+      ["kiln-platform", "logs", relayId, role] as const,
+  },
   updates: ["updates", "overview"] as const,
   releaseHistory: ["updates", "release-history"] as const,
   relayRelease: (relayId: string, version: string) =>
@@ -956,6 +963,31 @@ export function relayTailscaleQueryOptions(relayId: string) {
     queryFn: () => getRelayTailscale({ data: { id: relayId } }),
     retry: false,
     staleTime: 5_000,
+  })
+}
+
+// Kiln's own services, for the System page. Polled while it's open, since
+// a restart or repair changes them over the next minute.
+export function kilnPlatformQueryOptions() {
+  return queryOptions({
+    queryKey: queryKeys.kilnPlatform.all,
+    queryFn: () => getKilnPlatform(),
+    refetchInterval: 10_000,
+    retry: false,
+    staleTime: 5_000,
+  })
+}
+
+export function kilnPlatformLogsQueryOptions(
+  relayId: string,
+  role: RelayPlatformServiceRole
+) {
+  return queryOptions({
+    queryKey: queryKeys.kilnPlatform.logs(relayId, role),
+    queryFn: () =>
+      getKilnPlatformLogs({ data: { lines: 500, relayId, role } }),
+    retry: false,
+    staleTime: 0,
   })
 }
 

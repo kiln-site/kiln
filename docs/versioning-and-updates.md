@@ -103,6 +103,11 @@ accepted even if Hearth disconnects. A Relay that goes away mid-update is
 shown updating for up to 15 minutes. Hearth's existing Relay connection state
 continues to mark instances offline while Hearth is unavailable.
 
+A Relay in platform mode updates the Hearth it installed the same way. Its
+passes over Kiln's services leave Hearth alone while the updater holds it, and
+recreate Hearth only from the image the updater left, so an update is never
+undone. See [Self-hosting](self-hosting.md).
+
 Coolify remains free to manage the same containers. Kiln does not call the
 Coolify API and does not modify its project configuration. A later Coolify
 deployment is authoritative and may reapply the tag configured there.

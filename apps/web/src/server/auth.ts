@@ -82,6 +82,7 @@ export const createInitialAdministrator = createServerFn({ method: "POST" })
       displayName: z.string().trim().min(1).max(16),
       email: z.email(),
       password: z.string().min(12).max(128),
+      setupToken: z.string().max(256).optional(),
     })
   )
   .handler(async ({ data }) => {
