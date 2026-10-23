@@ -23,9 +23,13 @@ Docker's socket, and checks Docker by its version (20 or newer) and by running
 Docker only with `--yes`; `--skip-docker-install` stops instead. On macOS,
 install Docker Desktop first.
 
-The script then asks where people will open Hearth (by default
-`http://<public IP>:3000`), starts the Relay, waits for Hearth, and prints a
-setup link. Open it to create the platform administrator. Pass `--url`,
+The script asks its questions first, so the rest runs unattended: whether to
+install Docker, and where people will open Hearth. Press Enter for
+`http://<public IP>:3000`, or type a domain that already points at the machine
+for `http://<domain>:3000`. It then shows one line per step with a timer,
+starts the Relay, waits for Hearth, and prints a setup link. Open it to create
+the platform administrator. Everything each step ran and printed goes to
+`~/kiln-install.log` (or `KILN_INSTALL_LOG`); a failed step names it. Pass `--url`,
 `--port`, `--game-host`, or `--nightly` to skip the questions, and `--help`
 for the rest. Running it again prints the installation's status and setup link.
 
@@ -269,3 +273,13 @@ read-only. To move one under a platform Relay:
 
 `KILN_INSTALLATION_ID`, `BETTER_AUTH_SECRETS`, and `KILN_PLATFORM_BACKUP_KEY`
 only matter on that first start; afterwards the Relay uses its saved record.
+
+## Known rough edges
+
+To come back to:
+
+- In Hearth, a Relay that installed Kiln shows its address as `kiln-relay:4100`,
+  its name on Kiln's private network, and its consoles and logs show "Connected
+  through Hearth · Direct Relay unavailable". Both are how platform mode is meant
+  to work (browsers reach the Relay through Hearth), but they read like
+  problems.

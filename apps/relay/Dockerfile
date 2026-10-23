@@ -117,4 +117,5 @@ EXPOSE 4100 2022
 # interval lets the self-updater see a replacement become healthy quickly.
 HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --start-interval=1s --retries=3 \
   CMD ["/usr/local/bin/kiln-relay-healthcheck"]
-CMD ["dist/src/index.mjs"]
+# Through the kiln-relay entry, which quiets Node's SQLite warning.
+CMD ["/usr/local/bin/kiln-relay"]

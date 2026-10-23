@@ -256,12 +256,9 @@ function HeroInstall() {
   const command = useInstallCommand()
   return (
     <div className="mt-7 max-w-md">
-      <p className="type-label text-muted-foreground">
-        Install it on any machine with Docker
-      </p>
       <InstallCommand
         command={command}
-        className="mt-2 border border-border bg-card py-1.5 pr-1.5 pl-4"
+        className="border border-border bg-card py-1.5 pr-1.5 pl-4"
       />
     </div>
   )
@@ -412,7 +409,7 @@ function SelfHost() {
         <div className="min-w-0 lg:col-span-7">
           <div className="border border-border bg-card p-5 sm:p-6">
             <p className="font-mono text-[0.8125rem] leading-7 text-muted-foreground">
-              # On the machine that will run Kiln. All it needs is Docker.
+              # On the machine that will run Kiln.
             </p>
             <InstallCommand command={installCommand} />
             <p className="mt-4 font-mono text-[0.8125rem] leading-7 text-muted-foreground">

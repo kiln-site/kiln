@@ -362,7 +362,10 @@ const ConsoleConnectionNotice = React.memo(function ConsoleConnectionNotice({
     connection === "reconnecting"
       ? "RECONNECTING · OUTPUT MAY BE DELAYED"
       : connection === "live"
-        ? "CONNECTED THROUGH HEARTH · DIRECT RELAY UNAVAILABLE"
+        ? // TODO(platform): with KILN_RELAY_PROXY=hearth, as a Relay that
+          // installed Kiln runs, going through Hearth is normal, not a
+          // fallback, but this reads like a warning. Revisit the copy.
+          "CONNECTED THROUGH HEARTH · DIRECT RELAY UNAVAILABLE"
         : "LIVE OUTPUT PAUSED"
 
   return <ConsoleConnectionNoticeContent message={message} />
