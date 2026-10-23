@@ -615,14 +615,17 @@ export function followAppDeployment(record: AppDeploymentRecord): void {
           Effect.catch(() => Effect.succeed(false))
         )
         if (!settled) continue
-        // An image app's updates follow what it runs now. Imported here,
+        // An image app's updates follow what it runs now; an app that
+        // deploys from elsewhere now has none on offer. Imported here,
         // since image updates deploy through this module.
-        if (record.sourceType === "image") {
-          const { recheckAppImage } = yield* Effect.promise(
-            () => import("@/lib/app-image-updates.server")
-          )
+        const { recheckAppImage, resolveAppImageUpdateNotificationsEffect } =
+          yield* Effect.promise(() => import("@/lib/app-image-updates.server"))
+        if (record.sourceType === "image")
           recheckAppImage(record.relayId, record.appId, record.triggeredBy)
-        }
+        else
+          yield* resolveAppImageUpdateNotificationsEffect(record.appId, {
+            unchecked: true,
+          })
         return
       }
     }).pipe(

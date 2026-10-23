@@ -205,11 +205,24 @@ function useArrivingNotificationToasts(queryClient: QueryClient) {
     // Notification toasts on screen, until they close.
     const showing = new Set<string>()
     let reconciledAt = 0
-    let recheck: ReturnType<typeof setTimeout> | undefined
+    let reload: ReturnType<typeof setTimeout> | undefined
+    // Loads the inbox again once the margin has passed, so a notification
+    // shown just before a load is settled by one after it.
+    const reloadLater = () => {
+      clearTimeout(reload)
+      reload = setTimeout(
+        () => void queryClient.invalidateQueries({ queryKey }),
+        loadMarginMs + 1_000
+      )
+    }
     const reconcile = () => {
       const state = queryClient.getQueryState(queryKey)
       if (state?.data)
-        closeSettledDeviceNotifications(state.data, state.dataUpdatedAt)
+        closeSettledDeviceNotifications(
+          state.data,
+          state.dataUpdatedAt,
+          reloadLater
+        )
     }
     const check = () => {
       const state = queryClient.getQueryState(queryKey)
@@ -218,9 +231,6 @@ function useArrivingNotificationToasts(queryClient: QueryClient) {
       if (state.dataUpdatedAt !== reconciledAt) {
         reconciledAt = state.dataUpdatedAt
         reconcile()
-        // Ones shown too close to this load are settled once it's past.
-        clearTimeout(recheck)
-        recheck = setTimeout(reconcile, loadMarginMs + 1_000)
       }
       if (seen === null) {
         seen = new Set(inbox.map((notification) => notification.id))
@@ -241,11 +251,11 @@ function useArrivingNotificationToasts(queryClient: QueryClient) {
         dismissToast(id)
       }
       if (!arrived.length) return
-      // The toaster shows the newest few; older ones wait out of view, so
-      // only the ones that fit were seen. The inbox is newest first.
-      const fits = Math.max(0, visibleToastLimit - showing.size)
+      // The toaster shows the newest few on top, so of these, the newest
+      // that fit are seen; older ones wait out of view. The inbox is newest
+      // first. Toasts already showing were acknowledged when they arrived.
       const shown = arrived
-        .slice(0, fits)
+        .slice(0, visibleToastLimit)
         .map((notification) => notification.id)
       for (const notification of [...arrived].reverse()) {
         const { content, id } = notification
@@ -282,7 +292,7 @@ function useArrivingNotificationToasts(queryClient: QueryClient) {
     document.addEventListener("visibilitychange", onVisible)
     return () => {
       unsubscribe()
-      clearTimeout(recheck)
+      clearTimeout(reload)
       document.removeEventListener("visibilitychange", onVisible)
     }
   }, [queryClient, router])
@@ -314,7 +324,8 @@ const loadMarginMs = 10_000
 // cleared.
 function closeSettledDeviceNotifications(
   inbox: ReadonlyArray<KilnNotification>,
-  loadedAt: number
+  loadedAt: number,
+  onUnsettled: () => void
 ) {
   if (!("serviceWorker" in navigator)) return
   forkPromise(async () => {
@@ -323,19 +334,23 @@ function closeSettledDeviceNotifications(
     const byId = new Map(
       inbox.map((notification) => [notification.id, notification])
     )
+    let unsettled = false
     for (const shown of await registration.getNotifications()) {
       if (!notificationTagPattern.test(shown.tag)) continue
       const current = byId.get(shown.tag)
+      if (current) {
+        if (current.readAt !== null) shown.close()
+        continue
+      }
       const shownAt: unknown = Predicate.hasProperty(shown.data, "shownAt")
         ? shown.data.shownAt
         : null
-      if (
-        current
-          ? current.readAt !== null
-          : Predicate.isNumber(shownAt) && shownAt < loadedAt - loadMarginMs
-      )
-        shown.close()
+      if (!Predicate.isNumber(shownAt)) continue
+      if (shownAt < loadedAt - loadMarginMs) shown.close()
+      else unsettled = true
     }
+    // Missing from a load too close to tell; a later load settles it.
+    if (unsettled) onUnsettled()
   })
 }
 

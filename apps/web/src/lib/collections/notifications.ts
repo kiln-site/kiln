@@ -200,6 +200,8 @@ export function notificationPreferencesQueryOptions() {
   })
 }
 
+const saveKey = ["notification-preferences", "save"] as const
+
 /** Saves a change to the preferences, showing it at once. */
 export function saveNotificationPreferencesMutationOptions(
   queryClient: QueryClient,
@@ -207,7 +209,7 @@ export function saveNotificationPreferencesMutationOptions(
 ) {
   const { queryKey } = notificationPreferencesQueryOptions()
   return mutationOptions({
-    mutationKey: ["notification-preferences", "save"] as const,
+    mutationKey: saveKey,
     // One save at a time, so each answer is newer than the last.
     scope: { id: "notification-preferences" },
     mutationFn: (update: NotificationPreferencesUpdate) =>
@@ -224,7 +226,21 @@ export function saveNotificationPreferencesMutationOptions(
         queryClient.setQueryData(queryKey, context.previous)
       onFailure(error)
     },
-    onSuccess: (saved) => queryClient.setQueryData(queryKey, saved),
+    // Saves still waiting are shown already; keep them over this answer.
+    onSuccess: (saved, update) =>
+      queryClient.setQueryData(
+        queryKey,
+        queryClient
+          .getMutationCache()
+          .findAll({ mutationKey: saveKey, status: "pending" })
+          .flatMap((mutation) => {
+            const variables: unknown = mutation.state.variables
+            return variables === update || variables === undefined
+              ? []
+              : [variables as NotificationPreferencesUpdate]
+          })
+          .reduce(applyPreferences, saved)
+      ),
   })
 }
 
