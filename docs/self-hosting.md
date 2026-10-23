@@ -24,10 +24,23 @@ Docker only with `--yes`; `--skip-docker-install` stops instead. On macOS,
 install Docker Desktop first.
 
 The script asks its questions first, so the rest runs unattended: whether to
-install Docker, and where people will open Hearth. Press Enter for
-`http://<public IP>:3000`, or type a domain that already points at the machine
-for `http://<domain>:3000`. It then shows one line per step with a timer,
-starts the Relay, waits for Hearth, and prints a setup link. Open it to create
+install Docker, and where people will open Hearth. Kiln is served over HTTPS
+by default:
+
+- **Traefik** (`--proxy traefik`, the default). The Relay runs Traefik on ports
+  80 and 443 in front of Hearth. Press Enter for `https://<public IP>`, with a
+  six-day Let's Encrypt certificate for the address that Traefik renews, or
+  type a domain that already points at the machine for `https://<domain>`.
+- **Coolify** (`--proxy coolify`, chosen on its own when `coolify-proxy` is
+  running). Hearth gets labels for Coolify's Traefik and its Let's Encrypt
+  resolver. Coolify's resolver can't issue for an address, so type a domain;
+  pressing Enter keeps `http://<public IP>:3000`.
+- **None** (`--proxy none`). When another program already has port 80 or 443
+  the script asks before using `http://<public IP>:3000` instead.
+
+Hearth stays published on its own port (3000) either way. It then shows one
+line per step with a timer, starts the Relay, waits for Hearth and for HTTPS,
+and prints a setup link. Open it to create
 the platform administrator. Everything each step ran and printed goes to
 `~/kiln-install.log` (or `KILN_INSTALL_LOG`); a failed step names it. Pass `--url`,
 `--port`, `--game-host`, or `--nightly` to skip the questions, and `--help`
@@ -90,6 +103,14 @@ Hearth connects to it there. Browsers reach the Relay through Hearth
 SFTP. With `KILN_RELAY_RESOURCE_NAMESPACE`, every name above is prefixed with
 it.
 
+With `KILN_PLATFORM_PROXY=traefik` and an `https://` `KILN_URL` on the default
+port, the Relay also runs `kiln-traefik` on ports 80 and 443 and joins it to
+that network. It routes the host in `KILN_URL` to Hearth with a Let's Encrypt
+certificate: from the six-day profile, and served by default, when the host
+is an IP address, since browsers send no name for one. The Relay itself
+stays in `hearth` proxy mode. If the ports are taken, the Relay logs it and
+Hearth is still at its own port.
+
 Containers carry the same `io.kiln.installation` and `io.kiln.resource` labels
 as the Compose stack, so platform backups and Kiln's updates work as they do
 there, plus `io.kiln.platform.role` and a hash of their settings.
@@ -102,6 +123,8 @@ Set these on the Relay. Everything else is generated.
 | ------------------------------ | -------------------------- | -------------------------------------------------------------------------- |
 | `KILN_URL`                     | Required on first start    | Where people open Hearth. Saved; later starts may change it.               |
 | `KILN_PLATFORM_HEARTH_PORT`    | `3000`                     | Host port for Hearth                                                       |
+| `KILN_PLATFORM_PROXY`          | `none`                     | `traefik` runs Traefik on 80 and 443 for an https `KILN_URL`; `coolify` labels Hearth for Coolify's proxy |
+| `KILN_RELAY_ACME_CA_SERVER`    | Let's Encrypt              | Another ACME directory for Traefik, such as Let's Encrypt's staging one    |
 | `KILN_PLATFORM_HEARTH_BIND`    | `0.0.0.0`                  | Host address for Hearth's port                                             |
 | `KILN_RELAY_GAME_HOST`         | The host in `KILN_URL`     | Where players connect to game servers                                      |
 | `KILN_PLATFORM_HEARTH_IMAGE`   | Hearth with the Relay's tag | First start only; Kiln's updates change it afterwards                      |

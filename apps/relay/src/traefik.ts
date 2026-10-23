@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto"
+import { isIP } from "node:net"
 
 import type {
   RelayInstanceWebRoute,
@@ -138,11 +139,17 @@ function withWebRouteRevision(
 }
 
 export function traefikStaticConfiguration(
-  settings: RelayProxySettings
+  settings: RelayProxySettings,
+  caServer: string | null
 ): string {
   const email = settings.acmeEmail
     ? `      email: ${JSON.stringify(settings.acmeEmail)}\n`
     : ""
+  const directory = caServer
+    ? `      caServer: ${JSON.stringify(caServer)}\n`
+    : ""
+  // Let's Encrypt issues certificates for an IP address only from its
+  // six-day profile, and without the address as the Common Name.
   return `entryPoints:
   web:
     address: ":80"
@@ -163,7 +170,15 @@ providers:
 certificatesResolvers:
   kiln:
     acme:
-${email}      storage: /var/lib/traefik/acme.json
+${email}${directory}      storage: /var/lib/traefik/acme.json
+      httpChallenge:
+        entryPoint: web
+  kiln-ip:
+    acme:
+${email}${directory}      profile: shortlived
+      disableCommonName: true
+      certificatesDuration: 160
+      storage: /var/lib/traefik/acme.json
       httpChallenge:
         entryPoint: web
 
@@ -200,8 +215,13 @@ export function traefikDynamicConfiguration(
   _settings: RelayProxySettings
 ): string {
   const resources = relayResourceNames(config)
+  // Only a Relay in Traefik mode is itself reached through Traefik, and only
+  // its routes are; Hearth's, in platform mode, is the edge's own.
+  const relayRouted =
+    config.proxyMode === "traefik" && isTraefikHostname(config.advertisedHost)
+  const served = config.proxyMode === "traefik" ? routes : []
   const lines = ["http:", "  routers:"]
-  if (isTraefikHostname(config.advertisedHost)) {
+  if (relayRouted) {
     lines.push(
       "    kiln-relay:",
       `      rule: ${JSON.stringify(`Host(\`${config.advertisedHost}\`)`)}`,
@@ -224,7 +244,23 @@ export function traefikDynamicConfiguration(
       "        certResolver: kiln"
     )
   }
-  for (const route of routes) {
+  const edge = config.platformEdge
+  const ipEdge = edge !== null && isIP(edge.host) !== 0
+  if (edge) {
+    lines.push(
+      "    kiln-hearth:",
+      `      rule: ${JSON.stringify(`Host(\`${edge.host}\`)`)}`,
+      "      entryPoints:",
+      "        - websecure",
+      "      service: kiln-hearth",
+      "      tls:",
+      `        certResolver: ${ipEdge ? "kiln-ip" : "kiln"}`,
+      ...(ipEdge
+        ? ["        domains:", `          - main: ${JSON.stringify(edge.host)}`]
+        : [])
+    )
+  }
+  for (const route of served) {
     const name = traefikRouteName(route.id)
     const rule = route.path
       ? `Host(\`${route.hostname}\`) && PathPrefix(\`${route.path}\`)`
@@ -245,7 +281,15 @@ export function traefikDynamicConfiguration(
   }
 
   lines.push("  services:")
-  if (isTraefikHostname(config.advertisedHost)) {
+  if (edge) {
+    lines.push(
+      "    kiln-hearth:",
+      "      loadBalancer:",
+      "        servers:",
+      `          - url: ${JSON.stringify(edge.upstream)}`
+    )
+  }
+  if (relayRouted) {
     lines.push(
       "    kiln-relay:",
       "      loadBalancer:",
@@ -253,7 +297,7 @@ export function traefikDynamicConfiguration(
       `          - url: ${JSON.stringify(`http://${resources.relayEdgeAlias}:${config.port}`)}`
     )
   }
-  for (const route of routes) {
+  for (const route of served) {
     const name = traefikRouteName(route.id)
     lines.push(
       `    ${name}:`,
@@ -264,7 +308,7 @@ export function traefikDynamicConfiguration(
   }
 
   lines.push("  middlewares:")
-  if (isTraefikHostname(config.advertisedHost)) {
+  if (relayRouted) {
     lines.push(
       "    kiln-relay-browser-admission:",
       "      rateLimit:",
@@ -276,7 +320,7 @@ export function traefikDynamicConfiguration(
       "            ipv6Subnet: 64"
     )
   }
-  for (const route of routes) {
+  for (const route of served) {
     if (!route.path || !route.stripPrefix) continue
     const name = traefikRouteName(route.id)
     lines.push(
@@ -284,6 +328,19 @@ export function traefikDynamicConfiguration(
       "      stripPrefix:",
       "        prefixes:",
       `          - ${JSON.stringify(route.path)}`
+    )
+  }
+  // Browsers send no server name for an address, so its certificate has to
+  // be the one Traefik answers with by default.
+  if (edge && ipEdge) {
+    lines.push(
+      "tls:",
+      "  stores:",
+      "    default:",
+      "      defaultGeneratedCert:",
+      "        resolver: kiln-ip",
+      "        domain:",
+      `          main: ${JSON.stringify(edge.host)}`
     )
   }
   lines.push("")

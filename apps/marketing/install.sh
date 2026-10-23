@@ -35,15 +35,20 @@ sftp_port="2022"
 assume_yes=0
 install_docker_allowed=1
 asked=0
+proxy=""
 
 usage() {
   cat <<'EOF'
 Usage: curl -fsSL https://kiln.site/install | sh -s -- [options]
 
   --url URL          Where people will open Kiln, such as
-                     http://kiln.example.com:3000 (default: http://<this
-                     machine's public IP>:3000)
-  --port PORT        Host port Kiln listens on (default: 3000)
+                     https://kiln.example.com (default: https://<this
+                     machine's public IP>)
+  --proxy MODE       What serves Kiln over HTTPS: traefik (started on
+                     ports 80 and 443), coolify (Coolify's proxy), or none
+                     (default: coolify on a Coolify server, else traefik)
+  --port PORT        Host port Kiln also listens on, without HTTPS
+                     (default: 3000)
   --game-host HOST   Address players connect to game servers at
                      (default: the host in --url)
   --nightly          Install the newest nightly instead of the newest
@@ -66,12 +71,15 @@ Usage: curl -fsSL https://kiln.site/install | sh -s -- [options]
   -h, --help         Show this help
 
 The install log is ~/kiln-install.log, or KILN_INSTALL_LOG.
+KILN_ACME_CA_SERVER sets another ACME directory, such as Let's Encrypt's
+staging one, for testing.
 EOF
 }
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --url) url="${2:?--url needs a value}"; shift 2 ;;
+    --proxy) proxy="${2:?--proxy needs a value}"; shift 2 ;;
     --port) port="${2:?--port needs a value}"; shift 2 ;;
     --game-host) game_host="${2:?--game-host needs a value}"; shift 2 ;;
     --relay-host) relay_host="${2:?--relay-host needs a value}"; shift 2 ;;
@@ -229,6 +237,8 @@ trap 'printf "\n"; exit 130' INT TERM
 
 # How far a step has got, as a short bar, or nothing. Set per step.
 step_progress=""
+# Set for a step the install can do without: it's marked and skipped.
+step_soft=0
 
 progress_bar() {
   done_count=$1
@@ -282,6 +292,12 @@ step() {
   step_pid=""
   step_progress=""
   took=$(duration $(($(now) - step_started)))
+  if [ "$status" -ne 0 ] && [ "$step_soft" -eq 1 ]; then
+    step_soft=0
+    log "(didn't finish; carrying on)"
+    printf '%s  %s!%s %-26s %s%s%s\n' "$clear_line" "$dim" "$reset" "$label" "$dim" "$took" "$reset"
+    return 1
+  fi
   if [ "$status" -ne 0 ]; then
     log "(failed with status $status)"
     printf '%s  %s%s%s %-26s %s%s%s\n' "$clear_line" "$red" "$cross" "$reset" "$label" "$dim" "$took" "$reset"
@@ -290,6 +306,7 @@ step() {
     [ -n "$reason" ] || reason="$label didn't finish."
     fail "$reason"
   fi
+  step_soft=0
   printf '%s  %s%s%s %-26s %s%s%s\n' "$clear_line" "$green" "$tick" "$reset" "$label" "$dim" "$took" "$reset"
 }
 
@@ -567,6 +584,8 @@ start_platform_relay() {
     --env KILN_RELAY_CONTAINER="$container" \
     --env KILN_URL="$url" \
     --env KILN_PLATFORM_HEARTH_PORT="$port" \
+    --env KILN_PLATFORM_PROXY="$proxy" \
+    ${KILN_ACME_CA_SERVER:+--env KILN_RELAY_ACME_CA_SERVER="$KILN_ACME_CA_SERVER"} \
     ${bind_address:+--env KILN_PLATFORM_HEARTH_BIND="$bind_address"} \
     ${hearth_image:+--env KILN_PLATFORM_HEARTH_IMAGE="$hearth_image"} \
     ${namespace:+--env KILN_RELAY_RESOURCE_NAMESPACE="$namespace"} \
@@ -601,10 +620,60 @@ points_here() {
   getent ahostsv4 "$1" 2>/dev/null | awk '{print $1}' | grep -qxF "$address"
 }
 
+# What's listening on ports 80 or 443: a container's name, "another
+# program", or nothing.
+web_ports_owner() {
+  for published in 80 443; do
+    owner=$(dk ps --filter "publish=$published" --format '{{.Names}}' 2>/dev/null | head -n 1)
+    if [ -n "$owner" ]; then
+      printf '%s' "$owner"
+      return
+    fi
+  done
+  # Listening sockets, by port in hex: 0050 is 80, 01BB is 443.
+  if awk 'NR > 1 && $4 == "0A" { split($2, local, ":"); print local[2] }' \
+    /proc/net/tcp /proc/net/tcp6 2>/dev/null | grep -qx -e 0050 -e 01BB; then
+    printf 'another program'
+  fi
+}
+
+# Which proxy gives Kiln HTTPS: Coolify's on a Coolify server, otherwise
+# Traefik on ports 80 and 443 when they're free.
+choose_proxy() {
+  case "$proxy" in
+    traefik | coolify | none) return 0 ;;
+    "") ;;
+    *) fail "--proxy must be traefik, coolify, or none." ;;
+  esac
+  if docker_reachable &&
+    [ "$(dk inspect --format '{{.State.Running}}' coolify-proxy 2>/dev/null)" = "true" ]; then
+    proxy=coolify
+    say "  Coolify is running here, so Kiln will use its proxy."
+    asked=1
+    return 0
+  fi
+  owner=$(web_ports_owner)
+  if [ -z "$owner" ]; then
+    proxy=traefik
+    return 0
+  fi
+  log "ports 80/443 are used by: $owner"
+  say "  Port 80 or 443 is already in use by $owner,"
+  say "  so Kiln can't set up HTTPS."
+  asked=1
+  confirm "Use http://$address:$port instead?" ||
+    fail "Free ports 80 and 443, then run this again."
+  proxy=none
+}
+
 # The address people will open Kiln at: what they type, or this machine's IP.
+# With a proxy that's https, without a port; without one, Kiln's own port.
 choose_url() {
-  default="http://$address:$port"
   [ -z "$url" ] || return 0
+  case "$proxy" in
+    traefik) default="https://$address" ;;
+    *) default="http://$address:$port" ;;
+  esac
   if [ "$assume_yes" -eq 1 ] || ! has_terminal; then
     url=$default
     return 0
@@ -618,12 +687,33 @@ choose_url() {
       http://* | https://*) url=$answer; break ;;
     esac
     if points_here "$answer"; then
-      url="http://$answer:$port"
+      if [ "$proxy" = "none" ]; then
+        url="http://$answer:$port"
+      else
+        url="https://$answer"
+      fi
       break
     fi
     printf '  %s%s doesn'"'"'t point to %s yet.%s\n' "$dim" "$answer" "$address" "$reset" >/dev/tty
   done
   log "url: $url"
+}
+
+# Waits for Kiln's address to answer over HTTPS with a valid certificate,
+# which the proxy gets from Let's Encrypt once Hearth is up.
+wait_https() {
+  insecure=""
+  # A test directory's certificates aren't trusted.
+  [ -z "${KILN_ACME_CA_SERVER:-}" ] || insecure="-k"
+  waited=0
+  until curl -fsS $insecure --max-time 5 -o /dev/null "$url/" 2>/dev/null; do
+    waited=$((waited + 3))
+    if [ "$waited" -ge 180 ]; then
+      curl -sS $insecure --max-time 5 -o /dev/null "$url/" || true
+      stop "HTTPS isn't working yet."
+    fi
+    sleep 3
+  done
 }
 
 # ------------------------------------------------------------------- main
@@ -671,6 +761,7 @@ if [ "$mode" = "node" ]; then
     relay_host=$(ask "Address Kiln will reach this machine at [$address]:" "")
   [ -n "$relay_host" ] || relay_host=$address
 else
+  choose_proxy
   choose_url
   case "$url" in
     http://* | https://*) ;;
@@ -710,6 +801,16 @@ fi
 step "Starting Kiln's Relay" start_platform_relay
 step "Setting up the database" wait_healthy "$database" 600
 step "Starting Kiln" wait_healthy "$hearth" 900
+https_ok=1
+case "$url" in
+  https://*)
+    if command -v curl >/dev/null 2>&1 && [ "$proxy" != "none" ]; then
+      # Kiln works without it, at its own port; the proxy keeps trying.
+      step_soft=1
+      step "Turning on HTTPS" wait_https || https_ok=0
+    fi
+    ;;
+esac
 
 setup=$(dk exec "$container" kiln-relay platform setup-url 2>>"$log_file" || true)
 [ -n "$setup" ] || fail "Kiln started, but didn't give a setup link."
@@ -720,5 +821,10 @@ say ""
 say "  Open this link to create your account:"
 say "  $arrow $bold$setup$reset"
 say ""
+if [ "$https_ok" -eq 0 ]; then
+  say "  ${dim}HTTPS can take a few minutes. Until then Kiln is at$reset"
+  say "  ${dim}http://$address:$port$reset"
+  say ""
+fi
 say "  ${dim}Install log: $log_file$reset"
 say ""

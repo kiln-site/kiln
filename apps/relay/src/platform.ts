@@ -17,6 +17,7 @@
  */
 import { createHash, randomUUID } from "node:crypto"
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises"
+import { isIP } from "node:net"
 import { join } from "node:path"
 
 import {
@@ -320,7 +321,7 @@ interface ServiceSpec {
 
 function serviceSpecs(
   state: PlatformState,
-  config: Pick<RelayConfig, "resourceNamespace">
+  config: Pick<RelayConfig, "platformProxy" | "resourceNamespace">
 ): ReadonlyArray<ServiceSpec> {
   const { names } = state
   const labels = (role: RelayPlatformServiceRole) => ({
@@ -398,7 +399,7 @@ function serviceSpecs(
       ),
     },
     image: state.hearth.image,
-    labels: labels("hearth"),
+    labels: { ...labels("hearth"), ...coolifyLabels(state, config) },
     name: names.hearth,
     network: { aliases: [names.hearth], name: names.network },
     ports: [
@@ -417,6 +418,65 @@ function serviceSpecs(
     { role: "hearth", spec: withSpecLabel(hearth) },
   ]
 }
+
+/**
+ * The host in Hearth's address when a proxy can serve it: https on the
+ * default port. An IPv6 address comes without its brackets.
+ */
+function proxiedHost(state: PlatformState): string | null {
+  const url = new URL(state.hearth.url)
+  if (url.protocol !== "https:" || url.port) return null
+  return url.hostname.replace(/^\[(.*)\]$/u, "$1")
+}
+
+// Coolify's Traefik serves its entry points and Let's Encrypt resolver under
+// these names, and finds Hearth on Kiln's network, which it joins.
+const COOLIFY_PROXY = "coolify-proxy"
+
+/**
+ * Labels that route Hearth's domain through Coolify's Traefik, with HTTPS.
+ * Coolify's resolver can't issue for an address, so only a domain is routed.
+ */
+function coolifyLabels(
+  state: PlatformState,
+  config: Pick<RelayConfig, "platformProxy">
+): Record<string, string> {
+  const host = proxiedHost(state)
+  if (config.platformProxy !== "coolify" || !host || isIP(host) !== 0) {
+    return {}
+  }
+  const router = state.names.hearth
+  const rule = `Host(\`${host}\`)`
+  return {
+    "traefik.enable": "true",
+    "traefik.docker.network": state.names.network,
+    [`traefik.http.middlewares.${router}-https.redirectscheme.scheme`]: "https",
+    [`traefik.http.routers.${router}-http.entrypoints`]: "http",
+    [`traefik.http.routers.${router}-http.middlewares`]: `${router}-https`,
+    [`traefik.http.routers.${router}-http.rule`]: rule,
+    [`traefik.http.routers.${router}.entrypoints`]: "https",
+    [`traefik.http.routers.${router}.rule`]: rule,
+    [`traefik.http.routers.${router}.service`]: router,
+    [`traefik.http.routers.${router}.tls`]: "true",
+    [`traefik.http.routers.${router}.tls.certresolver`]: "letsencrypt",
+    [`traefik.http.services.${router}.loadbalancer.server.port`]: String(
+      HEARTH_CONTAINER_PORT
+    ),
+  }
+}
+
+/** Joins Coolify's Traefik to Kiln's network, so it can reach Hearth. */
+const attachCoolifyProxy = Effect.fnUntraced(function* (
+  engine: DockerEngine,
+  config: Pick<RelayConfig, "platformProxy">,
+  state: PlatformState
+) {
+  if (config.platformProxy !== "coolify") return
+  const proxy = yield* inspectOptional(engine.inspectContainer(COOLIFY_PROXY))
+  if (!proxy?.State.Running) return
+  if (proxy.NetworkSettings?.Networks?.[state.names.network]) return
+  yield* engine.connectNetwork(state.names.network, proxy.Id)
+})
 
 function withSpecLabel(spec: ContainerSpec): ContainerSpec {
   const { image: _image, ...configuration } = spec
@@ -490,6 +550,8 @@ export const reconcilePlatform = Effect.fn("Relay.platform.reconcile")(
         const networkIssue = yield* ensureNetwork(engine, state, config)
         if (networkIssue) return blocked(state, networkIssue)
         if (context.attachRelay) yield* attachRelay(engine, config, state)
+        // Coolify's proxy may be restarting; the next pass tries again.
+        yield* attachCoolifyProxy(engine, config, state).pipe(Effect.ignore)
 
         const volume = yield* inspectOptional(
           engine.inspectVolume(state.names.databaseVolume)
@@ -1398,10 +1460,25 @@ function applyPlatformConfig(config: RelayConfig, state: PlatformState) {
     )
   }
   config.platformBackupKey = state.secrets.platformBackupKey
+  config.platformEdge = platformEdge(config, state)
   // Players reach game servers at Hearth's host unless told otherwise.
   if (config.gameHostSource === "relay") {
     config.gameHost = new URL(state.hearth.url).hostname
     config.gameHostSource = "configured"
+  }
+}
+
+/** Hearth behind bundled Traefik, at the host in its https address. */
+function platformEdge(
+  config: Pick<RelayConfig, "platformProxy">,
+  state: PlatformState
+): RelayConfig["platformEdge"] {
+  const host = proxiedHost(state)
+  if (config.platformProxy !== "traefik" || !host) return null
+  return {
+    host,
+    network: state.names.network,
+    upstream: `http://${state.names.hearth}:${HEARTH_CONTAINER_PORT}`,
   }
 }
 

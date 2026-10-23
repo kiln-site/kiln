@@ -65,7 +65,7 @@ function dynamicConfiguration(environment: Record<string, string> = {}) {
 
 describe("bundled Traefik configuration", () => {
   it("obtains certificates over HTTP-01 without access to the Docker socket", () => {
-    const configuration = parse(traefikStaticConfiguration(settings)) as {
+    const configuration = parse(traefikStaticConfiguration(settings, null)) as {
       certificatesResolvers: { kiln: { acme: Record<string, unknown> } }
       providers: Record<string, unknown>
     }
@@ -129,6 +129,58 @@ describe("bundled Traefik configuration", () => {
       ).toThrow()
     }
   )
+})
+
+describe("Hearth behind bundled Traefik in platform mode", () => {
+  function platformConfiguration(host: string) {
+    const config = loadConfig({
+      KILN_PLATFORM_PROXY: "traefik",
+      KILN_RELAY_MODE: "platform",
+      NODE_ENV: "development",
+    })
+    config.platformEdge = {
+      host,
+      network: "kiln-platform",
+      upstream: "http://kiln-hearth:3000",
+    }
+    return parse(
+      traefikDynamicConfiguration(config, [route], {
+        ...settings,
+        mode: "hearth",
+      })
+    ) as DynamicConfiguration & {
+      http: {
+        routers: Record<string, { tls?: Record<string, unknown> }>
+      }
+      tls?: { stores: { default: { defaultGeneratedCert: unknown } } }
+    }
+  }
+
+  it("serves an IP address's certificate to browsers that send no name", () => {
+    const configuration = platformConfiguration("203.0.113.10")
+
+    expect(configuration.http.routers["kiln-hearth"]?.tls).toEqual({
+      certResolver: "kiln-ip",
+      domains: [{ main: "203.0.113.10" }],
+    })
+    expect(configuration.tls?.stores.default.defaultGeneratedCert).toEqual({
+      domain: { main: "203.0.113.10" },
+      resolver: "kiln-ip",
+    })
+    expect(
+      configuration.http.services["kiln-hearth"]?.loadBalancer.servers
+    ).toEqual([{ url: "http://kiln-hearth:3000" }])
+  })
+
+  it("routes only Hearth, not the Relay's private name or Ember routes", () => {
+    const configuration = platformConfiguration("kiln.example.com")
+
+    expect(Object.keys(configuration.http.routers)).toEqual(["kiln-hearth"])
+    expect(configuration.http.routers["kiln-hearth"]?.tls).toEqual({
+      certResolver: "kiln",
+    })
+    expect(configuration.tls).toBeUndefined()
+  })
 })
 
 describe("external Traefik labels", () => {

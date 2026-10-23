@@ -57,6 +57,19 @@ export type RelayTlsMode = "development" | "external" | "managed"
  */
 export type RelayMode = "node" | "platform"
 export type RelayProxyMode = "coolify" | "hearth" | "none" | "traefik"
+/**
+ * What serves Hearth in platform mode, beside its own published port:
+ * bundled Traefik with HTTPS, Coolify's Traefik, or nothing.
+ */
+export type RelayPlatformProxy = "coolify" | "none" | "traefik"
+
+export interface RelayPlatformEdge {
+  /** The host in `KILN_URL`: a domain, or an IP address. */
+  readonly host: string
+  /** Kiln's network, which Traefik joins to reach Hearth. */
+  readonly network: string
+  readonly upstream: string
+}
 export type RelayGameHostSource = "configured" | "public_ip" | "relay"
 
 export interface RelayConfig {
@@ -121,6 +134,12 @@ export interface RelayConfig {
   nodeName: string
   port: number
   platformBackupKey: string | null
+  /**
+   * Hearth behind bundled Traefik, by the host people open it at; set from
+   * the installation record once platform mode starts.
+   */
+  platformEdge: RelayPlatformEdge | null
+  platformProxy: RelayPlatformProxy
   publicPort: number
   proxyMode: RelayProxyMode
   resourceNamespace: string | null
@@ -135,6 +154,8 @@ export interface RelayConfig {
   tlsCertificatePath: string | null
   tlsKeyPath: string | null
   tlsMode: RelayTlsMode
+  /** An ACME directory other than Let's Encrypt's, such as its staging one. */
+  traefikAcmeCaServer: string | null
   traefikAcmeEmail: string | null
   traefikImage: string
 }
@@ -267,6 +288,8 @@ export function loadConfig(
     nodeName: environment.KILN_RELAY_NAME?.trim() || "",
     port,
     platformBackupKey: optionalPlatformBackupKey(environment),
+    platformEdge: null,
+    platformProxy: mode === "platform" ? platformProxy(environment) : "none",
     publicPort,
     proxyMode,
     resourceNamespace,
@@ -302,6 +325,7 @@ export function loadConfig(
     tlsCertificatePath: environment.KILN_RELAY_TLS_CERT_FILE?.trim() || null,
     tlsKeyPath: environment.KILN_RELAY_TLS_KEY_FILE?.trim() || null,
     tlsMode,
+    traefikAcmeCaServer: acmeCaServer(environment),
     traefikAcmeEmail: environment.KILN_RELAY_ACME_EMAIL?.trim() || null,
     traefikImage: traefikImage(environment),
   }
@@ -467,6 +491,24 @@ function relayProxyMode(environment: NodeJS.ProcessEnv): RelayProxyMode {
     return value
   }
   throw new Error("KILN_RELAY_PROXY must be none, hearth, traefik, or coolify")
+}
+
+function platformProxy(environment: NodeJS.ProcessEnv): RelayPlatformProxy {
+  const value = environment.KILN_PLATFORM_PROXY?.trim() || "none"
+  if (value === "none" || value === "traefik" || value === "coolify") {
+    return value
+  }
+  throw new Error("KILN_PLATFORM_PROXY must be none, traefik, or coolify")
+}
+
+function acmeCaServer(environment: NodeJS.ProcessEnv): string | null {
+  const value = environment.KILN_RELAY_ACME_CA_SERVER?.trim()
+  if (!value) return null
+  const url = Result.getOrNull(Result.try(() => new URL(value)))
+  if (url?.protocol !== "https:") {
+    throw new Error("KILN_RELAY_ACME_CA_SERVER must be an https URL")
+  }
+  return url.href
 }
 
 function relayCoolifyPublicOrigin(

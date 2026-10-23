@@ -1128,6 +1128,8 @@ export class LifecycleDriver {
       if (diagnostics.status !== "blocked") {
         await this.#ensureTraefik(settings, routes, true)
       }
+    } else if (this.#config.platformEdge) {
+      await this.#ensurePlatformTraefik(settings, routes)
     } else {
       await this.#removeBundledTraefik()
     }
@@ -1153,10 +1155,52 @@ export class LifecycleDriver {
           diagnostics.warnings.join(" ")
         )
       }
+    } else if (this.#config.platformEdge) {
+      await this.#ensurePlatformTraefik(settings, routes)
     } else {
       await this.#removeBundledTraefik()
     }
     this.#scheduleEdgeReconciliation(settings)
+  }
+
+  /**
+   * Joins bundled Traefik to Kiln's network, which the platform pass creates
+   * after the Relay starts, so it can reach Hearth.
+   */
+  async connectPlatformEdge(): Promise<void> {
+    const edge = this.#config.platformEdge
+    if (!edge || !(await this.#containerRunning(this.#resources.traefikContainer))) {
+      return
+    }
+    await connectNetwork(
+      this.#engine,
+      this.#resources.traefikContainer,
+      edge.network
+    )
+  }
+
+  // In platform mode Traefik serves Hearth whatever the Relay's own proxy
+  // mode. Without ports 80 and 443 Hearth stays at its own port, so the
+  // Relay starts anyway.
+  async #ensurePlatformTraefik(
+    settings: RelayProxySettings,
+    routes: ReadonlyArray<RelayStoredWebRoute>
+  ): Promise<void> {
+    await recoverPromise(
+      async () => {
+        await this.#ensureTraefik(settings, routes, false)
+        await recoverPromise(
+          () => this.connectPlatformEdge(),
+          () => undefined
+        )
+      },
+      (cause) => {
+        console.error(
+          "Bundled Traefik could not start, so Hearth is only at its own port:",
+          cause instanceof Error ? cause.message : cause
+        )
+      }
+    )
   }
 
   close(): void {
@@ -3193,12 +3237,21 @@ export class LifecycleDriver {
         mode: 0o700,
       }),
     ])
+    const staticConfiguration = traefikStaticConfiguration(
+      settings,
+      this.#config.traefikAcmeCaServer
+    )
+    // Traefik reads its static configuration only when it starts.
+    const staticChanged = await recoverPromise(
+      async () =>
+        (await readFile(join(infrastructure, "traefik.yaml"), "utf8")) !==
+        staticConfiguration,
+      () => true
+    )
     await Promise.all([
-      writeFile(
-        join(infrastructure, "traefik.yaml"),
-        traefikStaticConfiguration(settings),
-        { mode: 0o600 }
-      ),
+      writeFile(join(infrastructure, "traefik.yaml"), staticConfiguration, {
+        mode: 0o600,
+      }),
       writeFile(
         join(infrastructure, "dynamic", "kiln.yaml"),
         traefikDynamicConfiguration(this.#config, routes, settings),
@@ -3226,7 +3279,7 @@ export class LifecycleDriver {
       lifecycleOperation(async () => {
         await this.#ensureContainer(
           this.#resources.traefikContainer,
-          replace,
+          replace || staticChanged,
           traefik
         )
         await connectNetwork(
