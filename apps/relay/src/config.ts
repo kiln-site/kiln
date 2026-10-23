@@ -111,6 +111,11 @@ export interface RelayConfig {
   managedLabel: string
   mclogsApiUrl: string
   mode: RelayMode
+  /**
+   * The Relay's own container, from KILN_RELAY_CONTAINER, for when platform
+   * mode can't identify it from its mounts (Podman, Docker in Docker).
+   */
+  selfContainer: string | null
   serverIdLabel: string
   nodeId: string
   nodeName: string
@@ -257,6 +262,7 @@ export function loadConfig(
     mclogsApiUrl:
       environment.MCLOGS_API_URL?.trim() || "https://api.mclo.gs/1/log",
     mode,
+    selfContainer: environment.KILN_RELAY_CONTAINER?.trim() || null,
     nodeId: "kiln-relay",
     nodeName: environment.KILN_RELAY_NAME?.trim() || "",
     port,

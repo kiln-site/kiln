@@ -93,6 +93,7 @@ Set these on the Relay. Everything else is generated.
 | `KILN_PLATFORM_HEARTH_IMAGE`   | Hearth with the Relay's tag | First start only; Kiln's updates change it afterwards                      |
 | `KILN_PLATFORM_DATABASE_IMAGE` | `mysql:8.4`                | First start only; a database engine is never swapped under its data        |
 | `KILN_PLATFORM_CACHE_IMAGE`    | `valkey/valkey:9.1.2-alpine` | First start only; `none` runs Hearth without a cache                      |
+| `KILN_RELAY_CONTAINER`         | Found from its mounts      | The Relay's own container, where it can't find it (Podman, Docker in Docker) |
 | `KILN_INSTALLATION_ID`         | Generated                  | First start only                                                           |
 | `BETTER_AUTH_SECRETS`          | Generated                  | First start only; for moving an existing Hearth here                       |
 | `KILN_PLATFORM_BACKUP_KEY`     | Generated                  | First start only; encrypts platform backups, and the recovery kit holds it |
@@ -120,6 +121,9 @@ they don't.
 - **It never replaces lost data with an empty database.** Once the database has
   existed, a missing `kiln-hearth-mysql` volume stops the Relay from going on
   until an operator runs `kiln-relay platform recover`.
+- **It joins only itself to Kiln's network.** It recognizes its own container
+  by the ID Docker mounts its hostname from and by its data volume, never by
+  name or hostname alone, and joins nothing when it can't tell.
 - **It touches only its own containers.** A container, volume, or network with
   one of its names that isn't labeled for its installation stops it with a
   message instead.

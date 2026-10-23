@@ -37,7 +37,11 @@ function run<A, E>(effect: Effect.Effect<A, E>): Promise<A> {
 
 // A Relay started with KILN_RELAY_MODE=platform, in its own container.
 async function platformRelay(environment: Record<string, string> = {}) {
-  const harness = await relayHarness({ KILN_RELAY_MODE: "platform" })
+  // Tests don't run in the Relay's container, so they name it.
+  const harness = await relayHarness({
+    KILN_RELAY_CONTAINER: hostname(),
+    KILN_RELAY_MODE: "platform",
+  })
   fakeDocker.addContainer({
     image: "ghcr.io/kiln-site/relay:latest-nightly",
     name: hostname(),
@@ -548,11 +552,12 @@ describe("platform mode", () => {
     expect(env(names.hearth).KILN_RELAY_HOST).toBe(relay.config.advertisedHost)
   })
 
-  it("won't take another container for its own", async () => {
+  it("joins no container to Kiln's network when it can't tell which is its own", async () => {
     const relay = await platformRelay()
     await relay.start()
-    // Two containers claim this process's hostname: the Relay can't tell
-    // which is itself, so it joins neither to Kiln's network.
+    // Not named, and not this test's container: discovery finds nothing it
+    // can prove is the Relay.
+    relay.config.selfContainer = null
     fakeDocker.addContainer({
       hostname: hostname(),
       image: "example/other:latest",
@@ -562,11 +567,31 @@ describe("platform mode", () => {
 
     const result = await relay.pass()
 
-    expect(result.issue).toContain("Docker container")
+    expect(result.issue).toContain("KILN_RELAY_CONTAINER")
     expect(fakeDocker.container("someone-elses")?.networks.size).toBe(0)
     expect(fakeDocker.container(hostname())?.networks.has(names.network)).toBe(
       false
     )
+  })
+
+  it("won't start its database on a volume another deployment created meanwhile", async () => {
+    const relay = await platformRelay()
+    await relay.start()
+    // The volume appears between the Relay's check and its create, and
+    // Docker answers the create with it.
+    const held = fakeDocker.hold({ command: "volume create", target: names.volume })
+    const pass = relay.pass()
+    await held.reached
+    fakeDocker.addVolume({
+      labels: { "io.kiln.installation": "someone-else" },
+      name: names.volume,
+    })
+    held.release()
+
+    const result = await pass
+
+    expect(result.issue).toContain("doesn't belong to this installation")
+    expect(fakeDocker.container(names.database)).toBeUndefined()
   })
 
   it("requires a hostname for the Relay and a URL for Hearth", async () => {

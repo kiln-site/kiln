@@ -183,6 +183,7 @@ docker run --detach --name "$container" --restart unless-stopped \
   --volume "$volume:/data" \
   --publish "$sftp_port:2022" \
   --env KILN_RELAY_MODE=platform \
+  --env KILN_RELAY_CONTAINER="$container" \
   --env KILN_URL="$url" \
   --env KILN_PLATFORM_HEARTH_PORT="$port" \
   ${bind_address:+--env KILN_PLATFORM_HEARTH_BIND="$bind_address"} \

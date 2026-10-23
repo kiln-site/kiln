@@ -17,7 +17,6 @@
  */
 import { createHash, randomUUID } from "node:crypto"
 import { mkdir, readFile, stat } from "node:fs/promises"
-import { hostname } from "node:os"
 import { join } from "node:path"
 
 import {
@@ -42,6 +41,7 @@ import {
   isDockerNotFound,
 } from "./docker-engine.js"
 import type { RelayClientRecord } from "./effect/state.js"
+import { isOwnContainer, mountIdentity } from "./platform-identity.js"
 import { relayOwnerLabels } from "./relay-resources.js"
 import {
   decodePlatformRecoveryKit,
@@ -489,7 +489,7 @@ export const reconcilePlatform = Effect.fn("Relay.platform.reconcile")(
 
         const networkIssue = yield* ensureNetwork(engine, state, config)
         if (networkIssue) return blocked(state, networkIssue)
-        if (context.attachRelay) yield* attachRelay(engine, state)
+        if (context.attachRelay) yield* attachRelay(engine, config, state)
 
         const volume = yield* inspectOptional(
           engine.inspectVolume(state.names.databaseVolume)
@@ -510,7 +510,9 @@ export const reconcilePlatform = Effect.fn("Relay.platform.reconcile")(
           )
         }
         if (!volume) {
-          yield* engine.createVolume({
+          // Docker answers with a volume that appeared meanwhile instead of
+          // creating one, so its owner is checked again.
+          const created = yield* engine.createVolume({
             labels: {
               ...relayOwnerLabels(config),
               [KILN_INSTALLATION_LABEL]: state.installationId,
@@ -518,6 +520,14 @@ export const reconcilePlatform = Effect.fn("Relay.platform.reconcile")(
             },
             name: state.names.databaseVolume,
           })
+          if (
+            created.Labels?.[KILN_INSTALLATION_LABEL] !== state.installationId
+          ) {
+            return blocked(
+              state,
+              `A volume named ${state.names.databaseVolume} already exists and doesn't belong to this installation. Start the Relay with another KILN_RELAY_RESOURCE_NAMESPACE.`
+            )
+          }
         }
 
         for (const role of ["database", "cache"] as const) {
@@ -607,14 +617,15 @@ const ensureNetwork = Effect.fnUntraced(function* (
  */
 const attachRelay = Effect.fnUntraced(function* (
   engine: DockerEngine,
+  config: Pick<RelayConfig, "dataDirectory" | "selfContainer">,
   state: PlatformState
 ) {
   const alias = state.relay.host
-  const own = yield* ownContainer(engine)
+  const own = yield* ownContainer(engine, config)
   if (!own) {
     return yield* new PlatformError({
       reason:
-        "Platform mode needs the Relay to run in a Docker container on the host it installs Kiln on",
+        "The Relay can't tell which Docker container is its own, so it won't join one to Kiln's network. Set KILN_RELAY_CONTAINER to its container's name.",
     })
   }
   const endpoint = own.NetworkSettings?.Networks?.[state.names.network]
@@ -630,32 +641,31 @@ const attachRelay = Effect.fnUntraced(function* (
 })
 
 /**
- * The Relay's own container, or null when it can't be told apart. Docker
- * mounts each container's hostname file from a folder named after its ID, so
- * that's tried first; otherwise the one container whose hostname is this
- * process's. Another container merely named like that hostname never counts.
+ * The Relay's own container, or null when it can't be told apart:
+ * `KILN_RELAY_CONTAINER` when the operator named it, or else the container
+ * the Relay's mounts identify (see platform-identity.ts). Never a container
+ * that merely shares its name or hostname.
  */
-export const ownContainer = Effect.fnUntraced(function* (engine: DockerEngine) {
-  const name = hostname()
+export const ownContainer = Effect.fnUntraced(function* (
+  engine: DockerEngine,
+  config: Pick<RelayConfig, "dataDirectory" | "selfContainer">
+) {
+  if (config.selfContainer) {
+    return yield* inspectOptional(engine.inspectContainer(config.selfContainer))
+  }
   const mountinfo = yield* readOptional(() =>
     readFile("/proc/self/mountinfo", "utf8")
   )
-  const ids = new Set(
-    Array.from(
-      mountinfo?.matchAll(/\/containers\/([0-9a-f]{64})\/(?:hostname|hosts)\b/gu) ??
-        [],
-      (match) => match[1] ?? ""
-    )
+  if (!mountinfo) return null
+  const identity = mountIdentity(mountinfo, config.dataDirectory)
+  if (!identity.containerId) return null
+  const candidate = yield* inspectOptional(
+    engine.inspectContainer(identity.containerId)
   )
-  if (ids.size === 1) {
-    const [id = ""] = ids
-    const inspected = yield* inspectOptional(engine.inspectContainer(id))
-    if (inspected?.Id === id) return inspected
-  }
-  const running = yield* engine.listContainers()
-  const inspected = yield* engine.inspectContainers(running.map((c) => c.Id))
-  const matches = inspected.filter((c) => c.Config.Hostname === name)
-  return matches.length === 1 ? (matches[0] ?? null) : null
+  return candidate &&
+    isOwnContainer(identity, config.dataDirectory, candidate)
+    ? candidate
+    : null
 })
 
 /**
@@ -1321,7 +1331,7 @@ export const startPlatform = Effect.fn("Relay.platform.start")(function* (
         state: null,
       } satisfies PlatformStartup
     }
-    const own = yield* ownContainer(engine).pipe(
+    const own = yield* ownContainer(engine, config).pipe(
       Effect.catch(() => Effect.succeed(null))
     )
     const relayImage = own?.Config.Image ?? null
