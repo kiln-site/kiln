@@ -2,7 +2,10 @@ import * as React from "react"
 import type { InstanceReference } from "@workspace/contracts"
 
 import { IdentityName } from "@/components/identity-name"
-import type { IdentityNameProps } from "@/components/identity-name"
+import type {
+  IdentityNameProps,
+  IdentityStatusPresentation,
+} from "@/components/identity-name"
 import { instanceKindIcons } from "@/components/instance-kind-icon"
 import { LiveServerBrickIcon } from "@/components/server-brick-icon"
 import { InstanceFavoriteStar } from "@/components/instance-favorite"
@@ -27,6 +30,8 @@ export interface InstanceCardProps extends Omit<
   showFavorite?: boolean
   showStatus?: boolean
   state?: InstanceState
+  /** A fixed status, like a pending invitation's, in place of live state. */
+  status?: IdentityStatusPresentation
 }
 
 export const InstanceStatus = React.memo(function InstanceStatus({
@@ -54,7 +59,7 @@ function LiveInstanceStatus({ instance }: { instance: InstanceReference }) {
 export const InstanceCard = React.memo(function InstanceCard(
   props: InstanceCardProps
 ) {
-  return props.state || props.showStatus === false ? (
+  return props.state || props.status || props.showStatus === false ? (
     <InstanceCardView {...props} />
   ) : (
     <LiveInstanceCard {...props} />
@@ -74,6 +79,7 @@ const InstanceCardView = React.memo(function InstanceCardView({
   nameAccessory,
   meta = instance.id.slice(0, 8),
   state = { phase: "checking" },
+  status,
   ...props
 }: InstanceCardProps) {
   const Icon = instanceKindIcons[instance.kind]
@@ -107,7 +113,9 @@ const InstanceCardView = React.memo(function InstanceCardView({
           nameAccessory
         )
       }
-      status={showStatus ? instanceStatePresentation(state) : undefined}
+      status={
+        showStatus ? (status ?? instanceStatePresentation(state)) : undefined
+      }
     />
   )
 })

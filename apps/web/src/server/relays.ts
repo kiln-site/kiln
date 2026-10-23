@@ -15,6 +15,7 @@ import {
 import { z } from "zod"
 
 import { resolveMinecraftProfileEffect } from "@/effect/minecraft-profile"
+import { listInvitedRelaysEffect } from "@/server/invited-relays.server"
 import {
   attachRelayOwnersEffect,
   type RelayOwnerFields,
@@ -171,10 +172,17 @@ export const getRelayOwnerMinecraftProfiles = createServerFn({
 }).handler(async () => {
   const user = await requireEligibleResourceUser()
   // Only stored display names reach Mojang, never email-derived fallbacks.
-  const relays = await attachRelayOwners(await managedRelays(user), false)
+  // Pending Relay invitations show their owner too.
+  const [relays, invitedRelays] = await Promise.all([
+    managedRelays(user).then((managed) => attachRelayOwners(managed, false)),
+    runAppEffect(
+      "resourceInvitations.invitedRelays",
+      listInvitedRelaysEffect(user.id)
+    ),
+  ])
   const displayNames = [
     ...new Map(
-      relays.flatMap((relay) =>
+      [...relays, ...invitedRelays].flatMap((relay) =>
         relay.ownerName && isMinecraftUsername(relay.ownerName)
           ? [[minecraftUsernameKey(relay.ownerName), relay.ownerName] as const]
           : []

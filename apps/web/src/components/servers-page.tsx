@@ -5,9 +5,11 @@ import {
   type InfraInstanceRow,
 } from "@/lib/infra-table-source"
 import {
+  PendingInvitationCard,
   PendingResourceInvitations,
   PendingResourceInvitationBadge,
   resourceInvitationScopeKey,
+  type PendingInvitationCells,
 } from "@/components/pending-resource-invitations"
 import * as React from "react"
 import { useLiveSuspenseQuery } from "@tanstack/react-db"
@@ -531,6 +533,8 @@ const ServerDataTable = React.memo(function ServerDataTable({
     <DataTable
       leadingBody={
         <PendingResourceInvitations
+          cells={serverPendingCells}
+          columns={definition.columns}
           resourceType="instance"
           visibleResourceKeys={visibleResourceKeys}
           searchStore={searchStore}
@@ -787,4 +791,16 @@ function createServerTableItems(
     serverTableItemCache.set(server, item)
     return item
   })
+}
+
+// A pending game server shows what its row will once accepted, except its
+// address, which the invitation doesn't carry yet.
+const serverPendingCells: PendingInvitationCells = {
+  server: (invitation) => (
+    <div className="flex w-full min-w-0 items-center px-3">
+      <PendingInvitationCard invitation={invitation} />
+    </div>
+  ),
+  relay: (invitation) => <DataTableTextCell value={invitation.relayName} />,
+  address: () => <DataTableTextCell monospace value="—" />,
 }

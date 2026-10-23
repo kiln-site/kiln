@@ -39,7 +39,19 @@ export const RelayMemoryCell = React.memo(function RelayMemoryCell({
     select,
   })
 
-  if (!connected || memory === undefined) {
+  return <RelayMemoryValue memory={connected ? memory : undefined} />
+})
+
+/**
+ * One memory reading: a dash while unknown, a note when the Relay is too old
+ * to report it.
+ */
+export const RelayMemoryValue = React.memo(function RelayMemoryValue({
+  memory,
+}: {
+  memory: RelayMemoryReading
+}) {
+  if (memory === undefined) {
     return <span className="type-meta text-muted-foreground">—</span>
   }
   if (memory === null) {

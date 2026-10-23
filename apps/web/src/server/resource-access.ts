@@ -6,6 +6,7 @@ import { z } from "zod"
 import {
   builtinPermissionPresets,
   builtinPresetSelections,
+  databaseEngineSchema,
   expandPermissionSelections,
   permissionSelectionsSchema,
   permissionScopeTypeSchema,
@@ -40,6 +41,7 @@ import {
   peopleFilter,
   supportedScopePermissions,
 } from "@/server/resource-access.server"
+import { listInvitedRelaysEffect } from "@/server/invited-relays.server"
 import {
   accessPolicyTransaction,
   lockAccessActorEffect,
@@ -175,6 +177,7 @@ interface InvitationRow extends RowDataPacket {
   resource_name: string | null
   inviter_name: string | null
   relay_name: string | null
+  database_engine: string | null
   access_type: string
   delivery_status: string
 }
@@ -381,7 +384,7 @@ export const inviteResourceAccess = createServerFn({ method: "POST" })
 
 const iso = (value: number | null) =>
   value === null ? null : new Date(value).toISOString()
-const invitationSelect = `SELECT i.*, g.resource_type, g.resource_id, COALESCE(s.display_name, s.source_name, d.name, r.name) AS resource_name, u.name AS inviter_name, r.name AS relay_name
+const invitationSelect = `SELECT i.*, g.resource_type, g.resource_id, COALESCE(s.display_name, s.source_name, d.name, r.name) AS resource_name, u.name AS inviter_name, r.name AS relay_name, d.engine AS database_engine
   FROM ${databaseTable("invitation")} i
   LEFT JOIN ${databaseTable("user")} u ON u.id = i.invited_by
   LEFT JOIN ${databaseTable("access_grant")} g ON g.id = i.access_id
@@ -398,6 +401,8 @@ function invitationView(row: InvitationRow) {
     resourceName: row.resource_name ?? row.resource_id,
     inviterName: row.inviter_name ?? "Kiln",
     relayName: row.relay_name ?? "Relay",
+    databaseEngine:
+      databaseEngineSchema.safeParse(row.database_engine).data ?? null,
     createdAt: new Date(row.created_at).toISOString(),
     expiresAt: new Date(row.expires_at).toISOString(),
     acceptedAt: iso(row.accepted_at),
@@ -421,7 +426,27 @@ export const getMyInvitations = createServerFn({ method: "GET" }).handler(
       `${invitationSelect} WHERE i.user_id = ? AND i.access_type = 'scoped' AND ${currentAttemptFor("i.")} AND g.state = 'pending' AND r.enabled = TRUE ORDER BY i.created_at DESC LIMIT 500`,
       [user.id, Date.now()]
     )
-    return rows.map(invitationView)
+    const invitations = rows.map(invitationView)
+    const invitedRelays = invitations.some(
+      (invitation) => invitation.scope.resourceType === "relay"
+    )
+      ? new Map(
+          (
+            await runAppEffect(
+              "resourceInvitations.invitedRelays",
+              listInvitedRelaysEffect(user.id)
+            )
+          ).map((relay) => [relay.id, relay])
+        )
+      : null
+    return invitations.map((invitation) => ({
+      ...invitation,
+      // What the Relay's own table row shows, for a Relay invitation.
+      relay:
+        invitation.scope.resourceType === "relay"
+          ? (invitedRelays?.get(invitation.scope.relayId) ?? null)
+          : null,
+    }))
   }
 )
 

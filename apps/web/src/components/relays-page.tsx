@@ -1,8 +1,10 @@
 import { RelayKindIcon } from "@/components/instance-kind-icon"
 import {
+  PendingInvitationCard,
   PendingResourceInvitations,
   PendingResourceInvitationBadge,
   resourceInvitationScopeKey,
+  type PendingInvitationCells,
 } from "@/components/pending-resource-invitations"
 import * as React from "react"
 import { useLiveSuspenseQuery } from "@tanstack/react-db"
@@ -96,7 +98,10 @@ import {
 import { IdentityName } from "@/components/identity-name"
 import { InstanceCard, InstanceStatus } from "@/components/instance-card"
 import { statusColumnWidth } from "@/components/instance-name-presentation"
-import { RelayMemoryCell } from "@/components/relay-memory-cell"
+import {
+  RelayMemoryCell,
+  RelayMemoryValue,
+} from "@/components/relay-memory-cell"
 import { UserAvatar } from "@/components/account-avatar"
 import { relaysCollectionOptions } from "@/lib/collections/relays"
 import {
@@ -105,6 +110,10 @@ import {
   selectOwnerProfileIds,
 } from "@/lib/minecraft-profile"
 import { relayAddress } from "@/lib/relay-route"
+import {
+  myInvitationsQueryOptions,
+  type ResourceInvitation,
+} from "@/lib/resource-invitation-query"
 import {
   accessCapabilitiesQueryOptions,
   queryKeys,
@@ -402,7 +411,14 @@ const FilteredRelayTable = React.memo(function FilteredRelayTable({
           useTls: relay.useTls,
         })),
   })
-  const ownerNames = React.useMemo(() => relayOwnerNamesKey(data), [data])
+  const { data: invitedRelays = noInvitedRelays } = useQuery({
+    ...myInvitationsQueryOptions(),
+    select: selectInvitedRelays,
+  })
+  const ownerNames = React.useMemo(
+    () => relayOwnerNamesKey([...data, ...invitedRelays]),
+    [data, invitedRelays]
+  )
   const source = useInfraTableSource({ rows: data, reference: relayReference })
 
   return (
@@ -677,6 +693,8 @@ function RelayTable({
     <DataTable
       leadingBody={
         <PendingResourceInvitations
+          cells={relayPendingCells}
+          columns={definition.columns}
           resourceType="relay"
           visibleResourceKeys={visibleResourceKeys}
           searchStore={searchStore}
@@ -770,6 +788,32 @@ const RelayEditButton = React.memo(function RelayEditButton({
     </Tooltip>
   )
 })
+
+const noInvitedRelays: ReadonlyArray<{ ownerName: string | null }> = []
+const selectInvitedRelays = (invitations: Array<ResourceInvitation>) =>
+  invitations.flatMap((invitation) =>
+    invitation.relay ? [invitation.relay] : []
+  )
+
+// A pending Relay shows what its row will once accepted.
+const relayPendingCells: PendingInvitationCells = {
+  relay: (invitation) => <PendingInvitationCard invitation={invitation} />,
+  memory: (invitation) => (
+    <RelayMemoryValue memory={invitation.relay?.memory} />
+  ),
+  host: ({ relay }) =>
+    relay ? (
+      <DataTableTextCell
+        monospace
+        title={relayAddress(relay)}
+        value={relay.hostname}
+      />
+    ) : null,
+  owner: ({ relay }) =>
+    relay ? (
+      <RelayOwnerCell ownerEmail={null} ownerName={relay.ownerName} />
+    ) : null,
+}
 
 const RelayOwnerCell = React.memo(function RelayOwnerCell({
   ownerEmail,

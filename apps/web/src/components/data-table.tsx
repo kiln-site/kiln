@@ -18,6 +18,7 @@ import {
   dataTableSelectAllState,
   defaultDataTableVirtualization,
   type DataTableBreakpoint,
+  type DataTableColumnMeta,
   type DataTableDefinition,
   type DataTableInstance,
   type DataTableSelectableRow,
@@ -445,6 +446,17 @@ function dataTableColumnVisibilityClass(
 ): string | undefined {
   if (!hideBelow) return undefined
   return dataTableVisibilityClasses[hideBelow][element]
+}
+
+/** A body cell's classes, so rows outside the row model line up with it. */
+export function dataTableCellClassName(
+  meta: DataTableColumnMeta | undefined
+): string {
+  return cn(
+    "flex h-14 min-w-0 items-center px-3",
+    dataTableColumnVisibilityClass(meta?.layout?.hideBelow, "cell"),
+    meta?.cellClassName
+  )
 }
 
 const dataTableVisibilityClasses = {
@@ -1092,14 +1104,7 @@ function DataTableRow<TData extends RowData>({
       {row.getAllCells().map((cell) => (
         <td
           key={cell.id}
-          className={cn(
-            "flex h-14 min-w-0 items-center px-3",
-            dataTableColumnVisibilityClass(
-              cell.column.columnDef.meta?.layout?.hideBelow,
-              "cell"
-            ),
-            cell.column.columnDef.meta?.cellClassName
-          )}
+          className={dataTableCellClassName(cell.column.columnDef.meta)}
           role="cell"
         >
           <FlexRender cell={cell} />

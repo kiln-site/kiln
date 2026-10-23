@@ -2,9 +2,11 @@ import { DatabaseKindIcon } from "@/components/instance-kind-icon"
 import type { getManagedDatabaseDirectory } from "@/server/databases"
 import type { getInfraRelayOptions } from "@/server/infra-directory"
 import {
+  PendingInvitationCard,
   PendingResourceInvitations,
   PendingResourceInvitationBadge,
   resourceInvitationScopeKey,
+  type PendingInvitationCells,
 } from "@/components/pending-resource-invitations"
 import * as React from "react"
 import { useLiveSuspenseQuery } from "@tanstack/react-db"
@@ -423,14 +425,7 @@ const DatabaseTable = React.memo(function DatabaseTable({
         id: "engine",
         header: "Engine",
         sortFn: "text",
-        cell: ({ row }) => (
-          <Badge
-            variant="outline"
-            className={`type-meta font-mono uppercase ${engineBadgeClasses[row.original.engine]}`}
-          >
-            {engineLabel(row.original.engine)}
-          </Badge>
-        ),
+        cell: ({ row }) => <EngineBadge engine={row.original.engine} />,
         meta: dataTableColumnMeta({
           hideBelow: "md",
           width: "8.5rem",
@@ -482,6 +477,8 @@ const DatabaseTable = React.memo(function DatabaseTable({
     <DataTable
       leadingBody={
         <PendingResourceInvitations
+          cells={databasePendingCells}
+          columns={definition.columns}
           resourceType="database"
           visibleResourceKeys={visibleResourceKeys}
           searchStore={searchStore}
@@ -879,4 +876,23 @@ function databaseFavorite(database: {
   relayId: string
 }): InstanceFavorite {
   return { id: database.id, kind: "database", relayId: database.relayId }
+}
+
+// A pending database shows what its row will once accepted.
+const databasePendingCells: PendingInvitationCells = {
+  database: (invitation) => <PendingInvitationCard invitation={invitation} />,
+  engine: ({ databaseEngine }) =>
+    databaseEngine ? <EngineBadge engine={databaseEngine} /> : null,
+  relay: (invitation) => <DataTableTextCell value={invitation.relayName} />,
+}
+
+function EngineBadge({ engine }: { engine: DatabaseEngine }) {
+  return (
+    <Badge
+      variant="outline"
+      className={`type-meta font-mono uppercase ${engineBadgeClasses[engine]}`}
+    >
+      {engineLabel(engine)}
+    </Badge>
+  )
 }

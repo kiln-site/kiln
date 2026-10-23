@@ -1,4 +1,10 @@
-import { memo, useMemo, useState, useSyncExternalStore } from "react"
+import {
+  memo,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useRouter, useRouterState } from "@tanstack/react-router"
 import { Clock3 } from "lucide-react"
@@ -8,23 +14,40 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
+import { cn } from "@workspace/ui/lib/utils"
 
+import { dataTableCellClassName } from "@/components/data-table"
 import { InstanceCard } from "@/components/instance-card"
 import { ResourceInvitationDialog } from "@/components/resource-invitation-dialog"
+import type { DataTableColumnMeta } from "@/lib/data-table"
 import type { DataTableSearchStore } from "@/lib/data-table-search"
 import {
   myInvitationsQueryOptions,
   type ResourceInvitation,
 } from "@/lib/resource-invitation-query"
 
+export type PendingInvitationCells = Readonly<
+  Partial<Record<string, (invitation: ResourceInvitation) => ReactNode>>
+>
+type PendingInvitationColumns = ReadonlyArray<{
+  id?: string
+  meta?: DataTableColumnMeta
+}>
+
 // An independent body under the existing inventory header. Dialog changes do
 // not update the inventory query, table model, or virtualized active rows.
 export const PendingResourceInvitations = memo(
   function PendingResourceInvitations({
+    cells,
+    columns,
     resourceType,
     searchStore,
     visibleResourceKeys,
   }: {
+    // A pending row renders the table's own columns. Status and actions hold
+    // the invitation; the rest show what each cell renders for it.
+    cells: PendingInvitationCells
+    columns: PendingInvitationColumns
     resourceType: "instance" | "database" | "relay"
     searchStore: DataTableSearchStore
     visibleResourceKeys: ReadonlySet<string>
@@ -84,6 +107,8 @@ export const PendingResourceInvitations = memo(
             {rows.map((invitation) => (
               <PendingRow
                 key={invitation.id}
+                cells={cells}
+                columns={columns}
                 invitation={invitation}
                 onOpen={setSelected}
               />
@@ -118,63 +143,93 @@ export const PendingResourceInvitations = memo(
   }
 )
 
-// Every inventory table leads with status and favorite columns and ends with
-// actions. The invitation spans whatever sits between, so adding or hiding a
-// middle column cannot push its cells out of line.
 const PendingRow = memo(function PendingRow({
+  cells,
+  columns,
   invitation,
   onOpen,
 }: {
+  cells: PendingInvitationCells
+  columns: PendingInvitationColumns
   invitation: ResourceInvitation
   onOpen: (id: string) => void
 }) {
-  const type = invitation.scope.resourceType
   return (
     <tr
-      className="relative grid min-h-14 grid-cols-[var(--data-table-grid-base)] border-b border-border/70 bg-amber-500/[0.025] text-sm hover:bg-muted/20 sm:grid-cols-[var(--data-table-grid-sm)] md:grid-cols-[var(--data-table-grid-md)] lg:grid-cols-[var(--data-table-grid-lg)] xl:grid-cols-[var(--data-table-grid-xl)]"
+      className="relative grid grid-cols-[var(--data-table-grid-base)] border-b border-border/70 bg-amber-500/[0.025] text-sm hover:bg-muted/20 sm:grid-cols-[var(--data-table-grid-sm)] md:grid-cols-[var(--data-table-grid-md)] lg:grid-cols-[var(--data-table-grid-lg)] xl:grid-cols-[var(--data-table-grid-xl)]"
       role="row"
     >
-      <td
-        className="col-[1/2] row-start-1 flex items-center px-2 text-xs text-amber-600 sm:px-3 dark:text-amber-400"
-        role="cell"
-      >
-        <button
-          type="button"
-          onClick={() => onOpen(invitation.id)}
-          aria-label={`Review invitation to ${invitation.resourceName}`}
-          className="absolute inset-0 z-10 rounded-none outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-        />
-        <Clock3 className="mr-1 size-3.5 shrink-0" aria-hidden />
-        <span className="hidden sm:inline">Pending</span>
-      </td>
-      <td
-        className="pointer-events-none col-[3/-2] row-start-1 flex min-w-0 items-center px-3"
-        role="cell"
-      >
-        <InstanceCard
-          className="min-w-0 flex-1"
-          instance={{
-            id: invitation.scope.resourceId,
-            kind: type === "instance" ? "server" : type,
-            relayId: invitation.scope.relayId,
-          }}
-          meta={
-            type === "relay"
-              ? `Invited ${invitation.createdAt.slice(0, 10)}`
-              : `Invited ${invitation.createdAt.slice(0, 10)} · ${invitation.relayName}`
-          }
-          name={invitation.resourceName}
-          showFavorite={false}
-          showStatus={false}
-        />
-      </td>
-      <td
-        className="pointer-events-none col-[-2/-1] row-start-1 flex items-center justify-end px-3 text-xs font-medium text-primary-ink"
-        role="cell"
-      >
-        Review invitation
-      </td>
+      {columns.map((column, index) => {
+        const className = dataTableCellClassName(column.meta)
+        if (column.id === "status") {
+          return (
+            <td
+              key={column.id}
+              className={cn(
+                className,
+                "text-xs text-amber-600 dark:text-amber-400"
+              )}
+              role="cell"
+            >
+              <button
+                type="button"
+                onClick={() => onOpen(invitation.id)}
+                aria-label={`Review invitation to ${invitation.resourceName}`}
+                className="absolute inset-0 z-10 rounded-none outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+              />
+              <Clock3 className="mr-1 size-3.5 shrink-0" aria-hidden />
+              <span className="hidden sm:inline">Pending</span>
+            </td>
+          )
+        }
+        return (
+          <td
+            key={column.id ?? index}
+            className={cn(
+              className,
+              "pointer-events-none",
+              column.id === "actions" &&
+                "justify-end text-xs font-medium text-primary-ink"
+            )}
+            role="cell"
+          >
+            {column.id === "actions"
+              ? "Review invitation"
+              : column.id
+                ? cells[column.id]?.(invitation)
+                : null}
+          </td>
+        )
+      })}
     </tr>
+  )
+})
+
+const pendingInvitationStatus = {
+  label: "Pending invitation",
+  tone: "warning",
+} as const
+
+/** The resource's identity card for its pending row, marked pending. */
+export const PendingInvitationCard = memo(function PendingInvitationCard({
+  invitation,
+}: {
+  invitation: ResourceInvitation
+}) {
+  const type = invitation.scope.resourceType
+  return (
+    <InstanceCard
+      className="min-w-0 flex-1"
+      instance={{
+        id: invitation.scope.resourceId,
+        kind: type === "instance" ? "server" : type,
+        relayId: invitation.scope.relayId,
+      }}
+      meta={`Invited ${invitation.createdAt.slice(0, 10)}`}
+      name={invitation.resourceName}
+      showFavorite={false}
+      status={pendingInvitationStatus}
+    />
   )
 })
 
