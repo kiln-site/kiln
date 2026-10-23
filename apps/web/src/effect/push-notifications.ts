@@ -8,7 +8,10 @@ import { Clock, Context, Effect, Layer, Option, Schema } from "effect"
 import appIcon192 from "@/assets/branding/app-icon-192.png?no-inline"
 import { Database } from "@/effect/database"
 import { CredentialError, ExternalServiceError } from "@/effect/errors"
-import { decodeNotificationContent } from "@/effect/notifications"
+import {
+  decodeNotificationContent,
+  pushPendingWhenDue,
+} from "@/effect/notifications"
 import { databaseTable } from "@/lib/database-config"
 import { developmentBypassUserId } from "@/lib/development-bypass"
 import {
@@ -425,7 +428,8 @@ export const nextPushDueEffect = Effect.fnUntraced(function* () {
     "notifications.push.pending",
     `SELECT MIN(COALESCE(push_due_at, 0)) AS due
        FROM ${databaseTable("notification")}
-      WHERE push_pending = 1`
+      WHERE push_pending IN (1, ?)`,
+    [pushPendingWhenDue]
   )
   return row?.due === null || row?.due === undefined ? null : Number(row.due)
 })
@@ -492,12 +496,12 @@ export const pushPendingNotificationsEffect = Effect.fn("notifications.push")(
           const rows = yield* tx.queryRows<PendingNotificationRow>(
             `SELECT id, user_id, kind, data, created_at, read_at, dismissed_at
                FROM ${table}
-              WHERE push_pending = 1
+              WHERE push_pending IN (1, ?)
                 AND (push_due_at IS NULL OR push_due_at <= ?)
               ORDER BY created_at
               LIMIT ${pushBatchSize}
               FOR UPDATE SKIP LOCKED`,
-            [now]
+            [pushPendingWhenDue, now]
           )
           if (rows.length)
             yield* tx.execute(

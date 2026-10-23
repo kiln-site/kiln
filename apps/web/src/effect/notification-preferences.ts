@@ -94,8 +94,8 @@ export const saveNotificationPreferencesEffect = Effect.fn(
           userId,
           notificationsSettingKey,
           JSON.stringify(merged),
-          new Date(now),
-          new Date(now),
+          now,
+          now,
         ]
       )
       return normalizeNotificationPreferences(merged)

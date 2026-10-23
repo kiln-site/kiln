@@ -36,6 +36,13 @@ interface NotificationRow extends RowDataPacket {
  */
 export const notificationPushDelayMs = 5_000
 
+/**
+ * `push_pending` for a push that waits for `push_due_at`. Hearths from before
+ * pushes waited claim only 1, so during an upgrade they leave these alone
+ * rather than push them at once.
+ */
+export const pushPendingWhenDue = 2
+
 export interface NotifyOptions {
   /**
    * Whoever did what the notification is about. They know, so they don't
@@ -96,7 +103,7 @@ export const notifyUsersEffect = Effect.fn("notifications.notify")(function* (
       now,
       row.clearedAt,
       row.clearedAt,
-      row.pushDueAt === null ? null : 1,
+      row.pushDueAt === null ? null : pushPendingWhenDue,
       row.pushDueAt,
     ])
   )

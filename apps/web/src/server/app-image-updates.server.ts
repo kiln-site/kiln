@@ -42,7 +42,7 @@ export async function saveAppImageUpdatePolicyHandler(
   else
     await runAppEffect(
       "apps.imageUpdates.policy.resolveNotifications",
-      resolveAppImageUpdateNotificationsEffect(app.appId)
+      resolveAppImageUpdateNotificationsEffect(app.appId, { unchecked: true })
     )
   publishAppDeploymentChange(relay.id)
 }

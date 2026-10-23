@@ -291,7 +291,7 @@ const announceDeploymentEffect = Effect.fnUntraced(
   function* (
     record: Pick<
       AppDeploymentRecord,
-      "appId" | "id" | "relayId" | "sourceType" | "trigger" | "triggeredBy"
+      "appId" | "id" | "imageDigest" | "relayId" | "trigger" | "triggeredBy"
     >,
     status: AppDeploymentStatus
   ) {
@@ -326,15 +326,19 @@ const announceDeploymentEffect = Effect.fnUntraced(
       { actorUserId: record.triggeredBy }
     )
     if (delivered > 0) publishNotificationChange(recipients)
+    // The update it deployed is installed. Other deployments are settled
+    // by the check that follows them.
     if (
       status === "succeeded" &&
-      record.sourceType === "image" &&
-      record.trigger === "update"
+      record.trigger === "update" &&
+      record.imageDigest !== null
     ) {
       // Imported here, since image updates deploy through this module.
       const { resolveAppImageUpdateNotificationsEffect } =
         yield* Effect.promise(() => import("@/lib/app-image-updates.server"))
-      yield* resolveAppImageUpdateNotificationsEffect(record.appId)
+      yield* resolveAppImageUpdateNotificationsEffect(record.appId, {
+        installedDigest: record.imageDigest,
+      })
     }
   },
   // The deployment is recorded either way; its notification is best effort.

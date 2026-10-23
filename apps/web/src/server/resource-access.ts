@@ -923,7 +923,9 @@ export const updateResourceAccess = createServerFn({ method: "POST" })
                   relayId: data.relayId,
                   type: data.resourceType,
                 },
-              }
+              },
+              // Removing your own access tells you nothing new.
+              { actorUserId: user.id }
             )
           return {
             userId: grant.user_id,

@@ -208,6 +208,8 @@ export function saveNotificationPreferencesMutationOptions(
   const { queryKey } = notificationPreferencesQueryOptions()
   return mutationOptions({
     mutationKey: ["notification-preferences", "save"] as const,
+    // One save at a time, so each answer is newer than the last.
+    scope: { id: "notification-preferences" },
     mutationFn: (update: NotificationPreferencesUpdate) =>
       saveNotificationPreferences({ data: update }),
     onMutate: async (update) => {

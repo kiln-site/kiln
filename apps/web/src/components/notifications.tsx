@@ -10,6 +10,7 @@ import { Button } from "@workspace/ui/components/button"
 import {
   dismissToast,
   showToast,
+  visibleToastLimit,
   type AppToastType,
 } from "@workspace/ui/components/sonner"
 import {
@@ -201,15 +202,25 @@ function useArrivingNotificationToasts(queryClient: QueryClient) {
     const { queryKey } = notificationsQueryOptions()
     const hash = hashKey(queryKey)
     let seen: Set<string> | null = null
-    const toasted = new Set<string>()
+    // Notification toasts on screen, until they close.
+    const showing = new Set<string>()
     let reconciledAt = 0
+    let recheck: ReturnType<typeof setTimeout> | undefined
+    const reconcile = () => {
+      const state = queryClient.getQueryState(queryKey)
+      if (state?.data)
+        closeSettledDeviceNotifications(state.data, state.dataUpdatedAt)
+    }
     const check = () => {
       const state = queryClient.getQueryState(queryKey)
       const inbox = state?.data
       if (!inbox) return
       if (state.dataUpdatedAt !== reconciledAt) {
         reconciledAt = state.dataUpdatedAt
-        closeSettledDeviceNotifications(inbox, reconciledAt)
+        reconcile()
+        // Ones shown too close to this load are settled once it's past.
+        clearTimeout(recheck)
+        recheck = setTimeout(reconcile, loadMarginMs + 1_000)
       }
       if (seen === null) {
         seen = new Set(inbox.map((notification) => notification.id))
@@ -224,15 +235,22 @@ function useArrivingNotificationToasts(queryClient: QueryClient) {
         if (notification.readAt === null) arrived.push(notification)
       }
       // Read or cleared elsewhere, so its toast has nothing left to say.
-      for (const id of toasted) {
+      for (const id of showing) {
         if (unread.has(id)) continue
-        toasted.delete(id)
+        showing.delete(id)
         dismissToast(id)
       }
       if (!arrived.length) return
-      for (const notification of arrived) {
+      // The toaster shows the newest few; older ones wait out of view, so
+      // only the ones that fit were seen. The inbox is newest first.
+      const fits = Math.max(0, visibleToastLimit - showing.size)
+      const shown = arrived
+        .slice(0, fits)
+        .map((notification) => notification.id)
+      for (const notification of [...arrived].reverse()) {
         const { content, id } = notification
-        toasted.add(id)
+        showing.add(id)
+        const closed = () => showing.delete(id)
         showToast({
           action: {
             label: "View",
@@ -246,13 +264,12 @@ function useArrivingNotificationToasts(queryClient: QueryClient) {
           duration: notificationToastDurationMs,
           id,
           message: notificationTitle(content),
+          onAutoClose: closed,
+          onDismiss: closed,
           type: notificationToastType(content),
         })
       }
-      acknowledgeIfActive(
-        queryClient,
-        arrived.map((notification) => notification.id)
-      )
+      if (shown.length) acknowledgeIfActive(queryClient, shown)
     }
     check()
     const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
@@ -260,13 +277,12 @@ function useArrivingNotificationToasts(queryClient: QueryClient) {
     })
     // A phone that was away may still show notifications read meanwhile.
     const onVisible = () => {
-      const state = queryClient.getQueryState(queryKey)
-      if (document.visibilityState === "visible" && state?.data)
-        closeSettledDeviceNotifications(state.data, state.dataUpdatedAt)
+      if (document.visibilityState === "visible") reconcile()
     }
     document.addEventListener("visibilitychange", onVisible)
     return () => {
       unsubscribe()
+      clearTimeout(recheck)
       document.removeEventListener("visibilitychange", onVisible)
     }
   }, [queryClient, router])
@@ -285,7 +301,7 @@ function acknowledgeIfActive(queryClient: QueryClient, ids: Array<string>) {
       !isUserActive(preferences.idleMinutes * 60_000)
     )
       return
-    await acknowledgeNotificationsSeen({ data: { ids: ids.slice(0, 50) } })
+    await acknowledgeNotificationsSeen({ data: { ids } })
   })
 }
 

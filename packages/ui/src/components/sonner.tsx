@@ -33,6 +33,9 @@ type ToasterStyle = React.CSSProperties & { "--width": string }
 
 const defaultToasterStyle: ToasterStyle = { "--width": "25rem" }
 
+/** How many toasts show at once; newer ones push older ones out of view. */
+export const visibleToastLimit = 4
+
 const Toaster = React.memo(function Toaster({
   className,
   style,
@@ -45,7 +48,7 @@ const Toaster = React.memo(function Toaster({
       offset={{ top: 12 }}
       mobileOffset={{ top: 8, left: 8, right: 8 }}
       gap={8}
-      visibleToasts={4}
+      visibleToasts={visibleToastLimit}
       closeButton
       className={cn("kiln-toaster", className)}
       style={{ ...defaultToasterStyle, ...style }}

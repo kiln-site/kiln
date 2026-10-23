@@ -129,9 +129,15 @@ describeMysql("Kiln update notifications", () => {
             "0.3.0",
           ])
 
-          // The admin installs it; Hearth starts on it.
+          // The admin installs it; two Hearths start on it together.
           yield* recordHearthUpdateRequestEffect("admin")
-          yield* recordStartedKilnVersionEffect("0.3.0")
+          yield* Effect.all(
+            [
+              recordStartedKilnVersionEffect("0.3.0"),
+              recordStartedKilnVersionEffect("0.3.0"),
+            ],
+            { concurrency: "unbounded" }
+          )
           assert.deepStrictEqual(yield* updates("admin"), [])
           assert.deepStrictEqual(yield* updates("other-admin"), [
             "0.2.0 -> 0.3.0",
