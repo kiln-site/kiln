@@ -219,6 +219,40 @@ it("fails page reads fast only after a Relay drops, not while it first connects"
   }
 })
 
+it("drops a Relay that stops answering on a socket that stays open", async () => {
+  const fixture = await setupRelayServer()
+  const relayStates: Array<"connected" | "unreachable"> = []
+  const unsubscribe = subscribeRealtimeChanges((event) => {
+    if (event.type === "relay.state") relayStates.push(event.status)
+  })
+  try {
+    await relayRpc(fixture.endpoint, "relay.snapshot", {}, 1_000)
+
+    // A Relay that answers pings stays connected however quiet it is.
+    await advanceTimersWithIo(90_000)
+    expect(relayConnectionState(relayId).status).toBe("authenticated")
+
+    // Stalled, as under memory pressure: the socket stays open, but nothing
+    // is read from it or answered.
+    for (const client of fixture.server.clients) client.pause()
+    for (let elapsed = 0; elapsed < 60_000; elapsed += 1_000) {
+      if (relayConnectionState(relayId).status !== "authenticated") break
+      // oxlint-disable-next-line react-doctor/async-await-in-loop -- each step must observe the I/O of the previous one
+      await advanceTimersWithIo(1_000)
+    }
+    expect(relayConnectionState(relayId)).toMatchObject({
+      lastError: "Relay stopped responding",
+      status: "unreachable",
+    })
+    expect(relayStates).toEqual(["connected", "unreachable"])
+  } finally {
+    unsubscribe()
+    closeRelayConnection(relayId)
+    for (const client of fixture.server.clients) client.terminate()
+    await new Promise<void>((resolve) => fixture.server.close(() => resolve()))
+  }
+})
+
 it("settles failed generation readiness and replaces it for retry", async () => {
   let rejectSynchronization: (cause: Error) => void = () => undefined
   let markSynchronizationStarted: () => void = () => undefined
@@ -930,6 +964,17 @@ async function advanceTimersUntil<TResult>(
     await new Promise<void>((resolve) => setImmediate(resolve))
   }
   return promise
+}
+
+// Advance virtual time in small steps, yielding real event-loop turns between
+// them so pings and pongs can cross the socket.
+async function advanceTimersWithIo(ms: number): Promise<void> {
+  for (let elapsed = 0; elapsed < ms; elapsed += 500) {
+    // oxlint-disable-next-line react-doctor/async-await-in-loop -- each step must observe the I/O of the previous one
+    await vi.advanceTimersByTimeAsync(500)
+    // oxlint-disable-next-line react-doctor/async-await-in-loop -- see above
+    await new Promise<void>((resolve) => setImmediate(resolve))
+  }
 }
 
 function promiseEffect<TResult>(run: () => Promise<TResult>) {
