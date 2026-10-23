@@ -102,7 +102,7 @@ function Hero() {
               <CyclingWord words={heroWords} />
             </span>
           </h1>
-          <div className="lg:col-span-5 lg:pb-2">
+          <div className="min-w-0 lg:col-span-5 lg:pb-2">
             <p className="site-lede max-w-md text-muted-foreground">
               100% free and open source.
               <br />
@@ -258,7 +258,7 @@ function HeroInstall() {
     <div className="mt-7 max-w-md">
       <InstallCommand
         command={command}
-        className="border border-border bg-card py-1.5 pr-1.5 pl-4"
+        className="gap-2 border border-border bg-card py-1.5 pr-1.5 pl-3 text-[0.6875rem] tracking-tight sm:gap-3 sm:pl-4 sm:text-[0.8125rem] sm:tracking-normal"
       />
     </div>
   )
