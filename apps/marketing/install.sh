@@ -18,6 +18,11 @@
 # See docs/self-hosting.md in https://github.com/kiln-site/kiln.
 set -eu
 
+# Everything runs from main, called on the last line: `sh` reads a piped
+# script as it arrives, and a download cut off partway would otherwise run
+# the part that arrived. The body isn't indented, to keep the help text's.
+main() {
+
 image_prefix="ghcr.io/kiln-site"
 channel="latest"
 container="kiln-relay"
@@ -828,3 +833,6 @@ if [ "$https_ok" -eq 0 ]; then
 fi
 say "  ${dim}Install log: $log_file$reset"
 say ""
+}
+
+main "$@"
