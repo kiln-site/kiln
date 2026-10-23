@@ -1,6 +1,6 @@
 # Self-hosting
 
-Kiln needs only Docker. One Relay in **platform mode** installs the rest of
+Kiln needs only Docker, and its installer sets that up too. One Relay in **platform mode** installs the rest of
 Kiln on its own host (Hearth, Hearth's MySQL database, and a Valkey cache),
 pairs with that Hearth, and keeps them running. Every other machine runs a
 plain Relay that you pair from Hearth.
@@ -13,7 +13,17 @@ On the machine that will host Hearth:
 curl -fsSL https://kiln.site/install | sh
 ```
 
-The script asks where people will open Hearth (by default
+If Docker isn't installed, the script offers to install it: with Docker's
+official script (get.docker.com) on Debian, Ubuntu, Fedora, CentOS, RHEL,
+Raspberry Pi OS, and SLES, from Docker's CentOS packages on Rocky, AlmaLinux,
+and Oracle Linux, and with the system's package manager on Alpine and Arch. It
+starts Docker and enables it at boot, uses `sudo` when your user can't reach
+Docker's socket, and checks Docker by its version (20 or newer) and by running
+`hello-world` before installing Kiln. Without a terminal to ask on, it installs
+Docker only with `--yes`; `--skip-docker-install` stops instead. On macOS,
+install Docker Desktop first.
+
+The script then asks where people will open Hearth (by default
 `http://<public IP>:3000`), starts the Relay, waits for Hearth, and prints a
 setup link. Open it to create the platform administrator. Pass `--url`,
 `--port`, `--game-host`, or `--nightly` to skip the questions, and `--help`
