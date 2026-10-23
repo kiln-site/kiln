@@ -179,9 +179,34 @@ fail() {
 
 # ------------------------------------------------------------------ steps
 
+# A process's children, through pgrep or /proc.
+children_of() {
+  if command -v pgrep >/dev/null 2>&1; then
+    pgrep -P "$1" 2>/dev/null || true
+  else
+    awk -v parent="$1" '$4 == parent { print $1 }' /proc/[0-9]*/stat 2>/dev/null || true
+  fi
+}
+
+# Sends a signal to a process, through sudo for one running as root.
+signal() {
+  kill "-$1" "$2" 2>/dev/null ||
+    { [ "$(id -u)" -ne 0 ] && sudo -n kill "-$1" "$2" 2>/dev/null; } || true
+}
+
+# Stops a step and everything it started, such as Docker's installer, so
+# nothing keeps changing the machine after the script ends. Each process is
+# paused first so it can't start another while its children go.
+kill_tree() {
+  signal STOP "$1"
+  for child in $(children_of "$1"); do kill_tree "$child"; done
+  signal TERM "$1"
+  signal CONT "$1"
+}
+
 step_pid=""
 on_exit() {
-  if [ -n "$step_pid" ]; then kill "$step_pid" 2>/dev/null || true; fi
+  if [ -n "$step_pid" ]; then kill_tree "$step_pid"; fi
   if [ -n "${sudo_keeper:-}" ]; then kill "$sudo_keeper" 2>/dev/null || true; fi
   [ "$fancy" -eq 1 ] && printf '\033[?25h'
 }
@@ -216,10 +241,12 @@ step() {
   log "---------- $label ----------"
   log "\$ $*"
   step_log_start=$(wc -l <"$log_file")
+  # In the background even without a terminal: a `||` here would turn off
+  # `set -e` inside the step, so a failed command wouldn't stop it.
+  ("$@") >>"$log_file" 2>&1 </dev/null &
+  step_pid=$!
   if [ "$fancy" -eq 1 ]; then
     printf '\033[?25l'
-    ("$@") >>"$log_file" 2>&1 </dev/null &
-    step_pid=$!
     frame=1
     # shellcheck disable=SC2086 # one frame per word
     frames=$(printf '%s\n' $spinner | wc -l)
@@ -234,14 +261,11 @@ step() {
         "$dim" "$extra" "$(duration $(($(now) - step_started)))" "$reset"
       sleep 0.15 2>/dev/null || sleep 1
     done
-    status=0
-    wait "$step_pid" || status=$?
-    step_pid=""
     printf '\033[?25h'
-  else
-    status=0
-    ("$@") >>"$log_file" 2>&1 </dev/null || status=$?
   fi
+  status=0
+  wait "$step_pid" || status=$?
+  step_pid=""
   step_progress=""
   took=$(duration $(($(now) - step_started)))
   if [ "$status" -ne 0 ]; then
@@ -347,9 +371,9 @@ need_root() {
 
 download() {
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$1" -o "$2"
+    curl -fsSL "$1" -o "$2" || stop "Couldn't download $1. Check this machine is online."
   elif command -v wget >/dev/null 2>&1; then
-    wget -qO "$2" "$1"
+    wget -qO "$2" "$1" || stop "Couldn't download $1. Check this machine is online."
   else
     stop "Installing Docker needs curl or wget."
   fi
@@ -593,6 +617,14 @@ choose_url() {
 if [ "$mode" = "node" ]; then logo "Add this machine"; else logo "Install"; fi
 
 plan_docker
+# A stopped Docker starts first, so a rerun still finds what's installed.
+if [ "$docker_stopped" -eq 1 ]; then
+  say ""
+  step "Starting Docker" start_docker
+  docker_reachable || fail "Docker didn't start."
+  say ""
+  asked=0
+fi
 address=$(public_ip)
 [ -n "$address" ] || address="localhost"
 log "public address: $address"
@@ -633,8 +665,8 @@ else
 fi
 [ "$asked" -eq 0 ] || say ""
 
-[ "$docker_missing" -eq 0 ] || step "Installing Docker" install_docker
-if [ "$docker_missing" -eq 1 ] || [ "$docker_stopped" -eq 1 ]; then
+if [ "$docker_missing" -eq 1 ]; then
+  step "Installing Docker" install_docker
   step "Starting Docker" start_docker
   docker_reachable || fail "Docker didn't start."
 fi
@@ -644,11 +676,16 @@ step "Downloading Kiln" pull_relay
 
 if [ "$mode" = "node" ]; then
   step "Starting the Relay" start_node_relay
+  paired=$(dk exec "$container" kiln-relay pair create 2>>"$log_file" || true)
+  log "$paired"
+  invitation=$(printf '%s\n' "$paired" | grep '^kiln-relay://' | head -n 1 || true)
+  [ -n "$invitation" ] ||
+    fail "The Relay started, but couldn't make an invitation."
   say ""
   say "  ${green}Ready in $(duration $(($(now) - started_at))).$reset In Kiln, open Relays, choose"
   say "  Add Relay, and paste this (it expires in 15 minutes):"
   say ""
-  dk exec "$container" kiln-relay pair create 2>>"$log_file" | sed -n 's/^\(kiln-relay:\/\/.*\)/  \1/p'
+  say "  $invitation"
   say ""
   say "  ${dim}Install log: $log_file$reset"
   say ""
@@ -659,7 +696,8 @@ step "Starting Kiln's Relay" start_platform_relay
 step "Setting up the database" wait_healthy "$database" 600
 step "Starting Kiln" wait_healthy "$hearth" 900
 
-setup=$(dk exec "$container" kiln-relay platform setup-url 2>>"$log_file")
+setup=$(dk exec "$container" kiln-relay platform setup-url 2>>"$log_file" || true)
+[ -n "$setup" ] || fail "Kiln started, but didn't give a setup link."
 log "setup link printed"
 say ""
 say "  ${green}${bold}Kiln is ready$reset ${dim}in $(duration $(($(now) - started_at)))$reset"

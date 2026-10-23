@@ -86,6 +86,10 @@ ARG KILN_GIT_REPO=https://github.com/kiln-site/kiln
 ENV KILN_GIT_REPO=$KILN_GIT_REPO
 ENV KILN_DEFAULT_GIT_REPO=$KILN_GIT_REPO
 ENV NODE_ENV=production
+# node:sqlite is still experimental in Node 24, and its warning showed in every
+# Relay process and `kiln-relay` command. Docker adds image variables a
+# replaced container lacks, so updated Relays get this too.
+ENV NODE_OPTIONS=--disable-warning=ExperimentalWarning
 WORKDIR /app
 
 # Compose runs on its own from PATH; buildx is a plugin, where Compose and
@@ -117,5 +121,4 @@ EXPOSE 4100 2022
 # interval lets the self-updater see a replacement become healthy quickly.
 HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --start-interval=1s --retries=3 \
   CMD ["/usr/local/bin/kiln-relay-healthcheck"]
-# Through the kiln-relay entry, which quiets Node's SQLite warning.
-CMD ["/usr/local/bin/kiln-relay"]
+CMD ["dist/src/index.mjs"]
