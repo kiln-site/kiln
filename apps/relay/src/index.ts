@@ -1092,13 +1092,16 @@ const browserSocket = attachBrowserSocket({
       containerId: process.env.HOSTNAME?.trim() || null,
       id: config.nodeId,
     }),
-    async (target) =>
-      (
-        await runRelayEffect(
-          "relay.platform.console",
-          platformTargetContainer(platformReadContext(), target)
-        )
-      )?.Id ?? null
+    {
+      authorize: requirePlatformReader,
+      container: async (target) =>
+        (
+          await runRelayEffect(
+            "relay.platform.console",
+            platformTargetContainer(platformReadContext(), target)
+          )
+        )?.Id ?? null,
+    }
   ),
   docker,
   filesystem,

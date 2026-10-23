@@ -16,6 +16,9 @@ import type { RelaySnapshotSample } from "./snapshot-hub.js"
 export interface ConsoleSource {
   // The action a browser needs to read this output.
   readonly readAction: string
+  // Refuses a Hearth that this output's kind holds to more than the read
+  // action, such as Kiln's services, for the Hearth the Relay installed.
+  readonly authorize?: (clientId: string) => Promise<void>
   // The resource's output now: its current run's history and what follows.
   readonly session: (signal?: AbortSignal) => Promise<DockerConsoleSession>
   // Where the Relay's snapshots report the resource's runs, for kinds they
@@ -39,10 +42,14 @@ export function consoleSources(
   apps: Pick<AppDriver, "consoleSession">,
   // This Relay's ID, and the container it runs in (unknown outside Docker).
   relay: () => { containerId: string | null; id: string },
-  // The container of one of Kiln's services on this host, or its proxy.
-  platform: (
-    target: ReturnType<typeof relayPlatformTargetSchema.parse>
-  ) => Promise<string | null>
+  platform: {
+    // Throws unless the Hearth may read Kiln's services.
+    authorize: (clientId: string) => Promise<void>
+    // The container of one of Kiln's services on this host, or its proxy.
+    container: (
+      target: ReturnType<typeof relayPlatformTargetSchema.parse>
+    ) => Promise<string | null>
+  }
 ): ConsoleSources {
   return (kind, id, stream) => {
     switch (kind) {
@@ -100,11 +107,12 @@ export function consoleSources(
       // Kiln's services on this Relay's host, one container per stream.
       case "platform":
         return {
+          authorize: platform.authorize,
           readAction: relayConsoleReadActions.platform,
           session: async (signal) => {
             if (id !== relay().id) throw new Error("Relay not found")
             const target = relayPlatformTargetSchema.parse(stream ?? "hearth")
-            const containerId = await platform(target)
+            const containerId = await platform.container(target)
             if (!containerId) {
               throw new Error(`Kiln's ${target} container isn't on this host`)
             }

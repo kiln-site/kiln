@@ -532,23 +532,41 @@ function authenticateBrowser(
         socket.close(4403, "Console capability does not allow this resource")
         return
       }
-      const parent = tracedSubscription
-        ? undefined
-        : browserTraceParent(value)
+      const parent = tracedSubscription ? undefined : browserTraceParent(value)
       tracedSubscription = true
-      forkPromise(
-        () =>
-          traceRelayPromise(
-            "Subscribe browser console",
-            (span) => hubs.subscribe(socket, resource, source, span),
-            {
-              "kiln.operation": "relay.console.subscribe",
-              "kiln.resource.kind": resource.kind,
-            },
-            parent
-          ),
-        () => socket.close(4500, "Console stream failed")
-      )
+      const subscribe = () =>
+        forkPromise(
+          () =>
+            traceRelayPromise(
+              "Subscribe browser console",
+              (span) => hubs.subscribe(socket, resource, source, span),
+              {
+                "kiln.operation": "relay.console.subscribe",
+                "kiln.resource.kind": resource.kind,
+              },
+              parent
+            ),
+          () => socket.close(4500, "Console stream failed")
+        )
+      // Some kinds hold the Hearth that issued the capability to more than
+      // the read action, as Kiln's services do.
+      const { authorize } = source
+      if (authorize) {
+        const issuer = capability.issuer
+        forkPromise(
+          async () => {
+            await authorize(issuer)
+            subscribe()
+          },
+          () =>
+            socket.close(
+              4403,
+              "Console capability does not allow this resource"
+            )
+        )
+      } else {
+        subscribe()
+      }
       return
     }
     const resourceSubscription = decodeBrowserResourceSubscription(value)
@@ -3127,12 +3145,7 @@ function timedBrowserOperation<TResult>(
   parent?: Tracer.AnySpan
 ): Effect.Effect<TResult, Error> {
   return browserOperation((signal) =>
-    traceRelayPromise(
-      name,
-      () => run(signal),
-      { "kiln.operation": op },
-      parent
-    )
+    traceRelayPromise(name, () => run(signal), { "kiln.operation": op }, parent)
   )
 }
 

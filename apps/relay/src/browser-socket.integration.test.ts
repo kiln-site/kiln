@@ -170,7 +170,10 @@ describe("relay browser socket integration", () => {
 
   // A browser's trace context is only telemetry; none can stop its console.
   it.each([
-    ["a trace context", "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"],
+    [
+      "a trace context",
+      "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+    ],
     ["a malformed trace context", "00-not-a-trace-01"],
     ["an oversized trace context", `00-${"a".repeat(4_096)}`],
     ["a trace context that is not text", { traceId: 1 }],
@@ -310,6 +313,38 @@ describe("relay browser socket integration", () => {
 
     expect(result.ready).toBe(false)
     expect(result.closed.code).toBe(4401)
+  })
+
+  it("streams Kiln's services to the Hearth the Relay lets read them", async () => {
+    const relay = await startRelay({
+      actions: ["relay.logs.read"],
+      platformReader: true,
+    })
+    const { messages, socket } = await authenticate(relay, platformCapability)
+
+    socket.send(
+      JSON.stringify({
+        instanceId: relayId,
+        stream: "database",
+        type: "console.subscribe",
+        v: 1,
+      })
+    )
+
+    const reset = await messages.next("reset")
+    expect(lineTexts(reset)).toEqual(["container kiln-database output"])
+  })
+
+  it("refuses Kiln's services to another Hearth that may read Relay logs", async () => {
+    const relay = await startRelay({ actions: ["relay.logs.read"] })
+    const { messages, socket } = await authenticate(relay, platformCapability)
+    const closed = messages.closed()
+
+    socket.send(
+      JSON.stringify({ instanceId: relayId, type: "console.subscribe", v: 1 })
+    )
+
+    expect((await closed).code).toBe(4403)
   })
 
   it("refuses a Relay logs capability carrying a server's console actions", async () => {
@@ -678,6 +713,8 @@ function consoleSession(
 async function startRelay(
   clientGrant: {
     actions?: Array<string>
+    // Whether the Relay lets this Hearth read Kiln's services.
+    platformReader?: boolean
     role?: "custom" | "full_access"
   } = {},
   liveConsoles: ReadonlyArray<LiveConsole> = []
@@ -780,7 +817,13 @@ async function startRelay(
           Promise.resolve(consoleSession(id, `app ${id} output`)),
       },
       () => ({ containerId: "relay-container", id: relayId }),
-      (target) => Promise.resolve(`kiln-${target}`)
+      {
+        authorize: (clientId) =>
+          clientGrant.platformReader && clientId === client.id
+            ? Promise.resolve()
+            : Promise.reject(new Error("Not the Hearth this Relay installed")),
+        container: (target) => Promise.resolve(`kiln-${target}`),
+      }
     ),
     docker: {} as DockerDriver,
     filesystem: {} as FilesystemDriver,
@@ -1018,6 +1061,12 @@ const relayLogsCapability = {
   actions: ["relay.logs.read"],
   instanceId: relayId,
   resourceKind: "relay",
+} satisfies Partial<RelayBrowserCapabilityV2>
+
+const platformCapability = {
+  actions: ["relay.logs.read"],
+  instanceId: relayId,
+  resourceKind: "platform",
 } satisfies Partial<RelayBrowserCapabilityV2>
 
 function lineTexts(frame: Record<string, unknown>): Array<string> {

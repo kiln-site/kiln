@@ -60,13 +60,14 @@ export const kilnCopy: Record<
 }
 
 /**
- * The host Kiln runs on: the Relay that installed it, or else the first that
- * reports its services.
+ * The host this Hearth runs on: the Relay that installed it, or else one that
+ * installed some Kiln, or else the first that reports its services.
  */
 export function selectKilnHost(
   hosts: ReadonlyArray<KilnPlatformHost>
 ): KilnPlatformHost | null {
   return (
+    hosts.find((host) => host.status?.canManage === true) ??
     hosts.find((host) => host.status?.management === "relay") ??
     hosts.find((host) => host.status !== null) ??
     hosts[0] ??
