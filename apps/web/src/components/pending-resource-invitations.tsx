@@ -117,6 +117,9 @@ export const PendingResourceInvitations = memo(
   }
 )
 
+// Every inventory table leads with status and favorite columns and ends with
+// actions. The invitation spans whatever sits between, so adding or hiding a
+// middle column cannot push its cells out of line.
 const PendingRow = memo(function PendingRow({
   invitation,
   onOpen,
@@ -124,14 +127,13 @@ const PendingRow = memo(function PendingRow({
   invitation: ResourceInvitation
   onOpen: (id: string) => void
 }) {
-  const type = invitation.scope.resourceType
   return (
     <tr
       className="relative grid min-h-14 grid-cols-[var(--data-table-grid-base)] border-b border-border/70 bg-amber-500/[0.025] text-sm hover:bg-muted/20 sm:grid-cols-[var(--data-table-grid-sm)] md:grid-cols-[var(--data-table-grid-md)] lg:grid-cols-[var(--data-table-grid-lg)] xl:grid-cols-[var(--data-table-grid-xl)]"
       role="row"
     >
       <td
-        className="flex items-center px-2 text-xs text-amber-600 sm:px-3 dark:text-amber-400"
+        className="col-[1/2] row-start-1 flex items-center px-2 text-xs text-amber-600 sm:px-3 dark:text-amber-400"
         role="cell"
       >
         <button
@@ -140,40 +142,23 @@ const PendingRow = memo(function PendingRow({
           aria-label={`Review invitation to ${invitation.resourceName}`}
           className="absolute inset-0 z-10 rounded-none outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
         />
-        <Clock3 className="mr-1 size-3.5" aria-hidden />
+        <Clock3 className="mr-1 size-3.5 shrink-0" aria-hidden />
         <span className="hidden sm:inline">Pending</span>
       </td>
       <td
-        className="pointer-events-none flex min-w-0 flex-col justify-center px-3"
+        className="pointer-events-none col-[3/-2] row-start-1 flex min-w-0 flex-col justify-center px-3"
         role="cell"
       >
         <span className="truncate font-medium">{invitation.resourceName}</span>
         <span className="truncate text-xs text-muted-foreground">
           Invited {invitation.createdAt.slice(0, 10)}
+          {invitation.scope.resourceType === "relay"
+            ? null
+            : ` · ${invitation.relayName}`}
         </span>
       </td>
       <td
-        className="pointer-events-none hidden min-w-0 items-center truncate px-3 text-xs text-muted-foreground md:flex"
-        role="cell"
-      >
-        {type === "instance" ? invitation.relayName : "—"}
-      </td>
-      <td
-        className={`pointer-events-none hidden min-w-0 items-center truncate px-3 text-xs text-muted-foreground ${type === "instance" ? "xl:flex" : type === "database" ? "md:flex" : "lg:flex"}`}
-        role="cell"
-      >
-        {type === "database" ? invitation.relayName : "—"}
-      </td>
-      {type === "relay" ? (
-        <td
-          className="pointer-events-none hidden items-center px-3 text-xs text-muted-foreground xl:flex"
-          role="cell"
-        >
-          —
-        </td>
-      ) : null}
-      <td
-        className="pointer-events-none flex items-center justify-end px-3 text-xs font-medium text-primary-ink"
+        className="pointer-events-none col-[-2/-1] row-start-1 flex items-center justify-end px-3 text-xs font-medium text-primary-ink"
         role="cell"
       >
         Review invitation
