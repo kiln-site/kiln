@@ -439,6 +439,26 @@ export class DockerEngine {
     })
   }
 
+  /**
+   * Whether a path exists in the container's filesystem, as Docker sees it
+   * (`GET /containers/{id}/archive`). Answers false when the container or
+   * the path doesn't exist.
+   */
+  containerPathExists(
+    reference: string,
+    path: string
+  ): Effect.Effect<boolean, DockerEngineError> {
+    return this.#exchange({
+      maxBytes: 1024 * 1024,
+      method: "GET",
+      path: `/containers/${segment(reference)}/archive${query({ path })}`,
+      timeout: 10_000,
+    }).pipe(
+      Effect.as(true),
+      Effect.catchIf(isDockerNotFound, () => Effect.succeed(false))
+    )
+  }
+
   /** `docker logs --timestamps`, read whole into stdout and stderr. */
   containerLogs(
     reference: string,

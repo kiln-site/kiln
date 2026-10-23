@@ -16,7 +16,8 @@
  * run beside it, deployed with Compose or Coolify, but only reads them.
  */
 import { createHash, randomUUID } from "node:crypto"
-import { mkdir, readFile, stat } from "node:fs/promises"
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import {
@@ -41,7 +42,7 @@ import {
   isDockerNotFound,
 } from "./docker-engine.js"
 import type { RelayClientRecord } from "./effect/state.js"
-import { isOwnContainer, mountIdentity } from "./platform-identity.js"
+import { hostnameContainerId } from "./platform-identity.js"
 import { relayOwnerLabels } from "./relay-resources.js"
 import {
   decodePlatformRecoveryKit,
@@ -617,7 +618,7 @@ const ensureNetwork = Effect.fnUntraced(function* (
  */
 const attachRelay = Effect.fnUntraced(function* (
   engine: DockerEngine,
-  config: Pick<RelayConfig, "dataDirectory" | "selfContainer">,
+  config: Pick<RelayConfig, "selfContainer">,
   state: PlatformState
 ) {
   const alias = state.relay.host
@@ -641,14 +642,15 @@ const attachRelay = Effect.fnUntraced(function* (
 })
 
 /**
- * The Relay's own container, or null when it can't be told apart:
+ * The Relay's own container, or null when it can't be proven:
  * `KILN_RELAY_CONTAINER` when the operator named it, or else the container
- * the Relay's mounts identify (see platform-identity.ts). Never a container
- * that merely shares its name or hostname.
+ * its hostname file is mounted from, once Docker confirms that container
+ * holds a file this process just wrote to its own filesystem. A container
+ * that shares the Relay's network, hostname, or volumes doesn't have it.
  */
 export const ownContainer = Effect.fnUntraced(function* (
   engine: DockerEngine,
-  config: Pick<RelayConfig, "dataDirectory" | "selfContainer">
+  config: Pick<RelayConfig, "selfContainer">
 ) {
   if (config.selfContainer) {
     return yield* inspectOptional(engine.inspectContainer(config.selfContainer))
@@ -656,16 +658,25 @@ export const ownContainer = Effect.fnUntraced(function* (
   const mountinfo = yield* readOptional(() =>
     readFile("/proc/self/mountinfo", "utf8")
   )
-  if (!mountinfo) return null
-  const identity = mountIdentity(mountinfo, config.dataDirectory)
-  if (!identity.containerId) return null
-  const candidate = yield* inspectOptional(
-    engine.inspectContainer(identity.containerId)
+  const id = mountinfo ? hostnameContainerId(mountinfo) : null
+  if (!id) return null
+  const candidate = yield* inspectOptional(engine.inspectContainer(id))
+  if (candidate?.Id !== id) return null
+  const proof = join(tmpdir(), `kiln-relay-self-${randomUUID()}`)
+  const written = yield* Effect.tryPromise(() =>
+    writeFile(proof, "", { flag: "wx", mode: 0o600 })
+  ).pipe(
+    Effect.as(true),
+    Effect.catch(() => Effect.succeed(false))
   )
-  return candidate &&
-    isOwnContainer(identity, config.dataDirectory, candidate)
-    ? candidate
-    : null
+  if (!written) return null
+  const proven = yield* engine
+    .containerPathExists(id, proof)
+    .pipe(
+      Effect.catch(() => Effect.succeed(false)),
+      Effect.ensuring(Effect.promise(() => rm(proof, { force: true })))
+    )
+  return proven ? candidate : null
 })
 
 /**
