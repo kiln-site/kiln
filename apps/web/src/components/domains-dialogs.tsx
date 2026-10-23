@@ -55,11 +55,13 @@ import {
 } from "@/components/domains-shared"
 import { InstanceCard } from "@/components/instance-card"
 import {
+  DrawerPopover,
+  DrawerPopoverContent,
+  DrawerPopoverTrigger,
+} from "@/components/drawer-popover"
+import {
   InstancePickerContent,
   type InstancePickerItem,
-  InstancePickerPopover,
-  InstancePickerPopoverContent,
-  InstancePickerPopoverTrigger,
 } from "@/components/instance-picker"
 import type {
   DomainAssignmentStrategy,
@@ -279,8 +281,8 @@ const GameServerPicker = React.memo(function GameServerPicker({
   )
 
   return (
-    <InstancePickerPopover open={open} onOpenChange={setOpen}>
-      <InstancePickerPopoverTrigger asChild>
+    <DrawerPopover open={open} onOpenChange={setOpen}>
+      <DrawerPopoverTrigger asChild>
         <Button
           aria-expanded={open}
           aria-labelledby="new-domain-server"
@@ -308,8 +310,8 @@ const GameServerPicker = React.memo(function GameServerPicker({
           )}
           <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
         </Button>
-      </InstancePickerPopoverTrigger>
-      <InstancePickerPopoverContent
+      </DrawerPopoverTrigger>
+      <DrawerPopoverContent
         title="Game servers"
         align="start"
         className="z-[70] w-(--radix-popover-trigger-width) min-w-72 overflow-hidden p-0"
@@ -321,8 +323,8 @@ const GameServerPicker = React.memo(function GameServerPicker({
           selectedKeys={selectedKeys}
           onSelect={selectItem}
         />
-      </InstancePickerPopoverContent>
-    </InstancePickerPopover>
+      </DrawerPopoverContent>
+    </DrawerPopover>
   )
 })
 

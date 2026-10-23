@@ -21,11 +21,13 @@ import {
   type ManagedDatabase,
 } from "@/components/database/database-presentation"
 import {
+  DrawerPopover,
+  DrawerPopoverContent,
+  DrawerPopoverTrigger,
+} from "@/components/drawer-popover"
+import {
   InstancePickerContent,
   type InstancePickerItem,
-  InstancePickerPopover,
-  InstancePickerPopoverContent,
-  InstancePickerPopoverTrigger,
 } from "@/components/instance-picker"
 import { canAccessInstancePermission } from "@/lib/navigation-destinations"
 import {
@@ -125,9 +127,9 @@ export const DatabaseNetworkPicker = React.memo(function DatabaseNetworkPicker({
   const [open, setOpen] = React.useState(false)
 
   return (
-    <InstancePickerPopover open={open} onOpenChange={setOpen}>
+    <DrawerPopover open={open} onOpenChange={setOpen}>
       {variant === "button" ? (
-        <InstancePickerPopoverTrigger asChild>
+        <DrawerPopoverTrigger asChild>
           <Button
             aria-expanded={open}
             size="sm"
@@ -137,11 +139,11 @@ export const DatabaseNetworkPicker = React.memo(function DatabaseNetworkPicker({
             <Network />
             Connect servers
           </Button>
-        </InstancePickerPopoverTrigger>
+        </DrawerPopoverTrigger>
       ) : (
         <Tooltip>
           <TooltipTrigger asChild>
-            <InstancePickerPopoverTrigger asChild>
+            <DrawerPopoverTrigger asChild>
               <Button
                 aria-label={`Connect game servers to ${database.name}`}
                 aria-expanded={open}
@@ -152,19 +154,19 @@ export const DatabaseNetworkPicker = React.memo(function DatabaseNetworkPicker({
               >
                 <Network />
               </Button>
-            </InstancePickerPopoverTrigger>
+            </DrawerPopoverTrigger>
           </TooltipTrigger>
           <TooltipContent side="bottom">Connect game servers</TooltipContent>
         </Tooltip>
       )}
-      <InstancePickerPopoverContent
+      <DrawerPopoverContent
         title={`Connect game servers to ${database.name}`}
         align="end"
         className="w-[min(32rem,calc(100vw-2rem))] overflow-hidden p-0"
       >
         <DatabaseServerPicker database={database} />
-      </InstancePickerPopoverContent>
-    </InstancePickerPopover>
+      </DrawerPopoverContent>
+    </DrawerPopover>
   )
 })
 

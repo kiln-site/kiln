@@ -16,12 +16,14 @@ import {
   ServerKindIcon,
 } from "@/components/instance-kind-icon"
 import {
+  DrawerPopover,
+  DrawerPopoverContent,
+  DrawerPopoverTrigger,
+} from "@/components/drawer-popover"
+import {
   InstancePickerContent,
   type InstancePickerGroup,
   type InstancePickerItem,
-  InstancePickerPopover,
-  InstancePickerPopoverContent,
-  InstancePickerPopoverTrigger,
 } from "@/components/instance-picker"
 import { WorkspaceSummaryCard } from "@/components/workspace-summary-card"
 
@@ -172,7 +174,7 @@ function ServerScopePickerView<K extends ScopeKind>({
 
   return (
     <div className="mb-3">
-      <InstancePickerPopover open={pickerOpen} onOpenChange={setPickerOpen}>
+      <DrawerPopover open={pickerOpen} onOpenChange={setPickerOpen}>
         <WorkspaceSummaryCard
           action={
             <div className="flex shrink-0 items-center gap-2">
@@ -186,7 +188,7 @@ function ServerScopePickerView<K extends ScopeKind>({
                   </TooltipContent>
                 </Tooltip>
               ) : null}
-              <InstancePickerPopoverTrigger asChild>
+              <DrawerPopoverTrigger asChild>
                 <Button
                   type="button"
                   variant="outline"
@@ -196,7 +198,7 @@ function ServerScopePickerView<K extends ScopeKind>({
                   <ArrowLeftRight />
                   {selectedServer || kindScope ? changeLabel : chooseLabel}
                 </Button>
-              </InstancePickerPopoverTrigger>
+              </DrawerPopoverTrigger>
             </div>
           }
           icon={<ScopeIcon className="size-5" />}
@@ -215,7 +217,7 @@ function ServerScopePickerView<K extends ScopeKind>({
             {selectionMetadata}
           </p>
         </WorkspaceSummaryCard>
-        <InstancePickerPopoverContent
+        <DrawerPopoverContent
           title={ariaLabel}
           align="end"
           className="w-[min(32rem,calc(100vw-2rem))] overflow-hidden p-0"
@@ -231,8 +233,8 @@ function ServerScopePickerView<K extends ScopeKind>({
             onSelect={selectServer}
             onSelectGroup={allowAll || onSelectKind ? selectGroup : undefined}
           />
-        </InstancePickerPopoverContent>
-      </InstancePickerPopover>
+        </DrawerPopoverContent>
+      </DrawerPopover>
     </div>
   )
 }

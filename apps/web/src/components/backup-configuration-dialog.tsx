@@ -21,11 +21,13 @@ import {
 import { Input } from "@workspace/ui/components/input"
 
 import {
+  DrawerPopover,
+  DrawerPopoverContent,
+  DrawerPopoverTrigger,
+} from "@/components/drawer-popover"
+import {
   InstancePickerContent,
   type InstancePickerItem,
-  InstancePickerPopover,
-  InstancePickerPopoverContent,
-  InstancePickerPopoverTrigger,
 } from "@/components/instance-picker"
 import { InstanceCard } from "@/components/instance-card"
 import { timestampedBackupName } from "@/lib/backup-name"
@@ -469,8 +471,8 @@ const BackupTargetPicker = React.memo(function BackupTargetPicker({
   )
 
   return (
-    <InstancePickerPopover open={open} onOpenChange={setOpen}>
-      <InstancePickerPopoverTrigger asChild>
+    <DrawerPopover open={open} onOpenChange={setOpen}>
+      <DrawerPopoverTrigger asChild>
         <Button
           type="button"
           variant="outline"
@@ -498,8 +500,8 @@ const BackupTargetPicker = React.memo(function BackupTargetPicker({
           )}
           <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
         </Button>
-      </InstancePickerPopoverTrigger>
-      <InstancePickerPopoverContent
+      </DrawerPopoverTrigger>
+      <DrawerPopoverContent
         title="Backup targets"
         align="start"
         className="z-[70] w-(--radix-popover-trigger-width) min-w-72 overflow-hidden p-0"
@@ -511,8 +513,8 @@ const BackupTargetPicker = React.memo(function BackupTargetPicker({
           selectedKeys={selectedKeys}
           onSelect={selectItem}
         />
-      </InstancePickerPopoverContent>
-    </InstancePickerPopover>
+      </DrawerPopoverContent>
+    </DrawerPopover>
   )
 })
 

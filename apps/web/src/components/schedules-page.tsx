@@ -119,11 +119,13 @@ import {
 } from "@/components/backup-configuration-dialog"
 import { BackupIcon } from "@/components/backup-icon"
 import {
+  DrawerPopover,
+  DrawerPopoverContent,
+  DrawerPopoverTrigger,
+} from "@/components/drawer-popover"
+import {
   InstancePickerContent,
   type InstancePickerItem,
-  InstancePickerPopover,
-  InstancePickerPopoverContent,
-  InstancePickerPopoverTrigger,
 } from "@/components/instance-picker"
 import {
   useScheduleScope,
@@ -1698,8 +1700,8 @@ const HistoryTargets = React.memo(function HistoryTargets({
   const [open, setOpen] = React.useState(false)
   const close = React.useCallback(() => setOpen(false), [])
   return (
-    <InstancePickerPopover open={open} onOpenChange={setOpen}>
-      <InstancePickerPopoverTrigger asChild>
+    <DrawerPopover open={open} onOpenChange={setOpen}>
+      <DrawerPopoverTrigger asChild>
         <button
           type="button"
           aria-label={`${targets.length} ${targets.length === 1 ? "target" : "targets"} for ${name}`}
@@ -1707,8 +1709,8 @@ const HistoryTargets = React.memo(function HistoryTargets({
         >
           <InstanceKindCounts counts={counts} />
         </button>
-      </InstancePickerPopoverTrigger>
-      <InstancePickerPopoverContent
+      </DrawerPopoverTrigger>
+      <DrawerPopoverContent
         title="Targets"
         aria-label="Targets"
         align="start"
@@ -1720,8 +1722,8 @@ const HistoryTargets = React.memo(function HistoryTargets({
           targets={targets}
           onNavigate={close}
         />
-      </InstancePickerPopoverContent>
-    </InstancePickerPopover>
+      </DrawerPopoverContent>
+    </DrawerPopover>
   )
 })
 
@@ -2725,8 +2727,8 @@ const ScheduleTargetSelector = React.memo(function ScheduleTargetSelector({
           </span>
         </div>
       )}
-      <InstancePickerPopover open={open} onOpenChange={setOpen}>
-        <InstancePickerPopoverTrigger asChild>
+      <DrawerPopover open={open} onOpenChange={setOpen}>
+        <DrawerPopoverTrigger asChild>
           <Button
             type="button"
             variant="outline"
@@ -2742,8 +2744,8 @@ const ScheduleTargetSelector = React.memo(function ScheduleTargetSelector({
             </span>
             <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
           </Button>
-        </InstancePickerPopoverTrigger>
-        <InstancePickerPopoverContent
+        </DrawerPopoverTrigger>
+        <DrawerPopoverContent
           title="Targets"
           align="start"
           className="z-[70] w-[min(34rem,calc(100vw-2rem))] overflow-hidden p-0"
@@ -2757,8 +2759,8 @@ const ScheduleTargetSelector = React.memo(function ScheduleTargetSelector({
             onSelect={selectTarget}
             onSelectMany={onToggle}
           />
-        </InstancePickerPopoverContent>
-      </InstancePickerPopover>
+        </DrawerPopoverContent>
+      </DrawerPopover>
     </div>
   )
 })
@@ -3196,10 +3198,10 @@ const ScheduleActionTargetsButton = React.memo(
     )
 
     return (
-      <InstancePickerPopover open={open} onOpenChange={setOpen}>
+      <DrawerPopover open={open} onOpenChange={setOpen}>
         <Tooltip>
           <TooltipTrigger asChild>
-            <InstancePickerPopoverTrigger asChild>
+            <DrawerPopoverTrigger asChild>
               <Button
                 aria-expanded={open}
                 aria-label={`${selectedTargets.length} targets for ${actionLabel(action.type)}`}
@@ -3209,13 +3211,13 @@ const ScheduleActionTargetsButton = React.memo(
               >
                 <Server className="size-3.5" />
               </Button>
-            </InstancePickerPopoverTrigger>
+            </DrawerPopoverTrigger>
           </TooltipTrigger>
           <TooltipContent side="top">
             {selectedTargets.length} action targets
           </TooltipContent>
         </Tooltip>
-        <InstancePickerPopoverContent
+        <DrawerPopoverContent
           title="Action targets"
           align="end"
           className="z-[70] w-[min(28rem,calc(100vw-2rem))] overflow-hidden p-0"
@@ -3232,8 +3234,8 @@ const ScheduleActionTargetsButton = React.memo(
             onSelect={toggleTarget}
             onSelectMany={onToggle}
           />
-        </InstancePickerPopoverContent>
-      </InstancePickerPopover>
+        </DrawerPopoverContent>
+      </DrawerPopover>
     )
   }
 )

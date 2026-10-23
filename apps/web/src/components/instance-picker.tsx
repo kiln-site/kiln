@@ -15,12 +15,6 @@ import {
 import type { LucideProps } from "lucide-react"
 
 import {
-  Drawer,
-  DrawerContent,
-  DrawerTitle,
-  DrawerTrigger,
-} from "@workspace/ui/components/drawer"
-import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
@@ -34,9 +28,9 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@workspace/ui/components/popover"
-import { useIsMobile } from "@workspace/ui/hooks/use-mobile"
 import { cn } from "@workspace/ui/lib/utils"
 
+import { useDrawerPopoverIsDrawer } from "@/components/drawer-popover"
 import { useInstanceFavoriteKeys } from "@/components/instance-favorite"
 import { InstanceCard } from "@/components/instance-card"
 import {
@@ -123,132 +117,6 @@ const kindOrder: ReadonlyArray<InstancePickerKind> = [
 ]
 const emptyGroups: ReadonlySet<InstancePickerGroup> = new Set()
 const emptyGroupList: ReadonlyArray<InstancePickerGroup> = []
-
-// Whether the surrounding picker opens as a phone drawer, its trigger, and a
-// callback for when its surface has finished closing; set by
-// InstancePickerPopover, read by its trigger, content, and the list.
-const InstancePickerSurfaceContext = React.createContext<{
-  closed: () => void
-  drawer: boolean
-  triggerRef: React.RefObject<HTMLElement | null>
-}>({ closed: () => undefined, drawer: false, triggerRef: { current: null } })
-
-/**
- * A popover for an instance picker that opens as a bottom drawer on phones,
- * with the search field next to the keyboard. Use with
- * InstancePickerPopoverTrigger and InstancePickerPopoverContent.
- */
-export function InstancePickerPopover({
-  children,
-  onOpenChange,
-  open,
-}: {
-  children: React.ReactNode
-  onOpenChange: (open: boolean) => void
-  open: boolean
-}) {
-  const isMobile = useIsMobile()
-  const [drawer, setDrawer] = React.useState(isMobile)
-  // Swap between popover and drawer only while closed, so rotating a phone
-  // past the breakpoint keeps an open picker and its search. A closing picker
-  // waits until its surface has finished closing and handed focus back, even
-  // if the breakpoint changes mid-close.
-  const [closing, setClosing] = React.useState(false)
-  const [wasOpen, setWasOpen] = React.useState(open)
-  if (wasOpen !== open) {
-    setWasOpen(open)
-    setClosing(!open)
-  }
-  const closed = React.useCallback(() => setClosing(false), [])
-  const triggerRef = React.useRef<HTMLElement | null>(null)
-  const refocusTrigger = React.useRef(false)
-  React.useLayoutEffect(() => {
-    if (open || closing || drawer === isMobile) return
-    // Swapping rebuilds the trigger; keep focus on it if it had focus.
-    const active = document.activeElement
-    refocusTrigger.current =
-      active !== null && triggerRef.current?.contains(active) === true
-    setDrawer(isMobile)
-  }, [closing, drawer, isMobile, open])
-  React.useLayoutEffect(() => {
-    if (!refocusTrigger.current) return
-    refocusTrigger.current = false
-    triggerRef.current?.focus({ preventScroll: true })
-  }, [drawer])
-  // In case a surface closes without reporting it.
-  React.useEffect(() => {
-    if (!closing) return
-    const timeout = window.setTimeout(closed, 1000)
-    return () => window.clearTimeout(timeout)
-  }, [closed, closing])
-  const surface = React.useMemo(
-    () => ({ closed, drawer, triggerRef }),
-    [closed, drawer]
-  )
-  const Root = drawer ? Drawer : Popover
-  return (
-    <InstancePickerSurfaceContext.Provider value={surface}>
-      <Root open={open} onOpenChange={onOpenChange}>
-        {children}
-      </Root>
-    </InstancePickerSurfaceContext.Provider>
-  )
-}
-
-export function InstancePickerPopoverTrigger({
-  ref,
-  ...props
-}: React.ComponentProps<typeof PopoverTrigger>) {
-  const { drawer, triggerRef } = React.useContext(InstancePickerSurfaceContext)
-  const setTrigger = React.useCallback(
-    (node: HTMLButtonElement | null) => {
-      triggerRef.current = node
-      if (typeof ref === "function") ref(node)
-      else if (ref) ref.current = node
-    },
-    [ref, triggerRef]
-  )
-  return drawer ? (
-    <DrawerTrigger ref={setTrigger} {...props} />
-  ) : (
-    <PopoverTrigger ref={setTrigger} {...props} />
-  )
-}
-
-/**
- * The popover's content on desktop. On phones the drawer ignores the popover's
- * placement and sizing, and `title` names it for screen readers.
- */
-export function InstancePickerPopoverContent({
-  children,
-  onCloseAutoFocus,
-  title,
-  ...props
-}: React.ComponentProps<typeof PopoverContent> & { title: string }) {
-  const { closed, drawer } = React.useContext(InstancePickerSurfaceContext)
-  // Runs once the surface has unmounted, just before focus returns to the
-  // trigger unless the caller prevents it.
-  const handleCloseAutoFocus = React.useCallback(
-    (event: Event) => {
-      onCloseAutoFocus?.(event)
-      closed()
-    },
-    [closed, onCloseAutoFocus]
-  )
-  if (!drawer) {
-    return (
-      <PopoverContent onCloseAutoFocus={handleCloseAutoFocus} {...props}>
-        {children}
-      </PopoverContent>
-    )
-  }
-  return (
-    <DrawerContent onCloseAutoFocus={handleCloseAutoFocus}>
-      <DrawerTitle className="sr-only">{title}</DrawerTitle>
-      {children}
-    </DrawerContent>
-  )
-}
 
 export const InstancePickerContent = React.memo(function InstancePickerContent({
   ariaLabel = "Instances",
@@ -423,7 +291,7 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
   const activeItem = visibleItems[activeItemIndex]
   // In a phone drawer the search field sits last, next to the keyboard, and
   // the list fills the drawer.
-  const searchAtBottom = React.useContext(InstancePickerSurfaceContext).drawer
+  const searchAtBottom = useDrawerPopoverIsDrawer()
 
   const searchBar = (
     <div

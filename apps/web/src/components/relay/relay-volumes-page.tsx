@@ -43,11 +43,11 @@ import { IdentityName } from "@/components/identity-name"
 import { InfoCopyValue } from "@/components/info-page"
 import { InfraSyncButton } from "@/components/infra-sync-button"
 import {
-  InstancePickerContent,
-  InstancePickerPopover,
-  InstancePickerPopoverContent,
-  InstancePickerPopoverTrigger,
-} from "@/components/instance-picker"
+  DrawerPopover,
+  DrawerPopoverContent,
+  DrawerPopoverTrigger,
+} from "@/components/drawer-popover"
+import { InstancePickerContent } from "@/components/instance-picker"
 import { AppKindIcon, RelayKindIcon } from "@/components/instance-kind-icon"
 import { relayHostAccessQueryOptions } from "@/components/relay/relay-host-access"
 import { useRelayPermission } from "@/components/relay/relay-settings"
@@ -443,8 +443,8 @@ const VolumeMounts = React.memo(function VolumeMounts({
   ).size
   const containers = volume.mounts.length
   return (
-    <InstancePickerPopover open={open} onOpenChange={setOpen}>
-      <InstancePickerPopoverTrigger asChild>
+    <DrawerPopover open={open} onOpenChange={setOpen}>
+      <DrawerPopoverTrigger asChild>
         <button
           type="button"
           aria-label={`${apps} ${apps === 1 ? "app" : "apps"}, ${containers} ${containers === 1 ? "container" : "containers"} mount ${volume.name}`}
@@ -458,8 +458,8 @@ const VolumeMounts = React.memo(function VolumeMounts({
             other="containers"
           />
         </button>
-      </InstancePickerPopoverTrigger>
-      <InstancePickerPopoverContent
+      </DrawerPopoverTrigger>
+      <DrawerPopoverContent
         title="Mounts"
         aria-label="Mounts"
         align="start"
@@ -472,8 +472,8 @@ const VolumeMounts = React.memo(function VolumeMounts({
           volume={volume}
           onNavigate={close}
         />
-      </InstancePickerPopoverContent>
-    </InstancePickerPopover>
+      </DrawerPopoverContent>
+    </DrawerPopover>
   )
 })
 

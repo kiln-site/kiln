@@ -60,11 +60,13 @@ import {
 } from "@/components/instance-kind-icon"
 import { SourceAccount } from "@/components/source-account"
 import {
+  DrawerPopover,
+  DrawerPopoverContent,
+  DrawerPopoverTrigger,
+} from "@/components/drawer-popover"
+import {
   InstancePickerContent,
   type InstancePickerItem,
-  InstancePickerPopover,
-  InstancePickerPopoverContent,
-  InstancePickerPopoverTrigger,
 } from "@/components/instance-picker"
 import {
   githubBranchesQueryOptions,
@@ -623,8 +625,8 @@ function TargetPicker({
   )
   const TargetIcon = value ? targetIcon[value.kind] : Layers
   return (
-    <InstancePickerPopover open={open} onOpenChange={setOpen}>
-      <InstancePickerPopoverTrigger asChild>
+    <DrawerPopover open={open} onOpenChange={setOpen}>
+      <DrawerPopoverTrigger asChild>
         <Button
           type="button"
           variant="outline"
@@ -641,8 +643,8 @@ function TargetPicker({
           </span>
           <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
         </Button>
-      </InstancePickerPopoverTrigger>
-      <InstancePickerPopoverContent
+      </DrawerPopoverTrigger>
+      <DrawerPopoverContent
         title="Instances"
         align="start"
         className="z-[70] w-[min(34rem,calc(100vw-2rem))] overflow-hidden p-0"
@@ -660,8 +662,8 @@ function TargetPicker({
             setOpen(false)
           }}
         />
-      </InstancePickerPopoverContent>
-    </InstancePickerPopover>
+      </DrawerPopoverContent>
+    </DrawerPopover>
   )
 }
 

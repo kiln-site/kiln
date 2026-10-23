@@ -13,12 +13,7 @@ import {
   visibleToastLimit,
   type AppToastType,
 } from "@workspace/ui/components/sonner"
-import {
-  Popover,
-  PopoverAnchor,
-  PopoverContent,
-  PopoverTrigger,
-} from "@workspace/ui/components/popover"
+import { Popover, PopoverAnchor } from "@workspace/ui/components/popover"
 import {
   Tooltip,
   TooltipContent,
@@ -26,6 +21,12 @@ import {
 } from "@workspace/ui/components/tooltip"
 import { cn } from "@workspace/ui/lib/utils"
 
+import {
+  DrawerPopover,
+  DrawerPopoverContent,
+  DrawerPopoverTrigger,
+  useDrawerPopoverIsDrawer,
+} from "@/components/drawer-popover"
 import {
   NotificationGroupLabel,
   NotificationRow,
@@ -354,7 +355,10 @@ function closeSettledDeviceNotifications(
   })
 }
 
-/** The bell beside the Kiln name in the expanded sidebar. */
+/**
+ * The bell beside the Kiln name in the expanded sidebar. On phones its
+ * popover opens as a bottom drawer.
+ */
 export const NotificationsBell = React.memo(function NotificationsBell({
   className,
   tooltipHidden,
@@ -365,11 +369,14 @@ export const NotificationsBell = React.memo(function NotificationsBell({
   const store = useNotificationsPopoverStore()
   const open = useNotificationsPopoverOpen(store)
   const unread = useUnreadNotificationCount()
+  // Collapsing the sidebar or crossing the phone breakpoint unmounts the bell;
+  // closing then keeps the popover from reopening wherever it mounts next.
+  React.useEffect(() => store.close, [store])
   return (
-    <Popover open={open} onOpenChange={store.setOpen}>
+    <DrawerPopover open={open} onOpenChange={store.setOpen}>
       <Tooltip>
         <TooltipTrigger asChild>
-          <PopoverTrigger asChild>
+          <DrawerPopoverTrigger asChild>
             <button
               type="button"
               className={cn(
@@ -388,7 +395,7 @@ export const NotificationsBell = React.memo(function NotificationsBell({
                 />
               ) : null}
             </button>
-          </PopoverTrigger>
+          </DrawerPopoverTrigger>
         </TooltipTrigger>
         <TooltipContent
           side="bottom"
@@ -400,7 +407,7 @@ export const NotificationsBell = React.memo(function NotificationsBell({
         </TooltipContent>
       </Tooltip>
       <NotificationsPopoverContent align="start" />
-    </Popover>
+    </DrawerPopover>
   )
 })
 
@@ -477,8 +484,9 @@ function NotificationsPopoverContent({ align }: { align: "start" | "end" }) {
     navigatedRef.current = false
   }, [])
   return (
-    <PopoverContent
+    <DrawerPopoverContent
       aria-label="Notifications"
+      title="Notifications"
       side="right"
       align={align}
       sideOffset={10}
@@ -487,7 +495,7 @@ function NotificationsPopoverContent({ align }: { align: "start" | "end" }) {
       onCloseAutoFocus={handleCloseAutoFocus}
     >
       <NotificationsPopoverPanel onNavigate={navigate} />
-    </PopoverContent>
+    </DrawerPopoverContent>
   )
 }
 
@@ -509,6 +517,7 @@ function NotificationsPopoverPanel({ onNavigate }: { onNavigate: () => void }) {
   )
   const unread = useUnreadNotificationIds()
   const { clearThrough, dismiss } = useNotificationClearing()
+  const drawer = useDrawerPopoverIsDrawer()
   const newest = notifications[0]
   // What was new when it opened, plus anything still unread: newer arrivals
   // and older rows below the ones shown.
@@ -550,13 +559,17 @@ function NotificationsPopoverPanel({ onNavigate }: { onNavigate: () => void }) {
           <TooltipContent side="bottom">Notification settings</TooltipContent>
         </Tooltip>
       </div>
-      {/* A fixed height, about four and a half rows, so the popover never
-          resizes and a cut-off row shows there's more. */}
+      {/* A fixed height, so the popover never resizes and a cut-off row
+          shows there's more: about four and a half rows, or most of a
+          phone's screen in its drawer. */}
       <div
         role="feed"
         aria-label="Latest notifications"
         aria-busy={isLoading}
-        className="h-[18rem] overflow-y-auto overscroll-contain"
+        className={cn(
+          "overflow-y-auto overscroll-contain",
+          drawer ? "h-[60dvh] min-h-0 shrink" : "h-[18rem]"
+        )}
       >
         {isLoading ? (
           <p className="grid h-full place-items-center text-sm text-muted-foreground">

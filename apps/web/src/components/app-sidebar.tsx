@@ -73,11 +73,13 @@ import {
   ServerKindIcon,
 } from "@/components/instance-kind-icon"
 import {
+  DrawerPopover,
+  DrawerPopoverContent,
+  DrawerPopoverTrigger,
+} from "@/components/drawer-popover"
+import {
   InstancePickerContent,
   type InstancePickerItem,
-  InstancePickerPopover,
-  InstancePickerPopoverContent,
-  InstancePickerPopoverTrigger,
 } from "@/components/instance-picker"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { clearAppearanceCache } from "@/lib/appearance"
@@ -1189,8 +1191,8 @@ const InstanceSelector = React.memo(function InstanceSelector({
 
   return (
     <SidebarMenuItem>
-      <InstancePickerPopover open={open} onOpenChange={handleOpenChange}>
-        <InstancePickerPopoverTrigger asChild>
+      <DrawerPopover open={open} onOpenChange={handleOpenChange}>
+        <DrawerPopoverTrigger asChild>
           <SidebarMenuButton
             size="lg"
             tooltip={
@@ -1269,8 +1271,8 @@ const InstanceSelector = React.memo(function InstanceSelector({
             )}
             <ChevronsUpDown className="ml-auto size-3.5! text-sidebar-foreground/60 group-data-[collapsible=icon]:hidden light:text-sidebar-foreground/80" />
           </SidebarMenuButton>
-        </InstancePickerPopoverTrigger>
-        <InstancePickerPopoverContent
+        </DrawerPopoverTrigger>
+        <DrawerPopoverContent
           title="Switch instance"
           aria-label="Instances"
           side="right"
@@ -1285,8 +1287,8 @@ const InstanceSelector = React.memo(function InstanceSelector({
             onNavigate={closePicker}
             onSelect={selectInstance}
           />
-        </InstancePickerPopoverContent>
-      </InstancePickerPopover>
+        </DrawerPopoverContent>
+      </DrawerPopover>
     </SidebarMenuItem>
   )
 })

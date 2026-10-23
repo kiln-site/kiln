@@ -50,11 +50,13 @@ import type { IdentityStatusPresentation } from "@/components/identity-name"
 import { InstanceCard } from "@/components/instance-card"
 import { statusColumnWidth } from "@/components/instance-name-presentation"
 import {
+  DrawerPopover,
+  DrawerPopoverContent,
+  DrawerPopoverTrigger,
+} from "@/components/drawer-popover"
+import {
   InstancePickerContent,
   type InstancePickerItem,
-  InstancePickerPopover,
-  InstancePickerPopoverContent,
-  InstancePickerPopoverTrigger,
 } from "@/components/instance-picker"
 import { StatusIndicator } from "@/components/status-indicator"
 import { TailscaleRelayUpdateHint } from "@/components/tailscale-relay-update-hint"
@@ -402,11 +404,8 @@ export const TailscaleConnectServersPopover = React.memo(
     )
 
     return (
-      <InstancePickerPopover
-        open={open && Boolean(stack)}
-        onOpenChange={onOpenChange}
-      >
-        <InstancePickerPopoverTrigger asChild>
+      <DrawerPopover open={open && Boolean(stack)} onOpenChange={onOpenChange}>
+        <DrawerPopoverTrigger asChild>
           <Button
             type="button"
             size="sm"
@@ -419,8 +418,8 @@ export const TailscaleConnectServersPopover = React.memo(
             )}
             Connect Game Servers
           </Button>
-        </InstancePickerPopoverTrigger>
-        <InstancePickerPopoverContent
+        </DrawerPopoverTrigger>
+        <DrawerPopoverContent
           title="Connect game servers"
           align="end"
           className="w-[min(28rem,calc(100vw-2rem))] overflow-hidden p-0"
@@ -445,8 +444,8 @@ export const TailscaleConnectServersPopover = React.memo(
               {errorMessage(save.error)}
             </p>
           ) : null}
-        </InstancePickerPopoverContent>
-      </InstancePickerPopover>
+        </DrawerPopoverContent>
+      </DrawerPopover>
     )
   }
 )
