@@ -23,6 +23,7 @@ import {
 } from "@/components/app/app-workspace-context"
 import { ProvisioningGate } from "@/components/provisioning-progress"
 import {
+  WorkspaceCopyLinkButton,
   WorkspaceCopyValueButton,
   WorkspaceHeader,
   WorkspaceIdCopyButton,
@@ -264,9 +265,9 @@ function AppHeaderAddress({ app }: { app: App }) {
     select: (state) => state.routes[0],
   }).data
   return route ? (
-    <WorkspaceCopyValueButton
+    <WorkspaceCopyLinkButton
+      href={`https://${route.hostname}${route.path ?? ""}`}
       label="domain"
-      value={`${route.hostname}${route.path ?? ""}`}
     />
   ) : (
     <WorkspaceCopyValueButton label="internal address" value={app.hostname} />

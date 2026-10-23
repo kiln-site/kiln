@@ -150,7 +150,57 @@ export function WorkspaceCopyValueButton({
   )
 }
 
-export function useCopyFeedback(value: string) {
+// A link that copies on the first click and opens in a new tab on the next.
+// Modifier and middle clicks open it at once, as any link would.
+export function WorkspaceCopyLinkButton({
+  href,
+  label,
+}: {
+  href: string
+  // Lowercase noun, for example "domain".
+  label: string
+}) {
+  const { copied, copy, reset } = useCopyFeedback(href, 4_000)
+  const [hovered, setHovered] = React.useState(false)
+
+  return (
+    // Radix closes the tooltip on click, so it stays open while armed.
+    <Tooltip open={hovered || copied} onOpenChange={setHovered}>
+      <TooltipTrigger asChild>
+        <a
+          className={`flex min-w-0 items-center gap-1 truncate font-mono transition-colors ${copied ? "text-emerald-400" : "text-primary-ink/75 hover:text-primary-ink"}`}
+          href={href}
+          rel="noreferrer"
+          target="_blank"
+          onClick={(event) => {
+            if (event.metaKey || event.ctrlKey || event.shiftKey || copied) {
+              reset()
+              return
+            }
+            event.preventDefault()
+            void copy()
+          }}
+          onPointerLeave={(event) => {
+            // A touch lifts off as it taps, so only a mouse disarms on leave.
+            if (event.pointerType === "mouse") reset()
+          }}
+        >
+          <span className="truncate">{href}</span>
+          {copied ? (
+            <Check className="size-3 shrink-0" />
+          ) : (
+            <Copy className="size-3 shrink-0 opacity-55" />
+          )}
+        </a>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" sideOffset={6}>
+        {copied ? "Click again to open" : `Copy ${label}`}
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
+export function useCopyFeedback(value: string, durationMs = 1_800) {
   const [copied, setCopied] = React.useState(false)
   const resetTimer = React.useRef<number | null>(null)
   React.useEffect(
@@ -164,10 +214,15 @@ export function useCopyFeedback(value: string) {
     await copyToClipboard(value)
     setCopied(true)
     if (resetTimer.current) window.clearTimeout(resetTimer.current)
-    resetTimer.current = window.setTimeout(() => setCopied(false), 1_800)
+    resetTimer.current = window.setTimeout(() => setCopied(false), durationMs)
   }
 
-  return { copied, copy }
+  function reset() {
+    if (resetTimer.current) window.clearTimeout(resetTimer.current)
+    setCopied(false)
+  }
+
+  return { copied, copy, reset }
 }
 
 async function copyToClipboard(value: string) {
