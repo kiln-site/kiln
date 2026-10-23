@@ -230,18 +230,31 @@ export function saveNotificationPreferencesMutationOptions(
     onSuccess: (saved, update) =>
       queryClient.setQueryData(
         queryKey,
-        queryClient
-          .getMutationCache()
-          .findAll({ mutationKey: saveKey, status: "pending" })
-          .flatMap((mutation) => {
-            const variables: unknown = mutation.state.variables
-            return variables === update || variables === undefined
-              ? []
-              : [variables as NotificationPreferencesUpdate]
-          })
-          .reduce(applyPreferences, saved)
+        otherPendingSaves(queryClient, update).reduce(applyPreferences, saved)
       ),
+    // Once the last save is done, what's shown is what's stored, even after
+    // saves that failed rolled back over one another.
+    onSettled: (_saved, _error, update) => {
+      if (!otherPendingSaves(queryClient, update).length)
+        void queryClient.invalidateQueries({ queryKey })
+    },
   })
+}
+
+// The changes of saves still waiting their turn, oldest first.
+function otherPendingSaves(
+  queryClient: QueryClient,
+  update: NotificationPreferencesUpdate
+) {
+  return queryClient
+    .getMutationCache()
+    .findAll({ mutationKey: saveKey, status: "pending" })
+    .flatMap((mutation) => {
+      const variables: unknown = mutation.state.variables
+      return variables === update || variables === undefined
+        ? []
+        : [variables as NotificationPreferencesUpdate]
+    })
 }
 
 function applyPreferences(
