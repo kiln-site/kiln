@@ -60,7 +60,11 @@ export function KilnRepairButton({ relayId }: { relayId: string }) {
       variant="outline"
       onClick={() => repair.mutate()}
     >
-      {repair.isPending ? <LoaderCircle className="animate-spin" /> : <Wrench />}
+      {repair.isPending ? (
+        <LoaderCircle className="animate-spin" />
+      ) : (
+        <Wrench />
+      )}
       Repair
     </Button>
   )

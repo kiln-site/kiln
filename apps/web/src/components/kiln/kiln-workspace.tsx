@@ -1,7 +1,9 @@
 import * as React from "react"
+import { useQuery } from "@tanstack/react-query"
 import { useRouterState } from "@tanstack/react-router"
 
 import { HearthMark } from "@/components/hearth-mark"
+import { InfraUpdatesButton } from "@/components/infra-layout"
 import {
   KilnRefreshButton,
   KilnRepairButton,
@@ -19,6 +21,7 @@ import {
   WorkspaceMetaSeparator,
 } from "@/components/workspace-header"
 import { kilnDestinations } from "@/lib/navigation-destinations"
+import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
 
 // Kiln's pages share a header naming it, the Relay it runs beside, and where
 // people open it, with what applies to all of its services.
@@ -65,6 +68,10 @@ const KilnWorkspaceHeader = React.memo(function KilnWorkspaceHeader() {
   const status = host?.status ?? null
   const version = kilnVersion(status)
   const presentation = kilnPresentation(host)
+  const { data: canUpdate } = useQuery({
+    ...accessCapabilitiesQueryOptions(),
+    select: selectCanUpdateRelays,
+  })
   return (
     <WorkspaceHeader
       identity={
@@ -104,12 +111,17 @@ const KilnWorkspaceHeader = React.memo(function KilnWorkspaceHeader() {
           {host && status?.canManage ? (
             <KilnRepairButton relayId={host.relayId} />
           ) : null}
+          {canUpdate ? <InfraUpdatesButton className="shrink-0" /> : null}
           <KilnRefreshButton />
         </div>
       }
     />
   )
 })
+
+function selectCanUpdateRelays(capabilities: { canUpdateRelays: boolean }) {
+  return capabilities.canUpdateRelays
+}
 
 function KilnRouteTitle() {
   const title = useRouterState({

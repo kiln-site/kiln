@@ -158,11 +158,7 @@ import {
   traefikRouteUpstream,
   traefikStaticConfiguration,
 } from "./traefik.js"
-import {
-  forkPromise,
-  promiseEffect,
-  recoverPromise,
-} from "./effect/promise.js"
+import { forkPromise, promiseEffect, recoverPromise } from "./effect/promise.js"
 import { DockerEngine } from "./docker-engine.js"
 import { RelayVolumes } from "./volumes.js"
 import {
@@ -330,10 +326,12 @@ const lanes = new OperationLanes()
 // A Relay a Hearth paused stays paused across restarts: nothing starts until
 // it's resumed, so this is read before any worker runs.
 lanes.setPaused(
-  (await runRelayEffect(
-    "relay.startup.pauseHolds",
-    startupCore.state.listPauseHolds()
-  )).length > 0
+  (
+    await runRelayEffect(
+      "relay.startup.pauseHolds",
+      startupCore.state.listPauseHolds()
+    )
+  ).length > 0
 )
 const powerIntents = new PowerIntents()
 const runtimeRecovery = new RuntimeRecoveryManager(
@@ -486,40 +484,44 @@ async function hostFileRoot(id: string): Promise<FileRoot> {
 }
 const appDatabaseBrowser = new DatabaseBrowser(appFilesystem)
 // A helper left from when host access was on goes; one still in use has its
-// sessions swept with the rest.
-if (!hostShell.enabled) forkPromise(() => hostShell.remove())
-forkPromise(async () => {
-  const [managedDatabases, managedApps, hostContainer, platformContainers] =
-    await Promise.all([
-      databases.list(),
-      apps.list(),
-      hostShell.enabled ? hostShell.runningContainer() : null,
-      Promise.all(
-        (["database", "cache", "proxy"] as const).map((target) =>
-          runRelayEffect(
-            "relay.platform.terminal.sweepTarget",
-            platformManagedContainer({ config, engine: relayEngine }, target)
+// sessions swept with the rest. Only the Relay itself sweeps: a CLI command
+// runs beside it, often from one of those sessions.
+if (!hostShell.enabled && cliArguments.length === 0) {
+  forkPromise(() => hostShell.remove())
+}
+if (cliArguments.length === 0)
+  forkPromise(async () => {
+    const [managedDatabases, managedApps, hostContainer, platformContainers] =
+      await Promise.all([
+        databases.list(),
+        apps.list(),
+        hostShell.enabled ? hostShell.runningContainer() : null,
+        Promise.all(
+          (["database", "cache", "proxy"] as const).map((target) =>
+            runRelayEffect(
+              "relay.platform.terminal.sweepTarget",
+              platformManagedContainer({ config, engine: relayEngine }, target)
+            )
           )
+        ),
+      ])
+    await terminals.sweep([
+      ...(hostContainer ? [hostContainer] : []),
+      ...platformContainers.flatMap((container) =>
+        container?.State.Running ? [container.Id] : []
+      ),
+      ...managedDatabases.flatMap((database) =>
+        database.containerId && database.observedState === "running"
+          ? [database.containerId]
+          : []
+      ),
+      ...managedApps.flatMap((app) =>
+        app.containers.flatMap((container) =>
+          container.running ? [container.id] : []
         )
       ),
     ])
-  await terminals.sweep([
-    ...(hostContainer ? [hostContainer] : []),
-    ...platformContainers.flatMap((container) =>
-      container?.State.Running ? [container.Id] : []
-    ),
-    ...managedDatabases.flatMap((database) =>
-      database.containerId && database.observedState === "running"
-        ? [database.containerId]
-        : []
-    ),
-    ...managedApps.flatMap((app) =>
-      app.containers.flatMap((container) =>
-        container.running ? [container.id] : []
-      )
-    ),
-  ])
-})
+  })
 const databaseConnectionSnapshots = await docker.databaseConnectionSnapshots()
 await databaseConnections.initialize(databaseConnectionSnapshots)
 for (const snapshot of databaseConnectionSnapshots) {
@@ -843,10 +845,8 @@ async function runRelayCli(arguments_: ReadonlyArray<string>): Promise<void> {
   if (resource === "platform") {
     await runRelayEffect(
       "relay.cli.platform",
-      runPlatformCli(
-        arguments_,
-        { config, engine: relayEngine },
-        (text) => console.log(text)
+      runPlatformCli(arguments_, { config, engine: relayEngine }, (text) =>
+        console.log(text)
       )
     )
     return
@@ -2054,18 +2054,14 @@ async function executeControlRequest(
       )
     }
     case "database.provision.claim": {
-      const { databaseId } = relayProvisionDatabaseSchema.parse(
-        request.payload
-      )
+      const { databaseId } = relayProvisionDatabaseSchema.parse(request.payload)
       return runRelayEffect(
         "relay.database.provision.claim",
         provisioningManager.claim("database", databaseId)
       )
     }
     case "database.provision.cancel": {
-      const { databaseId } = relayProvisionDatabaseSchema.parse(
-        request.payload
-      )
+      const { databaseId } = relayProvisionDatabaseSchema.parse(request.payload)
       const cancelled = await runRelayEffect(
         "relay.database.provision.cancel",
         provisioningManager.cancel("database", databaseId)
@@ -2083,7 +2079,10 @@ async function executeControlRequest(
             () => databases.delete({ ...input, deleteData: true }),
             (cause) => {
               if (
-                !(cause instanceof Error && cause.message === "Database not found")
+                !(
+                  cause instanceof Error &&
+                  cause.message === "Database not found"
+                )
               )
                 throw cause
             }
@@ -3063,14 +3062,16 @@ async function executeControlRequest(
         platformManagedContainer(platformReadContext(), input.role)
       )
       if (!container) {
-        throw new Error("Kiln doesn't manage that container, so it opens no shell in it")
+        throw new Error(
+          "Kiln doesn't manage that container, so it opens no shell in it"
+        )
       }
       return terminals.attach(
         terminalOwner(client, request),
-        platformTerminalTarget(
-          input.role,
-          { id: container.Id, running: container.State.Running }
-        ),
+        platformTerminalTarget(input.role, {
+          id: container.Id,
+          running: container.State.Running,
+        }),
         input,
         (output, timeoutMs) =>
           requestHearth("hearth.database.terminal.output", output, timeoutMs)

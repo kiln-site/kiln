@@ -144,7 +144,11 @@ function KilnLatestLogs({
           variant="outline"
           onClick={() => void logs.refetch()}
         >
-          {logs.isFetching ? <LoaderCircle className="animate-spin" /> : <RotateCw />}
+          {logs.isFetching ? (
+            <LoaderCircle className="animate-spin" />
+          ) : (
+            <RotateCw />
+          )}
           Refresh
         </Button>
       </div>

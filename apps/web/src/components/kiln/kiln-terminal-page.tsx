@@ -108,7 +108,8 @@ function KilnTerminalUnavailable({ host }: { host: KilnPlatformHost | null }) {
         : !status?.canManage
           ? {
               title: "Only the Hearth this Relay installed",
-              detail: "Shells open only from the Hearth that the Relay installed.",
+              detail:
+                "Shells open only from the Hearth that the Relay installed.",
             }
           : {
               title: "No container to open a shell in",

@@ -158,7 +158,11 @@ export function kilnPresentation(
       : { label: "Not reported", tone: "neutral" }
   }
   if (status.phase === "blocked") {
-    return { detail: status.issue ?? undefined, label: "Needs attention", tone: "danger" }
+    return {
+      detail: status.issue ?? undefined,
+      label: "Needs attention",
+      tone: "danger",
+    }
   }
   if (status.phase === "installing") {
     return { label: "Installing", pulse: true, tone: "info" }
@@ -169,7 +173,9 @@ export function kilnPresentation(
   const order = ["danger", "warning", "info", "success"] as const
   const presentations = status.services.map(kilnContainerPresentation)
   for (const tone of order) {
-    const worst = presentations.find((presentation) => presentation.tone === tone)
+    const worst = presentations.find(
+      (presentation) => presentation.tone === tone
+    )
     if (worst) return worst
   }
   return { label: "Running", tone: "success" }

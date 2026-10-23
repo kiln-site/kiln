@@ -1,5 +1,14 @@
 import * as React from "react"
-import { CircleAlert, ScrollText, ShieldCheck, TerminalSquare, Zap } from "lucide-react"
+import { useQuery } from "@tanstack/react-query"
+import { Link } from "@tanstack/react-router"
+import {
+  ArrowRight,
+  CircleAlert,
+  ScrollText,
+  ShieldCheck,
+  TerminalSquare,
+  Zap,
+} from "lucide-react"
 import type { RelayPlatformStatus } from "@workspace/contracts"
 
 import { HearthMark } from "@/components/hearth-mark"
@@ -14,6 +23,7 @@ import {
   InfoSection,
   InfoSectionLink,
 } from "@/components/info-page"
+import { InstanceKindCounts } from "@/components/instance-kind-counts"
 import { DatabaseKindIcon } from "@/components/instance-kind-icon"
 import { KilnRestartButton } from "@/components/kiln/kiln-actions"
 import {
@@ -25,9 +35,29 @@ import {
   useKilnHost,
   type KilnContainer,
 } from "@/components/kiln/kiln-presentation"
+import { OwnerCard } from "@/components/owner-card"
+import {
+  RelayNodeCard,
+  useRelayNodeFacts,
+} from "@/components/relay/relay-node-card"
 import { RelativeTime } from "@/components/relative-time"
 import { InfoRailRelayLink } from "@/components/resource-info-rail"
 import { StatusIndicator } from "@/components/status-indicator"
+import {
+  appDirectoryQueryOptions,
+  managedDatabaseDirectoryQueryOptions,
+  relaySnapshotQueryOptions,
+  relaysQueryOptions,
+} from "@/lib/query-options"
+import {
+  relayRouteIdentifier,
+  type RelayDirectoryEntry,
+} from "@/lib/relay-route"
+import { selectSidebarInstanceCount } from "@/lib/relay-selectors"
+import {
+  queueTerminalInput,
+  relayTerminalInputKey,
+} from "@/lib/terminal-prefill"
 import type { KilnPlatformHost } from "@/server/platform"
 
 // Kiln's own services, each with what can be done to it, the commands for
@@ -55,10 +85,12 @@ export function KilnInfoPage() {
                 />
               ))}
               {/* Older Relays don't report the proxy at all. */}
-              {status.proxy === null ? <NoProxySection status={status} /> : null}
+              {status.proxy === null ? (
+                <NoProxySection status={status} />
+              ) : null}
             </div>
           </div>
-          <KilnCommandsSection status={status} />
+          <KilnCommandsSection relayId={host.relayId} status={status} />
         </>
       ) : null}
     </InfoPage>
@@ -142,13 +174,18 @@ const KilnContainerSection = React.memo(function KilnContainerSection({
             </InfoSectionLink>
           ) : null}
           {restart ? (
-            <KilnRestartButton relayId={host.relayId} target={container.target} />
+            <KilnRestartButton
+              relayId={host.relayId}
+              target={container.target}
+            />
           ) : null}
         </>
       }
     >
       <InfoFact label="Runs">
-        <span className="truncate text-muted-foreground">{copy.description}</span>
+        <span className="truncate text-muted-foreground">
+          {copy.description}
+        </span>
       </InfoFact>
       {container.managedBy ? (
         <InfoFact label="Managed by">
@@ -216,24 +253,32 @@ function NoProxySection({ status }: { status: RelayPlatformStatus }) {
       </InfoFact>
       <InfoFact label="HTTPS">
         <span className="text-muted-foreground">
-          {https ? "Expected, but no Traefik answers" : "Off; Hearth is at its own port"}
+          {https
+            ? "Expected, but no Traefik answers"
+            : "Off; Hearth is at its own port"}
         </span>
         <InfoHint label="About HTTPS" title="Serving Kiln over HTTPS">
           <p>
-            Kiln's installer starts Traefik on ports 80 and 443 and gets a
-            Let's Encrypt certificate, for a domain or the host's address.
+            Kiln's installer starts Traefik on ports 80 and 443 and gets a Let's
+            Encrypt certificate, for a domain or the host's address.
           </p>
-          <p>
-            Without it, Hearth is only at its own port, over plain HTTP.
-          </p>
+          <p>Without it, Hearth is only at its own port, over plain HTTP.</p>
         </InfoHint>
       </InfoFact>
     </InfoSection>
   )
 }
 
-// What an operator runs on the Relay's host, for what Hearth can't do.
-function KilnCommandsSection({ status }: { status: RelayPlatformStatus }) {
+// What an operator runs on the Relay's host, for what Hearth can't do. Run
+// opens the Relay's host shell with the command typed, for them to send.
+function KilnCommandsSection({
+  relayId,
+  status,
+}: {
+  relayId: string
+  status: RelayPlatformStatus
+}) {
+  const relay = useRelayEntry(relayId)
   if (status.management !== "relay") {
     return (
       <InfoSection icon={<TerminalSquare />} title="Commands" content>
@@ -250,17 +295,48 @@ function KilnCommandsSection({ status }: { status: RelayPlatformStatus }) {
         On the Relay's host, for when Hearth itself is down.
       </p>
       <dl className="@container px-4">
-        {commands.map((command) => (
-          <InfoFact key={command.label} label={command.label}>
-            <InfoCopyValue
-              label="command"
-              value={`docker exec kiln-relay kiln-relay platform ${command.args}`}
-            />
-          </InfoFact>
-        ))}
+        {commands.map((command) => {
+          const line = `docker exec kiln-relay kiln-relay platform ${command.args}`
+          return (
+            <InfoFact key={command.label} label={command.label}>
+              <InfoCopyValue label="command" value={line} />
+              {relay ? (
+                <Link
+                  aria-label={`Run ${command.label.toLowerCase()} in ${relay.name}'s terminal`}
+                  className="type-control-sm ml-1.5 flex h-7 shrink-0 items-center gap-1 border-l border-border/60 pl-3 text-muted-foreground transition-colors outline-none hover:text-primary-ink focus-visible:text-primary-ink"
+                  params={{ relayId: relay.routeId }}
+                  to="/relay/$relayId/terminal"
+                  onClick={() =>
+                    queueTerminalInput(relayTerminalInputKey(relayId), line)
+                  }
+                >
+                  Run
+                  <ArrowRight className="size-3.5" />
+                </Link>
+              ) : null}
+            </InfoFact>
+          )
+        })}
       </dl>
     </InfoSection>
   )
+}
+
+function useRelayEntry(relayId: string) {
+  const select = React.useCallback(
+    (relays: Array<RelayDirectoryEntry>) => {
+      const relay = relays.find((candidate) => candidate.id === relayId)
+      return relay
+        ? {
+            entry: relay,
+            name: relay.name,
+            routeId: relayRouteIdentifier(relays, relay),
+          }
+        : null
+    },
+    [relayId]
+  )
+  return useQuery({ ...relaysQueryOptions(), select }).data ?? null
 }
 
 const commands = [
@@ -273,6 +349,7 @@ const commands = [
 function KilnInfoRail({ host }: { host: KilnPlatformHost }) {
   const status = host.status
   const proxy = status?.proxy
+  const relay = useRelayEntry(host.relayId)
   return (
     <>
       <InfoRailGroup card>
@@ -286,7 +363,12 @@ function KilnInfoRail({ host }: { host: KilnPlatformHost }) {
           </InfoRailLink>
         ) : null}
       </InfoRailGroup>
-      <InfoRailCard icon={<HearthMark className="size-3.5" />} title="Installation">
+      <OwnerCard email={null} name={null} />
+      <InfoRailCard
+        icon={<HearthMark className="size-3.5" />}
+        title="Installation"
+        sections={<KilnInstanceCounts />}
+      >
         <InfoFact label="Address">
           {status?.hearthUrl ? (
             <InfoCopyValue label="address" value={status.hearthUrl} />
@@ -295,11 +377,15 @@ function KilnInfoRail({ host }: { host: KilnPlatformHost }) {
           )}
         </InfoFact>
         <InfoFact label="Version">
-          <span className="font-mono text-xs">{kilnVersion(status) ?? "—"}</span>
+          <span className="font-mono text-xs">
+            {kilnVersion(status) ?? "—"}
+          </span>
         </InfoFact>
         <InfoFact label="Installed by">
           <span>
-            {status?.management === "relay" ? host.relayName : "Compose or Coolify"}
+            {status?.management === "relay"
+              ? host.relayName
+              : "Compose or Coolify"}
           </span>
         </InfoFact>
         <InfoFact label="HTTPS">
@@ -323,6 +409,41 @@ function KilnInfoRail({ host }: { host: KilnPlatformHost }) {
           )}
         </InfoFact>
       </InfoRailCard>
+      {relay ? <KilnNodeCard relay={relay.entry} /> : null}
     </>
   )
+}
+
+function KilnNodeCard({ relay }: { relay: RelayDirectoryEntry }) {
+  const facts = useRelayNodeFacts(relay.id)
+  return <RelayNodeCard facts={facts} relay={relay} />
+}
+
+// Everything this Kiln runs, a count per kind.
+const KilnInstanceCounts = React.memo(function KilnInstanceCounts() {
+  const { data: relays = 0 } = useQuery({
+    ...relaysQueryOptions(),
+    select: countAll,
+  })
+  const { data: instances = 0 } = useQuery({
+    ...relaySnapshotQueryOptions(),
+    select: selectSidebarInstanceCount,
+  })
+  const { data: apps = 0 } = useQuery({
+    ...appDirectoryQueryOptions(),
+    select: countAll,
+  })
+  const { data: databases = 0 } = useQuery({
+    ...managedDatabaseDirectoryQueryOptions(),
+    select: countAll,
+  })
+  return (
+    <div className="type-meta grid grid-cols-4 justify-items-center border-t border-border/60 px-3 py-2.5 text-muted-foreground">
+      <InstanceKindCounts counts={{ apps, databases, instances, relays }} />
+    </div>
+  )
+})
+
+function countAll(resources: ReadonlyArray<unknown>) {
+  return resources.length
 }

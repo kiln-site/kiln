@@ -78,7 +78,6 @@ const InfraNavigation = React.memo(function InfraNavigation() {
 })
 
 export const InfraToolbarActions = React.memo(function InfraToolbarActions() {
-  const store = useInfraUpdateDialogStore()
   const { data: capabilities } = useSuspenseQuery(
     accessCapabilitiesQueryOptions()
   )
@@ -108,26 +107,36 @@ export const InfraToolbarActions = React.memo(function InfraToolbarActions() {
           </TooltipContent>
         </Tooltip>
       ) : null}
-      {capabilities.canUpdateRelays ? (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              aria-label="Review system updates"
-              className="h-9 w-9 shrink-0 gap-1.5 bg-card px-0 text-xs shadow-none sm:w-[6.5rem] sm:px-3"
-              size="sm"
-              type="button"
-              variant="outline"
-              onClick={() => store.open()}
-            >
-              <CloudDownload />
-              <span className="hidden sm:inline">Updates</span>
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" sideOffset={6}>
-            Review system updates
-          </TooltipContent>
-        </Tooltip>
-      ) : null}
+      {capabilities.canUpdateRelays ? <InfraUpdatesButton /> : null}
     </div>
   )
 })
+
+// Opens the updates review, here and on Kiln's own pages.
+export function InfraUpdatesButton({
+  className = "h-9 w-9 shrink-0 gap-1.5 bg-card px-0 text-xs shadow-none sm:w-[6.5rem] sm:px-3",
+}: {
+  className?: string
+}) {
+  const store = useInfraUpdateDialogStore()
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          aria-label="Review system updates"
+          className={className}
+          size="sm"
+          type="button"
+          variant="outline"
+          onClick={() => store.open()}
+        >
+          <CloudDownload />
+          <span className="hidden sm:inline">Updates</span>
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" sideOffset={6}>
+        Review system updates
+      </TooltipContent>
+    </Tooltip>
+  )
+}

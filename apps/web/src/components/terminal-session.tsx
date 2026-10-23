@@ -105,10 +105,13 @@ const ACTIVATED_VISIBLE_MS = 2_500
 
 export function TerminalSession({
   backend,
+  takeInitialInput,
   toolbarActions,
 }: {
   // Stable while the target is; a new backend starts a new connection.
   backend: TerminalBackend
+  // Typed at the prompt once the session is live, without Enter.
+  takeInitialInput?: () => string | null
   // Extra toolbar buttons from the page, before the terminal's own.
   toolbarActions?: React.ReactNode
 }) {
@@ -142,6 +145,14 @@ export function TerminalSession({
     setNotice(null)
     surface.current?.connect(false)
   }, [])
+  const live = status.kind === "live"
+  const initialInputTaken = React.useRef(false)
+  React.useEffect(() => {
+    if (!live || initialInputTaken.current || !takeInitialInput) return
+    initialInputTaken.current = true
+    const text = takeInitialInput()
+    if (text) surface.current?.paste(text)
+  }, [live, takeInitialInput])
   React.useEffect(() => {
     if (!activated) return
     const timer = window.setTimeout(
@@ -537,6 +548,7 @@ interface TerminalSurfaceEvents {
 interface TerminalSurfaceHandle {
   connect: (restart: boolean) => void
   copySelection: () => void
+  paste: (text: string) => void
   scrollToBottom: () => void
   search: (
     query: string,
@@ -557,6 +569,7 @@ const TerminalSurface = React.memo(
     React.useImperativeHandle(ref, () => ({
       connect: (restart) => handle.current?.connect(restart),
       copySelection: () => handle.current?.copySelection(),
+      paste: (text) => handle.current?.paste(text),
       scrollToBottom: () => handle.current?.scrollToBottom(),
       search: (query, direction, incremental) =>
         handle.current?.search(query, direction, incremental),
@@ -613,6 +626,12 @@ const TerminalSurface = React.memo(
             },
             () => showToast({ message: "Could not copy", type: "error" })
           )
+        },
+        // As if pasted: it goes through typing, and a shell with bracketed
+        // paste won't run it.
+        paste: (text) => {
+          terminal.paste(text)
+          terminal.focus()
         },
         scrollToBottom: () => terminal.scrollToBottom(),
         search: (query, direction, incremental) => {
