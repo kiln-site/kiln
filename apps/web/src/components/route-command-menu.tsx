@@ -32,6 +32,7 @@ import {
   accessibleDestinationsForServer,
   accessibleInfrastructureDestinations,
   automationDestinations,
+  kilnDestinations,
   canAccessActivity,
   canAccessAutomations,
   canAccessBackups,
@@ -221,6 +222,16 @@ export function RouteCommandMenuProvider({
                 <RouteGroup
                   heading="Infrastructure"
                   routes={infrastructureRoutes}
+                  onSelect={navigateToRoute}
+                />
+              </>
+            ) : null}
+            {capabilities.isPlatformAdmin ? (
+              <>
+                <CommandSeparator />
+                <RouteGroup
+                  heading="Kiln"
+                  routes={kilnDestinations}
                   onSelect={navigateToRoute}
                 />
               </>

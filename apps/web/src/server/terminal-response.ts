@@ -3,6 +3,7 @@ import {
   appServiceNameSchema,
   databaseIdSchema,
   relayIdSchema,
+  relayPlatformTargetSchema,
 } from "@workspace/contracts"
 import { Effect } from "effect"
 import { z } from "zod"
@@ -16,6 +17,7 @@ import {
   databaseTerminalTarget,
   relayTerminalTarget,
   openTerminalStream,
+  platformTerminalTarget,
 } from "@/server/terminal-stream"
 
 const sizeShape = {
@@ -32,12 +34,18 @@ const targetSchema = z.discriminatedUnion("kind", [
   }),
   z.object({ ...sizeShape, kind: z.literal("database"), id: databaseIdSchema }),
   z.object({ ...sizeShape, kind: z.literal("relay"), id: relayIdSchema }),
+  z.object({
+    ...sizeShape,
+    kind: z.literal("platform"),
+    id: relayIdSchema,
+    service: relayPlatformTargetSchema,
+  }),
 ])
 
 // All terminal routes share authentication, validation, and stream headers.
 export async function terminalResponse(
   request: Request,
-  resource: { kind: "app" | "database" | "relay"; id: string }
+  resource: { kind: "app" | "database" | "platform" | "relay"; id: string }
 ) {
   const identity = await Effect.runPromise(
     Effect.tryPromise({
@@ -52,7 +60,9 @@ export async function terminalResponse(
     )
   const input = targetSchema.safeParse({
     ...Object.fromEntries(new URL(request.url).searchParams),
-    ...(resource.kind === "relay" ? { relayId: resource.id } : {}),
+    ...(resource.kind === "relay" || resource.kind === "platform"
+      ? { relayId: resource.id }
+      : {}),
     ...resource,
   })
   if (!input.success)
@@ -95,6 +105,17 @@ export async function terminalResponse(
                 data.id,
                 access.user
               ),
+            }
+          }
+          case "platform": {
+            const { platformRelay, requirePlatformAdministrator } =
+              await import("@/server/platform-access.server")
+            const user = await requirePlatformAdministrator()
+            const relay = await platformRelay(data.id)
+            return {
+              relay,
+              target: platformTerminalTarget(relay, data.service, user),
+              user,
             }
           }
           case "relay": {

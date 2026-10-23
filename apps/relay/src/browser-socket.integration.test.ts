@@ -779,7 +779,8 @@ async function startRelay(
         consoleSession: (id) =>
           Promise.resolve(consoleSession(id, `app ${id} output`)),
       },
-      () => ({ containerId: "relay-container", id: relayId })
+      () => ({ containerId: "relay-container", id: relayId }),
+      (target) => Promise.resolve(`kiln-${target}`)
     ),
     docker: {} as DockerDriver,
     filesystem: {} as FilesystemDriver,

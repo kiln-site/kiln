@@ -83,3 +83,19 @@ export function relayTerminalStreamUrl(input: {
     `/api/relay-terminal/${encodeURIComponent(input.relayId)}?${search}`
   )
 }
+
+export function platformTerminalStreamUrl(input: {
+  cols: number
+  rows: number
+  relayId: string
+  role: string
+}) {
+  const search = new URLSearchParams({
+    cols: String(input.cols),
+    rows: String(input.rows),
+    service: input.role,
+  })
+  return withRenderedAccount(
+    `/api/platform-terminal/${encodeURIComponent(input.relayId)}?${search}`
+  )
+}

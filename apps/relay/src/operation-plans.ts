@@ -226,6 +226,12 @@ export function controlRequestLocks(
     case "relay.terminal.write":
     case "relay.terminal.claim":
     case "relay.terminal.restart":
+    case "relay.platform.terminal.attach":
+    case "relay.platform.terminal.heartbeat":
+    case "relay.platform.terminal.detach":
+    case "relay.platform.terminal.write":
+    case "relay.platform.terminal.claim":
+    case "relay.platform.terminal.restart":
     case "database.terminal.attach":
     case "database.terminal.heartbeat":
     case "database.terminal.detach":

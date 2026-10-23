@@ -110,6 +110,10 @@ import {
   relayBackupFailureCodesV1Feature,
   relayPlatformActionInputSchema,
   relayPlatformLogsInputSchema,
+  relayPlatformTerminalAttachSchema,
+  relayPlatformTerminalClaimSchema,
+  relayPlatformTerminalRestartSchema,
+  relayPlatformTerminalWriteSchema,
 } from "@workspace/contracts"
 import { relayScheduleProjectionSchema } from "@workspace/contracts/schedules"
 import type {
@@ -139,6 +143,7 @@ import { browseManagedDatabase } from "./database-sql-browser.js"
 import { consoleSources } from "./console-sources.js"
 import {
   appTerminalTarget,
+  platformTerminalTarget,
   ContainerTerminals,
   databaseTerminalTarget,
 } from "./container-terminal.js"
@@ -245,6 +250,8 @@ import {
   platformSetupUrl,
   platformStatus,
   platformUpdateRefusal,
+  platformManagedContainer,
+  platformTargetContainer,
   reconcilePlatform,
   restartPlatformService,
   runPlatformCli,
@@ -482,13 +489,25 @@ const appDatabaseBrowser = new DatabaseBrowser(appFilesystem)
 // sessions swept with the rest.
 if (!hostShell.enabled) forkPromise(() => hostShell.remove())
 forkPromise(async () => {
-  const [managedDatabases, managedApps, hostContainer] = await Promise.all([
-    databases.list(),
-    apps.list(),
-    hostShell.enabled ? hostShell.runningContainer() : null,
-  ])
+  const [managedDatabases, managedApps, hostContainer, platformContainers] =
+    await Promise.all([
+      databases.list(),
+      apps.list(),
+      hostShell.enabled ? hostShell.runningContainer() : null,
+      Promise.all(
+        (["database", "cache", "proxy"] as const).map((target) =>
+          runRelayEffect(
+            "relay.platform.terminal.sweepTarget",
+            platformManagedContainer({ config, engine: relayEngine }, target)
+          )
+        )
+      ),
+    ])
   await terminals.sweep([
     ...(hostContainer ? [hostContainer] : []),
+    ...platformContainers.flatMap((container) =>
+      container?.State.Running ? [container.Id] : []
+    ),
     ...managedDatabases.flatMap((database) =>
       database.containerId && database.observedState === "running"
         ? [database.containerId]
@@ -1064,11 +1083,23 @@ const browserSocket = attachBrowserSocket({
     filesystem: appFilesystem,
     root: (appId) => apps.fileRoot(appId),
   },
-  consoleSources: consoleSources(docker, databases, apps, () => ({
-    // Docker names a container's host after its ID.
-    containerId: process.env.HOSTNAME?.trim() || null,
-    id: config.nodeId,
-  })),
+  consoleSources: consoleSources(
+    docker,
+    databases,
+    apps,
+    () => ({
+      // Docker names a container's host after its ID.
+      containerId: process.env.HOSTNAME?.trim() || null,
+      id: config.nodeId,
+    }),
+    async (target) =>
+      (
+        await runRelayEffect(
+          "relay.platform.console",
+          platformTargetContainer(platformReadContext(), target)
+        )
+      )?.Id ?? null
+  ),
   docker,
   filesystem,
   identity: relayIdentity,
@@ -3024,6 +3055,70 @@ async function executeControlRequest(
         platformLogs(platformReadContext(), input.role, input.lines)
       )
     }
+    case "relay.platform.terminal.attach": {
+      const input = relayPlatformTerminalAttachSchema.parse(request.payload)
+      await requirePlatformOwner(client.id)
+      const container = await runRelayEffect(
+        "relay.platform.terminal.target",
+        platformManagedContainer(platformReadContext(), input.role)
+      )
+      if (!container) {
+        throw new Error("Kiln doesn't manage that container, so it opens no shell in it")
+      }
+      return terminals.attach(
+        terminalOwner(client, request),
+        platformTerminalTarget(
+          input.role,
+          { id: container.Id, running: container.State.Running }
+        ),
+        input,
+        (output, timeoutMs) =>
+          requestHearth("hearth.database.terminal.output", output, timeoutMs)
+      )
+    }
+    case "relay.platform.terminal.heartbeat": {
+      const input = relayDatabaseTerminalHeartbeatSchema.parse(request.payload)
+      return terminals.heartbeat(
+        terminalOwner(client, request),
+        input.attachmentIds
+      )
+    }
+    case "relay.platform.terminal.detach": {
+      const input = relayDatabaseTerminalDetachSchema.parse(request.payload)
+      return terminals.detach(
+        terminalOwner(client, request),
+        input.attachmentId
+      )
+    }
+    case "relay.platform.terminal.restart": {
+      const input = relayPlatformTerminalRestartSchema.parse(request.payload)
+      await requirePlatformOwner(client.id)
+      return terminals.restart(
+        terminalOwner(client, request),
+        platformTerminalTarget(input.role, null).key
+      )
+    }
+    case "relay.platform.terminal.write": {
+      const input = relayPlatformTerminalWriteSchema.parse(request.payload)
+      return terminals.write(
+        terminalOwner(client, request),
+        platformTerminalTarget(input.role, null).key,
+        input.sessionId,
+        input.data
+      )
+    }
+    case "relay.platform.terminal.claim": {
+      const input = relayPlatformTerminalClaimSchema.parse(request.payload)
+      await requirePlatformOwner(client.id)
+      return terminals.claim(
+        terminalOwner(client, request),
+        platformTerminalTarget(input.role, null).key,
+        input.sessionId,
+        input.attachmentId,
+        input.rows,
+        input.cols
+      )
+    }
     case "relay.platform.action": {
       const input = relayPlatformActionInputSchema.parse(request.payload)
       const record = await clientRecord(client.id)
@@ -3115,6 +3210,17 @@ function clientRecord(clientId: string) {
     "relay.platform.client",
     startup.state.findClientById(clientId)
   )
+}
+
+// Shells in Kiln's containers: only the Hearth this Relay installed.
+async function requirePlatformOwner(clientId: string): Promise<void> {
+  const record = await clientRecord(clientId)
+  const state = platformPass.state ?? platformStartup.state
+  if (!state || !isPlatformOwner(state, record)) {
+    throw new Error(
+      "Only the Hearth this Relay installed can open shells in Kiln's services"
+    )
+  }
 }
 
 // Hearth's logs: the installed Hearth's, or, for services this Relay only

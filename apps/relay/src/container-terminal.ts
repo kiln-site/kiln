@@ -826,6 +826,26 @@ export function appTerminalTarget(
   }
 }
 
+// A login shell in one of Kiln's own containers: Hearth's database, cache,
+// or the Traefik in front of it.
+export function platformTerminalTarget(
+  target: string,
+  container: { id: string; running: boolean } | null
+): TerminalTarget {
+  return {
+    command: [
+      "sh",
+      "-c",
+      "if command -v bash >/dev/null 2>&1; then exec bash -l; else exec sh -l; fi",
+    ],
+    containerId: container?.id ?? null,
+    environment: [],
+    key: `platform:${target}`,
+    running: container?.running ?? false,
+    stoppedMessage: "Start it to open its terminal",
+  }
+}
+
 function databaseClient(
   database: RelayManagedDatabase,
   username: string,

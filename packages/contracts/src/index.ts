@@ -1958,6 +1958,17 @@ export const relayPlatformServiceRoleSchema = z.enum([
   "cache",
 ])
 
+/**
+ * Which of Kiln's containers a v2 request is for: a service, or the Traefik
+ * in front of Hearth (`proxy`).
+ */
+export const relayPlatformTargetSchema = z.enum([
+  "hearth",
+  "database",
+  "cache",
+  "proxy",
+])
+
 export const relayPlatformServiceSchema = z.object({
   /** Actions this Hearth may take on it. Empty for external services. */
   actions: z.array(z.enum(["restart"])).max(4),
@@ -1975,8 +1986,17 @@ export const relayPlatformServiceSchema = z.object({
     "missing",
     "updating",
   ]),
+  /**
+   * Whether it has a shell to open a terminal in; Hearth's image doesn't.
+   * From Relays with `relay-platform-v2`, and null until checked.
+   */
+  shell: z.boolean().nullable().optional(),
   version: z.string().min(1).max(100).nullable(),
 })
+
+export const relayPlatformProxySchema = relayPlatformServiceSchema
+  .omit({ role: true })
+  .extend({ managedBy: z.enum(["kiln", "coolify", "external"]) })
 
 export const relayPlatformStatusSchema = z.object({
   /** Whether this Hearth may restart and repair them. */
@@ -1993,23 +2013,30 @@ export const relayPlatformStatusSchema = z.object({
    * Relay won't continue without one.
    */
   phase: z.enum(["installing", "ready", "maintenance", "blocked"]),
+  /**
+   * The Traefik in front of Hearth, from Relays with `relay-platform-v2`:
+   * the one this Relay runs (`kiln`), Coolify's, or another found on ports
+   * 80 and 443 (`external`). Only Kiln's own can be restarted from here.
+   */
+  proxy: relayPlatformProxySchema.nullable().optional(),
   services: z.array(relayPlatformServiceSchema).max(8),
 })
 
+// `proxy` needs `relay-platform-v2`.
 export const relayPlatformLogsInputSchema = z.object({
   lines: z.number().int().min(1).max(2_000).default(500),
-  role: relayPlatformServiceRoleSchema,
+  role: relayPlatformTargetSchema,
 })
 
 export const relayPlatformLogsSchema = z.object({
   lines: z.array(z.string()).max(2_000),
-  role: relayPlatformServiceRoleSchema,
+  role: relayPlatformTargetSchema,
 })
 
 export const relayPlatformActionInputSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("restart"),
-    role: relayPlatformServiceRoleSchema,
+    role: relayPlatformTargetSchema,
   }),
   // Recreates whatever is missing and starts whatever stopped.
   z.object({ action: z.literal("repair") }),
@@ -2026,6 +2053,46 @@ export type RelayPlatformServiceRole = z.infer<
 export type RelayPlatformActionInput = z.infer<
   typeof relayPlatformActionInputSchema
 >
+export type RelayPlatformProxy = z.infer<typeof relayPlatformProxySchema>
+export type RelayPlatformTarget = z.infer<typeof relayPlatformTargetSchema>
+
+// A shell in one of Kiln's containers, kept like an app's: one per person
+// per container. Needs `relay-platform-v2`.
+const platformTerminalTargetShape = { role: relayPlatformTargetSchema }
+
+export const relayPlatformTerminalAttachSchema = z
+  .object({
+    ...platformTerminalTargetShape,
+    ...databaseTerminalSizeShape,
+    attachmentId: databaseTerminalIdSchema,
+    idleTimeoutMs: z
+      .number()
+      .int()
+      .min(60_000)
+      .max(24 * 60 * 60_000),
+  })
+  .strict()
+
+export const relayPlatformTerminalRestartSchema = z
+  .object(platformTerminalTargetShape)
+  .strict()
+
+export const relayPlatformTerminalWriteSchema = z
+  .object({
+    ...platformTerminalTargetShape,
+    data: z.string().min(1).max(DATABASE_TERMINAL_WRITE_MAX_CHARACTERS),
+    sessionId: databaseTerminalIdSchema,
+  })
+  .strict()
+
+export const relayPlatformTerminalClaimSchema = z
+  .object({
+    ...platformTerminalTargetShape,
+    ...databaseTerminalSizeShape,
+    attachmentId: databaseTerminalIdSchema,
+    sessionId: databaseTerminalIdSchema,
+  })
+  .strict()
 
 const relaySnapshotRelaySchema = z.object({
   browserOrigin: relayProxyBrowserMetadataSchema.shape.browserOrigin.optional(),

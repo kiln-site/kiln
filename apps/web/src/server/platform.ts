@@ -5,68 +5,41 @@ import {
   relayPlatformLogsInputSchema,
   relayPlatformLogsSchema,
   relayPlatformStatusSchema,
-  relayPlatformV1Feature,
+  relayPlatformTargetSchema,
+  relayPlatformTerminalClaimSchema,
+  relayPlatformTerminalWriteSchema,
+    relayPlatformV2Feature,
   type RelayPlatformStatus,
 } from "@workspace/contracts"
 import { z } from "zod"
 
 import { recoverPromise } from "@/effect/promise"
-import { requireEligibleResourceUser } from "@/server/auth"
 
-// Kiln's own services: Hearth, its database, and its cache, as reported by
-// the Relay on their Docker host. Platform administrators only; Hearth's
-// logs can hold anything it printed.
-
-async function requirePlatformAdministrator() {
-  const [user, { isPlatformAdmin }] = await Promise.all([
-    requireEligibleResourceUser(),
-    import("@/lib/access-control"),
-  ])
-  if (!isPlatformAdmin(user)) {
-    throw new Error("Only a platform administrator can manage Kiln's services")
-  }
-  return user
-}
-
-// Relays that report Kiln's services, as of their last snapshot here.
-async function platformRelays() {
-  const [{ listPersistedRelays }, connection] = await Promise.all([
-    import("@/lib/relay-registry"),
-    import("@/lib/relay-connection"),
-  ])
-  return (await listPersistedRelays()).filter(
-    (relay) =>
-      relay.enabled &&
-      connection.relayConnectionPlatform(relay.id) !== null &&
-      connection.relayConnectionFeatures(relay.id).has(relayPlatformV1Feature)
-  )
-}
-
-async function platformRelay(relayId: string) {
-  const relay = (await platformRelays()).find(
-    (candidate) => candidate.id === relayId
-  )
-  if (!relay) throw new Error("That Relay doesn't report Kiln's services")
-  return relay
-}
+// Kiln's own services: Hearth, its database, its cache, and the Traefik in
+// front of it, as reported by the Relay on their Docker host. Platform
+// administrators only; Hearth's logs can hold anything it printed.
 
 export interface KilnPlatformHost {
   error: string | null
   relayId: string
   relayName: string
   status: RelayPlatformStatus | null
+  /** Whether the Relay streams logs and opens shells (`relay-platform-v2`). */
+  v2: boolean
 }
 
 export const getKilnPlatform = createServerFn({ method: "GET" }).handler(
   async (): Promise<{ hosts: Array<KilnPlatformHost> }> => {
+    const { platformRelays, requirePlatformAdministrator } =
+      await import("@/server/platform-access.server")
     await requirePlatformAdministrator()
-    const [relays, { relayRpc }] = await Promise.all([
-      platformRelays(),
-      import("@/lib/relay-connection"),
-    ])
+    const [relays, { relayConnectionFeatures, relayRpc }] = await Promise.all(
+      [platformRelays(), import("@/lib/relay-connection")]
+    )
     const hosts = await Promise.all(
-      relays.map((relay) =>
-        recoverPromise(
+      relays.map((relay) => {
+        const v2 = relayConnectionFeatures(relay.id).has(relayPlatformV2Feature)
+        return recoverPromise(
           async (): Promise<KilnPlatformHost> => ({
             error: null,
             relayId: relay.id,
@@ -74,6 +47,7 @@ export const getKilnPlatform = createServerFn({ method: "GET" }).handler(
             status: relayPlatformStatusSchema.parse(
               await relayRpc(relay, "relay.platform.read", {}, 15_000)
             ),
+            v2,
           }),
           (cause): KilnPlatformHost => ({
             error:
@@ -81,9 +55,10 @@ export const getKilnPlatform = createServerFn({ method: "GET" }).handler(
             relayId: relay.id,
             relayName: relay.name,
             status: null,
+            v2,
           })
         )
-      )
+      })
     )
     return { hosts }
   }
@@ -92,6 +67,8 @@ export const getKilnPlatform = createServerFn({ method: "GET" }).handler(
 export const getKilnPlatformLogs = createServerFn({ method: "GET" })
   .validator(relayPlatformLogsInputSchema.extend({ relayId: relayIdSchema }))
   .handler(async ({ data: { relayId, ...input } }) => {
+    const { platformRelay, requirePlatformAdministrator } =
+      await import("@/server/platform-access.server")
     await requirePlatformAdministrator()
     const [relay, { relayRpc }] = await Promise.all([
       platformRelay(relayId),
@@ -107,6 +84,8 @@ export const runKilnPlatformAction = createServerFn({ method: "POST" })
     relayPlatformActionInputSchema.and(z.object({ relayId: relayIdSchema }))
   )
   .handler(async ({ data: { relayId, ...input } }) => {
+    const { platformRelay, requirePlatformAdministrator } =
+      await import("@/server/platform-access.server")
     const user = await requirePlatformAdministrator()
     const [relay, { relayRpc }] = await Promise.all([
       platformRelay(relayId),
@@ -115,4 +94,63 @@ export const runKilnPlatformAction = createServerFn({ method: "POST" })
     return relayPlatformStatusSchema.parse(
       await relayRpc(relay, "relay.platform.action", input, 240_000, user.id)
     )
+  })
+
+const terminalSchema = z.object({
+  relayId: relayIdSchema,
+  role: relayPlatformTargetSchema,
+})
+
+export const writeKilnTerminal = createServerFn({ method: "POST" })
+  .validator(relayPlatformTerminalWriteSchema.extend({ relayId: relayIdSchema }))
+  .handler(async ({ data: { relayId, ...input } }) => {
+    const { databaseRpc, platformV2Relay, requirePlatformAdministrator } =
+      await import("@/server/platform-access.server")
+    const user = await requirePlatformAdministrator()
+    const relay = await platformV2Relay(relayId)
+    await databaseRpc(
+      relay,
+      "relay.platform.terminal.write",
+      input,
+      15_000,
+      user.id
+    )
+    return { accepted: true }
+  })
+
+export const claimKilnTerminal = createServerFn({ method: "POST" })
+  .validator(relayPlatformTerminalClaimSchema.extend({ relayId: relayIdSchema }))
+  .handler(async ({ data: { relayId, ...input } }) => {
+    const { databaseRpc, platformV2Relay, requirePlatformAdministrator } =
+      await import("@/server/platform-access.server")
+    const user = await requirePlatformAdministrator()
+    const relay = await platformV2Relay(relayId)
+    return z
+      .object({ seq: z.number().int().nonnegative() })
+      .parse(
+        await databaseRpc(
+          relay,
+          "relay.platform.terminal.claim",
+          input,
+          15_000,
+          user.id
+        )
+      )
+  })
+
+export const restartKilnTerminal = createServerFn({ method: "POST" })
+  .validator(terminalSchema)
+  .handler(async ({ data: { relayId, role } }) => {
+    const { databaseRpc, platformV2Relay, requirePlatformAdministrator } =
+      await import("@/server/platform-access.server")
+    const user = await requirePlatformAdministrator()
+    const relay = await platformV2Relay(relayId)
+    await databaseRpc(
+      relay,
+      "relay.platform.terminal.restart",
+      { role },
+      30_000,
+      user.id
+    )
+    return { restarted: true }
   })

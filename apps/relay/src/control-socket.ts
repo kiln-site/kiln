@@ -45,6 +45,7 @@ import {
   relayAppGitHubV1Feature,
   relayAppImageUpdatesV1Feature,
   relayPlatformV1Feature,
+  relayPlatformV2Feature,
   relayVolumesV1Feature,
   relayDatabaseProvisioningV1Feature,
   relayAppProvisioningV1Feature,
@@ -1139,6 +1140,7 @@ function authenticateSocket(
           relayVolumesV1Feature,
           relayAppImageUpdatesV1Feature,
           relayPlatformV1Feature,
+          relayPlatformV2Feature,
         ],
         protocol: relayControlProtocol,
         relayBuild: relayBuildLabel(),
@@ -1469,6 +1471,14 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "relay.terminal.write":
     case "relay.terminal.claim":
     case "relay.terminal.restart":
+      return "relay.terminal"
+    // A shell in Kiln's own containers is as much as a host shell.
+    case "relay.platform.terminal.attach":
+    case "relay.platform.terminal.heartbeat":
+    case "relay.platform.terminal.detach":
+    case "relay.platform.terminal.write":
+    case "relay.platform.terminal.claim":
+    case "relay.platform.terminal.restart":
       return "relay.terminal"
     // A root shell on the host could reboot it anyway.
     case "relay.host.restart":

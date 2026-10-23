@@ -10,6 +10,8 @@ import { DockerEngine } from "./docker-engine.js"
 import {
   addOwnerInvitation,
   isPlatformOwner,
+  platformManagedContainer,
+  platformTargetContainer,
   platformUpdateRefusal,
   restartPlatformService,
   withPlatformRestoreHold,
@@ -471,6 +473,60 @@ describe("platform mode", () => {
       isPlatformOwner(withOwner, { ...owner, invitationId: "another-pairing" })
     ).toBe(false)
     expect(isPlatformOwner(null, owner)).toBe(false)
+  })
+
+  it("opens shells only in the containers Kiln runs", async () => {
+    const relay = await platformRelay()
+    await relay.start()
+    await relay.pass()
+    const coolify = fakeDocker.addContainer({
+      image: "traefik:v3.7",
+      name: "coolify-proxy",
+      running: true,
+    })
+    const managed = (target: "database" | "proxy") =>
+      run(platformManagedContainer(relay.context, target))
+
+    // Coolify's proxy is read, not entered.
+    await expect(
+      run(platformTargetContainer(relay.context, "proxy"))
+    ).resolves.toMatchObject({ Id: coolify.id })
+    await expect(managed("proxy")).resolves.toBeNull()
+    await expect(managed("database")).resolves.toMatchObject({
+      Name: `/${names.database}`,
+    })
+
+    const own = fakeDocker.addContainer({
+      image: "traefik:v3.7.13",
+      labels: { "kiln.relay.infrastructure": "traefik" },
+      name: relay.harness.resources.traefikContainer,
+      running: true,
+    })
+    await expect(managed("proxy")).resolves.toMatchObject({ Id: own.id })
+  })
+
+  it("opens no shells in Kiln's services from a Relay that only reports them", async () => {
+    const harness = await relayHarness({ KILN_INSTALLATION_ID: "compose" })
+    fakeDocker.addContainer({
+      image: "mysql:8.4",
+      labels: {
+        "io.kiln.installation": "compose",
+        "io.kiln.resource": "hearth-database",
+      },
+      name: "compose-mysql",
+      running: true,
+    })
+    const context = {
+      config: harness.config,
+      engine: new DockerEngine(harness.config.dockerSocket),
+    }
+
+    await expect(
+      run(platformTargetContainer(context, "database"))
+    ).resolves.toMatchObject({ Name: "/compose-mysql" })
+    await expect(
+      run(platformManagedContainer(context, "database"))
+    ).resolves.toBeNull()
   })
 
   it("restores an installation's secrets on a new Relay from its recovery kit", async () => {

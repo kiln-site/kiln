@@ -276,10 +276,29 @@ When only the database volume is lost on the same host, run
 `kiln-relay platform recover --confirm <installation-id>`, restore a platform
 backup, and run `start-hearth`.
 
+## Kiln's pages
+
+Platform administrators open Kiln itself from the **Kiln** button beside
+**Updates** in Infrastructure, like any other instance:
+
+- **Info** shows Hearth, its database, its cache, and the Traefik in front of
+  them, with Repair, a Restart for each, and the `kiln-relay platform`
+  commands to run on the host when Hearth itself is down.
+- **Logs** follows each container's output live.
+- **Terminal** opens a shell in the database, the cache, or the Traefik the
+  Relay runs. Hearth's image has no shell.
+
+Restarts and shells are only for an installation the Relay installed, from the
+Hearth it installed. A Traefik that Coolify or something else runs shows as
+managed elsewhere: its logs, but no restart or shell. These need a Relay with
+`relay-platform-v2`; older ones show the latest log lines only.
+
 ## Existing Compose and Coolify installs
 
-They keep working as before, and **System** shows their Hearth and database
-read-only. To move one under a platform Relay:
+They keep working as before, and Kiln's own pages (the **Kiln** button beside
+**Updates** in Infrastructure) show their Hearth, database, and any Traefik in
+front of them read-only: their logs, but no restarts or shells. To move one
+under a platform Relay:
 
 1. Create a platform backup of it, and note its `KILN_INSTALLATION_ID`,
    `BETTER_AUTH_SECRETS`, and `KILN_PLATFORM_BACKUP_KEY`. Hearth encrypts

@@ -16,6 +16,7 @@ const fakes = vi.hoisted(() => ({
 }))
 
 vi.mock("@/lib/access-control", () => ({
+  isPlatformAdmin: (current: AuthenticatedUser) => current.role === "admin",
   refreshRelayAuthorizationUserEffect: fakes.refreshUser,
   requireRelayPermissionsEffect: fakes.requirePermissions,
 }))
@@ -588,6 +589,47 @@ describe("Relay capability issuance orchestration", () => {
 
       await expect(issueLogs()).rejects.toThrow(
         "Update this Relay to view these logs."
+      )
+    })
+  })
+
+  describe("Kiln's own logs", () => {
+    beforeEach(() => {
+      for (const feature of [
+        "browser-capability-v2",
+        "browser-lease-renewal-v1",
+        "console-resources-v1",
+        "relay-platform-v2",
+      ]) {
+        fakes.features.add(feature)
+      }
+    })
+
+    const issueKilnLogs = (current: AuthenticatedUser) =>
+      issueBrowserCapabilitiesForRequest({
+        authenticate: () =>
+          Promise.resolve({ sessionId: "session-one", user: current }),
+        publicKeyJwk,
+        relayId: "relay-one",
+        requests: [{ kind: "console", optInV2: true, write: false }],
+        resource: { id: "relay-one", kind: "platform", stream: "hearth" },
+      })
+
+    it("issues them to platform administrators", async () => {
+      const issued = await issueKilnLogs({ ...user, role: "admin" })
+
+      expect(
+        decodeCapabilityPayload(issued.capabilities[0]!.capability)
+      ).toMatchObject({
+        actions: ["relay.logs.read"],
+        instanceId: "relay-one",
+        resourceKind: "platform",
+      })
+    })
+
+    it("refuses anyone else, whatever they hold on the Relay", async () => {
+      await expect(issueKilnLogs(user)).rejects.toThrow(
+        "Only platform administrators"
       )
     })
   })

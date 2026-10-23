@@ -54,6 +54,14 @@ export async function requireGlobalDestinationAccess(
   throw redirect({ href: firstAccessibleAppHref(capabilities), replace: true })
 }
 
+// Kiln's own pages, like the platform's settings, are for platform
+// administrators.
+export async function requireKilnAccess(queryClient: QueryClient): Promise<void> {
+  const capabilities = await routeAccessCapabilities(queryClient)
+  if (capabilities.isPlatformAdmin) return
+  throw redirect({ href: firstAccessibleAppHref(capabilities), replace: true })
+}
+
 export async function requireInfrastructureSectionAccess(
   queryClient: QueryClient
 ): Promise<void> {

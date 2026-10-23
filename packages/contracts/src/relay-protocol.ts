@@ -68,6 +68,10 @@ export const relayAppImageUpdatesV1Feature = "app-image-updates-v1"
 // database, and its cache) through `relay.platform.*`, and, when it installed
 // them itself, restarts and repairs them.
 export const relayPlatformV1Feature = "relay-platform-v1"
+// The Relay also reports the Traefik in front of Hearth, follows each of
+// Kiln's containers' output as browser resource `platform`, opens shells in
+// them through `relay.platform.terminal.*`, and restarts its own Traefik.
+export const relayPlatformV2Feature = "relay-platform-v2"
 export const relayBrowserAuthorizationReviseMaxItems = 256
 
 export const relayControlOperations = [
@@ -98,6 +102,12 @@ export const relayControlOperations = [
   "relay.terminal.write",
   "relay.terminal.claim",
   "relay.terminal.restart",
+  "relay.platform.terminal.attach",
+  "relay.platform.terminal.heartbeat",
+  "relay.platform.terminal.detach",
+  "relay.platform.terminal.write",
+  "relay.platform.terminal.claim",
+  "relay.platform.terminal.restart",
   "relay.proxy.read",
   "relay.proxy.config.read",
   "relay.proxy.write",
@@ -231,6 +241,8 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "relay.platform.action",
   "relay.terminal.attach",
   "relay.terminal.restart",
+  "relay.platform.terminal.attach",
+  "relay.platform.terminal.restart",
   "instance.create",
   "instance.provision.prepare",
   "instance.provision.claim",
@@ -344,6 +356,12 @@ export function relayControlOperationChanges(
     case "relay.terminal.write":
     case "relay.terminal.claim":
     case "relay.terminal.restart":
+    case "relay.platform.terminal.attach":
+    case "relay.platform.terminal.heartbeat":
+    case "relay.platform.terminal.detach":
+    case "relay.platform.terminal.write":
+    case "relay.platform.terminal.claim":
+    case "relay.platform.terminal.restart":
     case "database.terminal.attach":
     case "database.terminal.heartbeat":
     case "database.terminal.detach":
@@ -595,13 +613,14 @@ export const RelayBrowserOperationKindSchema = Schema.Literals([
 ])
 
 // The kinds of resource a browser capability can be for. Its `instanceId` is
-// the resource's ID (a Relay's own ID for `relay`); capabilities without
-// `resourceKind` are for servers.
+// the resource's ID (a Relay's own ID for `relay` and `platform`, Kiln's
+// services on its host); capabilities without `resourceKind` are for servers.
 export const relayBrowserResourceKinds = [
   "instance",
   "database",
   "app",
   "relay",
+  "platform",
 ] as const
 
 export const RelayBrowserResourceKindSchema = Schema.Literals(
@@ -615,7 +634,8 @@ export interface RelayConsoleResource {
   readonly id: string
   readonly kind: RelayBrowserResourceKind
   // Which of the resource's outputs to follow, for kinds with more than one:
-  // an app's deployment log or one of its services.
+  // an app's deployment log or one of its services, or one of Kiln's
+  // containers.
   readonly stream?: string
 }
 
@@ -625,6 +645,8 @@ export const relayConsoleReadActions = {
   app: "app.logs.read",
   database: "database.logs.read",
   instance: "instance.console.read",
+  // Hearth issues these only to platform administrators.
+  platform: "relay.logs.read",
   relay: "relay.logs.read",
 } as const satisfies Record<RelayBrowserResourceKind, string>
 

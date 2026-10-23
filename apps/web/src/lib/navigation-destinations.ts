@@ -2,7 +2,6 @@ import type { ComponentType } from "react"
 import {
   CalendarDays,
   CircleUserRound,
-  Cpu,
   CreditCard,
   Folder,
   FolderDown,
@@ -83,23 +82,6 @@ export const infrastructureDestinations = [
     keywords: ["infrastructure", "summary", "setup"],
     label: "Overview",
     to: "/infra/overview",
-  },
-  {
-    access: "platform-admin",
-    group: "overview",
-    icon: Cpu,
-    keywords: [
-      "kiln",
-      "hearth",
-      "panel",
-      "mysql",
-      "valkey",
-      "cache",
-      "platform",
-      "recovery",
-    ],
-    label: "System",
-    to: "/infra/platform",
   },
   {
     access: "manage-relays",
@@ -621,6 +603,51 @@ export const relayDestinations = [
     to: "/relay/$relayId/logs",
   },
 ] as const satisfies ReadonlyArray<RelayDestination>
+
+export type KilnDestinationId = "info" | "logs" | "terminal"
+
+export interface KilnDestination extends NavigationDestination {
+  id: KilnDestinationId
+}
+
+// Kiln itself: Hearth, its database and cache, and the Traefik in front of
+// them. Platform administrators only.
+export const kilnDestinations = [
+  {
+    icon: SlidersHorizontal,
+    id: "info",
+    keywords: [
+      "kiln",
+      "system",
+      "hearth",
+      "panel",
+      "mysql",
+      "valkey",
+      "cache",
+      "traefik",
+      "https",
+      "platform",
+      "repair",
+      "recovery",
+    ],
+    label: "Info",
+    to: "/kiln/info",
+  },
+  {
+    icon: ScrollText,
+    id: "logs",
+    keywords: ["kiln", "hearth", "output", "errors"],
+    label: "Logs",
+    to: "/kiln/logs",
+  },
+  {
+    icon: TerminalSquare,
+    id: "terminal",
+    keywords: ["kiln", "shell", "mysql", "valkey", "traefik"],
+    label: "Terminal",
+    to: "/kiln/terminal",
+  },
+] as const satisfies ReadonlyArray<KilnDestination>
 
 // Granted on the Relay itself.
 export function canAccessRelayPermission(

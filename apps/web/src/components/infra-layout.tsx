@@ -10,6 +10,7 @@ import {
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
 
+import { HearthMark } from "@/components/hearth-mark"
 import { useInfraUpdateDialogStore } from "@/components/infra-update-dialog-provider"
 import { accessibleInfrastructureDestinations } from "@/lib/navigation-destinations"
 import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
@@ -81,26 +82,52 @@ export const InfraToolbarActions = React.memo(function InfraToolbarActions() {
   const { data: capabilities } = useSuspenseQuery(
     accessCapabilitiesQueryOptions()
   )
-  if (!capabilities.canUpdateRelays) return null
+  if (!capabilities.isPlatformAdmin && !capabilities.canUpdateRelays) {
+    return null
+  }
 
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          aria-label="Review system updates"
-          className="h-9 w-9 shrink-0 gap-1.5 bg-card px-0 text-xs shadow-none sm:w-[6.5rem] sm:px-3"
-          size="sm"
-          type="button"
-          variant="outline"
-          onClick={() => store.open()}
-        >
-          <CloudDownload />
-          <span className="hidden sm:inline">Updates</span>
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent side="bottom" sideOffset={6}>
-        Review system updates
-      </TooltipContent>
-    </Tooltip>
+    <div className="flex shrink-0 items-center gap-2">
+      {capabilities.isPlatformAdmin ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              asChild
+              className="h-9 w-9 shrink-0 gap-1.5 bg-card px-0 text-xs shadow-none sm:w-auto sm:px-3"
+              size="sm"
+              variant="outline"
+            >
+              <Link aria-label="Open Kiln's services" to="/kiln/info">
+                <HearthMark className="size-4" />
+                <span className="hidden sm:inline">Kiln</span>
+              </Link>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" sideOffset={6}>
+            Hearth, its database, and the Traefik in front of them
+          </TooltipContent>
+        </Tooltip>
+      ) : null}
+      {capabilities.canUpdateRelays ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              aria-label="Review system updates"
+              className="h-9 w-9 shrink-0 gap-1.5 bg-card px-0 text-xs shadow-none sm:w-[6.5rem] sm:px-3"
+              size="sm"
+              type="button"
+              variant="outline"
+              onClick={() => store.open()}
+            >
+              <CloudDownload />
+              <span className="hidden sm:inline">Updates</span>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" sideOffset={6}>
+            Review system updates
+          </TooltipContent>
+        </Tooltip>
+      ) : null}
+    </div>
   )
 })

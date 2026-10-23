@@ -59,7 +59,13 @@ import {
   RouteCommandMenuProvider,
   RouteCommandMenuTrigger,
 } from "@/components/route-command-menu"
+import { IdentityName } from "@/components/identity-name"
 import { InstanceCard } from "@/components/instance-card"
+import {
+  kilnPresentation,
+  kilnVersion,
+  selectKilnHost,
+} from "@/components/kiln/kiln-presentation"
 import {
   AppKindIcon,
   DatabaseKindIcon,
@@ -78,6 +84,7 @@ import { clearAppearanceCache } from "@/lib/appearance"
 import {
   accessCapabilitiesQueryOptions,
   appDirectoryQueryOptions,
+  kilnPlatformQueryOptions,
   managedDatabaseDirectoryQueryOptions,
   relaysQueryOptions,
   serverDirectoryQueryOptions,
@@ -120,6 +127,7 @@ import {
   canAccessActivity,
   canAccessAutomations,
   canAccessBackups,
+  kilnDestinations,
   relayDestinations,
   serverDestinations,
   type AppDestinationId,
@@ -454,6 +462,10 @@ function SidebarInstanceNavigation({
   // "server", a database selection ("db:<id>"), an app selection
   // ("app:<id>"), a Relay selection ("relay:<id>"), or null off instance
   // routes.
+  const kilnRoute = useRouterState({
+    select: (state) =>
+      state.matches.at(-1)?.routeId.startsWith("/_app/kiln") === true,
+  })
   const routeSelection = useRouterState({
     select: (state) => {
       const params = state.matches.at(-1)?.params as
@@ -522,6 +534,7 @@ function SidebarInstanceNavigation({
     />
   )
 
+  if (kilnRoute) return <SidebarKilnNavigation capabilities={capabilities} />
   return databaseRouteId ? (
     <SidebarDatabaseNavigation
       capabilities={capabilities}
@@ -542,6 +555,49 @@ function SidebarInstanceNavigation({
     />
   ) : (
     serverNavigation
+  )
+}
+
+// Kiln itself: Hearth and the services beside it, while one of its pages
+// is open.
+function SidebarKilnNavigation({
+  capabilities,
+}: {
+  capabilities: NavigationAccessCapabilities
+}) {
+  const { data: host = null } = useQuery({
+    ...kilnPlatformQueryOptions(),
+    select: (data) => selectKilnHost(data.hosts),
+  })
+  return (
+    <>
+      <SidebarSeparator />
+      <SidebarGroup>
+        <SidebarGroupContent>
+          <SidebarMenu>
+            <InstanceSelector
+              capabilities={capabilities}
+              selection={{ kind: "kiln", host }}
+            />
+            {kilnDestinations.map((item) => (
+              <SidebarMenuItem key={item.id}>
+                <SidebarMenuButton asChild tooltip={item.label}>
+                  <Link
+                    to={item.to}
+                    activeOptions={{ exact: true, includeSearch: false }}
+                    activeProps={{ "data-active": true }}
+                    preload="intent"
+                  >
+                    <item.icon />
+                    <span>{item.label}</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            ))}
+          </SidebarMenu>
+        </SidebarGroupContent>
+      </SidebarGroup>
+    </>
   )
 }
 
@@ -972,6 +1028,10 @@ type InstanceSelection =
   | { kind: "database"; database: ManagedDatabaseDirectoryEntry }
   | { kind: "app"; app: AppDirectoryEntry }
   | { kind: "relay"; relay: RelayDirectoryEntry }
+  | {
+      kind: "kiln"
+      host: ReturnType<typeof selectKilnHost>
+    }
   | { kind: "none"; serverCount: number }
 
 const InstanceSelector = React.memo(function InstanceSelector({
@@ -1140,7 +1200,9 @@ const InstanceSelector = React.memo(function InstanceSelector({
                   ? "Switch app"
                   : selection.kind === "relay"
                     ? "Switch Relay"
-                    : "Switch game server"
+                    : selection.kind === "kiln"
+                      ? "Switch instance"
+                      : "Switch game server"
             }
             aria-label={
               selection.kind === "none" ? "Choose a game server" : undefined
@@ -1186,6 +1248,8 @@ const InstanceSelector = React.memo(function InstanceSelector({
               />
             ) : selection.kind === "relay" ? (
               <SelectorRelayName relay={selection.relay} />
+            ) : selection.kind === "kiln" ? (
+              <SelectorKilnName host={selection.host} />
             ) : (
               <>
                 <span className="relative grid size-8 shrink-0 place-items-center rounded-md border border-sidebar-border/70 bg-background/25 group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:inset-0 group-data-[collapsible=icon]:size-full group-data-[collapsible=icon]:rounded-none group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent">
@@ -1254,6 +1318,37 @@ function SelectorInstanceName({
         name={name}
         nameClassName="type-control-sm text-sidebar-foreground"
         showFavorite={false}
+        statusClassName="ring-popover"
+        textClassName="group-data-[collapsible=icon]:sr-only"
+      />
+    </>
+  )
+}
+
+// Kiln, with its own logo: the panel itself and the services beside it.
+function SelectorKilnName({
+  host,
+}: {
+  host: ReturnType<typeof selectKilnHost>
+}) {
+  const version = kilnVersion(host?.status ?? null)
+  return (
+    <>
+      <span className="sr-only">Switch instance. </span>
+      <IdentityName
+        className="min-w-0 flex-1 gap-2 group-data-[collapsible=icon]:gap-0"
+        icon={<HearthMark className="size-4.5 group-data-[collapsible=icon]:size-5" />}
+        iconClassName="border-sidebar-border/70 bg-background/25 group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:inset-0 group-data-[collapsible=icon]:size-full group-data-[collapsible=icon]:rounded-none group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent"
+        meta={[
+          version ? kilnReleaseLabel(version) : null,
+          host?.relayName,
+        ]
+          .filter(Boolean)
+          .join(" · ")}
+        metaClassName="text-sidebar-muted-foreground"
+        name="Kiln"
+        nameClassName="type-control-sm text-sidebar-foreground"
+        status={kilnPresentation(host)}
         statusClassName="ring-popover"
         textClassName="group-data-[collapsible=icon]:sr-only"
       />

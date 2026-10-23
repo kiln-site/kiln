@@ -6,6 +6,7 @@ import {
   type HearthDatabaseTerminalOutput,
   type RelayControlOperation,
   type RelayDatabaseTerminalAttached,
+  type RelayPlatformTarget,
 } from "@workspace/contracts"
 import { z } from "zod"
 
@@ -168,6 +169,44 @@ export function relayTerminalTarget(
     operations: {
       detach: "relay.terminal.detach",
       heartbeat: "relay.terminal.heartbeat",
+    },
+  }
+}
+
+// A shell in one of Kiln's own containers, for platform administrators.
+export function platformTerminalTarget(
+  relay: PersistedRelay,
+  role: RelayPlatformTarget,
+  user: AuthenticatedUser
+): TerminalStreamTarget {
+  return {
+    attach: async (attachmentId, rows, cols) => ({
+      session: relayDatabaseTerminalAttachedSchema.parse(
+        await databaseRpc(
+          relay,
+          "relay.platform.terminal.attach",
+          {
+            attachmentId,
+            cols,
+            idleTimeoutMs: databaseTerminalIdleTimeoutMs(),
+            role,
+            rows,
+          },
+          30_000,
+          user.id
+        )
+      ),
+      user: role,
+    }),
+    authorize: async (current) => {
+      const { isPlatformAdmin } = await import("@/lib/access-control")
+      if (!isPlatformAdmin(current)) {
+        throw new Error("Only platform administrators can open Kiln's terminals")
+      }
+    },
+    operations: {
+      detach: "relay.platform.terminal.detach",
+      heartbeat: "relay.platform.terminal.heartbeat",
     },
   }
 }

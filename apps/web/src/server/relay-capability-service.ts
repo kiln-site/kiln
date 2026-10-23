@@ -7,6 +7,7 @@ import {
   relayConsoleResourcesV1Feature,
   relayAppsV1Feature,
   relayLogsV1Feature,
+  relayPlatformV2Feature,
   appIdFromFileRoot,
   isRelayFileRoot,
   relayHostFilesV1Feature,
@@ -24,6 +25,7 @@ import type {
 import { Clock, Effect, Result } from "effect"
 
 import {
+  isPlatformAdmin,
   refreshRelayAuthorizationUserEffect,
   requireRelayPermissionsEffect,
 } from "@/lib/access-control"
@@ -484,8 +486,12 @@ const authorizeBrowserCapabilityEffect = Effect.fn(
   relayId: string
   resource: RelayConsoleResource
 }) {
-  // A Relay's own output is only ever the Relay the capability is for.
-  if (input.resource.kind === "relay" && input.resource.id !== input.relayId) {
+  // A Relay's own output, and Kiln's services on its host, are only ever
+  // the Relay the capability is for.
+  if (
+    (input.resource.kind === "relay" || input.resource.kind === "platform") &&
+    input.resource.id !== input.relayId
+  ) {
     return yield* Effect.fail(new Error("Relay not found"))
   }
   for (
@@ -497,6 +503,12 @@ const authorizeBrowserCapabilityEffect = Effect.fn(
       loginSession: input.authorizationSession,
       user: input.identity.user,
     })
+    // Kiln's own services are for platform administrators, as their page is.
+    if (input.resource.kind === "platform" && !isPlatformAdmin(snapshot.user)) {
+      return yield* Effect.fail(
+        new Error("Only platform administrators can read Kiln's logs")
+      )
+    }
     yield* requireRelayPermissionsEffect({
       ...resourceScope(input.resource),
       permissions: input.permissions,
@@ -693,7 +705,8 @@ function resourceVersion(
     (version !== 2 ||
       !features.has(relayConsoleResourcesV1Feature) ||
       (resource.kind === "app" && !features.has(relayAppsV1Feature)) ||
-      (resource.kind === "relay" && !features.has(relayLogsV1Feature)))
+      (resource.kind === "relay" && !features.has(relayLogsV1Feature)) ||
+      (resource.kind === "platform" && !features.has(relayPlatformV2Feature)))
   ) {
     throw new Error("Update this Relay to view these logs.")
   }
@@ -729,6 +742,7 @@ function resourceScope(resource: RelayConsoleResource) {
     case "app":
       return { appId: appIdFromFileRoot(resource.id) ?? resource.id }
     case "relay":
+    case "platform":
       return {}
     default:
       return resource.kind satisfies never

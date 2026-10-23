@@ -26,6 +26,7 @@ import {
   type RelayPlatformActionInput,
   type RelayPlatformService,
   type RelayPlatformServiceRole,
+  type RelayPlatformTarget,
   type RelayPlatformStatus,
 } from "@workspace/contracts"
 import { Effect, Fiber, Option, Result, Schema } from "effect"
@@ -43,7 +44,7 @@ import {
 } from "./docker-engine.js"
 import type { RelayClientRecord } from "./effect/state.js"
 import { hostnameContainerId } from "./platform-identity.js"
-import { relayOwnerLabels } from "./relay-resources.js"
+import { relayOwnerLabels, relayResourceNames } from "./relay-resources.js"
 import {
   decodePlatformRecoveryKit,
   readOptional,
@@ -1031,15 +1032,15 @@ export const platformStatus = Effect.fn("Relay.platform.status")(function* (
     : (["hearth", "database", "cache"] as const).filter((role) =>
         containers.has(role)
       )
-  const services = roles.map(
-    (role): RelayPlatformService =>
-      serviceStatus(
-        role,
-        containers.get(role) ?? null,
-        updating.has(role),
-        canManage
-      )
-  )
+  const services: Array<RelayPlatformService> = []
+  for (const role of roles) {
+    const container = containers.get(role) ?? null
+    services.push({
+      ...serviceStatus(role, container, updating.has(role), canManage),
+      shell: yield* hasShell(engine, container),
+    })
+  }
+  const proxy = yield* platformProxy(engine, config)
   return {
     canManage,
     checkedAt: new Date().toISOString(),
@@ -1048,6 +1049,13 @@ export const platformStatus = Effect.fn("Relay.platform.status")(function* (
     issue: state ? context.issue : null,
     management: state ? "relay" : "external",
     phase: !state ? "ready" : context.blocked ? "blocked" : state.phase,
+    proxy: proxy && {
+      ...serviceFields(proxy.container, false, false),
+      shell: yield* hasShell(engine, proxy.container),
+      // Only the Traefik this Relay runs is Kiln's to restart.
+      actions: canManage && proxy.managedBy === "kiln" ? ["restart"] : [],
+      managedBy: proxy.managedBy,
+    },
     services,
   } satisfies RelayPlatformStatus
 })
@@ -1058,6 +1066,14 @@ function serviceStatus(
   updating: boolean,
   canManage: boolean
 ): RelayPlatformService {
+  return { ...serviceFields(container, updating, canManage), role }
+}
+
+function serviceFields(
+  container: DockerContainerInspect | null,
+  updating: boolean,
+  canManage: boolean
+): Omit<RelayPlatformService, "role"> {
   const health = container?.State.Health?.Status
   return {
     actions: canManage && container ? ["restart"] : [],
@@ -1067,7 +1083,6 @@ function serviceStatus(
         ? health
         : null,
     image: container?.Config.Image ?? null,
-    role,
     startedAt:
       container?.State.Running && validDate(container.State.StartedAt)
         ? new Date(container.State.StartedAt).toISOString()
@@ -1137,6 +1152,114 @@ const platformContainers = Effect.fnUntraced(function* (
   return found
 })
 
+// Whether each container has `sh`, by container ID. Images don't change
+// under a container, so each is asked once.
+const shells = new Map<string, boolean>()
+
+/**
+ * Whether a running container has a shell to open a terminal in, or null
+ * when it isn't running or Docker couldn't say.
+ */
+const hasShell = Effect.fnUntraced(function* (
+  engine: DockerEngine,
+  container: DockerContainerInspect | null
+) {
+  if (!container?.State.Running) return null
+  const known = shells.get(container.Id)
+  if (known !== undefined) return known
+  const found = yield* engine
+    .exec(container.Id, ["sh", "-c", "true"], { timeout: 5_000 })
+    .pipe(
+      Effect.as(true),
+      Effect.catch((cause) =>
+        Effect.succeed(
+          /executable file not found|no such file or directory/iu.test(
+            cause.message
+          )
+            ? false
+            : null
+        )
+      )
+    )
+  if (found === null) return null
+  if (shells.size >= 64) shells.clear()
+  shells.set(container.Id, found)
+  return found
+})
+
+// Coolify runs its Traefik under this name.
+const COOLIFY_PROXY_CONTAINER = "coolify-proxy"
+
+/**
+ * The Traefik in front of Hearth: the one this Relay runs, Coolify's, or
+ * another running Traefik published on port 443.
+ */
+const platformProxy = Effect.fnUntraced(function* (
+  engine: DockerEngine,
+  config: Pick<RelayConfig, "resourceNamespace">
+) {
+  const traefik = (inspected: DockerContainerInspect | null) =>
+    inspected?.State.Running &&
+    /^traefik(?:[:@]|$)/u.test(inspected.Config.Image)
+      ? inspected
+      : null
+  const own = yield* inspectOptional(
+    engine.inspectContainer(relayResourceNames(config).traefikContainer)
+  )
+  if (own?.Config.Labels?.["kiln.relay.infrastructure"] === "traefik") {
+    return { container: own, managedBy: "kiln" as const }
+  }
+  const coolify = traefik(
+    yield* inspectOptional(engine.inspectContainer(COOLIFY_PROXY_CONTAINER))
+  )
+  if (coolify) return { container: coolify, managedBy: "coolify" as const }
+  const published = yield* engine
+    .listContainers({ filters: { publish: ["443"] } })
+    .pipe(Effect.catch(() => Effect.succeed([])))
+  for (const listed of published) {
+    const external = traefik(
+      yield* inspectOptional(engine.inspectContainer(listed.Id))
+    )
+    if (external) return { container: external, managedBy: "external" as const }
+  }
+  return null
+})
+
+/** The container for one of Kiln's services, or the proxy in front of it. */
+export const platformTargetContainer = Effect.fnUntraced(function* (
+  context: Pick<PlatformReadContext, "config" | "engine">,
+  target: RelayPlatformTarget
+) {
+  const { config, engine } = context
+  if (target === "proxy") {
+    return (yield* platformProxy(engine, config))?.container ?? null
+  }
+  const state =
+    config.mode === "platform"
+      ? yield* readPlatformState(config.dataDirectory)
+      : null
+  return (yield* platformContainers(engine, config, state)).get(target) ?? null
+})
+
+/**
+ * The container for one of Kiln's services or its proxy, only when this
+ * Relay installed and manages it. Shells are opened only in these.
+ */
+export const platformManagedContainer = Effect.fnUntraced(function* (
+  context: Pick<PlatformReadContext, "config" | "engine">,
+  target: RelayPlatformTarget
+) {
+  const { config, engine } = context
+  if (config.mode !== "platform") return null
+  if (target === "proxy") {
+    const proxy = yield* platformProxy(engine, config)
+    return proxy?.managedBy === "kiln" ? proxy.container : null
+  }
+  const state = yield* readPlatformState(config.dataDirectory)
+  if (!state) return null
+  return (yield* platformContainers(engine, config, state)).get(target) ?? null
+})
+
 /** Whether Kiln's services run beside this Relay without it managing them. */
 export const externalPlatformPresent = Effect.fn(
   "Relay.platform.externalPresent"
@@ -1157,18 +1280,17 @@ const MAX_LOG_LINE_CHARACTERS = 8_192
 
 export const platformLogs = Effect.fn("Relay.platform.logs")(function* (
   context: PlatformReadContext,
-  role: RelayPlatformServiceRole,
+  role: RelayPlatformTarget,
   lines: number
 ) {
-  const { config, engine } = context
-  const state =
-    config.mode === "platform"
-      ? yield* readPlatformState(config.dataDirectory)
-      : null
-  const container = (yield* platformContainers(engine, config, state)).get(role)
+  const { engine } = context
+  const container = yield* platformTargetContainer(context, role)
   if (!container) {
     return yield* new PlatformError({
-      reason: `Kiln's ${role} container isn't on this Relay's host`,
+      reason:
+        role === "proxy"
+          ? "No Traefik runs in front of Hearth on this Relay's host"
+          : `Kiln's ${role} container isn't on this Relay's host`,
     })
   }
   const collected: Array<string> = []
@@ -1197,6 +1319,7 @@ export const platformAction = Effect.fn("Relay.platform.action")(function* (
   input: RelayPlatformActionInput
 ) {
   if (input.action === "repair") return yield* reconcilePlatform(context)
+  if (input.role === "proxy") return yield* restartPlatformProxy(context)
   return yield* restartPlatformService(context, input.role)
 })
 
@@ -1245,6 +1368,24 @@ export const checkHearthRestart = Effect.fn("Relay.platform.checkRestart")(
  * container's update lock. Hearth isn't restarted while maintenance holds
  * it stopped, which an operator may have started since it was asked for.
  */
+/** Restarts the Traefik this Relay runs in front of Hearth. */
+const restartPlatformProxy = Effect.fnUntraced(function* (
+  context: PlatformContext
+) {
+  const { config, engine } = context
+  const proxy = yield* platformProxy(engine, config)
+  if (proxy?.managedBy !== "kiln") {
+    return yield* new PlatformError({
+      reason: "Kiln doesn't run the Traefik in front of Hearth here",
+    })
+  }
+  yield* engine.restartContainer(proxy.container.Id, {
+    seconds: 10,
+    timeout: 60_000,
+  })
+  return passed(yield* readPlatformState(config.dataDirectory))
+})
+
 export const restartPlatformService = Effect.fn("Relay.platform.restart")(
   function* (context: PlatformContext, role: RelayPlatformServiceRole) {
     const { config, engine } = context

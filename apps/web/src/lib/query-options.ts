@@ -6,7 +6,7 @@ import {
 import type { QueryClient } from "@tanstack/react-query"
 import type {
   BackupTarget,
-  RelayPlatformServiceRole,
+  RelayPlatformTarget,
   RelayConsoleResource,
   RelayFileEntry,
   RelayInstance,
@@ -287,7 +287,7 @@ export const queryKeys = {
   tailscaleStacks: ["tailscale", "stacks"] as const,
   kilnPlatform: {
     all: ["kiln-platform"] as const,
-    logs: (relayId: string, role: RelayPlatformServiceRole) =>
+    logs: (relayId: string, role: RelayPlatformTarget) =>
       ["kiln-platform", "logs", relayId, role] as const,
   },
   updates: ["updates", "overview"] as const,
@@ -966,7 +966,7 @@ export function relayTailscaleQueryOptions(relayId: string) {
   })
 }
 
-// Kiln's own services, for the System page. Polled while it's open, since
+// Kiln's own services, for its pages. Polled while one is open, since
 // a restart or repair changes them over the next minute.
 export function kilnPlatformQueryOptions() {
   return queryOptions({
@@ -980,7 +980,7 @@ export function kilnPlatformQueryOptions() {
 
 export function kilnPlatformLogsQueryOptions(
   relayId: string,
-  role: RelayPlatformServiceRole
+  role: RelayPlatformTarget
 ) {
   return queryOptions({
     queryKey: queryKeys.kilnPlatform.logs(relayId, role),
