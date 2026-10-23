@@ -2,11 +2,16 @@ import * as React from "react"
 import { isNull, useLiveQuery } from "@tanstack/react-db"
 import { hashKey, useQueryClient } from "@tanstack/react-query"
 import type { QueryClient } from "@tanstack/react-query"
-import { Link } from "@tanstack/react-router"
-import { Bell } from "lucide-react"
+import { Link, useRouter } from "@tanstack/react-router"
+import { Bell, Settings2 } from "lucide-react"
+import { Predicate } from "effect"
 
 import { Button } from "@workspace/ui/components/button"
-import { showToast } from "@workspace/ui/components/sonner"
+import {
+  dismissToast,
+  showToast,
+  type AppToastType,
+} from "@workspace/ui/components/sonner"
 import {
   Popover,
   PopoverAnchor,
@@ -26,14 +31,18 @@ import {
   notificationListItems,
   useNotificationClearing,
 } from "@/components/notification-list"
+import { forkPromise } from "@/effect/promise"
 import {
   markCachedNotificationsRead,
+  notificationPreferencesQueryOptions,
   notificationsCollectionOptions,
   notificationsPopoverLimit,
   notificationsQueryOptions,
 } from "@/lib/collections/notifications"
-import { notificationTitle } from "@/lib/notification-text"
-import type { NotificationContent } from "@/lib/notifications"
+import { notificationDetail, notificationTitle } from "@/lib/notification-text"
+import type { KilnNotification, NotificationContent } from "@/lib/notifications"
+import { isUserActive, startUserActivityTracking } from "@/lib/user-activity"
+import { acknowledgeNotificationsSeen } from "@/server/notifications"
 
 interface NotificationsPopoverStore {
   close: () => void
@@ -157,47 +166,161 @@ function UnreadCountBadge({
   )
 }
 
-// Kinds that need attention now, so they also pop up as they arrive.
-const toastedKinds: ReadonlySet<NotificationContent["kind"]> = new Set([
-  "resource.disk-limit",
-])
+// How long a notification's toast stays, long enough to read it.
+const notificationToastDurationMs = 8_000
+
+function notificationToastType(content: NotificationContent): AppToastType {
+  switch (content.kind) {
+    case "resource.disk-limit":
+      return "warning"
+    case "app.deployed":
+      return content.status === "failed" ? "error" : "success"
+    case "kiln.updated":
+      return "success"
+    default:
+      return "info"
+  }
+}
+
+// Notification tags Hearth's pushes use: the notification's ID.
+const notificationTagPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /**
- * Shows a toast for each warning that arrives while the tab is open. It
- * watches the inbox's cache, so it renders nothing and re-renders nothing.
- * The inbox's first load sets what counts as already there.
+ * Shows a toast for each notification that arrives while the tab is open,
+ * and, when the user is using the tab, tells Hearth they saw it, so it isn't
+ * pushed to their devices too. It also closes the device notifications the
+ * user has since read or cleared. It watches the inbox's cache, so it
+ * renders nothing and re-renders nothing. The inbox's first load sets what
+ * counts as already there.
  */
 function useArrivingNotificationToasts(queryClient: QueryClient) {
+  const router = useRouter()
   React.useEffect(() => {
+    startUserActivityTracking()
     const { queryKey } = notificationsQueryOptions()
     const hash = hashKey(queryKey)
     let seen: Set<string> | null = null
+    const toasted = new Set<string>()
+    let reconciledAt = 0
     const check = () => {
-      const inbox = queryClient.getQueryData(queryKey)
+      const state = queryClient.getQueryState(queryKey)
+      const inbox = state?.data
       if (!inbox) return
+      if (state.dataUpdatedAt !== reconciledAt) {
+        reconciledAt = state.dataUpdatedAt
+        closeSettledDeviceNotifications(inbox, reconciledAt)
+      }
       if (seen === null) {
         seen = new Set(inbox.map((notification) => notification.id))
         return
       }
+      const unread = new Set<string>()
+      const arrived: Array<KilnNotification> = []
       for (const notification of inbox) {
+        if (notification.readAt === null) unread.add(notification.id)
         if (seen.has(notification.id)) continue
         seen.add(notification.id)
-        if (
-          notification.readAt === null &&
-          toastedKinds.has(notification.content.kind)
-        ) {
-          showToast({
-            message: notificationTitle(notification.content),
-            type: "warning",
-          })
-        }
+        if (notification.readAt === null) arrived.push(notification)
       }
+      // Read or cleared elsewhere, so its toast has nothing left to say.
+      for (const id of toasted) {
+        if (unread.has(id)) continue
+        toasted.delete(id)
+        dismissToast(id)
+      }
+      if (!arrived.length) return
+      for (const notification of arrived) {
+        const { content, id } = notification
+        toasted.add(id)
+        showToast({
+          action: {
+            label: "View",
+            onClick: () =>
+              void router.navigate({
+                to: "/notifications",
+                search: { focus: id },
+              }),
+          },
+          description: notificationDetail(content) ?? undefined,
+          duration: notificationToastDurationMs,
+          id,
+          message: notificationTitle(content),
+          type: notificationToastType(content),
+        })
+      }
+      acknowledgeIfActive(
+        queryClient,
+        arrived.map((notification) => notification.id)
+      )
     }
     check()
-    return queryClient.getQueryCache().subscribe((event) => {
+    const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
       if (event.query.queryHash === hash) check()
     })
-  }, [queryClient])
+    // A phone that was away may still show notifications read meanwhile.
+    const onVisible = () => {
+      const state = queryClient.getQueryState(queryKey)
+      if (document.visibilityState === "visible" && state?.data)
+        closeSettledDeviceNotifications(state.data, state.dataUpdatedAt)
+    }
+    document.addEventListener("visibilitychange", onVisible)
+    return () => {
+      unsubscribe()
+      document.removeEventListener("visibilitychange", onVisible)
+    }
+  }, [queryClient, router])
+}
+
+// Tells Hearth the user saw these here, if they're using this tab and want
+// pushes skipped meanwhile. A tab left open while they're away says
+// nothing, so their phone still buzzes.
+function acknowledgeIfActive(queryClient: QueryClient, ids: Array<string>) {
+  forkPromise(async () => {
+    const preferences = await queryClient.ensureQueryData(
+      notificationPreferencesQueryOptions()
+    )
+    if (
+      !preferences.skipPushWhileActive ||
+      !isUserActive(preferences.idleMinutes * 60_000)
+    )
+      return
+    await acknowledgeNotificationsSeen({ data: { ids: ids.slice(0, 50) } })
+  })
+}
+
+// An inbox request can start before a notification arrives and finish after
+// it's shown; one shown this close to the load may just be missing from it.
+const loadMarginMs = 10_000
+
+// Closes this device's notifications the user read or cleared, here or
+// elsewhere. One missing from an inbox loaded well after it was shown was
+// cleared.
+function closeSettledDeviceNotifications(
+  inbox: ReadonlyArray<KilnNotification>,
+  loadedAt: number
+) {
+  if (!("serviceWorker" in navigator)) return
+  forkPromise(async () => {
+    const registration = await navigator.serviceWorker.getRegistration()
+    if (!registration) return
+    const byId = new Map(
+      inbox.map((notification) => [notification.id, notification])
+    )
+    for (const shown of await registration.getNotifications()) {
+      if (!notificationTagPattern.test(shown.tag)) continue
+      const current = byId.get(shown.tag)
+      const shownAt: unknown = Predicate.hasProperty(shown.data, "shownAt")
+        ? shown.data.shownAt
+        : null
+      if (
+        current
+          ? current.readAt !== null
+          : Predicate.isNumber(shownAt) && shownAt < loadedAt - loadMarginMs
+      )
+        shown.close()
+    }
+  })
 }
 
 /** The bell beside the Kiln name in the expanded sidebar. */
@@ -376,6 +499,25 @@ function NotificationsPopoverPanel({ onNavigate }: { onNavigate: () => void }) {
         >
           Clear all
         </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              asChild
+              variant="ghost"
+              size="icon-sm"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <Link
+                to="/settings/notifications"
+                aria-label="Notification settings"
+                onClick={onNavigate}
+              >
+                <Settings2 />
+              </Link>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Notification settings</TooltipContent>
+        </Tooltip>
       </div>
       {/* A fixed height, about four and a half rows, so the popover never
           resizes and a cut-off row shows there's more. */}

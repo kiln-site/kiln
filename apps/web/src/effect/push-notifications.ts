@@ -32,6 +32,11 @@ export interface PushSubscriptionInput {
 export interface PushMessage {
   badge: string
   body?: string
+  /**
+   * Tags of notifications this device may still show that were read or
+   * cleared since, which the service worker closes.
+   */
+  close?: Array<string>
   icon: string
   tag: string
   title: string
@@ -408,22 +413,60 @@ interface PendingNotificationRow extends RowDataPacket {
 const pushWindowMs = 60 * 60_000
 const pushBatchSize = 200
 
-/** Whether any notification is still waiting to be pushed. */
-export const hasPendingPushesEffect = Effect.fnUntraced(function* () {
+/**
+ * When the next notification waiting to be pushed is due, or null when none
+ * waits. Ones from before pushes waited are due at once.
+ */
+export const nextPushDueEffect = Effect.fnUntraced(function* () {
   const database = yield* Database
-  const rows = yield* database.queryRows<RowDataPacket>(
+  const [row] = yield* database.queryRows<
+    RowDataPacket & { due: number | string | null }
+  >(
     "notifications.push.pending",
-    `SELECT 1 FROM ${databaseTable("notification")}
-      WHERE push_pending = 1
-      LIMIT 1`
+    `SELECT MIN(COALESCE(push_due_at, 0)) AS due
+       FROM ${databaseTable("notification")}
+      WHERE push_pending = 1`
   )
-  return rows.length > 0
+  return row?.due === null || row?.due === undefined ? null : Number(row.due)
+})
+
+// How far back, and how many, read or cleared notifications a push asks the
+// device to close, so a phone that was offline catches up with its next one.
+const closeWindowMs = 24 * 60 * 60_000
+const closeLimit = 20
+
+// Each user's notifications pushed recently and read or cleared since.
+const closedSincePushedEffect = Effect.fnUntraced(function* (
+  userIds: ReadonlyArray<string>,
+  now: number
+) {
+  const closed = new Map<string, Array<string>>()
+  if (!userIds.length) return closed
+  const database = yield* Database
+  const rows = yield* database.queryRows<
+    RowDataPacket & { id: string; user_id: string }
+  >(
+    "notifications.push.closed",
+    `SELECT id, user_id FROM ${databaseTable("notification")}
+      WHERE user_id IN (${userIds.map(() => "?").join(", ")})
+        AND created_at >= ? AND pushed_at IS NOT NULL
+        AND (read_at IS NOT NULL OR dismissed_at IS NOT NULL)
+      ORDER BY created_at DESC`,
+    [...userIds, now - closeWindowMs]
+  )
+  for (const row of rows) {
+    const ids = closed.get(row.user_id) ?? []
+    if (ids.length < closeLimit) ids.push(row.id)
+    closed.set(row.user_id, ids)
+  }
+  return closed
 })
 
 /**
  * Pushes notifications waiting to be pushed to their users' devices, each
- * once even with several Hearths. Ones already read, cleared, or too old are
- * let go without sending. Subscriptions the push service no longer knows, or
+ * once even with several Hearths, once they're due. Ones already read,
+ * cleared, or too old are let go without sending; ones a tab the user was
+ * using showed were let go when it said so. Subscriptions the push service no longer knows, or
  * whose sign-in ended, are deleted.
  *
  * Delivery is best effort: a notification is claimed before sending, so one
@@ -450,15 +493,17 @@ export const pushPendingNotificationsEffect = Effect.fn("notifications.push")(
             `SELECT id, user_id, kind, data, created_at, read_at, dismissed_at
                FROM ${table}
               WHERE push_pending = 1
+                AND (push_due_at IS NULL OR push_due_at <= ?)
               ORDER BY created_at
               LIMIT ${pushBatchSize}
-              FOR UPDATE SKIP LOCKED`
+              FOR UPDATE SKIP LOCKED`,
+            [now]
           )
           if (rows.length)
             yield* tx.execute(
-              `UPDATE ${table} SET push_pending = NULL
+              `UPDATE ${table} SET push_pending = NULL, pushed_at = ?
                 WHERE id IN (${rows.map(() => "?").join(", ")})`,
-              rows.map((row) => row.id)
+              [now, ...rows.map((row) => row.id)]
             )
           return rows
         })
@@ -488,16 +533,20 @@ export const pushPendingNotificationsEffect = Effect.fn("notifications.push")(
     if (!pending.length || !vapid) return claimed.length
 
     const userIds = [...new Set(pending.map((entry) => entry.userId))]
-    const { deliverable, stale } =
-      yield* deliverableSubscriptionsEffect(userIds)
+    const [{ deliverable, stale }, closed] = yield* Effect.all([
+      deliverableSubscriptionsEffect(userIds),
+      closedSincePushedEffect(userIds, now),
+    ])
     const gone = stale.map((row) => row.id)
     if (deliverable.length) {
       const webPush = yield* WebPush
-      const deliveries = pending.flatMap(({ message, userId }) =>
-        deliverable
+      const deliveries = pending.flatMap(({ message, userId }) => {
+        const close = closed.get(userId)
+        const sent = close?.length ? { ...message, close } : message
+        return deliverable
           .filter((subscription) => subscription.user_id === userId)
-          .map((subscription) => ({ message, subscription }))
-      )
+          .map((subscription) => ({ message: sent, subscription }))
+      })
       yield* Effect.forEach(
         deliveries,
         ({ message, subscription }) =>

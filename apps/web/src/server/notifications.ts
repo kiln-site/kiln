@@ -2,6 +2,11 @@ import { createServerFn } from "@tanstack/react-start"
 import { z } from "zod"
 
 import {
+  loadUserNotificationPreferencesEffect,
+  saveNotificationPreferencesEffect,
+} from "@/effect/notification-preferences"
+import {
+  acknowledgeNotificationsSeenEffect,
   clearNotificationsEffect,
   dismissNotificationEffect,
   listNotificationsEffect,
@@ -9,6 +14,7 @@ import {
   publishNotificationChange,
 } from "@/effect/notifications"
 import { runAppEffect } from "@/effect/runtime"
+import { notificationPreferencesUpdateSchema } from "@/lib/notification-preferences"
 import { notificationHistoryLimit } from "@/lib/notifications"
 import { requireEligibleResourceUser } from "@/server/auth"
 
@@ -60,4 +66,39 @@ export const clearNotifications = createServerFn({ method: "POST" })
       clearNotificationsEffect(user.id, data.through)
     )
     if (cleared > 0) publishNotificationChange([user.id])
+  })
+
+/**
+ * Says a tab the user is using showed these notifications, so they aren't
+ * pushed to the user's devices too.
+ */
+export const acknowledgeNotificationsSeen = createServerFn({ method: "POST" })
+  .validator(z.strictObject({ ids: z.array(z.uuid()).min(1).max(50) }))
+  .handler(async ({ data }) => {
+    const user = await requireEligibleResourceUser()
+    await runAppEffect(
+      "notifications.acknowledgeSeen",
+      acknowledgeNotificationsSeenEffect(user.id, data.ids)
+    )
+  })
+
+export const getNotificationPreferences = createServerFn({
+  method: "GET",
+}).handler(async () => {
+  const user = await requireEligibleResourceUser()
+  return runAppEffect(
+    "notificationPreferences.load",
+    loadUserNotificationPreferencesEffect(user.id)
+  )
+})
+
+/** Saves the given choices, keeping the rest; answers all of them. */
+export const saveNotificationPreferences = createServerFn({ method: "POST" })
+  .validator(notificationPreferencesUpdateSchema)
+  .handler(async ({ data }) => {
+    const user = await requireEligibleResourceUser()
+    return runAppEffect(
+      "notificationPreferences.save",
+      saveNotificationPreferencesEffect(user.id, data)
+    )
   })

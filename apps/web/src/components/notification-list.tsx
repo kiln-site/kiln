@@ -2,6 +2,7 @@ import * as React from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { Link, useNavigate } from "@tanstack/react-router"
 import {
+  CloudUpload,
   HardDrive,
   PackageCheck,
   PackagePlus,
@@ -233,6 +234,7 @@ function NotificationActions({
       return null
     case "resource.disk-limit":
     case "app.image-update":
+    case "app.deployed":
       return (
         <OpenResourceButton
           resource={content.resource}
@@ -378,6 +380,7 @@ const notificationIcons = {
   "kiln.updated": PackageCheck,
   "resource.disk-limit": HardDrive,
   "app.image-update": PackagePlus,
+  "app.deployed": CloudUpload,
 } satisfies Record<
   NotificationContent["kind"],
   React.ComponentType<{ className?: string }>

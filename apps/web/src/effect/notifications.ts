@@ -8,11 +8,16 @@ import { databaseTable } from "@/lib/database-config"
 import { developmentBypassUserId } from "@/lib/development-bypass"
 import { developmentBypassEnabled } from "@/lib/environment"
 import {
+  loadNotificationPreferencesEffect,
+  loadUserNotificationPreferencesEffect,
+} from "@/effect/notification-preferences"
+import {
   notificationContentSchema,
   notificationHistoryLimit,
   type InvitationOutcome,
   type KilnNotification,
   type NotificationContent,
+  type NotificationKind,
 } from "@/lib/notifications"
 import { wakePollingWorker } from "@/lib/polling-worker"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
@@ -26,39 +31,155 @@ interface NotificationRow extends RowDataPacket {
 }
 
 /**
- * Delivers one notification to each user. A user who already has a
- * notification for `sourceKey` keeps it unchanged, so callers can retry or
- * re-announce without duplicates. Inside a transaction the rows commit with it.
- * Answers how many users got a new one.
+ * How long a push waits for an open tab to show the notification first.
+ * A tab the user is using acknowledges it within this, and it isn't pushed.
+ */
+export const notificationPushDelayMs = 5_000
+
+export interface NotifyOptions {
+  /**
+   * Whoever did what the notification is about. They know, so they don't
+   * hear about it, and a later check never tells them again.
+   */
+  actorUserId?: string | null
+}
+
+/**
+ * Delivers one notification to each user, as their notification settings
+ * say. A user who already has a notification for `sourceKey` keeps it
+ * unchanged, so callers can retry or re-announce without duplicates. The
+ * actor, and users who turned the kind off, get it already cleared, so a later
+ * announcement of the same event doesn't reach them either. Inside a
+ * transaction the rows commit with it. Answers how many users got a new one.
  */
 export const notifyUsersEffect = Effect.fn("notifications.notify")(function* (
   userIds: ReadonlyArray<string>,
   sourceKey: string,
-  content: NotificationContent
+  content: NotificationContent,
+  options: NotifyOptions = {}
 ) {
   const recipients = [...new Set(userIds)]
   if (!recipients.length) return 0
   const database = yield* Database
+  const preferences = yield* loadNotificationPreferencesEffect(recipients)
   const now = yield* Clock.currentTimeMillis
   const { kind, ...data } = content
   const json = JSON.stringify(data)
+  const rows = recipients.map((userId) => {
+    const choice = preferences.get(userId)
+    const kindChoice = choice?.kinds[kind]
+    const hidden = userId === options.actorUserId || kindChoice?.inbox === false
+    const push = !hidden && kindChoice?.push !== false
+    return {
+      clearedAt: hidden ? now : null,
+      pushDueAt: push
+        ? choice?.skipPushWhileActive === false
+          ? now
+          : now + notificationPushDelayMs
+        : null,
+      userId,
+    }
+  })
   const result = yield* database.execute(
     "notifications.notify",
     `INSERT INTO ${databaseTable("notification")}
-       (id, user_id, kind, source_key, data, created_at, push_pending)
-     VALUES ${recipients.map(() => "(?, ?, ?, ?, ?, ?, 1)").join(", ")}
+       (id, user_id, kind, source_key, data, created_at, read_at,
+        dismissed_at, push_pending, push_due_at)
+     VALUES ${rows.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ")}
      ON DUPLICATE KEY UPDATE id = id`,
-    recipients.flatMap((userId) => [
+    rows.flatMap((row) => [
       randomUUID(),
-      userId,
+      row.userId,
       kind,
       sourceKey,
       json,
       now,
+      row.clearedAt,
+      row.clearedAt,
+      row.pushDueAt === null ? null : 1,
+      row.pushDueAt,
     ])
   )
   // MySQL counts an inserted row as 1 and an untouched duplicate as 0.
   return result.affectedRows
+})
+
+/**
+ * Clears notifications that no longer apply, as an update on offer once it's
+ * installed, for everyone who has them. Answers whose inboxes changed, for
+ * `publishNotificationChange`; their devices close the cleared ones.
+ */
+export const resolveNotificationsEffect = Effect.fn("notifications.resolve")(
+  function* (kind: NotificationKind, sourceKeys: ReadonlyArray<string>) {
+    if (!sourceKeys.length) return []
+    const database = yield* Database
+    const table = databaseTable("notification")
+    const now = yield* Clock.currentTimeMillis
+    const keys = sourceKeys.map(() => "?").join(", ")
+    return yield* database.transaction("notifications.resolve", (tx) =>
+      Effect.gen(function* () {
+        const rows = yield* tx.queryRows<RowDataPacket & { user_id: string }>(
+          `SELECT DISTINCT user_id FROM ${table}
+            WHERE kind = ? AND dismissed_at IS NULL
+              AND source_key IN (${keys})
+            FOR UPDATE`,
+          [kind, ...sourceKeys]
+        )
+        if (!rows.length) return []
+        yield* tx.execute(
+          `UPDATE ${table}
+              SET dismissed_at = ?, read_at = COALESCE(read_at, ?),
+                  push_pending = NULL
+            WHERE kind = ? AND dismissed_at IS NULL
+              AND source_key IN (${keys})`,
+          [now, now, kind, ...sourceKeys]
+        )
+        return rows.map((row) => row.user_id)
+      })
+    )
+  }
+)
+
+/**
+ * The source keys of a kind's notifications nobody has cleared yet whose key
+ * starts with `prefix`, for finding announcements to resolve.
+ */
+export const openSourceKeysEffect = Effect.fnUntraced(function* (
+  kind: NotificationKind,
+  prefix: string
+) {
+  const database = yield* Database
+  const rows = yield* database.queryRows<
+    RowDataPacket & { source_key: string }
+  >(
+    "notifications.openSourceKeys",
+    `SELECT DISTINCT source_key FROM ${databaseTable("notification")}
+      WHERE kind = ? AND dismissed_at IS NULL AND source_key LIKE ?`,
+    [kind, `${prefix.replace(/[\\%_]/g, (match) => `\\${match}`)}%`]
+  )
+  return rows.map((row) => row.source_key)
+})
+
+/**
+ * Records that a tab the user is using showed these notifications, so they
+ * aren't pushed to the user's devices, unless the user wants pushes anyway.
+ */
+export const acknowledgeNotificationsSeenEffect = Effect.fn(
+  "notifications.acknowledgeSeen"
+)(function* (userId: string, ids: ReadonlyArray<string>) {
+  if (!ids.length) return
+  const database = yield* Database
+  const preferences = yield* loadUserNotificationPreferencesEffect(userId)
+  const now = yield* Clock.currentTimeMillis
+  yield* database.execute(
+    "notifications.acknowledgeSeen",
+    `UPDATE ${databaseTable("notification")}
+        SET seen_at = COALESCE(seen_at, ?)${
+          preferences.skipPushWhileActive ? ", push_pending = NULL" : ""
+        }
+      WHERE user_id = ? AND id IN (${ids.map(() => "?").join(", ")})`,
+    [now, userId, ...ids]
+  )
 })
 
 /**

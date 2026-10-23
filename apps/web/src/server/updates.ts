@@ -289,7 +289,27 @@ export const checkForKilnReleases = createServerFn({ method: "POST" }).handler(
         message: "You don't have permission to update Kiln",
       })
     }
-    return runAppEffect("updates.check-releases", checkKilnReleasesEffect())
+    const checked = await runAppEffect(
+      "updates.check-releases",
+      checkKilnReleasesEffect()
+    )
+    // The admin who checked sees what it found; the others hear of it now.
+    if (!checked.failed && isPlatformAdmin(user)) {
+      const { notifyLatestKilnReleaseEffect } =
+        await import("@/lib/kiln-update-notifications")
+      await runAppEffect(
+        "updates.check-releases.notify",
+        notifyLatestKilnReleaseEffect(
+          import.meta.env.VITE_KILN_VERSION,
+          user.id
+        ).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("Could not announce Kiln releases", cause)
+          )
+        )
+      )
+    }
+    return checked
   }
 )
 
@@ -486,6 +506,25 @@ export const startSystemUpdates = createServerFn({ method: "POST" })
               })
               const legacyTarget =
                 group.targets.length === 1 ? group.targets[0] : undefined
+              // The Hearth that starts next shouldn't tell this admin about
+              // the update they started.
+              if (
+                group.targets.some(({ component }) => component === "hearth")
+              ) {
+                const { recordHearthUpdateRequestEffect } =
+                  await import("@/lib/kiln-update-notifications")
+                await runAppEffect(
+                  "updates.record-request",
+                  recordHearthUpdateRequestEffect(user.id).pipe(
+                    Effect.catchCause((cause) =>
+                      Effect.logWarning(
+                        "Could not record who updated Hearth",
+                        cause
+                      )
+                    )
+                  )
+                )
+              }
               // This Hearth may be replaced before every Relay answers. Each
               // Relay still finishes what it accepted and reports it, named
               // by the request, in its snapshot, which the browser reads

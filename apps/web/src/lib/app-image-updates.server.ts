@@ -20,7 +20,9 @@ import {
 } from "@/effect/managed-apps"
 import {
   notifyUsersEffect,
+  openSourceKeysEffect,
   publishNotificationChange,
+  resolveNotificationsEffect,
 } from "@/effect/notifications"
 import { forkAppWorker } from "@/effect/runtime"
 import {
@@ -93,11 +95,12 @@ const stillChecked = Effect.fnUntraced(function* (
 })
 
 // Tells everyone who can deploy the app about an image they haven't heard
-// of, unless it was skipped.
+// of, unless it was skipped. Whoever asked for the check sees what it found.
 const announce = Effect.fnUntraced(function* (
   relay: PersistedRelay,
   name: string,
-  update: AppImageUpdate
+  update: AppImageUpdate,
+  actorUserId: string | null
 ) {
   const digest = update.latestDigest
   if (
@@ -125,9 +128,30 @@ const announce = Effect.fnUntraced(function* (
         relayId: relay.id,
         type: "app",
       },
-    }
+    },
+    { actorUserId }
   )
   if (delivered > 0) publishNotificationChange(recipients)
+})
+
+function imageUpdateSourceKeyPrefix(appId: string) {
+  return `app.image-update:${appId}:`
+}
+
+/**
+ * Clears an app's update notifications, except the one for `keepDigest`, as
+ * once the app runs the update, it's skipped, or a newer image replaces it.
+ */
+export const resolveAppImageUpdateNotificationsEffect = Effect.fn(
+  "Apps.imageUpdates.resolveNotifications"
+)(function* (appId: string, keepDigest: string | null = null) {
+  const prefix = imageUpdateSourceKeyPrefix(appId)
+  const open = yield* openSourceKeysEffect("app.image-update", prefix)
+  const resolved = yield* resolveNotificationsEffect(
+    "app.image-update",
+    open.filter((key) => key !== `${prefix}${keepDigest}`)
+  )
+  publishNotificationChange(resolved)
 })
 
 // A registry that keeps failing fails every hour, so only a new failure
@@ -158,7 +182,8 @@ const reportFailure = (
 // off.
 const checkAppImagesEffect = Effect.fnUntraced(function* (
   relay: PersistedRelay,
-  onlyAppId?: string
+  onlyAppId?: string,
+  actorUserId: string | null = null
 ) {
   const lock = locks.get(relay.id) ?? Semaphore.makeUnsafe(1)
   locks.set(relay.id, lock)
@@ -231,8 +256,18 @@ const checkAppImagesEffect = Effect.fnUntraced(function* (
           changed ||= recorded.changed
           yield* reportFailure(relay.id, app.appId, recorded.update)
           if (recorded.newlySeen) {
-            yield* announce(relay, app.name, recorded.update)
+            yield* announce(relay, app.name, recorded.update, actorUserId)
           }
+          // An update that's gone, skipped, or replaced by a newer image no
+          // longer needs anyone's attention.
+          const offered = recorded.update
+          yield* resolveAppImageUpdateNotificationsEffect(
+            app.appId,
+            offered.state === "available" &&
+              offered.latestDigest !== offered.skippedDigest
+              ? offered.latestDigest
+              : null
+          )
           const at = autoUpdateAt(recorded.update)
           if (at !== null && at <= (yield* Clock.currentTimeMillis)) {
             enqueueAppDeployment(app.appId, relay.id, "update")
@@ -298,26 +333,33 @@ function checksImages(relay: PersistedRelay): boolean {
  * answers what Kiln knows of its updates after.
  */
 export const checkAppImageEffect = Effect.fn("Apps.imageUpdates.checkApp")(
-  function* (relay: PersistedRelay, appId: string) {
+  function* (relay: PersistedRelay, appId: string, actorUserId: string | null) {
     if (!checksImages(relay)) {
       return yield* Effect.fail(
         new Error("Update this Relay to check apps for image updates")
       )
     }
-    yield* checkAppImagesEffect(relay, appId)
+    yield* checkAppImagesEffect(relay, appId, actorUserId)
     const updates = yield* loadAppImageUpdatesEffect([appId])
     return updates.get(appId) ?? null
   }
 )
 
-/** Checks again after an image app deploys, so it shows what it runs. */
-export function recheckAppImage(relayId: string, appId: string): void {
+/**
+ * Checks again after an image app deploys, so it shows what it runs, or
+ * after someone (`actorUserId`) changed how it updates.
+ */
+export function recheckAppImage(
+  relayId: string,
+  appId: string,
+  actorUserId: string | null
+): void {
   forkAppWorker(
     Effect.gen(function* () {
       const relays = yield* listPersistedRelaysEffect()
       const relay = relays.find((item) => item.id === relayId)
       if (relay && checksImages(relay)) {
-        yield* checkAppImagesEffect(relay, appId)
+        yield* checkAppImagesEffect(relay, appId, actorUserId)
       }
     }).pipe(
       Effect.catchCause((cause) =>

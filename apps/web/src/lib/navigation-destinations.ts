@@ -1,5 +1,6 @@
 import type { ComponentType } from "react"
 import {
+  Bell,
   CalendarDays,
   CircleUserRound,
   Cpu,
@@ -219,6 +220,12 @@ export const settingsDestinations = [
     keywords: ["settings", "downloads", "editor"],
     label: "Files",
     to: "/settings/files",
+  },
+  {
+    icon: Bell,
+    keywords: ["settings", "push", "alerts"],
+    label: "Notifications",
+    to: "/settings/notifications",
   },
   {
     icon: CircleUserRound,

@@ -2,7 +2,7 @@ import { Effect } from "effect"
 
 import {
   WebPush,
-  hasPendingPushesEffect,
+  nextPushDueEffect,
   pushPendingNotificationsEffect,
 } from "@/effect/push-notifications"
 import { runAppEffect, runAppEffectUntraced } from "@/effect/runtime"
@@ -13,9 +13,12 @@ export function startNotificationPushes(): void {
   startPollingWorker("Notifications.push", pushPendingNotifications)
 }
 
+// A push waits a few seconds for an open tab to show it, so the pass that
+// sends it runs when it's due.
 async function pushPendingNotifications(): Promise<WorkerPass> {
-  if (!(await runAppEffectUntraced(hasPendingPushesEffect()))) {
-    return { outcome: "idle", nextAttemptAt: null }
+  const due = await runAppEffectUntraced(nextPushDueEffect())
+  if (due === null || due > Date.now()) {
+    return { outcome: "idle", nextAttemptAt: due }
   }
   await runAppEffect(
     "Notifications.push.pass",

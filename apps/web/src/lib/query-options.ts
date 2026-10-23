@@ -296,6 +296,7 @@ export const queryKeys = {
     ["updates", "relay", relayId, version] as const,
   instanceFavorites: ["instance-favorites"] as const,
   notifications: ["notifications"] as const,
+  notificationPreferences: ["notification-preferences"] as const,
   uiPreferences: ["ui", "preferences"] as const,
 }
 
@@ -984,8 +985,7 @@ export function kilnPlatformLogsQueryOptions(
 ) {
   return queryOptions({
     queryKey: queryKeys.kilnPlatform.logs(relayId, role),
-    queryFn: () =>
-      getKilnPlatformLogs({ data: { lines: 500, relayId, role } }),
+    queryFn: () => getKilnPlatformLogs({ data: { lines: 500, relayId, role } }),
     retry: false,
     staleTime: 0,
   })

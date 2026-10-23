@@ -6,6 +6,7 @@ import { TestClock } from "effect/testing"
 import { listNotificationsEffect } from "@/effect/notifications"
 import {
   notifyLatestKilnReleaseEffect,
+  recordHearthUpdateRequestEffect,
   recordStartedKilnVersionEffect,
 } from "@/lib/kiln-update-notifications"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
@@ -106,6 +107,42 @@ describeMysql("Kiln update notifications", () => {
         yield* recordStartedKilnVersionEffect("0.2.0")
         assert.deepStrictEqual(yield* updates("admin"), ["0.2.0 -> 0.3.0"])
       })
+    )
+
+    it.effect(
+      "doesn't tell the admin who updated Hearth or checked for releases",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* insertUser("admin", { role: "admin" })
+          yield* insertUser("other-admin", { role: "admin" })
+          serveReleaseFeed([["0.3.0", "2026-08-09T00:00:00Z"]])
+          yield* recordStartedKilnVersionEffect("0.2.0")
+
+          // The admin checks and sees 0.3.0 in the updater.
+          yield* notifyLatestKilnReleaseEffect("0.2.0", "admin")
+          // Hearth's own check later finds the same release.
+          yield* nextReleaseCheck
+          yield* notifyLatestKilnReleaseEffect("0.2.0")
+          assert.deepStrictEqual(yield* releaseNotices("admin"), [])
+          assert.deepStrictEqual(yield* releaseNotices("other-admin"), [
+            "0.3.0",
+          ])
+
+          // The admin installs it; Hearth starts on it.
+          yield* recordHearthUpdateRequestEffect("admin")
+          yield* recordStartedKilnVersionEffect("0.3.0")
+          assert.deepStrictEqual(yield* updates("admin"), [])
+          assert.deepStrictEqual(yield* updates("other-admin"), [
+            "0.2.0 -> 0.3.0",
+          ])
+          // The release on offer is installed, so it's cleared at once.
+          assert.deepStrictEqual(yield* releaseNotices("other-admin"), [])
+
+          // A request answers one start; later updates tell everyone.
+          yield* recordStartedKilnVersionEffect("0.4.0")
+          assert.deepStrictEqual(yield* updates("admin"), ["0.3.0 -> 0.4.0"])
+        })
     )
 
     it.effect("never announces the stable release that is installed", () =>

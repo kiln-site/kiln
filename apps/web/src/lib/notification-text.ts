@@ -21,54 +21,75 @@ function releaseName(name: string | undefined, version: string) {
   return name ?? kilnReleaseLabel(version)
 }
 
+// "a Game Server", "an App".
+function withArticle(label: string) {
+  return `${/^[AEIOU]/.test(label) ? "an" : "a"} ${label}`
+}
+
+// Titles say what happened to whose thing, short enough for a phone's lock
+// screen; the detail names it.
 export function notificationTitle(content: NotificationContent): string {
   switch (content.kind) {
     case "kiln.release":
-      return `${releaseName(content.name, content.version)} available`
+      return "Your Kiln has an update available"
     case "kiln.updated":
-      return `Updated to ${releaseName(content.name, content.version)}`
+      return "Your Kiln has been updated"
     case "access.invited": {
-      const { actorName, resource } = content
+      const type = resourceTypeLabels[content.resource.type]
       switch (content.outcome) {
         case undefined:
-          return `${actorName} invited you to ${resource.name}`
+          return `You've been invited to ${withArticle(type)}`
         case "accepted":
-          return `Joined ${resource.name}`
+          return `You joined ${withArticle(type)}`
         case "declined":
-          return `Declined ${actorName}'s invite to ${resource.name}`
+          return "You declined an invite"
         case "cancelled":
-          return `${actorName}'s invite to ${resource.name} was cancelled`
+          return "Your invite was cancelled"
         case "expired":
-          return `${actorName}'s invite to ${resource.name} expired`
+          return "Your invite expired"
       }
     }
     case "access.removed":
-      return `Removed from ${content.resource.name}`
-    case "resource.disk-limit":
+      return "Your access was removed"
+    case "resource.disk-limit": {
+      const type = resourceTypeLabels[content.resource.type]
       // Apps stop at their limit; databases keep running.
       return content.resource.type === "app"
-        ? `${content.resource.name} was stopped at its disk limit`
-        : `${content.resource.name} is over its disk limit`
+        ? `Your ${type} was stopped at its disk limit`
+        : `Your ${type} is over its disk limit`
+    }
     case "app.image-update":
-      return `Update available for ${content.resource.name}`
+      return "Your App has an update available"
+    case "app.deployed":
+      return content.status === "failed"
+        ? "Your App failed to deploy"
+        : content.update
+          ? "Your App has been updated"
+          : "Your App has been deployed"
   }
 }
 
-export function notificationDetail(content: NotificationContent): string | null {
+export function notificationDetail(
+  content: NotificationContent
+): string | null {
   switch (content.kind) {
     case "kiln.release":
-      return null
+      return releaseName(content.name, content.version)
     case "kiln.updated":
-      return `from ${releaseName(content.previousName, content.previousVersion)}`
+      return `to ${releaseName(content.name, content.version)}`
     case "access.invited":
-      return content.outcome === "accepted"
-        ? `invited by ${content.actorName}`
-        : resourceTypeLabels[content.resource.type]
+      return `${content.resource.name} - ${
+        content.outcome === undefined ? "by" : "from"
+      } ${content.actorName}`
     case "access.removed":
-      return `by ${content.actorName}`
+      return `${content.resource.name} - by ${content.actorName}`
     case "resource.disk-limit":
-      return `${formatBytes(content.usedBytes)} of ${formatBytes(content.limitBytes)}`
+      return `${content.resource.name} - ${formatBytes(content.usedBytes)} of ${formatBytes(content.limitBytes)}`
     case "app.image-update":
-      return `New image for ${content.image}`
+      return `Image - ${content.image}`
+    case "app.deployed":
+      return content.status === "failed"
+        ? `${content.resource.name} couldn't deploy`
+        : `${content.resource.name} has deployed successfully`
   }
 }

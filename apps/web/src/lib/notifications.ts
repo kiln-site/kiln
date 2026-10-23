@@ -61,6 +61,15 @@ export const notificationContentSchema = z.discriminatedUnion("kind", [
     kind: z.literal("app.image-update"),
     resource: notificationResourceSchema,
   }),
+  // An app finished deploying when someone else, or Kiln itself, started
+  // it. `update` marks an image update, which says the app was updated.
+  z.object({
+    deploymentId: z.string(),
+    kind: z.literal("app.deployed"),
+    resource: notificationResourceSchema,
+    status: z.enum(["succeeded", "failed"]),
+    update: z.boolean(),
+  }),
 ])
 
 export type NotificationContent = z.infer<typeof notificationContentSchema>

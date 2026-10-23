@@ -2,6 +2,7 @@ import { assert, layer } from "@effect/vitest"
 import { Effect } from "effect"
 import { TestClock } from "effect/testing"
 
+import { saveNotificationPreferencesEffect } from "@/effect/notification-preferences"
 import {
   clearNotificationsEffect,
   dismissNotificationEffect,
@@ -9,6 +10,7 @@ import {
   markNotificationsReadEffect,
   notifyUsersEffect,
   resolveInvitationNotificationsEffect,
+  resolveNotificationsEffect,
 } from "@/effect/notifications"
 import type {
   InvitationOutcome,
@@ -93,6 +95,68 @@ describeMysql("notifications", () => {
         assert.deepStrictEqual(yield* contents("user-b"), [
           { content: release, read: false },
         ])
+      })
+    )
+
+    it.effect(
+      "keeps the actor and users who opted out from hearing of it, for good",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          for (const id of ["user-a", "user-b", "user-c"]) yield* insertUser(id)
+          yield* saveNotificationPreferencesEffect("user-c", {
+            kinds: { "access.removed": { inbox: false, push: true } },
+          })
+
+          yield* notifyUsersEffect(
+            ["user-a", "user-b", "user-c"],
+            "access.removed:grant-a:1",
+            removed,
+            { actorUserId: "user-a" }
+          )
+          // A later, automatic announcement of the same event.
+          yield* notifyUsersEffect(
+            ["user-a", "user-b", "user-c"],
+            "access.removed:grant-a:1",
+            removed
+          )
+
+          assert.deepStrictEqual(yield* contents("user-a"), [])
+          assert.deepStrictEqual(yield* contents("user-b"), [
+            { content: removed, read: false },
+          ])
+          assert.deepStrictEqual(yield* contents("user-c"), [])
+        })
+    )
+
+    it.effect("clears resolved notifications for everyone who has them", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        yield* insertUser("user-a")
+        yield* insertUser("user-b")
+        yield* notifyUsersEffect(
+          ["user-a", "user-b"],
+          "kiln.release:0.3.0",
+          release
+        )
+        yield* notifyUsersEffect(
+          ["user-a"],
+          "access.removed:grant-a:1",
+          removed
+        )
+
+        const changed = yield* resolveNotificationsEffect("kiln.release", [
+          "kiln.release:0.3.0",
+        ])
+
+        assert.deepStrictEqual([...changed].sort(), ["user-a", "user-b"])
+        assert.deepStrictEqual(yield* contents("user-a"), [
+          { content: removed, read: false },
+        ])
+        assert.deepStrictEqual(yield* contents("user-b"), [])
+        // Resolved notifications stay resolved when announced again.
+        yield* notifyUsersEffect(["user-b"], "kiln.release:0.3.0", release)
+        assert.deepStrictEqual(yield* contents("user-b"), [])
       })
     )
 

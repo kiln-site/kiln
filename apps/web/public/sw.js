@@ -54,15 +54,31 @@ self.addEventListener("fetch", (event) => {
 self.addEventListener("push", (event) => {
   const message = readPushMessage(event.data)
   event.waitUntil(
-    self.registration.showNotification(message.title, {
-      badge: message.badge,
-      body: message.body,
-      data: { url: message.url },
-      icon: message.icon,
-      tag: message.tag,
-    })
+    Promise.all([
+      self.registration.showNotification(message.title, {
+        badge: message.badge,
+        body: message.body,
+        // When it was shown, so an open page can tell one cleared since
+        // from one its inbox hasn't loaded yet.
+        data: { shownAt: Date.now(), url: message.url },
+        icon: message.icon,
+        tag: message.tag,
+      }),
+      closeNotifications(message.close).catch(() => undefined),
+    ])
   )
 })
+
+// Closes the notifications this device still shows that were read or cleared
+// since, on this device or another. Browsers let a push close notifications
+// only alongside one it shows, so this rides along with the next one; an open
+// Kiln page closes them right away (see `notifications.tsx`).
+async function closeNotifications(tags) {
+  if (!Array.isArray(tags) || !tags.length) return
+  const closing = new Set(tags.filter((tag) => typeof tag === "string"))
+  for (const notification of await self.registration.getNotifications())
+    if (closing.has(notification.tag)) notification.close()
+}
 
 // Browsers require every push to show a notification, so one that can't be
 // read still says something.

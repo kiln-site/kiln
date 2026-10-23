@@ -70,6 +70,7 @@ import { Route as AppSettingsAccountRouteImport } from './routes/_app.settings.a
 import { Route as AppSettingsAppearanceRouteImport } from './routes/_app.settings.appearance'
 import { Route as AppSettingsBillingRouteImport } from './routes/_app.settings.billing'
 import { Route as AppSettingsFilesRouteImport } from './routes/_app.settings.files'
+import { Route as AppSettingsNotificationsRouteImport } from './routes/_app.settings.notifications'
 import { Route as AppSettingsRelaysRouteImport } from './routes/_app.settings.relays'
 import { Route as ApiAppTerminalAppIdRouteImport } from './routes/api.app-terminal.$appId'
 import { Route as ApiAuthSplatRouteImport } from './routes/api.auth.$'
@@ -424,6 +425,12 @@ const AppSettingsFilesRoute = AppSettingsFilesRouteImport.update({
   path: '/files',
   getParentRoute: () => AppSettingsRoute,
 } as any)
+const AppSettingsNotificationsRoute =
+  AppSettingsNotificationsRouteImport.update({
+    id: '/notifications',
+    path: '/notifications',
+    getParentRoute: () => AppSettingsRoute,
+  } as any)
 const AppSettingsRelaysRoute = AppSettingsRelaysRouteImport.update({
   id: '/relays',
   path: '/relays',
@@ -734,6 +741,7 @@ export interface FileRoutesByFullPath {
   '/settings/appearance': typeof AppSettingsAppearanceRoute
   '/settings/billing': typeof AppSettingsBillingRoute
   '/settings/files': typeof AppSettingsFilesRoute
+  '/settings/notifications': typeof AppSettingsNotificationsRoute
   '/settings/relays': typeof AppSettingsRelaysRoute
   '/api/app-terminal/$appId': typeof ApiAppTerminalAppIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -837,6 +845,7 @@ export interface FileRoutesByTo {
   '/settings/appearance': typeof AppSettingsAppearanceRoute
   '/settings/billing': typeof AppSettingsBillingRoute
   '/settings/files': typeof AppSettingsFilesRoute
+  '/settings/notifications': typeof AppSettingsNotificationsRoute
   '/settings/relays': typeof AppSettingsRelaysRoute
   '/api/app-terminal/$appId': typeof ApiAppTerminalAppIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -950,6 +959,7 @@ export interface FileRoutesById {
   '/_app/settings/appearance': typeof AppSettingsAppearanceRoute
   '/_app/settings/billing': typeof AppSettingsBillingRoute
   '/_app/settings/files': typeof AppSettingsFilesRoute
+  '/_app/settings/notifications': typeof AppSettingsNotificationsRoute
   '/_app/settings/relays': typeof AppSettingsRelaysRoute
   '/api/app-terminal/$appId': typeof ApiAppTerminalAppIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -1063,6 +1073,7 @@ export interface FileRouteTypes {
     | '/settings/appearance'
     | '/settings/billing'
     | '/settings/files'
+    | '/settings/notifications'
     | '/settings/relays'
     | '/api/app-terminal/$appId'
     | '/api/auth/$'
@@ -1166,6 +1177,7 @@ export interface FileRouteTypes {
     | '/settings/appearance'
     | '/settings/billing'
     | '/settings/files'
+    | '/settings/notifications'
     | '/settings/relays'
     | '/api/app-terminal/$appId'
     | '/api/auth/$'
@@ -1278,6 +1290,7 @@ export interface FileRouteTypes {
     | '/_app/settings/appearance'
     | '/_app/settings/billing'
     | '/_app/settings/files'
+    | '/_app/settings/notifications'
     | '/_app/settings/relays'
     | '/api/app-terminal/$appId'
     | '/api/auth/$'
@@ -1799,6 +1812,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSettingsFilesRouteImport
       parentRoute: typeof AppSettingsRoute
     }
+    '/_app/settings/notifications': {
+      id: '/_app/settings/notifications'
+      path: '/notifications'
+      fullPath: '/settings/notifications'
+      preLoaderRoute: typeof AppSettingsNotificationsRouteImport
+      parentRoute: typeof AppSettingsRoute
+    }
     '/_app/settings/relays': {
       id: '/_app/settings/relays'
       path: '/relays'
@@ -2224,6 +2244,7 @@ interface AppSettingsRouteChildren {
   AppSettingsAppearanceRoute: typeof AppSettingsAppearanceRoute
   AppSettingsBillingRoute: typeof AppSettingsBillingRoute
   AppSettingsFilesRoute: typeof AppSettingsFilesRoute
+  AppSettingsNotificationsRoute: typeof AppSettingsNotificationsRoute
   AppSettingsRelaysRoute: typeof AppSettingsRelaysRoute
   AppSettingsIndexRoute: typeof AppSettingsIndexRoute
 }
@@ -2233,6 +2254,7 @@ const AppSettingsRouteChildren: AppSettingsRouteChildren = {
   AppSettingsAppearanceRoute: AppSettingsAppearanceRoute,
   AppSettingsBillingRoute: AppSettingsBillingRoute,
   AppSettingsFilesRoute: AppSettingsFilesRoute,
+  AppSettingsNotificationsRoute: AppSettingsNotificationsRoute,
   AppSettingsRelaysRoute: AppSettingsRelaysRoute,
   AppSettingsIndexRoute: AppSettingsIndexRoute,
 }

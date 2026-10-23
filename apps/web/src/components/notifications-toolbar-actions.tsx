@@ -1,5 +1,7 @@
 import * as React from "react"
 import { useLiveQuery } from "@tanstack/react-db"
+import { Link } from "@tanstack/react-router"
+import { Settings2 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 
@@ -21,6 +23,12 @@ export const NotificationsToolbarActions = React.memo(
     const through = newest[0]?.createdAt
     return (
       <div className="flex shrink-0 items-center gap-2">
+        <Button asChild variant="outline" size="sm">
+          <Link to="/settings/notifications">
+            <Settings2 />
+            <span className="max-sm:sr-only">Settings</span>
+          </Link>
+        </Button>
         <PushNotificationsToggle />
         <Button
           variant="outline"

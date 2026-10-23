@@ -11,6 +11,7 @@ import {
 import {
   checkAppImageEffect,
   recheckAppImage,
+  resolveAppImageUpdateNotificationsEffect,
 } from "@/lib/app-image-updates.server"
 import { authorizedApp } from "@/server/app-access"
 
@@ -29,7 +30,7 @@ interface AppInput {
 export async function saveAppImageUpdatePolicyHandler(
   data: AppInput & { delayHours: number; mode: AppImageUpdateMode }
 ) {
-  const { app, relay } = await imageApp(data)
+  const { app, relay, user } = await imageApp(data)
   await runAppEffect(
     "apps.imageUpdates.policy",
     saveAppImageUpdatePolicyEffect(app.appId, {
@@ -37,16 +38,21 @@ export async function saveAppImageUpdatePolicyHandler(
       mode: data.mode,
     })
   )
-  if (data.mode !== "off") recheckAppImage(relay.id, app.appId)
+  if (data.mode !== "off") recheckAppImage(relay.id, app.appId, user.id)
+  else
+    await runAppEffect(
+      "apps.imageUpdates.policy.resolveNotifications",
+      resolveAppImageUpdateNotificationsEffect(app.appId)
+    )
   publishAppDeploymentChange(relay.id)
 }
 
 /** Checks the app's tag now. */
 export async function checkAppImageUpdateHandler(data: AppInput) {
-  const { app, relay } = await imageApp(data)
+  const { app, relay, user } = await imageApp(data)
   await runAppEffect(
     "apps.imageUpdates.checkApp",
-    checkAppImageEffect(relay, app.appId)
+    checkAppImageEffect(relay, app.appId, user.id)
   )
   publishAppDeploymentChange(relay.id)
 }
@@ -61,6 +67,10 @@ export async function skipAppImageUpdateHandler(
     skipAppImageUpdateEffect(app.appId, data.digest)
   )
   if (!skipped) throw new Error("That update is no longer on offer")
+  await runAppEffect(
+    "apps.imageUpdates.skip.resolveNotifications",
+    resolveAppImageUpdateNotificationsEffect(app.appId)
+  )
   publishAppDeploymentChange(relay.id)
 }
 
