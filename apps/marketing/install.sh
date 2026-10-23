@@ -155,10 +155,14 @@ duration() {
 
 # ---------------------------------------------------------------- the log
 
+# Readable only by this user, since a failed step adds the Relay's own logs.
+# A log it can't own, such as another user's, gives way to a new one.
 log_file="${KILN_INSTALL_LOG:-${HOME:-/tmp}/kiln-install.log}"
-if ! { : >>"$log_file"; } 2>/dev/null; then
-  log_file="/tmp/kiln-install-$(id -u).log"
-  : >>"$log_file"
+if ! (umask 077 && : >>"$log_file") 2>/dev/null || ! chmod 600 "$log_file" 2>/dev/null; then
+  log_file=$(mktemp "${TMPDIR:-/tmp}/kiln-install.XXXXXX") || {
+    printf 'kiln: there is nowhere to write the install log\n' >&2
+    exit 1
+  }
 fi
 log() { printf '%s\n' "$*" >>"$log_file"; }
 {
@@ -205,10 +209,14 @@ kill_tree() {
 }
 
 step_pid=""
+# Keeps the script's own exit status, so cleanup can't turn success into
+# failure.
 on_exit() {
+  code=$?
   if [ -n "$step_pid" ]; then kill_tree "$step_pid"; fi
   if [ -n "${sudo_keeper:-}" ]; then kill "$sudo_keeper" 2>/dev/null || true; fi
-  [ "$fancy" -eq 1 ] && printf '\033[?25h'
+  if [ "$fancy" -eq 1 ]; then printf '\033[?25h'; fi
+  exit "$code"
 }
 trap on_exit EXIT
 trap 'printf "\n"; exit 130' INT TERM
@@ -677,7 +685,8 @@ step "Downloading Kiln" pull_relay
 if [ "$mode" = "node" ]; then
   step "Starting the Relay" start_node_relay
   paired=$(dk exec "$container" kiln-relay pair create 2>>"$log_file" || true)
-  log "$paired"
+  # Not the invitation itself: it grants full access to this Relay.
+  log "$(printf '%s\n' "$paired" | grep -v '^kiln-relay://' || true)"
   invitation=$(printf '%s\n' "$paired" | grep '^kiln-relay://' | head -n 1 || true)
   [ -n "$invitation" ] ||
     fail "The Relay started, but couldn't make an invitation."
