@@ -434,7 +434,7 @@ export const getMyInvitations = createServerFn({ method: "GET" }).handler(
           (
             await runAppEffect(
               "resourceInvitations.invitedRelays",
-              listInvitedRelaysEffect(user.id)
+              listInvitedRelaysEffect(user.id, true)
             )
           ).map((relay) => [relay.id, relay])
         )

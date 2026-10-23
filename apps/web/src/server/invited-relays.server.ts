@@ -21,6 +21,7 @@ export interface InvitedRelay {
   // Undefined while this process has no connection to the Relay, null when
   // the Relay is too old to report it.
   memory: RelayProcessMemory | null | undefined
+  ownerEmail: string | null
   ownerName: string | null
   port: number
   useTls: boolean
@@ -29,12 +30,13 @@ export interface InvitedRelay {
 /**
  * Relays the user is invited to and hasn't answered, with what their Relays
  * table row shows. Every Relay grant includes `relay.read`, so the invitee
- * sees nothing they wouldn't see once they accept. Owner emails stay hidden,
- * as they do from every non-admin.
+ * sees no more of the Relay than accepting would show them. With
+ * `includeOwnerDetails`, they also see the owner's email, to know who they'd
+ * be joining; without it, owners are named as for every non-admin.
  */
 export const listInvitedRelaysEffect = Effect.fn(
   "ResourceInvitations.invitedRelays"
-)(function* (userId: string) {
+)(function* (userId: string, includeOwnerDetails: boolean) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
   const rows = yield* database.queryRows<InvitedRelayRow>(
@@ -58,12 +60,13 @@ export const listInvitedRelaysEffect = Effect.fn(
       port: row.port,
       useTls: Boolean(row.use_tls),
     })),
-    false
+    includeOwnerDetails
   )
   return relays.map((relay): InvitedRelay => ({
     hostname: relay.hostname,
     id: relay.id,
     memory: relayMemory(relay.id),
+    ownerEmail: relay.ownerEmail,
     ownerName: relay.ownerName,
     port: relay.port,
     useTls: relay.useTls,

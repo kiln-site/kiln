@@ -95,13 +95,14 @@ describeMysql("Invited Relays", () => {
         Effect.gen(function* () {
           yield* seed
 
-          const relays = yield* listInvitedRelaysEffect("invitee")
+          const relays = yield* listInvitedRelaysEffect("invitee", true)
 
           assert.deepStrictEqual(relays, [
             {
               hostname: "relay-invited.relay.test",
               id: "relay-invited",
               memory: undefined,
+              ownerEmail: "owner.private@example.test",
               ownerName: "Notch",
               port: 8443,
               useTls: true,
@@ -110,7 +111,7 @@ describeMysql("Invited Relays", () => {
         })
     )
 
-    it.effect("never reveals the owner's email", () =>
+    it.effect("names owners from their email only with owner details", () =>
       Effect.gen(function* () {
         yield* seed
         yield* insertUser("unnamed-owner", {
@@ -122,9 +123,16 @@ describeMysql("Invited Relays", () => {
         })
         yield* invite({ relayId: "relay-unnamed-owner" })
 
-        const relays = yield* listInvitedRelaysEffect("invitee")
-
-        assert.notInclude(JSON.stringify(relays), "private")
+        // Without details, as for Mojang lookups, no email or name derived
+        // from one appears.
+        assert.notInclude(
+          JSON.stringify(yield* listInvitedRelaysEffect("invitee", false)),
+          "private"
+        )
+        const unnamed = (yield* listInvitedRelaysEffect("invitee", true)).find(
+          (relay) => relay.id === "relay-unnamed-owner"
+        )
+        assert.strictEqual(unnamed?.ownerEmail, "unnamed.private@example.test")
       })
     )
   })

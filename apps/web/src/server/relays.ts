@@ -177,7 +177,7 @@ export const getRelayOwnerMinecraftProfiles = createServerFn({
     managedRelays(user).then((managed) => attachRelayOwners(managed, false)),
     runAppEffect(
       "resourceInvitations.invitedRelays",
-      listInvitedRelaysEffect(user.id)
+      listInvitedRelaysEffect(user.id, false)
     ),
   ])
   const displayNames = [

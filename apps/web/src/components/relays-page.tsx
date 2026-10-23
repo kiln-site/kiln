@@ -102,7 +102,7 @@ import {
   RelayMemoryCell,
   RelayMemoryValue,
 } from "@/components/relay-memory-cell"
-import { UserAvatar } from "@/components/account-avatar"
+import { UserIdentity } from "@/components/user-identity"
 import { relaysCollectionOptions } from "@/lib/collections/relays"
 import {
   minecraftUsernameKey,
@@ -811,7 +811,10 @@ const relayPendingCells: PendingInvitationCells = {
     ) : null,
   owner: ({ relay }) =>
     relay ? (
-      <RelayOwnerCell ownerEmail={null} ownerName={relay.ownerName} />
+      <RelayOwnerCell
+        ownerEmail={relay.ownerEmail}
+        ownerName={relay.ownerName}
+      />
     ) : null,
 }
 
@@ -820,21 +823,20 @@ const RelayOwnerCell = React.memo(function RelayOwnerCell({
   ownerName,
 }: Pick<RelayTableItem, "ownerEmail" | "ownerName">) {
   const profileIds = React.useContext(RelayOwnerProfileIdsContext)
-  return (
+  return ownerName ? (
+    <UserIdentity
+      className="w-full"
+      // Above a pending row's button, so the email can still be revealed.
+      emailClassName="pointer-events-auto relative z-20"
+      email={ownerEmail}
+      name={ownerName}
+      profileId={profileIds.get(minecraftUsernameKey(ownerName))}
+    />
+  ) : (
     <IdentityName
-      icon={
-        ownerName ? (
-          <UserAvatar
-            name={ownerName}
-            profileId={profileIds.get(minecraftUsernameKey(ownerName))}
-          />
-        ) : (
-          <UserRound className="size-4" aria-hidden="true" />
-        )
-      }
+      icon={<UserRound className="size-4" aria-hidden="true" />}
       iconClassName="border-0 bg-transparent"
-      meta={ownerEmail}
-      name={ownerName ?? "Unassigned"}
+      name="Unassigned"
     />
   )
 })
