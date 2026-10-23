@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ForksLegalRouteImport } from './routes/forks-legal'
+import { Route as InstallRouteImport } from './routes/install'
 import { Route as PricingRouteImport } from './routes/pricing'
 import { Route as PrivacyRouteImport } from './routes/privacy'
 import { Route as TermsRouteImport } from './routes/terms'
@@ -23,6 +24,11 @@ const IndexRoute = IndexRouteImport.update({
 const ForksLegalRoute = ForksLegalRouteImport.update({
   id: '/forks-legal',
   path: '/forks-legal',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const InstallRoute = InstallRouteImport.update({
+  id: '/install',
+  path: '/install',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PricingRoute = PricingRouteImport.update({
@@ -44,6 +50,7 @@ const TermsRoute = TermsRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/forks-legal': typeof ForksLegalRoute
+  '/install': typeof InstallRoute
   '/pricing': typeof PricingRoute
   '/privacy': typeof PrivacyRoute
   '/terms': typeof TermsRoute
@@ -51,6 +58,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/forks-legal': typeof ForksLegalRoute
+  '/install': typeof InstallRoute
   '/pricing': typeof PricingRoute
   '/privacy': typeof PrivacyRoute
   '/terms': typeof TermsRoute
@@ -59,21 +67,31 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/forks-legal': typeof ForksLegalRoute
+  '/install': typeof InstallRoute
   '/pricing': typeof PricingRoute
   '/privacy': typeof PrivacyRoute
   '/terms': typeof TermsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/forks-legal' | '/pricing' | '/privacy' | '/terms'
+  fullPaths:
+    '/' | '/forks-legal' | '/install' | '/pricing' | '/privacy' | '/terms'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/forks-legal' | '/pricing' | '/privacy' | '/terms'
-  id: '__root__' | '/' | '/forks-legal' | '/pricing' | '/privacy' | '/terms'
+  to: '/' | '/forks-legal' | '/install' | '/pricing' | '/privacy' | '/terms'
+  id:
+    | '__root__'
+    | '/'
+    | '/forks-legal'
+    | '/install'
+    | '/pricing'
+    | '/privacy'
+    | '/terms'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ForksLegalRoute: typeof ForksLegalRoute
+  InstallRoute: typeof InstallRoute
   PricingRoute: typeof PricingRoute
   PrivacyRoute: typeof PrivacyRoute
   TermsRoute: typeof TermsRoute
@@ -93,6 +111,13 @@ declare module '@tanstack/react-router' {
       path: '/forks-legal'
       fullPath: '/forks-legal'
       preLoaderRoute: typeof ForksLegalRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/install': {
+      id: '/install'
+      path: '/install'
+      fullPath: '/install'
+      preLoaderRoute: typeof InstallRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/pricing': {
@@ -122,6 +147,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ForksLegalRoute: ForksLegalRoute,
+  InstallRoute: InstallRoute,
   PricingRoute: PricingRoute,
   PrivacyRoute: PrivacyRoute,
   TermsRoute: TermsRoute,

@@ -10,7 +10,7 @@ plain Relay that you pair from Hearth.
 On the machine that will host Hearth:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kiln-site/kiln/main/scripts/install.sh | sh
+curl -fsSL https://kiln.site/install | sh
 ```
 
 The script asks where people will open Hearth (by default
@@ -40,7 +40,7 @@ at least export the recovery kit (see [Recovery](#recovery)).
 On each other machine:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kiln-site/kiln/main/scripts/install.sh | sh -s -- --node
+curl -fsSL https://kiln.site/install | sh -s -- --node
 ```
 
 It starts a Relay that publishes ports 4100 and 2022 and prints a pairing

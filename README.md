@@ -29,14 +29,19 @@ CLI publishing, self-updates, and merging upstream without workflow patches.
 Kiln needs only Docker. On the machine that will host Hearth:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kiln-site/kiln/main/scripts/install.sh | sh
+curl -fsSL https://kiln.site/install | sh
 ```
 
 This starts a Relay in platform mode, which installs Hearth, its MySQL
 database, and a Valkey cache, pairs with that Hearth, keeps them running, and
-prints a link that creates the administrator. Add other machines with
-`install.sh --node`. See [Self-hosting](docs/self-hosting.md) for how it works,
-its settings, and recovery.
+prints a link that creates the administrator. Add other machines with:
+
+```sh
+curl -fsSL https://kiln.site/install | sh -s -- --node
+```
+
+See [Self-hosting](docs/self-hosting.md) for how it works, its settings, and
+recovery.
 
 ## Configuration
 

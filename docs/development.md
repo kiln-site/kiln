@@ -85,6 +85,12 @@ non-HTTP(S) URLs also disable it. No rebuild is needed when changing these
 variables; restart the marketing app. Umami's database URL and authentication
 secrets belong on the Umami app, not the marketing app.
 
+`/install` serves `apps/marketing/install.sh` as plain text, for
+`curl -fsSL https://kiln.site/install | sh` (see [Self-hosting](self-hosting.md)).
+It's bundled when the site builds, so kiln.site serves the script from the
+commit it deployed. Edit it there; the Marketing image workflow already runs for
+changes under `apps/marketing`.
+
 The site serves the Terms of Use and Privacy Policy at `/terms` and `/privacy`.
 Hearth's footer links to them, and Hearth's own `/terms` and `/privacy`
 redirect there, on any panel running Kiln's official images, since those send

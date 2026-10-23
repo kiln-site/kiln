@@ -1,14 +1,18 @@
 #!/bin/sh
 # Installs Kiln on this machine with Docker as its only requirement.
 #
-#   curl -fsSL https://raw.githubusercontent.com/kiln-site/kiln/main/scripts/install.sh | sh
+#   curl -fsSL https://kiln.site/install | sh
+#   curl -fsSL https://kiln.site/install | sh -s -- --node
+#
+# kiln.site serves this file at /install (apps/marketing/src/routes/install.ts),
+# so it's live once the marketing site deploys from main.
 #
 # It starts one Relay in platform mode, which installs Hearth, its MySQL
 # database, and its cache, pairs with that Hearth, and keeps them running.
 # With --node it starts a plain Relay instead, to add this machine to an
 # existing Kiln. Run it again to see an installation's status.
 #
-# See docs/self-hosting.md.
+# See docs/self-hosting.md in https://github.com/kiln-site/kiln.
 set -eu
 
 image_prefix="ghcr.io/kiln-site"
@@ -29,7 +33,7 @@ assume_yes=0
 
 usage() {
   cat <<'EOF'
-Usage: install.sh [options]
+Usage: curl -fsSL https://kiln.site/install | sh -s -- [options]
 
   --url URL          Where people will open Hearth, such as
                      https://kiln.example.com (default: http://<this
