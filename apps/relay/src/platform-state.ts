@@ -9,12 +9,12 @@
  * The format is read by other Relay versions and by recovery kits; change it
  * only by adding a new `formatVersion`.
  */
-import { randomBytes } from "node:crypto"
-import { mkdir, open, readFile, rm, stat } from "node:fs/promises"
+import { randomBytes, randomUUID } from "node:crypto"
+import { mkdir, open, readFile, rm, stat, utimes } from "node:fs/promises"
 import { hostname } from "node:os"
 import { join } from "node:path"
 
-import { Effect, Option, Predicate, Result, Schema } from "effect"
+import { Effect, Fiber, Predicate, Schema } from "effect"
 
 import { writeFileAtomic } from "./effect/atomic-file.js"
 
@@ -162,6 +162,7 @@ export const readPlatformState = Effect.fn("Relay.platform.state.read")(
 
 export const writePlatformState = Effect.fn("Relay.platform.state.write")(
   function* (dataDirectory: string, state: PlatformState) {
+    yield* requireLease(dataDirectory)
     yield* Effect.tryPromise({
       try: () =>
         mkdir(platformDirectory(dataDirectory), {
@@ -210,15 +211,15 @@ export function updatePlatformState(
   )
 }
 
-// A lock left by a process that's gone, or older than any repair takes
-// (pulling Hearth's image on a slow link), is taken over.
-const STALE_LOCK_MS = 30 * 60_000
+// The lock is a lease: its holder renews it while it runs, however long a
+// pass takes (pulling an image on a slow link), and only a lease nobody has
+// renewed for a minute, left by a process that died, is taken over.
+const LEASE_RENEW_MS = 10_000
+const LEASE_EXPIRES_MS = 60_000
 const LOCK_RETRY_MS = 250
 
-interface LockOwner {
-  readonly host: string
-  readonly pid: number
-}
+// Leases this process holds, so a write can check it still holds one.
+const heldLeases = new Set<string>()
 
 /**
  * Runs `effect` holding the installation's lock, a file in the Relay's data
@@ -232,7 +233,11 @@ export function withPlatformLock<A, E, R>(
   options: { readonly waitMs?: number } = {}
 ): Effect.Effect<A, E | PlatformError, R> {
   const path = lockPath(dataDirectory)
-  const owner: LockOwner = { host: hostname(), pid: process.pid }
+  const lease = JSON.stringify({
+    host: hostname(),
+    id: randomUUID(),
+    pid: process.pid,
+  })
   const acquire = Effect.gen(function* () {
     yield* Effect.tryPromise({
       try: () =>
@@ -248,32 +253,16 @@ export function withPlatformLock<A, E, R>(
     })
     const deadline = Date.now() + (options.waitMs ?? 10 * 60_000)
     while (true) {
-      const taken = yield* Effect.acquireUseRelease(
-        Effect.tryPromise({
-          try: () => open(path, "wx", 0o600),
-          catch: (cause) => cause,
-        }),
-        (file) =>
-          Effect.tryPromise({
-            try: () => file.writeFile(JSON.stringify(owner)),
-            catch: (cause) => cause,
-          }),
-        (file) => Effect.promise(() => file.close())
-      ).pipe(
-        Effect.as(true),
-        Effect.catch((cause) =>
-          errorCode(cause) === "EEXIST"
-            ? Effect.succeed(false)
-            : Effect.fail(
-                PlatformError.make({
-                  reason: "Kiln's installation lock can't be taken",
-                  cause,
-                })
-              )
+      const taken = yield* createExclusive(path, lease).pipe(
+        Effect.mapError((cause) =>
+          PlatformError.make({
+            reason: "Kiln's installation lock can't be taken",
+            cause,
+          })
         )
       )
-      if (taken) return
-      if (yield* lockIsStale(path)) {
+      if (taken) break
+      if (yield* leaseExpired(path)) {
         yield* Effect.promise(() => rm(path, { force: true }))
         continue
       }
@@ -285,47 +274,110 @@ export function withPlatformLock<A, E, R>(
       }
       yield* Effect.sleep(LOCK_RETRY_MS)
     }
+    heldLeases.add(lease)
+    return yield* Effect.forkDetach(renewLease(path, lease))
   })
-  // Only our own: a lock taken over as stale belongs to someone else now.
-  const release = readOptional(() => readFile(path, "utf8")).pipe(
+  return Effect.acquireUseRelease(
+    acquire,
+    () => effect,
+    (renewal) =>
+      Fiber.interrupt(renewal).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            heldLeases.delete(lease)
+          })
+        ),
+        Effect.andThen(releaseIfOwned(path, lease))
+      )
+  )
+}
+
+/** Creates the file with `content`, or answers false when it exists. */
+export function createExclusive(
+  path: string,
+  content: string
+): Effect.Effect<boolean, unknown> {
+  return Effect.acquireUseRelease(
+    Effect.tryPromise({
+      try: () => open(path, "wx", 0o600),
+      catch: (cause) => cause,
+    }),
+    (file) =>
+      Effect.tryPromise({
+        try: () => file.writeFile(content),
+        catch: (cause) => cause,
+      }),
+    (file) => Effect.promise(() => file.close())
+  ).pipe(
+    Effect.as(true),
+    Effect.catch((cause) =>
+      errorCode(cause) === "EEXIST" ? Effect.succeed(false) : Effect.fail(cause)
+    )
+  )
+}
+
+/** Keeps a lease's file fresh while its holder runs. */
+export function renewLease(path: string, content: string): Effect.Effect<void> {
+  return Effect.sleep(LEASE_RENEW_MS).pipe(
+    Effect.andThen(
+      readOptional(() => readFile(path, "utf8")).pipe(
+        Effect.flatMap((current) =>
+          current === content
+            ? Effect.tryPromise(() => {
+                const now = new Date()
+                return utimes(path, now, now)
+              }).pipe(Effect.ignore)
+            : Effect.void
+        )
+      )
+    ),
+    Effect.forever
+  )
+}
+
+/** Removes the lease's file if it's still this holder's. */
+export function releaseIfOwned(
+  path: string,
+  content: string
+): Effect.Effect<void> {
+  return readOptional(() => readFile(path, "utf8")).pipe(
     Effect.flatMap((current) =>
-      current === JSON.stringify(owner)
+      current === content
         ? Effect.promise(() => rm(path, { force: true }))
         : Effect.void
     )
   )
-  return Effect.acquireUseRelease(acquire, () => effect, () => release)
 }
 
-const lockIsStale = Effect.fnUntraced(function* (path: string) {
-  const [text, metadata] = yield* Effect.all([
-    readOptional(() => readFile(path, "utf8")),
-    readOptional(() => stat(path)),
-  ])
-  if (!metadata) return true
-  if (Date.now() - metadata.mtimeMs > STALE_LOCK_MS) return true
-  const holder = parseLockOwner(text)
-  // Without a readable owner it may be mid-write; the age check covers it.
-  if (!holder || holder.host !== hostname()) return false
-  return !processIsAlive(holder.pid)
+/** Whether a lease's holder has stopped renewing it. */
+export function leaseExpired(
+  path: string,
+  expiresMs = LEASE_EXPIRES_MS
+): Effect.Effect<boolean> {
+  return readOptional(() => stat(path)).pipe(
+    Effect.map(
+      (metadata) => !metadata || Date.now() - metadata.mtimeMs > expiresMs
+    )
+  )
+}
+
+// Before every write: a holder whose lease was taken over, as when it was
+// stalled for over a minute, must not write over its successor's changes.
+const requireLease = Effect.fnUntraced(function* (dataDirectory: string) {
+  const current = yield* readOptional(() =>
+    readFile(lockPath(dataDirectory), "utf8")
+  )
+  if (current === null || !heldLeases.has(current)) {
+    return yield* PlatformError.make({
+      reason:
+        "This process no longer holds Kiln's installation lock; the change wasn't saved",
+    })
+  }
 })
 
-const decodeLockOwner = Schema.decodeUnknownOption(
-  Schema.fromJsonString(Schema.Struct({ host: Schema.String, pid: Schema.Number }))
-)
-
-function parseLockOwner(text: string | null): LockOwner | null {
-  return text ? Option.getOrNull(decodeLockOwner(text)) : null
-}
-
-function processIsAlive(pid: number): boolean {
-  if (pid === process.pid) return true
-  const signalled = Result.try(() => process.kill(pid, 0))
-  // EPERM: it's there, just not ours to signal.
-  return Result.isSuccess(signalled) || errorCode(signalled.failure) === "EPERM"
-}
-
-function readOptional<A>(read: () => Promise<A>): Effect.Effect<A | null> {
+export function readOptional<A>(
+  read: () => Promise<A>
+): Effect.Effect<A | null> {
   return Effect.tryPromise(read).pipe(
     Effect.map((value): A | null => value),
     Effect.catch(() => Effect.succeed(null))

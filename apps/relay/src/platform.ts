@@ -16,7 +16,7 @@
  * run beside it, deployed with Compose or Coolify, but only reads them.
  */
 import { createHash, randomUUID } from "node:crypto"
-import { access, readFile } from "node:fs/promises"
+import { mkdir, readFile } from "node:fs/promises"
 import { hostname } from "node:os"
 import { join } from "node:path"
 
@@ -28,7 +28,7 @@ import {
   type RelayPlatformServiceRole,
   type RelayPlatformStatus,
 } from "@workspace/contracts"
-import { Effect, Result } from "effect"
+import { Effect, Fiber, Option, Result, Schema } from "effect"
 
 import type { RelayConfig } from "./config.js"
 import {
@@ -44,7 +44,12 @@ import {
 import type { RelayClientRecord } from "./effect/state.js"
 import { relayOwnerLabels } from "./relay-resources.js"
 import {
+  createExclusive,
   decodePlatformRecoveryKit,
+  leaseExpired,
+  readOptional,
+  releaseIfOwned,
+  renewLease,
   PLATFORM_STATE_FORMAT_VERSION,
   PlatformError,
   type PlatformNames,
@@ -644,33 +649,51 @@ const ensureService = Effect.fnUntraced(function* (
   state: PlatformState,
   service: ContainerSpec
 ) {
-  if (yield* updateRunning(config.dataDirectory, service.name)) return null
-  const existing = yield* inspectOptional(
-    engine.inspectContainer(service.name)
+  const result = yield* withServiceLock(
+    config.dataDirectory,
+    service.name,
+    Effect.gen(function* () {
+      const existing = yield* inspectOptional(
+        engine.inspectContainer(service.name)
+      )
+      if (!existing) {
+        yield* createAndStart(engine, service)
+        return null
+      }
+      const labels = existing.Config.Labels ?? {}
+      if (
+        labels[KILN_INSTALLATION_LABEL] !== state.installationId ||
+        !labels[PLATFORM_ROLE_LABEL]
+      ) {
+        return `A container named ${service.name} already exists and doesn't belong to this installation. Rename or remove it, or start the Relay with another KILN_RELAY_RESOURCE_NAMESPACE.`
+      }
+      if (
+        labels[PLATFORM_SPEC_LABEL] !== service.labels?.[PLATFORM_SPEC_LABEL]
+      ) {
+        // Keep the image it runs: an update may have moved it on.
+        yield* engine.stopContainer(existing.Id, {
+          seconds: 30,
+          timeout: 45_000,
+        })
+        yield* engine.removeContainer(existing.Id, {
+          force: true,
+          timeout: 60_000,
+        })
+        yield* createAndStart(engine, {
+          ...service,
+          image: existing.Config.Image,
+        })
+        yield* Effect.logInfo(`Recreated ${service.name} with its new settings`)
+        return null
+      }
+      if (!existing.State.Running && !existing.State.Restarting) {
+        yield* engine.startContainer(existing.Id, { timeout: 120_000 })
+      }
+      return null
+    })
   )
-  if (!existing) {
-    yield* createAndStart(engine, service)
-    return null
-  }
-  const labels = existing.Config.Labels ?? {}
-  if (
-    labels[KILN_INSTALLATION_LABEL] !== state.installationId ||
-    !labels[PLATFORM_ROLE_LABEL]
-  ) {
-    return `A container named ${service.name} already exists and doesn't belong to this installation. Rename or remove it, or start the Relay with another KILN_RELAY_RESOURCE_NAMESPACE.`
-  }
-  if (labels[PLATFORM_SPEC_LABEL] !== service.labels?.[PLATFORM_SPEC_LABEL]) {
-    // Keep the image it runs: an update may have moved it on.
-    yield* engine.stopContainer(existing.Id, { seconds: 30, timeout: 45_000 })
-    yield* engine.removeContainer(existing.Id, { force: true, timeout: 60_000 })
-    yield* createAndStart(engine, { ...service, image: existing.Config.Image })
-    yield* Effect.logInfo(`Recreated ${service.name} with its new settings`)
-    return null
-  }
-  if (!existing.State.Running && !existing.State.Restarting) {
-    yield* engine.startContainer(existing.Id, { timeout: 120_000 })
-  }
-  return null
+  // An update is replacing it; the next pass looks again.
+  return result === BUSY ? null : result
 })
 
 function createAndStart(engine: DockerEngine, spec: ContainerSpec) {
@@ -687,24 +710,117 @@ const stopForMaintenance = Effect.fnUntraced(function* (
   config: Pick<RelayConfig, "dataDirectory">,
   state: PlatformState
 ) {
-  if (yield* updateRunning(config.dataDirectory, state.names.hearth)) return
-  const hearth = yield* inspectOptional(
-    engine.inspectContainer(state.names.hearth)
+  yield* withServiceLock(
+    config.dataDirectory,
+    state.names.hearth,
+    Effect.gen(function* () {
+      const hearth = yield* inspectOptional(
+        engine.inspectContainer(state.names.hearth)
+      )
+      if (!hearth?.State.Running && !hearth?.State.Restarting) return
+      if (
+        hearth.Config.Labels?.[KILN_INSTALLATION_LABEL] !== state.installationId
+      ) {
+        return
+      }
+      yield* engine.stopContainer(hearth.Id, { seconds: 30, timeout: 45_000 })
+    })
   )
-  if (!hearth?.State.Running && !hearth?.State.Restarting) return
-  if (hearth.Config.Labels?.[KILN_INSTALLATION_LABEL] !== state.installationId) {
-    return
-  }
-  yield* engine.stopContainer(hearth.Id, { seconds: 30, timeout: 45_000 })
 })
 
-/** Whether Kiln's updater holds the container: it's being replaced. */
-function updateRunning(dataDirectory: string, container: string) {
-  return Effect.tryPromise(() =>
-    access(join(dataDirectory, "updates", `${container}.lock`))
-  ).pipe(
-    Effect.as(true),
-    Effect.catch(() => Effect.succeed(false))
+// Kiln's updater holds `updates/<container>.lock` while it replaces a
+// container. Passes and actions take the same lock while they change one,
+// so neither ever acts on a container the other is halfway through.
+const UPDATE_LOCK_ORPHANED_MS = 30_000
+const UPDATE_STALE_MS = 30 * 60_000
+const PLATFORM_LOCK_PREFIX = "platform-"
+const BUSY = Symbol("busy")
+
+const decodeUpdateRecord = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Struct({ startedAt: Schema.String, status: Schema.String })
+  )
+)
+
+function updateLockPath(dataDirectory: string, container: string): string {
+  return join(dataDirectory, "updates", `${container}.lock`)
+}
+
+/**
+ * Whether Kiln's updater is replacing the container: its lock names an
+ * update still running, or one just starting. A lock left by an update that
+ * finished, or by an updater that died, doesn't count.
+ */
+const updateRunning = Effect.fnUntraced(function* (
+  dataDirectory: string,
+  container: string
+) {
+  const path = updateLockPath(dataDirectory, container)
+  const owner = (yield* readOptional(() => readFile(path, "utf8")))?.trim()
+  if (!owner || owner.startsWith(PLATFORM_LOCK_PREFIX)) return false
+  const record = yield* readOptional(() =>
+    readFile(join(dataDirectory, "updates", `${owner}.json`), "utf8")
+  )
+  if (record === null) {
+    return !(yield* leaseExpired(path, UPDATE_LOCK_ORPHANED_MS))
+  }
+  const operation = Option.getOrNull(decodeUpdateRecord(record))
+  return (
+    operation?.status === "running" &&
+    Date.now() - Date.parse(operation.startedAt) < UPDATE_STALE_MS
+  )
+})
+
+/**
+ * Runs `effect` holding the container's update lock, or answers BUSY while
+ * an update holds it. The lock is renewed while `effect` runs.
+ */
+function withServiceLock<A, E, R>(
+  dataDirectory: string,
+  container: string,
+  effect: Effect.Effect<A, E, R>
+): Effect.Effect<A | typeof BUSY, E | PlatformError, R> {
+  const path = updateLockPath(dataDirectory, container)
+  const content = `${PLATFORM_LOCK_PREFIX}${randomUUID()}\n`
+  const acquire = Effect.gen(function* () {
+    yield* Effect.tryPromise({
+      try: () =>
+        mkdir(join(dataDirectory, "updates"), { recursive: true, mode: 0o700 }),
+      catch: (cause) =>
+        new PlatformError({ reason: "Kiln's update folder can't be created", cause }),
+    })
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const taken = yield* createExclusive(path, content).pipe(
+        Effect.mapError(
+          (cause) =>
+            new PlatformError({
+              reason: `The update lock for ${container} can't be taken`,
+              cause,
+            })
+        )
+      )
+      if (taken) return yield* Effect.forkDetach(renewLease(path, content))
+      const holder = yield* readOptional(() => readFile(path, "utf8"))
+      if (holder === null) continue
+      const busy = holder.trim().startsWith(PLATFORM_LOCK_PREFIX)
+        ? !(yield* leaseExpired(path, UPDATE_LOCK_ORPHANED_MS))
+        : yield* updateRunning(dataDirectory, container)
+      if (busy) return null
+      // Left by an update that finished, or a holder that died.
+      yield* releaseIfOwned(path, holder)
+    }
+    return null
+  })
+  return Effect.acquireUseRelease(
+    acquire,
+    (renewal): Effect.Effect<A | typeof BUSY, E, R> =>
+      renewal ? effect : Effect.succeed(BUSY),
+    (renewal) =>
+      renewal
+        ? Fiber.interrupt(renewal).pipe(
+            Effect.andThen(releaseIfOwned(path, content))
+          )
+        : Effect.void
   )
 }
 
@@ -959,25 +1075,37 @@ export const platformAction = Effect.fn("Relay.platform.action")(function* (
     return yield* new PlatformError({ reason: "This Relay hasn't installed Kiln" })
   }
   const name = state.names[input.role]
-  if (yield* updateRunning(config.dataDirectory, name)) {
-    return yield* new PlatformError({
-      reason: `${name} is being updated; try again once the update finishes`,
-    })
-  }
-  const container = yield* inspectOptional(engine.inspectContainer(name))
-  if (
-    !container ||
-    container.Config.Labels?.[KILN_INSTALLATION_LABEL] !== state.installationId
-  ) {
-    return yield* new PlatformError({
-      reason: `${name} is missing; repair Kiln's services to recreate it`,
-    })
-  }
-  const restart = engine.restartContainer(container.Id, {
-    seconds: 30,
-    timeout: 90_000,
+  const busy = new PlatformError({
+    reason: `${name} is being updated; try again once the update finishes`,
   })
+  const restart = withServiceLock(
+    config.dataDirectory,
+    name,
+    Effect.gen(function* () {
+      const container = yield* inspectOptional(engine.inspectContainer(name))
+      if (
+        !container ||
+        container.Config.Labels?.[KILN_INSTALLATION_LABEL] !==
+          state.installationId
+      ) {
+        return yield* new PlatformError({
+          reason: `${name} is missing; repair Kiln's services to recreate it`,
+        })
+      }
+      yield* engine.restartContainer(container.Id, {
+        seconds: 30,
+        timeout: 90_000,
+      })
+    })
+  ).pipe(
+    Effect.flatMap((result) =>
+      result === BUSY ? Effect.fail(busy) : Effect.void
+    )
+  )
   if (input.role === "hearth") {
+    if (yield* updateRunning(config.dataDirectory, name)) {
+      return yield* busy
+    }
     // Hearth is the one asking: answer before it goes down.
     yield* Effect.sleep(1_000).pipe(
       Effect.andThen(restart),
@@ -1090,7 +1218,17 @@ function applyPlatformConfig(config: RelayConfig, state: PlatformState) {
   config.installationIdConfigured = true
   // Hearth is given the record's token, so the Relay must expect it.
   config.bootstrapToken = state.secrets.bootstrapToken
-  config.platformBackupKey ??= state.secrets.platformBackupKey
+  // The record's key, which recovery kits carry: backups made with another
+  // key couldn't be restored from a kit.
+  if (
+    config.platformBackupKey &&
+    config.platformBackupKey !== state.secrets.platformBackupKey
+  ) {
+    console.warn(
+      "KILN_PLATFORM_BACKUP_KEY differs from the installed Kiln's backup key; using the installed key, which its recovery kit holds"
+    )
+  }
+  config.platformBackupKey = state.secrets.platformBackupKey
   // Players reach game servers at Hearth's host unless told otherwise.
   if (config.gameHostSource === "relay") {
     config.gameHost = new URL(state.hearth.url).hostname

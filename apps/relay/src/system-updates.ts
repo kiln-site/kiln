@@ -1099,7 +1099,11 @@ function acquireTargetLockEffect(
               }
               return yield* systemUpdateFailure(
                 "lock.acquire",
-                `An update is starting for ${operation.targetContainer}`
+                // A Relay in platform mode holds it while it repairs or
+                // restarts one of Kiln's services (platform.ts).
+                existingId.startsWith("platform-")
+                  ? `Kiln is repairing ${operation.targetContainer}; try again in a moment`
+                  : `An update is starting for ${operation.targetContainer}`
               )
             }
             if (existing.status === "running") {

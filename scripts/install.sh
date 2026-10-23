@@ -123,6 +123,13 @@ if ! docker info >/dev/null 2>&1; then
 fi
 
 if docker container inspect "$container" >/dev/null 2>&1; then
+  if [ "$mode" = "node" ]; then
+    say "A Relay ($container) is already running on this machine. A new"
+    say "invitation to pair it, which expires in 15 minutes:"
+    say ""
+    docker exec "$container" kiln-relay pair create 2>/dev/null
+    exit 0
+  fi
   say "Kiln's Relay ($container) is already installed on this machine."
   if docker exec "$container" kiln-relay platform status 2>/dev/null; then
     say ""
@@ -159,7 +166,7 @@ if [ "$mode" = "node" ]; then
   say "In Hearth, open Relays, choose Add Relay, and paste this invitation."
   say "It expires in 15 minutes; run this script again for a new one."
   say ""
-  docker exec "$container" kiln-relay pair create
+  docker exec "$container" kiln-relay pair create 2>/dev/null
   exit 0
 fi
 

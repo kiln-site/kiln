@@ -95,7 +95,7 @@ Set these on the Relay. Everything else is generated.
 | `KILN_PLATFORM_CACHE_IMAGE`    | `valkey/valkey:9.1.2-alpine` | First start only; `none` runs Hearth without a cache                      |
 | `KILN_INSTALLATION_ID`         | Generated                  | First start only                                                           |
 | `BETTER_AUTH_SECRETS`          | Generated                  | First start only; for moving an existing Hearth here                       |
-| `KILN_PLATFORM_BACKUP_KEY`     | Generated                  | Decrypts platform backups; saved on first start                            |
+| `KILN_PLATFORM_BACKUP_KEY`     | Generated                  | First start only; encrypts platform backups, and the recovery kit holds it |
 
 These are passed on to Hearth when set on the Relay: `KILN_ENABLE_SIGNUPS`,
 `KILN_MARKETING_URL`, `KILN_SUPER_USER_EMAIL`, `KILN_SUPER_USER_PASSWORD`,
@@ -123,8 +123,10 @@ they don't.
 - **It touches only its own containers.** A container, volume, or network with
   one of its names that isn't labeled for its installation stops it with a
   message instead.
-- **It leaves updates alone.** While Kiln's updater replaces Hearth, the Relay
-  doesn't recreate or start it.
+- **It leaves updates alone.** The Relay changes a container only while
+  holding the same lock Kiln's updater takes to replace it, so a pass never
+  recreates, starts, or stops a container mid-update, and an update waits for
+  a repair to finish.
 - **Only the Hearth it installed manages them.** Restart and repair requests
   are accepted only from a Hearth client that paired through an invitation the
   Relay made for its own Hearth. Another Hearth paired with the same Relay can

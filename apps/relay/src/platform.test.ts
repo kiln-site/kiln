@@ -15,7 +15,11 @@ import {
   runPlatformCli,
   startPlatform,
 } from "./platform.js"
-import { readPlatformState } from "./platform-state.js"
+import {
+  readPlatformState,
+  withPlatformLock,
+  writePlatformState,
+} from "./platform-state.js"
 import { fakeDocker } from "./test/docker.js"
 import { relayHarness, TEST_NAMESPACE } from "./test/relay.js"
 
@@ -234,6 +238,86 @@ describe("platform mode", () => {
     await relay.pass()
 
     expect(fakeDocker.container(names.hearth)).toBeUndefined()
+  })
+
+  it("recreates Hearth after an update that finished left its lock behind", async () => {
+    const relay = await platformRelay()
+    await relay.start()
+    await relay.pass()
+    const updates = join(relay.config.dataDirectory, "updates")
+    await mkdir(updates, { recursive: true })
+    await writeFile(join(updates, `${names.hearth}.lock`), "finished\n")
+    await writeFile(
+      join(updates, "finished.json"),
+      JSON.stringify({ startedAt: new Date().toISOString(), status: "succeeded" })
+    )
+    fakeDocker.removeContainer(names.hearth)
+
+    await relay.pass()
+
+    expect(fakeDocker.container(names.hearth)?.state.running).toBe(true)
+  })
+
+  it("doesn't recreate Hearth for new settings while an update runs", async () => {
+    const relay = await platformRelay()
+    await relay.start()
+    await relay.pass()
+    const hearth = fakeDocker.container(names.hearth)?.id
+    const updates = join(relay.config.dataDirectory, "updates")
+    await mkdir(updates, { recursive: true })
+    await writeFile(join(updates, `${names.hearth}.lock`), "running\n")
+    await writeFile(
+      join(updates, "running.json"),
+      JSON.stringify({ startedAt: new Date().toISOString(), status: "running" })
+    )
+
+    await relay.start({ environment: { RESEND_FROM_EMAIL: "kiln@example.test" } })
+    await relay.pass()
+
+    expect(fakeDocker.container(names.hearth)?.id).toBe(hearth)
+    // A repair leaves no lock of its own behind for the updater to trip on.
+    expect(
+      await readFile(join(updates, `${names.hearth}.lock`), "utf8")
+    ).toBe("running\n")
+    expect(await readFile(join(updates, `${names.cache}.lock`), "utf8").catch(() => null)).toBeNull()
+  })
+
+  it("keeps the backup key its recovery kit holds", async () => {
+    const relay = await platformRelay()
+    const { state } = await relay.start()
+    relay.config.platformBackupKey = "k".repeat(48)
+
+    await relay.start()
+
+    expect(relay.config.platformBackupKey).toBe(state?.secrets.platformBackupKey)
+  })
+
+  it("won't save the record once another process has taken over its lock", async () => {
+    const relay = await platformRelay()
+    await relay.start()
+    const lock = join(relay.config.dataDirectory, "platform", "lock")
+
+    const write = run(
+      withPlatformLock(
+        relay.config.dataDirectory,
+        Effect.gen(function* () {
+          const state = yield* readPlatformState(relay.config.dataDirectory)
+          // Stalled long enough for another process to take the lock over.
+          yield* Effect.promise(() => writeFile(lock, '{"id":"someone-else"}'))
+          yield* writePlatformState(relay.config.dataDirectory, {
+            ...state!,
+            phase: "ready",
+          })
+        })
+      )
+    )
+
+    await expect(write).rejects.toThrow("no longer holds")
+    expect(await run(readPlatformState(relay.config.dataDirectory))).toMatchObject({
+      phase: "installing",
+    })
+    // Its release leaves the new holder's lock in place.
+    expect(await readFile(lock, "utf8")).toBe('{"id":"someone-else"}')
   })
 
   it("doesn't touch another installation's container", async () => {
