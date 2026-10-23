@@ -629,15 +629,33 @@ const attachRelay = Effect.fnUntraced(function* (
   })
 })
 
-/** The Relay's own container, by the hostname Docker gave it. */
+/**
+ * The Relay's own container, or null when it can't be told apart. Docker
+ * mounts each container's hostname file from a folder named after its ID, so
+ * that's tried first; otherwise the one container whose hostname is this
+ * process's. Another container merely named like that hostname never counts.
+ */
 export const ownContainer = Effect.fnUntraced(function* (engine: DockerEngine) {
   const name = hostname()
-  const direct = yield* inspectOptional(engine.inspectContainer(name))
-  if (direct) return direct
-  // A hostname set with `--hostname` isn't a container reference.
+  const mountinfo = yield* readOptional(() =>
+    readFile("/proc/self/mountinfo", "utf8")
+  )
+  const ids = new Set(
+    Array.from(
+      mountinfo?.matchAll(/\/containers\/([0-9a-f]{64})\/(?:hostname|hosts)\b/gu) ??
+        [],
+      (match) => match[1] ?? ""
+    )
+  )
+  if (ids.size === 1) {
+    const [id = ""] = ids
+    const inspected = yield* inspectOptional(engine.inspectContainer(id))
+    if (inspected?.Id === id) return inspected
+  }
   const running = yield* engine.listContainers()
   const inspected = yield* engine.inspectContainers(running.map((c) => c.Id))
-  return inspected.find((c) => c.Config.Hostname === name) ?? null
+  const matches = inspected.filter((c) => c.Config.Hostname === name)
+  return matches.length === 1 ? (matches[0] ?? null) : null
 })
 
 /**

@@ -84,8 +84,8 @@ await Effect.runPromise(
         // restarts beside it. Keep trying for half an hour.
         Effect.andThen(
           pairRelayFromEnvironment.pipe(
-            Effect.delay("15 seconds"),
             Effect.retry({ schedule: Schedule.spaced("15 seconds"), times: 120 }),
+            Effect.delay("15 seconds"),
             Effect.catch((retryCause) =>
               Effect.sync(() => {
                 reportAppError(retryCause, { operation: "relay.bootstrap" })

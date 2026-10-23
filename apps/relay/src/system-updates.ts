@@ -118,15 +118,19 @@ export class SystemUpdateManager {
   // for an offline restore; null when it may.
   readonly #refuseTarget: (container: string) => Effect.Effect<string | null>
 
-  constructor(config: {
-    dataDirectory: string
-    dockerSocket?: string
-    gitRepository?: string
-    installationId?: string | null
-    installationIdConfigured?: boolean
-    refuseTarget?: (container: string) => Effect.Effect<string | null>
-  }) {
-    this.#refuseTarget = config.refuseTarget ?? (() => Effect.succeed(null))
+  constructor(
+    config: {
+      dataDirectory: string
+      dockerSocket?: string
+      gitRepository?: string
+      installationId?: string | null
+      installationIdConfigured?: boolean
+    },
+    options: {
+      refuseTarget?: (container: string) => Effect.Effect<string | null>
+    } = {}
+  ) {
+    this.#refuseTarget = options.refuseTarget ?? (() => Effect.succeed(null))
     this.#engine = new DockerEngine(
       config.dockerSocket ?? "/var/run/docker.sock"
     )
@@ -266,6 +270,14 @@ export class SystemUpdateManager {
           )
 
         return yield* Effect.gen({ self: this }, function* () {
+          // Again now the targets are locked: maintenance may have begun
+          // since the check above, and it takes the same locks to hold Hearth.
+          for (const operation of operations) {
+            const refusal = yield* this.#refuseTarget(operation.targetContainer)
+            if (refusal) {
+              return yield* systemUpdateFailure("start.validate", refusal)
+            }
+          }
           // Recorded before the images are pulled, which can take minutes,
           // so a Relay restarted meanwhile still knows about them.
           yield* Effect.forEach(

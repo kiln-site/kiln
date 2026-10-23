@@ -79,17 +79,23 @@ class Installation {
     fakeDocker.exit(name, { exitCode: 0 })
   }
 
-  async manager(options: {
-    dataDirectory: string
-    gitRepository?: string
-    installationId?: string | null
-    installationIdConfigured?: boolean
-  }): Promise<SystemUpdateManager> {
+  async manager(
+    options: {
+      dataDirectory: string
+      gitRepository?: string
+      installationId?: string | null
+      installationIdConfigured?: boolean
+    },
+    hooks: ConstructorParameters<typeof SystemUpdateManager>[1] = {}
+  ): Promise<SystemUpdateManager> {
     this.install()
-    return new SystemUpdateManager({
-      ...options,
-      dockerSocket: await fakeDocker.listen(),
-    })
+    return new SystemUpdateManager(
+      {
+        ...options,
+        dockerSocket: await fakeDocker.listen(),
+      },
+      hooks
+    )
   }
 
   install() {
@@ -174,6 +180,45 @@ describe("release image versions", () => {
             volumesFrom: docker.relay.id,
           }
         )
+      })
+    )
+  )
+
+  // A Relay that installed Kiln holds Hearth for maintenance by taking its
+  // update lock, then checking for updates; updates check maintenance again
+  // once they hold that lock, so one admitted just before never starts it.
+  effectIt.effect("refuses a target that maintenance holds by the time it's locked", () =>
+    withTemporaryDataDirectory((dataDirectory) =>
+      Effect.gen(function* () {
+        let checks = 0
+        const manager = yield* Effect.promise(() =>
+          docker.manager(
+            { dataDirectory },
+            {
+              refuseTarget: () =>
+                Effect.sync(() =>
+                  ++checks > 1 ? "Kiln's Hearth is held stopped" : null
+                ),
+            }
+          )
+        )
+
+        const operation = yield* manager.start({
+          ...relayTarget,
+          version: "0.1.0",
+        })
+
+        expect(operation).toMatchObject({
+          error: "Kiln's Hearth is held stopped",
+          status: "failed",
+        })
+        expect(docker.helpers.size).toBe(0)
+        // Its lock is given back.
+        expect(
+          yield* Effect.promise(() =>
+            readdir(join(dataDirectory, "updates"))
+          ).pipe(Effect.map((files) => files.filter((f) => f.endsWith(".lock"))))
+        ).toEqual([])
       })
     )
   )

@@ -548,6 +548,27 @@ describe("platform mode", () => {
     expect(env(names.hearth).KILN_RELAY_HOST).toBe(relay.config.advertisedHost)
   })
 
+  it("won't take another container for its own", async () => {
+    const relay = await platformRelay()
+    await relay.start()
+    // Two containers claim this process's hostname: the Relay can't tell
+    // which is itself, so it joins neither to Kiln's network.
+    fakeDocker.addContainer({
+      hostname: hostname(),
+      image: "example/other:latest",
+      name: "someone-elses",
+      running: true,
+    })
+
+    const result = await relay.pass()
+
+    expect(result.issue).toContain("Docker container")
+    expect(fakeDocker.container("someone-elses")?.networks.size).toBe(0)
+    expect(fakeDocker.container(hostname())?.networks.has(names.network)).toBe(
+      false
+    )
+  })
+
   it("requires a hostname for the Relay and a URL for Hearth", async () => {
     expect(() =>
       loadConfig({

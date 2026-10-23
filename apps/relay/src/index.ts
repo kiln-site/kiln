@@ -382,8 +382,9 @@ await databases.recoverReplacements()
 const hostShell = new HostShell(config)
 const relayEngine = new DockerEngine(config.dockerSocket)
 const terminals = new ContainerTerminals(config)
-const systemUpdates = new SystemUpdateManager({
-  ...config,
+// The config itself, not a copy: it reads the installation ID Hearth gives
+// the Relay later.
+const systemUpdates = new SystemUpdateManager(config, {
   refuseTarget: (container) =>
     platformUpdateRefusal(config.dataDirectory, container),
 })
