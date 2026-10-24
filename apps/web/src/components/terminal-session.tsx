@@ -3,7 +3,8 @@ import "@xterm/xterm/css/xterm.css"
 import * as React from "react"
 import { FitAddon } from "@xterm/addon-fit"
 import { SearchAddon } from "@xterm/addon-search"
-import { Terminal } from "@xterm/xterm"
+import { WebLinksAddon } from "@xterm/addon-web-links"
+import { Terminal, type IDisposable } from "@xterm/xterm"
 import {
   DATABASE_TERMINAL_WRITE_MAX_CHARACTERS,
   type DatabaseTerminalControl,
@@ -125,10 +126,15 @@ export function TerminalSession({
   const [hasSelection, setHasSelection] = React.useState(false)
   const [atBottom, setAtBottom] = React.useState(true)
   const surface = React.useRef<TerminalSurfaceHandle>(null)
+  const searchInput = React.useRef<HTMLInputElement>(null)
   const events = React.useMemo<TerminalSurfaceEvents>(
     () => ({
       onActivated: () => setActivated(true),
       onControl: setControl,
+      onFind: () => {
+        searchInput.current?.focus()
+        searchInput.current?.select()
+      },
       onNotice: setNotice,
       onScrolledToBottom: setAtBottom,
       onSelection: setHasSelection,
@@ -173,7 +179,7 @@ export function TerminalSession({
       className="flex min-h-0 min-w-0 flex-1 flex-col bg-card transition-transform duration-150"
     >
       <div className="flex min-h-14 shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2.5 sm:px-4">
-        <TerminalSearch surface={surface} />
+        <TerminalSearch inputRef={searchInput} surface={surface} />
         {session ? (
           <span className="type-code flex min-w-0 items-center gap-1.5 text-muted-foreground">
             <User className="size-3.5 shrink-0" />
@@ -236,8 +242,10 @@ export function TerminalSession({
 }
 
 function TerminalSearch({
+  inputRef,
   surface,
 }: {
+  inputRef: React.RefObject<HTMLInputElement | null>
   surface: React.RefObject<TerminalSurfaceHandle | null>
 }) {
   const [query, setQuery] = React.useState("")
@@ -245,6 +253,7 @@ function TerminalSearch({
     <div className="relative min-w-[12rem] flex-1 sm:max-w-sm">
       <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
       <Input
+        ref={inputRef}
         value={query}
         placeholder="Search terminal"
         aria-label="Search terminal"
@@ -262,9 +271,11 @@ function TerminalSearch({
               false
             )
           }
+          // Back to typing in the terminal, as after a terminal's find bar.
           if (event.key === "Escape") {
             setQuery("")
             surface.current?.search("", "next", false)
+            surface.current?.focus()
           }
         }}
       />
@@ -538,6 +549,8 @@ interface TerminalSurfaceEvents {
   // This page took control over from another of the person's pages.
   onActivated: () => void
   onControl: (control: TerminalControl) => void
+  // The person asked to search from the terminal's keyboard shortcut.
+  onFind: () => void
   onNotice: (notice: SessionNotice | null) => void
   onScrolledToBottom: (atBottom: boolean) => void
   onSelection: (hasSelection: boolean) => void
@@ -548,6 +561,7 @@ interface TerminalSurfaceEvents {
 interface TerminalSurfaceHandle {
   connect: (restart: boolean) => void
   copySelection: () => void
+  focus: () => void
   paste: (text: string) => void
   scrollToBottom: () => void
   search: (
@@ -569,6 +583,7 @@ const TerminalSurface = React.memo(
     React.useImperativeHandle(ref, () => ({
       connect: (restart) => handle.current?.connect(restart),
       copySelection: () => handle.current?.copySelection(),
+      focus: () => handle.current?.focus(),
       paste: (text) => handle.current?.paste(text),
       scrollToBottom: () => handle.current?.scrollToBottom(),
       search: (query, direction, incremental) =>
@@ -578,6 +593,7 @@ const TerminalSurface = React.memo(
     React.useEffect(() => {
       const container = containerRef.current
       if (!container) return
+      const mac = /^(Mac|iPhone|iPad|iPod)/.test(navigator.platform)
       const terminal = new Terminal({
         allowProposedApi: true,
         cursorBlink: true,
@@ -588,6 +604,11 @@ const TerminalSurface = React.memo(
         // 16px on touch screens, so iOS doesn't zoom in when typing.
         fontSize: window.matchMedia("(pointer: coarse)").matches ? 16 : 13,
         lineHeight: 1.3,
+        // Links the client marks up itself (OSC 8), like the plain ones.
+        linkHandler: { activate: (event, uri) => openLink(event, uri, mac) },
+        // Option-drag selects text even while the client uses the mouse, as
+        // Shift-drag does everywhere.
+        macOptionClickForcesSelection: true,
         scrollback: 5_000,
         theme: terminalTheme(container),
       })
@@ -595,6 +616,9 @@ const TerminalSurface = React.memo(
       const search = new SearchAddon()
       terminal.loadAddon(fit)
       terminal.loadAddon(search)
+      terminal.loadAddon(
+        new WebLinksAddon((event, uri) => openLink(event, uri, mac))
+      )
       terminal.open(container)
       fit.fit()
       terminal.focus()
@@ -614,19 +638,21 @@ const TerminalSurface = React.memo(
         events,
         measure
       )
+      const copySelection = () => {
+        const selection = terminal.getSelection()
+        if (!selection) return
+        forkPromise(
+          async () => {
+            await navigator.clipboard.writeText(selection)
+            showToast({ message: "Copied", type: "success" })
+          },
+          () => showToast({ message: "Could not copy", type: "error" })
+        )
+      }
       handle.current = {
         connect: (restart) => connection.connect(restart),
-        copySelection: () => {
-          const selection = terminal.getSelection()
-          if (!selection) return
-          forkPromise(
-            async () => {
-              await navigator.clipboard.writeText(selection)
-              showToast({ message: "Copied", type: "success" })
-            },
-            () => showToast({ message: "Could not copy", type: "error" })
-          )
-        },
+        copySelection,
+        focus: () => terminal.focus(),
         // As if pasted: it goes through typing, and a shell with bracketed
         // paste won't run it.
         paste: (text) => {
@@ -669,12 +695,27 @@ const TerminalSurface = React.memo(
         }
       })
       const typed = terminal.onData((data) => connection.input(data))
+      terminal.attachCustomKeyEventHandler((event) => {
+        const shortcut = terminalShortcut(event, terminal, mac)
+        if (!shortcut) return true
+        // The browser pastes into the terminal itself, as bracketed paste.
+        if (shortcut === "paste" || event.type !== "keydown") return false
+        event.preventDefault()
+        if (shortcut === "copy") copySelection()
+        else if (shortcut === "find") events.onFind()
+        else connection.input(shortcut.send)
+        return false
+      })
       // Focusing or clicking the terminal puts this page in control (a click
       // on an already focused terminal fires no focus). While in control,
-      // its window resizing resizes the session.
+      // its window resizing resizes the session. Both run ahead of the
+      // terminal's own handlers, so the focus or click it reports to a client
+      // that asked for them comes from a page taking control.
       const focused = () => connection.claim()
-      terminal.textarea?.addEventListener("focus", focused)
-      terminal.element?.addEventListener("pointerdown", focused)
+      terminal.textarea?.addEventListener("focus", focused, { capture: true })
+      terminal.element?.addEventListener("pointerdown", focused, {
+        capture: true,
+      })
       const observer = new ResizeObserver(() => connection.windowResized())
       observer.observe(container)
       const keyboard = followKeyboard(terminal, container)
@@ -687,8 +728,12 @@ const TerminalSurface = React.memo(
         scrolled.dispose()
         selected.dispose()
         typed.dispose()
-        terminal.textarea?.removeEventListener("focus", focused)
-        terminal.element?.removeEventListener("pointerdown", focused)
+        terminal.textarea?.removeEventListener("focus", focused, {
+          capture: true,
+        })
+        terminal.element?.removeEventListener("pointerdown", focused, {
+          capture: true,
+        })
         handle.current = null
         terminal.dispose()
       }
@@ -742,6 +787,8 @@ class TerminalConnection {
   #sessionSize: TerminalSize | null = null
   #stopped = false
   #writing = false
+  // Set while the Relay answers the client's queries, so this page doesn't.
+  #queriesLeftToRelay: IDisposable | null = null
 
   constructor(
     terminal: Terminal,
@@ -776,6 +823,10 @@ class TerminalConnection {
 
   input(data: string) {
     if (!this.#live || !this.#sessionId) return
+    // Focus and mouse reports from a page that isn't in control aren't the
+    // person using it: leaving it or moving the mouse over it doesn't take
+    // control.
+    if (this.#reported !== "self" && !this.#claim && isReport(data)) return
     if (this.#pendingSessionId !== this.#sessionId) {
       this.#pendingInput = ""
       this.#pendingSessionId = this.#sessionId
@@ -872,6 +923,20 @@ class TerminalConnection {
     if (control === this.#shownControl) return
     this.#shownControl = control
     this.#events.onControl(control)
+  }
+
+  // A client asking the terminal something (where the cursor is, what
+  // terminal this is) gets its answer from the Relay, once and right away,
+  // rather than from every page showing the session. Older Relays leave the
+  // answers to the pages.
+  #leaveQueriesToRelay(relayAnswers: boolean) {
+    if (relayAnswers === (this.#queriesLeftToRelay !== null)) return
+    if (relayAnswers) {
+      this.#queriesLeftToRelay = ignoreQueries(this.#terminal)
+    } else {
+      this.#queriesLeftToRelay?.dispose()
+      this.#queriesLeftToRelay = null
+    }
   }
 
   // Output already written was at the old size, so the resize waits for it.
@@ -1027,6 +1092,7 @@ class TerminalConnection {
         // Rebuild the screen from the session's own snapshot, at its size, so
         // every page shows the same thing whatever it missed.
         this.#sessionSize = { cols: record.cols, rows: record.rows }
+        this.#leaveQueriesToRelay(record.answersQueries === true)
         this.#terminal.resize(record.cols, record.rows)
         this.#terminal.reset()
         this.#terminal.write(record.snapshot)
@@ -1102,6 +1168,99 @@ class TerminalConnection {
         return null
     }
   }
+}
+
+// Makes the terminal leave unanswered the queries the Relay answers: those
+// its headless xterm, the same version as this one, answers itself, and the
+// colors it adds. Each handler here takes the sequence before xterm's own.
+function ignoreQueries(terminal: Terminal): IDisposable {
+  const { parser } = terminal
+  const ignore = () => true
+  const handlers = [
+    // Device attributes.
+    parser.registerCsiHandler({ final: "c" }, ignore),
+    parser.registerCsiHandler({ final: "c", prefix: ">" }, ignore),
+    // Device status, including the cursor position.
+    parser.registerCsiHandler({ final: "n" }, ignore),
+    parser.registerCsiHandler({ final: "n", prefix: "?" }, ignore),
+    // Mode and setting reports.
+    parser.registerCsiHandler({ final: "p", intermediates: "$" }, ignore),
+    parser.registerCsiHandler(
+      { final: "p", intermediates: "$", prefix: "?" },
+      ignore
+    ),
+    parser.registerDcsHandler({ final: "q", intermediates: "$" }, ignore),
+    // Foreground and background colors, when only asked for, not set.
+    ...[10, 11].map((ident) =>
+      parser.registerOscHandler(ident, (data) =>
+        data.split(";").every((slot) => slot === "?")
+      )
+    ),
+  ]
+  return { dispose: () => handlers.forEach((handler) => handler.dispose()) }
+}
+
+// What the terminal sends on its own: focus changes and mouse reports (SGR,
+// or urxvt's) to a client that asked for them.
+function isReport(data: string) {
+  return (
+    data.startsWith("\u001b[") &&
+    /^(?:[IO]|<?\d+;\d+;\d+[Mm])$/.test(data.slice(2))
+  )
+}
+
+type TerminalShortcut = "copy" | "find" | "paste" | { send: string }
+
+// Desktop terminals' shortcuts that would otherwise go to the browser, or
+// reach the client as control keys.
+function terminalShortcut(
+  event: KeyboardEvent,
+  terminal: Terminal,
+  mac: boolean
+): TerminalShortcut | null {
+  const key = event.key.length === 1 ? event.key.toLowerCase() : event.key
+  if (mac) {
+    // Cmd-C and Cmd-V already copy and paste.
+    if (!event.metaKey || event.ctrlKey || event.altKey) return null
+    if (key === "f" && !event.shiftKey) return "find"
+    // Line editing at a shell's prompt, as Option-arrows move by word. Full
+    // screen programs keep their own keys.
+    if (event.shiftKey || terminal.buffer.active.type === "alternate") {
+      return null
+    }
+    if (key === "ArrowLeft") return { send: "\u0001" }
+    if (key === "ArrowRight") return { send: "\u0005" }
+    if (key === "Backspace") return { send: "\u0015" }
+    return null
+  }
+  if (event.altKey || event.metaKey) return null
+  if (event.ctrlKey && event.shiftKey) {
+    if (key === "c") return "copy"
+    if (key === "v") return "paste"
+    if (key === "f") return "find"
+  }
+  if (key === "Insert" && event.ctrlKey !== event.shiftKey) {
+    return event.ctrlKey ? "copy" : "paste"
+  }
+  return null
+}
+
+// Links open on Cmd-click (Ctrl-click elsewhere), as in desktop terminals, so
+// clicking into the terminal never opens one by accident. A tap opens one on
+// touch screens.
+function openLink(event: MouseEvent, uri: string, mac: boolean) {
+  const modified = mac ? event.metaKey : event.ctrlKey
+  if (!modified && !window.matchMedia("(pointer: coarse)").matches) {
+    showToast({
+      message: `${mac ? "⌘" : "Ctrl"}-click to open the link`,
+      type: "info",
+    })
+    return
+  }
+  if (!URL.canParse(uri)) return
+  const url = new URL(uri)
+  if (url.protocol !== "http:" && url.protocol !== "https:") return
+  window.open(url.href, "_blank", "noopener,noreferrer")
 }
 
 // The next write's worth of input, never splitting a surrogate pair.

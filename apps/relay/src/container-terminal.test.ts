@@ -492,6 +492,34 @@ describe("database terminal sessions", () => {
     expect(await pageScreen(secondAttached, second.pushes)).toBe(expected)
   })
 
+  it("answers the client's terminal queries once, however many pages are open", async () => {
+    const harness = await relayHarness()
+    const database = await runningDatabase(harness)
+    const terminals = new ContainerTerminals(harness.config)
+    const first = viewer()
+    const attached = await attach(terminals, alice, database, first)
+    const second = viewer()
+    await attach(terminals, alice, database, second)
+    expect(attached.answersQueries).toBe(true)
+
+    // The fake TTY echoes input, so the client prints these queries: where
+    // is the cursor, and what is the background color. The answers reach
+    // the client, which echoes them too.
+    terminals.write(
+      alice,
+      databaseId,
+      attached.sessionId,
+      "\u001b[2J\u001b[3;5H\u001b[6n\u001b]11;?\u0007"
+    )
+    const cursor = "\u001b[3;5R"
+    const background = "\u001b]11;rgb:0000/0000/0000\u001b\\"
+    for (const page of [first, second]) {
+      await vi.waitFor(() => expect(page.output).toContain(background))
+      expect(page.output.split(cursor)).toHaveLength(2)
+      expect(page.output.split(background)).toHaveLength(2)
+    }
+  })
+
   it("shows output the client printed as Docker started it", async () => {
     const harness = await relayHarness()
     const database = await runningDatabase(harness)

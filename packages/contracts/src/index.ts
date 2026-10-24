@@ -346,6 +346,10 @@ export const relayDatabaseTerminalAttachedSchema = z.object({
   seq: z.number().int().nonnegative(),
   sessionId: databaseTerminalIdSchema,
   startedAt: z.string().datetime(),
+  // The Relay answers the client's queries to the terminal (cursor position,
+  // device attributes, colors), so pages don't. Older Relays leave them to
+  // the pages.
+  answersQueries: z.boolean().optional(),
 })
 
 export const relayDatabaseTerminalHeartbeatSchema = z

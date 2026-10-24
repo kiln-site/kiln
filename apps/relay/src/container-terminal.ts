@@ -262,6 +262,7 @@ export class ContainerTerminals {
       sessionId: session.id,
       snapshot: snapshot.content,
       startedAt: session.startedAt,
+      answersQueries: true,
     }
   }
 
@@ -438,6 +439,9 @@ export class ContainerTerminals {
       startedAt: new Date().toISOString(),
       viewers: new Map(),
     }
+    answerQueries(screen, (reply) => {
+      if (!session.ending) socket.write(reply)
+    })
     const boundary = new SequenceBoundary()
     socket.on("data", (chunk: Buffer) => {
       const start = session.historyStart + session.history.length
@@ -700,6 +704,32 @@ function serializeScreen(session: TerminalSession) {
       })
     })
   })
+}
+
+// The colors Hearth's terminal shows (foreground, then background), for
+// clients asking whether it is dark or light. It is dark in every theme.
+const TERMINAL_COLORS = ["rgb:ecec/eaea/e9e9", "rgb:0000/0000/0000"]
+
+// Answers what the client asks the terminal (where the cursor is, what
+// terminal this is, which modes are on, its colors) from the session's own
+// screen. The client gets one answer, right away, however many pages show the
+// session, or none; pages leave these queries to the Relay.
+function answerQueries(screen: Terminal, reply: (data: string) => void) {
+  screen.onData(reply)
+  // The headless terminal has no colors of its own to report.
+  for (const [index, ident] of [10, 11].entries()) {
+    screen.parser.registerOscHandler(ident, (data) => {
+      const slots = data.split(";")
+      // Setting a color changes nothing here.
+      if (!slots.every((slot) => slot === "?")) return false
+      // `OSC 10 ; ? ; ?` asks for the foreground, then the background.
+      slots.forEach((_, slot) => {
+        const color = TERMINAL_COLORS[index + slot]
+        if (color) reply(`\u001b]${ident + slot};${color}\u001b\\`)
+      })
+      return true
+    })
+  }
 }
 
 function controlFor(
