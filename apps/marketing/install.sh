@@ -352,15 +352,14 @@ confirm() {
   esac
 }
 
-# A line of text from the terminal, or the default.
+# A line of text from the terminal, or the default, left in $answer. It
+# reads in this shell rather than a $( ) one: sudo passes ^C on only to the
+# shell it started, which can't stop while it waits on a subshell.
 ask() {
-  if [ "$assume_yes" -eq 1 ] || ! has_terminal; then
-    printf '%s' "$2"
-    return
-  fi
+  answer=$2
+  if [ "$assume_yes" -eq 1 ] || ! has_terminal; then return; fi
   printf '  %s ' "$1" >/dev/tty
   read -r answer </dev/tty || answer=""
-  printf '%s' "$answer"
 }
 
 public_ip() {
@@ -719,7 +718,7 @@ choose_url() {
   asked=1
   printf '  Kiln will open at %s%s%s\n' "$bold" "$default" "$reset" >/dev/tty
   while :; do
-    answer=$(ask "Press Enter, or type a domain you've pointed here:" "")
+    ask "Press Enter, or type a domain you've pointed here:" ""
     case "$answer" in
       "") url=$default; break ;;
       http://* | https://*) url=$answer; break ;;
@@ -805,9 +804,13 @@ if docker_reachable && dk container inspect "$container" >/dev/null 2>&1; then
 fi
 
 if [ "$mode" = "node" ]; then
-  if [ -z "$relay_host" ] && [ "$assume_yes" -eq 0 ] && has_terminal; then asked=1; fi
-  [ -n "$relay_host" ] ||
-    relay_host=$(ask "Address Kiln will reach this machine at [$address]:" "")
+  # Joining, Hearth's Add Relay dialog already asked, and filled in
+  # --relay-host when someone changed it.
+  if [ -z "$relay_host" ] && [ -z "$join" ]; then
+    if [ "$assume_yes" -eq 0 ] && has_terminal; then asked=1; fi
+    ask "Address Kiln will reach this machine at [$address]:" ""
+    relay_host=$answer
+  fi
   [ -n "$relay_host" ] || relay_host=$address
 else
   choose_proxy
