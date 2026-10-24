@@ -14,10 +14,11 @@ import { KilnDatabaseError } from "@/effect/errors"
 import { databaseConnectionConfig, databaseTable } from "@/lib/database-config"
 
 // Hearth's own database as a SQL file, read and written through Hearth's own
-// login. The file recreates every table from one consistent snapshot, so
-// importing it replaces each table it holds.
+// login. The file recreates every table from one consistent snapshot, so the
+// mysql client can load it into an empty database; importing it here puts
+// its rows back into the tables Hearth has.
 
-/** Imports run as one statement batch, which MySQL caps at 64 MB by default. */
+/** An import is read whole and held in one transaction. */
 export const KILN_DATABASE_IMPORT_LIMIT_BYTES = 32 * 1024 * 1024
 
 // Rows are written in multi-row INSERTs of about this many characters.
@@ -73,26 +74,93 @@ export function kilnDatabaseDump(
   )
 }
 
-// An import replaces Hearth's tables while it serves, and MySQL commits each
-// DROP and CREATE at once, so nothing can roll a failed one back. It takes
-// only what can't fail partway for its own reasons, and only with a way
-// back: a whole export from this schema, and a Kiln backup from the last day.
+// An import puts back the rows an export holds in one transaction: every
+// table is emptied and refilled together or, if anything fails, left as it
+// was, and requests meanwhile wait on its locks. It takes only a whole export
+// from this same schema, so the tables already have the export's shape and
+// it runs no DDL, which MySQL can't roll back; and only with a Kiln backup
+// from the last day to come back to.
 const RECENT_BACKUP_MS = 24 * 60 * 60_000
 
-/** Runs a Kiln export against Hearth's database, as one batch. */
+// As the export's header sets, except that unique keys stay checked and the
+// server's strict mode stays on.
+const IMPORT_SESSION = [
+  "SET NAMES utf8mb4",
+  "SET time_zone = '+00:00'",
+  "SET FOREIGN_KEY_CHECKS = 0",
+  "SET SESSION sql_mode = CONCAT_WS(',', NULLIF(@@SESSION.sql_mode, ''), 'NO_AUTO_VALUE_ON_ZERO')",
+]
+
+/** Puts a Kiln export's rows back into Hearth's database. */
 export const importKilnDatabaseSql = Effect.fn("kilnDatabase.import")(
   function* (sql: string, kiln: { installationId: string; now: number }) {
     if (Buffer.byteLength(sql) > KILN_DATABASE_IMPORT_LIMIT_BYTES) {
       return yield* importRefused("too_large", "SQL files are limited to 32 MB")
     }
     const connection = yield* openConnection("import", {
-      multipleStatements: true,
+      multipleStatements: false,
     })
-    yield* checkKilnImport(connection, sql, kiln)
-    yield* run(connection, "import", sql)
+    const plan = yield* checkKilnImport(connection, sql, kiln)
+    for (const statement of IMPORT_SESSION) {
+      yield* run(connection, "import", statement)
+    }
+    yield* run(connection, "import", "START TRANSACTION")
+    yield* Effect.gen(function* () {
+      for (const table of plan.tables) {
+        yield* run(connection, "import", `DELETE FROM ${escapeId(table)}`)
+      }
+      for (const insert of plan.inserts) {
+        yield* run(connection, "import", insert)
+      }
+      yield* run(connection, "import", "COMMIT")
+    }).pipe(
+      Effect.onError(() => Effect.ignore(run(connection, "import", "ROLLBACK")))
+    )
   },
   Effect.scoped
 )
+
+interface ImportPlan {
+  inserts: ReadonlyArray<string>
+  tables: ReadonlyArray<string>
+}
+
+// The tables an export creates and its INSERTs, each a statement of its own.
+// Values are escaped onto one line each (`escape` writes newlines as \n), so
+// an INSERT is its first line and the row lines after it, up to the one
+// ending its statement. Null for anything else.
+function parseKilnExport(sql: string): ImportPlan | null {
+  const tables: Array<string> = []
+  const inserts: Array<string> = []
+  const lines = sql.split("\n")
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? ""
+    const created = /^CREATE TABLE `((?:[^`]|``)+)` \($/u.exec(line)
+    if (created?.[1]) {
+      tables.push(created[1].replaceAll("``", "`"))
+      continue
+    }
+    if (!line.startsWith("INSERT INTO ")) continue
+    const target = /^INSERT INTO `((?:[^`]|``)+)` \(.*\) VALUES$/u.exec(line)
+    if (!target?.[1] || !tables.includes(target[1].replaceAll("``", "`"))) {
+      return null
+    }
+    const statement = [line]
+    for (index += 1; index < lines.length; index += 1) {
+      const row = lines[index] ?? ""
+      if (!row.startsWith("(")) return null
+      if (row.endsWith(");")) {
+        statement.push(row.slice(0, -1))
+        break
+      }
+      if (!row.endsWith("),")) return null
+      statement.push(row)
+    }
+    if (index >= lines.length) return null
+    inserts.push(statement.join("\n"))
+  }
+  return { inserts, tables }
+}
 
 const checkKilnImport = Effect.fnUntraced(function* (
   connection: Connection,
@@ -111,9 +179,21 @@ const checkKilnImport = Effect.fnUntraced(function* (
       "This export is incomplete; export Kiln's database again"
     )
   }
+  const plan = parseKilnExport(sql)
+  if (!plan) {
+    return yield* importRefused(
+      "not_kiln_export",
+      "This file was changed after Kiln exported it"
+    )
+  }
   const exported = Number(/^-- Kiln schema (\d+)$/mu.exec(sql)?.[1] ?? NaN)
   const current = yield* schemaVersion(connection, "import")
-  if (exported !== current) {
+  const tables = (yield* listTables(connection)).map((table) => table.name)
+  if (
+    exported !== current ||
+    tables.length !== plan.tables.length ||
+    tables.some((table) => !plan.tables.includes(table))
+  ) {
     return yield* importRefused(
       "other_schema",
       Number.isNaN(exported)
@@ -135,6 +215,7 @@ const checkKilnImport = Effect.fnUntraced(function* (
       "Back Kiln up first: importing needs a Kiln backup from the last day"
     )
   }
+  return plan
 })
 
 // The newest migration applied, which names the tables' shape.

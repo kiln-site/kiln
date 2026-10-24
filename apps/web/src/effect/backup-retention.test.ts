@@ -2,12 +2,14 @@ import { assert, layer } from "@effect/vitest"
 import { Effect } from "effect"
 
 import { expiredScheduledBackupsEffect } from "@/effect/backup-retention"
+import { reserveBackupDeleteEffect } from "@/effect/backups"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import {
   insertBackup,
   insertBackupStorage,
   insertRelay,
   insertRows,
+  selectRows,
 } from "@/test/seed"
 
 const now = Date.UTC(2026, 5, 1)
@@ -168,6 +170,52 @@ describeMysql("scheduled backup retention", () => {
           // A second schedule of Kiln to the Relay keeps everything.
           yield* insertKilnSchedule("schedule-two", [null])
           assert.deepStrictEqual(yield* expired, [])
+        })
+    )
+
+    it.effect(
+      "won't start deleting a backup copied elsewhere since retention chose it",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* insertRelay("relay-one")
+          yield* insertKilnBackup("chosen", 40, 100)
+          yield* insertBackupStorage("storage-one")
+          yield* insertRows("backup_artifact", [
+            {
+              id: "chosen-local",
+              backup_id: "chosen",
+              destination_key: "local",
+              storage_id: null,
+              status: "available",
+              created_at: now,
+              updated_at: now,
+            },
+            {
+              id: "chosen-s3",
+              backup_id: "chosen",
+              destination_key: "storage-one",
+              storage_id: "storage-one",
+              status: "available",
+              created_at: now,
+              updated_at: now,
+            },
+          ])
+
+          const refused = yield* Effect.flip(
+            reserveBackupDeleteEffect({
+              backupId: "chosen",
+              onlyAt: { storageId: null },
+              requestedBy: null,
+              taskId: crypto.randomUUID(),
+            })
+          )
+          assert.strictEqual(
+            refused._tag === "BackupStorageError" && refused.code,
+            "backup_copied"
+          )
+          const [backup] = yield* selectRows<{ status: string }>("backup")
+          assert.strictEqual(backup?.status, "available")
         })
     )
   })

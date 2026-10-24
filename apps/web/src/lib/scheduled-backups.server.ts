@@ -79,10 +79,11 @@ const deleteExpiredBackups = Effect.fn("scheduledBackups.applyRetention")(
       const relay = relays.get(backup.relayId)
       if (!relay?.enabled) continue
       yield* Effect.gen(function* () {
-        // Fails when it's no longer deletable, such as mid-restore; a
-        // later sweep tries again.
+        // Fails when it's no longer deletable, such as mid-restore, or
+        // since copied elsewhere; a later sweep looks again.
         const input = yield* reserveBackupDeleteEffect({
           backupId: backup.backupId,
+          onlyAt: { storageId: backup.storageId },
           requestedBy: null,
           taskId: randomUUID(),
         })

@@ -1982,6 +1982,12 @@ export const reserveBackupRestoreEffect = Effect.fn("backups.reserveRestore")(
 export const reserveBackupDeleteEffect = Effect.fn("backups.reserveDelete")(
   function* (input: {
     backupId: string
+    /**
+     * Retention deletes a backup only while every copy of it is at this one
+     * destination (`null` is the Relay), checked under the backup's lock so
+     * a copy finished meanwhile keeps it.
+     */
+    onlyAt?: { storageId: string | null }
     // Null when Hearth deletes it itself, as retention does.
     requestedBy: string | null
     taskId: string
@@ -2026,6 +2032,24 @@ export const reserveBackupDeleteEffect = Effect.fn("backups.reserveDelete")(
           targetId: backup.target_id,
           targetKind: backup.target_kind,
         })
+        if (input.onlyAt) {
+          const elsewhere = yield* transaction.queryRows<
+            { id: string } & RowDataPacket
+          >(
+            `SELECT id FROM ${databaseTable("backup_artifact")}
+              WHERE backup_id = ? AND status NOT IN ('deleted', 'failed')
+                AND NOT (storage_id <=> ?)
+              LIMIT 1`,
+            [input.backupId, input.onlyAt.storageId]
+          )
+          if (elsewhere.length > 0) {
+            return yield* BackupStorageError.make({
+              code: "backup_copied",
+              operation: "backup.delete",
+              reason: "This backup was copied to another destination",
+            })
+          }
+        }
         yield* transaction.execute(
           `UPDATE ${databaseTable("backup")}
               SET status = 'deleting', updated_at = ?

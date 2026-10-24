@@ -141,6 +141,15 @@ export async function seedDefaultKilnBackupSchedule(): Promise<string | null> {
             )
             if (!admin) return null
             yield* insertSchedule(transaction, schedule, admin.id, now)
+            // Pending until the Relay takes it, so a sweep resends it even
+            // if Hearth stops before the first send.
+            yield* transaction.execute(
+              `INSERT INTO ${databaseTable("schedule_deployment")}
+                 (schedule_id, relay_id, desired_revision, status,
+                  created_at, updated_at)
+               VALUES (?, ?, ?, 'pending', ?, ?)`,
+              [schedule.id, relayId, schedule.revision, now, now]
+            )
             yield* transaction.execute(
               `UPDATE ${databaseTable("setting")}
                   SET setting_value = ?, updated_at = ?
@@ -265,13 +274,19 @@ export async function deployScheduleToRelay(
   const deployed = await Effect.runPromise(
     Effect.result(
       promiseEffect(async () => {
-        const { continueOnFailure, ...definition } = schedule
+        // Field by field: callers can pass a loaded schedule, with Hearth's
+        // own fields, and Relays reject keys they don't know.
         const projection: RelayScheduleProjection = {
-          ...definition,
-          // Older Relays reject unknown keys, so only send the option when on.
-          ...(continueOnFailure ? { continueOnFailure } : {}),
           actions: await prepareRelayScheduleActions(schedule.actions, targets),
+          // Older Relays reject unknown keys, so only send the option when on.
+          ...(schedule.continueOnFailure ? { continueOnFailure: true } : {}),
+          cron: schedule.cron,
+          enabled: schedule.enabled,
+          id: schedule.id,
+          name: schedule.name,
+          revision: schedule.revision,
           targets: [...targets],
+          timezone: schedule.timezone,
         }
         const result = z
           .object({

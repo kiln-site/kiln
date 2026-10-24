@@ -96,6 +96,49 @@ describeMysql("Kiln database export", () => {
     )
 
     it.effect(
+      "leaves every table as it was when any row fails to import",
+      () =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* resetDatabase
+          yield* sql.unsafe(createValues)
+          yield* sql.unsafe(
+            "INSERT INTO dump_values (id, note) VALUES (42, 'exported')"
+          )
+          yield* insertUser("user-one", { name: "Exported" })
+          yield* insertRecentKilnBackup
+          const dump = (yield* Stream.runCollect(
+            kilnDatabaseDump(new Date(kiln.now))
+          )).join("")
+          yield* sql.unsafe("UPDATE dump_values SET note = 'current'")
+          yield* sql`UPDATE ${sql(databaseTableName("user"))}
+            SET name = 'Current' WHERE id = 'user-one'`
+
+          // A value MySQL refuses, in a file that is otherwise whole.
+          const failing = dump.replace("('42',", "('not a number',")
+          assert.notStrictEqual(failing, dump)
+          yield* Effect.flip(importKilnDatabaseSql(failing, kiln))
+
+          assert.deepStrictEqual(
+            yield* sql`SELECT CAST(id AS CHAR) AS id, note FROM dump_values`,
+            [{ id: "42", note: "current" }]
+          )
+          assert.deepStrictEqual(
+            yield* sql`SELECT name FROM ${sql(databaseTableName("user"))}`,
+            [{ name: "Current" }]
+          )
+        }).pipe(
+          Effect.ensuring(
+            Effect.flatMap(SqlClient.SqlClient, (sql) =>
+              sql.unsafe("DROP TABLE IF EXISTS dump_values")
+            ).pipe(Effect.orDie)
+          )
+        ),
+      // It writes every table in the test database.
+      60_000
+    )
+
+    it.effect(
       "refuses an incomplete export, one from another schema, and one without a recent Kiln backup",
       () =>
         Effect.gen(function* () {

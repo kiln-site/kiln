@@ -285,10 +285,12 @@ Platform administrators open Kiln itself from the **Kiln** button beside
   them, with Repair, a Restart for each, and the `kiln-relay platform`
   commands to run on the host when Hearth itself is down. Its **Data** section
   exports Hearth's database as SQL, imports such an export back, and opens its
-  backups; the rail's **Backups** line counts them. An import replaces every
-  table the export holds while Hearth serves, so it takes only a whole export
-  (up to 32 MB) from the same version of Kiln, and only when a Kiln backup
-  from the last day exists to come back to.
+  backups; the rail's **Backups** line counts them. An import puts back
+  every table's rows in one transaction, so it takes effect whole or not at
+  all, and requests wait on it meanwhile. It takes only a whole, unchanged
+  export (up to 32 MB) from the same version of Kiln, whose tables have the
+  same shape, and only when a Kiln backup from the last day exists to come
+  back to.
 - **Viewer** browses and edits Hearth's tables through the Relay, with the
   login Hearth itself uses. It needs a Relay with `relay-platform-database-v1`.
 - **Logs** follows each container's output live.

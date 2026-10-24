@@ -53,6 +53,8 @@ interface RetentionScope {
 export interface ExpiredBackup {
   backupId: string
   relayId: string
+  /** The destination its schedule keeps it at; `null` is the Relay. */
+  storageId: string | null
 }
 
 /** Relays that some schedule backs something up on. */
@@ -189,12 +191,19 @@ export const expiredScheduledBackupsEffect = Effect.fn(
         backupId: backup.id,
         createdAt: Number(backup.created_at),
         relayId: scope.relayId,
+        storageId: scope.storageId,
       })
     }
   }
   return expired
     .sort((left, right) => left.createdAt - right.createdAt)
-    .map(({ backupId, relayId }): ExpiredBackup => ({ backupId, relayId }))
+    .map(
+      (backup): ExpiredBackup => ({
+        backupId: backup.backupId,
+        relayId: backup.relayId,
+        storageId: backup.storageId,
+      })
+    )
 })
 
 // Newest first: the newest stays, then each is kept while it is young
