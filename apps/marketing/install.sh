@@ -328,8 +328,12 @@ step() {
   if [ "$status" -ne 0 ]; then
     log "(failed with status $status)"
     printf '%s  %s%s%s %-26s %s%s%s\n' "$clear_line" "$red" "$cross" "$reset" "$label" "$dim" "$took" "$reset"
-    # The reason, when the step gave one: its own `kiln:` line, or its last.
-    reason=$(tail -n +"$((step_log_start + 1))" "$log_file" | sed -n 's/^kiln: //p' | tail -n 1)
+    # The reason: the step's own `kiln:` line, else the error Docker or a
+    # command gave, so it isn't only in the log.
+    output=$(tail -n +"$((step_log_start + 1))" "$log_file")
+    reason=$(printf '%s\n' "$output" | sed -n 's/^kiln: //p' | tail -n 1)
+    [ -n "$reason" ] || reason=$(printf '%s\n' "$output" |
+      sed -n 's/.*Error response from daemon: //p; s/^\(.*[Ee]rror: .*\)$/\1/p' | tail -n 1)
     [ -n "$reason" ] || reason="$label didn't finish."
     fail "$reason"
   fi
@@ -600,6 +604,13 @@ wait_healthy() {
   dk inspect --format '{{.Name}} {{.Config.Image}} healthy' "$name"
 }
 
+# A `docker run` that failed after creating its container, as when a port
+# is taken, leaves it behind; it never ran, so it goes, and the run fails.
+remove_unstarted() {
+  dk rm --force "$container" >/dev/null 2>&1 || true
+  return 1
+}
+
 start_platform_relay() {
   dk volume create "$volume" >/dev/null
   dk run --detach --name "$container" --restart unless-stopped \
@@ -616,7 +627,7 @@ start_platform_relay() {
     ${hearth_image:+--env KILN_PLATFORM_HEARTH_IMAGE="$hearth_image"} \
     ${namespace:+--env KILN_RELAY_RESOURCE_NAMESPACE="$namespace"} \
     ${game_host:+--env KILN_RELAY_GAME_HOST="$game_host"} \
-    "$image"
+    "$image" || remove_unstarted
 }
 
 start_node_relay() {
@@ -629,7 +640,7 @@ start_node_relay() {
     ${join:+--env KILN_RELAY_JOIN="$join"} \
     ${namespace:+--env KILN_RELAY_RESOURCE_NAMESPACE="$namespace"} \
     ${game_host:+--env KILN_RELAY_GAME_HOST="$game_host"} \
-    "$image"
+    "$image" || remove_unstarted
   waited=0
   until [ "$(dk inspect --format '{{.State.Health.Status}}' "$container" 2>/dev/null)" = "healthy" ]; do
     waited=$((waited + 2))
@@ -701,21 +712,43 @@ points_here() {
   getent ahostsv4 "$1" 2>/dev/null | awk '{print $1}' | grep -qxF "$address"
 }
 
-# What's listening on ports 80 or 443: a container's name, "another
-# program", or nothing.
+# What's listening on a port: a container's name, "another program", or
+# nothing.
+port_owner() {
+  owner=$(dk ps --filter "publish=$1" --format '{{.Names}}' 2>/dev/null | head -n 1)
+  if [ -n "$owner" ]; then
+    printf '%s' "$owner"
+    return
+  fi
+  # Listening sockets, by port in hex: 0050 is 80.
+  if awk 'NR > 1 && $4 == "0A" { split($2, local, ":"); print local[2] }' \
+    /proc/net/tcp /proc/net/tcp6 2>/dev/null | grep -qx "$(printf '%04X' "$1")"; then
+    printf 'another program'
+  fi
+}
+
+# What's listening on ports 80 or 443, the same way.
 web_ports_owner() {
   for published in 80 443; do
-    owner=$(dk ps --filter "publish=$published" --format '{{.Names}}' 2>/dev/null | head -n 1)
+    owner=$(port_owner "$published")
     if [ -n "$owner" ]; then
       printf '%s' "$owner"
       return
     fi
   done
-  # Listening sockets, by port in hex: 0050 is 80, 01BB is 443.
-  if awk 'NR > 1 && $4 == "0A" { split($2, local, ":"); print local[2] }' \
-    /proc/net/tcp /proc/net/tcp6 2>/dev/null | grep -qx -e 0050 -e 01BB; then
-    printf 'another program'
+}
+
+# Stops before starting anything when a port the Relay publishes is taken,
+# naming what has it, rather than failing halfway through.
+check_ports() {
+  if [ "$mode" = "node" ]; then
+    owner=$(port_owner 4100)
+    [ -z "$owner" ] ||
+      fail "Port 4100 is in use by $owner, and a Relay needs it for Kiln to reach it."
   fi
+  owner=$(port_owner "$sftp_port")
+  [ -z "$owner" ] ||
+    fail "Port $sftp_port is in use by $owner. Run this again with --sftp-port and a free port for SFTP."
 }
 
 # Which proxy gives Kiln HTTPS: Coolify's on a Coolify server, otherwise
@@ -814,6 +847,14 @@ address=$(public_ip)
 [ -n "$address" ] || address="localhost"
 log "public address: $address"
 
+# A Relay container that never started, left by an install that failed
+# before it could, isn't a Relay; its volume, if any, stays.
+if docker_reachable &&
+  [ "$(dk inspect --format '{{.State.Status}}' "$container" 2>/dev/null)" = "created" ]; then
+  log "removing $container, which never started"
+  dk rm --force "$container" >/dev/null 2>&1 || true
+fi
+
 # Already here: say so, and show where it's at.
 if docker_reachable && dk container inspect "$container" >/dev/null 2>&1; then
   if [ -n "$join" ]; then
@@ -873,6 +914,7 @@ if [ "$docker_missing" -eq 1 ]; then
   docker_reachable || fail "Docker didn't start."
 fi
 step "Checking Docker" check_docker
+check_ports
 step_progress=pull_progress
 step "Downloading Kiln" pull_relay
 
