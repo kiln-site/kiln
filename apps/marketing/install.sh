@@ -142,13 +142,15 @@ say() { printf '%s\n' "$*"; }
 logo() {
   if [ "$unicode" -eq 1 ]; then
     printf '\n'
-    printf '%s        ▄▄▄%s\n' "$orange" "$reset"
-    printf '%s      ▄▄▄▄▄▄▄%s\n' "$orange" "$reset"
-    printf '%s   ▐▀▀▀▀▀▀▀▀▀▀▀▌%s\n' "$orange" "$reset"
-    printf '%s   ▐ ▬▬▬     ■ ▌%s   %sKiln%s\n' "$orange" "$reset" "$bold" "$reset"
-    printf '%s   ▐ ▬▬▬     ■ ▌%s   %s%s%s\n' "$orange" "$reset" "$dim" "$1" "$reset"
-    printf '%s   ▐ ▬▬▬     ■ ▌%s\n' "$orange" "$reset"
-    printf '%s  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀%s\n\n' "$orange" "$reset"
+    printf '%s       ▆▆▆▆▆▆▆▆%s\n' "$orange" "$reset"
+    printf '%s        ▆▆▆▆▆▆%s\n' "$orange" "$reset"
+    printf '%s    ▅▅▅▅▅▅▅▅▅▅▅▅▅▅%s\n' "$orange" "$reset"
+    printf '%s    █▆▆▆▆▆█████▃▃█%s\n' "$orange" "$reset"
+    printf '%s    ▅▅▅▅▅▅▅▅▅▅▅▅▅▅%s     %sKiln%s\n' "$orange" "$reset" "$bold" "$reset"
+    printf '%s    █▆▆▆▆▆█████▃▃█%s     %s%s%s\n' "$orange" "$reset" "$dim" "$1" "$reset"
+    printf '%s    ▅▅▅▅▅▅▅▅▅▅▅▅▅▅%s\n' "$orange" "$reset"
+    printf '%s    █▆▆▆▆▆█████▃▃█%s\n' "$orange" "$reset"
+    printf '%s  ▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇%s\n\n' "$orange" "$reset"
   else
     printf '\nKiln - %s\n\n' "$1"
   fi
