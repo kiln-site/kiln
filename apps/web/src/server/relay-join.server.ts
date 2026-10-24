@@ -48,6 +48,7 @@ import {
   publicKeyFingerprint,
   publishRelayCollectionChange,
   verifyPairingResponse,
+  type PersistedRelay,
 } from "@/lib/relay-registry"
 import { assertRequestRateLimit } from "@/lib/request-rate-limit"
 
@@ -137,6 +138,12 @@ interface RelayJoinRow extends RowDataPacket {
 export interface RelayJoinView {
   readonly announcement: {
     readonly controlEndpoint: string
+    // Another Relay Hearth has at the address this one gives, which has
+    // to go before this one can be added.
+    readonly addressTakenBy: {
+      readonly id: string
+      readonly name: string
+    } | null
     // What the Relay is called when nobody names it.
     readonly defaultName: string
     readonly envelopeDigest: string
@@ -219,24 +226,29 @@ const loadJoin = Effect.fn("relayJoin.load")(function* (
 const joinView = Effect.fn("relayJoin.view")(function* (row: RelayJoinRow) {
   const envelope = json(row.envelope)
   const intent = json(row.intent)
-  const existing =
+  const relays =
     envelope && row.state !== "paired"
-      ? yield* promiseEffect(() =>
-          findPersistedRelayRow(envelope.relayFingerprint)
-        )
-      : null
+      ? yield* promiseEffect(listPersistedRelays)
+      : []
+  const existing = envelope
+    ? (relays.find((relay) => relay.id === envelope.relayFingerprint) ?? null)
+    : null
+  const addressTakenBy = envelope ? relayAtAddress(envelope, relays) : null
   const defaultName =
     existing?.name ??
     (envelope
       ? relayNameForNewPairing(
           envelope.relayName,
-          (yield* promiseEffect(listPersistedRelays)).map((relay) => relay.name)
+          relays.map((relay) => relay.name)
         )
       : null)
   return {
     announcement:
       envelope && row.envelope_digest && defaultName
         ? {
+            addressTakenBy: addressTakenBy
+              ? { id: addressTakenBy.id, name: addressTakenBy.name }
+              : null,
             controlEndpoint: envelope.controlEndpoint,
             defaultName,
             envelopeDigest: row.envelope_digest,
@@ -264,6 +276,25 @@ const joinView = Effect.fn("relayJoin.view")(function* (row: RelayJoinRow) {
     state: row.state,
   } satisfies RelayJoinView
 })
+
+// Another Relay Hearth saved at the address a joining one gives. Hearth
+// keeps one Relay per address, as a machine set up again under a new
+// identity still has its old one.
+function relayAtAddress(
+  envelope: RelayJoinEnvelope,
+  relays: ReadonlyArray<PersistedRelay>
+): PersistedRelay | null {
+  const control = new URL(envelope.controlEndpoint)
+  const port = Number(control.port || 443)
+  return (
+    relays.find(
+      (relay) =>
+        relay.id !== envelope.relayFingerprint &&
+        relay.hostname === control.hostname &&
+        relay.port === port
+    ) ?? null
+  )
+}
 
 // ------------------------------------------------------------ the dialog
 
@@ -627,6 +658,17 @@ export const confirmRelayJoinEffect = Effect.fn("relayJoin.confirm")(
           if (!envelope || row.envelope_digest !== input.envelopeDigest) {
             return yield* Effect.fail(
               new RelayJoinFailure("The Relay changed; review it again")
+            )
+          }
+          const holder = relayAtAddress(
+            envelope,
+            yield* promiseEffect(listPersistedRelays)
+          )
+          if (holder) {
+            return yield* Effect.fail(
+              new RelayJoinFailure(
+                `${holder.name} is already at this Relay's address; remove it first`
+              )
             )
           }
           const name = input.name?.trim() || null

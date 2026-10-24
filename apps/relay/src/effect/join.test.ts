@@ -6,7 +6,8 @@ import type { AddressInfo } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { assert, describe, it } from "@effect/vitest"
-import { Effect } from "effect"
+import { Effect, Fiber } from "effect"
+import { TestClock } from "effect/testing"
 
 import {
   RELAY_JOIN_LIFETIME_MS,
@@ -101,6 +102,47 @@ describe("Relay joining", () => {
     15_000
   )
 
+  it.effect(
+    "keeps waiting after pairing until Hearth says it saved the Relay",
+    () =>
+      withJoiningRelay((relay) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const hearthKeys = ed25519Keys()
+            const answers: Array<Omit<RelayJoinResponse, "mac">> = [
+              {
+                clientId: fingerprint(hearthKeys.publicKey),
+                expiresAt: Date.now() + 60_000,
+                status: "pending",
+              },
+            ]
+            const hearth = yield* fakeHearth(answers)
+            const events: Array<string> = []
+            const joining = yield* runRelayJoin(
+              { ...relay, link: { hearthOrigin: hearth.origin, secret } },
+              (event) => events.push(event.kind)
+            ).pipe(Effect.forkChild)
+            yield* advanceUntil(() => events.includes("waiting"))
+
+            // Hearth pairs, then fails to save the Relay, so it still
+            // answers that the join is pending.
+            yield* pairHearth({
+              identity: relay.identity,
+              request: joinPairingRequest(hearthKeys),
+              state: relay.state,
+            })
+            const asked = hearth.asked()
+            yield* advanceUntil(() => hearth.asked() > asked)
+            assert.notInclude(events, "finished")
+
+            answers.push({ clientId: null, expiresAt: null, status: "paired" })
+            yield* advanceUntil(() => events.includes("finished"))
+            assert.strictEqual(yield* Fiber.join(joining), "paired")
+          })
+        )
+      )
+  )
+
   it.live("trusts no answer that doesn't prove the join", () =>
     withJoiningRelay((relay) =>
       Effect.scoped(
@@ -176,6 +218,19 @@ describe("Relay joining", () => {
     )
   )
 })
+
+// Moves the test clock a second at a time, letting the Relay's requests to
+// the fake Hearth land in between, until `done` holds.
+function advanceUntil(done: () => boolean) {
+  return Effect.gen(function* () {
+    while (!done()) {
+      yield* TestClock.adjust(1_000)
+      yield* Effect.promise(
+        () => new Promise((resolve) => setTimeout(resolve, 10))
+      )
+    }
+  })
+}
 
 // A Relay to join with, on a fresh data directory and state store.
 function withJoiningRelay<A, E>(
@@ -261,6 +316,8 @@ function fakeHearth(
   ).pipe(
     Effect.map((server) => ({
       announcements,
+      // How many announcements Hearth has answered.
+      asked: () => asked,
       origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
     }))
   )

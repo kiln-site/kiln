@@ -101,7 +101,7 @@ export const runRelayJoin = Effect.fnUntraced(function* (
   input: RelayJoinInput,
   report: (event: RelayJoinEvent) => void
 ) {
-  const { link, state } = input
+  const { link } = input
   if (new URL(input.config.browserOrigin).protocol !== "https:") {
     return yield* new RelayJoinError({
       reason:
@@ -124,10 +124,9 @@ export const runRelayJoin = Effect.fnUntraced(function* (
   })
   let delay = ANNOUNCE_INTERVAL_MS
   let waiting = false
+  // Only Hearth's answer says it's paired: Hearth pairs, then saves the
+  // Relay, and pairing here alone doesn't mean it saved it.
   while (true) {
-    if (yield* pairedLocally(state, saved.joinId)) {
-      return yield* finish(input, saved, "paired", report)
-    }
     if (Date.now() >= saved.expiresAt) {
       return yield* finish(input, saved, "expired", report)
     }
@@ -252,14 +251,6 @@ const finish = Effect.fnUntraced(function* (
   }
   report({ kind: "finished", outcome })
   return outcome
-})
-
-const pairedLocally = Effect.fnUntraced(function* (
-  state: RelayStateStore["Service"],
-  joinId: string
-) {
-  const clients = yield* state.listClients()
-  return clients.some((client) => client.invitationId === joinId)
 })
 
 // One announcement. Fails with why Hearth couldn't be asked, or answered

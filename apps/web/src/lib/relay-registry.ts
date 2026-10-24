@@ -737,6 +737,23 @@ async function pairWithEnvelope(
   if (creatorUserId && existing && existing.created_by !== creatorUserId) {
     throw new Error("You can only manage Relays you created")
   }
+  // One Relay per address: a machine set up again under a new identity
+  // still has its old one here.
+  const [holders] = await databasePool.query<Array<RelayRow>>(
+    `SELECT name FROM ${databaseTable("relay")}
+      WHERE hostname = ? AND port = ? AND id <> ?
+      LIMIT 1`,
+    [
+      controlEndpoint.hostname,
+      effectivePort(controlEndpoint),
+      envelope.relayFingerprint,
+    ]
+  )
+  if (holders[0]) {
+    throw new Error(
+      `${holders[0].name} is already at this Relay's address; remove it first`
+    )
+  }
   // A Relay keeps this fingerprint when its SQLite state is rebuilt. Reuse
   // Hearth's client identity so Relay can enroll it again without replacing
   // Hearth's Relay row and cascading away instance activity or pins.

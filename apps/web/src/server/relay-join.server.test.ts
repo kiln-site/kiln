@@ -24,6 +24,7 @@ import {
   relayJoinViewEffect,
 } from "@/server/relay-join.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
+import { insertRelay } from "@/test/seed"
 
 vi.stubEnv("BETTER_AUTH_SECRETS", `1:${"j".repeat(32)}`)
 
@@ -214,6 +215,48 @@ describeMysql("Relay joins", () => {
           assert.strictEqual(
             (yield* openRelayJoinEffect("owner")).id,
             refreshed.id
+          )
+        })
+    )
+
+    it.effect(
+      "won't add a Relay where Hearth already has another, and says which",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          // The machine set up again: a new identity at the old address.
+          yield* insertRelay("old-relay", {
+            hostname: "relay.test",
+            name: "K100",
+            port: 4100,
+          })
+          const join = yield* openRelayJoinEffect("owner")
+          yield* announce(
+            join.id,
+            join.secret ?? "",
+            relayEnvelope(join.id),
+            "203.0.113.5"
+          )
+
+          const view = yield* relayJoinViewEffect("owner", join.id)
+          assert.deepStrictEqual(view.announcement?.addressTakenBy, {
+            id: "old-relay",
+            name: "K100",
+          })
+          const refused = yield* Effect.flip(
+            confirmRelayJoinEffect({
+              canManageAnyRelay: true,
+              envelopeDigest: view.announcement?.envelopeDigest ?? "",
+              installation: "use",
+              joinId: join.id,
+              name: null,
+              userId: "owner",
+            })
+          )
+          assert.include(messageOf(refused), "K100 is already at")
+          assert.strictEqual(
+            (yield* relayJoinViewEffect("owner", join.id)).state,
+            "announced"
           )
         })
     )

@@ -1,6 +1,6 @@
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { useNavigate } from "@tanstack/react-router"
+import { Link, useNavigate } from "@tanstack/react-router"
 import { encodeRelayJoinLink } from "@workspace/contracts"
 import {
   Check,
@@ -64,7 +64,7 @@ export function RelayJoinPanel({
     queryFn: () => getRelayJoin({ data: { joinId: join?.id ?? "" } }),
     queryKey: [...relayJoinQueryKey, join?.id],
     refetchInterval: (query) =>
-      polling(query.state.data?.state ?? join?.state) ? POLL_MS : false,
+      polling(query.state.data ?? join) ? POLL_MS : false,
   })
   const view: JoinView | undefined = polled.data ?? join
   const refresh = useMutation({
@@ -114,8 +114,14 @@ export function RelayJoinPanel({
   )
 }
 
-function polling(state: JoinView["state"] | undefined): boolean {
-  return state === "waiting" || state === "confirming"
+// While something on the Relay's side or Hearth's can still change: also
+// while another Relay holds its address, until someone removes that one.
+function polling(view: JoinView | undefined): boolean {
+  return (
+    view?.state === "waiting" ||
+    view?.state === "confirming" ||
+    (view?.state === "announced" && view.announcement?.addressTakenBy != null)
+  )
 }
 
 // The command to run on the new machine, then waiting for its Relay.
@@ -284,6 +290,7 @@ function JoinReview({
   const working = view.state === "confirming" && view.error === null
   const locked = view.state === "confirming"
   const existing = announcement.existingRelay
+  const holder = announcement.addressTakenBy
 
   return (
     <div className="min-w-0 space-y-4">
@@ -331,6 +338,24 @@ function JoinReview({
         />
       ) : null}
 
+      {holder ? (
+        <div className="flex items-start gap-3 border border-amber-400/25 bg-amber-400/8 px-3 py-2.5">
+          <CircleAlert className="mt-0.5 size-3.5 shrink-0 text-amber-200 light:text-amber-800" />
+          <p className="type-meta min-w-0 flex-1 text-amber-200 light:text-amber-800">
+            <Link
+              to="/relay/$relayId/info"
+              params={{ relayId: holder.id }}
+              className="font-medium underline underline-offset-2"
+            >
+              {holder.name}
+            </Link>{" "}
+            is already at {new URL(announcement.controlEndpoint).host}, as when
+            this machine was set up again. Remove it to add this Relay in its
+            place; this updates once it's gone.
+          </p>
+        </div>
+      ) : null}
+
       {view.state === "needs_review" ? (
         <DialogFeedback message="The Relay's installation ID changed while it was being added. Choose again." />
       ) : null}
@@ -348,7 +373,7 @@ function JoinReview({
         ) : null}
         <Button
           type="button"
-          disabled={working || confirm.isPending}
+          disabled={working || confirm.isPending || holder !== null}
           onClick={() => confirm.mutate()}
         >
           {confirm.isPending ? (
