@@ -1,20 +1,116 @@
+# Kiln's development stack: Hearth and a Relay run from this checkout,
+# beside MySQL, Valkey, and MinIO. Start it with `pnpm dev:docker`, which
+# supplies the environment. It isn't a way to run Kiln: install that with
+# https://kiln.site/install, or compose.yaml.
 services:
+  cache:
+    image: ${CACHE_IMAGE:-valkey/valkey:9.1.2-alpine}
+    restart: unless-stopped
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        if command -v valkey-server >/dev/null; then
+          exec valkey-server --save "" --appendonly no
+        fi
+        exec redis-server --save "" --appendonly no
+    tmpfs:
+      - /data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "if command -v valkey-cli >/dev/null; then valkey-cli ping; else redis-cli ping; fi | grep -q PONG",
+        ]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
   mysql:
-    ports: !override
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${DB_NAME:-hearth}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+      MYSQL_ROOT_PASSWORD: kiln-root
+      MYSQL_USER: ${DB_USERNAME:-kiln}
+      TZ: America/New_York
+    volumes:
+      - hearth-mysql:/var/lib/mysql
+    labels:
+      io.kiln.installation: ${KILN_INSTALLATION_ID:-}
+      io.kiln.resource: hearth-database
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'mysqladmin ping -h 127.0.0.1 -u"$${MYSQL_USER}" -p"$${MYSQL_PASSWORD}"',
+        ]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    ports:
       - "127.0.0.1:${KILN_DEV_MYSQL_PORT:-3306}:3306"
 
   relay:
-    build: !reset null
     image: node:24-alpine
     restart: "no"
     working_dir: /workspace
+    depends_on:
+      minio-certs:
+        condition: service_completed_successfully
     environment:
+      KILN_GIT_REPO: ${KILN_GIT_REPO:-}
+      KILN_INSTALLATION_ID: ${KILN_INSTALLATION_ID:-}
+      KILN_RELAY_BOOTSTRAP_TOKEN: ${KILN_RELAY_BOOTSTRAP_TOKEN:-}
+      KILN_RELAY_BOOTSTRAP_TOKEN_FILE: ${KILN_RELAY_BOOTSTRAP_TOKEN_FILE:-}
+      KILN_RELAY_HOST: ${KILN_RELAY_HOST:-relay.hearth.orb.local}
+      KILN_RELAY_HOST_ACCESS: ${KILN_RELAY_HOST_ACCESS:-true}
+      KILN_RELAY_GAME_HOST: ${KILN_RELAY_GAME_HOST:-}
+      KILN_RELAY_GAME_PORT_RANGE: ${KILN_RELAY_GAME_PORT_RANGE:-30000-39999}
+      KILN_RELAY_CRASH_RETRY_LIMIT: ${KILN_RELAY_CRASH_RETRY_LIMIT:-2}
+      KILN_RELAY_CRASH_RETRY_DELAY_SECONDS: ${KILN_RELAY_CRASH_RETRY_DELAY_SECONDS:-5}
+      KILN_RELAY_CRASH_STABILITY_SECONDS: ${KILN_RELAY_CRASH_STABILITY_SECONDS:-300}
+      KILN_RELAY_BROWSER_SESSIONS_MAX: ${KILN_RELAY_BROWSER_SESSIONS_MAX:-512}
+      KILN_RELAY_BROWSER_SESSIONS_PER_INSTANCE_MAX: ${KILN_RELAY_BROWSER_SESSIONS_PER_INSTANCE_MAX:-256}
+      KILN_RELAY_BROWSER_SESSIONS_PER_USER_MAX: ${KILN_RELAY_BROWSER_SESSIONS_PER_USER_MAX:-64}
+      KILN_RELAY_BROWSER_SESSIONS_PER_USER_INSTANCE_MAX: ${KILN_RELAY_BROWSER_SESSIONS_PER_USER_INSTANCE_MAX:-16}
+      KILN_RELAY_BROWSER_PENDING_HANDSHAKES_MAX: ${KILN_RELAY_BROWSER_PENDING_HANDSHAKES_MAX:-64}
+      KILN_RELAY_BROWSER_PENDING_HANDSHAKES_PER_IP_MAX: ${KILN_RELAY_BROWSER_PENDING_HANDSHAKES_PER_IP_MAX:-16}
+      KILN_RELAY_BROWSER_PENDING_FILE_AUTH_MAX: ${KILN_RELAY_BROWSER_PENDING_FILE_AUTH_MAX:-16}
+      KILN_RELAY_BROWSER_SUBLIMITS_ENFORCE: ${KILN_RELAY_BROWSER_SUBLIMITS_ENFORCE:-true}
+      KILN_RELAY_BROWSER_OUTBOX_MESSAGES_MAX: ${KILN_RELAY_BROWSER_OUTBOX_MESSAGES_MAX:-256}
+      KILN_RELAY_BROWSER_OUTBOX_BYTES_MAX: ${KILN_RELAY_BROWSER_OUTBOX_BYTES_MAX:-2097152}
+      KILN_RELAY_BROWSER_FILE_REPLAYS_MAX: ${KILN_RELAY_BROWSER_FILE_REPLAYS_MAX:-65536}
+      KILN_RELAY_NAME: ${KILN_RELAY_NAME:-D001-localdev}
+      KILN_RELAY_PROXY: ${KILN_RELAY_PROXY:-none}
+      KILN_RELAY_TRAEFIK_IMAGE: ${KILN_RELAY_TRAEFIK_IMAGE:-traefik:v3.7.13}
+      KILN_RELAY_ACME_EMAIL: ${KILN_RELAY_ACME_EMAIL:-}
+      KILN_RELAY_PORT: ${KILN_RELAY_PORT:-4100}
+      KILN_RELAY_HEALTH_PORT: ${KILN_RELAY_HEALTH_PORT:-4101}
+      KILN_RELAY_PUBLIC_PORT: ${KILN_RELAY_PUBLIC_PORT:-}
+      KILN_RELAY_PUBLIC_URL: ${KILN_RELAY_PUBLIC_URL:-}
+      KILN_RELAY_RESOURCE_NAMESPACE: ${KILN_RELAY_RESOURCE_NAMESPACE:-}
+      KILN_PLATFORM_BACKUP_KEY: ${KILN_PLATFORM_BACKUP_KEY:-}
+      KILN_BACKUP_TIMEOUT: ${KILN_BACKUP_TIMEOUT:-60}
+      KILN_RELAY_DISCOVER_PUBLIC_IP: ${KILN_RELAY_DISCOVER_PUBLIC_IP:-true}
+      KILN_RELAY_SFTP_PORT: ${KILN_RELAY_SFTP_PORT:-2022}
+      KILN_RELAY_TLS_MODE: managed
+      KILN_RELAY_TLS_CERT_FILE: ${KILN_RELAY_TLS_CERT_FILE:-}
+      KILN_RELAY_TLS_KEY_FILE: ${KILN_RELAY_TLS_KEY_FILE:-}
+      MCLOGS_API_URL: ${MCLOGS_API_URL:-}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS:-}
+      OTEL_LOGS_EXPORTER: ${OTEL_LOGS_EXPORTER:-}
+      OTEL_METRICS_EXPORTER: ${OTEL_METRICS_EXPORTER:-}
+      OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-}
+      OTEL_TRACES_EXPORTER: ${OTEL_TRACES_EXPORTER:-}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-}
       NODE_ENV: development
       npm_config_store_dir: /root/.local/share/pnpm/store
       # Upgrade-only read path for instances created from the old Relay catalog.
       KILN_BRICKS_CATALOG_URL: file:///workspace/apps/bricks/catalog.yml
-      KILN_RELAY_TLS_MODE: managed
-      KILN_RELAY_NAME: ${KILN_RELAY_NAME:-D001-localdev}
       RESTIC_CACERT: /minio-certs/public.crt
       # Full-archive uploads go through Node, not restic.
       NODE_EXTRA_CA_CERTS: /minio-certs/public.crt
@@ -75,16 +171,13 @@ services:
       test:
         [
           "CMD-SHELL",
-          "port=$$(printf '%s' \"$$KILN_RELAY_HEALTH_PORT\" | tr -cd '0-9'); wget -q -T 2 -O /dev/null \"http://127.0.0.1:$${port:-4101}/health\"",
+          'port=$$(printf ''%s'' "$$KILN_RELAY_HEALTH_PORT" | tr -cd ''0-9''); wget -q -T 2 -O /dev/null "http://127.0.0.1:$${port:-4101}/health"',
         ]
       interval: 10s
       timeout: 3s
       start_period: 10s
       retries: 6
-    depends_on:
-      minio-certs:
-        condition: service_completed_successfully
-    volumes: !override
+    volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /:/host:rw,rslave
       - relay-data:/data
@@ -111,15 +204,18 @@ services:
           nocopy: true
       - kiln-dev-pnpm-store:/root/.local/share/pnpm/store
       - minio-certs:/minio-certs:ro
-    ports: !override
+    ports:
       - "127.0.0.1:${KILN_DEV_SFTP_PORT:-2022}:2022"
+    labels:
+      io.kiln.installation: ${KILN_INSTALLATION_ID:-}
 
   hearth:
-    build: !reset null
     image: node:24-alpine
     restart: "no"
     working_dir: /workspace
     depends_on:
+      cache:
+        condition: service_healthy
       mysql:
         condition: service_healthy
       relay:
@@ -131,10 +227,51 @@ services:
       minio-setup:
         condition: service_completed_successfully
     environment:
+      DB_HOST: mysql
+      DB_PORT: ${DB_PORT:-3306}
+      DB_NAME: ${DB_NAME:-hearth}
+      DB_USERNAME: ${DB_USERNAME:-kiln}
+      DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+      DB_TABLE_PREFIX: ${DB_TABLE_PREFIX:-}
+      KILN_ENVIRONMENT: dev
+      KILN_GIT_REPO: ${KILN_GIT_REPO:-}
+      KILN_BRICKS_CATALOG_URL: file:///workspace/apps/bricks/catalog.yml
+      KILN_MARKETING_URL: ${KILN_MARKETING_URL:-}
+      KILN_INSTALLATION_ID: ${KILN_INSTALLATION_ID:-}
+      CACHE_HOST: ${CACHE_HOST:-cache}
+      CACHE_PORT: ${CACHE_PORT:-6379}
+      CACHE_USERNAME: ${CACHE_USERNAME:-}
+      CACHE_PASSWORD: ${CACHE_PASSWORD:-}
+      CACHE_DATABASE: ${CACHE_DATABASE:-0}
+      CACHE_TLS: ${CACHE_TLS:-false}
+      KILN_ENABLE_SIGNUPS: ${KILN_ENABLE_SIGNUPS:-false}
+      KILN_RELAY_BOOTSTRAP_TOKEN: ${KILN_RELAY_BOOTSTRAP_TOKEN:-}
+      KILN_RELAY_CONTROL_URL: ${KILN_RELAY_CONTROL_URL:-}
+      KILN_RELAY_HOST: ${KILN_RELAY_HOST:-relay.hearth.orb.local}
+      KILN_RELAY_PORT: ${KILN_RELAY_PORT:-4100}
+      KILN_RELAY_PUBLIC_URL: ${KILN_RELAY_PUBLIC_URL:-}
+      KILN_BROWSER_CAPABILITY_CONSOLE_MIN_VERSION: ${KILN_BROWSER_CAPABILITY_CONSOLE_MIN_VERSION:-1}
+      KILN_BROWSER_CAPABILITY_RESOURCES_MIN_VERSION: ${KILN_BROWSER_CAPABILITY_RESOURCES_MIN_VERSION:-1}
+      KILN_BROWSER_CAPABILITY_FILE_MIN_VERSION: ${KILN_BROWSER_CAPABILITY_FILE_MIN_VERSION:-1}
+      KILN_SUPER_USER_EMAIL: ${KILN_SUPER_USER_EMAIL:-}
+      KILN_SUPER_USER_PASSWORD: ${KILN_SUPER_USER_PASSWORD:-}
+      KILN_URL: ${KILN_URL:-http://localhost:3000}
+      BETTER_AUTH_SECRETS: ${BETTER_AUTH_SECRETS:?Set BETTER_AUTH_SECRETS in .env}
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL:-}
+      BETTER_AUTH_TRUSTED_ORIGINS: ${BETTER_AUTH_TRUSTED_ORIGINS:-}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL:-}
+      MCLOGS_API_URL: ${MCLOGS_API_URL:-}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS:-}
+      OTEL_LOGS_EXPORTER: ${OTEL_LOGS_EXPORTER:-}
+      OTEL_METRICS_EXPORTER: ${OTEL_METRICS_EXPORTER:-}
+      OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-}
+      OTEL_TRACES_EXPORTER: ${OTEL_TRACES_EXPORTER:-}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-}
       NODE_ENV: development
       npm_config_store_dir: /root/.local/share/pnpm/store
-      KILN_ENVIRONMENT: dev
-      KILN_BRICKS_CATALOG_URL: file:///workspace/apps/bricks/catalog.yml
       NODE_EXTRA_CA_CERTS: /minio-certs/public.crt
     command:
       - /bin/sh
@@ -160,7 +297,7 @@ services:
       timeout: 3s
       start_period: 10s
       retries: 6
-    volumes: !override
+    volumes:
       - .:/workspace
       - type: bind
         source: "${KILN_DEV_ENV_FILE:?Run through pnpm dev:docker}"
@@ -193,8 +330,11 @@ services:
           nocopy: true
       - kiln-dev-pnpm-store:/root/.local/share/pnpm/store
       - minio-certs:/minio-certs:ro
-    ports: !override
+    ports:
       - "127.0.0.1:${KILN_DEV_WEB_PORT:-3000}:3000"
+    labels:
+      io.kiln.installation: ${KILN_INSTALLATION_ID:-}
+      io.kiln.resource: hearth
 
   minio-certs:
     image: alpine:3.21
@@ -254,6 +394,8 @@ services:
         mc --insecure mb --ignore-existing kiln/kiln-backups
 
 volumes:
+  hearth-mysql:
+  relay-data:
   relay-dev-node-modules:
   relay-dev-app-node-modules:
   relay-dev-contracts-node-modules:

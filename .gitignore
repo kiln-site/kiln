@@ -5,8 +5,8 @@ dist
 dist-ssr
 *.local
 .env*
-!.env.hearth.example
-!.env.relay.example
+!.env.dev.example
+!.env.example
 !.env.marketing.example
 .tanstack
 .wrangler
