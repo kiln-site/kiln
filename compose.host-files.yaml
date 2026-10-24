@@ -1,5 +1,5 @@
 # Lets the Relay's Files page browse and edit its Docker host's filesystem,
-# as its Mount host files button does. Add it to the Compose stack only where
+# as its Mount host files button does. Add it to compose.yaml only where
 # people with relay.files.write should have root over the host's files:
 #
 #   docker compose -f compose.yaml -f compose.host-files.yaml up -d

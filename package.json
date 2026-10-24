@@ -4,9 +4,6 @@
   "private": true,
   "scripts": {
     "build": "vp run -r build",
-    "db:down": "docker compose down",
-    "db:reset": "docker compose down -v && docker compose up -d --wait mysql",
-    "db:up": "docker compose up -d mysql",
     "dev:setup": "node scripts/dev-docker.mjs setup",
     "dev:docker": "node scripts/dev-docker.mjs start",
     "dev:docker:up": "node scripts/dev-docker.mjs up",
