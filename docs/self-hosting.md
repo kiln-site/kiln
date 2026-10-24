@@ -288,7 +288,7 @@ Platform administrators open Kiln itself from the **Kiln** button beside
   backups; the rail's **Backups** line counts them. An import puts back
   every table's rows in one transaction, so it takes effect whole or not at
   all, and requests wait on it meanwhile. It takes only a whole, unchanged
-  export (up to 32 MB) from the same version of Kiln, whose tables have the
+  export (Kiln seals each with a SHA-256 of its contents; up to 32 MB) from the same version of Kiln, whose tables have the
   same shape, and only when a Kiln backup from the last day exists to come
   back to.
 - **Viewer** browses and edits Hearth's tables through the Relay, with the

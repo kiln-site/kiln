@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import type { Readable } from "node:stream"
 
 import { Effect, Stream } from "effect"
@@ -62,13 +63,21 @@ export function kilnDatabaseDump(
       )
       const tables = yield* listTables(connection)
       const schema = yield* schemaVersion(connection, "export")
+      // The last line seals the file: a digest of everything before it.
+      const digest = createHash("sha256")
       return Stream.make(dumpHeader(createdAt, schema)).pipe(
         Stream.concat(
           Stream.fromIterable(tables).pipe(
             Stream.flatMap((table) => tableStream(connection, table))
           )
         ),
-        Stream.concat(Stream.make(DUMP_FOOTER))
+        Stream.concat(Stream.make(DUMP_FOOTER)),
+        Stream.tap((chunk) => Effect.sync(() => digest.update(chunk, "utf8"))),
+        Stream.concat(
+          Stream.suspend(() =>
+            Stream.make(`${DUMP_SEAL}${digest.digest("hex")}\n`)
+          )
+        )
       )
     })
   )
@@ -85,6 +94,9 @@ const RECENT_BACKUP_MS = 24 * 60 * 60_000
 // As the export's header sets, except that unique keys stay checked and the
 // server's strict mode stays on.
 const IMPORT_SESSION = [
+  // Next-key locks keep other writers out of the tables it empties, whatever
+  // the server's default.
+  "SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ",
   "SET NAMES utf8mb4",
   "SET time_zone = '+00:00'",
   "SET FOREIGN_KEY_CHECKS = 0",
@@ -125,41 +137,67 @@ interface ImportPlan {
   tables: ReadonlyArray<string>
 }
 
-// The tables an export creates and its INSERTs, each a statement of its own.
-// Values are escaped onto one line each (`escape` writes newlines as \n), so
-// an INSERT is its first line and the row lines after it, up to the one
-// ending its statement. Null for anything else.
+// The tables an export creates and its INSERTs, each a statement of its own,
+// or null for any line an export doesn't write. Values are escaped onto one
+// line each (`escape` writes newlines as \\n), so an INSERT is its first line
+// and the row lines after it, up to the one ending its statement.
 function parseKilnExport(sql: string): ImportPlan | null {
   const tables: Array<string> = []
   const inserts: Array<string> = []
   const lines = sql.split("\n")
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index] ?? ""
+  let index = 0
+  const next = () => lines[index++]
+  while (index < lines.length) {
+    const line = next() ?? ""
+    if (
+      line === "" ||
+      line.startsWith("-- ") ||
+      /^SET [^;]*;$/u.test(line) ||
+      /^DROP TABLE IF EXISTS `(?:[^`]|``)+`;$/u.test(line)
+    ) {
+      continue
+    }
     const created = /^CREATE TABLE `((?:[^`]|``)+)` \($/u.exec(line)
     if (created?.[1]) {
+      // Its definition runs to the line closing it.
+      let closed = false
+      while (index < lines.length && !closed) {
+        const definition = next() ?? ""
+        closed = definition.startsWith(")") && definition.endsWith(";")
+      }
+      if (!closed) return null
       tables.push(created[1].replaceAll("``", "`"))
       continue
     }
-    if (!line.startsWith("INSERT INTO ")) continue
     const target = /^INSERT INTO `((?:[^`]|``)+)` \(.*\) VALUES$/u.exec(line)
     if (!target?.[1] || !tables.includes(target[1].replaceAll("``", "`"))) {
       return null
     }
     const statement = [line]
-    for (index += 1; index < lines.length; index += 1) {
-      const row = lines[index] ?? ""
+    let ended = false
+    while (index < lines.length && !ended) {
+      const row = next() ?? ""
       if (!row.startsWith("(")) return null
-      if (row.endsWith(");")) {
-        statement.push(row.slice(0, -1))
-        break
-      }
-      if (!row.endsWith("),")) return null
-      statement.push(row)
+      ended = row.endsWith(");")
+      if (!ended && !row.endsWith("),")) return null
+      statement.push(ended ? row.slice(0, -1) : row)
     }
-    if (index >= lines.length) return null
+    if (!ended) return null
     inserts.push(statement.join("\n"))
   }
   return { inserts, tables }
+}
+
+// The file as Kiln wrote it: whole, and unchanged since.
+function sealedExport(sql: string): boolean {
+  const body = sql.endsWith("\n") ? sql.slice(0, -1) : sql
+  const lastLine = body.lastIndexOf("\n") + 1
+  const seal = body.slice(lastLine)
+  return (
+    seal.startsWith(DUMP_SEAL) &&
+    seal.slice(DUMP_SEAL.length) ===
+      createHash("sha256").update(body.slice(0, lastLine), "utf8").digest("hex")
+  )
 }
 
 const checkKilnImport = Effect.fnUntraced(function* (
@@ -173,17 +211,17 @@ const checkKilnImport = Effect.fnUntraced(function* (
       "Import a SQL file exported from Kiln's Data section"
     )
   }
-  if (sql.trimEnd().split("\n").at(-1) !== DUMP_END) {
+  if (!sealedExport(sql)) {
     return yield* importRefused(
-      "incomplete",
-      "This export is incomplete; export Kiln's database again"
+      "changed",
+      "This export is incomplete or was changed; export Kiln's database again"
     )
   }
   const plan = parseKilnExport(sql)
   if (!plan) {
     return yield* importRefused(
-      "not_kiln_export",
-      "This file was changed after Kiln exported it"
+      "changed",
+      "This export holds something Kiln doesn't write; export Kiln's database again"
     )
   }
   const exported = Number(/^-- Kiln schema (\d+)$/mu.exec(sql)?.[1] ?? NaN)
@@ -238,7 +276,7 @@ function importRefused(
 }
 
 const DUMP_TITLE = "-- Kiln database export"
-const DUMP_END = "SET UNIQUE_CHECKS = 1;"
+const DUMP_SEAL = "-- Kiln export sha256 "
 
 function dumpHeader(createdAt: Date, schema: number) {
   return [
@@ -256,7 +294,11 @@ function dumpHeader(createdAt: Date, schema: number) {
   ].join("\n")
 }
 
-const DUMP_FOOTER = ["SET FOREIGN_KEY_CHECKS = 1;", DUMP_END, ""].join("\n")
+const DUMP_FOOTER = [
+  "SET FOREIGN_KEY_CHECKS = 1;",
+  "SET UNIQUE_CHECKS = 1;",
+  "",
+].join("\n")
 
 function tableStream(
   connection: Connection,

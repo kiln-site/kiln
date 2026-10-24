@@ -197,13 +197,11 @@ export const expiredScheduledBackupsEffect = Effect.fn(
   }
   return expired
     .sort((left, right) => left.createdAt - right.createdAt)
-    .map(
-      (backup): ExpiredBackup => ({
-        backupId: backup.backupId,
-        relayId: backup.relayId,
-        storageId: backup.storageId,
-      })
-    )
+    .map((backup): ExpiredBackup => ({
+      backupId: backup.backupId,
+      relayId: backup.relayId,
+      storageId: backup.storageId,
+    }))
 })
 
 // Newest first: the newest stays, then each is kept while it is young

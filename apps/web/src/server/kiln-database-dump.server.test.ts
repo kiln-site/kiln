@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto"
+
 import { assert, layer } from "@effect/vitest"
 import { Effect, Stream } from "effect"
 import { SqlClient } from "effect/sql"
@@ -11,6 +13,12 @@ import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertBackup, insertUser } from "@/test/seed"
 
 const kiln = { installationId: "installation-one", now: Date.now() }
+
+// Seals an altered export again, as only someone rewriting it would.
+function reseal(dump: string) {
+  const body = dump.slice(0, dump.lastIndexOf("-- Kiln export sha256 "))
+  return `${body}-- Kiln export sha256 ${createHash("sha256").update(body, "utf8").digest("hex")}\n`
+}
 
 // The backup an import needs to come back to.
 const insertRecentKilnBackup = insertBackup("kiln-backup", {
@@ -115,7 +123,7 @@ describeMysql("Kiln database export", () => {
             SET name = 'Current' WHERE id = 'user-one'`
 
           // A value MySQL refuses, in a file that is otherwise whole.
-          const failing = dump.replace("('42',", "('not a number',")
+          const failing = reseal(dump.replace("('42',", "('not a number',"))
           assert.notStrictEqual(failing, dump)
           yield* Effect.flip(importKilnDatabaseSql(failing, kiln))
 
@@ -156,15 +164,27 @@ describeMysql("Kiln database export", () => {
             yield* refusal("DROP TABLE IF EXISTS anything;"),
             "not_kiln_export"
           )
+          // Cut short, or with an INSERT's rows left out.
           assert.strictEqual(
             yield* refusal(
               dump.slice(0, dump.lastIndexOf("SET UNIQUE_CHECKS"))
             ),
-            "incomplete"
+            "changed"
+          )
+          assert.strictEqual(
+            yield* refusal(dump.replace(/^INSERT INTO /mu, "insert into ")),
+            "changed"
+          )
+          // Even resealed, a file must hold only what Kiln writes.
+          assert.strictEqual(
+            yield* refusal(
+              reseal(dump.replace(/^INSERT INTO /mu, "insert into "))
+            ),
+            "changed"
           )
           assert.strictEqual(
             yield* refusal(
-              dump.replace(/^-- Kiln schema \d+$/mu, "-- Kiln schema 1")
+              reseal(dump.replace(/^-- Kiln schema \d+$/mu, "-- Kiln schema 1"))
             ),
             "other_schema"
           )
