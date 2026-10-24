@@ -7,6 +7,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links"
 import { Terminal, type IDisposable } from "@xterm/xterm"
 import {
   DATABASE_TERMINAL_WRITE_MAX_CHARACTERS,
+  relayAnswersColorQuery,
   type DatabaseTerminalControl,
   type DatabaseTerminalEnd,
 } from "@workspace/contracts"
@@ -932,7 +933,10 @@ class TerminalConnection {
   #leaveQueriesToRelay(relayAnswers: boolean) {
     if (relayAnswers === (this.#queriesLeftToRelay !== null)) return
     if (relayAnswers) {
-      this.#queriesLeftToRelay = ignoreQueries(this.#terminal)
+      this.#queriesLeftToRelay = ignoreQueries(
+        this.#terminal,
+        () => this.#reported === "self" || this.#claim !== null
+      )
     } else {
       this.#queriesLeftToRelay?.dispose()
       this.#queriesLeftToRelay = null
@@ -1172,8 +1176,13 @@ class TerminalConnection {
 
 // Makes the terminal leave unanswered the queries the Relay answers: those
 // its headless xterm, the same version as this one, answers itself, and the
-// colors it adds. Each handler here takes the sequence before xterm's own.
-function ignoreQueries(terminal: Terminal): IDisposable {
+// colors it adds. Color queries the Relay can't answer are answered by the
+// page in control only. Each handler here takes the sequence before xterm's
+// own.
+function ignoreQueries(
+  terminal: Terminal,
+  inControl: () => boolean
+): IDisposable {
   const { parser } = terminal
   const ignore = () => true
   const handlers = [
@@ -1190,11 +1199,18 @@ function ignoreQueries(terminal: Terminal): IDisposable {
       ignore
     ),
     parser.registerDcsHandler({ final: "q", intermediates: "$" }, ignore),
-    // Foreground and background colors, when only asked for, not set.
-    ...[10, 11].map((ident) =>
-      parser.registerOscHandler(ident, (data) =>
-        data.split(";").every((slot) => slot === "?")
-      )
+    // Colors: the ones the Relay knows it answers. Only the page in control
+    // answers for the others (the palette and cursor follow its theme), so
+    // they're answered once too. Setting a color applies on every page.
+    ...[4, 10, 11, 12].map((ident) =>
+      parser.registerOscHandler(ident, (data) => {
+        if (relayAnswersColorQuery(ident, data)) return true
+        // The palette's are index and color pairs.
+        const asked = data
+          .split(";")
+          .filter((_, slot) => ident !== 4 || slot % 2 === 1)
+        return asked.every((slot) => slot === "?") && !inControl()
+      })
     ),
   ]
   return { dispose: () => handlers.forEach((handler) => handler.dispose()) }

@@ -503,20 +503,32 @@ describe("database terminal sessions", () => {
     expect(attached.answersQueries).toBe(true)
 
     // The fake TTY echoes input, so the client prints these queries: where
-    // is the cursor, and what is the background color. The answers reach
-    // the client, which echoes them too.
+    // is the cursor, what terminal is this, and what are the foreground and
+    // background colors. The answers reach the client, which echoes them
+    // back verbatim; an answer that reads as a query isn't answered again.
     terminals.write(
       alice,
       databaseId,
       attached.sessionId,
-      "\u001b[2J\u001b[3;5H\u001b[6n\u001b]11;?\u0007"
+      "\u001b[2J\u001b[3;5H\u001b[6n\u001b[>c\u001b]10;?;?\u0007"
     )
-    const cursor = "\u001b[3;5R"
-    const background = "\u001b]11;rgb:0000/0000/0000\u001b\\"
+    const answers = [
+      "\u001b[3;5R",
+      "\u001b[>0;276;0c",
+      "\u001b]10;rgb:ecec/eaea/e9e9\u001b\\",
+      "\u001b]11;rgb:0000/0000/0000\u001b\\",
+    ]
+    await vi.waitFor(() => expect(first.output).toContain(answers[3]))
+    // A new page's snapshot waits for the screen to read every echoed
+    // answer, and the TTY echoes what follows in order, so an answer to an
+    // answer would be in the output before "done".
+    await attach(terminals, alice, database, viewer())
+    terminals.write(alice, databaseId, attached.sessionId, "done")
     for (const page of [first, second]) {
-      await vi.waitFor(() => expect(page.output).toContain(background))
-      expect(page.output.split(cursor)).toHaveLength(2)
-      expect(page.output.split(background)).toHaveLength(2)
+      await vi.waitFor(() => expect(page.output).toContain("done"))
+      for (const answer of answers) {
+        expect(page.output.split(answer)).toHaveLength(2)
+      }
     }
   })
 

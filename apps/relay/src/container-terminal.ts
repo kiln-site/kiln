@@ -10,6 +10,7 @@ import type {
   RelayDatabaseTerminalAttached,
   RelayManagedDatabase,
 } from "@workspace/contracts"
+import { relayAnswersColorQuery } from "@workspace/contracts"
 import type { ITerminalAddon, Terminal } from "@xterm/headless"
 import { Effect } from "effect"
 
@@ -440,7 +441,8 @@ export class ContainerTerminals {
       viewers: new Map(),
     }
     answerQueries(screen, (reply) => {
-      if (!session.ending) socket.write(reply)
+      // Not into a session that is ending or a connection already closed.
+      if (!session.ending && socket.writable) socket.write(reply)
     })
     const boundary = new SequenceBoundary()
     socket.on("data", (chunk: Buffer) => {
@@ -706,9 +708,12 @@ function serializeScreen(session: TerminalSession) {
   })
 }
 
-// The colors Hearth's terminal shows (foreground, then background), for
-// clients asking whether it is dark or light. It is dark in every theme.
-const TERMINAL_COLORS = ["rgb:ecec/eaea/e9e9", "rgb:0000/0000/0000"]
+// The colors Hearth's terminal shows, by OSC number, for clients asking
+// whether it is dark or light. It is dark in every theme.
+const TERMINAL_COLORS: Record<number, string> = {
+  10: "rgb:ecec/eaea/e9e9",
+  11: "rgb:0000/0000/0000",
+}
 
 // Answers what the client asks the terminal (where the cursor is, what
 // terminal this is, which modes are on, its colors) from the session's own
@@ -716,16 +721,22 @@ const TERMINAL_COLORS = ["rgb:ecec/eaea/e9e9", "rgb:0000/0000/0000"]
 // session, or none; pages leave these queries to the Relay.
 function answerQueries(screen: Terminal, reply: (data: string) => void) {
   screen.onData(reply)
+  // The secondary device attributes reply (`CSI > 0 ; 276 ; 0 c`) reads as
+  // the same query to xterm. A TTY that echoes it back would have the screen
+  // answer its own answer forever, so only the query, with at most one
+  // parameter, is answered.
+  screen.parser.registerCsiHandler(
+    { final: "c", prefix: ">" },
+    (params) => params.length > 1
+  )
   // The headless terminal has no colors of its own to report.
-  for (const [index, ident] of [10, 11].entries()) {
+  for (const ident of [10, 11]) {
     screen.parser.registerOscHandler(ident, (data) => {
-      const slots = data.split(";")
-      // Setting a color changes nothing here.
-      if (!slots.every((slot) => slot === "?")) return false
-      // `OSC 10 ; ? ; ?` asks for the foreground, then the background.
-      slots.forEach((_, slot) => {
-        const color = TERMINAL_COLORS[index + slot]
-        if (color) reply(`\u001b]${ident + slot};${color}\u001b\\`)
+      // Setting a color changes nothing here; queries for colors the Relay
+      // doesn't know are left to the page.
+      if (!relayAnswersColorQuery(ident, data)) return false
+      data.split(";").forEach((_, slot) => {
+        reply(`\u001b]${ident + slot};${TERMINAL_COLORS[ident + slot]}\u001b\\`)
       })
       return true
     })

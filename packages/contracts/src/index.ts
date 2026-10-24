@@ -347,10 +347,24 @@ export const relayDatabaseTerminalAttachedSchema = z.object({
   sessionId: databaseTerminalIdSchema,
   startedAt: z.string().datetime(),
   // The Relay answers the client's queries to the terminal (cursor position,
-  // device attributes, colors), so pages don't. Older Relays leave them to
-  // the pages.
+  // device attributes, the colors `relayAnswersColorQuery` covers), so pages
+  // don't. Older Relays leave them to the pages.
   answersQueries: z.boolean().optional(),
 })
+
+// Whether the Relay answers a color query (`OSC <ident> ; <data>`) on its
+// own. It knows the terminal's foreground (10) and background (11), not the
+// cursor or palette, which follow the page's theme. A query that also asks
+// for those, or sets a color, is left whole to the page. Each slot after the
+// first asks for the next color, as `OSC 10 ; ? ; ?` asks for both.
+export function relayAnswersColorQuery(ident: number, data: string) {
+  const slots = data.split(";")
+  return (
+    (ident === 10 || ident === 11) &&
+    ident + slots.length - 1 <= 11 &&
+    slots.every((slot) => slot === "?")
+  )
+}
 
 export const relayDatabaseTerminalHeartbeatSchema = z
   .object({ attachmentIds: z.array(databaseTerminalIdSchema).max(1_000) })
