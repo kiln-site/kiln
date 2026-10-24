@@ -64,15 +64,44 @@ at least export the recovery kit (see [Recovery](#recovery)).
 
 ### Adding machines
 
-On each other machine:
+In Hearth, open **Relays** and choose **Add Relay**. It shows a command to
+run on the new machine:
 
 ```sh
-curl -fsSL https://kiln.site/install | sh -s -- --node
+curl -fsSL https://kiln.site/install | sh -s -- --node --join '<link>'
 ```
 
-It starts a Relay that publishes ports 4100 and 2022 and prints a pairing
-invitation. In Hearth, open **Relays**, choose **Add Relay**, and paste it.
-Hearth must be able to reach the machine on port 4100.
+The link carries Hearth's address and a secret that lasts 30 minutes
+(**Refresh** in the dialog makes a new one and retires the old). The Relay
+starts, publishes ports 4100 and 2022, and announces itself to Hearth. The
+dialog then shows its fingerprint, which the installer prints too, and asks
+for a name. Hearth must be able to reach the machine on port 4100, and the
+machine must be able to reach Hearth at the address in the link, which can
+be edited in the dialog for an IP or an internal address.
+
+- **Docker** shows the same as a `docker run` command, with the link in
+  `KILN_RELAY_JOIN`.
+- **Pairing link** pairs a Relay that's already running without a join:
+  run `docker exec <container> kiln-relay pair create` on it and paste
+  what it prints.
+- On a machine that already runs a Relay, the install command joins that
+  Relay instead (`kiln-relay pair join '<link>'`), and Hearth reconnects it
+  if it already has it.
+
+Joining needs the Relay's own HTTPS (the default). The link's secret never
+leaves the two machines: the Relay proves it holds it, and Hearth answers
+in kind, so the dialog asks first when Hearth's address is plain HTTP,
+where someone on the network could still get in the way.
+
+#### Installation IDs
+
+A Relay takes the installation ID of the first Hearth that pairs it and
+keeps it. Another Hearth pairing the same Relay, as when two Kiln
+installations share one machine, is asked whether to replace the Relay's ID
+with its own or keep it. The ID decides whose Kiln services and backups the
+Relay finds; it doesn't separate anything else, since every Hearth paired
+with full access can manage the Relay. `KILN_INSTALLATION_ID`, or a Relay
+that installed Kiln itself, fixes the ID.
 
 ## Platform mode
 

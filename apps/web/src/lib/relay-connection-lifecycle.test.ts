@@ -770,6 +770,7 @@ async function setupRelayServer(
   vi.mocked(loadRelayCredentials).mockResolvedValue({
     caCertificatePem: null,
     clientId: "hearth-client",
+    sendInstallationId: true,
     clientPrivateKeyPem: clientKeys.privateKey
       .export({
         format: "pem",

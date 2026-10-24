@@ -14,6 +14,8 @@ import { Effect, Predicate, Schema } from "effect"
 import {
   RelayInventoryLookupSchema,
   backupTaskIdSchema,
+  decodeRelayJoinLink,
+  relayInstallationReplaceInputSchema,
   backupTaskInputSchema,
   redactRelayBackupTask,
   relayConsoleCommandSchema,
@@ -172,7 +174,12 @@ import {
 } from "./platform-backups.js"
 import { FilesystemDriver, type FileRoot } from "./files.js"
 import { HostFiles } from "./host-files.js"
-import { adoptInstallationId, loadInstallationId } from "./installation.js"
+import {
+  adoptInstallationId,
+  installationFixed,
+  loadInstallationId,
+  replaceInstallationId,
+} from "./installation.js"
 import { LifecycleDriver } from "./lifecycle.js"
 import { nodeSnapshot } from "./node.js"
 import { reportRelayMemoryMetrics } from "./relay-memory.js"
@@ -185,10 +192,12 @@ import {
 import {
   decodePairingRequest,
   createPairingInvitation,
+  type InitialPairingResult,
   initializePairing,
   pairHearth,
   renderPairingInvitation,
 } from "./effect/pairing.js"
+import { describeRelayJoinEvent, runRelayJoin } from "./effect/join.js"
 import {
   disposeRelayRuntime,
   forkRelayEffect,
@@ -565,15 +574,19 @@ if (
   await disposeRelayRuntime()
   process.exit(0)
 }
-let initialPairing = await runRelayEffect(
-  "relay.startup.pairing",
-  initializePairing({
-    config,
-    identity: relayIdentity,
-    state: startup.state,
-    tls: startup.tls,
-  })
-)
+// A Relay joining Hearth pairs through the join's own invitation, so it
+// makes and prints none of its own.
+let initialPairing: InitialPairingResult = config.join
+  ? { invitation: null, kind: "none" }
+  : await runRelayEffect(
+      "relay.startup.pairing",
+      initializePairing({
+        config,
+        identity: relayIdentity,
+        state: startup.state,
+        tls: startup.tls,
+      })
+    )
 if (initialPairing.kind === "automatic") {
   console.log(
     "Automatic Relay pairing is pending; the bootstrap token has been redacted."
@@ -897,6 +910,35 @@ async function runRelayCli(arguments_: ReadonlyArray<string>): Promise<void> {
     )
     return
   }
+  if (resource === "pair" && command === "join") {
+    // The installer asks this first, to tell an older Relay from one that
+    // can join.
+    if (arguments_[2] === "--check") {
+      console.log("This Relay can join a Kiln from a join link.")
+      return
+    }
+    const link = decodeRelayJoinLink(
+      requiredCliArgument(arguments_[2], "join link")
+    )
+    if (!link) {
+      throw new Error("That isn't a join link from Hearth's Add Relay dialog")
+    }
+    const outcome = await runRelayEffect(
+      "relay.cli.pair.join",
+      runRelayJoin(
+        {
+          config,
+          identity: relayIdentity,
+          link,
+          state: startup.state,
+          tls: startup.tls,
+        },
+        (event) => console.log(describeRelayJoinEvent(event, link.hearthOrigin))
+      )
+    )
+    if (outcome !== "paired") process.exitCode = 1
+    return
+  }
   if (resource === "pair" && command === "list") {
     const invitations = await runRelayEffect(
       "relay.cli.pair.list",
@@ -986,7 +1028,7 @@ async function runRelayCli(arguments_: ReadonlyArray<string>): Promise<void> {
     return
   }
   throw new Error(
-    "Usage: kiln-relay pair create|list|revoke; kiln-relay hearth list|revoke; or kiln-relay platform-backup inspect|restore <path> [--confirm <installation-id>]"
+    "Usage: kiln-relay pair create|list|revoke; kiln-relay pair join <link>; kiln-relay hearth list|revoke; or kiln-relay platform-backup inspect|restore <path> [--confirm <installation-id>]"
   )
 }
 
@@ -1249,6 +1291,31 @@ const tlsRefreshFiber = forkRelayEffect(
   "relay.tls.refreshLoop",
   tlsRefreshLoop()
 )
+// Started with a join link, the Relay announces itself to that Hearth until
+// someone there confirms it (effect/join.ts).
+const joining = config.join
+const joinFiber = joining
+  ? forkRelayEffect(
+      "relay.join",
+      runRelayJoin(
+        {
+          config,
+          identity: relayIdentity,
+          link: joining,
+          state: startup.state,
+          tls: startup.tls,
+        },
+        (event) =>
+          console.log(describeRelayJoinEvent(event, joining.hearthOrigin))
+      ).pipe(
+        Effect.catch((error) =>
+          Effect.sync(() => {
+            console.error(error.message)
+          })
+        )
+      )
+    )
+  : null
 // The last pass over Kiln's services, reported in snapshots and to Hearth.
 let platformPass: PlatformPassResult = {
   blocked: false,
@@ -1467,6 +1534,7 @@ function shutdownRelay(signal: NodeJS.Signals): Promise<void> {
         capacityMetricsFiber.interruptUnsafe()
         operationPruneFiber.interruptUnsafe()
         tlsRefreshFiber.interruptUnsafe()
+        joinFiber?.interruptUnsafe()
         platformFiber.interruptUnsafe()
         backupFiber.interruptUnsafe()
         provisioningFiber.interruptUnsafe()
@@ -3093,6 +3161,25 @@ async function executeControlRequest(
       )
       return lifecycle.webRouteState(instance.id, routes)
     }
+    case "relay.installation.read":
+      await requireFullAccess(client.id, "read this Relay's installation ID")
+      return runRelayEffect(
+        "relay.installation.read",
+        Effect.gen(function* () {
+          return {
+            fixed: yield* installationFixed(config),
+            installationId: config.installationId,
+          }
+        })
+      )
+    case "relay.installation.replace": {
+      const input = relayInstallationReplaceInputSchema.parse(request.payload)
+      await requireFullAccess(client.id, "replace this Relay's installation ID")
+      return runRelayEffect(
+        "relay.installation.replace",
+        replaceInstallationId(config, startup.state, input)
+      )
+    }
     case "relay.platform.read":
       return runRelayEffect(
         "relay.platform.read",
@@ -3291,6 +3378,17 @@ function clientRecord(clientId: string) {
     "relay.platform.client",
     startup.state.findClientById(clientId)
   )
+}
+
+// A Relay's installation ID is a full-access Hearth's to read or change.
+async function requireFullAccess(
+  clientId: string,
+  purpose: string
+): Promise<void> {
+  const record = await clientRecord(clientId)
+  if (record?.role !== "full_access") {
+    throw new Error(`Only a full-access Hearth can ${purpose}`)
+  }
 }
 
 // Shells in Kiln's containers: only the Hearth this Relay installed.

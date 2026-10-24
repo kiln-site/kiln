@@ -20,7 +20,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@workspace/ui/components/dialog"
-import { Input } from "@workspace/ui/components/input"
 import { showToast } from "@workspace/ui/components/sonner"
 
 import { invalidateRelayRuntimeQueries } from "@/components/relay/relay-actions"
@@ -36,6 +35,14 @@ const invitationTimeFormatter = new Intl.DateTimeFormat("en-US", {
   timeZoneName: "short",
 })
 
+type AddRelayMethod = "install" | "docker" | "link"
+
+const methods: ReadonlyArray<{ label: string; value: AddRelayMethod }> = [
+  { label: "Install", value: "install" },
+  { label: "Docker", value: "docker" },
+  { label: "Pairing link", value: "link" },
+]
+
 export function AddRelayDialog({
   open,
   onOpenChange,
@@ -43,9 +50,59 @@ export function AddRelayDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
+  const [method, setMethod] = React.useState<AddRelayMethod>("install")
+  const close = React.useCallback(() => onOpenChange(false), [onOpenChange])
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-xl">
+        <DialogHeader>
+          <DialogTitle>Add a Relay</DialogTitle>
+          <DialogDescription>
+            {method === "link"
+              ? "Paste the link `kiln-relay pair create` printed on the Relay."
+              : "Run this on the machine, and the Relay connects to Hearth."}
+          </DialogDescription>
+        </DialogHeader>
+        <div
+          role="tablist"
+          aria-label="How to add the Relay"
+          className="flex border-b border-border/70"
+        >
+          {methods.map((option) => (
+            <button
+              key={option.value}
+              role="tab"
+              type="button"
+              aria-selected={method === option.value}
+              className="type-control-sm -mb-px border-b-2 border-transparent px-3 py-2 text-muted-foreground transition-colors hover:text-foreground aria-selected:border-primary aria-selected:text-foreground"
+              onClick={() => setMethod(option.value)}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+        {open ? (
+          method === "link" ? (
+            <PairingLinkForm onDone={close} />
+          ) : (
+            <React.Suspense fallback={null}>
+              <RelayJoinPanel method={method} onDone={close} />
+            </React.Suspense>
+          )
+        ) : null}
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// Loaded with the dialog's first open, beside today's pairing-link form.
+const RelayJoinPanel = React.lazy(async () => ({
+  default: (await import("@/components/relay/relay-join-panel")).RelayJoinPanel,
+}))
+
+function PairingLinkForm({ onDone }: { onDone: () => void }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const formRef = React.useRef<HTMLFormElement>(null)
   const [pending, setPending] = React.useState(false)
   const [feedback, setFeedback] = React.useState<{
     docsHref?: string
@@ -53,19 +110,12 @@ export function AddRelayDialog({
   } | null>(null)
   const [reviewedPairing, setReviewedPairing] = React.useState<{
     pairingUri: string
-    preview: {
-      controlEndpoint: string
-      existingRelayName: string | null
-      expiresAt: number
-      managedTls: boolean
-      mode: "add" | "repair"
-      relayFingerprint: string
-      relayName: string
-    }
+    preview: Awaited<ReturnType<typeof previewRelayPairing>>
   } | null>(null)
+  const [installation, setInstallation] = React.useState<"keep" | "use">("keep")
   const addMutation = useMutation({
     mutationFn: addRelay,
-    onSuccess: async (relay) => {
+    onSuccess: async ({ relay }) => {
       queryClient.setQueryData<Array<PersistedRelay>>(
         queryKeys.relays,
         (current) =>
@@ -82,16 +132,6 @@ export function AddRelayDialog({
     },
   })
 
-  function changeOpen(nextOpen: boolean) {
-    if (!nextOpen && pending) return
-    onOpenChange(nextOpen)
-    if (!nextOpen) {
-      setFeedback(null)
-      setReviewedPairing(null)
-      formRef.current?.reset()
-    }
-  }
-
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setPending(true)
@@ -104,26 +144,29 @@ export function AddRelayDialog({
             const pairingUri = String(form.get("pairingUri") ?? "").trim()
             const preview = await previewRelayPairing({ data: { pairingUri } })
             setReviewedPairing({ pairingUri, preview })
+            // A Relay without an ID takes this Kiln's; one with another
+            // keeps it unless someone chooses otherwise.
+            setInstallation(
+              preview.installation?.id &&
+                preview.installation.id !== preview.hearthInstallationId
+                ? "keep"
+                : "use"
+            )
             return
           }
-          const relay = await addMutation.mutateAsync({
-            data: { pairingUri: reviewedPairing.pairingUri },
+          const { installationWarning, relay } = await addMutation.mutateAsync({
+            data: { installation, pairingUri: reviewedPairing.pairingUri },
           })
           const repaired = reviewedPairing.preview.mode === "repair"
           showToast({
-            type: "success",
+            type: installationWarning ? "warning" : "success",
             message: repaired
               ? `${relay.name} repaired`
               : `${relay.name} paired`,
-            description: repaired
-              ? "The Relay connection was repaired without replacing its Hearth data."
-              : "The Relay is now available to Hearth.",
+            description: installationWarning ?? undefined,
             duration: 4_000,
           })
-          onOpenChange(false)
-          setFeedback(null)
-          setReviewedPairing(null)
-          formRef.current?.reset()
+          onDone()
           // A repaired Relay keeps its place; a new one opens its Info page.
           if (!repaired) {
             await navigate({
@@ -142,101 +185,97 @@ export function AddRelayDialog({
     )
   }
 
+  const preview = reviewedPairing?.preview
   return (
-    <Dialog open={open} onOpenChange={changeOpen}>
-      <DialogContent className="sm:max-w-xl">
-        <DialogHeader>
-          <p className="type-technical-label text-primary-ink">
-            {reviewedPairing?.preview.mode === "repair"
-              ? "Existing connection"
-              : "New connection"}
-          </p>
-          <DialogTitle>
-            {reviewedPairing?.preview.mode === "repair"
-              ? "Repair Relay connection"
-              : "Add a Relay"}
-          </DialogTitle>
-          <DialogDescription>
-            {reviewedPairing?.preview.mode === "repair"
-              ? "Verify the Relay identity before authorizing it again."
-              : "Paste the one-time pairing URI printed by Relay, then verify its identity before connecting."}
-          </DialogDescription>
-        </DialogHeader>
+    <form className="space-y-4" onSubmit={(event) => void submit(event)}>
+      {preview ? (
+        <>
+          <PairingReview
+            pairing={preview}
+            onBack={() => {
+              setFeedback(null)
+              setReviewedPairing(null)
+            }}
+          />
+          <PairingInstallation
+            choice={installation}
+            preview={preview}
+            onChange={setInstallation}
+          />
+        </>
+      ) : (
+        <Field label="Pairing link" htmlFor="relay-pairing-uri">
+          <textarea
+            id="relay-pairing-uri"
+            name="pairingUri"
+            className="type-code min-h-32 w-full resize-y rounded-md border border-input bg-background/35 px-3 py-2 shadow-xs outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
+            placeholder="kiln-relay://pair/v1?payload=…"
+            autoCapitalize="none"
+            autoComplete="off"
+            spellCheck={false}
+            required
+          />
+        </Field>
+      )}
 
-        <form
-          ref={formRef}
-          className="space-y-4"
-          onSubmit={(event) => void submit(event)}
-        >
-          {reviewedPairing ? (
-            <PairingReview
-              pairing={reviewedPairing.preview}
-              onBack={() => {
-                setFeedback(null)
-                setReviewedPairing(null)
-              }}
-            />
-          ) : (
-            <>
-              <Field
-                label="Create a pairing URI"
-                htmlFor="relay-pairing-command"
-              >
-                <Input
-                  id="relay-pairing-command"
-                  value="docker exec <container-id> kiln-relay pair create"
-                  className="type-meta font-mono"
-                  readOnly
-                />
-                <p className="type-meta text-muted-foreground">
-                  Run this against your Relay container, then paste the returned
-                  URI below.
-                </p>
-              </Field>
+      {feedback ? (
+        <DialogFeedback
+          message={feedback.message}
+          docsHref={feedback.docsHref}
+        />
+      ) : null}
 
-              <Field label="One-time pairing URI" htmlFor="relay-pairing-uri">
-                <textarea
-                  id="relay-pairing-uri"
-                  name="pairingUri"
-                  className="type-code min-h-32 w-full resize-y rounded-md border border-input bg-background/35 px-3 py-2 shadow-xs outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
-                  placeholder="kiln-relay://pair/v1?payload=…"
-                  autoCapitalize="none"
-                  autoComplete="off"
-                  spellCheck={false}
-                  required
-                />
-              </Field>
-            </>
-          )}
+      <DialogFooter>
+        <Button type="submit" disabled={pending}>
+          {pending ? <LoaderCircle className="animate-spin" /> : <Check />}
+          {preview?.mode === "repair"
+            ? "Repair connection"
+            : preview
+              ? "Confirm and pair"
+              : "Review pairing"}
+        </Button>
+      </DialogFooter>
+    </form>
+  )
+}
 
-          {feedback ? (
-            <DialogFeedback
-              message={feedback.message}
-              docsHref={feedback.docsHref}
-            />
-          ) : null}
-
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={pending}
-              onClick={() => changeOpen(false)}
-            >
-              Cancel
-            </Button>
-            <Button type="submit" disabled={pending}>
-              {pending ? <LoaderCircle className="animate-spin" /> : <Check />}
-              {reviewedPairing?.preview.mode === "repair"
-                ? "Repair connection"
-                : reviewedPairing
-                  ? "Confirm and pair"
-                  : "Review pairing"}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+// What happens to the Relay's installation ID. An older Relay doesn't say
+// what it has, and replaces it with any it's sent.
+function PairingInstallation({
+  choice,
+  onChange,
+  preview,
+}: {
+  choice: "keep" | "use"
+  onChange: (choice: "keep" | "use") => void
+  preview: Awaited<ReturnType<typeof previewRelayPairing>>
+}) {
+  if (!preview.hearthInstallationId) return null
+  if (!preview.installation) {
+    return (
+      <label className="type-meta flex cursor-pointer items-start gap-2 text-muted-foreground">
+        <input
+          type="checkbox"
+          className="mt-0.5 accent-primary"
+          checked={choice === "use"}
+          onChange={(event) =>
+            onChange(event.currentTarget.checked ? "use" : "keep")
+          }
+        />
+        Give this Relay this Kiln's installation ID, replacing any it has
+      </label>
+    )
+  }
+  const current = preview.installation.id
+  if (current === null || current === preview.hearthInstallationId) return null
+  return (
+    <InstallationChoice
+      choice={choice}
+      disabled={false}
+      fixed={preview.installation.fixed || !preview.installation.replace}
+      relayInstallationId={current}
+      onChange={onChange}
+    />
   )
 }
 
@@ -372,5 +411,70 @@ export function Field({
       </label>
       {children}
     </div>
+  )
+}
+
+/** Keep the Relay's installation ID, or give it this Kiln's. */
+export function InstallationChoice({
+  choice,
+  disabled,
+  fixed,
+  onChange,
+  relayInstallationId,
+}: {
+  choice: "keep" | "use"
+  disabled: boolean
+  fixed: boolean
+  onChange: (choice: "keep" | "use") => void
+  relayInstallationId: string
+}) {
+  if (fixed) {
+    return (
+      <p className="type-meta text-muted-foreground">
+        This Relay belongs to another Kiln installation,{" "}
+        <span className="font-mono break-all">{relayInstallationId}</span>,
+        which it keeps. Every Hearth paired with full access can manage it.
+      </p>
+    )
+  }
+  return (
+    <fieldset className="space-y-2" disabled={disabled}>
+      <legend className="type-label text-muted-foreground">
+        Installation ID
+      </legend>
+      {(
+        [
+          [
+            "keep",
+            <>
+              Keep{" "}
+              <span className="truncate font-mono text-xs">
+                {relayInstallationId}
+              </span>
+            </>,
+          ],
+          ["use", "Use this Kiln's"],
+        ] as const
+      ).map(([value, label]) => (
+        <label
+          key={value}
+          className="flex min-w-0 cursor-pointer items-center gap-2 text-sm"
+        >
+          <input
+            type="radio"
+            name="relay-installation"
+            className="accent-primary"
+            checked={choice === value}
+            onChange={() => onChange(value)}
+          />
+          {label}
+        </label>
+      ))}
+      <p className="type-meta text-muted-foreground">
+        It belongs to another Kiln installation. Its ID decides whose Kiln
+        services and backups it finds; every Hearth paired with full access can
+        manage it either way.
+      </p>
+    </fieldset>
   )
 }

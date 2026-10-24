@@ -49,6 +49,7 @@ import {
   relayPlatformV2Feature,
   relayPlatformDatabaseV1Feature,
   relayDatabaseDumpFilesV1Feature,
+  relayInstallationV1Feature,
   relayVolumesV1Feature,
   relayDatabaseProvisioningV1Feature,
   relayAppProvisioningV1Feature,
@@ -99,6 +100,7 @@ import {
 } from "./operation-lanes.js"
 import type { RelayIdentity } from "./effect/identity.js"
 import { countRelayRefusal, type ControlCapacity } from "./relay-capacity.js"
+import { InstallationReplaceError } from "./installation.js"
 import type {
   RelayClientGrant,
   RelayOperationRecord,
@@ -1183,6 +1185,7 @@ function authenticateSocket(
           relayPlatformV2Feature,
           relayPlatformDatabaseV1Feature,
           relayDatabaseDumpFilesV1Feature,
+          relayInstallationV1Feature,
         ],
         protocol: relayControlProtocol,
         relayBuild: relayBuildLabel(),
@@ -1561,6 +1564,10 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     // Hearth's own database holds everything Hearth knows.
     case "relay.platform.database.read":
     case "relay.platform.database.write":
+      return "relay.update"
+    // Only full access, which the handler checks too.
+    case "relay.installation.read":
+    case "relay.installation.replace":
       return "relay.update"
     case "relay.clients.update":
       return "relay.clients.update"
@@ -2026,6 +2033,9 @@ function controlFailureFor(
   }
   if (cause instanceof RelayNotFoundError) {
     return { code: "not_found", message: cause.message, retryable: false }
+  }
+  if (cause instanceof InstallationReplaceError) {
+    return { code: cause.code, message: cause.message, retryable: false }
   }
   if (cause instanceof LaneRejectedError && cause.reason === "busy") {
     return {

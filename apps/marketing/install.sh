@@ -3,6 +3,7 @@
 #
 #   curl -fsSL https://kiln.site/install | sh
 #   curl -fsSL https://kiln.site/install | sh -s -- --node
+#   curl -fsSL https://kiln.site/install | sh -s -- --node --join '<link>'
 #
 # kiln.site serves this file at /install (apps/marketing/src/routes/install.ts),
 # so it's live once the marketing site deploys from main.
@@ -10,7 +11,9 @@
 # It starts one Relay in platform mode, which installs Hearth, its MySQL
 # database, and its cache, pairs with that Hearth, and keeps them running.
 # With --node it starts a plain Relay instead, to add this machine to an
-# existing Kiln. Run it again to see an installation's status.
+# existing Kiln; with the --join link from Hearth's Add Relay dialog, that
+# Relay connects to Hearth by itself. Run it again to see an installation's
+# status.
 #
 # The terminal shows one line per step. Everything each step ran and printed
 # goes to the install log (~/kiln-install.log), for when something fails.
@@ -31,6 +34,7 @@ mode="platform"
 url=""
 port="3000"
 relay_host=""
+join=""
 game_host=""
 image=""
 hearth_image=""
@@ -69,6 +73,8 @@ Usage: curl -fsSL https://kiln.site/install | sh -s -- [options]
                      Relay and print the invitation to pair it with
   --relay-host HOST  With --node: the address Kiln reaches this Relay at
                      (default: this machine's public IP)
+  --join LINK        Join the Kiln whose Add Relay dialog gave this link,
+                     instead of printing an invitation (implies --node)
   --skip-docker-install
                      Don't install Docker if it's missing; stop instead
   -y, --yes          Don't ask; use the defaults for anything not given,
@@ -88,6 +94,7 @@ while [ "$#" -gt 0 ]; do
     --port) port="${2:?--port needs a value}"; shift 2 ;;
     --game-host) game_host="${2:?--game-host needs a value}"; shift 2 ;;
     --relay-host) relay_host="${2:?--relay-host needs a value}"; shift 2 ;;
+    --join) join="${2:?--join needs a value}"; mode="node"; shift 2 ;;
     --image) image="${2:?--image needs a value}"; shift 2 ;;
     --hearth-image) hearth_image="${2:?--hearth-image needs a value}"; shift 2 ;;
     --bind) bind_address="${2:?--bind needs a value}"; shift 2 ;;
@@ -607,6 +614,7 @@ start_node_relay() {
     --volume "$volume:/data" \
     --publish 4100:4100 --publish "$sftp_port:2022" \
     --env KILN_RELAY_HOST="$relay_host" \
+    ${join:+--env KILN_RELAY_JOIN="$join"} \
     ${namespace:+--env KILN_RELAY_RESOURCE_NAMESPACE="$namespace"} \
     ${game_host:+--env KILN_RELAY_GAME_HOST="$game_host"} \
     "$image"
@@ -619,6 +627,29 @@ start_node_relay() {
     fi
     sleep 2
   done
+}
+
+# Follows a joining Relay's log until it paired with Hearth, or the join
+# ended. The link itself never shows: the Relay doesn't print it.
+wait_joined() {
+  printed=0
+  waited=0
+  while [ "$waited" -lt 1900 ]; do
+    lines=$(dk logs "$container" 2>&1 |
+      grep -E "Joining the Kiln|Waiting for someone|Hearth's address is plain|Paired with Hearth|join expired|already joined with this link|Joining needs" || true)
+    count=$(printf '%s' "$lines" | grep -c '' || true)
+    if [ "$count" -gt "$printed" ]; then
+      printf '%s\n' "$lines" | sed -n "$((printed + 1)),\$p" | sed 's/^/  /'
+      printed=$count
+    fi
+    case "$lines" in
+      *"Paired with Hearth"*) return 0 ;;
+      *"join expired"* | *"already joined with this link"* | *"Joining needs"*) return 1 ;;
+    esac
+    sleep 3
+    waited=$((waited + 3))
+  done
+  return 1
 }
 
 # Whether a domain resolves to this machine's address.
@@ -742,6 +773,17 @@ log "public address: $address"
 
 # Already here: say so, and show where it's at.
 if docker_reachable && dk container inspect "$container" >/dev/null 2>&1; then
+  if [ -n "$join" ]; then
+    [ "$(dk inspect --format '{{.State.Running}}' "$container" 2>/dev/null)" = "true" ] ||
+      fail "A Relay is installed here but stopped. Start it with \`docker start $container\`, then run this again."
+    dk exec "$container" kiln-relay pair join --check >/dev/null 2>&1 ||
+      fail "This Relay is older than joining needs. Update it, or pair it by hand: run \`docker exec $container kiln-relay pair create\` and paste the link into Hearth's Pairing link tab."
+    say "  A Relay is already running here. Joining it to that Kiln:"
+    say ""
+    dk exec "$container" kiln-relay pair join "$join" 2>>"$log_file" | sed 's/^/  /'
+    say ""
+    exit 0
+  fi
   if [ "$mode" = "node" ]; then
     say "  A Relay is already running here. A new invitation to pair it"
     say "  (it expires in 15 minutes):"
@@ -785,6 +827,19 @@ fi
 step "Checking Docker" check_docker
 step_progress=pull_progress
 step "Downloading Kiln" pull_relay
+
+if [ "$mode" = "node" ] && [ -n "$join" ]; then
+  step "Starting the Relay" start_node_relay
+  say ""
+  say "  ${green}Ready in $(duration $(($(now) - started_at))).$reset Confirm it in Hearth's Add Relay"
+  say "  dialog, where the same fingerprint shows:"
+  say ""
+  wait_joined || fail "The Relay didn't join. Its log says why: docker logs $container"
+  say ""
+  say "  ${dim}Install log: $log_file$reset"
+  say ""
+  exit 0
+fi
 
 if [ "$mode" = "node" ]; then
   step "Starting the Relay" start_node_relay

@@ -60,6 +60,12 @@ export function kilnLegalUrls(): KilnLegalUrls {
   return { privacy: notice.href, terms: notice.href }
 }
 
+/** Kiln's install script, from KILN_MARKETING_URL's site or Kiln's own. */
+export function kilnInstallScriptUrl(): string {
+  const configured = webUrl(process.env.KILN_MARKETING_URL)
+  return `${configured ? configured.href.replace(/\/+$/u, "") : "https://kiln.site"}/install`
+}
+
 // An http or https address, so a link built from it can't run script.
 function webUrl(value: string | undefined): URL | null {
   const trimmed = value?.trim()

@@ -81,6 +81,10 @@ export const relayPlatformDatabaseV1Feature = "relay-platform-database-v1"
 // uploaded, which each import names for itself (`import-<random>`).
 export const relayDatabaseDumpFilesV1Feature = "database-dump-files-v1"
 export const relayDatabaseDumpExportFile = "export"
+// Reads and replaces the Relay's Kiln installation ID
+// (`relay.installation.read`, `relay.installation.replace`). Relays with it
+// adopt an ID from Hearth's authentication only when they have none.
+export const relayInstallationV1Feature = "relay-installation-v1"
 export const relayBrowserAuthorizationReviseMaxItems = 256
 
 export const relayControlOperations = [
@@ -135,6 +139,8 @@ export const relayControlOperations = [
   "relay.platform.action",
   "relay.platform.database.read",
   "relay.platform.database.write",
+  "relay.installation.read",
+  "relay.installation.replace",
   "browser.authorization.revise",
   "brick.catalog",
   "brick.recipe",
@@ -255,6 +261,7 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "relay.platform.terminal.attach",
   "relay.platform.terminal.restart",
   "relay.platform.database.write",
+  "relay.installation.replace",
   "instance.create",
   "instance.provision.prepare",
   "instance.provision.claim",
@@ -337,6 +344,7 @@ export function relayControlOperationChanges(
     case "relay.pairing.list":
     case "relay.clients.list":
     case "relay.platform.read":
+    case "relay.installation.read":
     case "relay.platform.logs":
     case "relay.platform.database.read":
     case "brick.catalog":
@@ -414,6 +422,7 @@ export function relayControlOperationChanges(
     case "relay.clients.revoke":
     case "relay.platform.action":
     case "relay.platform.database.write":
+    case "relay.installation.replace":
     case "browser.authorization.revise":
     case "database.create":
     case "database.provision.prepare":

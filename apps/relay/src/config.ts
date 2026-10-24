@@ -9,9 +9,11 @@ import type {
   RelayInstancePortAllocation,
   RelayInstancePortProtocol,
   RelayInstanceTailscale,
+  RelayJoinLink,
   ResourceLimits,
 } from "@workspace/contracts"
 import {
+  decodeRelayJoinLink,
   isKilnInstallationId,
   kilnGitRepositoryRawUrl,
   resolveKilnGitRepository,
@@ -110,6 +112,9 @@ export interface RelayConfig {
   brickCatalogUrl: string
   bootstrapToken: string | null
   browserOrigin: string
+  // From KILN_RELAY_JOIN: the join link from Hearth's Add Relay dialog this
+  // Relay pairs with Hearth by (effect/join.ts). It holds a secret.
+  join: RelayJoinLink | null
   browserLimits: {
     fileReplayEntries: number
     outboxBytes: number
@@ -288,6 +293,7 @@ export function loadConfig(
         ? legacyFileCatalogUrl.href
         : kilnGitRepositoryRawUrl(gitRepository, "apps/bricks/catalog.yml"),
     bootstrapToken: bootstrapToken(environment),
+    join: joinLink(environment),
     browserOrigin:
       proxyMode === "traefik"
         ? `https://${formatUrlHost(advertisedHost)}`
@@ -715,6 +721,18 @@ async function discoverPublicIp(): Promise<string> {
   const address = addresses[0]
   if (!address) throw new Error("Public DNS returned no address")
   return address
+}
+
+function joinLink(environment: NodeJS.ProcessEnv): RelayJoinLink | null {
+  const value = environment.KILN_RELAY_JOIN?.trim()
+  if (!value) return null
+  const link = decodeRelayJoinLink(value)
+  if (!link) {
+    throw new Error(
+      "KILN_RELAY_JOIN must be the join link from Hearth's Add Relay dialog"
+    )
+  }
+  return link
 }
 
 function bootstrapToken(environment: NodeJS.ProcessEnv): string | null {

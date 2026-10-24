@@ -70,7 +70,7 @@ import {
 } from "@/effect/runtime"
 import { ensuringPromise, forkPromise, promiseEffect } from "@/effect/promise"
 import { hearthContainerClaim } from "@/lib/hearth-container"
-import type { RelayCredentials } from "@/lib/relay-registry"
+import type { RelayConnectionCredentials } from "@/lib/relay-registry"
 import { resolveSftpAuthorization } from "@/lib/sftp-authorization"
 import { relayControlFailureError } from "@/lib/relay-control-errors"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
@@ -149,7 +149,10 @@ export async function relayRpc(
     ? relayControlDeadlineMs(operation)
     : 10_000,
   subject?: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  // A change's operation ID, when the caller keeps it to ask how the
+  // change went (`operation.get`) after losing its answer.
+  knownOperationId?: string
 ): Promise<unknown> {
   const changes = relayControlOperationChanges(operation)
   if (
@@ -158,7 +161,7 @@ export async function relayRpc(
   ) {
     throw relayPausedError()
   }
-  const operationId = changes ? randomUUID() : undefined
+  const operationId = changes ? (knownOperationId ?? randomUUID()) : undefined
   const audit =
     operationId !== undefined && subject !== undefined
       ? auditChange((hearthAudit) =>
@@ -473,7 +476,7 @@ class RelayConnection {
   #attempt = 0
   #closed = false
   #connecting: Fiber.Fiber<void, unknown> | null = null
-  #credentials: RelayCredentials | null = null
+  #credentials: RelayConnectionCredentials | null = null
   #pending = new Map<string, PendingRequest>()
   // Changes whose connection dropped before they answered, by operation ID.
   // They're settled by asking the Relay how each went once it's back.
@@ -1313,8 +1316,12 @@ class RelayConnection {
     ) {
       throw new Error("Relay identity challenge could not be verified")
     }
-    // Relays save it, so the whole installation shares Hearth's ID.
-    const installationId = loadedKilnInstallationId()
+    // A Relay without an installation ID saves Hearth's, so the whole
+    // installation shares it. Not to one where someone chose to keep the
+    // ID it has, or before a join's choice is applied.
+    const installationId = credentials.sendInstallationId
+      ? loadedKilnInstallationId()
+      : null
     const hearthContainer = hearthContainerClaim(
       challenge,
       credentials.clientId
