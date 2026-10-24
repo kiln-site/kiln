@@ -4,7 +4,6 @@ import { useNavigate } from "@tanstack/react-router"
 import { encodeRelayJoinLink } from "@workspace/contracts"
 import {
   Check,
-  ChevronRight,
   CircleAlert,
   Copy,
   Fingerprint,
@@ -37,7 +36,6 @@ import {
 
 type OpenedJoin = Awaited<ReturnType<typeof openRelayJoin>>
 type JoinView = Awaited<ReturnType<typeof getRelayJoin>>
-export type JoinMethod = "install" | "docker"
 
 const POLL_MS = 2_000
 
@@ -46,12 +44,10 @@ const relayJoinQueryKey = ["relay-join"] as const
 
 export function RelayJoinPanel({
   joinId,
-  method,
   onDone,
 }: {
   // The join the installer's confirmation link names.
   joinId?: string
-  method: JoinMethod
   onDone: () => void
 }) {
   const queryClient = useQueryClient()
@@ -111,7 +107,6 @@ export function RelayJoinPanel({
     <JoinCommand
       join={join}
       expired={view.state !== "waiting" || view.expiresAt <= Date.now()}
-      method={method}
       refreshError={refresh.error?.message ?? null}
       refreshing={refresh.isPending}
       onRefresh={() => refresh.mutate()}
@@ -127,37 +122,32 @@ function polling(state: JoinView["state"] | undefined): boolean {
 function JoinCommand({
   expired,
   join,
-  method,
   onRefresh,
   refreshError,
   refreshing,
 }: {
   expired: boolean
   join: OpenedJoin
-  method: JoinMethod
   onRefresh: () => void
   refreshError: string | null
   refreshing: boolean
 }) {
-  const [hearthOrigin, setHearthOrigin] = React.useState(join.hearthOrigin)
-  const [relayHost, setRelayHost] = React.useState("")
   const [insecureAccepted, setInsecureAccepted] = React.useState(false)
-  const origin = parsedOrigin(hearthOrigin)
-  const link =
-    join.secret && origin
-      ? encodeRelayJoinLink({ hearthOrigin: origin, secret: join.secret })
-      : null
-  const command = link
-    ? method === "install"
-      ? installCommand(join, link, relayHost.trim())
-      : dockerCommand(join, link, relayHost.trim())
+  const command = join.secret
+    ? installCommand(
+        join,
+        encodeRelayJoinLink({
+          hearthOrigin: join.hearthOrigin,
+          secret: join.secret,
+        })
+      )
     : null
   // A plain-HTTP address is asked about before the command shows.
-  const insecure = origin?.startsWith("http:") === true && !insecureAccepted
+  const insecure = join.hearthOrigin.startsWith("http:") && !insecureAccepted
 
   return (
     <div className="min-w-0 space-y-3">
-      {expired ? (
+      {expired || !command ? (
         <div className="flex items-center justify-between gap-3 border border-border/70 bg-background/35 px-3 py-2.5">
           <p className="type-meta text-muted-foreground">
             This command expired.
@@ -167,8 +157,6 @@ function JoinCommand({
             New command
           </Button>
         </div>
-      ) : !command ? (
-        <DialogFeedback message="Hearth's address isn't a web address." />
       ) : insecure ? (
         <div className="flex items-center gap-3 border border-amber-400/25 bg-amber-400/8 px-3 py-2.5">
           <CircleAlert className="size-3.5 shrink-0 text-amber-200 light:text-amber-800" />
@@ -207,80 +195,23 @@ function JoinCommand({
         </div>
       )}
 
-      <details className="group">
-        <summary className="type-meta flex cursor-pointer list-none items-center gap-1 text-muted-foreground hover:text-foreground">
-          <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" />
-          Addresses
-        </summary>
-        <div className="mt-3 grid gap-3 sm:grid-cols-2">
-          <Field label="Hearth" htmlFor="relay-join-hearth">
-            <Input
-              id="relay-join-hearth"
-              className="type-meta font-mono"
-              value={hearthOrigin}
-              spellCheck={false}
-              onChange={(event) => setHearthOrigin(event.currentTarget.value)}
-            />
-          </Field>
-          <Field label="This machine" htmlFor="relay-join-host">
-            <Input
-              id="relay-join-host"
-              className="type-meta font-mono"
-              placeholder={method === "install" ? "Its public IP" : "Required"}
-              value={relayHost}
-              spellCheck={false}
-              onChange={(event) => setRelayHost(event.currentTarget.value)}
-            />
-          </Field>
-        </div>
-      </details>
-
       {refreshError ? <DialogFeedback message={refreshError} /> : null}
     </div>
   )
 }
 
-function installCommand(join: OpenedJoin, link: string, relayHost: string) {
+function installCommand(join: OpenedJoin, link: string) {
   return [
     `curl -fsSL ${join.installScript} | sh -s --`,
     join.nightly ? "--nightly" : null,
-    relayHost ? `--relay-host ${shellQuote(relayHost)}` : null,
     `--join ${shellQuote(link)}`,
   ]
     .filter(Boolean)
     .join(" ")
 }
 
-function dockerCommand(join: OpenedJoin, link: string, relayHost: string) {
-  return [
-    "docker run -d --name kiln-relay --restart unless-stopped",
-    "-v /var/run/docker.sock:/var/run/docker.sock -v kiln-relay-data:/data",
-    "-p 4100:4100 -p 2022:2022",
-    `-e KILN_RELAY_HOST=${shellQuote(relayHost || "<this machine's address>")}`,
-    `-e KILN_RELAY_JOIN=${shellQuote(link)}`,
-    join.relayImage,
-  ].join(" ")
-}
-
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`
-}
-
-function parsedOrigin(value: string): string | null {
-  const trimmed = value.trim().replace(/\/+$/u, "")
-  const candidate = /^https?:\/\//u.test(trimmed)
-    ? trimmed
-    : `https://${trimmed}`
-  if (!URL.canParse(candidate)) return null
-  const url = new URL(candidate)
-  return (url.protocol === "https:" || url.protocol === "http:") &&
-    !url.username &&
-    !url.password &&
-    url.pathname === "/" &&
-    !url.search &&
-    !url.hash
-    ? url.origin
-    : null
 }
 
 function Countdown({ expiresAt }: { expiresAt: number }) {

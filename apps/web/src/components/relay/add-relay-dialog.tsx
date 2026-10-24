@@ -35,11 +35,10 @@ const invitationTimeFormatter = new Intl.DateTimeFormat("en-US", {
   timeZoneName: "short",
 })
 
-type AddRelayMethod = "install" | "docker" | "link"
+type AddRelayMethod = "install" | "link"
 
 const methods: ReadonlyArray<{ label: string; value: AddRelayMethod }> = [
   { label: "Install", value: "install" },
-  { label: "Docker", value: "docker" },
   { label: "Pairing link", value: "link" },
 ]
 
@@ -89,7 +88,7 @@ export function AddRelayDialog({
             <PairingLinkForm onDone={close} />
           ) : (
             <React.Suspense fallback={null}>
-              <RelayJoinPanel joinId={joinId} method={method} onDone={close} />
+              <RelayJoinPanel joinId={joinId} onDone={close} />
             </React.Suspense>
           )
         ) : null}

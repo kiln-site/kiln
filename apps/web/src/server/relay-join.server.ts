@@ -12,7 +12,6 @@ import { BlockList, isIP } from "node:net"
 
 import {
   isKilnNightlyVersion,
-  kilnImageRepository,
   RELAY_JOIN_ID_LABEL,
   RELAY_JOIN_INVITATION_LABEL,
   RELAY_JOIN_LIFETIME_MS,
@@ -34,11 +33,7 @@ import { loadedKilnInstallationId } from "@/effect/installation"
 import { promiseEffect } from "@/effect/promise"
 import { forkAppWorker } from "@/effect/runtime"
 import { databaseTable } from "@/lib/database-config"
-import {
-  kilnGitRepository,
-  kilnInstallScriptUrl,
-  kilnPublicUrl,
-} from "@/lib/environment"
+import { kilnInstallScriptUrl, kilnPublicUrl } from "@/lib/environment"
 import { relayPairingOrigin } from "@/lib/relay-control-endpoint"
 import { relayNameForNewPairing } from "@/lib/relay-names"
 import {
@@ -179,12 +174,11 @@ export interface RelayJoinView {
 
 /** A join with what its command carries, for the person who owns it. */
 export interface OpenedRelayJoin extends RelayJoinView {
-  // Where this Hearth is, which the command names unless someone changes it.
+  // Where this Hearth is, which the command names.
   readonly hearthOrigin: string
   readonly installScript: string
   // Whether this Hearth is a nightly, so the Relay is too.
   readonly nightly: boolean
-  readonly relayImage: string
   // The code the command carries, while it's waiting for its Relay.
   readonly secret: string | null
 }
@@ -306,13 +300,11 @@ const openedJoin = Effect.fnUntraced(function* (row: RelayJoinRow) {
     row.state === "waiting" && row.secret_ciphertext
       ? decryptPrivateKey(row.secret_ciphertext).plaintext
       : null
-  const nightly = isKilnNightlyVersion(import.meta.env.VITE_KILN_VERSION ?? "")
   return {
     ...view,
     hearthOrigin: kilnPublicUrl().origin,
     installScript: kilnInstallScriptUrl(),
-    nightly,
-    relayImage: `${kilnImageRepository("relay", kilnGitRepository())}:${nightly ? "latest-nightly" : "latest"}`,
+    nightly: isKilnNightlyVersion(import.meta.env.VITE_KILN_VERSION ?? ""),
     secret,
   } satisfies OpenedRelayJoin
 })

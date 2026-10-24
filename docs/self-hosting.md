@@ -76,16 +76,22 @@ command** in the dialog makes another and retires the old). The Relay starts,
 publishes ports 4100 and 2022, and announces itself to Hearth. The installer
 then prints a link to confirm it in Hearth, which opens the dialog on that
 Relay, and its fingerprint, which the dialog shows too. Confirming takes an
-optional name; left blank, the Relay gets the next free default name. Hearth
-must be able to reach the machine on port 4100, and the machine must be able
-to reach Hearth at the address in the link. **Addresses** in the dialog
-changes either, for an IP or an internal address.
+optional name; left blank, the Relay gets the next free default name (K100,
+then K101, and so on). Hearth must be able to reach the machine on port 4100
+at its public IP, and the machine must be able to reach Hearth at
+`KILN_URL`. For another address, such as an internal one, add
+`--relay-host <address>` to the command; for another SFTP port, add
+`--sftp-port <port>`. The installer stops before starting anything when a
+port it needs is taken, and names what has it.
 
-- **Docker** shows the same as a `docker run` command, with the link in
-  `KILN_RELAY_JOIN`.
+The install command is the supported way to add a machine: it sets up the
+Relay's container, volume, and settings the way Kiln expects and keeps them
+that way across updates, so a machine set up by hand can drift from what
+Kiln supports.
+
 - **Pairing link** pairs a Relay that's already running without a join:
-  run `docker exec <container> kiln-relay pair create` on it and paste
-  what it prints.
+  run `docker exec kiln-relay kiln-relay pair create` on it and paste what
+  it prints.
 - On a machine that already runs a Relay, the install command joins that
   Relay instead (`kiln-relay pair join '<link>'`), and Hearth reconnects it
   if it already has it.
@@ -248,8 +254,8 @@ Hearth updates from the Updates dialog as with Compose.
 | `stop-hearth`            | Holds Hearth stopped; the database and cache keep running                  |
 | `start-hearth`           | Lets Hearth run again                                                      |
 | `recover --confirm <id>` | Starts an empty database after its volume was lost, holding Hearth stopped |
-| `export-kit`             | Prints the recovery kit                                                     |
-| `import-kit <path>`      | Installs from a recovery kit on a new Relay                                 |
+| `export-kit`             | Prints the recovery kit                                                    |
+| `import-kit <path>`      | Installs from a recovery kit on a new Relay                                |
 | `pair`                   | Prints an invitation for the installed Hearth, such as after a restore     |
 
 Run them with `docker exec kiln-relay kiln-relay platform <command>`. If the
