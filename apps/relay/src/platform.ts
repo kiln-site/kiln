@@ -1207,7 +1207,10 @@ export const provenHearthContainer = Effect.fn("Relay.platform.proveHearth")(
     const container = yield* inspectOptional(
       engine.inspectContainer(claim.containerId)
     )
-    if (container?.Id !== claim.containerId) return null
+    // The Hearth connecting runs in it; a stopped one is somewhere else.
+    if (container?.Id !== claim.containerId || !container.State.Running) {
+      return null
+    }
     const secret = environmentValue(container, "BETTER_AUTH_SECRETS")
     if (!secret) return null
     const expected = createHmac("sha256", secret)

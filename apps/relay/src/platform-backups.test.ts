@@ -42,8 +42,14 @@ const manifest: PlatformBackupManifest = {
 }
 
 // A valid encrypted platform backup of `dump`.
-function platformBundle(dump: string): Buffer {
-  const manifestBytes = Buffer.from(JSON.stringify(manifest), "utf8")
+function platformBundle(
+  dump: string,
+  overrides: Partial<PlatformBackupManifest> = {}
+): Buffer {
+  const manifestBytes = Buffer.from(
+    JSON.stringify({ ...manifest, ...overrides }),
+    "utf8"
+  )
   const salt = Buffer.from("00112233445566778899aabbccddeeff", "hex")
   const initializationVector = Buffer.from("00112233445566778899aabb", "hex")
   // The bundle format pins scrypt with Node's default cost parameters.
@@ -68,6 +74,7 @@ describe("Kiln platform backups", () => {
       KILN_PLATFORM_BACKUP_KEY: recoveryKey,
     })
     fakeDocker.addContainer({
+      env: { MYSQL_DATABASE: "hearth" },
       labels: {
         "io.kiln.installation": "kiln-test",
         "io.kiln.resource": "hearth-database",
@@ -101,6 +108,7 @@ describe("Kiln platform backups", () => {
     })
     onTestFinished(() => fakeDocker.reset())
     fakeDocker.addContainer({
+      env: { MYSQL_DATABASE: "hearth" },
       labels: {
         "io.kiln.installation": "kiln-test",
         "io.kiln.resource": "hearth-database",
@@ -207,29 +215,55 @@ async function coolifyKiln(
       installationId: "kiln-test",
     })
   )
-  const source = join(testDirectory, `coolify-${randomUUID()}.kiln`)
-  await writeFile(source, platformBundle("CREATE TABLE restored (id int);"))
   return {
     dataVolume,
     database,
+    engine,
     harness,
     hearth,
-    restore: () =>
-      restoreEncryptedPlatformBackup(harness.config, source, "kiln-test"),
+    restore: async (manifest: Partial<PlatformBackupManifest> = {}) => {
+      const source = join(testDirectory, `coolify-${randomUUID()}.kiln`)
+      await writeFile(
+        source,
+        platformBundle("CREATE TABLE restored (id int);", {
+          databaseName: "hearth",
+          ...manifest,
+        })
+      )
+      return restoreEncryptedPlatformBackup(harness.config, source, "kiln-test")
+    },
   }
 }
 
 describe("Kiln platform backups deployed by Coolify", () => {
-  it("restores into Hearth's database once Coolify removes Hearth's container", async () => {
+  it("backs up Hearth's database, and restores it once Coolify removes Hearth's container", async () => {
     const kiln = await coolifyKiln()
-    await expect(kiln.restore()).rejects.toThrow("Stop Hearth")
+    kiln.database.sqlDump = "CREATE TABLE kept (id int);"
+    const backup = join(testDirectory, `coolify-${randomUUID()}.kiln`)
+    await createEncryptedPlatformBackup(
+      kiln.harness.config,
+      {
+        backupId: "d".repeat(40),
+        maxBytes: null,
+        target: { id: "kiln-test", kind: "platform" },
+      } as unknown as BackupCreateTaskInput,
+      backup,
+      { completed: 0, total: 0 },
+      new AbortController().signal
+    )
+    await expect(
+      inspectEncryptedPlatformBackup(recoveryKey, backup)
+    ).resolves.toMatchObject({ databaseName: "hearth" })
+    const restore = () =>
+      restoreEncryptedPlatformBackup(kiln.harness.config, backup, "kiln-test")
+    await expect(restore()).rejects.toThrow("Stop Hearth")
 
     // Coolify stops Hearth by removing its container.
     fakeDocker.removeContainer("hearth-1")
-    await kiln.restore()
+    await restore()
 
     expect(kiln.database.executedSql.join("\n")).toContain(
-      "CREATE TABLE restored (id int);"
+      "CREATE TABLE kept (id int);"
     )
   })
 
@@ -314,6 +348,40 @@ describe("Kiln platform backups deployed by Coolify", () => {
       expect(impostor.executedSql).toEqual([])
     }
   )
+
+  it("restores only a backup of the database Hearth uses", async () => {
+    const kiln = await coolifyKiln()
+    fakeDocker.removeContainer("hearth-1")
+
+    // The dump recreates the database it came from by name.
+    await expect(
+      kiln.restore({ databaseName: "coolify_default" })
+    ).rejects.toThrow("holds the database coolify_default")
+    // A backup from before Kiln recorded the name.
+    await expect(kiln.restore({ databaseName: undefined })).rejects.toThrow(
+      "(unrecorded)"
+    )
+
+    expect(kiln.database.executedSql).toEqual([])
+  })
+
+  it("trusts no proof from a stopped container", async () => {
+    const kiln = await coolifyKiln()
+    const stopped = fakeDocker.container("hearth-1")
+    if (stopped) stopped.state.running = false
+
+    await expect(
+      Effect.runPromise(
+        provenHearthContainer(kiln.engine, {
+          containerId: stopped?.id ?? "",
+          proof: createHmac("sha256", "1:hearth-secret")
+            .update("t")
+            .digest("base64url"),
+          transcript: "t",
+        })
+      )
+    ).resolves.toBeNull()
+  })
 
   it("backs up only the database Hearth uses", async () => {
     const kiln = await coolifyKiln({
