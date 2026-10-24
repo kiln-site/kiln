@@ -359,9 +359,9 @@ function JoinReview({
             >
               {holder.name}
             </Link>{" "}
-            is already at {new URL(announcement.controlEndpoint).host}, as when
-            this machine was set up again. Remove it to add this Relay in its
-            place; this updates once it's gone.
+            already uses {new URL(announcement.controlEndpoint).host}, as
+            happens when a machine is set up again. Remove {holder.name} to add
+            this Relay in its place; this updates once it's gone.
           </p>
         </div>
       ) : null}
@@ -369,7 +369,9 @@ function JoinReview({
       {view.state === "needs_review" ? (
         <DialogFeedback message="The Relay's installation ID changed while it was being added. Choose again." />
       ) : null}
-      {view.error ? <DialogFeedback message={view.error} /> : null}
+      {/* Saving it fails while another Relay holds its address, which
+          says why already. */}
+      {view.error && !holder ? <DialogFeedback message={view.error} /> : null}
       {confirm.error ? (
         <DialogFeedback message={confirm.error.message} />
       ) : null}
