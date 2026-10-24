@@ -22,7 +22,7 @@ import {
 } from "@workspace/contracts"
 
 import type { RelayConfig } from "./config.js"
-import { platformTargetContainer, provenHearthRunning } from "./platform.js"
+import { provenDatabaseContainer, provenHearthRunning } from "./platform.js"
 import { relayOwnsLabels } from "./relay-resources.js"
 import {
   DockerEngine,
@@ -389,7 +389,7 @@ async function hearthApplicationIsRunning(
   return (
     (await runningHearthContainers(config, installationId, "hearth")).length >
       0 ||
-    // Any container with its secret: a Docker error fails the restore.
+    // A Docker error fails the restore rather than read as none running.
     (await Effect.runPromise(
       provenHearthRunning(new DockerEngine(config.dockerSocket), config)
     ))
@@ -402,12 +402,9 @@ async function unlabeledDatabaseContainer(
   config: RelayConfig
 ): Promise<string | null> {
   const container = await Effect.runPromise(
-    platformTargetContainer(
-      { config, engine: new DockerEngine(config.dockerSocket) },
-      "database"
-    )
+    provenDatabaseContainer(new DockerEngine(config.dockerSocket), config)
   )
-  return container?.State.Running ? container.Id : null
+  return container?.Id ?? null
 }
 
 function requiredInstallationId(config: RelayConfig, targetId: string): string {

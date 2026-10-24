@@ -1,4 +1,4 @@
-import { createCipheriv, createHmac, scryptSync } from "node:crypto"
+import { createCipheriv, createHmac, randomUUID, scryptSync } from "node:crypto"
 import { existsSync, mkdtempSync, rmSync } from "node:fs"
 import { readdir, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -124,74 +124,6 @@ describe("Kiln platform backups", () => {
     expect(staged.filter((name) => name.endsWith(".dmp.gz"))).toEqual([])
   })
 
-  it("restores into a database Coolify runs, only while Hearth's container is stopped", async () => {
-    const harness = await relayHarness({
-      KILN_INSTALLATION_ID: "kiln-test",
-      KILN_PLATFORM_BACKUP_KEY: recoveryKey,
-    })
-    onTestFinished(() => fakeDocker.reset())
-    const secret = "1:hearth-secret"
-    const hearth = {
-      env: { BETTER_AUTH_SECRETS: secret, DB_HOST: "coolify-mysql" },
-      labels: { "coolify.managed": "true" },
-      networks: ["coolify"],
-      running: true,
-    }
-    fakeDocker.addNetwork({ name: "coolify" })
-    const proving = fakeDocker.addContainer({ ...hearth, name: "hearth-1" })
-    const database = fakeDocker.addContainer({
-      labels: { "coolify.managed": "true" },
-      mounts: [
-        { destination: "/var/lib/mysql", source: "mysql-data", type: "volume" },
-      ],
-      name: "coolify-mysql",
-      networks: ["coolify"],
-      running: true,
-    })
-    // Hearth proves its container as it connects.
-    const engine = new DockerEngine(harness.config.dockerSocket)
-    const proven = await Effect.runPromise(
-      provenHearthContainer(engine, {
-        containerId: proving.id,
-        proof: createHmac("sha256", secret).update("t").digest("base64url"),
-        transcript: "t",
-      })
-    )
-    assert.isNotNull(proven)
-    await Effect.runPromise(
-      adoptProvenHearth(harness.config, harness.state, {
-        ...proven!,
-        installationId: "kiln-test",
-      })
-    )
-    const source = join(testDirectory, "coolify.kiln")
-    await writeFile(source, platformBundle("CREATE TABLE restored (id int);"))
-    const restore = () =>
-      restoreEncryptedPlatformBackup(harness.config, source, "kiln-test")
-
-    await expect(restore()).rejects.toThrow("Stop Hearth")
-
-    // Coolify stops Hearth by removing its container.
-    fakeDocker.removeContainer("hearth-1")
-    await restore()
-    expect(database.executedSql.join("\n")).toContain(
-      "CREATE TABLE restored (id int);"
-    )
-
-    // Started again under a new ID, not yet connected, while another
-    // container of it stays stopped.
-    fakeDocker.addContainer({ ...hearth, name: "hearth-2", running: false })
-    fakeDocker.addContainer({ ...hearth, name: "hearth-3" })
-    database.executedSql.length = 0
-    await expect(restore()).rejects.toThrow("Stop Hearth")
-
-    // When Docker can't list them to say whether one runs.
-    fakeDocker.removeContainer("hearth-3")
-    fakeDocker.failNext({ command: "ps", target: "" }, "Docker is unavailable")
-    await expect(restore()).rejects.toThrow("Docker is unavailable")
-    expect(database.executedSql).toEqual([])
-  })
-
   it("authenticates the manifest and encrypted payload", async () => {
     const source = join(testDirectory, "valid.kiln")
     const bundle = platformBundle("SELECT 1;")
@@ -220,6 +152,187 @@ describe("Kiln platform backups", () => {
     await expect(
       inspectEncryptedPlatformBackup(recoveryKey, source)
     ).rejects.toThrow()
+  })
+})
+
+// Hearth and its MySQL as Coolify deploys them, without Kiln's labels, once
+// Hearth has proven its container to the Relay.
+async function coolifyKiln(
+  options: { databaseEnvironment?: Record<string, string> } = {}
+) {
+  const harness = await relayHarness({
+    KILN_INSTALLATION_ID: "kiln-test",
+    KILN_PLATFORM_BACKUP_KEY: recoveryKey,
+  })
+  onTestFinished(() => fakeDocker.reset())
+  const hearth = {
+    env: {
+      BETTER_AUTH_SECRETS: "1:hearth-secret",
+      DB_HOST: "coolify-mysql",
+      DB_NAME: "hearth",
+    },
+    labels: { "coolify.managed": "true" },
+    networks: ["coolify"],
+    running: true,
+  }
+  const dataVolume = {
+    destination: "/var/lib/mysql",
+    source: "mysql-data",
+    type: "volume" as const,
+  }
+  fakeDocker.addNetwork({ name: "coolify" })
+  const proving = fakeDocker.addContainer({ ...hearth, name: "hearth-1" })
+  const database = fakeDocker.addContainer({
+    env: { MYSQL_DATABASE: "hearth", ...options.databaseEnvironment },
+    labels: { "coolify.managed": "true" },
+    mounts: [dataVolume],
+    name: "coolify-mysql",
+    networks: ["coolify"],
+    running: true,
+  })
+  const engine = new DockerEngine(harness.config.dockerSocket)
+  const proven = await Effect.runPromise(
+    provenHearthContainer(engine, {
+      containerId: proving.id,
+      proof: createHmac("sha256", "1:hearth-secret")
+        .update("t")
+        .digest("base64url"),
+      transcript: "t",
+    })
+  )
+  assert.isNotNull(proven)
+  await Effect.runPromise(
+    adoptProvenHearth(harness.config, harness.state, {
+      ...proven!,
+      installationId: "kiln-test",
+    })
+  )
+  const source = join(testDirectory, `coolify-${randomUUID()}.kiln`)
+  await writeFile(source, platformBundle("CREATE TABLE restored (id int);"))
+  return {
+    dataVolume,
+    database,
+    harness,
+    hearth,
+    restore: () =>
+      restoreEncryptedPlatformBackup(harness.config, source, "kiln-test"),
+  }
+}
+
+describe("Kiln platform backups deployed by Coolify", () => {
+  it("restores into Hearth's database once Coolify removes Hearth's container", async () => {
+    const kiln = await coolifyKiln()
+    await expect(kiln.restore()).rejects.toThrow("Stop Hearth")
+
+    // Coolify stops Hearth by removing its container.
+    fakeDocker.removeContainer("hearth-1")
+    await kiln.restore()
+
+    expect(kiln.database.executedSql.join("\n")).toContain(
+      "CREATE TABLE restored (id int);"
+    )
+  })
+
+  it("refuses while any Hearth that may use the database runs", async () => {
+    const kiln = await coolifyKiln()
+    fakeDocker.removeContainer("hearth-1")
+
+    // Recreated under a new ID, beside a stopped one, before it connects.
+    fakeDocker.addContainer({
+      ...kiln.hearth,
+      name: "hearth-2",
+      running: false,
+    })
+    fakeDocker.addContainer({ ...kiln.hearth, name: "hearth-3" })
+    await expect(kiln.restore()).rejects.toThrow("Stop Hearth")
+    fakeDocker.removeContainer("hearth-3")
+
+    // With a rotated keyring.
+    fakeDocker.addContainer({
+      ...kiln.hearth,
+      env: {
+        ...kiln.hearth.env,
+        BETTER_AUTH_SECRETS: "2:new-secret,1:hearth-secret",
+      },
+      name: "hearth-4",
+    })
+    await expect(kiln.restore()).rejects.toThrow("Stop Hearth")
+    fakeDocker.removeContainer("hearth-4")
+
+    // With all-new secrets, still reaching the database.
+    fakeDocker.addContainer({
+      ...kiln.hearth,
+      env: { ...kiln.hearth.env, BETTER_AUTH_SECRETS: "1:replaced-secret" },
+      name: "hearth-5",
+    })
+    await expect(kiln.restore()).rejects.toThrow("Stop Hearth")
+    fakeDocker.removeContainer("hearth-5")
+
+    // When Docker can't list containers to say whether one runs.
+    fakeDocker.failNext({ command: "ps", target: "" }, "Docker is unavailable")
+    await expect(kiln.restore()).rejects.toThrow("Docker is unavailable")
+
+    expect(kiln.database.executedSql).toEqual([])
+  })
+
+  it.each([
+    ["keeps other data where Hearth's was", "another-data", undefined],
+    ["mounts Hearth's data elsewhere", "another-data", "/old-data"],
+    [
+      "mounts other data inside Hearth's",
+      "mysql-data",
+      "/var/lib/mysql/hearth",
+    ],
+  ])(
+    "won't restore into a container under the database's name that %s",
+    async (_name, source, elsewhere) => {
+      const kiln = await coolifyKiln()
+      // Stopped, not removed: its DB_HOST would name the impostor too.
+      const stopped = fakeDocker.container("hearth-1")
+      if (stopped) stopped.state.running = false
+      fakeDocker.removeContainer("coolify-mysql")
+      const impostor = fakeDocker.addContainer({
+        env: { MYSQL_DATABASE: "hearth" },
+        mounts: [
+          { ...kiln.dataVolume, source },
+          ...(elsewhere
+            ? [
+                {
+                  destination: elsewhere,
+                  source: "mysql-data",
+                  type: "volume" as const,
+                },
+              ]
+            : []),
+        ],
+        name: "coolify-mysql",
+        networks: ["coolify"],
+        running: true,
+      })
+
+      await expect(kiln.restore()).rejects.toThrow("was not found")
+      expect(impostor.executedSql).toEqual([])
+    }
+  )
+
+  it("backs up only the database Hearth uses", async () => {
+    const kiln = await coolifyKiln({
+      databaseEnvironment: { MYSQL_DATABASE: "default" },
+    })
+
+    await expect(
+      createEncryptedPlatformBackup(
+        kiln.harness.config,
+        {
+          backupId: "c".repeat(40),
+          maxBytes: null,
+          target: { id: "kiln-test", kind: "platform" },
+        } as unknown as BackupCreateTaskInput,
+        join(testDirectory, "mismatched.kiln"),
+        { completed: 0, total: 0 },
+        new AbortController().signal
+      )
+    ).rejects.toThrow("created for default")
   })
 })
 

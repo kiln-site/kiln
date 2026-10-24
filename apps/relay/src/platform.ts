@@ -44,6 +44,7 @@ import { createContainer, type ContainerSpec } from "./docker-container-spec.js"
 import {
   type DockerContainerInspect,
   type DockerEngine,
+  type DockerMount,
   type DockerEngineError,
   isDockerNotFound,
 } from "./docker-engine.js"
@@ -1221,7 +1222,8 @@ export const provenHearthContainer = Effect.fn("Relay.platform.proveHearth")(
       cache: provenContainer(beside.get("cache")),
       containerId: container.Id,
       database: provenContainer(beside.get("database")),
-      secretDigest: hearthSecretDigest(secret),
+      databaseName: environmentValue(container, "DB_NAME")?.trim() || null,
+      secretDigests: hearthSecretDigests(secret),
     } satisfies Omit<ProvenHearth, "installationId">
   }
 )
@@ -1240,7 +1242,13 @@ function provenContainer(
   container: DockerContainerInspect | undefined
 ): ProvenContainer | null {
   return container
-    ? { mounts: dataMounts(container), name: containerName(container) }
+    ? {
+        mounts: (container.Mounts ?? []).flatMap((mount) => {
+          const source = mountSource(mount)
+          return source ? [{ destination: mount.Destination, source }] : []
+        }),
+        name: containerName(container),
+      }
     : null
 }
 
@@ -1248,22 +1256,48 @@ function containerName(container: DockerContainerInspect): string {
   return container.Name.replace(/^\//u, "")
 }
 
-function dataMounts(container: DockerContainerInspect): Array<string> {
-  return (container.Mounts ?? [])
-    .flatMap((mount) =>
-      mount.Type === "volume" && mount.Name
-        ? [`volume:${mount.Name}`]
-        : mount.Type === "bind"
-          ? [`bind:${mount.Source}`]
-          : []
-    )
-    .sort((left, right) => left.localeCompare(right))
+function mountSource(mount: DockerMount): string | null {
+  if (mount.Type === "volume" && mount.Name) return `volume:${mount.Name}`
+  return mount.Type === "bind" ? `bind:${mount.Source}` : null
 }
 
-function hearthSecretDigest(secret: string): string {
-  return createHash("sha256")
-    .update(`kiln-hearth-secret\n${secret}`)
-    .digest("hex")
+/**
+ * Whether a container under a recorded name keeps the recorded data where
+ * it was: each recorded volume or folder at the same path, and nothing
+ * mounted inside those paths over it.
+ */
+function holdsRecordedData(
+  container: DockerContainerInspect,
+  recorded: ProvenContainer
+): boolean {
+  const mounts = container.Mounts ?? []
+  return (
+    recorded.mounts.length > 0 &&
+    recorded.mounts.every((saved) =>
+      mounts.some(
+        (mount) =>
+          mount.Destination === saved.destination &&
+          mountSource(mount) === saved.source
+      )
+    ) &&
+    !mounts.some((mount) =>
+      recorded.mounts.some((saved) =>
+        mount.Destination.startsWith(`${saved.destination}/`)
+      )
+    )
+  )
+}
+
+// Each secret in Hearth's keyring, so one still matches after a rotation
+// adds a new secret beside it.
+function hearthSecretDigests(keyring: string): Array<string> {
+  return keyring
+    .split(",")
+    .map((entry) => entry.slice(entry.indexOf(":") + 1).trim())
+    .filter((secret) => secret.length > 0)
+    .map((secret) =>
+      createHash("sha256").update(`kiln-hearth-secret\n${secret}`).digest("hex")
+    )
 }
 
 function environmentValue(
@@ -1277,8 +1311,9 @@ function environmentValue(
 
 /**
  * The proven Hearth, or a running one Coolify recreated with its secret,
- * and the database and cache beside it. With Hearth's container gone, as
- * when Coolify stops it, they're the containers it found when it proved
+ * and the database and cache beside it. A running Hearth's DB_HOST and
+ * CACHE_HOST name them; otherwise, as when Coolify removed Hearth's
+ * container to stop it, they're the containers it found when it proved
  * itself, while they still hold the same data.
  */
 const containersBesideHearth = Effect.fnUntraced(function* (
@@ -1290,20 +1325,21 @@ const containersBesideHearth = Effect.fnUntraced(function* (
   )
   const hearth = saved?.State.Running
     ? saved
-    : ((yield* runningHearths(engine, proven.secretDigest))[0] ?? saved)
-  const found = hearth
+    : ((yield* sameHearths(engine, proven))[0] ?? saved)
+  const found = hearth?.State.Running
     ? yield* servicesBesideHearth(engine, hearth)
-    : new Map<RelayPlatformServiceRole, DockerContainerInspect>()
+    : new Map<RelayPlatformServiceRole, DockerContainerInspect>(
+        hearth ? [["hearth", hearth]] : []
+      )
   for (const [role, recorded] of [
     ["database", proven.database],
     ["cache", proven.cache],
   ] as const) {
-    if (found.has(role) || !recorded || recorded.mounts.length === 0) continue
+    if (found.has(role) || !recorded) continue
     const container = yield* inspectOptional(
       engine.inspectContainer(recorded.name)
     )
-    const mounts = container ? dataMounts(container) : []
-    if (container && recorded.mounts.every((mount) => mounts.includes(mount))) {
+    if (container && holdsRecordedData(container, recorded)) {
       found.set(role, container)
     }
   }
@@ -1335,30 +1371,43 @@ const servicesBesideHearth = Effect.fnUntraced(function* (
 })
 
 /**
- * Every running container with the proven Hearth's BETTER_AUTH_SECRETS: the
+ * Running containers with a secret of the proven Hearth's keyring: the
  * proven one, or one Coolify recreated that hasn't connected yet. Fails
  * when Docker can't list or inspect them, so nothing reads that as none.
  */
-const runningHearths = Effect.fnUntraced(function* (
+const sameHearths = Effect.fnUntraced(function* (
   engine: DockerEngine,
-  secretDigest: string
+  proven: ProvenHearth
 ) {
   const found: Array<DockerContainerInspect> = []
-  for (const listed of yield* engine.listContainers()) {
-    const container = yield* inspectOptional(engine.inspectContainer(listed.Id))
-    const secret =
-      container?.State.Running &&
-      environmentValue(container, "BETTER_AUTH_SECRETS")
-    if (container && secret && hearthSecretDigest(secret) === secretDigest) {
+  for (const container of yield* runningContainers(engine)) {
+    const keyring = environmentValue(container, "BETTER_AUTH_SECRETS")
+    if (
+      keyring &&
+      hearthSecretDigests(keyring).some((digest) =>
+        proven.secretDigests.includes(digest)
+      )
+    ) {
       found.push(container)
     }
   }
   return found
 })
 
+const runningContainers = Effect.fnUntraced(function* (engine: DockerEngine) {
+  const found: Array<DockerContainerInspect> = []
+  for (const listed of yield* engine.listContainers()) {
+    const container = yield* inspectOptional(engine.inspectContainer(listed.Id))
+    if (container?.State.Running) found.push(container)
+  }
+  return found
+})
+
 /**
- * Whether a Hearth of this installation runs where only its proof finds it,
- * for a restore to refuse.
+ * Whether a Hearth may be using Kiln's database where only its proof finds
+ * it, for a restore to refuse: a running container with a secret of the
+ * proven Hearth's keyring, or any running Hearth whose DB_HOST reaches the
+ * database. Fails when Docker can't say.
  */
 export const provenHearthRunning = Effect.fn("Relay.platform.hearthRunning")(
   function* (
@@ -1367,9 +1416,52 @@ export const provenHearthRunning = Effect.fn("Relay.platform.hearthRunning")(
   ) {
     const proven = provenHearth(config)
     if (!proven) return false
-    return (yield* runningHearths(engine, proven.secretDigest)).length > 0
+    if ((yield* sameHearths(engine, proven)).length > 0) return true
+    const database = (yield* containersBesideHearth(engine, proven)).get(
+      "database"
+    )
+    if (!database) return false
+    for (const container of yield* runningContainers(engine)) {
+      const host = environmentValue(container, "DB_HOST")?.trim()
+      if (
+        host &&
+        environmentValue(container, "BETTER_AUTH_SECRETS") &&
+        Object.keys(container.NetworkSettings?.Networks ?? {}).some((network) =>
+          answersTo(database, network, host)
+        )
+      ) {
+        return true
+      }
+    }
+    return false
   }
 )
+
+/**
+ * Kiln's database where only Hearth's proof finds it, while it runs and was
+ * created for the database Hearth uses: Kiln's backups dump and restore
+ * the database a MySQL container was created with.
+ */
+export const provenDatabaseContainer = Effect.fn(
+  "Relay.platform.provenDatabase"
+)(function* (
+  engine: DockerEngine,
+  config: Pick<RelayConfig, "installationId" | "provenHearth">
+) {
+  const proven = provenHearth(config)
+  if (!proven) return null
+  const database = (yield* containersBesideHearth(engine, proven)).get(
+    "database"
+  )
+  if (!database?.State.Running) return null
+  const created = environmentValue(database, "MYSQL_DATABASE")
+  if (!proven.databaseName || created !== proven.databaseName) {
+    return yield* new PlatformError({
+      reason: `Hearth uses the database ${proven.databaseName ?? "(unset)"}, but its MySQL container was created for ${created ?? "none"}. Kiln backs up the database its MySQL container was created with, so set Hearth's DB_NAME to match.`,
+    })
+  }
+  return database
+})
 
 // The container each Hearth's address reached, by Hearth container and
 // address, so reads don't search its networks each time. Each read checks

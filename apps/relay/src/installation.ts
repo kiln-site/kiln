@@ -9,7 +9,9 @@ const INSTALLATION_ID_METADATA_KEY = "installation_id"
 const PROVEN_HEARTH_METADATA_KEY = "proven_hearth"
 
 const ProvenContainerSchema = Schema.Struct({
-  mounts: Schema.Array(Schema.String),
+  mounts: Schema.Array(
+    Schema.Struct({ destination: Schema.String, source: Schema.String })
+  ),
   name: Schema.String,
 })
 
@@ -19,8 +21,9 @@ const decodeProvenHearth = Schema.decodeUnknownOption(
       cache: Schema.NullOr(ProvenContainerSchema),
       containerId: Schema.String,
       database: Schema.NullOr(ProvenContainerSchema),
+      databaseName: Schema.NullOr(Schema.String),
       installationId: Schema.String,
-      secretDigest: Schema.String,
+      secretDigests: Schema.Array(Schema.String),
     })
   )
 )
@@ -85,13 +88,20 @@ export const adoptProvenHearth = Effect.fn("Relay.installation.hearth")(
 
 function provenHearthRecord(hearth: ProvenHearth): string {
   const container = (recorded: ProvenContainer | null) =>
-    recorded && { mounts: recorded.mounts, name: recorded.name }
+    recorded && {
+      mounts: recorded.mounts.map(({ destination, source }) => ({
+        destination,
+        source,
+      })),
+      name: recorded.name,
+    }
   return JSON.stringify({
     cache: container(hearth.cache),
     containerId: hearth.containerId,
     database: container(hearth.database),
+    databaseName: hearth.databaseName,
     installationId: hearth.installationId,
-    secretDigest: hearth.secretDigest,
+    secretDigests: hearth.secretDigests,
   })
 }
 
