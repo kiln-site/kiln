@@ -57,9 +57,11 @@ and checks packages one at a time to leave resources for parallel work. Package
 tasks remain cached by Vite+; use `vp run --filter web typecheck` for Hearth-only
 work. tsrs is experimental and follows TypeScript 7; keep its exact version
 pinned and validate upgrades against the package checks. TypeScript remains
-installed for editor support and declaration builds. `vp check` runs type-aware
-lint rules, with compiler typechecking disabled so compiler diagnostics come
-from tsrs.
+installed for editor support and declaration builds. If tsrs cannot start (for
+example on Windows or Intel macOS), the task falls back to Vite+'s built-in
+typechecker, without formatting or linting. A type error from an available tsrs
+compiler fails the task directly; it never triggers the fallback. Ordinary
+`vp check` still runs type-aware lint rules without a second compiler check.
 
 ## Marketing site
 

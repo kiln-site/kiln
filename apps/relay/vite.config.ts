@@ -87,7 +87,7 @@ export default defineConfig({
         dependsOn: [{ task: "build", from: "dependencies" }],
       },
       typecheck: {
-        command: "tsrs --noEmit --checkers 2",
+        command: "node ../../scripts/typecheck.mjs",
         dependsOn: [{ task: "build", from: "dependencies" }],
       },
     },

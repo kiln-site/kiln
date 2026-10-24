@@ -69,7 +69,7 @@ const config = defineConfig(({ command }) => {
           },
         },
         typecheck: {
-          command: "tsrs --noEmit --checkers 2",
+          command: "node ../../scripts/typecheck.mjs",
           dependsOn: [{ task: "build", from: "dependencies" }],
         },
       },
