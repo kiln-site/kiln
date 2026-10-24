@@ -460,6 +460,81 @@ describe("Relay capability issuance orchestration", () => {
     })
   })
 
+  describe("database dumps", () => {
+    const databaseId = "d".repeat(40)
+    // Alice holds these permissions on the database; `granted` lists them.
+    let granted: Array<string>
+    beforeEach(() => {
+      granted = ["database.dump.export"]
+      for (const feature of [
+        "browser-capability-v2",
+        "browser-lease-renewal-v1",
+        "console-resources-v1",
+        "file-request-replay-v1",
+        "database-dump-files-v1",
+      ]) {
+        fakes.features.add(feature)
+      }
+      fakes.requirePermissions.mockImplementation(
+        (input: {
+          databaseId?: string
+          instanceId?: string
+          permissions: Array<string>
+        }) =>
+          input.databaseId === databaseId &&
+          input.permissions.every((permission) => granted.includes(permission))
+            ? Effect.void
+            : Effect.fail(new Error("Permission denied"))
+      )
+    })
+
+    const issueFiles = (
+      action: "instance.files.download" | "instance.files.upload"
+    ) =>
+      issueFileCapabilityForRequest({
+        action,
+        authenticate: () => Promise.resolve({ sessionId: "session-one", user }),
+        instanceId: `database:${databaseId}`,
+        optInV2: true,
+        path: "export",
+        publicKeyJwk,
+        relayId: "relay-one",
+      })
+
+    it("transfers a database's dumps with its own dump permissions", async () => {
+      const issued = await issueFiles("instance.files.download")
+
+      expect(decodeCapabilityPayload(issued.capability)).toMatchObject({
+        actions: ["database.dump.export"],
+        instanceId: `database:${databaseId}`,
+        operation: "file",
+        resourceKind: "database",
+      })
+      await expect(issueFiles("instance.files.upload")).rejects.toThrow()
+      granted = ["instance.files.read", "instance.files.write"]
+      await expect(issueFiles("instance.files.download")).rejects.toThrow()
+    })
+
+    it("issues dump uploads within the Relay's write lease", async () => {
+      granted = ["database.dump.import"]
+
+      const payload = decodeCapabilityPayload(
+        (await issueFiles("instance.files.upload")).capability
+      )
+
+      expect(payload.actions).toEqual(["database.dump.import"])
+      expect(Number(payload.expiresAt) - Number(payload.issuedAt)).toBe(30_000)
+    })
+
+    it("refuses Relays that keep no dump files", async () => {
+      fakes.features.delete("database-dump-files-v1")
+
+      await expect(issueFiles("instance.files.download")).rejects.toThrow(
+        "Update this Relay to import or export data."
+      )
+    })
+  })
+
   describe("host file capabilities", () => {
     const hostId = "H".repeat(43)
     let granted: string[]

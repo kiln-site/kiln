@@ -3,7 +3,7 @@ import { Schema } from "effect"
 export const relayControlProtocol = "kiln-relay.v1" as const
 // Release compatibility level for response-shape changes. Keep this separate
 // from the WebSocket subprotocol so Hearth can be upgraded before Relay.
-export const relayControlProtocolVersion = 7 as const
+export const relayControlProtocolVersion = 8 as const
 export const relayBrowserProtocol = "kiln-relay-browser.v1" as const
 export const relayBrowserConsoleProtocol = "kiln-relay-browser.v2" as const
 export const relayBrowserConsoleProtocols = [
@@ -75,6 +75,12 @@ export const relayPlatformV2Feature = "relay-platform-v2"
 // The Relay browses and edits Hearth's own database through
 // `relay.platform.database.*`, with the credentials Hearth sends.
 export const relayPlatformDatabaseV1Feature = "relay-platform-database-v1"
+// Database dumps travel as files under the database's file root
+// (`database:<id>`): `database.dump.export` writes `export` there for the
+// browser to download, and `database.dump.import` runs the file the browser
+// uploaded, which each import names for itself (`import-<random>`).
+export const relayDatabaseDumpFilesV1Feature = "database-dump-files-v1"
+export const relayDatabaseDumpExportFile = "export"
 export const relayBrowserAuthorizationReviseMaxItems = 256
 
 export const relayControlOperations = [
@@ -538,11 +544,12 @@ export function relayControlDeadlineMs(
   // Removing a limit recreates the container and waits for it to be ready.
   if (operation === "database.limits.write") return 240_000
   if (operation === "database.credentials.rotate") return 180_000
-  if (operation === "database.dump.export") return 120_000
+  // Dumps take as long as the database's data does.
+  if (operation === "database.dump.export") return 60 * 60_000
   // Docker walks every volume to measure them.
   if (operation === "database.inspect") return 75_000
   if (operation === "database.wipe") return 120_000
-  if (operation === "database.dump.import") return 120_000
+  if (operation === "database.dump.import") return 60 * 60_000
   if (operation === "instance.action") return 180_000
   if (
     operation === "schedule.apply" ||

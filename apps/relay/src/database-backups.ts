@@ -157,7 +157,7 @@ function databaseBackupShell(
   throw new Error(`${database.engine} logical backups are not supported yet`)
 }
 
-function collectProcessErrors(child: DockerExecProcess) {
+export function collectProcessErrors(child: DockerExecProcess) {
   const chunks: Array<Buffer> = []
   let bytes = 0
   child.stderr.on("data", (chunk: Buffer) => {

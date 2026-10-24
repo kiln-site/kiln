@@ -19,7 +19,8 @@ import {
   relayDatabaseTerminalRestartSchema,
   relayDatabaseTerminalWriteSchema,
   relayDatabaseContainerSchema,
-  relayDatabaseDumpFormatSchema,
+  relayDatabaseDumpFilesV1Feature,
+  relayDatabaseImportFileSchema,
   relayDatabaseLimitsV1Feature,
   relayDatabaseProvisioningV1Feature,
   relayManagedDatabaseSchema,
@@ -91,18 +92,6 @@ const databaseNetworkInputSchema = databaseInputSchema.extend({
   connected: z.boolean(),
   instanceId: z.string().regex(/^[a-f0-9]{40}$/u),
 })
-// A text dump, or a PostgreSQL custom-format dump in base64, which the
-// Relay checks against the same 700 KB once decoded.
-const databaseImportInputSchema = databaseInputSchema
-  .extend({
-    content: z.string().max(940_000),
-    format: relayDatabaseDumpFormatSchema.default("sql"),
-  })
-  .refine(
-    ({ content, format }) =>
-      format === "postgres-custom" || content.length <= 700_000,
-    "SQL dumps are currently limited to 700 KB"
-  )
 const databaseRowsRequestSchema = databaseInputSchema.extend({
   request: databaseRowsInputSchema,
 })
@@ -535,21 +524,24 @@ export const updateManagedDatabaseNetwork = createServerFn({ method: "POST" })
     return database
   })
 
+// Dumps travel as files in the database's dump folder on its Relay, which
+// the browser downloads and uploads as it does other files: an export
+// writes one there, and an import runs the one the browser uploaded.
+const DUMP_TIMEOUT_MS = 60 * 60_000
+
 export const exportManagedDatabase = createServerFn({ method: "POST" })
   .validator(databaseInputSchema)
   .handler(async ({ data }) => {
-    const { relay, user } = await authorizedDatabase(
+    const { relay, user, credential } = await dumpableDatabase(
       data,
       "database.dump.export"
     )
-    const credential = await requiredCredential(data.relayId, data.databaseId)
-    if (!databaseEngineSupportsLogicalBackups(credential.engine)) {
-      throw new Error(
-        "This database engine does not support data import or export"
-      )
-    }
     return z
-      .object({ content: z.string(), fileName: z.string().min(1).max(180) })
+      .object({
+        fileName: z.string().min(1).max(180),
+        path: z.string().min(1).max(255),
+        size: z.number().int().nonnegative(),
+      })
       .parse(
         await databaseRpc(
           relay,
@@ -559,42 +551,53 @@ export const exportManagedDatabase = createServerFn({ method: "POST" })
             password: credential.password,
             username: credential.username,
           },
-          120_000,
+          DUMP_TIMEOUT_MS,
           user.id
         )
       )
   })
 
 export const importManagedDatabase = createServerFn({ method: "POST" })
-  .validator(databaseImportInputSchema)
+  .validator(
+    databaseInputSchema.extend({ fileName: relayDatabaseImportFileSchema })
+  )
   .handler(async ({ data }) => {
-    const { relay, user } = await authorizedDatabase(
+    const { relay, user, credential } = await dumpableDatabase(
       data,
       "database.dump.import"
     )
-    const credential = await requiredCredential(data.relayId, data.databaseId)
-    if (!databaseEngineSupportsLogicalBackups(credential.engine)) {
-      throw new Error(
-        "This database engine does not support data import or export"
-      )
-    }
     await databaseRpc(
       relay,
       "database.dump.import",
       {
-        content: data.content,
         databaseId: data.databaseId,
-        // Left out for text dumps, so Relays from before custom-format
-        // imports still take them.
-        ...(data.format === "postgres-custom" ? { format: data.format } : {}),
+        fileName: data.fileName,
         password: credential.password,
         username: credential.username,
       },
-      120_000,
+      DUMP_TIMEOUT_MS,
       user.id
     )
     return { imported: true }
   })
+
+async function dumpableDatabase(
+  data: z.infer<typeof databaseInputSchema>,
+  permission: "database.dump.export" | "database.dump.import"
+) {
+  const { relay, user } = await authorizedDatabase(data, permission)
+  const { relayConnectionFeatures } = await import("@/lib/relay-connection")
+  if (!relayConnectionFeatures(relay.id).has(relayDatabaseDumpFilesV1Feature)) {
+    throw new Error("Update this Relay to import or export data")
+  }
+  const credential = await requiredCredential(data.relayId, data.databaseId)
+  if (!databaseEngineSupportsLogicalBackups(credential.engine)) {
+    throw new Error(
+      "This database engine does not support data import or export"
+    )
+  }
+  return { credential, relay, user }
+}
 
 export const getManagedDatabaseOverview = createServerFn({ method: "GET" })
   .validator(databaseInputSchema)

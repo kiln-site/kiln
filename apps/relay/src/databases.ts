@@ -1,12 +1,15 @@
 import { createHash, randomBytes } from "node:crypto"
-import { statfs } from "node:fs/promises"
+import { createReadStream, createWriteStream } from "node:fs"
+import { mkdir, open, rename, rm, stat, statfs } from "node:fs/promises"
+import { join } from "node:path"
+import { pipeline } from "node:stream/promises"
 
 import type {
   DatabaseEngine,
   RelayCreateDatabase,
   RelayDatabaseAction,
-  RelayDatabaseDump,
   RelayDatabaseExport,
+  RelayDatabaseImport,
   RelayDatabaseLimits,
   RelayDatabaseNetwork,
   RelayDatabaseContainer,
@@ -23,13 +26,18 @@ import type {
 import {
   databaseEngineSupportsLogicalBackups,
   databaseEngineSchema,
+  databaseFileRootId,
+  relayDatabaseDumpExportFile,
   NO_RESOURCE_LIMITS,
   relayManagedDatabaseSchema,
   resolveResourceLimits,
 } from "@workspace/contracts"
 import { Effect, Option, Result } from "effect"
 
+import { ensuringPromise } from "./effect/promise.js"
 import { traceRelayEffect, traceRelayPromise } from "./effect/runtime.js"
+import { collectProcessErrors } from "./database-backups.js"
+import type { FileRoot } from "./files.js"
 import type { DatabaseConnections } from "./database-connections.js"
 import type { RelayConfig } from "./config.js"
 import type { DockerDriver } from "./docker.js"
@@ -44,6 +52,7 @@ import {
   isDockerNotFound,
   type DockerContainerSummary,
   type DockerExecProcess,
+  streamIntoProcess,
 } from "./docker-engine.js"
 import { provisioningStatus } from "./provisioning.js"
 import { relayOwnerLabel, relayOwnsLabels } from "./relay-resources.js"
@@ -65,7 +74,11 @@ function databaseObservedState(
 
 const DATABASE_KIND_LABEL = "kiln.resource.kind"
 const DATABASE_KIND = "database"
-const MAX_DUMP_BYTES = 700_000
+// What a database client may print, where its output is kept.
+const MAX_CLIENT_OUTPUT_BYTES = 1024 * 1024
+// Dumps take as long as the database's data does, up to the deadline of the
+// operation that runs them.
+const DUMP_TIMEOUT_MS = 60 * 60_000
 // A container a limits change set aside. Discovery skips it, and Relay
 // startup finishes or undoes a replacement it interrupted.
 const REPLACED_MARKER = "-replaced-"
@@ -783,6 +796,10 @@ export class DatabaseDriver {
     if (input.deleteData && volume) {
       await Effect.runPromise(engine.removeVolume(volume))
     }
+    await rm(join(this.dumpDirectory, input.databaseId), {
+      force: true,
+      recursive: true,
+    })
     return { databaseId: input.databaseId, deleted: true }
   }
 
@@ -868,61 +885,137 @@ export class DatabaseDriver {
     return updated
   }
 
+  // Where databases' dump files live, a folder per database, for browsers to
+  // transfer as files under `database:<databaseId>`.
+  get dumpDirectory(): string {
+    return join(this.#config.dataDirectory, "database-dumps")
+  }
+
+  /** A database's dump folder, relative to `dumpDirectory`. */
+  async dumpFileRoot(databaseId: string): Promise<FileRoot> {
+    await this.#dumpable(databaseId)
+    await this.#dumpFolder(databaseId)
+    return { directory: databaseId, id: databaseFileRootId(databaseId) }
+  }
+
+  // Dumps hold all of a database's data, so only the Relay may read them.
+  async #dumpFolder(databaseId: string): Promise<string> {
+    const folder = join(this.dumpDirectory, databaseId)
+    await mkdir(folder, { mode: 0o700, recursive: true })
+    return folder
+  }
+
+  /**
+   * Dumps the database as its own user into its dump folder, for the
+   * browser to download. The last export is replaced only by a whole one.
+   */
   async exportDump(input: RelayDatabaseExport) {
-    const database = await this.#required(input.databaseId)
-    if (!databaseEngineSupportsLogicalBackups(database.engine)) {
-      throw new Error(`${database.engine} dump export is not supported yet`)
-    }
-    const result = await this.#client(
-      requiredContainerId(database),
-      databaseClient(database, input.username, input.password, "export"),
-      undefined,
-      120_000
+    const database = await this.#dumpable(input.databaseId)
+    const exported = join(
+      await this.#dumpFolder(database.id),
+      relayDatabaseDumpExportFile
     )
-    if (Buffer.byteLength(result.stdout) > MAX_DUMP_BYTES) {
-      throw new Error(
-        "The database dump is larger than the current 700 KB transfer limit"
+    // Each export writes its own file, so exports at once each finish whole.
+    const partial = `${exported}.${randomBytes(8).toString("hex")}.partial`
+    const child = await this.#start(
+      database,
+      databaseClient(database, input.username, input.password, "export"),
+      false
+    )
+    const stderr = collectProcessErrors(child)
+    const writing = pipeline(
+      child.stdout,
+      createWriteStream(partial, { flags: "wx", mode: 0o600 })
+    )
+    // Waited for alongside the write, so a client that stalls without
+    // writing still times out.
+    const exited = requireClientSuccess(child, stderr)
+    const written = await Effect.runPromise(
+      Effect.result(
+        Effect.tryPromise({
+          try: async () => {
+            await Promise.all([writing, exited])
+            const { size } = await stat(partial)
+            await rename(partial, exported)
+            return size
+          },
+          catch: (cause) => cause,
+        })
       )
+    )
+    if (Result.isFailure(written)) {
+      child.kill()
+      await Promise.allSettled([writing, exited])
+      await rm(partial, { force: true })
+      throw written.failure
     }
+    const size = written.success
     return {
-      content: result.stdout,
       fileName: `${safeFileName(database.name)}-${new Date().toISOString().slice(0, 10)}.sql`,
+      path: relayDatabaseDumpExportFile,
+      size,
     }
   }
 
-  async importDump(input: RelayDatabaseDump) {
-    const database = await this.#required(input.databaseId)
-    if (!databaseEngineSupportsLogicalBackups(database.engine)) {
-      throw new Error(`${database.engine} dump import is not supported yet`)
-    }
-    const custom = input.format === "postgres-custom"
-    const dump = custom
-      ? Buffer.from(input.content, "base64")
-      : Buffer.from(input.content)
-    if (dump.byteLength > MAX_DUMP_BYTES) {
-      throw new Error(
-        "The database dump is larger than the current 700 KB transfer limit"
+  /**
+   * Runs the dump the browser uploaded to the database's dump folder into the
+   * database as its own user, through pg_restore when it is a PostgreSQL
+   * custom-format dump (pg_dump -Fc), then removes it.
+   */
+  async importDump(input: RelayDatabaseImport) {
+    const database = await this.#dumpable(input.databaseId)
+    const dump = join(this.dumpDirectory, database.id, input.fileName)
+    // Each upload is run once, so it goes however its import ends.
+    await removingAfter(dump, async () => {
+      const custom = (await readDumpHead(dump)).equals(
+        POSTGRES_CUSTOM_DUMP_MAGIC
       )
-    }
-    if (custom) {
-      if (database.engine !== "postgres") {
+      if (custom && database.engine !== "postgres") {
         throw new Error(
           "PostgreSQL custom-format dumps can only be imported into PostgreSQL"
         )
       }
-      if (!dump.subarray(0, 5).equals(POSTGRES_CUSTOM_DUMP_MAGIC)) {
-        throw new Error("This isn't a PostgreSQL custom-format dump")
-      }
-    }
-    await this.#client(
-      requiredContainerId(database),
-      custom
-        ? postgresRestoreClient(database, input.username, input.password)
-        : databaseClient(database, input.username, input.password, "import"),
-      dump,
-      120_000
-    )
+      const child = await this.#start(
+        database,
+        custom
+          ? postgresRestoreClient(database, input.username, input.password)
+          : databaseClient(database, input.username, input.password, "import"),
+        true
+      )
+      const stderr = collectProcessErrors(child)
+      // The client's own output isn't kept, but must be read for it to keep
+      // going.
+      child.stdout.resume()
+      await streamIntoProcess(
+        child,
+        () => pipeline(createReadStream(dump), child.stdin),
+        () => requireClientSuccess(child, stderr)
+      )
+    })
     return { databaseId: database.id, imported: true }
+  }
+
+  async #dumpable(id: string): Promise<RelayManagedDatabase> {
+    const database = await this.#required(id)
+    if (!databaseEngineSupportsLogicalBackups(database.engine)) {
+      throw new Error(
+        `${database.engine} data import and export are not supported yet`
+      )
+    }
+    return database
+  }
+
+  #start(
+    database: RelayManagedDatabase,
+    client: DatabaseClient,
+    stdin: boolean
+  ): Promise<DockerExecProcess> {
+    return Effect.runPromise(
+      this.#engine.execProcess(requiredContainerId(database), client.command, {
+        env: client.env,
+        stdin,
+      })
+    )
   }
 
   /** Starts a process in a database's container, streaming its stdio. */
@@ -948,8 +1041,8 @@ export class DatabaseDriver {
       this.#engine.execWithInput(container, client.command, {
         env: client.env,
         input,
-        maxOutputBytes: MAX_DUMP_BYTES + 64 * 1024,
-        overflow: "Database transfer exceeded the current size limit",
+        maxOutputBytes: MAX_CLIENT_OUTPUT_BYTES,
+        overflow: "The database client printed more than expected",
         timeout,
       })
     )
@@ -1436,7 +1529,7 @@ async function writeAclFile(
         name: "",
       },
       acl,
-      { maxOutputBytes: MAX_DUMP_BYTES + 64 * 1024, timeout: 60_000 }
+      { maxOutputBytes: MAX_CLIENT_OUTPUT_BYTES, timeout: 60_000 }
     )
   )
 }
@@ -1490,6 +1583,46 @@ function stringLabels(value: unknown): Record<string, string> {
     if (typeof label === "string") labels[name] = label
   }
   return labels
+}
+
+// The start of an uploaded dump, enough to tell a custom-format one.
+async function readDumpHead(path: string): Promise<Buffer> {
+  const opened = await Effect.runPromise(
+    Effect.tryPromise({
+      try: () => open(path, "r"),
+      catch: (cause) =>
+        (cause as NodeJS.ErrnoException).code === "ENOENT"
+          ? new Error("Upload a dump to import first")
+          : cause,
+    })
+  )
+  const head = Buffer.alloc(POSTGRES_CUSTOM_DUMP_MAGIC.byteLength)
+  return ensuringPromise(
+    async () => head.subarray(0, (await opened.read(head)).bytesRead),
+    () => void opened.close()
+  )
+}
+
+// Runs `run`, then removes `path` however it went.
+function removingAfter<A>(path: string, run: () => Promise<A>): Promise<A> {
+  return Effect.runPromise(
+    Effect.tryPromise({ try: run, catch: (cause) => cause }).pipe(
+      Effect.ensuring(Effect.promise(() => rm(path, { force: true })))
+    )
+  )
+}
+
+async function requireClientSuccess(
+  child: DockerExecProcess,
+  stderr: () => string
+): Promise<void> {
+  const code = await child.waitFor({
+    timeout: DUMP_TIMEOUT_MS,
+    timedOut: "The database client took longer than an hour",
+  })
+  if (code !== 0) {
+    throw new Error(stderr() || `${child.program} exited with code ${code}`)
+  }
 }
 
 function safeFileName(name: string): string {

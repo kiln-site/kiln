@@ -1,4 +1,6 @@
-import { createHash } from "node:crypto"
+import { createHash, randomBytes } from "node:crypto"
+import { readdir, readFile, stat, writeFile } from "node:fs/promises"
+import { dirname, join } from "node:path"
 import {
   relayCreateDatabaseSchema,
   type DatabaseEngine,
@@ -616,40 +618,160 @@ describe("managed database wipe", () => {
   })
 })
 
-describe("managed database custom-format imports", () => {
-  it("refuses dumps that aren't PostgreSQL custom format, or aren't for PostgreSQL", async () => {
+describe("managed database dumps", () => {
+  const credentials = { password, username: "kiln_user" }
+
+  const fileName = "import-0f8e2c1d-7a4b-4c3e-9d2f-1b6a5e4c3d2f"
+
+  // Where a browser's upload of a dump lands.
+  async function uploadDump(
+    harness: RelayHarness,
+    id: string,
+    dump: Buffer | string,
+    name = fileName
+  ) {
+    const root = await harness.databases.dumpFileRoot(id)
+    const file = join(harness.databases.dumpDirectory, root.directory, name)
+    await writeFile(file, dump)
+    return file
+  }
+
+  it("runs an uploaded dump far past the old 700 KB limit, then removes it", async () => {
     const harness = await relayHarness()
-    const postgres = "4".repeat(40)
-    const mysql = "5".repeat(40)
-    await createDatabase(harness, postgres)
-    await createDatabase(harness, mysql, "mysql")
-    const customDump = Buffer.from("PGDMP\u0001\u000e\u0000").toString("base64")
-    const credentials = { password, username: "kiln_user" }
+    const id = "4".repeat(40)
+    await createDatabase(harness, id)
+    const dump = "INSERT INTO kiln_test VALUES ('row');\n".repeat(80_000)
+    const uploaded = await uploadDump(harness, id, dump)
+
+    await harness.databases.importDump({
+      ...credentials,
+      databaseId: id,
+      fileName,
+    })
+
+    expect(databaseContainer(id).executedSql).toEqual([dump])
+    await expect(stat(uploaded)).rejects.toThrow()
+  })
+
+  it("runs only the upload its import names, leaving another browser's", async () => {
+    const harness = await relayHarness()
+    const id = "8".repeat(40)
+    await createDatabase(harness, id)
+    const other = "import-7c1d2e3f-4a5b-4c6d-8e9f-0a1b2c3d4e5f"
+    await uploadDump(harness, id, "INSERT INTO mine VALUES (1);\n")
+    const theirs = await uploadDump(harness, id, "DELETE FROM mine;\n", other)
+
+    await harness.databases.importDump({
+      ...credentials,
+      databaseId: id,
+      fileName,
+    })
+
+    expect(databaseContainer(id).executedSql).toEqual([
+      "INSERT INTO mine VALUES (1);\n",
+    ])
+    expect(await readFile(theirs, "utf8")).toBe("DELETE FROM mine;\n")
+  })
+
+  it("removes an upload whose import can't start, leaving another browser's", async () => {
+    const harness = await relayHarness()
+    const id = "a1".repeat(20)
+    await createDatabase(harness, id)
+    const other = "import-7c1d2e3f-4a5b-4c6d-8e9f-0a1b2c3d4e5f"
+    const mine = await uploadDump(harness, id, "INSERT INTO mine VALUES (1);\n")
+    const theirs = await uploadDump(harness, id, "SELECT 1;\n", other)
+    await harness.databases.action({ action: "stop", databaseId: id })
 
     await expect(
+      harness.databases.importDump({ ...credentials, databaseId: id, fileName })
+    ).rejects.toThrow()
+
+    await expect(stat(mine)).rejects.toThrow()
+    expect(await readFile(theirs, "utf8")).toBe("SELECT 1;\n")
+    expect(databaseContainer(id).executedSql).toEqual([])
+  })
+
+  it("restores an uploaded custom-format dump byte for byte, and only into PostgreSQL", async () => {
+    const harness = await relayHarness()
+    const postgres = "5".repeat(40)
+    const mysql = "6".repeat(40)
+    await createDatabase(harness, postgres)
+    await createDatabase(harness, mysql, "mysql")
+    const dump = Buffer.concat([
+      Buffer.from("PGDMP"),
+      Buffer.from([0x01, 0x0e, 0x00, 0xff, 0xfe, 0x80]),
+      randomBytes(256 * 1024),
+    ])
+    await uploadDump(harness, postgres, dump)
+    await uploadDump(harness, mysql, dump)
+
+    await harness.databases.importDump({
+      ...credentials,
+      databaseId: postgres,
+      fileName,
+    })
+    await expect(
       harness.databases.importDump({
         ...credentials,
-        content: customDump,
         databaseId: mysql,
-        format: "postgres-custom",
+        fileName,
       })
     ).rejects.toThrow("can only be imported into PostgreSQL")
+
+    expect(databaseContainer(postgres).restoredDumps).toEqual([dump])
+    expect(databaseContainer(mysql).executedSql).toEqual([])
+  })
+
+  it("exports a dump far past the old limit for download, keeping the last whole one when a dump fails", async () => {
+    const harness = await relayHarness()
+    const id = "7".repeat(40)
+    await createDatabase(harness, id)
+    const container = databaseContainer(id)
+    container.sqlDump = "-- PostgreSQL database dump\n".repeat(50_000)
+
+    const exported = await harness.databases.exportDump({
+      ...credentials,
+      databaseId: id,
+    })
+    const file = join(harness.databases.dumpDirectory, id, exported.path)
+    expect(await readFile(file, "utf8")).toBe(container.sqlDump)
+    // A dump holds all of the database's data, for the Relay alone to read.
+    expect((await stat(file)).mode & 0o777).toBe(0o600)
+    expect((await stat(dirname(file))).mode & 0o777).toBe(0o700)
+
+    const whole = container.sqlDump
+    container.sqlDump = "-- partial"
+    fakeDocker.programFailures.set("pg_dump", "pg_dump: error: query failed")
     await expect(
-      harness.databases.importDump({
-        ...credentials,
-        content: Buffer.from("SELECT 1;").toString("base64"),
-        databaseId: postgres,
-        format: "postgres-custom",
-      })
-    ).rejects.toThrow("isn't a PostgreSQL custom-format dump")
-    await expect(
-      harness.databases.importDump({
-        ...credentials,
-        content: Buffer.alloc(700_001).toString("base64"),
-        databaseId: postgres,
-        format: "postgres-custom",
-      })
-    ).rejects.toThrow("700 KB transfer limit")
+      harness.databases.exportDump({ ...credentials, databaseId: id })
+    ).rejects.toThrow("pg_dump: error: query failed")
+    expect(await readFile(file, "utf8")).toBe(whole)
+    expect(await readdir(join(harness.databases.dumpDirectory, id))).toEqual([
+      exported.path,
+    ])
+  })
+
+  it("finishes exports run at once each whole", async () => {
+    const harness = await relayHarness()
+    const id = "9".repeat(40)
+    await createDatabase(harness, id)
+    const container = databaseContainer(id)
+    container.sqlDump = "-- PostgreSQL database dump\n".repeat(50_000)
+
+    const exports = await Promise.all([
+      harness.databases.exportDump({ ...credentials, databaseId: id }),
+      harness.databases.exportDump({ ...credentials, databaseId: id }),
+    ])
+
+    const folder = join(harness.databases.dumpDirectory, id)
+    expect(exports.map(({ size }) => size)).toEqual([
+      container.sqlDump.length,
+      container.sqlDump.length,
+    ])
+    expect(await readFile(join(folder, exports[0].path), "utf8")).toBe(
+      container.sqlDump
+    )
+    expect(await readdir(folder)).toEqual([exports[0].path])
   })
 })
 

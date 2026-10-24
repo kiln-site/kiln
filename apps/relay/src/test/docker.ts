@@ -108,6 +108,8 @@ export interface FakeContainer {
   sqlDump: string
   /** SQL database clients in the container were given on stdin. */
   executedSql: Array<string>
+  /** What pg_restore in the container was given on stdin, byte for byte. */
+  restoredDumps: Array<Buffer>
   /** iptables chains inside the container's network namespace. */
   firewall: Map<string, Array<string>>
   /** TCP ports the container's process is listening on. */
@@ -436,6 +438,7 @@ export class FakeDocker {
       processes: [],
       sqlDump: "",
       executedSql: [],
+      restoredDumps: [],
       firewall: new Map(),
       listeningPorts: [...(seed.listeningPorts ?? [])],
     }
@@ -1313,7 +1316,7 @@ export class FakeDocker {
     container: FakeContainer,
     argv: Array<string>,
     env: Record<string, string>,
-    input = "",
+    input: Buffer | string = "",
     user?: string
   ): string {
     container.processes.push({ argv, env, ...(user ? { user } : {}) })
@@ -1325,7 +1328,11 @@ export class FakeDocker {
       return container.sqlDump
     }
     if (["mysql", "mariadb", "psql"].includes(client)) {
-      container.executedSql.push(input)
+      container.executedSql.push(input.toString())
+      return ""
+    }
+    if (client === "pg_restore") {
+      container.restoredDumps.push(Buffer.from(input))
       return ""
     }
     if (program === "iptables") {
@@ -2326,7 +2333,7 @@ export class FakeDocker {
             container,
             exec.cmd,
             exec.env,
-            Buffer.concat(input).toString("utf8"),
+            Buffer.concat(input),
             exec.user
           )
         } catch (cause) {

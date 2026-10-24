@@ -24,12 +24,13 @@ import {
 import { Input } from "@workspace/ui/components/input"
 import { showToast } from "@workspace/ui/components/sonner"
 
+import { databaseFileRootId } from "@workspace/contracts"
+
 import {
-  DATABASE_DUMP_LIMIT_BYTES,
-  downloadTextFile,
   showDatabaseOperationError,
   type ManagedDatabase,
 } from "@/components/database/database-presentation"
+import { downloadRelayFile, uploadRelayFile } from "@/lib/relay-file-transfer"
 import {
   managedDatabaseCredentialQueryOptions,
   queryKeys,
@@ -313,23 +314,28 @@ export function ImportDatabaseDialog({
   onOpenChange: (open: boolean) => void
 }) {
   const [file, setFile] = React.useState<File | null>(initialFile)
-  const [localError, setLocalError] = React.useState<string | null>(() =>
-    dumpSizeError(initialFile)
-  )
+  // How much of the dump has reached the Relay, until it all has.
+  const [uploaded, setUploaded] = React.useState<number | null>(null)
   const upload = useMutation({
     mutationFn: async () => {
       if (!file) throw new Error("Choose a SQL dump first")
-      if (file.size > DATABASE_DUMP_LIMIT_BYTES) {
-        throw new Error("SQL dumps are currently limited to 700 KB")
-      }
+      await checkDatabaseDump(file, database.engine)
+      // Sent as files are, to the database's dump folder on its Relay, under
+      // a name of its own, then run from there.
+      const fileName = `import-${crypto.randomUUID()}`
+      await uploadRelayFile({
+        file,
+        instanceId: databaseFileRootId(database.id),
+        onProgress: setUploaded,
+        path: fileName,
+        relayId: database.relayId,
+      })
+      setUploaded(null)
       return importManagedDatabase({
-        data: {
-          ...(await readDatabaseDump(file, database.engine)),
-          databaseId: database.id,
-          relayId: database.relayId,
-        },
+        data: { databaseId: database.id, fileName, relayId: database.relayId },
       })
     },
+    onSettled: () => setUploaded(null),
     onSuccess: () => {
       showToast({
         message: `Imported ${file?.name ?? "SQL dump"}`,
@@ -346,7 +352,7 @@ export function ImportDatabaseDialog({
           <DialogTitle>Import SQL dump</DialogTitle>
           <DialogDescription>
             The dump runs against {database.databaseName}. Existing data is not
-            cleared first. Current upload limit: 700 KB.
+            cleared first.
           </DialogDescription>
         </DialogHeader>
         <label className="block rounded-lg border border-dashed border-border p-4 text-center">
@@ -364,16 +370,12 @@ export function ImportDatabaseDialog({
             className="sr-only"
             type="file"
             onChange={(event) => {
-              const next = event.currentTarget.files?.[0] ?? null
-              setFile(next)
-              setLocalError(dumpSizeError(next))
+              setFile(event.currentTarget.files?.[0] ?? null)
             }}
           />
         </label>
-        {localError || upload.error ? (
-          <p className="text-xs text-destructive">
-            {localError ?? upload.error?.message}
-          </p>
+        {upload.error ? (
+          <p className="text-xs text-destructive">{upload.error.message}</p>
         ) : null}
         <DialogFooter>
           <Button
@@ -384,7 +386,7 @@ export function ImportDatabaseDialog({
             Cancel
           </Button>
           <Button
-            disabled={!file || Boolean(localError) || upload.isPending}
+            disabled={!file || upload.isPending}
             type="button"
             onClick={() => upload.mutate()}
           >
@@ -393,7 +395,11 @@ export function ImportDatabaseDialog({
             ) : (
               <Upload />
             )}
-            Import
+            {uploaded !== null && file
+              ? `Uploading ${Math.floor((uploaded / Math.max(file.size, 1)) * 100)}%`
+              : upload.isPending
+                ? "Importing"
+                : "Import"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -405,44 +411,27 @@ export function ImportDatabaseDialog({
 // way.
 export const DATABASE_DUMP_ACCEPT = ".sql,.dmp,application/sql,text/plain"
 
-// A text dump is sent as is. A PostgreSQL custom-format dump (pg_dump -Fc),
-// which starts with "PGDMP", is binary, so it goes in base64 for pg_restore.
-// Any other binary file isn't a dump we can import.
-async function readDatabaseDump(
+// A text dump, or a PostgreSQL custom-format dump (pg_dump -Fc), which starts
+// with "PGDMP" and goes through pg_restore. Any other binary file isn't a
+// dump we can import. Only the start of the file is read, however large.
+async function checkDatabaseDump(
   file: File,
   engine: ManagedDatabase["engine"]
-): Promise<{ content: string; format: "postgres-custom" | "sql" }> {
-  const bytes = new Uint8Array(await file.arrayBuffer())
-  const custom = new TextDecoder().decode(bytes.subarray(0, 5)) === "PGDMP"
-  if (custom) {
+): Promise<void> {
+  const bytes = new Uint8Array(await file.slice(0, 64 * 1024).arrayBuffer())
+  if (new TextDecoder().decode(bytes.subarray(0, 5)) === "PGDMP") {
     if (engine !== "postgres") {
       throw new Error(
         "This is a PostgreSQL custom-format dump, which only a PostgreSQL database can import"
       )
     }
-    return { content: base64(bytes), format: "postgres-custom" }
+    return
   }
   if (bytes.includes(0)) {
     throw new Error(
       "This file isn't a text SQL dump or a PostgreSQL custom-format dump"
     )
   }
-  return { content: new TextDecoder().decode(bytes), format: "sql" }
-}
-
-function base64(bytes: Uint8Array): string {
-  let binary = ""
-  // In chunks, so a large file doesn't overflow the argument list.
-  for (let start = 0; start < bytes.length; start += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(start, start + 0x8000))
-  }
-  return btoa(binary)
-}
-
-function dumpSizeError(file: File | null): string | null {
-  return file && file.size > DATABASE_DUMP_LIMIT_BYTES
-    ? "SQL dumps are currently limited to 700 KB"
-    : null
 }
 
 // Deletes every table and row and keeps the database, its login, and its
@@ -617,12 +606,21 @@ export function useDatabaseExport(
   database: Pick<ManagedDatabase, "id" | "name" | "relayId">
 ) {
   return useMutation({
-    mutationFn: () =>
-      exportManagedDatabase({
+    // The Relay writes the dump to the database's dump folder, which the
+    // browser then downloads as it does other files.
+    mutationFn: async () => {
+      const exported = await exportManagedDatabase({
         data: { databaseId: database.id, relayId: database.relayId },
-      }),
-    onSuccess: (result) => {
-      downloadTextFile(result.fileName, result.content)
+      })
+      await downloadRelayFile({
+        compression: "none",
+        instanceId: databaseFileRootId(database.id),
+        name: exported.fileName,
+        path: exported.path,
+        relayId: database.relayId,
+      })
+    },
+    onSuccess: () => {
       showToast({ message: `Exported ${database.name}`, type: "success" })
     },
     onError: (error) => showDatabaseOperationError("Export failed", error),

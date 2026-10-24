@@ -48,7 +48,6 @@ import {
   relayDeployAppSchema,
   relayDatabaseActionSchema,
   relayDatabaseLimitsSchema,
-  relayDatabaseDumpSchema,
   relayDatabaseDataReadSchema,
   relayDatabaseDataWriteSchema,
   relayPlatformDatabaseReadSchema,
@@ -60,6 +59,7 @@ import {
   relayDatabaseTerminalRestartSchema,
   relayDatabaseTerminalWriteSchema,
   relayDatabaseExportSchema,
+  relayDatabaseImportSchema,
   relayDatabaseInspectRequestSchema,
   relayDatabaseWipeSchema,
   relayDatabaseNetworkSchema,
@@ -489,6 +489,10 @@ async function hostFileRoot(id: string): Promise<FileRoot> {
   return { id, directory: "." }
 }
 const appDatabaseBrowser = new DatabaseBrowser(appFilesystem)
+const databaseDumpFilesystem = new FilesystemDriver({
+  ...config,
+  rootDirectory: databases.dumpDirectory,
+})
 // A helper left from when host access was on goes; one still in use has its
 // sessions swept with the rest. Only the Relay itself sweeps: a CLI command
 // runs beside it, often from one of those sessions.
@@ -1110,6 +1114,10 @@ const browserSocket = attachBrowserSocket({
   appFiles: {
     filesystem: appFilesystem,
     root: (appId) => apps.fileRoot(appId),
+  },
+  databaseFiles: {
+    filesystem: databaseDumpFilesystem,
+    root: (databaseId) => databases.dumpFileRoot(databaseId),
   },
   consoleSources: consoleSources(
     docker,
@@ -2166,7 +2174,7 @@ async function executeControlRequest(
       )
     case "database.dump.import":
       return databases.importDump(
-        relayDatabaseDumpSchema.parse(request.payload)
+        relayDatabaseImportSchema.parse(request.payload)
       )
     case "database.data.read": {
       const input = relayDatabaseDataReadSchema.parse(request.payload)

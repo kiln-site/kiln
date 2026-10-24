@@ -13,8 +13,6 @@ export type ManagedDatabase = Omit<ManagedDatabaseListItem, "observedState"> & {
   runtimeStatus?: import("@/lib/instance-state").InstanceState
 }
 
-export const DATABASE_DUMP_LIMIT_BYTES = 700_000
-
 export const engineOptions: ReadonlyArray<{
   description: string
   label: string
@@ -101,17 +99,6 @@ export function engineLabel(engine: DatabaseEngine): string {
   return (
     engineOptions.find((option) => option.value === engine)?.label ?? engine
   )
-}
-
-export function downloadTextFile(fileName: string, content: string) {
-  const url = URL.createObjectURL(
-    new Blob([content], { type: "application/sql" })
-  )
-  const link = document.createElement("a")
-  link.href = url
-  link.download = fileName
-  link.click()
-  URL.revokeObjectURL(url)
 }
 
 export function showDatabaseOperationError(message: string, error: Error) {

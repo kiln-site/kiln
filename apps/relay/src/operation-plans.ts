@@ -5,6 +5,7 @@
  */
 import {
   appIdFromFileRoot,
+  databaseIdFromFileRoot,
   isRelayFileRoot,
   type BackupTaskInput,
   type RelayControlOperation,
@@ -122,6 +123,10 @@ export function backupTaskLocks(
  */
 export function fileRootTransferLocks(rootId: string): Array<LaneLock> {
   if (isRelayFileRoot(rootId)) return [shared(laneKeys.hostFiles)]
+  // A database's dumps transfer beside reads of it, such as backups, and an
+  // import, which reads the uploaded dump, waits for them.
+  const databaseId = databaseIdFromFileRoot(rootId)
+  if (databaseId) return databaseReadLocks(databaseId)
   const appId = appIdFromFileRoot(rootId)
   return [shared(appId ? laneKeys.app(appId) : laneKeys.instance(rootId))]
 }

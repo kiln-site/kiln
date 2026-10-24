@@ -388,11 +388,7 @@ function DatabaseImportDropZone({
   const [file, setFile] = React.useState<File | null>(null)
   return (
     <>
-      <SqlImportDropZone
-        disabledReason={disabledReason}
-        limit="700 KB Limit"
-        onFile={setFile}
-      />
+      <SqlImportDropZone disabledReason={disabledReason} onFile={setFile} />
       {file ? (
         <ImportDatabaseDialog
           database={database}
@@ -417,7 +413,7 @@ export function SqlImportDropZone({
 }: {
   disabledReason: string | undefined
   label?: string
-  limit: string
+  limit?: string
   onFile: (file: File) => void
 }) {
   const [dragging, setDragging] = React.useState(false)
@@ -449,7 +445,9 @@ export function SqlImportDropZone({
     >
       <Upload className="size-5 text-muted-foreground" />
       <span className="text-[0.8125rem] font-medium">{label}</span>
-      <span className="text-xs text-muted-foreground">{limit}</span>
+      {limit ? (
+        <span className="text-xs text-muted-foreground">{limit}</span>
+      ) : null}
       <input
         accept={DATABASE_DUMP_ACCEPT}
         className="sr-only"

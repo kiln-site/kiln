@@ -239,23 +239,25 @@ export const relayDatabaseNetworkSchema = z
   })
   .strict()
 
-// A text SQL dump, or a PostgreSQL custom-format dump (pg_dump -Fc) in
-// base64. Either holds at most 700 KB of dump; base64 makes that ~933 KB.
-export const relayDatabaseDumpFormatSchema = z.enum(["sql", "postgres-custom"])
-
-export const relayDatabaseDumpSchema = z
+// A database's login, for the Relay to act on the database as its own user.
+// Dumps themselves travel as files (see `databaseFileRootId`): an export
+// writes one for the browser to download, and an import reads the one the
+// browser uploaded.
+export const relayDatabaseExportSchema = z
   .object({
-    content: z.string().max(940_000),
-    format: relayDatabaseDumpFormatSchema.optional(),
     databaseId: databaseIdSchema,
     password: z.string().min(24).max(256),
     username: z.string().regex(/^[a-z][a-z0-9_]{0,31}$/u),
   })
   .strict()
 
-export const relayDatabaseExportSchema = relayDatabaseDumpSchema.omit({
-  content: true,
-  format: true,
+// The upload an import runs, which only that import names.
+export const relayDatabaseImportFileSchema = z
+  .string()
+  .regex(/^import-[A-Za-z0-9-]{16,64}$/u)
+
+export const relayDatabaseImportSchema = relayDatabaseExportSchema.extend({
+  fileName: relayDatabaseImportFileSchema,
 })
 
 export const relayDatabaseInspectRequestSchema = z
@@ -2704,11 +2706,8 @@ export type RelayRotateDatabaseCredentials = z.infer<
   typeof relayRotateDatabaseCredentialsSchema
 >
 export type RelayDatabaseNetwork = z.infer<typeof relayDatabaseNetworkSchema>
-export type RelayDatabaseDump = z.infer<typeof relayDatabaseDumpSchema>
-export type RelayDatabaseDumpFormat = z.infer<
-  typeof relayDatabaseDumpFormatSchema
->
 export type RelayDatabaseExport = z.infer<typeof relayDatabaseExportSchema>
+export type RelayDatabaseImport = z.infer<typeof relayDatabaseImportSchema>
 export type RelayDatabaseContainer = z.infer<
   typeof relayDatabaseContainerSchema
 >
