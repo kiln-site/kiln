@@ -503,15 +503,22 @@ describe("database terminal sessions", () => {
     expect(attached.answersQueries).toBe(true)
 
     // The fake TTY echoes input, so the client prints these queries: where
-    // is the cursor, what terminal is this, what are the foreground,
-    // background, and cursor colors, and two of the palette's. The answers
-    // reach the client, which echoes them back verbatim; an answer that reads
-    // as a query isn't answered again.
+    // is the cursor, what terminal is this, how does the cursor look, what
+    // are the foreground, background, and cursor colors, and some of the
+    // palette's, written the loose ways xterm accepts (leading zeros, a slot
+    // left over, an index out of range, one slot too many). The answers reach
+    // the client, which echoes them back verbatim; an answer that reads as a
+    // query isn't answered again.
     terminals.write(
       alice,
       databaseId,
       attached.sessionId,
-      "\u001b[2J\u001b[3;5H\u001b[6n\u001b[>c\u001b]10;?;?;?\u0007\u001b]4;1;?;255;?\u0007"
+      [
+        "\u001b[2J\u001b[3;5H\u001b[6n\u001b[>c",
+        "\u001b[?12$p\u001bP$q q\u001b\\",
+        "\u001b]10;?;?;?;?\u0007",
+        "\u001b]4;0001;?;255;?;7\u0007\u001b]4;256;?;3;?\u0007",
+      ].join("")
     )
     const answers = [
       "\u001b[3;5R",
@@ -521,8 +528,13 @@ describe("database terminal sessions", () => {
       "\u001b]12;rgb:fafa/8282/2e2e\u001b\\",
       "\u001b]4;1;rgb:f8f8/7171/7171\u001b\\",
       "\u001b]4;255;rgb:eeee/eeee/eeee\u001b\\",
+      "\u001b]4;3;rgb:fafa/cccc/1515\u001b\\",
+      // A blinking bar, as pages show it.
+      "\u001b[?12;1$y",
+      "\u001bP1$r5 q\u001b\\",
     ]
-    await vi.waitFor(() => expect(first.output).toContain(answers.at(-1)))
+    // The answer to the last query.
+    await vi.waitFor(() => expect(first.output).toContain(answers[7]))
     // A new page's snapshot waits for the screen to read every echoed
     // answer, and the TTY echoes what follows in order, so an answer to an
     // answer would be in the output before "done".

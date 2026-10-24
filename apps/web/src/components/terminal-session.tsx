@@ -7,8 +7,9 @@ import { WebLinksAddon } from "@xterm/addon-web-links"
 import { Terminal, type IDisposable } from "@xterm/xterm"
 import {
   DATABASE_TERMINAL_WRITE_MAX_CHARACTERS,
-  relayAnswersColorQuery,
+  terminalColorQuery,
   terminalColors,
+  terminalCursor,
   type DatabaseTerminalControl,
   type DatabaseTerminalEnd,
 } from "@workspace/contracts"
@@ -598,8 +599,8 @@ const TerminalSurface = React.memo(
       const mac = /^(Mac|iPhone|iPad|iPod)/.test(navigator.platform)
       const terminal = new Terminal({
         allowProposedApi: true,
-        cursorBlink: true,
-        cursorStyle: "bar",
+        cursorBlink: terminalCursor.blink,
+        cursorStyle: terminalCursor.style,
         fontFamily:
           getComputedStyle(container).getPropertyValue("--font-mono").trim() ||
           "monospace",
@@ -1194,8 +1195,9 @@ function ignoreQueries(terminal: Terminal): IDisposable {
     parser.registerDcsHandler({ final: "q", intermediates: "$" }, ignore),
     // Colors, when only asked for. Setting one applies on every page.
     ...[4, 10, 11, 12].map((ident) =>
-      parser.registerOscHandler(ident, (data) =>
-        relayAnswersColorQuery(ident, data)
+      parser.registerOscHandler(
+        ident,
+        (data) => terminalColorQuery(ident, data) !== null
       )
     ),
   ]

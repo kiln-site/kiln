@@ -10,7 +10,11 @@ import type {
   RelayDatabaseTerminalAttached,
   RelayManagedDatabase,
 } from "@workspace/contracts"
-import { relayAnswersColorQuery, terminalColors } from "@workspace/contracts"
+import {
+  terminalColorQuery,
+  terminalColors,
+  terminalCursor,
+} from "@workspace/contracts"
 import type { ITerminalAddon, Terminal } from "@xterm/headless"
 import { Effect } from "effect"
 
@@ -402,6 +406,9 @@ export class ContainerTerminals {
     )
     const screen = new HeadlessTerminal({
       allowProposedApi: true,
+      // Reported to clients that ask, as Hearth shows it.
+      cursorBlink: terminalCursor.blink,
+      cursorStyle: terminalCursor.style,
       cols: input.cols,
       rows: input.rows,
       scrollback: SCROLLBACK_LINES,
@@ -754,23 +761,18 @@ function answerQueries(screen: Terminal, reply: (data: string) => void) {
     (params) => params.length > 1
   )
   // The headless terminal has no colors of its own to report. Setting a
-  // color changes nothing here, so one that does is left to the page.
-  screen.parser.registerOscHandler(4, (data) => {
-    if (!relayAnswersColorQuery(4, data)) return false
-    const slots = data.split(";")
-    for (let slot = 0; slot < slots.length; slot += 2) {
-      const index = Number(slots[slot])
-      reply(`\u001b]4;${index};${colorSpec(PALETTE[index]!)}\u001b\\`)
-    }
-    return true
-  })
-  for (const ident of [10, 11, 12]) {
+  // color changes nothing here, so a sequence that does is left to the page.
+  for (const ident of [4, 10, 11, 12]) {
     screen.parser.registerOscHandler(ident, (data) => {
-      if (!relayAnswersColorQuery(ident, data)) return false
-      data.split(";").forEach((_, slot) => {
-        const color = colorSpec(SPECIAL_COLORS[ident + slot]!)
-        reply(`\u001b]${ident + slot};${color}\u001b\\`)
-      })
+      const asked = terminalColorQuery(ident, data)
+      if (!asked) return false
+      for (const color of asked) {
+        reply(
+          ident === 4
+            ? `\u001b]4;${color};${colorSpec(PALETTE[color]!)}\u001b\\`
+            : `\u001b]${color};${colorSpec(SPECIAL_COLORS[color]!)}\u001b\\`
+        )
+      }
       return true
     })
   }
