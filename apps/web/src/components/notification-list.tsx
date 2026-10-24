@@ -1,5 +1,6 @@
 import * as React from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
+import type { QueryClient } from "@tanstack/react-query"
 import { Link, useNavigate } from "@tanstack/react-router"
 import {
   CloudUpload,
@@ -21,6 +22,7 @@ import {
   acceptedInvitationHref,
   useResourceInvitationDecision,
 } from "@/components/resource-invitation-dialog"
+import { appRouteIdentifier } from "@/lib/app-route"
 import {
   clearNotificationsMutationOptions,
   dismissNotificationMutationOptions,
@@ -33,6 +35,7 @@ import type {
   NotificationResource,
 } from "@/lib/notifications"
 import { notificationDetail, notificationTitle } from "@/lib/notification-text"
+import { appDirectoryQueryOptions } from "@/lib/query-options"
 
 export type NotificationListItem =
   | { key: string; kind: "group"; label: string }
@@ -247,12 +250,7 @@ function NotificationActions({
 // Opens the Updates dialog's changelog.
 function ChangelogLink({ onNavigate }: { onNavigate?: () => void }) {
   return (
-    <Button
-      asChild
-      variant="ghost"
-      size="xs"
-      className="text-muted-foreground hover:text-foreground"
-    >
+    <Button asChild variant="outline" size="xs">
       <Link to="/infra/updates/changelog" onClick={onNavigate}>
         Changelog
       </Link>
@@ -333,7 +331,7 @@ function OpenResourceButton({
         void navigate({
           href:
             resource.type === "app"
-              ? `/infra/apps?search=${encodeURIComponent(resource.id)}`
+              ? appHref(queryClient, resource.id)
               : acceptedInvitationHref(queryClient, {
                   relayId: resource.relayId,
                   resourceId: resource.id,
@@ -345,6 +343,15 @@ function OpenResourceButton({
       Open
     </Button>
   )
+}
+
+// The app's own page, by its short ID when the cached directory can tell it
+// apart. The route resolves a full ID too, and falls back to the Apps list for
+// an app that's gone.
+function appHref(queryClient: QueryClient, appId: string) {
+  const apps = queryClient.getQueryData(appDirectoryQueryOptions().queryKey)
+  const routeId = apps ? appRouteIdentifier(apps, { id: appId }) : appId
+  return `/app/${encodeURIComponent(routeId)}`
 }
 
 function showNotificationFailure(action: string) {
