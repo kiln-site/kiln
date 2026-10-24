@@ -685,6 +685,11 @@ describe("platform mode", () => {
 
 describe("Kiln deployed without Kiln's labels", () => {
   const secret = "1:hearth-secret"
+  const databaseVolume = {
+    destination: "/var/lib/mysql",
+    source: "mysql-data-ir20rpu9xgaz",
+    type: "volume" as const,
+  }
 
   // Hearth, its MySQL, and its Valkey as Coolify deploys them: no Kiln
   // labels, on Coolify's network, the database by container name and the
@@ -709,6 +714,7 @@ describe("Kiln deployed without Kiln's labels", () => {
     const database = fakeDocker.addContainer({
       image: "mysql:8.4",
       labels,
+      mounts: [databaseVolume],
       name: "ir20rpu9xgaz",
       networks: ["coolify"],
       running: true,
@@ -821,6 +827,7 @@ describe("Kiln deployed without Kiln's labels", () => {
     fakeDocker.removeContainer("ir20rpu9xgaz")
     const recreated = fakeDocker.addContainer({
       image: "mysql:8.4",
+      mounts: [databaseVolume],
       name: "ir20rpu9xgaz",
       networks: ["coolify"],
       running: true,
@@ -828,13 +835,31 @@ describe("Kiln deployed without Kiln's labels", () => {
     await expect(
       run(platformTargetContainer(kiln.context, "database"))
     ).resolves.toMatchObject({ Id: recreated.id })
+
+    // Another container that takes over the address Hearth uses.
+    fakeDocker.removeContainer("ir20rpu9xgaz")
+    fakeDocker.addContainer({
+      image: "mysql:8.4",
+      name: "elsewhere",
+      running: true,
+    })
+    const takeover = fakeDocker.addContainer({
+      image: "mysql:8.4",
+      name: "ir20rpu9xgaz",
+      networks: ["coolify"],
+      running: true,
+    })
+    await expect(
+      run(platformTargetContainer(kiln.context, "database"))
+    ).resolves.toMatchObject({ Id: takeover.id })
   })
 
   it("finds Kiln's services after Coolify removes Hearth's container, and Hearth once Coolify recreates it", async () => {
     const kiln = await coolify()
     await kiln.identify({ containerId: kiln.hearth.id, key: secret })
 
-    // Coolify stops Hearth by removing its container.
+    // Coolify stops Hearth by removing its container. The cache kept no
+    // data, so nothing shows it's the same one.
     fakeDocker.removeContainer("y7m44jcsfszy-074805")
     await expect(
       run(platformTargetContainer(kiln.context, "hearth"))
@@ -844,7 +869,18 @@ describe("Kiln deployed without Kiln's labels", () => {
     ).resolves.toMatchObject({ Id: kiln.database.id })
     await expect(
       run(platformTargetContainer(kiln.context, "cache"))
-    ).resolves.toMatchObject({ Name: "/c675ux4n93qd" })
+    ).resolves.toBeNull()
+
+    // Another container under the database's name, without its data.
+    fakeDocker.removeContainer("ir20rpu9xgaz")
+    fakeDocker.addContainer({
+      mounts: [{ ...databaseVolume, source: "another-app-data" }],
+      name: "ir20rpu9xgaz",
+      running: true,
+    })
+    await expect(
+      run(platformTargetContainer(kiln.context, "database"))
+    ).resolves.toBeNull()
 
     // Started again under a new ID, before it connects to prove it.
     const restarted = fakeDocker.addContainer({
@@ -866,6 +902,22 @@ describe("Kiln deployed without Kiln's labels", () => {
     await expect(
       run(platformTargetContainer(kiln.context, "hearth"))
     ).resolves.toMatchObject({ Id: restarted.id })
+  })
+
+  it("prefers a running Hearth with the proven one's secret over the stopped proven container", async () => {
+    const kiln = await coolify()
+    await kiln.identify({ containerId: kiln.hearth.id, key: secret })
+    kiln.hearth.state.running = false
+    const replacement = fakeDocker.addContainer({
+      env: { BETTER_AUTH_SECRETS: secret, DB_HOST: "ir20rpu9xgaz" },
+      name: "y7m44jcsfszy-091500",
+      networks: ["coolify"],
+      running: true,
+    })
+
+    await expect(
+      run(platformTargetContainer(kiln.context, "hearth"))
+    ).resolves.toMatchObject({ Id: replacement.id })
   })
 
   it("reports nothing for a Hearth that can't prove the container it names", async () => {

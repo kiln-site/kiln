@@ -141,6 +141,9 @@ describe("Kiln platform backups", () => {
     const proving = fakeDocker.addContainer({ ...hearth, name: "hearth-1" })
     const database = fakeDocker.addContainer({
       labels: { "coolify.managed": "true" },
+      mounts: [
+        { destination: "/var/lib/mysql", source: "mysql-data", type: "volume" },
+      ],
       name: "coolify-mysql",
       networks: ["coolify"],
       running: true,
@@ -175,9 +178,18 @@ describe("Kiln platform backups", () => {
       "CREATE TABLE restored (id int);"
     )
 
-    // Started again under a new ID, not yet connected.
-    fakeDocker.addContainer({ ...hearth, name: "hearth-2" })
+    // Started again under a new ID, not yet connected, while another
+    // container of it stays stopped.
+    fakeDocker.addContainer({ ...hearth, name: "hearth-2", running: false })
+    fakeDocker.addContainer({ ...hearth, name: "hearth-3" })
+    database.executedSql.length = 0
     await expect(restore()).rejects.toThrow("Stop Hearth")
+
+    // When Docker can't list them to say whether one runs.
+    fakeDocker.removeContainer("hearth-3")
+    fakeDocker.failNext({ command: "ps", target: "" }, "Docker is unavailable")
+    await expect(restore()).rejects.toThrow("Docker is unavailable")
+    expect(database.executedSql).toEqual([])
   })
 
   it("authenticates the manifest and encrypted payload", async () => {

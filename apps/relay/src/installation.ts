@@ -2,18 +2,23 @@ import { Effect, Option, Schema, Semaphore } from "effect"
 
 import { isKilnInstallationId } from "@workspace/contracts"
 
-import type { ProvenHearth, RelayConfig } from "./config.js"
+import type { ProvenContainer, ProvenHearth, RelayConfig } from "./config.js"
 import type { RelayStateStore } from "./effect/state.js"
 
 const INSTALLATION_ID_METADATA_KEY = "installation_id"
 const PROVEN_HEARTH_METADATA_KEY = "proven_hearth"
 
+const ProvenContainerSchema = Schema.Struct({
+  mounts: Schema.Array(Schema.String),
+  name: Schema.String,
+})
+
 const decodeProvenHearth = Schema.decodeUnknownOption(
   Schema.fromJsonString(
     Schema.Struct({
-      cacheContainer: Schema.NullOr(Schema.String),
+      cache: Schema.NullOr(ProvenContainerSchema),
       containerId: Schema.String,
-      databaseContainer: Schema.NullOr(Schema.String),
+      database: Schema.NullOr(ProvenContainerSchema),
       installationId: Schema.String,
       secretDigest: Schema.String,
     })
@@ -79,10 +84,12 @@ export const adoptProvenHearth = Effect.fn("Relay.installation.hearth")(
 )
 
 function provenHearthRecord(hearth: ProvenHearth): string {
+  const container = (recorded: ProvenContainer | null) =>
+    recorded && { mounts: recorded.mounts, name: recorded.name }
   return JSON.stringify({
-    cacheContainer: hearth.cacheContainer,
+    cache: container(hearth.cache),
     containerId: hearth.containerId,
-    databaseContainer: hearth.databaseContainer,
+    database: container(hearth.database),
     installationId: hearth.installationId,
     secretDigest: hearth.secretDigest,
   })

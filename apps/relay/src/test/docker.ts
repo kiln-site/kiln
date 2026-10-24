@@ -1525,6 +1525,8 @@ export class FakeDocker {
       return json(200, { ApiVersion: "1.47", Version: "27.3.1" })
     }
     if (method === "GET" && path === "/containers/json") {
+      // Targeted by its filters, or "" for every container.
+      await this.#checkpoint("ps", url.searchParams.get("filters") ?? "")
       const filters = apiFilters(url)
       return json(
         200,

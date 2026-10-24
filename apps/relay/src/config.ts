@@ -74,18 +74,26 @@ export type RelayGameHostSource = "configured" | "public_ip" | "relay"
 
 /**
  * A Hearth that proved the container it runs in, and what it found beside
- * it then: the database and cache containers its DB_HOST and CACHE_HOST
- * reached, by name, and a digest of its BETTER_AUTH_SECRETS. Coolify
- * removes Hearth's container when it stops Hearth and recreates it under a
- * new ID, so these find Kiln's services, and a Hearth that hasn't connected
- * yet, without it.
+ * it then: the database and cache its DB_HOST and CACHE_HOST reached, and a
+ * digest of its BETTER_AUTH_SECRETS. Coolify removes Hearth's container when
+ * it stops Hearth and recreates it under a new ID, so these find Kiln's
+ * services, and a Hearth that hasn't connected yet, without it.
  */
 export interface ProvenHearth {
-  readonly cacheContainer: string | null
+  readonly cache: ProvenContainer | null
   readonly containerId: string
-  readonly databaseContainer: string | null
+  readonly database: ProvenContainer | null
   readonly installationId: string
   readonly secretDigest: string
+}
+
+/**
+ * A container by name, and the volumes and folders it keeps its data in, so
+ * one recreated under the name is only taken for it with the same data.
+ */
+export interface ProvenContainer {
+  readonly mounts: ReadonlyArray<string>
+  readonly name: string
 }
 
 export interface RelayConfig {

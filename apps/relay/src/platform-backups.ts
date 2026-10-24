@@ -22,7 +22,7 @@ import {
 } from "@workspace/contracts"
 
 import type { RelayConfig } from "./config.js"
-import { platformTargetContainer } from "./platform.js"
+import { platformTargetContainer, provenHearthRunning } from "./platform.js"
 import { relayOwnsLabels } from "./relay-resources.js"
 import {
   DockerEngine,
@@ -368,7 +368,7 @@ async function hearthDatabaseContainer(
   const containers =
     config.resourceNamespace && owned.length > 0 ? owned : matching
   if (containers.length === 0) {
-    const unlabeled = await unlabeledHearthContainer(config, "database")
+    const unlabeled = await unlabeledDatabaseContainer(config)
     if (unlabeled) return unlabeled
   }
   const [container] = containers
@@ -388,20 +388,23 @@ async function hearthApplicationIsRunning(
 ): Promise<boolean> {
   return (
     (await runningHearthContainers(config, installationId, "hearth")).length >
-      0 || (await unlabeledHearthContainer(config, "hearth")) !== null
+      0 ||
+    // Any container with its secret: a Docker error fails the restore.
+    (await Effect.runPromise(
+      provenHearthRunning(new DockerEngine(config.dockerSocket), config)
+    ))
   )
 }
 
-// Kiln deployed without Kiln's labels, as Coolify does: found from the
-// container its Hearth proved it runs in, while it's running.
-async function unlabeledHearthContainer(
-  config: RelayConfig,
-  role: "database" | "hearth"
+// Kiln's database deployed without Kiln's labels, as Coolify does: found
+// from the container its Hearth proved it runs in, while it's running.
+async function unlabeledDatabaseContainer(
+  config: RelayConfig
 ): Promise<string | null> {
   const container = await Effect.runPromise(
     platformTargetContainer(
       { config, engine: new DockerEngine(config.dockerSocket) },
-      role
+      "database"
     )
   )
   return container?.State.Running ? container.Id : null
