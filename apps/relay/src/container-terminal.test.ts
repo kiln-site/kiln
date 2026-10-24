@@ -503,22 +503,26 @@ describe("database terminal sessions", () => {
     expect(attached.answersQueries).toBe(true)
 
     // The fake TTY echoes input, so the client prints these queries: where
-    // is the cursor, what terminal is this, and what are the foreground and
-    // background colors. The answers reach the client, which echoes them
-    // back verbatim; an answer that reads as a query isn't answered again.
+    // is the cursor, what terminal is this, what are the foreground,
+    // background, and cursor colors, and two of the palette's. The answers
+    // reach the client, which echoes them back verbatim; an answer that reads
+    // as a query isn't answered again.
     terminals.write(
       alice,
       databaseId,
       attached.sessionId,
-      "\u001b[2J\u001b[3;5H\u001b[6n\u001b[>c\u001b]10;?;?\u0007"
+      "\u001b[2J\u001b[3;5H\u001b[6n\u001b[>c\u001b]10;?;?;?\u0007\u001b]4;1;?;255;?\u0007"
     )
     const answers = [
       "\u001b[3;5R",
       "\u001b[>0;276;0c",
       "\u001b]10;rgb:ecec/eaea/e9e9\u001b\\",
       "\u001b]11;rgb:0000/0000/0000\u001b\\",
+      "\u001b]12;rgb:fafa/8282/2e2e\u001b\\",
+      "\u001b]4;1;rgb:f8f8/7171/7171\u001b\\",
+      "\u001b]4;255;rgb:eeee/eeee/eeee\u001b\\",
     ]
-    await vi.waitFor(() => expect(first.output).toContain(answers[3]))
+    await vi.waitFor(() => expect(first.output).toContain(answers.at(-1)))
     // A new page's snapshot waits for the screen to read every echoed
     // answer, and the TTY echoes what follows in order, so an answer to an
     // answer would be in the output before "done".

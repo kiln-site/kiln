@@ -8,6 +8,7 @@ import { Terminal, type IDisposable } from "@xterm/xterm"
 import {
   DATABASE_TERMINAL_WRITE_MAX_CHARACTERS,
   relayAnswersColorQuery,
+  terminalColors,
   type DatabaseTerminalControl,
   type DatabaseTerminalEnd,
 } from "@workspace/contracts"
@@ -933,10 +934,7 @@ class TerminalConnection {
   #leaveQueriesToRelay(relayAnswers: boolean) {
     if (relayAnswers === (this.#queriesLeftToRelay !== null)) return
     if (relayAnswers) {
-      this.#queriesLeftToRelay = ignoreQueries(
-        this.#terminal,
-        () => this.#reported === "self" || this.#claim !== null
-      )
+      this.#queriesLeftToRelay = ignoreQueries(this.#terminal)
     } else {
       this.#queriesLeftToRelay?.dispose()
       this.#queriesLeftToRelay = null
@@ -1176,13 +1174,8 @@ class TerminalConnection {
 
 // Makes the terminal leave unanswered the queries the Relay answers: those
 // its headless xterm, the same version as this one, answers itself, and the
-// colors it adds. Color queries the Relay can't answer are answered by the
-// page in control only. Each handler here takes the sequence before xterm's
-// own.
-function ignoreQueries(
-  terminal: Terminal,
-  inControl: () => boolean
-): IDisposable {
+// colors it adds. Each handler here takes the sequence before xterm's own.
+function ignoreQueries(terminal: Terminal): IDisposable {
   const { parser } = terminal
   const ignore = () => true
   const handlers = [
@@ -1199,18 +1192,11 @@ function ignoreQueries(
       ignore
     ),
     parser.registerDcsHandler({ final: "q", intermediates: "$" }, ignore),
-    // Colors: the ones the Relay knows it answers. Only the page in control
-    // answers for the others (the palette and cursor follow its theme), so
-    // they're answered once too. Setting a color applies on every page.
+    // Colors, when only asked for. Setting one applies on every page.
     ...[4, 10, 11, 12].map((ident) =>
-      parser.registerOscHandler(ident, (data) => {
-        if (relayAnswersColorQuery(ident, data)) return true
-        // The palette's are index and color pairs.
-        const asked = data
-          .split(";")
-          .filter((_, slot) => ident !== 4 || slot % 2 === 1)
-        return asked.every((slot) => slot === "?") && !inControl()
-      })
+      parser.registerOscHandler(ident, (data) =>
+        relayAnswersColorQuery(ident, data)
+      )
     ),
   ]
   return { dispose: () => handlers.forEach((handler) => handler.dispose()) }
@@ -1411,32 +1397,51 @@ function terminalTheme(element: HTMLElement) {
     const [red, green, blue] = context.getImageData(0, 0, 1, 1).data
     return `rgb(${red}, ${green}, ${blue})`
   }
-  const foreground = resolve("--foreground", "#e7e5e4")
-  const primary = resolve("--primary", "#f97316")
+  const foreground = resolve("--foreground", terminalColors.foreground)
+  const primary = resolve("--primary", terminalColors.cursor)
+  // The same colors the Relay reports to clients that ask.
+  const [
+    black,
+    red,
+    green,
+    yellow,
+    blue,
+    magenta,
+    cyan,
+    white,
+    brightBlack,
+    brightRed,
+    brightGreen,
+    brightYellow,
+    brightBlue,
+    brightMagenta,
+    brightCyan,
+    brightWhite,
+  ] = terminalColors.ansi
   return {
     background: "#00000000",
-    black: "#1c1917",
-    blue: "#60a5fa",
-    brightBlack: "#78716c",
-    brightBlue: "#93c5fd",
-    brightCyan: "#67e8f9",
-    brightGreen: "#86efac",
-    brightMagenta: "#f0abfc",
-    brightRed: "#fca5a5",
-    brightWhite: "#fafaf9",
-    brightYellow: "#fde68a",
+    black,
+    blue,
+    brightBlack,
+    brightBlue,
+    brightCyan,
+    brightGreen,
+    brightMagenta,
+    brightRed,
+    brightWhite,
+    brightYellow,
     cursor: primary,
     cursorAccent: "#0c0a09",
-    cyan: "#22d3ee",
+    cyan,
     foreground,
-    green: "#4ade80",
-    magenta: "#e879f9",
-    red: "#f87171",
+    green,
+    magenta,
+    red,
     selectionBackground: primary
       .replace("rgb(", "rgba(")
       .replace(")", ", 0.3)"),
-    white: "#d6d3d1",
-    yellow: "#facc15",
+    white,
+    yellow,
   }
 }
 

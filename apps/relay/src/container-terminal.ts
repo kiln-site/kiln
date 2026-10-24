@@ -10,7 +10,7 @@ import type {
   RelayDatabaseTerminalAttached,
   RelayManagedDatabase,
 } from "@workspace/contracts"
-import { relayAnswersColorQuery } from "@workspace/contracts"
+import { relayAnswersColorQuery, terminalColors } from "@workspace/contracts"
 import type { ITerminalAddon, Terminal } from "@xterm/headless"
 import { Effect } from "effect"
 
@@ -708,11 +708,35 @@ function serializeScreen(session: TerminalSession) {
   })
 }
 
-// The colors Hearth's terminal shows, by OSC number, for clients asking
-// whether it is dark or light. It is dark in every theme.
-const TERMINAL_COLORS: Record<number, string> = {
-  10: "rgb:ecec/eaea/e9e9",
-  11: "rgb:0000/0000/0000",
+// A `#rrggbb` color as xterm reports it: `rgb:rrrr/gggg/bbbb`.
+function colorSpec(color: string) {
+  const channels = [1, 3, 5].map((start) => color.slice(start, start + 2))
+  return `rgb:${channels.map((channel) => channel.repeat(2)).join("/")}`
+}
+
+function hexColor(...channels: Array<number>) {
+  return `#${channels.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`
+}
+
+// The 256 colors of Hearth's terminal: its own 16, then xterm's color cube
+// and grays.
+const CUBE_LEVELS = [0x00, 0x5f, 0x87, 0xaf, 0xd7, 0xff]
+const PALETTE = [
+  ...terminalColors.ansi,
+  ...Array.from({ length: 216 }, (_, index) =>
+    hexColor(
+      ...[36, 6, 1].map((step) => CUBE_LEVELS[Math.floor(index / step) % 6]!)
+    )
+  ),
+  ...Array.from({ length: 24 }, (_, index) =>
+    hexColor(...Array<number>(3).fill(8 + index * 10))
+  ),
+]
+// The foreground, background, and cursor, by OSC number.
+const SPECIAL_COLORS: Record<number, string> = {
+  10: terminalColors.foreground,
+  11: terminalColors.background,
+  12: terminalColors.cursor,
 }
 
 // Answers what the client asks the terminal (where the cursor is, what
@@ -729,14 +753,23 @@ function answerQueries(screen: Terminal, reply: (data: string) => void) {
     { final: "c", prefix: ">" },
     (params) => params.length > 1
   )
-  // The headless terminal has no colors of its own to report.
-  for (const ident of [10, 11]) {
+  // The headless terminal has no colors of its own to report. Setting a
+  // color changes nothing here, so one that does is left to the page.
+  screen.parser.registerOscHandler(4, (data) => {
+    if (!relayAnswersColorQuery(4, data)) return false
+    const slots = data.split(";")
+    for (let slot = 0; slot < slots.length; slot += 2) {
+      const index = Number(slots[slot])
+      reply(`\u001b]4;${index};${colorSpec(PALETTE[index]!)}\u001b\\`)
+    }
+    return true
+  })
+  for (const ident of [10, 11, 12]) {
     screen.parser.registerOscHandler(ident, (data) => {
-      // Setting a color changes nothing here; queries for colors the Relay
-      // doesn't know are left to the page.
       if (!relayAnswersColorQuery(ident, data)) return false
       data.split(";").forEach((_, slot) => {
-        reply(`\u001b]${ident + slot};${TERMINAL_COLORS[ident + slot]}\u001b\\`)
+        const color = colorSpec(SPECIAL_COLORS[ident + slot]!)
+        reply(`\u001b]${ident + slot};${color}\u001b\\`)
       })
       return true
     })

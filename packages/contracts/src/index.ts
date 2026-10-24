@@ -352,16 +352,56 @@ export const relayDatabaseTerminalAttachedSchema = z.object({
   answersQueries: z.boolean().optional(),
 })
 
+// The colors Hearth's terminal shows, as `#rrggbb`: its 16 ANSI colors, and
+// the foreground, background, and cursor with the default accent. The Relay
+// reports them to clients that ask. The terminal is dark in every theme.
+export const terminalColors = {
+  ansi: [
+    // black, red, green, yellow, blue, magenta, cyan, white
+    "#1c1917",
+    "#f87171",
+    "#4ade80",
+    "#facc15",
+    "#60a5fa",
+    "#e879f9",
+    "#22d3ee",
+    "#d6d3d1",
+    // The same, bright.
+    "#78716c",
+    "#fca5a5",
+    "#86efac",
+    "#fde68a",
+    "#93c5fd",
+    "#f0abfc",
+    "#67e8f9",
+    "#fafaf9",
+  ],
+  background: "#000000",
+  cursor: "#fa822e",
+  foreground: "#eceae9",
+} as const
+
 // Whether the Relay answers a color query (`OSC <ident> ; <data>`) on its
-// own. It knows the terminal's foreground (10) and background (11), not the
-// cursor or palette, which follow the page's theme. A query that also asks
-// for those, or sets a color, is left whole to the page. Each slot after the
-// first asks for the next color, as `OSC 10 ; ? ; ?` asks for both.
+// own: the palette (4), foreground (10), background (11), or cursor (12),
+// when it only asks. One that also sets a color is left whole to the page.
+// Each slot after the first in 10-12 asks for the next color, as
+// `OSC 10 ; ? ; ?` asks for the foreground and background; 4 takes index and
+// `?` pairs.
 export function relayAnswersColorQuery(ident: number, data: string) {
   const slots = data.split(";")
+  if (ident === 4) {
+    return (
+      slots.length % 2 === 0 &&
+      slots.every((slot, index) =>
+        index % 2 === 1
+          ? slot === "?"
+          : /^\d{1,3}$/.test(slot) && Number(slot) <= 255
+      )
+    )
+  }
   return (
-    (ident === 10 || ident === 11) &&
-    ident + slots.length - 1 <= 11 &&
+    ident >= 10 &&
+    ident + slots.length - 1 <= 12 &&
     slots.every((slot) => slot === "?")
   )
 }
