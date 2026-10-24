@@ -365,7 +365,7 @@ export function InfoRailBackupsLink({
   )
 }
 
-// "3/10" against a limit, or just "3" without one.
+// "3/10" against the newest kept, or just "3" without that limit.
 function BackupCount({ resource }: { resource: BackupsResource }) {
   const { data } = useQuery(
     backupUsageQueryOptions(resource.relayId, {
@@ -374,20 +374,13 @@ function BackupCount({ resource }: { resource: BackupsResource }) {
     })
   )
   if (!data) return null
-  const full =
-    data.quantityLimit !== null && data.quantityUsed >= data.quantityLimit
   return (
     <span
-      className={cn(
-        "tabular-nums",
-        full && "text-amber-300 light:text-amber-700"
-      )}
+      className="tabular-nums"
       title={
         data.quantityLimit === null
-          ? "Backups kept, with no limit"
-          : full
-            ? "At the backup limit; delete one to make another"
-            : `Backups kept, of ${data.quantityLimit} allowed`
+          ? "Backups kept"
+          : `Backups kept, of the newest ${data.quantityLimit}`
       }
     >
       {data.quantityLimit === null

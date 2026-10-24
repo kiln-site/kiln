@@ -116,27 +116,7 @@ export function scheduleAuthorizationFailure(input: {
       ) {
         return `You do not have ${permission} permission for ${target.name}`
       }
-      // Retention deletes the action's older backups.
-      if (
-        scheduleActionDeletesBackups(action) &&
-        !hasScheduleTargetPermission({
-          grants: input.grants,
-          permission: "backup.delete",
-          target,
-          user: input.user,
-        })
-      ) {
-        return `You do not have backup.delete permission for ${target.name}`
-      }
     }
   }
   return null
-}
-
-function scheduleActionDeletesBackups(action: ScheduleAction): boolean {
-  return (
-    action.type === "backup" &&
-    action.retention !== undefined &&
-    (action.retention.days !== null || action.retention.bytes !== null)
-  )
 }

@@ -34,23 +34,6 @@ export const scheduleConsoleCommandActionSchema = z
   })
   .strict()
 
-/**
- * Which of an action's scheduled backups of a target, at its destination,
- * Hearth keeps: those at most `days` old, newest first until together they
- * pass `bytes`. The newest is always kept. Hearth deletes the rest; Relays
- * never see this.
- */
-export const scheduleBackupRetentionSchema = z
-  .object({
-    bytes: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).nullable(),
-    days: z.number().int().positive().max(36_500).nullable(),
-  })
-  .strict()
-
-export type ScheduleBackupRetention = z.infer<
-  typeof scheduleBackupRetentionSchema
->
-
 export const scheduleBackupActionSchema = z
   .object({
     destination: z
@@ -72,7 +55,6 @@ export const scheduleBackupActionSchema = z
       .max(120)
       .transform((name) => name || "Scheduled backup")
       .default("Scheduled backup"),
-    retention: scheduleBackupRetentionSchema.optional(),
     targetKeys: scheduleActionTargetKeysSchema,
     type: z.literal("backup"),
   })
@@ -281,7 +263,6 @@ const relayScheduleBackupExecutionSchema = z
   .strict()
 
 export const relayScheduleBackupActionSchema = scheduleBackupActionSchema
-  .omit({ retention: true })
   .safeExtend({
     executions: z
       .array(relayScheduleBackupExecutionSchema)

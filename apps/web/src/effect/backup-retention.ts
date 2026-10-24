@@ -1,60 +1,45 @@
 import { Effect } from "effect"
 import type { RowDataPacket } from "mysql2/promise"
 
-import {
-  scheduleActionAppliesToTarget,
-  scheduleActionSchema,
-  scheduleTargetSchema,
-  type ScheduleBackupRetention,
-} from "@workspace/contracts/schedules"
-
 import { Database } from "@/effect/database"
 import { databaseTable } from "@/lib/database-config"
 
-// A schedule's backup action can keep its backups of each target for a
-// number of days, up to a total size, or both. Hearth works out which of
-// them have aged or outgrown it; the newest is always kept, so a target
-// never loses its last scheduled backup to retention.
+// A target's backup policy is its retention: it keeps its newest backups,
+// up to a number of them, the space they take together, and an age, each
+// the lower of the owner's limit and a platform administrator's ceiling.
+// Hearth deletes the rest, oldest first. The newest backup is always kept,
+// so retention never leaves a target without one, and final-deletion
+// backups, the last of a deleted server or database, are never deleted.
 
 const DAY_MS = 24 * 60 * 60_000
-const keepEverything: ScheduleBackupRetention = { bytes: null, days: null }
 
-interface ScheduleActionRow extends RowDataPacket {
-  action_config: unknown
-  schedule_id: string
-}
-
-interface ScheduleTargetRow extends RowDataPacket {
+interface RetentionPolicyRow extends RowDataPacket {
+  admin_quantity_limit: number | null
+  admin_retention_days: number | null
+  admin_size_limit_bytes: number | string | null
+  quantity_limit: number | null
   relay_id: string
-  schedule_id: string
+  retention_days: number | null
+  size_limit_bytes: number | string | null
   target_id: string
-  target_kind: string
-  target_name: string
+  target_kind: "database" | "instance" | "platform"
 }
 
-interface RetainedBackupRow extends RowDataPacket {
+interface KeptBackupRow extends RowDataPacket {
   bytes: number | string | null
   created_at: number | string
-  // Copied to another destination too, so retention leaves it be.
-  elsewhere: number | string
   id: string
 }
 
-/** The scheduled backups one action keeps for a target at a destination. */
-interface RetentionScope {
-  mode: "full" | "incremental"
-  relayId: string
-  retention: ScheduleBackupRetention
-  storageId: string | null
-  targetId: string
-  targetKind: "database" | "instance" | "platform"
+interface Retention {
+  bytes: number | null
+  days: number | null
+  quantity: number | null
 }
 
 export interface ExpiredBackup {
   backupId: string
   relayId: string
-  /** The destination its schedule keeps it at; `null` is the Relay. */
-  storageId: string | null
 }
 
 /** Relays that some schedule backs something up on. */
@@ -74,124 +59,45 @@ export const scheduledBackupRelayIdsEffect = Effect.fn(
   return rows.map((row) => row.relay_id)
 })
 
-/**
- * Scheduled backups past their schedule's retention, oldest first. Where two
- * schedules back up the same target to the same place, the more generous
- * retention applies to both.
- */
-export const expiredScheduledBackupsEffect = Effect.fn(
-  "backups.expiredScheduled"
-)(function* (input: { installationId: string; now: number }) {
+/** Backups past their target's retention, oldest first. */
+export const expiredBackupsEffect = Effect.fn("backups.expired")(function* (
+  now: number
+) {
   const database = yield* Database
-  const [actions, targets] = yield* Effect.all([
-    database.queryRows<ScheduleActionRow>(
-      "backup_retention_actions",
-      `SELECT action.schedule_id, action.action_config
-         FROM ${databaseTable("schedule_action")} action
-         JOIN ${databaseTable("schedule")} schedule
-           ON schedule.id = action.schedule_id AND schedule.deleted_at IS NULL
-        WHERE action.action_type = 'backup'`
-    ),
-    database.queryRows<ScheduleTargetRow>(
-      "backup_retention_targets",
-      `SELECT target.schedule_id, target.relay_id, target.target_kind,
-              target.target_id, target.target_name
-         FROM ${databaseTable("schedule_target")} target
-         JOIN ${databaseTable("schedule")} schedule
-           ON schedule.id = target.schedule_id AND schedule.deleted_at IS NULL`
-    ),
-  ])
-  const scopes = new Map<string, RetentionScope>()
-  for (const row of actions) {
-    const action = scheduleActionSchema.safeParse(jsonValue(row.action_config))
-    if (!action.success || action.data.type !== "backup") continue
-    // One without retention keeps everything it shares a scope with: a
-    // backup doesn't record which schedule made it.
-    const retention = action.data.retention ?? keepEverything
-    for (const targetRow of targets) {
-      if (targetRow.schedule_id !== row.schedule_id) continue
-      const target = scheduleTargetSchema.safeParse({
-        id: targetRow.target_id,
-        kind: targetRow.target_kind,
-        name: targetRow.target_name,
-        relayId: targetRow.relay_id,
-      })
-      if (
-        !target.success ||
-        !scheduleActionAppliesToTarget(action.data, target.data)
-      ) {
-        continue
-      }
-      // A Relay target is Kiln's own backup, made on that Relay.
-      const scope: RetentionScope = {
-        mode: action.data.mode,
-        relayId: target.data.relayId,
-        retention,
-        storageId:
-          action.data.destination.kind === "storage"
-            ? action.data.destination.storageId
-            : null,
-        targetId:
-          target.data.kind === "relay" ? input.installationId : target.data.id,
-        targetKind:
-          target.data.kind === "relay" ? "platform" : target.data.kind,
-      }
-      const key = [
-        scope.relayId,
-        scope.targetKind,
-        scope.targetId,
-        scope.storageId ?? "local",
-        scope.mode,
-      ].join(":")
-      const existing = scopes.get(key)
-      scopes.set(
-        key,
-        existing
-          ? {
-              ...scope,
-              retention: moreGenerous(existing.retention, retention),
-            }
-          : scope
-      )
-    }
-  }
-
+  const policies = yield* database.queryRows<RetentionPolicyRow>(
+    "backup_retention_policies",
+    `SELECT relay_id, target_kind, target_id, quantity_limit,
+            size_limit_bytes, retention_days, admin_quantity_limit,
+            admin_size_limit_bytes, admin_retention_days
+       FROM ${databaseTable("backup_policy")}
+      WHERE COALESCE(quantity_limit, size_limit_bytes, retention_days,
+                     admin_quantity_limit, admin_size_limit_bytes,
+                     admin_retention_days) IS NOT NULL`
+  )
   const expired: Array<ExpiredBackup & { createdAt: number }> = []
-  for (const scope of scopes.values()) {
-    if (scope.retention.days === null && scope.retention.bytes === null) {
-      continue
+  for (const policy of policies) {
+    const retention: Retention = {
+      bytes: lower(
+        nullableNumber(policy.size_limit_bytes),
+        nullableNumber(policy.admin_size_limit_bytes)
+      ),
+      days: lower(policy.retention_days, policy.admin_retention_days),
+      quantity: lower(policy.quantity_limit, policy.admin_quantity_limit),
     }
-    const backups = yield* database.queryRows<RetainedBackupRow>(
+    const backups = yield* database.queryRows<KeptBackupRow>(
       "backup_retention_backups",
-      `SELECT backup.id, backup.created_at, backup.bytes,
-              EXISTS (
-                SELECT 1
-                  FROM ${databaseTable("backup_artifact")} artifact
-                 WHERE artifact.backup_id = backup.id
-                   AND artifact.status NOT IN ('deleted', 'failed')
-                   AND NOT (artifact.storage_id <=> ?)
-              ) AS elsewhere
-         FROM ${databaseTable("backup")} backup
-        WHERE backup.relay_id = ? AND backup.target_kind = ?
-          AND backup.target_id = ?
-          AND backup.reason = 'scheduled' AND backup.status = 'available'
-          AND backup.storage_id <=> ? AND backup.backup_mode = ?
-        ORDER BY backup.created_at DESC, backup.id DESC`,
-      [
-        scope.storageId,
-        scope.relayId,
-        scope.targetKind,
-        scope.targetId,
-        scope.storageId,
-        scope.mode,
-      ]
+      `SELECT id, created_at, bytes
+         FROM ${databaseTable("backup")}
+        WHERE relay_id = ? AND target_kind = ? AND target_id = ?
+          AND status = 'available' AND reason <> 'final_delete'
+        ORDER BY created_at DESC, id DESC`,
+      [policy.relay_id, policy.target_kind, policy.target_id]
     )
-    for (const backup of expiredBackups(backups, scope.retention, input.now)) {
+    for (const backup of expiredBackups(backups, retention, now)) {
       expired.push({
         backupId: backup.id,
         createdAt: Number(backup.created_at),
-        relayId: scope.relayId,
-        storageId: scope.storageId,
+        relayId: policy.relay_id,
       })
     }
   }
@@ -200,47 +106,35 @@ export const expiredScheduledBackupsEffect = Effect.fn(
     .map((backup): ExpiredBackup => ({
       backupId: backup.backupId,
       relayId: backup.relayId,
-      storageId: backup.storageId,
     }))
 })
 
-// Newest first: the newest stays, then each is kept while it is young
-// enough and fits in what's left of the size. Deleting a backup deletes
-// every copy of it, so one also copied elsewhere, which that destination's
-// own keeping covers, is never deleted here; it still counts toward the size.
+// Newest first: the newest stays, then each is kept while it's within the
+// number, young enough, and fits in what's left of the space.
 function expiredBackups(
-  backups: ReadonlyArray<RetainedBackupRow>,
-  retention: ScheduleBackupRetention,
+  backups: ReadonlyArray<KeptBackupRow>,
+  retention: Retention,
   now: number
-): Array<RetainedBackupRow> {
+): Array<KeptBackupRow> {
   const oldest = retention.days === null ? null : now - retention.days * DAY_MS
   let total = 0
   return backups.filter((backup, index) => {
     total += Number(backup.bytes ?? 0)
-    if (index === 0 || Number(backup.elsewhere) === 1) return false
+    if (index === 0) return false
     return (
+      (retention.quantity !== null && index >= retention.quantity) ||
       (oldest !== null && Number(backup.created_at) < oldest) ||
       (retention.bytes !== null && total > retention.bytes)
     )
   })
 }
 
-function moreGenerous(
-  left: ScheduleBackupRetention,
-  right: ScheduleBackupRetention
-): ScheduleBackupRetention {
-  return {
-    bytes:
-      left.bytes === null || right.bytes === null
-        ? null
-        : Math.max(left.bytes, right.bytes),
-    days:
-      left.days === null || right.days === null
-        ? null
-        : Math.max(left.days, right.days),
-  }
+function lower(left: number | null, right: number | null): number | null {
+  if (left === null) return right
+  if (right === null) return left
+  return Math.min(left, right)
 }
 
-function jsonValue(value: unknown): unknown {
-  return typeof value === "string" ? JSON.parse(value) : value
+function nullableNumber(value: number | string | null): number | null {
+  return value === null ? null : Number(value)
 }

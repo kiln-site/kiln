@@ -17,6 +17,7 @@ import {
   createInstanceBackupHandler,
   getBackupUsageHandler,
   restoreInstanceBackupHandler,
+  updateBackupLimitsHandler,
 } from "@/server/backups.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import {
@@ -434,6 +435,39 @@ describeMysql("backup authorization", () => {
             quantityLimit: 5,
             quantityUsed: 2,
           })
+        })
+    )
+
+    it.effect(
+      "setting a server's retention needs backup.delete there, as it deletes backups",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          yield* grant(instanceId, ["backup.create"])
+          const retention = {
+            quantityLimit: 3,
+            relayId,
+            retentionDays: null,
+            scope: "user" as const,
+            sizeLimitBytes: null,
+            target: { id: instanceId, kind: "instance" as const },
+          }
+
+          const message = yield* rejection(() =>
+            updateBackupLimitsHandler(user, retention)
+          )
+          assert.include(message, "permission")
+          assert.strictEqual(yield* count("backup_policy"), 0)
+
+          yield* seed
+          yield* grant(instanceId, ["backup.create", "backup.delete"])
+          yield* Effect.promise(() =>
+            updateBackupLimitsHandler(user, retention)
+          )
+          const [policy] = yield* selectRows<{ quantity_limit: number }>(
+            "backup_policy"
+          )
+          assert.strictEqual(policy?.quantity_limit, 3)
         })
     )
   })

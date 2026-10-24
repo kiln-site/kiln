@@ -47,8 +47,8 @@ import {
 } from "@workspace/ui/components/select"
 import { showToast } from "@workspace/ui/components/sonner"
 import { Switch } from "@workspace/ui/components/switch"
-import { Textarea } from "@workspace/ui/components/textarea"
 import { KilnRestoreDialog } from "@/components/backups/kiln-restore-dialog"
+import { BackupTargetSettings } from "@/components/backups/target-settings"
 import {
   useKilnBackupHost,
   type KilnBackupHost,
@@ -106,15 +106,11 @@ import {
   restoreDatabaseBackup,
   restoreInstanceBackup,
   syncBackupRuns,
-  getBackupPolicy,
-  updateBackupExcludes,
-  updateBackupLimits,
 } from "@/server/backups"
 import type { getAccessCapabilities } from "@/server/access"
 import {
   deleteBackupStorage,
   saveBackupStorage,
-  setPreferredBackupStorage,
   type getBackupStorage,
 } from "@/server/backup-storage"
 import {
@@ -141,7 +137,6 @@ import {
 import { forkPromise } from "@/effect/promise"
 import { reportBrowserError } from "@/lib/browser-telemetry"
 type BackupStorage = Awaited<ReturnType<typeof getBackupStorage>>[number]
-type BackupPolicy = Awaited<ReturnType<typeof getBackupPolicy>>
 type CreateTarget = BackupConfigurationTarget
 
 const completedDeleteFeedbackMs = 1_000
@@ -1393,10 +1388,6 @@ export const BackupSettingsPage = React.memo(function BackupSettingsPage({
           <h2 className="mt-4 font-heading text-base font-semibold">
             Choose an instance to configure
           </h2>
-          <p className="type-support mx-auto mt-1 max-w-md text-muted-foreground">
-            Backup limits, the preferred destination, and exclusions are set
-            independently for each server, database, or Relay.
-          </p>
         </section>
       )}
     </div>
@@ -1418,14 +1409,16 @@ function BackupSettingsSurface({
   )
 
   return (
-    <section className="overflow-hidden rounded-xl border bg-card/45 [contain:paint]">
+    <section className="[contain:paint]">
       {policy.data ? (
-        <BackupSettingsEditor
+        <BackupTargetSettings
           key={`${target.relayId}:${policyTarget.kind}:${policyTarget.id}`}
           isPlatformAdmin={isPlatformAdmin}
+          name={target.name}
           policy={policy.data}
-          target={target}
+          relayId={target.relayId}
           storage={storage}
+          target={policyTarget}
         />
       ) : policy.error ? (
         <p className="p-5 text-xs text-destructive">{policy.error.message}</p>
@@ -1435,207 +1428,6 @@ function BackupSettingsSurface({
         </div>
       )}
     </section>
-  )
-}
-
-function BackupSettingsEditor({
-  isPlatformAdmin,
-  policy,
-  target,
-  storage,
-}: {
-  isPlatformAdmin: boolean
-  policy: BackupPolicy
-  target: ServerPickerOption
-  storage: Array<BackupStorage>
-}) {
-  const queryClient = useQueryClient()
-  const policyTarget = React.useMemo(() => backupPolicyTarget(target), [target])
-  const [quantityLimit, setQuantityLimit] = React.useState(
-    () => policy.quantityLimit?.toString() ?? ""
-  )
-  const [sizeLimit, setSizeLimit] = React.useState(() =>
-    bytesToGiBInput(policy.sizeLimitBytes)
-  )
-  const [adminQuantityLimit, setAdminQuantityLimit] = React.useState(
-    () => policy.adminQuantityLimit?.toString() ?? ""
-  )
-  const [adminSizeLimit, setAdminSizeLimit] = React.useState(() =>
-    bytesToGiBInput(policy.adminSizeLimitBytes)
-  )
-  const enabledStorage = React.useMemo(
-    () =>
-      storage.filter(
-        (destination) =>
-          destination.enabled &&
-          !destination.deleting &&
-          (policyTarget.kind !== "platform" || destination.ownerUserId === null)
-      ),
-    [policyTarget.kind, storage]
-  )
-  const [storageId, setStorageId] = React.useState(() =>
-    policy.storageId &&
-    enabledStorage.some((destination) => destination.id === policy.storageId)
-      ? policy.storageId
-      : "local"
-  )
-  const [exclude, setExclude] = React.useState(() => policy.exclude.join("\n"))
-  const save = useMutation({
-    mutationFn: async () => {
-      const operations: Array<Promise<unknown>> = [
-        updateBackupLimits({
-          data: {
-            quantityLimit: parseOptionalInteger(
-              quantityLimit,
-              "Quantity limit"
-            ),
-            relayId: target.relayId,
-            scope: "user",
-            sizeLimitBytes: parseOptionalGiB(sizeLimit, "Size limit"),
-            target: policyTarget,
-          },
-        }),
-        updateBackupExcludes({
-          data: {
-            exclude: excludeLines(exclude),
-            relayId: target.relayId,
-            target: policyTarget,
-          },
-        }),
-        setPreferredBackupStorage({
-          data: {
-            relayId: target.relayId,
-            storageId: storageId === "local" ? null : storageId,
-            target: policyTarget,
-          },
-        }),
-      ]
-      if (isPlatformAdmin) {
-        operations.push(
-          updateBackupLimits({
-            data: {
-              quantityLimit: parseOptionalInteger(
-                adminQuantityLimit,
-                "Platform quantity limit"
-              ),
-              relayId: target.relayId,
-              scope: "platform",
-              sizeLimitBytes: parseOptionalGiB(
-                adminSizeLimit,
-                "Platform size limit"
-              ),
-              target: policyTarget,
-            },
-          })
-        )
-      }
-      await Promise.all(operations)
-    },
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({
-        queryKey: queryKeys.backups.policy(target.relayId, policyTarget),
-      })
-      showToast({
-        message: `${target.name} backup settings saved`,
-        type: "success",
-      })
-    },
-  })
-
-  return (
-    <div className="grid gap-4 p-5 sm:grid-cols-2">
-      <StorageTextField
-        label="Quantity limit"
-        placeholder="Unlimited"
-        type="number"
-        value={quantityLimit}
-        onChange={setQuantityLimit}
-      />
-      <StorageTextField
-        label="Size limit (GiB)"
-        placeholder="Unlimited"
-        type="number"
-        value={sizeLimit}
-        onChange={setSizeLimit}
-      />
-      {isPlatformAdmin ? (
-        <StorageTextField
-          label="Platform quantity ceiling"
-          placeholder="Not enforced"
-          type="number"
-          value={adminQuantityLimit}
-          onChange={setAdminQuantityLimit}
-        />
-      ) : null}
-      {isPlatformAdmin ? (
-        <StorageTextField
-          label="Platform size ceiling (GiB)"
-          placeholder="Not enforced"
-          type="number"
-          value={adminSizeLimit}
-          onChange={setAdminSizeLimit}
-        />
-      ) : null}
-      {!isPlatformAdmin &&
-      (policy.adminQuantityLimit !== null ||
-        policy.adminSizeLimitBytes !== null) ? (
-        <div className="type-meta rounded-lg border border-amber-500/25 bg-amber-500/8 p-3 text-muted-foreground sm:col-span-2 light:bg-amber-500/16">
-          Platform ceiling: {policy.adminQuantityLimit ?? "unlimited"} backups ·{" "}
-          {policy.adminSizeLimitBytes === null
-            ? " unlimited size"
-            : ` ${formatBytes(policy.adminSizeLimitBytes)}`}
-        </div>
-      ) : null}
-      <label className="block sm:col-span-2">
-        <span className="mb-2 block text-xs font-medium">
-          Preferred destination
-        </span>
-        <Select value={storageId} onValueChange={setStorageId}>
-          <SelectTrigger
-            aria-label="Preferred backup destination"
-            className="h-9 w-full [&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate"
-          >
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent className="w-max min-w-(--radix-select-trigger-width)">
-            <SelectItem value="local">Local Relay storage</SelectItem>
-            {enabledStorage.map((destination) => (
-              <SelectItem key={destination.id} value={destination.id}>
-                {destination.name} · S3
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </label>
-      <label className="block sm:col-span-2">
-        <span className="mb-2 block text-xs font-medium">Extra exclusions</span>
-        <Textarea
-          aria-label="Extra backup exclusions"
-          className="min-h-28 font-mono text-xs"
-          placeholder={"cache/**\nlogs/*.log\nworld/session.lock"}
-          value={exclude}
-          onChange={(event) => setExclude(event.currentTarget.value)}
-        />
-        <span className="type-meta mt-1.5 block text-muted-foreground">
-          One glob per line. Relay validates exclusions before applying them to
-          compatible archives.
-        </span>
-      </label>
-      {save.error ? (
-        <p className="text-xs text-destructive sm:col-span-2">
-          {save.error.message}
-        </p>
-      ) : null}
-      <div className="flex justify-end sm:col-span-2">
-        <Button
-          disabled={save.isPending}
-          type="button"
-          onClick={() => save.mutate()}
-        >
-          {save.isPending ? "Saving…" : "Save settings"}
-        </Button>
-      </div>
-    </div>
   )
 }
 
@@ -2449,41 +2241,6 @@ function hasBackupResourcePermission(
         (grant.resourceType === resourceType &&
           grant.resourceId === resourceId))
   )
-}
-
-function parseOptionalInteger(value: string, label: string): number | null {
-  if (!value.trim()) return null
-  const parsed = Number(value)
-  if (!Number.isSafeInteger(parsed) || parsed < 0) {
-    throw new Error(`${label} must be a whole number of zero or more`)
-  }
-  return parsed
-}
-
-function parseOptionalGiB(value: string, label: string): number | null {
-  if (!value.trim()) return null
-  const gibibytes = Number(value)
-  const bytes = Math.round(gibibytes * 1024 ** 3)
-  if (
-    !Number.isFinite(gibibytes) ||
-    gibibytes < 0 ||
-    !Number.isSafeInteger(bytes)
-  ) {
-    throw new Error(`${label} must be a non-negative size`)
-  }
-  return bytes
-}
-
-function bytesToGiBInput(bytes: number | null): string {
-  if (bytes === null) return ""
-  return (bytes / 1024 ** 3).toString()
-}
-
-function excludeLines(value: string): Array<string> {
-  return value
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
 }
 
 function backupRunTargetKind(

@@ -99,32 +99,26 @@ describe("backup limits", () => {
     ).toBe(false)
   })
 
-  it("reserves remaining bytes and rejects exhausted limits", () => {
+  it("caps a backup at the space kept, and refuses only when backups are off", () => {
     expect(
       backupReservation({
         quantityLimit: 5,
-        quantityUsed: 2,
         requestedMaxBytes: 800,
         sizeLimit: 1_000,
-        sizeUsed: 400,
       })
-    ).toEqual({ maxBytes: 600 })
-    expect(() =>
+    ).toEqual({ maxBytes: 800 })
+    expect(
       backupReservation({
-        quantityLimit: 2,
-        quantityUsed: 2,
-        requestedMaxBytes: null,
-        sizeLimit: null,
-        sizeUsed: 0,
-      })
-    ).toThrow(BackupLimitError)
-    expect(() =>
-      backupReservation({
-        quantityLimit: null,
-        quantityUsed: 0,
+        quantityLimit: 1,
         requestedMaxBytes: null,
         sizeLimit: 1_000,
-        sizeUsed: 1_000,
+      })
+    ).toEqual({ maxBytes: 1_000 })
+    expect(() =>
+      backupReservation({
+        quantityLimit: 0,
+        requestedMaxBytes: null,
+        sizeLimit: null,
       })
     ).toThrow(BackupLimitError)
   })
@@ -308,52 +302,58 @@ const reserve = (
 
 describeMysql("backup reservations", () => {
   layer(TestDatabase)((it) => {
-    it.effect("counts deleting and in-flight backups toward size limits", () =>
-      Effect.gen(function* () {
-        yield* fresh
-        yield* insertPolicy({ quantity_limit: 5, size_limit_bytes: 2_048 })
-        yield* insertBackup("deleting", { status: "deleting", bytes: 1_024 })
-        yield* insertBackup("failed", { status: "failed", bytes: 5_000 })
-        yield* insertBackup("deleted", { status: "deleted", bytes: 5_000 })
+    it.effect(
+      "takes a backup past the target's limits, for retention to make room",
+      () =>
+        Effect.gen(function* () {
+          yield* fresh
+          yield* insertPolicy({ quantity_limit: 1, size_limit_bytes: 2_048 })
+          yield* insertBackup("kept", { bytes: 2_048 })
+          yield* insertBackup("running", { status: "running" })
 
-        const first = yield* reserve({ backupId: "first" })
-        // The queued backup's reservation now fills the rest of the limit.
-        const second = yield* Effect.flip(reserve({ backupId: "second" }))
+          const next = yield* reserve({ backupId: "next" })
 
-        assert.strictEqual(first.maxBytes, 1_024)
-        assert.instanceOf(second, BackupLimitError)
-        assert.strictEqual((second as BackupLimitError).kind, "size")
-        assert.isFalse((yield* backups).has("second"))
-      })
+          // As large as everything kept, at most.
+          assert.strictEqual(next.maxBytes, 2_048)
+          assert.isTrue((yield* backups).has("next"))
+        })
     )
 
     it.effect(
-      "bypasses user limits for final-deletion backups but keeps admin caps",
+      "refuses backups a platform ceiling turns off, final-deletion ones too",
+      () =>
+        Effect.gen(function* () {
+          yield* fresh
+          yield* insertPolicy({ admin_quantity_limit: 0 })
+
+          const manual = yield* Effect.flip(reserve({ backupId: "manual" }))
+          const final = yield* Effect.flip(
+            reserve({ backupId: "final", reason: "final_delete" })
+          )
+
+          assert.instanceOf(manual, BackupLimitError)
+          assert.instanceOf(final, BackupLimitError)
+          assert.strictEqual((yield* backups).size, 0)
+        })
+    )
+
+    it.effect(
+      "lets final-deletion backups past the owner's limits but not a ceiling's size",
       () =>
         Effect.gen(function* () {
           yield* fresh
           yield* insertPolicy({
-            quantity_limit: 0,
-            size_limit_bytes: 0,
-            admin_quantity_limit: 2,
+            quantity_limit: 1,
+            size_limit_bytes: 512,
             admin_size_limit_bytes: 2_048,
           })
-          yield* insertBackup("existing", { bytes: 1_024 })
 
-          const manual = yield* Effect.flip(reserve({ backupId: "manual" }))
           const final = yield* reserve({
             backupId: "final",
             reason: "final_delete",
           })
 
-          assert.instanceOf(manual, BackupLimitError)
-          assert.strictEqual(final.maxBytes, 1_024)
-          const [task] = yield* selectRows<{
-            reserved_bytes: number | string
-            backup_id: string
-          }>("backup_task")
-          assert.strictEqual(task?.backup_id, "final")
-          assert.strictEqual(Number(task?.reserved_bytes), 1_024)
+          assert.strictEqual(final.maxBytes, 2_048)
           const finalDeletes = yield* selectRows<{
             backup_id: string
             status: string
@@ -529,12 +529,14 @@ describeMysql("backup policies", () => {
           ...target,
           admin: false,
           quantityLimit: 6,
+          retentionDays: 30,
           sizeLimitBytes: 2_048,
         })
         yield* updateBackupLimitsEffect({
           ...target,
           admin: true,
           quantityLimit: 12,
+          retentionDays: 90,
           sizeLimitBytes: 4_096,
         })
         yield* updateBackupExcludesEffect({ ...target, exclude: ["cache/**"] })
@@ -549,9 +551,11 @@ describeMysql("backup policies", () => {
           yield* getBackupPolicyEffect("relay-one", "database", "database-one"),
           {
             adminQuantityLimit: 12,
+            adminRetentionDays: 90,
             adminSizeLimitBytes: 4_096,
             exclude: ["cache/**"],
             quantityLimit: 6,
+            retentionDays: 30,
             sizeLimitBytes: 2_048,
             storageId: null,
           }
@@ -560,9 +564,11 @@ describeMysql("backup policies", () => {
           yield* getBackupPolicyEffect("relay-one", "platform", "kiln.dev"),
           {
             adminQuantityLimit: null,
+            adminRetentionDays: null,
             adminSizeLimitBytes: null,
             exclude: ["logs/**"],
             quantityLimit: null,
+            retentionDays: null,
             sizeLimitBytes: null,
             storageId: null,
           }

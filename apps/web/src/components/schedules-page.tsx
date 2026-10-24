@@ -3165,10 +3165,8 @@ const ActionEditor = React.memo(function ActionEditor({
           }
           initialMode={action.mode}
           initialName={action.name}
-          initialRetention={action.retention}
           onOpenChange={setBackupConfigOpen}
           onSubmit={(configuration) => {
-            const { retention } = configuration
             onChange({
               ...action,
               destination: scheduleBackupDestination(
@@ -3176,17 +3174,10 @@ const ActionEditor = React.memo(function ActionEditor({
               ),
               mode: configuration.mode,
               name: configuration.name,
-              // Both blank keeps every backup.
-              retention:
-                retention &&
-                (retention.days !== null || retention.bytes !== null)
-                  ? retention
-                  : undefined,
             })
             setBackupConfigOpen(false)
           }}
           open={backupConfigOpen}
-          showRetention
           showTarget={false}
           singleDestination
           storage={storage}

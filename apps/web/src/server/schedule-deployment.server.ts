@@ -69,8 +69,8 @@ export function insertSchedule(
   })
 }
 
-// What a fresh installation's daily Kiln backup keeps.
-const defaultKilnBackupRetention = { bytes: 20 * 1024 ** 3, days: 30 }
+// What a fresh installation keeps of Kiln's backups.
+const defaultKilnRetention = { days: 30, sizeLimitBytes: 20 * 1024 ** 3 }
 
 interface SettingValueRow extends RowDataPacket {
   setting_value: unknown
@@ -104,7 +104,6 @@ export async function seedDefaultKilnBackupSchedule(): Promise<string | null> {
         id: randomUUID(),
         mode: "full",
         name: "Kiln backup",
-        retention: defaultKilnBackupRetention,
         type: "backup",
       },
     ],
@@ -149,6 +148,22 @@ export async function seedDefaultKilnBackupSchedule(): Promise<string | null> {
                   created_at, updated_at)
                VALUES (?, ?, ?, 'pending', ?, ?)`,
               [schedule.id, relayId, schedule.revision, now, now]
+            )
+            // Kiln's backups keep 30 days or 20 GiB, unless someone has
+            // already chosen otherwise.
+            yield* transaction.execute(
+              `INSERT IGNORE INTO ${databaseTable("backup_policy")}
+                 (relay_id, target_kind, target_id, exclude_patterns,
+                  size_limit_bytes, retention_days, created_at, updated_at)
+               VALUES (?, 'platform', ?, JSON_ARRAY(), ?, ?, ?, ?)`,
+              [
+                relayId,
+                installationId,
+                defaultKilnRetention.sizeLimitBytes,
+                defaultKilnRetention.days,
+                now,
+                now,
+              ]
             )
             yield* transaction.execute(
               `UPDATE ${databaseTable("setting")}
@@ -356,7 +371,7 @@ async function prepareRelayScheduleActions(
           { concurrency: scheduleReconciliationConcurrency }
         ).pipe(
           Effect.map((executions) => ({
-            ...relayBackupAction(action),
+            ...action,
             executions: executions.flatMap((execution) =>
               execution ? [execution] : []
             ),
@@ -366,14 +381,6 @@ async function prepareRelayScheduleActions(
       { concurrency: 1 }
     )
   )
-}
-
-// Retention is Hearth's to apply, and Relays reject keys they don't know.
-function relayBackupAction(
-  action: Extract<ScheduleAction, { type: "backup" }>
-): Omit<Extract<ScheduleAction, { type: "backup" }>, "retention"> {
-  const { retention: _, ...relayAction } = action
-  return relayAction
 }
 
 async function scheduledFullBackupDestination(

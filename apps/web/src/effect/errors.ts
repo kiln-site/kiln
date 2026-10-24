@@ -37,10 +37,10 @@ export class BackupLimitError extends Schema.TaggedError<BackupLimitError>()(
     used: Schema.Number,
   }
 ) {
+  // Retention makes room for new backups, so the only limit that refuses
+  // one is a platform ceiling of none, which turns backups off.
   override get message() {
-    return this.kind === "quantity"
-      ? `This resource has reached its ${this.limit} backup limit`
-      : "This resource does not have enough backup storage remaining"
+    return "Backups are turned off for this resource"
   }
 }
 

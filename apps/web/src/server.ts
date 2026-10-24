@@ -34,9 +34,9 @@ import {
 import { startDiskLimitWarnings } from "./lib/disk-limit-warnings.server"
 import { startNotificationPushes } from "./lib/notification-pushes.server"
 import {
-  startScheduledBackupMaintenance,
-  stopScheduledBackupMaintenance,
-} from "./lib/scheduled-backups.server"
+  startBackupMaintenance,
+  stopBackupMaintenance,
+} from "./lib/backup-maintenance.server"
 import {
   initializeRelayFromEnvironment,
   maintainPersistedRelayConnections,
@@ -115,7 +115,7 @@ scheduleTailscaleCleanupProcessing()
 startKilnUpdateNotifications()
 startDiskLimitWarnings()
 startNotificationPushes()
-startScheduledBackupMaintenance()
+startBackupMaintenance()
 forkPromise(wakePendingAuthorizationDelivery, (cause) => {
   reportAppError(cause, { operation: "authorization.delivery.recover" })
 })
@@ -131,7 +131,7 @@ export function shutdownHearth(): Promise<void> {
     stopGitHubSyncPolling(),
     stopAppDeploymentPolling(),
     stopAppImageUpdateChecks(),
-    stopScheduledBackupMaintenance(),
+    stopBackupMaintenance(),
     stopPollingWorkers(),
     stopRelayMetrics(),
   ])

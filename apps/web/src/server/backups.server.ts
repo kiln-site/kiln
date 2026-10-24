@@ -52,6 +52,7 @@ import {
 } from "@/lib/backup-storage-selection.server"
 import { grantHasPermission } from "@/lib/permissions"
 import { scheduleBackupCopyProcessing } from "@/lib/backup-copy"
+import { requestBackupRetention } from "@/lib/backup-maintenance.server"
 import { selectBackupCopySource } from "@/lib/backup-copy-source"
 import {
   publishBackupChange,
@@ -845,18 +846,31 @@ export async function updateBackupLimitsHandler(
   ) {
     throw new Error("Platform backup limits require administrator access")
   }
+  // Retention deletes the backups it no longer keeps.
+  if (data.target.kind !== "platform") {
+    await requireRelayPermission({
+      ...(data.target.kind === "database"
+        ? { databaseId: data.target.id }
+        : { instanceId: data.target.id }),
+      permission: "backup.delete",
+      relayId: data.relayId,
+      user,
+    })
+  }
   await runAppEffect(
     "backups.updateLimits",
     updateBackupLimitsEffect({
       admin: data.scope === "platform",
       quantityLimit: data.quantityLimit,
       relayId: data.relayId,
+      retentionDays: data.retentionDays,
       sizeLimitBytes: data.sizeLimitBytes,
       targetId: target.id,
       targetKind: target.kind,
     })
   )
   publishBackupSettingsChange(data.relayId)
+  requestBackupRetention()
   return { updated: true }
 }
 

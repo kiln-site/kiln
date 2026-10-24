@@ -14,8 +14,8 @@ manual tasks use the same durable task model that schedules can enqueue later.
   after reconnecting.
 - Serialize backup and restore work per Relay to bound disk, CPU, and network
   pressure.
-- Enforce per-resource quantity and logical-size limits set by the resource
-  owner, with optional stricter platform-admin caps.
+- Keep each resource's newest backups, by number, total logical size, and
+  age, as its owner sets, within optional platform-admin ceilings.
 - Restore with one clear action and optionally create a safety backup first.
 - Produce short-lived download URLs for both local and S3 artifacts.
 - Take a portable full backup before destructive resource deletion.
@@ -80,18 +80,15 @@ Artifact kinds start with `archive`, `database_dump`, and `platform_bundle`.
 A `full`/`incremental` mode is recorded independently so a future Restic
 artifact does not require a catalog migration.
 
-Each resource can set a preferred destination, exclude patterns, quantity
-limit, and total logical-size limit. Platform admins can set caps. The
-effective numeric limit is the lower non-null value. `0` disables new backups;
-`null` is unlimited. Queued/running creates reserve one quantity slot and their
-configured maximum bytes so concurrent requests cannot race past a limit.
-Failed artifacts do not consume retention. Final-deletion backups bypass a
-user limit but not Relay free-space safety checks or a platform cap explicitly
-configured to block backups.
-
-When adding a normal backup would exceed a limit, creation fails without
-silently deleting data. A later retention policy may offer opt-in oldest-first
-pruning, with protected/final backups excluded.
+Each resource can set a preferred destination, exclude patterns, and its
+retention (see [Retention](#retention)): the most backups it keeps, the most
+logical space they take together, and the longest it keeps them. Platform
+admins can set a ceiling on each; the lower non-null value applies, and
+`null` keeps without that limit. A ceiling of no backups at all turns
+backups off for the resource, and is the only limit that refuses a new one.
+A backup can be at most as large as all the space kept. Final-deletion
+backups pass the owner's limits but not a ceiling, nor Relay free-space
+safety checks.
 
 ## Storage destinations
 
@@ -216,11 +213,11 @@ Hearth stores a schedule target of kind `relay` for it, and the Relay turns it
 into a `platform` backup of its installation.
 
 A fresh installation backs Kiln up once a day, at 03:00 UTC, to the Relay,
-keeping 30 days or 20 GiB. Migration 24 marks a database migrated before
+and keeps 30 days of them, in at most 20 GiB. Migration 24 marks a database migrated before
 anyone signed up; once an administrator and a Relay reporting this
 installation exist, Hearth creates the **Kiln backups** schedule, owned by
-the first administrator, and clears the mark, so deleting or editing it
-sticks. The same sweep resends any schedule a Relay hasn't acknowledged, so
+the first administrator, with Kiln's retention, and clears the mark, so
+deleting or editing either sticks. The same sweep resends any schedule a Relay hasn't acknowledged, so
 a first deploy that failed is retried.
 Existing installations keep the schedules they chose.
 
@@ -231,19 +228,15 @@ operator to send.
 
 ## Retention
 
-A schedule's backup action can keep its backups for a number of days, up to
-a total size, or both (`retention`). Every ten minutes Hearth catalogs the
-backups Relays made on their own, then deletes, oldest first, the scheduled
-backups of each target at that destination that are past either limit. The
-newest is always kept, so a target never loses its last scheduled backup to
-retention. A backup doesn't record which schedule made it, so where two
-schedules back up the same target to the same place, the more generous
-retention applies to both, and one without retention keeps everything.
-Deleting a backup deletes every copy of it, so one also copied to another
-destination is never pruned; it still counts toward the size. Retention is
-Hearth's: Relays never receive it, and setting it takes `backup.delete` on
-each target as well as `backup.create`. Manual, pre-restore, and
-final-deletion backups are never pruned.
+A resource's backup policy is its retention. Hearth keeps its newest
+backups, by hand or on a schedule, while they're within its number, younger
+than its age, and fit in its space, newest first, and deletes the rest,
+oldest first, with every copy of each. The newest is always kept, so
+retention never leaves a resource without a backup, and final-deletion
+backups are never deleted. Hearth applies it soon after a backup finishes or
+a retention changes, and every ten minutes, when it also catalogs the
+backups Relays made on their own. Setting a retention takes `backup.delete`
+as well as `backup.create`.
 
 ## Restore and deletion safety
 
@@ -292,8 +285,7 @@ reason, size, status/progress, and creation time. Actions are download,
 restore, and delete. Transient outcomes use Sonner; queue state updates in
 place without shifting the layout.
 
-The create dialog selects a target and destination, shows effective quantity
-and size headroom, and accepts exclusions. The restore dialog explains whether
+The create dialog selects a target and destination, and accepts exclusions. The restore dialog explains whether
 the target must be stopped and defaults to "Take a safety backup first."
 Storage configuration clearly separates platform destinations from "My S3"
 destinations and never redisplays a saved secret.
@@ -355,7 +347,7 @@ Kiln keeps it and lists the skipped files as the backup's warnings, shown
 beside its size. A snapshot recovered after a Relay restart can't list them,
 so it says so instead.
 
-Quantity limits map to retained snapshot rows. Size limits use each snapshot's
+Retention counts each snapshot as a backup. Its space uses each snapshot's
 logical restore size because physical repository bytes are shared. Database
 dumps and platform bundles stay full archives. Incremental backups accept
 exactly one destination. The 5 GiB single-PUT ceiling applies only to full

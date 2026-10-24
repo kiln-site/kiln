@@ -4,29 +4,32 @@ import { logException } from "@workspace/telemetry"
 import { Cause, Clock, Effect, Fiber, Schedule } from "effect"
 
 import {
-  expiredScheduledBackupsEffect,
+  expiredBackupsEffect,
   scheduledBackupRelayIdsEffect,
 } from "@/effect/backup-retention"
 import { reserveBackupDeleteEffect } from "@/effect/backups"
-import { kilnInstallationId } from "@/effect/installation"
 import { promiseEffect } from "@/effect/promise"
 import { forkAppWorker } from "@/effect/runtime"
 import { publishBackupChange } from "@/lib/backup-realtime.server"
 import { listPersistedRelaysEffect } from "@/lib/relay-registry"
 
-// Looks after scheduled backups between runs: creates a fresh installation's
-// daily Kiln backup once it can, catalogs what Relays backed up on their own,
-// and deletes the backups each schedule's retention no longer keeps.
+// Looks after backups between runs: creates a fresh installation's daily
+// Kiln backup once it can, catalogs what Relays backed up on their own, and
+// deletes the backups each target's retention no longer keeps. It sweeps on
+// an interval, and soon after a backup finishes or a retention changes.
 
 const SWEEP_INTERVAL = "10 minutes"
-// A long-neglected schedule catches up over several sweeps.
+// Coalesces the backups and edits that ask for a sweep around the same time.
+const REQUESTED_SWEEP_DELAY_MS = 5_000
+// A target long over its retention catches up over several sweeps.
 const MAX_DELETES_PER_SWEEP = 50
 
 declare global {
-  var kilnScheduledBackupMaintenance: Fiber.Fiber<void> | undefined
+  var kilnBackupMaintenance: Fiber.Fiber<void> | undefined
+  var kilnBackupRetentionRequest: ReturnType<typeof setTimeout> | undefined
 }
 
-const seedDefaultSchedule = Effect.fn("scheduledBackups.seedDefault")(
+const seedDefaultSchedule = Effect.fn("backupMaintenance.seedDefault")(
   function* () {
     const { redeployUnacknowledgedSchedules, seedDefaultKilnBackupSchedule } =
       yield* promiseEffect(() => import("@/server/schedule-deployment.server"))
@@ -38,7 +41,7 @@ const seedDefaultSchedule = Effect.fn("scheduledBackups.seedDefault")(
 
 // A Relay makes scheduled backups on its own; Hearth catalogs them when it
 // next lists the Relay's backups, which retention needs first.
-const catalogScheduledBackups = Effect.fn("scheduledBackups.catalog")(
+const catalogScheduledBackups = Effect.fn("backupMaintenance.catalog")(
   function* () {
     const relayIds = new Set(yield* scheduledBackupRelayIdsEffect())
     const relays = (yield* listPersistedRelaysEffect()).filter(
@@ -57,13 +60,9 @@ const catalogScheduledBackups = Effect.fn("scheduledBackups.catalog")(
   }
 )
 
-const deleteExpiredBackups = Effect.fn("scheduledBackups.applyRetention")(
+const applyRetention = Effect.fn("backupMaintenance.applyRetention")(
   function* () {
-    yield* catalogScheduledBackups()
-    const expired = yield* expiredScheduledBackupsEffect({
-      installationId: kilnInstallationId(),
-      now: yield* Clock.currentTimeMillis,
-    })
+    const expired = yield* expiredBackupsEffect(yield* Clock.currentTimeMillis)
     if (expired.length === 0) return
     const relays = new Map(
       (yield* listPersistedRelaysEffect()).map((relay) => [relay.id, relay])
@@ -79,11 +78,10 @@ const deleteExpiredBackups = Effect.fn("scheduledBackups.applyRetention")(
       const relay = relays.get(backup.relayId)
       if (!relay?.enabled) continue
       yield* Effect.gen(function* () {
-        // Fails when it's no longer deletable, such as mid-restore, or
-        // since copied elsewhere; a later sweep looks again.
+        // Fails when it's no longer deletable, such as mid-restore; a later
+        // sweep looks again.
         const input = yield* reserveBackupDeleteEffect({
           backupId: backup.backupId,
-          onlyAt: { storageId: backup.storageId },
           requestedBy: null,
           taskId: randomUUID(),
         })
@@ -110,15 +108,20 @@ function logFailure(operation: string) {
   )
 }
 
-export function startScheduledBackupMaintenance(): void {
+const applyRetentionLogged = Effect.suspend(applyRetention).pipe(
+  logFailure("backupMaintenance.applyRetention")
+)
+
+export function startBackupMaintenance(): void {
   const sweep = seedDefaultSchedule().pipe(
-    logFailure("scheduledBackups.seedDefault"),
+    logFailure("backupMaintenance.seedDefault"),
     Effect.andThen(
-      deleteExpiredBackups().pipe(logFailure("scheduledBackups.applyRetention"))
-    )
+      catalogScheduledBackups().pipe(logFailure("backupMaintenance.catalog"))
+    ),
+    Effect.andThen(applyRetentionLogged)
   )
   // The first sweep waits a little, so Relays have connected.
-  globalThis.kilnScheduledBackupMaintenance ??= forkAppWorker(
+  globalThis.kilnBackupMaintenance ??= forkAppWorker(
     Effect.sleep("1 minute").pipe(
       Effect.andThen(
         sweep.pipe(Effect.repeat(Schedule.spaced(SWEEP_INTERVAL)))
@@ -128,12 +131,28 @@ export function startScheduledBackupMaintenance(): void {
   )
 }
 
-export function stopScheduledBackupMaintenance(): Promise<void> {
-  const worker = globalThis.kilnScheduledBackupMaintenance
-  globalThis.kilnScheduledBackupMaintenance = undefined
+/**
+ * Applies retention soon: after a backup finishes, or a target's retention
+ * changes. Requests close together share one pass.
+ */
+export function requestBackupRetention(): void {
+  if (globalThis.kilnBackupRetentionRequest) return
+  const timer = setTimeout(() => {
+    globalThis.kilnBackupRetentionRequest = undefined
+    forkAppWorker(applyRetentionLogged)
+  }, REQUESTED_SWEEP_DELAY_MS)
+  timer.unref()
+  globalThis.kilnBackupRetentionRequest = timer
+}
+
+export function stopBackupMaintenance(): Promise<void> {
+  const worker = globalThis.kilnBackupMaintenance
+  globalThis.kilnBackupMaintenance = undefined
+  clearTimeout(globalThis.kilnBackupRetentionRequest)
+  globalThis.kilnBackupRetentionRequest = undefined
   return worker ? Effect.runPromise(Fiber.interrupt(worker)) : Promise.resolve()
 }
 
 if (import.meta.hot) {
-  import.meta.hot.dispose(() => stopScheduledBackupMaintenance())
+  import.meta.hot.dispose(() => stopBackupMaintenance())
 }

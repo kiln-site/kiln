@@ -24,6 +24,7 @@ import { pushSubscriptions } from "./0021_push_subscriptions"
 import { resourceOwners } from "./0022_resource_owners"
 import { notificationDelivery } from "./0023_notification_delivery"
 import { defaultKilnBackups } from "./0024_default_kiln_backups"
+import { backupRetentionDays } from "./0025_backup_retention_days"
 
 // Append new migrations with the next id. Never edit or reorder applied ones.
 export const migrations: ReadonlyArray<Migration> = [
@@ -51,4 +52,5 @@ export const migrations: ReadonlyArray<Migration> = [
   resourceOwners,
   notificationDelivery,
   defaultKilnBackups,
+  backupRetentionDays,
 ]

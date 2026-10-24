@@ -107,39 +107,6 @@ describe("schedule authorization", () => {
     ).toContain("schedule.execute")
   })
 
-  it("needs backup deletion to keep backups for only so long", () => {
-    const backup: ScheduleAction = {
-      destination: { kind: "local" },
-      id: "4f9a1f0e-55c4-4d7b-9a43-1d2f0b6f2e11",
-      mode: "full",
-      name: "Nightly",
-      type: "backup",
-    }
-    const retained: ScheduleAction = {
-      ...backup,
-      retention: { bytes: null, days: 7 },
-    }
-    const check = (
-      action: ScheduleAction,
-      permissions: NonNullable<AccessGrant["permissions"]>
-    ) =>
-      scheduleAuthorizationFailure({
-        actions: [action],
-        grants: [grant(permissions)],
-        schedulePermission: "schedule.update",
-        targets: [target],
-        user,
-      })
-
-    expect(check(backup, ["schedule.update", "backup.create"])).toBeNull()
-    expect(check(retained, ["schedule.update", "backup.create"])).toBe(
-      "You do not have backup.delete permission for Server A"
-    )
-    expect(
-      check(retained, ["schedule.update", "backup.create", "backup.delete"])
-    ).toBeNull()
-  })
-
   it("keeps Kiln's backups to platform administrators, whatever a Relay grant allows", () => {
     const kiln: ScheduleTarget = {
       id: "relay-a",

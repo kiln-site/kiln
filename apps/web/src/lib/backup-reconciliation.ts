@@ -53,6 +53,19 @@ export async function reconcileRelayBackups(
       return changed && backupId ? [backupId] : []
     })
   )
+  // A finished backup can push its target past its retention.
+  if (
+    reconciled.some(
+      (changed, index) =>
+        changed &&
+        tasks[index]?.kind === "create" &&
+        tasks[index]?.status === "succeeded"
+    )
+  ) {
+    const { requestBackupRetention } =
+      await import("@/lib/backup-maintenance.server")
+    requestBackupRetention()
+  }
   const dispatchable = await runAppEffect(
     "backups.dispatchable",
     listDispatchableBackupTasksEffect(relay.id)

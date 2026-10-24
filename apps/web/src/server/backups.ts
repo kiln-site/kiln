@@ -113,18 +113,28 @@ const backupRestoreInputSchema = z.strictObject({
   safetyBackup: z.boolean().default(true),
 })
 
-const backupLimitsInputSchema = z.strictObject({
-  quantityLimit: z.number().int().nonnegative().max(1_000_000).nullable(),
-  relayId: relayIdSchema,
-  scope: z.enum(["platform", "user"]),
-  sizeLimitBytes: z
-    .number()
-    .int()
-    .nonnegative()
-    .max(Number.MAX_SAFE_INTEGER)
-    .nullable(),
-  target: backupTargetSchema,
-})
+// A target's retention: the most backups it keeps, the most space they take,
+// and the longest it keeps them; null keeps without that limit. Only a
+// platform administrator's ceiling can be none at all, which turns backups
+// off for the target.
+const backupLimitsInputSchema = z
+  .strictObject({
+    quantityLimit: z.number().int().nonnegative().max(1_000_000).nullable(),
+    relayId: relayIdSchema,
+    retentionDays: z.number().int().positive().max(36_500).nullable(),
+    scope: z.enum(["platform", "user"]),
+    sizeLimitBytes: z
+      .number()
+      .int()
+      .positive()
+      .max(Number.MAX_SAFE_INTEGER)
+      .nullable(),
+    target: backupTargetSchema,
+  })
+  .refine((input) => input.scope === "platform" || input.quantityLimit !== 0, {
+    message: "Keep at least one backup",
+    path: ["quantityLimit"],
+  })
 
 const backupExcludesInputSchema = z.strictObject({
   exclude: z.array(z.string().trim().min(1).max(1_024)).max(1_000),

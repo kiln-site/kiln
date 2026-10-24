@@ -50,9 +50,11 @@ const COUNTED_BACKUP_STATUSES = "('queued', 'running', 'available', 'deleting')"
 
 interface BackupPolicyRow extends RowDataPacket {
   admin_quantity_limit: number | null
+  admin_retention_days: number | null
   admin_size_limit_bytes: number | string | null
   exclude_patterns: unknown
   quantity_limit: number | null
+  retention_days: number | null
   size_limit_bytes: number | string | null
   storage_id: string | null
 }
@@ -328,11 +330,19 @@ export interface BackupDispatchArtifact {
   storageId: string | null
 }
 
+/**
+ * What a target keeps: its newest backups, up to a number of them, the
+ * space they take together, and an age. Each has a platform administrator's
+ * ceiling; the lower applies, and `null` keeps without that limit. Older
+ * backups are deleted (see `expiredBackupsEffect`).
+ */
 export interface BackupPolicy {
   adminQuantityLimit: number | null
+  adminRetentionDays: number | null
   adminSizeLimitBytes: number | null
   exclude: Array<string>
   quantityLimit: number | null
+  retentionDays: number | null
   sizeLimitBytes: number | null
   storageId: string | null
 }
@@ -424,7 +434,8 @@ const reserveBackupCreateEffect = Effect.fn("backups.reserveCreate")(
         )
         const policies = yield* transaction.queryRows<BackupPolicyRow>(
           `SELECT exclude_patterns, quantity_limit, size_limit_bytes, storage_id,
-                  admin_quantity_limit, admin_size_limit_bytes
+                  admin_quantity_limit, admin_size_limit_bytes,
+            retention_days, admin_retention_days
              FROM ${databaseTable("backup_policy")}
             WHERE relay_id = ? AND target_kind = ? AND target_id = ?
             FOR UPDATE`,
@@ -560,52 +571,21 @@ const reserveBackupCreateEffect = Effect.fn("backups.reserveCreate")(
           repositoryId = repository.id
           repositoryPassword = repository.password
         }
-        const usageRows = yield* transaction.queryRows<BackupUsageRow>(
-          `SELECT COUNT(*) AS quantity_used,
-                  COALESCE(SUM(
-                    CASE
-                      WHEN backup.status IN ('available', 'deleting')
-                        THEN COALESCE(backup.bytes, 0)
-                      ELSE COALESCE((
-                        SELECT MAX(task.reserved_bytes)
-                          FROM ${databaseTable("backup_task")} task
-                         WHERE task.backup_id = backup.id
-                           AND task.task_kind = 'create'
-                           AND task.status IN ('queued', 'running')
-                      ), 0)
-                    END
-                  ), 0) AS size_used
-             FROM ${databaseTable("backup")} backup
-            WHERE backup.relay_id = ?
-              AND backup.target_kind = ?
-              AND backup.target_id = ?
-              AND backup.status IN ${COUNTED_BACKUP_STATUSES}`,
-          [input.relayId, input.targetKind, input.targetId]
+        // Retention makes room by deleting older backups once this one is
+        // kept, so a new backup is refused only where backups are turned off
+        // (a ceiling of none), and can't outgrow all the space kept.
+        // Final-deletion backups pass the owner's own limits.
+        const quantityLimit = effectiveBackupLimit(
+          input.reason === "final_delete" ? null : policy.quantity_limit,
+          policy.admin_quantity_limit
         )
-        const usage = usageRows[0]
-        const quantityUsed = safeDatabaseNumber(
-          usage?.quantity_used ?? 0,
-          "backup quantity"
-        )
-        const sizeUsed = safeDatabaseNumber(
-          usage?.size_used ?? 0,
-          "backup size"
-        )
-        const userQuantityLimit =
-          input.reason === "final_delete" ? null : policy.quantity_limit
-        const userSizeLimit =
+        const sizeLimit = effectiveBackupLimit(
           input.reason === "final_delete"
             ? null
             : nullableDatabaseNumber(
                 policy.size_limit_bytes,
                 "backup size limit"
-              )
-        const quantityLimit = effectiveBackupLimit(
-          userQuantityLimit,
-          policy.admin_quantity_limit
-        )
-        const sizeLimit = effectiveBackupLimit(
-          userSizeLimit,
+              ),
           nullableDatabaseNumber(
             policy.admin_size_limit_bytes,
             "admin backup size limit"
@@ -615,10 +595,8 @@ const reserveBackupCreateEffect = Effect.fn("backups.reserveCreate")(
           try: () =>
             backupReservation({
               quantityLimit,
-              quantityUsed,
               requestedMaxBytes: input.requestedMaxBytes,
               sizeLimit,
-              sizeUsed,
             }),
           catch: (cause) =>
             cause instanceof BackupLimitError
@@ -1982,12 +1960,6 @@ export const reserveBackupRestoreEffect = Effect.fn("backups.reserveRestore")(
 export const reserveBackupDeleteEffect = Effect.fn("backups.reserveDelete")(
   function* (input: {
     backupId: string
-    /**
-     * Retention deletes a backup only while every copy of it is at this one
-     * destination (`null` is the Relay), checked under the backup's lock so
-     * a copy finished meanwhile keeps it.
-     */
-    onlyAt?: { storageId: string | null }
     // Null when Hearth deletes it itself, as retention does.
     requestedBy: string | null
     taskId: string
@@ -2032,24 +2004,6 @@ export const reserveBackupDeleteEffect = Effect.fn("backups.reserveDelete")(
           targetId: backup.target_id,
           targetKind: backup.target_kind,
         })
-        if (input.onlyAt) {
-          const elsewhere = yield* transaction.queryRows<
-            { id: string } & RowDataPacket
-          >(
-            `SELECT id FROM ${databaseTable("backup_artifact")}
-              WHERE backup_id = ? AND status NOT IN ('deleted', 'failed')
-                AND NOT (storage_id <=> ?)
-              LIMIT 1`,
-            [input.backupId, input.onlyAt.storageId]
-          )
-          if (elsewhere.length > 0) {
-            return yield* BackupStorageError.make({
-              code: "backup_copied",
-              operation: "backup.delete",
-              reason: "This backup was copied to another destination",
-            })
-          }
-        }
         yield* transaction.execute(
           `UPDATE ${databaseTable("backup")}
               SET status = 'deleting', updated_at = ?
@@ -2871,27 +2825,28 @@ export const updateBackupLimitsEffect = Effect.fn("backups.updateLimits")(
     admin: boolean
     quantityLimit: number | null
     relayId: string
+    retentionDays: number | null
     sizeLimitBytes: number | null
     targetId: string
     targetKind: BackupTargetKind
   }) {
     const database = yield* Database
     const now = yield* Clock.currentTimeMillis
-    const quantityColumn = input.admin
-      ? "admin_quantity_limit"
-      : "quantity_limit"
-    const sizeColumn = input.admin
-      ? "admin_size_limit_bytes"
-      : "size_limit_bytes"
+    const prefix = input.admin ? "admin_" : ""
+    const quantityColumn = `${prefix}quantity_limit`
+    const sizeColumn = `${prefix}size_limit_bytes`
+    const daysColumn = `${prefix}retention_days`
     yield* database.execute(
       "backup_limits_update",
       `INSERT INTO ${databaseTable("backup_policy")}
         (relay_id, target_kind, target_id, exclude_patterns,
-         ${quantityColumn}, ${sizeColumn}, created_at, updated_at)
-       VALUES (?, ?, ?, JSON_ARRAY(), ?, ?, ?, ?)
+         ${quantityColumn}, ${sizeColumn}, ${daysColumn}, created_at,
+         updated_at)
+       VALUES (?, ?, ?, JSON_ARRAY(), ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
          ${quantityColumn} = VALUES(${quantityColumn}),
          ${sizeColumn} = VALUES(${sizeColumn}),
+         ${daysColumn} = VALUES(${daysColumn}),
          updated_at = VALUES(updated_at)`,
       [
         input.relayId,
@@ -2899,6 +2854,7 @@ export const updateBackupLimitsEffect = Effect.fn("backups.updateLimits")(
         input.targetId,
         input.quantityLimit,
         input.sizeLimitBytes,
+        input.retentionDays,
         now,
         now,
       ]
@@ -2915,7 +2871,8 @@ export const getBackupPolicyEffect = Effect.fn("backups.getPolicy")(function* (
   const rows = yield* database.queryRows<BackupPolicyRow>(
     "backup_policy_get",
     `SELECT exclude_patterns, quantity_limit, size_limit_bytes, storage_id,
-            admin_quantity_limit, admin_size_limit_bytes
+            admin_quantity_limit, admin_size_limit_bytes,
+            retention_days, admin_retention_days
        FROM ${databaseTable("backup_policy")}
       WHERE relay_id = ? AND target_kind = ? AND target_id = ?
       LIMIT 1`,
@@ -2924,12 +2881,14 @@ export const getBackupPolicyEffect = Effect.fn("backups.getPolicy")(function* (
   const policy = rows[0]
   return {
     adminQuantityLimit: policy?.admin_quantity_limit ?? null,
+    adminRetentionDays: policy?.admin_retention_days ?? null,
     adminSizeLimitBytes: nullableDatabaseNumber(
       policy?.admin_size_limit_bytes ?? null,
       "admin backup size limit"
     ),
     exclude: parseExcludes(policy?.exclude_patterns ?? []),
     quantityLimit: policy?.quantity_limit ?? null,
+    retentionDays: policy?.retention_days ?? null,
     sizeLimitBytes: nullableDatabaseNumber(
       policy?.size_limit_bytes ?? null,
       "backup size limit"
@@ -2961,7 +2920,8 @@ export const getBackupUsageEffect = Effect.fn("backups.getUsage")(function* (
     database.queryRows<BackupPolicyRow>(
       "backup_usage_policy_get",
       `SELECT exclude_patterns, quantity_limit, size_limit_bytes, storage_id,
-              admin_quantity_limit, admin_size_limit_bytes
+              admin_quantity_limit, admin_size_limit_bytes,
+            retention_days, admin_retention_days
          FROM ${databaseTable("backup_policy")}
         WHERE relay_id = ? AND target_kind = ? AND target_id = ?
         LIMIT 1`,
@@ -3239,39 +3199,23 @@ export function effectiveBackupLimit(
 
 export function backupReservation(input: {
   quantityLimit: number | null
-  quantityUsed: number
   requestedMaxBytes: number | null
   sizeLimit: number | null
-  sizeUsed: number
 }): { maxBytes: number | null } {
-  if (
-    input.quantityLimit !== null &&
-    input.quantityUsed >= input.quantityLimit
-  ) {
+  if (input.quantityLimit === 0 || input.sizeLimit === 0) {
     throw BackupLimitError.make({
-      kind: "quantity",
-      limit: input.quantityLimit,
-      used: input.quantityUsed,
-    })
-  }
-  const remaining =
-    input.sizeLimit === null
-      ? null
-      : Math.max(0, input.sizeLimit - input.sizeUsed)
-  if (remaining !== null && remaining === 0) {
-    throw BackupLimitError.make({
-      kind: "size",
-      limit: input.sizeLimit ?? 0,
-      used: input.sizeUsed,
+      kind: input.quantityLimit === 0 ? "quantity" : "size",
+      limit: 0,
+      used: 0,
     })
   }
   return {
     maxBytes:
       input.requestedMaxBytes === null
-        ? remaining
-        : remaining === null
+        ? input.sizeLimit
+        : input.sizeLimit === null
           ? input.requestedMaxBytes
-          : Math.min(input.requestedMaxBytes, remaining),
+          : Math.min(input.requestedMaxBytes, input.sizeLimit),
   }
 }
 
