@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
-import type { Readable } from "node:stream"
+import { PassThrough, type Readable } from "node:stream"
 
-import { Effect, Stream } from "effect"
+import { Cause, Effect, Stream } from "effect"
 import {
   createConnection,
   escape,
@@ -12,6 +12,7 @@ import {
 } from "mysql2"
 
 import { KilnDatabaseError } from "@/effect/errors"
+import { forkPromise } from "@/effect/promise"
 import { databaseConnectionConfig, databaseTable } from "@/lib/database-config"
 
 // Hearth's own database as a SQL file, read and written through Hearth's own
@@ -316,39 +317,73 @@ function tableStream(
   if (table.columns.length === 0) return Stream.fromEffect(definition)
   // Queued only once the definition is written: the connection answers one
   // query at a time, and a row stream holds it until it's read.
-  const rows = Stream.suspend(() =>
-    Stream.fromAsyncIterable(
-      insertStatements(
-        table,
-        rowStream(
-          connection,
-          `SELECT ${table.columns.map((column) => escapeId(column)).join(", ")} FROM ${escapeId(table.name)}`
-        )
-      ),
-      (cause) =>
-        KilnDatabaseError.make({
-          cause,
-          operation: "export",
-          reason: errorReason(cause),
-        })
+  const rows = Stream.suspend(() => {
+    const source = rowStream(
+      connection,
+      `SELECT ${table.columns.map((column) => escapeId(column)).join(", ")} FROM ${escapeId(table.name)}`
     )
-  )
+    const statements = insertStatements(table, source)[Symbol.asyncIterator]()
+    // Each statement as it's ready. Cancelling the export, as a download
+    // that's closed does, destroys the rows at once, even while MySQL holds
+    // the query, so the connection is let go.
+    const next = Effect.callback<string, KilnDatabaseError | Cause.Done>(
+      (resume) => {
+        forkPromise(
+          async () => {
+            const step = await statements.next()
+            resume(step.done ? Cause.done() : Effect.succeed(step.value))
+          },
+          (cause) =>
+            resume(
+              Effect.fail(
+                KilnDatabaseError.make({
+                  cause,
+                  operation: "export",
+                  reason: errorReason(cause),
+                })
+              )
+            )
+        )
+        return Effect.sync(() => source.destroy())
+      }
+    )
+    return Stream.fromEffectRepeat(next).pipe(
+      Stream.ensuring(Effect.sync(() => source.destroy()))
+    )
+  })
   return Stream.fromEffect(definition).pipe(Stream.concat(rows))
 }
 
+// Connections that were lost, with why: an error between queries reaches
+// only the connection's listener, and mysql2 goes on writing later queries
+// to the closed socket without ever answering them.
+const lostConnections = new WeakMap<Connection, Error>()
+
 // A table's rows as they arrive. mysql2 reports a lost connection on the
-// connection rather than the stream, which would then wait forever, so it
-// ends the stream with that error.
+// connection rather than the stream, which would then wait forever, so the
+// stream ends with that error: one lost earlier, one raised as the query is
+// sent, or one while its rows arrive.
 function rowStream(connection: Connection, sql: string) {
-  const rows = connection
-    .query({ rowsAsArray: true, sql, typeCast: dumpTypeCast })
-    .stream() as Readable & AsyncIterable<ReadonlyArray<SqlValue>>
-  const lost = (error: Error) => rows.destroy(error)
+  let rows: (Readable & AsyncIterable<ReadonlyArray<SqlValue>>) | null = null
+  let failure = lostConnections.get(connection) ?? null
+  const lost = (error: Error) => {
+    failure ??= error
+    rows?.destroy(error)
+  }
   connection.on("error", lost)
+  rows = (
+    failure
+      ? new PassThrough({ objectMode: true })
+      : connection
+          .query({ rowsAsArray: true, sql, typeCast: dumpTypeCast })
+          .stream()
+  ) as Readable & AsyncIterable<ReadonlyArray<SqlValue>>
   rows.once("close", () => connection.off("error", lost))
+  if (failure) rows.destroy(failure)
   return rows
 }
 
+// A table's rows as multi-row INSERTs, then a blank line.
 async function* insertStatements(
   table: DumpTable,
   rows: AsyncIterable<ReadonlyArray<SqlValue>>
@@ -423,7 +458,9 @@ function openConnection(
       // A connection lost between queries would otherwise throw from the
       // socket and take Hearth down. A query then fails on its own, and a
       // row stream is ended with the error (see `rowStream`).
-      connection.on("error", () => {})
+      connection.on("error", (error) => {
+        lostConnections.set(connection, error)
+      })
       connection.connect((error) => {
         resume(
           error
@@ -456,6 +493,21 @@ function query<TRows>(
   sql: string
 ) {
   return Effect.callback<TRows, KilnDatabaseError>((resume) => {
+    // A query on a connection the server closed is written to a dead socket
+    // and never answered, so a lost connection fails it here.
+    const lost = lostConnections.get(connection)
+    if (lost) {
+      resume(
+        Effect.fail(
+          KilnDatabaseError.make({
+            cause: lost,
+            operation,
+            reason: errorReason(lost),
+          })
+        )
+      )
+      return
+    }
     connection.query(sql, (error, rows) => {
       resume(
         error
