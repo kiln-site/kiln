@@ -747,8 +747,12 @@ check_ports() {
       fail "Port 4100 is in use by $owner, and a Relay needs it for Kiln to reach it."
   fi
   owner=$(port_owner "$sftp_port")
-  [ -z "$owner" ] ||
-    fail "Port $sftp_port is in use by $owner. Run this again with --sftp-port and a free port for SFTP."
+  [ -n "$owner" ] || return 0
+  free=$((sftp_port + 1))
+  while [ -n "$(port_owner "$free")" ] && [ "$free" -lt $((sftp_port + 100)) ]; do
+    free=$((free + 1))
+  done
+  fail "Port $sftp_port, for SFTP, is in use by $owner. Run this again with --sftp-port $free added to use $free instead."
 }
 
 # Which proxy gives Kiln HTTPS: Coolify's on a Coolify server, otherwise
