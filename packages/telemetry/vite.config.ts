@@ -18,7 +18,7 @@ export default defineConfig({
   run: {
     tasks: {
       build: "vp pack",
-      typecheck: "tsc --noEmit",
+      typecheck: "tsrs --noEmit --checkers 2",
     },
   },
 })

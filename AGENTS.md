@@ -134,7 +134,7 @@ guide doesn't cover, search through the source code in `node_modules/effect/src`
   loads at the printed URL. Validate user-visible changes in the browser.
   Docs-only work does not need a stack.
 - Validate the changed behavior. Before pushing, run `vp check`,
-  `vp run -r typecheck`, and the tests for what you changed. Follow
+  `vp run typecheck`, and the tests for what you changed. Follow
   [Contributing](CONTRIBUTING.md) for PR conventions. When asked to deliver a PR,
   commit, push, and open it ready for review. Never merge it yourself.
 - After merge, follow the cleanup instructions in the development guide.

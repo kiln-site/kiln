@@ -22,11 +22,12 @@
     "lint": "vp lint",
     "test": "vp run -r test && vp test run",
     "format": "vp fmt",
-    "typecheck": "vp run -r typecheck",
+    "typecheck": "vp run -r --concurrency-limit 1 typecheck",
     "doctor": "npx react-doctor@latest"
   },
   "devDependencies": {
     "effect": "4.0.1",
+    "tsrs": "0.18.0-ts7.1.0-dev.20260929",
     "typescript": "^6",
     "vite": "catalog:",
     "vite-plus": "catalog:"

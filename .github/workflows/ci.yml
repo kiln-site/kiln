@@ -22,7 +22,7 @@ jobs:
         include:
           - name: Static checks
             command: |
-              vp run -r typecheck
+              vp run typecheck
               vp check
           - name: Tests
             # Every package's test task except Hearth's, plus scripts/ tests.

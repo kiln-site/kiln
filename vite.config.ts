@@ -40,6 +40,7 @@ export default defineConfig({
         rules: { "kiln/effect-recovery": "off" },
       },
     ],
+    // Keep semantic lint rules, but let the tsrs tasks own compiler diagnostics.
     options: { typeAware: true, typeCheck: false },
   },
   test: {
