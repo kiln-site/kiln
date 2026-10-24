@@ -114,7 +114,11 @@ done
 if [ -n "$join" ]; then
   case "$join" in
     http://*'#kj1.'* | https://*'#kj1.'*) ;;
-    *) usage >&2; printf 'kiln: --join needs the link from Hearth'"'"'s Add Relay dialog\n' >&2; exit 1 ;;
+    *)
+      printf 'kiln: "%s" isn'"'"'t a join link.\n' "$join" >&2
+      printf 'Copy the whole command from Add Relay in Hearth; it includes the link.\n' >&2
+      exit 1
+      ;;
   esac
 fi
 
