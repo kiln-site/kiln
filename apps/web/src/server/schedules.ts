@@ -9,7 +9,6 @@ import { relaySnapshotSchema } from "@workspace/contracts"
 import {
   normalizeScheduleCron,
   relayScheduleOverviewSchema,
-  scheduleActionSchema,
   scheduleDefinitionSchema,
   scheduleInputSchema,
   scheduleRunSchema,
@@ -49,7 +48,7 @@ import {
   groupRows,
   insertSchedule,
   insertScheduleParts,
-  jsonValue,
+  loadSchedules,
   publishScheduleCollectionChange,
   scheduleReconciliationConcurrency,
   upsertDeployment,
@@ -69,51 +68,6 @@ let nextScheduleReconciliationAt = 0
 class ScheduleRevisionConflictError extends Data.TaggedError(
   "ScheduleRevisionConflictError"
 )<{ readonly message: string }> {}
-
-interface ScheduleRow extends RowDataPacket {
-  continue_on_failure: number
-  created_at: number
-  created_by: string
-  cron_expression: string
-  enabled: number
-  id: string
-  name: string
-  revision: number
-  timezone: string
-  updated_at: number
-}
-
-interface ScheduleActionRow extends RowDataPacket {
-  action_config: unknown
-  action_type: ScheduleAction["type"]
-  id: string
-  position: number
-  schedule_id: string
-}
-
-interface ScheduleTargetRow extends RowDataPacket {
-  relay_id: string
-  schedule_id: string
-  target_id: string
-  target_kind: ScheduleTarget["kind"]
-  target_name: string
-}
-
-interface ScheduleDeploymentRow extends RowDataPacket {
-  acknowledged_revision: number | null
-  desired_revision: number
-  last_error: string | null
-  next_run_at: number | null
-  relay_id: string
-  schedule_id: string
-  status: "applied" | "error" | "pending"
-}
-
-interface ScheduleRunRow extends RowDataPacket {
-  relay_id: string
-  run_json: unknown
-  schedule_id: string
-}
 
 interface StoredScheduleIdRow extends RowDataPacket {
   id: string
@@ -148,6 +102,8 @@ export const getScheduleOptions = createServerFn({ method: "GET" }).handler(
       referencedTargets
     )
     return targets.flatMap((target) => {
+      // Kiln's backups are platform administrators' alone.
+      if (target.kind === "relay" && !isPlatformAdmin(user)) return []
       if (
         !hasScheduleTargetPermission({
           grants,
@@ -651,91 +607,6 @@ async function replaceSchedule(
       )
     })
   )
-}
-
-async function loadSchedules() {
-  const [scheduleRows, actionRows, targetRows, deploymentRows, runRows] =
-    await Promise.all([
-      databasePool.query<ScheduleRow[]>(
-        `SELECT id, name, cron_expression, timezone, enabled,
-                continue_on_failure, revision, created_by, created_at,
-                updated_at
-           FROM ${databaseTable("schedule")}
-          WHERE deleted_at IS NULL
-          ORDER BY updated_at DESC, id DESC`
-      ),
-      databasePool.query<ScheduleActionRow[]>(
-        `SELECT id, schedule_id, position, action_type, action_config
-           FROM ${databaseTable("schedule_action")}
-          ORDER BY schedule_id, position`
-      ),
-      databasePool.query<ScheduleTargetRow[]>(
-        `SELECT schedule_id, relay_id, target_kind, target_id, target_name
-           FROM ${databaseTable("schedule_target")}
-          ORDER BY schedule_id, relay_id, target_kind, target_name`
-      ),
-      databasePool.query<ScheduleDeploymentRow[]>(
-        `SELECT schedule_id, relay_id, desired_revision,
-                acknowledged_revision, status, next_run_at, last_error
-           FROM ${databaseTable("schedule_deployment")}`
-      ),
-      databasePool.query<ScheduleRunRow[]>(
-        `SELECT schedule_id, relay_id, run_json
-           FROM ${databaseTable("schedule_run")}
-          ORDER BY scheduled_at DESC
-          LIMIT 1000`
-      ),
-    ])
-  const actionsBySchedule = groupRows(actionRows[0], (row) => row.schedule_id)
-  const targetsBySchedule = groupRows(targetRows[0], (row) => row.schedule_id)
-  const deploymentsBySchedule = groupRows(
-    deploymentRows[0],
-    (row) => row.schedule_id
-  )
-  const runsBySchedule = groupRows(runRows[0], (row) => row.schedule_id)
-  return scheduleRows[0].map((row) => {
-    const definition = scheduleDefinitionSchema.parse({
-      actions: (actionsBySchedule.get(row.id) ?? []).map((action) =>
-        scheduleActionSchema.parse(jsonValue(action.action_config))
-      ),
-      continueOnFailure: Boolean(row.continue_on_failure),
-      cron: row.cron_expression,
-      enabled: Boolean(row.enabled),
-      id: row.id,
-      name: row.name,
-      revision: row.revision,
-      targets: (targetsBySchedule.get(row.id) ?? []).map((target) => ({
-        id: target.target_id,
-        kind: target.target_kind,
-        name: target.target_name,
-        relayId: target.relay_id,
-      })),
-      timezone: row.timezone,
-    })
-    return {
-      ...definition,
-      createdAt: new Date(row.created_at).toISOString(),
-      createdBy: row.created_by,
-      deployments: (deploymentsBySchedule.get(row.id) ?? []).map(
-        (deployment) => ({
-          acknowledgedRevision: deployment.acknowledged_revision,
-          desiredRevision: deployment.desired_revision,
-          lastError: deployment.last_error,
-          nextRunAt:
-            deployment.next_run_at === null
-              ? null
-              : new Date(deployment.next_run_at).toISOString(),
-          relayId: deployment.relay_id,
-          status: deployment.status,
-        })
-      ),
-      runs: (runsBySchedule.get(row.id) ?? []).flatMap((run) => {
-        const parsed = scheduleRunSchema.safeParse(jsonValue(run.run_json))
-        return parsed.success ? [{ ...parsed.data, relayId: run.relay_id }] : []
-      }),
-      updatedAt: new Date(row.updated_at).toISOString(),
-    }
-  })
 }
 
 async function removeRelayProjections(

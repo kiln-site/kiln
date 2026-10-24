@@ -411,10 +411,12 @@ function DatabaseImportDropZone({
 // first.
 export function SqlImportDropZone({
   disabledReason,
+  label = "Upload a .sql or .dmp file to import",
   limit,
   onFile,
 }: {
   disabledReason: string | undefined
+  label?: string
   limit: string
   onFile: (file: File) => void
 }) {
@@ -446,9 +448,7 @@ export function SqlImportDropZone({
       }}
     >
       <Upload className="size-5 text-muted-foreground" />
-      <span className="text-[0.8125rem] font-medium">
-        Upload a .sql or .dmp file to import
-      </span>
+      <span className="text-[0.8125rem] font-medium">{label}</span>
       <span className="text-xs text-muted-foreground">{limit}</span>
       <input
         accept={DATABASE_DUMP_ACCEPT}

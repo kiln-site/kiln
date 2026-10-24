@@ -63,6 +63,7 @@ export function KilnDataSection({ host }: { host: KilnPlatformHost }) {
     >
       <SqlImportDropZone
         disabledReason={undefined}
+        label="Upload a Kiln SQL export to import"
         limit="32 MB Limit"
         onFile={setFile}
       />
@@ -109,9 +110,10 @@ function KilnImportDialog({
         <DialogHeader>
           <DialogTitle>Import into Kiln&apos;s database</DialogTitle>
           <DialogDescription>
-            {file.name} runs against Hearth&apos;s own database while it serves.
-            A Kiln export replaces every table it holds, including sign-ins,
-            settings, and the catalog, so take a backup first.
+            {file.name} replaces every table it holds, including sign-ins,
+            settings, and the catalog, while Hearth serves. It must be a whole
+            export from this version of Kiln, and it needs a Kiln backup from
+            the last day to come back to.
           </DialogDescription>
         </DialogHeader>
         {tooLarge || upload.error ? (

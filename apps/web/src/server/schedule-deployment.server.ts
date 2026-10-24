@@ -6,7 +6,9 @@ import { z } from "zod"
 
 import {
   scheduleActionAppliesToTarget,
+  scheduleActionSchema,
   scheduleDefinitionSchema,
+  scheduleRunSchema,
   type RelayScheduleAction,
   type RelayScheduleProjection,
   type ScheduleAction,
@@ -82,16 +84,19 @@ interface SettingValueRow extends RowDataPacket {
  */
 export async function seedDefaultKilnBackupSchedule(): Promise<string | null> {
   if (!(await defaultKilnBackupsPending())) return null
-  const [{ platformRelays }, { relayConnectionPlatform }] = await Promise.all([
+  // Only a Relay that reports this installation backs it up: another Kiln
+  // can run beside it.
+  const installationId = kilnInstallationId()
+  const [{ kilnPlatformHosts }, { selectKilnHost }] = await Promise.all([
     import("@/server/platform-access.server"),
-    import("@/lib/relay-connection"),
+    import("@/lib/kiln-host"),
   ])
-  const relays = await platformRelays()
-  // The Relay that installed Kiln, else one that only reports it.
-  const host =
-    relays.find((relay) => relayConnectionPlatform(relay.id) === "relay") ??
-    relays[0]
-  if (!host) return null
+  const own = (await kilnPlatformHosts()).filter(
+    (host) => host.status?.installationId === installationId
+  )
+  const kilnHost = selectKilnHost({ hosts: own, installationId })
+  if (!kilnHost) return null
+  const { relayId } = kilnHost
   const schedule = scheduleDefinitionSchema.parse({
     actions: [
       {
@@ -108,7 +113,7 @@ export async function seedDefaultKilnBackupSchedule(): Promise<string | null> {
     id: randomUUID(),
     name: "Kiln backups",
     revision: 1,
-    targets: [{ id: host.id, kind: "relay", name: "Kiln", relayId: host.id }],
+    targets: [{ id: relayId, kind: "relay", name: "Kiln", relayId }],
     timezone: "UTC",
   })
   const owner = await runAppEffect(
@@ -153,7 +158,7 @@ export async function seedDefaultKilnBackupSchedule(): Promise<string | null> {
   )
   if (!owner) return null
   await deploySchedule(schedule, owner)
-  publishScheduleCollectionChange([host.id])
+  publishScheduleCollectionChange([relayId])
   return schedule.id
 }
 
@@ -484,4 +489,174 @@ export async function deploymentError(
 
 export function errorMessage(cause: unknown) {
   return cause instanceof Error ? cause.message : "Unknown Relay error"
+}
+
+export interface ScheduleRow extends RowDataPacket {
+  continue_on_failure: number
+  created_at: number
+  created_by: string
+  cron_expression: string
+  enabled: number
+  id: string
+  name: string
+  revision: number
+  timezone: string
+  updated_at: number
+}
+
+export interface ScheduleActionRow extends RowDataPacket {
+  action_config: unknown
+  action_type: ScheduleAction["type"]
+  id: string
+  position: number
+  schedule_id: string
+}
+
+export interface ScheduleTargetRow extends RowDataPacket {
+  relay_id: string
+  schedule_id: string
+  target_id: string
+  target_kind: ScheduleTarget["kind"]
+  target_name: string
+}
+
+export interface ScheduleDeploymentRow extends RowDataPacket {
+  acknowledged_revision: number | null
+  desired_revision: number
+  last_error: string | null
+  next_run_at: number | null
+  relay_id: string
+  schedule_id: string
+  status: "applied" | "error" | "pending"
+}
+
+export interface ScheduleRunRow extends RowDataPacket {
+  relay_id: string
+  run_json: unknown
+  schedule_id: string
+}
+
+export async function loadSchedules() {
+  const [scheduleRows, actionRows, targetRows, deploymentRows, runRows] =
+    await Promise.all([
+      databasePool.query<ScheduleRow[]>(
+        `SELECT id, name, cron_expression, timezone, enabled,
+                continue_on_failure, revision, created_by, created_at,
+                updated_at
+           FROM ${databaseTable("schedule")}
+          WHERE deleted_at IS NULL
+          ORDER BY updated_at DESC, id DESC`
+      ),
+      databasePool.query<ScheduleActionRow[]>(
+        `SELECT id, schedule_id, position, action_type, action_config
+           FROM ${databaseTable("schedule_action")}
+          ORDER BY schedule_id, position`
+      ),
+      databasePool.query<ScheduleTargetRow[]>(
+        `SELECT schedule_id, relay_id, target_kind, target_id, target_name
+           FROM ${databaseTable("schedule_target")}
+          ORDER BY schedule_id, relay_id, target_kind, target_name`
+      ),
+      databasePool.query<ScheduleDeploymentRow[]>(
+        `SELECT schedule_id, relay_id, desired_revision,
+                acknowledged_revision, status, next_run_at, last_error
+           FROM ${databaseTable("schedule_deployment")}`
+      ),
+      databasePool.query<ScheduleRunRow[]>(
+        `SELECT schedule_id, relay_id, run_json
+           FROM ${databaseTable("schedule_run")}
+          ORDER BY scheduled_at DESC
+          LIMIT 1000`
+      ),
+    ])
+  const actionsBySchedule = groupRows(actionRows[0], (row) => row.schedule_id)
+  const targetsBySchedule = groupRows(targetRows[0], (row) => row.schedule_id)
+  const deploymentsBySchedule = groupRows(
+    deploymentRows[0],
+    (row) => row.schedule_id
+  )
+  const runsBySchedule = groupRows(runRows[0], (row) => row.schedule_id)
+  return scheduleRows[0].map((row) => {
+    const definition = scheduleDefinitionSchema.parse({
+      actions: (actionsBySchedule.get(row.id) ?? []).map((action) =>
+        scheduleActionSchema.parse(jsonValue(action.action_config))
+      ),
+      continueOnFailure: Boolean(row.continue_on_failure),
+      cron: row.cron_expression,
+      enabled: Boolean(row.enabled),
+      id: row.id,
+      name: row.name,
+      revision: row.revision,
+      targets: (targetsBySchedule.get(row.id) ?? []).map((target) => ({
+        id: target.target_id,
+        kind: target.target_kind,
+        name: target.target_name,
+        relayId: target.relay_id,
+      })),
+      timezone: row.timezone,
+    })
+    return {
+      ...definition,
+      createdAt: new Date(row.created_at).toISOString(),
+      createdBy: row.created_by,
+      deployments: (deploymentsBySchedule.get(row.id) ?? []).map(
+        (deployment) => ({
+          acknowledgedRevision: deployment.acknowledged_revision,
+          desiredRevision: deployment.desired_revision,
+          lastError: deployment.last_error,
+          nextRunAt:
+            deployment.next_run_at === null
+              ? null
+              : new Date(deployment.next_run_at).toISOString(),
+          relayId: deployment.relay_id,
+          status: deployment.status,
+        })
+      ),
+      runs: (runsBySchedule.get(row.id) ?? []).flatMap((run) => {
+        const parsed = scheduleRunSchema.safeParse(jsonValue(run.run_json))
+        return parsed.success ? [{ ...parsed.data, relayId: run.relay_id }] : []
+      }),
+      updatedAt: new Date(row.updated_at).toISOString(),
+    }
+  })
+}
+
+/**
+ * Sends each Relay the schedules it hasn't acknowledged, as reconciling on
+ * the Schedules page does, so a deploy that failed, such as a fresh
+ * installation's first, is retried without anyone opening it.
+ */
+export async function redeployUnacknowledgedSchedules(): Promise<void> {
+  const [rows] = await databasePool.query<
+    Array<{ relay_id: string; schedule_id: string } & RowDataPacket>
+  >(
+    `SELECT deployment.schedule_id, deployment.relay_id
+       FROM ${databaseTable("schedule_deployment")} deployment
+       JOIN ${databaseTable("schedule")} schedule
+         ON schedule.id = deployment.schedule_id
+        AND schedule.deleted_at IS NULL
+      WHERE deployment.status <> 'applied'
+         OR COALESCE(deployment.acknowledged_revision, 0)
+              < deployment.desired_revision`
+  )
+  if (rows.length === 0) return
+  const [schedules, relays] = await Promise.all([
+    loadSchedules().then(
+      (loaded) => new Map(loaded.map((schedule) => [schedule.id, schedule]))
+    ),
+    listPersistedRelays().then(
+      (persisted) => new Map(persisted.map((relay) => [relay.id, relay]))
+    ),
+  ])
+  for (const row of rows) {
+    const schedule = schedules.get(row.schedule_id)
+    const relay = relays.get(row.relay_id)
+    if (!schedule || !relay?.enabled) continue
+    const targets = schedule.targets.filter(
+      (target) => target.relayId === row.relay_id
+    )
+    if (targets.length > 0) {
+      await deployScheduleToRelay(schedule, targets, relay)
+    }
+  }
 }

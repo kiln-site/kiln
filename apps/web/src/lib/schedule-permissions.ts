@@ -87,6 +87,11 @@ export function scheduleAuthorizationFailure(input: {
   user: AuthenticatedUser
 }): string | null {
   for (const target of input.targets) {
+    // A Relay target backs Kiln itself up, which only a platform
+    // administrator may do, as with Kiln's other backups.
+    if (target.kind === "relay" && !isPlatformAdmin(input.user)) {
+      return "Only a platform administrator can schedule Kiln's backups"
+    }
     if (
       !hasScheduleTargetPermission({
         grants: input.grants,
@@ -111,7 +116,27 @@ export function scheduleAuthorizationFailure(input: {
       ) {
         return `You do not have ${permission} permission for ${target.name}`
       }
+      // Retention deletes the action's older backups.
+      if (
+        scheduleActionDeletesBackups(action) &&
+        !hasScheduleTargetPermission({
+          grants: input.grants,
+          permission: "backup.delete",
+          target,
+          user: input.user,
+        })
+      ) {
+        return `You do not have backup.delete permission for ${target.name}`
+      }
     }
   }
   return null
+}
+
+function scheduleActionDeletesBackups(action: ScheduleAction): boolean {
+  return (
+    action.type === "backup" &&
+    action.retention !== undefined &&
+    (action.retention.days !== null || action.retention.bytes !== null)
+  )
 }

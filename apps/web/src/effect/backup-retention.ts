@@ -35,6 +35,8 @@ interface ScheduleTargetRow extends RowDataPacket {
 interface RetainedBackupRow extends RowDataPacket {
   bytes: number | string | null
   created_at: number | string
+  // Copied to another destination too, so retention leaves it be.
+  elsewhere: number | string
   id: string
 }
 
@@ -159,13 +161,22 @@ export const expiredScheduledBackupsEffect = Effect.fn(
     }
     const backups = yield* database.queryRows<RetainedBackupRow>(
       "backup_retention_backups",
-      `SELECT id, created_at, bytes
-         FROM ${databaseTable("backup")}
-        WHERE relay_id = ? AND target_kind = ? AND target_id = ?
-          AND reason = 'scheduled' AND status = 'available'
-          AND storage_id <=> ? AND backup_mode = ?
-        ORDER BY created_at DESC, id DESC`,
+      `SELECT backup.id, backup.created_at, backup.bytes,
+              EXISTS (
+                SELECT 1
+                  FROM ${databaseTable("backup_artifact")} artifact
+                 WHERE artifact.backup_id = backup.id
+                   AND artifact.status NOT IN ('deleted', 'failed')
+                   AND NOT (artifact.storage_id <=> ?)
+              ) AS elsewhere
+         FROM ${databaseTable("backup")} backup
+        WHERE backup.relay_id = ? AND backup.target_kind = ?
+          AND backup.target_id = ?
+          AND backup.reason = 'scheduled' AND backup.status = 'available'
+          AND backup.storage_id <=> ? AND backup.backup_mode = ?
+        ORDER BY backup.created_at DESC, backup.id DESC`,
       [
+        scope.storageId,
         scope.relayId,
         scope.targetKind,
         scope.targetId,
@@ -187,7 +198,9 @@ export const expiredScheduledBackupsEffect = Effect.fn(
 })
 
 // Newest first: the newest stays, then each is kept while it is young
-// enough and fits in what's left of the size.
+// enough and fits in what's left of the size. Deleting a backup deletes
+// every copy of it, so one also copied elsewhere, which that destination's
+// own keeping covers, is never deleted here; it still counts toward the size.
 function expiredBackups(
   backups: ReadonlyArray<RetainedBackupRow>,
   retention: ScheduleBackupRetention,
@@ -197,7 +210,7 @@ function expiredBackups(
   let total = 0
   return backups.filter((backup, index) => {
     total += Number(backup.bytes ?? 0)
-    if (index === 0) return false
+    if (index === 0 || Number(backup.elsewhere) === 1) return false
     return (
       (oldest !== null && Number(backup.created_at) < oldest) ||
       (retention.bytes !== null && total > retention.bytes)

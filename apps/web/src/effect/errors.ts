@@ -219,6 +219,16 @@ export class KilnDatabaseError extends Schema.TaggedError<KilnDatabaseError>()(
   "KilnDatabaseError",
   {
     operation: Schema.Literals(["export", "import"]),
+    // Why an import was refused before it ran anything.
+    refusal: Schema.optional(
+      Schema.Literals([
+        "too_large",
+        "not_kiln_export",
+        "incomplete",
+        "other_schema",
+        "no_recent_backup",
+      ])
+    ),
     reason: Schema.String,
     cause: Schema.optional(Schema.Defect()),
   }

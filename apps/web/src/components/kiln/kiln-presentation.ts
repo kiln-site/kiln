@@ -7,6 +7,7 @@ import type {
 } from "@workspace/contracts"
 
 import type { IdentityStatusPresentation } from "@/components/identity-name"
+import { selectKilnHost, type KilnPlatform } from "@/lib/kiln-host"
 import { kilnPlatformQueryOptions } from "@/lib/query-options"
 import type { KilnPlatformHost } from "@/server/platform"
 
@@ -59,26 +60,10 @@ export const kilnCopy: Record<
   },
 }
 
-/**
- * The host this Hearth runs on: the Relay that installed it, or else one that
- * installed some Kiln, or else the first that reports its services.
- */
-export function selectKilnHost(
-  hosts: ReadonlyArray<KilnPlatformHost>
-): KilnPlatformHost | null {
-  return (
-    hosts.find((host) => host.status?.canManage === true) ??
-    hosts.find((host) => host.status?.management === "relay") ??
-    hosts.find((host) => host.status !== null) ??
-    hosts[0] ??
-    null
-  )
-}
-
 export function useKilnHost(): KilnPlatformHost | null {
   return useSuspenseQuery({
     ...kilnPlatformQueryOptions(),
-    select: (data) => selectKilnHost(data.hosts),
+    select: selectKilnHost,
   }).data
 }
 
@@ -105,10 +90,8 @@ export function useKilnBackupHost(enabled: boolean): KilnBackupHost | null {
   )
 }
 
-function selectKilnBackupHost(data: {
-  hosts: ReadonlyArray<KilnPlatformHost>
-}): KilnBackupHost | null {
-  const host = selectKilnHost(data.hosts)
+function selectKilnBackupHost(data: KilnPlatform): KilnBackupHost | null {
+  const host = selectKilnHost(data)
   return host ? { relayId: host.relayId, relayName: host.relayName } : null
 }
 
@@ -218,3 +201,5 @@ export const kilnPhaseLabels: Record<RelayPlatformStatus["phase"], string> = {
   maintenance: "Hearth held stopped",
   ready: "Running",
 }
+
+export { selectKilnHost }

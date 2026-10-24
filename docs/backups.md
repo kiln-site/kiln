@@ -210,15 +210,18 @@ bytes, stored bytes, and SHA-256 digest.
 
 Kiln is a backup target like any game server or database: pickers, schedules,
 and the runs table show it as **Kiln**, backed up on the Relay beside it (the
-one Kiln's pages use). Its backups are the encrypted platform bundles above.
+one Kiln's pages use, preferring a Relay that reports this installation's
+ID). Only platform administrators back Kiln up, by hand or on a schedule. Its backups are the encrypted platform bundles above.
 Hearth stores a schedule target of kind `relay` for it, and the Relay turns it
 into a `platform` backup of its installation.
 
 A fresh installation backs Kiln up once a day, at 03:00 UTC, to the Relay,
 keeping 30 days or 20 GiB. Migration 24 marks a database migrated before
-anyone signed up; once an administrator and the Relay on Kiln's host exist,
-Hearth creates the **Kiln backups** schedule, owned by the first
-administrator, and clears the mark, so deleting or editing it sticks.
+anyone signed up; once an administrator and a Relay reporting this
+installation exist, Hearth creates the **Kiln backups** schedule, owned by
+the first administrator, and clears the mark, so deleting or editing it
+sticks. The same sweep resends any schedule a Relay hasn't acknowledged, so
+a first deploy that failed is retried.
 Existing installations keep the schedules they chose.
 
 Restoring Kiln stays offline (see below). Its Restore shows the commands for
@@ -236,7 +239,10 @@ newest is always kept, so a target never loses its last scheduled backup to
 retention. A backup doesn't record which schedule made it, so where two
 schedules back up the same target to the same place, the more generous
 retention applies to both, and one without retention keeps everything.
-Retention is Hearth's: Relays never receive it. Manual, pre-restore, and
+Deleting a backup deletes every copy of it, so one also copied to another
+destination is never pruned; it still counts toward the size. Retention is
+Hearth's: Relays never receive it, and setting it takes `backup.delete` on
+each target as well as `backup.create`. Manual, pre-restore, and
 final-deletion backups are never pruned.
 
 ## Restore and deletion safety

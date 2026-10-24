@@ -11,7 +11,7 @@ import {
 } from "mysql2"
 
 import { KilnDatabaseError } from "@/effect/errors"
-import { databaseConnectionConfig } from "@/lib/database-config"
+import { databaseConnectionConfig, databaseTable } from "@/lib/database-config"
 
 // Hearth's own database as a SQL file, read and written through Hearth's own
 // login. The file recreates every table from one consistent snapshot, so
@@ -60,7 +60,8 @@ export function kilnDatabaseDump(
         "START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY"
       )
       const tables = yield* listTables(connection)
-      return Stream.make(dumpHeader(createdAt)).pipe(
+      const schema = yield* schemaVersion(connection, "export")
+      return Stream.make(dumpHeader(createdAt, schema)).pipe(
         Stream.concat(
           Stream.fromIterable(tables).pipe(
             Stream.flatMap((table) => tableStream(connection, table))
@@ -72,27 +73,97 @@ export function kilnDatabaseDump(
   )
 }
 
-/** Runs a SQL file against Hearth's database, as one batch. */
+// An import replaces Hearth's tables while it serves, and MySQL commits each
+// DROP and CREATE at once, so nothing can roll a failed one back. It takes
+// only what can't fail partway for its own reasons, and only with a way
+// back: a whole export from this schema, and a Kiln backup from the last day.
+const RECENT_BACKUP_MS = 24 * 60 * 60_000
+
+/** Runs a Kiln export against Hearth's database, as one batch. */
 export const importKilnDatabaseSql = Effect.fn("kilnDatabase.import")(
-  function* (sql: string) {
+  function* (sql: string, kiln: { installationId: string; now: number }) {
     if (Buffer.byteLength(sql) > KILN_DATABASE_IMPORT_LIMIT_BYTES) {
-      return yield* KilnDatabaseError.make({
-        operation: "import",
-        reason: "SQL files are limited to 32 MB",
-      })
+      return yield* importRefused("too_large", "SQL files are limited to 32 MB")
     }
     const connection = yield* openConnection("import", {
       multipleStatements: true,
     })
+    yield* checkKilnImport(connection, sql, kiln)
     yield* run(connection, "import", sql)
   },
   Effect.scoped
 )
 
-function dumpHeader(createdAt: Date) {
+const checkKilnImport = Effect.fnUntraced(function* (
+  connection: Connection,
+  sql: string,
+  kiln: { installationId: string; now: number }
+) {
+  if (!sql.startsWith(`${DUMP_TITLE}\n`)) {
+    return yield* importRefused(
+      "not_kiln_export",
+      "Import a SQL file exported from Kiln's Data section"
+    )
+  }
+  if (sql.trimEnd().split("\n").at(-1) !== DUMP_END) {
+    return yield* importRefused(
+      "incomplete",
+      "This export is incomplete; export Kiln's database again"
+    )
+  }
+  const exported = Number(/^-- Kiln schema (\d+)$/mu.exec(sql)?.[1] ?? NaN)
+  const current = yield* schemaVersion(connection, "import")
+  if (exported !== current) {
+    return yield* importRefused(
+      "other_schema",
+      Number.isNaN(exported)
+        ? "This export doesn't say which version of Kiln made it"
+        : `This export is from schema ${exported}, and Hearth runs schema ${current}. Import an export from this version of Kiln.`
+    )
+  }
+  const [backup] = yield* query<Array<{ id: string }>>(
+    connection,
+    "import",
+    `SELECT id FROM ${databaseTable("backup")}
+      WHERE target_kind = 'platform' AND target_id = ${escape(kiln.installationId)}
+        AND status = 'available' AND created_at >= ${escape(kiln.now - RECENT_BACKUP_MS)}
+      LIMIT 1`
+  )
+  if (!backup) {
+    return yield* importRefused(
+      "no_recent_backup",
+      "Back Kiln up first: importing needs a Kiln backup from the last day"
+    )
+  }
+})
+
+// The newest migration applied, which names the tables' shape.
+function schemaVersion(connection: Connection, operation: "export" | "import") {
+  return Effect.map(
+    query<Array<{ id: number | null }>>(
+      connection,
+      operation,
+      `SELECT MAX(id) AS id FROM ${databaseTable("schema_migration")}`
+    ),
+    ([row]) => Number(row?.id ?? 0)
+  )
+}
+
+function importRefused(
+  refusal: NonNullable<KilnDatabaseError["refusal"]>,
+  reason: string
+) {
+  return KilnDatabaseError.make({ operation: "import", reason, refusal })
+}
+
+const DUMP_TITLE = "-- Kiln database export"
+const DUMP_END = "SET UNIQUE_CHECKS = 1;"
+
+function dumpHeader(createdAt: Date, schema: number) {
   return [
-    "-- Kiln database export",
+    DUMP_TITLE,
     `-- Created ${createdAt.toISOString()}`,
+    `-- Kiln schema ${schema}`,
     "",
     "SET NAMES utf8mb4;",
     "SET time_zone = '+00:00';",
@@ -104,11 +175,7 @@ function dumpHeader(createdAt: Date) {
   ].join("\n")
 }
 
-const DUMP_FOOTER = [
-  "SET FOREIGN_KEY_CHECKS = 1;",
-  "SET UNIQUE_CHECKS = 1;",
-  "",
-].join("\n")
+const DUMP_FOOTER = ["SET FOREIGN_KEY_CHECKS = 1;", DUMP_END, ""].join("\n")
 
 function tableStream(
   connection: Connection,
@@ -173,7 +240,8 @@ async function* insertStatements(
 }
 
 // Base tables in name order, each with the columns it stores; generated
-// columns are left to MySQL to compute again.
+// columns are left to MySQL to compute again. A column with a default from
+// an expression (DEFAULT_GENERATED) keeps its own values.
 const listTables = Effect.fnUntraced(function* (connection: Connection) {
   const rows = yield* query<Array<{ column: string | null; name: string }>>(
     connection,
@@ -183,7 +251,8 @@ const listTables = Effect.fnUntraced(function* (connection: Connection) {
        LEFT JOIN information_schema.COLUMNS columns
          ON columns.TABLE_SCHEMA = tables.TABLE_SCHEMA
         AND columns.TABLE_NAME = tables.TABLE_NAME
-        AND columns.EXTRA NOT LIKE '%GENERATED%'
+        AND columns.EXTRA NOT LIKE '%VIRTUAL GENERATED%'
+        AND columns.EXTRA NOT LIKE '%STORED GENERATED%'
       WHERE tables.TABLE_SCHEMA = DATABASE()
         AND tables.TABLE_TYPE = 'BASE TABLE'
       ORDER BY tables.TABLE_NAME, columns.ORDINAL_POSITION`

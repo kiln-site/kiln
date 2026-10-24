@@ -569,7 +569,7 @@ function SidebarKilnNavigation({
 }) {
   const { data: host = null } = useQuery({
     ...kilnPlatformQueryOptions(),
-    select: (data) => selectKilnHost(data.hosts),
+    select: selectKilnHost,
   })
   return (
     <>

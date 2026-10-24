@@ -8,13 +8,11 @@ import {
   relayPlatformTargetSchema,
   relayPlatformTerminalClaimSchema,
   relayPlatformTerminalWriteSchema,
-  relayPlatformDatabaseV1Feature,
-  relayPlatformV2Feature,
   type RelayPlatformStatus,
 } from "@workspace/contracts"
 import { z } from "zod"
 
-import { recoverPromise } from "@/effect/promise"
+import type { KilnPlatform } from "@/lib/kiln-host"
 
 // Kiln's own services: Hearth, its database, its cache, and the Traefik in
 // front of it, as reported by the Relay on their Docker host. Platform
@@ -32,42 +30,17 @@ export interface KilnPlatformHost {
 }
 
 export const getKilnPlatform = createServerFn({ method: "GET" }).handler(
-  async (): Promise<{ hosts: Array<KilnPlatformHost> }> => {
-    const { platformRelays, requirePlatformAdministrator } =
-      await import("@/server/platform-access.server")
+  async (): Promise<KilnPlatform> => {
+    const [{ kilnPlatformHosts, requirePlatformAdministrator }, installation] =
+      await Promise.all([
+        import("@/server/platform-access.server"),
+        import("@/effect/installation"),
+      ])
     await requirePlatformAdministrator()
-    const [relays, { relayConnectionFeatures, relayRpc }] = await Promise.all(
-      [platformRelays(), import("@/lib/relay-connection")]
-    )
-    const hosts = await Promise.all(
-      relays.map((relay) => {
-        const features = relayConnectionFeatures(relay.id)
-        const v2 = features.has(relayPlatformV2Feature)
-        const database = features.has(relayPlatformDatabaseV1Feature)
-        return recoverPromise(
-          async (): Promise<KilnPlatformHost> => ({
-            database,
-            error: null,
-            relayId: relay.id,
-            relayName: relay.name,
-            status: relayPlatformStatusSchema.parse(
-              await relayRpc(relay, "relay.platform.read", {}, 15_000)
-            ),
-            v2,
-          }),
-          (cause): KilnPlatformHost => ({
-            database,
-            error:
-              cause instanceof Error ? cause.message : "The Relay didn't answer",
-            relayId: relay.id,
-            relayName: relay.name,
-            status: null,
-            v2,
-          })
-        )
-      })
-    )
-    return { hosts }
+    return {
+      hosts: await kilnPlatformHosts(),
+      installationId: installation.loadedKilnInstallationId(),
+    }
   }
 )
 

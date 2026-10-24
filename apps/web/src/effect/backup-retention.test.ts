@@ -3,7 +3,12 @@ import { Effect } from "effect"
 
 import { expiredScheduledBackupsEffect } from "@/effect/backup-retention"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
-import { insertBackup, insertRelay, insertRows } from "@/test/seed"
+import {
+  insertBackup,
+  insertBackupStorage,
+  insertRelay,
+  insertRows,
+} from "@/test/seed"
 
 const now = Date.UTC(2026, 5, 1)
 const day = 24 * 60 * 60_000
@@ -102,6 +107,29 @@ describeMysql("scheduled backup retention", () => {
           yield* insertKilnBackup("other-target", 50, 100, {
             target_id: "installation-two",
           })
+          // Copied to S3 as well: deleting it would delete that copy too.
+          yield* insertBackupStorage("storage-one")
+          yield* insertKilnBackup("copied", 60, 100)
+          yield* insertRows("backup_artifact", [
+            {
+              id: "copied-local",
+              backup_id: "copied",
+              destination_key: "local",
+              storage_id: null,
+              status: "available",
+              created_at: now,
+              updated_at: now,
+            },
+            {
+              id: "copied-s3",
+              backup_id: "copied",
+              destination_key: "storage-one",
+              storage_id: "storage-one",
+              status: "available",
+              created_at: now,
+              updated_at: now,
+            },
+          ])
 
           assert.deepStrictEqual(yield* expired, ["aged", "third"])
         })

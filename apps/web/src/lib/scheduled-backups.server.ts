@@ -28,10 +28,11 @@ declare global {
 
 const seedDefaultSchedule = Effect.fn("scheduledBackups.seedDefault")(
   function* () {
-    const { seedDefaultKilnBackupSchedule } = yield* promiseEffect(
-      () => import("@/server/schedule-deployment.server")
-    )
+    const { redeployUnacknowledgedSchedules, seedDefaultKilnBackupSchedule } =
+      yield* promiseEffect(() => import("@/server/schedule-deployment.server"))
     yield* promiseEffect(seedDefaultKilnBackupSchedule)
+    // Including the one just seeded, if its Relay didn't take it.
+    yield* promiseEffect(redeployUnacknowledgedSchedules)
   }
 )
 
@@ -70,7 +71,11 @@ const deleteExpiredBackups = Effect.fn("scheduledBackups.applyRetention")(
     const { dispatchBackupTask } = yield* promiseEffect(
       () => import("@/lib/backup-reconciliation")
     )
-    for (const backup of expired.slice(0, MAX_DELETES_PER_SWEEP)) {
+    // Only deletes that start count, so ones a disabled Relay or a restore
+    // holds up never crowd out the rest.
+    let started = 0
+    for (const backup of expired) {
+      if (started >= MAX_DELETES_PER_SWEEP) break
       const relay = relays.get(backup.relayId)
       if (!relay?.enabled) continue
       yield* Effect.gen(function* () {
@@ -81,6 +86,7 @@ const deleteExpiredBackups = Effect.fn("scheduledBackups.applyRetention")(
           requestedBy: null,
           taskId: randomUUID(),
         })
+        started += 1
         publishBackupChange(relay.id, backup.backupId)
         // Undelivered, the delete waits queued; the Relay's next
         // reconciliation sends it.

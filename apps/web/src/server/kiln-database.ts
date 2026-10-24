@@ -95,20 +95,29 @@ async function kilnDatabaseRequest(
   )
 }
 
-// Runs a SQL file against Hearth's own database, through Hearth's login.
+// Runs a Kiln export against Hearth's own database, through Hearth's login;
+// importKilnDatabaseSql says which it accepts.
 export const importKilnDatabase = createServerFn({ method: "POST" })
   .validator(z.strictObject({ content: z.string().min(1) }))
   .handler(async ({ data }) => {
     const { requirePlatformAdministrator } =
       await import("@/server/platform-access.server")
     await requirePlatformAdministrator()
-    const [{ importKilnDatabaseSql }, { runAppEffect }] = await Promise.all([
+    const [
+      { importKilnDatabaseSql },
+      { runAppEffect },
+      { kilnInstallationId },
+    ] = await Promise.all([
       import("@/server/kiln-database-dump.server"),
       import("@/effect/runtime"),
+      import("@/effect/installation"),
     ])
     await runAppEffect(
       "kilnDatabase.import",
-      importKilnDatabaseSql(data.content)
+      importKilnDatabaseSql(data.content, {
+        installationId: kilnInstallationId(),
+        now: Date.now(),
+      })
     )
     return { imported: true }
   })
