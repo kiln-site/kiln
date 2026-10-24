@@ -34,7 +34,6 @@ const hearthUrl = orbstack
 const relayHost = orbstack ? `relay.${stack}.orb.local` : "relay"
 const relayUrl = orbstack ? `https://${relayHost}` : `https://${relayHost}:4100`
 const composeFiles = [
-  resolve(worktreeRoot, "compose.yaml"),
   resolve(worktreeRoot, "compose.dev.yaml"),
   ...(orbstack ? [resolve(worktreeRoot, "compose.dev.orbstack.yaml")] : []),
 ]
@@ -278,7 +277,7 @@ function printStack() {
 
 function setupEnvironment() {
   if (!existsSync(environmentFile)) {
-    const example = resolve(primaryRoot, ".env.hearth.example")
+    const example = resolve(primaryRoot, ".env.dev.example")
     if (!existsSync(example)) fail(`Missing environment template: ${example}`)
     writeFileSync(environmentFile, readFileSync(example, "utf8"), {
       mode: 0o600,

@@ -34,37 +34,23 @@ curl -fsSL https://kiln.site/install | sh
 
 This starts a Relay in platform mode, which installs Hearth, its MySQL
 database, and a Valkey cache, pairs with that Hearth, keeps them running, and
-prints a link that creates the administrator. Add other machines with:
+prints a link that creates the administrator. To add another machine, choose
+**Add Relay** in Hearth and run the command it shows there.
+
+To run the same with Compose, set `KILN_URL` in a `.env` from `.env.example`
+and start [`compose.yaml`](compose.yaml), which runs just that Relay:
 
 ```sh
-curl -fsSL https://kiln.site/install | sh -s -- --node
+docker compose up -d
+docker exec kiln-relay kiln-relay platform setup-url
 ```
 
-See [Self-hosting](docs/self-hosting.md) for how it works, its settings, and
-recovery.
+Either way, the Relay sets up and updates everything else, so set Kiln up
+one of these two ways rather than running Hearth, its database, or a Relay
+by hand. See [Self-hosting](docs/self-hosting.md) for how it works, its
+settings, and recovery.
 
-## Configuration
-
-To deploy the pieces yourself with Compose instead, start from
-`.env.hearth.example`. These are the values worth setting for a first install:
-
-```env
-KILN_URL=https://hearth.example.com
-DB_PASSWORD=
-BETTER_AUTH_SECRETS=1:
-KILN_PLATFORM_BACKUP_KEY=
-
-KILN_RELAY_HOST=relay.example.com
-KILN_RELAY_GAME_HOST=games.example.com
-KILN_RELAY_GAME_PORT_RANGE=30000-39999
-KILN_RELAY_BOOTSTRAP_TOKEN=
-KILN_RELAY_PROXY=none
-KILN_RELAY_ACME_EMAIL=
-
-KILN_ENABLE_SIGNUPS=false
-```
-
-Generate secrets with `openssl rand -base64 48`. `BETTER_AUTH_SECRETS` is versioned (`1:<secret>`). Keep an offline copy of `KILN_PLATFORM_BACKUP_KEY`; it is intentionally separate from Hearth's live secrets so a platform bundle remains recoverable after Hearth is lost. For a colocated Compose stack, give Hearth and Relay the same bootstrap token so they can pair on first boot. Set `KILN_RELAY_PROXY` to `traefik` or `coolify` when an edge should terminate TLS; `none` leaves that to you.
+## Relay access
 
 The Relay workspace includes a root terminal on its Docker host, protected by
 `relay.terminal`. Set `KILN_RELAY_HOST_ACCESS=false` on the Relay to disable host
@@ -77,8 +63,8 @@ editor as server and app files, protected by `relay.files.read` and
 `relay.files.write`. It needs the host's filesystem mounted at `/host`. Someone
 with `relay.files.mount` (Relay owners and platform admins by default) can turn
 that on from the Files page, which restarts the Relay with the mount and puts it
-back as it was if that fails. To set it up yourself instead, start the stack
-below with `docker compose -f compose.yaml -f compose.host-files.yaml up -d`.
+back as it was if that fails. With Compose, start it with
+`docker compose -f compose.yaml -f compose.host-files.yaml up -d` instead.
 Recreating the Relay from a Compose file without it removes the mount. Saving a
 host file overwrites it in place, as editors do, so its hard links and
 containers that bind-mount it see the change. Where Docker is rootless, remaps
@@ -90,12 +76,6 @@ The Database page inspects the live `/data/network/relay.sqlite` file in
 read-only mode. `relay.database.read` grants access to its state, including
 sensitive configuration. When host files are mounted, `relay.files.read` can
 read the same file through Docker's volume directory.
-
-Then:
-
-```sh
-docker compose up -d
-```
 
 See [Relay runtime](docs/relay-runtime.md) for how the Relay talks to Docker,
 how its health check works, and how to read its memory use.
