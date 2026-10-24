@@ -828,8 +828,19 @@ step "Checking Docker" check_docker
 step_progress=pull_progress
 step "Downloading Kiln" pull_relay
 
+# A Relay release older than joining starts fine but ignores the link, so
+# it's asked first and falls back to an invitation to paste.
 if [ "$mode" = "node" ] && [ -n "$join" ]; then
   step "Starting the Relay" start_node_relay
+  if ! dk exec "$container" kiln-relay pair join --check >/dev/null 2>&1; then
+    log "this Relay can't join; printing an invitation instead"
+    join=""
+    say ""
+    say "  This Relay version can't join by itself yet."
+  fi
+fi
+
+if [ "$mode" = "node" ] && [ -n "$join" ]; then
   say ""
   say "  ${green}Ready in $(duration $(($(now) - started_at))).$reset Confirm it in Hearth's Add Relay"
   say "  dialog, where the same fingerprint shows:"
@@ -842,7 +853,9 @@ if [ "$mode" = "node" ] && [ -n "$join" ]; then
 fi
 
 if [ "$mode" = "node" ]; then
-  step "Starting the Relay" start_node_relay
+  # Unless it was started above to join, and couldn't.
+  dk container inspect "$container" >/dev/null 2>&1 ||
+    step "Starting the Relay" start_node_relay
   paired=$(dk exec "$container" kiln-relay pair create 2>>"$log_file" || true)
   # Not the invitation itself: it grants full access to this Relay.
   log "$(printf '%s\n' "$paired" | grep -v '^kiln-relay://' || true)"
