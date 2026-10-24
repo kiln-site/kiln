@@ -37,7 +37,7 @@ import {
   type RelayPlatformTarget,
   type RelayPlatformStatus,
 } from "@workspace/contracts"
-import { Effect, Fiber, Option, Result, Schema } from "effect"
+import { Effect, Fiber, Option, Result, Schema, Semaphore } from "effect"
 
 import type { ProvenContainer, ProvenHearth, RelayConfig } from "./config.js"
 import { createContainer, type ContainerSpec } from "./docker-container-spec.js"
@@ -48,7 +48,8 @@ import {
   type DockerEngineError,
   isDockerNotFound,
 } from "./docker-engine.js"
-import type { RelayClientRecord } from "./effect/state.js"
+import type { RelayClientRecord, RelayStateStore } from "./effect/state.js"
+import { adoptProvenHearth } from "./installation.js"
 import { relayOwnerLabels, relayResourceNames } from "./relay-resources.js"
 import {
   decodePlatformRecoveryKit,
@@ -1221,6 +1222,10 @@ export const provenHearthContainer = Effect.fn("Relay.platform.proveHearth")(
       return null
     }
     const beside = yield* servicesBesideHearth(engine, container)
+    // Still running once its services are found, so a Hearth that stopped
+    // meanwhile doesn't record where it was.
+    const after = yield* inspectOptional(engine.inspectContainer(container.Id))
+    if (!after?.State.Running) return null
     return {
       cache: provenContainer(beside.get("cache")),
       containerId: container.Id,
@@ -1230,6 +1235,43 @@ export const provenHearthContainer = Effect.fn("Relay.platform.proveHearth")(
     } satisfies Omit<ProvenHearth, "installationId">
   }
 )
+
+// Hearths' claims are checked one at a time, in the order they arrived, and
+// one a newer claim arrived behind is dropped, so a slow check of a Hearth
+// being replaced can't save over its replacement.
+const identifying = Semaphore.makeUnsafe(1)
+let latestClaim = 0
+
+/**
+ * Checks the container a full-access Hearth says it runs in and, once
+ * proven, saves what's beside it. Returns whether it saved it.
+ */
+export function identifyHearth(
+  engine: DockerEngine,
+  config: Pick<RelayConfig, "installationId" | "provenHearth">,
+  state: RelayStateStore["Service"],
+  claim: {
+    readonly containerId: string
+    readonly installationId: string
+    readonly proof: string
+    readonly transcript: string
+  }
+) {
+  latestClaim += 1
+  const claimed = latestClaim
+  return identifying.withPermit(
+    Effect.gen(function* () {
+      if (claimed !== latestClaim) return false
+      const proven = yield* provenHearthContainer(engine, claim)
+      if (!proven || claimed !== latestClaim) return false
+      yield* adoptProvenHearth(config, state, {
+        ...proven,
+        installationId: claim.installationId,
+      })
+      return config.provenHearth?.containerId === proven.containerId
+    })
+  )
+}
 
 function provenHearth(
   config: Pick<RelayConfig, "installationId" | "provenHearth">

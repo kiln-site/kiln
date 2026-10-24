@@ -242,7 +242,9 @@ export async function restoreEncryptedPlatformBackup(
       : opened.manifest.databaseName !== databaseName
   ) {
     throw new Error(
-      `This backup holds the database ${opened.manifest.databaseName ?? "(unrecorded)"}, but Hearth's MySQL container was created for ${databaseName}`
+      opened.manifest.databaseName === undefined
+        ? "This backup predates Kiln recording which database it holds, so it restores only onto Kiln's labeled MySQL"
+        : `This backup holds the database ${opened.manifest.databaseName}, but Hearth's MySQL container was created for ${databaseName}`
     )
   }
   const restoreDirectory = resolve(config.dataDirectory, "restores")

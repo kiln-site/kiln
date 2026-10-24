@@ -172,11 +172,7 @@ import {
 } from "./platform-backups.js"
 import { FilesystemDriver, type FileRoot } from "./files.js"
 import { HostFiles } from "./host-files.js"
-import {
-  adoptProvenHearth,
-  adoptInstallationId,
-  loadInstallationId,
-} from "./installation.js"
+import { adoptInstallationId, loadInstallationId } from "./installation.js"
 import { LifecycleDriver } from "./lifecycle.js"
 import { nodeSnapshot } from "./node.js"
 import { reportRelayMemoryMetrics } from "./relay-memory.js"
@@ -250,7 +246,7 @@ import {
   checkHearthRestart,
   externalPlatformPresent,
   isPlatformOwner,
-  provenHearthContainer,
+  identifyHearth,
   platformAction,
   platformLogs,
   platformSetupUrl,
@@ -1071,13 +1067,13 @@ const controlSocket = attachControlSocket({
         runRelayEffect(
           "relay.platform.identifyHearth",
           Effect.gen(function* () {
-            const proven = yield* provenHearthContainer(relayEngine, claim)
-            if (!proven) return
-            yield* adoptProvenHearth(config, startup.state, {
-              ...proven,
-              installationId: claim.installationId,
-            })
-            yield* refreshExternalPlatform
+            const saved = yield* identifyHearth(
+              relayEngine,
+              config,
+              startup.state,
+              claim
+            )
+            if (saved) yield* refreshExternalPlatform
           })
         ),
       (cause) => {

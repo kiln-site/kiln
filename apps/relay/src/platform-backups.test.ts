@@ -359,7 +359,7 @@ describe("Kiln platform backups deployed by Coolify", () => {
     ).rejects.toThrow("holds the database coolify_default")
     // A backup from before Kiln recorded the name.
     await expect(kiln.restore({ databaseName: undefined })).rejects.toThrow(
-      "(unrecorded)"
+      "predates"
     )
 
     expect(kiln.database.executedSql).toEqual([])

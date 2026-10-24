@@ -8,15 +8,15 @@ import { describe, expect, it, onTestFinished } from "vite-plus/test"
 
 import { loadConfig } from "./config.js"
 import { DockerEngine } from "./docker-engine.js"
-import { adoptProvenHearth, loadInstallationId } from "./installation.js"
+import { loadInstallationId } from "./installation.js"
 import {
   addOwnerInvitation,
   externalPlatformPresent,
   isPlatformOwner,
   platformManagedContainer,
   platformTargetContainer,
+  identifyHearth,
   platformUpdateRefusal,
-  provenHearthContainer,
   restartPlatformService,
   withPlatformRestoreHold,
   platformStatus,
@@ -750,25 +750,21 @@ describe("Kiln deployed without Kiln's labels", () => {
       harness,
       hearth,
       // What a Relay checks when a Hearth connects, then saves.
-      identify: async (claim: { containerId: string; key: string }) => {
-        const proven = await run(
-          provenHearthContainer(engine, {
+      identify: (claim: {
+        containerId: string
+        installationId?: string
+        key: string
+      }) =>
+        run(
+          identifyHearth(engine, harness.config, harness.state, {
             containerId: claim.containerId,
+            installationId: claim.installationId ?? "coolify",
             proof: createHmac("sha256", claim.key)
               .update("transcript")
               .digest("base64url"),
             transcript: "transcript",
           })
-        )
-        if (!proven) return false
-        await run(
-          adoptProvenHearth(harness.config, harness.state, {
-            ...proven,
-            installationId: "coolify",
-          })
-        )
-        return true
-      },
+        ),
       status: () => run(platformStatus(context, null)),
     }
   }
@@ -904,6 +900,53 @@ describe("Kiln deployed without Kiln's labels", () => {
     ).resolves.toMatchObject({ Id: restarted.id })
   })
 
+  it("saves the newest of overlapping claims, and none from a Hearth that stopped while it was checked", async () => {
+    const kiln = await coolify()
+    // A redeploy moves the database while the old Hearth's check stalls.
+    let held = fakeDocker.hold({
+      command: "ps",
+      target: JSON.stringify({ network: ["coolify"] }),
+    })
+    const old = kiln.identify({ containerId: kiln.hearth.id, key: secret })
+    await held.reached
+    fakeDocker.addContainer({
+      mounts: [{ ...databaseVolume, source: "mysql-data-moved" }],
+      name: "moved-database",
+      networks: ["coolify"],
+      running: true,
+    })
+    const replacement = fakeDocker.addContainer({
+      env: { BETTER_AUTH_SECRETS: secret, DB_HOST: "moved-database" },
+      name: "y7m44jcsfszy-091500",
+      networks: ["coolify"],
+      running: true,
+    })
+    const newer = kiln.identify({ containerId: replacement.id, key: secret })
+    held.release()
+
+    await expect(old).resolves.toBe(false)
+    await expect(newer).resolves.toBe(true)
+    expect(kiln.harness.config.provenHearth).toMatchObject({
+      containerId: replacement.id,
+      database: { name: "moved-database" },
+    })
+
+    // The old Hearth reconnects, then stops before its check finishes.
+    held = fakeDocker.hold({
+      command: "inspect",
+      target: "y7m44jcsfszy-074805",
+    })
+    const stopping = kiln.identify({ containerId: kiln.hearth.id, key: secret })
+    await held.reached
+    kiln.hearth.state.running = false
+    held.release()
+
+    await expect(stopping).resolves.toBe(false)
+    expect(kiln.harness.config.provenHearth).toMatchObject({
+      containerId: replacement.id,
+    })
+  })
+
   it("prefers a running Hearth with the proven one's secret over the stopped proven container", async () => {
     const kiln = await coolify()
     await kiln.identify({ containerId: kiln.hearth.id, key: secret })
@@ -931,24 +974,13 @@ describe("Kiln deployed without Kiln's labels", () => {
       kiln.identify({ containerId: kiln.database.id, key: secret })
     ).resolves.toBe(false)
     // A proven Hearth of another installation.
-    const proven = await run(
-      provenHearthContainer(kiln.context.engine, {
+    await expect(
+      kiln.identify({
         containerId: kiln.hearth.id,
-        proof: createHmac("sha256", secret)
-          .update("transcript")
-          .digest("base64url"),
-        transcript: "transcript",
+        installationId: "another-installation",
+        key: secret,
       })
-    )
-    expect(proven).not.toBeNull()
-    if (proven) {
-      await run(
-        adoptProvenHearth(kiln.harness.config, kiln.harness.state, {
-          ...proven,
-          installationId: "another-installation",
-        })
-      )
-    }
+    ).resolves.toBe(false)
 
     expect((await kiln.status()).services).toEqual([])
     await expect(
