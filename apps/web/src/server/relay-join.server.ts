@@ -408,7 +408,8 @@ export const relayJoinViewEffect = Effect.fn("relayJoin.get")(function* (
 
 /**
  * A new command: the old join can no longer pair anything, and tells its
- * Relay it expired. Not while a Relay is being added from it.
+ * Relay it expired. Not while a Relay is being added from it; one whose
+ * adding stopped on an error, or that waits for review, can go.
  */
 export const refreshRelayJoinEffect = Effect.fn("relayJoin.refresh")(function* (
   userId: string,
@@ -421,12 +422,14 @@ export const refreshRelayJoinEffect = Effect.fn("relayJoin.refresh")(function* (
     `UPDATE ${databaseTable("relay_join")}
           SET state = 'revoked', client_private_key_ciphertext = NULL,
               updated_at = ?
-        WHERE id = ? AND created_by = ? AND state IN ('waiting', 'announced')`,
+        WHERE id = ? AND created_by = ?
+          AND (state IN ('waiting', 'announced', 'needs_review')
+            OR (state = 'confirming' AND error IS NOT NULL))`,
     [now, joinId, userId]
   )
   if (revoked.affectedRows === 0) {
     const row = yield* loadJoin(joinId, userId)
-    if (row?.state === "confirming" || row?.state === "needs_review") {
+    if (row?.state === "confirming") {
       return yield* Effect.fail(
         new RelayJoinFailure(
           "A Relay is being added from this command; finish or wait for it first"

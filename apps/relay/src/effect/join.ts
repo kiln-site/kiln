@@ -151,6 +151,9 @@ export const runRelayJoin = Effect.fnUntraced(function* (
       waiting = true
       delay = ANNOUNCE_INTERVAL_MS
     } else {
+      if (answered.response.status !== "paired") {
+        yield* dropJoinClients(input, saved.joinId)
+      }
       return yield* finish(input, saved, answered.response.status, report)
     }
     yield* Effect.sleep(
@@ -233,6 +236,22 @@ const invite = Effect.fnUntraced(function* (
     })
   }
   return next
+})
+
+// Hearth proved this join ended without saving the Relay, as when someone
+// cancelled it after pairing failed to save: a client it paired here has
+// a key Hearth threw away, so it goes too. Only on Hearth's word, not when
+// the join just runs out here, since then Hearth may well have it.
+const dropJoinClients = Effect.fnUntraced(function* (
+  input: RelayJoinInput,
+  joinId: string
+) {
+  const now = Date.now()
+  for (const client of yield* input.state.listClients()) {
+    if (client.invitationId === joinId) {
+      yield* input.state.revokeClient(client.id, now)
+    }
+  }
 })
 
 const finish = Effect.fnUntraced(function* (

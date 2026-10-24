@@ -95,7 +95,10 @@ export function RelayJoinPanel({
     return (
       <JoinReview
         key={`${view.id}:${view.state}`}
+        cancelError={refresh.error?.message ?? null}
+        cancelling={refresh.isPending}
         view={view}
+        onCancel={() => refresh.mutate()}
         onConfirmed={(next) => {
           queryClient.setQueryData([...relayJoinQueryKey, view.id], next)
           void invalidateRelayRuntimeQueries(queryClient)
@@ -258,9 +261,16 @@ function CommandLine({ command }: { command: string }) {
 // The Relay that announced itself, to name and confirm, then how adding it
 // goes.
 function JoinReview({
+  cancelError,
+  cancelling,
+  onCancel,
   onConfirmed,
   view,
 }: {
+  cancelError: string | null
+  cancelling: boolean
+  // Drops this Relay and shows a new command instead.
+  onCancel: () => void
   onConfirmed: (view: JoinView) => void
   view: JoinView
 }) {
@@ -363,6 +373,7 @@ function JoinReview({
       {confirm.error ? (
         <DialogFeedback message={confirm.error.message} />
       ) : null}
+      {cancelError ? <DialogFeedback message={cancelError} /> : null}
 
       <div className="flex items-center justify-end gap-3">
         {working ? (
@@ -371,6 +382,16 @@ function JoinReview({
             {progressLabel(view.progress)}
           </span>
         ) : null}
+        {working ? null : (
+          <Button
+            type="button"
+            variant="ghost"
+            disabled={cancelling || confirm.isPending}
+            onClick={onCancel}
+          >
+            Cancel
+          </Button>
+        )}
         <Button
           type="button"
           disabled={working || confirm.isPending || holder !== null}

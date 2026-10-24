@@ -7,7 +7,7 @@ import {
 } from "node:crypto"
 
 import { assert, layer } from "@effect/vitest"
-import { Effect } from "effect"
+import { Effect, Schedule } from "effect"
 import { TestClock } from "effect/testing"
 import { vi } from "vite-plus/test"
 import {
@@ -259,6 +259,51 @@ describeMysql("Relay joins", () => {
             "announced"
           )
         })
+    )
+
+    it.effect("give way to a new command once adding the Relay failed", () =>
+      // Confirming starts the worker, which reads the real clock.
+      TestClock.withLive(
+        Effect.gen(function* () {
+          yield* resetDatabase
+          const join = yield* openRelayJoinEffect("owner")
+          // At a closed port, so pairing with it fails at once.
+          yield* announce(
+            join.id,
+            join.secret ?? "",
+            relayEnvelope(join.id, {
+              browserOrigin: "https://127.0.0.1:1",
+              controlEndpoint: "wss://127.0.0.1:1/v1/socket",
+            }),
+            "203.0.113.6"
+          )
+          yield* confirmRelayJoinEffect({
+            canManageAnyRelay: true,
+            envelopeDigest:
+              (yield* relayJoinViewEffect("owner", join.id)).announcement
+                ?.envelopeDigest ?? "",
+            installation: "use",
+            joinId: join.id,
+            name: null,
+            userId: "owner",
+          })
+          const failed = yield* relayJoinViewEffect("owner", join.id).pipe(
+            Effect.repeat({
+              schedule: Schedule.spaced("100 millis"),
+              until: (view) => view.error !== null,
+            }),
+            Effect.timeout("4 seconds")
+          )
+          assert.strictEqual(failed.state, "confirming")
+
+          const next = yield* refreshRelayJoinEffect("owner", join.id)
+          assert.notStrictEqual(next.id, join.id)
+          assert.strictEqual(
+            (yield* relayJoinViewEffect("owner", join.id)).state,
+            "revoked"
+          )
+        })
+      )
     )
 
     it.effect("belong to whoever opened them", () =>

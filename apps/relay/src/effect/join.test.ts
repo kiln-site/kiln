@@ -143,6 +143,46 @@ describe("Relay joining", () => {
       )
   )
 
+  it.effect(
+    "drops the client it paired when Hearth cancels the join unsaved",
+    () =>
+      withJoiningRelay((relay) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const hearthKeys = ed25519Keys()
+            const answers: Array<Omit<RelayJoinResponse, "mac">> = [
+              {
+                clientId: fingerprint(hearthKeys.publicKey),
+                expiresAt: Date.now() + 60_000,
+                status: "pending",
+              },
+            ]
+            const hearth = yield* fakeHearth(answers)
+            const events: Array<string> = []
+            const joining = yield* runRelayJoin(
+              { ...relay, link: { hearthOrigin: hearth.origin, secret } },
+              (event) => events.push(event.kind)
+            ).pipe(Effect.forkChild)
+            yield* advanceUntil(() => events.includes("waiting"))
+            const paired = yield* pairHearth({
+              identity: relay.identity,
+              request: joinPairingRequest(hearthKeys),
+              state: relay.state,
+            })
+
+            // Saving it failed, and someone cancelled the join.
+            answers.push({ clientId: null, expiresAt: null, status: "expired" })
+            yield* advanceUntil(() => events.includes("finished"))
+            assert.strictEqual(yield* Fiber.join(joining), "expired")
+            const clients = yield* relay.state.listClients()
+            assert.isFalse(
+              clients.some((client) => client.id === paired.clientId)
+            )
+          })
+        )
+      )
+  )
+
   it.live("trusts no answer that doesn't prove the join", () =>
     withJoiningRelay((relay) =>
       Effect.scoped(
