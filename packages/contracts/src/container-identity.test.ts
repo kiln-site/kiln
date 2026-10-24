@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vite-plus/test"
 
-import { hostnameContainerId } from "./platform-identity.js"
+import { hostnameContainerId } from "./container-identity.js"
 
 const relayId = "d".repeat(64)
 
-describe("the Relay's candidate container", () => {
+describe("a process's candidate container", () => {
   it("is the one its hostname file is mounted from", () => {
     const mountinfo = [
       "2374 2344 252:0 /var/lib/docker/volumes/kiln-relay-data/_data /data rw,relatime master:1 - ext4 /dev/sda1 rw",

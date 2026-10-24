@@ -595,6 +595,13 @@ export const RelayAuthResponseSchema = Schema.Struct({
   // Hearth's installation ID, which the Relay saves as its own. Relays
   // validate it themselves so an ID they can't use never fails authentication.
   installationId: Schema.optionalKey(Schema.String),
+  // The container Hearth runs in, and an HMAC of
+  // `relayHearthContainerTranscript` keyed by its BETTER_AUTH_SECRETS, which
+  // a Relay on the same host checks against that container's environment.
+  // It then finds Kiln's services without Kiln's labels, as under Coolify.
+  hearthContainer: Schema.optionalKey(
+    Schema.Struct({ id: Schema.String, proof: Schema.String })
+  ),
   signature: Schema.String,
   type: Schema.Literal("auth.response"),
   v: Schema.Literal(1),
@@ -889,6 +896,22 @@ export function relayAuthResponseTranscript(
     challenge.sessionId,
     challenge.nonce,
     challenge.expiresAt,
+  ])
+}
+
+export function relayHearthContainerTranscript(
+  challenge: Omit<RelayAuthChallenge, "signature">,
+  clientId: string,
+  containerId: string
+): string {
+  return JSON.stringify([
+    relayControlProtocol,
+    "hearth-container",
+    challenge.relayId,
+    clientId,
+    challenge.sessionId,
+    challenge.nonce,
+    containerId,
   ])
 }
 

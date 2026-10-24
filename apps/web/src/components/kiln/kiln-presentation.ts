@@ -15,8 +15,10 @@ import type { KilnPlatformHost } from "@/server/platform"
 // Traefik in front of them, on the host of the Relay that reports them.
 
 /** One of Kiln's containers, a service or the proxy in front of them. */
-export type KilnContainer = Omit<RelayPlatformService, "role"> & {
-  managedBy?: RelayPlatformProxy["managedBy"]
+export type KilnContainer = Omit<RelayPlatformService, "role" | "managedBy"> & {
+  managedBy?:
+    | RelayPlatformService["managedBy"]
+    | RelayPlatformProxy["managedBy"]
   target: RelayPlatformTarget
 }
 
@@ -106,6 +108,23 @@ export function kilnContainers(
   return status.proxy
     ? [...services, { ...status.proxy, target: "proxy" as const }]
     : services
+}
+
+/**
+ * What deployed Kiln when its Relay didn't, from Hearth's container; older
+ * Relays don't say.
+ */
+export function kilnDeployer(status: RelayPlatformStatus | null | undefined) {
+  switch (
+    status?.services.find((service) => service.role === "hearth")?.managedBy
+  ) {
+    case "coolify":
+      return "Coolify"
+    case "compose":
+      return "Compose"
+    default:
+      return "Compose or Coolify"
+  }
 }
 
 /** Hearth's version, from its container's label. */

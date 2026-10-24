@@ -22,6 +22,7 @@ import {
 } from "@workspace/contracts"
 
 import type { RelayConfig } from "./config.js"
+import { platformTargetContainer } from "./platform.js"
 import { relayOwnsLabels } from "./relay-resources.js"
 import {
   DockerEngine,
@@ -366,6 +367,10 @@ async function hearthDatabaseContainer(
   )
   const containers =
     config.resourceNamespace && owned.length > 0 ? owned : matching
+  if (containers.length === 0) {
+    const unlabeled = await unlabeledHearthContainer(config, "database")
+    if (unlabeled) return unlabeled
+  }
   const [container] = containers
   if (!container || containers.length > 1) {
     throw new Error(
@@ -382,8 +387,24 @@ async function hearthApplicationIsRunning(
   installationId: string
 ): Promise<boolean> {
   return (
-    (await runningHearthContainers(config, installationId, "hearth")).length > 0
+    (await runningHearthContainers(config, installationId, "hearth")).length >
+      0 || (await unlabeledHearthContainer(config, "hearth")) !== null
   )
+}
+
+// Kiln deployed without Kiln's labels, as Coolify does: found from the
+// container its Hearth proved it runs in, while it's running.
+async function unlabeledHearthContainer(
+  config: RelayConfig,
+  role: "database" | "hearth"
+): Promise<string | null> {
+  const container = await Effect.runPromise(
+    platformTargetContainer(
+      { config, engine: new DockerEngine(config.dockerSocket) },
+      role
+    )
+  )
+  return container?.State.Running ? container.Id : null
 }
 
 function requiredInstallationId(config: RelayConfig, targetId: string): string {

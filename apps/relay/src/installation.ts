@@ -6,6 +6,8 @@ import type { RelayConfig } from "./config.js"
 import type { RelayStateStore } from "./effect/state.js"
 
 const INSTALLATION_ID_METADATA_KEY = "installation_id"
+// `<installation ID>/<container ID>`
+const HEARTH_CONTAINER_METADATA_KEY = "hearth_container"
 
 // One adoption at a time, so the saved ID and the one in config can't end up
 // from different Hearth sessions.
@@ -24,12 +26,48 @@ export const savedInstallationId = Effect.fnUntraced(function* (
   return saved && isKilnInstallationId(saved) ? saved : null
 })
 
-/** Loads the saved installation ID unless KILN_INSTALLATION_ID set one. */
+/**
+ * Loads the saved installation ID unless KILN_INSTALLATION_ID set one, and
+ * the container a Hearth last proved it runs in.
+ */
 export const loadInstallationId = Effect.fn("Relay.installation.load")(
-  function* (config: InstallationConfig, state: RelayStateStore["Service"]) {
-    if (config.installationIdConfigured) return
-    config.installationId = yield* savedInstallationId(state)
+  function* (
+    config: InstallationConfig & Pick<RelayConfig, "hearthContainer">,
+    state: RelayStateStore["Service"]
+  ) {
+    if (!config.installationIdConfigured) {
+      config.installationId = yield* savedInstallationId(state)
+    }
+    const [installationId, containerId] = (
+      (yield* state.getMetadata(HEARTH_CONTAINER_METADATA_KEY)) ?? ""
+    ).split("/")
+    config.hearthContainer =
+      installationId && containerId ? { containerId, installationId } : null
   }
+)
+
+/** Saves the container a Hearth of this installation proved it runs in. */
+export const adoptHearthContainer = Effect.fn("Relay.installation.hearth")(
+  function* (
+    config: Pick<RelayConfig, "hearthContainer" | "installationId">,
+    state: RelayStateStore["Service"],
+    hearth: { readonly containerId: string; readonly installationId: string }
+  ) {
+    if (hearth.installationId !== config.installationId) return
+    if (
+      config.hearthContainer?.containerId === hearth.containerId &&
+      config.hearthContainer.installationId === hearth.installationId
+    ) {
+      return
+    }
+    yield* state.setMetadata(
+      HEARTH_CONTAINER_METADATA_KEY,
+      `${hearth.installationId}/${hearth.containerId}`
+    )
+    config.hearthContainer = hearth
+    yield* Effect.logInfo(`Hearth runs in container ${hearth.containerId}`)
+  },
+  (effect) => adoption.withPermit(effect)
 )
 
 /**

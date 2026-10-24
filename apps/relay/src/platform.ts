@@ -13,14 +13,22 @@
  * alone a container that's mid-update, and any container it didn't create.
  *
  * Without platform mode the Relay still reports Kiln's services when they
- * run beside it, deployed with Compose or Coolify, but only reads them.
+ * run beside it, deployed with Compose or Coolify, but only reads them. It
+ * finds them by Kiln's labels, or from the container Hearth proved it runs
+ * in, when they were deployed without them.
  */
-import { createHash, randomUUID } from "node:crypto"
+import {
+  createHash,
+  createHmac,
+  randomUUID,
+  timingSafeEqual,
+} from "node:crypto"
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { isIP } from "node:net"
 import { join } from "node:path"
 
 import {
+  hostnameContainerId,
   isKilnInstallationId,
   kilnImageRepository,
   type RelayPlatformActionInput,
@@ -43,7 +51,6 @@ import {
   isDockerNotFound,
 } from "./docker-engine.js"
 import type { RelayClientRecord } from "./effect/state.js"
-import { hostnameContainerId } from "./platform-identity.js"
 import { relayOwnerLabels, relayResourceNames } from "./relay-resources.js"
 import {
   decodePlatformRecoveryKit,
@@ -1037,6 +1044,11 @@ export const platformStatus = Effect.fn("Relay.platform.status")(function* (
     const container = containers.get(role) ?? null
     services.push({
       ...serviceStatus(role, container, updating.has(role), canManage),
+      ...(state
+        ? { managedBy: "kiln" as const }
+        : container
+          ? { managedBy: externalManager(container) }
+          : {}),
       shell: yield* hasShell(engine, container),
     })
   }
@@ -1044,7 +1056,8 @@ export const platformStatus = Effect.fn("Relay.platform.status")(function* (
   return {
     canManage,
     checkedAt: new Date().toISOString(),
-    hearthUrl: state?.hearth.url ?? null,
+    hearthUrl:
+      state?.hearth.url ?? configuredHearthUrl(containers.get("hearth")),
     installationId: state?.installationId ?? config.installationId,
     issue: state ? context.issue : null,
     management: state ? "relay" : "external",
@@ -1104,18 +1117,42 @@ function serviceFields(
   }
 }
 
+// Where people open a Hearth this Relay didn't install: its KILN_URL.
+function configuredHearthUrl(
+  container: DockerContainerInspect | undefined
+): string | null {
+  const value = container && environmentValue(container, "KILN_URL")?.trim()
+  return value &&
+    value.length <= 2_000 &&
+    /^https?:\/\//u.test(value) &&
+    URL.canParse(value)
+    ? value
+    : null
+}
+
+// Who runs a container this Relay didn't install, by the labels they add.
+function externalManager(
+  container: DockerContainerInspect
+): "coolify" | "compose" | "external" {
+  const labels = container.Config.Labels ?? {}
+  if (labels["coolify.managed"] === "true") return "coolify"
+  if (labels["com.docker.compose.project"]) return "compose"
+  return "external"
+}
+
 function validDate(value: string | undefined): value is string {
   return Boolean(value) && Number.isFinite(Date.parse(value ?? ""))
 }
 
 /**
  * Kiln's service containers on this host: the ones this Relay installed, or,
- * without an installation of its own, Compose or Coolify containers labeled
- * for its installation.
+ * without an installation of its own, containers labeled for its
+ * installation, or else the ones beside the container its Hearth proved it
+ * runs in.
  */
 const platformContainers = Effect.fnUntraced(function* (
   engine: DockerEngine,
-  config: Pick<RelayConfig, "installationId">,
+  config: Pick<RelayConfig, "hearthContainer" | "installationId">,
   state: PlatformState | null
 ) {
   const found = new Map<RelayPlatformServiceRole, DockerContainerInspect>()
@@ -1149,7 +1186,131 @@ const platformContainers = Effect.fnUntraced(function* (
     const inspected = yield* inspectOptional(engine.inspectContainer(match.Id))
     if (inspected) found.set(role, inspected)
   }
+  const proven = provenHearth(config)
+  if (found.has("hearth") || !proven) return found
+  return yield* containersBesideHearth(engine, proven)
+})
+
+/**
+ * The container a Hearth claimed it runs in, once proven: `proof` is an
+ * HMAC of the session's `transcript` keyed by the BETTER_AUTH_SECRETS in
+ * that container's environment, which only that Hearth knows.
+ */
+export const provenHearthContainer = Effect.fn("Relay.platform.proveHearth")(
+  function* (
+    engine: DockerEngine,
+    claim: {
+      readonly containerId: string
+      readonly proof: string
+      readonly transcript: string
+    }
+  ) {
+    if (!/^[0-9a-f]{64}$/u.test(claim.containerId)) return null
+    const container = yield* inspectOptional(
+      engine.inspectContainer(claim.containerId)
+    )
+    if (container?.Id !== claim.containerId) return null
+    const secret = environmentValue(container, "BETTER_AUTH_SECRETS")
+    if (!secret) return null
+    const expected = createHmac("sha256", secret)
+      .update(claim.transcript)
+      .digest()
+    const proof = Buffer.from(claim.proof, "base64url")
+    return proof.length === expected.length && timingSafeEqual(proof, expected)
+      ? container.Id
+      : null
+  }
+)
+
+function provenHearth(
+  config: Pick<RelayConfig, "hearthContainer" | "installationId">
+): string | null {
+  return config.hearthContainer &&
+    config.hearthContainer.installationId === config.installationId
+    ? config.hearthContainer.containerId
+    : null
+}
+
+function environmentValue(
+  container: DockerContainerInspect,
+  name: string
+): string | null {
+  const prefix = `${name}=`
+  const entry = container.Config.Env?.find((value) => value.startsWith(prefix))
+  return entry === undefined ? null : entry.slice(prefix.length)
+}
+
+/**
+ * Hearth, and the database and cache its DB_HOST and CACHE_HOST name on a
+ * network it shares with them.
+ */
+const containersBesideHearth = Effect.fnUntraced(function* (
+  engine: DockerEngine,
+  hearthId: string
+) {
+  const found = new Map<RelayPlatformServiceRole, DockerContainerInspect>()
+  const hearth = yield* inspectOptional(engine.inspectContainer(hearthId))
+  if (!hearth) return found
+  found.set("hearth", hearth)
+  for (const [role, variable] of [
+    ["database", "DB_HOST"],
+    ["cache", "CACHE_HOST"],
+  ] as const) {
+    const host = environmentValue(hearth, variable)?.trim()
+    const container = host
+      ? yield* addressedContainer(engine, hearth, host)
+      : null
+    if (container) found.set(role, container)
+  }
   return found
+})
+
+// The container each Hearth's address reached, by Hearth container and
+// address, so reads don't search its networks each time.
+const addressed = new Map<string, string>()
+
+/** The container on one of Hearth's networks that answers to `host`. */
+const addressedContainer = Effect.fnUntraced(function* (
+  engine: DockerEngine,
+  hearth: DockerContainerInspect,
+  host: string
+) {
+  const key = `${hearth.Id}/${host}`
+  const known = addressed.get(key)
+  if (known) {
+    const container = yield* inspectOptional(engine.inspectContainer(known))
+    if (container) return container
+    addressed.delete(key)
+  }
+  for (const network of Object.keys(hearth.NetworkSettings?.Networks ?? {})) {
+    if (network === "host" || network === "none") continue
+    const members = (yield* engine
+      .listContainers({ all: true, filters: { network: [network] } })
+      .pipe(Effect.catch(() => Effect.succeed([])))).filter(
+      (member) => member.Id !== hearth.Id
+    )
+    // Coolify addresses its databases by container name; Compose by service.
+    const named = members.find((member) => member.Names.includes(`/${host}`))
+    const candidates = named ? [named] : members
+    for (const member of candidates) {
+      const container = yield* inspectOptional(
+        engine.inspectContainer(member.Id)
+      )
+      const endpoint = container?.NetworkSettings?.Networks?.[network]
+      if (
+        container &&
+        (member === named ||
+          endpoint?.IPAddress === host ||
+          endpoint?.Aliases?.includes(host) ||
+          endpoint?.DNSNames?.includes(host))
+      ) {
+        if (addressed.size >= 64) addressed.clear()
+        addressed.set(key, container.Id)
+        return container
+      }
+    }
+  }
+  return null
 })
 
 // Whether each container has `sh`, by container ID. Images don't change
@@ -1263,7 +1424,10 @@ export const platformManagedContainer = Effect.fnUntraced(function* (
 /** Whether Kiln's services run beside this Relay without it managing them. */
 export const externalPlatformPresent = Effect.fn(
   "Relay.platform.externalPresent"
-)(function* (engine: DockerEngine, config: Pick<RelayConfig, "installationId">) {
+)(function* (
+  engine: DockerEngine,
+  config: Pick<RelayConfig, "hearthContainer" | "installationId">
+) {
   if (!config.installationId) return false
   const listed = yield* engine.listContainers({
     filters: {
@@ -1273,7 +1437,13 @@ export const externalPlatformPresent = Effect.fn(
       ],
     },
   })
-  return listed.length > 0
+  if (listed.length > 0) return true
+  const proven = provenHearth(config)
+  if (!proven) return false
+  return (
+    (yield* inspectOptional(engine.inspectContainer(proven)))?.State.Running ===
+    true
+  )
 })
 
 const MAX_LOG_LINE_CHARACTERS = 8_192

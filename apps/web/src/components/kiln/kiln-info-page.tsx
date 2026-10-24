@@ -30,6 +30,7 @@ import { KilnDataSection } from "@/components/kiln/kiln-data-section"
 import {
   kilnContainerPresentation,
   kilnContainers,
+  kilnDeployer,
   kilnCopy,
   kilnShellAvailable,
   kilnVersion,
@@ -127,20 +128,38 @@ function containerIcon(container: KilnContainer) {
   }
 }
 
-const proxyManagers = {
-  coolify: {
-    label: "Coolify",
-    hint: "Coolify runs this Traefik, so Kiln only shows it. Change its settings in Coolify; Kiln's labels on Hearth route its address through it.",
-  },
-  external: {
-    label: "Outside Kiln",
-    hint: "This Traefik already served ports 80 and 443 on this host, so Kiln only shows it. Change it where it was set up.",
-  },
-  kiln: {
-    label: "Kiln",
-    hint: "The Relay runs this Traefik for Hearth and renews its Let's Encrypt certificates.",
-  },
+const managerLabels = {
+  compose: "Compose",
+  coolify: "Coolify",
+  external: "Outside Kiln",
+  kiln: "Kiln",
 } as const
+
+const proxyManagerHints = {
+  coolify:
+    "Coolify runs this Traefik, so Kiln only shows it. Change its settings in Coolify; Kiln's labels on Hearth route its address through it.",
+  external:
+    "This Traefik already served ports 80 and 443 on this host, so Kiln only shows it. Change it where it was set up.",
+  kiln: "The Relay runs this Traefik for Hearth and renews its Let's Encrypt certificates.",
+} as const
+
+// Services the Relay installed don't say who manages them.
+const serviceManagerHints = {
+  compose:
+    "Docker Compose runs it, so Kiln only shows it. Change it in its Compose file.",
+  coolify: "Coolify runs it, so Kiln only shows it. Change it in Coolify.",
+  external:
+    "It was deployed outside Kiln, so Kiln only shows it. Change it where it was set up.",
+} as const
+
+function managerHint(container: KilnContainer): string | null {
+  const managedBy = container.managedBy
+  if (!managedBy) return null
+  if (container.target === "proxy" && managedBy !== "compose") {
+    return proxyManagerHints[managedBy]
+  }
+  return managedBy === "kiln" ? null : serviceManagerHints[managedBy]
+}
 
 const KilnContainerSection = React.memo(function KilnContainerSection({
   container,
@@ -153,6 +172,7 @@ const KilnContainerSection = React.memo(function KilnContainerSection({
   const logs = container.container !== null
   const terminal = kilnShellAvailable(host, container)
   const restart = container.actions.includes("restart")
+  const managerHintText = managerHint(container)
   return (
     <InfoSection
       icon={containerIcon(container)}
@@ -192,14 +212,14 @@ const KilnContainerSection = React.memo(function KilnContainerSection({
           {copy.description}
         </span>
       </InfoFact>
-      {container.managedBy ? (
+      {container.managedBy && managerHintText ? (
         <InfoFact label="Managed by">
-          <span>{proxyManagers[container.managedBy].label}</span>
+          <span>{managerLabels[container.managedBy]}</span>
           <InfoHint
             label={`About who manages ${copy.noun}`}
-            title={`Managed by ${proxyManagers[container.managedBy].label}`}
+            title={`Managed by ${managerLabels[container.managedBy]}`}
           >
-            <p>{proxyManagers[container.managedBy].hint}</p>
+            <p>{managerHintText}</p>
           </InfoHint>
         </InfoFact>
       ) : null}
@@ -285,11 +305,13 @@ function KilnCommandsSection({
 }) {
   const relay = useRelayEntry(relayId)
   if (status.management !== "relay") {
+    const deployer = kilnDeployer(status)
     return (
       <InfoSection icon={<TerminalSquare />} title="Commands" content>
         <p className="text-xs leading-relaxed text-muted-foreground">
-          Compose or Coolify manages these containers, so Kiln only shows them.
-          Change them where they were deployed.
+          {deployer} manages these containers, so Kiln only shows them. Change
+          them{" "}
+          {deployer === "Coolify" ? "in Coolify" : "where they were deployed"}.
         </p>
       </InfoSection>
     )
@@ -397,13 +419,13 @@ function KilnInfoRail({ host }: { host: KilnPlatformHost }) {
           <span>
             {status?.management === "relay"
               ? host.relayName
-              : "Compose or Coolify"}
+              : kilnDeployer(status)}
           </span>
         </InfoFact>
         <InfoFact label="HTTPS">
           <span>
             {proxy
-              ? `Traefik, by ${proxyManagers[proxy.managedBy].label}`
+              ? `Traefik, by ${managerLabels[proxy.managedBy]}`
               : status?.hearthUrl?.startsWith("https:")
                 ? "Not answering"
                 : "Off"}

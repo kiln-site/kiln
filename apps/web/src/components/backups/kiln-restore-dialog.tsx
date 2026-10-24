@@ -13,6 +13,7 @@ import {
   DialogTitle,
 } from "@workspace/ui/components/dialog"
 
+import { kilnDeployer } from "@/components/kiln/kiln-presentation"
 import { useCopyFeedback } from "@/components/workspace-header"
 import type { BackupRun } from "@/lib/backup-runs"
 import type { KilnPlatformHost } from "@/server/platform"
@@ -52,7 +53,7 @@ export function KilnRestoreDialog({
   open: boolean
 }) {
   const relay = useRelayRoute(backup.relayId)
-  const managed = useKilnManagedBy(backup.relayId)
+  const { deployer, managed } = useKilnManagedBy(backup.relayId)
   // The Relay keeps a local copy at a path of the backup's own ID.
   const local = backup.artifacts.some(
     (artifact) => artifact.storageId === null && artifact.status === "available"
@@ -82,8 +83,8 @@ export function KilnRestoreDialog({
       </>
     ) : (
       <>
-        Compose or Coolify runs Hearth: stop it there, run this on the host with
-        the Relay&apos;s container name, then start Hearth again.
+        {deployer} runs Hearth: stop it there, run this on the host with the
+        Relay&apos;s container name, then start Hearth again.
       </>
     ),
   ]
@@ -175,12 +176,17 @@ function useRelayRoute(relayId: string) {
   return useQuery({ ...relaysQueryOptions(), select }).data ?? null
 }
 
-// Who runs Kiln on that Relay's host: the Relay itself, or Compose/Coolify.
+// Who runs Kiln on that Relay's host: the Relay itself, or what deployed it.
 function useKilnManagedBy(relayId: string) {
   const select = React.useCallback(
-    (data: { hosts: ReadonlyArray<KilnPlatformHost> }) =>
-      data.hosts.find((host) => host.relayId === relayId)?.status?.management ??
-      null,
+    (data: { hosts: ReadonlyArray<KilnPlatformHost> }) => {
+      const status =
+        data.hosts.find((host) => host.relayId === relayId)?.status ?? null
+      return {
+        deployer: kilnDeployer(status),
+        managed: status?.management ?? null,
+      }
+    },
     [relayId]
   )
   return (
@@ -188,6 +194,6 @@ function useKilnManagedBy(relayId: string) {
       ...kilnPlatformQueryOptions(),
       refetchInterval: false,
       select,
-    }).data ?? null
+    }).data ?? { deployer: kilnDeployer(null), managed: null }
   )
 }

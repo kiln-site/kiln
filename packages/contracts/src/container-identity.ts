@@ -1,7 +1,7 @@
 /**
- * Where a Relay in platform mode looks for its own container's ID, before
- * it proves the container is itself (platform.ts) and joins it to Kiln's
- * network.
+ * Where a process in a Docker container finds its container's ID: a Relay
+ * in platform mode before it proves the container is itself and joins it to
+ * Kiln's network, and Hearth before it proves its container to its Relays.
  *
  * Docker bind-mounts each container's `/etc/hostname` from a folder named
  * after the container's ID. That's only a candidate: a container started

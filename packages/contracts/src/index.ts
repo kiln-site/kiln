@@ -28,6 +28,7 @@ import {
 export * from "./access-permissions.js"
 export * from "./relay-protocol.js"
 export * from "./installation-id.js"
+export * from "./container-identity.js"
 export * from "./release-version.js"
 export * from "./minecraft-java.js"
 export * from "./cli.js"
@@ -2060,6 +2061,11 @@ export const relayPlatformTargetSchema = z.enum([
 export const relayPlatformServiceSchema = z.object({
   /** Actions this Hearth may take on it. Empty for external services. */
   actions: z.array(z.enum(["restart"])).max(4),
+  /**
+   * Who runs it: this Relay (`kiln`), Coolify, Docker Compose, or something
+   * else. Absent from older Relays.
+   */
+  managedBy: z.enum(["kiln", "coolify", "compose", "external"]).optional(),
   container: z.string().min(1).max(255).nullable(),
   health: z.enum(["healthy", "starting", "unhealthy"]).nullable(),
   image: z.string().min(1).max(500).nullable(),

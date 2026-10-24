@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { hostname, tmpdir } from "node:os"
 import { join } from "node:path"
@@ -7,12 +8,15 @@ import { describe, expect, it, onTestFinished } from "vite-plus/test"
 
 import { loadConfig } from "./config.js"
 import { DockerEngine } from "./docker-engine.js"
+import { adoptHearthContainer, loadInstallationId } from "./installation.js"
 import {
   addOwnerInvitation,
+  externalPlatformPresent,
   isPlatformOwner,
   platformManagedContainer,
   platformTargetContainer,
   platformUpdateRefusal,
+  provenHearthContainer,
   restartPlatformService,
   withPlatformRestoreHold,
   platformStatus,
@@ -57,7 +61,10 @@ async function platformRelay(environment: Record<string, string> = {}) {
     harness,
     /** Starts the Relay, as `index.ts` does before it pairs. */
     start: (
-      input: { environment?: Record<string, string>; pairedClients?: number } = {}
+      input: {
+        environment?: Record<string, string>
+        pairedClients?: number
+      } = {}
     ) =>
       run(
         startPlatform(harness.config, engine, {
@@ -294,10 +301,14 @@ describe("platform mode", () => {
 
     expect(fakeDocker.container(names.hearth)?.id).toBe(hearth)
     // A repair leaves no lock of its own behind for the updater to trip on.
+    expect(await readFile(join(updates, `${names.hearth}.lock`), "utf8")).toBe(
+      "running\n"
+    )
     expect(
-      await readFile(join(updates, `${names.hearth}.lock`), "utf8")
-    ).toBe("running\n")
-    expect(await readFile(join(updates, `${names.cache}.lock`), "utf8").catch(() => null)).toBeNull()
+      await readFile(join(updates, `${names.cache}.lock`), "utf8").catch(
+        () => null
+      )
+    ).toBeNull()
   })
 
   it("keeps the backup key its recovery kit holds", async () => {
@@ -669,5 +680,186 @@ describe("platform mode", () => {
         })
       )
     ).rejects.toThrow("KILN_URL")
+  })
+})
+
+describe("Kiln deployed without Kiln's labels", () => {
+  const secret = "1:hearth-secret"
+
+  // Hearth, its MySQL, and its Valkey as Coolify deploys them: no Kiln
+  // labels, on Coolify's network, the database by container name and the
+  // cache by an alias.
+  async function coolify() {
+    const harness = await relayHarness({ KILN_INSTALLATION_ID: "coolify" })
+    const labels = { "coolify.managed": "true" }
+    fakeDocker.addNetwork({ name: "coolify" })
+    const hearth = fakeDocker.addContainer({
+      env: {
+        BETTER_AUTH_SECRETS: secret,
+        CACHE_HOST: "cache",
+        DB_HOST: "ir20rpu9xgaz",
+        KILN_URL: "https://kiln.example.test",
+      },
+      image: "ghcr.io/kiln-site/hearth:latest",
+      labels,
+      name: "y7m44jcsfszy-074805",
+      networks: ["coolify"],
+      running: true,
+    })
+    const database = fakeDocker.addContainer({
+      image: "mysql:8.4",
+      labels,
+      name: "ir20rpu9xgaz",
+      networks: ["coolify"],
+      running: true,
+    })
+    fakeDocker
+      .addContainer({
+        image: "valkey/valkey:9.1.2-alpine",
+        labels,
+        name: "c675ux4n93qd",
+        networks: ["coolify"],
+        running: true,
+      })
+      .networks.get("coolify")
+      ?.aliases.push("cache")
+    // Another app's database on the same network.
+    fakeDocker.addContainer({
+      image: "postgres:17",
+      labels,
+      name: "another-database",
+      networks: ["coolify"],
+      running: true,
+    })
+    const engine = new DockerEngine(harness.config.dockerSocket)
+    const context = {
+      blocked: false,
+      config: harness.config,
+      engine,
+      issue: null,
+    }
+    return {
+      context,
+      database,
+      harness,
+      hearth,
+      // What a Relay checks when a Hearth connects, then saves.
+      identify: async (claim: { containerId: string; key: string }) => {
+        const containerId = await run(
+          provenHearthContainer(engine, {
+            containerId: claim.containerId,
+            proof: createHmac("sha256", claim.key)
+              .update("transcript")
+              .digest("base64url"),
+            transcript: "transcript",
+          })
+        )
+        if (!containerId) return false
+        await run(
+          adoptHearthContainer(harness.config, harness.state, {
+            containerId,
+            installationId: "coolify",
+          })
+        )
+        return true
+      },
+      status: () => run(platformStatus(context, null)),
+    }
+  }
+
+  it("reports Hearth, and the database and cache it uses, once Hearth proves its container", async () => {
+    const kiln = await coolify()
+    expect((await kiln.status()).services).toEqual([])
+
+    await expect(
+      kiln.identify({ containerId: kiln.hearth.id, key: secret })
+    ).resolves.toBe(true)
+
+    const status = await kiln.status()
+    expect(status).toMatchObject({
+      hearthUrl: "https://kiln.example.test",
+      management: "external",
+    })
+    expect(
+      status.services.map(({ actions, container, managedBy, role }) => ({
+        actions,
+        container,
+        managedBy,
+        role,
+      }))
+    ).toEqual([
+      {
+        actions: [],
+        container: "y7m44jcsfszy-074805",
+        managedBy: "coolify",
+        role: "hearth",
+      },
+      {
+        actions: [],
+        container: "ir20rpu9xgaz",
+        managedBy: "coolify",
+        role: "database",
+      },
+      {
+        actions: [],
+        container: "c675ux4n93qd",
+        managedBy: "coolify",
+        role: "cache",
+      },
+    ])
+    await expect(
+      run(externalPlatformPresent(kiln.context.engine, kiln.harness.config))
+    ).resolves.toBe(true)
+    await expect(
+      run(platformManagedContainer(kiln.context, "database"))
+    ).resolves.toBeNull()
+
+    // A restarted Relay remembers it, and follows Coolify recreating the
+    // database under the same name.
+    kiln.harness.config.hearthContainer = null
+    await run(loadInstallationId(kiln.harness.config, kiln.harness.state))
+    fakeDocker.removeContainer("ir20rpu9xgaz")
+    const recreated = fakeDocker.addContainer({
+      image: "mysql:8.4",
+      name: "ir20rpu9xgaz",
+      networks: ["coolify"],
+      running: true,
+    })
+    await expect(
+      run(platformTargetContainer(kiln.context, "database"))
+    ).resolves.toMatchObject({ Id: recreated.id })
+  })
+
+  it("reports nothing for a Hearth that can't prove the container it names", async () => {
+    const kiln = await coolify()
+
+    // Without the container's secret, or naming a container without one.
+    await expect(
+      kiln.identify({ containerId: kiln.hearth.id, key: "1:guessed" })
+    ).resolves.toBe(false)
+    await expect(
+      kiln.identify({ containerId: kiln.database.id, key: secret })
+    ).resolves.toBe(false)
+    // A proven Hearth of another installation.
+    const containerId = await run(
+      provenHearthContainer(kiln.context.engine, {
+        containerId: kiln.hearth.id,
+        proof: createHmac("sha256", secret)
+          .update("transcript")
+          .digest("base64url"),
+        transcript: "transcript",
+      })
+    )
+    await run(
+      adoptHearthContainer(kiln.harness.config, kiln.harness.state, {
+        containerId: containerId ?? "",
+        installationId: "another-installation",
+      })
+    )
+
+    expect((await kiln.status()).services).toEqual([])
+    await expect(
+      run(platformTargetContainer(kiln.context, "database"))
+    ).resolves.toBeNull()
   })
 })

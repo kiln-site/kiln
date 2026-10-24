@@ -90,11 +90,11 @@ the same secrets and volumes.
 Then, every 30 seconds, it makes sure these exist and run, on a Docker network
 of their own:
 
-| Container          | Image                                | Notes                                                                                |
-| ------------------ | ------------------------------------ | ------------------------------------------------------------------------------------ |
-| `kiln-hearth-mysql` | `mysql:8.4`                          | Data in the `kiln-hearth-mysql` volume                                               |
-| `kiln-hearth-cache` | `valkey/valkey:9.1.2-alpine`         | In memory only                                                                       |
-| `kiln-hearth`       | Hearth with the Relay's own tag      | Published on `KILN_PLATFORM_HEARTH_BIND:KILN_PLATFORM_HEARTH_PORT`; pairs on startup |
+| Container           | Image                           | Notes                                                                                |
+| ------------------- | ------------------------------- | ------------------------------------------------------------------------------------ |
+| `kiln-hearth-mysql` | `mysql:8.4`                     | Data in the `kiln-hearth-mysql` volume                                               |
+| `kiln-hearth-cache` | `valkey/valkey:9.1.2-alpine`    | In memory only                                                                       |
+| `kiln-hearth`       | Hearth with the Relay's own tag | Published on `KILN_PLATFORM_HEARTH_BIND:KILN_PLATFORM_HEARTH_PORT`; pairs on startup |
 
 The Relay joins that network under its own host name (`kiln-relay` unless
 `KILN_RELAY_HOST` says otherwise), the name its certificate is issued for, and
@@ -119,21 +119,21 @@ there, plus `io.kiln.platform.role` and a hash of their settings.
 
 Set these on the Relay. Everything else is generated.
 
-| Variable                       | Default                    | Meaning                                                                    |
-| ------------------------------ | -------------------------- | -------------------------------------------------------------------------- |
-| `KILN_URL`                     | Required on first start    | Where people open Hearth. Saved; later starts may change it.               |
-| `KILN_PLATFORM_HEARTH_PORT`    | `3000`                     | Host port for Hearth                                                       |
-| `KILN_PLATFORM_PROXY`          | `none`                     | `traefik` runs Traefik on 80 and 443 for an https `KILN_URL`; `coolify` labels Hearth for Coolify's proxy |
-| `KILN_RELAY_ACME_CA_SERVER`    | Let's Encrypt              | Another ACME directory for Traefik, such as Let's Encrypt's staging one    |
-| `KILN_PLATFORM_HEARTH_BIND`    | `0.0.0.0`                  | Host address for Hearth's port                                             |
-| `KILN_RELAY_GAME_HOST`         | The host in `KILN_URL`     | Where players connect to game servers                                      |
-| `KILN_PLATFORM_HEARTH_IMAGE`   | Hearth with the Relay's tag | First start only; Kiln's updates change it afterwards                      |
-| `KILN_PLATFORM_DATABASE_IMAGE` | `mysql:8.4`                | First start only; a database engine is never swapped under its data        |
-| `KILN_PLATFORM_CACHE_IMAGE`    | `valkey/valkey:9.1.2-alpine` | First start only; `none` runs Hearth without a cache                      |
-| `KILN_RELAY_CONTAINER`         | Found and proven           | The Relay's own container, where it can't find it (Podman, Docker in Docker) |
-| `KILN_INSTALLATION_ID`         | Generated                  | First start only                                                           |
-| `BETTER_AUTH_SECRETS`          | Generated                  | First start only; for moving an existing Hearth here                       |
-| `KILN_PLATFORM_BACKUP_KEY`     | Generated                  | First start only; encrypts platform backups, and the recovery kit holds it |
+| Variable                       | Default                      | Meaning                                                                                                   |
+| ------------------------------ | ---------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `KILN_URL`                     | Required on first start      | Where people open Hearth. Saved; later starts may change it.                                              |
+| `KILN_PLATFORM_HEARTH_PORT`    | `3000`                       | Host port for Hearth                                                                                      |
+| `KILN_PLATFORM_PROXY`          | `none`                       | `traefik` runs Traefik on 80 and 443 for an https `KILN_URL`; `coolify` labels Hearth for Coolify's proxy |
+| `KILN_RELAY_ACME_CA_SERVER`    | Let's Encrypt                | Another ACME directory for Traefik, such as Let's Encrypt's staging one                                   |
+| `KILN_PLATFORM_HEARTH_BIND`    | `0.0.0.0`                    | Host address for Hearth's port                                                                            |
+| `KILN_RELAY_GAME_HOST`         | The host in `KILN_URL`       | Where players connect to game servers                                                                     |
+| `KILN_PLATFORM_HEARTH_IMAGE`   | Hearth with the Relay's tag  | First start only; Kiln's updates change it afterwards                                                     |
+| `KILN_PLATFORM_DATABASE_IMAGE` | `mysql:8.4`                  | First start only; a database engine is never swapped under its data                                       |
+| `KILN_PLATFORM_CACHE_IMAGE`    | `valkey/valkey:9.1.2-alpine` | First start only; `none` runs Hearth without a cache                                                      |
+| `KILN_RELAY_CONTAINER`         | Found and proven             | The Relay's own container, where it can't find it (Podman, Docker in Docker)                              |
+| `KILN_INSTALLATION_ID`         | Generated                    | First start only                                                                                          |
+| `BETTER_AUTH_SECRETS`          | Generated                    | First start only; for moving an existing Hearth here                                                      |
+| `KILN_PLATFORM_BACKUP_KEY`     | Generated                    | First start only; encrypts platform backups, and the recovery kit holds it                                |
 
 These are passed on to Hearth when set on the Relay: `KILN_ENABLE_SIGNUPS`,
 `KILN_MARKETING_URL`, `KILN_SUPER_USER_EMAIL`, `KILN_SUPER_USER_PASSWORD`,
@@ -199,8 +199,9 @@ the host.
 database, and its cache as the Relay beside them reports them: state, image,
 version, and their last 500 log lines. With a Relay that installed them it also
 restarts each one and repairs them (the same pass the Relay runs every 30
-seconds). Hearth and its database deployed with Compose or Coolify appear
-read-only, labeled as deployed outside Kiln, when a Relay runs on their host.
+seconds). Hearth, its database, and its cache deployed with Compose or Coolify
+appear read-only, labeled with what manages them, when a Relay runs on their
+host.
 
 Hearth updates from the Updates dialog as with Compose.
 
@@ -208,13 +209,13 @@ Hearth updates from the Updates dialog as with Compose.
 
 `kiln-relay platform` works without Hearth:
 
-| Command                  | Does                                                                        |
-| ------------------------ | --------------------------------------------------------------------------- |
-| `status`                 | Shows the installation and each service                                     |
-| `setup-url`              | Prints the setup link                                                       |
-| `repair`                 | Runs a pass now, even while the Relay is paused                             |
-| `stop-hearth`            | Holds Hearth stopped; the database and cache keep running                   |
-| `start-hearth`           | Lets Hearth run again                                                       |
+| Command                  | Does                                                                       |
+| ------------------------ | -------------------------------------------------------------------------- |
+| `status`                 | Shows the installation and each service                                    |
+| `setup-url`              | Prints the setup link                                                      |
+| `repair`                 | Runs a pass now, even while the Relay is paused                            |
+| `stop-hearth`            | Holds Hearth stopped; the database and cache keep running                  |
+| `start-hearth`           | Lets Hearth run again                                                      |
 | `recover --confirm <id>` | Starts an empty database after its volume was lost, holding Hearth stopped |
 | `export-kit`             | Prints the recovery kit                                                     |
 | `import-kit <path>`      | Installs from a recovery kit on a new Relay                                 |
@@ -305,9 +306,20 @@ managed elsewhere: its logs, but no restart or shell. These need a Relay with
 ## Existing Compose and Coolify installs
 
 They keep working as before, and Kiln's own pages (the **Kiln** button beside
-**Updates** in Infrastructure) show their Hearth, database, and any Traefik in
-front of them read-only: their logs, but no restarts or shells. To move one
-under a platform Relay:
+**Updates** in Infrastructure) show their Hearth, database, cache, and any
+Traefik in front of them read-only: their logs, but no restarts or shells.
+
+A Relay on the same Docker host finds them by Kiln's labels
+(`io.kiln.installation` and `io.kiln.resource`, which `compose.yaml` sets), or
+else from Hearth itself. Each time Hearth connects it names the container it
+runs in, proven with an HMAC keyed by its `BETTER_AUTH_SECRETS`, which the
+Relay checks against that container's environment. The Relay then finds the
+database and cache that Hearth's `DB_HOST` and `CACHE_HOST` name on a Docker
+network Hearth shares with them, so Hearth, MySQL, and Valkey deployed as
+separate Coolify resources show up without any labels. Kiln's backups use the
+same containers.
+
+To move one under a platform Relay:
 
 1. Create a platform backup of it, and note its `KILN_INSTALLATION_ID`,
    `BETTER_AUTH_SECRETS`, and `KILN_PLATFORM_BACKUP_KEY`. Hearth encrypts

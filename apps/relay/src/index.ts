@@ -172,7 +172,11 @@ import {
 } from "./platform-backups.js"
 import { FilesystemDriver, type FileRoot } from "./files.js"
 import { HostFiles } from "./host-files.js"
-import { adoptInstallationId, loadInstallationId } from "./installation.js"
+import {
+  adoptHearthContainer,
+  adoptInstallationId,
+  loadInstallationId,
+} from "./installation.js"
 import { LifecycleDriver } from "./lifecycle.js"
 import { nodeSnapshot } from "./node.js"
 import { reportRelayMemoryMetrics } from "./relay-memory.js"
@@ -246,6 +250,7 @@ import {
   checkHearthRestart,
   externalPlatformPresent,
   isPlatformOwner,
+  provenHearthContainer,
   platformAction,
   platformLogs,
   platformSetupUrl,
@@ -1058,6 +1063,28 @@ const controlSocket = attachControlSocket({
         reportRelayError(cause, { operation: "relay.installation.adopt" })
       }
     ),
+  identifyHearth: (claim) => {
+    // A Relay that installed Kiln knows its containers already.
+    if (platformStartup.state) return
+    forkPromise(
+      () =>
+        runRelayEffect(
+          "relay.platform.identifyHearth",
+          Effect.gen(function* () {
+            const containerId = yield* provenHearthContainer(relayEngine, claim)
+            if (!containerId) return
+            yield* adoptHearthContainer(config, startup.state, {
+              containerId,
+              installationId: claim.installationId,
+            })
+            yield* refreshExternalPlatform
+          })
+        ),
+      (cause) => {
+        reportRelayError(cause, { operation: "relay.platform.identifyHearth" })
+      }
+    )
+  },
   beforeRun: (request) => {
     if (request.operation === "app.delete") {
       const appId = lockFields(request.payload).appId
@@ -1226,6 +1253,19 @@ let platformPass: PlatformPassResult = {
 }
 // Without platform mode: whether Hearth runs beside this Relay anyway.
 let externalPlatform = false
+// Looks again, refreshing snapshots when that changed.
+const refreshExternalPlatform = Effect.suspend(() =>
+  externalPlatformPresent(relayEngine, config)
+).pipe(
+  Effect.tap((present) =>
+    Effect.sync(() => {
+      if (present !== externalPlatform) {
+        externalPlatform = present
+        void snapshotHub.refresh()
+      }
+    })
+  )
+)
 const platformContext: PlatformContext = {
   attachRelay: true,
   beforeHearth: Effect.suspend(() => ensurePlatformInvitation()),
@@ -3314,15 +3354,7 @@ function notePlatformPass(result: PlatformPassResult): void {
  */
 function platformLoop() {
   if (!platformStartup.state) {
-    return externalPlatformPresent(relayEngine, config).pipe(
-      Effect.tap((present) =>
-        Effect.sync(() => {
-          if (present !== externalPlatform) {
-            externalPlatform = present
-            void snapshotHub.refresh()
-          }
-        })
-      ),
+    return refreshExternalPlatform.pipe(
       Effect.ignore,
       Effect.andThen(Effect.sleep("1 minute")),
       Effect.forever

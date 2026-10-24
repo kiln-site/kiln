@@ -69,6 +69,7 @@ import {
   runAppEffect,
 } from "@/effect/runtime"
 import { ensuringPromise, forkPromise, promiseEffect } from "@/effect/promise"
+import { hearthContainerClaim } from "@/lib/hearth-container"
 import type { RelayCredentials } from "@/lib/relay-registry"
 import { resolveSftpAuthorization } from "@/lib/sftp-authorization"
 import { relayControlFailureError } from "@/lib/relay-control-errors"
@@ -1314,6 +1315,10 @@ class RelayConnection {
     }
     // Relays save it, so the whole installation shares Hearth's ID.
     const installationId = loadedKilnInstallationId()
+    const hearthContainer = hearthContainerClaim(
+      challenge,
+      credentials.clientId
+    )
     socket.send(
       JSON.stringify({
         clientId: credentials.clientId,
@@ -1335,6 +1340,7 @@ class RelayConnection {
         type: "auth.response",
         v: 1,
         ...(installationId ? { installationId } : {}),
+        ...(hearthContainer ? { hearthContainer } : {}),
       })
     )
   }

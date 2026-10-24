@@ -14,6 +14,7 @@ import {
 import {
   kilnContainers,
   kilnCopy,
+  kilnDeployer,
   kilnShellAvailable,
   useKilnHost,
 } from "@/components/kiln/kiln-presentation"
@@ -92,6 +93,7 @@ export function KilnTerminalPage() {
 
 function KilnTerminalUnavailable({ host }: { host: KilnPlatformHost | null }) {
   const status = host?.status
+  const deployer = kilnDeployer(status)
   const message = !host
     ? { title: "No Relay reports Kiln", detail: "" }
     : !host.v2
@@ -102,8 +104,7 @@ function KilnTerminalUnavailable({ host }: { host: KilnPlatformHost | null }) {
       : status?.management === "external"
         ? {
             title: "Kiln only shows these containers",
-            detail:
-              "Compose or Coolify manages them, so open a shell where they were deployed.",
+            detail: `${deployer} manages them, so open a shell ${deployer === "Coolify" ? "in Coolify" : "where they were deployed"}.`,
           }
         : !status?.canManage
           ? {

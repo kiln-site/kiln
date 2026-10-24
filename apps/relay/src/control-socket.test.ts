@@ -1,4 +1,5 @@
 import {
+  createHmac,
   generateKeyPairSync,
   randomBytes,
   randomUUID,
@@ -21,6 +22,7 @@ import {
   relayAuthResponseTranscript,
   relayControlMaxFrameBytes,
   relayControlProtocol,
+  relayHearthContainerTranscript,
   relaySnapshotDeltaFeature,
   relaySnapshotNodeResourcesFeature,
 } from "@workspace/contracts"
@@ -32,7 +34,10 @@ import type {
 } from "@workspace/contracts"
 
 import { attachControlSocket } from "./control-socket.js"
-import type { ControlSocketOptions } from "./control-socket.js"
+import type {
+  ControlSocketOptions,
+  HearthContainerClaim,
+} from "./control-socket.js"
 import { RelayNotFoundError } from "./effect/errors.js"
 import { fingerprint } from "./effect/identity.js"
 import { makeRelayStateLayer, RelayStateStore } from "./effect/state.js"
@@ -102,9 +107,44 @@ describe("Relay control socket", () => {
     await Promise.all(relay.adoptions)
 
     // The next start loads it.
-    const restarted = { installationId: null, installationIdConfigured: false }
+    const restarted = {
+      hearthContainer: null,
+      installationId: null,
+      installationIdConfigured: false,
+    }
     await relay.loadInstallationId(restarted)
     expect(restarted.installationId).toBe(installationId)
+  })
+
+  it("passes on the container only a full-access Hearth claims, to check against its session", async () => {
+    const claims: Array<HearthContainerClaim> = []
+    const relay = await startRelay({
+      identifyHearth: (claim) => claims.push(claim),
+    })
+    const hearthContainer = { id: "a".repeat(64), secret: "1:hearth-secret" }
+    await relay.connect(await relay.pair({ role: "read_only" }), {
+      hearthContainer,
+      installationId: "kiln",
+    })
+    expect(claims).toEqual([])
+
+    await relay.connect(await relay.pair(), {
+      hearthContainer,
+      installationId: "kiln",
+    })
+
+    expect(claims).toHaveLength(1)
+    const [claim] = claims
+    expect(claim).toMatchObject({
+      containerId: hearthContainer.id,
+      installationId: "kiln",
+    })
+    // The Relay checks the proof against what this session signed.
+    expect(claim?.proof).toBe(
+      createHmac("sha256", hearthContainer.secret)
+        .update(claim?.transcript ?? "")
+        .digest("base64url")
+    )
   })
 
   it("adopts Hearth's installation ID before the session accepts requests", async () => {
@@ -1590,6 +1630,7 @@ async function startRelay(
     readonly execute?: ControlSocketOptions["execute"]
     readonly initialSnapshot?: ControlSocketOptions["initialSnapshot"]
     readonly installation?: InstallationConfig
+    readonly identifyHearth?: ControlSocketOptions["identifyHearth"]
     readonly resolveInstance?: InstanceResolver
     readonly beforeRun?: ControlSocketOptions["beforeRun"]
     /** Holds reads of the operation journal until it settles, as a slow disk would. */
@@ -1623,6 +1664,9 @@ async function startRelay(
         }
       : {}),
     ...(options.beforeRun ? { beforeRun: options.beforeRun } : {}),
+    ...(options.identifyHearth
+      ? { identifyHearth: options.identifyHearth }
+      : {}),
     execute: options.execute ?? (async () => ({ ok: true })),
     lanes,
     requestLocks: (request) =>
@@ -1692,6 +1736,8 @@ async function startRelay(
       hearth: TestHearth,
       connectOptions: {
         readonly features?: ReadonlyArray<string>
+        // The container it runs in, proven with this secret as Hearth does.
+        readonly hearthContainer?: { id: string; secret: string }
         readonly installationId?: string
       } = {}
     ) => {
@@ -1707,6 +1753,25 @@ async function startRelay(
           ...(connectOptions.installationId
             ? { installationId: connectOptions.installationId }
             : {}),
+          ...(connectOptions.hearthContainer
+            ? {
+                hearthContainer: {
+                  id: connectOptions.hearthContainer.id,
+                  proof: createHmac(
+                    "sha256",
+                    connectOptions.hearthContainer.secret
+                  )
+                    .update(
+                      relayHearthContainerTranscript(
+                        challenge,
+                        hearth.id,
+                        connectOptions.hearthContainer.id
+                      )
+                    )
+                    .digest("base64url"),
+                },
+              }
+            : {}),
         })
       )
       expect((await connection.inbox.next()).type).toBe("auth.ready")
@@ -1716,8 +1781,9 @@ async function startRelay(
     control,
     databaseFile: join(directory, "relay.sqlite"),
     lanes,
-    loadInstallationId: (config: InstallationConfig) =>
-      runtime.runPromise(loadInstallationId(config, state)),
+    loadInstallationId: (
+      config: InstallationConfig & Pick<RelayConfig, "hearthContainer">
+    ) => runtime.runPromise(loadInstallationId(config, state)),
     open,
     server,
     pair: async (

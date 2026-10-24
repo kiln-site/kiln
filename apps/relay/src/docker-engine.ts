@@ -81,6 +81,7 @@ export interface DockerContainerInspect {
   readonly Config: {
     readonly AttachStdin?: boolean
     readonly AttachStdout?: boolean
+    readonly Env?: ReadonlyArray<string> | null
     readonly Hostname?: string
     readonly Image: string
     readonly Labels: Readonly<Record<string, string>> | null
@@ -104,6 +105,8 @@ export interface DockerContainerInspect {
         string,
         {
           readonly Aliases?: ReadonlyArray<string> | null
+          // Docker 26 and later: its name, short ID, and aliases.
+          readonly DNSNames?: ReadonlyArray<string> | null
           readonly IPAddress?: string
         }
       >

@@ -121,6 +121,15 @@ export interface RelayConfig {
   installationId: string | null
   // Whether KILN_INSTALLATION_ID set it, so Hearth's ID doesn't replace it.
   installationIdConfigured: boolean
+  /**
+   * The container a Hearth proved it runs in, which the Relay saves and
+   * loads at startup. While it's for this installation, Kiln's services
+   * deployed without Kiln's labels, as Coolify does, are found from it.
+   */
+  hearthContainer: {
+    readonly containerId: string
+    readonly installationId: string
+  } | null
   managedLabel: string
   mclogsApiUrl: string
   mode: RelayMode
@@ -279,6 +288,7 @@ export function loadConfig(
     host: environment.KILN_RELAY_BIND_HOST?.trim() || "0.0.0.0",
     installationId,
     installationIdConfigured: installationId !== null,
+    hearthContainer: null,
     managedLabel: "kiln.relay.managed=true",
     mclogsApiUrl:
       environment.MCLOGS_API_URL?.trim() || "https://api.mclo.gs/1/log",

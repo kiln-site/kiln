@@ -25,6 +25,7 @@ import {
   relayAuthenticationWindowMs,
   relayAuthChallengeTranscript,
   relayAuthResponseTranscript,
+  relayHearthContainerTranscript,
   relayBrowserCapabilityV2Feature,
   relayBrowserLeaseRenewalV1Feature,
   relayControlDeadlineMs,
@@ -112,10 +113,23 @@ const MAX_IN_FLIGHT_REQUESTS = 32
 const MAX_CONTROL_SESSIONS = 128
 const MAX_CONTROL_SESSIONS_PER_CLIENT = 4
 
+export interface HearthContainerClaim {
+  readonly containerId: string
+  readonly installationId: string
+  readonly proof: string
+  readonly transcript: string
+}
+
 export interface ControlSocketOptions {
   // Saves the installation ID a full-access Hearth authenticated with. The
   // session is ready only once this settles; it reports its own failures.
   readonly adoptInstallationId?: (installationId: string) => Promise<void>
+  /**
+   * Checks, in the background, the container a full-access Hearth says it
+   * runs in: `proof` must be an HMAC of `transcript` keyed by that
+   * container's BETTER_AUTH_SECRETS.
+   */
+  readonly identifyHearth?: (claim: HearthContainerClaim) => void
   /**
    * Runs once an authorized request has its place in line, before it waits
    * for its locks: a delete stops a running deployment here, so it doesn't
@@ -461,7 +475,8 @@ function authenticateSocket(
           message.clientId,
           message.signature,
           message.features ?? [],
-          message.installationId
+          message.installationId,
+          message.hearthContainer
         ).pipe(
           Effect.catch(() =>
             Effect.sync(() => {
@@ -638,7 +653,8 @@ function authenticateSocket(
     clientId: string,
     signature: string,
     features: ReadonlyArray<string>,
-    installationId: string | undefined
+    installationId: string | undefined,
+    hearthContainer: { readonly id: string; readonly proof: string } | undefined
   ): EffectType.Effect<void, Error> {
     return Effect.gen(function* () {
       if (Date.now() > challenge.expiresAt || authenticatedClient) {
@@ -665,7 +681,11 @@ function authenticateSocket(
       nodeResourceDeltasEnabled = features.includes(
         relaySnapshotNodeResourcesFeature
       )
-      yield* completedAuthenticationEffect(client, installationId)
+      yield* completedAuthenticationEffect(
+        client,
+        installationId,
+        hearthContainer
+      )
     })
   }
 
@@ -1077,7 +1097,8 @@ function authenticateSocket(
 
   function completedAuthenticationEffect(
     client: RelayClientGrant,
-    installationId: string | undefined
+    installationId: string | undefined,
+    hearthContainer: { readonly id: string; readonly proof: string } | undefined
   ): EffectType.Effect<void, Error> {
     return Effect.gen(function* () {
       const clientSessionCount = [...authenticatedSockets.values()].filter(
@@ -1098,6 +1119,23 @@ function authenticateSocket(
       const adopt = options.adoptInstallationId
       if (adopt && installationId && client.role === "full_access") {
         yield* promiseOperation(() => adopt(installationId)).pipe(Effect.ignore)
+      }
+      if (
+        options.identifyHearth &&
+        hearthContainer &&
+        installationId &&
+        client.role === "full_access"
+      ) {
+        options.identifyHearth({
+          containerId: hearthContainer.id,
+          installationId,
+          proof: hearthContainer.proof,
+          transcript: relayHearthContainerTranscript(
+            unsignedChallenge,
+            client.id,
+            hearthContainer.id
+          ),
+        })
       }
       authenticatedClient = client
       yield* Fiber.interrupt(authenticationTimeoutFiber)
