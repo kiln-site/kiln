@@ -379,6 +379,9 @@ function rowStream(connection: Connection, sql: string) {
           .stream()
   ) as Readable & AsyncIterable<ReadonlyArray<SqlValue>>
   rows.once("close", () => connection.off("error", lost))
+  // The reader sees an error through its iterator, which the stream keeps;
+  // this keeps one raised before reading starts from going unhandled.
+  rows.on("error", () => {})
   if (failure) rows.destroy(failure)
   return rows
 }
