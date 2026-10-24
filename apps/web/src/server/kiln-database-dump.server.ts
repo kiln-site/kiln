@@ -320,13 +320,10 @@ function tableStream(
     Stream.fromAsyncIterable(
       insertStatements(
         table,
-        connection
-          .query({
-            rowsAsArray: true,
-            sql: `SELECT ${table.columns.map((column) => escapeId(column)).join(", ")} FROM ${escapeId(table.name)}`,
-            typeCast: dumpTypeCast,
-          })
-          .stream() as Readable & AsyncIterable<ReadonlyArray<SqlValue>>
+        rowStream(
+          connection,
+          `SELECT ${table.columns.map((column) => escapeId(column)).join(", ")} FROM ${escapeId(table.name)}`
+        )
       ),
       (cause) =>
         KilnDatabaseError.make({
@@ -337,6 +334,19 @@ function tableStream(
     )
   )
   return Stream.fromEffect(definition).pipe(Stream.concat(rows))
+}
+
+// A table's rows as they arrive. mysql2 reports a lost connection on the
+// connection rather than the stream, which would then wait forever, so it
+// ends the stream with that error.
+function rowStream(connection: Connection, sql: string) {
+  const rows = connection
+    .query({ rowsAsArray: true, sql, typeCast: dumpTypeCast })
+    .stream() as Readable & AsyncIterable<ReadonlyArray<SqlValue>>
+  const lost = (error: Error) => rows.destroy(error)
+  connection.on("error", lost)
+  rows.once("close", () => connection.off("error", lost))
+  return rows
 }
 
 async function* insertStatements(
@@ -410,6 +420,10 @@ function openConnection(
         timezone: "Z",
         user: config.user,
       })
+      // A connection lost between queries would otherwise throw from the
+      // socket and take Hearth down. A query then fails on its own, and a
+      // row stream is ended with the error (see `rowStream`).
+      connection.on("error", () => {})
       connection.connect((error) => {
         resume(
           error

@@ -147,6 +147,64 @@ describeMysql("Kiln database export", () => {
     )
 
     it.effect(
+      "fails without a seal, and without taking Hearth down, when its connection is lost",
+      () =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* resetDatabase
+          yield* sql.unsafe(
+            "CREATE TABLE IF NOT EXISTS dump_many (id INT PRIMARY KEY, pad VARCHAR(255))"
+          )
+          // More rows than the connection buffers, so the export is still
+          // reading them when it's cut off.
+          for (let batch = 0; batch < 20; batch += 1) {
+            const values = Array.from(
+              { length: 5_000 },
+              (_, row) => `(${batch * 5_000 + row}, REPEAT('x', 200))`
+            )
+            yield* sql.unsafe(
+              `INSERT INTO dump_many (id, pad) VALUES ${values.join(",")}`
+            )
+          }
+          const reader = Stream.toReadableStream(
+            kilnDatabaseDump(new Date(kiln.now))
+          ).getReader()
+          let received = ""
+          while (!received.includes("INSERT INTO `dump_many`")) {
+            const chunk = yield* Effect.promise(() => reader.read())
+            if (chunk.done) break
+            received += chunk.value
+          }
+          const [exporting] = yield* sql<{ id: number }>`
+            SELECT ID AS id FROM information_schema.PROCESSLIST
+            WHERE INFO LIKE 'SELECT%dump_many%'`
+          assert.isDefined(exporting)
+          yield* sql.unsafe(`KILL ${Number(exporting?.id)}`)
+
+          const ended = yield* Effect.promise(async () => {
+            for (;;) {
+              const chunk = await reader.read().then(
+                (result) => result,
+                (error: unknown) => ({ error })
+              )
+              if ("error" in chunk) return "failed"
+              if (chunk.done) return "finished"
+              received += chunk.value
+            }
+          })
+          assert.strictEqual(ended, "failed")
+          assert.notInclude(received, "-- Kiln export sha256")
+        }).pipe(
+          Effect.ensuring(
+            Effect.flatMap(SqlClient.SqlClient, (sql) =>
+              sql.unsafe("DROP TABLE IF EXISTS dump_many")
+            ).pipe(Effect.orDie)
+          )
+        ),
+      60_000
+    )
+
+    it.effect(
       "refuses an incomplete export, one from another schema, and one without a recent Kiln backup",
       () =>
         Effect.gen(function* () {
