@@ -11,7 +11,7 @@ import { Effect } from "effect"
 import {
   RELAY_JOIN_LIFETIME_MS,
   type RelayJoinAnnouncement,
-  type RelayJoinStatus,
+  type RelayJoinResponse,
   relayJoinAnnouncementTranscript,
   relayJoinResponseTranscript,
   relayPairingRequestTranscript,
@@ -23,43 +23,53 @@ import {
   loadOrCreateRelayIdentity,
   type RelayIdentity,
 } from "./identity.js"
-import { relayJoinInvitationToken, runRelayJoin } from "./join.js"
+import { relayJoinId, relayJoinInvitationToken, runRelayJoin } from "./join.js"
 import { pairHearth, type PairingRequest } from "./pairing.js"
 import { makeRelayStateLayer, RelayStateStore } from "./state.js"
 
-const secret = randomBytes(32).toString("base64url")
-const joinId = "0e0f6703-46db-4677-b84c-138997bc25a9"
+const secret = "abcdefghijklmnopqrs2"
+const joinId = relayJoinId(secret)
 
 describe("Relay joining", () => {
   it.live(
-    "makes one invitation that only the join's Hearth key can pair with",
+    "makes one invitation, once Hearth names its client, that only that client can pair with",
     () =>
       withJoiningRelay((relay) =>
         Effect.scoped(
           Effect.gen(function* () {
-            const hearth = yield* fakeHearth({ answer: "paired" })
             const hearthKeys = ed25519Keys()
-            const link = {
-              clientId: fingerprint(hearthKeys.publicKey),
-              // A link can't make a join last longer than a join does.
-              expiresAt: Date.now() + 24 * 60 * 60_000,
-              hearthOrigin: hearth.origin,
-              joinId,
-              secret,
-            }
+            const clientId = fingerprint(hearthKeys.publicKey)
+            const hearth = yield* fakeHearth([
+              // A join can't last longer than a join does.
+              {
+                clientId,
+                expiresAt: Date.now() + 24 * 60 * 60_000,
+                status: "pending",
+              },
+              { clientId: null, expiresAt: null, status: "paired" },
+            ])
+            const events: Array<string> = []
 
-            const outcome = yield* runRelayJoin({ ...relay, link }, () => {})
+            const outcome = yield* runRelayJoin(
+              { ...relay, link: { hearthOrigin: hearth.origin, secret } },
+              (event) => events.push(event.kind)
+            )
 
             assert.strictEqual(outcome, "paired")
-            const [announced] = hearth.announcements
-            assert.isDefined(announced)
-            assert.strictEqual(announced?.envelope.invitationId, joinId)
+            assert.deepStrictEqual(events, [
+              "started",
+              "insecure",
+              "waiting",
+              "finished",
+            ])
             assert.strictEqual(
-              announced?.envelope.relayFingerprint,
-              relay.identity.fingerprint
+              hearth.announcements[0]?.envelope.invitationId,
+              joinId
             )
+            const invitation = yield* relay.state.findInvitationById(joinId)
+            assert.strictEqual(invitation?.clientId, clientId)
             assert.isAtMost(
-              announced?.envelope.expiresAt ?? Infinity,
+              invitation?.expiresAt ?? Infinity,
               Date.now() + RELAY_JOIN_LIFETIME_MS
             )
 
@@ -82,53 +92,69 @@ describe("Relay joining", () => {
               request: joinPairingRequest(hearthKeys),
               state: relay.state,
             })
-            assert.strictEqual(paired.clientId, link.clientId)
+            assert.strictEqual(paired.clientId, clientId)
             assert.strictEqual(paired.role, "full_access")
           })
         )
-      )
+      ),
+    // It announces again after its interval, to hear it's paired.
+    15_000
   )
 
-  it.live(
-    "ignores answers that don't prove the join, and never outlives it",
-    () =>
-      withJoiningRelay((relay) =>
-        Effect.scoped(
-          Effect.gen(function* () {
-            const hearth = yield* fakeHearth({ answer: "paired", forge: true })
-            const hearthKeys = ed25519Keys()
-            const link = {
+  it.live("trusts no answer that doesn't prove the join", () =>
+    withJoiningRelay((relay) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const hearth = yield* fakeHearth(
+            [
+              {
+                clientId: fingerprint(ed25519Keys().publicKey),
+                expiresAt: Date.now() + 60_000,
+                status: "pending",
+              },
+            ],
+            { forge: true }
+          )
+
+          yield* runRelayJoin(
+            { ...relay, link: { hearthOrigin: hearth.origin, secret } },
+            () => {}
+          ).pipe(Effect.timeout(1_000), Effect.ignore)
+
+          assert.isAbove(hearth.announcements.length, 0)
+          assert.isNull(yield* relay.state.findInvitationById(joinId))
+        })
+      )
+    )
+  )
+
+  it.live("ends with its join, and never outlives it after a restart", () =>
+    withJoiningRelay((relay) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const hearthKeys = ed25519Keys()
+          const hearth = yield* fakeHearth([
+            {
               clientId: fingerprint(hearthKeys.publicKey),
               expiresAt: Date.now() + 1_500,
-              hearthOrigin: hearth.origin,
-              joinId,
-              secret,
-            }
+              status: "pending",
+            },
+          ])
+          const run = runRelayJoin(
+            { ...relay, link: { hearthOrigin: hearth.origin, secret } },
+            () => {}
+          )
 
-            // Hearth "answers paired", but without the join's secret.
-            assert.strictEqual(
-              yield* runRelayJoin({ ...relay, link }, () => {}),
-              "expired"
-            )
-            // Its invitation can't pair anyone now.
-            assert.isNull(
-              yield* relay.state.findActiveInvitation(joinId, Date.now())
-            )
-
-            // The same join from a link claiming more time is still over.
-            assert.strictEqual(
-              yield* runRelayJoin(
-                {
-                  ...relay,
-                  link: { ...link, expiresAt: Date.now() + 10 * 60_000 },
-                },
-                () => {}
-              ),
-              "expired"
-            )
-          })
-        )
+          assert.strictEqual(yield* run, "expired")
+          // Its invitation can't pair anyone now, and starting again
+          // doesn't bring the join back.
+          assert.isNull(
+            yield* relay.state.findActiveInvitation(joinId, Date.now())
+          )
+          assert.strictEqual(yield* run, "expired")
+        })
       )
+    )
   )
 
   it.live("joins only over the Relay's own HTTPS", () =>
@@ -139,13 +165,7 @@ describe("Relay joining", () => {
             runRelayJoin(
               {
                 ...relay,
-                link: {
-                  clientId: "c".repeat(43),
-                  expiresAt: Date.now() + 60_000,
-                  hearthOrigin: "https://kiln.example.test",
-                  joinId,
-                  secret,
-                },
+                link: { hearthOrigin: "https://kiln.example.test", secret },
               },
               () => {}
             )
@@ -189,13 +209,14 @@ function withJoiningRelay<A, E>(
   )
 }
 
-// Hearth's join endpoint, answering every announcement the same way: with
-// the join's secret, or with a forged MAC.
-function fakeHearth(options: {
-  readonly answer: RelayJoinStatus
-  readonly forge?: boolean
-}) {
+// Hearth's join endpoint, giving each answer in turn and repeating the
+// last: MAC'd with the join's code, or with another key when forging.
+function fakeHearth(
+  answers: ReadonlyArray<Omit<RelayJoinResponse, "mac">>,
+  options: { readonly forge?: boolean } = {}
+) {
   const announcements: Array<RelayJoinAnnouncement> = []
+  let asked = 0
   return Effect.acquireRelease(
     Effect.promise(async () => {
       const server: Server = createServer((request, response) => {
@@ -209,22 +230,22 @@ function fakeHearth(options: {
             .update(relayJoinAnnouncementTranscript(announcement))
             .digest("base64url")
           if (announcement.mac === expected) announcements.push(announcement)
+          const answer = answers[Math.min(asked, answers.length - 1)]
+          asked += 1
+          if (!answer) throw new Error("The fake Hearth has no answers")
           response.setHeader("content-type", "application/json")
           response.end(
             JSON.stringify({
-              mac: createHmac(
-                "sha256",
-                options.forge ? "not-the-secret" : secret
-              )
+              ...answer,
+              mac: createHmac("sha256", options.forge ? "not-the-code" : secret)
                 .update(
                   relayJoinResponseTranscript({
+                    ...answer,
                     joinId: announcement.joinId,
                     nonce: announcement.nonce,
-                    status: options.answer,
                   })
                 )
                 .digest("base64url"),
-              status: options.answer,
             })
           )
         })

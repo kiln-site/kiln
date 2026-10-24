@@ -8,6 +8,7 @@ import {
 
 import { assert, layer } from "@effect/vitest"
 import { Effect } from "effect"
+import { TestClock } from "effect/testing"
 import { vi } from "vite-plus/test"
 import {
   type RelayJoinEnvelope,
@@ -33,7 +34,6 @@ function messageOf(error: unknown): string {
 // A Relay's announcement for a join, as effect/join.ts on the Relay sends it.
 function relayEnvelope(
   joinId: string,
-  expiresAt: number,
   overrides: Partial<RelayJoinEnvelope> = {}
 ): RelayJoinEnvelope {
   const { publicKey } = generateKeyPairSync("ed25519", {
@@ -44,7 +44,6 @@ function relayEnvelope(
     browserOrigin: "https://relay.test:4100",
     caCertificatePem: null,
     controlEndpoint: "wss://relay.test:4100/v1/socket",
-    expiresAt,
     installation: { fixed: false, id: null, replace: true },
     invitationId: joinId,
     relayBuild: "1.0.0",
@@ -81,7 +80,12 @@ function announce(
   return answerRelayJoinAnnouncement(request, address).pipe(
     Effect.flatMap((response) =>
       Effect.promise(async () => ({
-        body: (await response.json()) as { mac?: string; status?: string },
+        body: (await response.json()) as {
+          clientId?: string | null
+          expiresAt?: number | null
+          mac?: string
+          status?: string
+        },
         status: response.status,
       }))
     ),
@@ -94,6 +98,8 @@ function announce(
           createHmac("sha256", secret)
             .update(
               relayJoinResponseTranscript({
+                clientId: answer.body.clientId ?? null,
+                expiresAt: answer.body.expiresAt ?? null,
                 joinId,
                 nonce,
                 status: answer.body.status as "pending",
@@ -112,9 +118,9 @@ describeMysql("Relay joins", () => {
         Effect.gen(function* () {
           yield* resetDatabase
           const join = yield* openRelayJoinEffect("owner")
-          assert.isNotNull(join.link)
-          const secret = join.link?.secret ?? ""
-          const envelope = relayEnvelope(join.id, join.expiresAt)
+          assert.match(join.secret ?? "", /^[a-z2-7]{20}$/u)
+          const secret = join.secret ?? ""
+          const envelope = relayEnvelope(join.id)
 
           const forged = yield* announce(
             join.id,
@@ -132,6 +138,9 @@ describeMysql("Relay joins", () => {
           )
           assert.deepInclude(first, { proven: true, status: 200 })
           assert.strictEqual(first.body.status, "pending")
+          // Naming the one Hearth client the Relay may let pair.
+          assert.match(first.body.clientId ?? "", /^[A-Za-z\d_-]{43}$/u)
+          assert.strictEqual(first.body.expiresAt, join.expiresAt)
           // The same Relay asking again.
           const again = yield* announce(
             join.id,
@@ -144,7 +153,7 @@ describeMysql("Relay joins", () => {
           const other = yield* announce(
             join.id,
             secret,
-            relayEnvelope(join.id, join.expiresAt),
+            relayEnvelope(join.id),
             "203.0.113.1"
           )
           assert.deepInclude(other, { proven: true })
@@ -174,12 +183,12 @@ describeMysql("Relay joins", () => {
         Effect.gen(function* () {
           yield* resetDatabase
           const join = yield* openRelayJoinEffect("owner")
-          const secret = join.link?.secret ?? ""
+          const secret = join.secret ?? ""
 
           const plain = yield* announce(
             join.id,
             secret,
-            relayEnvelope(join.id, join.expiresAt, {
+            relayEnvelope(join.id, {
               browserOrigin: "http://relay.test:4100",
               controlEndpoint: "ws://relay.test:4100/v1/socket",
             }),
@@ -196,7 +205,7 @@ describeMysql("Relay joins", () => {
           const stale = yield* announce(
             join.id,
             secret,
-            relayEnvelope(join.id, join.expiresAt),
+            relayEnvelope(join.id),
             "203.0.113.2"
           )
           assert.deepInclude(stale, { proven: true })
@@ -213,13 +222,8 @@ describeMysql("Relay joins", () => {
       Effect.gen(function* () {
         yield* resetDatabase
         const join = yield* openRelayJoinEffect("owner")
-        const envelope = relayEnvelope(join.id, join.expiresAt)
-        yield* announce(
-          join.id,
-          join.link?.secret ?? "",
-          envelope,
-          "203.0.113.3"
-        )
+        const envelope = relayEnvelope(join.id)
+        yield* announce(join.id, join.secret ?? "", envelope, "203.0.113.3")
 
         const seen = yield* Effect.flip(
           relayJoinViewEffect("stranger", join.id)
@@ -251,52 +255,50 @@ describeMysql("Relay joins", () => {
     it.effect(
       "freeze what someone confirmed, and refuse other choices meanwhile",
       () =>
-        Effect.gen(function* () {
-          yield* resetDatabase
-          const join = yield* openRelayJoinEffect("owner")
-          const envelope = relayEnvelope(join.id, join.expiresAt)
-          yield* announce(
-            join.id,
-            join.link?.secret ?? "",
-            envelope,
-            "203.0.113.4"
-          )
-          const digest =
-            (yield* relayJoinViewEffect("owner", join.id)).announcement
-              ?.envelopeDigest ?? ""
-          const confirm = (name: string | null, digestUsed = digest) =>
-            confirmRelayJoinEffect({
-              canManageAnyRelay: true,
-              envelopeDigest: digestUsed,
+        // Confirming starts the worker, which reads the real clock.
+        TestClock.withLive(
+          Effect.gen(function* () {
+            yield* resetDatabase
+            const join = yield* openRelayJoinEffect("owner")
+            const envelope = relayEnvelope(join.id)
+            yield* announce(join.id, join.secret ?? "", envelope, "203.0.113.4")
+            const digest =
+              (yield* relayJoinViewEffect("owner", join.id)).announcement
+                ?.envelopeDigest ?? ""
+            const confirm = (name: string | null, digestUsed = digest) =>
+              confirmRelayJoinEffect({
+                canManageAnyRelay: true,
+                envelopeDigest: digestUsed,
+                installation: "use",
+                joinId: join.id,
+                name,
+                userId: "owner",
+              })
+
+            const changed = yield* Effect.flip(confirm("Forge", "0".repeat(64)))
+            assert.strictEqual(
+              messageOf(changed),
+              "The Relay changed; review it again"
+            )
+
+            const confirming = yield* confirm("Forge")
+            assert.strictEqual(confirming.state, "confirming")
+            assert.deepStrictEqual(confirming.intent, {
               installation: "use",
-              joinId: join.id,
-              name,
-              userId: "owner",
+              name: "Forge",
             })
-
-          const changed = yield* Effect.flip(confirm("Forge", "0".repeat(64)))
-          assert.strictEqual(
-            messageOf(changed),
-            "The Relay changed; review it again"
-          )
-
-          const confirming = yield* confirm("Forge")
-          assert.strictEqual(confirming.state, "confirming")
-          assert.deepStrictEqual(confirming.intent, {
-            installation: "use",
-            name: "Forge",
+            const otherName = yield* Effect.flip(confirm("Anvil"))
+            assert.strictEqual(
+              messageOf(otherName),
+              "This Relay is already being added with other choices"
+            )
+            // A command can't be swapped out from under it.
+            const refreshed = yield* Effect.flip(
+              refreshRelayJoinEffect("owner", join.id)
+            )
+            assert.include(messageOf(refreshed), "being added")
           })
-          const otherName = yield* Effect.flip(confirm("Anvil"))
-          assert.strictEqual(
-            messageOf(otherName),
-            "This Relay is already being added with other choices"
-          )
-          // A command can't be swapped out from under it.
-          const refreshed = yield* Effect.flip(
-            refreshRelayJoinEffect("owner", join.id)
-          )
-          assert.include(messageOf(refreshed), "being added")
-        })
+        )
     )
   })
 })

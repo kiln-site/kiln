@@ -13,6 +13,7 @@ import { BlockList, isIP } from "node:net"
 import {
   isKilnNightlyVersion,
   kilnImageRepository,
+  RELAY_JOIN_ID_LABEL,
   RELAY_JOIN_INVITATION_LABEL,
   RELAY_JOIN_LIFETIME_MS,
   type RelayJoinEnvelope,
@@ -141,6 +142,8 @@ interface RelayJoinRow extends RowDataPacket {
 export interface RelayJoinView {
   readonly announcement: {
     readonly controlEndpoint: string
+    // What the Relay is called when nobody names it.
+    readonly defaultName: string
     readonly envelopeDigest: string
     // The Relay Hearth already has under this fingerprint, if any.
     readonly existingRelay: {
@@ -182,12 +185,8 @@ export interface OpenedRelayJoin extends RelayJoinView {
   // Whether this Hearth is a nightly, so the Relay is too.
   readonly nightly: boolean
   readonly relayImage: string
-  readonly link: {
-    readonly clientId: string
-    readonly expiresAt: number
-    readonly joinId: string
-    readonly secret: string
-  } | null
+  // The code the command carries, while it's waiting for its Relay.
+  readonly secret: string | null
 }
 
 export class RelayJoinFailure extends Error {
@@ -232,11 +231,20 @@ const joinView = Effect.fn("relayJoin.view")(function* (row: RelayJoinRow) {
           findPersistedRelayRow(envelope.relayFingerprint)
         )
       : null
+  const defaultName =
+    existing?.name ??
+    (envelope
+      ? relayNameForNewPairing(
+          envelope.relayName,
+          (yield* promiseEffect(listPersistedRelays)).map((relay) => relay.name)
+        )
+      : null)
   return {
     announcement:
-      envelope && row.envelope_digest
+      envelope && row.envelope_digest && defaultName
         ? {
             controlEndpoint: envelope.controlEndpoint,
+            defaultName,
             envelopeDigest: row.envelope_digest,
             existingRelay: existing
               ? { id: existing.id, name: existing.name }
@@ -270,7 +278,10 @@ const joinView = Effect.fn("relayJoin.view")(function* (row: RelayJoinRow) {
  * when it opens. A join someone was confirming comes back to finish.
  */
 export const openRelayJoinEffect = Effect.fn("relayJoin.open")(function* (
-  userId: string
+  userId: string,
+  // The join the installer linked to, when it's still this person's to
+  // confirm; otherwise their newest.
+  joinId?: string
 ) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
@@ -280,9 +291,9 @@ export const openRelayJoinEffect = Effect.fn("relayJoin.open")(function* (
     `${SELECT_JOIN}
       WHERE created_by = ?
         AND state IN ('waiting', 'announced', 'confirming', 'needs_review')
-      ORDER BY created_at DESC
+      ORDER BY id = ? DESC, created_at DESC
       LIMIT 1`,
-    [userId]
+    [userId, joinId ?? ""]
   )
   const row = rows[0] ?? (yield* createJoin(userId, now))
   yield* resumeIfAbandoned(row, now)
@@ -302,20 +313,14 @@ const openedJoin = Effect.fnUntraced(function* (row: RelayJoinRow) {
     installScript: kilnInstallScriptUrl(),
     nightly,
     relayImage: `${kilnImageRepository("relay", kilnGitRepository())}:${nightly ? "latest-nightly" : "latest"}`,
-    link: secret
-      ? {
-          clientId: publicKeyFingerprint(row.client_public_key),
-          expiresAt: Number(row.expires_at),
-          joinId: row.id,
-          secret,
-        }
-      : null,
+    secret,
   } satisfies OpenedRelayJoin
 })
 
 const createJoin = Effect.fnUntraced(function* (userId: string, now: number) {
   const database = yield* Database
-  const id = randomUUID()
+  const secret = joinCode()
+  const id = relayJoinId(secret)
   const keys = generateKeyPairSync("ed25519", {
     privateKeyEncoding: { format: "pem", type: "pkcs8" },
     publicKeyEncoding: { format: "pem", type: "spki" },
@@ -330,7 +335,7 @@ const createJoin = Effect.fnUntraced(function* (userId: string, now: number) {
     [
       id,
       userId,
-      encryptPrivateKey(randomBytes(32).toString("base64url")),
+      encryptPrivateKey(secret),
       keys.publicKey,
       encryptPrivateKey(keys.privateKey),
       now + RELAY_JOIN_LIFETIME_MS,
@@ -474,21 +479,33 @@ const acceptAnnouncement = Effect.fn("relayJoin.announce")(function* (
       ) {
         return { body: { error: "Not this join's Relay" }, status: 403 }
       }
-      const answer = (status: RelayJoinStatus) => ({
-        body: {
-          mac: createHmac("sha256", secret)
-            .update(
-              relayJoinResponseTranscript({
-                joinId: row.id,
-                nonce: announcement.nonce,
-                status,
-              })
-            )
-            .digest("base64url"),
+      // A pending answer tells the Relay which of Hearth's clients may pair
+      // with it, and until when.
+      const answer = (status: RelayJoinStatus) => {
+        const response = {
+          clientId:
+            status === "pending"
+              ? publicKeyFingerprint(row.client_public_key)
+              : null,
+          expiresAt: status === "pending" ? Number(row.expires_at) : null,
           status,
-        },
-        status: 200,
-      })
+        }
+        return {
+          body: {
+            ...response,
+            mac: createHmac("sha256", secret)
+              .update(
+                relayJoinResponseTranscript({
+                  ...response,
+                  joinId: row.id,
+                  nonce: announcement.nonce,
+                })
+              )
+              .digest("base64url"),
+          },
+          status: 200,
+        }
+      }
       const digest = envelopeDigest(announcement.envelope)
       switch (row.state) {
         case "revoked":
@@ -511,11 +528,7 @@ const acceptAnnouncement = Effect.fn("relayJoin.announce")(function* (
             )
             return answer("expired")
           }
-          const problem = envelopeProblem(
-            announcement.envelope,
-            row.id,
-            Number(row.expires_at)
-          )
+          const problem = envelopeProblem(announcement.envelope, row.id)
           if (problem) return { body: { error: problem }, status: 422 }
           yield* transaction.execute(
             `UPDATE ${databaseTable("relay_join")}
@@ -549,12 +562,10 @@ function envelopeDigest(envelope: RelayJoinEnvelope): string {
 // installation ID, relies on it.
 function envelopeProblem(
   envelope: RelayJoinEnvelope,
-  joinId: string,
-  expiresAt: number
+  joinId: string
 ): string | null {
   if (envelope.invitationId !== joinId)
     return "The invitation isn't this join's"
-  if (envelope.expiresAt > expiresAt) return "The invitation outlives the join"
   if (
     !URL.canParse(envelope.controlEndpoint) ||
     !URL.canParse(envelope.browserOrigin)
@@ -1219,6 +1230,20 @@ async function assertRelayDestination(hostname: string): Promise<void> {
       throw new RelayJoinFailure(`Hearth won't connect to ${address}`)
     }
   }
+}
+
+// A join's code: 20 base32 letters, 100 bits.
+function joinCode(): string {
+  const alphabet = "abcdefghijklmnopqrstuvwxyz234567"
+  return [...randomBytes(20)].map((byte) => alphabet[byte & 31]).join("")
+}
+
+// A join's ID, derived from its code as the Relay derives it.
+function relayJoinId(secret: string): string {
+  return createHmac("sha256", secret)
+    .update(RELAY_JOIN_ID_LABEL)
+    .digest("base64url")
+    .slice(0, 22)
 }
 
 function errorMessage(cause: unknown): string {

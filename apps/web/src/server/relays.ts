@@ -3,6 +3,7 @@ import { Effect } from "effect"
 import {
   relayConnectionSettingsSchema,
   relayIdSchema as relayFingerprintSchema,
+  relayJoinIdPattern,
   relayNameSchema,
   relayHostAccessSchema,
   relayProxyDiagnosticsSchema,
@@ -304,7 +305,9 @@ export const removeRelay = createServerFn({ method: "POST" })
     )
   })
 
-const relayJoinIdSchema = z.object({ joinId: z.uuid() })
+const relayJoinIdSchema = z.object({
+  joinId: z.string().regex(relayJoinIdPattern),
+})
 const confirmRelayJoinSchema = relayJoinIdSchema.extend({
   envelopeDigest: z.string().regex(/^[\da-f]{64}$/u),
   installation: z.enum(["keep", "use"]),
@@ -312,13 +315,16 @@ const confirmRelayJoinSchema = relayJoinIdSchema.extend({
 })
 
 /** The person's join for the Add Relay dialog's install command. */
-export const openRelayJoin = createServerFn({ method: "POST" }).handler(
-  async () => {
+export const openRelayJoin = createServerFn({ method: "POST" })
+  .validator(relayJoinIdSchema.partial())
+  .handler(async ({ data }) => {
     const user = await requireRelayCreationAccess()
     const { openRelayJoinEffect } = await import("@/server/relay-join.server")
-    return runAppEffect("relay.join.open", openRelayJoinEffect(user.id))
-  }
-)
+    return runAppEffect(
+      "relay.join.open",
+      openRelayJoinEffect(user.id, data.joinId)
+    )
+  })
 
 export const getRelayJoin = createServerFn({ method: "GET" })
   .validator(relayJoinIdSchema)

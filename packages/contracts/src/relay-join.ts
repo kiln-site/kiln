@@ -3,77 +3,67 @@ import { Schema } from "effect"
 // Joining: a new Relay pairs with a Hearth from one link, copied out of
 // Hearth's Add Relay dialog into the Relay's install command.
 //
-// The link is `<hearth origin>/#kiln-relay-join=v1.<join>.<secret>.<client>.
-// <expires>`. It travels from Hearth to the Relay through the operator, so
-// the Relay trusts what it says: which Hearth client may pair (`client`, the
-// fingerprint of a key Hearth made for this join) and until when. The
-// secret never leaves the two machines: the Relay proves it holds it with an
-// HMAC over its announcement, and Hearth answers with one over the Relay's
-// nonce, so a network between them can delay joining but not take it over.
+// The link is `<hearth origin>/#kj1.<code>`: where Hearth is, and a short
+// secret code. It travels from Hearth to the Relay through the person, and
+// the code never crosses the network: the join's ID is derived from it, the
+// Relay proves it holds it with an HMAC over its announcement, and Hearth
+// answers with one over the Relay's nonce, which also carries what the
+// Relay needs to know, such as which Hearth client may pair. A network
+// between them can delay joining, but not take it over; someone also
+// confirms the Relay in Hearth before it's added.
 
-export const RELAY_JOIN_FRAGMENT = "kiln-relay-join"
+const LINK_PREFIX = "#kj1."
 // A join lasts this long from when Hearth makes it.
 export const RELAY_JOIN_LIFETIME_MS = 30 * 60_000
 
+// 20 base32 letters: 100 bits, plenty for a code that lasts half an hour
+// and needs a person's confirmation.
+const CODE = /^[a-z2-7]{20}$/u
+const JOIN_ID = /^[A-Za-z\d_-]{22}$/u
 const FINGERPRINT = /^[A-Za-z\d_-]{43}$/u
-const SECRET = /^[A-Za-z\d_-]{43}$/u
-const UUID =
-  /^[\da-f]{8}-[\da-f]{4}-[1-8][\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/u
 
 export interface RelayJoinLink {
-  readonly clientId: string
-  readonly expiresAt: number
   readonly hearthOrigin: string
-  readonly joinId: string
   readonly secret: string
 }
 
 export function encodeRelayJoinLink(link: RelayJoinLink): string {
-  return `${link.hearthOrigin}/#${RELAY_JOIN_FRAGMENT}=v1.${link.joinId}.${link.secret}.${link.clientId}.${link.expiresAt}`
+  return `${link.hearthOrigin}/${LINK_PREFIX}${link.secret}`
 }
 
 /** The join a link describes, or null when it isn't a valid one. */
 export function decodeRelayJoinLink(value: string): RelayJoinLink | null {
-  if (value.length > 2_048 || !URL.canParse(value.trim())) return null
-  const url = new URL(value.trim())
+  const trimmed = value.trim()
+  if (trimmed.length > 2_048 || !URL.canParse(trimmed)) return null
+  const url = new URL(trimmed)
+  const secret = url.hash.slice(LINK_PREFIX.length)
   if (
     (url.protocol !== "https:" && url.protocol !== "http:") ||
     url.username ||
     url.password ||
     url.search ||
-    (url.pathname !== "/" && url.pathname !== "")
+    (url.pathname !== "/" && url.pathname !== "") ||
+    !url.hash.startsWith(LINK_PREFIX) ||
+    !CODE.test(secret)
   ) {
     return null
   }
-  const prefix = `#${RELAY_JOIN_FRAGMENT}=v1.`
-  if (!url.hash.startsWith(prefix)) return null
-  const [joinId, secret, clientId, expires, ...rest] = url.hash
-    .slice(prefix.length)
-    .split(".")
-  const expiresAt = Number(expires)
-  if (
-    rest.length > 0 ||
-    !joinId ||
-    !UUID.test(joinId) ||
-    !secret ||
-    !SECRET.test(secret) ||
-    !clientId ||
-    !FINGERPRINT.test(clientId) ||
-    !/^\d{1,16}$/u.test(expires ?? "") ||
-    !Number.isSafeInteger(expiresAt)
-  ) {
-    return null
-  }
-  return { clientId, expiresAt, hearthOrigin: url.origin, joinId, secret }
+  return { hearthOrigin: url.origin, secret }
 }
 
-/** The link with its secret left out, for logs and output. */
-export function redactRelayJoinLink(link: RelayJoinLink): string {
-  return `${link.hearthOrigin}/#${RELAY_JOIN_FRAGMENT}=v1.${link.joinId}.…`
+/** Where someone confirms a join's Relay in Hearth. */
+export function relayJoinConfirmUrl(
+  hearthOrigin: string,
+  joinId: string
+): string {
+  return `${hearthOrigin}/infra/relays?join=${joinId}`
 }
 
-// The pairing token of the invitation a join creates, derived from the
-// join's secret so the two are never the same value.
+export const relayJoinIdPattern = JOIN_ID
+
+// HMAC labels: a join's ID, and its invitation's pairing token, are each
+// derived from its code, so none of them is the code itself.
+export const RELAY_JOIN_ID_LABEL = "kiln.relay-join.id.v1"
 export const RELAY_JOIN_INVITATION_LABEL = "kiln.relay-join.invitation.v1"
 
 /** The Relay's installation, as a join or a pairing link reports it. */
@@ -91,9 +81,8 @@ export const RelayJoinEnvelopeSchema = Schema.Struct({
     Schema.String.check(Schema.isMaxLength(16_384))
   ),
   controlEndpoint: Schema.String.check(Schema.isMaxLength(512)),
-  expiresAt: Schema.Number,
   installation: RelayJoinInstallationSchema,
-  invitationId: Schema.String.check(Schema.isPattern(UUID)),
+  invitationId: Schema.String.check(Schema.isPattern(JOIN_ID)),
   relayBuild: Schema.String.check(Schema.isMaxLength(120)),
   relayFingerprint: Schema.String.check(Schema.isPattern(FINGERPRINT)),
   relayName: Schema.String.check(
@@ -110,7 +99,7 @@ export type RelayJoinEnvelope = typeof RelayJoinEnvelopeSchema.Type
 
 export const RelayJoinAnnouncementSchema = Schema.Struct({
   envelope: RelayJoinEnvelopeSchema,
-  joinId: Schema.String.check(Schema.isPattern(UUID)),
+  joinId: Schema.String.check(Schema.isPattern(JOIN_ID)),
   mac: Schema.String.check(Schema.isMaxLength(128)),
   nonce: Schema.String.check(Schema.isPattern(/^[A-Za-z\d_-]{22,86}$/u)),
   version: Schema.Literal(1),
@@ -130,9 +119,15 @@ export const relayJoinStatuses = [
 export type RelayJoinStatus = (typeof relayJoinStatuses)[number]
 
 export const RelayJoinResponseSchema = Schema.Struct({
+  // While it's pending: the Hearth client that may pair, by key
+  // fingerprint, and when the join expires.
+  clientId: Schema.NullOr(Schema.String.check(Schema.isPattern(FINGERPRINT))),
+  expiresAt: Schema.NullOr(Schema.Number),
   mac: Schema.String.check(Schema.isMaxLength(128)),
   status: Schema.Literals(relayJoinStatuses),
 })
+
+export type RelayJoinResponse = typeof RelayJoinResponseSchema.Type
 
 /** What the Relay's announcement MAC covers: every field, in order. */
 export function relayJoinAnnouncementTranscript(
@@ -146,7 +141,6 @@ export function relayJoinAnnouncementTranscript(
     envelope.browserOrigin,
     envelope.caCertificatePem,
     envelope.controlEndpoint,
-    envelope.expiresAt,
     envelope.installation.id,
     envelope.installation.fixed,
     envelope.installation.replace,
@@ -158,16 +152,19 @@ export function relayJoinAnnouncementTranscript(
   ])
 }
 
-/** What Hearth's answer MAC covers: the Relay's nonce and the status. */
-export function relayJoinResponseTranscript(input: {
-  readonly joinId: string
-  readonly nonce: string
-  readonly status: RelayJoinStatus
-}): string {
+/** What Hearth's answer MAC covers: the Relay's nonce and everything else. */
+export function relayJoinResponseTranscript(
+  input: Omit<RelayJoinResponse, "mac"> & {
+    readonly joinId: string
+    readonly nonce: string
+  }
+): string {
   return JSON.stringify([
     "kiln.relay-join.response.v1",
     input.joinId,
     input.nonce,
     input.status,
+    input.clientId,
+    input.expiresAt,
   ])
 }

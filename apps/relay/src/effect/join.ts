@@ -1,13 +1,16 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto"
 
 import {
+  RELAY_JOIN_ID_LABEL,
   RELAY_JOIN_INVITATION_LABEL,
   RELAY_JOIN_LIFETIME_MS,
   type RelayJoinEnvelope,
   type RelayJoinLink,
+  type RelayJoinResponse,
   RelayJoinResponseSchema,
   type RelayJoinStatus,
   relayJoinAnnouncementTranscript,
+  relayJoinConfirmUrl,
   relayJoinResponseTranscript,
 } from "@workspace/contracts"
 import { Effect, Option, Schema } from "effect"
@@ -21,11 +24,12 @@ import type { RelayTlsMaterial } from "./tls.js"
 
 // Joining: a Relay started with a join link from Hearth's Add Relay dialog
 // (KILN_RELAY_JOIN, or `kiln-relay pair join <link>` on a running Relay)
-// pairs with that Hearth without anyone pasting an invitation. It makes one
-// invitation that only the Hearth client the link names can use, then
-// announces itself to Hearth until someone there confirms it, the join
-// expires, or another Relay used the link first. See packages/contracts
-// relay-join.ts for the link and the messages.
+// pairs with that Hearth without anyone pasting an invitation. It announces
+// itself to Hearth until someone there confirms it, the join expires, or
+// another Relay used the link first. Hearth's first answer names the one
+// Hearth client that may pair, and the Relay makes one invitation only that
+// client can use. See packages/contracts relay-join.ts for the link and the
+// messages.
 
 const JOIN_METADATA_PREFIX = "relay_join:"
 const ANNOUNCE_INTERVAL_MS = 5_000
@@ -46,7 +50,7 @@ export class RelayJoinError extends Schema.TaggedError<RelayJoinError>()(
 // invitation nor extends the first.
 const SavedJoinSchema = Schema.fromJsonString(
   Schema.Struct({
-    clientId: Schema.String,
+    clientId: Schema.NullOr(Schema.String),
     expiresAt: Schema.Number,
     hearthOrigin: Schema.String,
     joinId: Schema.String,
@@ -62,7 +66,7 @@ export type RelayJoinOutcome = Exclude<RelayJoinStatus, "pending">
 export type RelayJoinEvent =
   | { readonly kind: "started"; readonly fingerprint: string }
   | { readonly kind: "insecure" }
-  | { readonly kind: "waiting" }
+  | { readonly kind: "waiting"; readonly confirmUrl: string }
   | { readonly kind: "unreachable"; readonly reason: string }
   | { readonly kind: "finished"; readonly outcome: RelayJoinOutcome }
 
@@ -72,6 +76,21 @@ export interface RelayJoinInput {
   readonly link: RelayJoinLink
   readonly state: RelayStateStore["Service"]
   readonly tls: RelayTlsMaterial | null
+}
+
+/** A join's ID, derived from its code. */
+export function relayJoinId(secret: string): string {
+  return createHmac("sha256", secret)
+    .update(RELAY_JOIN_ID_LABEL)
+    .digest("base64url")
+    .slice(0, 22)
+}
+
+/** The pairing token of a join's invitation. */
+export function relayJoinInvitationToken(secret: string): string {
+  return createHmac("sha256", secret)
+    .update(RELAY_JOIN_INVITATION_LABEL)
+    .digest("base64url")
 }
 
 /**
@@ -89,7 +108,7 @@ export const runRelayJoin = Effect.fnUntraced(function* (
         "Joining needs the Relay's own HTTPS (KILN_RELAY_TLS_MODE=managed). Pair this Relay by hand instead: run `kiln-relay pair create` and paste the link into Hearth.",
     })
   }
-  const saved = yield* prepareJoin(input)
+  let saved = yield* prepareJoin(input)
   if (saved.outcome) {
     report({ kind: "finished", outcome: saved.outcome })
     return saved.outcome
@@ -98,24 +117,23 @@ export const runRelayJoin = Effect.fnUntraced(function* (
   if (link.hearthOrigin.startsWith("http:")) report({ kind: "insecure" })
   const envelope = yield* joinEnvelope({
     config: input.config,
-    expiresAt: saved.expiresAt,
     identity: input.identity,
-    invitationId: link.joinId,
+    invitationId: saved.joinId,
     relayBuild: relayBuildLabel(),
     tls: input.tls,
   })
   let delay = ANNOUNCE_INTERVAL_MS
   let waiting = false
   while (true) {
-    if (yield* pairedLocally(state, link.joinId)) {
+    if (yield* pairedLocally(state, saved.joinId)) {
       return yield* finish(input, saved, "paired", report)
     }
     if (Date.now() >= saved.expiresAt) {
       return yield* finish(input, saved, "expired", report)
     }
-    const answered = yield* announce(link, envelope).pipe(
+    const answered = yield* announce(link, saved.joinId, envelope).pipe(
       Effect.withSpan("RelayJoin.announce"),
-      Effect.map((status) => ({ status })),
+      Effect.map((response) => ({ response })),
       Effect.catch((error: RelayJoinError) =>
         Effect.succeed({ reason: error.reason })
       )
@@ -123,12 +141,18 @@ export const runRelayJoin = Effect.fnUntraced(function* (
     if ("reason" in answered) {
       report({ kind: "unreachable", reason: answered.reason })
       delay = Math.min(delay * 2, MAX_RETRY_DELAY_MS)
-    } else if (answered.status === "pending") {
-      if (!waiting) report({ kind: "waiting" })
+    } else if (answered.response.status === "pending") {
+      saved = yield* invite(input, saved, answered.response)
+      if (!waiting) {
+        report({
+          confirmUrl: relayJoinConfirmUrl(link.hearthOrigin, saved.joinId),
+          kind: "waiting",
+        })
+      }
       waiting = true
       delay = ANNOUNCE_INTERVAL_MS
     } else {
-      return yield* finish(input, saved, answered.status, report)
+      return yield* finish(input, saved, answered.response.status, report)
     }
     yield* Effect.sleep(
       Math.min(delay, Math.max(0, saved.expiresAt - Date.now()))
@@ -136,56 +160,80 @@ export const runRelayJoin = Effect.fnUntraced(function* (
   }
 })
 
-// The saved join, saving it and its invitation the first time. The link's
-// expiry is capped once, when the Relay first sees it, and kept.
+// The saved join, saving it the first time. Its expiry is capped once, when
+// the Relay first sees it, and kept.
 const prepareJoin = Effect.fn("RelayJoin.prepare")(function* (
   input: RelayJoinInput
 ) {
   const { link, state } = input
-  const key = `${JOIN_METADATA_PREFIX}${link.joinId}`
+  const joinId = relayJoinId(link.secret)
+  const key = `${JOIN_METADATA_PREFIX}${joinId}`
   const existing = Option.getOrNull(
     decodeSavedJoin((yield* state.getMetadata(key)) ?? "")
   )
-  if (existing && existing.clientId !== link.clientId) {
-    return yield* new RelayJoinError({
-      reason: "This Relay already joined with a different link for that join",
-    })
-  }
   // Hearth's address may be corrected; who may pair and until when may not.
   const saved: SavedJoin = existing
     ? { ...existing, hearthOrigin: link.hearthOrigin }
     : {
-        clientId: link.clientId,
-        expiresAt: Math.min(
-          link.expiresAt,
-          Date.now() + RELAY_JOIN_LIFETIME_MS
-        ),
+        clientId: null,
+        expiresAt: Date.now() + RELAY_JOIN_LIFETIME_MS,
         hearthOrigin: link.hearthOrigin,
-        joinId: link.joinId,
+        joinId,
         outcome: null,
       }
   if (!existing || existing.hearthOrigin !== link.hearthOrigin) {
     yield* state.setMetadata(key, JSON.stringify(saved))
   }
-  if (saved.outcome || saved.expiresAt <= Date.now()) return saved
-  // Saved first, so a restart between the two finds the join and makes the
-  // invitation then.
-  if (!(yield* state.findInvitationById(link.joinId))) {
+  return saved
+})
+
+// Makes the join's one invitation once Hearth names its client, for that
+// client only, lasting no longer than either side allows.
+const invite = Effect.fnUntraced(function* (
+  input: RelayJoinInput,
+  saved: SavedJoin,
+  response: RelayJoinResponse
+) {
+  if (!response.clientId || response.expiresAt === null) {
+    return yield* new RelayJoinError({
+      reason: "Hearth didn't say which of its clients may pair",
+    })
+  }
+  if (saved.clientId !== null) {
+    if (saved.clientId !== response.clientId) {
+      return yield* new RelayJoinError({
+        reason: "Hearth named another client for this join",
+      })
+    }
+    return saved
+  }
+  const next: SavedJoin = {
+    ...saved,
+    clientId: response.clientId,
+    expiresAt: Math.min(saved.expiresAt, response.expiresAt),
+  }
+  // Saved first, so a restart between the two finds the client and makes
+  // the invitation then.
+  yield* input.state.setMetadata(
+    `${JOIN_METADATA_PREFIX}${saved.joinId}`,
+    JSON.stringify(next)
+  )
+  if (!(yield* input.state.findInvitationById(saved.joinId))) {
     yield* createPairingInvitation({
       config: input.config,
       identity: input.identity,
       join: {
-        clientId: link.clientId,
-        expiresAt: saved.expiresAt,
-        invitationId: link.joinId,
+        clientId: response.clientId,
+        expiresAt: next.expiresAt,
+        invitationId: saved.joinId,
       },
       role: "full_access",
-      state,
+      state: input.state,
       tls: input.tls,
-      token: relayJoinInvitationToken(link.secret),
+      token: relayJoinInvitationToken(input.link.secret),
     })
   }
-  return saved
+  return next
 })
 
 const finish = Effect.fnUntraced(function* (
@@ -216,9 +264,13 @@ const pairedLocally = Effect.fnUntraced(function* (
 
 // One announcement. Fails with why Hearth couldn't be asked, or answered
 // in a way that can't be trusted, so the caller tries again later.
-function announce(link: RelayJoinLink, envelope: RelayJoinEnvelope) {
+function announce(
+  link: RelayJoinLink,
+  joinId: string,
+  envelope: RelayJoinEnvelope
+) {
   const nonce = randomBytes(32).toString("base64url")
-  const unsigned = { envelope, joinId: link.joinId, nonce, version: 1 as const }
+  const unsigned = { envelope, joinId, nonce, version: 1 as const }
   const body = JSON.stringify({
     ...unsigned,
     mac: createHmac("sha256", link.secret)
@@ -265,19 +317,14 @@ function announce(link: RelayJoinLink, envelope: RelayJoinEnvelope) {
           })
         )
       }
+      const { mac, ...response } = answer.value
       const expected = createHmac("sha256", link.secret)
-        .update(
-          relayJoinResponseTranscript({
-            joinId: link.joinId,
-            nonce,
-            status: answer.value.status,
-          })
-        )
+        .update(relayJoinResponseTranscript({ ...response, joinId, nonce }))
         .digest()
-      const actual = Buffer.from(answer.value.mac, "base64url")
+      const actual = Buffer.from(mac, "base64url")
       return expected.length === actual.length &&
         timingSafeEqual(expected, actual)
-        ? Effect.succeed(answer.value.status)
+        ? Effect.succeed(answer.value)
         : Effect.fail(
             new RelayJoinError({
               reason: "Hearth's answer didn't prove it holds the join",
@@ -287,13 +334,6 @@ function announce(link: RelayJoinLink, envelope: RelayJoinEnvelope) {
   )
 }
 
-/** The pairing token of a join's invitation. */
-export function relayJoinInvitationToken(secret: string): string {
-  return createHmac("sha256", secret)
-    .update(RELAY_JOIN_INVITATION_LABEL)
-    .digest("base64url")
-}
-
 /** A line for the log or terminal about how joining is going. */
 export function describeRelayJoinEvent(
   event: RelayJoinEvent,
@@ -301,11 +341,11 @@ export function describeRelayJoinEvent(
 ): string {
   switch (event.kind) {
     case "started":
-      return `Joining the Kiln at ${hearthOrigin}. This Relay's fingerprint is ${event.fingerprint}; check Hearth shows the same.`
+      return `Joining ${hearthOrigin} as ${event.fingerprint}`
     case "insecure":
       return "Hearth's address is plain HTTP; joining relies on the network between the two machines."
     case "waiting":
-      return "Waiting for someone to confirm this Relay in Hearth's Add Relay dialog."
+      return `Confirm this Relay in Hearth: ${event.confirmUrl}`
     case "unreachable":
       return `${event.reason}. Trying again.`
     case "finished":

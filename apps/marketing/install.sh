@@ -109,6 +109,15 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+# The link from Hearth's Add Relay dialog: its address, then #kj1. and a
+# code. The Relay checks it fully; this only catches a wrong paste early.
+if [ -n "$join" ]; then
+  case "$join" in
+    http://*'#kj1.'* | https://*'#kj1.'*) ;;
+    *) usage >&2; printf 'kiln: --join needs the link from Hearth'"'"'s Add Relay dialog\n' >&2; exit 1 ;;
+  esac
+fi
+
 [ -n "$image" ] || image="$image_prefix/relay:$channel"
 prefix="${namespace:+$namespace-}"
 container="$prefix$container"
@@ -628,27 +637,58 @@ start_node_relay() {
   done
 }
 
-# Follows a joining Relay's log until it paired with Hearth, or the join
-# ended. The link itself never shows: the Relay doesn't print it.
-wait_joined() {
-  printed=0
+# A joining Relay's lines: its container's log, or the `pair join` run on a
+# Relay that was already here. The link itself never shows in either.
+join_output=""
+join_lines() {
+  if [ -n "$join_output" ]; then
+    cat "$join_output" 2>/dev/null || true
+  else
+    dk logs "$container" 2>&1 || true
+  fi
+}
+
+# Waits for a line saying the join got as far as $1, or ended. A join
+# that ended badly leaves the Relay's reason as the step's.
+wait_join() {
   waited=0
-  while [ "$waited" -lt 1900 ]; do
-    lines=$(dk logs "$container" 2>&1 |
-      grep -E "Joining the Kiln|Waiting for someone|Hearth's address is plain|Paired with Hearth|join expired|already joined with this link|Joining needs" || true)
-    count=$(printf '%s' "$lines" | grep -c '' || true)
-    if [ "$count" -gt "$printed" ]; then
-      printf '%s\n' "$lines" | sed -n "$((printed + 1)),\$p" | sed 's/^/  /'
-      printed=$count
-    fi
+  while [ "$waited" -lt "$2" ]; do
+    lines=$(join_lines)
     case "$lines" in
-      *"Paired with Hearth"*) return 0 ;;
-      *"join expired"* | *"already joined with this link"* | *"Joining needs"*) return 1 ;;
+      *"$1"* | *"Paired with Hearth"*) return 0 ;;
+      *"join expired"* | *"already joined with this link"* | *"Joining needs"* | *"isn't a join link"*)
+        printf 'kiln: %s\n' "$(printf '%s\n' "$lines" | grep -E "expired|already joined|Joining needs|join link" | tail -n 1)"
+        return 1
+        ;;
     esac
-    sleep 3
-    waited=$((waited + 3))
+    sleep 2
+    waited=$((waited + 2))
   done
+  printf 'kiln: %s\n' "The Relay didn't hear from Hearth. Its last line: $(printf '%s\n' "$lines" | tail -n 1)"
   return 1
+}
+wait_announced() { wait_join "Confirm this Relay in Hearth:" 600; }
+wait_confirmed() { wait_join "Paired with Hearth" 1900; }
+
+# Joins Hearth: until Hearth has the Relay, where to confirm it, until
+# someone does, then done.
+join_hearth() {
+  step "Reaching Hearth" wait_announced
+  confirm_url=$(join_lines | sed -n 's/.*Confirm this Relay in Hearth: //p' | tail -n 1)
+  fingerprint=$(join_lines | sed -n 's/^Joining .* as //p' | tail -n 1)
+  if [ -n "$confirm_url" ]; then
+    say ""
+    say "  Confirm this Relay in Hearth:"
+    say "  $arrow $bold$confirm_url$reset"
+    [ -z "$fingerprint" ] || say "  ${dim}Fingerprint $fingerprint$reset"
+    say ""
+    step "Waiting for confirmation" wait_confirmed
+  fi
+  say ""
+  say "  ${green}${bold}Relay added$reset ${dim}in $(duration $(($(now) - started_at)))$reset"
+  say ""
+  say "  ${dim}Install log: $log_file$reset"
+  say ""
 }
 
 # Whether a domain resolves to this machine's address.
@@ -777,10 +817,11 @@ if docker_reachable && dk container inspect "$container" >/dev/null 2>&1; then
       fail "A Relay is installed here but stopped. Start it with \`docker start $container\`, then run this again."
     dk exec "$container" kiln-relay pair join --check >/dev/null 2>&1 ||
       fail "This Relay is older than joining needs. Update it, or pair it by hand: run \`docker exec $container kiln-relay pair create\` and paste the link into Hearth's Pairing link tab."
-    say "  A Relay is already running here. Joining it to that Kiln:"
+    say "  A Relay is already running here; joining it to that Kiln."
     say ""
-    dk exec "$container" kiln-relay pair join "$join" 2>>"$log_file" | sed 's/^/  /'
-    say ""
+    join_output=$(mktemp)
+    dk exec "$container" kiln-relay pair join "$join" >"$join_output" 2>&1 &
+    join_hearth
     exit 0
   fi
   if [ "$mode" = "node" ]; then
@@ -844,14 +885,7 @@ if [ "$mode" = "node" ] && [ -n "$join" ]; then
 fi
 
 if [ "$mode" = "node" ] && [ -n "$join" ]; then
-  say ""
-  say "  ${green}Ready in $(duration $(($(now) - started_at))).$reset Confirm it in Hearth's Add Relay"
-  say "  dialog, where the same fingerprint shows:"
-  say ""
-  wait_joined || fail "The Relay didn't join. Its log says why: docker logs $container"
-  say ""
-  say "  ${dim}Install log: $log_file$reset"
-  say ""
+  join_hearth
   exit 0
 fi
 

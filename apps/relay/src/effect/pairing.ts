@@ -533,21 +533,22 @@ const restoreAutomaticInvitation = Effect.fn(
   } satisfies InitialPairingResult
 })
 
-/** What a join announces: a pairing envelope without its token. */
+/** What a join announces: a pairing envelope without its token or expiry. */
 export const joinEnvelope = Effect.fnUntraced(function* (input: {
   readonly config: RelayConfig
-  readonly expiresAt: number
   readonly identity: RelayIdentity
   readonly invitationId: string
   readonly relayBuild: string
   readonly tls: RelayTlsMaterial | null
 }) {
   const {
+    expiresAt: _expiresAt,
     token: _token,
     version: _version,
     ...envelope
   } = pairingEnvelope({
     ...input,
+    expiresAt: 0,
     installation: yield* pairingInstallation(input.config),
     token: "",
   })

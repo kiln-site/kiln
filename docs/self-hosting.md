@@ -68,16 +68,18 @@ In Hearth, open **Relays** and choose **Add Relay**. It shows a command to
 run on the new machine:
 
 ```sh
-curl -fsSL https://kiln.site/install | sh -s -- --node --join '<link>'
+curl -fsSL https://kiln.site/install | sh -s -- --join 'https://kiln.example.com/#kj1.<code>'
 ```
 
-The link carries Hearth's address and a secret that lasts 30 minutes
-(**Refresh** in the dialog makes a new one and retires the old). The Relay
-starts, publishes ports 4100 and 2022, and announces itself to Hearth. The
-dialog then shows its fingerprint, which the installer prints too, and asks
-for a name. Hearth must be able to reach the machine on port 4100, and the
-machine must be able to reach Hearth at the address in the link, which can
-be edited in the dialog for an IP or an internal address.
+The link carries Hearth's address and a code that lasts 30 minutes (**New
+command** in the dialog makes another and retires the old). The Relay starts,
+publishes ports 4100 and 2022, and announces itself to Hearth. The installer
+then prints a link to confirm it in Hearth, which opens the dialog on that
+Relay, and its fingerprint, which the dialog shows too. Confirming takes an
+optional name; left blank, the Relay gets the next free default name. Hearth
+must be able to reach the machine on port 4100, and the machine must be able
+to reach Hearth at the address in the link. **Addresses** in the dialog
+changes either, for an IP or an internal address.
 
 - **Docker** shows the same as a `docker run` command, with the link in
   `KILN_RELAY_JOIN`.

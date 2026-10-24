@@ -4,9 +4,9 @@ import { useNavigate } from "@tanstack/react-router"
 import { encodeRelayJoinLink } from "@workspace/contracts"
 import {
   Check,
+  ChevronRight,
   CircleAlert,
   Copy,
-  Dices,
   Fingerprint,
   LoaderCircle,
   RefreshCw,
@@ -30,7 +30,6 @@ import {
   openRelayJoin,
   refreshRelayJoin,
 } from "@/server/relays"
-import { generateVanityCandidates } from "@/server/vanity-names"
 
 // The install-command way to add a Relay: the command carries a join link,
 // the new Relay announces itself, and someone confirms it here. Hearth asks
@@ -46,16 +45,19 @@ const POLL_MS = 2_000
 const relayJoinQueryKey = ["relay-join"] as const
 
 export function RelayJoinPanel({
+  joinId,
   method,
   onDone,
 }: {
+  // The join the installer's confirmation link names.
+  joinId?: string
   method: JoinMethod
   onDone: () => void
 }) {
   const queryClient = useQueryClient()
   const opened = useQuery({
     gcTime: 0,
-    queryFn: () => openRelayJoin(),
+    queryFn: () => openRelayJoin({ data: joinId ? { joinId } : {} }),
     queryKey: relayJoinQueryKey,
     refetchOnWindowFocus: false,
     staleTime: Number.POSITIVE_INFINITY,
@@ -81,7 +83,7 @@ export function RelayJoinPanel({
   }
   if (!join || !view) {
     return (
-      <div className="flex h-32 items-center justify-center text-muted-foreground">
+      <div className="flex h-24 items-center justify-center text-muted-foreground">
         <LoaderCircle className="size-4 animate-spin" />
       </div>
     )
@@ -121,7 +123,7 @@ function polling(state: JoinView["state"] | undefined): boolean {
   return state === "waiting" || state === "confirming"
 }
 
-// The command to run on the new machine, and the addresses in it.
+// The command to run on the new machine, then waiting for its Relay.
 function JoinCommand({
   expired,
   join,
@@ -141,37 +143,38 @@ function JoinCommand({
   const [relayHost, setRelayHost] = React.useState("")
   const [insecureAccepted, setInsecureAccepted] = React.useState(false)
   const origin = parsedOrigin(hearthOrigin)
-  const insecure = origin?.startsWith("http:") === true
   const link =
-    join.link && origin
-      ? encodeRelayJoinLink({ ...join.link, hearthOrigin: origin })
+    join.secret && origin
+      ? encodeRelayJoinLink({ hearthOrigin: origin, secret: join.secret })
       : null
   const command = link
     ? method === "install"
       ? installCommand(join, link, relayHost.trim())
       : dockerCommand(join, link, relayHost.trim())
     : null
+  // A plain-HTTP address is asked about before the command shows.
+  const insecure = origin?.startsWith("http:") === true && !insecureAccepted
 
   return (
-    <div className="space-y-4">
-      {expired || !command ? (
+    <div className="min-w-0 space-y-3">
+      {expired ? (
         <div className="flex items-center justify-between gap-3 border border-border/70 bg-background/35 px-3 py-2.5">
           <p className="type-meta text-muted-foreground">
-            {origin ? "This command expired." : "Enter Hearth's address."}
+            This command expired.
           </p>
-          {origin ? (
-            <Button size="sm" type="button" onClick={onRefresh}>
-              <RefreshCw className={refreshing ? "animate-spin" : undefined} />
-              New command
-            </Button>
-          ) : null}
+          <Button size="sm" type="button" onClick={onRefresh}>
+            <RefreshCw className={refreshing ? "animate-spin" : undefined} />
+            New command
+          </Button>
         </div>
-      ) : insecure && !insecureAccepted ? (
-        <div className="flex items-start gap-3 border border-amber-400/25 bg-amber-400/8 px-3 py-2.5">
-          <CircleAlert className="mt-0.5 size-3.5 shrink-0 text-amber-200 light:text-amber-800" />
+      ) : !command ? (
+        <DialogFeedback message="Hearth's address isn't a web address." />
+      ) : insecure ? (
+        <div className="flex items-center gap-3 border border-amber-400/25 bg-amber-400/8 px-3 py-2.5">
+          <CircleAlert className="size-3.5 shrink-0 text-amber-200 light:text-amber-800" />
           <p className="type-meta min-w-0 flex-1 text-amber-200 light:text-amber-800">
-            Hearth isn't on HTTPS at this address, so someone on the network
-            between the two machines could interfere with joining.
+            Hearth isn't on HTTPS at this address, so the network between the
+            machines could interfere.
           </p>
           <Button
             size="sm"
@@ -183,61 +186,63 @@ function JoinCommand({
           </Button>
         </div>
       ) : (
-        <CommandBlock command={command} />
+        <CommandLine command={command} />
       )}
 
-      <div className="grid gap-3 sm:grid-cols-2">
-        <Field label="Hearth address" htmlFor="relay-join-hearth">
-          <Input
-            id="relay-join-hearth"
-            className="type-meta font-mono"
-            value={hearthOrigin}
-            spellCheck={false}
-            onChange={(event) => setHearthOrigin(event.currentTarget.value)}
-          />
-        </Field>
-        <Field label="This machine's address" htmlFor="relay-join-host">
-          <Input
-            id="relay-join-host"
-            className="type-meta font-mono"
-            placeholder={method === "install" ? "Its public IP" : "Required"}
-            value={relayHost}
-            spellCheck={false}
-            onChange={(event) => setRelayHost(event.currentTarget.value)}
-          />
-        </Field>
-      </div>
+      {expired ? null : (
+        <div className="type-meta flex items-center gap-2 text-muted-foreground">
+          <LoaderCircle className="size-3.5 animate-spin" />
+          <span className="flex-1">Waiting for the Relay</span>
+          <Countdown expiresAt={join.expiresAt} />
+          <Button
+            size="xs"
+            type="button"
+            variant="ghost"
+            disabled={refreshing}
+            onClick={onRefresh}
+          >
+            <RefreshCw className={refreshing ? "animate-spin" : undefined} />
+            New command
+          </Button>
+        </div>
+      )}
+
+      <details className="group">
+        <summary className="type-meta flex cursor-pointer list-none items-center gap-1 text-muted-foreground hover:text-foreground">
+          <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" />
+          Addresses
+        </summary>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <Field label="Hearth" htmlFor="relay-join-hearth">
+            <Input
+              id="relay-join-hearth"
+              className="type-meta font-mono"
+              value={hearthOrigin}
+              spellCheck={false}
+              onChange={(event) => setHearthOrigin(event.currentTarget.value)}
+            />
+          </Field>
+          <Field label="This machine" htmlFor="relay-join-host">
+            <Input
+              id="relay-join-host"
+              className="type-meta font-mono"
+              placeholder={method === "install" ? "Its public IP" : "Required"}
+              value={relayHost}
+              spellCheck={false}
+              onChange={(event) => setRelayHost(event.currentTarget.value)}
+            />
+          </Field>
+        </div>
+      </details>
 
       {refreshError ? <DialogFeedback message={refreshError} /> : null}
-
-      <div className="type-meta flex items-center justify-between gap-3 text-muted-foreground">
-        <span className="flex items-center gap-2">
-          {expired ? null : <LoaderCircle className="size-3.5 animate-spin" />}
-          {expired ? "Expired" : "Waiting for the Relay"}
-        </span>
-        {expired ? null : (
-          <span className="flex items-center gap-2">
-            <Countdown expiresAt={join.expiresAt} />
-            <Button
-              aria-label="New command"
-              size="icon-sm"
-              type="button"
-              variant="ghost"
-              disabled={refreshing}
-              onClick={onRefresh}
-            >
-              <RefreshCw className={refreshing ? "animate-spin" : undefined} />
-            </Button>
-          </span>
-        )}
-      </div>
     </div>
   )
 }
 
 function installCommand(join: OpenedJoin, link: string, relayHost: string) {
   return [
-    `curl -fsSL ${join.installScript} | sh -s -- --node`,
+    `curl -fsSL ${join.installScript} | sh -s --`,
     join.nightly ? "--nightly" : null,
     relayHost ? `--relay-host ${shellQuote(relayHost)}` : null,
     `--join ${shellQuote(link)}`,
@@ -285,24 +290,29 @@ function Countdown({ expiresAt }: { expiresAt: number }) {
     return () => window.clearInterval(timer)
   }, [])
   const minutes = Math.max(0, Math.ceil((expiresAt - now) / 60_000))
-  return <span className="tabular-nums">{minutes} min left</span>
+  return <span className="tabular-nums">{minutes} min</span>
 }
 
-function CommandBlock({ command }: { command: string }) {
+// One line, however long: the copy button takes all of it.
+function CommandLine({ command }: { command: string }) {
   const { copied, copy } = useCopyFeedback(command)
   return (
-    <div className="flex items-start gap-2 border border-border/70 bg-background/35 p-3">
-      <code className="min-w-0 flex-1 font-mono text-xs leading-5 break-all">
+    <div className="flex items-center gap-2 border border-border/70 bg-background/35 py-1.5 pr-1.5 pl-3">
+      <code
+        className="min-w-0 flex-1 truncate font-mono text-xs"
+        title={command}
+      >
         {command}
       </code>
       <Button
         aria-label="Copy the command"
-        size="icon-sm"
+        size="sm"
         type="button"
-        variant="ghost"
+        variant={copied ? "outline" : "default"}
         onClick={() => void copy()}
       >
         {copied ? <Check /> : <Copy />}
+        {copied ? "Copied" : "Copy"}
       </Button>
     </div>
   )
@@ -342,67 +352,41 @@ function JoinReview({
   if (!announcement) return null
   const working = view.state === "confirming" && view.error === null
   const locked = view.state === "confirming"
+  const existing = announcement.existingRelay
 
   return (
-    <div className="space-y-4">
+    <div className="min-w-0 space-y-4">
       <div className="flex items-center gap-3 border border-primary/20 bg-primary/[0.045] p-3">
         <span className="flex size-8 shrink-0 items-center justify-center border border-primary/20 bg-primary/10 text-primary-ink">
           <Fingerprint className="size-4" />
         </span>
-        <div className="min-w-0">
-          <p className="truncate text-sm font-semibold">
-            {announcement.existingRelay?.name ?? announcement.relayName}
+        <div className="min-w-0 flex-1">
+          <p className="type-meta text-muted-foreground">
+            {new URL(announcement.controlEndpoint).host} ·{" "}
+            {announcement.relayBuild}
           </p>
-          <p className="type-meta font-mono break-all text-muted-foreground">
+          <p className="font-mono text-xs break-all">
             {announcement.relayFingerprint}
           </p>
         </div>
       </div>
-      <dl className="type-meta grid gap-3 sm:grid-cols-2">
-        <div>
-          <dt className="text-muted-foreground">Address</dt>
-          <dd className="mt-1 font-mono break-all">
-            {new URL(announcement.controlEndpoint).host}
-          </dd>
-        </div>
-        <div>
-          <dt className="text-muted-foreground">Version</dt>
-          <dd className="mt-1 font-mono">{announcement.relayBuild}</dd>
-        </div>
-      </dl>
-      {announcement.existingRelay ? (
+
+      {existing ? (
         <p className="type-meta text-muted-foreground">
           Hearth already has this Relay as{" "}
-          <span className="text-foreground">
-            {announcement.existingRelay.name}
-          </span>
-          . Its game servers, Apps, and databases stay; Hearth's connection to
-          it is replaced.
+          <span className="text-foreground">{existing.name}</span>. Reconnecting
+          keeps its game servers, Apps, and databases.
         </p>
-      ) : null}
-
-      {announcement.existingRelay ? null : (
+      ) : (
         <Field label="Name" htmlFor="relay-join-name">
-          <div className="flex gap-2">
-            <Input
-              id="relay-join-name"
-              maxLength={120}
-              placeholder="Automatic"
-              value={name}
-              disabled={locked}
-              onChange={(event) => setName(event.currentTarget.value)}
-            />
-            <Button
-              aria-label="Generate a name"
-              size="icon"
-              type="button"
-              variant="outline"
-              disabled={locked}
-              onClick={() => setName(generatedName())}
-            >
-              <Dices />
-            </Button>
-          </div>
+          <Input
+            id="relay-join-name"
+            maxLength={120}
+            placeholder={announcement.defaultName}
+            value={name}
+            disabled={locked}
+            onChange={(event) => setName(event.currentTarget.value)}
+          />
         </Field>
       )}
 
@@ -441,11 +425,7 @@ function JoinReview({
           ) : (
             <Check />
           )}
-          {view.error
-            ? "Try again"
-            : announcement.existingRelay
-              ? "Reconnect"
-              : "Add Relay"}
+          {view.error ? "Try again" : existing ? "Reconnect" : "Add Relay"}
         </Button>
       </div>
     </div>
@@ -465,14 +445,6 @@ function progressLabel(progress: JoinView["progress"]): string {
   }
 }
 
-function generatedName(): string {
-  const [candidate = "relay"] = generateVanityCandidates([], 1)
-  return candidate
-    .split("-")
-    .map((word) => (word ? word[0]!.toUpperCase() + word.slice(1) : word))
-    .join(" ")
-}
-
 function JoinPaired({ onDone, view }: { onDone: () => void; view: JoinView }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -489,7 +461,7 @@ function JoinPaired({ onDone, view }: { onDone: () => void; view: JoinView }) {
     ])
     showToast({
       type: "success",
-      message: `${view.announcement?.existingRelay?.name ?? "Relay"} added`,
+      message: `${view.intent?.name ?? "Relay"} added`,
       duration: 4_000,
     })
     onDone()

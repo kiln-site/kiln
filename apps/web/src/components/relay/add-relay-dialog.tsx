@@ -44,9 +44,12 @@ const methods: ReadonlyArray<{ label: string; value: AddRelayMethod }> = [
 ]
 
 export function AddRelayDialog({
+  joinId,
   open,
   onOpenChange,
 }: {
+  // The join to confirm, from the link the installer prints.
+  joinId?: string
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
@@ -60,7 +63,7 @@ export function AddRelayDialog({
           <DialogDescription>
             {method === "link"
               ? "Paste the link `kiln-relay pair create` printed on the Relay."
-              : "Run this on the machine, and the Relay connects to Hearth."}
+              : "Run this on the new machine, then confirm the Relay here."}
           </DialogDescription>
         </DialogHeader>
         <div
@@ -86,7 +89,7 @@ export function AddRelayDialog({
             <PairingLinkForm onDone={close} />
           ) : (
             <React.Suspense fallback={null}>
-              <RelayJoinPanel method={method} onDone={close} />
+              <RelayJoinPanel joinId={joinId} method={method} onDone={close} />
             </React.Suspense>
           )
         ) : null}
