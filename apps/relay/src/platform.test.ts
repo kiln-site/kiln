@@ -8,7 +8,7 @@ import { describe, expect, it, onTestFinished } from "vite-plus/test"
 
 import { loadConfig } from "./config.js"
 import { DockerEngine } from "./docker-engine.js"
-import { adoptHearthContainer, loadInstallationId } from "./installation.js"
+import { adoptProvenHearth, loadInstallationId } from "./installation.js"
 import {
   addOwnerInvitation,
   externalPlatformPresent,
@@ -745,7 +745,7 @@ describe("Kiln deployed without Kiln's labels", () => {
       hearth,
       // What a Relay checks when a Hearth connects, then saves.
       identify: async (claim: { containerId: string; key: string }) => {
-        const containerId = await run(
+        const proven = await run(
           provenHearthContainer(engine, {
             containerId: claim.containerId,
             proof: createHmac("sha256", claim.key)
@@ -754,10 +754,10 @@ describe("Kiln deployed without Kiln's labels", () => {
             transcript: "transcript",
           })
         )
-        if (!containerId) return false
+        if (!proven) return false
         await run(
-          adoptHearthContainer(harness.config, harness.state, {
-            containerId,
+          adoptProvenHearth(harness.config, harness.state, {
+            ...proven,
             installationId: "coolify",
           })
         )
@@ -816,7 +816,7 @@ describe("Kiln deployed without Kiln's labels", () => {
 
     // A restarted Relay remembers it, and follows Coolify recreating the
     // database under the same name.
-    kiln.harness.config.hearthContainer = null
+    kiln.harness.config.provenHearth = null
     await run(loadInstallationId(kiln.harness.config, kiln.harness.state))
     fakeDocker.removeContainer("ir20rpu9xgaz")
     const recreated = fakeDocker.addContainer({
@@ -830,6 +830,44 @@ describe("Kiln deployed without Kiln's labels", () => {
     ).resolves.toMatchObject({ Id: recreated.id })
   })
 
+  it("finds Kiln's services after Coolify removes Hearth's container, and Hearth once Coolify recreates it", async () => {
+    const kiln = await coolify()
+    await kiln.identify({ containerId: kiln.hearth.id, key: secret })
+
+    // Coolify stops Hearth by removing its container.
+    fakeDocker.removeContainer("y7m44jcsfszy-074805")
+    await expect(
+      run(platformTargetContainer(kiln.context, "hearth"))
+    ).resolves.toBeNull()
+    await expect(
+      run(platformTargetContainer(kiln.context, "database"))
+    ).resolves.toMatchObject({ Id: kiln.database.id })
+    await expect(
+      run(platformTargetContainer(kiln.context, "cache"))
+    ).resolves.toMatchObject({ Name: "/c675ux4n93qd" })
+
+    // Started again under a new ID, before it connects to prove it.
+    const restarted = fakeDocker.addContainer({
+      env: {
+        BETTER_AUTH_SECRETS: secret,
+        CACHE_HOST: "cache",
+        DB_HOST: "ir20rpu9xgaz",
+      },
+      name: "y7m44jcsfszy-091500",
+      networks: ["coolify"],
+      running: true,
+    })
+    // Another Hearth on the host, with its own secret.
+    fakeDocker.addContainer({
+      env: { BETTER_AUTH_SECRETS: "1:another-secret" },
+      name: "another-hearth",
+      running: true,
+    })
+    await expect(
+      run(platformTargetContainer(kiln.context, "hearth"))
+    ).resolves.toMatchObject({ Id: restarted.id })
+  })
+
   it("reports nothing for a Hearth that can't prove the container it names", async () => {
     const kiln = await coolify()
 
@@ -841,7 +879,7 @@ describe("Kiln deployed without Kiln's labels", () => {
       kiln.identify({ containerId: kiln.database.id, key: secret })
     ).resolves.toBe(false)
     // A proven Hearth of another installation.
-    const containerId = await run(
+    const proven = await run(
       provenHearthContainer(kiln.context.engine, {
         containerId: kiln.hearth.id,
         proof: createHmac("sha256", secret)
@@ -850,12 +888,15 @@ describe("Kiln deployed without Kiln's labels", () => {
         transcript: "transcript",
       })
     )
-    await run(
-      adoptHearthContainer(kiln.harness.config, kiln.harness.state, {
-        containerId: containerId ?? "",
-        installationId: "another-installation",
-      })
-    )
+    expect(proven).not.toBeNull()
+    if (proven) {
+      await run(
+        adoptProvenHearth(kiln.harness.config, kiln.harness.state, {
+          ...proven,
+          installationId: "another-installation",
+        })
+      )
+    }
 
     expect((await kiln.status()).services).toEqual([])
     await expect(

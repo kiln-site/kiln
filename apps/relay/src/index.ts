@@ -173,7 +173,7 @@ import {
 import { FilesystemDriver, type FileRoot } from "./files.js"
 import { HostFiles } from "./host-files.js"
 import {
-  adoptHearthContainer,
+  adoptProvenHearth,
   adoptInstallationId,
   loadInstallationId,
 } from "./installation.js"
@@ -1071,10 +1071,10 @@ const controlSocket = attachControlSocket({
         runRelayEffect(
           "relay.platform.identifyHearth",
           Effect.gen(function* () {
-            const containerId = yield* provenHearthContainer(relayEngine, claim)
-            if (!containerId) return
-            yield* adoptHearthContainer(config, startup.state, {
-              containerId,
+            const proven = yield* provenHearthContainer(relayEngine, claim)
+            if (!proven) return
+            yield* adoptProvenHearth(config, startup.state, {
+              ...proven,
               installationId: claim.installationId,
             })
             yield* refreshExternalPlatform

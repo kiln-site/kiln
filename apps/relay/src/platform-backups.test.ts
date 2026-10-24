@@ -1,10 +1,11 @@
-import { createCipheriv, scryptSync } from "node:crypto"
+import { createCipheriv, createHmac, scryptSync } from "node:crypto"
 import { existsSync, mkdtempSync, rmSync } from "node:fs"
 import { readdir, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { gzipSync } from "node:zlib"
 import { afterAll, assert, describe, expect, it } from "@effect/vitest"
+import { Effect } from "effect"
 import { onTestFinished, vi } from "vite-plus/test"
 
 import type { BackupCreateTaskInput } from "@workspace/contracts"
@@ -17,6 +18,9 @@ import {
   type PlatformBackupManifest,
   restoreEncryptedPlatformBackup,
 } from "./platform-backups.js"
+import { DockerEngine } from "./docker-engine.js"
+import { adoptProvenHearth } from "./installation.js"
+import { provenHearthContainer } from "./platform.js"
 import { fakeDocker } from "./test/docker.js"
 import { relayHarness } from "./test/relay.js"
 
@@ -118,6 +122,62 @@ describe("Kiln platform backups", () => {
 
     const staged = await readdir(join(harness.config.dataDirectory, "restores"))
     expect(staged.filter((name) => name.endsWith(".dmp.gz"))).toEqual([])
+  })
+
+  it("restores into a database Coolify runs, only while Hearth's container is stopped", async () => {
+    const harness = await relayHarness({
+      KILN_INSTALLATION_ID: "kiln-test",
+      KILN_PLATFORM_BACKUP_KEY: recoveryKey,
+    })
+    onTestFinished(() => fakeDocker.reset())
+    const secret = "1:hearth-secret"
+    const hearth = {
+      env: { BETTER_AUTH_SECRETS: secret, DB_HOST: "coolify-mysql" },
+      labels: { "coolify.managed": "true" },
+      networks: ["coolify"],
+      running: true,
+    }
+    fakeDocker.addNetwork({ name: "coolify" })
+    const proving = fakeDocker.addContainer({ ...hearth, name: "hearth-1" })
+    const database = fakeDocker.addContainer({
+      labels: { "coolify.managed": "true" },
+      name: "coolify-mysql",
+      networks: ["coolify"],
+      running: true,
+    })
+    // Hearth proves its container as it connects.
+    const engine = new DockerEngine(harness.config.dockerSocket)
+    const proven = await Effect.runPromise(
+      provenHearthContainer(engine, {
+        containerId: proving.id,
+        proof: createHmac("sha256", secret).update("t").digest("base64url"),
+        transcript: "t",
+      })
+    )
+    assert.isNotNull(proven)
+    await Effect.runPromise(
+      adoptProvenHearth(harness.config, harness.state, {
+        ...proven!,
+        installationId: "kiln-test",
+      })
+    )
+    const source = join(testDirectory, "coolify.kiln")
+    await writeFile(source, platformBundle("CREATE TABLE restored (id int);"))
+    const restore = () =>
+      restoreEncryptedPlatformBackup(harness.config, source, "kiln-test")
+
+    await expect(restore()).rejects.toThrow("Stop Hearth")
+
+    // Coolify stops Hearth by removing its container.
+    fakeDocker.removeContainer("hearth-1")
+    await restore()
+    expect(database.executedSql.join("\n")).toContain(
+      "CREATE TABLE restored (id int);"
+    )
+
+    // Started again under a new ID, not yet connected.
+    fakeDocker.addContainer({ ...hearth, name: "hearth-2" })
+    await expect(restore()).rejects.toThrow("Stop Hearth")
   })
 
   it("authenticates the manifest and encrypted payload", async () => {

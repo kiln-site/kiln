@@ -1,13 +1,24 @@
-import { Effect, Semaphore } from "effect"
+import { Effect, Option, Schema, Semaphore } from "effect"
 
 import { isKilnInstallationId } from "@workspace/contracts"
 
-import type { RelayConfig } from "./config.js"
+import type { ProvenHearth, RelayConfig } from "./config.js"
 import type { RelayStateStore } from "./effect/state.js"
 
 const INSTALLATION_ID_METADATA_KEY = "installation_id"
-// `<installation ID>/<container ID>`
-const HEARTH_CONTAINER_METADATA_KEY = "hearth_container"
+const PROVEN_HEARTH_METADATA_KEY = "proven_hearth"
+
+const decodeProvenHearth = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Struct({
+      cacheContainer: Schema.NullOr(Schema.String),
+      containerId: Schema.String,
+      databaseContainer: Schema.NullOr(Schema.String),
+      installationId: Schema.String,
+      secretDigest: Schema.String,
+    })
+  )
+)
 
 // One adoption at a time, so the saved ID and the one in config can't end up
 // from different Hearth sessions.
@@ -28,47 +39,54 @@ export const savedInstallationId = Effect.fnUntraced(function* (
 
 /**
  * Loads the saved installation ID unless KILN_INSTALLATION_ID set one, and
- * the container a Hearth last proved it runs in.
+ * the Hearth that last proved its container.
  */
 export const loadInstallationId = Effect.fn("Relay.installation.load")(
   function* (
-    config: InstallationConfig & Pick<RelayConfig, "hearthContainer">,
+    config: InstallationConfig & Pick<RelayConfig, "provenHearth">,
     state: RelayStateStore["Service"]
   ) {
     if (!config.installationIdConfigured) {
       config.installationId = yield* savedInstallationId(state)
     }
-    const [installationId, containerId] = (
-      (yield* state.getMetadata(HEARTH_CONTAINER_METADATA_KEY)) ?? ""
-    ).split("/")
-    config.hearthContainer =
-      installationId && containerId ? { containerId, installationId } : null
+    const saved = yield* state.getMetadata(PROVEN_HEARTH_METADATA_KEY)
+    config.provenHearth = saved
+      ? Option.getOrNull(decodeProvenHearth(saved))
+      : null
   }
 )
 
-/** Saves the container a Hearth of this installation proved it runs in. */
-export const adoptHearthContainer = Effect.fn("Relay.installation.hearth")(
+/** Saves a Hearth of this installation that proved its container. */
+export const adoptProvenHearth = Effect.fn("Relay.installation.hearth")(
   function* (
-    config: Pick<RelayConfig, "hearthContainer" | "installationId">,
+    config: Pick<RelayConfig, "installationId" | "provenHearth">,
     state: RelayStateStore["Service"],
-    hearth: { readonly containerId: string; readonly installationId: string }
+    hearth: ProvenHearth
   ) {
     if (hearth.installationId !== config.installationId) return
+    const record = provenHearthRecord(hearth)
     if (
-      config.hearthContainer?.containerId === hearth.containerId &&
-      config.hearthContainer.installationId === hearth.installationId
+      config.provenHearth &&
+      provenHearthRecord(config.provenHearth) === record
     ) {
       return
     }
-    yield* state.setMetadata(
-      HEARTH_CONTAINER_METADATA_KEY,
-      `${hearth.installationId}/${hearth.containerId}`
-    )
-    config.hearthContainer = hearth
+    yield* state.setMetadata(PROVEN_HEARTH_METADATA_KEY, record)
+    config.provenHearth = hearth
     yield* Effect.logInfo(`Hearth runs in container ${hearth.containerId}`)
   },
   (effect) => adoption.withPermit(effect)
 )
+
+function provenHearthRecord(hearth: ProvenHearth): string {
+  return JSON.stringify({
+    cacheContainer: hearth.cacheContainer,
+    containerId: hearth.containerId,
+    databaseContainer: hearth.databaseContainer,
+    installationId: hearth.installationId,
+    secretDigest: hearth.secretDigest,
+  })
+}
 
 /**
  * Saves the installation ID a full-access Hearth sent when it connected.

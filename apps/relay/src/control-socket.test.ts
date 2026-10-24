@@ -108,7 +108,7 @@ describe("Relay control socket", () => {
 
     // The next start loads it.
     const restarted = {
-      hearthContainer: null,
+      provenHearth: null,
       installationId: null,
       installationIdConfigured: false,
     }
@@ -1782,7 +1782,7 @@ async function startRelay(
     databaseFile: join(directory, "relay.sqlite"),
     lanes,
     loadInstallationId: (
-      config: InstallationConfig & Pick<RelayConfig, "hearthContainer">
+      config: InstallationConfig & Pick<RelayConfig, "provenHearth">
     ) => runtime.runPromise(loadInstallationId(config, state)),
     open,
     server,

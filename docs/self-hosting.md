@@ -317,7 +317,9 @@ Relay checks against that container's environment. The Relay then finds the
 database and cache that Hearth's `DB_HOST` and `CACHE_HOST` name on a Docker
 network Hearth shares with them, so Hearth, MySQL, and Valkey deployed as
 separate Coolify resources show up without any labels. Kiln's backups use the
-same containers.
+same containers. The Relay saves which ones they were, so it can still
+restore a backup after Coolify removes Hearth's container to stop it, and it
+refuses while any container with Hearth's `BETTER_AUTH_SECRETS` runs.
 
 To move one under a platform Relay:
 

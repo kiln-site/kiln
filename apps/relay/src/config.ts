@@ -72,6 +72,22 @@ export interface RelayPlatformEdge {
 }
 export type RelayGameHostSource = "configured" | "public_ip" | "relay"
 
+/**
+ * A Hearth that proved the container it runs in, and what it found beside
+ * it then: the database and cache containers its DB_HOST and CACHE_HOST
+ * reached, by name, and a digest of its BETTER_AUTH_SECRETS. Coolify
+ * removes Hearth's container when it stops Hearth and recreates it under a
+ * new ID, so these find Kiln's services, and a Hearth that hasn't connected
+ * yet, without it.
+ */
+export interface ProvenHearth {
+  readonly cacheContainer: string | null
+  readonly containerId: string
+  readonly databaseContainer: string | null
+  readonly installationId: string
+  readonly secretDigest: string
+}
+
 export interface RelayConfig {
   advertisedHost: string
   advertisedHostInferred: boolean
@@ -122,14 +138,12 @@ export interface RelayConfig {
   // Whether KILN_INSTALLATION_ID set it, so Hearth's ID doesn't replace it.
   installationIdConfigured: boolean
   /**
-   * The container a Hearth proved it runs in, which the Relay saves and
-   * loads at startup. While it's for this installation, Kiln's services
-   * deployed without Kiln's labels, as Coolify does, are found from it.
+   * The Hearth that last proved the container it runs in, which the Relay
+   * saves and loads at startup. While it's for this installation, Kiln's
+   * services deployed without Kiln's labels, as Coolify does, are found
+   * from it.
    */
-  hearthContainer: {
-    readonly containerId: string
-    readonly installationId: string
-  } | null
+  provenHearth: ProvenHearth | null
   managedLabel: string
   mclogsApiUrl: string
   mode: RelayMode
@@ -288,7 +302,7 @@ export function loadConfig(
     host: environment.KILN_RELAY_BIND_HOST?.trim() || "0.0.0.0",
     installationId,
     installationIdConfigured: installationId !== null,
-    hearthContainer: null,
+    provenHearth: null,
     managedLabel: "kiln.relay.managed=true",
     mclogsApiUrl:
       environment.MCLOGS_API_URL?.trim() || "https://api.mclo.gs/1/log",

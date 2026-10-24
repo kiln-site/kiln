@@ -39,11 +39,8 @@ import {
 } from "@workspace/contracts"
 import { Effect, Fiber, Option, Result, Schema } from "effect"
 
-import type { RelayConfig } from "./config.js"
-import {
-  createContainer,
-  type ContainerSpec,
-} from "./docker-container-spec.js"
+import type { ProvenHearth, RelayConfig } from "./config.js"
+import { createContainer, type ContainerSpec } from "./docker-container-spec.js"
 import {
   type DockerContainerInspect,
   type DockerEngine,
@@ -1152,7 +1149,7 @@ function validDate(value: string | undefined): value is string {
  */
 const platformContainers = Effect.fnUntraced(function* (
   engine: DockerEngine,
-  config: Pick<RelayConfig, "hearthContainer" | "installationId">,
+  config: Pick<RelayConfig, "installationId" | "provenHearth">,
   state: PlatformState | null
 ) {
   const found = new Map<RelayPlatformServiceRole, DockerContainerInspect>()
@@ -1216,19 +1213,37 @@ export const provenHearthContainer = Effect.fn("Relay.platform.proveHearth")(
       .update(claim.transcript)
       .digest()
     const proof = Buffer.from(claim.proof, "base64url")
-    return proof.length === expected.length && timingSafeEqual(proof, expected)
-      ? container.Id
-      : null
+    if (proof.length !== expected.length || !timingSafeEqual(proof, expected)) {
+      return null
+    }
+    const beside = yield* servicesBesideHearth(engine, container)
+    return {
+      cacheContainer: containerName(beside.get("cache")),
+      containerId: container.Id,
+      databaseContainer: containerName(beside.get("database")),
+      secretDigest: hearthSecretDigest(secret),
+    } satisfies Omit<ProvenHearth, "installationId">
   }
 )
 
 function provenHearth(
-  config: Pick<RelayConfig, "hearthContainer" | "installationId">
-): string | null {
-  return config.hearthContainer &&
-    config.hearthContainer.installationId === config.installationId
-    ? config.hearthContainer.containerId
+  config: Pick<RelayConfig, "installationId" | "provenHearth">
+): ProvenHearth | null {
+  return config.provenHearth?.installationId === config.installationId
+    ? config.provenHearth
     : null
+}
+
+function containerName(
+  container: DockerContainerInspect | undefined
+): string | null {
+  return container ? container.Name.replace(/^\//u, "") : null
+}
+
+function hearthSecretDigest(secret: string): string {
+  return createHash("sha256")
+    .update(`kiln-hearth-secret\n${secret}`)
+    .digest("hex")
 }
 
 function environmentValue(
@@ -1241,17 +1256,42 @@ function environmentValue(
 }
 
 /**
- * Hearth, and the database and cache its DB_HOST and CACHE_HOST name on a
- * network it shares with them.
+ * The proven Hearth, or one Coolify recreated with its secret, and the
+ * database and cache beside it. With Hearth's container gone, as when
+ * Coolify stops it, they're the containers it found when it proved itself.
  */
 const containersBesideHearth = Effect.fnUntraced(function* (
   engine: DockerEngine,
-  hearthId: string
+  proven: ProvenHearth
 ) {
-  const found = new Map<RelayPlatformServiceRole, DockerContainerInspect>()
-  const hearth = yield* inspectOptional(engine.inspectContainer(hearthId))
-  if (!hearth) return found
-  found.set("hearth", hearth)
+  const hearth =
+    (yield* inspectOptional(engine.inspectContainer(proven.containerId))) ??
+    (yield* hearthBySecret(engine, proven.secretDigest))
+  const found = hearth
+    ? yield* servicesBesideHearth(engine, hearth)
+    : new Map<RelayPlatformServiceRole, DockerContainerInspect>()
+  for (const [role, name] of [
+    ["database", proven.databaseContainer],
+    ["cache", proven.cacheContainer],
+  ] as const) {
+    if (found.has(role) || !name) continue
+    const container = yield* inspectOptional(engine.inspectContainer(name))
+    if (container) found.set(role, container)
+  }
+  return found
+})
+
+/**
+ * Hearth, and the database and cache its DB_HOST and CACHE_HOST name on a
+ * network it shares with them.
+ */
+const servicesBesideHearth = Effect.fnUntraced(function* (
+  engine: DockerEngine,
+  hearth: DockerContainerInspect
+) {
+  const found = new Map<RelayPlatformServiceRole, DockerContainerInspect>([
+    ["hearth", hearth],
+  ])
   for (const [role, variable] of [
     ["database", "DB_HOST"],
     ["cache", "CACHE_HOST"],
@@ -1263,6 +1303,28 @@ const containersBesideHearth = Effect.fnUntraced(function* (
     if (container) found.set(role, container)
   }
   return found
+})
+
+/**
+ * A running Hearth with the proven one's BETTER_AUTH_SECRETS, in a
+ * container it hasn't proven yet, as when Coolify recreated it.
+ */
+const hearthBySecret = Effect.fnUntraced(function* (
+  engine: DockerEngine,
+  secretDigest: string
+) {
+  const running = yield* engine
+    .listContainers()
+    .pipe(Effect.catch(() => Effect.succeed([])))
+  for (const listed of running) {
+    // Game servers, Apps, and databases the Relay runs aren't Hearth.
+    if (listed.Labels?.["kiln.relay.managed"] === "true") continue
+    const container = yield* inspectOptional(engine.inspectContainer(listed.Id))
+    const secret =
+      container && environmentValue(container, "BETTER_AUTH_SECRETS")
+    if (secret && hearthSecretDigest(secret) === secretDigest) return container
+  }
+  return null
 })
 
 // The container each Hearth's address reached, by Hearth container and
@@ -1426,7 +1488,7 @@ export const externalPlatformPresent = Effect.fn(
   "Relay.platform.externalPresent"
 )(function* (
   engine: DockerEngine,
-  config: Pick<RelayConfig, "hearthContainer" | "installationId">
+  config: Pick<RelayConfig, "installationId" | "provenHearth">
 ) {
   if (!config.installationId) return false
   const listed = yield* engine.listContainers({
@@ -1438,11 +1500,12 @@ export const externalPlatformPresent = Effect.fn(
     },
   })
   if (listed.length > 0) return true
+  // A recreated Hearth proves its new container as it connects.
   const proven = provenHearth(config)
   if (!proven) return false
   return (
-    (yield* inspectOptional(engine.inspectContainer(proven)))?.State.Running ===
-    true
+    (yield* inspectOptional(engine.inspectContainer(proven.containerId)))?.State
+      .Running === true
   )
 })
 
