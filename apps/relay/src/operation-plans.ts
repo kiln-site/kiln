@@ -198,6 +198,7 @@ export function controlRequestLocks(
     case "relay.platform.read":
     case "relay.platform.logs":
     case "relay.platform.database.read":
+    case "relay.installation.read":
     case "browser.authorization.revise":
     case "brick.catalog":
     case "brick.recipe":
@@ -259,6 +260,9 @@ export function controlRequestLocks(
     // Writing Hearth's database waits out a restart or repair of it.
     case "relay.platform.database.write":
       return [shared(laneKeys.platform)]
+    // Kiln's services and backups are found by the installation ID.
+    case "relay.installation.replace":
+      return [exclusive(laneKeys.platform)]
 
     // Updates and restarts replace the Relay itself and reserve themselves.
     case "relay.update.apply":

@@ -15,7 +15,7 @@ import {
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query"
-import { Link } from "@tanstack/react-router"
+import { Link, useNavigate } from "@tanstack/react-router"
 
 import { InfraSyncButton } from "@/components/infra-sync-button"
 import { Effect } from "effect"
@@ -196,11 +196,27 @@ interface RelayEditView {
 }
 
 export const RelaysPage = React.memo(function RelaysPage({
+  joinId,
   searchStore,
 }: {
+  // A join to confirm, which opens Add Relay at it.
+  joinId?: string
   searchStore: DataTableSearchStore
 }) {
-  const [dialogStore] = React.useState(createRelayDialogStore)
+  const [dialogStore] = React.useState(() =>
+    createRelayDialogStore(joinId ? { kind: "add" } : closedRelayDialogState)
+  )
+  // The dialog keeps the linked join; the address goes back to just Relays.
+  const [linkedJoinId] = React.useState(joinId)
+  const navigate = useNavigate()
+  React.useEffect(() => {
+    if (!joinId) return
+    void navigate({
+      replace: true,
+      search: (previous) => ({ ...previous, join: undefined }),
+      to: "/infra/relays",
+    })
+  }, [joinId, navigate])
 
   return (
     <div className="mx-auto flex h-full min-h-[34rem] w-full max-w-[90rem] flex-col px-3 pb-3 sm:px-5 sm:pb-5">
@@ -227,7 +243,7 @@ export const RelaysPage = React.memo(function RelaysPage({
         </React.Suspense>
       </DataTableWorkspace>
 
-      <RelayDialogHost store={dialogStore} />
+      <RelayDialogHost joinId={linkedJoinId} store={dialogStore} />
     </div>
   )
 })
@@ -248,8 +264,8 @@ interface RelayDialogStore {
 
 const closedRelayDialogState: RelayDialogState = { kind: "closed" }
 
-function createRelayDialogStore(): RelayDialogStore {
-  let state = closedRelayDialogState
+function createRelayDialogStore(initial: RelayDialogState): RelayDialogStore {
+  let state = initial
   const listeners = new Set<() => void>()
 
   function publish(nextState: RelayDialogState) {
@@ -330,8 +346,10 @@ const RelayAddButton = React.memo(function RelayAddButton({
 })
 
 const RelayDialogHost = React.memo(function RelayDialogHost({
+  joinId,
   store,
 }: {
+  joinId?: string
   store: RelayDialogStore
 }) {
   const state = React.useSyncExternalStore(
@@ -364,6 +382,7 @@ const RelayDialogHost = React.memo(function RelayDialogHost({
   return (
     <>
       <AddRelayDialog
+        joinId={joinId}
         open={state.kind === "add"}
         onOpenChange={(open) => {
           if (!open) store.close()

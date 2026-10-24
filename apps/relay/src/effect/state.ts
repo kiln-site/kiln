@@ -60,6 +60,9 @@ export interface RelayClientRecord extends RelayClientGrant {
 
 export interface RelayInvitationInput {
   readonly actions: ReadonlyArray<string>
+  // The only Hearth client that may pair with it, by key fingerprint, as a
+  // join's invitation is; null for any holder of the token.
+  readonly clientId?: string | null
   readonly createdAt: number
   readonly expiresAt: number
   readonly id: string
@@ -69,6 +72,7 @@ export interface RelayInvitationInput {
 
 export interface RelayInvitation {
   readonly actions: ReadonlyArray<string>
+  readonly clientId: string | null
   readonly createdAt: number
   readonly expiresAt: number
   readonly id: string
@@ -256,6 +260,7 @@ const RelayClientRowSchema = Schema.Struct({
 
 const RelayInvitationRowSchema = Schema.Struct({
   actionsJson: Schema.String,
+  clientId: Schema.NullOr(Schema.String),
   createdAt: Schema.Number,
   expiresAt: Schema.Number,
   id: Schema.String,
@@ -1286,6 +1291,11 @@ const migrations = SqliteMigrator.fromRecord({
     if (columns.some((column) => column.name === "maintenance_key")) return
     yield* sql`ALTER TABLE relay_backup_tasks ADD COLUMN maintenance_key TEXT`
   }),
+  // The Hearth client a join's invitation is for.
+  "26_invitation_client": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    yield* sql`ALTER TABLE relay_invitations ADD COLUMN client_id TEXT`
+  }),
 })
 
 function scrubBackupTaskInputJson(inputJson: string): string {
@@ -2060,14 +2070,16 @@ const makeRelayStateStore = Effect.gen(function* () {
         "create_invitation",
         sql`
           INSERT INTO relay_invitations (
-            id, token_hash, role, actions_json, created_at, expires_at
+            id, token_hash, role, actions_json, created_at, expires_at,
+            client_id
           ) VALUES (
             ${input.id},
             ${input.tokenHash},
             ${input.role},
             ${JSON.stringify(input.actions)},
             ${input.createdAt},
-            ${input.expiresAt}
+            ${input.expiresAt},
+            ${input.clientId ?? null}
           )
         `.pipe(Effect.asVoid)
       ),
@@ -2734,6 +2746,7 @@ const makeRelayStateStore = Effect.gen(function* () {
               role,
               token_hash AS tokenHash,
               actions_json AS actionsJson,
+              client_id AS clientId,
               created_at AS createdAt,
               expires_at AS expiresAt
             FROM relay_invitations
@@ -2748,6 +2761,7 @@ const makeRelayStateStore = Effect.gen(function* () {
           if (!invitation) return null
           return {
             actions: yield* decodeJsonStringArray(invitation.actionsJson),
+            clientId: invitation.clientId,
             createdAt: invitation.createdAt,
             expiresAt: invitation.expiresAt,
             id: invitation.id,
@@ -2907,6 +2921,7 @@ const makeRelayStateStore = Effect.gen(function* () {
               role,
               token_hash AS tokenHash,
               actions_json AS actionsJson,
+              client_id AS clientId,
               created_at AS createdAt,
               expires_at AS expiresAt
             FROM relay_invitations
@@ -2918,6 +2933,7 @@ const makeRelayStateStore = Effect.gen(function* () {
           if (!invitation) return null
           return {
             actions: yield* decodeJsonStringArray(invitation.actionsJson),
+            clientId: invitation.clientId,
             createdAt: invitation.createdAt,
             expiresAt: invitation.expiresAt,
             id: invitation.id,
@@ -3030,6 +3046,7 @@ const makeRelayStateStore = Effect.gen(function* () {
               role,
               token_hash AS tokenHash,
               actions_json AS actionsJson,
+              client_id AS clientId,
               created_at AS createdAt,
               expires_at AS expiresAt
             FROM relay_invitations
@@ -3043,6 +3060,7 @@ const makeRelayStateStore = Effect.gen(function* () {
             decodeJsonStringArray(invitation.actionsJson).pipe(
               Effect.map((actions) => ({
                 actions,
+                clientId: invitation.clientId,
                 createdAt: invitation.createdAt,
                 expiresAt: invitation.expiresAt,
                 id: invitation.id,

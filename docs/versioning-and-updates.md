@@ -62,7 +62,9 @@ One-click updates are enabled only when all of these are true:
 
 The installation ID is `KILN_INSTALLATION_ID` when set. Otherwise Hearth
 generates one on its first start, saves it in its database, and sends it to
-its Relays when they connect; each Relay saves it in its data volume.
+its Relays when they connect; a Relay without one saves it in its data
+volume, and one with another keeps it unless someone pairing it chooses to
+replace it (see [Installation IDs](self-hosting.md#installation-ids)).
 Containers created before installation IDs existed have no label and stay
 updatable; their replacement gets the label. With `KILN_INSTALLATION_ID` set,
 the label must match exactly.

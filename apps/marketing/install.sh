@@ -3,6 +3,7 @@
 #
 #   curl -fsSL https://kiln.site/install | sh
 #   curl -fsSL https://kiln.site/install | sh -s -- --node
+#   curl -fsSL https://kiln.site/install | sh -s -- --node --join '<link>'
 #
 # kiln.site serves this file at /install (apps/marketing/src/routes/install.ts),
 # so it's live once the marketing site deploys from main.
@@ -10,7 +11,9 @@
 # It starts one Relay in platform mode, which installs Hearth, its MySQL
 # database, and its cache, pairs with that Hearth, and keeps them running.
 # With --node it starts a plain Relay instead, to add this machine to an
-# existing Kiln. Run it again to see an installation's status.
+# existing Kiln; with the --join link from Hearth's Add Relay dialog, that
+# Relay connects to Hearth by itself. Run it again to see an installation's
+# status.
 #
 # The terminal shows one line per step. Everything each step ran and printed
 # goes to the install log (~/kiln-install.log), for when something fails.
@@ -31,6 +34,7 @@ mode="platform"
 url=""
 port="3000"
 relay_host=""
+join=""
 game_host=""
 image=""
 hearth_image=""
@@ -69,6 +73,8 @@ Usage: curl -fsSL https://kiln.site/install | sh -s -- [options]
                      Relay and print the invitation to pair it with
   --relay-host HOST  With --node: the address Kiln reaches this Relay at
                      (default: this machine's public IP)
+  --join LINK        Join the Kiln whose Add Relay dialog gave this link,
+                     instead of printing an invitation (implies --node)
   --skip-docker-install
                      Don't install Docker if it's missing; stop instead
   -y, --yes          Don't ask; use the defaults for anything not given,
@@ -88,6 +94,7 @@ while [ "$#" -gt 0 ]; do
     --port) port="${2:?--port needs a value}"; shift 2 ;;
     --game-host) game_host="${2:?--game-host needs a value}"; shift 2 ;;
     --relay-host) relay_host="${2:?--relay-host needs a value}"; shift 2 ;;
+    --join) join="${2:?--join needs a value}"; mode="node"; shift 2 ;;
     --image) image="${2:?--image needs a value}"; shift 2 ;;
     --hearth-image) hearth_image="${2:?--hearth-image needs a value}"; shift 2 ;;
     --bind) bind_address="${2:?--bind needs a value}"; shift 2 ;;
@@ -101,6 +108,19 @@ while [ "$#" -gt 0 ]; do
     *) usage >&2; printf 'kiln: unknown option %s\n' "$1" >&2; exit 1 ;;
   esac
 done
+
+# The link from Hearth's Add Relay dialog: its address, then #kj1. and a
+# code. The Relay checks it fully; this only catches a wrong paste early.
+if [ -n "$join" ]; then
+  case "$join" in
+    http://*'#kj1.'* | https://*'#kj1.'*) ;;
+    *)
+      printf 'kiln: "%s" isn'"'"'t a join link.\n' "$join" >&2
+      printf 'Copy the whole command from Add Relay in Hearth; it includes the link.\n' >&2
+      exit 1
+      ;;
+  esac
+fi
 
 [ -n "$image" ] || image="$image_prefix/relay:$channel"
 prefix="${namespace:+$namespace-}"
@@ -308,8 +328,12 @@ step() {
   if [ "$status" -ne 0 ]; then
     log "(failed with status $status)"
     printf '%s  %s%s%s %-26s %s%s%s\n' "$clear_line" "$red" "$cross" "$reset" "$label" "$dim" "$took" "$reset"
-    # The reason, when the step gave one: its own `kiln:` line, or its last.
-    reason=$(tail -n +"$((step_log_start + 1))" "$log_file" | sed -n 's/^kiln: //p' | tail -n 1)
+    # The reason: the step's own `kiln:` line, else the error Docker or a
+    # command gave, so it isn't only in the log.
+    output=$(tail -n +"$((step_log_start + 1))" "$log_file")
+    reason=$(printf '%s\n' "$output" | sed -n 's/^kiln: //p' | tail -n 1)
+    [ -n "$reason" ] || reason=$(printf '%s\n' "$output" |
+      sed -n 's/.*Error response from daemon: //p; s/^\(.*[Ee]rror: .*\)$/\1/p' | tail -n 1)
     [ -n "$reason" ] || reason="$label didn't finish."
     fail "$reason"
   fi
@@ -345,15 +369,14 @@ confirm() {
   esac
 }
 
-# A line of text from the terminal, or the default.
+# A line of text from the terminal, or the default, left in $answer. It
+# reads in this shell rather than a $( ) one: sudo passes ^C on only to the
+# shell it started, which can't stop while it waits on a subshell.
 ask() {
-  if [ "$assume_yes" -eq 1 ] || ! has_terminal; then
-    printf '%s' "$2"
-    return
-  fi
+  answer=$2
+  if [ "$assume_yes" -eq 1 ] || ! has_terminal; then return; fi
   printf '  %s ' "$1" >/dev/tty
   read -r answer </dev/tty || answer=""
-  printf '%s' "$answer"
 }
 
 public_ip() {
@@ -581,6 +604,13 @@ wait_healthy() {
   dk inspect --format '{{.Name}} {{.Config.Image}} healthy' "$name"
 }
 
+# A `docker run` that failed after creating its container, as when a port
+# is taken, leaves it behind; it never ran, so it goes, and the run fails.
+remove_unstarted() {
+  dk rm --force "$container" >/dev/null 2>&1 || true
+  return 1
+}
+
 start_platform_relay() {
   dk volume create "$volume" >/dev/null
   dk run --detach --name "$container" --restart unless-stopped \
@@ -597,7 +627,7 @@ start_platform_relay() {
     ${hearth_image:+--env KILN_PLATFORM_HEARTH_IMAGE="$hearth_image"} \
     ${namespace:+--env KILN_RELAY_RESOURCE_NAMESPACE="$namespace"} \
     ${game_host:+--env KILN_RELAY_GAME_HOST="$game_host"} \
-    "$image"
+    "$image" || remove_unstarted
 }
 
 start_node_relay() {
@@ -607,9 +637,10 @@ start_node_relay() {
     --volume "$volume:/data" \
     --publish 4100:4100 --publish "$sftp_port:2022" \
     --env KILN_RELAY_HOST="$relay_host" \
+    ${join:+--env KILN_RELAY_JOIN="$join"} \
     ${namespace:+--env KILN_RELAY_RESOURCE_NAMESPACE="$namespace"} \
     ${game_host:+--env KILN_RELAY_GAME_HOST="$game_host"} \
-    "$image"
+    "$image" || remove_unstarted
   waited=0
   until [ "$(dk inspect --format '{{.State.Health.Status}}' "$container" 2>/dev/null)" = "healthy" ]; do
     waited=$((waited + 2))
@@ -621,27 +652,107 @@ start_node_relay() {
   done
 }
 
+# A joining Relay's lines: its container's log, or the `pair join` run on a
+# Relay that was already here. The link itself never shows in either.
+join_output=""
+join_lines() {
+  if [ -n "$join_output" ]; then
+    cat "$join_output" 2>/dev/null || true
+  else
+    dk logs "$container" 2>&1 || true
+  fi
+}
+
+# Waits for a line saying the join got as far as $1, or ended. A join
+# that ended badly leaves the Relay's reason as the step's.
+wait_join() {
+  waited=0
+  while [ "$waited" -lt "$2" ]; do
+    lines=$(join_lines)
+    case "$lines" in
+      *"$1"* | *"Paired with Hearth"*) return 0 ;;
+      *"join expired"* | *"already joined with this link"* | *"Joining needs"* | *"isn't a join link"*)
+        printf 'kiln: %s\n' "$(printf '%s\n' "$lines" | grep -E "expired|already joined|Joining needs|join link" | tail -n 1)"
+        return 1
+        ;;
+    esac
+    sleep 2
+    waited=$((waited + 2))
+  done
+  printf 'kiln: %s\n' "The Relay didn't hear from Hearth. Its last line: $(printf '%s\n' "$lines" | tail -n 1)"
+  return 1
+}
+wait_announced() { wait_join "Confirm this Relay in Hearth:" 600; }
+wait_confirmed() { wait_join "Paired with Hearth" 1900; }
+
+# Joins Hearth: until Hearth has the Relay, where to confirm it, until
+# someone does, then done.
+join_hearth() {
+  step "Reaching Hearth" wait_announced
+  confirm_url=$(join_lines | sed -n 's/.*Confirm this Relay in Hearth: //p' | tail -n 1)
+  fingerprint=$(join_lines | sed -n 's/^Joining .* as //p' | tail -n 1)
+  if [ -n "$confirm_url" ]; then
+    say ""
+    say "  Confirm this Relay in Hearth:"
+    say "  $arrow $bold$confirm_url$reset"
+    [ -z "$fingerprint" ] || say "  ${dim}Fingerprint $fingerprint$reset"
+    say ""
+    step "Waiting for confirmation" wait_confirmed
+  fi
+  say ""
+  say "  ${green}${bold}Relay added$reset ${dim}in $(duration $(($(now) - started_at)))$reset"
+  say ""
+  say "  ${dim}Install log: $log_file$reset"
+  say ""
+}
+
 # Whether a domain resolves to this machine's address.
 points_here() {
   command -v getent >/dev/null 2>&1 || return 0
   getent ahostsv4 "$1" 2>/dev/null | awk '{print $1}' | grep -qxF "$address"
 }
 
-# What's listening on ports 80 or 443: a container's name, "another
-# program", or nothing.
+# What's listening on a port: a container's name, "another program", or
+# nothing.
+port_owner() {
+  owner=$(dk ps --filter "publish=$1" --format '{{.Names}}' 2>/dev/null | head -n 1)
+  if [ -n "$owner" ]; then
+    printf '%s' "$owner"
+    return
+  fi
+  # Listening sockets, by port in hex: 0050 is 80.
+  if awk 'NR > 1 && $4 == "0A" { split($2, local, ":"); print local[2] }' \
+    /proc/net/tcp /proc/net/tcp6 2>/dev/null | grep -qx "$(printf '%04X' "$1")"; then
+    printf 'another program'
+  fi
+}
+
+# What's listening on ports 80 or 443, the same way.
 web_ports_owner() {
   for published in 80 443; do
-    owner=$(dk ps --filter "publish=$published" --format '{{.Names}}' 2>/dev/null | head -n 1)
+    owner=$(port_owner "$published")
     if [ -n "$owner" ]; then
       printf '%s' "$owner"
       return
     fi
   done
-  # Listening sockets, by port in hex: 0050 is 80, 01BB is 443.
-  if awk 'NR > 1 && $4 == "0A" { split($2, local, ":"); print local[2] }' \
-    /proc/net/tcp /proc/net/tcp6 2>/dev/null | grep -qx -e 0050 -e 01BB; then
-    printf 'another program'
+}
+
+# Stops before starting anything when a port the Relay publishes is taken,
+# naming what has it, rather than failing halfway through.
+check_ports() {
+  if [ "$mode" = "node" ]; then
+    owner=$(port_owner 4100)
+    [ -z "$owner" ] ||
+      fail "Port 4100 is in use by $owner, and a Relay needs it for Kiln to reach it."
   fi
+  owner=$(port_owner "$sftp_port")
+  [ -n "$owner" ] || return 0
+  free=$((sftp_port + 1))
+  while [ -n "$(port_owner "$free")" ] && [ "$free" -lt $((sftp_port + 100)) ]; do
+    free=$((free + 1))
+  done
+  fail "Port $sftp_port, for SFTP, is in use by $owner. Run this again with --sftp-port $free added to use $free instead."
 }
 
 # Which proxy gives Kiln HTTPS: Coolify's on a Coolify server, otherwise
@@ -688,7 +799,7 @@ choose_url() {
   asked=1
   printf '  Kiln will open at %s%s%s\n' "$bold" "$default" "$reset" >/dev/tty
   while :; do
-    answer=$(ask "Press Enter, or type a domain you've pointed here:" "")
+    ask "Press Enter, or type a domain you've pointed here:" ""
     case "$answer" in
       "") url=$default; break ;;
       http://* | https://*) url=$answer; break ;;
@@ -740,8 +851,28 @@ address=$(public_ip)
 [ -n "$address" ] || address="localhost"
 log "public address: $address"
 
+# A Relay container that never started, left by an install that failed
+# before it could, isn't a Relay; its volume, if any, stays.
+if docker_reachable &&
+  [ "$(dk inspect --format '{{.State.Status}}' "$container" 2>/dev/null)" = "created" ]; then
+  log "removing $container, which never started"
+  dk rm --force "$container" >/dev/null 2>&1 || true
+fi
+
 # Already here: say so, and show where it's at.
 if docker_reachable && dk container inspect "$container" >/dev/null 2>&1; then
+  if [ -n "$join" ]; then
+    [ "$(dk inspect --format '{{.State.Running}}' "$container" 2>/dev/null)" = "true" ] ||
+      fail "A Relay is installed here but stopped. Start it with \`docker start $container\`, then run this again."
+    dk exec "$container" kiln-relay pair join --check >/dev/null 2>&1 ||
+      fail "This Relay is older than joining needs. Update it, or pair it by hand: run \`docker exec $container kiln-relay pair create\` and paste the link into Hearth's Pairing link tab."
+    say "  A Relay is already running here; joining it to that Kiln."
+    say ""
+    join_output=$(mktemp)
+    dk exec "$container" kiln-relay pair join "$join" >"$join_output" 2>&1 &
+    join_hearth
+    exit 0
+  fi
   if [ "$mode" = "node" ]; then
     say "  A Relay is already running here. A new invitation to pair it"
     say "  (it expires in 15 minutes):"
@@ -763,9 +894,13 @@ if docker_reachable && dk container inspect "$container" >/dev/null 2>&1; then
 fi
 
 if [ "$mode" = "node" ]; then
-  if [ -z "$relay_host" ] && [ "$assume_yes" -eq 0 ] && has_terminal; then asked=1; fi
-  [ -n "$relay_host" ] ||
-    relay_host=$(ask "Address Kiln will reach this machine at [$address]:" "")
+  # Joining, Hearth's Add Relay dialog already asked, and filled in
+  # --relay-host when someone changed it.
+  if [ -z "$relay_host" ] && [ -z "$join" ]; then
+    if [ "$assume_yes" -eq 0 ] && has_terminal; then asked=1; fi
+    ask "Address Kiln will reach this machine at [$address]:" ""
+    relay_host=$answer
+  fi
   [ -n "$relay_host" ] || relay_host=$address
 else
   choose_proxy
@@ -783,11 +918,31 @@ if [ "$docker_missing" -eq 1 ]; then
   docker_reachable || fail "Docker didn't start."
 fi
 step "Checking Docker" check_docker
+check_ports
 step_progress=pull_progress
 step "Downloading Kiln" pull_relay
 
-if [ "$mode" = "node" ]; then
+# A Relay release older than joining starts fine but ignores the link, so
+# it's asked first and falls back to an invitation to paste.
+if [ "$mode" = "node" ] && [ -n "$join" ]; then
   step "Starting the Relay" start_node_relay
+  if ! dk exec "$container" kiln-relay pair join --check >/dev/null 2>&1; then
+    log "this Relay can't join; printing an invitation instead"
+    join=""
+    say ""
+    say "  This Relay version can't join by itself yet."
+  fi
+fi
+
+if [ "$mode" = "node" ] && [ -n "$join" ]; then
+  join_hearth
+  exit 0
+fi
+
+if [ "$mode" = "node" ]; then
+  # Unless it was started above to join, and couldn't.
+  dk container inspect "$container" >/dev/null 2>&1 ||
+    step "Starting the Relay" start_node_relay
   paired=$(dk exec "$container" kiln-relay pair create 2>>"$log_file" || true)
   # Not the invitation itself: it grants full access to this Relay.
   log "$(printf '%s\n' "$paired" | grep -v '^kiln-relay://' || true)"

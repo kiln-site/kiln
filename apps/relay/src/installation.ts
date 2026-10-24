@@ -3,6 +3,7 @@ import { Effect, Option, Schema, Semaphore } from "effect"
 import { isKilnInstallationId } from "@workspace/contracts"
 
 import type { ProvenContainer, ProvenHearth, RelayConfig } from "./config.js"
+import { readPlatformState } from "./platform-state.js"
 import type { RelayStateStore } from "./effect/state.js"
 
 const INSTALLATION_ID_METADATA_KEY = "installation_id"
@@ -106,9 +107,10 @@ function provenHearthRecord(hearth: ProvenHearth): string {
 }
 
 /**
- * Saves the installation ID a full-access Hearth sent when it connected.
- * Hearth owns the ID, so a different one replaces the saved one; only
- * KILN_INSTALLATION_ID overrides it.
+ * Saves the installation ID a full-access Hearth sent when it connected,
+ * when the Relay has none yet. One that has an ID keeps it: replacing it
+ * takes `relay.installation.replace`, which a person confirms in Hearth, so
+ * two Hearths sharing a Relay don't swap it back and forth.
  */
 export const adoptInstallationId = Effect.fn("Relay.installation.adopt")(
   function* (
@@ -117,9 +119,9 @@ export const adoptInstallationId = Effect.fn("Relay.installation.adopt")(
     installationId: string
   ) {
     if (installationId === config.installationId) return
-    if (config.installationIdConfigured) {
+    if (config.installationId !== null) {
       yield* Effect.logWarning(
-        `Hearth's installation ID ${installationId} differs from KILN_INSTALLATION_ID; keeping ${config.installationId}`
+        `Hearth's installation ID ${installationId} differs from this Relay's; keeping ${config.installationId}`
       )
       return
     }
@@ -130,13 +132,90 @@ export const adoptInstallationId = Effect.fn("Relay.installation.adopt")(
       return
     }
     yield* state.setMetadata(INSTALLATION_ID_METADATA_KEY, installationId)
-    const previous = config.installationId
     config.installationId = installationId
+    yield* Effect.logInfo(`Saved installation ID ${installationId} from Hearth`)
+  },
+  (effect) => adoption.withPermit(effect)
+)
+
+/**
+ * Whether the Relay's installation ID can't change: KILN_INSTALLATION_ID
+ * set it, or Kiln's platform state on this Relay holds it, even when the
+ * Relay isn't running in platform mode.
+ */
+export const installationFixed = Effect.fn("Relay.installation.fixed")(
+  function* (
+    config: Pick<RelayConfig, "dataDirectory" | "installationIdConfigured">
+  ) {
+    if (config.installationIdConfigured) return true
+    // An unreadable record still counts as one.
+    return (
+      (yield* readPlatformState(config.dataDirectory).pipe(
+        Effect.catch(() => Effect.succeed(true))
+      )) !== null
+    )
+  }
+)
+
+/** Why the installation ID wasn't replaced; Hearth reads the code. */
+export class InstallationReplaceError extends Schema.TaggedError<InstallationReplaceError>()(
+  "InstallationReplaceError",
+  {
+    code: Schema.Literals(["installation_changed", "installation_fixed"]),
+    reason: Schema.String,
+  }
+) {
+  override get message() {
+    return this.reason
+  }
+}
+
+/**
+ * Sets the Relay's installation ID to `installationId` while it's still
+ * `expectedInstallationId`. Asking again once it's set succeeds, so a lost
+ * answer can be retried.
+ */
+export const replaceInstallationId = Effect.fn("Relay.installation.replace")(
+  function* (
+    config: InstallationConfig &
+      Pick<RelayConfig, "dataDirectory" | "installationIdConfigured">,
+    state: RelayStateStore["Service"],
+    input: {
+      readonly expectedInstallationId: string | null
+      readonly installationId: string
+    }
+  ) {
+    if (!isKilnInstallationId(input.installationId)) {
+      return yield* new InstallationReplaceError({
+        code: "installation_changed",
+        reason:
+          "Installation IDs use 1-120 letters, numbers, dots, underscores, or hyphens",
+      })
+    }
+    if (config.installationId === input.installationId) {
+      return { installationId: input.installationId }
+    }
+    if (yield* installationFixed(config)) {
+      return yield* new InstallationReplaceError({
+        code: "installation_fixed",
+        reason: `This Relay's installation ID is fixed at ${config.installationId ?? "none"}`,
+      })
+    }
+    if (config.installationId !== input.expectedInstallationId) {
+      return yield* new InstallationReplaceError({
+        code: "installation_changed",
+        reason: `This Relay's installation ID is now ${config.installationId ?? "none"}`,
+      })
+    }
+    yield* state.setMetadata(INSTALLATION_ID_METADATA_KEY, input.installationId)
+    const previous = config.installationId
+    config.installationId = input.installationId
     yield* Effect.logInfo(
       previous
-        ? `Hearth changed this Relay's installation ID from ${previous} to ${installationId}`
-        : `Saved installation ID ${installationId} from Hearth`
+        ? `Hearth replaced this Relay's installation ID ${previous} with ${input.installationId}`
+        : `Saved installation ID ${input.installationId} from Hearth`
     )
+    return { installationId: input.installationId }
   },
   (effect) => adoption.withPermit(effect)
 )

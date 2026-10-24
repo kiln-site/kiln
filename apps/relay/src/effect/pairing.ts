@@ -11,6 +11,7 @@ import {
 import { Effect, Option, Schema } from "effect"
 
 import {
+  type RelayJoinEnvelope,
   relayPairingRequestTranscript,
   relayPairingResponseTranscript,
   relayBootstrapEnrollmentTranscript,
@@ -22,6 +23,7 @@ import type { RelayAction } from "../permissions.js"
 import { RelayPairingError } from "./errors.js"
 import { fingerprint } from "./identity.js"
 import type { RelayConfig } from "../config.js"
+import { installationFixed } from "../installation.js"
 import type { RelayIdentity } from "./identity.js"
 import type { RelayTlsMaterial } from "./tls.js"
 import type {
@@ -44,12 +46,23 @@ export interface PairingEnvelope {
   readonly caCertificatePem: string | null
   readonly controlEndpoint: string
   readonly expiresAt: number
+  // The Relay's Kiln installation, so Hearth can ask before replacing it.
+  // Older Relays leave it out.
+  readonly installation: PairingInstallation
   readonly invitationId: string
   readonly relayFingerprint: string
   readonly relayName: string
   readonly relayPublicKeyPem: string
   readonly token: string
   readonly version: 1
+}
+
+export interface PairingInstallation {
+  // Whether KILN_INSTALLATION_ID or Kiln's platform state fixes it.
+  readonly fixed: boolean
+  readonly id: string | null
+  // Whether the Relay can replace it (`relay.installation.replace`).
+  readonly replace: true
 }
 
 export interface PairingRequest {
@@ -173,13 +186,21 @@ export const createPairingInvitation = Effect.fn(
   readonly state: RelayStateStore["Service"]
   readonly tls: RelayTlsMaterial | null
   readonly token?: string
+  // A join's invitation: its ID and expiry come from the join, and only
+  // the Hearth client the join names may pair with it.
+  readonly join?: {
+    readonly clientId: string
+    readonly expiresAt: number
+    readonly invitationId: string
+  }
 }) {
   const now = Date.now()
   const token = input.token ?? randomBytes(32).toString("base64url")
-  const invitationId = randomUUID()
-  const expiresAt = now + PAIRING_LIFETIME_MS
+  const invitationId = input.join?.invitationId ?? randomUUID()
+  const expiresAt = input.join?.expiresAt ?? now + PAIRING_LIFETIME_MS
   yield* input.state.createInvitation({
     actions: actionsForRole(input.role, input.actions),
+    clientId: input.join?.clientId ?? null,
     createdAt: now,
     expiresAt,
     id: invitationId,
@@ -189,6 +210,7 @@ export const createPairingInvitation = Effect.fn(
   const envelope = pairingEnvelope({
     ...input,
     expiresAt,
+    installation: yield* pairingInstallation(input.config),
     invitationId,
     token,
   })
@@ -254,7 +276,9 @@ export const pairHearth = Effect.fn("RelayPairing.pairHearth")(
           historicalInvitation,
           input.request,
           input.bootstrapToken ?? null
-        )
+        ) ||
+        (historicalInvitation.clientId !== null &&
+          historicalInvitation.clientId !== clientId)
       ) {
         return yield* pairingFailure("invalid_or_expired_invitation")
       }
@@ -270,7 +294,8 @@ export const pairHearth = Effect.fn("RelayPairing.pairHearth")(
         invitation,
         input.request,
         input.bootstrapToken ?? null
-      )
+      ) ||
+      (invitation.clientId !== null && invitation.clientId !== clientId)
     ) {
       return yield* pairingFailure("invalid_or_expired_invitation")
     }
@@ -384,6 +409,7 @@ export function renderPairingInvitation(
 function pairingEnvelope(input: {
   readonly config: RelayConfig
   readonly expiresAt: number
+  readonly installation: PairingInstallation
   readonly identity: RelayIdentity
   readonly invitationId: string
   readonly tls: RelayTlsMaterial | null
@@ -399,6 +425,7 @@ function pairingEnvelope(input: {
     caCertificatePem: input.tls?.caCertificatePem ?? null,
     controlEndpoint: controlEndpoint.toString(),
     expiresAt: input.expiresAt,
+    installation: input.installation,
     invitationId: input.invitationId,
     relayFingerprint: input.identity.fingerprint,
     relayName: input.identity.name,
@@ -491,6 +518,7 @@ const restoreAutomaticInvitation = Effect.fn(
     config: input.config,
     expiresAt: invitation.expiresAt,
     identity: input.identity,
+    installation: yield* pairingInstallation(input.config),
     invitationId: invitation.id,
     tls: input.tls,
     token: input.config.bootstrapToken,
@@ -503,6 +531,42 @@ const restoreAutomaticInvitation = Effect.fn(
     },
     kind: "automatic",
   } satisfies InitialPairingResult
+})
+
+/** What a join announces: a pairing envelope without its token or expiry. */
+export const joinEnvelope = Effect.fnUntraced(function* (input: {
+  readonly config: RelayConfig
+  readonly identity: RelayIdentity
+  readonly invitationId: string
+  readonly relayBuild: string
+  readonly tls: RelayTlsMaterial | null
+}) {
+  const {
+    expiresAt: _expiresAt,
+    token: _token,
+    version: _version,
+    ...envelope
+  } = pairingEnvelope({
+    ...input,
+    expiresAt: 0,
+    installation: yield* pairingInstallation(input.config),
+    token: "",
+  })
+  return {
+    ...envelope,
+    relayBuild: input.relayBuild,
+  } satisfies RelayJoinEnvelope
+})
+
+/** The Relay's installation, as a pairing link or a join reports it. */
+export const pairingInstallation = Effect.fnUntraced(function* (
+  config: RelayConfig
+) {
+  return {
+    fixed: yield* installationFixed(config),
+    id: config.installationId,
+    replace: true,
+  } satisfies PairingInstallation
 })
 
 function hashToken(token: string): string {

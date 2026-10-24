@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { createFileRoute } from "@tanstack/react-router"
+import { relayJoinIdPattern } from "@workspace/contracts"
 
 import { RelaysPage } from "@/components/relays-page"
 import { relaysCollectionOptions } from "@/lib/collections/relays"
@@ -13,6 +14,8 @@ import { requireInfrastructureDestinationAccess } from "@/lib/route-access"
 export const Route = createFileRoute("/_app/infra/relays")({
   validateSearch: z.object({
     invitation: z.uuid().optional(),
+    // A join to confirm, from the link a joining Relay's installer prints.
+    join: z.string().regex(relayJoinIdPattern).optional(),
     search: z.string().max(DATA_TABLE_SEARCH_MAX_LENGTH).optional(),
   }),
   beforeLoad: async ({ context }) => {
@@ -30,8 +33,8 @@ export const Route = createFileRoute("/_app/infra/relays")({
 })
 
 function InfraRelaysRoute() {
-  const { search = "" } = Route.useSearch()
+  const { join, search = "" } = Route.useSearch()
   const searchStore = useDataTableSearchStore(search)
 
-  return <RelaysPage searchStore={searchStore} />
+  return <RelaysPage joinId={join} searchStore={searchStore} />
 }

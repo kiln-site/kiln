@@ -29,6 +29,7 @@ export * from "./access-permissions.js"
 export * from "./relay-protocol.js"
 export * from "./installation-id.js"
 export * from "./container-identity.js"
+export * from "./relay-join.js"
 export * from "./release-version.js"
 export * from "./minecraft-java.js"
 export * from "./cli.js"
@@ -2137,6 +2138,24 @@ export const relayPlatformActionInputSchema = z.discriminatedUnion("action", [
   // Recreates whatever is missing and starts whatever stopped.
   z.object({ action: z.literal("repair") }),
 ])
+
+/** A Relay's Kiln installation ID, and whether it can change (`relay.installation.read`). */
+export const relayInstallationSchema = z.object({
+  /** Whether KILN_INSTALLATION_ID or the Relay's platform state fixes it. */
+  fixed: z.boolean(),
+  installationId: z.string().min(1).max(120).nullable(),
+})
+
+/**
+ * Sets the Relay's installation ID, only while it's still `expected` (null
+ * for none). Repeating it once applied succeeds.
+ */
+export const relayInstallationReplaceInputSchema = z.object({
+  expectedInstallationId: z.string().min(1).max(120).nullable(),
+  installationId: z.string().min(1).max(120),
+})
+
+export type RelayInstallation = z.infer<typeof relayInstallationSchema>
 
 export type RelayPlatformManagement = z.infer<
   typeof relayPlatformManagementSchema
