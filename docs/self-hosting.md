@@ -339,6 +339,13 @@ To move one under a platform Relay:
 `KILN_INSTALLATION_ID`, `BETTER_AUTH_SECRETS`, and `KILN_PLATFORM_BACKUP_KEY`
 only matter on that first start; afterwards the Relay uses its saved record.
 
+A platform backup recreates the database it came from by name, and the
+platform Relay's database is named `hearth`, so restore refuses a backup of
+a database named anything else (Coolify's MySQL defaults to `default`). Move
+such an installation with Kiln's SQL export instead, which carries only its
+tables: on the old Hearth, **Export SQL** from Kiln's Info page; once the new
+Hearth runs the same version, upload that file into its **Data** section.
+
 ## Known rough edges
 
 To come back to:
