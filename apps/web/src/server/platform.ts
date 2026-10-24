@@ -8,7 +8,8 @@ import {
   relayPlatformTargetSchema,
   relayPlatformTerminalClaimSchema,
   relayPlatformTerminalWriteSchema,
-    relayPlatformV2Feature,
+  relayPlatformDatabaseV1Feature,
+  relayPlatformV2Feature,
   type RelayPlatformStatus,
 } from "@workspace/contracts"
 import { z } from "zod"
@@ -20,6 +21,8 @@ import { recoverPromise } from "@/effect/promise"
 // administrators only; Hearth's logs can hold anything it printed.
 
 export interface KilnPlatformHost {
+  /** Whether the Relay browses Hearth's database (`relay-platform-database-v1`). */
+  database: boolean
   error: string | null
   relayId: string
   relayName: string
@@ -38,9 +41,12 @@ export const getKilnPlatform = createServerFn({ method: "GET" }).handler(
     )
     const hosts = await Promise.all(
       relays.map((relay) => {
-        const v2 = relayConnectionFeatures(relay.id).has(relayPlatformV2Feature)
+        const features = relayConnectionFeatures(relay.id)
+        const v2 = features.has(relayPlatformV2Feature)
+        const database = features.has(relayPlatformDatabaseV1Feature)
         return recoverPromise(
           async (): Promise<KilnPlatformHost> => ({
+            database,
             error: null,
             relayId: relay.id,
             relayName: relay.name,
@@ -50,6 +56,7 @@ export const getKilnPlatform = createServerFn({ method: "GET" }).handler(
             v2,
           }),
           (cause): KilnPlatformHost => ({
+            database,
             error:
               cause instanceof Error ? cause.message : "The Relay didn't answer",
             relayId: relay.id,

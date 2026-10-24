@@ -68,6 +68,7 @@ import { Route as AppKilnIndexRouteImport } from './routes/_app/kiln.index'
 import { Route as AppKilnInfoRouteImport } from './routes/_app/kiln.info'
 import { Route as AppKilnLogsRouteImport } from './routes/_app/kiln.logs'
 import { Route as AppKilnTerminalRouteImport } from './routes/_app/kiln.terminal'
+import { Route as AppKilnViewerRouteImport } from './routes/_app/kiln.viewer'
 import { Route as AppRelayRelayIdRouteImport } from './routes/_app/relay/$relayId'
 import { Route as AppServerServerIdRouteImport } from './routes/_app/server/$serverId'
 import { Route as AppSettingsIndexRouteImport } from './routes/_app.settings.index'
@@ -84,6 +85,7 @@ import { Route as ApiDatabaseTerminalDatabaseIdRouteImport } from './routes/api.
 import { Route as ApiGithubManifestRouteImport } from './routes/api.github.manifest'
 import { Route as ApiGithubSetupRouteImport } from './routes/api.github.setup'
 import { Route as ApiGithubWebhookRouteImport } from './routes/api.github.webhook'
+import { Route as ApiKilnDatabaseExportRouteImport } from './routes/api.kiln.database-export'
 import { Route as ApiPlatformTerminalRelayIdRouteImport } from './routes/api.platform-terminal.$relayId'
 import { Route as ApiRelayTerminalRelayIdRouteImport } from './routes/api.relay-terminal.$relayId'
 import { Route as AppAppAppIdIndexRouteImport } from './routes/_app/app/$appId.index'
@@ -421,6 +423,11 @@ const AppKilnTerminalRoute = AppKilnTerminalRouteImport.update({
   path: '/terminal',
   getParentRoute: () => AppKilnRoute,
 } as any)
+const AppKilnViewerRoute = AppKilnViewerRouteImport.update({
+  id: '/viewer',
+  path: '/viewer',
+  getParentRoute: () => AppKilnRoute,
+} as any)
 const AppRelayRelayIdRoute = AppRelayRelayIdRouteImport.update({
   id: '/relay/$relayId',
   path: '/relay/$relayId',
@@ -501,6 +508,11 @@ const ApiGithubSetupRoute = ApiGithubSetupRouteImport.update({
 const ApiGithubWebhookRoute = ApiGithubWebhookRouteImport.update({
   id: '/api/github/webhook',
   path: '/api/github/webhook',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiKilnDatabaseExportRoute = ApiKilnDatabaseExportRouteImport.update({
+  id: '/api/kiln/database-export',
+  path: '/api/kiln/database-export',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiPlatformTerminalRelayIdRoute =
@@ -776,6 +788,7 @@ export interface FileRoutesByFullPath {
   '/kiln/info': typeof AppKilnInfoRoute
   '/kiln/logs': typeof AppKilnLogsRoute
   '/kiln/terminal': typeof AppKilnTerminalRoute
+  '/kiln/viewer': typeof AppKilnViewerRoute
   '/relay/$relayId': typeof AppRelayRelayIdRouteWithChildren
   '/server/$serverId': typeof AppServerServerIdRouteWithChildren
   '/settings/account': typeof AppSettingsAccountRoute
@@ -791,6 +804,7 @@ export interface FileRoutesByFullPath {
   '/api/github/manifest': typeof ApiGithubManifestRoute
   '/api/github/setup': typeof ApiGithubSetupRoute
   '/api/github/webhook': typeof ApiGithubWebhookRoute
+  '/api/kiln/database-export': typeof ApiKilnDatabaseExportRoute
   '/api/platform-terminal/$relayId': typeof ApiPlatformTerminalRelayIdRoute
   '/api/relay-terminal/$relayId': typeof ApiRelayTerminalRelayIdRoute
   '/automations/': typeof AppAutomationsIndexRoute
@@ -887,6 +901,7 @@ export interface FileRoutesByTo {
   '/kiln/info': typeof AppKilnInfoRoute
   '/kiln/logs': typeof AppKilnLogsRoute
   '/kiln/terminal': typeof AppKilnTerminalRoute
+  '/kiln/viewer': typeof AppKilnViewerRoute
   '/settings/account': typeof AppSettingsAccountRoute
   '/settings/appearance': typeof AppSettingsAppearanceRoute
   '/settings/billing': typeof AppSettingsBillingRoute
@@ -900,6 +915,7 @@ export interface FileRoutesByTo {
   '/api/github/manifest': typeof ApiGithubManifestRoute
   '/api/github/setup': typeof ApiGithubSetupRoute
   '/api/github/webhook': typeof ApiGithubWebhookRoute
+  '/api/kiln/database-export': typeof ApiKilnDatabaseExportRoute
   '/api/platform-terminal/$relayId': typeof ApiPlatformTerminalRelayIdRoute
   '/api/relay-terminal/$relayId': typeof ApiRelayTerminalRelayIdRoute
   '/automations': typeof AppAutomationsIndexRoute
@@ -1005,6 +1021,7 @@ export interface FileRoutesById {
   '/_app/kiln/info': typeof AppKilnInfoRoute
   '/_app/kiln/logs': typeof AppKilnLogsRoute
   '/_app/kiln/terminal': typeof AppKilnTerminalRoute
+  '/_app/kiln/viewer': typeof AppKilnViewerRoute
   '/_app/relay/$relayId': typeof AppRelayRelayIdRouteWithChildren
   '/_app/server/$serverId': typeof AppServerServerIdRouteWithChildren
   '/_app/settings/account': typeof AppSettingsAccountRoute
@@ -1020,6 +1037,7 @@ export interface FileRoutesById {
   '/api/github/manifest': typeof ApiGithubManifestRoute
   '/api/github/setup': typeof ApiGithubSetupRoute
   '/api/github/webhook': typeof ApiGithubWebhookRoute
+  '/api/kiln/database-export': typeof ApiKilnDatabaseExportRoute
   '/api/platform-terminal/$relayId': typeof ApiPlatformTerminalRelayIdRoute
   '/api/relay-terminal/$relayId': typeof ApiRelayTerminalRelayIdRoute
   '/_app/automations/': typeof AppAutomationsIndexRoute
@@ -1125,6 +1143,7 @@ export interface FileRouteTypes {
     | '/kiln/info'
     | '/kiln/logs'
     | '/kiln/terminal'
+    | '/kiln/viewer'
     | '/relay/$relayId'
     | '/server/$serverId'
     | '/settings/account'
@@ -1140,6 +1159,7 @@ export interface FileRouteTypes {
     | '/api/github/manifest'
     | '/api/github/setup'
     | '/api/github/webhook'
+    | '/api/kiln/database-export'
     | '/api/platform-terminal/$relayId'
     | '/api/relay-terminal/$relayId'
     | '/automations/'
@@ -1236,6 +1256,7 @@ export interface FileRouteTypes {
     | '/kiln/info'
     | '/kiln/logs'
     | '/kiln/terminal'
+    | '/kiln/viewer'
     | '/settings/account'
     | '/settings/appearance'
     | '/settings/billing'
@@ -1249,6 +1270,7 @@ export interface FileRouteTypes {
     | '/api/github/manifest'
     | '/api/github/setup'
     | '/api/github/webhook'
+    | '/api/kiln/database-export'
     | '/api/platform-terminal/$relayId'
     | '/api/relay-terminal/$relayId'
     | '/automations'
@@ -1353,6 +1375,7 @@ export interface FileRouteTypes {
     | '/_app/kiln/info'
     | '/_app/kiln/logs'
     | '/_app/kiln/terminal'
+    | '/_app/kiln/viewer'
     | '/_app/relay/$relayId'
     | '/_app/server/$serverId'
     | '/_app/settings/account'
@@ -1368,6 +1391,7 @@ export interface FileRouteTypes {
     | '/api/github/manifest'
     | '/api/github/setup'
     | '/api/github/webhook'
+    | '/api/kiln/database-export'
     | '/api/platform-terminal/$relayId'
     | '/api/relay-terminal/$relayId'
     | '/_app/automations/'
@@ -1447,6 +1471,7 @@ export interface RootRouteChildren {
   ApiGithubManifestRoute: typeof ApiGithubManifestRoute
   ApiGithubSetupRoute: typeof ApiGithubSetupRoute
   ApiGithubWebhookRoute: typeof ApiGithubWebhookRoute
+  ApiKilnDatabaseExportRoute: typeof ApiKilnDatabaseExportRoute
   ApiPlatformTerminalRelayIdRoute: typeof ApiPlatformTerminalRelayIdRoute
   ApiRelayTerminalRelayIdRoute: typeof ApiRelayTerminalRelayIdRoute
   ApiCliAuthDeviceRoute: typeof ApiCliAuthDeviceRoute
@@ -1870,6 +1895,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppKilnTerminalRouteImport
       parentRoute: typeof AppKilnRoute
     }
+    '/_app/kiln/viewer': {
+      id: '/_app/kiln/viewer'
+      path: '/viewer'
+      fullPath: '/kiln/viewer'
+      preLoaderRoute: typeof AppKilnViewerRouteImport
+      parentRoute: typeof AppKilnRoute
+    }
     '/_app/relay/$relayId': {
       id: '/_app/relay/$relayId'
       path: '/relay/$relayId'
@@ -1980,6 +2012,13 @@ declare module '@tanstack/react-router' {
       path: '/api/github/webhook'
       fullPath: '/api/github/webhook'
       preLoaderRoute: typeof ApiGithubWebhookRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/kiln/database-export': {
+      id: '/api/kiln/database-export'
+      path: '/api/kiln/database-export'
+      fullPath: '/api/kiln/database-export'
+      preLoaderRoute: typeof ApiKilnDatabaseExportRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/platform-terminal/$relayId': {
@@ -2357,6 +2396,7 @@ interface AppKilnRouteChildren {
   AppKilnInfoRoute: typeof AppKilnInfoRoute
   AppKilnLogsRoute: typeof AppKilnLogsRoute
   AppKilnTerminalRoute: typeof AppKilnTerminalRoute
+  AppKilnViewerRoute: typeof AppKilnViewerRoute
   AppKilnIndexRoute: typeof AppKilnIndexRoute
 }
 
@@ -2364,6 +2404,7 @@ const AppKilnRouteChildren: AppKilnRouteChildren = {
   AppKilnInfoRoute: AppKilnInfoRoute,
   AppKilnLogsRoute: AppKilnLogsRoute,
   AppKilnTerminalRoute: AppKilnTerminalRoute,
+  AppKilnViewerRoute: AppKilnViewerRoute,
   AppKilnIndexRoute: AppKilnIndexRoute,
 }
 
@@ -2599,6 +2640,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiGithubManifestRoute: ApiGithubManifestRoute,
   ApiGithubSetupRoute: ApiGithubSetupRoute,
   ApiGithubWebhookRoute: ApiGithubWebhookRoute,
+  ApiKilnDatabaseExportRoute: ApiKilnDatabaseExportRoute,
   ApiPlatformTerminalRelayIdRoute: ApiPlatformTerminalRelayIdRoute,
   ApiRelayTerminalRelayIdRoute: ApiRelayTerminalRelayIdRoute,
   ApiCliAuthDeviceRoute: ApiCliAuthDeviceRoute,

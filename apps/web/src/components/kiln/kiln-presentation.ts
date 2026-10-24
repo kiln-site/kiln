@@ -1,4 +1,4 @@
-import { useSuspenseQuery } from "@tanstack/react-query"
+import { useQuery, useSuspenseQuery } from "@tanstack/react-query"
 import type {
   RelayPlatformProxy,
   RelayPlatformService,
@@ -80,6 +80,36 @@ export function useKilnHost(): KilnPlatformHost | null {
     ...kilnPlatformQueryOptions(),
     select: (data) => selectKilnHost(data.hosts),
   }).data
+}
+
+export interface KilnBackupHost {
+  relayId: string
+  relayName: string
+}
+
+/**
+ * The Relay Kiln is backed up on, for pages that offer Kiln beside game
+ * servers and databases. Only platform administrators can back Kiln up, so
+ * only they ask; null until known. These pages don't follow its services, so
+ * they don't poll for them.
+ */
+export function useKilnBackupHost(enabled: boolean): KilnBackupHost | null {
+  return (
+    useQuery({
+      ...kilnPlatformQueryOptions(),
+      enabled,
+      refetchInterval: false,
+      select: selectKilnBackupHost,
+      staleTime: 60_000,
+    }).data ?? null
+  )
+}
+
+function selectKilnBackupHost(data: {
+  hosts: ReadonlyArray<KilnPlatformHost>
+}): KilnBackupHost | null {
+  const host = selectKilnHost(data.hosts)
+  return host ? { relayId: host.relayId, relayName: host.relayName } : null
 }
 
 /** Kiln's containers in order, the proxy last when there is one. */

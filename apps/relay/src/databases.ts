@@ -927,7 +927,7 @@ export class DatabaseDriver {
 
   /** Starts a process in a database's container, streaming its stdio. */
   process(
-    database: RelayManagedDatabase,
+    database: Pick<RelayManagedDatabase, "containerId">,
     command: ReadonlyArray<string>,
     options: { readonly stdin?: boolean; readonly user?: string } = {}
   ): Promise<DockerExecProcess> {
@@ -1186,7 +1186,9 @@ function databaseHostname(id: string): string {
   return `database-${id}`
 }
 
-function requiredContainerId(database: RelayManagedDatabase): string {
+function requiredContainerId(
+  database: Pick<RelayManagedDatabase, "containerId">
+): string {
   if (!database.containerId) throw new Error("Database container ID is missing")
   return database.containerId
 }

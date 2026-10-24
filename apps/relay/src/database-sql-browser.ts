@@ -57,9 +57,16 @@ export interface BrowseAccess {
   readOnly: boolean
 }
 
+// What browsing needs of a database: a managed database's record, or a
+// description of Hearth's own MySQL container.
+export type BrowsableDatabase = Pick<
+  RelayManagedDatabase,
+  "containerId" | "databaseName" | "engine" | "internalPort" | "observedState"
+>
+
 export function browseManagedDatabase(
   databases: Pick<DatabaseDriver, "process">,
-  database: RelayManagedDatabase,
+  database: BrowsableDatabase,
   credentials: ManagedDatabaseCredentials,
   request: DatabaseReadRequest | DatabaseWriteRequest,
   access: BrowseAccess

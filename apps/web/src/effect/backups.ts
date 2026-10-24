@@ -1980,7 +1980,12 @@ export const reserveBackupRestoreEffect = Effect.fn("backups.reserveRestore")(
 )
 
 export const reserveBackupDeleteEffect = Effect.fn("backups.reserveDelete")(
-  function* (input: { backupId: string; requestedBy: string; taskId: string }) {
+  function* (input: {
+    backupId: string
+    // Null when Hearth deletes it itself, as retention does.
+    requestedBy: string | null
+    taskId: string
+  }) {
     const database = yield* Database
     const now = yield* Clock.currentTimeMillis
     return yield* database.transaction("backup_reserve_delete", (transaction) =>

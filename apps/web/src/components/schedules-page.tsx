@@ -107,6 +107,10 @@ import { IdentityName } from "@/components/identity-name"
 import type { IdentityStatusPresentation } from "@/components/identity-name"
 import { InstanceCard } from "@/components/instance-card"
 import {
+  useKilnBackupHost,
+  type KilnBackupHost,
+} from "@/components/kiln/kiln-presentation"
+import {
   ServerKindIcon,
   instanceKindIcons,
 } from "@/components/instance-kind-icon"
@@ -149,6 +153,7 @@ import {
   upsertScheduleCache,
 } from "@/lib/collections/schedules"
 import {
+  accessCapabilitiesQueryOptions,
   backupStorageQueryOptions,
   githubSyncRunsQueryOptions,
   queryKeys,
@@ -213,9 +218,19 @@ export const SchedulesPage = React.memo(function SchedulesPage() {
   const [searchStore] = React.useState(() => createDataTableSearchStore())
   const [editor, setEditor] = React.useState<EditorMode | null>(null)
   const [deleting, setDeleting] = React.useState<Schedule | null>(null)
+  const { data: isPlatformAdmin = false } = useQuery({
+    ...accessCapabilitiesQueryOptions(),
+    select: selectIsPlatformAdmin,
+  })
+  const kiln = useKilnBackupHost(isPlatformAdmin)
   const options = React.useMemo(
-    () => scheduleOptionsWithInstanceNames(scheduleOptions, instances),
-    [instances, scheduleOptions]
+    () =>
+      kilnScheduleOptions(
+        scheduleOptionsWithInstanceNames(scheduleOptions, instances),
+        kiln,
+        schedules
+      ),
+    [instances, kiln, scheduleOptions, schedules]
   )
   const canCreate = options.some((option) => option.canCreate)
   const optionMap = React.useMemo(
@@ -1186,6 +1201,8 @@ interface HistoryTarget {
   id: string
   kind: InstancePickerKind
   name: string
+  /** A schedule's Relay target: Kiln, backed up on that Relay. */
+  platform?: boolean
   relayId: string
   /** Falls back to the Relay that ran it. */
   relayName?: string
@@ -1286,7 +1303,8 @@ function scheduleHistoryTarget(
   return {
     id: target.kind === "relay" ? target.relayId : target.id,
     kind: target.kind === "instance" ? "server" : target.kind,
-    name: target.name,
+    name: target.kind === "relay" ? "Kiln" : target.name,
+    platform: target.kind === "relay",
     relayId: target.relayId,
     relayName,
   }
@@ -1788,7 +1806,9 @@ function historyTargetPickerItem(
         ? "Database"
         : target.kind === "app"
           ? "App"
-          : "Relay"
+          : target.platform
+            ? "Kiln"
+            : "Relay"
   return {
     identity:
       target.kind === "server"
@@ -1803,13 +1823,15 @@ function historyTargetPickerItem(
           ? {
               id: target.relayId,
               kind: "relay",
+              platform: target.platform,
               relayId: target.relayId,
               source: "fleet",
             }
           : { id: target.id, kind: target.kind, relayId: target.relayId },
     key: `${target.kind}:${target.relayId}:${target.id}`,
-    meta:
-      target.kind === "relay"
+    meta: target.platform
+      ? `On ${relayName}`
+      : target.kind === "relay"
         ? "Relay"
         : `${server?.implementation ?? kindLabel} · ${relayName}`,
     name: server?.name ?? target.name,
@@ -1827,6 +1849,7 @@ function historyTargetHref(identity: InstancePickerItem["identity"]) {
     return `/db/${encodeURIComponent(identity.id)}`
   }
   if (identity.kind === "app") return `/app/${encodeURIComponent(identity.id)}`
+  if (identity.platform) return "/kiln/info"
   return `/relay/${encodeURIComponent(identity.relayId)}`
 }
 
@@ -2702,7 +2725,8 @@ const ScheduleTargetSelector = React.memo(function ScheduleTargetSelector({
   const selectedNames = React.useMemo(() => {
     const names: Array<string> = []
     for (const option of options) {
-      if (selectedTargets.has(targetKey(option))) names.push(option.name)
+      if (selectedTargets.has(targetKey(option)))
+        names.push(option.kind === "relay" ? "Kiln" : option.name)
     }
     return names
   }, [options, selectedTargets])
@@ -2719,7 +2743,8 @@ const ScheduleTargetSelector = React.memo(function ScheduleTargetSelector({
           <div>
             <h3 className="text-sm font-semibold">Targets</h3>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              Select every server, database, or Relay this schedule applies to.
+              Select every game server, database, or Kiln this schedule applies
+              to.
             </p>
           </div>
           <span className="type-code text-muted-foreground">
@@ -3140,8 +3165,10 @@ const ActionEditor = React.memo(function ActionEditor({
           }
           initialMode={action.mode}
           initialName={action.name}
+          initialRetention={action.retention}
           onOpenChange={setBackupConfigOpen}
           onSubmit={(configuration) => {
+            const { retention } = configuration
             onChange({
               ...action,
               destination: scheduleBackupDestination(
@@ -3149,10 +3176,17 @@ const ActionEditor = React.memo(function ActionEditor({
               ),
               mode: configuration.mode,
               name: configuration.name,
+              // Both blank keeps every backup.
+              retention:
+                retention &&
+                (retention.days !== null || retention.bytes !== null)
+                  ? retention
+                  : undefined,
             })
             setBackupConfigOpen(false)
           }}
           open={backupConfigOpen}
+          showRetention
           showTarget={false}
           singleDestination
           storage={storage}
@@ -3240,13 +3274,14 @@ const ScheduleActionTargetsButton = React.memo(
   }
 )
 
+// A Relay target is Kiln itself, backed up on that Relay.
 function scheduleTargetPickerItem(option: ScheduleOption): InstancePickerItem {
   const kind =
     option.kind === "instance"
       ? "Game Server"
       : option.kind === "database"
         ? "Database"
-        : "Relay"
+        : "Kiln"
   return {
     identity:
       option.kind === "instance"
@@ -3256,16 +3291,17 @@ function scheduleTargetPickerItem(option: ScheduleOption): InstancePickerItem {
           : {
               id: option.relayId,
               kind: "relay",
+              platform: true,
               relayId: option.relayId,
               source: "fleet",
             },
     key: targetKey(option),
     meta: option.available
       ? option.kind === "relay"
-        ? "Relay"
+        ? `On ${option.relayName}`
         : `${option.relayName} · ${option.id.slice(0, 8)}`
       : `Unavailable · ${kind} · ${option.relayName}`,
-    name: option.name,
+    name: option.kind === "relay" ? "Kiln" : option.name,
     searchText: `${kind} ${option.relayName} ${option.id}`,
   }
 }
@@ -3277,7 +3313,7 @@ function scheduleBackupTarget(
     id: target.id,
     key: targetKey(target),
     kind: target.kind === "relay" ? "platform" : target.kind,
-    name: target.name,
+    name: target.kind === "relay" ? "Kiln" : target.name,
     relayId: target.relayId,
     relayName: target.relayName,
   }
@@ -3724,6 +3760,33 @@ function scheduleOptionsWithInstanceNames(
       ? { ...option, name: instance.name, relayName: instance.relayName }
       : option
   })
+}
+
+// A Relay target backs Kiln up, which only the Relay on Kiln's host can do.
+// Others stay listed only where a schedule already names them, so it can be
+// fixed.
+function kilnScheduleOptions(
+  options: ReadonlyArray<ScheduleOption>,
+  kiln: KilnBackupHost | null,
+  schedules: ReadonlyArray<Pick<Schedule, "targets">>
+): Array<ScheduleOption> {
+  const named = new Set(
+    schedules.flatMap((schedule) =>
+      schedule.targets.flatMap((target) =>
+        target.kind === "relay" ? [target.relayId] : []
+      )
+    )
+  )
+  return options.filter(
+    (option) =>
+      option.kind !== "relay" ||
+      option.relayId === kiln?.relayId ||
+      named.has(option.relayId)
+  )
+}
+
+function selectIsPlatformAdmin(capabilities: { isPlatformAdmin: boolean }) {
+  return capabilities.isPlatformAdmin
 }
 
 function selectScheduleTargetInstances(snapshot: RelaySnapshot) {

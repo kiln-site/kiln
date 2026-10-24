@@ -72,6 +72,9 @@ export const relayPlatformV1Feature = "relay-platform-v1"
 // Kiln's containers' output as browser resource `platform`, opens shells in
 // them through `relay.platform.terminal.*`, and restarts its own Traefik.
 export const relayPlatformV2Feature = "relay-platform-v2"
+// The Relay browses and edits Hearth's own database through
+// `relay.platform.database.*`, with the credentials Hearth sends.
+export const relayPlatformDatabaseV1Feature = "relay-platform-database-v1"
 export const relayBrowserAuthorizationReviseMaxItems = 256
 
 export const relayControlOperations = [
@@ -124,6 +127,8 @@ export const relayControlOperations = [
   "relay.platform.read",
   "relay.platform.logs",
   "relay.platform.action",
+  "relay.platform.database.read",
+  "relay.platform.database.write",
   "browser.authorization.revise",
   "brick.catalog",
   "brick.recipe",
@@ -243,6 +248,7 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "relay.terminal.restart",
   "relay.platform.terminal.attach",
   "relay.platform.terminal.restart",
+  "relay.platform.database.write",
   "instance.create",
   "instance.provision.prepare",
   "instance.provision.claim",
@@ -326,6 +332,7 @@ export function relayControlOperationChanges(
     case "relay.clients.list":
     case "relay.platform.read":
     case "relay.platform.logs":
+    case "relay.platform.database.read":
     case "brick.catalog":
     case "brick.recipe":
     case "database.list":
@@ -400,6 +407,7 @@ export function relayControlOperationChanges(
     case "relay.clients.update":
     case "relay.clients.revoke":
     case "relay.platform.action":
+    case "relay.platform.database.write":
     case "browser.authorization.revise":
     case "database.create":
     case "database.provision.prepare":

@@ -82,7 +82,7 @@ type BackupAvailabilityState =
   | "working"
 type BackupTargetPresentation = {
   id: string
-  kindLabel: "Database" | "Relay" | "Game Server"
+  kindLabel: "Database" | "Game Server" | "Kiln"
   name: string
 }
 const activeStatuses = new Set(["queued", "running", "deleting"])
@@ -412,7 +412,11 @@ export const BackupRowActions = React.memo(function BackupRowActions({
     backup.status === "available" &&
     !backupSourceIsActive(backup) &&
     targetAvailable &&
-    (backup.targetKind === "instance" || backup.targetKind === "database")
+    // Kiln's restore runs on its Relay's host; the dialog says how.
+    (backup.targetKind === "instance" ||
+      backup.targetKind === "database" ||
+      (backup.targetKind === "platform" &&
+        backup.artifactKind === "platform_bundle"))
   const restore = (
     <Button
       aria-label={`Restore ${backup.name}`}
@@ -918,21 +922,18 @@ export const BackupTargetLink = React.memo(function BackupTargetLink({
   targetId: string
   targetKind: Backup["targetKind"]
 }) {
+  const fallback: InstanceNameInstance =
+    targetKind === "platform"
+      ? { id: relayId, kind: "relay", platform: true, relayId }
+      : {
+          id: targetId,
+          kind: targetKind === "database" ? "database" : "server",
+          relayId,
+        }
   const identity = (
     <InstanceCard
       className="w-full"
-      instance={
-        instance ?? {
-          id: targetKind === "platform" ? relayId : targetId,
-          kind:
-            targetKind === "database"
-              ? "database"
-              : targetKind === "platform"
-                ? "relay"
-                : "server",
-          relayId,
-        }
-      }
+      instance={instance ?? fallback}
       name={name}
       nameClassName={
         available
@@ -1015,7 +1016,7 @@ const BackupTargetAnchor = React.memo(function BackupTargetAnchor({
   }
 
   return (
-    <Link className={className} preload="intent" to="/infra/relays">
+    <Link className={className} preload="intent" to="/kiln/info">
       {children}
     </Link>
   )
@@ -1179,7 +1180,7 @@ export function backupTargetName(
   backup: Backup,
   targetNames: ReadonlyMap<string, string>
 ): string {
-  if (backup.targetKind === "platform") return "Kiln platform"
+  if (backup.targetKind === "platform") return "Kiln"
   return (
     targetNames.get(
       targetKey(backup.targetKind, backup.relayId, backup.targetId)
@@ -1189,14 +1190,13 @@ export function backupTargetName(
 
 export function backupTargetPresentation(
   backup: Backup,
-  relayName: string,
   targetName: string
 ): BackupTargetPresentation {
   if (backup.targetKind === "platform") {
     return {
       id: backup.relayId,
-      kindLabel: "Relay",
-      name: relayName,
+      kindLabel: "Kiln",
+      name: "Kiln",
     }
   }
   const shortId = backup.targetId.slice(0, 8)
@@ -1209,7 +1209,7 @@ export function backupTargetPresentation(
 
 function missingTargetMessage(kind: Backup["targetKind"]): string {
   if (kind === "database") return "This database no longer exists"
-  if (kind === "platform") return "This Relay no longer exists"
+  if (kind === "platform") return "The Relay Kiln was backed up on is gone"
   return "This game server no longer exists"
 }
 

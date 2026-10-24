@@ -41,6 +41,8 @@ export type InstanceNameInstance =
     })
   | (InstanceIdentity & {
       kind: "relay"
+      /** Kiln itself, backed up on and reached through this Relay. */
+      platform?: boolean
       source?: "fleet" | "registry"
     } & RelayStatusSource)
   | (InventoryIdentity & { kind: "database" })

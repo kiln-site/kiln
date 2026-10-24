@@ -26,6 +26,7 @@ import {
 import { InstanceKindCounts } from "@/components/instance-kind-counts"
 import { DatabaseKindIcon } from "@/components/instance-kind-icon"
 import { KilnRestartButton } from "@/components/kiln/kiln-actions"
+import { KilnDataSection } from "@/components/kiln/kiln-data-section"
 import {
   kilnContainerPresentation,
   kilnContainers,
@@ -41,7 +42,10 @@ import {
   useRelayNodeFacts,
 } from "@/components/relay/relay-node-card"
 import { RelativeTime } from "@/components/relative-time"
-import { InfoRailRelayLink } from "@/components/resource-info-rail"
+import {
+  InfoRailBackupsLink,
+  InfoRailRelayLink,
+} from "@/components/resource-info-rail"
 import { StatusIndicator } from "@/components/status-indicator"
 import {
   appDirectoryQueryOptions,
@@ -90,6 +94,7 @@ export function KilnInfoPage() {
               ) : null}
             </div>
           </div>
+          <KilnDataSection host={host} />
           <KilnCommandsSection relayId={host.relayId} status={status} />
         </>
       ) : null}
@@ -362,6 +367,13 @@ function KilnInfoRail({ host }: { host: KilnPlatformHost }) {
             Terminal
           </InfoRailLink>
         ) : null}
+        <InfoRailBackupsLink
+          resource={{
+            id: host.relayId,
+            kind: "platform",
+            relayId: host.relayId,
+          }}
+        />
       </InfoRailGroup>
       <OwnerCard email={null} name={null} />
       <InfoRailCard

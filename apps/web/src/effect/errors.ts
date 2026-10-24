@@ -213,3 +213,17 @@ export class RenderReadError extends Schema.TaggedError<RenderReadError>()(
   "RenderReadError",
   { message: Schema.String }
 ) {}
+
+// Exporting or importing Hearth's own database; `reason` is MySQL's.
+export class KilnDatabaseError extends Schema.TaggedError<KilnDatabaseError>()(
+  "KilnDatabaseError",
+  {
+    operation: Schema.Literals(["export", "import"]),
+    reason: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
+  }
+) {
+  override get message() {
+    return this.reason
+  }
+}

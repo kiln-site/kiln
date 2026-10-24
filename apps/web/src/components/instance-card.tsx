@@ -1,6 +1,7 @@
 import * as React from "react"
 import type { InstanceReference } from "@workspace/contracts"
 
+import { HearthMark } from "@/components/hearth-mark"
 import { IdentityName } from "@/components/identity-name"
 import type {
   IdentityNameProps,
@@ -83,6 +84,7 @@ const InstanceCardView = React.memo(function InstanceCardView({
   ...props
 }: InstanceCardProps) {
   const Icon = instanceKindIcons[instance.kind]
+  const kiln = isKilnIdentity(instance)
   return (
     <IdentityName
       {...props}
@@ -95,12 +97,15 @@ const InstanceCardView = React.memo(function InstanceCardView({
             implementation={instance.implementation}
             className={iconSizeClassName}
           />
+        ) : kiln ? (
+          <HearthMark className={iconSizeClassName ?? "size-4"} />
         ) : (
           <Icon className={iconSizeClassName ?? "size-4"} aria-hidden="true" />
         )
       }
       nameAccessory={
-        showFavorite ? (
+        // Kiln isn't one of the Relay's instances to favorite.
+        showFavorite && !kiln ? (
           <>
             <InstanceFavoriteStar
               id={instance.id}
@@ -119,3 +124,12 @@ const InstanceCardView = React.memo(function InstanceCardView({
     />
   )
 })
+
+/** Kiln itself, shown through the Relay on its host. */
+export function isKilnIdentity(instance: InstanceIdentity): boolean {
+  return (
+    instance.kind === "relay" &&
+    "platform" in instance &&
+    instance.platform === true
+  )
+}

@@ -32,7 +32,8 @@ import { cn } from "@workspace/ui/lib/utils"
 
 import { useDrawerPopoverIsDrawer } from "@/components/drawer-popover"
 import { useInstanceFavoriteKeys } from "@/components/instance-favorite"
-import { InstanceCard } from "@/components/instance-card"
+import { HearthMark } from "@/components/hearth-mark"
+import { InstanceCard, isKilnIdentity } from "@/components/instance-card"
 import {
   AppKindIcon,
   DatabaseKindIcon,
@@ -782,8 +783,14 @@ const InstancePickerRowButton = React.memo(function InstancePickerRowButton({
         />
       ) : showKind ? (
         <span className="shrink-0 text-muted-foreground/70 light:text-muted-foreground/85">
-          <kind.Icon className="size-3.5" aria-hidden="true" />
-          <span className="sr-only">{kind.label}</span>
+          {isKilnIdentity(item.identity) ? (
+            <HearthMark className="size-3.5 text-current" />
+          ) : (
+            <kind.Icon className="size-3.5" aria-hidden="true" />
+          )}
+          <span className="sr-only">
+            {isKilnIdentity(item.identity) ? "Kiln" : kind.label}
+          </span>
         </span>
       ) : null}
     </button>

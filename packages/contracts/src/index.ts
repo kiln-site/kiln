@@ -2182,6 +2182,34 @@ export const relayPlatformTerminalClaimSchema = z
   })
   .strict()
 
+// Hearth's own database, browsed through its MySQL container with the login
+// Hearth itself uses. Needs `relay-platform-database-v1`.
+const platformDatabaseLoginShape = {
+  databaseName: z.string().regex(/^[A-Za-z0-9_$]{1,64}$/u),
+  password: z.string().min(1).max(512),
+  username: z.string().min(1).max(128),
+}
+
+export const relayPlatformDatabaseReadSchema = z
+  .object({ ...platformDatabaseLoginShape, request: databaseReadRequestSchema })
+  .strict()
+
+export const relayPlatformDatabaseWriteSchema = z
+  .object({
+    ...platformDatabaseLoginShape,
+    // As `relayDatabaseDataWriteSchema`'s: a guard against mistakes.
+    readOnly: z.boolean().optional(),
+    request: databaseWriteRequestSchema,
+  })
+  .strict()
+
+export type RelayPlatformDatabaseRead = z.infer<
+  typeof relayPlatformDatabaseReadSchema
+>
+export type RelayPlatformDatabaseWrite = z.infer<
+  typeof relayPlatformDatabaseWriteSchema
+>
+
 const relaySnapshotRelaySchema = z.object({
   browserOrigin: relayProxyBrowserMetadataSchema.shape.browserOrigin.optional(),
   id: relayIdSchema,

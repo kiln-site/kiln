@@ -46,6 +46,7 @@ import {
   relayAppImageUpdatesV1Feature,
   relayPlatformV1Feature,
   relayPlatformV2Feature,
+  relayPlatformDatabaseV1Feature,
   relayVolumesV1Feature,
   relayDatabaseProvisioningV1Feature,
   relayAppProvisioningV1Feature,
@@ -1141,6 +1142,7 @@ function authenticateSocket(
           relayAppImageUpdatesV1Feature,
           relayPlatformV1Feature,
           relayPlatformV2Feature,
+          relayPlatformDatabaseV1Feature,
         ],
         protocol: relayControlProtocol,
         relayBuild: relayBuildLabel(),
@@ -1515,6 +1517,10 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "relay.platform.logs":
       return "relay.logs.read"
     case "relay.platform.action":
+      return "relay.update"
+    // Hearth's own database holds everything Hearth knows.
+    case "relay.platform.database.read":
+    case "relay.platform.database.write":
       return "relay.update"
     case "relay.clients.update":
       return "relay.clients.update"

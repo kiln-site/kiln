@@ -611,7 +611,7 @@ export const relayDestinations = [
   },
 ] as const satisfies ReadonlyArray<RelayDestination>
 
-export type KilnDestinationId = "info" | "logs" | "terminal"
+export type KilnDestinationId = "info" | "logs" | "terminal" | "viewer"
 
 export interface KilnDestination extends NavigationDestination {
   id: KilnDestinationId
@@ -639,6 +639,13 @@ export const kilnDestinations = [
     ],
     label: "Info",
     to: "/kiln/info",
+  },
+  {
+    icon: Table2,
+    id: "viewer",
+    keywords: ["kiln", "hearth", "database", "tables", "rows", "sql", "query"],
+    label: "Viewer",
+    to: "/kiln/viewer",
   },
   {
     icon: ScrollText,

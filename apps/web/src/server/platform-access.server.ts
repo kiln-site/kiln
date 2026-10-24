@@ -1,4 +1,5 @@
 import {
+  relayPlatformDatabaseV1Feature,
   relayPlatformV1Feature,
   relayPlatformV2Feature,
 } from "@workspace/contracts"
@@ -55,3 +56,14 @@ export async function platformV2Relay(relayId: string) {
   return relay
 }
 
+// A Relay that browses Hearth's own database.
+export async function platformDatabaseRelay(relayId: string) {
+  const [relay, { relayConnectionFeatures }] = await Promise.all([
+    platformRelay(relayId),
+    import("@/lib/relay-connection"),
+  ])
+  if (!relayConnectionFeatures(relay.id).has(relayPlatformDatabaseV1Feature)) {
+    throw new Error("Update this Relay to browse Kiln's database.")
+  }
+  return relay
+}

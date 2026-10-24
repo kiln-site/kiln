@@ -192,6 +192,7 @@ export function controlRequestLocks(
     case "relay.clients.revoke":
     case "relay.platform.read":
     case "relay.platform.logs":
+    case "relay.platform.database.read":
     case "browser.authorization.revise":
     case "brick.catalog":
     case "brick.recipe":
@@ -250,6 +251,9 @@ export function controlRequestLocks(
     // Relay's own passes over them run.
     case "relay.platform.action":
       return [exclusive(laneKeys.platform)]
+    // Writing Hearth's database waits out a restart or repair of it.
+    case "relay.platform.database.write":
+      return [shared(laneKeys.platform)]
 
     // Updates and restarts replace the Relay itself and reserve themselves.
     case "relay.update.apply":

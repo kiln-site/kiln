@@ -75,10 +75,10 @@ Targets are:
 - `database`: a managed database logical dump;
 - `platform`: Hearth's database and the recoverable Kiln configuration.
 
-Reasons are `manual`, `pre_restore`, `final_delete`, and the reserved
-`scheduled` value. Artifact kinds start with `archive`, `database_dump`, and
-`platform_bundle`. A `full`/`incremental` mode is recorded independently so a
-future Restic artifact does not require a catalog migration.
+Reasons are `manual`, `pre_restore`, `final_delete`, and `scheduled`.
+Artifact kinds start with `archive`, `database_dump`, and `platform_bundle`.
+A `full`/`incremental` mode is recorded independently so a future Restic
+artifact does not require a catalog migration.
 
 Each resource can set a preferred destination, exclude patterns, quantity
 limit, and total logical-size limit. Platform admins can set caps. The
@@ -205,6 +205,39 @@ recovery kit (`kiln-relay platform export-kit`); see
 Every artifact gets a manifest containing format version, target identity,
 created time, engine/Brick metadata, exclusions, consistency warnings, logical
 bytes, stored bytes, and SHA-256 digest.
+
+## Kiln's own backups
+
+Kiln is a backup target like any game server or database: pickers, schedules,
+and the runs table show it as **Kiln**, backed up on the Relay beside it (the
+one Kiln's pages use). Its backups are the encrypted platform bundles above.
+Hearth stores a schedule target of kind `relay` for it, and the Relay turns it
+into a `platform` backup of its installation.
+
+A fresh installation backs Kiln up once a day, at 03:00 UTC, to the Relay,
+keeping 30 days or 20 GiB. Migration 24 marks a database migrated before
+anyone signed up; once an administrator and the Relay on Kiln's host exist,
+Hearth creates the **Kiln backups** schedule, owned by the first
+administrator, and clears the mark, so deleting or editing it sticks.
+Existing installations keep the schedules they chose.
+
+Restoring Kiln stays offline (see below). Its Restore shows the commands for
+the Relay's host and, where the Relay installed Kiln, opens that Relay's
+terminal with `stop-hearth`, the restore, and `start-hearth` typed for the
+operator to send.
+
+## Retention
+
+A schedule's backup action can keep its backups for a number of days, up to
+a total size, or both (`retention`). Every ten minutes Hearth catalogs the
+backups Relays made on their own, then deletes, oldest first, the scheduled
+backups of each target at that destination that are past either limit. The
+newest is always kept, so a target never loses its last scheduled backup to
+retention. A backup doesn't record which schedule made it, so where two
+schedules back up the same target to the same place, the more generous
+retention applies to both, and one without retention keeps everything.
+Retention is Hearth's: Relays never receive it. Manual, pre-restore, and
+final-deletion backups are never pruned.
 
 ## Restore and deletion safety
 

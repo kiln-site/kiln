@@ -31,6 +31,7 @@ import {
 } from "@/components/instance-picker"
 import { InstanceCard } from "@/components/instance-card"
 import { timestampedBackupName } from "@/lib/backup-name"
+import type { ScheduleBackupRetention } from "@workspace/contracts/schedules"
 
 export interface BackupConfigurationTarget {
   id: string
@@ -45,6 +46,8 @@ export interface BackupConfiguration {
   destinationKeys: ReadonlyArray<string>
   mode: "full" | "incremental"
   name: string
+  /** With `showRetention`: how long a schedule keeps these backups. */
+  retention?: ScheduleBackupRetention
   targetKey?: string
 }
 
@@ -64,11 +67,13 @@ export function BackupConfigurationDialog({
   initialDestinationKeys,
   initialMode = "incremental",
   initialName,
+  initialRetention,
   initialTargetKey,
   onOpenChange,
   onSubmit,
   open,
   pending = false,
+  showRetention = false,
   showTarget = true,
   singleDestination = false,
   storage,
@@ -83,11 +88,14 @@ export function BackupConfigurationDialog({
   initialDestinationKeys?: ReadonlyArray<string>
   initialMode?: "full" | "incremental"
   initialName?: string
+  initialRetention?: ScheduleBackupRetention
   initialTargetKey?: string
   onOpenChange: (open: boolean) => void
   onSubmit: (configuration: BackupConfiguration) => void
   open: boolean
   pending?: boolean
+  // For a schedule's backups: how many days, and how much, it keeps.
+  showRetention?: boolean
   showTarget?: boolean
   singleDestination?: boolean
   storage: ReadonlyArray<BackupStorageOption>
@@ -112,6 +120,15 @@ export function BackupConfigurationDialog({
     ]
   )
   const [mode, setMode] = React.useState<"full" | "incremental">(initialMode)
+  const [retentionDays, setRetentionDays] = React.useState(() =>
+    retentionInput(initialRetention?.days ?? null)
+  )
+  const [retentionGiB, setRetentionGiB] = React.useState(() =>
+    retentionInput(bytesToGiB(initialRetention?.bytes ?? null))
+  )
+  const retention = showRetention
+    ? parseRetention(retentionDays, retentionGiB)
+    : undefined
   const target = showTarget
     ? targets.find((candidate) => candidate.key === targetKeyValue)
     : undefined
@@ -170,6 +187,8 @@ export function BackupConfigurationDialog({
       ]),
     ])
     setMode(initialMode)
+    setRetentionDays(retentionInput(initialRetention?.days ?? null))
+    setRetentionGiB(retentionInput(bytesToGiB(initialRetention?.bytes ?? null)))
   }
 
   const changeOpen = (nextOpen: boolean) => {
@@ -246,6 +265,37 @@ export function BackupConfigurationDialog({
             targetKind={target?.kind}
             onToggleDestination={toggleDestination}
           />
+          {showRetention ? (
+            <fieldset>
+              <legend className="mb-2 text-xs font-medium">Keep</legend>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <RetentionField
+                  label="Days"
+                  placeholder="Forever"
+                  value={retentionDays}
+                  onChange={setRetentionDays}
+                />
+                <RetentionField
+                  label="GiB in all"
+                  placeholder="No limit"
+                  step="any"
+                  value={retentionGiB}
+                  onChange={setRetentionGiB}
+                />
+              </div>
+              <span
+                className={
+                  retention === null
+                    ? "type-meta mt-1.5 block text-destructive"
+                    : "type-meta mt-1.5 block text-muted-foreground"
+                }
+              >
+                {retention === null
+                  ? "Use whole days, and a size above zero."
+                  : "Older backups past either limit are deleted, oldest first. The newest is always kept."}
+              </span>
+            </fieldset>
+          ) : null}
           {error ? <p className="text-xs text-destructive">{error}</p> : null}
         </div>
         <DialogFooter>
@@ -257,13 +307,19 @@ export function BackupConfigurationDialog({
             Cancel
           </Button>
           <Button
-            disabled={pending || !name.trim() || (showTarget && !target)}
+            disabled={
+              pending ||
+              !name.trim() ||
+              (showTarget && !target) ||
+              retention === null
+            }
             type="button"
             onClick={() =>
               onSubmit({
                 destinationKeys: destinationKeysInUse,
                 mode: effectiveMode,
                 name: name.trim(),
+                ...(retention ? { retention } : {}),
                 ...(showTarget && targetKeyValue
                   ? { targetKey: targetKeyValue }
                   : {}),
@@ -277,6 +333,66 @@ export function BackupConfigurationDialog({
       </DialogContent>
     </Dialog>
   )
+}
+
+function RetentionField({
+  label,
+  onChange,
+  placeholder,
+  step = "1",
+  value,
+}: {
+  label: string
+  onChange: (value: string) => void
+  placeholder: string
+  step?: string
+  value: string
+}) {
+  return (
+    <label className="flex items-center gap-2 rounded-lg border border-border/70 bg-background/35 px-3 py-2">
+      <Input
+        aria-label={`Keep, in ${label.toLowerCase()}`}
+        className="h-7 w-20 tabular-nums"
+        inputMode="decimal"
+        min="0"
+        placeholder={placeholder}
+        step={step}
+        type="number"
+        value={value}
+        onChange={(event) => onChange(event.currentTarget.value)}
+      />
+      <span className="text-xs text-muted-foreground">{label}</span>
+    </label>
+  )
+}
+
+const GIB = 1024 ** 3
+
+function retentionInput(value: number | null): string {
+  return value === null ? "" : String(value)
+}
+
+function bytesToGiB(bytes: number | null): number | null {
+  return bytes === null ? null : Math.round((bytes / GIB) * 100) / 100
+}
+
+// Blank keeps forever; null when either isn't a usable limit.
+function parseRetention(
+  days: string,
+  gibibytes: string
+): ScheduleBackupRetention | null {
+  const keepDays = days.trim() === "" ? null : Number(days)
+  const keepGiB = gibibytes.trim() === "" ? null : Number(gibibytes)
+  if (
+    (keepDays !== null && (!Number.isSafeInteger(keepDays) || keepDays < 1)) ||
+    (keepGiB !== null && (!Number.isFinite(keepGiB) || keepGiB <= 0))
+  ) {
+    return null
+  }
+  return {
+    bytes: keepGiB === null ? null : Math.max(1, Math.round(keepGiB * GIB)),
+    days: keepDays,
+  }
 }
 
 function BackupModeChoices({
@@ -374,7 +490,7 @@ function BackupDestinationChoices({
           : singleDestination
             ? "Choose one destination. Full archives can stay on this Relay or use S3."
             : targetKind === "platform"
-              ? "Platform bundles can use Relay-local and platform-owned S3 destinations."
+              ? "Kiln's backups can stay on this Relay or use platform-owned S3."
               : targetKind === "instance"
                 ? "Choose one or more copies. Default uses this server’s preferred destination."
                 : "Choose one or more copies. Default uses Relay-local storage."}
@@ -526,13 +642,14 @@ function backupTargetItem(
       identity: {
         id: target.relayId,
         kind: "relay",
+        platform: true,
         relayId: target.relayId,
         source: "fleet",
       },
       key: target.key,
-      meta: "Kiln platform",
-      name: target.relayName,
-      searchText: `${target.relayId} platform`,
+      meta: `On ${target.relayName}`,
+      name: "Kiln",
+      searchText: `kiln hearth platform ${target.relayName} ${target.relayId}`,
     }
   }
   return {

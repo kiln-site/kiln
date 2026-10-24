@@ -149,7 +149,6 @@ export const BackupTable = React.memo(function BackupTable({
           )
         )}
         nameStore={nameStore}
-        relayName={backup.relayId}
         selectionStore={selectionStore}
         targetAvailable={
           backup.targetKind === "platform"
@@ -348,11 +347,7 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
         sortFn: "text",
         cell: ({ row }) => {
           const backup = row.original
-          const target = backupTargetPresentation(
-            backup,
-            backup.relayId,
-            backup.targetId
-          )
+          const target = backupTargetPresentation(backup, backup.targetId)
           const targetAvailable =
             backup.targetKind === "platform"
               ? availableRelayIds.has(backup.relayId)
@@ -744,7 +739,6 @@ const BackupMobileRow = React.memo(function BackupMobileRow({
   dialogStore,
   instance,
   nameStore,
-  relayName,
   selectionStore,
   targetAvailable,
   targetName,
@@ -757,12 +751,11 @@ const BackupMobileRow = React.memo(function BackupMobileRow({
   dialogStore: BackupDialogStore
   instance?: InstanceNameInstance
   nameStore: BackupNameStore
-  relayName: string
   selectionStore: BackupSelectionStore
   targetAvailable: boolean
   targetName: string
 }) {
-  const target = backupTargetPresentation(backup, relayName, targetName)
+  const target = backupTargetPresentation(backup, targetName)
   const showsPrimaryTaskFeedback = backupShowsPrimaryTaskFeedback(backup)
   const displayBytes = backupDisplayBytes(backup)
   return (

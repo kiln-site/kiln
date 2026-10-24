@@ -48,6 +48,11 @@ import {
 import { showToast } from "@workspace/ui/components/sonner"
 import { Switch } from "@workspace/ui/components/switch"
 import { Textarea } from "@workspace/ui/components/textarea"
+import { KilnRestoreDialog } from "@/components/backups/kiln-restore-dialog"
+import {
+  useKilnBackupHost,
+  type KilnBackupHost,
+} from "@/components/kiln/kiln-presentation"
 import { ServerScopePicker } from "@/components/server-scope-picker"
 import type { ServerPickerOption } from "@/components/server-scope-picker"
 import type { InstanceNameInstance } from "@/components/instance-card"
@@ -147,10 +152,6 @@ function selectBackupScope(
   snapshot: Awaited<ReturnType<typeof getRelaySnapshot>>
 ) {
   return {
-    nodes: snapshot.nodes.map(({ relayId, relayName }) => ({
-      relayId,
-      relayName,
-    })),
     servers: snapshot.instances.map(({ id, name, relayId, relayName }) => ({
       id,
       name,
@@ -404,6 +405,7 @@ export const BackupsPage = React.memo(function BackupsPage({
       instances.set(targetKey("platform", relay.relayId, "kiln"), {
         id: relay.relayId,
         kind: "relay",
+        platform: true,
         relayId: relay.relayId,
       })
     }
@@ -556,20 +558,15 @@ const BackupScopeControls = React.memo(function BackupScopeControls({
   const { data: capabilities } = useSuspenseQuery(
     accessCapabilitiesQueryOptions()
   )
+  const kiln = useKilnBackupHost(capabilities.isPlatformAdmin)
   const scopeOptions = React.useMemo(
     () =>
       backupScopeOptions({
         databases,
-        includePlatform: capabilities.isPlatformAdmin,
-        nodes: backupScope.nodes,
+        kiln: capabilities.isPlatformAdmin ? kiln : null,
         servers: backupScope.servers,
       }),
-    [
-      backupScope.nodes,
-      backupScope.servers,
-      capabilities.isPlatformAdmin,
-      databases,
-    ]
+    [backupScope.servers, capabilities.isPlatformAdmin, databases, kiln]
   )
   const selectedServer = React.useMemo(
     () =>
@@ -586,10 +583,10 @@ const BackupScopeControls = React.memo(function BackupScopeControls({
       availableCreateTargets({
         capabilities,
         databases,
-        nodes: backupScope.nodes,
+        kiln,
         servers: backupScope.servers,
       }),
-    [backupScope.nodes, backupScope.servers, capabilities, databases]
+    [backupScope.servers, capabilities, databases, kiln]
   )
   const targetNames = React.useMemo(() => {
     const names = new Map<string, string>()
@@ -944,6 +941,11 @@ const BackupDialogHost = React.memo(function BackupDialogHost({
         targets={targets}
         onOpenChange={close}
       />
+    )
+  }
+  if (dialog.kind === "restore" && dialog.backup.targetKind === "platform") {
+    return (
+      <KilnRestoreDialog backup={dialog.backup} open onOpenChange={close} />
     )
   }
   if (dialog.kind === "restore") {
@@ -1328,21 +1330,21 @@ export const BackupSettingsPage = React.memo(function BackupSettingsPage({
   const { data: capabilities } = useSuspenseQuery(
     accessCapabilitiesQueryOptions()
   )
+  const kiln = useKilnBackupHost(capabilities.isPlatformAdmin)
   const configurableOptions = React.useMemo(() => {
     const targets = availableCreateTargets({
       capabilities,
       databases,
-      nodes: backupScope.nodes,
+      kiln,
       servers: backupScope.servers,
     })
     const targetKeys = new Set(targets.map((target) => target.key))
     return backupScopeOptions({
       databases,
-      includePlatform: capabilities.isPlatformAdmin,
-      nodes: backupScope.nodes,
+      kiln: capabilities.isPlatformAdmin ? kiln : null,
       servers: backupScope.servers,
     }).filter((option) => targetKeys.has(selectedBackupCreateTargetKey(option)))
-  }, [backupScope.nodes, backupScope.servers, capabilities, databases])
+  }, [backupScope.servers, capabilities, databases, kiln])
   const selectedTarget = React.useMemo(
     () =>
       configurableOptions.find(
@@ -2303,13 +2305,11 @@ function DeleteBackupDialog({
 
 function backupScopeOptions({
   databases,
-  includePlatform,
-  nodes,
+  kiln,
   servers,
 }: {
   databases: Awaited<ReturnType<typeof getManagedDatabaseDirectory>>
-  includePlatform: boolean
-  nodes: ReturnType<typeof selectBackupScope>["nodes"]
+  kiln: KilnBackupHost | null
   servers: ReturnType<typeof selectBackupScope>["servers"]
 }): Array<ServerPickerOption> {
   const options: Array<ServerPickerOption> = []
@@ -2333,19 +2333,21 @@ function backupScopeOptions({
       relayName: database.relayName,
     })
   }
-  if (includePlatform) {
-    for (const node of nodes) {
-      options.push({
-        description: `Relay · ${node.relayId}`,
-        id: node.relayId,
-        kind: "relay",
-        name: node.relayName,
-        relayId: node.relayId,
-        relayName: node.relayName,
-      })
-    }
-  }
+  if (kiln) options.push(kilnScopeOption(kiln))
   return options
+}
+
+// Kiln, backed up on the Relay beside it.
+function kilnScopeOption(kiln: KilnBackupHost): ServerPickerOption {
+  return {
+    description: `Kiln · ${kiln.relayName}`,
+    id: kiln.relayId,
+    kind: "relay",
+    name: "Kiln",
+    platform: true,
+    relayId: kiln.relayId,
+    relayName: kiln.relayName,
+  }
 }
 
 function backupPolicyTarget(target: ServerPickerOption): BackupTarget {
@@ -2370,12 +2372,12 @@ function selectedBackupCreateTargetKey(selected: ServerPickerOption): string {
 function availableCreateTargets({
   capabilities,
   databases,
-  nodes,
+  kiln,
   servers,
 }: {
   capabilities: Awaited<ReturnType<typeof getAccessCapabilities>>
   databases: Awaited<ReturnType<typeof getManagedDatabaseDirectory>>
-  nodes: ReturnType<typeof selectBackupScope>["nodes"]
+  kiln: KilnBackupHost | null
   servers: ReturnType<typeof selectBackupScope>["servers"]
 }): Array<CreateTarget> {
   const targets: Array<CreateTarget> = []
@@ -2418,17 +2420,15 @@ function availableCreateTargets({
       })
     }
   }
-  if (capabilities.isPlatformAdmin) {
-    for (const relay of nodes) {
-      targets.push({
-        id: relay.relayId,
-        key: targetKey("platform", relay.relayId, "kiln"),
-        kind: "platform",
-        name: "Kiln platform",
-        relayId: relay.relayId,
-        relayName: relay.relayName,
-      })
-    }
+  if (capabilities.isPlatformAdmin && kiln) {
+    targets.push({
+      id: kiln.relayId,
+      key: targetKey("platform", kiln.relayId, "kiln"),
+      kind: "platform",
+      name: "Kiln",
+      relayId: kiln.relayId,
+      relayName: kiln.relayName,
+    })
   }
   return targets
 }

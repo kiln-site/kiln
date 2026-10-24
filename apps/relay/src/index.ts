@@ -51,6 +51,8 @@ import {
   relayDatabaseDumpSchema,
   relayDatabaseDataReadSchema,
   relayDatabaseDataWriteSchema,
+  relayPlatformDatabaseReadSchema,
+  relayPlatformDatabaseWriteSchema,
   relayDatabaseTerminalAttachSchema,
   relayDatabaseTerminalDetachSchema,
   relayDatabaseTerminalHeartbeatSchema,
@@ -139,7 +141,10 @@ import { attachControlSocket } from "./control-socket.js"
 import { DockerDriver } from "./docker.js"
 import { DatabaseBrowser, readDatabaseFile } from "./database-browser.js"
 import { DatabaseDriver } from "./databases.js"
-import { browseManagedDatabase } from "./database-sql-browser.js"
+import {
+  browseManagedDatabase,
+  type BrowsableDatabase,
+} from "./database-sql-browser.js"
 import { consoleSources } from "./console-sources.js"
 import {
   appTerminalTarget,
@@ -3057,6 +3062,34 @@ async function executeControlRequest(
         platformLogs(platformReadContext(), input.role, input.lines)
       )
     }
+    case "relay.platform.database.read": {
+      const input = relayPlatformDatabaseReadSchema.parse(request.payload)
+      await requirePlatformReader(client.id, "browse Kiln's database")
+      return runRelayEffect(
+        "relay.platform.database.read",
+        browseManagedDatabase(
+          databases,
+          await platformDatabaseTarget(input.databaseName),
+          input,
+          input.request,
+          { canWrite: false, readOnly: true }
+        )
+      )
+    }
+    case "relay.platform.database.write": {
+      const input = relayPlatformDatabaseWriteSchema.parse(request.payload)
+      await requirePlatformReader(client.id, "change Kiln's database")
+      return runRelayEffect(
+        "relay.platform.database.write",
+        browseManagedDatabase(
+          databases,
+          await platformDatabaseTarget(input.databaseName),
+          input,
+          input.request,
+          { canWrite: true, readOnly: input.readOnly === true }
+        )
+      )
+    }
     case "relay.platform.terminal.attach": {
       const input = relayPlatformTerminalAttachSchema.parse(request.payload)
       await requirePlatformOwner(client.id)
@@ -3227,15 +3260,39 @@ async function requirePlatformOwner(clientId: string): Promise<void> {
   }
 }
 
-// Hearth's logs: the installed Hearth's, or, for services this Relay only
-// reports, a full-access Hearth's.
-async function requirePlatformReader(clientId: string): Promise<void> {
+// Hearth's logs and database: the installed Hearth's, or, for services this
+// Relay only reports, a full-access Hearth's. Its database also takes the
+// login Hearth sends, so another Hearth can't open it without knowing that.
+async function requirePlatformReader(
+  clientId: string,
+  purpose = "read Kiln's logs"
+): Promise<void> {
   const record = await clientRecord(clientId)
   const allowed = platformStartup.state
     ? isPlatformOwner(platformPass.state ?? platformStartup.state, record)
     : record?.role === "full_access"
   if (!allowed) {
-    throw new Error("Only the Hearth this Relay installed can read Kiln's logs")
+    throw new Error(`Only the Hearth this Relay installed can ${purpose}`)
+  }
+}
+
+// Hearth's MySQL container, described for browsing as a managed database is.
+async function platformDatabaseTarget(
+  databaseName: string
+): Promise<BrowsableDatabase> {
+  const container = await runRelayEffect(
+    "relay.platform.database.target",
+    platformTargetContainer(platformReadContext(), "database")
+  )
+  if (!container) {
+    throw new Error("Kiln's database container isn't on this Relay's host")
+  }
+  return {
+    containerId: container.Id,
+    databaseName,
+    engine: "mysql",
+    internalPort: 3306,
+    observedState: container.State.Running ? "running" : "stopped",
   }
 }
 

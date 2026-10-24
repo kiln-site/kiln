@@ -15,6 +15,7 @@ import {
   RelayKindIcon,
   ServerKindIcon,
 } from "@/components/instance-kind-icon"
+import { HearthMark } from "@/components/hearth-mark"
 import {
   DrawerPopover,
   DrawerPopoverContent,
@@ -41,6 +42,8 @@ export interface ServerPickerOption<
   id: string
   kind?: K
   name: string
+  /** A Relay option that stands for Kiln itself, on that Relay's host. */
+  platform?: boolean
   relayId: string
   relayName: string
 }
@@ -171,6 +174,7 @@ function ServerScopePickerView<K extends ScopeKind>({
       : `${servers.length} accessible ${servers.length === 1 ? "instance" : "instances"}`
   const scopeKind = selectedServer?.kind ?? selectedKind
   const ScopeIcon = scopeKind ? scopeKindPresentation[scopeKind].Icon : Layers
+  const kilnSelected = selectedServer?.platform === true
 
   return (
     <div className="mb-3">
@@ -201,15 +205,23 @@ function ServerScopePickerView<K extends ScopeKind>({
               </DrawerPopoverTrigger>
             </div>
           }
-          icon={<ScopeIcon className="size-5" />}
+          icon={
+            kilnSelected ? (
+              <HearthMark className="size-5" />
+            ) : (
+              <ScopeIcon className="size-5" />
+            )
+          }
           title={selectedServer?.name ?? kindScope?.label ?? allLabel}
           titleAccessory={
             <Badge variant="outline" className="type-meta font-mono">
-              {selectedServer?.kind === "relay"
-                ? "Relay"
-                : (selectedServer?.relayName ??
-                  selectedRelayName ??
-                  "All Relays")}
+              {kilnSelected
+                ? `On ${selectedServer?.relayName ?? ""}`
+                : selectedServer?.kind === "relay"
+                  ? "Relay"
+                  : (selectedServer?.relayName ??
+                    selectedRelayName ??
+                    "All Relays")}
             </Badge>
           }
         >
@@ -250,13 +262,15 @@ function serverScopePickerItem(
         ? {
             id: server.relayId,
             kind,
+            platform: server.platform,
             relayId: server.relayId,
             source: "fleet",
           }
         : { id: server.id, kind, relayId: server.relayId },
     key: serverPickerOptionKey(server),
-    meta:
-      kind === "relay"
+    meta: server.platform
+      ? `On ${server.relayName}`
+      : kind === "relay"
         ? server.relayId.slice(0, 8)
         : `${server.relayName} · ${server.id.slice(0, 8)}`,
     name: server.name,
