@@ -49,6 +49,7 @@ assume_yes=0
 install_docker_allowed=1
 asked=0
 cli=0
+stored=""
 proxy=""
 
 usage() {
@@ -904,10 +905,24 @@ use_direct_port() {
 # volume.
 remove_new_relay() {
   dk rm -f "$container" >/dev/null
-  traefik=$(dk ps -aq --filter "name=^${prefix}kiln-traefik\$" \
-    --filter label=kiln.relay.infrastructure=traefik)
-  [ -z "$traefik" ] || dk rm -f "$traefik" >/dev/null
+  traefik=$(dk container inspect --format \
+    '{{.Id}} {{index .Config.Labels "kiln.relay.infrastructure"}}' \
+    "${prefix}kiln-traefik" 2>/dev/null || true)
+  case "$traefik" in
+    *" traefik") dk rm -f "${traefik%% *}" >/dev/null ;;
+  esac
   dk volume rm "$volume" >/dev/null
+}
+
+# Whether the downloaded Relay release can do $1, from the features its
+# image is labeled with.
+relay_feature() {
+  features=$(dk image inspect \
+    --format '{{index .Config.Labels "io.kiln.relay.features"}}' "$image" 2>/dev/null || true)
+  for feature in $(printf '%s' "$features" | tr ',' ' '); do
+    [ "$feature" != "$1" ] || return 0
+  done
+  return 1
 }
 
 # Which proxy gives Kiln HTTPS: Coolify's on a Coolify server, otherwise
@@ -1345,6 +1360,26 @@ step "Checking Docker" check_docker
 check_ports
 step_progress=pull_progress
 step "Downloading Kiln" pull_relay
+
+# Behind Traefik at an IP address, the Relay needs a release that gets a
+# certificate for one; an older one is reached at port 4100, as before.
+if [ "$mode" = "node" ] && [ "$proxy" = "traefik" ] && [ -z "$stored" ]; then
+  case "$relay_host" in
+    *[!0-9.]*) ;;
+    *)
+      if ! relay_feature ip-certificates; then
+        log "this Relay release can't get a certificate for an address"
+        owner=$(port_owner 4100)
+        [ -z "$owner" ] ||
+          fail "Port 4100 is in use by $owner, and a Relay needs it for Kiln to reach it."
+        say ""
+        say "  This Relay version can't get HTTPS for an address yet, so"
+        say "  Kiln will reach it at port 4100."
+        proxy=none
+      fi
+      ;;
+  esac
+fi
 
 if [ "$mode" = "node" ]; then
   volume_created=0

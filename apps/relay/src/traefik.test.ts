@@ -145,6 +145,33 @@ describe("bundled Traefik configuration", () => {
     expect(resolvers["kiln-ip"]?.acme).toMatchObject({ profile: "shortlived" })
   })
 
+  it("leaves a pinned Traefik too old for the IP resolver serving as before", () => {
+    const config = loadConfig({
+      KILN_RELAY_HOST: "203.0.113.20",
+      KILN_RELAY_PROXY: "traefik",
+      NODE_ENV: "development",
+    })
+    const pinned = { ...settings, traefikImage: "traefik:v3.3.0" }
+    const resolvers = (
+      parse(traefikStaticConfiguration(pinned, config)) as {
+        certificatesResolvers: Record<string, unknown>
+      }
+    ).certificatesResolvers
+    const dynamic = parse(
+      traefikDynamicConfiguration(config, [route], pinned)
+    ) as DynamicConfiguration & {
+      http: { routers: Record<string, { tls?: Record<string, unknown> }> }
+      tls?: unknown
+    }
+
+    expect(Object.keys(resolvers)).toEqual(["kiln"])
+    expect(dynamic.http.routers["kiln-relay"]?.tls).toEqual({
+      certResolver: "kiln",
+    })
+    expect(dynamic.tls).toBeUndefined()
+    expect(dynamic.http.routers["kiln-route-b00d4423"]).toBeDefined()
+  })
+
   it("targets namespaced Ember containers for an isolated Relay", () => {
     const { http } = dynamicConfiguration({
       KILN_RELAY_RESOURCE_NAMESPACE: "hearth-feature-a1b2c3",

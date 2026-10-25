@@ -153,9 +153,9 @@ export function traefikStaticConfiguration(
     : ""
   // Let's Encrypt issues certificates for an IP address only from its
   // six-day profile, and without the address as the Common Name. Only a
-  // Traefik serving an address gets the resolver: older Traefik versions a
-  // Relay may be pinned to can't load it.
-  const ipResolver = traefikIpHost(config)
+  // Traefik serving an address gets the resolver, and only one that can
+  // load it.
+  const ipResolver = traefikIpHost(config, settings.traefikImage)
     ? `  kiln-ip:
     acme:
 ${email}${directory}      profile: shortlived
@@ -220,7 +220,7 @@ export function traefikRouteUpstream(
 export function traefikDynamicConfiguration(
   config: RelayConfig,
   routes: ReadonlyArray<RelayStoredWebRoute>,
-  _settings: RelayProxySettings
+  settings: RelayProxySettings
 ): string {
   const resources = relayResourceNames(config)
   // Only a Relay in Traefik mode is itself reached through Traefik, and only
@@ -228,7 +228,7 @@ export function traefikDynamicConfiguration(
   const relayRouted =
     config.proxyMode === "traefik" && isTraefikHostname(config.advertisedHost)
   const served = config.proxyMode === "traefik" ? routes : []
-  const ipHost = traefikIpHost(config)
+  const ipHost = traefikIpHost(config, settings.traefikImage)
   const relayTls =
     relayRouted && ipHost === config.advertisedHost
       ? [
@@ -365,15 +365,30 @@ export function traefikDynamicConfiguration(
 
 // The address Traefik serves by IP rather than by name, if any: Hearth's in
 // platform mode, or the Relay's own when it's in Traefik mode at an address.
+// None for a Traefik too old to load the IP resolver, which then keeps
+// serving everything else.
 function traefikIpHost(
-  config: Pick<RelayConfig, "advertisedHost" | "platformEdge" | "proxyMode">
+  config: Pick<RelayConfig, "advertisedHost" | "platformEdge" | "proxyMode">,
+  image: string
 ): string | null {
+  if (!traefikLoadsIpResolver(image)) return null
   if (config.platformEdge) {
     return isIP(config.platformEdge.host) !== 0 ? config.platformEdge.host : null
   }
   return config.proxyMode === "traefik" && isIP(config.advertisedHost) !== 0
     ? config.advertisedHost
     : null
+}
+
+// The IP resolver's settings load from Traefik v3.6: `profile` came in
+// v3.5 and `disableCommonName` in v3.6. A tag naming no version, such as
+// latest, is taken to be new enough.
+function traefikLoadsIpResolver(image: string): boolean {
+  const version = /:v?(\d+)\.(\d+)/u.exec(image.slice(image.lastIndexOf("/") + 1))
+  if (!version) return true
+  const major = Number(version[1])
+  const minor = Number(version[2])
+  return major > 3 || (major === 3 && minor >= 6)
 }
 
 function traefikRouteName(id: string): string {
