@@ -199,7 +199,7 @@ describeMysql("Activity permission boundary", () => {
 
     // server-a was copied to relay-b as server-copy, which the viewer can
     // see; server-a itself they can't.
-    const seedCopy = (keepActivity: boolean) =>
+    const seedCopy = (keepActivity: boolean, finishedAt = 5) =>
       Effect.gen(function* () {
         yield* seed([
           {
@@ -220,6 +220,7 @@ describeMysql("Activity permission boundary", () => {
           destination_instance_id: "server-copy",
           destination_name: "server-copy",
           destination_relay_id: "relay-b",
+          finished_at: finishedAt,
           id: randomUUID(),
           mode: "migrate",
           options: JSON.stringify({
@@ -262,6 +263,19 @@ describeMysql("Activity permission boundary", () => {
               },
             ]
           )
+        })
+    )
+
+    it.effect(
+      "keeps what happens to a copied server after the copy to itself",
+      () =>
+        Effect.gen(function* () {
+          // server-a's event comes after its copy finished.
+          yield* seedCopy(true, 0)
+
+          const result = yield* activityFor(user)
+
+          assert.deepEqual(result.entries, [])
         })
     )
 

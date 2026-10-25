@@ -28,7 +28,7 @@ import type { AuthenticatedUser } from "@/lib/auth-session"
 import { databasePool } from "@/lib/database"
 import { databaseTable } from "@/lib/database-config"
 import { grantHasPermission } from "@/lib/permissions"
-import { listPersistedRelays } from "@/lib/relay-registry"
+import { listPersistedRelays, type PersistedRelay } from "@/lib/relay-registry"
 
 interface InstanceRow extends RowDataPacket {
   display_name: string | null
@@ -97,59 +97,38 @@ export async function getActivityForUser(
     }
   }
 
-  // A game server copied with its history shows the activity of the server
-  // it came from as its own, to whoever can see the copy.
-  const lineage = await listActivityLineage()
-  const successors = new Map(
-    lineage.map((row) => [
-      instanceKey(row.source_relay_id, row.source_instance_id),
-      {
-        instanceId: row.destination_instance_id,
-        relayId: row.destination_relay_id,
-      },
+  // A game server copied with its history shows what happened to the server
+  // it came from until the copy finished, as its own, to whoever can see the
+  // copy but not that server. What happens to it afterwards stays its own.
+  const inherited = platformAdmin
+    ? new Map<string, InheritedActivity>()
+    : inheritedActivity(await listActivityLineage(), (relayId, instanceId) => {
+        const scope = scopes.get(relayId)
+        return Boolean(
+          scope && (scope.allInstances || scope.instanceIds.has(instanceId))
+        )
+      })
+  const enabledRelayIds = new Set(relays.map((relay) => relay.id))
+  const queryScopes = new Map(
+    [...scopes].map(([relayId, scope]) => [
+      relayId,
+      { ...scope, instanceIds: new Set(scope.instanceIds) },
     ])
   )
-  const latestCopy = (relayId: string, instanceId: string) => {
-    let current = { instanceId, relayId }
-    const seen = new Set<string>()
-    while (true) {
-      const key = instanceKey(current.relayId, current.instanceId)
-      const next = successors.get(key)
-      if (!next || seen.has(key)) return current
-      seen.add(key)
-      current = next
-    }
-  }
-  if (!platformAdmin) {
-    const enabledRelayIds = new Set(relays.map((relay) => relay.id))
-    for (const row of lineage) {
-      const copy = latestCopy(
-        row.destination_relay_id,
-        row.destination_instance_id
-      )
-      const copyScope = scopes.get(copy.relayId)
-      if (
-        !copyScope ||
-        !(
-          copyScope.allInstances || copyScope.instanceIds.has(copy.instanceId)
-        ) ||
-        !enabledRelayIds.has(row.source_relay_id)
-      ) {
-        continue
-      }
-      const sourceScope = scopes.get(row.source_relay_id)
-      if (sourceScope) sourceScope.instanceIds.add(row.source_instance_id)
-      else {
-        scopes.set(row.source_relay_id, {
-          allInstances: false,
-          instanceIds: new Set([row.source_instance_id]),
-          relayAudit: false,
-        })
-      }
+  for (const source of inherited.values()) {
+    if (!enabledRelayIds.has(source.relayId)) continue
+    const scope = queryScopes.get(source.relayId)
+    if (scope) scope.instanceIds.add(source.instanceId)
+    else {
+      queryScopes.set(source.relayId, {
+        allInstances: false,
+        instanceIds: new Set([source.instanceId]),
+        relayAudit: false,
+      })
     }
   }
 
-  const visibleRelays = relays.filter((relay) => scopes.has(relay.id))
+  const visibleRelays = relays.filter((relay) => queryScopes.has(relay.id))
   const baseQuery = {
     ...(data.from ? { from: Date.parse(data.from) } : {}),
     limit: Math.min(Math.max(data.limit ?? 2_000, 1), 2_000),
@@ -158,7 +137,7 @@ export async function getActivityForUser(
   const { relayRpc } = await import("@/lib/relay-connection")
   const results = await Promise.all(
     visibleRelays.map(async (relay) => {
-      const scope = scopes.get(relay.id)
+      const scope = queryScopes.get(relay.id)
       const query =
         scope?.allInstances === false
           ? { ...baseQuery, instanceIds: [...scope.instanceIds] }
@@ -196,10 +175,18 @@ export async function getActivityForUser(
   )
   const visibleAudits = available.flatMap(({ records, relay }) => {
     const scope = scopes.get(relay.id)
-    if (!scope) return []
-    return records.flatMap((record) =>
-      scopeAllowsAudit(scope, record) ? [{ record, relay }] : []
-    )
+    return records.flatMap((record): Array<VisibleAudit> => {
+      if (scope && scopeAllowsAudit(scope, record)) {
+        return [{ copy: null, record, relay }]
+      }
+      const instanceId = auditInstanceId(record)
+      const source = instanceId
+        ? inherited.get(instanceKey(relay.id, instanceId))
+        : undefined
+      return source && record.occurredAt <= source.until
+        ? [{ copy: source.copy, record, relay }]
+        : []
+    })
   })
 
   const visibleRelayIds = visibleRelays.map((relay) => relay.id)
@@ -283,18 +270,9 @@ export async function getActivityForUser(
 
   const relayById = new Map(relays.map((relay) => [relay.id, relay]))
   const entries = visibleAudits
-    .map(({ record, relay: recordedRelay }) => {
-      // An event of a server since copied with its history belongs to the
-      // copy now.
-      const recordedInstanceId = auditInstanceId(record)
-      const copy = recordedInstanceId
-        ? latestCopy(recordedRelay.id, recordedInstanceId)
-        : null
-      const copied =
-        copy !== null &&
-        (copy.relayId !== recordedRelay.id ||
-          copy.instanceId !== recordedInstanceId)
-      const relay = copied
+    .map(({ copy, record, relay: recordedRelay }) => {
+      // An event of the server a copy came from, shown as the copy's.
+      const relay = copy
         ? (relayById.get(copy.relayId) ?? recordedRelay)
         : recordedRelay
       const actorId = auditUserId(record)
@@ -325,7 +303,7 @@ export async function getActivityForUser(
           unavailable: unavailableRelayIds.has(relay.id),
         },
         source: activitySourceForAudit(record),
-        target: copied
+        target: copy
           ? {
               id: copy.instanceId,
               kind: "server" as const,
@@ -339,15 +317,22 @@ export async function getActivityForUser(
     })
     .sort((left, right) => right.occurredAt - left.occurredAt)
 
+  // Relays read only for a copy's history stay out of the person's list.
   return {
     entries,
-    relays: visibleRelays.map((relay) => ({
-      id: relay.id,
-      name: relay.name,
-      unavailable: unavailableRelayIds.has(relay.id),
-    })),
+    relays: visibleRelays.flatMap((relay) =>
+      scopes.has(relay.id)
+        ? [
+            {
+              id: relay.id,
+              name: relay.name,
+              unavailable: unavailableRelayIds.has(relay.id),
+            },
+          ]
+        : []
+    ),
     truncatedRelayIds: available.flatMap(({ records, relay }) =>
-      records.length === 2_000 ? [relay.id] : []
+      records.length === 2_000 && scopes.has(relay.id) ? [relay.id] : []
     ),
   }
 }
@@ -355,19 +340,84 @@ export async function getActivityForUser(
 interface LineageRow extends RowDataPacket {
   destination_instance_id: string
   destination_relay_id: string
+  finished_at: number | string
   source_instance_id: string
   source_relay_id: string
+}
+
+interface VisibleAudit {
+  /** Set for an event shown as a copy's, from the server it came from. */
+  readonly copy: InheritedActivity["copy"] | null
+  readonly record: RelayAuditRecord
+  readonly relay: PersistedRelay
+}
+
+interface InheritedActivity {
+  /** The copy its events show as. */
+  readonly copy: { readonly instanceId: string; readonly relayId: string }
+  readonly instanceId: string
+  readonly relayId: string
+  /** Its events up to here are the copy's history too. */
+  readonly until: number
 }
 
 // Servers copied with their history, from the server each came from.
 async function listActivityLineage(): Promise<Array<LineageRow>> {
   const [rows] = await databasePool.query<Array<LineageRow>>(
     `SELECT source_relay_id, source_instance_id,
-            destination_relay_id, destination_instance_id
+            destination_relay_id, destination_instance_id, finished_at
        FROM ${databaseTable("server_migration")}
-      WHERE state = 'completed' AND options->>'$.keepActivity' = 'true'`
+      WHERE state = 'completed' AND finished_at IS NOT NULL
+        AND options->>'$.keepActivity' = 'true'`
   )
   return rows
+}
+
+// The servers whose history someone sees through copies they can see,
+// keyed by server: each up to when its copy finished, or the earliest
+// such time along a copy of a copy.
+function inheritedActivity(
+  lineage: ReadonlyArray<LineageRow>,
+  canSee: (relayId: string, instanceId: string) => boolean
+): Map<string, InheritedActivity> {
+  const sources = new Map(
+    lineage.map((row) => [
+      instanceKey(row.destination_relay_id, row.destination_instance_id),
+      {
+        instanceId: row.source_instance_id,
+        relayId: row.source_relay_id,
+        until: Number(row.finished_at),
+      },
+    ])
+  )
+  const inherited = new Map<string, InheritedActivity>()
+  for (const row of lineage) {
+    const copy = {
+      instanceId: row.destination_instance_id,
+      relayId: row.destination_relay_id,
+    }
+    if (!canSee(copy.relayId, copy.instanceId)) continue
+    let current = copy
+    let until = Number.POSITIVE_INFINITY
+    const seen = new Set<string>()
+    while (true) {
+      const key = instanceKey(current.relayId, current.instanceId)
+      const source = sources.get(key)
+      if (!source || seen.has(key)) break
+      seen.add(key)
+      until = Math.min(until, source.until)
+      const sourceKey = instanceKey(source.relayId, source.instanceId)
+      const known = inherited.get(sourceKey)
+      if (
+        !canSee(source.relayId, source.instanceId) &&
+        (!known || known.until < until)
+      ) {
+        inherited.set(sourceKey, { ...source, copy, until })
+      }
+      current = source
+    }
+  }
+  return inherited
 }
 
 async function listActivityInstances(

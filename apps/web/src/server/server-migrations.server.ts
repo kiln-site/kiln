@@ -61,7 +61,10 @@ export interface ServerMigrationPreview {
     readonly backup: boolean
     readonly copyAccess: boolean
     readonly network: boolean
+    /** Stopping and starting it, as a duplicate that stops it does. */
     readonly power: boolean
+    /** Stopping it, as a move does. */
+    readonly stop: boolean
   }
   readonly destinations: ReadonlyArray<ServerMigrationDestination>
   readonly domains: {
@@ -143,6 +146,7 @@ export async function previewServerMigrationHandler(
       power:
         authorization.allows("instance.power.stop") &&
         authorization.allows("instance.power.start"),
+      stop: authorization.allows("instance.power.stop"),
     },
     destinations: destinations.filter((item) => item !== null),
     domains: {
@@ -189,7 +193,9 @@ export async function startServerMigrationHandler(
     moveWebRoutes: data.mode === "migrate" && data.options.moveWebRoutes,
     stopSource: data.mode === "migrate" || data.options.stopSource,
   }
-  if (options.stopSource && instance.observedState !== "stopped") {
+  // Checked whether or not it runs now: it may be started before the copy
+  // reaches the step that stops it, and starts again after a duplicate.
+  if (options.stopSource) {
     authorization.require("instance.power.stop")
     if (data.mode === "duplicate") authorization.require("instance.power.start")
   }
@@ -214,9 +220,6 @@ export async function startServerMigrationHandler(
     throw new Error(
       `A server on ${destination.name} is already named ${data.name}`
     )
-  }
-  if (await migrationRunning(relay.id, instance.id)) {
-    throw new Error("This server is already being copied")
   }
   const id = await runAppEffect(
     "serverMigrations.start",
@@ -349,15 +352,4 @@ async function countAccess(relayId: string, instanceId: string) {
     [relayId, instanceId]
   )
   return Number(rows[0]?.count ?? 0)
-}
-
-async function migrationRunning(relayId: string, instanceId: string) {
-  const [rows] = await databasePool.query<Array<RowDataPacket>>(
-    `SELECT 1 FROM ${databaseTable("server_migration")}
-      WHERE source_relay_id = ? AND source_instance_id = ?
-        AND state IN ('running', 'cancelling')
-      LIMIT 1`,
-    [relayId, instanceId]
-  )
-  return rows.length > 0
 }

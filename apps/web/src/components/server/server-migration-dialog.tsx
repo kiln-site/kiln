@@ -141,7 +141,9 @@ function MigrationForm({
   const [moveWebRoutes, setMoveWebRoutes] = React.useState(
     preview.webRoutes.length > 0 && preview.allowed.network
   )
-  const [stopSource, setStopSource] = React.useState(preview.source.running)
+  const [stopSource, setStopSource] = React.useState(
+    preview.source.running && preview.allowed.power
+  )
   const [backup, setBackup] = React.useState(false)
   const [backupDestination, setBackupDestination] = React.useState("default")
   const backupStorage = useQuery({
@@ -191,7 +193,8 @@ function MigrationForm({
     selected.problems.length > 0 ||
     !trimmedName ||
     nameTaken ||
-    preview.source.provisioning
+    preview.source.provisioning ||
+    (mode === "migrate" && !preview.allowed.stop)
   const archMismatch =
     selected?.nodeArch &&
     preview.source.nodeArch &&
@@ -424,7 +427,11 @@ function MigrationForm({
             disabled
             icon={<Square />}
             label="Stop this server"
-            detail="It stops for the move and stays stopped. Once the move finishes, you'll be asked whether to delete it."
+            detail={
+              preview.allowed.stop
+                ? "It stops for the move and stays stopped. Once the move finishes, you'll be asked whether to delete it."
+                : "A move stops this server, and you can't stop it."
+            }
           />
         ) : (
           <OptionRow

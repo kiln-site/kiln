@@ -175,32 +175,62 @@ export const startServerMigrationEffect = Effect.fn("serverMigrations.start")(
       : input.options.stopSource
         ? "stop"
         : "create"
-    yield* database.execute(
-      "serverMigrations.insert",
-      `INSERT INTO ${databaseTable("server_migration")}
-         (id, requested_by, actor, mode, source_relay_id, source_instance_id,
-          source_name, destination_relay_id, destination_instance_id,
-          destination_name, create_key, options, state, step,
-          claim_generation, lease_until, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, 1, ?, ?, ?)`,
-      [
-        id,
-        input.actor.id,
-        JSON.stringify(input.actor),
-        input.mode,
-        input.source.relayId,
-        input.source.instanceId,
-        input.source.name,
-        input.destinationRelayId,
-        provisioningInstanceId(createKey),
-        input.destinationName,
-        createKey,
-        JSON.stringify(input.options),
-        step,
-        now + LEASE_MS,
-        now,
-        now,
-      ]
+    yield* database.transaction("serverMigrations.insert", (transaction) =>
+      Effect.gen(function* () {
+        // One copy of a server at a time: starts queue on its row, or its
+        // Relay's for a server Hearth keeps no row for, before checking.
+        const [instance] = yield* transaction.queryRows<RowDataPacket>(
+          `SELECT 1 FROM ${databaseTable("instance")}
+            WHERE relay_id = ? AND instance_id = ?
+            FOR UPDATE`,
+          [input.source.relayId, input.source.instanceId]
+        )
+        if (!instance) {
+          yield* transaction.queryRows<RowDataPacket>(
+            `SELECT 1 FROM ${databaseTable("relay")} WHERE id = ? FOR UPDATE`,
+            [input.source.relayId]
+          )
+        }
+        const running = yield* transaction.queryRows<RowDataPacket>(
+          `SELECT 1 FROM ${databaseTable("server_migration")}
+            WHERE source_relay_id = ? AND source_instance_id = ?
+              AND state IN ('running', 'cancelling')
+            LIMIT 1`,
+          [input.source.relayId, input.source.instanceId]
+        )
+        if (running.length > 0) {
+          return yield* Effect.fail(
+            new Error("This server is already being copied")
+          )
+        }
+        yield* transaction.execute(
+          `INSERT INTO ${databaseTable("server_migration")}
+             (id, requested_by, actor, mode, source_relay_id,
+              source_instance_id, source_name, destination_relay_id,
+              destination_instance_id, destination_name, create_key, options,
+              state, step, claim_generation, lease_until, created_at,
+              updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, 1, ?, ?, ?)`,
+          [
+            id,
+            input.actor.id,
+            JSON.stringify(input.actor),
+            input.mode,
+            input.source.relayId,
+            input.source.instanceId,
+            input.source.name,
+            input.destinationRelayId,
+            provisioningInstanceId(createKey),
+            input.destinationName,
+            createKey,
+            JSON.stringify(input.options),
+            step,
+            now + LEASE_MS,
+            now,
+            now,
+          ]
+        )
+      })
     )
     publishMigrationChange(input.actor.id)
     forkMigrationWorker(id, 1)
@@ -280,8 +310,9 @@ export const resumeServerMigrationsEffect = Effect.fn(
           SET claim_generation = claim_generation + 1, lease_until = ?,
               updated_at = ?
         WHERE id = ? AND claim_generation = ?
-          AND state IN ('running', 'cancelling')`,
-      [now + LEASE_MS, now, row.id, row.claim_generation]
+          AND state IN ('running', 'cancelling')
+          AND COALESCE(lease_until, 0) <= ?`,
+      [now + LEASE_MS, now, row.id, row.claim_generation, now]
     )
     if (taken.affectedRows === 1) {
       worked = true
@@ -319,7 +350,9 @@ const driveMigration = Effect.fn("serverMigrations.drive")(function* (
   id: string,
   generation: number
 ) {
-  let renewedAt = 0
+  // Renewed on its own while a step waits on a slow Relay or backup, so the
+  // lease lapses only once this worker is gone.
+  yield* Effect.forkChild(keepLease(id, generation))
   while (true) {
     const row = yield* loadMigration(id)
     if (
@@ -333,11 +366,6 @@ const driveMigration = Effect.fn("serverMigrations.drive")(function* (
       "kiln.migration.id": id,
       "kiln.migration.step": row.step,
     })
-    const now = yield* Clock.currentTimeMillis
-    if (now - renewedAt > LEASE_RENEW_MS) {
-      yield* claimWrite(id, generation, "error = error", [])
-      renewedAt = now
-    }
     if (row.state === "cancelling") {
       return yield* endMigration(row, generation, "cancelled", null)
     }
@@ -357,6 +385,25 @@ const driveMigration = Effect.fn("serverMigrations.drive")(function* (
       })
     )
     if (outcome === "stop") return
+  }
+})
+
+// Renews a worker's lease until it ends or another worker took over.
+const keepLease = Effect.fnUntraced(function* (id: string, generation: number) {
+  while (true) {
+    yield* Effect.sleep(LEASE_RENEW_MS)
+    const renewed = yield* claimWrite(id, generation, "error = error", []).pipe(
+      Effect.as(true),
+      Effect.catch((cause) =>
+        cause instanceof StaleClaim
+          ? Effect.succeed(false)
+          : Effect.logWarning(
+              `Server migration ${id} couldn't renew its lease`,
+              cause
+            ).pipe(Effect.as(true))
+      )
+    )
+    if (!renewed) return
   }
 })
 
@@ -777,11 +824,22 @@ const restartSourceEffect = Effect.fnUntraced(function* (
  * hold what was already moved to it.
  */
 const endMigration = Effect.fnUntraced(function* (
-  row: MigrationRow,
+  claimed: MigrationRow,
   generation: number,
   state: "completed" | "failed" | "cancelled",
   error: string | null
 ) {
+  // What the failed step recorded, such as whether it stopped the old
+  // server, and only while this worker still holds it: one that took over
+  // does its own cleaning up.
+  const row = yield* loadMigration(claimed.id)
+  if (
+    !row ||
+    Number(row.claim_generation) !== generation ||
+    (row.state !== "running" && row.state !== "cancelling")
+  ) {
+    return
+  }
   const cleanup: Array<string> = []
   if (state !== "completed") {
     const actor = yield* currentActor(row).pipe(Effect.option)

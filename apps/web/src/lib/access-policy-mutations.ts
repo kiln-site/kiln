@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { Clock, Effect } from "effect"
 import type { RowDataPacket } from "mysql2/promise"
 import {
@@ -373,6 +373,18 @@ interface CopiedAccessPresetRow extends RowDataPacket {
   preset_id: string | null
 }
 
+// A UUID (version 8) derived from a preset and the server it's copied to.
+function copiedPresetId(presetId: string, to: ResourceScope): string {
+  const hex = createHash("sha256")
+    .update(`${presetId}\0${to.relayId}\0${to.resourceId}`)
+    .digest("hex")
+  const variant = (
+    (Number.parseInt(hex.slice(16, 17), 16) & 0x3) |
+    0x8
+  ).toString(16)
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`
+}
+
 /**
  * Gives a new game server the access its source had: the same people, with
  * the same permissions and presets. Presets belong to one resource, so the
@@ -408,10 +420,12 @@ export function copyInstanceAccessEffect(input: {
       )
       const presetIds = new Map<string, string>()
       for (const preset of presets) {
-        const id = randomUUID()
+        // The same ID each time for the same preset and server, so copying
+        // again, as a migration resumed mid-step does, adds no second one.
+        const id = copiedPresetId(preset.id, toScope)
         presetIds.set(preset.id, id)
-        yield* transaction.execute(
-          `INSERT INTO ${databaseTable("permission_preset")}
+        const inserted = yield* transaction.execute(
+          `INSERT IGNORE INTO ${databaseTable("permission_preset")}
              (id, relay_id, resource_type, resource_id, name, created_by,
               updated_by, created_at, updated_at)
            VALUES (?, ?, 'instance', ?, ?, ?, ?, ?, ?)`,
@@ -426,6 +440,7 @@ export function copyInstanceAccessEffect(input: {
             now,
           ]
         )
+        if (inserted.affectedRows === 0) continue
         yield* transaction.execute(
           `INSERT INTO ${databaseTable("preset_selection")}
              (preset_id, selection_kind, selection_key)
