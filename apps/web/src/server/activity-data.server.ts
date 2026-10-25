@@ -123,10 +123,37 @@ export async function getActivityForUser(
   const relayById = new Map(relays.map((relay) => [relay.id, relay]))
   // Each inherited server's history is asked for up to when its copies
   // finished, so what happened to it since can't crowd that out.
-  const inheritedSources = [...inherited.values()].flatMap((source) => {
-    const relay = relayById.get(source.relayId)
-    return relay ? [{ relay, source }] : []
-  })
+  // One query per inherited server and cutoff, so each copy's history is
+  // asked for up to its own cutoff and later activity can't crowd it out.
+  // A Relay's are asked one at a time, beside its other requests.
+  const inheritedQueries = new Map<
+    string,
+    Array<{
+      copies: Array<InheritedActivity["copies"][number]>
+      instanceId: string
+      until: number
+    }>
+  >()
+  for (const source of inherited.values()) {
+    if (!relayById.has(source.relayId)) continue
+    const queries = inheritedQueries.get(source.relayId) ?? []
+    for (const copy of source.copies) {
+      const query = queries.find(
+        (candidate) =>
+          candidate.instanceId === source.instanceId &&
+          candidate.until === copy.until
+      )
+      if (query) query.copies.push(copy)
+      else {
+        queries.push({
+          copies: [copy],
+          instanceId: source.instanceId,
+          until: copy.until,
+        })
+      }
+    }
+    inheritedQueries.set(source.relayId, queries)
+  }
   const [results, inheritedResults] = await Promise.all([
     Promise.all(
       visibleRelays.map(async (relay) => {
@@ -144,28 +171,52 @@ export async function getActivityForUser(
         return { auditResult, relay, snapshotResult }
       })
     ),
-    Promise.allSettled(
-      inheritedSources.map(async ({ relay, source }) => {
-        const until = Math.max(...source.copies.map((copy) => copy.until))
-        const records = await listAudits(relay, {
-          ...baseQuery,
-          instanceIds: [source.instanceId],
-          to: Math.min(baseQuery.to ?? until, until),
-        })
-        return { records, relay, source }
+    Promise.all(
+      [...inheritedQueries].map(async ([relayId, queries]) => {
+        const relay = relayById.get(relayId)
+        const answered: Array<{
+          copies: Array<InheritedActivity["copies"][number]>
+          instanceId: string
+          records: Array<RelayAuditRecord> | null
+          relay: PersistedRelay
+        }> = []
+        if (!relay) return answered
+        for (const query of queries) {
+          const [records] = await Promise.allSettled([
+            listAudits(relay, {
+              ...baseQuery,
+              instanceIds: [query.instanceId],
+              to: Math.min(baseQuery.to ?? query.until, query.until),
+            }),
+          ])
+          answered.push({
+            copies: query.copies,
+            instanceId: query.instanceId,
+            records: records.status === "fulfilled" ? records.value : null,
+            relay,
+          })
+        }
+        return answered
       })
-    ),
+    ).then((answers) => answers.flat()),
   ])
   const available = results.flatMap((result) =>
     result.auditResult.status === "fulfilled"
       ? [{ records: result.auditResult.value, relay: result.relay }]
       : []
   )
-  const unavailableRelayIds = new Set(
-    results.flatMap((result) =>
+  // A copy whose inherited history couldn't be read shows its Relay as
+  // unavailable, as its own activity would.
+  const unavailableRelayIds = new Set([
+    ...results.flatMap((result) =>
       result.auditResult.status === "rejected" ? [result.relay.id] : []
-    )
-  )
+    ),
+    ...inheritedResults.flatMap((result) =>
+      result.records === null
+        ? result.copies.map((copy) => copy.copy.relayId)
+        : []
+    ),
+  ])
   const snapshotInstances: Array<ActivityInstance> = results.flatMap(
     ({ relay, snapshotResult }) =>
       snapshotResult.status === "fulfilled"
@@ -188,18 +239,16 @@ export async function getActivityForUser(
         : []
     }),
     // An inherited event shows once for each copy it's history of.
-    ...inheritedResults.flatMap((result) => {
-      if (result.status !== "fulfilled") return []
-      const { records, relay, source } = result.value
-      return records.flatMap((record) =>
-        source.copies.flatMap((copy): Array<VisibleAudit> =>
-          auditInstanceId(record) === source.instanceId &&
+    ...inheritedResults.flatMap(({ copies, instanceId, records, relay }) =>
+      (records ?? []).flatMap((record) =>
+        copies.flatMap((copy): Array<VisibleAudit> =>
+          auditInstanceId(record) === instanceId &&
           record.occurredAt <= copy.until
             ? [{ copy: copy.copy, record, relay }]
             : []
         )
       )
-    }),
+    ),
   ]
 
   const visibleRelayIds = visibleRelays.map((relay) => relay.id)

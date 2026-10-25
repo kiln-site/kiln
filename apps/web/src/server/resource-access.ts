@@ -46,6 +46,7 @@ import { listInvitedRelaysEffect } from "@/server/invited-relays.server"
 import {
   accessPolicyTransaction,
   lockAccessActorEffect,
+  compareAccessScopes,
   lockAccessScopeEffect,
   scopeAuthorityEffect,
   scopeCapabilitiesEffect,
@@ -193,11 +194,7 @@ export const inviteResourceAccess = createServerFn({ method: "POST" })
   .validator(inviteSchema)
   .handler(async ({ data }) => {
     const user = await requireEligibleResourceUser()
-    const targets = [...data.targets].sort((a, b) =>
-      JSON.stringify(scopeValues(a)).localeCompare(
-        JSON.stringify(scopeValues(b))
-      )
-    )
+    const targets = [...data.targets].sort(compareAccessScopes)
     if (
       new Set(targets.map((scope) => JSON.stringify(scopeValues(scope))))
         .size !== targets.length

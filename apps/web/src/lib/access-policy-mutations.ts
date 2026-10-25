@@ -82,6 +82,23 @@ export function lockAccessActorEffect(
   })
 }
 
+/**
+ * The one order to lock several scopes in, so transactions that lock more
+ * than one queue behind each other rather than deadlock.
+ */
+export function compareAccessScopes(
+  left: ResourceScope,
+  right: ResourceScope
+): number {
+  return JSON.stringify([
+    left.relayId,
+    left.resourceType,
+    left.resourceId,
+  ]).localeCompare(
+    JSON.stringify([right.relayId, right.resourceType, right.resourceId])
+  )
+}
+
 export function lockAccessScopeEffect(
   transaction: DatabaseTransaction,
   scope: ResourceScope
@@ -413,9 +430,7 @@ export function copyInstanceAccessEffect(input: {
       const now = yield* Clock.currentTimeMillis
       // Locked in one order whichever way the copy goes, so copies in
       // opposite directions between two Relays queue rather than deadlock.
-      const fromFirst =
-        `${fromScope.relayId}\0${fromScope.resourceId}` <=
-        `${toScope.relayId}\0${toScope.resourceId}`
+      const fromFirst = compareAccessScopes(fromScope, toScope) <= 0
       const first = yield* lockAccessScopeEffect(
         transaction,
         fromFirst ? fromScope : toScope

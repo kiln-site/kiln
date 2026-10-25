@@ -363,8 +363,15 @@ const runMigration = Effect.fnUntraced(function* (
       "kiln.migration.id": id,
       "kiln.migration.step": row.step,
     })
+    // Cancelled, or ending as failed under a worker that has since stopped:
+    // either way it's cleaned up, not carried on.
     if (row.state === "cancelling") {
-      return yield* endMigration(row, generation, "cancelled", null)
+      return yield* endMigration(
+        row,
+        generation,
+        row.error ? "failed" : "cancelled",
+        row.error
+      )
     }
     const outcome = yield* migrationStep(row, generation).pipe(
       Effect.map(() => "next" as const),
@@ -848,6 +855,23 @@ const endMigration = Effect.fnUntraced(function* (
     (row.state !== "running" && row.state !== "cancelling")
   ) {
     return
+  }
+  // Recorded as ending before anything is undone, by a write that holds
+  // only while this worker does, so a worker that takes over from here
+  // finishes the cleanup rather than carrying on the copy it removes.
+  if (state !== "completed") {
+    const ending = yield* claimWrite(
+      row.id,
+      generation,
+      "state = 'cancelling', error = ?",
+      [error?.slice(0, 512) ?? null]
+    ).pipe(
+      Effect.as(true),
+      Effect.catch((cause) =>
+        cause instanceof StaleClaim ? Effect.succeed(false) : Effect.fail(cause)
+      )
+    )
+    if (!ending) return
   }
   const cleanup: Array<string> = []
   if (state !== "completed") {
