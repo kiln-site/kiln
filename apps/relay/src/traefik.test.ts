@@ -66,7 +66,9 @@ function dynamicConfiguration(environment: Record<string, string> = {}) {
 describe("bundled Traefik configuration", () => {
   it("obtains certificates over HTTP-01 without access to the Docker socket", () => {
     const configuration = parse(traefikStaticConfiguration(settings, {
+        advertisedHost: "relay.example.com",
         platformEdge: null,
+        proxyMode: "traefik",
         traefikAcmeCaServer: null,
       })) as {
       certificatesResolvers: { kiln: { acme: Record<string, unknown> } }
@@ -104,6 +106,43 @@ describe("bundled Traefik configuration", () => {
     expect(http.services["kiln-relay"]?.loadBalancer.servers).toEqual([
       { url: "http://kiln-relay:4100" },
     ])
+  })
+
+  it("reaches a Relay at an IP address with that address's certificate", () => {
+    const config = loadConfig({
+      KILN_RELAY_HOST: "203.0.113.20",
+      KILN_RELAY_PROXY: "traefik",
+      NODE_ENV: "development",
+    })
+    const dynamic = parse(
+      traefikDynamicConfiguration(config, [route], settings)
+    ) as DynamicConfiguration & {
+      http: { routers: Record<string, { tls?: Record<string, unknown> }> }
+      tls?: { stores: { default: { defaultGeneratedCert: unknown } } }
+    }
+    const ipCertificate = {
+      certResolver: "kiln-ip",
+      domains: [{ main: "203.0.113.20" }],
+    }
+
+    expect(dynamic.http.routers["kiln-relay"]?.tls).toEqual(ipCertificate)
+    expect(dynamic.http.routers["kiln-relay-browser"]?.tls).toEqual(
+      ipCertificate
+    )
+    expect(dynamic.tls?.stores.default.defaultGeneratedCert).toEqual({
+      domain: { main: "203.0.113.20" },
+      resolver: "kiln-ip",
+    })
+    // Ember routes have names of their own.
+    expect(dynamic.http.routers["kiln-route-b00d4423"]?.tls).toEqual({
+      certResolver: "kiln",
+    })
+    const resolvers = (
+      parse(traefikStaticConfiguration(settings, config)) as {
+        certificatesResolvers: Record<string, { acme: Record<string, unknown> }>
+      }
+    ).certificatesResolvers
+    expect(resolvers["kiln-ip"]?.acme).toMatchObject({ profile: "shortlived" })
   })
 
   it("targets namespaced Ember containers for an isolated Relay", () => {

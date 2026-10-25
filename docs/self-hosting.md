@@ -74,17 +74,29 @@ curl -fsSL https://kiln.site/install | sh -s -- --join 'https://kiln.example.com
 ```
 
 The link carries Hearth's address and a code that lasts 30 minutes (**New
-command** in the dialog makes another and retires the old). The Relay starts,
-publishes ports 4100 and 2022, and announces itself to Hearth. The installer
-then prints a link to confirm it in Hearth, which opens the dialog on that
-Relay, and its fingerprint, which the dialog shows too. Confirming takes an
-optional name; left blank, the Relay gets the next free default name (K100,
-then K101, and so on). Hearth must be able to reach the machine on port 4100
-at its public IP, and the machine must be able to reach Hearth at
-`KILN_URL`. For another address, such as an internal one, add
-`--relay-host <address>` to the command; for another SFTP port, add
+command** in the dialog makes another and retires the old). When ports 80
+and 443 are free, the Relay runs its own Traefik on them, like a platform
+install, and Kiln reaches it at `https://<public IP>` with a Let's Encrypt
+certificate (the six-day one for an IP address). Apps on that machine get
+their domains and HTTPS from the same Traefik. The installer waits for the
+certificate before the Relay announces itself to Hearth. When Let's Encrypt
+can't reach the machine on port 80, as when a router sends 80 and 443 to
+another machine, the installer offers to use port 4100 instead. When
+something else already has 80 or 443, the Relay uses port 4100 and its own
+certificate from the start: `--proxy none` asks for that.
+
+Once the Relay announces itself, the installer prints a link to confirm it
+in Hearth, which opens the dialog on that Relay, and its fingerprint, which
+the dialog shows too. Until Hearth can reach the Relay, the dialog says
+where it tried and waits. Confirming takes an optional name; left blank,
+the Relay gets the next free default name (K100, then K101, and so on). The
+machine must be able to reach Hearth at `KILN_URL`, and Hearth the machine:
+on 443 behind Traefik, or 4100, at its public IP, with a router forwarding
+the port. For another address, such as a domain or an internal address,
+add `--relay-host <address>` to the command; for another SFTP port, add
 `--sftp-port <port>`. The installer stops before starting anything when a
-port it needs is taken, and names what has it.
+port it needs is taken, and names what has it. A machine whose Relay data
+is already there keeps the way it was reached.
 
 The install command is the supported way to add a machine: it sets up the
 Relay's container, volume, and settings the way Kiln expects and keeps them

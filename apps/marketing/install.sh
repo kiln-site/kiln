@@ -12,8 +12,9 @@
 # It starts one Relay in platform mode, which installs Hearth, its MySQL
 # database, and its cache, pairs with that Hearth, and keeps them running.
 # With --node it starts a plain Relay instead, to add this machine to an
-# existing Kiln; with the --join link from Hearth's Add Relay dialog, that
-# Relay connects to Hearth by itself. Run it again to see an installation's
+# existing Kiln, behind its own Traefik on ports 80 and 443 when they're
+# free; with the --join link from Hearth's Add Relay dialog, that Relay
+# connects to Hearth by itself. Run it again to see an installation's
 # status. With --cli it installs only the kiln command, on Linux or macOS,
 # and needs no Docker.
 #
@@ -59,7 +60,10 @@ Usage: curl -fsSL https://kiln.site/install | sh -s -- [options]
                      machine's public IP>)
   --proxy MODE       What serves Kiln over HTTPS: traefik (started on
                      ports 80 and 443), coolify (Coolify's proxy), or none
-                     (default: coolify on a Coolify server, else traefik)
+                     (default: coolify on a Coolify server, else traefik).
+                     With --node: traefik, or none for the Relay's own
+                     HTTPS on port 4100 (default: traefik when 80 and 443
+                     are free)
   --port PORT        Host port Kiln also listens on, without HTTPS
                      (default: 3000)
   --game-host HOST   Address players connect to game servers at
@@ -673,13 +677,24 @@ start_platform_relay() {
 
 start_node_relay() {
   dk volume create "$volume" >/dev/null
+  # Behind Traefik, Kiln reaches the Relay on 443 and nothing else needs
+  # 4100; the Relay joins once its HTTPS works, from join_when_https.
+  relay_port="--publish 4100:4100"
+  relay_join=$join
+  if [ "$proxy" = "traefik" ]; then
+    relay_port=""
+    relay_join=""
+  fi
   new_relay_cidfile
+  # shellcheck disable=SC2086 # the port's flag and value
   dk run --detach --cidfile "$relay_cidfile" --name "$container" --restart unless-stopped \
     --volume /var/run/docker.sock:/var/run/docker.sock \
     --volume "$volume:/data" \
-    --publish 4100:4100 --publish "$sftp_port:2022" \
+    $relay_port --publish "$sftp_port:2022" \
     --env KILN_RELAY_HOST="$relay_host" \
-    ${join:+--env KILN_RELAY_JOIN="$join"} \
+    ${proxy:+--env KILN_RELAY_PROXY="$proxy"} \
+    ${KILN_ACME_CA_SERVER:+--env KILN_RELAY_ACME_CA_SERVER="$KILN_ACME_CA_SERVER"} \
+    ${relay_join:+--env KILN_RELAY_JOIN="$relay_join"} \
     ${namespace:+--env KILN_RELAY_RESOURCE_NAMESPACE="$namespace"} \
     ${game_host:+--env KILN_RELAY_GAME_HOST="$game_host"} \
     "$image" || remove_unstarted
@@ -784,7 +799,11 @@ web_ports_owner() {
 # Stops before starting anything when a port the Relay publishes is taken,
 # naming what has it, rather than failing halfway through.
 check_ports() {
-  if [ "$mode" = "node" ]; then
+  if [ "$mode" = "node" ] && [ "$proxy" = "traefik" ]; then
+    owner=$(web_ports_owner)
+    [ -z "$owner" ] ||
+      fail "Port 80 or 443 is in use by $owner, and the Relay's Traefik needs them. Run this again with --proxy none added to use port 4100 instead."
+  elif [ "$mode" = "node" ]; then
     owner=$(port_owner 4100)
     [ -z "$owner" ] ||
       fail "Port 4100 is in use by $owner, and a Relay needs it for Kiln to reach it."
@@ -796,6 +815,99 @@ check_ports() {
     free=$((free + 1))
   done
   fail "Port $sftp_port, for SFTP, is in use by $owner. Run this again with --sftp-port $free added to use $free instead."
+}
+
+# How Kiln reaches an added machine's Relay: through the Relay's own
+# Traefik on ports 80 and 443, with a Let's Encrypt certificate for its
+# address, or at the Relay's own HTTPS on port 4100 when something else has
+# 80 or 443. A Relay's data from before keeps how it was reached.
+choose_node_proxy() {
+  case "$proxy" in
+    traefik | none | "") ;;
+    *) fail "--proxy with --node must be traefik or none." ;;
+  esac
+  stored=$(stored_proxy_mode)
+  if [ -n "$stored" ]; then
+    log "the Relay's data keeps proxy mode $stored"
+    proxy=$stored
+    return 0
+  fi
+  [ -z "$proxy" ] || return 0
+  # Let's Encrypt checks a name or an IPv4 address.
+  case "$relay_host" in
+    *:*)
+      proxy=none
+      return 0
+      ;;
+  esac
+  owner=$(web_ports_owner)
+  if [ -z "$owner" ]; then
+    proxy=traefik
+    return 0
+  fi
+  log "ports 80/443 are used by: $owner"
+  say "  Port 80 or 443 is in use by $owner, so Kiln will reach"
+  say "  this Relay at port 4100 instead."
+  asked=1
+  proxy=none
+}
+
+# The proxy mode a Relay's data here already has, or nothing: read with the
+# Relay's own image, whose entrypoint is Node.
+stored_proxy_mode() {
+  docker_reachable || return 0
+  dk volume inspect "$volume" >/dev/null 2>&1 || return 0
+  dk run --rm --network none --volume "$volume:/data:ro" "$image" \
+    -e 'try { process.stdout.write(JSON.parse(require("fs").readFileSync("/data/proxy.json", "utf8")).mode) } catch {}' \
+    2>>"$log_file" | grep -Ex 'none|hearth|traefik|coolify' || true
+}
+
+# Waits for the Relay's address to answer over HTTPS with a certificate for
+# it, asking this machine's Traefik directly: a router may not send a
+# machine's own public address back to it.
+wait_relay_https() {
+  insecure=""
+  # A test directory's certificates aren't trusted.
+  [ -z "${KILN_ACME_CA_SERVER:-}" ] || insecure="-k"
+  waited=0
+  until curl -sS $insecure --max-time 5 -o /dev/null \
+    --connect-to "$relay_host:443:127.0.0.1:443" "https://$relay_host/" 2>/dev/null; do
+    waited=$((waited + 3))
+    if [ "$waited" -ge 180 ]; then
+      curl -sS $insecure --max-time 5 -o /dev/null \
+        --connect-to "$relay_host:443:127.0.0.1:443" "https://$relay_host/" || true
+      stop "HTTPS isn't working yet."
+    fi
+    sleep 3
+  done
+}
+
+# Let's Encrypt couldn't check the Relay's address, as when ports 80 and
+# 443 there reach another machine. A Relay this install just made, which
+# hasn't joined anything, starts again at port 4100 instead.
+use_direct_port() {
+  say ""
+  say "  Let's Encrypt couldn't reach this machine at $relay_host"
+  say "  on port 80. Ports 80 and 443 there have to lead here."
+  if [ "$volume_created" -eq 1 ] && [ -z "$(port_owner 4100)" ] &&
+    confirm "Use port 4100 instead?"; then
+    say ""
+    proxy=none
+    step "Switching to port 4100" remove_new_relay
+    step "Starting the Relay" start_node_relay
+    return 0
+  fi
+  fail "Forward ports 80 and 443 at $relay_host to this machine, then run this again."
+}
+
+# Removes the Relay this install just started, its Traefik, and its new
+# volume.
+remove_new_relay() {
+  dk rm -f "$container" >/dev/null
+  traefik=$(dk ps -aq --filter "name=^${prefix}kiln-traefik\$" \
+    --filter label=kiln.relay.infrastructure=traefik)
+  [ -z "$traefik" ] || dk rm -f "$traefik" >/dev/null
+  dk volume rm "$volume" >/dev/null
 }
 
 # Which proxy gives Kiln HTTPS: Coolify's on a Coolify server, otherwise
@@ -1213,6 +1325,7 @@ if [ "$mode" = "node" ]; then
     relay_host=$answer
   fi
   [ -n "$relay_host" ] || relay_host=$address
+  choose_node_proxy
 else
   choose_proxy
   choose_url
@@ -1233,11 +1346,19 @@ check_ports
 step_progress=pull_progress
 step "Downloading Kiln" pull_relay
 
-# A Relay release older than joining starts fine but ignores the link, so
-# it's asked first and falls back to an invitation to paste.
-if [ "$mode" = "node" ] && [ -n "$join" ]; then
+if [ "$mode" = "node" ]; then
+  volume_created=0
+  dk volume inspect "$volume" >/dev/null 2>&1 || volume_created=1
   step "Starting the Relay" start_node_relay
-  if ! dk exec "$container" kiln-relay pair join --check >/dev/null 2>&1; then
+  # Kiln can't reach a Relay behind Traefik until Traefik has its
+  # certificate, so it joins only then.
+  if [ "$proxy" = "traefik" ]; then
+    step_soft=1
+    step "Turning on HTTPS" wait_relay_https || use_direct_port
+  fi
+  # A Relay release older than joining starts fine but ignores the link,
+  # so it's asked first and falls back to an invitation to paste.
+  if [ -n "$join" ] && ! dk exec "$container" kiln-relay pair join --check >/dev/null 2>&1; then
     log "this Relay can't join; printing an invitation instead"
     join=""
     say ""
@@ -1246,14 +1367,15 @@ if [ "$mode" = "node" ] && [ -n "$join" ]; then
 fi
 
 if [ "$mode" = "node" ] && [ -n "$join" ]; then
+  if [ "$proxy" = "traefik" ]; then
+    join_output=$(mktemp)
+    dk exec "$container" kiln-relay pair join "$join" >"$join_output" 2>&1 &
+  fi
   join_hearth
   exit 0
 fi
 
 if [ "$mode" = "node" ]; then
-  # Unless it was started above to join, and couldn't.
-  dk container inspect "$container" >/dev/null 2>&1 ||
-    step "Starting the Relay" start_node_relay
   paired=$(dk exec "$container" kiln-relay pair create 2>>"$log_file" || true)
   # Not the invitation itself: it grants full access to this Relay.
   log "$(printf '%s\n' "$paired" | grep -v '^kiln-relay://' || true)"
