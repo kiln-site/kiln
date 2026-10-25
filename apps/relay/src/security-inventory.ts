@@ -362,19 +362,21 @@ export class SecurityInventory {
         ? await this.#hostMounts(relay, securityOptions)
         : null
     const helperName = this.#helperName("scan")
-    // The helper and what it wrote go, however the scan ends.
-    const cleanup = Effect.promise(() =>
-      Promise.all([
-        rm(output, { force: true }),
-        rm(`${output}.syft.json`, { force: true }),
-      ])
-    ).pipe(
-      Effect.andThen(
-        this.#engine
-          .removeContainer(helperName, { force: true })
-          .pipe(Effect.catch(() => Effect.void))
+    // The helper and what it wrote go, however the scan ends: the helper
+    // first, so it can't write again after its files are removed.
+    const cleanup = this.#engine
+      .removeContainer(helperName, { force: true })
+      .pipe(
+        Effect.catch(() => Effect.void),
+        Effect.andThen(
+          Effect.promise(() =>
+            Promise.all([
+              rm(output, { force: true }),
+              rm(`${output}.syft.json`, { force: true }),
+            ])
+          )
+        )
       )
-    )
     // Beside the Relay's own entry, which is TypeScript in development.
     const main = process.argv[1] ?? ""
     const development = extname(main) === ".ts"
