@@ -864,6 +864,9 @@ export class FakeDocker {
         )
       })
     }
+    if (key === "status") {
+      return value === (container.state.running ? "running" : "exited")
+    }
     return this.#unsupported(`docker container ls --filter ${filter}`)
   }
 

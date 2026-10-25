@@ -4429,9 +4429,10 @@ export class LifecycleDriver {
     sources: ReadonlyArray<string>,
     except: string
   ): Promise<string | null> {
-    const running = await recoverPromise(
-      () => runLifecycle(this.#engine.listContainers()),
-      () => []
+    // Not knowing who runs on this host is no reason to remove anything,
+    // so a failed listing fails the removal.
+    const running = await runLifecycle(
+      this.#engine.listContainers({ filters: { status: ["running"] } })
     )
     for (const container of running) {
       if (container.Id === except || container.State !== "running") continue

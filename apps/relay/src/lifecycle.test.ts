@@ -124,6 +124,22 @@ describe("Hearth behind bundled Traefik in platform mode", () => {
     expect(container?.mounts).toContainEqual(theirs)
   })
 
+  it("leaves a running Traefik alone when it can't tell whose it is", async () => {
+    const harness = await platformHarness()
+    legacyStack(harness, false)
+    fakeDocker.failNext(
+      { command: "ps", target: JSON.stringify({ status: ["running"] }) },
+      "Docker is unavailable"
+    )
+
+    vi.spyOn(console, "error").mockImplementation(() => {})
+    await harness.lifecycle.initializeProxy([], hearthSettings)
+
+    const container = fakeDocker.container(harness.resources.traefikContainer)
+    expect(container?.state.running).toBe(true)
+    expect(container?.mounts).toContainEqual(theirs)
+  })
+
   it("takes over the Traefik a stopped Relay left running", async () => {
     const harness = await platformHarness()
     // Moving that install under this Relay: its Relay stopped first.
