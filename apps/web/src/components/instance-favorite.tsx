@@ -92,6 +92,32 @@ export const InstanceFavoriteStar = React.memo(function InstanceFavoriteStar({
   )
 })
 
+/**
+ * A favorite's star on the top-right corner of its icon, opposite its
+ * status. Nothing when it isn't a favorite.
+ */
+export const InstanceFavoriteBadge = React.memo(function InstanceFavoriteBadge({
+  className,
+  ...favorite
+}: InstanceFavorite & { className?: string }) {
+  const starred = useIsInstanceFavorite(favorite)
+  if (!starred) return null
+  return (
+    <span
+      className={cn(
+        "absolute -top-1 -right-1 grid size-3 place-items-center rounded-full bg-background",
+        className
+      )}
+    >
+      <Star
+        className="size-2.5 fill-amber-400 text-amber-400 light:text-amber-500"
+        aria-hidden="true"
+      />
+      <span className="sr-only">Favorite</span>
+    </span>
+  )
+})
+
 export const InstanceFavoriteMenuItem = React.memo(
   function InstanceFavoriteMenuItem({
     favorite,

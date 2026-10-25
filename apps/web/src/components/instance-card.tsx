@@ -9,7 +9,10 @@ import type {
 } from "@/components/identity-name"
 import { instanceKindIcons } from "@/components/instance-kind-icon"
 import { LiveServerBrickIcon } from "@/components/server-brick-icon"
-import { InstanceFavoriteStar } from "@/components/instance-favorite"
+import {
+  InstanceFavoriteBadge,
+  InstanceFavoriteStar,
+} from "@/components/instance-favorite"
 import { StatusIndicator } from "@/components/status-indicator"
 import { useInstanceState, type InstanceState } from "@/lib/instance-state"
 import { instanceStatePresentation } from "@/lib/instance-state-presentation"
@@ -27,6 +30,12 @@ export interface InstanceCardProps extends Omit<
   "icon" | "status"
 > {
   instance: InstanceIdentity
+  /**
+   * Marks a favorite with a star on the icon's corner. Tables pass `md:hidden`
+   * to `iconFavoriteClassName`, where their favorite column takes over.
+   */
+  iconFavorite?: boolean
+  iconFavoriteClassName?: string
   iconSizeClassName?: string
   showFavorite?: boolean
   showStatus?: boolean
@@ -74,6 +83,8 @@ function LiveInstanceCard(props: InstanceCardProps) {
 
 const InstanceCardView = React.memo(function InstanceCardView({
   instance,
+  iconFavorite = false,
+  iconFavoriteClassName,
   iconSizeClassName,
   showFavorite = true,
   showStatus = true,
@@ -89,6 +100,16 @@ const InstanceCardView = React.memo(function InstanceCardView({
     <IdentityName
       {...props}
       meta={meta}
+      iconBadge={
+        iconFavorite && !kiln ? (
+          <InstanceFavoriteBadge
+            className={iconFavoriteClassName}
+            id={instance.id}
+            kind={instance.kind}
+            relayId={instance.relayId}
+          />
+        ) : undefined
+      }
       icon={
         instance.kind === "server" && instance.implementation ? (
           <LiveServerBrickIcon

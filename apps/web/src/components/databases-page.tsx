@@ -377,7 +377,7 @@ const DatabaseTable = React.memo(function DatabaseTable({
           />
         ),
         meta: dataTableColumnMeta(
-          { width: { base: "1.75rem" } },
+          { hideBelow: "md", width: "1.75rem" },
           { cellClassName: "relative z-10 px-0", headerClassName: "px-0" }
         ),
       }),
@@ -412,6 +412,8 @@ const DatabaseTable = React.memo(function DatabaseTable({
                   nameClassName="transition-colors group-hover/database-link:text-primary-ink"
                   meta={database.shortId}
                   metaClassName="font-mono"
+                  iconFavorite
+                  iconFavoriteClassName="md:hidden"
                   showFavorite={false}
                 />
               </Link>

@@ -14,6 +14,8 @@ export interface IdentityStatusPresentation {
 export interface IdentityNameProps {
   className?: string
   icon: React.ReactNode
+  /** A mark on the icon's top-right corner, opposite its status. */
+  iconBadge?: React.ReactNode
   iconClassName?: string
   meta?: React.ReactNode
   metaClassName?: string
@@ -28,6 +30,7 @@ export interface IdentityNameProps {
 export const IdentityName = React.memo(function IdentityName({
   className,
   icon,
+  iconBadge,
   iconClassName,
   meta,
   metaClassName,
@@ -56,6 +59,7 @@ export const IdentityName = React.memo(function IdentityName({
             tone={status.tone}
           />
         ) : null}
+        {iconBadge}
       </span>
       <span className={cn("min-w-0 flex-1", textClassName)}>
         <span

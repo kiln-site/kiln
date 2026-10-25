@@ -578,7 +578,7 @@ function RelayTable({
           />
         ),
         meta: dataTableColumnMeta(
-          { width: { base: "1.75rem" } },
+          { hideBelow: "md", width: "1.75rem" },
           { cellClassName: "relative z-10 px-0", headerClassName: "px-0" }
         ),
       }),
@@ -614,6 +614,8 @@ function RelayTable({
                   metaClassName="font-mono"
                   name={relay.name}
                   nameClassName="transition-colors group-hover/relay-link:text-primary-ink"
+                  iconFavorite
+                  iconFavoriteClassName="md:hidden"
                   showFavorite={false}
                 />
               </Link>

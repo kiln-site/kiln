@@ -405,7 +405,7 @@ const ServerDataTable = React.memo(function ServerDataTable({
           />
         ),
         meta: dataTableColumnMeta(
-          { width: { base: "1.75rem" } },
+          { hideBelow: "md", width: "1.75rem" },
           { cellClassName: "relative z-10 px-0", headerClassName: "px-0" }
         ),
       }),
@@ -443,6 +443,8 @@ const ServerDataTable = React.memo(function ServerDataTable({
                       .join(" · ") || server.shortId
                   }
                   metaClassName="font-mono"
+                  iconFavorite
+                  iconFavoriteClassName="md:hidden"
                   showFavorite={false}
                 />
               </Link>
