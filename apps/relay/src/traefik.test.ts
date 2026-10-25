@@ -151,25 +151,31 @@ describe("bundled Traefik configuration", () => {
       KILN_RELAY_PROXY: "traefik",
       NODE_ENV: "development",
     })
-    const pinned = { ...settings, traefikImage: "traefik:v3.3.0" }
-    const resolvers = (
-      parse(traefikStaticConfiguration(pinned, config)) as {
-        certificatesResolvers: Record<string, unknown>
+    // A digest could be any version, so it counts as old too.
+    for (const traefikImage of [
+      "traefik:v3.3.0",
+      `traefik@sha256:${"a".repeat(64)}`,
+    ]) {
+      const pinned = { ...settings, traefikImage }
+      const resolvers = (
+        parse(traefikStaticConfiguration(pinned, config)) as {
+          certificatesResolvers: Record<string, unknown>
+        }
+      ).certificatesResolvers
+      const dynamic = parse(
+        traefikDynamicConfiguration(config, [route], pinned)
+      ) as DynamicConfiguration & {
+        http: { routers: Record<string, { tls?: Record<string, unknown> }> }
+        tls?: unknown
       }
-    ).certificatesResolvers
-    const dynamic = parse(
-      traefikDynamicConfiguration(config, [route], pinned)
-    ) as DynamicConfiguration & {
-      http: { routers: Record<string, { tls?: Record<string, unknown> }> }
-      tls?: unknown
-    }
 
-    expect(Object.keys(resolvers)).toEqual(["kiln"])
-    expect(dynamic.http.routers["kiln-relay"]?.tls).toEqual({
-      certResolver: "kiln",
-    })
-    expect(dynamic.tls).toBeUndefined()
-    expect(dynamic.http.routers["kiln-route-b00d4423"]).toBeDefined()
+      expect(Object.keys(resolvers)).toEqual(["kiln"])
+      expect(dynamic.http.routers["kiln-relay"]?.tls).toEqual({
+        certResolver: "kiln",
+      })
+      expect(dynamic.tls).toBeUndefined()
+      expect(dynamic.http.routers["kiln-route-b00d4423"]).toBeDefined()
+    }
   })
 
   it("targets namespaced Ember containers for an isolated Relay", () => {

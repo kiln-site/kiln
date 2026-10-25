@@ -381,11 +381,18 @@ function traefikIpHost(
 }
 
 // The IP resolver's settings load from Traefik v3.6: `profile` came in
-// v3.5 and `disableCommonName` in v3.6. A tag naming no version, such as
-// latest, is taken to be new enough.
+// v3.5 and `disableCommonName` in v3.6. An image counts only when its tag
+// names v3.6 or later, or it has no tag or `latest`, which is current. A
+// digest or other tag could be any version, so it doesn't.
 function traefikLoadsIpResolver(image: string): boolean {
-  const version = /:v?(\d+)\.(\d+)/u.exec(image.slice(image.lastIndexOf("/") + 1))
-  if (!version) return true
+  const name = image.slice(image.lastIndexOf("/") + 1)
+  const [reference = "", digest] = name.split("@")
+  const colon = reference.indexOf(":")
+  const tag = colon === -1 ? null : reference.slice(colon + 1)
+  if (tag === null) return digest === undefined
+  if (tag === "latest") return true
+  const version = /^v?(\d+)\.(\d+)(?:\.|-|$)/u.exec(tag)
+  if (!version) return false
   const major = Number(version[1])
   const minor = Number(version[2])
   return major > 3 || (major === 3 && minor >= 6)
