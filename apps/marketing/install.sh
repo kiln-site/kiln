@@ -626,7 +626,8 @@ remove_unstarted() {
   remove_relay_cidfile
   if [ -n "$created" ] &&
     [ "$(dk inspect --format '{{.State.Status}}' "$created" 2>/dev/null)" = "created" ]; then
-    dk rm --force "$created" >/dev/null 2>&1 || true
+    # Not forced, so Docker refuses if it started after all.
+    dk rm "$created" >/dev/null 2>&1 || true
   fi
   return 1
 }
@@ -876,11 +877,15 @@ address=$(public_ip)
 log "public address: $address"
 
 # A Relay container that never started, left by an install that failed
-# before it could, isn't a Relay; its volume, if any, stays.
-if docker_reachable &&
-  [ "$(dk inspect --format '{{.State.Status}}' "$container" 2>/dev/null)" = "created" ]; then
-  log "removing $container, which never started"
-  dk rm --force "$container" >/dev/null 2>&1 || true
+# before it could, isn't a Relay; its volume, if any, stays. Removed by the
+# ID inspected, and not forced, so Docker refuses if another install
+# started it meanwhile.
+if docker_reachable; then
+  unstarted=$(dk inspect --format '{{if eq .State.Status "created"}}{{.Id}}{{end}}' "$container" 2>/dev/null || true)
+  if [ -n "$unstarted" ]; then
+    log "removing $container, which never started"
+    dk rm "$unstarted" >/dev/null 2>&1 || true
+  fi
 fi
 
 # Already here: say so, and show where it's at.

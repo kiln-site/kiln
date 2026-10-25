@@ -281,9 +281,15 @@ function JoinReview({
     reviewed?.id != null &&
     view.hearthInstallationId !== null &&
     reviewed.id !== view.hearthInstallationId
-  const [installation, setInstallation] = React.useState<"keep" | "use">(
+  const fixed =
+    reviewed !== undefined &&
+    (reviewed.fixed || announcement?.installation.replace === false)
+  const [chosen, setInstallation] = React.useState<"keep" | "use">(
     view.intent?.installation ?? (differs ? "keep" : "use")
   )
+  // A fixed ID other than this Kiln's can only be kept, whatever was chosen
+  // before the Relay reported it, as when it restarts with one mid-review.
+  const installation = differs && fixed ? "keep" : chosen
   const confirm = useMutation({
     mutationFn: () =>
       confirmRelayJoin({
@@ -348,7 +354,7 @@ function JoinReview({
         <InstallationChoice
           choice={installation}
           disabled={locked}
-          fixed={reviewed.fixed || !announcement.installation.replace}
+          fixed={fixed}
           relayInstallationId={reviewed.id ?? ""}
           onChange={setInstallation}
         />

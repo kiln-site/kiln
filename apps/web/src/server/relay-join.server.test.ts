@@ -24,6 +24,7 @@ import {
   relayJoinViewEffect,
 } from "@/server/relay-join.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
+import { deletePersistedRelayEffect } from "@/lib/relay-registry"
 import { insertRelay } from "@/test/seed"
 
 vi.stubEnv("BETTER_AUTH_SECRETS", `1:${"j".repeat(32)}`)
@@ -315,6 +316,56 @@ describeMysql("Relay joins", () => {
               next.secret ?? "",
               { ...envelope, invitationId: next.id },
               "203.0.113.6"
+            )
+            assert.strictEqual((yield* confirm(next.id)).state, "confirming")
+          })
+        )
+    )
+
+    it.effect(
+      "end a join still adding a Relay when that Relay is removed, so it can join again",
+      () =>
+        TestClock.withLive(
+          Effect.gen(function* () {
+            yield* resetDatabase
+            const join = yield* openRelayJoinEffect("owner")
+            // A Relay Hearth has, at a closed port, so adding it stalls.
+            const envelope = relayEnvelope(join.id, {
+              browserOrigin: "https://127.0.0.1:1",
+              controlEndpoint: "wss://127.0.0.1:1/v1/socket",
+            })
+            yield* insertRelay(envelope.relayFingerprint, {
+              hostname: "127.0.0.1",
+              port: 1,
+            })
+            yield* announce(join.id, join.secret ?? "", envelope, "203.0.113.8")
+            const confirm = (joinId: string) =>
+              Effect.gen(function* () {
+                return yield* confirmRelayJoinEffect({
+                  canManageAnyRelay: true,
+                  envelopeDigest:
+                    (yield* relayJoinViewEffect("owner", joinId)).announcement
+                      ?.envelopeDigest ?? "",
+                  installation: "keep",
+                  joinId,
+                  name: null,
+                  userId: "owner",
+                })
+              })
+            yield* confirm(join.id)
+
+            yield* deletePersistedRelayEffect(envelope.relayFingerprint)
+            assert.strictEqual(
+              (yield* relayJoinViewEffect("owner", join.id)).state,
+              "revoked"
+            )
+            const next = yield* openRelayJoinEffect("owner")
+            assert.notStrictEqual(next.id, join.id)
+            yield* announce(
+              next.id,
+              next.secret ?? "",
+              { ...envelope, invitationId: next.id },
+              "203.0.113.8"
             )
             assert.strictEqual((yield* confirm(next.id)).state, "confirming")
           })

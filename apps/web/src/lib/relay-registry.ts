@@ -1111,6 +1111,17 @@ export const deletePersistedRelayEffect = Effect.fn("relay.deletePersisted")(
           `DELETE FROM ${databaseTable("access_grant")} WHERE relay_id = ?`,
           [id]
         )
+        // A join still adding this Relay can't finish without it: it ends,
+        // its worker stops at its next write, and the Relay may join again.
+        yield* transaction.execute(
+          `UPDATE ${databaseTable("relay_join")}
+              SET state = 'revoked', claimed_fingerprint = NULL,
+                  lease_until = NULL, claim_generation = claim_generation + 1,
+                  client_private_key_ciphertext = NULL, updated_at = ?
+            WHERE claimed_fingerprint = ?
+              AND state IN ('confirming', 'needs_review')`,
+          [now, id]
+        )
         const finalizable = yield* transaction.execute(
           `UPDATE ${databaseTable("tailscale_network")} network
              JOIN ${databaseTable("tailscale_network_deployment")} target

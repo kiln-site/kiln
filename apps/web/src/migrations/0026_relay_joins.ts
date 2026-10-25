@@ -20,7 +20,7 @@ export const relayJoins: Migration = {
     const join = databaseTableName("relay_join")
     const relay = databaseTableName("relay")
     yield* sql.unsafe(`CREATE TABLE IF NOT EXISTS \`${join}\` (
-  \`id\` char(36) NOT NULL,
+  \`id\` varchar(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   \`created_by\` varchar(36) NOT NULL,
   \`secret_ciphertext\` text,
   \`client_public_key\` text NOT NULL,
