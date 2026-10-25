@@ -811,18 +811,8 @@ const TargetsRail = React.memo(function TargetsRail({
     }),
     [overview.targets, scope]
   )
-  const pending = overview.targets.filter(
-    (target) => target.status === "pending"
-  ).length
   return (
     <section className="flex min-h-0 flex-col xl:flex-1">
-      <h3 className="type-technical-label mb-1 flex items-baseline justify-between gap-2 text-muted-foreground/80 light:text-muted-foreground/90">
-        <span>What's checked</span>
-        <span className="tracking-normal normal-case">
-          {overview.targets.length}
-          {pending ? `, ${pending} checking` : ""}
-        </span>
-      </h3>
       <DataTableWorkspace
         className="h-[28rem] flex-none rounded-none bg-background/45 xl:h-auto xl:min-h-[16rem] xl:flex-1"
         toolbar={
