@@ -29,8 +29,9 @@ Relay stays covered:
 
 Every 15 minutes Hearth asks each connected Relay what it runs, which costs
 the Relay one container listing, and asks for any inventory it lacks.
-The Relay drops the per-file listings Grype doesn't read, and a host's
-kernels other than the running one, before it sends an inventory. Inventories
+The scan's helper drops the per-file listings Grype doesn't read, and a
+host's kernels other than the running one, before the Relay sends an
+inventory. Inventories
 reach Hearth in 512 KiB chunks over the control connection: a host's is a few
 hundred kilobytes gzipped, an image's tens. Hearth refuses one over 32 MiB
 unzipped, so a Relay can't run it out of memory.
@@ -41,8 +42,9 @@ can't verify what a Relay says an image holds.
 
 ## Staying out of the way
 
-The Relay never runs Syft in its own container or a workload's. It starts a
-short-lived helper from its own image with:
+The Relay never runs Syft, or reads its output, in its own container or a
+workload's. It starts a short-lived helper from its own image, which runs
+Syft and slims what it found, with:
 
 - the lowest CPU weight Docker gives (`CpuShares: 2`), at most one core, and
   the lowest block I/O weight;

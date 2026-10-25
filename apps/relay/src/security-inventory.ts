@@ -12,10 +12,9 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises"
-import { availableParallelism, hostname, loadavg, release } from "node:os"
-import { join, relative } from "node:path"
+import { availableParallelism, hostname, loadavg } from "node:os"
+import { dirname, extname, join, relative } from "node:path"
 import { promisify } from "node:util"
-import { gzip as gzipCallback } from "node:zlib"
 import {
   relaySecurityInventoryChunkBytes,
   relaySecurityInventoryMaxBytes,
@@ -75,15 +74,13 @@ const HOST_PATHS = [
   "/var/lib/pacman/local",
 ] as const
 const HELPER_MEMORY_BYTES = 1024 * 1024 * 1024
+// Node's share of it, slimming Syft's output once Syft has exited.
+const HELPER_HEAP_MEGABYTES = 768
 const SCAN_TIMEOUT_MS = 10 * 60_000
 // Inventories Hearth hasn't come back for are removed after a day.
 const CACHE_MAX_AGE_MS = 24 * 60 * 60_000
 
-// The most Syft output the Relay reads to slim for Hearth.
-const SCAN_OUTPUT_MAX_BYTES = 256 * 1024 * 1024
-
 const run = promisify(execFile)
-const gzip = promisify(gzipCallback)
 
 type SecurityInventoryConfig = Pick<
   RelayConfig,
@@ -359,19 +356,31 @@ export class SecurityInventory {
       }
     }
     const securityOptions = await this.#securityOptions()
-    const output = join(this.#directory, `scan-${randomUUID()}.json`)
+    const output = join(this.#directory, `scan-${randomUUID()}.json.gz`)
     const source =
       target.kind === "host"
         ? await this.#hostMounts(relay, securityOptions)
         : null
     const helperName = this.#helperName("scan")
-    // The helper and Syft's raw output go, however the scan ends.
-    const cleanup = Effect.promise(() => rm(output, { force: true })).pipe(
+    // The helper and what it wrote go, however the scan ends.
+    const cleanup = Effect.promise(() =>
+      Promise.all([
+        rm(output, { force: true }),
+        rm(`${output}.syft.json`, { force: true }),
+      ])
+    ).pipe(
       Effect.andThen(
         this.#engine
           .removeContainer(helperName, { force: true })
           .pipe(Effect.catch(() => Effect.void))
       )
+    )
+    // Beside the Relay's own entry, which is TypeScript in development.
+    const main = process.argv[1] ?? ""
+    const development = extname(main) === ".ts"
+    const entry = join(
+      dirname(main),
+      `security-inventory-helper${extname(main)}`
     )
     const scan = async (): Promise<
       | { readonly meta: InventoryMeta; readonly status: "ready" }
@@ -380,8 +389,13 @@ export class SecurityInventory {
       const helper = await Effect.runPromise(
         this.#engine.createContainer(helperName, {
           Image: relay.Image,
-          Entrypoint: [this.#config.syftPath],
+          // Node from the Relay's own image runs Syft, then slims its
+          // output, both within the helper's caps.
+          Entrypoint: [process.execPath],
           Cmd: [
+            ...(development ? ["--import", "tsx"] : []),
+            `--max-old-space-size=${HELPER_HEAP_MEGABYTES}`,
+            entry,
             "scan",
             target.kind === "host"
               ? `dir:${HOST_ROOT}`
@@ -393,15 +407,17 @@ export class SecurityInventory {
             target.kind === "host"
               ? this.#config.nodeName || "host"
               : target.image || target.imageId,
-            "-o",
-            `syft-json=${output}`,
-            "-q",
           ],
+          WorkingDir: process.cwd(),
           Env: [
             "SYFT_CHECK_FOR_APP_UPDATE=false",
             // Packages, not every file's digest.
             "SYFT_FILE_METADATA_SELECTION=none",
             `DOCKER_HOST=unix://${this.#config.dockerSocket}`,
+            `KILN_SECURITY_HOST=${target.kind === "host" ? "1" : ""}`,
+            `KILN_SECURITY_MAX_BYTES=${relaySecurityInventoryMaxBytes}`,
+            `KILN_SECURITY_OUTPUT=${output}`,
+            `KILN_SECURITY_SYFT=${this.#config.syftPath}`,
           ],
           Healthcheck: { Test: ["NONE"] },
           Labels: { [HELPER_LABEL]: "true", ...relayOwnerLabels(this.#config) },
@@ -442,25 +458,11 @@ export class SecurityInventory {
           status: "failed",
         }
       }
-      // Syft's output is bounded by its memory cap; past this, reading it
-      // whole would weigh on the host more than the inventory is worth.
-      if ((await stat(output)).size > SCAN_OUTPUT_MAX_BYTES) {
+      // Never more than the helper may write, so it's read whole.
+      if ((await stat(output)).size > relaySecurityInventoryMaxBytes) {
         return { error: "The inventory is too large to send", status: "failed" }
       }
-      const slim = Buffer.from(
-        JSON.stringify(
-          slimInventory(
-            JSON.parse(await readFile(output, "utf8")) as SyftDocument,
-            target.kind === "host" ? release() : null
-          )
-        )
-      )
-      if (slim.length > relaySecurityInventoryMaxBytes) {
-        return { error: "The inventory is too large to send", status: "failed" }
-      }
-      const gzipped = await gzip(slim)
-      const document = `${paths.document}.${randomUUID()}.tmp`
-      await writeFile(document, gzipped)
+      const gzipped = await readFile(output)
       const meta: InventoryMeta = {
         collectedAt: Date.now(),
         generator,
@@ -468,7 +470,7 @@ export class SecurityInventory {
         sha256: createHash("sha256").update(gzipped).digest("hex"),
         size: gzipped.length,
       }
-      await rename(document, paths.document)
+      await rename(output, paths.document)
       await writeFile(paths.meta, `${JSON.stringify(meta)}\n`)
       return { meta, status: "ready" }
     }
@@ -607,86 +609,6 @@ export class SecurityInventory {
 }
 
 // As provisioning judges it: a load average of one per core or more.
-interface SyftArtifact {
-  id?: unknown
-  metadata?: { files?: unknown }
-  name?: unknown
-  type?: unknown
-  version?: unknown
-}
-
-interface SyftDocument {
-  artifactRelationships?: Array<{
-    child?: unknown
-    parent?: unknown
-    type?: unknown
-  }>
-  artifacts?: Array<SyftArtifact>
-  files?: unknown
-}
-
-/**
- * Syft's inventory as Hearth needs it: without the files each package
- * installed and their containment, which Grype doesn't read and which make
- * up most of a host's inventory. A host's kernels other than the running
- * one are left out: package managers keep old ones installed, each with
- * thousands of findings for a kernel that isn't running.
- */
-function slimInventory(
-  document: SyftDocument,
-  kernel: string | null
-): SyftDocument {
-  const artifacts = document.artifacts ?? []
-  const idle = new Set(
-    kernel === null
-      ? []
-      : artifacts.flatMap((artifact) =>
-          idleKernelPackage(artifact, kernel) ? [artifact.id] : []
-        )
-  )
-  delete document.files
-  document.artifacts = artifacts.filter((artifact) => !idle.has(artifact.id))
-  document.artifactRelationships = (
-    document.artifactRelationships ?? []
-  ).filter(
-    (relationship) =>
-      relationship.type !== "contains" &&
-      !idle.has(relationship.parent) &&
-      !idle.has(relationship.child)
-  )
-  for (const artifact of document.artifacts) {
-    if (artifact.metadata && typeof artifact.metadata === "object") {
-      delete artifact.metadata.files
-    }
-  }
-  return document
-}
-
-// Whether a package is a kernel the host isn't running, from the release it
-// reports, such as `6.8.0-147-generic`: Debian's and Ubuntu's
-// `linux-image-6.8.0-137-generic`, or an RPM `kernel-core` of another version.
-function idleKernelPackage(artifact: SyftArtifact, kernel: string): boolean {
-  if (typeof artifact.name !== "string") return false
-  if (artifact.type === "deb") {
-    const release = artifact.name.match(
-      /^linux-(?:[a-z]+-)+?(\d+\.\d+\.\d+-\d+)(?:-[a-z0-9]+)*$/u
-    )?.[1]
-    const running = kernel.match(/^(\d+\.\d+\.\d+-\d+)/u)?.[1]
-    return release !== undefined && running !== undefined && release !== running
-  }
-  if (
-    artifact.type === "rpm" &&
-    /^kernel(?:-core|-modules(?:-core|-extra)?)?$/u.test(artifact.name)
-  ) {
-    const version =
-      typeof artifact.version === "string"
-        ? artifact.version.replace(/^\d+:/u, "")
-        : ""
-    return version !== "" && !kernel.startsWith(version)
-  }
-  return false
-}
-
 function busy(): boolean {
   return (loadavg()[0] ?? 0) / availableParallelism() >= 1
 }
