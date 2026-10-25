@@ -80,6 +80,10 @@ FROM compose-${TARGETARCH} AS compose
 
 FROM restic/restic:0.19.1 AS restic
 
+# Syft inventories the host and the images it runs, for Hearth's
+# vulnerability checks, in helpers the Relay starts from its own image.
+FROM ghcr.io/anchore/syft:v1.55.0@sha256:4cc92b64ca74ffca4c94d4c8fcc01f217731375300be14d0b6eeb2e82eaa110a AS syft
+
 FROM gcr.io/distroless/nodejs24-debian12 AS runtime
 
 ARG KILN_GIT_REPO=https://github.com/kiln-site/kiln
@@ -97,6 +101,7 @@ WORKDIR /app
 COPY --from=compose /docker-compose /usr/local/bin/docker-compose
 COPY --from=compose /docker-buildx /usr/local/libexec/docker/cli-plugins/docker-buildx
 COPY --from=restic /usr/bin/restic /usr/bin/restic
+COPY --from=syft /syft /usr/local/bin/syft
 COPY --from=healthcheck /out/kiln-relay-healthcheck /usr/local/bin/kiln-relay-healthcheck
 COPY --from=runtime-deps /runtime/node_modules ./node_modules
 COPY apps/relay/package.runtime.json ./package.json

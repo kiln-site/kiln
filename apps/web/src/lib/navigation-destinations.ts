@@ -17,6 +17,7 @@ import {
   Palette,
   Rocket,
   ScrollText,
+  ShieldAlert,
   SlidersHorizontal,
   Table2,
   TerminalSquare,
@@ -205,7 +206,7 @@ export const settingsDestinations = [
   },
   {
     icon: Bell,
-    keywords: ["settings", "push", "alerts"],
+    keywords: ["settings", "push", "alerts", "security", "vulnerabilities"],
     label: "Notifications",
     to: "/settings/notifications",
   },
@@ -611,7 +612,12 @@ export const relayDestinations = [
   },
 ] as const satisfies ReadonlyArray<RelayDestination>
 
-export type KilnDestinationId = "info" | "logs" | "terminal" | "viewer"
+export type KilnDestinationId =
+  | "info"
+  | "logs"
+  | "security"
+  | "terminal"
+  | "viewer"
 
 export interface KilnDestination extends NavigationDestination {
   id: KilnDestinationId
@@ -639,6 +645,21 @@ export const kilnDestinations = [
     ],
     label: "Info",
     to: "/kiln/info",
+  },
+  {
+    icon: ShieldAlert,
+    id: "security",
+    keywords: [
+      "kiln",
+      "security",
+      "vulnerabilities",
+      "cve",
+      "sbom",
+      "images",
+      "hosts",
+    ],
+    label: "Security",
+    to: "/kiln/security",
   },
   {
     icon: Table2,

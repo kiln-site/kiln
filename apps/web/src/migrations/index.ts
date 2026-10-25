@@ -26,6 +26,7 @@ import { notificationDelivery } from "./0023_notification_delivery"
 import { defaultKilnBackups } from "./0024_default_kiln_backups"
 import { backupRetentionDays } from "./0025_backup_retention_days"
 import { relayJoins } from "./0026_relay_joins"
+import { security } from "./0027_security"
 
 // Append new migrations with the next id. Never edit or reorder applied ones.
 export const migrations: ReadonlyArray<Migration> = [
@@ -55,4 +56,5 @@ export const migrations: ReadonlyArray<Migration> = [
   defaultKilnBackups,
   backupRetentionDays,
   relayJoins,
+  security,
 ]

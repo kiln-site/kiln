@@ -117,6 +117,7 @@ const hearthRealtimeQueryScopes = {
     exact(queryKeys.relayProxyModes),
   ],
   schedules: [exact(queryKeys.schedules.all)],
+  security: [prefix(["security"])],
   tailscale: [
     exact(queryKeys.tailscaleStacks),
     prefix(["tailscale", "relays"]),

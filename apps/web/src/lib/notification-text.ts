@@ -3,6 +3,7 @@ import type {
   NotificationResource,
 } from "@/lib/notifications"
 import { formatBytes } from "@/lib/format-bytes"
+import { securitySeverityLabels } from "@/lib/security"
 import { kilnReleaseLabel } from "@/lib/release-version"
 
 // What a notification says in a line or two, shared by the inbox and the
@@ -66,6 +67,15 @@ export function notificationTitle(content: NotificationContent): string {
         : content.update
           ? "Your App has been updated"
           : "Your App has been deployed"
+    case "security.vulnerabilities": {
+      const subject = securitySubject(content)
+      if (content.count > 1) {
+        return `${subject} has ${content.count} new vulnerabilities`
+      }
+      return content.knownExploited
+        ? `${subject} has an exploited vulnerability`
+        : `${subject} has ${withArticle(securitySeverityLabels[content.severity]).toLowerCase()} vulnerability`
+    }
   }
 }
 
@@ -91,5 +101,26 @@ export function notificationDetail(
       return content.status === "failed"
         ? `${content.resource.name} couldn't deploy`
         : `${content.resource.name} has deployed successfully`
+    case "security.vulnerabilities": {
+      const { top } = content
+      const fix = top.fixedVersion ? `, fixed in ${top.fixedVersion}` : ""
+      return `${content.resource.name} - ${top.id} in ${top.packageName} ${top.packageVersion}${fix}`
+    }
   }
+}
+
+type SecurityContent = Extract<
+  NotificationContent,
+  { kind: "security.vulnerabilities" }
+>
+
+// Whose thing it's about, as titles say it: "Your App", or for a Relay, its
+// host or the Kiln service on it.
+function securitySubject(content: SecurityContent): string {
+  const { component, resource } = content
+  const type = resourceTypeLabels[resource.type]
+  if (resource.type !== "relay" || component === null) return `Your ${type}`
+  return component === "host"
+    ? "Your Relay's host"
+    : `Your Relay's ${component}`
 }

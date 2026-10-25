@@ -2,6 +2,11 @@ import { Predicate } from "effect"
 import { z } from "zod"
 
 import type { NotificationKind } from "@/lib/notifications"
+import {
+  defaultSecurityNotificationSettings,
+  securityNotificationSettingsSchema,
+  type SecurityNotificationSettings,
+} from "@/lib/security"
 
 // What each user hears about, and how: per kind, whether it reaches the inbox
 // and whether it's pushed to their devices, and whether a push waits to see
@@ -17,6 +22,8 @@ export interface NotificationPreferences {
   /** Minutes without input after which an open tab counts as away. */
   idleMinutes: number
   kinds: Record<NotificationKind, NotificationKindPreference>
+  /** Which vulnerabilities in what the user can update notify them. */
+  security: SecurityNotificationSettings
   /** Skip the push for a notification an active tab already showed. */
   skipPushWhileActive: boolean
 }
@@ -40,6 +47,12 @@ export const notificationPreferenceGroups = [
       { kind: "app.deployed", label: "Deployments" },
     ],
     label: "Apps",
+  },
+  {
+    adminOnly: false,
+    id: "security",
+    kinds: [{ kind: "security.vulnerabilities", label: "Vulnerabilities" }],
+    label: "Security",
   },
   {
     adminOnly: false,
@@ -89,6 +102,7 @@ const allKinds: ReadonlyArray<NotificationKind> = [
   "resource.disk-limit",
   "app.image-update",
   "app.deployed",
+  "security.vulnerabilities",
 ] satisfies ReadonlyArray<NotificationKind>
 
 const storedKindSchema = z.object({
@@ -98,9 +112,12 @@ const storedKindSchema = z.object({
 
 type StoredKind = z.infer<typeof storedKindSchema>
 
+const storedSecuritySchema = securityNotificationSettingsSchema.partial()
+
 interface StoredPreferences {
   idleMinutes?: number
   kinds?: Record<string, StoredKind>
+  security?: Partial<SecurityNotificationSettings>
   skipPushWhileActive?: boolean
 }
 
@@ -126,6 +143,9 @@ function readStored(value: unknown): StoredPreferences {
       ? parsed(idleMinutesSchema, value.idleMinutes)
       : undefined,
     kinds,
+    security: Predicate.hasProperty(value, "security")
+      ? parsed(storedSecuritySchema, value.security)
+      : undefined,
     skipPushWhileActive: Predicate.hasProperty(value, "skipPushWhileActive")
       ? parsed(z.boolean(), value.skipPushWhileActive)
       : undefined,
@@ -148,6 +168,7 @@ export function normalizeNotificationPreferences(
   return {
     idleMinutes: stored.idleMinutes ?? defaultIdleMinutes,
     kinds,
+    security: { ...defaultSecurityNotificationSettings, ...stored.security },
     skipPushWhileActive: stored.skipPushWhileActive ?? true,
   }
 }
@@ -170,6 +191,7 @@ export const notificationPreferencesUpdateSchema = z.strictObject({
       z.strictObject({ inbox: z.boolean(), push: z.boolean() })
     )
     .optional(),
+  security: storedSecuritySchema.optional(),
   skipPushWhileActive: z.boolean().optional(),
 })
 
@@ -194,5 +216,8 @@ export function mergeNotificationPreferences(
       skipPushWhileActive: update.skipPushWhileActive,
     }),
     kinds: { ...base.kinds, ...update.kinds },
+    ...((base.security || update.security) && {
+      security: { ...base.security, ...update.security },
+    }),
   }
 }

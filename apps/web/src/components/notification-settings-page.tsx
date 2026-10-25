@@ -5,7 +5,14 @@ import {
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query"
-import { AppWindow, BellRing, HardDrive, Rocket, UserPlus } from "lucide-react"
+import {
+  AppWindow,
+  BellRing,
+  HardDrive,
+  Rocket,
+  ShieldAlert,
+  UserPlus,
+} from "lucide-react"
 
 import {
   Select,
@@ -30,6 +37,7 @@ import {
   type NotificationPreferencesUpdate,
 } from "@/lib/notification-preferences"
 import type { NotificationKind } from "@/lib/notifications"
+import type { SecurityNotificationSettings } from "@/lib/security"
 import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
 
 const groupIcons = {
@@ -37,6 +45,7 @@ const groupIcons = {
   apps: <AppWindow />,
   kiln: <Rocket />,
   resources: <HardDrive />,
+  security: <ShieldAlert />,
 } satisfies Record<
   (typeof notificationPreferenceGroups)[number]["id"],
   React.ReactNode
@@ -143,6 +152,15 @@ export const NotificationSettingsPage = React.memo(
                   onChange={setKind}
                 />
               ))}
+              {group.id === "security" ? (
+                <SecurityPreferences
+                  choice={preferences.security}
+                  disabled={
+                    !preferences.kinds["security.vulnerabilities"].inbox
+                  }
+                  onChange={save}
+                />
+              ) : null}
             </SettingsPanel>
           )
         )}
@@ -200,6 +218,79 @@ const KindRow = React.memo(function KindRow({
         </span>
       </div>
     </div>
+  )
+})
+
+const severityOptions = [
+  { label: "Critical only", value: "critical" },
+  { label: "High and critical", value: "high" },
+  { label: "Medium and above", value: "medium" },
+  { label: "Every severity", value: "low" },
+] as const satisfies ReadonlyArray<{
+  label: string
+  value: SecurityNotificationSettings["severity"]
+}>
+
+// Which vulnerabilities in what the user can update notify them. Ones being
+// exploited in the wild do whatever these say.
+const SecurityPreferences = React.memo(function SecurityPreferences({
+  choice,
+  disabled,
+  onChange,
+}: {
+  choice: SecurityNotificationSettings
+  disabled: boolean
+  onChange: (update: NotificationPreferencesUpdate) => void
+}) {
+  return (
+    <>
+      <PreferenceRow
+        label="Least severe"
+        description="Vulnerabilities known to be exploited notify at any severity."
+      >
+        <Select
+          value={choice.severity}
+          disabled={disabled}
+          onValueChange={(severity) =>
+            onChange({
+              security: {
+                severity: severity as SecurityNotificationSettings["severity"],
+              },
+            })
+          }
+        >
+          <SelectTrigger aria-label="Least severe" className="h-8 w-44">
+            <SelectValue>
+              {
+                severityOptions.find(
+                  (option) => option.value === choice.severity
+                )?.label
+              }
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {severityOptions.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </PreferenceRow>
+      <PreferenceRow
+        label="Only when an update fixes it"
+        description="Leaves out vulnerabilities nobody has released a fix for yet."
+      >
+        <Switch
+          aria-label="Only when an update fixes it"
+          checked={choice.fixableOnly}
+          disabled={disabled}
+          onCheckedChange={(fixableOnly) =>
+            onChange({ security: { fixableOnly } })
+          }
+        />
+      </PreferenceRow>
+    </>
   )
 })
 

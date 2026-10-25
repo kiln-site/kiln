@@ -42,6 +42,10 @@ import {
   maintainPersistedRelayConnections,
 } from "./lib/relay-registry"
 import { relayConnectionsCapacity } from "./lib/relay-connection"
+import {
+  startSecurityScans,
+  stopSecurityScans,
+} from "./lib/security-scans.server"
 import { startRelayMetrics, stopRelayMetrics } from "./lib/relay-metrics"
 
 await migrateDatabase()
@@ -52,6 +56,7 @@ startInstanceDirectorySync()
 startGitHubSyncPolling()
 startAppDeploymentPolling()
 startAppImageUpdateChecks()
+startSecurityScans()
 startRelayMetrics(relayConnectionsCapacity)
 
 const pairRelayFromEnvironment = Effect.tryPromise({
@@ -133,6 +138,7 @@ export function shutdownHearth(): Promise<void> {
     stopAppImageUpdateChecks(),
     stopBackupMaintenance(),
     stopPollingWorkers(),
+    stopSecurityScans(),
     stopRelayMetrics(),
   ])
     .then(() => Effect.runPromise(stopWarmCacheRefreshes))

@@ -14,6 +14,7 @@ import {
 } from "@/components/relay/relay-settings"
 import { useRelayWorkspace } from "@/components/relay/relay-workspace-context"
 import type { RelayDirectoryEntry } from "@/lib/relay-route"
+import { ResourceSecurityAlert } from "@/components/resource-security-alert"
 
 // The Relay's settings, edited in place, with a rail summing up what it is,
 // what runs on it, and the machine under it.
@@ -22,6 +23,11 @@ export function RelayInfoPage() {
 
   return (
     <InfoPage rail={<RelayInfoRail relay={relay} routeId={routeId} />}>
+      <ResourceSecurityAlert
+        relayId={relay.id}
+        resourceId={relay.id}
+        resourceType="relay"
+      />
       <RelayGeneralSettings relay={relay} routeId={routeId} />
       <RelayProxySettings relay={relay} routeId={routeId} />
       <RelayDangerZone relay={relay} />

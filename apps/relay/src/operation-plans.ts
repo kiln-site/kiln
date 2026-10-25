@@ -196,6 +196,10 @@ export function controlRequestLocks(
     case "relay.clients.update":
     case "relay.clients.revoke":
     case "relay.platform.read":
+    // Inventories read images and the host's package databases, and run
+    // one at a time in their own helper.
+    case "relay.security.targets":
+    case "relay.security.inventory":
     case "relay.platform.logs":
     case "relay.platform.database.read":
     case "relay.installation.read":

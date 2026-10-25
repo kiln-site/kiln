@@ -20,7 +20,7 @@
  * Dockerfile builds and Compose projects run the standalone `docker-buildx`
  * and `docker-compose` binaries instead (see `./apps.js`).
  */
-import { Agent, request } from "node:http"
+import { Agent, type IncomingHttpHeaders, request } from "node:http"
 import { type Duplex, PassThrough, Writable } from "node:stream"
 import { StringDecoder } from "node:string_decoder"
 import { Effect, Predicate, Result } from "effect"
@@ -54,6 +54,7 @@ export type DockerPortBinding = { HostIp?: string; HostPort?: string }
 export interface DockerContainerSummary {
   readonly Id: string
   readonly Image: string
+  readonly ImageID?: string
   readonly Labels: Readonly<Record<string, string>> | null
   readonly Names: ReadonlyArray<string>
   readonly Ports: ReadonlyArray<{
@@ -170,7 +171,7 @@ export interface DockerLogOptions {
 }
 
 interface Exchange {
-  readonly method: "DELETE" | "GET" | "POST"
+  readonly method: "DELETE" | "GET" | "HEAD" | "POST"
   readonly path: string
   readonly body?: unknown
   readonly headers?: Readonly<Record<string, string>>
@@ -183,6 +184,8 @@ interface Exchange {
    * within the stream.
    */
   readonly onData?: (chunk: Buffer) => string | undefined
+  /** Receives a successful answer's headers. */
+  readonly onHeaders?: (headers: IncomingHttpHeaders) => void
 }
 
 export class DockerEngine {
@@ -194,8 +197,11 @@ export class DockerEngine {
 
   info(options: { readonly timeout?: number } = {}): Effect.Effect<
     {
+      readonly Architecture?: string
+      readonly KernelVersion?: string
       readonly OperatingSystem?: string
       readonly SecurityOptions?: ReadonlyArray<string> | null
+      readonly ServerVersion?: string
     },
     DockerEngineError
   > {
@@ -459,6 +465,38 @@ export class DockerEngine {
     }).pipe(
       Effect.as(true),
       Effect.catchIf(isDockerNotFound, () => Effect.succeed(false))
+    )
+  }
+
+  /**
+   * Where a path in the container's filesystem leads, as Docker sees it
+   * (`HEAD /containers/{id}/archive`): the path a symlink resolves to, or
+   * the path itself; null when nothing is there. It answers for a container
+   * that was only created, setting up its mounts for the look.
+   */
+  containerPathTarget(
+    reference: string,
+    path: string
+  ): Effect.Effect<string | null, DockerEngineError> {
+    let stat: string | undefined
+    return this.#exchange({
+      method: "HEAD",
+      onHeaders: (headers) => {
+        const value = headers["x-docker-container-path-stat"]
+        stat = Array.isArray(value) ? value[0] : value
+      },
+      path: `/containers/${segment(reference)}/archive${query({ path })}`,
+      timeout: 10_000,
+    }).pipe(
+      Effect.map(() => {
+        const decoded = stat
+          ? (JSON.parse(Buffer.from(stat, "base64").toString("utf8")) as {
+              readonly linkTarget?: string
+            })
+          : {}
+        return decoded.linkTarget || path
+      }),
+      Effect.catchIf(isDockerNotFound, () => Effect.succeed(null))
     )
   }
 
@@ -1162,6 +1200,7 @@ export class DockerEngine {
       call.on("response", (response) => {
         const status = response.statusCode ?? 500
         const failed = status >= 400
+        if (!failed) exchange.onHeaders?.(response.headers)
         const stream = failed ? undefined : exchange.onData
         const limit = failed
           ? MAX_ERROR_BYTES

@@ -8,6 +8,7 @@ import {
   PackageCheck,
   PackagePlus,
   Rocket,
+  ShieldAlert,
   UserMinus,
   UserPlus,
   X,
@@ -238,6 +239,8 @@ function NotificationActions({
     case "resource.disk-limit":
     case "app.image-update":
     case "app.deployed":
+    // The resource's page says what it has and what fixes it.
+    case "security.vulnerabilities":
       return (
         <OpenResourceButton
           resource={content.resource}
@@ -388,6 +391,7 @@ const notificationIcons = {
   "resource.disk-limit": HardDrive,
   "app.image-update": PackagePlus,
   "app.deployed": CloudUpload,
+  "security.vulnerabilities": ShieldAlert,
 } satisfies Record<
   NotificationContent["kind"],
   React.ComponentType<{ className?: string }>

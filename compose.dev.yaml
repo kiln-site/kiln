@@ -83,6 +83,8 @@ services:
       KILN_RELAY_BROWSER_OUTBOX_BYTES_MAX: ${KILN_RELAY_BROWSER_OUTBOX_BYTES_MAX:-2097152}
       KILN_RELAY_BROWSER_FILE_REPLAYS_MAX: ${KILN_RELAY_BROWSER_FILE_REPLAYS_MAX:-65536}
       KILN_RELAY_NAME: ${KILN_RELAY_NAME:-D001-localdev}
+      # In a volume, so the inventory helpers this stock image starts share it.
+      KILN_RELAY_SYFT_PATH: /opt/kiln-tools/syft
       KILN_RELAY_PROXY: ${KILN_RELAY_PROXY:-none}
       KILN_RELAY_TRAEFIK_IMAGE: ${KILN_RELAY_TRAEFIK_IMAGE:-traefik:v3.7.13}
       KILN_RELAY_ACME_EMAIL: ${KILN_RELAY_ACME_EMAIL:-}
@@ -157,6 +159,20 @@ services:
             exit 1
           fi
         fi
+        # Pin Syft to the version apps/relay/Dockerfile ships.
+        if ! "$$KILN_RELAY_SYFT_PATH" version 2>/dev/null | grep -q '1.55.0$$'; then
+          case "$$(uname -m)" in
+            aarch64) syft_arch=arm64
+              syft_sum=929bd163db2d7cd2255d3bcb8967208079813d7b46b0c952f7b794d8e2c7d304 ;;
+            *) syft_arch=amd64
+              syft_sum=bb65249542db5fedeeb4d3f9b018b75e7264dbfbbb10486f044581a92f90490d ;;
+          esac
+          wget -qO /tmp/syft.tar.gz "https://github.com/anchore/syft/releases/download/v1.55.0/syft_1.55.0_linux_$${syft_arch}.tar.gz"
+          printf '%s  %s\n' "$$syft_sum" /tmp/syft.tar.gz | sha256sum -c -
+          mkdir -p "$$(dirname "$$KILN_RELAY_SYFT_PATH")"
+          tar -xzf /tmp/syft.tar.gz -C "$$(dirname "$$KILN_RELAY_SYFT_PATH")" syft
+          rm -f /tmp/syft.tar.gz
+        fi
         corepack enable
         pnpm install --frozen-lockfile --ignore-scripts --filter relay...
         pnpm rebuild esbuild
@@ -204,6 +220,7 @@ services:
           nocopy: true
       - kiln-dev-pnpm-store:/root/.local/share/pnpm/store
       - minio-certs:/minio-certs:ro
+      - relay-dev-tools:/opt/kiln-tools
     ports:
       - "127.0.0.1:${KILN_DEV_SFTP_PORT:-2022}:2022"
     labels:
@@ -274,11 +291,27 @@ services:
       NODE_ENV: development
       npm_config_store_dir: /root/.local/share/pnpm/store
       NODE_EXTRA_CA_CERTS: /minio-certs/public.crt
+      KILN_GRYPE_PATH: /opt/kiln-tools/grype
+      KILN_VULNERABILITY_DB_DIR: /opt/kiln-tools/vulnerability-db
     command:
       - /bin/sh
       - -lc
       - |
         set -eu
+        # Pin Grype to the version apps/web/Dockerfile ships.
+        if ! "$$KILN_GRYPE_PATH" version 2>/dev/null | grep -q '0.121.0$$'; then
+          case "$$(uname -m)" in
+            aarch64) grype_arch=arm64
+              grype_sum=86f570f75ca947ea3dd6486309232bcff6d78e44ba081ae75ab14eab72be3dae ;;
+            *) grype_arch=amd64
+              grype_sum=64e07133d3486115de647a66581461dccf5c732748a0a3119077395565f15519 ;;
+          esac
+          wget -qO /tmp/grype.tar.gz "https://github.com/anchore/grype/releases/download/v0.121.0/grype_0.121.0_linux_$${grype_arch}.tar.gz"
+          printf '%s  %s\n' "$$grype_sum" /tmp/grype.tar.gz | sha256sum -c -
+          mkdir -p "$$(dirname "$$KILN_GRYPE_PATH")"
+          tar -xzf /tmp/grype.tar.gz -C "$$(dirname "$$KILN_GRYPE_PATH")" grype
+          rm -f /tmp/grype.tar.gz
+        fi
         corepack enable
         pnpm install --frozen-lockfile --ignore-scripts --filter web...
         pnpm rebuild esbuild
@@ -331,6 +364,7 @@ services:
           nocopy: true
       - kiln-dev-pnpm-store:/root/.local/share/pnpm/store
       - minio-certs:/minio-certs:ro
+      - hearth-dev-tools:/opt/kiln-tools
     ports:
       - "127.0.0.1:${KILN_DEV_WEB_PORT:-3000}:3000"
     labels:
@@ -401,6 +435,8 @@ volumes:
   relay-dev-app-node-modules:
   relay-dev-contracts-node-modules:
   relay-dev-telemetry-node-modules:
+  relay-dev-tools:
+  hearth-dev-tools:
   hearth-dev-node-modules:
   hearth-dev-web-node-modules:
   hearth-dev-contracts-node-modules:

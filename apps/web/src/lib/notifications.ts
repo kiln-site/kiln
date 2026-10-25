@@ -70,6 +70,24 @@ export const notificationContentSchema = z.discriminatedUnion("kind", [
     status: z.enum(["succeeded", "failed"]),
     update: z.boolean(),
   }),
+  // Grype found vulnerabilities its people hadn't heard of in what a
+  // resource runs: for a Relay, its host or one of Kiln's services there,
+  // which `component` names.
+  z.object({
+    component: z.string().nullable(),
+    count: z.number().int().positive(),
+    fixable: z.number().int().nonnegative(),
+    kind: z.literal("security.vulnerabilities"),
+    knownExploited: z.number().int().nonnegative(),
+    resource: notificationResourceSchema,
+    severity: z.enum(["critical", "high", "medium", "low", "negligible"]),
+    top: z.object({
+      fixedVersion: z.string().nullable(),
+      id: z.string(),
+      packageName: z.string(),
+      packageVersion: z.string(),
+    }),
+  }),
 ])
 
 export type NotificationContent = z.infer<typeof notificationContentSchema>

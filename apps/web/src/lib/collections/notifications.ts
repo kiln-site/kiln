@@ -264,6 +264,7 @@ function applyPreferences(
   return {
     idleMinutes: update.idleMinutes ?? preferences.idleMinutes,
     kinds: { ...preferences.kinds, ...update.kinds },
+    security: { ...preferences.security, ...update.security },
     skipPushWhileActive:
       update.skipPushWhileActive ?? preferences.skipPushWhileActive,
   }

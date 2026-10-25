@@ -85,6 +85,10 @@ export const relayDatabaseDumpExportFile = "export"
 // (`relay.installation.read`, `relay.installation.replace`). Relays with it
 // adopt an ID from Hearth's authentication only when they have none.
 export const relayInstallationV1Feature = "relay-installation-v1"
+// The Relay lists what runs on its host (`relay.security.targets`) and
+// inventories its host and images with Syft (`relay.security.inventory`),
+// so Hearth can check them for known vulnerabilities.
+export const relaySecurityInventoryV1Feature = "security-inventory-v1"
 export const relayBrowserAuthorizationReviseMaxItems = 256
 
 export const relayControlOperations = [
@@ -141,6 +145,8 @@ export const relayControlOperations = [
   "relay.platform.database.write",
   "relay.installation.read",
   "relay.installation.replace",
+  "relay.security.targets",
+  "relay.security.inventory",
   "browser.authorization.revise",
   "brick.catalog",
   "brick.recipe",
@@ -347,6 +353,8 @@ export function relayControlOperationChanges(
     case "relay.installation.read":
     case "relay.platform.logs":
     case "relay.platform.database.read":
+    case "relay.security.targets":
+    case "relay.security.inventory":
     case "brick.catalog":
     case "brick.recipe":
     case "database.list":
@@ -539,6 +547,9 @@ export function relayControlDeadlineMs(
   if (operation === "relay.host.files.mount") return 60_000
   // A repair can wait for MySQL to become healthy.
   if (operation === "relay.platform.action") return 240_000
+  // An inventory may first wait for the host to be less busy, then reads a
+  // whole image through Docker at the lowest priority.
+  if (operation === "relay.security.inventory") return 15 * 60_000
   if (operation === "hearth.tailscale.instance.detach") return 60_000
   if (operation === "instance.delete") return 360_000
   if (operation === "database.create") return 360_000

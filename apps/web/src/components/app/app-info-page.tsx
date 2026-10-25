@@ -17,6 +17,7 @@ import {
   AppWebRouteSettings,
 } from "@/components/app/app-settings"
 import { AppVolumesSection } from "@/components/app/app-volumes-section"
+import { ResourceSecurityAlert } from "@/components/resource-security-alert"
 import { useAppWorkspace } from "@/components/app/app-workspace-context"
 import {
   InfoDangerAction,
@@ -51,6 +52,11 @@ function AppInfoContent({ app, routeId }: { app: App; routeId: string }) {
   return (
     <AppContainerSelectionContext.Provider value={selection}>
       <InfoPage rail={<AppInfoRail app={app} routeId={routeId} />}>
+        <ResourceSecurityAlert
+          relayId={app.relayId}
+          resourceId={app.id}
+          resourceType="app"
+        />
         {/* What the app is and what it runs, side by side when there's
             room. */}
         <div className="@container">

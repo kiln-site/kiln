@@ -47,6 +47,7 @@ import {
   relayDeleteAppSchema,
   relayAppDeploymentReadSchema,
   relayAppImageCheckSchema,
+  relaySecurityInventoryRequestSchema,
   relayDeployAppSchema,
   relayDatabaseActionSchema,
   relayDatabaseLimitsSchema,
@@ -174,6 +175,7 @@ import {
 } from "./platform-backups.js"
 import { FilesystemDriver, type FileRoot } from "./files.js"
 import { HostFiles } from "./host-files.js"
+import { SecurityInventory } from "./security-inventory.js"
 import {
   adoptInstallationId,
   installationFixed,
@@ -491,6 +493,7 @@ const hostFilesystem = new FilesystemDriver(
   { saveInPlace: true }
 )
 const hostFiles = new HostFiles(config)
+const securityInventory = new SecurityInventory(config)
 const hostDatabaseBrowser = new DatabaseBrowser(hostFilesystem)
 async function hostFileRoot(id: string): Promise<FileRoot> {
   if (!config.hostAccess) throw new HostAccessDisabledError()
@@ -1839,6 +1842,12 @@ async function executeControlRequest(
         files: await hostFiles.status(),
         dataDirectory: await lifecycle.hostDataDirectory(),
       }
+    case "relay.security.targets":
+      return securityInventory.targets()
+    case "relay.security.inventory":
+      return securityInventory.inventory(
+        relaySecurityInventoryRequestSchema.parse(request.payload)
+      )
     case "relay.host.files.mount":
       await hostFiles.mount()
       return { started: true }

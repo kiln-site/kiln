@@ -45,6 +45,7 @@ import {
   relayAppLimitsV1Feature,
   relayAppGitHubV1Feature,
   relayAppImageUpdatesV1Feature,
+  relaySecurityInventoryV1Feature,
   relayPlatformV1Feature,
   relayPlatformV2Feature,
   relayPlatformDatabaseV1Feature,
@@ -1186,6 +1187,7 @@ function authenticateSocket(
           relayPlatformDatabaseV1Feature,
           relayDatabaseDumpFilesV1Feature,
           relayInstallationV1Feature,
+          relaySecurityInventoryV1Feature,
         ],
         protocol: relayControlProtocol,
         relayBuild: relayBuildLabel(),
@@ -1532,6 +1534,8 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       return "relay.database.read"
     case "relay.host.read":
     case "relay.proxy.read":
+    case "relay.security.targets":
+    case "relay.security.inventory":
       return "relay.read"
     case "relay.host.files.mount":
       return "relay.files.mount"

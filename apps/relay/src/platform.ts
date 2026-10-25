@@ -407,6 +407,16 @@ function serviceSpecs(
     },
     image: state.hearth.image,
     labels: { ...labels("hearth"), ...coolifyLabels(state, config) },
+    // Grype's vulnerability database, about 3 GB, kept across Hearth's
+    // updates. It's a cache Hearth downloads again when it's missing, so
+    // backups leave it out.
+    mounts: [
+      {
+        source: `${names.hearth}-data`,
+        target: "/var/lib/kiln",
+        type: "volume",
+      },
+    ],
     name: names.hearth,
     network: { aliases: [names.hearth], name: names.network },
     ports: [

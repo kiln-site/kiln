@@ -15,6 +15,7 @@ import type {
   InstanceSettingsInstance,
   RelayNodeSummary,
 } from "@/lib/relay-selectors"
+import { ResourceSecurityAlert } from "@/components/resource-security-alert"
 
 // The game server's details, each section with the actions that change it,
 // and a rail summing up where it runs and who can reach it. While it's
@@ -43,6 +44,11 @@ export function ServerInfoPage({
   const provisioning = Boolean(instance.provisioning)
   return (
     <InfoPage rail={<ServerInfoRail instance={instance} node={node} />}>
+      <ResourceSecurityAlert
+        relayId={instance.relayId}
+        resourceId={instance.id}
+        resourceType="instance"
+      />
       <ServerProvisioningSection instance={instance} />
       <ServerGeneralSettings
         canRename={permissions.configurationWrite && !provisioning}

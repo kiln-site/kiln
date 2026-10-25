@@ -32,6 +32,7 @@ import {
   type NavigationAccessCapabilities,
 } from "@/lib/navigation-destinations"
 import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
+import { ResourceSecurityAlert } from "@/components/resource-security-alert"
 
 // The database's details, each section with the actions that change it, and
 // a rail summing up where it runs and who can reach it.
@@ -50,6 +51,11 @@ export function DatabaseInfoPage() {
 
   return (
     <InfoPage rail={<DatabaseInfoRail database={database} />}>
+      <ResourceSecurityAlert
+        relayId={database.relayId}
+        resourceId={database.id}
+        resourceType="database"
+      />
       <DatabaseGeneralSettings
         canRename={can("database.delete") && database.hasCredentials}
         database={database}

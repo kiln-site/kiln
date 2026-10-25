@@ -67,6 +67,7 @@ import { Route as AppInfraTailscaleRouteImport } from './routes/_app.infra.tails
 import { Route as AppKilnIndexRouteImport } from './routes/_app/kiln.index'
 import { Route as AppKilnInfoRouteImport } from './routes/_app/kiln.info'
 import { Route as AppKilnLogsRouteImport } from './routes/_app/kiln.logs'
+import { Route as AppKilnSecurityRouteImport } from './routes/_app/kiln.security'
 import { Route as AppKilnTerminalRouteImport } from './routes/_app/kiln.terminal'
 import { Route as AppKilnViewerRouteImport } from './routes/_app/kiln.viewer'
 import { Route as AppRelayRelayIdRouteImport } from './routes/_app/relay/$relayId'
@@ -417,6 +418,11 @@ const AppKilnInfoRoute = AppKilnInfoRouteImport.update({
 const AppKilnLogsRoute = AppKilnLogsRouteImport.update({
   id: '/logs',
   path: '/logs',
+  getParentRoute: () => AppKilnRoute,
+} as any)
+const AppKilnSecurityRoute = AppKilnSecurityRouteImport.update({
+  id: '/security',
+  path: '/security',
   getParentRoute: () => AppKilnRoute,
 } as any)
 const AppKilnTerminalRoute = AppKilnTerminalRouteImport.update({
@@ -793,6 +799,7 @@ export interface FileRoutesByFullPath {
   '/infra/tailscale': typeof AppInfraTailscaleRoute
   '/kiln/info': typeof AppKilnInfoRoute
   '/kiln/logs': typeof AppKilnLogsRoute
+  '/kiln/security': typeof AppKilnSecurityRoute
   '/kiln/terminal': typeof AppKilnTerminalRoute
   '/kiln/viewer': typeof AppKilnViewerRoute
   '/relay/$relayId': typeof AppRelayRelayIdRouteWithChildren
@@ -907,6 +914,7 @@ export interface FileRoutesByTo {
   '/infra/tailscale': typeof AppInfraTailscaleRoute
   '/kiln/info': typeof AppKilnInfoRoute
   '/kiln/logs': typeof AppKilnLogsRoute
+  '/kiln/security': typeof AppKilnSecurityRoute
   '/kiln/terminal': typeof AppKilnTerminalRoute
   '/kiln/viewer': typeof AppKilnViewerRoute
   '/settings/account': typeof AppSettingsAccountRoute
@@ -1028,6 +1036,7 @@ export interface FileRoutesById {
   '/_app/infra/tailscale': typeof AppInfraTailscaleRoute
   '/_app/kiln/info': typeof AppKilnInfoRoute
   '/_app/kiln/logs': typeof AppKilnLogsRoute
+  '/_app/kiln/security': typeof AppKilnSecurityRoute
   '/_app/kiln/terminal': typeof AppKilnTerminalRoute
   '/_app/kiln/viewer': typeof AppKilnViewerRoute
   '/_app/relay/$relayId': typeof AppRelayRelayIdRouteWithChildren
@@ -1151,6 +1160,7 @@ export interface FileRouteTypes {
     | '/infra/tailscale'
     | '/kiln/info'
     | '/kiln/logs'
+    | '/kiln/security'
     | '/kiln/terminal'
     | '/kiln/viewer'
     | '/relay/$relayId'
@@ -1265,6 +1275,7 @@ export interface FileRouteTypes {
     | '/infra/tailscale'
     | '/kiln/info'
     | '/kiln/logs'
+    | '/kiln/security'
     | '/kiln/terminal'
     | '/kiln/viewer'
     | '/settings/account'
@@ -1385,6 +1396,7 @@ export interface FileRouteTypes {
     | '/_app/infra/tailscale'
     | '/_app/kiln/info'
     | '/_app/kiln/logs'
+    | '/_app/kiln/security'
     | '/_app/kiln/terminal'
     | '/_app/kiln/viewer'
     | '/_app/relay/$relayId'
@@ -1901,6 +1913,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppKilnLogsRouteImport
       parentRoute: typeof AppKilnRoute
     }
+    '/_app/kiln/security': {
+      id: '/_app/kiln/security'
+      path: '/security'
+      fullPath: '/kiln/security'
+      preLoaderRoute: typeof AppKilnSecurityRouteImport
+      parentRoute: typeof AppKilnRoute
+    }
     '/_app/kiln/terminal': {
       id: '/_app/kiln/terminal'
       path: '/terminal'
@@ -2415,6 +2434,7 @@ const AppInfraRouteWithChildren = AppInfraRoute._addFileChildren(
 interface AppKilnRouteChildren {
   AppKilnInfoRoute: typeof AppKilnInfoRoute
   AppKilnLogsRoute: typeof AppKilnLogsRoute
+  AppKilnSecurityRoute: typeof AppKilnSecurityRoute
   AppKilnTerminalRoute: typeof AppKilnTerminalRoute
   AppKilnViewerRoute: typeof AppKilnViewerRoute
   AppKilnIndexRoute: typeof AppKilnIndexRoute
@@ -2423,6 +2443,7 @@ interface AppKilnRouteChildren {
 const AppKilnRouteChildren: AppKilnRouteChildren = {
   AppKilnInfoRoute: AppKilnInfoRoute,
   AppKilnLogsRoute: AppKilnLogsRoute,
+  AppKilnSecurityRoute: AppKilnSecurityRoute,
   AppKilnTerminalRoute: AppKilnTerminalRoute,
   AppKilnViewerRoute: AppKilnViewerRoute,
   AppKilnIndexRoute: AppKilnIndexRoute,
