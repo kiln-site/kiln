@@ -2025,10 +2025,22 @@ export const reserveBackupDeleteEffect = Effect.fn("backups.reserveDelete")(
           [input.backupId]
         )
         if (linked?.linked_from_backup_id) {
-          yield* transaction.queryRows<RowDataPacket>(
+          const [original] = yield* transaction.queryRows<RowDataPacket>(
             `SELECT id FROM ${databaseTable("backup")} WHERE id = ? FOR UPDATE`,
             [linked.linked_from_backup_id]
           )
+          // Forgotten, as with its Relay: the first record still linked to
+          // the archive stands in for it.
+          if (!original) {
+            yield* transaction.queryRows<RowDataPacket>(
+              `SELECT id FROM ${databaseTable("backup")}
+                WHERE linked_from_backup_id = ?
+                ORDER BY id
+                LIMIT 1
+                FOR UPDATE`,
+              [linked.linked_from_backup_id]
+            )
+          }
         }
         const rows = yield* transaction.queryRows<BackupRow>(
           `SELECT backup.id, backup.relay_id, backup.target_kind,
