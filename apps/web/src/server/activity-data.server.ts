@@ -116,8 +116,12 @@ export async function getActivityForUser(
     ...(data.to ? { to: Date.parse(data.to) } : {}),
   }
   const { relayRpc } = await import("@/lib/relay-connection")
-  const listAudits = (relay: PersistedRelay, query: object) =>
-    relayRpc(relay, "relay.audit.list", query, 10_000).then((value) =>
+  const listAudits = (
+    relay: PersistedRelay,
+    query: object,
+    timeoutMs = 10_000
+  ) =>
+    relayRpc(relay, "relay.audit.list", query, timeoutMs).then((value) =>
       z.array(relayAuditRecordSchema).parse(value)
     )
   const relayById = new Map(relays.map((relay) => [relay.id, relay]))
@@ -181,18 +185,32 @@ export async function getActivityForUser(
           relay: PersistedRelay
         }> = []
         if (!relay) return answered
+        // Within one request's time in all: once a Relay fails or the time
+        // is up, the rest count as unavailable rather than holding up the
+        // whole answer.
+        const deadline = Date.now() + 10_000
+        let reachable = true
         for (const query of queries) {
-          const [records] = await Promise.allSettled([
-            listAudits(relay, {
-              ...baseQuery,
-              instanceIds: [query.instanceId],
-              to: Math.min(baseQuery.to ?? query.until, query.until),
-            }),
-          ])
+          const remaining = deadline - Date.now()
+          const [records] =
+            reachable && remaining > 0
+              ? await Promise.allSettled([
+                  listAudits(
+                    relay,
+                    {
+                      ...baseQuery,
+                      instanceIds: [query.instanceId],
+                      to: Math.min(baseQuery.to ?? query.until, query.until),
+                    },
+                    remaining
+                  ),
+                ])
+              : [null]
+          if (records?.status !== "fulfilled") reachable = false
           answered.push({
             copies: query.copies,
             instanceId: query.instanceId,
-            records: records.status === "fulfilled" ? records.value : null,
+            records: records?.status === "fulfilled" ? records.value : null,
             relay,
           })
         }
