@@ -134,8 +134,6 @@ export const emptySecuritySummary = (): SecuritySummary => ({
 })
 
 export interface SecurityOverview {
-  /** When Grype's vulnerability data the findings come from was built. */
-  databaseBuiltAt: number | null
   resources: Array<SecurityResource>
   summary: SecuritySummary
   targets: Array<SecurityTarget & { targetKey: string }>

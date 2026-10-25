@@ -8,7 +8,6 @@ import {
   useSuspenseQuery,
 } from "@tanstack/react-query"
 import {
-  CircleAlert,
   ExternalLink,
   LoaderCircle,
   ScanSearch,
@@ -18,11 +17,6 @@ import {
 
 import { Button } from "@workspace/ui/components/button"
 import { showToast } from "@workspace/ui/components/sonner"
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@workspace/ui/components/tooltip"
 import { cn } from "@workspace/ui/lib/utils"
 
 import {
@@ -36,11 +30,7 @@ import {
 } from "@/components/data-table-workspace"
 import { InstanceCard } from "@/components/instance-card"
 import { RelativeTime } from "@/components/relative-time"
-import {
-  SeverityBadge,
-  SeverityCountChips,
-  severityTone,
-} from "@/components/security-severity"
+import { SeverityBadge, severityTone } from "@/components/security-severity"
 import {
   ServerScopePicker,
   type ServerPickerOption,
@@ -99,29 +89,40 @@ export const SecurityPage = React.memo(function SecurityPage({
     [everything.resources]
   )
 
+  // Laid out as an Info page: the vulnerabilities, and a rail of what's
+  // checked. Wide, both fill the page and their tables scroll; narrower,
+  // the rail stacks below and the page scrolls.
   return (
-    <section className="min-h-0 flex-1 overflow-y-auto bg-card">
-      <div className="mx-auto grid w-full max-w-[90rem] gap-5 px-3 pt-4 pb-10 sm:px-5">
-        <SecurityScopePicker
-          resources={everything.resources}
-          scannable={everything.scannable}
-          scope={scope}
-          onScopeChange={onScopeChange}
-        />
-        {overview.targets.length === 0 ? (
-          <NothingChecked />
-        ) : (
-          <>
-            <SecuritySummary overview={overview} />
-            <FindingsSection
-              overview={overview}
-              resources={resources}
-              scope={scope}
-            />
-            <TargetsSection overview={overview} resources={resources} />
-            <SecurityFootnote overview={overview} />
-          </>
-        )}
+    <section className="min-h-0 flex-1 overflow-y-auto bg-card xl:overflow-hidden">
+      <div className="grid min-h-full xl:h-full xl:grid-cols-[minmax(0,1fr)_21rem]">
+        <div className="flex min-h-0 min-w-0 flex-col gap-4 px-5 py-6 sm:px-7">
+          <SecurityScopePicker
+            resources={everything.resources}
+            scannable={everything.scannable}
+            scope={scope}
+            onScopeChange={onScopeChange}
+          />
+          {overview.targets.length === 0 ? (
+            <NothingChecked />
+          ) : (
+            <>
+              <SecuritySummary overview={overview} />
+              <FindingsSection
+                overview={overview}
+                resources={resources}
+                scope={scope}
+              />
+            </>
+          )}
+        </div>
+        <aside className="flex min-h-0 min-w-0 flex-col border-t bg-background/30 px-4 py-6 xl:border-t-0 xl:border-l">
+          <TargetsRail
+            overview={overview}
+            resources={resources}
+            scannable={everything.scannable}
+            scope={scope}
+          />
+        </aside>
       </div>
     </section>
   )
@@ -197,15 +198,10 @@ const SecurityScopePicker = React.memo(function SecurityScopePicker({
   )
 })
 
-function ScanNowButton({
-  disabled,
-  scope,
-}: {
-  disabled: boolean
-  scope: string | null
-}) {
+// Checks the scope again against the latest vulnerability data.
+function useScanNow(scope: string | null) {
   const queryClient = useQueryClient()
-  const { isPending, mutate } = useMutation({
+  return useMutation({
     mutationFn: () => scanSecurityNow({ data: { scope } }),
     onError: (error: Error) =>
       showToast({ message: `Could not scan: ${error.message}`, type: "error" }),
@@ -217,6 +213,16 @@ function ScanNowButton({
       void queryClient.invalidateQueries({ queryKey: securityQueryKeys.all })
     },
   })
+}
+
+function ScanNowButton({
+  disabled,
+  scope,
+}: {
+  disabled: boolean
+  scope: string | null
+}) {
+  const { isPending, mutate } = useScanNow(scope)
   return (
     <Button
       aria-label="Scan now"
@@ -231,6 +237,30 @@ function ScanNowButton({
     </Button>
   )
 }
+
+// Scans one instance, as its row in the rail offers.
+const TargetScanButton = React.memo(function TargetScanButton({
+  name,
+  scope,
+}: {
+  name: string
+  scope: string
+}) {
+  const { isPending, mutate } = useScanNow(scope)
+  return (
+    <Button
+      aria-label={`Scan ${name} now`}
+      disabled={isPending}
+      size="xs"
+      type="button"
+      variant="outline"
+      onClick={() => mutate()}
+    >
+      {isPending ? <LoaderCircle className="animate-spin" /> : <ScanSearch />}
+      Scan now
+    </Button>
+  )
+})
 
 function NothingChecked() {
   return (
@@ -255,7 +285,7 @@ const SecuritySummary = React.memo(function SecuritySummary({
   return (
     <section
       aria-label="Vulnerabilities found"
-      className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6"
+      className="grid shrink-0 grid-cols-2 gap-2 sm:grid-cols-3 2xl:grid-cols-6"
     >
       {(["critical", "high", "medium", "low"] as const).map((severity) => (
         <SummaryTile
@@ -294,7 +324,7 @@ function SummaryTile({
   return (
     <div
       className={cn(
-        "rounded-xl border border-border/75 bg-card/45 px-4 py-3",
+        "rounded-xl border border-border/75 bg-card/45 px-3 py-2",
         tone
       )}
     >
@@ -302,7 +332,7 @@ function SummaryTile({
         {icon}
         {label}
       </p>
-      <p className="mt-1 text-2xl font-semibold tabular-nums">{value}</p>
+      <p className="text-xl font-semibold tabular-nums">{value}</p>
     </div>
   )
 }
@@ -346,6 +376,7 @@ const findingTableDefinition = defineDataTable<FindingRowData>({
     findingColumnHelper.accessor((row) => severityRank(row.finding.severity), {
       id: "severity",
       header: "Severity",
+      sortDescFirst: true,
       // Known exploited ones lead their severity.
       sortFn: (left, right) =>
         severityRank(left.original.finding.severity) -
@@ -355,7 +386,7 @@ const findingTableDefinition = defineDataTable<FindingRowData>({
       cell: ({ row }) => (
         <SeverityBadge severity={row.original.finding.severity} />
       ),
-      meta: dataTableColumnMeta({ width: "7rem" }),
+      meta: dataTableColumnMeta({ width: "7.25rem" }),
     }),
     findingColumnHelper.accessor((row) => row.resource?.name ?? "", {
       id: "found-in",
@@ -368,7 +399,7 @@ const findingTableDefinition = defineDataTable<FindingRowData>({
         />
       ),
       meta: dataTableColumnMeta(
-        { width: "minmax(12rem,1.2fr)" },
+        { width: "minmax(10rem,1.2fr)" },
         { cellClassName: "p-0" }
       ),
     }),
@@ -377,7 +408,7 @@ const findingTableDefinition = defineDataTable<FindingRowData>({
       header: "Vulnerability",
       sortFn: "text",
       cell: ({ row }) => <VulnerabilityLink finding={row.original.finding} />,
-      meta: dataTableColumnMeta({ width: "minmax(11rem,0.8fr)" }),
+      meta: dataTableColumnMeta({ width: "10.5rem" }),
     }),
     findingColumnHelper.accessor((row) => row.finding.packageName, {
       id: "package",
@@ -395,7 +426,7 @@ const findingTableDefinition = defineDataTable<FindingRowData>({
       ),
       meta: dataTableColumnMeta({
         hideBelow: "md",
-        width: "minmax(10rem,1fr)",
+        width: "minmax(7.5rem,1fr)",
       }),
     }),
     findingColumnHelper.accessor((row) => row.finding.fixedVersion ?? "", {
@@ -414,7 +445,7 @@ const findingTableDefinition = defineDataTable<FindingRowData>({
               : "No fix yet"}
           </span>
         ),
-      meta: dataTableColumnMeta({ hideBelow: "sm", width: "8rem" }),
+      meta: dataTableColumnMeta({ hideBelow: "sm", width: "7rem" }),
     }),
     findingColumnHelper.accessor((row) => row.finding.firstSeenAt, {
       id: "first-seen",
@@ -426,10 +457,12 @@ const findingTableDefinition = defineDataTable<FindingRowData>({
           <RelativeTime timestamp={row.original.finding.firstSeenAt} />
         </span>
       ),
-      meta: dataTableColumnMeta({ hideBelow: "lg", width: "8.25rem" }),
+      meta: dataTableColumnMeta({ hideBelow: "lg", width: "8.5rem" }),
     }),
   ]),
   getRowId: (row) => row.id,
+  // Most severe first, known exploited first within each severity.
+  model: { initialState: { sorting: [{ desc: true, id: "severity" }] } },
   search: { fields: findingSearchFields },
   virtualization: true,
 })
@@ -475,56 +508,56 @@ const FindingsSection = React.memo(function FindingsSection({
   )
   const checked = overview.targets.some((target) => target.status === "checked")
   return (
-    <section className="grid gap-3">
-      <div className="flex flex-wrap items-baseline gap-2">
-        <h2 className="type-section-title">Vulnerabilities</h2>
-        {overview.truncated ? (
-          <p className="type-meta text-muted-foreground">
-            The {overview.findings.length.toLocaleString()} most urgent; choose
-            an instance to see all of its own.
-          </p>
-        ) : null}
-      </div>
-      <DataTableWorkspace
-        className="h-[min(44rem,75dvh)] flex-none"
-        toolbar={
-          <DataTableToolbar
-            search={{
-              ariaLabel: "Search vulnerabilities",
-              closeMobileWhenEmpty: true,
-              id: "security-search",
-              placeholder: "Search vulnerabilities",
-              store: searchStore,
-            }}
-          />
-        }
-      >
-        <DataTable
-          definition={findingTableDefinition}
-          emptyState={({ searchActive }) => (
-            <DataTableEmptyState
-              description={
-                searchActive
-                  ? "Try a CVE, package, or instance."
-                  : checked
-                    ? "Nothing Kiln has checked has a known vulnerability."
-                    : "Kiln is still checking what it inventoried."
-              }
-              icon={
-                <ShieldCheck className="size-6 text-muted-foreground/45 light:text-muted-foreground/72" />
-              }
-              title={
-                searchActive
-                  ? "No vulnerabilities match your search"
-                  : "No known vulnerabilities"
-              }
-            />
-          )}
-          searchStore={searchStore}
-          source={source}
+    <DataTableWorkspace
+      className="h-[min(44rem,75dvh)] flex-none xl:h-auto xl:min-h-[20rem] xl:flex-1"
+      before={
+        <div className="flex items-baseline gap-2 border-b px-4 py-3">
+          <h2 className="type-section-title">Vulnerabilities</h2>
+          {overview.truncated ? (
+            <p className="type-meta truncate text-muted-foreground">
+              The {overview.findings.length.toLocaleString()} most urgent;
+              choose an instance to see all of its own.
+            </p>
+          ) : null}
+        </div>
+      }
+      toolbar={
+        <DataTableToolbar
+          search={{
+            ariaLabel: "Search vulnerabilities",
+            closeMobileWhenEmpty: true,
+            id: "security-search",
+            placeholder: "Search vulnerabilities",
+            store: searchStore,
+          }}
         />
-      </DataTableWorkspace>
-    </section>
+      }
+    >
+      <DataTable
+        definition={findingTableDefinition}
+        emptyState={({ searchActive }) => (
+          <DataTableEmptyState
+            description={
+              searchActive
+                ? "Try a CVE, package, or instance."
+                : checked
+                  ? "Nothing Kiln has checked has a known vulnerability."
+                  : "Kiln is still checking what it inventoried."
+            }
+            icon={
+              <ShieldCheck className="size-6 text-muted-foreground/45 light:text-muted-foreground/72" />
+            }
+            title={
+              searchActive
+                ? "No vulnerabilities match your search"
+                : "No known vulnerabilities"
+            }
+          />
+        )}
+        searchStore={searchStore}
+        source={source}
+      />
+    </DataTableWorkspace>
   )
 })
 
@@ -626,144 +659,134 @@ const ResourceIdentityLink = React.memo(function ResourceIdentityLink({
   }
 })
 
-const TargetsSection = React.memo(function TargetsSection({
+const targetColumnHelper = createDataTableColumnHelper<Target>()
+
+const targetSearchFields = [
+  (target: Target) => target.image,
+  (target: Target) => target.distro,
+  (target: Target) => targetLabel(target),
+] as const
+
+function targetTableDefinition(
+  resources: ReadonlyMap<string, SecurityResource>,
+  scannable: ReadonlySet<string>
+) {
+  const name = (target: Target) => resources.get(target.scope)?.name ?? ""
+  return defineDataTable<Target>({
+    ariaLabel: "What's checked",
+    columns: targetColumnHelper.columns([
+      targetColumnHelper.accessor(name, {
+        id: "instance",
+        header: "Instance",
+        sortFn: "text",
+        cell: ({ row }) => (
+          <ResourceIdentityLink
+            resource={resources.get(row.original.scope) ?? null}
+            target={row.original}
+          />
+        ),
+        meta: dataTableColumnMeta(
+          { width: "minmax(0,1fr)" },
+          { cellClassName: "p-0" }
+        ),
+      }),
+      targetColumnHelper.display({
+        id: "scan",
+        header: () => <span className="sr-only">Scan</span>,
+        enableSorting: false,
+        cell: ({ row }) =>
+          scannable.has(row.original.scope) ? (
+            <TargetScanButton
+              name={name(row.original)}
+              scope={row.original.scope}
+            />
+          ) : null,
+        meta: dataTableColumnMeta(
+          { width: "6.75rem" },
+          { cellClassName: "pl-0 pr-3", headerClassName: "pl-0 pr-3" }
+        ),
+      }),
+    ]),
+    getRowId: (target) => target.targetKey,
+    model: { initialState: { sorting: [{ desc: false, id: "instance" }] } },
+    search: {
+      fields: [(target: Target) => name(target), ...targetSearchFields],
+    },
+    virtualization: true,
+  })
+}
+
+// Every inventory in view, each with a way to scan it again.
+const TargetsRail = React.memo(function TargetsRail({
   overview,
   resources,
+  scannable,
+  scope,
 }: {
   overview: SecurityOverview
   resources: ReadonlyMap<string, SecurityResource>
+  scannable: ReadonlyArray<string>
+  scope: string | null
 }) {
-  const targets = React.useMemo(
-    () =>
-      [...overview.targets].sort(
-        (a, b) =>
-          b.knownExploited - a.knownExploited ||
-          b.counts.critical - a.counts.critical ||
-          b.counts.high - a.counts.high ||
-          b.counts.medium - a.counts.medium ||
-          a.targetKey.localeCompare(b.targetKey)
-      ),
-    [overview.targets]
+  const [searchStore] = React.useState(createDataTableSearchStore)
+  const definition = React.useMemo(
+    () => targetTableDefinition(resources, new Set(scannable)),
+    [resources, scannable]
   )
-  const pending = targets.filter((target) => target.status === "pending").length
+  const source = React.useMemo(
+    (): DataTableSource<Target> => ({
+      body: { kind: "ready" },
+      refreshing: false,
+      resetKey: scope ?? "all",
+      rows: overview.targets,
+    }),
+    [overview.targets, scope]
+  )
+  const pending = overview.targets.filter(
+    (target) => target.status === "pending"
+  ).length
   return (
-    <section className="grid gap-3">
-      <div className="flex flex-wrap items-baseline gap-2">
-        <h2 className="type-section-title">What's checked</h2>
-        <p className="type-meta text-muted-foreground">
-          {targets.length} {targets.length === 1 ? "inventory" : "inventories"}
-          {pending ? `, ${pending} still being checked` : ""}
-        </p>
-      </div>
-      <div className="overflow-x-auto rounded-xl border border-border/75 bg-card/45">
-        <table className="w-full min-w-[48rem] text-left text-sm">
-          <thead className="type-meta border-b border-border/75 text-muted-foreground">
-            <tr>
-              <th className="px-4 py-2.5 font-medium">Instance</th>
-              <th className="px-4 py-2.5 font-medium">Image</th>
-              <th className="px-4 py-2.5 font-medium">Found</th>
-              <th className="w-36 px-4 py-2.5 font-medium">Inventoried</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-border/60">
-            {targets.map((target) => (
-              <TargetRow
-                key={target.targetKey}
-                resources={resources}
-                target={target}
-              />
-            ))}
-          </tbody>
-        </table>
-      </div>
+    <section className="flex min-h-0 flex-col xl:flex-1">
+      <h3 className="type-technical-label mb-1 flex items-baseline justify-between gap-2 text-muted-foreground/80 light:text-muted-foreground/90">
+        <span>What's checked</span>
+        <span className="tracking-normal normal-case">
+          {overview.targets.length}
+          {pending ? `, ${pending} checking` : ""}
+        </span>
+      </h3>
+      <DataTableWorkspace
+        className="h-[28rem] flex-none rounded-none bg-background/45 xl:h-auto xl:min-h-[16rem] xl:flex-1"
+        toolbar={
+          <DataTableToolbar
+            search={{
+              ariaLabel: "Search inventories",
+              id: "security-target-search",
+              placeholder: "Search inventories",
+              store: searchStore,
+            }}
+          />
+        }
+      >
+        <DataTable
+          definition={definition}
+          emptyState={({ searchActive }) => (
+            <DataTableEmptyState
+              description={
+                searchActive
+                  ? "Try an instance, image, or Relay."
+                  : "Relays inventory what they run within a few minutes of connecting."
+              }
+              title={
+                searchActive
+                  ? "No inventories match"
+                  : "Nothing inventoried yet"
+              }
+            />
+          )}
+          searchStore={searchStore}
+          source={source}
+        />
+      </DataTableWorkspace>
     </section>
   )
 })
-
-const TargetRow = React.memo(function TargetRow({
-  resources,
-  target,
-}: {
-  resources: ReadonlyMap<string, SecurityResource>
-  target: Target
-}) {
-  return (
-    <tr className="align-middle [contain-intrinsic-size:auto_3.25rem] [content-visibility:auto]">
-      <td className="p-0">
-        <ResourceIdentityLink
-          resource={resources.get(target.scope) ?? null}
-          target={target}
-        />
-      </td>
-      <td className="max-w-[22rem] px-4 py-2.5">
-        <p
-          className="truncate font-mono text-[0.8125rem]"
-          title={target.image ?? undefined}
-        >
-          {target.image ?? target.distro ?? "Host packages"}
-        </p>
-        {target.packages !== null ? (
-          <p className="type-meta text-muted-foreground">
-            {target.packages} packages
-            {target.running ? "" : " · not running"}
-          </p>
-        ) : null}
-      </td>
-      <td className="px-4 py-2.5">
-        {target.status === "checked" ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <SeverityCountChips counts={target.counts} />
-            {target.fixable > 0 ? (
-              <span className="type-meta text-muted-foreground">
-                {target.fixable} fixable
-              </span>
-            ) : null}
-          </div>
-        ) : target.status === "failed" ? (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="type-meta inline-flex items-center gap-1.5 text-amber-300 light:text-amber-700">
-                <CircleAlert className="size-3.5" />
-                Couldn't check
-              </span>
-            </TooltipTrigger>
-            <TooltipContent className="max-w-sm">{target.error}</TooltipContent>
-          </Tooltip>
-        ) : (
-          <span className="type-meta inline-flex items-center gap-1.5 text-muted-foreground">
-            <LoaderCircle className="size-3.5 animate-spin" />
-            {target.collectedAt === null ? "Waiting for inventory" : "Checking"}
-          </span>
-        )}
-      </td>
-      <td className="px-4 py-2.5">
-        {target.collectedAt !== null ? (
-          <RelativeTime
-            className="type-meta text-muted-foreground"
-            timestamp={target.collectedAt}
-          />
-        ) : (
-          <span className="type-meta text-muted-foreground">Not yet</span>
-        )}
-      </td>
-    </tr>
-  )
-})
-
-function SecurityFootnote({ overview }: { overview: SecurityOverview }) {
-  return (
-    <p className="type-meta text-muted-foreground">
-      Each Relay inventories its host and each image once with Syft, at the
-      lowest priority; Hearth keeps the inventories and checks them again with
-      Grype whenever its vulnerability data changes, even while a Relay is
-      offline.
-      {overview.databaseBuiltAt ? (
-        <>
-          {" "}
-          Vulnerability data from{" "}
-          <RelativeTime timestamp={overview.databaseBuiltAt} />.
-        </>
-      ) : null}
-    </p>
-  )
-}

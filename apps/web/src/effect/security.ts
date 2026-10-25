@@ -745,22 +745,6 @@ export const loadSecurityFindingsEffect = Effect.fn("security.loadFindings")(
   }
 )
 
-/** The newest vulnerability data any inventory was checked against. */
-export const securityDatabaseBuiltAtEffect = Effect.fn(
-  "security.databaseBuiltAt"
-)(function* () {
-  const database = yield* Database
-  const rows = yield* database.queryRows<
-    RowDataPacket & { built: string | null }
-  >(
-    "security.databaseBuiltAt",
-    `SELECT MAX(CAST(matched_db AS UNSIGNED)) AS built
-       FROM ${databaseTable("security_sbom")}`
-  )
-  const built = Number(rows[0]?.built ?? Number.NaN)
-  return Number.isFinite(built) && built > 0 ? built : null
-})
-
 /** What one resource's page says about its vulnerabilities. */
 export function resourceSecuritySummary(
   targets: ReadonlyArray<SecurityTarget>,

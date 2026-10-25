@@ -6,7 +6,6 @@ import {
   loadSecurityTargetsEffect,
   requestSecurityScanEffect,
   resourceSecuritySummary,
-  securityDatabaseBuiltAtEffect,
   securityResourceNamesEffect,
 } from "@/effect/security"
 import { isPlatformAdmin, listUserGrants } from "@/lib/access-control"
@@ -125,13 +124,9 @@ export async function getSecurityOverviewHandler(input: {
   scope: string | null
 }): Promise<SecurityOverview> {
   const user = await requireEligibleResourceUser()
-  const [{ access, findings, summary, targets, truncated }, databaseBuiltAt] =
-    await Promise.all([
-      visibleFindings(user, input.scope),
-      runAppEffect("security.databaseBuiltAt", securityDatabaseBuiltAtEffect()),
-    ])
+  const { access, findings, summary, targets, truncated } =
+    await visibleFindings(user, input.scope)
   return {
-    databaseBuiltAt,
     findings,
     resources: await securityResources(targets),
     summary,
