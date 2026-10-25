@@ -18,6 +18,7 @@ import { resolveBrick, resolveBrickForProvisioning } from "./bricks.js"
 import { directoryApparentSizeEffect } from "./disk-usage.js"
 import {
   ensuringPromise,
+  forkPromise,
   recoverPromise,
   tapPromiseError,
 } from "./effect/promise.js"
@@ -386,9 +387,13 @@ export class LifecycleDriver {
   #edgeRepairAgain = false
   // Why each edge repair last failed, by what it repairs.
   readonly #edgeRepairErrors = new Map<string, string>()
-  // A running container rejoined the edge network, and Coolify's Traefik
-  // hasn't been made to see it yet.
-  #edgeRefreshPending = false
+  // Repairs waiting their turn in a resource's lanes, by what they repair.
+  readonly #edgeRepairsWaiting = new Set<string>()
+  // How many times a running container rejoined the edge network, and how
+  // many of those Coolify's Traefik has been made to see.
+  #edgeReconnects = 0
+  #edgeRefreshed = 0
+  #edgeRefresh: Promise<void> | null = null
   #hostDataDirectoryPromise: Promise<string> | null = null
   #listenerMode: RelayProxySettings["mode"] | null = null
   // The last reason Traefik couldn't serve Hearth, logged once.
@@ -3379,11 +3384,7 @@ export class LifecycleDriver {
         .filter((instance) => instance.managedByRelay)
         .map((instance) =>
           routedInstances.has(instance.id)
-            ? connectNetwork(
-                this.#engine,
-                instance.service,
-                this.#resources.edgeNetwork
-              )
+            ? this.#reconnectToEdge(instance.service)
             : disconnectNetwork(
                 this.#engine,
                 instance.service,
@@ -3519,6 +3520,8 @@ export class LifecycleDriver {
     }
     if (settings.mode === "coolify") {
       await this.#repairExternalEdge(settings, current)
+      // One that failed before tries again.
+      this.#refreshEdgeSoon()
     }
   }
 
@@ -3529,12 +3532,14 @@ export class LifecycleDriver {
     if (!(await this.#containerRunning(this.#resources.traefikContainer))) {
       // In platform mode, the platform pass starts it.
       if (settings.mode !== "traefik") return
-      await this.#repairEdgeTarget("bundled Traefik", () =>
-        this.#inLanes("relay.edge.traefik", [exclusive(laneKeys.routes)], () =>
+      this.#repairInLanes(
+        "bundled Traefik",
+        "relay.edge.traefik",
+        [exclusive(laneKeys.routes)],
+        () =>
           current()
             ? this.#ensureTraefik(settings, this.#webRoutes, false)
             : Promise.resolve()
-        )
       )
       return
     }
@@ -3547,12 +3552,14 @@ export class LifecycleDriver {
       this.#appsWithoutTraefik()
     )
     for (const appId of apps ?? []) {
-      await this.#repairEdgeTarget(`the network of app ${appId}`, () =>
-        this.#inLanes("relay.edge.app", appNetworkLocks(appId), () =>
+      this.#repairInLanes(
+        `the network of app ${appId}`,
+        "relay.edge.app",
+        appNetworkLocks(appId),
+        () =>
           this.#serializeEdgeMutation(async () => {
             if (current()) await this.#attachTraefikToApp(appId)
           })
-        )
       )
     }
   }
@@ -3633,32 +3640,66 @@ export class LifecycleDriver {
       this.#containersOffEdge()
     )
     for (const target of targets ?? []) {
-      await this.#repairEdgeTarget(target.name, () =>
-        this.#inLanes("relay.edge.attach", target.locks, () =>
-          this.#serializeEdgeMutation(async () => {
-            if (!current() || !target.routed()) return
-            const container = await recoverPromise(
-              () => runLifecycle(this.#engine.inspectContainer(target.name)),
-              () => null
-            )
-            if (
-              !container ||
-              Object.hasOwn(container.NetworkSettings?.Networks ?? {}, edge)
-            ) {
-              return
-            }
-            await this.#reconnect(target.name, edge)
-            if (container.State.Running) this.#edgeRefreshPending = true
-          })
-        )
+      this.#repairInLanes(target.name, "relay.edge.attach", target.locks, () =>
+        this.#serializeEdgeMutation(async () => {
+          if (current() && target.routed()) {
+            await this.#reconnectToEdge(target.name)
+          }
+        })
       )
     }
-    if (this.#edgeRefreshPending) {
-      await this.#repairEdgeTarget("Coolify's Traefik", async () => {
-        await this.#refreshExternalTraefik()
-        this.#edgeRefreshPending = false
-      })
+  }
+
+  // Joins a container to the edge network, if it's still there and not on
+  // it, and makes Coolify's Traefik see it there when it's running.
+  async #reconnectToEdge(name: string): Promise<void> {
+    const edge = this.#resources.edgeNetwork
+    const container = await recoverPromise(
+      () => runLifecycle(this.#engine.inspectContainer(name)),
+      () => null
+    )
+    if (
+      !container ||
+      Object.hasOwn(container.NetworkSettings?.Networks ?? {}, edge)
+    ) {
+      return
     }
+    await this.#reconnect(name, edge)
+    if (container.State.Running) {
+      this.#edgeReconnects += 1
+      this.#refreshEdgeSoon()
+    }
+  }
+
+  // Refreshes Coolify's Traefik until it has read containers after the last
+  // one rejoined. A failed refresh waits for the next pass.
+  #refreshEdgeSoon(): void {
+    if (
+      this.#closed ||
+      this.#edgeRefresh ||
+      this.#edgeRefreshed >= this.#edgeReconnects
+    ) {
+      return
+    }
+    this.#edgeRefresh = ensuringPromise(
+      async () => {
+        while (this.#edgeRefreshed < this.#edgeReconnects) {
+          const reconnects = this.#edgeReconnects
+          const refreshed = await this.#repairEdgeTarget(
+            "Coolify's Traefik",
+            async () => {
+              await this.#refreshExternalTraefik()
+              return true
+            }
+          )
+          if (!refreshed) return
+          this.#edgeRefreshed = reconnects
+        }
+      },
+      () => {
+        this.#edgeRefresh = null
+      }
+    )
   }
 
   // Routed servers and app services that aren't on the edge network, with
@@ -3766,17 +3807,33 @@ export class LifecycleDriver {
     console.log(`Relay attached ${container} to ${network}`)
   }
 
-  // Runs one change to a resource in its lanes. A paused Relay refuses it,
-  // and the next pass after it resumes tries again.
-  #inLanes(
+  // Repairs one resource in its lanes, on its own, so one waiting out a
+  // long deployment holds up nothing else. A paused Relay refuses it, and a
+  // pass after it resumes tries again.
+  #repairInLanes(
+    target: string,
     label: string,
     locks: ReadonlyArray<LaneLock>,
     run: () => Promise<void>
-  ): Promise<void> {
-    return runLifecycle(
-      this.#lanes.run(
-        { label, locks },
-        lifecycleOperation(run).pipe(Effect.withSpan("Relay.repairEdge"))
+  ): void {
+    if (this.#closed || this.#edgeRepairsWaiting.has(target)) return
+    this.#edgeRepairsWaiting.add(target)
+    forkPromise(() =>
+      ensuringPromise(
+        () =>
+          this.#repairEdgeTarget(target, () =>
+            runLifecycle(
+              this.#lanes.run(
+                { label, locks },
+                lifecycleOperation(run).pipe(
+                  Effect.withSpan("Relay.repairEdge")
+                )
+              )
+            )
+          ),
+        () => {
+          this.#edgeRepairsWaiting.delete(target)
+        }
       )
     )
   }

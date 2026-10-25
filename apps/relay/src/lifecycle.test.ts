@@ -2,6 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 
 vi.mock("./command.js", () => import("./test/docker.js"))
 
+import { Effect } from "effect"
+
+import { appLifecycleLocks } from "./operation-plans.js"
 import { appRouteOwner } from "./relay-resources.js"
 import { fakeDocker } from "./test/docker.js"
 import { relayHarness, TEST_NAMESPACE } from "./test/relay.js"
@@ -164,14 +167,14 @@ describe("edge recovery", () => {
     expect(traefik.starts).toBe(1)
   })
 
-  it("reconnects routed services to a remade edge network, retrying until Coolify's Traefik reads them again", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+  // A routed app service and game server on Coolify's Traefik, after
+  // another Relay took the edge network down and it was made again.
+  async function coolifyAfterIncident() {
     const harness = await relayHarness({
       KILN_RELAY_HOST: "relay.example.com",
       KILN_RELAY_PROXY: "coolify",
     })
     const edge = harness.resources.edgeNetwork
-    const refresh = harness.resources.traefikRefreshContainer
     relayContainer()
     const proxy = fakeDocker.addContainer({
       image: "traefik:v3.7",
@@ -180,45 +183,71 @@ describe("edge recovery", () => {
     })
     const app = appService()
     const server = await harness.seedServer({ id: serverId, running: true })
-    await harness.lifecycle.initializeProxy(
-      [route(appRouteOwner(appId)), route(serverId)],
-      coolifySettings
-    )
+    const routes = [route(appRouteOwner(appId)), route(serverId)]
+    await harness.lifecycle.initializeProxy(routes, coolifySettings)
     fakeDocker.connect(app.name, edge)
-    // Another Relay takes the edge network down, and it's made again.
     for (const container of [proxy, app, server]) {
       container.networks.delete(edge)
     }
     fakeDocker.networks.delete(edge)
-    const errors = vi.spyOn(console, "error")
-    fakeDocker.failNext({ command: "start" }, "no space left on device")
-    const since = fakeDocker.events.length
-
-    await vi.advanceTimersByTimeAsync(30_000)
-    await vi.waitFor(() => expect(errors).toHaveBeenCalled())
-    expect(
-      fakeDocker.events.slice(since).filter(({ action }) => action === "start")
-    ).toEqual([])
-    await vi.advanceTimersByTimeAsync(30_000)
-
-    await vi.waitFor(() =>
-      expect(fakeDocker.events.slice(since)).toContainEqual({
-        action: "start",
-        container: refresh,
-      })
-    )
-    const events = fakeDocker.events.slice(since)
-    const reconnected = events
-      .slice(
-        0,
-        events.findIndex(({ container }) => container === refresh)
+    // Whether Coolify's Traefik has read where a container is since it last
+    // joined the edge network: a container started after that.
+    const seen = (name: string) => {
+      const events = fakeDocker.events
+      const joined = events.findLastIndex(
+        (event) =>
+          event.action === "connect" &&
+          event.container === name &&
+          event.network === edge
       )
-      .filter(({ action, network }) => action === "connect" && network === edge)
-      .map(({ container }) => container)
-    expect(reconnected.sort()).toEqual(
-      [app.name, proxy.name, server.name].sort()
+      const refreshed = events.findLastIndex(
+        (event) =>
+          event.action === "start" &&
+          event.container === harness.resources.traefikRefreshContainer
+      )
+      return joined !== -1 && refreshed > joined
+    }
+    return { app, edge, harness, proxy, routes, seen, server }
+  }
+
+  it("reconnects routed services to a remade edge network, and Coolify's Traefik reads them again", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+    const { app, edge, harness, proxy, seen, server } =
+      await coolifyAfterIncident()
+    // The app is deploying, which holds its lifecycle lane.
+    const deployment = Promise.withResolvers<void>()
+    const deploying = Effect.runPromise(
+      harness.lanes.run(
+        { label: "app.deploy", locks: appLifecycleLocks(appId) },
+        Effect.promise(() => deployment.promise)
+      )
     )
+    fakeDocker.failNext({ command: "start" }, "no space left on device")
+
+    await vi.advanceTimersByTimeAsync(30_000)
+    await vi.waitFor(() => {
+      expect([...proxy.networks.keys()]).toContain(edge)
+      expect([...server.networks.keys()]).toContain(edge)
+    })
+    // The refresh that failed runs again on the next pass, while the
+    // deployment still holds the app.
+    await vi.advanceTimersByTimeAsync(30_000)
+    await vi.waitFor(() => expect(seen(server.name)).toBe(true))
+    expect([...app.networks.keys()]).not.toContain(edge)
+
+    deployment.resolve()
+    await deploying
+    await vi.advanceTimersByTimeAsync(30_000)
+    await vi.waitFor(() => expect(seen(app.name)).toBe(true))
     expect([app.starts, server.starts]).toEqual([0, 0])
+  })
+
+  it("makes Coolify's Traefik read a server that saving routes reconnected", async () => {
+    const { harness, routes, seen, server } = await coolifyAfterIncident()
+
+    await harness.lifecycle.configureWebRoutes(routes, coolifySettings)
+
+    await vi.waitFor(() => expect(seen(server.name)).toBe(true))
   })
 
   it("leaves the edge network and what's on it when no routes use it", async () => {
