@@ -449,6 +449,7 @@ const apps = new AppDriver(
   {
     routes: async (appId) =>
       lifecycle.appRoutePlan(
+        appId,
         await runRelayEffect(
           "relay.apps.routes",
           startupCore.state.listInstanceRoutes(appRouteOwner(appId))
@@ -3564,7 +3565,7 @@ async function appWebRouteState(appId: string) {
     ),
   ])
   return relayAppWebRouteStateSchema.parse({
-    ...(await lifecycle.appWebRouteState(routes, app.containers)),
+    ...(await lifecycle.appWebRouteState(appId, routes, app.containers)),
     routes: routes.map((route) => ({
       ...route,
       service: route.service ?? APP_SERVICE,

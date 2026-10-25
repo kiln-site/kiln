@@ -97,6 +97,8 @@ export interface DockerContainerInspect {
     readonly RestartPolicy?: { readonly Name?: string }
   }
   readonly Id: string
+  // The ID of the image it runs.
+  readonly Image: string
   readonly Mounts?: ReadonlyArray<DockerMount>
   readonly Name: string
   readonly NetworkSettings?: {

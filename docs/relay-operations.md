@@ -98,6 +98,32 @@ server to stopped, it doesn't start it. The snapshot loop only notes recovery
 candidates; it never waits for a lane, so a power change that samples the
 server can't deadlock against recovery.
 
+### Edge upkeep
+
+Every 30 seconds, the Relay puts back the network attachments its proxy
+reaches resources through, should anything take them away, such as a network
+removed and made again or a container disconnected by hand. It looks without
+locks, and takes a resource's lanes only to change it:
+
+- Bundled Traefik is on every App's network, routed or not, and on the
+  Relay's own networks. Joining an App's network takes the App shared, so it
+  waits out a create or delete, not a deployment. A deployment joins Traefik
+  to its App's network first, and a new Traefik container joins them all
+  right away, in its own pass, since whatever started it may be holding up
+  those Apps' lanes.
+- With Coolify's proxy, routed game servers and App services rejoin the
+  `kiln-edge` network in their lifecycle lane, which waits for a power change
+  or deployment. Coolify's Traefik reads where containers are only when one
+  starts or stops, so once a running one rejoined, the Relay starts a
+  container from its own image that exits at once
+  (`kiln-traefik-refresh`), until that succeeds. Nothing restarts.
+
+The Relay's own networks (its own, the game network, and Kiln's in platform
+mode) take no resource lane, so they carry on while the Relay is paused;
+changes to Apps and game servers wait until it's resumed. Removing routes
+never removes the edge network, and switching proxy modes leaves it as it is:
+containers leave it as they're redeployed or restarted.
+
 ### Schedules
 
 A schedule's steps are ordinary operations. A schedule notes each game

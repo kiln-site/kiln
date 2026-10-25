@@ -20,6 +20,7 @@ export interface RelayResourceNames {
   tailscaleStackDnsContainer(stackId: string): string
   tailscaleStackNetwork(stackId: string): string
   traefikContainer: string
+  traefikRefreshContainer: string
 }
 
 export function relayResourceNames(
@@ -51,6 +52,7 @@ export function relayResourceNames(
     tailscaleStackNetwork: (stackId) =>
       name(`kiln-ts-${stackId.slice(0, 8)}-network`),
     traefikContainer: name("kiln-traefik"),
+    traefikRefreshContainer: name("kiln-traefik-refresh"),
   }
 }
 

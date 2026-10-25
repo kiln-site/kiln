@@ -16,7 +16,11 @@ import { Effect, Fiber, Schedule, Semaphore } from "effect"
 import type { DatabaseConnections } from "./database-connections.js"
 import { resolveBrick, resolveBrickForProvisioning } from "./bricks.js"
 import { directoryApparentSizeEffect } from "./disk-usage.js"
-import { recoverPromise, tapPromiseError } from "./effect/promise.js"
+import {
+  ensuringPromise,
+  recoverPromise,
+  tapPromiseError,
+} from "./effect/promise.js"
 import type {
   BrickRecipe,
   RelayCreateInstance,
@@ -89,12 +93,19 @@ import {
 } from "./resource-limits.js"
 import {
   exclusive,
+  type LaneLock,
   laneKeys,
+  LaneRejectedError,
   type OperationLanes,
 } from "./operation-lanes.js"
 import {
+  appLifecycleLocks,
+  appNetworkLocks,
+  instanceLifecycleLocks,
+} from "./operation-plans.js"
+import {
   APP_SERVICE,
-  appIdFromRouteOwner,
+  appRouteOwner,
   relayOwnerLabels,
   relayOwnsLabels,
   relayResourceNames,
@@ -367,6 +378,17 @@ export class LifecycleDriver {
   readonly #resources: RelayResourceNames
   #edgeMutation: Promise<void> = Promise.resolve()
   #edgeReconciliationFiber: Fiber.Fiber<void> | null = null
+  // Moves on when the proxy settings change, so repairs begun under the
+  // old ones stop.
+  #edgeGeneration = 0
+  #closed = false
+  #edgeRepair: Promise<void> | null = null
+  #edgeRepairAgain = false
+  // Why each edge repair last failed, by what it repairs.
+  readonly #edgeRepairErrors = new Map<string, string>()
+  // A running container rejoined the edge network, and Coolify's Traefik
+  // hasn't been made to see it yet.
+  #edgeRefreshPending = false
   #hostDataDirectoryPromise: Promise<string> | null = null
   #listenerMode: RelayProxySettings["mode"] | null = null
   // The last reason Traefik couldn't serve Hearth, logged once.
@@ -1122,6 +1144,9 @@ export class LifecycleDriver {
         "Switching proxy TLS termination on or off changes Relay's private listener protocol. Set KILN_RELAY_PROXY, remove /data/proxy.json once, and restart Relay."
       )
     }
+    // An edge repair still running under the old settings stops changing
+    // anything.
+    this.#edgeGeneration += 1
     await this.#writeProxySettings(settings)
     this.hydrateProxySettings(settings)
     await this.configureWebRoutes(routes, settings)
@@ -1185,10 +1210,8 @@ export class LifecycleDriver {
       running?.State.Running &&
       running.Config.Image === settings.traefikImage
     ) {
-      await connectNetwork(
-        this.#engine,
-        this.#resources.traefikContainer,
-        edge.network
+      await this.#serializeEdgeMutation(() =>
+        this.#attachTraefikToRelayNetworks()
       )
       return
     }
@@ -1207,12 +1230,8 @@ export class LifecycleDriver {
     await this.#serializeEdgeMutation(() =>
       recoverPromise(
         async () => {
+          // It joins Kiln's network with the Relay's others.
           await this.#ensureTraefik(settings, routes, false)
-          await connectNetwork(
-            this.#engine,
-            this.#resources.traefikContainer,
-            edge.network
-          )
           this.#platformEdgeError = null
         },
         (cause) => {
@@ -1231,6 +1250,8 @@ export class LifecycleDriver {
   close(): void {
     this.#edgeReconciliationFiber?.interruptUnsafe()
     this.#edgeReconciliationFiber = null
+    this.#edgeGeneration += 1
+    this.#closed = true
   }
 
   async assertPrivateProxyListener(): Promise<void> {
@@ -1405,52 +1426,35 @@ export class LifecycleDriver {
       traefikDynamicConfiguration(this.#config, routes, settings),
       { mode: 0o600 }
     )
+    // Bundled Traefik is on every app's network already, so only an external
+    // one has containers to move. Routes going away never take the edge
+    // network down: other resources, or another Relay's, may still use it.
     if (settings.mode === "none" || settings.mode === "coolify") {
       await this.#serializeEdgeMutation(() =>
         this.#reconcileExternalTraefikRoutes(routes, settings)
       )
     } else {
       await this.#removeExternalTraefikRoutes()
-      await this.#serializeEdgeMutation(() =>
-        this.#disableExternalEdge(settings)
-      )
-      if (settings.mode === "traefik") {
-        await this.#connectTraefikToApps(routes)
-      }
-    }
-  }
-
-  // Bundled Traefik reaches routed apps on their own networks.
-  async #connectTraefikToApps(routes: ReadonlyArray<RelayStoredWebRoute>) {
-    const appIds = new Set(
-      routes.flatMap((route) => {
-        const appId = appIdFromRouteOwner(route.instanceId)
-        return appId ? [appId] : []
-      })
-    )
-    for (const appId of appIds) {
-      await recoverPromise(
-        () =>
-          connectNetwork(
-            this.#engine,
-            this.#resources.traefikContainer,
-            this.#resources.appNetwork(appId)
-          ),
-        () => undefined
-      )
     }
   }
 
   // The Traefik labels each of an app's services needs for its routes, and
   // the edge network Traefik reaches them on. Only an external Traefik reads
-  // labels; bundled Traefik routes from its file configuration.
+  // labels; bundled Traefik routes from its file configuration, and joins
+  // the app's network here, before each deploy, should it have left it.
   async appRoutePlan(
+    appId: string,
     routes: ReadonlyArray<RelayInstanceWebRoute & { readonly service?: string }>
   ): Promise<{
     labels: (service: string) => Record<string, string>
     network: string | null
   }> {
     const settings = await this.proxySettings()
+    if (this.#runsBundledTraefik(settings)) {
+      await this.#repairEdgeTarget(`the network of app ${appId}`, () =>
+        this.#serializeEdgeMutation(() => this.#attachTraefikToApp(appId))
+      )
+    }
     if (
       routes.length === 0 ||
       (settings.mode !== "none" && settings.mode !== "coolify")
@@ -1476,6 +1480,7 @@ export class LifecycleDriver {
   // as they're saved; an external one once a deploy puts their labels on
   // the app's containers.
   async appWebRouteState(
+    appId: string,
     routes: ReadonlyArray<
       RelayInstanceWebRoute & { readonly service?: string }
     >,
@@ -1487,14 +1492,28 @@ export class LifecycleDriver {
   ): Promise<Omit<RelayInstanceWebRouteState, "routes">> {
     const settings = await this.proxySettings()
     if (settings.mode === "traefik") {
-      return {
-        edgeConnected: false,
-        message:
-          "Bundled Traefik routes to this app as soon as routes are saved.",
-        proxyConnected: true,
-        requiresRestart: false,
-        status: "ready",
-      }
+      const proxyConnected = await containerUsesNetwork(
+        this.#engine,
+        this.#resources.traefikContainer,
+        this.#resources.appNetwork(appId)
+      )
+      return routes.length === 0 || proxyConnected
+        ? {
+            edgeConnected: false,
+            message:
+              "Bundled Traefik routes to this app as soon as routes are saved.",
+            proxyConnected: true,
+            requiresRestart: false,
+            status: "ready",
+          }
+        : {
+            edgeConnected: false,
+            message:
+              "Bundled Traefik isn't on this app's network. Relay is reconnecting it.",
+            proxyConnected: false,
+            requiresRestart: false,
+            status: "blocked",
+          }
     }
     if (settings.mode === "hearth") {
       return {
@@ -3319,18 +3338,7 @@ export class LifecycleDriver {
           replace || staticChanged || stale,
           traefik
         )
-        await connectNetwork(
-          this.#engine,
-          this.#resources.traefikContainer,
-          this.#resources.relayEdgeNetwork
-        )
-        await connectNetwork(
-          this.#engine,
-          this.#resources.traefikContainer,
-          this.#resources.gameNetwork
-        )
-        // A new Traefik container joins routed apps' networks too.
-        await this.#connectTraefikToApps(routes)
+        await this.#attachTraefikToRelayNetworks()
       }).pipe(
         Effect.mapError((cause) =>
           isPortBindingFailure(cause)
@@ -3342,6 +3350,10 @@ export class LifecycleDriver {
         )
       )
     )
+    // A new Traefik container joins apps' networks in a repair of its own:
+    // each waits its turn in that app's lanes, which the caller may be
+    // holding up.
+    this.#repairEdgeSoon()
   }
 
   async #reconcileExternalTraefikRoutes(
@@ -3349,17 +3361,17 @@ export class LifecycleDriver {
     settings: RelayProxySettings
   ): Promise<void> {
     await this.#removeExternalTraefikRoutes()
-    if (routes.length === 0) {
-      await this.#disableExternalEdge(settings)
-      return
-    }
-    await this.#ensureEdgeNetwork()
-    if (settings.mode === "coolify") {
-      const proxy = await this.#externalTraefikContainer(settings)
-      if (proxy)
-        await connectNetwork(this.#engine, proxy, this.#resources.edgeNetwork)
+    if (routes.length > 0) {
+      await this.#ensureEdgeNetwork()
+      if (settings.mode === "coolify") {
+        const proxy = await this.#externalTraefikContainer(settings)
+        if (proxy)
+          await connectNetwork(this.#engine, proxy, this.#resources.edgeNetwork)
+      }
     }
 
+    // A server whose routes were removed leaves the edge network; one that
+    // has routes joins it.
     const routedInstances = new Set(routes.map((route) => route.instanceId))
     const instances = await this.#docker.inspectInstances()
     await Promise.all(
@@ -3444,28 +3456,353 @@ export class LifecycleDriver {
     return recoveryRouteLabels(routes)
   }
 
+  // Bundled Traefik runs in Traefik mode, and in platform mode to serve
+  // Hearth whatever the Relay's own mode.
+  #runsBundledTraefik(settings: RelayProxySettings): boolean {
+    return settings.mode === "traefik" || this.#config.platformEdge !== null
+  }
+
+  // Every 30 seconds, puts back what the proxy reaches resources through if
+  // anything took it away: a network removed and made again, or a container
+  // disconnected by hand or by another Relay.
   #scheduleEdgeReconciliation(settings: RelayProxySettings): void {
     this.#edgeReconciliationFiber?.interruptUnsafe()
     this.#edgeReconciliationFiber = null
-    if (settings.mode !== "coolify") return
-    const reconcile = Effect.tryPromise({
-      try: () =>
-        this.#serializeEdgeMutation(() =>
-          this.#reconcileExternalTraefikRoutes(this.#webRoutes, settings)
+    if (!this.#runsBundledTraefik(settings) && settings.mode !== "coolify") {
+      return
+    }
+    this.#edgeReconciliationFiber = Effect.runFork(
+      Effect.sleep("30 seconds").pipe(
+        Effect.andThen(
+          Effect.promise(() => {
+            this.#repairEdgeSoon()
+            return this.#edgeRepair ?? Promise.resolve()
+          })
         ),
-      catch: (cause) => cause,
-    }).pipe(
-      Effect.catch((cause) =>
-        Effect.sync(() => {
-          console.error(
-            "Relay could not reconcile the Coolify Traefik edge",
-            cause
-          )
-        })
+        Effect.forever
       )
     )
-    this.#edgeReconciliationFiber = Effect.runFork(
-      Effect.sleep("30 seconds").pipe(Effect.andThen(reconcile), Effect.forever)
+  }
+
+  // Starts a repair pass, or another once the running one finishes.
+  #repairEdgeSoon(): void {
+    if (this.#closed) return
+    if (this.#edgeRepair) {
+      this.#edgeRepairAgain = true
+      return
+    }
+    this.#edgeRepair = ensuringPromise(
+      async () => {
+        do {
+          this.#edgeRepairAgain = false
+          await this.#repairEdge()
+        } while (this.#edgeRepairAgain)
+      },
+      () => {
+        this.#edgeRepair = null
+      }
+    )
+  }
+
+  // Looks without locks first, and takes a resource's lanes only to change
+  // it. Whatever started under settings since replaced changes nothing.
+  async #repairEdge(): Promise<void> {
+    const generation = this.#edgeGeneration
+    const current = () => generation === this.#edgeGeneration
+    const settings = await recoverPromise(
+      () => this.proxySettings(),
+      () => null
+    )
+    if (!settings) return
+    if (this.#runsBundledTraefik(settings)) {
+      await this.#repairBundledTraefik(settings, current)
+    }
+    if (settings.mode === "coolify") {
+      await this.#repairExternalEdge(settings, current)
+    }
+  }
+
+  async #repairBundledTraefik(
+    settings: RelayProxySettings,
+    current: () => boolean
+  ): Promise<void> {
+    if (!(await this.#containerRunning(this.#resources.traefikContainer))) {
+      // In platform mode, the platform pass starts it.
+      if (settings.mode !== "traefik") return
+      await this.#repairEdgeTarget("bundled Traefik", () =>
+        this.#inLanes("relay.edge.traefik", [exclusive(laneKeys.routes)], () =>
+          current()
+            ? this.#ensureTraefik(settings, this.#webRoutes, false)
+            : Promise.resolve()
+        )
+      )
+      return
+    }
+    await this.#repairEdgeTarget("the Relay's networks", () =>
+      this.#serializeEdgeMutation(async () => {
+        if (current()) await this.#attachTraefikToRelayNetworks()
+      })
+    )
+    const apps = await this.#repairEdgeTarget("app networks", () =>
+      this.#appsWithoutTraefik()
+    )
+    for (const appId of apps ?? []) {
+      await this.#repairEdgeTarget(`the network of app ${appId}`, () =>
+        this.#inLanes("relay.edge.app", appNetworkLocks(appId), () =>
+          this.#serializeEdgeMutation(async () => {
+            if (current()) await this.#attachTraefikToApp(appId)
+          })
+        )
+      )
+    }
+  }
+
+  // The networks Traefik reaches the Relay's own services on: the Relay
+  // itself, under its alias; game servers; and Hearth in platform mode.
+  async #attachTraefikToRelayNetworks(): Promise<void> {
+    const traefik = this.#resources.traefikContainer
+    await this.#ensureRelayEdgeNetwork()
+    await connectNetworkWithAlias(
+      this.#engine,
+      requiredRelayContainerReference(),
+      this.#resources.relayEdgeNetwork,
+      this.#resources.relayEdgeAlias
+    )
+    for (const network of [
+      this.#resources.relayEdgeNetwork,
+      this.#resources.gameNetwork,
+      this.#config.platformEdge?.network,
+    ]) {
+      if (network && (await this.#networkLabels(network))) {
+        await this.#reconnect(traefik, network)
+      }
+    }
+  }
+
+  // Bundled Traefik joins every app's network, routed or not yet, so a
+  // route works as soon as it's saved.
+  async #attachTraefikToApp(appId: string): Promise<void> {
+    const network = this.#resources.appNetwork(appId)
+    if (
+      !(await this.#containerLabels(this.#resources.traefikContainer)) ||
+      !(await this.#networkLabels(network))
+    ) {
+      return
+    }
+    await this.#reconnect(this.#resources.traefikContainer, network)
+  }
+
+  // Apps whose network bundled Traefik isn't on.
+  async #appsWithoutTraefik(): Promise<Array<string>> {
+    const [networks, joined] = await Promise.all([
+      runLifecycle(
+        this.#engine.listNetworks({
+          filters: { label: ["kiln.resource.kind=app"] },
+        })
+      ),
+      containerNetworks(this.#engine, this.#resources.traefikContainer),
+    ])
+    return networks.flatMap(({ Labels: labels, Name: name }) => {
+      const appId = labels?.["kiln.app.id"]
+      return appId &&
+        relayOwnsLabels(this.#config, labels) &&
+        name === this.#resources.appNetwork(appId) &&
+        !Object.hasOwn(joined, name)
+        ? [appId]
+        : []
+    })
+  }
+
+  // Coolify's Traefik routes by label to the edge network, which routed
+  // servers and app services join.
+  async #repairExternalEdge(
+    settings: RelayProxySettings,
+    current: () => boolean
+  ): Promise<void> {
+    const edge = this.#resources.edgeNetwork
+    if (this.#webRoutes.length === 0) return
+    await this.#repairEdgeTarget("the edge network", () =>
+      this.#serializeEdgeMutation(async () => {
+        if (!current()) return
+        await this.#ensureEdgeNetwork()
+        const proxy = await this.#externalTraefikContainer(settings)
+        if (proxy) await this.#reconnect(proxy, edge)
+      })
+    )
+    const targets = await this.#repairEdgeTarget("routed containers", () =>
+      this.#containersOffEdge()
+    )
+    for (const target of targets ?? []) {
+      await this.#repairEdgeTarget(target.name, () =>
+        this.#inLanes("relay.edge.attach", target.locks, () =>
+          this.#serializeEdgeMutation(async () => {
+            if (!current() || !target.routed()) return
+            const container = await recoverPromise(
+              () => runLifecycle(this.#engine.inspectContainer(target.name)),
+              () => null
+            )
+            if (
+              !container ||
+              Object.hasOwn(container.NetworkSettings?.Networks ?? {}, edge)
+            ) {
+              return
+            }
+            await this.#reconnect(target.name, edge)
+            if (container.State.Running) this.#edgeRefreshPending = true
+          })
+        )
+      )
+    }
+    if (this.#edgeRefreshPending) {
+      await this.#repairEdgeTarget("Coolify's Traefik", async () => {
+        await this.#refreshExternalTraefik()
+        this.#edgeRefreshPending = false
+      })
+    }
+  }
+
+  // Routed servers and app services that aren't on the edge network, with
+  // the locks reconnecting each takes and whether it's still routed.
+  async #containersOffEdge(): Promise<
+    Array<{
+      locks: ReadonlyArray<LaneLock>
+      name: string
+      routed: () => boolean
+    }>
+  > {
+    const edge = this.#resources.edgeNetwork
+    const routed = (owner: string, service?: string) => () =>
+      this.#webRoutes.some(
+        (route) =>
+          route.instanceId === owner &&
+          (service === undefined || (route.service ?? APP_SERVICE) === service)
+      )
+    const servers = (await this.#docker.inspectInstances()).filter(
+      (instance) => instance.managedByRelay && routed(instance.id)()
+    )
+    const apps = (
+      await runLifecycle(
+        this.#engine.listContainers({
+          all: true,
+          filters: { label: ["kiln.resource.kind=app"] },
+        })
+      )
+    ).flatMap((container) => {
+      const labels = container.Labels ?? {}
+      const appId = labels["kiln.app.id"]
+      const service = labels["kiln.app.service"]
+      return appId &&
+        service &&
+        relayOwnsLabels(this.#config, labels) &&
+        routed(appRouteOwner(appId), service)()
+        ? [
+            {
+              locks: appLifecycleLocks(appId),
+              name: containerName(container),
+              routed: routed(appRouteOwner(appId), service),
+            },
+          ]
+        : []
+    })
+    const candidates = [
+      ...servers.map((instance) => ({
+        locks: instanceLifecycleLocks(instance.id),
+        name: instance.service,
+        routed: routed(instance.id),
+      })),
+      ...apps,
+    ]
+    const attached = await Promise.all(
+      candidates.map(({ name }) =>
+        containerUsesNetwork(this.#engine, name, edge)
+      )
+    )
+    return candidates.filter((_, index) => !attached[index])
+  }
+
+  // Coolify's Traefik reads where containers are only when one starts or
+  // stops, not when one joins a network, so it keeps sending a reconnected
+  // container's requests to the address it had. A container that starts
+  // and exits at once makes it read them all again, and nothing restarts.
+  async #refreshExternalTraefik(): Promise<void> {
+    const relay = await runLifecycle(
+      this.#engine.inspectContainer(
+        this.#config.selfContainer ?? requiredRelayContainerReference()
+      )
+    )
+    const name = this.#resources.traefikRefreshContainer
+    await this.#removeOwnedContainer(name)
+    const created = await runLifecycle(
+      this.#engine.createContainer(name, {
+        // The Relay's own image, which has Node.
+        Image: relay.Image,
+        Entrypoint: [process.execPath],
+        Cmd: ["-e", ""],
+        Healthcheck: { Test: ["NONE"] },
+        Labels: {
+          ...relayOwnerLabels(this.#config),
+          "kiln.relay.infrastructure": "traefik-refresh",
+          "traefik.enable": "false",
+        },
+        HostConfig: { AutoRemove: true, NetworkMode: "none" },
+      })
+    )
+    await runLifecycle(
+      this.#engine
+        .startContainer(created.Id)
+        .pipe(
+          Effect.tapError(() =>
+            lifecycleOperation(() => this.#removeOwnedContainer(name)).pipe(
+              Effect.ignore
+            )
+          )
+        )
+    )
+  }
+
+  async #reconnect(container: string, network: string): Promise<void> {
+    if (await containerUsesNetwork(this.#engine, container, network)) return
+    await runLifecycle(this.#engine.connectNetwork(network, container))
+    console.log(`Relay attached ${container} to ${network}`)
+  }
+
+  // Runs one change to a resource in its lanes. A paused Relay refuses it,
+  // and the next pass after it resumes tries again.
+  #inLanes(
+    label: string,
+    locks: ReadonlyArray<LaneLock>,
+    run: () => Promise<void>
+  ): Promise<void> {
+    return runLifecycle(
+      this.#lanes.run(
+        { label, locks },
+        lifecycleOperation(run).pipe(Effect.withSpan("Relay.repairEdge"))
+      )
+    )
+  }
+
+  // Logs each target's failure once, until it's repaired, then says so.
+  async #repairEdgeTarget<A>(
+    target: string,
+    repair: () => Promise<A>
+  ): Promise<A | null> {
+    return recoverPromise(
+      async () => {
+        const result = await repair()
+        if (this.#edgeRepairErrors.delete(target)) {
+          console.log(`Relay repaired ${target}`)
+        }
+        return result
+      },
+      (cause) => {
+        if (cause instanceof LaneRejectedError) return null
+        const message = cause instanceof Error ? cause.message : String(cause)
+        if (this.#edgeRepairErrors.get(target) !== message) {
+          this.#edgeRepairErrors.set(target, message)
+          console.error(`Relay couldn't repair ${target}:`, message)
+        }
+        return null
+      }
     )
   }
 
@@ -3479,45 +3816,6 @@ export class LifecycleDriver {
       () => undefined
     )
     return result
-  }
-
-  async #disableExternalEdge(settings: RelayProxySettings): Promise<void> {
-    const instances = await this.#docker.inspectInstances()
-    const proxy = await this.#externalTraefikContainer(settings)
-    // Apps join the edge network for their routes too.
-    const apps = await recoverPromise(
-      async () =>
-        (
-          await runLifecycle(
-            this.#engine.listContainers({
-              all: true,
-              filters: {
-                label: ["kiln.resource.kind=app"],
-                network: [this.#resources.edgeNetwork],
-              },
-            })
-          )
-        ).map(containerName),
-      () => []
-    )
-    await Promise.all([
-      ...apps.map((app) =>
-        disconnectNetwork(this.#engine, app, this.#resources.edgeNetwork)
-      ),
-      ...instances
-        .filter((instance) => instance.managedByRelay)
-        .map((instance) =>
-          disconnectNetwork(
-            this.#engine,
-            instance.service,
-            this.#resources.edgeNetwork
-          )
-        ),
-      ...(proxy
-        ? [disconnectNetwork(this.#engine, proxy, this.#resources.edgeNetwork)]
-        : []),
-    ])
-    await this.#removeOwnedNetwork(this.#resources.edgeNetwork)
   }
 
   async #removeExternalTraefikRoutes(): Promise<void> {

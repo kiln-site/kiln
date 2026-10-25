@@ -202,6 +202,15 @@ class DockerFailure extends Error {
 
 export class FakeDocker {
   readonly containers = new Map<string, FakeContainer>()
+  /**
+   * Container starts and network connects, in order: what a proxy that
+   * watches Docker's events, such as Traefik's Docker provider, sees.
+   */
+  readonly events: Array<{
+    action: "connect" | "start"
+    container: string
+    network?: string
+  }> = []
   readonly networks = new Map<string, FakeNetwork>()
   readonly volumes = new Map<string, FakeVolume>()
   readonly execs = new Map<string, FakeExec>()
@@ -334,6 +343,7 @@ export class FakeDocker {
   reset(): void {
     const unmodelled = this.#unmodelled
     this.containers.clear()
+    this.events.length = 0
     this.execs.clear()
     this.execGreeting = ""
     this.missingPrograms.clear()
@@ -1211,6 +1221,7 @@ export class FakeDocker {
       container.state.running = true
       container.state.startedAt = this.#timestamp()
       container.starts += 1
+      this.events.push({ action: "start", container: container.name })
       setImmediate(() => this.#finishRunOnce(container))
       return
     }
@@ -1226,6 +1237,7 @@ export class FakeDocker {
         : "healthy"
       : undefined
     container.starts += 1
+    this.events.push({ action: "start", container: container.name })
     // Each run gets a fresh network namespace.
     container.firewall = new Map()
     if (container.image.startsWith("tailscale/tailscale")) {
@@ -1418,6 +1430,11 @@ export class FakeDocker {
     container.networks.set(network.name, {
       aliases: [...endpoint.aliases, container.name],
       ipAddress: endpoint.ipAddress,
+    })
+    this.events.push({
+      action: "connect",
+      container: container.name,
+      network: network.name,
     })
   }
 

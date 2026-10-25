@@ -138,6 +138,7 @@ export async function relayHarness(
       {
         routes: async (appId) =>
           lifecycle.appRoutePlan(
+            appId,
             await Effect.runPromise(
               state.listInstanceRoutes(appRouteOwner(appId))
             )

@@ -776,11 +776,64 @@ describe("apps", () => {
       [route]
     )
 
-    expect([
-      ...fakeDocker
-        .container(harness.resources.traefikContainer)!
-        .networks.keys(),
-    ]).toContain(harness.resources.appNetwork(appId))
+    // It joins in a repair of its own, which takes the app's lanes.
+    await vi.waitFor(() =>
+      expect([
+        ...fakeDocker
+          .container(harness.resources.traefikContainer)!
+          .networks.keys(),
+      ]).toContain(harness.resources.appNetwork(appId))
+    )
+  })
+
+  it("puts bundled Traefik back on an app's network when the app deploys", async () => {
+    const harness = await relayHarness({ KILN_RELAY_PROXY: "traefik" })
+    await harness.apps.create({ id: appId, name: "Website" })
+    fakeDocker.images.set("nginx:alpine", {})
+    // Not on the app's network, as after being disconnected by hand.
+    const traefik = fakeDocker.addContainer({
+      name: harness.resources.traefikContainer,
+      running: true,
+    })
+
+    await deploy(harness, {})
+
+    expect([...traefik.networks.keys()]).toContain(
+      harness.resources.appNetwork(appId)
+    )
+  })
+
+  it("deletes an app while bundled Traefik is repairing its network", async () => {
+    const harness = await relayHarness({ KILN_RELAY_PROXY: "traefik" })
+    fakeDocker.addContainer({ name: "kiln-relay", running: true })
+    vi.stubEnv("HOSTNAME", "kiln-relay")
+    await harness.apps.create({ id: appId, name: "Website" })
+    const network = harness.resources.appNetwork(appId)
+    const removing = fakeDocker.hold({ command: "network rm", target: network })
+    const deleted = Effect.runPromise(
+      harness.lanes.run(
+        { label: "app.delete", locks: appReplaceLocks(appId) },
+        Effect.promise(() => harness.apps.delete({ appId, deleteData: false }))
+      )
+    )
+    await removing.reached
+
+    // Traefik starts meanwhile and goes to join every app's network.
+    await harness.lifecycle.configureProxy(
+      {
+        acmeEmail: "admin@example.com",
+        mode: "traefik",
+        traefikImage: "traefik:v3.7.13",
+      },
+      []
+    )
+    // The repair waits for the delete rather than joining the network
+    // between the delete's disconnects and its removal.
+    await vi.waitFor(() => expect(harness.lanes.pending.waiting).toBe(1))
+    removing.release()
+
+    await deleted
+    expect(fakeDocker.networks.has(network)).toBe(false)
   })
 
   it("removes a routed app's network that bundled Traefik joined", async () => {

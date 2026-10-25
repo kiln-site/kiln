@@ -65,6 +65,14 @@ export function appLifecycleLocks(appId: string): Array<LaneLock> {
   return [shared(laneKeys.app(appId)), exclusive(laneKeys.appLifecycle(appId))]
 }
 
+/**
+ * Joining the edge proxy to an App's network, which outlasts its
+ * containers: waits out the App's create and delete, not its deployments.
+ */
+export function appNetworkLocks(appId: string): Array<LaneLock> {
+  return [shared(laneKeys.app(appId))]
+}
+
 export function appFileLocks(appId: string): Array<LaneLock> {
   return [shared(laneKeys.app(appId)), exclusive(laneKeys.appFiles(appId))]
 }
