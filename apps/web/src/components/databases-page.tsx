@@ -426,10 +426,7 @@ const DatabaseTable = React.memo(function DatabaseTable({
         header: "Engine",
         sortFn: "text",
         cell: ({ row }) => <EngineBadge engine={row.original.engine} />,
-        meta: dataTableColumnMeta({
-          hideBelow: "md",
-          width: "8.5rem",
-        }),
+        meta: dataTableColumnMeta({ width: { base: "6.5rem", md: "8.5rem" } }),
       }),
       databaseTableColumnHelper.accessor((database) => database.relayName, {
         id: "relay",

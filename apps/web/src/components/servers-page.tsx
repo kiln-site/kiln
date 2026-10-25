@@ -466,7 +466,7 @@ const ServerDataTable = React.memo(function ServerDataTable({
           <DataTableTextCell value={row.original.server.relayName} />
         ),
         meta: dataTableColumnMeta({
-          hideBelow: "md",
+          hideBelow: "xl",
           width: "minmax(0,0.8fr)",
         }),
       }),
@@ -490,8 +490,11 @@ const ServerDataTable = React.memo(function ServerDataTable({
           )
         },
         meta: dataTableColumnMeta({
-          hideBelow: "xl",
-          width: "minmax(12rem,1fr)",
+          width: {
+            base: "minmax(0,0.9fr)",
+            md: "minmax(0,1fr)",
+            xl: "minmax(12rem,1fr)",
+          },
         }),
       }),
       serverTableColumnHelper.display({

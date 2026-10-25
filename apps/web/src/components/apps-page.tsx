@@ -110,10 +110,11 @@ import {
 } from "@/lib/infra-directory"
 import type { DataTableSource } from "@/lib/data-table-source"
 import type { InstanceFavorite } from "@/lib/instance-favorites"
-import { queryKeys } from "@/lib/query-options"
+import { queryKeys, relayWebRoutesQueryOptions } from "@/lib/query-options"
 import { recoverPromise } from "@/effect/promise"
 import { saveAppGitHubSource } from "@/server/app-deployments"
 import { createApp, deployApp, runAppAction } from "@/server/apps"
+import type { getRelayWebRoutes } from "@/server/relays"
 import type { getInfraRelayOptions } from "@/server/infra-directory"
 
 type AppRelay = Awaited<
@@ -351,6 +352,17 @@ const AppTable = React.memo(function AppTable({
           width: { base: "minmax(0,1fr)", md: "minmax(0,1.5fr)" },
         }),
       }),
+      appTableColumnHelper.display({
+        id: "link",
+        header: "Link",
+        enableSorting: false,
+        cell: ({ row }) => (
+          <AppLinkCell appId={row.original.id} relayId={row.original.relayId} />
+        ),
+        meta: dataTableColumnMeta({
+          width: { base: "minmax(0,0.9fr)", md: "minmax(0,1fr)" },
+        }),
+      }),
       appTableColumnHelper.accessor((app) => appRowContainersLabel(app), {
         id: "containers",
         header: "Containers",
@@ -365,7 +377,7 @@ const AppTable = React.memo(function AppTable({
             value={appRowContainersLabel(row.original)}
           />
         ),
-        meta: dataTableColumnMeta({ hideBelow: "md", width: "9rem" }),
+        meta: dataTableColumnMeta({ hideBelow: "lg", width: "9rem" }),
       }),
       appTableColumnHelper.accessor((app) => app.relayName, {
         id: "relay",
@@ -373,7 +385,7 @@ const AppTable = React.memo(function AppTable({
         sortFn: "text",
         cell: ({ row }) => <DataTableTextCell value={row.original.relayName} />,
         meta: dataTableColumnMeta({
-          hideBelow: "md",
+          hideBelow: "xl",
           width: "minmax(8rem,0.8fr)",
         }),
       }),
@@ -594,6 +606,44 @@ const AppActions = React.memo(function AppActions({
         </DropdownMenuContent>
       </DropdownMenu>
     </DataTableActionGroup>
+  )
+})
+
+// An app's first web route. The Relay's routes come in one request, shared
+// by every app on it; each cell re-renders only when its own link changes.
+const AppLinkCell = React.memo(function AppLinkCell({
+  appId,
+  relayId,
+}: {
+  appId: string
+  relayId: string
+}) {
+  const selectLink = React.useCallback(
+    (routes: Awaited<ReturnType<typeof getRelayWebRoutes>>) => {
+      const route = routes?.find(
+        ({ owner }) => owner.kind === "app" && owner.id === appId
+      )
+      return route ? `${route.hostname}${route.path ?? ""}` : null
+    },
+    [appId]
+  )
+  const { data: link } = useQuery({
+    ...relayWebRoutesQueryOptions(relayId),
+    select: selectLink,
+  })
+  if (!link) {
+    return <span className="type-meta text-muted-foreground">—</span>
+  }
+  return (
+    <a
+      className="type-meta block min-w-0 truncate font-mono text-foreground hover:text-primary-ink"
+      href={`https://${link}`}
+      rel="noreferrer"
+      target="_blank"
+      title={`https://${link}`}
+    >
+      {link}
+    </a>
   )
 })
 

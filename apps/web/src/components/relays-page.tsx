@@ -661,8 +661,7 @@ function RelayTable({
           )
         },
         meta: dataTableColumnMeta({
-          hideBelow: "lg",
-          width: "minmax(0,1fr)",
+          width: { base: "minmax(0,0.9fr)", lg: "minmax(0,1fr)" },
         }),
       }),
       relayTableColumnHelper.accessor(
