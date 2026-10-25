@@ -108,8 +108,12 @@ switch (command) {
   case "test":
     // Web tests, including the real-MySQL suites, against this stack's MySQL.
     run(
-      "pnpm",
-      ["exec", "vp", "test", "run", ...process.argv.slice(3)],
+      process.execPath,
+      [
+        resolve(worktreeRoot, "scripts/verify.mjs"),
+        "hearth",
+        ...process.argv.slice(3),
+      ],
       {
         ...process.env,
         KILN_TEST_MYSQL: "1",
@@ -119,7 +123,7 @@ switch (command) {
         DB_USERNAME: "root",
         DB_PASSWORD: "kiln-root",
       },
-      resolve(worktreeRoot, "apps/web")
+      worktreeRoot
     )
     break
   case "list":

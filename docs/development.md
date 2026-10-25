@@ -49,8 +49,45 @@ to be unique across running stacks.
 | `pnpm dev:docker:destroy` | Delete a worktree's stack, data, and Relay resources |
 | `pnpm dev:docker:test` | Run web tests against the stack's MySQL |
 
-Run relevant checks with `vp check`, `vp run typecheck`, or targeted
-`vp test run` suites. Validate user-visible changes in the browser.
+## Verification
+
+Before pushing, run the same checks as CI:
+
+```sh
+pnpm dev:docker:up
+pnpm verify
+```
+
+`pnpm verify` runs the four **Code checks** stages in order and stops on the
+first failure. CI runs those same stages in separate jobs. The command uses
+the running dev stack's MySQL for Hearth tests; it does not start the stack
+or silently skip database tests. Keep any port or network overrides from
+stack startup set in your shell when verifying.
+
+| Command              | Checks                                                |
+| -------------------- | ----------------------------------------------------- |
+| `pnpm verify static` | All package typechecks and `vp check`                 |
+| `pnpm verify tests`  | Non-Hearth package tests and repository tooling tests |
+| `pnpm verify hearth` | Hearth tests, including the real-MySQL suites         |
+| `pnpm verify build`  | All package builds and the generated route tree diff  |
+
+Use individual stages and targeted tests while iterating. For example,
+`pnpm dev:docker:test src/server/auth-coverage.test.ts` and
+`pnpm verify hearth src/server/auth-coverage.test.ts` both use the shared
+Hearth stage. Validate user-visible changes in the browser.
+
+To use a disposable MySQL outside the dev stack, set `KILN_TEST_MYSQL=1`
+and `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USERNAME`, and `DB_PASSWORD`.
+`DB_NAME` must end in `_test`; the test runner creates per-worker databases.
+CI supplies these variables for its MySQL container.
+
+The build stage writes to `artifacts/verify/build.log`, then prints the log
+and returns the build's exit status. This avoids Vite+ output-forwarding
+errors on long asset lists. A successful build also requires
+`apps/web/src/routeTree.gen.ts` to match the checked-in version.
+
+Native CLI platform checks and container-image builds remain separate CI
+workflows; `pnpm verify` covers the Code checks workflow.
 
 `vp run typecheck` uses the pinned tsrs compiler with two checkers per package
 and checks packages one at a time to leave resources for parallel work. Package

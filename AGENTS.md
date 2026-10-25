@@ -133,8 +133,9 @@ guide doesn't cover, search through the source code in `node_modules/effect/src`
 - Before changing core components, start `pnpm dev:docker` and confirm Hearth
   loads at the printed URL. Validate user-visible changes in the browser.
   Docs-only work does not need a stack.
-- Validate the changed behavior. Before pushing, run `vp check`,
-  `vp run typecheck`, and the tests for what you changed. Follow
+- Validate the changed behavior. Before pushing, run `pnpm verify`, the same
+  checks as CI including real-MySQL tests, builds, and generated routes. Use
+  individual verification stages or targeted tests while iterating. Follow
   [Contributing](CONTRIBUTING.md) for PR conventions. When asked to deliver a PR,
   commit, push, and open it ready for review. Never merge it yourself.
 - After merge, follow the cleanup instructions in the development guide.

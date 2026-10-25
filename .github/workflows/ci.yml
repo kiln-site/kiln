@@ -21,33 +21,25 @@ jobs:
       matrix:
         include:
           - name: Static checks
-            command: |
-              vp run typecheck
-              vp check
+            stage: static
+            env: {}
           - name: Tests
-            # Every package's test task except Hearth's, plus scripts/ tests.
-            # The root package is excluded too: its own "test" script runs
-            # every package, Hearth included.
-            command: |
-              vp run --filter '!web' --filter '!kiln' test
-              vp test run
+            stage: tests
+            env: {}
           - name: Hearth tests
             # Runs alone so its import-heavy suite gets the whole runner.
             mysql: true
-            command: |
-              KILN_TEST_MYSQL=1 DB_HOST=127.0.0.1 DB_PORT=3306 \
-                DB_NAME=kiln_test DB_USERNAME=root DB_PASSWORD=root \
-                vp run --filter web test
+            stage: hearth
+            env:
+              KILN_TEST_MYSQL: "1"
+              DB_HOST: 127.0.0.1
+              DB_PORT: "3306"
+              DB_NAME: kiln_test
+              DB_USERNAME: root
+              DB_PASSWORD: root
           - name: Build
-            # vp fails a task when it can't forward its output fast enough
-            # ("Resource temporarily unavailable"), which the web build's
-            # long asset list sometimes trips. A file always takes it.
-            command: |
-              status=0
-              vp run -r build > "$RUNNER_TEMP/build.log" 2>&1 || status=$?
-              cat "$RUNNER_TEMP/build.log"
-              test "$status" -eq 0
-              git diff --exit-code -- apps/web/src/routeTree.gen.ts
+            stage: build
+            env: {}
     steps:
       # Backs the real-MySQL suites (apps/web/src/test/database.ts). Pulled
       # and booted in the background while the job sets up. The data is
@@ -81,4 +73,5 @@ jobs:
             { cat "$RUNNER_TEMP/mysql.log"; docker logs mysql; exit 1; }
 
       - name: Run ${{ matrix.name }}
-        run: ${{ matrix.command }}
+        env: ${{ matrix.env }}
+        run: pnpm verify ${{ matrix.stage }}

@@ -20,6 +20,7 @@
     "test": "vp run -r test && vp test run",
     "format": "vp fmt",
     "typecheck": "vp run -r --concurrency-limit 1 typecheck",
+    "verify": "node scripts/verify.mjs",
     "doctor": "npx react-doctor@latest"
   },
   "devDependencies": {
