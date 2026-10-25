@@ -1102,7 +1102,20 @@ install_cli() {
       # shellcheck disable=SC2088 # shown, not expanded
       case "${SHELL:-}" in
         */zsh) profile="~/.zshrc" ;;
-        */bash) profile="~/.bashrc" ;;
+        */bash)
+          profile="~/.bashrc"
+          # macOS's Terminal starts bash as a login shell, which reads the
+          # first of these it finds and not ~/.bashrc.
+          if [ "$(uname -s)" = "Darwin" ]; then
+            profile="~/.bash_profile"
+            for file in .bash_profile .bash_login .profile; do
+              if [ -f "$HOME/$file" ]; then
+                profile="~/$file"
+                break
+              fi
+            done
+          fi
+          ;;
         *) profile="your shell's profile" ;;
       esac
       say "  $cli_dir isn't on your PATH yet. Add this line to $profile,"
