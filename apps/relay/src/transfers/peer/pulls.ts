@@ -11,7 +11,7 @@ import { rm, stat } from "node:fs/promises"
 import { join } from "node:path"
 import type { Readable } from "node:stream"
 import { pipeline } from "node:stream/promises"
-import { Clock, Effect, Fiber, Schedule, Schema } from "effect"
+import { Clock, Effect, Fiber, Schedule, Schema, Semaphore } from "effect"
 
 import {
   RelayPeerEndpointSchema,
@@ -68,6 +68,9 @@ export class TransferPulls {
   readonly #records = new Map<string, PullRecord>()
   readonly #running = new Map<string, Fiber.Fiber<void>>()
   readonly #savedAt = new Map<string, number>()
+  // One write of a transfer's record at a time, so a slow progress write
+  // can't land after, and undo, the one that finished it.
+  readonly #saving = new Map<string, Semaphore.Semaphore>()
 
   constructor(options: TransferPullsOptions) {
     this.#options = options
@@ -413,12 +416,23 @@ export class TransferPulls {
   }
 
   #save(record: PullRecord) {
-    this.#records.set(record.pull.transferId, record)
-    return writeTransferRecord(
-      this.#options.directory,
-      record.pull.transferId,
-      PullRecordSchema,
-      record
+    const { transferId } = record.pull
+    this.#records.set(transferId, record)
+    let saving = this.#saving.get(transferId)
+    if (!saving) {
+      saving = Semaphore.makeUnsafe(1)
+      this.#saving.set(transferId, saving)
+    }
+    // Whichever write runs last writes the latest record.
+    return saving.withPermits(1)(
+      Effect.suspend(() =>
+        writeTransferRecord(
+          this.#options.directory,
+          transferId,
+          PullRecordSchema,
+          this.#records.get(transferId) ?? record
+        )
+      )
     )
   }
 

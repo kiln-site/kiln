@@ -78,7 +78,12 @@ import type { RelayConfig, RelayInstanceConfig } from "./config.js"
 export type FileRoot = Pick<RelayInstanceConfig, "directory" | "id">
 import { directoryApparentSizeEffect } from "./disk-usage.js"
 import { RelayFilesystemError } from "./effect/errors.js"
-import { ensuringPromise, promiseEffect } from "./effect/promise.js"
+import {
+  ensuringPromise,
+  forkPromise,
+  promiseEffect,
+  tapPromiseError,
+} from "./effect/promise.js"
 import { decodeNbt, encodeNbt } from "./nbt.js"
 import type { FilesystemCapacity } from "./relay-capacity.js"
 
@@ -886,7 +891,7 @@ export class FilesystemDriver {
       const entries = yield* collectArchiveEntries(root, selected)
       let completed = false
       return yield* filesystemOperation("transfer.pack", (signal) =>
-        writeTransferArchive(destination, entries, signal)
+        writeTransferArchive(root, destination, entries, signal)
       ).pipe(
         Effect.tap(() =>
           Effect.sync(() => {
@@ -936,7 +941,7 @@ export class FilesystemDriver {
       let completed = false
       yield* filesystemOperation("transfer.install", async (signal) => {
         const entries = await inspectTarGzArchive(archive, signal)
-        created = await prepareTransferDestination(destination)
+        created = await prepareTransferDestination(destination, owner)
         wrote = true
         await extractTarGzEntries(
           archive,
@@ -2963,6 +2968,7 @@ function ensureContained(root: string, candidate: string) {
 // A transfer archive: every entry under its path in the root, with its
 // mode, gzipped as it's written, hashed and counted on the way to disk.
 async function writeTransferArchive(
+  root: string,
   destination: string,
   entries: ReadonlyArray<ArchiveDownloadEntry>,
   signal: AbortSignal
@@ -2983,73 +2989,137 @@ async function writeTransferArchive(
     createWriteStream(destination, { flags: "wx", mode: 0o600 }),
     { signal }
   )
-  const added = (async () => {
+  // A failure on either side ends both: the archive stops, and so does the
+  // entry being added, which would otherwise wait on it forever.
+  const packing: {
+    failEntry: ((cause: unknown) => void) | null
+    stopped: unknown
+  } = { failEntry: null, stopped: null }
+  const stop = (cause: unknown) => {
+    if (packing.stopped !== null) return
+    packing.stopped = cause ?? new Error("Packing the transfer stopped")
+    archive.destroy(
+      cause instanceof Error ? cause : new Error("Packing the transfer stopped")
+    )
+    packing.failEntry?.(packing.stopped)
+  }
+  const addEntry = (
+    add: (
+      settled: (cause?: Error | null) => void,
+      rejectEntry: (cause: unknown) => void
+    ) => void
+  ) =>
+    new Promise<void>((resolveEntry, rejectEntry) => {
+      if (packing.stopped !== null) {
+        rejectEntry(packing.stopped)
+        return
+      }
+      packing.failEntry = rejectEntry
+      add((cause) => (cause ? rejectEntry(cause) : resolveEntry()), rejectEntry)
+    }).then(() => {
+      packing.failEntry = null
+    })
+  const added = tapPromiseError(async () => {
     for (const entry of entries) {
       if (signal.aborted) throw signal.reason
-      const metadata = await stat(entry.absolute)
       // Named under the selection, as an archive download names them, so a
       // copied folder lands as that folder.
       const name = entry.name
       if (entry.kind === "directory") {
-        await new Promise<void>((resolveEntry, rejectEntry) => {
+        const metadata = await lstat(entry.absolute)
+        if (!metadata.isDirectory()) throw transferEntryChanged(name)
+        await addEntry((settled) => {
           archive.entry(
             {
               mode: metadata.mode & 0o777,
               name: `${name}/`,
               type: "directory",
             },
-            (cause) => (cause ? rejectEntry(cause) : resolveEntry())
+            settled
           )
         })
         continue
       }
-      const header = {
-        mode: metadata.mode & 0o777,
-        mtime: metadata.mtime,
-        name,
-        size: metadata.size,
-        type: "file" as const,
-      }
-      await new Promise<void>((resolveEntry, rejectEntry) => {
-        const settled = (cause?: Error | null) =>
-          cause ? rejectEntry(cause) : resolveEntry()
-        if (metadata.size === 0) {
-          archive.entry(header, Buffer.alloc(0), settled)
-          return
-        }
-        const target = archive.entry(header, settled)
-        // Exactly the size the header declares, should the file grow.
-        const source = createReadStream(entry.absolute, {
-          end: metadata.size - 1,
-          start: 0,
-        })
-        source.once("error", (cause) => {
-          target.destroy(cause)
-          rejectEntry(cause)
-        })
-        source.pipe(target)
-      })
+      // Opened without following links and read through that one handle, so
+      // a file swapped for a link after it was listed can't bring in what
+      // the link points at.
+      const file = await open(
+        entry.absolute,
+        fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW
+      )
+      await ensuringPromise(
+        async () => {
+          const actual = await realpath(fileDescriptorPath(file))
+          if (actual !== root && !actual.startsWith(`${root}${sep}`)) {
+            throw transferEntryChanged(name)
+          }
+          const metadata = await file.stat()
+          if (!metadata.isFile()) throw transferEntryChanged(name)
+          const header = {
+            mode: metadata.mode & 0o777,
+            mtime: metadata.mtime,
+            name,
+            size: metadata.size,
+            type: "file" as const,
+          }
+          await addEntry((settled, rejectEntry) => {
+            if (metadata.size === 0) {
+              archive.entry(header, Buffer.alloc(0), settled)
+              return
+            }
+            const target = archive.entry(header, settled)
+            // Exactly the size the header declares, should the file grow.
+            const source = file.createReadStream({
+              autoClose: false,
+              end: metadata.size - 1,
+              start: 0,
+            })
+            source.once("error", (cause) => {
+              target.destroy(cause)
+              rejectEntry(cause)
+            })
+            source.pipe(target)
+          })
+        },
+        () => forkPromise(() => file.close())
+      )
     }
     archive.finalize()
-  })()
-  const [packing] = await Promise.allSettled([added, written])
-  if (packing.status === "rejected") {
-    archive.destroy(packing.reason as Error)
-    throw packing.reason
-  }
-  await written
+  }, stop)
+  const [adding, writing] = await Promise.allSettled([
+    added,
+    tapPromiseError(() => written, stop),
+  ])
+  if (adding.status === "rejected") throw adding.reason
+  if (writing.status === "rejected") throw writing.reason
   return { entries: entries.length, sha256: hash.digest("hex"), size }
+}
+
+function transferEntryChanged(name: string) {
+  return makeFilesystemError(
+    "file_changed",
+    "transfer.pack",
+    `${name} changed while it was being copied`
+  )
 }
 
 // The folder a transfer installs into: created when missing, or taken as
 // it is when empty. True when it was created.
-async function prepareTransferDestination(destination: string) {
+async function prepareTransferDestination(
+  destination: string,
+  owner: { gid: number; uid: number }
+) {
   const existing = await Effect.runPromise(
     Effect.result(promiseEffect(() => lstat(destination)))
   )
   if (Result.isFailure(existing)) {
     if (!isMissingFile(existing.failure)) throw existing.failure
     await mkdir(destination, { mode: 0o755 })
+    // The root's owner, as every entry installed into it, so the server can
+    // write beside them.
+    if (process.getuid?.() === 0) {
+      await chown(destination, owner.uid, owner.gid)
+    }
     return true
   }
   if (existing.success.isSymbolicLink() || !existing.success.isDirectory()) {
