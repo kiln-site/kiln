@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { gunzipSync, gzipSync } from "node:zlib"
+import { gunzipSync } from "node:zlib"
 
 import {
   relayControlDeadlineMs,
@@ -149,11 +149,7 @@ const syncRelayEffect = Effect.fnUntraced(function* (relay: PersistedRelay) {
       continue
     }
     // One that fails waits for its retry rather than holding up the rest.
-    const outcome = yield* collectInventoryEffect(
-      relay,
-      inventory,
-      report.host.kernel
-    ).pipe(
+    const outcome = yield* collectInventoryEffect(relay, inventory).pipe(
       Effect.catch((error) =>
         recordInventoryFailureEffect(
           relay.id,
@@ -170,14 +166,9 @@ const syncRelayEffect = Effect.fnUntraced(function* (relay: PersistedRelay) {
   return { busy, more }
 })
 
-// Reads one inventory from the Relay, in chunks, and keeps it without the
-// file listings Grype doesn't read.
+// Reads one inventory from the Relay, in chunks, and keeps it.
 const collectInventoryEffect = Effect.fn("Security.collectInventory")(
-  function* (
-    relay: PersistedRelay,
-    inventory: DueInventory,
-    kernel: string | null
-  ) {
+  function* (relay: PersistedRelay, inventory: DueInventory) {
     yield* Effect.annotateCurrentSpan({
       "relay.id": relay.id,
       "security.inventory": inventory.sbomKey,
@@ -266,7 +257,7 @@ const collectInventoryEffect = Effect.fn("Security.collectInventory")(
       return "failed" as const
     }
     const prepared = yield* Effect.try({
-      try: () => slimInventory(gzipped, target.kind === "host" ? kernel : null),
+      try: () => readInventory(gzipped),
       catch: (cause) =>
         cause instanceof Error ? cause : new Error(String(cause)),
     }).pipe(Effect.result)
@@ -288,26 +279,20 @@ const collectInventoryEffect = Effect.fn("Security.collectInventory")(
 )
 
 /**
- * A Relay's gzipped Syft JSON, checked and slimmed: without the files each
- * package installed and their containment, which Grype doesn't read and
- * which make up most of a host's inventory. A host's kernels other than the
- * one `kernel` names are left out: package managers keep old ones
- * installed, each with thousands of findings for a kernel that isn't running.
+ * A Relay's gzipped Syft JSON, checked. It's read whole only within the size
+ * the Relay may send, so no Relay can run Hearth out of memory.
  */
-function slimInventory(gzipped: Buffer, kernel: string | null) {
+function readInventory(gzipped: Buffer) {
+  if (gzipped.length > storedInventoryMaxBytes) {
+    throw new Error("The inventory is too large to keep")
+  }
   const raw = gunzipSync(gzipped, {
-    maxOutputLength: relaySecurityInventoryMaxBytes * 8,
+    maxOutputLength: relaySecurityInventoryMaxBytes,
   })
   const document = JSON.parse(raw.toString("utf8")) as {
-    artifactRelationships?: Array<{
-      child?: unknown
-      parent?: unknown
-      type?: unknown
-    }>
-    artifacts?: Array<InventoryArtifact>
+    artifacts?: Array<unknown>
     descriptor?: { name?: unknown }
     distro?: { prettyName?: unknown }
-    files?: unknown
   }
   if (
     document.descriptor?.name !== "syft" ||
@@ -315,78 +300,14 @@ function slimInventory(gzipped: Buffer, kernel: string | null) {
   ) {
     throw new Error("The Relay sent something other than a Syft inventory")
   }
-  delete document.files
-  const idle = new Set(
-    kernel === null
-      ? []
-      : document.artifacts.flatMap((artifact) =>
-          idleKernelPackage(artifact, kernel) ? [artifact.id] : []
-        )
-  )
-  document.artifacts = document.artifacts.filter(
-    (artifact) => !idle.has(artifact.id)
-  )
-  document.artifactRelationships = (
-    document.artifactRelationships ?? []
-  ).filter(
-    (relationship) =>
-      relationship.type !== "contains" &&
-      !idle.has(relationship.parent) &&
-      !idle.has(relationship.child)
-  )
-  for (const artifact of document.artifacts) {
-    if (artifact.metadata && typeof artifact.metadata === "object") {
-      delete artifact.metadata.files
-    }
-  }
-  const stored = gzipSync(JSON.stringify(document))
-  if (stored.length > storedInventoryMaxBytes) {
-    throw new Error("The inventory is too large to keep")
-  }
   return {
     distro:
       typeof document.distro?.prettyName === "string"
         ? document.distro.prettyName
         : null,
-    document: stored,
+    document: gzipped,
     packageCount: document.artifacts.length,
   }
-}
-
-interface InventoryArtifact {
-  id?: unknown
-  metadata?: { files?: unknown }
-  name?: unknown
-  type?: unknown
-  version?: unknown
-}
-
-// Whether a package is a kernel the host isn't running, from the release it
-// reports, such as `6.8.0-147-generic`: Debian's and Ubuntu's
-// `linux-image-6.8.0-137-generic`, or an RPM `kernel-core` of another version.
-function idleKernelPackage(
-  artifact: InventoryArtifact,
-  kernel: string
-): boolean {
-  if (typeof artifact.name !== "string") return false
-  if (artifact.type === "deb") {
-    const release = artifact.name.match(
-      /^linux-(?:[a-z]+-)+?(\d+\.\d+\.\d+-\d+)(?:-[a-z0-9]+)*$/u
-    )?.[1]
-    const running = kernel.match(/^(\d+\.\d+\.\d+-\d+)/u)?.[1]
-    return release !== undefined && running !== undefined && release !== running
-  }
-  if (
-    artifact.type === "rpm" &&
-    /^kernel(?:-core|-modules(?:-core|-extra)?)?$/u.test(artifact.name)
-  ) {
-    const version =
-      typeof artifact.version === "string"
-        ? artifact.version.replace(/^\d+:/u, "")
-        : ""
-    return version !== "" && !kernel.startsWith(version)
-  }
-  return false
 }
 
 // Brings Grype's database up to date when it's due, downloading it the first
@@ -611,10 +532,15 @@ const report = (operation: string, attributes: Record<string, string> = {}) =>
   )
 
 export function startSecurityScans(): void {
+  // Relays whose news wasn't delivered, announced again each sweep until it
+  // is. All of them at first, for what a restart interrupted.
+  let owed: Set<string> | null = null
   const sweep = Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis
     const changed = new Set<string>()
-    for (const relay of yield* listPersistedRelaysEffect()) {
+    const relays = yield* listPersistedRelaysEffect()
+    owed ??= new Set(relays.map((relay) => relay.id))
+    for (const relay of relays) {
       if (!inventories(relay)) continue
       if (now - (synced.get(relay.id) ?? 0) < syncIntervalMs) continue
       synced.set(relay.id, now)
@@ -647,8 +573,10 @@ export function startSecurityScans(): void {
     for (const relayId of matched) changed.add(relayId)
     // Announced after every sync too: a new game server may run an image
     // whose findings are already known.
-    for (const relayId of changed) {
+    for (const relayId of new Set([...owed, ...changed])) {
+      owed.add(relayId)
       yield* announceEffect(relayId).pipe(
+        Effect.tap(() => Effect.sync(() => owed?.delete(relayId))),
         report("Security.announce", { "relay.id": relayId })
       )
     }

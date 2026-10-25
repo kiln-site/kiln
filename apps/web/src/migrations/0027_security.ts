@@ -60,6 +60,7 @@ export const security: Migration = {
   \`sbom_key\` varchar(80) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   \`running\` tinyint unsigned NOT NULL DEFAULT '1',
   \`observed_at\` bigint unsigned NOT NULL,
+  \`inventory_since\` bigint unsigned NOT NULL,
   PRIMARY KEY (\`relay_id\`, \`target_key\`),
   KEY \`${target}_sbom_idx\` (\`relay_id\`, \`sbom_key\`),
   KEY \`${target}_resource_idx\` (\`relay_id\`, \`resource_type\`, \`resource_id\`),

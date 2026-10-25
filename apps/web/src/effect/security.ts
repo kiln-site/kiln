@@ -129,13 +129,16 @@ export const syncSecurityTargetsEffect = Effect.fn("security.syncTargets")(
         yield* tx.execute(
           `INSERT INTO ${databaseTable("security_target")}
              (relay_id, target_key, resource_type, resource_id, component,
-              image, sbom_key, running, observed_at)
-           VALUES ${rows.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ")}
+              image, sbom_key, running, observed_at, inventory_since)
+           VALUES ${rows.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ")}
            ON DUPLICATE KEY UPDATE
              resource_type = VALUES(resource_type),
              resource_id = VALUES(resource_id),
              component = VALUES(component),
              image = VALUES(image),
+             -- Before sbom_key changes, which MySQL assigns in order.
+             inventory_since = IF(sbom_key = VALUES(sbom_key),
+               inventory_since, VALUES(inventory_since)),
              sbom_key = VALUES(sbom_key),
              running = VALUES(running),
              observed_at = VALUES(observed_at)`,
@@ -148,6 +151,7 @@ export const syncSecurityTargetsEffect = Effect.fn("security.syncTargets")(
             row.image?.slice(0, 512) ?? null,
             row.sbomKey,
             row.running ? 1 : 0,
+            now,
             now,
           ])
         )
@@ -780,7 +784,7 @@ export interface SecurityAnnouncement {
 }
 
 export interface AnnouncedFinding {
-  /** When this occurrence was first seen, so one that returns is news. */
+  /** When it was first seen where it is now, so one that returns is news. */
   readonly firstSeenAt: number
   readonly fixedVersion: string | null
   readonly fixable: boolean
@@ -829,7 +833,8 @@ export const pendingSecurityAnnouncementsEffect = Effect.fn(
       `SELECT t.target_key, t.resource_type, t.resource_id, t.component,
               f.vulnerability_id, ${findingPackage} AS package_name,
               f.package_version, f.severity, f.fix_state, f.fixed_version,
-              f.first_seen_at, v.known_exploited
+              GREATEST(f.first_seen_at, t.inventory_since) AS first_seen_at,
+              v.known_exploited
          FROM ${databaseTable("security_target")} t
          JOIN ${databaseTable("security_sbom")} s
            ON s.relay_id = t.relay_id AND s.sbom_key = t.sbom_key

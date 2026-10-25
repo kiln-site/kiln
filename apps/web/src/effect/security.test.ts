@@ -1,6 +1,7 @@
 import { assert, layer } from "@effect/vitest"
 import type { RelaySecurityTargets } from "@workspace/contracts"
 import { Effect } from "effect"
+import { TestClock } from "effect/testing"
 
 import type { GrypeFinding } from "@/effect/grype"
 import {
@@ -143,6 +144,67 @@ describeMysql("security", () => {
             { ...finding("CVE-2", "fixed"), knownExploited: true },
           ])
           assert.deepStrictEqual(yield* announced, ["app:CVE-1:fixed"])
+        })
+    )
+
+    it.effect(
+      "announces a vulnerability anew when a resource goes back to an image another kept running",
+      () =>
+        Effect.gen(function* () {
+          const clean = `sha256:${"c".repeat(64)}`
+          const otherAppId = "d".repeat(40)
+          const running = (appImage: string) =>
+            report([
+              {
+                component: "app",
+                image: "php",
+                imageId: appImage,
+                resource: { id: appId, type: "app" },
+                running: true,
+              },
+              {
+                component: "app",
+                image: "php",
+                imageId: image,
+                resource: { id: otherAppId, type: "app" },
+                running: true,
+              },
+            ])
+          // When the first app's finding was first seen where it is now.
+          const seenAt = Effect.map(
+            pendingSecurityAnnouncementsEffect("relay-a"),
+            ({ announcements }) =>
+              announcements.find(
+                (announcement) => announcement.resourceId === appId
+              )?.findings[0]?.firstSeenAt
+          )
+
+          yield* seedInventory
+          yield* syncSecurityTargetsEffect("relay-a", running(image))
+          yield* recordFindingsEffect("relay-a", image, 1, [
+            finding("CVE-1", "fixed"),
+          ])
+          const first = yield* seenAt
+          yield* announced
+
+          yield* TestClock.adjust("1 hour")
+          yield* syncSecurityTargetsEffect("relay-a", running(clean))
+          yield* recordInventoryEffect("relay-a", clean, {
+            collectedAt: 2,
+            distro: null,
+            document: Buffer.from("{}"),
+            generator: "syft 1.55.0",
+            packageCount: 0,
+          })
+          yield* recordFindingsEffect("relay-a", clean, 2, [])
+          assert.deepStrictEqual(yield* announced, [])
+
+          yield* TestClock.adjust("1 hour")
+          yield* syncSecurityTargetsEffect("relay-a", running(image))
+          const again = yield* seenAt
+          assert.isDefined(first)
+          assert.isDefined(again)
+          assert.isAbove(again!, first!)
         })
     )
 

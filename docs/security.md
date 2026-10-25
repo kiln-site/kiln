@@ -29,9 +29,11 @@ Relay stays covered:
 
 Every 15 minutes Hearth asks each connected Relay what it runs, which costs
 the Relay one container listing, and asks for any inventory it lacks.
-Inventories reach Hearth in 512 KiB chunks over the control connection and are
-kept without the per-file listings Grype doesn't read: a host's is a few
-hundred kilobytes gzipped, an image's tens.
+The Relay drops the per-file listings Grype doesn't read, and a host's
+kernels other than the running one, before it sends an inventory. Inventories
+reach Hearth in 512 KiB chunks over the control connection: a host's is a few
+hundred kilobytes gzipped, an image's tens. Hearth refuses one over 32 MiB
+unzipped, so a Relay can't run it out of memory.
 
 Findings are kept per inventory with when each was first seen. Hearth keeps
 inventories per Relay rather than sharing one image's between Relays, since it
@@ -91,10 +93,10 @@ image). A platform Relay mounts the `kiln-hearth-data` volume at `/var/lib/kiln`
 so it survives Hearth's updates; a Hearth run any other way without a volume
 there downloads it again each time its container is recreated.
 
-| Variable                    | Where  | Default                                 |
-| --------------------------- | ------ | --------------------------------------- |
-| `KILN_RELAY_SYFT_PATH`      | Relay  | `/usr/local/bin/syft`                   |
-| `KILN_GRYPE_PATH`           | Hearth | `grype` on `PATH`                       |
+| Variable                    | Where  | Default                                                    |
+| --------------------------- | ------ | ---------------------------------------------------------- |
+| `KILN_RELAY_SYFT_PATH`      | Relay  | `/usr/local/bin/syft`                                      |
+| `KILN_GRYPE_PATH`           | Hearth | `grype` on `PATH`                                          |
 | `KILN_VULNERABILITY_DB_DIR` | Hearth | `/var/lib/kiln/vulnerability-db`, or a temporary directory |
 
 The Relay's data directory must be a volume, as it is in every supported

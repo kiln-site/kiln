@@ -1,6 +1,5 @@
 import { execFile } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
-import { createReadStream, createWriteStream } from "node:fs"
 import {
   access,
   constants,
@@ -13,13 +12,13 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises"
-import { availableParallelism, hostname, loadavg } from "node:os"
+import { availableParallelism, hostname, loadavg, release } from "node:os"
 import { join, relative } from "node:path"
-import { pipeline } from "node:stream/promises"
 import { promisify } from "node:util"
-import { createGzip } from "node:zlib"
+import { gzip as gzipCallback } from "node:zlib"
 import {
   relaySecurityInventoryChunkBytes,
+  relaySecurityInventoryMaxBytes,
   securityImageIdSchema,
   type RelaySecurityContainer,
   type RelaySecurityInventoryRequest,
@@ -80,7 +79,11 @@ const SCAN_TIMEOUT_MS = 10 * 60_000
 // Inventories Hearth hasn't come back for are removed after a day.
 const CACHE_MAX_AGE_MS = 24 * 60 * 60_000
 
+// The most Syft output the Relay reads to slim for Hearth.
+const SCAN_OUTPUT_MAX_BYTES = 256 * 1024 * 1024
+
 const run = promisify(execFile)
+const gzip = promisify(gzipCallback)
 
 type SecurityInventoryConfig = Pick<
   RelayConfig,
@@ -179,10 +182,10 @@ export class SecurityInventory {
             this.#collect(input.target, paths, input.collectedAfter)
           ),
         (cause) => ({
-          error: (cause instanceof Error
-            ? cause.message
-            : String(cause)
-          ).slice(0, 1_000),
+          error: (cause instanceof Error ? cause.message : String(cause)).slice(
+            0,
+            1_000
+          ),
           status: "failed" as const,
         })
       )
@@ -439,35 +442,37 @@ export class SecurityInventory {
           status: "failed",
         }
       }
-      const document = `${paths.document}.${randomUUID()}.tmp`
-      const hash = createHash("sha256")
-      let size = 0
-      await pipeline(
-        createReadStream(output),
-        createGzip(),
-        async function* (chunks: AsyncIterable<Buffer>) {
-          for await (const chunk of chunks) {
-            hash.update(chunk)
-            size += chunk.length
-            yield chunk
-          }
-        },
-        createWriteStream(document)
+      // Syft's output is bounded by its memory cap; past this, reading it
+      // whole would weigh on the host more than the inventory is worth.
+      if ((await stat(output)).size > SCAN_OUTPUT_MAX_BYTES) {
+        return { error: "The inventory is too large to send", status: "failed" }
+      }
+      const slim = Buffer.from(
+        JSON.stringify(
+          slimInventory(
+            JSON.parse(await readFile(output, "utf8")) as SyftDocument,
+            target.kind === "host" ? release() : null
+          )
+        )
       )
+      if (slim.length > relaySecurityInventoryMaxBytes) {
+        return { error: "The inventory is too large to send", status: "failed" }
+      }
+      const gzipped = await gzip(slim)
+      const document = `${paths.document}.${randomUUID()}.tmp`
+      await writeFile(document, gzipped)
       const meta: InventoryMeta = {
         collectedAt: Date.now(),
         generator,
         key: paths.key,
-        sha256: hash.digest("hex"),
-        size,
+        sha256: createHash("sha256").update(gzipped).digest("hex"),
+        size: gzipped.length,
       }
       await rename(document, paths.document)
       await writeFile(paths.meta, `${JSON.stringify(meta)}\n`)
       return { meta, status: "ready" }
     }
-    return Effect.runPromise(
-      promiseEffect(scan).pipe(Effect.ensuring(cleanup))
-    )
+    return Effect.runPromise(promiseEffect(scan).pipe(Effect.ensuring(cleanup)))
   }
 
   // Each host path the OS catalogers read that exists, mounted read-only
@@ -602,6 +607,86 @@ export class SecurityInventory {
 }
 
 // As provisioning judges it: a load average of one per core or more.
+interface SyftArtifact {
+  id?: unknown
+  metadata?: { files?: unknown }
+  name?: unknown
+  type?: unknown
+  version?: unknown
+}
+
+interface SyftDocument {
+  artifactRelationships?: Array<{
+    child?: unknown
+    parent?: unknown
+    type?: unknown
+  }>
+  artifacts?: Array<SyftArtifact>
+  files?: unknown
+}
+
+/**
+ * Syft's inventory as Hearth needs it: without the files each package
+ * installed and their containment, which Grype doesn't read and which make
+ * up most of a host's inventory. A host's kernels other than the running
+ * one are left out: package managers keep old ones installed, each with
+ * thousands of findings for a kernel that isn't running.
+ */
+function slimInventory(
+  document: SyftDocument,
+  kernel: string | null
+): SyftDocument {
+  const artifacts = document.artifacts ?? []
+  const idle = new Set(
+    kernel === null
+      ? []
+      : artifacts.flatMap((artifact) =>
+          idleKernelPackage(artifact, kernel) ? [artifact.id] : []
+        )
+  )
+  delete document.files
+  document.artifacts = artifacts.filter((artifact) => !idle.has(artifact.id))
+  document.artifactRelationships = (
+    document.artifactRelationships ?? []
+  ).filter(
+    (relationship) =>
+      relationship.type !== "contains" &&
+      !idle.has(relationship.parent) &&
+      !idle.has(relationship.child)
+  )
+  for (const artifact of document.artifacts) {
+    if (artifact.metadata && typeof artifact.metadata === "object") {
+      delete artifact.metadata.files
+    }
+  }
+  return document
+}
+
+// Whether a package is a kernel the host isn't running, from the release it
+// reports, such as `6.8.0-147-generic`: Debian's and Ubuntu's
+// `linux-image-6.8.0-137-generic`, or an RPM `kernel-core` of another version.
+function idleKernelPackage(artifact: SyftArtifact, kernel: string): boolean {
+  if (typeof artifact.name !== "string") return false
+  if (artifact.type === "deb") {
+    const release = artifact.name.match(
+      /^linux-(?:[a-z]+-)+?(\d+\.\d+\.\d+-\d+)(?:-[a-z0-9]+)*$/u
+    )?.[1]
+    const running = kernel.match(/^(\d+\.\d+\.\d+-\d+)/u)?.[1]
+    return release !== undefined && running !== undefined && release !== running
+  }
+  if (
+    artifact.type === "rpm" &&
+    /^kernel(?:-core|-modules(?:-core|-extra)?)?$/u.test(artifact.name)
+  ) {
+    const version =
+      typeof artifact.version === "string"
+        ? artifact.version.replace(/^\d+:/u, "")
+        : ""
+    return version !== "" && !kernel.startsWith(version)
+  }
+  return false
+}
+
 function busy(): boolean {
   return (loadavg()[0] ?? 0) / availableParallelism() >= 1
 }

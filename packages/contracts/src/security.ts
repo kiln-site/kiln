@@ -72,8 +72,13 @@ export type RelaySecurityTarget = z.infer<typeof relaySecurityTargetSchema>
 
 /** Raw bytes in one inventory chunk, so a chunk fits a control frame. */
 export const relaySecurityInventoryChunkBytes = 512 * 1024
-/** The largest inventory Hearth accepts, gzipped. */
-export const relaySecurityInventoryMaxBytes = 64 * 1024 * 1024
+/**
+ * The largest inventory Hearth accepts, as JSON before it's gzipped. The
+ * Relay sends Syft's packages without the files each installed, which is a
+ * few MiB for a host with thousands of packages, so Hearth can read it
+ * whole without a Relay being able to run it out of memory.
+ */
+export const relaySecurityInventoryMaxBytes = 32 * 1024 * 1024
 
 /**
  * Reads a target's inventory from `offset`. The Relay inventories the target
