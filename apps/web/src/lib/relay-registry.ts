@@ -10,6 +10,7 @@ import {
 } from "node:crypto"
 import { request as httpRequest } from "node:http"
 import { request as httpsRequest } from "node:https"
+import type { LookupFunction } from "node:net"
 import { TLSSocket } from "node:tls"
 import type { RowDataPacket } from "mysql2/promise"
 import { Clock, Effect, Result } from "effect"
@@ -1415,7 +1416,9 @@ function decodePairingUri(value: string) {
 export async function postPairingRequest(
   url: URL,
   caCertificatePem: string | null,
-  body: RelayPairingRequestContract
+  body: RelayPairingRequestContract,
+  // Resolves the Relay's name, for a caller that limits where it may be.
+  lookup?: LookupFunction
 ): Promise<unknown> {
   const encoded = Buffer.from(JSON.stringify(body))
   const request = url.protocol === "https:" ? httpsRequest : httpRequest
@@ -1431,6 +1434,7 @@ export async function postPairingRequest(
       url,
       {
         ca: caCertificatePem ?? undefined,
+        ...(lookup && { lookup }),
         headers: {
           Accept: "application/json",
           "Content-Length": encoded.length,

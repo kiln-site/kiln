@@ -117,16 +117,14 @@ export function RelayJoinPanel({
   )
 }
 
-// While something on the Relay's side or Hearth's can still change: also
-// while another Relay holds its address, until someone removes that one,
-// and while Hearth can't reach it, until someone opens the way.
+// While something on the Relay's side or Hearth's can still change,
+// including, until it's confirmed, whether Hearth can reach the Relay and
+// whether another Relay holds its address.
 function polling(view: JoinView | undefined): boolean {
   return (
     view?.state === "waiting" ||
     view?.state === "confirming" ||
-    (view?.state === "announced" &&
-      (view.announcement?.addressTakenBy != null ||
-        view.announcement?.unreachable != null))
+    view?.state === "announced"
   )
 }
 

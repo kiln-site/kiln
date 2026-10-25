@@ -5,7 +5,7 @@ import {
   generateKeyPairSync,
   randomBytes,
 } from "node:crypto"
-import { createServer } from "node:net"
+import { createServer, type Socket } from "node:net"
 
 import { assert, layer } from "@effect/vitest"
 import { Effect, Schedule } from "effect"
@@ -29,6 +29,33 @@ import { deletePersistedRelayEffect } from "@/lib/relay-registry"
 import { insertRelay } from "@/test/seed"
 
 vi.stubEnv("BETTER_AUTH_SECRETS", `1:${"j".repeat(32)}`)
+
+// A local server that takes connections and never answers.
+function silentServer(): Promise<{ close: () => Promise<void>; port: number }> {
+  return new Promise((resolve, reject) => {
+    const sockets = new Set<Socket>()
+    const server = createServer((socket) => {
+      sockets.add(socket)
+      socket.once("close", () => sockets.delete(socket))
+    })
+    server.once("error", reject)
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address()
+      if (typeof address !== "object" || !address) {
+        reject(new Error("No port"))
+        return
+      }
+      resolve({
+        close: () =>
+          new Promise((done) => {
+            for (const socket of sockets) socket.destroy()
+            server.close(() => done())
+          }),
+        port: address.port,
+      })
+    })
+  })
+}
 
 // A local port nothing listens on.
 function closedPort(): Promise<number> {
@@ -217,6 +244,23 @@ describeMysql("Relay joins", () => {
           assert.strictEqual(
             view.announcement?.unreachable,
             `Hearth can't reach the Relay at 127.0.0.1:${port}. If its machine is behind a router, forward port ${port} to it.`
+          )
+
+          // Nor does Hearth connect to where cloud metadata services live.
+          const metadata = yield* openRelayJoinEffect("other")
+          yield* announce(
+            metadata.id,
+            metadata.secret ?? "",
+            relayEnvelope(metadata.id, {
+              browserOrigin: "https://169.254.169.254",
+              controlEndpoint: "wss://169.254.169.254/v1/socket",
+            }),
+            "203.0.113.1"
+          )
+          const refused = yield* relayJoinViewEffect("other", metadata.id)
+          assert.strictEqual(
+            refused.announcement?.unreachable,
+            "Hearth won't connect to 169.254.169.254"
           )
         })
     )
@@ -482,8 +526,16 @@ describeMysql("Relay joins", () => {
         TestClock.withLive(
           Effect.gen(function* () {
             yield* resetDatabase
+            // A Relay that never answers, so the adding stays underway.
+            const silent = yield* Effect.acquireRelease(
+              Effect.promise(silentServer),
+              (server) => Effect.promise(server.close)
+            )
             const join = yield* openRelayJoinEffect("owner")
-            const envelope = relayEnvelope(join.id)
+            const envelope = relayEnvelope(join.id, {
+              browserOrigin: `https://127.0.0.1:${silent.port}`,
+              controlEndpoint: `wss://127.0.0.1:${silent.port}/v1/socket`,
+            })
             yield* announce(join.id, join.secret ?? "", envelope, "203.0.113.4")
             const digest =
               (yield* relayJoinViewEffect("owner", join.id)).announcement
@@ -520,7 +572,7 @@ describeMysql("Relay joins", () => {
               refreshRelayJoinEffect("owner", join.id)
             )
             assert.include(messageOf(refreshed), "being added")
-          })
+          }).pipe(Effect.scoped)
         )
     )
   })

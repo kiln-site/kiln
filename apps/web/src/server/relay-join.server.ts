@@ -7,9 +7,9 @@ import {
   sign,
   timingSafeEqual,
 } from "node:crypto"
-import { lookup } from "node:dns/promises"
-import { BlockList, isIP } from "node:net"
-import { connect as tlsConnect } from "node:tls"
+import { lookup as dnsLookup } from "node:dns"
+import { BlockList, isIP, type LookupFunction } from "node:net"
+import { connect as tlsConnect, type TLSSocket } from "node:tls"
 
 import {
   isKilnNightlyVersion,
@@ -31,7 +31,7 @@ import type { RowDataPacket } from "mysql2/promise"
 
 import { Database } from "@/effect/database"
 import { loadedKilnInstallationId } from "@/effect/installation"
-import { promiseEffect, recoverPromise } from "@/effect/promise"
+import { promiseEffect } from "@/effect/promise"
 import { forkAppWorker } from "@/effect/runtime"
 import { databaseTable } from "@/lib/database-config"
 import { kilnInstallScriptUrl, kilnPublicUrl } from "@/lib/environment"
@@ -955,8 +955,15 @@ const pairJoinedRelay = Effect.fnUntraced(function* (
     row.client_private_key_ciphertext
   ).plaintext
   const secret = decryptPrivateKey(row.secret_ciphertext).plaintext
-  const browserOrigin = new URL(envelope.browserOrigin)
-  yield* promiseEffect(() => assertRelayDestination(browserOrigin.hostname))
+  const pairingOrigin = relayPairingOrigin({
+    browserOrigin: new URL(envelope.browserOrigin),
+    caCertificatePem: envelope.caCertificatePem,
+  })
+  yield* Effect.try({
+    try: () =>
+      assertRelayAddress(pairingOrigin.hostname.replace(/^\[|\]$/gu, "")),
+    catch: (cause) => cause,
+  })
   const nonce = randomBytes(32).toString("base64url")
   const unsignedRequest: Omit<RelayPairingRequestContract, "signature"> = {
     bootstrapProof: null,
@@ -983,15 +990,10 @@ const pairJoinedRelay = Effect.fnUntraced(function* (
   const response = yield* promiseEffect(async () =>
     pairingResponseSchema.parse(
       await postPairingRequest(
-        new URL(
-          "/v1/pair",
-          relayPairingOrigin({
-            browserOrigin,
-            caCertificatePem: envelope.caCertificatePem,
-          })
-        ),
+        new URL("/v1/pair", pairingOrigin),
         envelope.caCertificatePem,
-        request
+        request,
+        relayDestinationLookup
       )
     )
   )
@@ -1027,7 +1029,7 @@ const pairJoinedRelay = Effect.fnUntraced(function* (
         if (saved.affectedRows === 0)
           return yield* Effect.fail(new StaleClaim())
       }),
-    browserOrigin: browserOrigin.origin,
+    browserOrigin: new URL(envelope.browserOrigin).origin,
     clientActions: JSON.stringify(response.actions),
     clientId: response.clientId,
     clientPrivateKeyCiphertext: encryptPrivateKey(privateKey),
@@ -1265,68 +1267,111 @@ const finishJoin = Effect.fnUntraced(function* (
 
 // ------------------------------------------------------------- network
 
-const REACH_TIMEOUT_MS = 3_000
+// As long as pairing waits, so a Relay pairing would reach is never held
+// back.
+const REACH_TIMEOUT_MS = 10_000
+// How long the dialog's question waits for an answer before it shows the
+// last one; a slow check finishes for a later question.
+const REACH_WAIT_MS = 1_000
 // The dialog asks every two seconds; Hearth looks again at most this often.
 const REACH_RECHECK_MS = 5_000
-const reachChecks = new Map<
-  string,
-  { checkedAt: number; problem: Promise<string | null> }
->()
+// A join nobody asked about for this long is forgotten.
+const REACH_FORGET_MS = 60_000
+
+interface ReachCheck {
+  askedAt: number
+  checkedAt: number
+  checking: Promise<void> | null
+  // Undefined until the first check finishes.
+  problem: string | null | undefined
+}
+const reachChecks = new Map<string, ReachCheck>()
 
 // Whether Hearth can open the Relay's HTTPS the way pairing will, so the
-// dialog says what's wrong before anyone confirms: null when it can.
-function relayReachProblem(
+// dialog says what's wrong before anyone confirms: null when it can, or
+// before the first check finishes.
+async function relayReachProblem(
   joinId: string,
   envelope: RelayJoinEnvelope
 ): Promise<string | null> {
   const now = Date.now()
   for (const [id, check] of reachChecks) {
-    if (now - check.checkedAt > REACH_RECHECK_MS) reachChecks.delete(id)
+    if (!check.checking && now - check.askedAt > REACH_FORGET_MS) {
+      reachChecks.delete(id)
+    }
   }
-  const cached = reachChecks.get(joinId)
-  if (cached) return cached.problem
+  const check = reachChecks.get(joinId) ?? {
+    askedAt: now,
+    checkedAt: 0,
+    checking: null,
+    problem: undefined,
+  }
+  reachChecks.set(joinId, check)
+  check.askedAt = now
+  if (!check.checking && now - check.checkedAt > REACH_RECHECK_MS) {
+    check.checking = relayReach(envelope).then((problem) => {
+      check.problem = problem
+      check.checkedAt = Date.now()
+      check.checking = null
+    })
+  }
+  if (check.checking && check.problem === undefined) {
+    await Promise.race([check.checking, delay(REACH_WAIT_MS)])
+  }
+  return check.problem ?? null
+}
+
+function relayReach(envelope: RelayJoinEnvelope): Promise<string | null> {
   const origin = relayPairingOrigin({
     browserOrigin: new URL(envelope.browserOrigin),
     caCertificatePem: envelope.caCertificatePem,
   })
-  const problem = recoverPromise(async () => {
-    await assertRelayDestination(origin.hostname)
-    return tlsReachProblem(origin, envelope.caCertificatePem)
-  }, errorMessage)
-  reachChecks.set(joinId, { checkedAt: now, problem })
-  return problem
-}
-
-function tlsReachProblem(
-  origin: URL,
-  caCertificatePem: string | null
-): Promise<string | null> {
   const host = origin.hostname.replace(/^\[|\]$/gu, "")
   return new Promise((resolve) => {
-    const socket = tlsConnect({
-      ca: caCertificatePem ?? undefined,
-      host,
-      port: Number(origin.port || 443),
-      servername: isIP(host) ? undefined : host,
-    })
+    let socket: TLSSocket | null = null
+    let settled = false
     const settle = (problem: string | null) => {
-      socket.destroy()
+      if (settled) return
+      settled = true
+      clearTimeout(deadline)
+      socket?.destroy()
       resolve(problem)
     }
-    socket.setTimeout(REACH_TIMEOUT_MS, () =>
-      settle(unreachableRelayError(origin).message)
-    )
-    socket.once("secureConnect", () => settle(null))
-    socket.once("error", (cause) =>
+    const fail = (cause: unknown) =>
       settle(
         (
           mapPairingTransportError(cause) ??
           unreachablePairingError(cause, origin) ??
-          cause
+          new Error(errorMessage(cause))
         ).message
       )
+    // Covers resolving the name too.
+    const deadline = setTimeout(
+      () => settle(unreachableRelayError(origin).message),
+      REACH_TIMEOUT_MS
     )
+    const opened = Result.try(() => {
+      assertRelayAddress(host)
+      return tlsConnect({
+        ca: envelope.caCertificatePem ?? undefined,
+        host,
+        lookup: relayDestinationLookup,
+        port: Number(origin.port || 443),
+        servername: isIP(host) ? undefined : host,
+      })
+    })
+    if (Result.isFailure(opened)) {
+      fail(opened.failure)
+      return
+    }
+    socket = opened.success
+    socket.once("secureConnect", () => settle(null))
+    socket.once("error", fail)
   })
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 // Addresses Hearth never pairs with, whatever a Relay announces: link-local
@@ -1344,16 +1389,57 @@ const forbiddenDestinations = (() => {
   return list
 })()
 
-async function assertRelayDestination(hostname: string): Promise<void> {
-  const host = hostname.replace(/^\[|\]$/gu, "")
-  const addresses = isIP(host)
-    ? [{ address: host, family: isIP(host) }]
-    : await lookup(host, { all: true })
-  for (const { address, family } of addresses) {
-    if (forbiddenDestinations.check(address, family === 6 ? "ipv6" : "ipv4")) {
-      throw new RelayJoinFailure(`Hearth won't connect to ${address}`)
-    }
+function forbiddenAddress(address: string, family: number): boolean {
+  return forbiddenDestinations.check(address, family === 6 ? "ipv6" : "ipv4")
+}
+
+// A Relay at an address rather than a name, which no lookup sees.
+function assertRelayAddress(host: string): void {
+  const family = isIP(host)
+  if (family !== 0 && forbiddenAddress(host, family)) {
+    throw new RelayJoinFailure(`Hearth won't connect to ${host}`)
   }
+}
+
+// Resolves a Relay's name for the connection itself, refusing any answer
+// with a forbidden address, so what was checked is what's connected to.
+const relayDestinationLookup: LookupFunction = (
+  hostname,
+  options,
+  callback
+) => {
+  dnsLookup(
+    hostname,
+    {
+      all: true,
+      family: options.family,
+      hints: options.hints,
+      order: options.order ?? "verbatim",
+    },
+    (cause, addresses) => {
+      if (cause) {
+        callback(cause, "")
+        return
+      }
+      const forbidden = addresses.find(({ address, family }) =>
+        forbiddenAddress(address, family)
+      )
+      if (forbidden) {
+        callback(
+          new RelayJoinFailure(`Hearth won't connect to ${forbidden.address}`),
+          ""
+        )
+        return
+      }
+      const selected = addresses.at(0)
+      if (!selected) {
+        callback(new Error(`${hostname} has no address`), "")
+        return
+      }
+      if (options.all) callback(null, addresses)
+      else callback(null, selected.address, selected.family)
+    }
+  )
 }
 
 // A join's code: 20 base32 letters, 100 bits.
