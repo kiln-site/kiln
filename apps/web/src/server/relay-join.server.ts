@@ -1370,8 +1370,9 @@ function relayReach(envelope: RelayJoinEnvelope): Promise<string | null> {
   })
 }
 
+// Without keeping the process up for a check that already finished.
 function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
+  return new Promise((resolve) => setTimeout(resolve, ms).unref())
 }
 
 // Addresses Hearth never pairs with, whatever a Relay announces: link-local
