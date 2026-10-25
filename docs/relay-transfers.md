@@ -37,6 +37,28 @@ A route that changes a game server, App, or database also takes its lane
 locks, as uploads do with `fileRootTransferLocks`
 ([Relay operations](relay-operations.md)). Reads take none.
 
+## In the browser
+
+`apps/web/src/lib/relay-file-transfer.ts` is the browser's half. Each
+transfer is an effect with its own span (`RelayTransfer.upload`,
+`RelayTransfer.download`, `RelayTransfer.inspect`,
+`RelayTransfer.uploadBatch`), run through `runBrowserEffect` so its spans
+export with the page's other browser traces. The request URL carries the
+span's `traceparent`, marked sampled only when Hearth keeps that browser
+trace, so the browser's and the Relay's halves are kept or dropped
+together. Relays that predate this ignore the parameter.
+
+- Uploads go over XHR for its progress events and abort when the effect is
+  interrupted. Folder uploads send three files at a time and keep each
+  file's failure.
+- Downloads are handed to the browser's own download manager with a form
+  post, which carries the credentials since it can't set headers.
+- The page signs its requests with one non-extractable key pair; each
+  capability still names one path and method.
+- Failures are `RelayTransferError`s whose `reason` says whether the Relay
+  was unreachable, refused, cancelled, or answered with something invalid.
+  An unreachable Relay still takes a small text file through Hearth.
+
 ## Limits
 
 | Pool      | At once | Per principal |

@@ -17,7 +17,11 @@ import {
   uploadDroppedFiles,
 } from "@/components/files/file-tree-utils"
 import type { FileWorkspaceInstance } from "@/lib/relay-selectors"
-import { uploadRelayFile } from "@/lib/relay-file-transfer"
+import { runBrowserEffect } from "@/lib/browser-telemetry"
+import {
+  uploadRelayFilesEffect,
+  type RelayUploadItem,
+} from "@/lib/relay-file-transfer"
 
 export type UploadFiles = (
   files: ReadonlyArray<UploadFile>,
@@ -95,22 +99,28 @@ export function useFileUploadAction({
       let uploaded = 0
       let failedCount = 0
       let uploadedBytes = 0
+      const items = files.map((upload) => ({
+        file: upload.file,
+        path: joinFilePath(directory, upload.path),
+      }))
+      const uploads = new Map(items.map((item, index) => [item, files[index]!]))
       const totalBytes = files.reduce(
         (total, upload) => total + Math.max(upload.file.size, 1),
         0
       )
-      const active = new Map<number, { upload: UploadFile; loaded: number }>()
+      // The files being sent and how much of each has gone.
+      const active = new Map<RelayUploadItem, number>()
       let toastId: number | string | undefined
       let progressTimer: ReturnType<typeof setTimeout> | undefined
 
       function updateToast() {
         clearTimeout(progressTimer)
         progressTimer = undefined
-        const current = active.values().next().value
-        const upload = current?.upload ?? files[completed]
+        const [currentItem, loaded = 0] = active.entries().next().value ?? []
+        const upload = currentItem ? uploads.get(currentItem) : files[completed]
         if (!upload) return
         const fileProgress = upload.file.size
-          ? Math.floor(((current?.loaded ?? 0) / upload.file.size) * 100)
+          ? Math.floor((loaded / upload.file.size) * 100)
           : 0
         const totalProgress = Math.min(
           99,
@@ -159,73 +169,37 @@ export function useFileUploadAction({
       }
       updateToast()
 
-      await Effect.runPromise(
-        Effect.forEach(
-          files,
-          (upload, index) =>
-            Effect.gen(function* () {
-              const current = { upload, loaded: 0 }
-              active.set(index, current)
-              updateToast()
-              const result = yield* Effect.tryPromise({
-                try: () =>
-                  uploadRelayFile({
-                    file: upload.file,
-                    instanceId: instance.id,
-                    path: joinFilePath(directory, upload.path),
-                    relayId: instance.relayId,
-                    onProgress: (loaded) => {
-                      if (!active.has(index)) return
-                      uploadedBytes += loaded - current.loaded
-                      current.loaded = loaded
-                      // Keep progress updates inside Sonner and cap them at 10 per second.
-                      progressTimer ??= setTimeout(updateToast, 100)
-                    },
-                  }),
-                catch: (cause) => cause,
-              }).pipe(
-                Effect.match({
-                  onFailure: (cause) => ({ cause, uploaded: false as const }),
-                  onSuccess: () => ({ cause: null, uploaded: true as const }),
-                })
-              )
-              completed += 1
-              if (result.uploaded) {
-                uploaded += 1
-                uploadedBytes += Math.max(upload.file.size, 1) - current.loaded
-              } else {
-                failedCount += 1
-                uploadedBytes -= current.loaded
-              }
-              active.delete(index)
-              if (completed < files.length) updateToast()
-              return result
-            }),
-          { concurrency: 3 }
-        ).pipe(
-          Effect.tap((results) =>
-            Effect.sync(() => {
-              clearTimeout(progressTimer)
-              dismissToast(toastId)
-              const failed = results.find((result) => !result.uploaded)
-              showToast({
-                type: failed ? "error" : "success",
-                message: failed
-                  ? uploaded
-                    ? `${uploaded} of ${files.length} files uploaded`
-                    : "Upload failed"
-                  : uploaded === 1
-                    ? "File uploaded"
-                    : `${uploaded} files uploaded`,
-                description: failed
-                  ? failed.cause instanceof Error
-                    ? failed.cause.message
-                    : "The Relay could not complete every upload."
-                  : `Added to ${rootPath}/${normalizeDirectoryPath(directory)}`,
-              })
-              if (uploaded) onRefresh()
-            })
-          ),
+      const outcomes = await runBrowserEffect(
+        uploadRelayFilesEffect({
+          instanceId: instance.id,
+          items,
+          relayId: instance.relayId,
+          onStart: (item) => {
+            active.set(item, 0)
+            updateToast()
+          },
+          onProgress: (item, loaded) => {
+            const previous = active.get(item)
+            if (previous === undefined) return
+            uploadedBytes += loaded - previous
+            active.set(item, loaded)
+            // Keep progress updates inside Sonner and cap them at 10 per second.
+            progressTimer ??= setTimeout(updateToast, 100)
+          },
+          onSettled: ({ cause, item }) => {
+            const loaded = active.get(item) ?? 0
+            completed += 1
+            if (cause) {
+              failedCount += 1
+              uploadedBytes -= loaded
+            } else {
+              uploaded += 1
+              uploadedBytes += Math.max(item.file.size, 1) - loaded
+            }
+            active.delete(item)
+            if (completed < files.length) updateToast()
+          },
+        }).pipe(
           Effect.ensuring(
             Effect.sync(() => {
               clearTimeout(progressTimer)
@@ -234,6 +208,21 @@ export function useFileUploadAction({
           )
         )
       )
+      const failed = outcomes.find((outcome) => outcome.cause)?.cause
+      showToast({
+        type: failed ? "error" : "success",
+        message: failed
+          ? uploaded
+            ? `${uploaded} of ${files.length} files uploaded`
+            : "Upload failed"
+          : uploaded === 1
+            ? "File uploaded"
+            : `${uploaded} files uploaded`,
+        description: failed
+          ? failed.message
+          : `Added to ${rootPath}/${normalizeDirectoryPath(directory)}`,
+      })
+      if (uploaded) onRefresh()
     },
   })
   const uploadFiles = React.useCallback<UploadFiles>(

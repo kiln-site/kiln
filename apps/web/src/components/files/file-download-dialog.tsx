@@ -43,9 +43,11 @@ import {
   writeFileDownloadPreferences,
 } from "@/lib/file-download-preferences"
 import type { FileArchiveFormat } from "@/lib/file-download-preferences"
+import { runBrowserEffect } from "@/lib/browser-telemetry"
 import {
-  downloadRelayFile,
+  downloadRelayFileEffect,
   inspectRelayFileDownload,
+  inspectRelayFileDownloadEffect,
   isValidRelayDownloadName,
 } from "@/lib/relay-file-transfer"
 import type { RelayFileDownloadPreview } from "@/lib/relay-file-transfer"
@@ -114,7 +116,7 @@ export const FileDownloadDialog = React.memo(function FileDownloadDialog({
       automatic: boolean
       skipDialog?: boolean
     }) =>
-      Effect.runPromise(
+      runBrowserEffect(
         startRelayDownload({
           archiveFormat,
           compressed,
@@ -482,20 +484,17 @@ function startRelayDownload({
   preflight?: boolean
   relayId: string
 }) {
-  return Effect.tryPromise({
-    try: async () => {
-      if (preflight) {
-        await inspectRelayFileDownload({ instanceId, path, relayId })
-      }
-      await downloadRelayFile({
-        compression: compressed ? archiveFormat : "none",
-        instanceId,
-        name,
-        path,
-        relayId,
-      })
-    },
-    catch: (cause) => cause,
+  return Effect.gen(function* () {
+    if (preflight) {
+      yield* inspectRelayFileDownloadEffect({ instanceId, path, relayId })
+    }
+    yield* downloadRelayFileEffect({
+      compression: compressed ? archiveFormat : "none",
+      instanceId,
+      name,
+      path,
+      relayId,
+    })
   })
 }
 

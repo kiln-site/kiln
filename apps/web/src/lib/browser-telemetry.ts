@@ -181,15 +181,33 @@ export function browserTraceparent(
   span: BrowserSpan | undefined
 ): string | undefined {
   const traced = span ? spans.get(span) : undefined
-  if (!traced) return undefined
+  return traced ? sampledTraceparent(traced) : undefined
+}
+
+/**
+ * The `traceparent` for work another service does within the current
+ * effect's span, sampled as `browserTraceparent` is. Undefined outside
+ * `runBrowserEffect` or while Hearth forwards no browser traces.
+ */
+export const currentBrowserTraceparent: Effect.Effect<string | undefined> =
+  Effect.gen(function* () {
+    if (!telemetry?.tracer) return undefined
+    const span = yield* Effect.option(Effect.currentSpan)
+    return Option.isSome(span) ? sampledTraceparent(span.value) : undefined
+  })
+
+function sampledTraceparent(span: {
+  readonly spanId: string
+  readonly traceId: string
+}): string | undefined {
   const ratio = Number(
     document
       .querySelector(`meta[name="${browserTraceSampleRatioMeta}"]`)
       ?.getAttribute("content") ?? Number.NaN
   )
   if (!Number.isFinite(ratio)) return undefined
-  const sampled = keepBrowserTrace(traced.traceId, ratio)
-  return `00-${traced.traceId}-${traced.spanId}-${sampled ? "01" : "00"}`
+  const sampled = keepBrowserTrace(span.traceId, ratio)
+  return `00-${span.traceId}-${span.spanId}-${sampled ? "01" : "00"}`
 }
 
 /** Traces promise code, marking the span failed when it rejects. */

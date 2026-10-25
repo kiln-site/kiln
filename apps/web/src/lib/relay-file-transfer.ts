@@ -1,68 +1,129 @@
+/**
+ * The browser's half of direct Relay transfers. Each request is authorized
+ * by a capability Hearth signs for one path, proven with a key the page
+ * holds, and sent straight to the Relay, which continues this page's trace.
+ * Transfers are effects, so callers can run them concurrently and cancel
+ * them; the promise wrappers below run them through browser telemetry.
+ */
 import { relayBrowserRequestProofTranscript } from "@workspace/contracts"
-import { Effect } from "effect"
+import { Effect, Option, Schema } from "effect"
 
-import { recoverPromise } from "@/effect/promise"
+import {
+  currentBrowserTraceparent,
+  runBrowserEffect,
+} from "@/lib/browser-telemetry"
+import type { FileArchiveFormat } from "@/lib/file-download-preferences"
 import { issueFileCapability } from "@/server/relay-capability"
 import { saveRelayFile } from "@/server/relay"
-import type { FileArchiveFormat } from "@/lib/file-download-preferences"
 
+// A small text file can still be saved through Hearth when the browser
+// can't reach the Relay directly.
 const HEARTH_FILE_FALLBACK_LIMIT = 2 * 1024 * 1024
 
-class DirectRelayTransferError extends Error {}
+/**
+ * Why a transfer didn't happen: the Relay couldn't be reached directly, it
+ * refused the request, the transfer was cancelled, or it answered with
+ * something other than a transfer result.
+ */
+export class RelayTransferError extends Schema.TaggedError<RelayTransferError>()(
+  "RelayTransferError",
+  {
+    reason: Schema.Literals([
+      "aborted",
+      "invalid_response",
+      "rejected",
+      "unavailable",
+    ]),
+    message: Schema.String,
+    status: Schema.optional(Schema.Number),
+    cause: Schema.optional(Schema.Defect()),
+  }
+) {}
 
 interface FileTransferInput {
-  signal?: AbortSignal
-  instanceId: string
-  path: string
-  relayId: string
+  readonly instanceId: string
+  readonly path: string
+  readonly relayId: string
 }
 
-export interface RelayFileDownloadPreview {
-  gzipSizeEstimate: number
-  maxSize: number
-  modifiedAt: string
-  name: string
-  recommendedCompression: boolean
-  size: number
-  zipSizeEstimate: number
-}
-
-type DownloadCompression = FileArchiveFormat | "none"
+export type DownloadCompression = FileArchiveFormat | "none"
 type FileRequestMethod = "HEAD" | "POST" | "PUT"
 
 interface RelayFileAuthorization {
-  headers: {
-    Authorization: string
-    "X-Kiln-Nonce": string
-    "X-Kiln-Proof": string
-    "X-Kiln-Public-Key": string
-    "X-Kiln-Requested-At": string
+  readonly headers: {
+    readonly Authorization: string
+    readonly "X-Kiln-Nonce": string
+    readonly "X-Kiln-Proof": string
+    readonly "X-Kiln-Public-Key": string
+    readonly "X-Kiln-Requested-At": string
   }
-  url: URL
+  readonly url: URL
 }
 
-export async function inspectRelayFileDownload(
-  input: FileTransferInput
-): Promise<RelayFileDownloadPreview> {
-  const response = await runTransfer(
-    transferOperation(async () => {
-      const result = await relayFileRequest(input, "HEAD")
-      if (!result.ok) throw await transferError(result, "download")
-      return result
-    }).pipe(
-      Effect.mapError((cause) => directTransferUnavailable("download", cause))
+const RelayUploadResult = Schema.Struct({
+  modifiedAt: Schema.String,
+  path: Schema.String,
+  sha256: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/u)),
+  size: Schema.Number,
+})
+export type RelayUploadResult = typeof RelayUploadResult.Type
+
+const RelayFailureBody = Schema.fromJsonString(
+  Schema.Struct({ error: Schema.String })
+)
+
+const CapabilityPayload = Schema.fromJsonString(
+  Schema.Struct({ capabilityId: Schema.String, expiresAt: Schema.Number })
+)
+
+const SizeHeader = Schema.NumberFromString.check(
+  Schema.isInt(),
+  Schema.isGreaterThanOrEqualTo(0)
+)
+
+export interface RelayFileDownloadPreview {
+  readonly gzipSizeEstimate: number
+  readonly maxSize: number
+  readonly modifiedAt: string
+  readonly name: string
+  readonly recommendedCompression: boolean
+  readonly size: number
+  readonly zipSizeEstimate: number
+}
+
+/** What a download would send, from the Relay's answer to a HEAD request. */
+export const inspectRelayFileDownloadEffect = Effect.fn(
+  "RelayTransfer.inspect"
+)(function* (input: FileTransferInput) {
+  const authorization = yield* authorizeRelayFileRequest(input, "HEAD")
+  const response = yield* Effect.tryPromise({
+    try: (signal) =>
+      fetch(authorization.url, {
+        headers: authorization.headers,
+        method: "HEAD",
+        mode: "cors",
+        signal,
+      }),
+    catch: (cause) => unavailable("download", cause),
+  })
+  if (!response.ok) return yield* rejected(response, "download")
+  const header = (name: string) =>
+    Schema.decodeUnknownEffect(SizeHeader)(response.headers.get(name)).pipe(
+      Effect.mapError(
+        (cause) =>
+          new RelayTransferError({
+            reason: "invalid_response",
+            message: "Relay returned invalid download metadata",
+            cause,
+          })
+      )
     )
-  )
-  const size = requiredSizeHeader(response, "Content-Length")
-  const gzipSizeEstimate = requiredSizeHeader(
-    response,
-    "X-Kiln-Gzip-Size-Estimate"
-  )
-  const zipSizeEstimate = requiredSizeHeader(
-    response,
-    "X-Kiln-Zip-Size-Estimate"
-  )
-  const maxSize = requiredSizeHeader(response, "X-Kiln-Download-Max-Size")
+  const [size, gzipSizeEstimate, zipSizeEstimate, maxSize] = yield* Effect.all([
+    header("Content-Length"),
+    header("X-Kiln-Gzip-Size-Estimate"),
+    header("X-Kiln-Zip-Size-Estimate"),
+    header("X-Kiln-Download-Max-Size"),
+  ] as const)
   return {
     gzipSizeEstimate,
     maxSize,
@@ -71,62 +132,201 @@ export async function inspectRelayFileDownload(
     recommendedCompression: size >= 256 * 1024 && zipSizeEstimate < size * 0.9,
     size,
     zipSizeEstimate,
-  }
-}
+  } satisfies RelayFileDownloadPreview
+})
 
-export async function downloadRelayFile(
-  input: FileTransferInput & {
-    compression: DownloadCompression
-    name: string
-  }
-): Promise<void> {
-  const name = input.name.trim()
-  if (!isValidRelayDownloadName(name)) {
-    throw new Error("Enter a valid file name without slashes")
-  }
-  const authorization = await runTransfer(
-    transferOperation(() => relayFileAuthorization(input, "POST")).pipe(
-      Effect.mapError((cause) => directTransferUnavailable("download", cause))
+/**
+ * Hands a file's download to the browser's own download manager, which
+ * streams it to disk and shows its progress. A form post carries the
+ * credentials, since a native download can't send headers.
+ */
+export const downloadRelayFileEffect = Effect.fn("RelayTransfer.download")(
+  function* (
+    input: FileTransferInput & {
+      readonly compression: DownloadCompression
+      readonly name: string
+    }
+  ) {
+    const name = input.name.trim()
+    if (!isValidRelayDownloadName(name)) {
+      return yield* new RelayTransferError({
+        reason: "rejected",
+        message: "Enter a valid file name without slashes",
+      })
+    }
+    yield* Effect.annotateCurrentSpan(
+      "kiln.transfer.compression",
+      input.compression
     )
-  )
-  submitNativeDownload(authorization, {
-    compression: input.compression,
-    name,
-    path: input.path,
-  })
-}
+    const authorization = yield* authorizeRelayFileRequest(input, "POST")
+    submitNativeDownload(authorization, {
+      compression: input.compression,
+      name,
+      path: input.path,
+    })
+  }
+)
 
-export async function downloadRelayArchive(
+/** Hands a zip of several files and folders to the browser's downloads. */
+export const downloadRelayArchiveEffect = Effect.fn(
+  "RelayTransfer.downloadArchive"
+)(function* (
   input: Omit<FileTransferInput, "path"> & {
-    name: string
-    paths: ReadonlyArray<string>
+    readonly name: string
+    readonly paths: ReadonlyArray<string>
   }
-): Promise<void> {
-  if (!input.paths.length) throw new Error("Select files to download")
+) {
+  if (!input.paths.length) {
+    return yield* new RelayTransferError({
+      reason: "rejected",
+      message: "Select files to download",
+    })
+  }
   const name = input.name.trim()
   if (!isValidRelayDownloadName(name)) {
-    throw new Error("Enter a valid file name without slashes")
+    return yield* new RelayTransferError({
+      reason: "rejected",
+      message: "Enter a valid file name without slashes",
+    })
   }
+  yield* Effect.annotateCurrentSpan("kiln.transfer.paths", input.paths.length)
+  // The capability names the selection's digest, which the Relay checks
+  // against the paths the form sends.
   const serializedPaths = JSON.stringify(input.paths)
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(serializedPaths)
+  const digest = yield* Effect.promise(() =>
+    crypto.subtle.digest("SHA-256", new TextEncoder().encode(serializedPaths))
   )
-  const path = `@archive/${Array.from(new Uint8Array(digest), (byte) =>
-    byte.toString(16).padStart(2, "0")
-  ).join("")}`
-  const authorization = await runTransfer(
-    transferOperation(() =>
-      relayFileAuthorization({ ...input, path }, "POST")
-    ).pipe(
-      Effect.mapError((cause) => directTransferUnavailable("download", cause))
-    )
+  const path = `@archive/${hex(new Uint8Array(digest))}`
+  const authorization = yield* authorizeRelayFileRequest(
+    { ...input, path },
+    "POST"
   )
   submitNativeDownload(authorization, {
     compression: "zip",
     name,
     path,
     serializedPaths,
+  })
+})
+
+/**
+ * Streams a file to the Relay, reporting how much has been sent. Without a
+ * direct connection, a small text file is saved through Hearth instead.
+ */
+export const uploadRelayFileEffect = Effect.fn("RelayTransfer.upload")(
+  function* (
+    input: FileTransferInput & {
+      readonly file: File
+      readonly onProgress?: ((uploadedBytes: number) => void) | undefined
+    }
+  ) {
+    yield* Effect.annotateCurrentSpan("kiln.transfer.bytes", input.file.size)
+    const result = yield* sendUpload(input).pipe(
+      Effect.catchIf(
+        (error) => error.reason === "unavailable",
+        (error) =>
+          input.file.size > HEARTH_FILE_FALLBACK_LIMIT
+            ? Effect.fail(error)
+            : saveThroughHearth(input).pipe(
+                Effect.mapError((cause) => unavailable("upload", cause))
+              )
+      )
+    )
+    input.onProgress?.(input.file.size)
+    return result
+  }
+)
+
+export interface RelayUploadItem {
+  readonly file: File
+  readonly path: string
+}
+
+export interface RelayUploadOutcome {
+  readonly cause: RelayTransferError | null
+  readonly item: RelayUploadItem
+}
+
+/**
+ * Uploads several files, three at a time, under one span. Each file's
+ * failure is kept rather than stopping the rest. `onProgress` is called
+ * with the file and how much of it has been sent.
+ */
+export const uploadRelayFilesEffect = Effect.fn("RelayTransfer.uploadBatch")(
+  function* (input: {
+    readonly instanceId: string
+    readonly items: ReadonlyArray<RelayUploadItem>
+    readonly onStart?: (item: RelayUploadItem) => void
+    readonly onProgress?: (item: RelayUploadItem, uploadedBytes: number) => void
+    readonly onSettled?: (outcome: RelayUploadOutcome) => void
+    readonly relayId: string
+  }) {
+    yield* Effect.annotateCurrentSpan({
+      "kiln.transfer.files": input.items.length,
+      "kiln.transfer.bytes": input.items.reduce(
+        (total, item) => total + item.file.size,
+        0
+      ),
+    })
+    return yield* Effect.forEach(
+      input.items,
+      (item) =>
+        Effect.sync(() => input.onStart?.(item)).pipe(
+          Effect.andThen(
+            uploadRelayFileEffect({
+              file: item.file,
+              instanceId: input.instanceId,
+              onProgress: (loaded) => input.onProgress?.(item, loaded),
+              path: item.path,
+              relayId: input.relayId,
+            })
+          ),
+          Effect.match({
+            onFailure: (cause): RelayUploadOutcome => ({ cause, item }),
+            onSuccess: (): RelayUploadOutcome => ({ cause: null, item }),
+          }),
+          Effect.tap((outcome) => Effect.sync(() => input.onSettled?.(outcome)))
+        ),
+      { concurrency: 3 }
+    )
+  }
+)
+
+export function inspectRelayFileDownload(
+  input: FileTransferInput & { signal?: AbortSignal }
+): Promise<RelayFileDownloadPreview> {
+  return runBrowserEffect(inspectRelayFileDownloadEffect(input), {
+    signal: input.signal,
+  })
+}
+
+export function downloadRelayFile(
+  input: FileTransferInput & {
+    compression: DownloadCompression
+    name: string
+  }
+): Promise<void> {
+  return runBrowserEffect(downloadRelayFileEffect(input))
+}
+
+export function downloadRelayArchive(
+  input: Omit<FileTransferInput, "path"> & {
+    name: string
+    paths: ReadonlyArray<string>
+  }
+): Promise<void> {
+  return runBrowserEffect(downloadRelayArchiveEffect(input))
+}
+
+export function uploadRelayFile(
+  input: FileTransferInput & {
+    file: File
+    onProgress?: (uploadedBytes: number) => void
+    signal?: AbortSignal
+  }
+): Promise<RelayUploadResult> {
+  return runBrowserEffect(uploadRelayFileEffect(input), {
+    signal: input.signal,
   })
 }
 
@@ -145,6 +345,222 @@ export function isValidRelayDownloadName(name: string): boolean {
     )
   })
 }
+
+// The upload itself, over XHR for its progress events, which fetch still
+// lacks. Interrupting it aborts the request.
+const sendUpload = Effect.fnUntraced(function* (
+  input: FileTransferInput & {
+    readonly file: File
+    readonly onProgress?: ((uploadedBytes: number) => void) | undefined
+  }
+) {
+  const authorization = yield* authorizeRelayFileRequest(input, "PUT")
+  const response = yield* Effect.callback<
+    { body: string; status: number },
+    RelayTransferError
+  >((resume) => {
+    const request = new XMLHttpRequest()
+    request.upload.onprogress = (event) =>
+      input.onProgress?.(Math.min(event.loaded, input.file.size))
+    request.onload = () =>
+      resume(
+        Effect.succeed({ body: request.responseText, status: request.status })
+      )
+    request.onerror = () =>
+      resume(
+        Effect.fail(
+          unavailable("upload", new TypeError("Relay upload connection failed"))
+        )
+      )
+    request.onabort = () =>
+      resume(
+        Effect.fail(
+          new RelayTransferError({
+            reason: "aborted",
+            message: "Relay upload was cancelled",
+          })
+        )
+      )
+    request.open("PUT", authorization.url)
+    for (const [name, value] of Object.entries(authorization.headers)) {
+      request.setRequestHeader(name, value)
+    }
+    request.send(input.file)
+    return Effect.sync(() => request.abort())
+  })
+  if (response.status < 200 || response.status >= 300) {
+    return yield* new RelayTransferError({
+      reason: "rejected",
+      message: failureMessage(response.body, response.status, "upload"),
+      status: response.status,
+    })
+  }
+  return yield* Schema.decodeUnknownEffect(
+    Schema.fromJsonString(RelayUploadResult)
+  )(response.body).pipe(
+    Effect.mapError(
+      (cause) =>
+        new RelayTransferError({
+          reason: "invalid_response",
+          message: "Relay returned an invalid upload response",
+          cause,
+        })
+    )
+  )
+})
+
+const saveThroughHearth = Effect.fn("RelayTransfer.saveThroughHearth")(
+  function* (input: FileTransferInput & { readonly file: File }) {
+    const bytes = new Uint8Array(
+      yield* Effect.promise(() => input.file.arrayBuffer())
+    )
+    const content = yield* Effect.try(() =>
+      new TextDecoder("utf-8", { fatal: true }).decode(bytes)
+    )
+    const [saved, digest] = yield* Effect.all(
+      [
+        Effect.tryPromise(() =>
+          saveRelayFile({
+            data: {
+              content,
+              instanceId: input.instanceId,
+              path: input.path,
+              relayId: input.relayId,
+            },
+          })
+        ),
+        Effect.promise(() => crypto.subtle.digest("SHA-256", bytes)),
+      ],
+      { concurrency: 2 }
+    )
+    return {
+      modifiedAt: saved.modifiedAt,
+      path: saved.path,
+      sha256: hex(new Uint8Array(digest)),
+      size: bytes.byteLength,
+    } satisfies RelayUploadResult
+  }
+)
+
+/**
+ * A request's credentials: a capability Hearth signs for this path and
+ * method, and this page's proof that it holds the key the capability names.
+ * The URL carries the current span's `traceparent`, so the Relay's work
+ * joins this trace.
+ */
+const authorizeRelayFileRequest = Effect.fn("RelayTransfer.authorize")(
+  function* (input: FileTransferInput, method: FileRequestMethod) {
+    const keys = yield* pageTransferKeys
+    const issued = yield* Effect.tryPromise({
+      try: () =>
+        issueFileCapability({
+          data: {
+            action:
+              method === "PUT"
+                ? "instance.files.upload"
+                : "instance.files.download",
+            instanceId: input.instanceId,
+            optInV2: true,
+            path: input.path,
+            publicKeyJwk: keys.publicKeyJwk,
+            relayId: input.relayId,
+          },
+        }),
+      catch: (cause) =>
+        new RelayTransferError({
+          reason: "rejected",
+          message:
+            cause instanceof Error
+              ? cause.message
+              : "Hearth could not authorize this transfer",
+          cause,
+        }),
+    })
+    if (issued.proxyMode === "hearth") {
+      return yield* unavailable(
+        method === "PUT" ? "upload" : "download",
+        new Error("This Relay is configured to transfer through Hearth")
+      )
+    }
+    const payload = yield* Schema.decodeUnknownEffect(CapabilityPayload)(
+      atobBase64Url(issued.capability.split(".", 1)[0] ?? "")
+    ).pipe(
+      Effect.mapError(
+        (cause) =>
+          new RelayTransferError({
+            reason: "invalid_response",
+            message: "Hearth returned an invalid Relay capability",
+            cause,
+          })
+      )
+    )
+    const nonce = bytesToBase64Url(crypto.getRandomValues(new Uint8Array(32)))
+    const requestedAt = Date.now()
+    const proof = yield* Effect.promise(() =>
+      crypto.subtle.sign(
+        { hash: "SHA-256", name: "ECDSA" },
+        keys.privateKey,
+        new TextEncoder().encode(
+          relayBrowserRequestProofTranscript({
+            capabilityId: payload.capabilityId,
+            expiresAt: payload.expiresAt,
+            instanceId: input.instanceId,
+            method,
+            nonce,
+            path: input.path,
+            relayId: input.relayId,
+            requestedAt,
+          })
+        )
+      )
+    )
+    const url = new URL(
+      `/v1/browser/files/${encodeURIComponent(input.instanceId)}`,
+      issued.browserOrigin
+    )
+    url.searchParams.set("path", input.path)
+    const traceparent = yield* currentBrowserTraceparent
+    if (traceparent) url.searchParams.set("traceparent", traceparent)
+    return {
+      headers: {
+        Authorization: `Kiln ${issued.capability}`,
+        "X-Kiln-Nonce": nonce,
+        "X-Kiln-Proof": bytesToBase64Url(new Uint8Array(proof)),
+        "X-Kiln-Public-Key": bytesToBase64Url(
+          new TextEncoder().encode(JSON.stringify(keys.publicKeyJwk))
+        ),
+        "X-Kiln-Requested-At": String(requestedAt),
+      },
+      url,
+    } satisfies RelayFileAuthorization
+  }
+)
+
+// One key pair for the page's transfers. Its private half can't leave the
+// browser, and each capability still names one path and method, so a
+// folder upload doesn't generate a key per file.
+const pageTransferKeys = Effect.cached(
+  Effect.promise(async () => {
+    const keys = await crypto.subtle.generateKey(
+      { name: "ECDSA", namedCurve: "P-256" },
+      false,
+      ["sign", "verify"]
+    )
+    const exported = await crypto.subtle.exportKey("jwk", keys.publicKey)
+    if (!exported.x || !exported.y) {
+      throw new Error("Browser could not create a file transfer key")
+    }
+    return {
+      privateKey: keys.privateKey,
+      publicKeyJwk: {
+        crv: "P-256" as const,
+        kty: "EC" as const,
+        x: exported.x,
+        y: exported.y,
+      },
+    }
+  })
+).pipe(Effect.runSync)
 
 function submitNativeDownload(
   authorization: RelayFileAuthorization,
@@ -189,292 +605,52 @@ function submitNativeDownload(
   window.setTimeout(() => frame.remove(), 60_000)
 }
 
-export async function uploadRelayFile(
-  input: FileTransferInput & {
-    file: File
-    onProgress?: (uploadedBytes: number) => void
-  }
-): Promise<{
-  modifiedAt: string
-  path: string
-  sha256: string
-  size: number
-}> {
-  const result = await runTransfer(
-    transferOperation(async () => {
-      const response = await relayFileRequest(
-        input,
-        "PUT",
-        input.file,
-        input.onProgress
-      )
-      if (!response.ok) throw await transferError(response, "upload")
-      return (await response.json()) as unknown
-    }).pipe(
-      Effect.catchIf(isDirectConnectionFailure, (cause) => {
-        if (input.file.size > HEARTH_FILE_FALLBACK_LIMIT) {
-          return Effect.fail(directTransferUnavailable("upload", cause))
-        }
-        return transferOperation(async () => {
-          input.onProgress?.(0)
-          const bytes = new Uint8Array(await input.file.arrayBuffer())
-          const content = new TextDecoder("utf-8", { fatal: true }).decode(
-            bytes
-          )
-          const [saved, digest] = await Promise.all([
-            saveRelayFile({
-              data: {
-                content,
-                instanceId: input.instanceId,
-                path: input.path,
-                relayId: input.relayId,
-              },
-            }),
-            crypto.subtle.digest("SHA-256", bytes),
-          ])
-          return {
-            modifiedAt: saved.modifiedAt,
-            path: saved.path,
-            sha256: Array.from(new Uint8Array(digest), (byte) =>
-              byte.toString(16).padStart(2, "0")
-            ).join(""),
-            size: bytes.byteLength,
-          }
-        }).pipe(
-          Effect.mapError((fallbackCause) =>
-            directTransferUnavailable("upload", fallbackCause)
-          )
-        )
-      })
-    )
-  )
-  if (!result || typeof result !== "object" || Array.isArray(result)) {
-    throw new Error("Relay returned an invalid upload response")
-  }
-  const value = Object.fromEntries(Object.entries(result))
-  if (
-    typeof value.modifiedAt !== "string" ||
-    typeof value.path !== "string" ||
-    typeof value.sha256 !== "string" ||
-    !/^[a-f0-9]{64}$/u.test(value.sha256) ||
-    typeof value.size !== "number"
-  )
-    throw new Error("Relay returned an invalid upload response")
-  input.onProgress?.(input.file.size)
-  return {
-    modifiedAt: value.modifiedAt,
-    path: value.path,
-    sha256: value.sha256,
-    size: value.size,
-  }
-}
-
-async function relayFileRequest(
-  input: FileTransferInput,
-  method: "HEAD" | "PUT",
-  body?: File,
-  onProgress?: (uploadedBytes: number) => void
-): Promise<Response> {
-  const authorization = await relayFileAuthorization(input, method)
-  return runTransfer(
-    transferOperation(() =>
-      body && onProgress
-        ? uploadRelayRequest(authorization, body, onProgress)
-        : fetch(authorization.url, {
-            ...(body === undefined ? {} : { body }),
-            headers: authorization.headers,
-            method,
-            mode: "cors",
-            signal: input.signal,
-          })
-    ).pipe(
-      Effect.mapError(
-        (cause) =>
-          new DirectRelayTransferError(
-            "The browser could not establish the direct Relay transfer",
-            { cause }
-          )
-      )
-    )
-  )
-}
-
-function uploadRelayRequest(
-  authorization: RelayFileAuthorization,
-  file: File,
-  onProgress: (uploadedBytes: number) => void
-): Promise<Response> {
-  return new Promise((resolve, reject) => {
-    const request = new XMLHttpRequest()
-    request.upload.onprogress = (event) =>
-      onProgress(Math.min(event.loaded, file.size))
-    request.onload = () =>
-      resolve(
-        new Response(request.responseText || null, {
-          status: request.status,
-          statusText: request.statusText,
-        })
-      )
-    request.onerror = () =>
-      reject(new TypeError("Relay upload connection failed"))
-    request.onabort = () => reject(new Error("Relay upload was aborted"))
-    request.open("PUT", authorization.url)
-    for (const [name, value] of Object.entries(authorization.headers)) {
-      request.setRequestHeader(name, value)
-    }
-    request.send(file)
-  })
-}
-
-async function relayFileAuthorization(
-  input: FileTransferInput,
-  method: FileRequestMethod
-): Promise<RelayFileAuthorization> {
-  const keys = await crypto.subtle.generateKey(
-    { name: "ECDSA", namedCurve: "P-256" },
-    false,
-    ["sign", "verify"]
-  )
-  const exported = await crypto.subtle.exportKey("jwk", keys.publicKey)
-  const publicKeyJwk = {
-    crv: "P-256" as const,
-    kty: "EC" as const,
-    x: requiredCoordinate(exported.x),
-    y: requiredCoordinate(exported.y),
-  }
-  const issued = await issueFileCapability({
-    data: {
-      action:
-        method === "PUT" ? "instance.files.upload" : "instance.files.download",
-      instanceId: input.instanceId,
-      optInV2: true,
-      path: input.path,
-      publicKeyJwk,
-      relayId: input.relayId,
-    },
-  })
-  if (issued.proxyMode === "hearth") {
-    throw new DirectRelayTransferError(
-      "This Relay is configured to transfer through Hearth"
-    )
-  }
-  const payload = capabilityPayload(issued.capability)
-  const nonceBytes = crypto.getRandomValues(new Uint8Array(32))
-  const nonce = bytesToBase64Url(nonceBytes)
-  const requestedAt = Date.now()
-  const proof = await crypto.subtle.sign(
-    { hash: "SHA-256", name: "ECDSA" },
-    keys.privateKey,
-    new TextEncoder().encode(
-      relayBrowserRequestProofTranscript({
-        capabilityId: payload.capabilityId,
-        expiresAt: payload.expiresAt,
-        instanceId: input.instanceId,
-        method,
-        nonce,
-        path: input.path,
-        relayId: input.relayId,
-        requestedAt,
-      })
-    )
-  )
-  const url = new URL(
-    `/v1/browser/files/${encodeURIComponent(input.instanceId)}`,
-    issued.browserOrigin
-  )
-  url.searchParams.set("path", input.path)
-  return {
-    headers: {
-      Authorization: `Kiln ${issued.capability}`,
-      "X-Kiln-Nonce": nonce,
-      "X-Kiln-Proof": bytesToBase64Url(new Uint8Array(proof)),
-      "X-Kiln-Public-Key": bytesToBase64Url(
-        new TextEncoder().encode(JSON.stringify(publicKeyJwk))
-      ),
-      "X-Kiln-Requested-At": String(requestedAt),
-    },
-    url,
-  }
-}
-
-function requiredSizeHeader(response: Response, name: string): number {
-  const value = Number(response.headers.get(name))
-  if (!Number.isSafeInteger(value) || value < 0) {
-    throw new Error("Relay returned invalid download metadata")
-  }
-  return value
-}
-
-function isDirectConnectionFailure(cause: unknown): boolean {
-  return cause instanceof DirectRelayTransferError
-}
-
-function directTransferUnavailable(
+function unavailable(
   operation: "download" | "upload",
   cause: unknown
-): Error {
-  return new Error(
-    `The secure direct ${operation} edge is unavailable, and Hearth could not safely proxy this file. Configure bundled Traefik or a trusted existing Traefik edge and try again.`,
-    { cause }
-  )
-}
-
-function transferOperation<A>(
-  run: () => Promise<A>
-): Effect.Effect<A, unknown> {
-  return Effect.tryPromise({
-    try: run,
-    catch: (cause) => cause,
+): RelayTransferError {
+  return new RelayTransferError({
+    reason: "unavailable",
+    message: `The secure direct ${operation} edge is unavailable, and Hearth could not safely proxy this file. Configure bundled Traefik or a trusted existing Traefik edge and try again.`,
+    cause,
   })
 }
 
-function runTransfer<A>(effect: Effect.Effect<A, unknown>): Promise<A> {
-  return Effect.runPromise(effect)
-}
-
-function capabilityPayload(capability: string): {
-  capabilityId: string
-  expiresAt: number
-} {
-  const encoded = capability.split(".", 1)[0]
-  if (!encoded) throw new Error("Hearth returned an invalid Relay capability")
-  const value = JSON.parse(atobBase64Url(encoded)) as unknown
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Hearth returned an invalid Relay capability")
-  }
-  const payload = Object.fromEntries(Object.entries(value))
-  if (
-    typeof payload.capabilityId !== "string" ||
-    typeof payload.expiresAt !== "number"
-  )
-    throw new Error("Hearth returned an invalid Relay capability")
-  return {
-    capabilityId: payload.capabilityId,
-    expiresAt: payload.expiresAt,
-  }
-}
-
-async function transferError(
+function rejected(
   response: Response,
-  operation: string
-): Promise<Error> {
-  const body = await recoverPromise(
-    () => response.json(),
-    () => null
+  operation: "download" | "upload"
+): Effect.Effect<never, RelayTransferError> {
+  return Effect.tryPromise(() => response.text()).pipe(
+    Effect.orElseSucceed(() => ""),
+    Effect.flatMap((body) =>
+      Effect.fail(
+        new RelayTransferError({
+          reason: "rejected",
+          message: failureMessage(body, response.status, operation),
+          status: response.status,
+        })
+      )
+    )
   )
-  const message =
-    body &&
-    typeof body === "object" &&
-    "error" in body &&
-    typeof body.error === "string"
-      ? body.error
-      : `Relay ${operation} failed with HTTP ${response.status}`
-  return new Error(message)
 }
 
-function requiredCoordinate(value: string | undefined): string {
-  if (!value) throw new Error("Browser could not create a file transfer key")
-  return value
+// The Relay's reason for refusing, or a generic one for an empty answer
+// such as a HEAD request's.
+function failureMessage(
+  body: string,
+  status: number,
+  operation: "download" | "upload"
+): string {
+  return Option.match(Schema.decodeUnknownOption(RelayFailureBody)(body), {
+    onNone: () => `Relay ${operation} failed with HTTP ${status}`,
+    onSome: (failure) => failure.error,
+  })
+}
+
+function hex(bytes: Uint8Array): string {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
+    ""
+  )
 }
 
 function bytesToBase64Url(value: Uint8Array): string {
