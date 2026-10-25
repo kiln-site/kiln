@@ -924,46 +924,19 @@ export class FilesystemDriver {
       const root = yield* this.#instanceRoot(instance)
       const normalizedPath = requestedPath.replace(/\/+$/u, "")
       if (normalizedPath) yield* validateRelativePath(normalizedPath)
-      const destination = normalizedPath ? resolve(root, normalizedPath) : root
-      yield* ensureContained(root, destination)
-      if (normalizedPath) {
-        const parent = yield* filesystemOperation(
-          "transfer.resolveParent",
-          () => realpath(dirname(destination))
-        )
-        yield* ensureContained(root, parent)
-      }
       const owner = yield* filesystemOperation("transfer.statRoot", () =>
         stat(root)
       )
-      let created = false
-      let wrote = false
-      let completed = false
-      yield* filesystemOperation("transfer.install", async (signal) => {
-        const entries = await inspectTarGzArchive(archive, signal)
-        created = await prepareTransferDestination(destination, owner)
-        wrote = true
-        await extractTarGzEntries(
+      const discarded = join(this.#config.dataDirectory, "transfer-discards")
+      yield* filesystemOperation("transfer.install", (signal) =>
+        installTransferTree({
           archive,
-          entries,
+          discarded,
+          owner,
+          path: normalizedPath,
+          root,
           signal,
-          (entry, inspected) =>
-            extractTransferEntry(entry, inspected, destination, owner, signal)
-        )
-      }).pipe(
-        Effect.tap(() =>
-          Effect.sync(() => {
-            completed = true
-          })
-        ),
-        Effect.ensuring(
-          Effect.suspend(() => {
-            if (completed || !wrote) return Effect.void
-            return created
-              ? cleanupExtractionEffect(destination)
-              : emptyDirectoryEffect(destination)
-          })
-        )
+        })
       )
     }).pipe(
       Effect.tap(() =>
@@ -3042,10 +3015,11 @@ async function writeTransferArchive(
       }
       // Opened without following links and read through that one handle, so
       // a file swapped for a link after it was listed can't bring in what
-      // the link points at.
+      // the link points at. Without blocking, so one swapped for a pipe
+      // fails the check below rather than waiting for a writer.
       const file = await open(
         entry.absolute,
-        fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW
+        fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK
       )
       await ensuringPromise(
         async () => {
@@ -3103,32 +3077,180 @@ function transferEntryChanged(name: string) {
   )
 }
 
-// The folder a transfer installs into: created when missing, or taken as
-// it is when empty. True when it was created.
-async function prepareTransferDestination(
-  destination: string,
+// Installs a transfer archive into `path` under `root`. Every folder and
+// file is made through a descriptor of its parent, opened without following
+// links, so a running server swapping part of the tree for a link midway
+// can't send a write, owner, or mode change outside its root. New files keep
+// their modes, with at least their owner's access, and get the root's owner.
+async function installTransferTree(input: {
+  archive: string
+  discarded: string
   owner: { gid: number; uid: number }
-) {
-  const existing = await Effect.runPromise(
-    Effect.result(promiseEffect(() => lstat(destination)))
+  path: string
+  root: string
+  signal: AbortSignal
+}): Promise<void> {
+  const { archive, owner, root, signal } = input
+  const entries = await inspectTarGzArchive(archive, signal)
+  const segments = input.path ? input.path.split("/").filter(Boolean) : []
+  const name = segments.at(-1)
+  const rootHandle = await open(
+    root,
+    fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW
   )
-  if (Result.isFailure(existing)) {
-    if (!isMissingFile(existing.failure)) throw existing.failure
-    await mkdir(destination, { mode: 0o755 })
-    // The root's owner, as every entry installed into it, so the server can
-    // write beside them.
-    if (process.getuid?.() === 0) {
-      await chown(destination, owner.uid, owner.gid)
-    }
-    return true
+  const parents = new AnchoredDirectories(root, rootHandle)
+  await ensuringPromise(
+    async () => {
+      // The folder's parents must already be there; the folder itself may
+      // be missing, or must be empty.
+      const parent = name
+        ? await parents.open(segments.slice(0, -1), null)
+        : null
+      const destination =
+        parent && name
+          ? await prepareTransferDestination(root, parent, name, owner)
+          : null
+      const top = destination?.handle ?? rootHandle
+      if (!destination) await requireEmptyDirectory(top)
+      const tree = new AnchoredDirectories(root, top)
+      const extracted = await Effect.runPromise(
+        Effect.result(
+          promiseEffect(() =>
+            extractTarGzEntries(archive, entries, signal, (entry, inspected) =>
+              extractTransferEntry(entry, inspected, tree, owner, signal)
+            )
+          )
+        )
+      )
+      await tree.close()
+      if (Result.isFailure(extracted)) {
+        // What was written leaves the root by a rename the server can't
+        // redirect, and is removed where the server can't reach it.
+        const cleaned = await Effect.runPromise(
+          Effect.result(
+            promiseEffect(() =>
+              parent && name && destination?.created
+                ? discardTransferPath(
+                    resolve(fileDescriptorPath(parent), name),
+                    input.discarded
+                  )
+                : discardTransferChildren(top, input.discarded)
+            )
+          )
+        )
+        if (Result.isFailure(cleaned)) {
+          await Effect.runPromise(
+            Effect.logWarning("Relay transfer cleanup failed", cleaned.failure)
+          )
+        }
+      }
+      await destination?.handle.close()
+      if (Result.isFailure(extracted)) throw extracted.failure
+    },
+    () => forkPromise(() => parents.close().then(() => rootHandle.close()))
+  )
+}
+
+// Folders of an install held open along the current path, so each entry is
+// made relative to its parent's descriptor. Entries arrive folder by folder,
+// so only the current path stays open.
+class AnchoredDirectories {
+  readonly #root: string
+  readonly #top: FileHandle
+  readonly #open: Array<{ handle: FileHandle; name: string }> = []
+
+  constructor(root: string, top: FileHandle) {
+    this.#root = root
+    this.#top = top
   }
-  if (existing.success.isSymbolicLink() || !existing.success.isDirectory()) {
+
+  // Opens the folder at `segments` under the top, creating missing ones,
+  // owned by `create`, when it's given.
+  async open(
+    segments: ReadonlyArray<string>,
+    create: { gid: number; uid: number } | null
+  ): Promise<FileHandle> {
+    let depth = 0
+    while (
+      depth < this.#open.length &&
+      depth < segments.length &&
+      this.#open[depth]?.name === segments[depth]
+    ) {
+      depth += 1
+    }
+    while (this.#open.length > depth) await this.#open.pop()?.handle.close()
+    for (const segment of segments.slice(depth)) {
+      requireSafeSegment(segment)
+      const parent = this.#open.at(-1)?.handle ?? this.#top
+      const child = resolve(fileDescriptorPath(parent), segment)
+      let made = false
+      if (create) {
+        const created = await Effect.runPromise(
+          Effect.result(promiseEffect(() => mkdir(child, { mode: 0o755 })))
+        )
+        if (Result.isFailure(created) && !isAlreadyExists(created.failure)) {
+          throw created.failure
+        }
+        made = Result.isSuccess(created)
+      }
+      const handle = await open(
+        child,
+        fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW
+      )
+      this.#open.push({ handle, name: segment })
+      const actual = await realpath(fileDescriptorPath(handle))
+      if (actual !== this.#root && !actual.startsWith(`${this.#root}${sep}`)) {
+        throw unsafeTransferPath()
+      }
+      if (made && create && process.getuid?.() === 0) {
+        await handle.chown(create.uid, create.gid)
+      }
+    }
+    return this.#open.at(-1)?.handle ?? this.#top
+  }
+
+  async close(): Promise<void> {
+    while (this.#open.length) await this.#open.pop()?.handle.close()
+  }
+}
+
+// The folder a transfer installs into, under `parent`: created when
+// missing, or taken as it is when empty.
+async function prepareTransferDestination(
+  root: string,
+  parent: FileHandle,
+  name: string,
+  owner: { gid: number; uid: number }
+): Promise<{ created: boolean; handle: FileHandle }> {
+  const existing = await Effect.runPromise(
+    Effect.result(
+      promiseEffect(() => lstat(resolve(fileDescriptorPath(parent), name)))
+    )
+  )
+  if (Result.isFailure(existing) && !isMissingFile(existing.failure)) {
+    throw existing.failure
+  }
+  if (
+    Result.isSuccess(existing) &&
+    (existing.success.isSymbolicLink() || !existing.success.isDirectory())
+  ) {
     throw archiveExtractionError(
       "target_exists",
       "The transfer's destination is not a folder"
     )
   }
-  const directory = await opendir(destination)
+  const created = Result.isFailure(existing)
+  // Its own handle, kept open past the walk that found it.
+  const handle = await new AnchoredDirectories(root, parent).open(
+    [name],
+    created ? owner : null
+  )
+  if (!created) await requireEmptyDirectory(handle)
+  return { created, handle }
+}
+
+async function requireEmptyDirectory(handle: FileHandle): Promise<void> {
+  const directory = await opendir(fileDescriptorPath(handle))
   const first = await directory.read()
   await directory.close()
   if (first) {
@@ -3137,7 +3259,6 @@ async function prepareTransferDestination(
       "The transfer's destination folder is not empty"
     )
   }
-  return false
 }
 
 // Writes one entry of a transfer archive, keeping its mode with at least
@@ -3145,36 +3266,96 @@ async function prepareTransferDestination(
 async function extractTransferEntry(
   entry: TarEntry,
   inspected: TarArchiveEntry,
-  destination: string,
+  tree: AnchoredDirectories,
   owner: { gid: number; uid: number },
   signal: AbortSignal
 ): Promise<void> {
   const mode =
     ((entry.header.mode ?? 0) & 0o777) |
     (inspected.kind === "directory" ? 0o700 : 0o600)
-  const target = resolve(destination, inspected.name)
-  requireExtractedPathContained(destination, target)
+  const segments = inspected.name.split("/").filter(Boolean)
   if (inspected.kind === "directory") {
     await drainTarEntry(entry, signal)
-    await mkdir(target, { mode, recursive: true })
-  } else {
-    await mkdir(dirname(target), { mode: 0o755, recursive: true })
-    await pipeline(entry, createWriteStream(target, { flags: "wx", mode }), {
-      signal,
-    })
+    const folder = await tree.open(segments, owner)
+    await folder.chmod(mode)
+    return
   }
-  await chmod(target, mode)
-  if (process.getuid?.() === 0) await chown(target, owner.uid, owner.gid)
+  const name = segments.at(-1) ?? ""
+  requireSafeSegment(name)
+  const parent = await tree.open(segments.slice(0, -1), owner)
+  const file = await open(
+    resolve(fileDescriptorPath(parent), name),
+    fsConstants.O_WRONLY |
+      fsConstants.O_CREAT |
+      fsConstants.O_EXCL |
+      fsConstants.O_NOFOLLOW,
+    mode
+  )
+  await ensuringPromise(
+    async () => {
+      await pipeline(entry, file.createWriteStream({ autoClose: false }), {
+        signal,
+      })
+      await file.chmod(mode)
+      if (process.getuid?.() === 0) await file.chown(owner.uid, owner.gid)
+    },
+    () => forkPromise(() => file.close())
+  )
 }
 
-function emptyDirectoryEffect(path: string) {
-  return filesystemOperation("cleanup.transfer", async () => {
-    for await (const child of await opendir(path)) {
-      await rm(join(path, child.name), { force: true, recursive: true })
-    }
-  }).pipe(
-    Effect.catch((cause) =>
-      Effect.logWarning("Relay transfer cleanup failed", cause)
-    )
+function requireSafeSegment(segment: string): void {
+  if (
+    !segment ||
+    segment === "." ||
+    segment === ".." ||
+    segment.includes("/")
+  ) {
+    throw unsafeTransferPath()
+  }
+}
+
+function unsafeTransferPath() {
+  return archiveExtractionError(
+    "unsafe_archive_path",
+    "The archive contains a path outside its destination"
+  )
+}
+
+// Moves a failed install's folder out of the root, then removes it.
+async function discardTransferPath(
+  path: string,
+  discarded: string
+): Promise<void> {
+  await mkdir(discarded, { mode: 0o700, recursive: true })
+  const target = join(discarded, randomUUID())
+  const moved = await Effect.runPromise(
+    Effect.result(promiseEffect(() => rename(path, target)))
+  )
+  if (Result.isFailure(moved)) {
+    // A root on another filesystem, as host files are, can't be renamed
+    // out of, so what's there is removed in place.
+    if (!isCrossDevice(moved.failure)) throw moved.failure
+    await rm(path, { force: true, recursive: true })
+    return
+  }
+  await rm(target, { force: true, recursive: true })
+}
+
+async function discardTransferChildren(
+  folder: FileHandle,
+  discarded: string
+): Promise<void> {
+  const anchored = fileDescriptorPath(folder)
+  for await (const child of await opendir(anchored)) {
+    await discardTransferPath(resolve(anchored, child.name), discarded)
+  }
+}
+
+function isCrossDevice(cause: unknown): boolean {
+  return Boolean(
+    cause &&
+    typeof cause === "object" &&
+    "code" in cause &&
+    cause.code === "EXDEV"
   )
 }
