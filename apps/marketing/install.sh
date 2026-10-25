@@ -833,6 +833,10 @@ choose_node_proxy() {
     proxy=$stored
     return 0
   fi
+  # The installer checks the Relay's HTTPS with curl before it joins.
+  if [ "$proxy" = "traefik" ] && ! command -v curl >/dev/null 2>&1; then
+    fail "Checking the Relay's HTTPS needs curl. Install curl, or run this again with --proxy none."
+  fi
   [ -z "$proxy" ] || return 0
   # Let's Encrypt checks a name or an IPv4 address.
   case "$relay_host" in
@@ -841,6 +845,14 @@ choose_node_proxy() {
       return 0
       ;;
   esac
+  if ! command -v curl >/dev/null 2>&1; then
+    log "no curl to check HTTPS with"
+    say "  curl isn't installed, so Kiln will reach this Relay at"
+    say "  port 4100 instead."
+    asked=1
+    proxy=none
+    return 0
+  fi
   owner=$(web_ports_owner)
   if [ -z "$owner" ]; then
     proxy=traefik
@@ -1387,7 +1399,8 @@ if [ "$mode" = "node" ]; then
   step "Starting the Relay" start_node_relay
   # Kiln can't reach a Relay behind Traefik until Traefik has its
   # certificate, so it joins only then.
-  if [ "$proxy" = "traefik" ]; then
+  # A Relay whose data already chose Traefik is checked only with curl.
+  if [ "$proxy" = "traefik" ] && command -v curl >/dev/null 2>&1; then
     step_soft=1
     step "Turning on HTTPS" wait_relay_https || use_direct_port
   fi

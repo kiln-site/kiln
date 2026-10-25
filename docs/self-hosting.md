@@ -82,8 +82,9 @@ their domains and HTTPS from the same Traefik. The installer waits for the
 certificate before the Relay announces itself to Hearth. When Let's Encrypt
 can't reach the machine on port 80, as when a router sends 80 and 443 to
 another machine, the installer offers to use port 4100 instead. When
-something else already has 80 or 443, the Relay uses port 4100 and its own
-certificate from the start: `--proxy none` asks for that.
+something else already has 80 or 443, or the machine has no curl to check
+HTTPS with, the Relay uses port 4100 and its own certificate from the
+start: `--proxy none` asks for that.
 
 Once the Relay announces itself, the installer prints a link to confirm it
 in Hearth, which opens the dialog on that Relay, and its fingerprint, which
