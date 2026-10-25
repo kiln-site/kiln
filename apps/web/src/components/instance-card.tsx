@@ -14,6 +14,7 @@ import {
   InstanceFavoriteStar,
 } from "@/components/instance-favorite"
 import { StatusIndicator } from "@/components/status-indicator"
+import { kilnFavorite } from "@/lib/instance-favorites"
 import { useInstanceState, type InstanceState } from "@/lib/instance-state"
 import { instanceStatePresentation } from "@/lib/instance-state-presentation"
 
@@ -96,17 +97,19 @@ const InstanceCardView = React.memo(function InstanceCardView({
 }: InstanceCardProps) {
   const Icon = instanceKindIcons[instance.kind]
   const kiln = isKilnIdentity(instance)
+  // Kiln shows through its host's Relay but is starred on its own.
+  const favorite = kiln ? kilnFavorite : instance
   return (
     <IdentityName
       {...props}
       meta={meta}
       iconBadge={
-        iconFavorite && !kiln ? (
+        iconFavorite ? (
           <InstanceFavoriteBadge
             className={iconFavoriteClassName}
-            id={instance.id}
-            kind={instance.kind}
-            relayId={instance.relayId}
+            id={favorite.id}
+            kind={favorite.kind}
+            relayId={favorite.relayId}
           />
         ) : undefined
       }
@@ -125,13 +128,12 @@ const InstanceCardView = React.memo(function InstanceCardView({
         )
       }
       nameAccessory={
-        // Kiln isn't one of the Relay's instances to favorite.
-        showFavorite && !kiln ? (
+        showFavorite ? (
           <>
             <InstanceFavoriteStar
-              id={instance.id}
-              kind={instance.kind}
-              relayId={instance.relayId}
+              id={favorite.id}
+              kind={favorite.kind}
+              relayId={favorite.relayId}
             />
             {nameAccessory}
           </>

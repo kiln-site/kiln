@@ -23,6 +23,7 @@ import {
   InfoSection,
   InfoSectionLink,
 } from "@/components/info-page"
+import { InstanceFavoriteButton } from "@/components/instance-favorite"
 import { InstanceKindCounts } from "@/components/instance-kind-counts"
 import { DatabaseKindIcon } from "@/components/instance-kind-icon"
 import { KilnRestartButton } from "@/components/kiln/kiln-actions"
@@ -58,6 +59,7 @@ import {
   relayRouteIdentifier,
   type RelayDirectoryEntry,
 } from "@/lib/relay-route"
+import { kilnFavorite } from "@/lib/instance-favorites"
 import { selectSidebarInstanceCount } from "@/lib/relay-selectors"
 import {
   queueTerminalInput,
@@ -399,6 +401,7 @@ function KilnInfoRail({ host }: { host: KilnPlatformHost }) {
       </InfoRailGroup>
       <OwnerCard email={null} name={null} />
       <InfoRailCard
+        action={<InstanceFavoriteButton {...kilnFavorite} />}
         icon={<HearthMark className="size-3.5" />}
         title="Installation"
         sections={<KilnInstanceCounts />}

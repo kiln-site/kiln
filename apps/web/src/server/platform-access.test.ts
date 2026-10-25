@@ -3,6 +3,11 @@ import { Effect } from "effect"
 import { TestClock } from "effect/testing"
 
 import {
+  listInstanceFavoritesEffect,
+  setInstanceFavoriteEffect,
+} from "@/effect/instance-favorites"
+import { kilnFavorite } from "@/lib/instance-favorites"
+import {
   assignPlatformAccessEffect,
   removePlatformAccessEffect,
 } from "@/lib/platform-access"
@@ -120,6 +125,31 @@ describeMysql("platform access changes", () => {
             deliveries.map((row) => [row.relay_id, row.subject_id]),
             [[relayId, "operator"]]
           )
+        })
+    )
+
+    it.effect(
+      "stars Kiln for a new administrator, and keeps it unstarred once they remove it",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          yield* insertMember("admin", "admin")
+          yield* insertMember("operator", "user")
+          const promote = assignPlatformAccessEffect({
+            accessType: "platform_admin",
+            actingUserId: "admin",
+            developmentBypass: false,
+            userId: "operator",
+          })
+
+          yield* promote
+          assert.deepEqual(yield* listInstanceFavoritesEffect("operator"), [
+            kilnFavorite,
+          ])
+
+          yield* setInstanceFavoriteEffect("operator", kilnFavorite, false)
+          yield* promote
+          assert.deepEqual(yield* listInstanceFavoritesEffect("operator"), [])
         })
     )
 

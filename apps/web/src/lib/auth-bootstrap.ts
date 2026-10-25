@@ -8,6 +8,7 @@ import type {
 import { z } from "zod"
 
 import { Database } from "@/effect/database"
+import { setInstanceFavoriteEffect } from "@/effect/instance-favorites"
 import { runAppEffect } from "@/effect/runtime"
 import { advanceSubjectAcrossEnabledRelaysEffect } from "@/lib/authorization-revision"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
@@ -17,6 +18,7 @@ import { databasePool } from "@/lib/database"
 import { databaseTable, databaseTablePrefix } from "@/lib/database-config"
 import { displayNameFromEmail, parseDisplayName } from "@/lib/display-name"
 import { emailDeliveryConfig, publicSignupEnabled } from "@/lib/environment"
+import { kilnFavorite } from "@/lib/instance-favorites"
 
 const emailSchema = z.email().transform((value) => value.trim().toLowerCase())
 const FIRST_USER_LOCK = `${databaseTablePrefix()}:first-user`
@@ -292,7 +294,19 @@ async function createFirstUser(input: {
       )
       if (Number(countRows[0]?.user_count ?? 0) > 0) return false
 
-      await createCredentialUser({ ...input, role: "admin" })
+      const userId = await createCredentialUser({ ...input, role: "admin" })
+      // The first administrator finds Kiln starred in their instance picker.
+      await runAppEffect(
+        "account.bootstrap.kilnFavorite",
+        setInstanceFavoriteEffect(userId, kilnFavorite, true).pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning(
+              "Could not star Kiln for its first administrator",
+              cause
+            )
+          )
+        )
+      )
       return true
     }
   )
@@ -304,8 +318,8 @@ async function createCredentialUser(input: {
   password: string
   role: "admin" | "user"
   verified: boolean
-}): Promise<void> {
-  await Effect.runPromise(
+}): Promise<string> {
+  return Effect.runPromise(
     Effect.gen(function* () {
       const context = yield* promiseEffect(() => auth.$context)
       const password = yield* promiseEffect(() =>
@@ -364,6 +378,7 @@ async function createCredentialUser(input: {
           )
         )
       )
+      return user.id
     })
   )
 }

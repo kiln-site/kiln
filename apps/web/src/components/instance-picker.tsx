@@ -40,7 +40,7 @@ import {
   RelayKindIcon,
   ServerKindIcon,
 } from "@/components/instance-kind-icon"
-import { instanceFavoriteKey } from "@/lib/instance-favorites"
+import { instanceFavoriteKey, kilnFavorite } from "@/lib/instance-favorites"
 import {
   availableInstancePickerFilters,
   defaultInstancePickerFilterIdsSnapshot,
@@ -146,7 +146,7 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
       favoriteKeys.size === 0
         ? sourceItems
         : sourceItems.map((item) =>
-            favoriteKeys.has(instanceFavoriteKey(item.identity))
+            favoriteKeys.has(instancePickerFavoriteKey(item))
               ? { ...item, favorite: true }
               : item
           ),
@@ -476,6 +476,14 @@ function useInstancePickerFilterIds() {
   return { filterIds, setFilterIds }
 }
 
+const kilnFavoriteKey = instanceFavoriteKey(kilnFavorite)
+
+function instancePickerFavoriteKey(item: InstancePickerItem): string {
+  return isKilnIdentity(item.identity)
+    ? kilnFavoriteKey
+    : instanceFavoriteKey(item.identity)
+}
+
 function matchesInstancePickerSearch(
   item: InstancePickerItem,
   query: string
@@ -774,6 +782,7 @@ const InstancePickerRowButton = React.memo(function InstancePickerRowButton({
         metaClassName="font-mono"
         name={item.name}
         nameClassName="type-control-sm"
+        status={item.status}
         statusClassName="ring-popover"
       />
       {pending ? (
@@ -929,7 +938,11 @@ const InstancePickerViewAll = React.memo(function InstancePickerViewAll({
   onNavigate?: () => void
   search: string
 }) {
-  const kind = activeKind ?? items[0]?.identity.kind ?? "server"
+  // Kiln shows as a Relay, but isn't one to list.
+  const kind =
+    activeKind ??
+    items.find((item) => !isKilnIdentity(item.identity))?.identity.kind ??
+    "server"
   const destination = viewAllDestinations[kind]
   const { Icon } = kindPresentation[kind]
 

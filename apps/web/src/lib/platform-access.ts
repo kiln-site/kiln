@@ -2,6 +2,7 @@ import { Clock, Effect } from "effect"
 import type { RowDataPacket } from "mysql2/promise"
 
 import { Database, type DatabaseTransaction } from "@/effect/database"
+import { starKilnForAdministratorEffect } from "@/effect/instance-favorites"
 import { isPlatformAdmin } from "@/lib/access-control"
 import {
   lockAccessActorEffect,
@@ -104,6 +105,9 @@ export function assignPlatformAccessEffect(input: {
               target.role,
               platformRole
             )
+            if (platformRole === "admin") {
+              yield* starKilnForAdministratorEffect(transaction, input.userId)
+            }
           }
         })
     )
@@ -463,6 +467,9 @@ export function acceptPlatformInvitationEffect(
         yield* advanceSubjectAcrossEnabledRelaysEffect(tx, user.id, [
           { kind: "subject_relay" },
         ])
+        if (role === "admin" && subject.role !== "admin") {
+          yield* starKilnForAdministratorEffect(tx, user.id)
+        }
       })
     )
   })

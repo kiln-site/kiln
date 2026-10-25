@@ -1,5 +1,6 @@
 import { Option, Result, Schema } from "effect"
 
+import type { IdentityStatusPresentation } from "@/components/identity-name"
 import type { InstanceNameInstance } from "@/components/instance-name-presentation"
 
 export type InstancePickerKind = InstanceNameInstance["kind"]
@@ -14,6 +15,8 @@ export interface InstancePickerItem {
   name: string
   /** Extra text matched by search, such as IDs or versions. */
   searchText?: string
+  /** A status in place of the instance's live state, such as Kiln's. */
+  status?: IdentityStatusPresentation
 }
 
 export type InstancePickerFilterGroup = "favorite" | "type"

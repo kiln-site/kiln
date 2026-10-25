@@ -60,7 +60,7 @@ import {
   RouteCommandMenuTrigger,
 } from "@/components/route-command-menu"
 import { IdentityName } from "@/components/identity-name"
-import { InstanceCard } from "@/components/instance-card"
+import { InstanceCard, isKilnIdentity } from "@/components/instance-card"
 import {
   kilnPresentation,
   kilnVersion,
@@ -92,6 +92,7 @@ import {
   serverDirectoryQueryOptions,
 } from "@/lib/query-options"
 import { kilnReleaseLabel } from "@/lib/release-version"
+import type { KilnPlatformHost } from "@/server/platform"
 import { disableDevelopmentBypass } from "@/server/auth"
 import { engineLabel } from "@/components/database/database-presentation"
 import {
@@ -501,14 +502,20 @@ function SidebarInstanceNavigation({
     relayConfigured &&
     destinations.some((destination) => destination.to === "/infra/apps")
   // Without servers, the sidebar opens the first database, then app, then
-  // Relay, so whatever the user can reach still fills it.
+  // Relay, then Kiln for platform administrators, so whatever the user can
+  // reach still fills it, even before a Relay is added.
+  const kilnFallback = capabilities.isPlatformAdmin ? (
+    <SidebarKilnNavigation capabilities={capabilities} followServices={false} />
+  ) : null
   const relayFallback = relayConfigured ? (
     <SidebarRelayNavigation
       capabilities={capabilities}
-      fallback={null}
+      fallback={kilnFallback}
       relayRouteId={null}
     />
-  ) : null
+  ) : (
+    kilnFallback
+  )
   const appFallback = showApps ? (
     <SidebarAppNavigation
       appRouteId={null}
@@ -536,7 +543,9 @@ function SidebarInstanceNavigation({
     />
   )
 
-  if (kilnRoute) return <SidebarKilnNavigation capabilities={capabilities} />
+  if (kilnRoute) {
+    return <SidebarKilnNavigation capabilities={capabilities} followServices />
+  }
   return databaseRouteId ? (
     <SidebarDatabaseNavigation
       capabilities={capabilities}
@@ -561,15 +570,21 @@ function SidebarInstanceNavigation({
 }
 
 // Kiln itself: Hearth and the services beside it, while one of its pages
-// is open.
+// is open, or when an administrator has nothing else to open.
 function SidebarKilnNavigation({
   capabilities,
+  followServices,
 }: {
   capabilities: NavigationAccessCapabilities
+  // Polls Kiln's services, as its own pages do. Elsewhere it only names Kiln.
+  followServices: boolean
 }) {
   const { data: host = null } = useQuery({
     ...kilnPlatformQueryOptions(),
     select: selectKilnHost,
+    ...(followServices
+      ? null
+      : { refetchInterval: false, staleTime: kilnPickerStaleTime }),
   })
   return (
     <>
@@ -1067,10 +1082,23 @@ const InstanceSelector = React.memo(function InstanceSelector({
   // so it opens filled.
   const warmPicker = React.useCallback(() => {
     void queryClient.prefetchQuery(serverDirectoryQueryOptions())
-  }, [queryClient])
+    if (capabilities.isPlatformAdmin) {
+      void queryClient.prefetchQuery({
+        ...kilnPlatformQueryOptions(),
+        staleTime: kilnPickerStaleTime,
+      })
+    }
+  }, [capabilities.isPlatformAdmin, queryClient])
   const selectInstance = React.useCallback(
     (item: InstancePickerItem) => {
       closePicker()
+      if (isKilnIdentity(item.identity)) {
+        // Already on one of Kiln's pages, stay on it.
+        if (!window.location.pathname.startsWith("/kiln/")) {
+          void navigate({ to: "/kiln/info" })
+        }
+        return
+      }
       if (item.identity.kind === "database") {
         const databases = queryClient.getQueryData(
           managedDatabaseDirectoryQueryOptions().queryKey
@@ -1182,7 +1210,9 @@ const InstanceSelector = React.memo(function InstanceSelector({
           ? sidebarPickerKey("app", selection.app.relayId, selection.app.id)
           : selection.kind === "relay"
             ? sidebarPickerKey("relay", selection.relay.id, selection.relay.id)
-            : null
+            : selection.kind === "kiln"
+              ? kilnPickerKey
+              : null
   const selectedKeys = React.useMemo(
     () => new Set(selectedKey ? [selectedKey] : []),
     [selectedKey]
@@ -1339,12 +1369,11 @@ function SelectorKilnName({
       <span className="sr-only">Switch instance. </span>
       <IdentityName
         className="min-w-0 flex-1 gap-2 group-data-[collapsible=icon]:gap-0"
-        icon={<HearthMark className="size-4.5 group-data-[collapsible=icon]:size-5" />}
+        icon={
+          <HearthMark className="size-4.5 group-data-[collapsible=icon]:size-5" />
+        }
         iconClassName="border-sidebar-border/70 bg-background/25 group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:inset-0 group-data-[collapsible=icon]:size-full group-data-[collapsible=icon]:rounded-none group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent"
-        meta={[
-          version ? kilnReleaseLabel(version) : null,
-          host?.relayName,
-        ]
+        meta={[version ? kilnReleaseLabel(version) : null, host?.relayName]
           .filter(Boolean)
           .join(" · ")}
         metaClassName="text-sidebar-muted-foreground"
@@ -1413,13 +1442,28 @@ const SidebarInstancePicker = React.memo(function SidebarInstancePicker({
     enabled: showApps,
     select: selectSidebarAppPickerItems,
   })
+  // Kiln's own pages follow its services; the picker only names it, so it
+  // doesn't poll them.
+  const showKiln = capabilities.isPlatformAdmin
+  const { data: kilnHost = null } = useQuery({
+    ...kilnPlatformQueryOptions(),
+    enabled: showKiln,
+    refetchInterval: false,
+    select: selectKilnHost,
+    staleTime: kilnPickerStaleTime,
+  })
   const items = React.useMemo(
     () =>
+      !showKiln &&
       databaseItems.length === 0 &&
       relayItems.length === 0 &&
       appItems.length === 0
         ? serverItems
         : [
+            // Kiln leads, so a fresh installation's picker isn't empty.
+            ...(showKiln
+              ? [sidebarKilnPickerItem(kilnHost)]
+              : emptyPickerItems),
             ...serverItems,
             ...(showDatabases ? databaseItems : emptyPickerItems),
             ...(showApps ? appItems : emptyPickerItems),
@@ -1428,10 +1472,12 @@ const SidebarInstancePicker = React.memo(function SidebarInstancePicker({
     [
       appItems,
       databaseItems,
+      kilnHost,
       relayItems,
       serverItems,
       showApps,
       showDatabases,
+      showKiln,
       showRelays,
     ]
   )
@@ -1450,6 +1496,28 @@ const SidebarInstancePicker = React.memo(function SidebarInstancePicker({
 })
 
 const emptyPickerItems: Array<InstancePickerItem> = []
+const kilnPickerKey = "kiln"
+const kilnPickerStaleTime = 60_000
+
+// Kiln itself, shown through the Relay on its host like the other pickers
+// show it, with the status of its services.
+function sidebarKilnPickerItem(
+  host: KilnPlatformHost | null
+): InstancePickerItem {
+  const version = kilnVersion(host?.status ?? null)
+  const relayId = host?.relayId ?? ""
+  return {
+    identity: { id: relayId, kind: "relay", platform: true, relayId },
+    key: kilnPickerKey,
+    meta:
+      [version ? kilnReleaseLabel(version) : null, host?.relayName]
+        .filter(Boolean)
+        .join(" · ") || "Hearth",
+    name: "Kiln",
+    searchText: `hearth platform ${host?.relayName ?? ""}`,
+    status: kilnPresentation(host),
+  }
+}
 
 function sidebarPickerKey(
   kind: InstancePickerItem["identity"]["kind"],
