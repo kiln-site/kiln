@@ -40,8 +40,8 @@ export interface DataTableVirtualizationOptions {
 export const defaultDataTableVirtualization = {
   estimateRowHeight: 56,
   overscan: 8,
-  // An `h-14` cell plus the row's bottom border.
-  rowHeight: "3.5rem + 1px",
+  // A cell, taller on phones, plus the row's bottom border.
+  rowHeight: "var(--data-table-row-height) + 1px",
 } satisfies Required<DataTableVirtualizationOptions>
 
 export type DataTableSearchValue = boolean | number | string | null | undefined

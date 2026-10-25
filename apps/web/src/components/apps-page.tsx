@@ -62,8 +62,11 @@ import { CopyIdentifierMenuItem } from "@/components/copy-identifier-menu-item"
 import { GitHubMark } from "@/components/github-mark"
 import {
   DataTableActionGroup,
+  DataTableInlineActions,
+  DataTablePhoneMenuItems,
   DataTableEmptyState,
   DataTableTextCell,
+  keepFocusInRowMenuDialog,
 } from "@/components/data-table"
 import {
   AddFirstRelayButton,
@@ -295,12 +298,8 @@ const AppTable = React.memo(function AppTable({
           />
         ),
         meta: dataTableColumnMeta(
-          { width: { base: "2.5rem", sm: statusColumnWidth } },
-          {
-            cellClassName: "px-2 sm:px-3",
-            headerClassName: "px-2 sm:px-3",
-            headerLabelClassName: "shrink-0 overflow-visible text-clip",
-          }
+          { hideBelow: "md", width: statusColumnWidth },
+          { headerLabelClassName: "shrink-0 overflow-visible text-clip" }
         ),
       }),
       appTableColumnHelper.display({
@@ -390,8 +389,8 @@ const AppTable = React.memo(function AppTable({
           />
         ),
         meta: dataTableColumnMeta(
-          { width: { base: "6.5rem", sm: "7.5rem" } },
-          { cellClassName: "px-1 sm:px-3", headerClassName: "px-1 sm:px-3" }
+          { width: { base: "2.5rem", md: "7.5rem" } },
+          { cellClassName: "px-1 md:px-3", headerClassName: "px-1 md:px-3" }
         ),
       }),
     ])
@@ -470,51 +469,55 @@ const AppActions = React.memo(function AppActions({
   const running =
     state.phase === "ready" && state.observation.runtime === "running"
   const busy = deploy.isPending || action.isPending
+  const canDelete = app.permissions.includes("app.delete")
+  const deployDisabled = !available || !app.detail || busy || deploying
 
   return (
     <DataTableActionGroup>
-      {canManage ? (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              aria-label={`Deploy ${app.name}`}
-              className="text-muted-foreground hover:text-primary-ink"
-              disabled={!available || !app.detail || busy || deploying}
-              size="icon-sm"
-              type="button"
-              variant="ghost"
-              onClick={() => deploy.mutate()}
-            >
-              {deploying || deploy.isPending ? (
-                <LoaderCircle className="animate-spin" />
-              ) : (
-                <Rocket />
-              )}
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            {deploying ? "Deploying" : "Deploy"}
-          </TooltipContent>
-        </Tooltip>
-      ) : null}
-      {app.permissions.includes("app.delete") ? (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              aria-label={`Delete ${app.name}`}
-              className="text-destructive hover:bg-destructive/10 hover:text-destructive light:hover:bg-destructive/20"
-              disabled={busy}
-              size="icon-sm"
-              type="button"
-              variant="ghost"
-              onClick={() => onDelete(app)}
-            >
-              <Trash2 />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Delete</TooltipContent>
-        </Tooltip>
-      ) : null}
+      <DataTableInlineActions>
+        {canManage ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-label={`Deploy ${app.name}`}
+                className="text-muted-foreground hover:text-primary-ink"
+                disabled={deployDisabled}
+                size="icon-sm"
+                type="button"
+                variant="ghost"
+                onClick={() => deploy.mutate()}
+              >
+                {deploying || deploy.isPending ? (
+                  <LoaderCircle className="animate-spin" />
+                ) : (
+                  <Rocket />
+                )}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {deploying ? "Deploying" : "Deploy"}
+            </TooltipContent>
+          </Tooltip>
+        ) : null}
+        {canDelete ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-label={`Delete ${app.name}`}
+                className="text-destructive hover:bg-destructive/10 hover:text-destructive light:hover:bg-destructive/20"
+                disabled={busy}
+                size="icon-sm"
+                type="button"
+                variant="ghost"
+                onClick={() => onDelete(app)}
+              >
+                <Trash2 />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Delete</TooltipContent>
+          </Tooltip>
+        ) : null}
+      </DataTableInlineActions>
       <DropdownMenu>
         <Tooltip>
           <TooltipTrigger asChild>
@@ -536,7 +539,22 @@ const AppActions = React.memo(function AppActions({
           </TooltipTrigger>
           <TooltipContent side="bottom">More actions</TooltipContent>
         </Tooltip>
-        <DropdownMenuContent align="end" className="min-w-44">
+        <DropdownMenuContent
+          align="end"
+          className="min-w-44"
+          onCloseAutoFocus={keepFocusInRowMenuDialog}
+        >
+          {canManage ? (
+            <DataTablePhoneMenuItems>
+              <DropdownMenuItem
+                disabled={deployDisabled}
+                onSelect={() => deploy.mutate()}
+              >
+                <Rocket /> {deploying ? "Deploying" : "Deploy"}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+            </DataTablePhoneMenuItems>
+          ) : null}
           <InstanceFavoriteMenuItem
             favorite={{ id: app.id, kind: "app", relayId: app.relayId }}
           />
@@ -561,6 +579,18 @@ const AppActions = React.memo(function AppActions({
           ) : null}
           <CopyIdentifierMenuItem label="App ID" value={app.id} />
           <CopyIdentifierMenuItem label="Relay ID" value={app.relayId} />
+          {canDelete ? (
+            <DataTablePhoneMenuItems>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                disabled={busy}
+                variant="destructive"
+                onSelect={() => onDelete(app)}
+              >
+                <Trash2 /> Delete
+              </DropdownMenuItem>
+            </DataTablePhoneMenuItems>
+          ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
     </DataTableActionGroup>

@@ -19,6 +19,7 @@ import {
   EllipsisVertical,
   KeyRound,
   LoaderCircle,
+  Network,
   Play,
   Plus,
   RotateCw,
@@ -61,8 +62,11 @@ import {
 
 import {
   DataTableActionGroup,
+  DataTableInlineActions,
+  DataTablePhoneMenuItems,
   DataTableEmptyState,
   DataTableTextCell,
+  keepFocusInRowMenuDialog,
 } from "@/components/data-table"
 import { CopyIdentifierMenuItem } from "@/components/copy-identifier-menu-item"
 import {
@@ -352,12 +356,8 @@ const DatabaseTable = React.memo(function DatabaseTable({
             />
           ),
           meta: dataTableColumnMeta(
-            { width: { base: "2.5rem", sm: statusColumnWidth } },
-            {
-              cellClassName: "px-2 sm:px-3",
-              headerClassName: "px-2 sm:px-3",
-              headerLabelClassName: "shrink-0 overflow-visible text-clip",
-            }
+            { hideBelow: "md", width: statusColumnWidth },
+            { headerLabelClassName: "shrink-0 overflow-visible text-clip" }
           ),
         }
       ),
@@ -453,10 +453,10 @@ const DatabaseTable = React.memo(function DatabaseTable({
           />
         ),
         meta: dataTableColumnMeta(
-          { width: { base: "8.5rem", sm: "9.5rem" } },
+          { width: { base: "2.5rem", md: "9.5rem" } },
           {
-            cellClassName: "px-1 sm:px-3",
-            headerClassName: "px-1 sm:px-3",
+            cellClassName: "px-1 md:px-3",
+            headerClassName: "px-1 md:px-3",
           }
         ),
       }),
@@ -563,38 +563,50 @@ const DatabaseActions = React.memo(function DatabaseActions({
   const canPower = available && can("database.power")
   const canDelete = can("database.delete")
   const hasOperationalActions = canPower || hasDumpActions
+  const canReadCredentials =
+    can("database.credentials.read") && database.hasCredentials
+  const canConnect = can("database.network.write")
+  const [networkOpen, setNetworkOpen] = React.useState(false)
+  const showCredentials = () => onDialog({ kind: "credentials", database })
+  const deleteDatabase = () => onDialog({ kind: "delete", database })
 
   return (
     <DataTableActionGroup>
-      {can("database.credentials.read") && database.hasCredentials ? (
-        <ActionIconButton
-          icon={KeyRound}
-          label={`View ${database.name} credentials`}
-          tooltip="Credentials"
-          onClick={() => onDialog({ kind: "credentials", database })}
-        />
-      ) : null}
-      {can("database.network.write") ? (
-        <DatabaseNetworkPicker database={database} />
-      ) : null}
-      {canDelete ? (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              aria-label={`Delete ${database.name}`}
-              className="text-destructive hover:bg-destructive/10 hover:text-destructive light:hover:bg-destructive/20"
-              disabled={busy}
-              size="icon-sm"
-              type="button"
-              variant="ghost"
-              onClick={() => onDialog({ kind: "delete", database })}
-            >
-              <Trash2 />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Delete</TooltipContent>
-        </Tooltip>
-      ) : null}
+      <DataTableInlineActions>
+        {canReadCredentials ? (
+          <ActionIconButton
+            icon={KeyRound}
+            label={`View ${database.name} credentials`}
+            tooltip="Credentials"
+            onClick={showCredentials}
+          />
+        ) : null}
+        {canConnect ? (
+          <DatabaseNetworkPicker
+            database={database}
+            open={networkOpen}
+            onOpenChange={setNetworkOpen}
+          />
+        ) : null}
+        {canDelete ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-label={`Delete ${database.name}`}
+                className="text-destructive hover:bg-destructive/10 hover:text-destructive light:hover:bg-destructive/20"
+                disabled={busy}
+                size="icon-sm"
+                type="button"
+                variant="ghost"
+                onClick={deleteDatabase}
+              >
+                <Trash2 />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Delete</TooltipContent>
+          </Tooltip>
+        ) : null}
+      </DataTableInlineActions>
       <DropdownMenu>
         <Tooltip>
           <TooltipTrigger asChild>
@@ -616,7 +628,26 @@ const DatabaseActions = React.memo(function DatabaseActions({
           </TooltipTrigger>
           <TooltipContent side="bottom">More actions</TooltipContent>
         </Tooltip>
-        <DropdownMenuContent align="end" className="min-w-44">
+        <DropdownMenuContent
+          align="end"
+          className="min-w-44"
+          onCloseAutoFocus={keepFocusInRowMenuDialog}
+        >
+          {canReadCredentials || canConnect ? (
+            <DataTablePhoneMenuItems>
+              {canReadCredentials ? (
+                <DropdownMenuItem onSelect={showCredentials}>
+                  <KeyRound /> Credentials
+                </DropdownMenuItem>
+              ) : null}
+              {canConnect ? (
+                <DropdownMenuItem onSelect={() => setNetworkOpen(true)}>
+                  <Network /> Connect game servers
+                </DropdownMenuItem>
+              ) : null}
+              <DropdownMenuSeparator />
+            </DataTablePhoneMenuItems>
+          ) : null}
           <InstanceFavoriteMenuItem
             favorite={{
               id: database.id,
@@ -654,6 +685,18 @@ const DatabaseActions = React.memo(function DatabaseActions({
           {hasOperationalActions ? <DropdownMenuSeparator /> : null}
           <CopyIdentifierMenuItem label="Database ID" value={database.id} />
           <CopyIdentifierMenuItem label="Relay ID" value={database.relayId} />
+          {canDelete ? (
+            <DataTablePhoneMenuItems>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                disabled={busy}
+                variant="destructive"
+                onSelect={deleteDatabase}
+              >
+                <Trash2 /> Delete
+              </DropdownMenuItem>
+            </DataTablePhoneMenuItems>
+          ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
     </DataTableActionGroup>

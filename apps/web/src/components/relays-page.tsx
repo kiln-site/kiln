@@ -24,8 +24,11 @@ import {
   EllipsisVertical,
   ListTodo,
   LoaderCircle,
+  Pause,
+  Play,
   Plus,
   Settings2,
+  Trash2,
   UserRound,
 } from "lucide-react"
 
@@ -42,6 +45,7 @@ import { Input } from "@workspace/ui/components/input"
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
@@ -72,10 +76,13 @@ import {
 import {
   RelayDeleteButton,
   RelayPauseButton,
+  RelayPauseDialog,
+  RemoveRelayDialog,
   invalidateRelayRuntimeQueries,
   messageFrom,
   showRelayError,
   updateRelayCache,
+  useRelayPauseToggle,
 } from "@/components/relay/relay-actions"
 import { CopyIdentifierMenuItem } from "@/components/copy-identifier-menu-item"
 import {
@@ -89,7 +96,10 @@ import {
 import {
   DataTableActionGroup,
   DataTableEmptyState,
+  DataTableInlineActions,
+  DataTablePhoneMenuItems,
   DataTableTextCell,
+  keepFocusInRowMenuDialog,
 } from "@/components/data-table"
 import { DataTable } from "@/components/data-table-view"
 import {
@@ -548,12 +558,8 @@ function RelayTable({
           />
         ),
         meta: dataTableColumnMeta(
-          { width: { base: "2.5rem", sm: statusColumnWidth } },
-          {
-            cellClassName: "px-2 sm:px-3",
-            headerClassName: "px-2 sm:px-3",
-            headerLabelClassName: "shrink-0 overflow-visible text-clip",
-          }
+          { hideBelow: "md", width: statusColumnWidth },
+          { headerLabelClassName: "shrink-0 overflow-visible text-clip" }
         ),
       }),
       relayTableColumnHelper.display({
@@ -686,15 +692,10 @@ function RelayTable({
           <RelayActions relay={row.original} onEdit={onEdit} />
         ),
         meta: dataTableColumnMeta(
+          { width: { base: "2.5rem", md: "10rem" } },
           {
-            width: {
-              base: "9rem",
-              sm: "10rem",
-            },
-          },
-          {
-            cellClassName: "px-1 sm:px-3",
-            headerClassName: "px-1 sm:px-3",
+            cellClassName: "px-1 md:px-3",
+            headerClassName: "px-1 md:px-3",
           }
         ),
       }),
@@ -745,11 +746,24 @@ const RelayActions = React.memo(function RelayActions({
   relay: RelayTableItem
   onEdit: (relayId: string) => void
 }) {
+  const [dialog, setDialog] = React.useState<"pause" | "remove" | null>(null)
+  const pause = useRelayPauseToggle(relay)
+  const togglePaused = () =>
+    relay.enabled ? setDialog("pause") : void pause.toggle()
+  const removeRelay = () => setDialog("remove")
+
   return (
     <DataTableActionGroup>
-      <RelayEditButton relay={relay} onEdit={onEdit} />
-      <RelayPauseButton relay={relay} />
-      <RelayDeleteButton relayId={relay.id} name={relay.name} />
+      <DataTableInlineActions>
+        <RelayEditButton relay={relay} onEdit={onEdit} />
+        <RelayPauseButton
+          enabled={relay.enabled}
+          name={relay.name}
+          pending={pause.pending}
+          onClick={togglePaused}
+        />
+        <RelayDeleteButton name={relay.name} onClick={removeRelay} />
+      </DataTableInlineActions>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button
@@ -761,14 +775,44 @@ const RelayActions = React.memo(function RelayActions({
             <EllipsisVertical />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="min-w-44">
+        <DropdownMenuContent
+          align="end"
+          className="min-w-44"
+          onCloseAutoFocus={keepFocusInRowMenuDialog}
+        >
+          <DataTablePhoneMenuItems>
+            <DropdownMenuItem onSelect={() => onEdit(relay.id)}>
+              <Settings2 /> Configure
+            </DropdownMenuItem>
+            <DropdownMenuItem disabled={pause.pending} onSelect={togglePaused}>
+              {relay.enabled ? <Pause /> : <Play />}
+              {relay.enabled ? "Pause" : "Resume"}
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+          </DataTablePhoneMenuItems>
           <InstanceFavoriteMenuItem
             favorite={{ id: relay.id, kind: "relay", relayId: relay.id }}
           />
           <DropdownMenuSeparator />
           <CopyIdentifierMenuItem label="Relay ID" value={relay.id} />
+          <DataTablePhoneMenuItems>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem variant="destructive" onSelect={removeRelay}>
+              <Trash2 /> Remove
+            </DropdownMenuItem>
+          </DataTablePhoneMenuItems>
         </DropdownMenuContent>
       </DropdownMenu>
+      {dialog === "pause" ? (
+        <RelayPauseDialog relay={relay} onClose={() => setDialog(null)} />
+      ) : null}
+      {dialog === "remove" ? (
+        <RemoveRelayDialog
+          name={relay.name}
+          relayId={relay.id}
+          onOpenChange={(open) => setDialog(open ? "remove" : null)}
+        />
+      ) : null}
     </DataTableActionGroup>
   )
 })

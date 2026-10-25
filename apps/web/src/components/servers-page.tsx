@@ -28,6 +28,7 @@ import { Button } from "@workspace/ui/components/button"
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
@@ -55,7 +56,10 @@ import {
 import {
   DataTableActionGroup,
   DataTableEmptyState,
+  DataTableInlineActions,
+  DataTablePhoneMenuItems,
   DataTableTextCell,
+  keepFocusInRowMenuDialog,
 } from "@/components/data-table"
 import {
   ServerDeleteDialog,
@@ -381,12 +385,8 @@ const ServerDataTable = React.memo(function ServerDataTable({
           />
         ),
         meta: dataTableColumnMeta(
-          { width: { base: "2.5rem", sm: statusColumnWidth } },
-          {
-            cellClassName: "px-2 sm:px-3",
-            headerClassName: "px-2 sm:px-3",
-            headerLabelClassName: "shrink-0 overflow-visible text-clip",
-          }
+          { hideBelow: "md", width: statusColumnWidth },
+          { headerLabelClassName: "shrink-0 overflow-visible text-clip" }
         ),
       }),
       serverTableColumnHelper.display({
@@ -510,10 +510,10 @@ const ServerDataTable = React.memo(function ServerDataTable({
           )
         },
         meta: dataTableColumnMeta(
-          { width: { base: "8.5rem", sm: "9.5rem" } },
+          { width: { base: "2.5rem", md: "9.5rem" } },
           {
-            cellClassName: "px-1 sm:px-3",
-            headerClassName: "px-1 sm:px-3",
+            cellClassName: "px-1 md:px-3",
+            headerClassName: "px-1 md:px-3",
           }
         ),
       }),
@@ -576,51 +576,53 @@ const ServerActions = React.memo(function ServerActions({
   const deleteEnabled =
     server.instanceState.phase === "ready" &&
     server.instanceState.observation.reachability === "connected"
+  const deleteServer = () =>
+    onDelete({
+      backupAvailable:
+        server.instanceState.phase === "ready" &&
+        server.instanceState.observation.runtime !== "provisioning",
+      id: server.id,
+      name: server.name,
+      relayId: server.relayId,
+    })
   return (
     <DataTableActionGroup>
-      <ServerActionLink
-        icon={TerminalSquare}
-        label={`Open ${server.name} console`}
-        routeIdentifier={routeIdentifier}
-        tab="console"
-        tooltip="Console"
-      />
-      <ServerActionLink
-        icon={Folder}
-        label={`Open ${server.name} files`}
-        routeIdentifier={routeIdentifier}
-        tab="files"
-        tooltip="Files"
-      />
-      {canDelete ? (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              type="button"
-              size="icon-sm"
-              variant="ghost"
-              aria-label={`Delete ${server.name}`}
-              className="text-destructive hover:bg-destructive/10 hover:text-destructive light:hover:bg-destructive/20"
-              disabled={!deleteEnabled}
-              onClick={() =>
-                onDelete({
-                  backupAvailable:
-                    server.instanceState.phase === "ready" &&
-                    server.instanceState.observation.runtime !== "provisioning",
-                  id: server.id,
-                  name: server.name,
-                  relayId: server.relayId,
-                })
-              }
-            >
-              <Trash2 />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" sideOffset={6}>
-            {deleteEnabled ? "Delete" : "Relay unavailable"}
-          </TooltipContent>
-        </Tooltip>
-      ) : null}
+      <DataTableInlineActions>
+        <ServerActionLink
+          icon={TerminalSquare}
+          label={`Open ${server.name} console`}
+          routeIdentifier={routeIdentifier}
+          tab="console"
+          tooltip="Console"
+        />
+        <ServerActionLink
+          icon={Folder}
+          label={`Open ${server.name} files`}
+          routeIdentifier={routeIdentifier}
+          tab="files"
+          tooltip="Files"
+        />
+        {canDelete ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="ghost"
+                aria-label={`Delete ${server.name}`}
+                className="text-destructive hover:bg-destructive/10 hover:text-destructive light:hover:bg-destructive/20"
+                disabled={!deleteEnabled}
+                onClick={deleteServer}
+              >
+                <Trash2 />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" sideOffset={6}>
+              {deleteEnabled ? "Delete" : "Relay unavailable"}
+            </TooltipContent>
+          </Tooltip>
+        ) : null}
+      </DataTableInlineActions>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button
@@ -632,7 +634,30 @@ const ServerActions = React.memo(function ServerActions({
             <EllipsisVertical />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="min-w-44">
+        <DropdownMenuContent
+          align="end"
+          className="min-w-44"
+          onCloseAutoFocus={keepFocusInRowMenuDialog}
+        >
+          <DataTablePhoneMenuItems>
+            <DropdownMenuItem asChild>
+              <Link
+                to="/server/$serverId/console"
+                params={{ serverId: routeIdentifier }}
+              >
+                <TerminalSquare /> Console
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild>
+              <Link
+                to="/server/$serverId/files/$"
+                params={{ serverId: routeIdentifier, _splat: "" }}
+              >
+                <Folder /> Files
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+          </DataTablePhoneMenuItems>
           <InstanceFavoriteMenuItem
             favorite={{
               id: server.id,
@@ -643,6 +668,18 @@ const ServerActions = React.memo(function ServerActions({
           <DropdownMenuSeparator />
           <CopyIdentifierMenuItem label="Server ID" value={server.id} />
           <CopyIdentifierMenuItem label="Relay ID" value={server.relayId} />
+          {canDelete ? (
+            <DataTablePhoneMenuItems>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                disabled={!deleteEnabled}
+                variant="destructive"
+                onSelect={deleteServer}
+              >
+                <Trash2 /> Delete
+              </DropdownMenuItem>
+            </DataTablePhoneMenuItems>
+          ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
     </DataTableActionGroup>

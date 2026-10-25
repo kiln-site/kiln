@@ -12,6 +12,7 @@ import { ArrowDown, ArrowUp, ArrowUpDown, LoaderCircle } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import { Skeleton } from "@workspace/ui/components/skeleton"
+import { useIsMobile } from "@workspace/ui/hooks/use-mobile"
 import { cn } from "@workspace/ui/lib/utils"
 import {
   dataTableFeatures,
@@ -283,7 +284,7 @@ function DataTableRowModel<TData extends RowData>({
           aria-rowcount={
             leadingBody ? undefined : hasBodyState ? 2 : rows.length + 1
           }
-          className="flex h-full min-h-0 w-full min-w-0 border-collapse flex-col overflow-hidden text-left"
+          className="flex h-full min-h-0 w-full min-w-0 border-collapse flex-col overflow-hidden text-left [--data-table-row-height:4rem] md:[--data-table-row-height:3.5rem]"
           role="table"
           style={gridStyle}
         >
@@ -453,7 +454,7 @@ export function dataTableCellClassName(
   meta: DataTableColumnMeta | undefined
 ): string {
   return cn(
-    "flex h-14 min-w-0 items-center px-3",
+    "flex h-(--data-table-row-height) min-w-0 items-center px-3",
     dataTableColumnVisibilityClass(meta?.layout?.hideBelow, "cell"),
     meta?.cellClassName
   )
@@ -573,6 +574,38 @@ export function DataTableActionGroup({
       {children}
     </div>
   )
+}
+
+/**
+ * Row actions shown beside the row's menu, hidden on phones. Repeat them in
+ * the menu inside DataTablePhoneMenuItems.
+ */
+export function DataTableInlineActions({
+  children,
+}: {
+  children: React.ReactNode
+}) {
+  return <div className="hidden md:contents">{children}</div>
+}
+
+/**
+ * Menu items for the actions DataTableInlineActions hides on phones. Menus
+ * mount when opened, so this only runs in the browser.
+ */
+export function DataTablePhoneMenuItems({
+  children,
+}: {
+  children: React.ReactNode
+}) {
+  return useIsMobile() ? children : null
+}
+
+/**
+ * A row menu's `onCloseAutoFocus`. When an item opened a dialog, the dialog
+ * keeps focus instead of the menu handing it back to its trigger.
+ */
+export function keepFocusInRowMenuDialog(event: Event) {
+  if (document.querySelector("[role=dialog]")) event.preventDefault()
 }
 
 export function DataTableEmptyState({

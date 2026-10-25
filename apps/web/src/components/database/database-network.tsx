@@ -119,12 +119,19 @@ export function useDatabaseNetworkToggle(
 
 export const DatabaseNetworkPicker = React.memo(function DatabaseNetworkPicker({
   database,
+  onOpenChange,
+  open: controlledOpen,
   variant = "icon",
 }: {
   database: NetworkDatabase
+  /** Set both to open the picker from elsewhere, like a menu. */
+  onOpenChange?: (open: boolean) => void
+  open?: boolean
   variant?: "button" | "icon"
 }) {
-  const [open, setOpen] = React.useState(false)
+  const [uncontrolledOpen, setUncontrolledOpen] = React.useState(false)
+  const open = controlledOpen ?? uncontrolledOpen
+  const setOpen = onOpenChange ?? setUncontrolledOpen
 
   return (
     <DrawerPopover open={open} onOpenChange={setOpen}>

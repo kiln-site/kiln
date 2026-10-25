@@ -40,45 +40,41 @@ import { removeRelay, setRelayEnabled } from "@/server/relays"
 const pendingRelayResumes = new Map<string, Promise<void>>()
 
 export const RelayPauseButton = React.memo(function RelayPauseButton({
-  relay,
+  enabled,
+  name,
+  pending,
+  onClick,
 }: {
-  relay: RelayPauseTarget
+  enabled: boolean
+  name: string
+  pending: boolean
+  onClick: () => void
 }) {
-  const { pending, toggle } = useRelayPauseToggle(relay)
-  const [confirming, setConfirming] = React.useState(false)
-
   return (
-    <>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            type="button"
-            size="icon-sm"
-            variant="ghost"
-            aria-label={`${relay.enabled ? "Pause" : "Resume"} ${relay.name}`}
-            disabled={pending}
-            className="text-muted-foreground hover:text-foreground"
-            onClick={() =>
-              relay.enabled ? setConfirming(true) : void toggle()
-            }
-          >
-            {pending ? (
-              <LoaderCircle className="animate-spin" />
-            ) : relay.enabled ? (
-              <Pause />
-            ) : (
-              <Play />
-            )}
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom" sideOffset={6}>
-          {relay.enabled ? "Pause" : "Resume"}
-        </TooltipContent>
-      </Tooltip>
-      {confirming ? (
-        <RelayPauseDialog relay={relay} onClose={() => setConfirming(false)} />
-      ) : null}
-    </>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          type="button"
+          size="icon-sm"
+          variant="ghost"
+          aria-label={`${enabled ? "Pause" : "Resume"} ${name}`}
+          disabled={pending}
+          className="text-muted-foreground hover:text-foreground"
+          onClick={onClick}
+        >
+          {pending ? (
+            <LoaderCircle className="animate-spin" />
+          ) : enabled ? (
+            <Pause />
+          ) : (
+            <Play />
+          )}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" sideOffset={6}>
+        {enabled ? "Pause" : "Resume"}
+      </TooltipContent>
+    </Tooltip>
   )
 })
 
@@ -178,41 +174,30 @@ export function useRelayPauseToggle(relay: RelayPauseTarget) {
 }
 
 export const RelayDeleteButton = React.memo(function RelayDeleteButton({
-  relayId,
   name,
+  onClick,
 }: {
-  relayId: string
   name: string
+  onClick: () => void
 }) {
-  const [open, setOpen] = React.useState(false)
-
   return (
-    <>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            type="button"
-            size="icon-sm"
-            variant="ghost"
-            aria-label={`Remove ${name}`}
-            className="text-destructive hover:bg-destructive/10 hover:text-destructive light:hover:bg-destructive/20"
-            onClick={() => setOpen(true)}
-          >
-            <Trash2 />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom" sideOffset={6}>
-          Remove
-        </TooltipContent>
-      </Tooltip>
-      {open ? (
-        <RemoveRelayDialog
-          name={name}
-          relayId={relayId}
-          onOpenChange={setOpen}
-        />
-      ) : null}
-    </>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          type="button"
+          size="icon-sm"
+          variant="ghost"
+          aria-label={`Remove ${name}`}
+          className="text-destructive hover:bg-destructive/10 hover:text-destructive light:hover:bg-destructive/20"
+          onClick={onClick}
+        >
+          <Trash2 />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" sideOffset={6}>
+        Remove
+      </TooltipContent>
+    </Tooltip>
   )
 })
 
