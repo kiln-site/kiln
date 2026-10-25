@@ -110,8 +110,10 @@ describeLinux("browser file transfers on Linux", () => {
       createHash("sha256").update(contents).digest("hex")
     )
     expect(
-      await readFile(join(relay.instanceRoot, "world", "region.mca"))
-    ).toEqual(contents)
+      createHash("sha256")
+        .update(await readFile(join(relay.instanceRoot, "world", "region.mca")))
+        .digest("hex")
+    ).toBe(createHash("sha256").update(contents).digest("hex"))
 
     const download = await relay.signedRequest({
       action: "instance.files.download",
