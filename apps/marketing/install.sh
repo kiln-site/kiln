@@ -1010,10 +1010,35 @@ download_cli() {
     stop "The CLI reports \"$reported\", not kiln $cli_version."
 }
 
-# Into place in one step, so a `kiln` running meanwhile keeps working.
+# Into place in one step, so a `kiln` running meanwhile keeps working. A
+# link there goes first: mv would follow one to a directory, and `kiln
+# update` replaces the file a link points to, which may need sudo.
 place_cli() {
+  [ ! -L "$cli_dir/kiln" ] || rm -f "$cli_dir/kiln"
   mv -f "$cli_work/kiln" "$cli_dir/kiln" ||
     stop "Couldn't install the CLI into $cli_dir."
+}
+
+# Whether release version $1 is newer than $2, ordered as Kiln orders them:
+# by number, then a stable release after its nightlies, then the newer
+# nightly.
+newer_version() {
+  awk -v left="$1" -v right="$2" '
+    function key(version,   part, count, rank) {
+      count = split(version, part, "[.-]")
+      rank = count == 3 ? 2 : count == 6 ? 1 : 0
+      return sprintf("%010d%010d%010d%d%010d%010d", part[1], part[2], part[3], rank, part[5], part[6])
+    }
+    BEGIN { exit !(key(left) > key(right)) }
+  '
+}
+
+# The version of the CLI already in $cli_dir, or nothing. Only a binary of
+# its own counts, not a link to one elsewhere.
+installed_cli() {
+  [ -f "$cli_dir/kiln" ] && [ ! -L "$cli_dir/kiln" ] && [ -x "$cli_dir/kiln" ] || return 0
+  "$cli_dir/kiln" --version 2>/dev/null | sed -n 's/^kiln //p' | head -n 1 |
+    grep -E '^[0-9]+\.[0-9]+\.[0-9]+(-nightly\.[0-9]+(\.[0-9]+)?)?$' || true
 }
 
 install_cli() {
@@ -1032,6 +1057,9 @@ install_cli() {
   log "cli: $cli_platform into $cli_dir"
   mkdir -p "$cli_dir" 2>/dev/null && [ -w "$cli_dir" ] ||
     fail "Can't write to $cli_dir. Run this again as root, or as its owner."
+  if [ -d "$cli_dir/kiln" ] && [ ! -L "$cli_dir/kiln" ]; then
+    fail "$cli_dir/kiln is a directory. Move it, then run this again."
+  fi
   # Beside where it goes, so moving it there can't be a copy across disks.
   cli_work=$(mktemp -d "$cli_dir/.kiln-install.XXXXXX") ||
     fail "Can't write to $cli_dir."
@@ -1041,11 +1069,16 @@ install_cli() {
   set -- $(cat "$cli_work/release")
   cli_version=${1#v} cli_size=$3 cli_digest=$4 cli_url=$5
 
-  installed=""
-  [ ! -x "$cli_dir/kiln" ] || installed=$("$cli_dir/kiln" --version 2>/dev/null || true)
-  if [ "$installed" = "kiln $cli_version" ]; then
+  # A newer CLI stays, such as a nightly when this found a stable release.
+  installed=$(installed_cli)
+  if [ "$installed" = "$cli_version" ]; then
     say ""
     say "  ${green}${bold}Kiln CLI $cli_version$reset is already installed in $cli_dir."
+  elif [ -n "$installed" ] && newer_version "$installed" "$cli_version"; then
+    say ""
+    say "  ${green}${bold}Kiln CLI $installed$reset is already installed in $cli_dir."
+    say "  It's newer than $cli_version, so it stays. To install that"
+    say "  version instead, delete $cli_dir/kiln and run this again."
   else
     step_progress=cli_progress
     step "Downloading the CLI" download_cli
