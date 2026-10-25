@@ -131,7 +131,8 @@ import type {
 
 import { DatabaseConnections } from "./database-connections.js"
 import { BrickCatalog } from "./bricks.js"
-import { BackupDownloadServer } from "./backup-download.js"
+import { backupLinks } from "./transfers/backup-links.js"
+import { TransferGate } from "./transfers/gate.js"
 import { BackupManager } from "./backups.js"
 import { attachBrowserSocket } from "./browser-socket.js"
 import {
@@ -785,10 +786,12 @@ const scheduleFiber = forkRelayEffect(
   "relay.schedules.worker",
   scheduleManager.run()
 )
-const backupDownloads = new BackupDownloadServer({
+// Every direct transfer the Relay serves draws from one gate.
+const transferGate = new TransferGate()
+const backupDownloads = backupLinks({
   config,
+  gate: transferGate,
   identity: relayIdentity,
-  runEffect: (effect) => runRelayEffect("relay.backups.download", effect),
   state: startup.state,
 })
 
@@ -1156,6 +1159,7 @@ const controlSocket = attachControlSocket({
 rejectMalformedUpgrades(server)
 const browserSocket = attachBrowserSocket({
   config,
+  gate: transferGate,
   hostFiles: { filesystem: hostFilesystem, root: hostFileRoot },
   appFiles: {
     filesystem: appFilesystem,

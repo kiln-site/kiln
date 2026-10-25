@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vite-plus/test"
 
-import { parseRange } from "./browser-socket.js"
+import { parseByteRange as parseRange } from "./http.js"
 
-describe("Relay browser byte ranges", () => {
+describe("Relay transfer byte ranges", () => {
   it("supports open, bounded, oversized, and suffix ranges", () => {
     expect(parseRange(undefined, 100)).toBeNull()
     expect(parseRange("bytes=10-", 100)).toEqual({ end: 99, start: 10 })

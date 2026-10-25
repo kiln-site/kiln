@@ -64,6 +64,17 @@ export function runRelayEffect<TResult, TError>(
   )
 }
 
+/**
+ * Runs an effect for a request the Relay serves, such as a direct transfer,
+ * which names its own span. Before the Relay runtime exists, as in tests,
+ * it runs without exporting.
+ */
+export function runRelayRequest<TResult, TError>(
+  effect: Effect.Effect<TResult, TError>
+): Promise<TResult> {
+  return runtime ? runtime.runPromise(effect) : Effect.runPromise(effect)
+}
+
 /** Runs a hot-path effect, such as a snapshot read, without tracing it. */
 export function runRelayEffectUntraced<TResult, TError>(
   effect: Effect.Effect<TResult, TError, RelayStateStore>
