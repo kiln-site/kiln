@@ -10,7 +10,7 @@ import {
   statfs,
   writeFile,
 } from "node:fs/promises"
-import { join } from "node:path"
+import { join, resolve as resolvePath, sep } from "node:path"
 import { Effect, Fiber, Schedule, Semaphore } from "effect"
 
 import type { DatabaseConnections } from "./database-connections.js"
@@ -4423,6 +4423,34 @@ export class LifecycleDriver {
     )
   }
 
+  // The running container, other than `except`, whose data directory the
+  // files at `sources` are in: its infrastructure or instances.
+  async #runningRelayHolding(
+    sources: ReadonlyArray<string>,
+    except: string
+  ): Promise<string | null> {
+    const running = await recoverPromise(
+      () => runLifecycle(this.#engine.listContainers()),
+      () => []
+    )
+    for (const container of running) {
+      if (container.Id === except || container.State !== "running") continue
+      for (const mount of container.Mounts ?? []) {
+        const root = resolvePath(mount.Source)
+        if (
+          sources.some(
+            (source) =>
+              isWithin(join(root, "infrastructure"), source) ||
+              isWithin(join(root, "instances"), source)
+          )
+        ) {
+          return (container.Names[0] ?? container.Id).replace(/^\//u, "")
+        }
+      }
+    }
+    return null
+  }
+
   async #ensureContainer(
     name: string,
     replace: boolean,
@@ -4454,23 +4482,27 @@ export class LifecycleDriver {
       )
     }
     // Two Relays in one resource namespace, such as a stack from Kiln's old
-    // compose.yaml beside a platform Relay, both own these names. What this
-    // Relay runs reads its files from its own data directory, so a running
-    // one reading another's belongs to the other Relay, and stays.
-    const ours = await this.#hostDataDirectory()
+    // compose.yaml beside a platform Relay, both own these names. What a
+    // Relay runs reads its files from that Relay's data directory, so a
+    // running one reading another directory, while the Relay holding that
+    // directory runs, is that Relay's and stays. Once that Relay stopped,
+    // as when moving an install or restoring one onto a new volume, it's
+    // this one's to replace.
+    const ours = resolvePath(await this.#hostDataDirectory())
     const sources = (existing.Mounts ?? [])
       .filter((mount) => mount.Type === "bind")
-      .map((mount) => mount.Source)
+      .map((mount) => resolvePath(mount.Source))
     if (
       existing.State.Running &&
       sources.length > 0 &&
-      !sources.some(
-        (source) => source === ours || source.startsWith(`${ours}/`)
-      )
+      !sources.some((source) => isWithin(ours, source))
     ) {
-      throw new Error(
-        `Docker container ${name} is running for another Relay on this host, which keeps its files in ${sources[0]}. Stop that Relay's ${name} first, or run this Relay with another KILN_RELAY_RESOURCE_NAMESPACE.`
-      )
+      const owner = await this.#runningRelayHolding(sources, existing.Id)
+      if (owner) {
+        throw new Error(
+          `Docker container ${name} is running for another Relay on this host, ${owner}. Stop that Relay first, or run this one with another KILN_RELAY_RESOURCE_NAMESPACE.`
+        )
+      }
     }
     await runLifecycle(this.#engine.removeContainer(name, { force: true }))
   }
@@ -4816,4 +4848,9 @@ function hasErrorCode(cause: unknown, code: string): boolean {
     "code" in cause &&
     cause.code === code
   )
+}
+
+// Whether `path` is `directory` or inside it; both already resolved.
+function isWithin(directory: string, path: string): boolean {
+  return path === directory || path.startsWith(`${directory}${sep}`)
 }

@@ -78,24 +78,36 @@ describe("Hearth behind bundled Traefik in platform mode", () => {
     expect([...container!.networks.keys()]).toContain("kiln-platform")
   })
 
-  it("leaves another Relay's running Traefik alone", async () => {
-    const harness = await platformHarness()
-    // A stack from Kiln's old compose.yaml runs its own, from its own data.
-    const theirs = {
-      destination: "/etc/traefik/traefik.yaml",
-      readOnly: true,
-      source:
-        "/var/lib/docker/volumes/kiln_relay-data/_data/infrastructure/traefik.yaml",
-      type: "bind" as const,
-    }
+  // A stack from Kiln's old compose.yaml: its Relay and the Traefik it runs,
+  // from that Relay's own data, in this Relay's resource namespace.
+  const theirData = "/var/lib/docker/volumes/kiln_relay-data/_data"
+  const theirs = {
+    destination: "/etc/traefik/traefik.yaml",
+    readOnly: true,
+    source: `${theirData}/infrastructure/traefik.yaml`,
+    type: "bind" as const,
+  }
+  function legacyStack(
+    harness: Awaited<ReturnType<typeof platformHarness>>,
+    relayRunning: boolean
+  ) {
+    fakeDocker.addContainer({
+      mounts: [{ destination: "/data", source: theirData, type: "bind" }],
+      name: "kiln-relay-1",
+      running: relayRunning,
+    })
     fakeDocker.addContainer({
       image: "traefik:v3.7.13",
-      // In the same resource namespace, so by its label it's this Relay's.
       labels: relayOwnerLabels(harness.config),
       mounts: [theirs],
       name: harness.resources.traefikContainer,
       running: true,
     })
+  }
+
+  it("leaves another running Relay's Traefik alone", async () => {
+    const harness = await platformHarness()
+    legacyStack(harness, true)
 
     const logged = vi.spyOn(console, "error").mockImplementation(() => {})
     await harness.lifecycle.initializeProxy([], hearthSettings)
@@ -103,12 +115,25 @@ describe("Hearth behind bundled Traefik in platform mode", () => {
     // Hearth stays at its own port, and the log says why.
     expect(logged).toHaveBeenCalledWith(
       expect.any(String),
-      expect.stringContaining("running for another Relay")
+      expect.stringContaining(
+        "running for another Relay on this host, kiln-relay-1"
+      )
     )
-
     const container = fakeDocker.container(harness.resources.traefikContainer)
     expect(container?.state.running).toBe(true)
     expect(container?.mounts).toContainEqual(theirs)
+  })
+
+  it("takes over the Traefik a stopped Relay left running", async () => {
+    const harness = await platformHarness()
+    // Moving that install under this Relay: its Relay stopped first.
+    legacyStack(harness, false)
+
+    await harness.lifecycle.initializeProxy([], hearthSettings)
+
+    const container = fakeDocker.container(harness.resources.traefikContainer)
+    expect(container?.state.running).toBe(true)
+    expect(container?.mounts).not.toContainEqual(theirs)
   })
 
   it("moves Traefik to the image Hearth's proxy settings name", async () => {
