@@ -22,12 +22,13 @@ services:
     # The installer's names, so it and Kiln's recovery steps find this Relay.
     container_name: kiln-relay
     restart: unless-stopped
-    env_file:
-      - path: .env
-        required: false
+    env_file: .env
     environment:
       KILN_RELAY_MODE: platform
       KILN_RELAY_CONTAINER: kiln-relay
+      # Inside the container, whatever .env says: KILN_SFTP_PORT moves the
+      # host's side.
+      KILN_RELAY_SFTP_PORT: "2022"
       KILN_URL: ${KILN_URL:?Set KILN_URL in .env to where people will open Kiln}
       KILN_PLATFORM_PROXY: ${KILN_PLATFORM_PROXY:-traefik}
       KILN_PLATFORM_HEARTH_PORT: ${KILN_PLATFORM_HEARTH_PORT:-3000}

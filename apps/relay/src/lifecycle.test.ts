@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vite-plus/test"
 
 vi.mock("./command.js", () => import("./test/docker.js"))
 
+import { relayOwnerLabels } from "./relay-resources.js"
 import { fakeDocker } from "./test/docker.js"
 import { relayHarness } from "./test/relay.js"
 
@@ -75,6 +76,39 @@ describe("Hearth behind bundled Traefik in platform mode", () => {
     const container = fakeDocker.container(traefik)
     expect(container?.state.running).toBe(true)
     expect([...container!.networks.keys()]).toContain("kiln-platform")
+  })
+
+  it("leaves another Relay's running Traefik alone", async () => {
+    const harness = await platformHarness()
+    // A stack from Kiln's old compose.yaml runs its own, from its own data.
+    const theirs = {
+      destination: "/etc/traefik/traefik.yaml",
+      readOnly: true,
+      source:
+        "/var/lib/docker/volumes/kiln_relay-data/_data/infrastructure/traefik.yaml",
+      type: "bind" as const,
+    }
+    fakeDocker.addContainer({
+      image: "traefik:v3.7.13",
+      // In the same resource namespace, so by its label it's this Relay's.
+      labels: relayOwnerLabels(harness.config),
+      mounts: [theirs],
+      name: harness.resources.traefikContainer,
+      running: true,
+    })
+
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {})
+    await harness.lifecycle.initializeProxy([], hearthSettings)
+
+    // Hearth stays at its own port, and the log says why.
+    expect(logged).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.stringContaining("running for another Relay")
+    )
+
+    const container = fakeDocker.container(harness.resources.traefikContainer)
+    expect(container?.state.running).toBe(true)
+    expect(container?.mounts).toContainEqual(theirs)
   })
 
   it("moves Traefik to the image Hearth's proxy settings name", async () => {

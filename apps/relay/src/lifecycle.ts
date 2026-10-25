@@ -4443,11 +4443,33 @@ export class LifecycleDriver {
   }
 
   async #removeOwnedContainer(name: string): Promise<void> {
-    const labels = await this.#containerLabels(name)
-    if (!labels) return
-    if (!relayOwnsLabels(this.#config, labels)) {
+    const existing = await recoverPromise(
+      () => runLifecycle(this.#engine.inspectContainer(name)),
+      () => null
+    )
+    if (!existing) return
+    if (!relayOwnsLabels(this.#config, stringLabels(existing.Config.Labels))) {
       throw new Error(
         `Docker container ${name} is not owned by this Relay and will not be removed`
+      )
+    }
+    // Two Relays in one resource namespace, such as a stack from Kiln's old
+    // compose.yaml beside a platform Relay, both own these names. What this
+    // Relay runs reads its files from its own data directory, so a running
+    // one reading another's belongs to the other Relay, and stays.
+    const ours = await this.#hostDataDirectory()
+    const sources = (existing.Mounts ?? [])
+      .filter((mount) => mount.Type === "bind")
+      .map((mount) => mount.Source)
+    if (
+      existing.State.Running &&
+      sources.length > 0 &&
+      !sources.some(
+        (source) => source === ours || source.startsWith(`${ours}/`)
+      )
+    ) {
+      throw new Error(
+        `Docker container ${name} is running for another Relay on this host, which keeps its files in ${sources[0]}. Stop that Relay's ${name} first, or run this Relay with another KILN_RELAY_RESOURCE_NAMESPACE.`
       )
     }
     await runLifecycle(this.#engine.removeContainer(name, { force: true }))

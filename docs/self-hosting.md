@@ -391,9 +391,10 @@ the ports the old one holds. Remove the container it made with
 2. Start a platform Relay on a fresh data volume with those three variables
    set, along with `KILN_URL`. On its first start it uses them instead of
    generating its own. With Compose, put all four in `.env` and start
-   `compose.yaml`; the Relay reads everything in `.env`. On the same
-   machine, stop the old deployment first, since the new one needs its
-   ports.
+   `compose.yaml`; the Relay reads everything in `.env`. A custom SFTP
+   port from the old `.env` (`KILN_RELAY_SFTP_PORT`) becomes
+   `KILN_SFTP_PORT`. On the same machine, stop the old deployment first,
+   since the new one needs its ports.
 3. Once Hearth is up, run `kiln-relay platform stop-hearth`, restore the backup
    with `kiln-relay platform-backup restore`, and run `start-hearth`.
 4. Stop the old deployment, so two tools don't manage the same Hearth. If
