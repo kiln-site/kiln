@@ -1,5 +1,4 @@
 import { createServerFn } from "@tanstack/react-start"
-import { Effect } from "effect"
 import {
   type Brick,
   type BrickRecipe,
@@ -39,18 +38,8 @@ import {
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { listMcJarVersionsEffect } from "@/effect/mcjarfiles"
-import { promiseEffect } from "@/effect/promise"
-import {
-  claimPreparedProvisioning,
-  compensatePreparedProvisioning,
-  provisioningInstanceId,
-} from "@/lib/provisioning.server"
-import { forkAppEffect, runAppEffect } from "@/effect/runtime"
-import {
-  registerPreparedInstance,
-  reservePreparedInstance,
-  unregisterInstance,
-} from "@/lib/instance-registry"
+import { provisionServer } from "@/lib/server-provisioning.server"
+import { runAppEffect } from "@/effect/runtime"
 import {
   invalidateRelayCache,
   relayCachePolicy,
@@ -98,10 +87,6 @@ const networkingInputSchema = relayNetworkingSchema.extend(
 const recipeInputSchema = relayInputSchema.extend({ source: brickSourceSchema })
 const instanceInputSchema = relayInputSchema.extend({
   instanceId: z.string().regex(/^[a-f0-9]{40}$/u),
-})
-const cancelProvisioningResultSchema = z.object({
-  cancelled: z.boolean(),
-  instanceId: instanceInputSchema.shape.instanceId,
 })
 export const hearthUpdateInstanceStartupInputSchema =
   relayUpdateInstanceStartupSchema
@@ -232,70 +217,13 @@ export const createBrickInstance = createServerFn({ method: "POST" })
       ),
       recipeDefinition,
     })
-    const instanceId = provisioningInstanceId(idempotencyKey)
-    const cancel = () =>
-      requestRelay(
-        relay,
-        `/v1/instances/${encodeURIComponent(instanceId)}/provision`,
-        { method: "DELETE" },
-        30_000,
-        user.id
-      ).then((result) => cancelProvisioningResultSchema.parse(result).cancelled)
-    const unregister = () => unregisterInstance(relay.id, instanceId)
-    await reservePreparedInstance(relay.id, { id: instanceId }, user.id)
-    const instance = await Effect.runPromise(
-      promiseEffect(() =>
-        requestRelay(
-          relay,
-          "/v1/instance-provisioning",
-          {
-            method: "POST",
-            body: JSON.stringify({ ...input, idempotencyKey, instanceId }),
-          },
-          30_000,
-          user.id
-        )
-      ).pipe(
-        Effect.map(relayInstanceSchema.parse),
-        Effect.tapError(() =>
-          compensatePreparedProvisioning(cancel, unregister)
-        )
-      )
-    )
-    await Effect.runPromise(
-      promiseEffect(() =>
-        registerPreparedInstance(relay.id, instance, user.id)
-      ).pipe(
-        Effect.tapError(() =>
-          compensatePreparedProvisioning(cancel, unregister)
-        )
-      )
-    )
-    await claimPreparedProvisioning({
-      cancel,
-      unconfirmed:
-        "Retry the unchanged request to resume the same server.",
-      claim: () =>
-        requestRelay(
-          relay,
-          `/v1/instances/${encodeURIComponent(instance.id)}/provision`,
-          { method: "POST" },
-          30_000,
-          user.id
-        ),
-      unregister,
+    return provisionServer({
+      create: input,
+      idempotencyKey,
+      ownerId: user.id,
+      relay,
+      requestedBy: user.id,
     })
-    forkAppEffect(
-      "relay.snapshot.invalidate",
-      invalidateRelayCache(relayCachePolicy.snapshot(relay.id))
-    )
-    publishRealtimeChange({
-      directoryChanged: true,
-      instance,
-      relayId: relay.id,
-      type: "instance.upsert",
-    })
-    return instance
   })
 
 export const getInstanceRecipe = createServerFn({ method: "GET" })

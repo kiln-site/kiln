@@ -38,6 +38,7 @@ import {
   loadRelayInstanceDomainAssignmentsEffect,
   loadUsedVanityLabelsEffect,
   markInstanceDomainRemovingEffect,
+  reassignInstanceDomainsEffect,
   recordInstanceDomainErrorEffect,
   recordInstanceDomainSyncErrorEffect,
   reserveInstanceDomainAssignmentEffect,
@@ -73,7 +74,10 @@ import {
 import { publishDomainChange } from "@/lib/domain-realtime.server"
 import { kilnRootDomain } from "@/lib/environment"
 import { listInstanceDirectoryEffect } from "@/lib/instance-directory"
-import { relayInstanceRouteId, type FleetRelayInstance } from "@/lib/relay-fleet"
+import {
+  relayInstanceRouteId,
+  type FleetRelayInstance,
+} from "@/lib/relay-fleet"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { activeRelay, listPersistedRelays } from "@/lib/relay-registry"
 import { relayJsonEffect } from "@/lib/relay-client"
@@ -149,7 +153,10 @@ export async function getDomainSettingsHandler() {
     integration?.domains.map((domain) => [domain.domain, domain.zoneName])
   )
   const servers = new Map(
-    directory.map((record) => [assignmentKey(record.relayId, record.id), record])
+    directory.map((record) => [
+      assignmentKey(record.relayId, record.id),
+      record,
+    ])
   )
   // Match the Game Servers table: a short ID routes on its own unless another
   // game server shares it.
@@ -532,6 +539,52 @@ export const loadManagedDomainAddressesEffect = Effect.fn(
   })
 })
 
+/**
+ * Hands a game server's managed domains to the server that takes its place,
+ * as moving a server to another Relay does, and points their records at the
+ * new server's address. The old server keeps none and isn't given a new
+ * one; the new one is given one only as the old one would have been.
+ * Reports how many domains moved.
+ */
+export const moveInstanceDomainsEffect = Effect.fn("domains.instance.move")(
+  function* (
+    from: { readonly instanceId: string; readonly relayId: string },
+    to: DomainInstance
+  ) {
+    const moved = yield* withInstanceDomainLock(
+      from.relayId,
+      from.instanceId,
+      withInstanceDomainLock(
+        to.relayId,
+        to.id,
+        Effect.gen(function* () {
+          const optedOut = yield* loadInstanceDomainOptOutEffect(
+            from.relayId,
+            from.instanceId
+          )
+          const count = yield* reassignInstanceDomainsEffect(from, {
+            instanceId: to.id,
+            relayId: to.relayId,
+          })
+          yield* setInstanceDomainOptOutEffect(
+            from.relayId,
+            from.instanceId,
+            true
+          )
+          yield* setInstanceDomainOptOutEffect(to.relayId, to.id, optedOut)
+          return count
+        })
+      )
+    )
+    yield* invalidateManagedDomainAddressesEffect
+    // Its records still point at the old server's address until now.
+    if (moved > 0) yield* provisionInstanceDomainEffect(to)
+    publishDomainChange({ instanceId: from.instanceId, relayId: from.relayId })
+    publishDomainChange({ instanceId: to.id, relayId: to.relayId })
+    return moved
+  }
+)
+
 // A removal stays recorded here: the game server may survive a failed
 // deletion. Post-delete cleanup clears it once the Relay has removed it.
 export const deleteInstanceDomainEffect = Effect.fn("domains.instance.delete")(
@@ -700,7 +753,9 @@ const provisionInstanceDomainEffect = Effect.fn("domains.instance.provision")(
       // A game server whose last domain was removed doesn't get a new one.
       // Its other domains still follow it below, since someone kept or added
       // them, and ones being deleted are left to their delete.
-      if (yield* loadInstanceDomainOptOutEffect(instance.relayId, instance.id)) {
+      if (
+        yield* loadInstanceDomainOptOutEffect(instance.relayId, instance.id)
+      ) {
         return false
       }
       const credential = yield* loadCloudflareIntegrationCredentialEffect()
@@ -1073,7 +1128,9 @@ const provisionVanityRecordsEffect = Effect.fn(
               addressRecord.id
             ).pipe(
               Effect.catch(() => Effect.void),
-              Effect.andThen(recordInstanceDomainErrorEffect(id, error.message)),
+              Effect.andThen(
+                recordInstanceDomainErrorEffect(id, error.message)
+              ),
               Effect.andThen(Effect.fail(error))
             )
           )

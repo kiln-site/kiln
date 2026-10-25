@@ -358,3 +358,142 @@ export function scopeCapabilitiesEffect(
     return databaseScopeCapabilities(rows[0].engine)
   })
 }
+
+interface CopiedPresetRow extends RowDataPacket {
+  id: string
+  name: string
+}
+interface CopiedGrantRow extends RowDataPacket {
+  id: string
+  role: string | null
+  user_id: string
+}
+interface CopiedAccessPresetRow extends RowDataPacket {
+  builtin_key: string | null
+  preset_id: string | null
+}
+
+/**
+ * Gives a new game server the access its source had: the same people, with
+ * the same permissions and presets. Presets belong to one resource, so the
+ * source's are copied to the new server. Pending invitations aren't copied,
+ * since their links can't be, and the new server's owner owns it rather
+ * than being granted access. Someone who already has access to the new
+ * server keeps what they have. Returns the people given access.
+ */
+export function copyInstanceAccessEffect(input: {
+  readonly actorId: string
+  readonly from: { readonly instanceId: string; readonly relayId: string }
+  readonly to: { readonly instanceId: string; readonly relayId: string }
+}) {
+  const fromScope: ResourceScope = {
+    relayId: input.from.relayId,
+    resourceId: input.from.instanceId,
+    resourceType: "instance",
+  }
+  const toScope: ResourceScope = {
+    relayId: input.to.relayId,
+    resourceId: input.to.instanceId,
+    resourceType: "instance",
+  }
+  return accessPolicyTransaction("access.copyInstance", (transaction) =>
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis
+      yield* lockAccessScopeEffect(transaction, fromScope)
+      const target = yield* lockAccessScopeEffect(transaction, toScope)
+      const presets = yield* transaction.queryRows<CopiedPresetRow>(
+        `SELECT id, name FROM ${databaseTable("permission_preset")}
+          WHERE relay_id = ? AND resource_type = 'instance' AND resource_id = ?`,
+        [fromScope.relayId, fromScope.resourceId]
+      )
+      const presetIds = new Map<string, string>()
+      for (const preset of presets) {
+        const id = randomUUID()
+        presetIds.set(preset.id, id)
+        yield* transaction.execute(
+          `INSERT INTO ${databaseTable("permission_preset")}
+             (id, relay_id, resource_type, resource_id, name, created_by,
+              updated_by, created_at, updated_at)
+           VALUES (?, ?, 'instance', ?, ?, ?, ?, ?, ?)`,
+          [
+            id,
+            toScope.relayId,
+            toScope.resourceId,
+            preset.name,
+            input.actorId,
+            input.actorId,
+            now,
+            now,
+          ]
+        )
+        yield* transaction.execute(
+          `INSERT INTO ${databaseTable("preset_selection")}
+             (preset_id, selection_kind, selection_key)
+           SELECT ?, selection_kind, selection_key
+             FROM ${databaseTable("preset_selection")} WHERE preset_id = ?`,
+          [id, preset.id]
+        )
+      }
+      const grants = yield* transaction.queryRows<CopiedGrantRow>(
+        `SELECT id, user_id, role FROM ${databaseTable("access_grant")}
+          WHERE relay_id = ? AND resource_type = 'instance'
+            AND resource_id = ? AND state = 'active'`,
+        [fromScope.relayId, fromScope.resourceId]
+      )
+      const copiedTo: Array<string> = []
+      for (const grant of grants) {
+        if (grant.user_id === target.owner_id) continue
+        const id = randomUUID()
+        const inserted = yield* transaction.execute(
+          `INSERT IGNORE INTO ${databaseTable("access_grant")}
+             (id, user_id, relay_id, resource_type, resource_id, role, state,
+              granted_by, created_at, updated_at)
+           VALUES (?, ?, ?, 'instance', ?, ?, 'active', ?, ?, ?)`,
+          [
+            id,
+            grant.user_id,
+            toScope.relayId,
+            toScope.resourceId,
+            grant.role,
+            input.actorId,
+            now,
+            now,
+          ]
+        )
+        if (inserted.affectedRows === 0) continue
+        yield* transaction.execute(
+          `INSERT INTO ${databaseTable("access_selection")}
+             (access_id, selection_kind, selection_key)
+           SELECT ?, selection_kind, selection_key
+             FROM ${databaseTable("access_selection")} WHERE access_id = ?`,
+          [id, grant.id]
+        )
+        const assigned = yield* transaction.queryRows<CopiedAccessPresetRow>(
+          `SELECT preset_id, builtin_key FROM ${databaseTable("access_preset")}
+            WHERE access_id = ?`,
+          [grant.id]
+        )
+        for (const preset of assigned) {
+          const presetId = preset.preset_id
+            ? (presetIds.get(preset.preset_id) ?? null)
+            : null
+          if (preset.preset_id && !presetId) continue
+          yield* transaction.execute(
+            `INSERT INTO ${databaseTable("access_preset")}
+               (id, access_id, preset_id, builtin_key, granted_by, created_at)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            [randomUUID(), id, presetId, preset.builtin_key, input.actorId, now]
+          )
+        }
+        yield* advanceScopeAccessEffect(transaction, grant.user_id, toScope)
+        copiedTo.push(grant.user_id)
+      }
+      yield* auditAccessEffect(transaction, input.actorId, "access.copied", {
+        from: fromScope,
+        people: copiedTo.length,
+        to: toScope,
+      })
+      return copiedTo
+    })
+  )
+}

@@ -1,6 +1,10 @@
 import { Effect } from "effect"
 
 import { setInstanceDomainOptOutEffect } from "@/effect/domains"
+import {
+  publishNotificationChange,
+  resolveMigrationSourceNotificationsEffect,
+} from "@/effect/notifications"
 import { reportAppError } from "@/effect/runtime"
 import { deleteInstanceAccessEffect } from "@/lib/access-control"
 import { removeDeletedInstanceEffect } from "@/lib/instance-registry"
@@ -27,6 +31,17 @@ export const finalizeInstanceDeletionEffect = Effect.fn(
     relayId,
     instanceId,
     setInstanceDomainOptOutEffect(relayId, instanceId, false)
+  )
+  // A finished move stops offering to delete the server it left.
+  yield* postDeleteCleanupStep(
+    "notifications.migrationSource.resolve",
+    relayId,
+    instanceId,
+    resolveMigrationSourceNotificationsEffect(relayId, instanceId).pipe(
+      Effect.tap((userIds) =>
+        Effect.sync(() => publishNotificationChange(userIds))
+      )
+    )
   )
   // The Relay has removed the server, so its directory record goes too.
   // Live snapshots never remove records on their own.

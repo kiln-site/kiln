@@ -14,6 +14,7 @@ const passes = Metric.counter("hearth.worker.passes", {
 export type PollingWorkerName =
   | "Instances.postProvision"
   | "Notifications.push"
+  | "ServerMigrations"
   | "TailscaleCleanup"
 
 /**

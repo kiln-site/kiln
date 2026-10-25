@@ -26,6 +26,7 @@ export const hearthRealtimeTopics = [
   "relays",
   "schedules",
   "security",
+  "server-migrations",
   "tailscale",
 ] as const
 

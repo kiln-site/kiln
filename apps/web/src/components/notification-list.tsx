@@ -1,8 +1,9 @@
 import * as React from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import type { QueryClient } from "@tanstack/react-query"
-import { Link, useNavigate } from "@tanstack/react-router"
+import { Link, useNavigate, useRouteContext } from "@tanstack/react-router"
 import {
+  ArrowRightLeft,
   CloudUpload,
   HardDrive,
   PackageCheck,
@@ -19,11 +20,13 @@ import { showToast } from "@workspace/ui/components/sonner"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { RelativeTime } from "@/components/relative-time"
+import { ServerDeleteDialog } from "@/components/server-delete-dialog"
 import {
   acceptedInvitationHref,
   useResourceInvitationDecision,
 } from "@/components/resource-invitation-dialog"
 import { appRouteIdentifier } from "@/lib/app-route"
+import { isDevelopmentBypassIdentity } from "@/lib/development-bypass"
 import {
   clearNotificationsMutationOptions,
   dismissNotificationMutationOptions,
@@ -247,7 +250,57 @@ function NotificationActions({
           onNavigate={onNavigate}
         />
       )
+    case "server.migration":
+      if (content.outcome !== "completed") {
+        return (
+          <OpenResourceButton
+            resource={content.source}
+            onNavigate={onNavigate}
+          />
+        )
+      }
+      return (
+        <div className="relative flex shrink-0 items-center gap-1.5">
+          {content.mode === "migrate" && !content.sourceDeleted ? (
+            <DeleteMovedServerButton server={content.source} />
+          ) : null}
+          <OpenResourceButton
+            resource={content.destination}
+            onNavigate={onNavigate}
+          />
+        </div>
+      )
   }
+}
+
+// A finished move leaves the old server stopped where it was; deleting it
+// is up to the person, and permanent, as the dialog says.
+function DeleteMovedServerButton({ server }: { server: NotificationResource }) {
+  const [open, setOpen] = React.useState(false)
+  const user = useRouteContext({
+    from: "/_app",
+    select: (context) => context.user,
+  })
+  return (
+    <>
+      <Button variant="destructive" size="xs" onClick={() => setOpen(true)}>
+        Delete old server
+      </Button>
+      {open ? (
+        <ServerDeleteDialog
+          open
+          passwordRequired={!isDevelopmentBypassIdentity(user)}
+          target={{
+            backupAvailable: true,
+            id: server.id,
+            name: server.name,
+            relayId: server.relayId,
+          }}
+          onOpenChange={setOpen}
+        />
+      ) : null}
+    </>
+  )
 }
 
 // Opens the Updates dialog's changelog.
@@ -392,6 +445,7 @@ const notificationIcons = {
   "app.image-update": PackagePlus,
   "app.deployed": CloudUpload,
   "security.vulnerabilities": ShieldAlert,
+  "server.migration": ArrowRightLeft,
 } satisfies Record<
   NotificationContent["kind"],
   React.ComponentType<{ className?: string }>

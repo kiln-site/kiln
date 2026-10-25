@@ -57,7 +57,15 @@ export const notificationPreferenceGroups = [
   {
     adminOnly: false,
     id: "resources",
-    kinds: [{ kind: "resource.disk-limit", label: "Disk limit warnings" }],
+    kinds: [
+      { kind: "resource.disk-limit", label: "Disk limit warnings" },
+      // A finished move waits in the inbox to offer deleting the old server.
+      {
+        inboxRequired: true,
+        kind: "server.migration",
+        label: "Game Server moves and copies",
+      },
+    ],
     label: "Resources",
   },
   {
@@ -103,6 +111,7 @@ const allKinds: ReadonlyArray<NotificationKind> = [
   "app.image-update",
   "app.deployed",
   "security.vulnerabilities",
+  "server.migration",
 ] satisfies ReadonlyArray<NotificationKind>
 
 const storedKindSchema = z.object({

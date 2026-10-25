@@ -252,9 +252,7 @@ export const saveCloudflareIntegrationEffect = Effect.fn(
       )
       const assigned = yield* transaction.queryRows<
         RowDataPacket & { domain: string }
-      >(
-        `SELECT domain FROM ${databaseTable("instance_domain")} FOR SHARE`
-      )
+      >(`SELECT domain FROM ${databaseTable("instance_domain")} FOR SHARE`)
       const usage = new Map<string, number>()
       for (const row of assigned) {
         usage.set(row.domain, (usage.get(row.domain) ?? 0) + 1)
@@ -382,19 +380,41 @@ export const deleteRelayInstanceDomainAssignmentsEffect = Effect.fn(
   )
 })
 
-export const loadInstanceDomainOptOutEffect = Effect.fn(
-  "domains.optOut.load"
-)(function* (relayId: string, instanceId: string) {
+/**
+ * Gives a game server's domains to another server, as a move to a new
+ * server does. Domains being removed stay with their removal. Reports how
+ * many moved.
+ */
+export const reassignInstanceDomainsEffect = Effect.fn(
+  "domains.assignments.reassign"
+)(function* (
+  from: { readonly instanceId: string; readonly relayId: string },
+  to: { readonly instanceId: string; readonly relayId: string }
+) {
   const database = yield* Database
-  const rows = yield* database.queryRows<RowDataPacket>(
-    "domains.optOut.load",
-    `SELECT 1 FROM ${databaseTable("instance_domain_opt_out")}
+  const result = yield* database.execute(
+    "domains.assignments.reassign",
+    `UPDATE ${databaseTable("instance_domain")}
+        SET relay_id = ?, instance_id = ?
+      WHERE relay_id = ? AND instance_id = ? AND status <> 'removing'`,
+    [to.relayId, to.instanceId, from.relayId, from.instanceId]
+  )
+  return result.affectedRows
+})
+
+export const loadInstanceDomainOptOutEffect = Effect.fn("domains.optOut.load")(
+  function* (relayId: string, instanceId: string) {
+    const database = yield* Database
+    const rows = yield* database.queryRows<RowDataPacket>(
+      "domains.optOut.load",
+      `SELECT 1 FROM ${databaseTable("instance_domain_opt_out")}
       WHERE relay_id = ? AND instance_id = ?
       LIMIT 1`,
-    [relayId, instanceId]
-  )
-  return rows.length > 0
-})
+      [relayId, instanceId]
+    )
+    return rows.length > 0
+  }
+)
 
 export const setInstanceDomainOptOutEffect = Effect.fn("domains.optOut.set")(
   function* (relayId: string, instanceId: string, optedOut: boolean) {

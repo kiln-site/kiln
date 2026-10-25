@@ -76,6 +76,19 @@ export function notificationTitle(content: NotificationContent): string {
         ? `${subject} has an exploited vulnerability`
         : `${subject} has ${withArticle(securitySeverityLabels[content.severity]).toLowerCase()} vulnerability`
     }
+    case "server.migration": {
+      const action = content.mode === "migrate" ? "move" : "copy"
+      switch (content.outcome) {
+        case "completed":
+          return content.mode === "migrate"
+            ? "Your Game Server was moved"
+            : "Your Game Server was duplicated"
+        case "failed":
+          return `Your Game Server couldn't ${action}`
+        case "cancelled":
+          return `Your Game Server ${action} was cancelled`
+      }
+    }
   }
 }
 
@@ -106,6 +119,10 @@ export function notificationDetail(
       const fix = top.fixedVersion ? `, fixed in ${top.fixedVersion}` : ""
       return `${content.resource.name} - ${top.id} in ${top.packageName} ${top.packageVersion}${fix}`
     }
+    case "server.migration":
+      return content.outcome === "failed"
+        ? `${content.source.name} - ${content.error ?? "The copy stopped"}`
+        : `${content.source.name} to ${content.destination.name}`
   }
 }
 

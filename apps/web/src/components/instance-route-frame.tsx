@@ -68,6 +68,10 @@ export const InstanceRouteFrame = React.memo(function InstanceRouteFrame({
     return {
       consoleRead: can("instance.console.read"),
       consoleWrite: can("instance.console.write"),
+      // Copying a server, to duplicate or move it, reads its files and
+      // settings; where it can go is up to the Relays.
+      copyServer:
+        can("instance.files.read") && can("instance.configuration.read"),
       deleteServer: can("instance.delete"),
       filesWrite: can("instance.files.write"),
       networkRead: can("instance.network.read"),

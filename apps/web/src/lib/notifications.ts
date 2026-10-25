@@ -88,6 +88,19 @@ export const notificationContentSchema = z.discriminatedUnion("kind", [
       packageVersion: z.string(),
     }),
   }),
+  // A game server finished copying to a new one, as a duplicate or a move to
+  // another Relay. A finished move offers to delete the server it left;
+  // `sourceDeleted` marks one that was.
+  z.object({
+    destination: notificationResourceSchema,
+    error: z.string().optional(),
+    kind: z.literal("server.migration"),
+    migrationId: z.string(),
+    mode: z.enum(["duplicate", "migrate"]),
+    outcome: z.enum(["completed", "failed", "cancelled"]),
+    source: notificationResourceSchema,
+    sourceDeleted: z.boolean().optional(),
+  }),
 ])
 
 export type NotificationContent = z.infer<typeof notificationContentSchema>

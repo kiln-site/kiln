@@ -222,6 +222,34 @@ export const resolveInvitationNotificationsEffect = Effect.fn(
 })
 
 /**
+ * Records on finished moves that the server they left is gone, so their
+ * notifications stop offering to delete it. Returns whose notifications
+ * changed.
+ */
+export const resolveMigrationSourceNotificationsEffect = Effect.fn(
+  "notifications.resolveMigrationSource"
+)(function* (relayId: string, instanceId: string) {
+  const database = yield* Database
+  const rows = yield* database.queryRows<RowDataPacket & { user_id: string }>(
+    "notifications.migrationSource.find",
+    `SELECT DISTINCT user_id FROM ${databaseTable("notification")}
+      WHERE kind = 'server.migration'
+        AND data->>'$.source.relayId' = ? AND data->>'$.source.id' = ?`,
+    [relayId, instanceId]
+  )
+  if (!rows.length) return []
+  yield* database.execute(
+    "notifications.migrationSource.resolve",
+    `UPDATE ${databaseTable("notification")}
+        SET data = JSON_SET(data, '$.sourceDeleted', true)
+      WHERE kind = 'server.migration'
+        AND data->>'$.source.relayId' = ? AND data->>'$.source.id' = ?`,
+    [relayId, instanceId]
+  )
+  return rows.map((row) => row.user_id)
+})
+
+/**
  * Tells the users' open tabs to reload their notifications, and pushes new
  * ones to their devices. Call it once the change is committed.
  */

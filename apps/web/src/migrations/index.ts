@@ -28,6 +28,7 @@ import { backupRetentionDays } from "./0025_backup_retention_days"
 import { relayJoins } from "./0026_relay_joins"
 import { security } from "./0027_security"
 import { kilnFavorite } from "./0028_kiln_favorite"
+import { serverMigrations } from "./0029_server_migrations"
 
 // Append new migrations with the next id. Never edit or reorder applied ones.
 export const migrations: ReadonlyArray<Migration> = [
@@ -59,4 +60,5 @@ export const migrations: ReadonlyArray<Migration> = [
   relayJoins,
   security,
   kilnFavorite,
+  serverMigrations,
 ]

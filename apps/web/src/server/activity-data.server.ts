@@ -64,7 +64,7 @@ export async function getActivityForUser(
   const relays = (await listPersistedRelays()).filter((relay) => relay.enabled)
   const platformAdmin = isPlatformAdmin(user)
   const grants = platformAdmin ? [] : await listUserGrants(user.id)
-  const scopes = new Map<string, ActivityScope>()
+  const scopes = new Map<string, ActivityScope & { instanceIds: Set<string> }>()
 
   for (const relay of relays) {
     if (platformAdmin) {
@@ -94,6 +94,58 @@ export async function getActivityForUser(
     )
     if (allInstances || instanceIds.size > 0) {
       scopes.set(relay.id, { relayAudit, allInstances, instanceIds })
+    }
+  }
+
+  // A game server copied with its history shows the activity of the server
+  // it came from as its own, to whoever can see the copy.
+  const lineage = await listActivityLineage()
+  const successors = new Map(
+    lineage.map((row) => [
+      instanceKey(row.source_relay_id, row.source_instance_id),
+      {
+        instanceId: row.destination_instance_id,
+        relayId: row.destination_relay_id,
+      },
+    ])
+  )
+  const latestCopy = (relayId: string, instanceId: string) => {
+    let current = { instanceId, relayId }
+    const seen = new Set<string>()
+    while (true) {
+      const key = instanceKey(current.relayId, current.instanceId)
+      const next = successors.get(key)
+      if (!next || seen.has(key)) return current
+      seen.add(key)
+      current = next
+    }
+  }
+  if (!platformAdmin) {
+    const enabledRelayIds = new Set(relays.map((relay) => relay.id))
+    for (const row of lineage) {
+      const copy = latestCopy(
+        row.destination_relay_id,
+        row.destination_instance_id
+      )
+      const copyScope = scopes.get(copy.relayId)
+      if (
+        !copyScope ||
+        !(
+          copyScope.allInstances || copyScope.instanceIds.has(copy.instanceId)
+        ) ||
+        !enabledRelayIds.has(row.source_relay_id)
+      ) {
+        continue
+      }
+      const sourceScope = scopes.get(row.source_relay_id)
+      if (sourceScope) sourceScope.instanceIds.add(row.source_instance_id)
+      else {
+        scopes.set(row.source_relay_id, {
+          allInstances: false,
+          instanceIds: new Set([row.source_instance_id]),
+          relayAudit: false,
+        })
+      }
     }
   }
 
@@ -229,8 +281,22 @@ export async function getActivityForUser(
     return null
   }
 
+  const relayById = new Map(relays.map((relay) => [relay.id, relay]))
   const entries = visibleAudits
-    .map(({ record, relay }) => {
+    .map(({ record, relay: recordedRelay }) => {
+      // An event of a server since copied with its history belongs to the
+      // copy now.
+      const recordedInstanceId = auditInstanceId(record)
+      const copy = recordedInstanceId
+        ? latestCopy(recordedRelay.id, recordedInstanceId)
+        : null
+      const copied =
+        copy !== null &&
+        (copy.relayId !== recordedRelay.id ||
+          copy.instanceId !== recordedInstanceId)
+      const relay = copied
+        ? (relayById.get(copy.relayId) ?? recordedRelay)
+        : recordedRelay
       const actorId = auditUserId(record)
       const actor = actorId ? userById.get(actorId) : undefined
       return {
@@ -248,7 +314,7 @@ export async function getActivityForUser(
         // Kept beside the target: connecting a database to a game server
         // targets the server but belongs in the database's activity too.
         databaseId: auditDatabaseId(record),
-        id: `${relay.id}:${record.id}`,
+        id: `${recordedRelay.id}:${record.id}`,
         label: activityLabelForAudit(record),
         occurredAt: record.occurredAt,
         permission: activityPermissionForAudit(record),
@@ -259,7 +325,15 @@ export async function getActivityForUser(
           unavailable: unavailableRelayIds.has(relay.id),
         },
         source: activitySourceForAudit(record),
-        target: activityTarget(relay.id, record),
+        target: copied
+          ? {
+              id: copy.instanceId,
+              kind: "server" as const,
+              name:
+                instanceByKey.get(instanceKey(copy.relayId, copy.instanceId))
+                  ?.displayName ?? `Server ${copy.instanceId.slice(0, 8)}`,
+            }
+          : activityTarget(relay.id, record),
         type: activityTypeForAudit(record),
       }
     })
@@ -276,6 +350,24 @@ export async function getActivityForUser(
       records.length === 2_000 ? [relay.id] : []
     ),
   }
+}
+
+interface LineageRow extends RowDataPacket {
+  destination_instance_id: string
+  destination_relay_id: string
+  source_instance_id: string
+  source_relay_id: string
+}
+
+// Servers copied with their history, from the server each came from.
+async function listActivityLineage(): Promise<Array<LineageRow>> {
+  const [rows] = await databasePool.query<Array<LineageRow>>(
+    `SELECT source_relay_id, source_instance_id,
+            destination_relay_id, destination_instance_id
+       FROM ${databaseTable("server_migration")}
+      WHERE state = 'completed' AND options->>'$.keepActivity' = 'true'`
+  )
+  return rows
 }
 
 async function listActivityInstances(
@@ -307,7 +399,9 @@ async function listActivityResourceNames(
 }
 
 function resourceNames(rows: Array<ResourceNameRow>): Map<string, string> {
-  return new Map(rows.map((row) => [instanceKey(row.relay_id, row.id), row.name]))
+  return new Map(
+    rows.map((row) => [instanceKey(row.relay_id, row.id), row.name])
+  )
 }
 
 async function listActivityUsers(

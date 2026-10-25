@@ -1,10 +1,20 @@
+import * as React from "react"
+import { ArrowRightLeft, Copy } from "lucide-react"
+
+import { Button } from "@workspace/ui/components/button"
+
 import {
   InfoDangerAction,
   InfoDangerZone,
   InfoPage,
+  InfoSection,
 } from "@/components/info-page"
 import { ServerDeleteDialog } from "@/components/server-delete-dialog"
 import { ServerInfoRail } from "@/components/server/server-info-rail"
+import {
+  ServerMigrationDialog,
+  type ServerMigrationMode,
+} from "@/components/server/server-migration-dialog"
 import {
   ServerBrickSettings,
   ServerConnectionSettings,
@@ -35,6 +45,7 @@ export function ServerInfoPage({
   permissions: {
     configurationRead: boolean
     configurationWrite: boolean
+    copyServer: boolean
     deleteServer: boolean
     networkRead: boolean
     shareLogs: boolean
@@ -66,6 +77,12 @@ export function ServerInfoPage({
         canViewStartup={permissions.configurationRead}
         instance={instance}
       />
+      {permissions.copyServer && !provisioning ? (
+        <ServerMigrationSection
+          instance={instance}
+          relayConnected={relayConnected}
+        />
+      ) : null}
       {permissions.deleteServer ? (
         <ServerDangerZone
           instance={instance}
@@ -115,5 +132,64 @@ function ServerDangerZone({
         Delete server
       </InfoDangerAction>
     </InfoDangerZone>
+  )
+}
+
+// Copies the server to a new one, on this Relay or another, or moves it to
+// another Relay. The dialog mounts only while it's open.
+function ServerMigrationSection({
+  instance,
+  relayConnected,
+}: {
+  instance: InstanceSettingsInstance
+  relayConnected: boolean
+}) {
+  const [mode, setMode] = React.useState<ServerMigrationMode | null>(null)
+  const unavailable = relayConnected
+    ? undefined
+    : "Reconnect this server's Relay first"
+  return (
+    <InfoSection
+      icon={<ArrowRightLeft />}
+      title="Move or duplicate"
+      action={
+        <>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!relayConnected}
+            title={unavailable}
+            onClick={() => setMode("duplicate")}
+          >
+            <Copy />
+            Duplicate
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!relayConnected}
+            title={unavailable}
+            onClick={() => setMode("migrate")}
+          >
+            <ArrowRightLeft />
+            Move to another Relay
+          </Button>
+          {mode ? (
+            <ServerMigrationDialog
+              open
+              initialMode={mode}
+              server={{
+                id: instance.id,
+                name: instance.name,
+                relayId: instance.relayId,
+              }}
+              onOpenChange={(open) => {
+                if (!open) setMode(null)
+              }}
+            />
+          ) : null}
+        </>
+      }
+    />
   )
 }

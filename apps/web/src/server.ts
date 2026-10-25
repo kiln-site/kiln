@@ -33,6 +33,7 @@ import {
 } from "./lib/app-image-updates.server"
 import { startDiskLimitWarnings } from "./lib/disk-limit-warnings.server"
 import { startNotificationPushes } from "./lib/notification-pushes.server"
+import { startServerMigrationResumption } from "./lib/server-migrations.server"
 import {
   startBackupMaintenance,
   stopBackupMaintenance,
@@ -94,7 +95,10 @@ await Effect.runPromise(
         // restarts beside it. Keep trying for half an hour.
         Effect.andThen(
           pairRelayFromEnvironment.pipe(
-            Effect.retry({ schedule: Schedule.spaced("15 seconds"), times: 120 }),
+            Effect.retry({
+              schedule: Schedule.spaced("15 seconds"),
+              times: 120,
+            }),
             Effect.delay("15 seconds"),
             Effect.catch((retryCause) =>
               Effect.sync(() => {
@@ -121,6 +125,7 @@ startKilnUpdateNotifications()
 startDiskLimitWarnings()
 startNotificationPushes()
 startBackupMaintenance()
+startServerMigrationResumption()
 forkPromise(wakePendingAuthorizationDelivery, (cause) => {
   reportAppError(cause, { operation: "authorization.delivery.recover" })
 })
