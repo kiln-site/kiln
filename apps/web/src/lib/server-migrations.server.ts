@@ -338,13 +338,18 @@ function forkMigrationWorker(id: string, generation: number): void {
 
 // ---------------------------------------------------------- the worker
 
-const driveMigration = Effect.fn("serverMigrations.drive")(function* (
+// Runs a migration while renewing its lease on the side, so the lease
+// lapses only once this worker is gone. Should another worker take over
+// anyway, this one stops at once, whatever it was doing.
+const driveMigration = Effect.fn("serverMigrations.drive")(
+  (id: string, generation: number) =>
+    Effect.raceFirst(runMigration(id, generation), keepLease(id, generation))
+)
+
+const runMigration = Effect.fnUntraced(function* (
   id: string,
   generation: number
 ) {
-  // Renewed on its own while a step waits on a slow Relay or backup, so the
-  // lease lapses only once this worker is gone.
-  yield* Effect.forkChild(keepLease(id, generation))
   while (true) {
     const row = yield* loadMigration(id)
     if (
@@ -380,22 +385,34 @@ const driveMigration = Effect.fn("serverMigrations.drive")(function* (
   }
 })
 
-// Renews a worker's lease until it ends or another worker took over.
+// Renews a worker's lease, ending only once another worker took over. It
+// checks the claim alone, not the state, so a migration this worker just
+// finished doesn't stop it partway through telling its person.
 const keepLease = Effect.fnUntraced(function* (id: string, generation: number) {
   while (true) {
     yield* Effect.sleep(LEASE_RENEW_MS)
-    const renewed = yield* claimWrite(id, generation, "error = error", []).pipe(
-      Effect.as(true),
+    const held = yield* loadMigration(id).pipe(
+      Effect.flatMap((row) => {
+        if (!row || Number(row.claim_generation) !== generation) {
+          return Effect.succeed(false)
+        }
+        if (row.state !== "running" && row.state !== "cancelling") {
+          return Effect.succeed(true)
+        }
+        return claimWrite(id, generation, "error = error", []).pipe(
+          Effect.as(true)
+        )
+      }),
       Effect.catch((cause) =>
         cause instanceof StaleClaim
-          ? Effect.succeed(false)
+          ? Effect.succeed(true)
           : Effect.logWarning(
               `Server migration ${id} couldn't renew its lease`,
               cause
             ).pipe(Effect.as(true))
       )
     )
-    if (!renewed) return
+    if (!held) return
   }
 })
 
