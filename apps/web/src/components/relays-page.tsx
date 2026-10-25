@@ -33,6 +33,7 @@ import {
 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
+import { cn } from "@workspace/ui/lib/utils"
 import {
   Dialog,
   DialogContent,
@@ -99,7 +100,8 @@ import {
   DataTableInlineActions,
   DataTablePhoneMenuItems,
   DataTableTextCell,
-  keepFocusInRowMenuDialog,
+  useRowMenuDialogs,
+  dataTableRowLinkClassName,
 } from "@/components/data-table"
 import { DataTable } from "@/components/data-table-view"
 import {
@@ -576,7 +578,7 @@ function RelayTable({
         ),
         meta: dataTableColumnMeta(
           { width: { base: "1.75rem" } },
-          { cellClassName: "px-0", headerClassName: "px-0" }
+          { cellClassName: "relative z-10 px-0", headerClassName: "px-0" }
         ),
       }),
       relayTableColumnHelper.accessor((relay) => relay.name, {
@@ -593,7 +595,10 @@ function RelayTable({
                 // other Relay shares its short ID.
                 params={{ relayId: relay.id }}
                 preload="intent"
-                className="group/relay-link flex min-h-14 min-w-0 flex-1 items-center outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
+                className={cn(
+                  dataTableRowLinkClassName,
+                  "group/relay-link flex min-h-14 min-w-0 flex-1 items-center outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
+                )}
               >
                 <InstanceCard
                   state={relay.instanceState}
@@ -693,7 +698,7 @@ function RelayTable({
         meta: dataTableColumnMeta(
           { width: { base: "2.5rem", md: "10rem" } },
           {
-            cellClassName: "px-1 md:px-3",
+            cellClassName: "relative z-10 px-1 md:px-3",
             headerClassName: "px-1 md:px-3",
           }
         ),
@@ -745,6 +750,7 @@ const RelayActions = React.memo(function RelayActions({
   relay: RelayTableItem
   onEdit: (relayId: string) => void
 }) {
+  const menu = useRowMenuDialogs()
   const [dialog, setDialog] = React.useState<"pause" | "remove" | null>(null)
   const pause = useRelayPauseToggle(relay)
   const togglePaused = () =>
@@ -777,13 +783,18 @@ const RelayActions = React.memo(function RelayActions({
         <DropdownMenuContent
           align="end"
           className="min-w-44"
-          onCloseAutoFocus={keepFocusInRowMenuDialog}
+          onCloseAutoFocus={menu.onCloseAutoFocus}
         >
           <DataTablePhoneMenuItems>
-            <DropdownMenuItem onSelect={() => onEdit(relay.id)}>
+            <DropdownMenuItem
+              onSelect={menu.openAfterClose(() => onEdit(relay.id))}
+            >
               <Settings2 /> Configure
             </DropdownMenuItem>
-            <DropdownMenuItem disabled={pause.pending} onSelect={togglePaused}>
+            <DropdownMenuItem
+              disabled={pause.pending}
+              onSelect={menu.openAfterClose(togglePaused)}
+            >
               {relay.enabled ? <Pause /> : <Play />}
               {relay.enabled ? "Pause" : "Resume"}
             </DropdownMenuItem>
@@ -796,7 +807,10 @@ const RelayActions = React.memo(function RelayActions({
           <CopyIdentifierMenuItem label="Relay ID" value={relay.id} />
           <DataTablePhoneMenuItems>
             <DropdownMenuSeparator />
-            <DropdownMenuItem variant="destructive" onSelect={removeRelay}>
+            <DropdownMenuItem
+              variant="destructive"
+              onSelect={menu.openAfterClose(removeRelay)}
+            >
               <Trash2 /> Remove
             </DropdownMenuItem>
           </DataTablePhoneMenuItems>

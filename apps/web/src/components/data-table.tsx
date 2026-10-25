@@ -560,6 +560,13 @@ export const DataTableTextCell = React.memo(function DataTableTextCell({
   )
 })
 
+/**
+ * On phones, stretches a row's main link over the whole row, so a tap
+ * anywhere opens it. Controls in the row sit above it with `relative z-10`.
+ */
+export const dataTableRowLinkClassName =
+  "max-md:after:absolute max-md:after:inset-0"
+
 export function DataTableActionGroup({
   children,
   className,
@@ -601,11 +608,24 @@ export function DataTablePhoneMenuItems({
 }
 
 /**
- * A row menu's `onCloseAutoFocus`. When an item opened a dialog, the dialog
- * keeps focus instead of the menu handing it back to its trigger.
+ * For row menu items that open a dialog. The item's action waits until the
+ * menu has closed and handed focus back to its trigger, so the dialog starts
+ * from there and returns focus there when it closes, not to the page.
  */
-export function keepFocusInRowMenuDialog(event: Event) {
-  if (document.querySelector("[role=dialog]")) event.preventDefault()
+export function useRowMenuDialogs() {
+  const pendingRef = React.useRef<(() => void) | null>(null)
+  const openAfterClose = React.useCallback(
+    (open: () => void) => () => {
+      pendingRef.current = open
+    },
+    []
+  )
+  const onCloseAutoFocus = React.useCallback(() => {
+    const open = pendingRef.current
+    pendingRef.current = null
+    open?.()
+  }, [])
+  return { onCloseAutoFocus, openAfterClose }
 }
 
 export function DataTableEmptyState({
@@ -1116,7 +1136,7 @@ function DataTableRow<TData extends RowData>({
       ref={ref}
       aria-rowindex={ariaRowIndex}
       className={cn(
-        "group grid grid-cols-[var(--data-table-grid-base)] border-b border-border/70 transition-colors hover:bg-muted/20 sm:grid-cols-[var(--data-table-grid-sm)] md:grid-cols-[var(--data-table-grid-md)] lg:grid-cols-[var(--data-table-grid-lg)] xl:grid-cols-[var(--data-table-grid-xl)]",
+        "group relative grid grid-cols-[var(--data-table-grid-base)] border-b border-border/70 transition-colors hover:bg-muted/20 sm:grid-cols-[var(--data-table-grid-sm)] md:grid-cols-[var(--data-table-grid-md)] lg:grid-cols-[var(--data-table-grid-lg)] xl:grid-cols-[var(--data-table-grid-xl)]",
         rowClassName
       )}
       data-index={dataIndex}

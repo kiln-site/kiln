@@ -18,6 +18,7 @@ import {
 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
+import { cn } from "@workspace/ui/lib/utils"
 import {
   Dialog,
   DialogContent,
@@ -66,7 +67,8 @@ import {
   DataTablePhoneMenuItems,
   DataTableEmptyState,
   DataTableTextCell,
-  keepFocusInRowMenuDialog,
+  useRowMenuDialogs,
+  dataTableRowLinkClassName,
 } from "@/components/data-table"
 import {
   AddFirstRelayButton,
@@ -317,7 +319,7 @@ const AppTable = React.memo(function AppTable({
         ),
         meta: dataTableColumnMeta(
           { width: { base: "1.75rem" } },
-          { cellClassName: "px-0", headerClassName: "px-0" }
+          { cellClassName: "relative z-10 px-0", headerClassName: "px-0" }
         ),
       }),
       appTableColumnHelper.accessor((app) => app.name, {
@@ -333,7 +335,10 @@ const AppTable = React.memo(function AppTable({
               // other app shares its short ID.
               params={{ appId: app.id }}
               preload="intent"
-              className="group/app-link flex min-h-14 w-full min-w-0 items-center outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
+              className={cn(
+                dataTableRowLinkClassName,
+                "group/app-link flex min-h-14 w-full min-w-0 items-center outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
+              )}
             >
               <InstanceCard
                 state={app.instanceState}
@@ -402,7 +407,10 @@ const AppTable = React.memo(function AppTable({
         ),
         meta: dataTableColumnMeta(
           { width: { base: "2.5rem", md: "7.5rem" } },
-          { cellClassName: "px-1 md:px-3", headerClassName: "px-1 md:px-3" }
+          {
+            cellClassName: "relative z-10 px-1 md:px-3",
+            headerClassName: "px-1 md:px-3",
+          }
         ),
       }),
     ])
@@ -481,6 +489,7 @@ const AppActions = React.memo(function AppActions({
   const running =
     state.phase === "ready" && state.observation.runtime === "running"
   const busy = deploy.isPending || action.isPending
+  const menu = useRowMenuDialogs()
   const canDelete = app.permissions.includes("app.delete")
   const deployDisabled = !available || !app.detail || busy || deploying
 
@@ -554,7 +563,7 @@ const AppActions = React.memo(function AppActions({
         <DropdownMenuContent
           align="end"
           className="min-w-44"
-          onCloseAutoFocus={keepFocusInRowMenuDialog}
+          onCloseAutoFocus={menu.onCloseAutoFocus}
         >
           {canManage ? (
             <DataTablePhoneMenuItems>
@@ -597,7 +606,7 @@ const AppActions = React.memo(function AppActions({
               <DropdownMenuItem
                 disabled={busy}
                 variant="destructive"
-                onSelect={() => onDelete(app)}
+                onSelect={menu.openAfterClose(() => onDelete(app))}
               >
                 <Trash2 /> Delete
               </DropdownMenuItem>
@@ -636,7 +645,7 @@ const AppLinkCell = React.memo(function AppLinkCell({
   }
   return (
     <a
-      className="type-meta block min-w-0 truncate font-mono text-foreground hover:text-primary-ink"
+      className="type-meta relative z-10 block min-w-0 truncate font-mono text-foreground hover:text-primary-ink"
       href={`https://${link}`}
       rel="noreferrer"
       target="_blank"

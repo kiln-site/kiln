@@ -8,7 +8,7 @@ import {
 } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useRouter, useRouterState } from "@tanstack/react-router"
-import { Clock3 } from "lucide-react"
+import { ChevronRight, Clock3 } from "lucide-react"
 import { Button } from "@workspace/ui/components/button"
 import {
   Tooltip,
@@ -177,34 +177,44 @@ const PendingRow = memo(function PendingRow({
               )}
               role="cell"
             >
+              <Clock3 className="mr-1 size-3.5 shrink-0" aria-hidden />
+              <span className="hidden sm:inline">Pending</span>
+            </td>
+          )
+        }
+        // The row's button covers the whole row. It sits in the actions cell,
+        // which every table shows on phones, where the status column hides.
+        if (column.id === "actions") {
+          return (
+            <td
+              key={column.id}
+              className={cn(
+                className,
+                "justify-end text-xs font-medium text-primary-ink"
+              )}
+              role="cell"
+            >
               <button
                 type="button"
                 onClick={() => onOpen(invitation.id)}
                 aria-label={`Review invitation to ${invitation.resourceName}`}
                 className="absolute inset-0 z-10 rounded-none outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
               />
-              <Clock3 className="mr-1 size-3.5 shrink-0" aria-hidden />
-              <span className="hidden sm:inline">Pending</span>
+              <span aria-hidden className="hidden md:inline">
+                Review invitation
+              </span>
+              <ChevronRight aria-hidden className="size-4 md:hidden" />
             </td>
           )
         }
         return (
           <td
             key={column.id ?? index}
-            className={cn(
-              className,
-              "pointer-events-none",
-              column.id === "actions" &&
-                "justify-end text-xs font-medium text-primary-ink"
-            )}
+            className={cn(className, "pointer-events-none")}
             role="cell"
             onClick={openFromDetail}
           >
-            {column.id === "actions"
-              ? "Review invitation"
-              : column.id
-                ? cells[column.id]?.(invitation)
-                : null}
+            {column.id ? cells[column.id]?.(invitation) : null}
           </td>
         )
       })}
@@ -290,7 +300,7 @@ export const PendingResourceInvitationBadge = memo(
               type="button"
               size="icon-sm"
               variant="ghost"
-              className="shrink-0 text-amber-700 hover:bg-amber-500/10 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-400 light:hover:bg-amber-500/20"
+              className="relative z-10 shrink-0 text-amber-700 hover:bg-amber-500/10 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-400 light:hover:bg-amber-500/20"
               aria-label={`Review pending invitation to ${invitation.resourceName}`}
               onClick={(event) => {
                 event.stopPropagation()

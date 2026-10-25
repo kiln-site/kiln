@@ -25,6 +25,7 @@ import {
 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
+import { cn } from "@workspace/ui/lib/utils"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -59,7 +60,8 @@ import {
   DataTableInlineActions,
   DataTablePhoneMenuItems,
   DataTableTextCell,
-  keepFocusInRowMenuDialog,
+  useRowMenuDialogs,
+  dataTableRowLinkClassName,
 } from "@/components/data-table"
 import {
   ServerDeleteDialog,
@@ -403,7 +405,7 @@ const ServerDataTable = React.memo(function ServerDataTable({
         ),
         meta: dataTableColumnMeta(
           { width: { base: "1.75rem" } },
-          { cellClassName: "px-0", headerClassName: "px-0" }
+          { cellClassName: "relative z-10 px-0", headerClassName: "px-0" }
         ),
       }),
       serverTableColumnHelper.accessor(({ server }) => server.name, {
@@ -418,7 +420,10 @@ const ServerDataTable = React.memo(function ServerDataTable({
                 to="/server/$serverId/console"
                 params={{ serverId: routeIdentifier }}
                 preload="intent"
-                className="group/server-link flex min-h-14 min-w-0 flex-1 items-center px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
+                className={cn(
+                  dataTableRowLinkClassName,
+                  "group/server-link flex min-h-14 min-w-0 flex-1 items-center px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
+                )}
               >
                 <InstanceCard
                   state={server.instanceState}
@@ -515,7 +520,7 @@ const ServerDataTable = React.memo(function ServerDataTable({
         meta: dataTableColumnMeta(
           { width: { base: "2.5rem", md: "9.5rem" } },
           {
-            cellClassName: "px-1 md:px-3",
+            cellClassName: "relative z-10 px-1 md:px-3",
             headerClassName: "px-1 md:px-3",
           }
         ),
@@ -579,6 +584,7 @@ const ServerActions = React.memo(function ServerActions({
   const deleteEnabled =
     server.instanceState.phase === "ready" &&
     server.instanceState.observation.reachability === "connected"
+  const menu = useRowMenuDialogs()
   const deleteServer = () =>
     onDelete({
       backupAvailable:
@@ -640,7 +646,7 @@ const ServerActions = React.memo(function ServerActions({
         <DropdownMenuContent
           align="end"
           className="min-w-44"
-          onCloseAutoFocus={keepFocusInRowMenuDialog}
+          onCloseAutoFocus={menu.onCloseAutoFocus}
         >
           <DataTablePhoneMenuItems>
             <DropdownMenuItem asChild>
@@ -677,7 +683,7 @@ const ServerActions = React.memo(function ServerActions({
               <DropdownMenuItem
                 disabled={!deleteEnabled}
                 variant="destructive"
-                onSelect={deleteServer}
+                onSelect={menu.openAfterClose(deleteServer)}
               >
                 <Trash2 /> Delete
               </DropdownMenuItem>

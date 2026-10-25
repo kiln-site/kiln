@@ -30,6 +30,7 @@ import {
 
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
+import { cn } from "@workspace/ui/lib/utils"
 import {
   Dialog,
   DialogContent,
@@ -66,7 +67,8 @@ import {
   DataTablePhoneMenuItems,
   DataTableEmptyState,
   DataTableTextCell,
-  keepFocusInRowMenuDialog,
+  useRowMenuDialogs,
+  dataTableRowLinkClassName,
 } from "@/components/data-table"
 import { CopyIdentifierMenuItem } from "@/components/copy-identifier-menu-item"
 import {
@@ -375,7 +377,7 @@ const DatabaseTable = React.memo(function DatabaseTable({
         ),
         meta: dataTableColumnMeta(
           { width: { base: "1.75rem" } },
-          { cellClassName: "px-0", headerClassName: "px-0" }
+          { cellClassName: "relative z-10 px-0", headerClassName: "px-0" }
         ),
       }),
       databaseTableColumnHelper.accessor((database) => database.name, {
@@ -392,7 +394,10 @@ const DatabaseTable = React.memo(function DatabaseTable({
                 // no other database shares its short ID.
                 params={{ databaseId: database.id }}
                 preload="intent"
-                className="group/database-link flex min-h-14 min-w-0 flex-1 items-center outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
+                className={cn(
+                  dataTableRowLinkClassName,
+                  "group/database-link flex min-h-14 min-w-0 flex-1 items-center outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
+                )}
               >
                 <InstanceCard
                   state={database.instanceState}
@@ -452,7 +457,7 @@ const DatabaseTable = React.memo(function DatabaseTable({
         meta: dataTableColumnMeta(
           { width: { base: "2.5rem", md: "9.5rem" } },
           {
-            cellClassName: "px-1 md:px-3",
+            cellClassName: "relative z-10 px-1 md:px-3",
             headerClassName: "px-1 md:px-3",
           }
         ),
@@ -563,7 +568,22 @@ const DatabaseActions = React.memo(function DatabaseActions({
   const canReadCredentials =
     can("database.credentials.read") && database.hasCredentials
   const canConnect = can("database.network.write")
+  const menu = useRowMenuDialogs()
+  const menuTriggerRef = React.useRef<HTMLButtonElement>(null)
   const [networkOpen, setNetworkOpen] = React.useState(false)
+  // On phones the picker's own button is hidden, so when the menu opened it,
+  // focus goes back to the menu's button.
+  const networkFromMenuRef = React.useRef(false)
+  const openNetworkFromMenu = () => {
+    networkFromMenuRef.current = true
+    setNetworkOpen(true)
+  }
+  const returnNetworkFocus = React.useCallback((event: Event) => {
+    if (!networkFromMenuRef.current) return
+    networkFromMenuRef.current = false
+    event.preventDefault()
+    menuTriggerRef.current?.focus()
+  }, [])
   const showCredentials = () => onDialog({ kind: "credentials", database })
   const deleteDatabase = () => onDialog({ kind: "delete", database })
 
@@ -582,6 +602,7 @@ const DatabaseActions = React.memo(function DatabaseActions({
           <DatabaseNetworkPicker
             database={database}
             open={networkOpen}
+            onCloseAutoFocus={returnNetworkFocus}
             onOpenChange={setNetworkOpen}
           />
         ) : null}
@@ -609,6 +630,7 @@ const DatabaseActions = React.memo(function DatabaseActions({
           <TooltipTrigger asChild>
             <DropdownMenuTrigger asChild>
               <Button
+                ref={menuTriggerRef}
                 aria-label={`More actions for ${database.name}`}
                 disabled={busy}
                 size="icon-sm"
@@ -628,17 +650,21 @@ const DatabaseActions = React.memo(function DatabaseActions({
         <DropdownMenuContent
           align="end"
           className="min-w-44"
-          onCloseAutoFocus={keepFocusInRowMenuDialog}
+          onCloseAutoFocus={menu.onCloseAutoFocus}
         >
           {canReadCredentials || canConnect ? (
             <DataTablePhoneMenuItems>
               {canReadCredentials ? (
-                <DropdownMenuItem onSelect={showCredentials}>
+                <DropdownMenuItem
+                  onSelect={menu.openAfterClose(showCredentials)}
+                >
                   <KeyRound /> Credentials
                 </DropdownMenuItem>
               ) : null}
               {canConnect ? (
-                <DropdownMenuItem onSelect={() => setNetworkOpen(true)}>
+                <DropdownMenuItem
+                  onSelect={menu.openAfterClose(openNetworkFromMenu)}
+                >
                   <Network /> Connect game servers
                 </DropdownMenuItem>
               ) : null}
@@ -674,7 +700,9 @@ const DatabaseActions = React.memo(function DatabaseActions({
           ) : null}
           {canImport ? (
             <DropdownMenuItem
-              onSelect={() => onDialog({ kind: "import", database })}
+              onSelect={menu.openAfterClose(() =>
+                onDialog({ kind: "import", database })
+              )}
             >
               <Upload /> Import SQL
             </DropdownMenuItem>
@@ -688,7 +716,7 @@ const DatabaseActions = React.memo(function DatabaseActions({
               <DropdownMenuItem
                 disabled={busy}
                 variant="destructive"
-                onSelect={deleteDatabase}
+                onSelect={menu.openAfterClose(deleteDatabase)}
               >
                 <Trash2 /> Delete
               </DropdownMenuItem>
