@@ -35,7 +35,7 @@ import {
   InfoSection,
 } from "@/components/info-page"
 import { useUptime } from "@/components/resource-meters"
-import { UsageBar, percentOf } from "@/components/usage-bar"
+import { UsageBar } from "@/components/usage-bar"
 import { formatBytes } from "@/lib/format-bytes"
 import {
   appConfigQueryOptions,
@@ -343,9 +343,8 @@ const ContainerLimits = React.memo(function ContainerLimits({
         detail={disk ? `of ${formatBytes(disk.nodeTotalBytes)}` : undefined}
         indicatorClassName="[&_[data-slot=progress-indicator]]:bg-emerald-400/80"
         label="Disk"
-        percent={
-          disk ? percentOf(disk.nodeUsedBytes, disk.nodeTotalBytes) : undefined
-        }
+        used={disk?.nodeUsedBytes}
+        total={disk?.nodeTotalBytes}
         title="The node's disk, shared with everything else on it"
         value={disk ? `${formatBytes(disk.nodeUsedBytes)} used` : "—"}
       />
@@ -375,11 +374,8 @@ function LimitBar({
       detail={limit === null ? undefined : detail}
       indicatorClassName={indicatorClassName}
       label={label}
-      percent={
-        limit === null || limit === undefined || total === undefined
-          ? undefined
-          : percentOf(limit, total)
-      }
+      used={limit ?? undefined}
+      total={total}
       value={limit === undefined ? "—" : value(limit)}
     />
   )

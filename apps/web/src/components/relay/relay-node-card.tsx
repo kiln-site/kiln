@@ -5,7 +5,7 @@ import { Server } from "lucide-react"
 import { InfoCopyValue, InfoFact, InfoRailCard } from "@/components/info-page"
 import { useRelayLiveStatus } from "@/components/relay/relay-presentation"
 import { useUptime } from "@/components/resource-meters"
-import { UsageBar, percentOf } from "@/components/usage-bar"
+import { UsageBar } from "@/components/usage-bar"
 import { formatBytes } from "@/lib/format-bytes"
 import {
   relayNodeReadingsQueryOptions,
@@ -139,15 +139,21 @@ const RelayNodeUsage = React.memo(function RelayNodeUsage({
   // A paused or unreachable Relay keeps its last poll in the cache; don't
   // present it as current.
   const reading = connected ? data : null
+  // Node load is already normalized by the Relay. Display it in the same
+  // units as container CPU (100% per core), then scale against all cores.
+  const cpuUsed = reading
+    ? reading.cpu.loadPercent * reading.cpu.cores
+    : undefined
 
   return (
     <div className="flex flex-col gap-3 py-3">
       <UsageBar
         label="CPU"
         title="Load over the last minute, against the node's cores"
-        value={reading ? `${Math.round(reading.cpu.loadPercent)}%` : "—"}
+        value={cpuUsed === undefined ? "—" : `${Math.round(cpuUsed)}%`}
         detail={reading ? `${reading.cpu.cores} cores` : undefined}
-        percent={reading?.cpu.loadPercent}
+        used={cpuUsed}
+        total={reading ? reading.cpu.cores * 100 : undefined}
         indicatorClassName="[&_[data-slot=progress-indicator]]:bg-sky-400/85"
       />
       <UsageBar
@@ -156,11 +162,8 @@ const RelayNodeUsage = React.memo(function RelayNodeUsage({
         detail={
           reading ? `of ${formatBytes(reading.memory.totalBytes)}` : undefined
         }
-        percent={
-          reading
-            ? percentOf(reading.memory.usedBytes, reading.memory.totalBytes)
-            : undefined
-        }
+        used={reading?.memory.usedBytes}
+        total={reading?.memory.totalBytes}
         indicatorClassName="[&_[data-slot=progress-indicator]]:bg-violet-400/85"
       />
       <UsageBar
@@ -169,11 +172,8 @@ const RelayNodeUsage = React.memo(function RelayNodeUsage({
         detail={
           reading ? `of ${formatBytes(reading.storage.totalBytes)}` : undefined
         }
-        percent={
-          reading
-            ? percentOf(reading.storage.usedBytes, reading.storage.totalBytes)
-            : undefined
-        }
+        used={reading?.storage.usedBytes}
+        total={reading?.storage.totalBytes}
         indicatorClassName="[&_[data-slot=progress-indicator]]:bg-emerald-400/80"
       />
     </div>

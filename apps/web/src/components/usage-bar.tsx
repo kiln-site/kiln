@@ -7,18 +7,25 @@ export function UsageBar({
   detail,
   indicatorClassName,
   label,
-  percent,
   title,
+  total,
+  used,
   value,
 }: {
   detail?: string
   // Colors the bar, as a class on the progress root.
   indicatorClassName: string
   label: string
-  percent: number | undefined
   title?: string
+  // Usage and capacity use the same units. For CPU, 100% is one core.
+  total: number | undefined
+  used: number | undefined
   value: string
 }) {
+  const percent =
+    used !== undefined && total !== undefined && total > 0
+      ? (used / total) * 100
+      : 0
   return (
     <div title={title}>
       <div className="flex items-baseline justify-between gap-2 text-xs">
@@ -33,12 +40,8 @@ export function UsageBar({
       <Progress
         aria-label={label}
         className={cn("mt-1.5 h-1.5", indicatorClassName)}
-        value={Math.min(100, Math.max(0, percent ?? 0))}
+        value={Math.min(100, Math.max(0, percent))}
       />
     </div>
   )
-}
-
-export function percentOf(used: number, total: number): number {
-  return total > 0 ? (used / total) * 100 : 0
 }

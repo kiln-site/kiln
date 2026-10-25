@@ -1980,6 +1980,7 @@ export const relayNodeSchema = z.object({
   bootedAt: z.string().datetime().optional(),
   cpu: z.object({
     cores: z.number().int().positive(),
+    /** One-minute load as a percentage of all cores, not 100% per core. */
     loadPercent: z.number().min(0),
     /**
      * Like "AMD EPYC 7763 64-Core Processor". Absent when the CPU doesn't
