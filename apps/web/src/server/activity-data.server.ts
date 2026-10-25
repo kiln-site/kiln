@@ -119,10 +119,10 @@ export async function getActivityForUser(
   const listAudits = (
     relay: PersistedRelay,
     query: object,
-    timeoutMs = 10_000
+    signal?: AbortSignal
   ) =>
-    relayRpc(relay, "relay.audit.list", query, timeoutMs).then((value) =>
-      z.array(relayAuditRecordSchema).parse(value)
+    relayRpc(relay, "relay.audit.list", query, 10_000, undefined, signal).then(
+      (value) => z.array(relayAuditRecordSchema).parse(value)
     )
   const relayById = new Map(relays.map((relay) => [relay.id, relay]))
   // Each inherited server's history is asked for up to when its copies
@@ -185,15 +185,14 @@ export async function getActivityForUser(
           relay: PersistedRelay
         }> = []
         if (!relay) return answered
-        // Within one request's time in all: once a Relay fails or the time
-        // is up, the rest count as unavailable rather than holding up the
-        // whole answer.
-        const deadline = Date.now() + 10_000
+        // Within one request's time in all, connecting included: once a
+        // Relay fails or the time is up, the rest count as unavailable
+        // rather than holding up the whole answer.
+        const budget = AbortSignal.timeout(10_000)
         let reachable = true
         for (const query of queries) {
-          const remaining = deadline - Date.now()
           const [records] =
-            reachable && remaining > 0
+            reachable && !budget.aborted
               ? await Promise.allSettled([
                   listAudits(
                     relay,
@@ -202,7 +201,7 @@ export async function getActivityForUser(
                       instanceIds: [query.instanceId],
                       to: Math.min(baseQuery.to ?? query.until, query.until),
                     },
-                    remaining
+                    budget
                   ),
                 ])
               : [null]
