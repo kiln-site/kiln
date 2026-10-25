@@ -277,7 +277,9 @@ function printStack() {
 
 function setupEnvironment() {
   if (!existsSync(environmentFile)) {
-    const example = resolve(primaryRoot, ".env.dev.example")
+    // This checkout's template: the primary checkout may be on another
+    // revision. The .env it makes is shared.
+    const example = resolve(worktreeRoot, ".env.dev.example")
     if (!existsSync(example)) fail(`Missing environment template: ${example}`)
     writeFileSync(environmentFile, readFileSync(example, "utf8"), {
       mode: 0o600,

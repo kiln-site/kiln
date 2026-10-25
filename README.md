@@ -45,6 +45,10 @@ docker compose up -d
 docker exec kiln-relay kiln-relay platform setup-url
 ```
 
+If you started Kiln from an older `compose.yaml`, which ran each service
+itself, read [From Kiln's old compose.yaml](docs/self-hosting.md#from-kilns-old-composeyaml)
+first: this one isn't an upgrade of that stack.
+
 Either way, the Relay sets up and updates everything else, so set Kiln up
 one of these two ways rather than running Hearth, its database, or a Relay
 by hand. See [Self-hosting](docs/self-hosting.md) for how it works, its

@@ -346,15 +346,15 @@ managed elsewhere: its logs, but no restart or shell. These need a Relay with
 
 Kiln once documented running Hearth, its database, its cache, and a Relay as
 separate Compose services or Coolify resources. Set up new installs with the
-installer or `compose.yaml` instead, which run one platform Relay that sets up
-and updates the rest. Installs made the old way keep working, and Kiln's own pages (the **Kiln** button beside
-**Updates** in Infrastructure) show their Hearth, database, cache, and any
-Traefik in front of them read-only: their logs, but no restarts or shells.
+installer or `compose.yaml` instead, which run one platform Relay that sets
+up and updates the rest. Installs made the old way keep working, and Kiln's
+own pages (the **Kiln** button beside **Updates** in Infrastructure) show
+their Hearth, database, cache, and any Traefik in front of them read-only:
+their logs, but no restarts or shells.
 
 A Relay on the same Docker host finds them by Kiln's labels
 (`io.kiln.installation` and `io.kiln.resource`, which Kiln's old Compose file
-set), or
-else from Hearth itself. Each time Hearth connects it names the container it
+set), or else from Hearth itself. Each time Hearth connects it names the container it
 runs in, proven with an HMAC keyed by its `BETTER_AUTH_SECRETS`, which the
 Relay checks against that container's environment. The Relay then finds the
 database and cache that Hearth's `DB_HOST` and `CACHE_HOST` name on a Docker
@@ -364,15 +364,36 @@ same containers. The Relay saves which ones they were, so it can still
 restore a backup after Coolify removes Hearth's container to stop it, and it
 refuses while any container with Hearth's `BETTER_AUTH_SECRETS` runs.
 
-To move one under a platform Relay:
+### From Kiln's old compose.yaml
+
+`compose.yaml` used to be that stack, and now runs one platform Relay
+instead, so it isn't an upgrade of an install started from the old file.
+Pulling it and running `docker compose up -d` leaves the old stack running:
+the new Relay is a service of another name (`kiln-relay`), and it stops on
+the ports the old one holds. Remove the container it made with
+`docker rm -f kiln-relay`, then either:
+
+- **Keep running it as before.** Save the old file and use it from now on:
+
+  ```sh
+  git show 18b90d3:compose.yaml > compose.legacy.yaml
+  docker compose -f compose.legacy.yaml up -d
+  ```
+
+- **Move it under a platform Relay**, as below.
+
+### Moving under a platform Relay
 
 1. Create a platform backup of it, and note its `KILN_INSTALLATION_ID`,
    `BETTER_AUTH_SECRETS`, and `KILN_PLATFORM_BACKUP_KEY`. Hearth encrypts
    saved credentials with `BETTER_AUTH_SECRETS`, so the new Hearth needs the
    same value to read them.
 2. Start a platform Relay on a fresh data volume with those three variables
-   set, along with `KILN_RELAY_MODE=platform` and `KILN_URL`. On its first
-   start it uses them instead of generating its own.
+   set, along with `KILN_URL`. On its first start it uses them instead of
+   generating its own. With Compose, put all four in `.env` and start
+   `compose.yaml`; the Relay reads everything in `.env`. On the same
+   machine, stop the old deployment first, since the new one needs its
+   ports.
 3. Once Hearth is up, run `kiln-relay platform stop-hearth`, restore the backup
    with `kiln-relay platform-backup restore`, and run `start-hearth`.
 4. Stop the old deployment, so two tools don't manage the same Hearth. If

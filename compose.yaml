@@ -8,13 +8,23 @@
 #   docker exec kiln-relay kiln-relay platform setup-url
 #
 # The last prints the link that creates the administrator. Add more machines
-# from Hearth's Add Relay dialog. See docs/self-hosting.md for every setting.
+# from Hearth's Add Relay dialog. Any setting in docs/self-hosting.md can go
+# in .env; the Relay reads all of it.
+#
+# Coming from Kiln's old compose.yaml, which ran Hearth, MySQL, and Valkey as
+# services of their own? This isn't an upgrade of that stack: see "From
+# Kiln's old compose.yaml" in docs/self-hosting.md first. The service isn't
+# called `relay`, so pulling this and running `docker compose up -d` leaves
+# the old stack running, and this Relay stops on a port the old one holds.
 services:
-  relay:
+  kiln-relay:
     image: ${KILN_IMAGE_PREFIX:-ghcr.io/kiln-site}/relay:${KILN_IMAGE_TAG:-latest}
     # The installer's names, so it and Kiln's recovery steps find this Relay.
     container_name: kiln-relay
     restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
     environment:
       KILN_RELAY_MODE: platform
       KILN_RELAY_CONTAINER: kiln-relay

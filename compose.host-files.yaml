@@ -4,6 +4,6 @@
 #
 #   docker compose -f compose.yaml -f compose.host-files.yaml up -d
 services:
-  relay:
+  kiln-relay:
     volumes:
       - /:/host:rw,rslave
