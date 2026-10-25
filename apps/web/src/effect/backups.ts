@@ -2008,6 +2008,25 @@ export const reserveBackupDeleteEffect = Effect.fn("backups.reserveDelete")(
     const now = yield* Clock.currentTimeMillis
     return yield* database.transaction("backup_reserve_delete", (transaction) =>
       Effect.gen(function* () {
+        // Deletes of backups sharing an archive queue on the backup it was
+        // made as, so each sees whether the others still hold it. Every read
+        // before the sharing check below locks, so that check reads after
+        // this wait rather than from an earlier snapshot.
+        const [linked] = yield* transaction.queryRows<
+          RowDataPacket & { linked_from_backup_id: string | null }
+        >(
+          `SELECT linked_from_backup_id
+             FROM ${databaseTable("backup")}
+            WHERE id = ?
+            FOR UPDATE`,
+          [input.backupId]
+        )
+        if (linked?.linked_from_backup_id) {
+          yield* transaction.queryRows<RowDataPacket>(
+            `SELECT id FROM ${databaseTable("backup")} WHERE id = ? FOR UPDATE`,
+            [linked.linked_from_backup_id]
+          )
+        }
         const rows = yield* transaction.queryRows<BackupRow>(
           `SELECT backup.id, backup.relay_id, backup.target_kind,
                   backup.target_id, backup.storage_id, backup.object_key,
