@@ -138,8 +138,6 @@ export interface SecurityOverview {
   summary: SecuritySummary
   targets: Array<SecurityTarget & { targetKey: string }>
   findings: Array<SecurityFindingSummary>
-  /** Whether more findings matched than `findings` holds. */
-  truncated: boolean
   /** Scopes the viewer may scan again. */
   scannable: Array<string>
 }

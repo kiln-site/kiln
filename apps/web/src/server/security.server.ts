@@ -36,10 +36,6 @@ const viewPermissions = {
   relay: "relay.read",
 } as const satisfies Record<SecurityTarget["resourceType"], AccessPermission>
 
-// Rows are virtualized; this keeps one response small for the largest
-// installs.
-const findingLimit = 2_000
-
 // What the user may see and scan, from one read of their grants.
 async function securityAccess(user: AuthenticatedUser) {
   const admin = isPlatformAdmin(user)
@@ -87,7 +83,7 @@ function inScope(
 async function visibleFindings(
   user: AuthenticatedUser,
   scope: string | null,
-  options: { limit: number; own?: boolean } = { limit: findingLimit }
+  options: { limit?: number; own?: boolean } = {}
 ) {
   const access = await securityAccess(user)
   const targets = (
@@ -113,19 +109,21 @@ async function visibleFindings(
     inventory.targetKeys.push(target.targetKey)
     inventories.set(key, inventory)
   }
-  const { findings, summary, truncated } = await runAppEffect(
+  const { findings, summary } = await runAppEffect(
     "security.loadFindings",
     loadSecurityFindingsEffect([...inventories.values()], options.limit)
   )
-  return { access, findings, summary, targets, truncated }
+  return { access, findings, summary, targets }
 }
 
 export async function getSecurityOverviewHandler(input: {
   scope: string | null
 }): Promise<SecurityOverview> {
   const user = await requireEligibleResourceUser()
-  const { access, findings, summary, targets, truncated } =
-    await visibleFindings(user, input.scope)
+  const { access, findings, summary, targets } = await visibleFindings(
+    user,
+    input.scope
+  )
   return {
     findings,
     resources: await securityResources(targets),
@@ -134,7 +132,6 @@ export async function getSecurityOverviewHandler(input: {
       ...new Set(targets.filter(access.canScan).map((target) => target.scope)),
     ],
     targets: targets.map(({ sbomKey: _sbomKey, ...target }) => target),
-    truncated,
   }
 }
 

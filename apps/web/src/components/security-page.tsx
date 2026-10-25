@@ -9,6 +9,7 @@ import {
 } from "@tanstack/react-query"
 import {
   ExternalLink,
+  ListFilter,
   LoaderCircle,
   ScanSearch,
   ShieldCheck,
@@ -16,6 +17,13 @@ import {
 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@workspace/ui/components/select"
 import { showToast } from "@workspace/ui/components/sonner"
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -28,6 +36,7 @@ import {
   DataTableToolbar,
   DataTableWorkspace,
 } from "@/components/data-table-workspace"
+import { InfraSyncButton } from "@/components/infra-sync-button"
 import { InstanceCard } from "@/components/instance-card"
 import { RelativeTime } from "@/components/relative-time"
 import { SeverityBadge, severityTone } from "@/components/security-severity"
@@ -43,8 +52,10 @@ import {
 import { createDataTableSearchStore } from "@/lib/data-table-search"
 import type { DataTableSource } from "@/lib/data-table-source"
 import {
+  securitySeverities,
   securitySeverityLabels,
   severityRank,
+  type SecuritySeverity,
   type SecurityFindingSummary,
   type SecurityOverview,
   type SecurityResource,
@@ -477,11 +488,13 @@ const FindingsSection = React.memo(function FindingsSection({
   scope: string | null
 }) {
   const [searchStore] = React.useState(createDataTableSearchStore)
+  const [severity, setSeverity] = React.useState<SeverityFilter>("all")
   const rows = React.useMemo(() => {
     const targets = new Map(
       overview.targets.map((target) => [target.targetKey, target])
     )
     return overview.findings.flatMap((finding) => {
+      if (severity !== "all" && finding.severity !== severity) return []
       const byResource = new Map<string, Target>()
       for (const key of finding.targets) {
         const target = targets.get(key)
@@ -496,33 +509,26 @@ const FindingsSection = React.memo(function FindingsSection({
         target,
       }))
     })
-  }, [overview.findings, overview.targets, resources])
+  }, [overview.findings, overview.targets, resources, severity])
   const source = React.useMemo(
     (): DataTableSource<FindingRowData> => ({
       body: { kind: "ready" },
       refreshing: false,
-      resetKey: scope ?? "all",
+      resetKey: `${scope ?? "all"}:${severity}`,
       rows,
     }),
-    [rows, scope]
+    [rows, scope, severity]
   )
   const checked = overview.targets.some((target) => target.status === "checked")
   return (
     <DataTableWorkspace
       className="h-[min(44rem,75dvh)] flex-none xl:h-auto xl:min-h-[20rem] xl:flex-1"
-      before={
-        <div className="flex items-baseline gap-2 border-b px-4 py-3">
-          <h2 className="type-section-title">Vulnerabilities</h2>
-          {overview.truncated ? (
-            <p className="type-meta truncate text-muted-foreground">
-              The {overview.findings.length.toLocaleString()} most urgent;
-              choose an instance to see all of its own.
-            </p>
-          ) : null}
-        </div>
-      }
       toolbar={
         <DataTableToolbar
+          controls={
+            <SeveritySelect value={severity} onValueChange={setSeverity} />
+          }
+          leading={<SecurityRefreshButton label="Refresh vulnerabilities" />}
           search={{
             ariaLabel: "Search vulnerabilities",
             closeMobileWhenEmpty: true,
@@ -538,8 +544,8 @@ const FindingsSection = React.memo(function FindingsSection({
         emptyState={({ searchActive }) => (
           <DataTableEmptyState
             description={
-              searchActive
-                ? "Try a CVE, package, or instance."
+              searchActive || severity !== "all"
+                ? "Try a CVE, package, instance, or another severity."
                 : checked
                   ? "Nothing Kiln has checked has a known vulnerability."
                   : "Kiln is still checking what it inventoried."
@@ -548,8 +554,8 @@ const FindingsSection = React.memo(function FindingsSection({
               <ShieldCheck className="size-6 text-muted-foreground/45 light:text-muted-foreground/72" />
             }
             title={
-              searchActive
-                ? "No vulnerabilities match your search"
+              searchActive || severity !== "all"
+                ? "No vulnerabilities match"
                 : "No known vulnerabilities"
             }
           />
@@ -559,6 +565,69 @@ const FindingsSection = React.memo(function FindingsSection({
       />
     </DataTableWorkspace>
   )
+})
+
+type SeverityFilter = SecuritySeverity | "all"
+
+const severityFilterOptions: ReadonlyArray<{
+  label: string
+  value: SeverityFilter
+}> = [
+  { label: "All severities", value: "all" },
+  ...[...securitySeverities].reverse().map((severity) => ({
+    label: securitySeverityLabels[severity],
+    value: severity,
+  })),
+]
+
+// Narrows the vulnerabilities to one severity.
+const SeveritySelect = React.memo(function SeveritySelect({
+  onValueChange,
+  value,
+}: {
+  onValueChange: (value: SeverityFilter) => void
+  value: SeverityFilter
+}) {
+  return (
+    <Select
+      value={value}
+      onValueChange={(next) => onValueChange(next as SeverityFilter)}
+    >
+      <SelectTrigger
+        aria-label="Filter by severity"
+        className="h-9 w-auto min-w-36 gap-1.5"
+      >
+        <ListFilter className="size-4 text-muted-foreground" />
+        <SelectValue>
+          {
+            severityFilterOptions.find((option) => option.value === value)
+              ?.label
+          }
+        </SelectValue>
+      </SelectTrigger>
+      <SelectContent align="end">
+        {severityFilterOptions.map((option) => (
+          <SelectItem key={option.value} value={option.value}>
+            {option.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  )
+})
+
+// Loads what Hearth knows again, as when the page may be out of date.
+const SecurityRefreshButton = React.memo(function SecurityRefreshButton({
+  label,
+}: {
+  label: string
+}) {
+  const queryClient = useQueryClient()
+  const refresh = React.useCallback(
+    () => queryClient.invalidateQueries({ queryKey: securityQueryKeys.all }),
+    [queryClient]
+  )
+  return <InfraSyncButton label={label} sync={refresh} />
 })
 
 // The vulnerability's ID, linking to its advisory.
@@ -758,6 +827,7 @@ const TargetsRail = React.memo(function TargetsRail({
         className="h-[28rem] flex-none rounded-none bg-background/45 xl:h-auto xl:min-h-[16rem] xl:flex-1"
         toolbar={
           <DataTableToolbar
+            leading={<SecurityRefreshButton label="Refresh inventories" />}
             search={{
               ariaLabel: "Search inventories",
               id: "security-target-search",

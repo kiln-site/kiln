@@ -646,10 +646,11 @@ export const loadSecurityFindingsEffect = Effect.fn("security.loadFindings")(
       readonly sbomKey: string
       readonly targetKeys: ReadonlyArray<string>
     }>,
-    limit: number
+    // Only the most urgent, as a resource's page shows; all without one.
+    limit?: number
   ) {
     if (!inventories.length) {
-      return { findings: [], summary: emptySecuritySummary(), truncated: false }
+      return { findings: [], summary: emptySecuritySummary() }
     }
     const database = yield* Database
     const pairs = inventories.flatMap((inventory) => [
@@ -697,8 +698,9 @@ export const loadSecurityFindingsEffect = Effect.fn("security.loadFindings")(
            ON v.id = f.vulnerability_id
         WHERE (f.relay_id, f.sbom_key) IN (${inventories.map(() => "(?, ?)").join(", ")})
         ORDER BY COALESCE(v.known_exploited, 0) DESC, f.severity DESC,
-                 f.fix_state = 'fixed' DESC, f.risk DESC, f.vulnerability_id
-        LIMIT ${Math.max(1, Math.min(20_000, limit * 8))}`,
+                 f.fix_state = 'fixed' DESC, f.risk DESC, f.vulnerability_id${
+                   limit === undefined ? "" : ` LIMIT ${Math.max(1, limit * 8)}`
+                 }`,
       inventories.flatMap((inventory) => [inventory.relayId, inventory.sbomKey])
     )
     const targets = new Map(
@@ -738,9 +740,8 @@ export const loadSecurityFindingsEffect = Effect.fn("security.loadFindings")(
     }
     const all = [...findings.values()]
     return {
-      findings: all.slice(0, limit),
+      findings: limit === undefined ? all : all.slice(0, limit),
       summary,
-      truncated: all.length > limit || rows.length >= limit * 8,
     }
   }
 )
