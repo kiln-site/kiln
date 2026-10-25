@@ -15,7 +15,7 @@ export function WorkspacePage({
   summary?: ReactNode
 }) {
   return (
-    <div className="mx-auto flex h-full min-h-[34rem] w-full max-w-[90rem] flex-col gap-3 px-3 pb-3 sm:px-5 sm:pb-5 xl:flex-row">
+    <div className="mx-auto flex h-full min-h-[34rem] w-full max-w-[90rem] flex-col gap-3 px-2 pb-3 sm:px-5 sm:pb-5 xl:flex-row">
       <div className="flex min-h-[28rem] min-w-0 flex-1 flex-col xl:min-h-0">
         {summary}
         {children}

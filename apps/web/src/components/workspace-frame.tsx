@@ -17,7 +17,8 @@ export function WorkspaceFrame({
       <div
         data-slot="workspace-surface"
         className={cn(
-          "relative isolate mx-2 mt-2 flex min-h-0 flex-1 overflow-hidden border border-border/80 bg-card/30",
+          // Phones use the full width; the surface keeps its top edge.
+          "relative isolate mx-2 mt-2 flex min-h-0 flex-1 overflow-hidden border border-border/80 bg-card/30 max-md:mx-0 max-md:border-x-0",
           surfaceClassName
         )}
       >

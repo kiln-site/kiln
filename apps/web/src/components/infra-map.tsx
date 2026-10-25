@@ -68,7 +68,7 @@ export function InfraOverviewPage({
     replaceDataTableUrlSearch(infraMapScopeKey(next), "scope")
   }, [])
   return (
-    <div className="mx-auto flex h-full min-h-[34rem] w-full max-w-[90rem] flex-col px-3 pb-3 sm:px-5 sm:pb-5">
+    <div className="mx-auto flex h-full min-h-[34rem] w-full max-w-[90rem] flex-col px-2 pb-3 sm:px-5 sm:pb-5">
       <InfraMap
         includeDomains={includeDomains}
         scope={scope}
@@ -252,24 +252,20 @@ const InfraMapScopePicker = React.memo(function InfraMapScopePicker({
 }) {
   const options = React.useMemo(() => {
     return [
-      ...data.relays.map(
-        (relay): ServerPickerOption<ScopeKind> => ({
-          id: relay.id,
-          kind: "relay",
-          name: relay.name,
-          relayId: relay.id,
-          relayName: relay.name,
-        })
-      ),
-      ...data.resources.map(
-        (resource): ServerPickerOption<ScopeKind> => ({
-          id: resource.id,
-          kind: resource.kind,
-          name: resource.name,
-          relayId: resource.relayId,
-          relayName: resource.relayName,
-        })
-      ),
+      ...data.relays.map((relay): ServerPickerOption<ScopeKind> => ({
+        id: relay.id,
+        kind: "relay",
+        name: relay.name,
+        relayId: relay.id,
+        relayName: relay.name,
+      })),
+      ...data.resources.map((resource): ServerPickerOption<ScopeKind> => ({
+        id: resource.id,
+        kind: resource.kind,
+        name: resource.name,
+        relayId: resource.relayId,
+        relayName: resource.relayName,
+      })),
     ]
   }, [data.relays, data.resources])
   const selected = React.useMemo(() => {
@@ -354,44 +350,38 @@ function directoryResources(
   directory: ReturnType<typeof useDirectory>
 ): Array<InfraMapResource> {
   return [
-    ...directory.servers.map(
-      (server): InfraMapResource => ({
-        key: resourceKey("server", server.relayId, server.id),
-        kind: "server",
-        id: server.id,
-        relayId: server.relayId,
-        relayName: server.relayName,
-        name: server.name,
-        meta: server.connectAddress || server.game,
-        routeId: server.routeId,
-        brickId: server.brickId,
-        implementation: server.implementation,
-      })
-    ),
-    ...directory.apps.map(
-      (app): InfraMapResource => ({
-        key: resourceKey("app", app.relayId, app.id),
-        kind: "app",
-        id: app.id,
-        relayId: app.relayId,
-        relayName: app.relayName,
-        name: app.name,
-        meta: app.shortId,
-        routeId: app.id,
-      })
-    ),
-    ...directory.databases.map(
-      (database): InfraMapResource => ({
-        key: resourceKey("database", database.relayId, database.id),
-        kind: "database",
-        id: database.id,
-        relayId: database.relayId,
-        relayName: database.relayName,
-        name: database.name,
-        meta: `${engineLabel(database.engine)} · ${database.shortId}`,
-        routeId: database.id,
-      })
-    ),
+    ...directory.servers.map((server): InfraMapResource => ({
+      key: resourceKey("server", server.relayId, server.id),
+      kind: "server",
+      id: server.id,
+      relayId: server.relayId,
+      relayName: server.relayName,
+      name: server.name,
+      meta: server.connectAddress || server.game,
+      routeId: server.routeId,
+      brickId: server.brickId,
+      implementation: server.implementation,
+    })),
+    ...directory.apps.map((app): InfraMapResource => ({
+      key: resourceKey("app", app.relayId, app.id),
+      kind: "app",
+      id: app.id,
+      relayId: app.relayId,
+      relayName: app.relayName,
+      name: app.name,
+      meta: app.shortId,
+      routeId: app.id,
+    })),
+    ...directory.databases.map((database): InfraMapResource => ({
+      key: resourceKey("database", database.relayId, database.id),
+      kind: "database",
+      id: database.id,
+      relayId: database.relayId,
+      relayName: database.relayName,
+      name: database.name,
+      meta: `${engineLabel(database.engine)} · ${database.shortId}`,
+      routeId: database.id,
+    })),
   ]
 }
 
@@ -492,7 +482,10 @@ function useAppDetails(
   })
   // Apps poll; keep unchanged details identical so the map holds still.
   const stable = React.useRef(noAppDetails)
-  if (JSON.stringify(stable.current, mapReplacer) !== JSON.stringify(details, mapReplacer))
+  if (
+    JSON.stringify(stable.current, mapReplacer) !==
+    JSON.stringify(details, mapReplacer)
+  )
     stable.current = details
   return stable.current
 }

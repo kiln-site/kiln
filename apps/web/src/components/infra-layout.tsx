@@ -23,7 +23,7 @@ export const InfraShell = React.memo(function InfraShell({
 }) {
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
-      <header className="mx-auto w-full max-w-[90rem] shrink-0 px-3 pt-3 sm:px-5">
+      <header className="mx-auto w-full max-w-[90rem] shrink-0 px-2 pt-3 sm:px-5">
         <InfraNavigation />
       </header>
       <div

@@ -232,7 +232,7 @@ export const RelaysPage = React.memo(function RelaysPage({
   }, [joinId, navigate])
 
   return (
-    <div className="mx-auto flex h-full min-h-[34rem] w-full max-w-[90rem] flex-col px-3 pb-3 sm:px-5 sm:pb-5">
+    <div className="mx-auto flex h-full min-h-[34rem] w-full max-w-[90rem] flex-col px-2 pb-3 sm:px-5 sm:pb-5">
       <DataTableWorkspace
         toolbar={
           <RelayToolbar searchStore={searchStore} onAdd={dialogStore.openAdd} />

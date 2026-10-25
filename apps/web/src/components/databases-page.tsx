@@ -182,7 +182,7 @@ export const DatabasesPage = React.memo(function DatabasesPage({
   const canCreate = data?.relays.some((relay) => relay.canCreate)
 
   return (
-    <div className="mx-auto flex h-full min-h-[34rem] w-full max-w-[90rem] flex-col px-3 pb-3 sm:px-5 sm:pb-5">
+    <div className="mx-auto flex h-full min-h-[34rem] w-full max-w-[90rem] flex-col px-2 pb-3 sm:px-5 sm:pb-5">
       <DataTableWorkspace
         toolbar={
           <DatabaseToolbar
