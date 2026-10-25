@@ -108,51 +108,54 @@ export async function getActivityForUser(
           scope && (scope.allInstances || scope.instanceIds.has(instanceId))
         )
       })
-  const enabledRelayIds = new Set(relays.map((relay) => relay.id))
-  const queryScopes = new Map(
-    [...scopes].map(([relayId, scope]) => [
-      relayId,
-      { ...scope, instanceIds: new Set(scope.instanceIds) },
-    ])
-  )
-  for (const source of inherited.values()) {
-    if (!enabledRelayIds.has(source.relayId)) continue
-    const scope = queryScopes.get(source.relayId)
-    if (scope) scope.instanceIds.add(source.instanceId)
-    else {
-      queryScopes.set(source.relayId, {
-        allInstances: false,
-        instanceIds: new Set([source.instanceId]),
-        relayAudit: false,
-      })
-    }
-  }
 
-  const visibleRelays = relays.filter((relay) => queryScopes.has(relay.id))
+  const visibleRelays = relays.filter((relay) => scopes.has(relay.id))
   const baseQuery = {
     ...(data.from ? { from: Date.parse(data.from) } : {}),
     limit: Math.min(Math.max(data.limit ?? 2_000, 1), 2_000),
     ...(data.to ? { to: Date.parse(data.to) } : {}),
   }
   const { relayRpc } = await import("@/lib/relay-connection")
-  const results = await Promise.all(
-    visibleRelays.map(async (relay) => {
-      const scope = queryScopes.get(relay.id)
-      const query =
-        scope?.allInstances === false
-          ? { ...baseQuery, instanceIds: [...scope.instanceIds] }
-          : baseQuery
-      const [auditResult, snapshotResult] = await Promise.allSettled([
-        relayRpc(relay, "relay.audit.list", query, 10_000).then((value) =>
-          z.array(relayAuditRecordSchema).parse(value)
-        ),
-        relayRpc(relay, "relay.snapshot", {}, 5_000).then((value) =>
-          relaySnapshotSchema.parse(value)
-        ),
-      ])
-      return { auditResult, relay, snapshotResult }
-    })
-  )
+  const listAudits = (relay: PersistedRelay, query: object) =>
+    relayRpc(relay, "relay.audit.list", query, 10_000).then((value) =>
+      z.array(relayAuditRecordSchema).parse(value)
+    )
+  const relayById = new Map(relays.map((relay) => [relay.id, relay]))
+  // Each inherited server's history is asked for up to when its copies
+  // finished, so what happened to it since can't crowd that out.
+  const inheritedSources = [...inherited.values()].flatMap((source) => {
+    const relay = relayById.get(source.relayId)
+    return relay ? [{ relay, source }] : []
+  })
+  const [results, inheritedResults] = await Promise.all([
+    Promise.all(
+      visibleRelays.map(async (relay) => {
+        const scope = scopes.get(relay.id)
+        const query =
+          scope?.allInstances === false
+            ? { ...baseQuery, instanceIds: [...scope.instanceIds] }
+            : baseQuery
+        const [auditResult, snapshotResult] = await Promise.allSettled([
+          listAudits(relay, query),
+          relayRpc(relay, "relay.snapshot", {}, 5_000).then((value) =>
+            relaySnapshotSchema.parse(value)
+          ),
+        ])
+        return { auditResult, relay, snapshotResult }
+      })
+    ),
+    Promise.allSettled(
+      inheritedSources.map(async ({ relay, source }) => {
+        const until = Math.max(...source.copies.map((copy) => copy.until))
+        const records = await listAudits(relay, {
+          ...baseQuery,
+          instanceIds: [source.instanceId],
+          to: Math.min(baseQuery.to ?? until, until),
+        })
+        return { records, relay, source }
+      })
+    ),
+  ])
   const available = results.flatMap((result) =>
     result.auditResult.status === "fulfilled"
       ? [{ records: result.auditResult.value, relay: result.relay }]
@@ -173,21 +176,31 @@ export async function getActivityForUser(
           }))
         : []
   )
-  const visibleAudits = available.flatMap(({ records, relay }) => {
-    const scope = scopes.get(relay.id)
-    return records.flatMap((record): Array<VisibleAudit> => {
-      if (scope && scopeAllowsAudit(scope, record)) {
-        return [{ copy: null, record, relay }]
-      }
-      const instanceId = auditInstanceId(record)
-      const source = instanceId
-        ? inherited.get(instanceKey(relay.id, instanceId))
-        : undefined
-      return source && record.occurredAt <= source.until
-        ? [{ copy: source.copy, record, relay }]
+  const visibleAudits: Array<VisibleAudit> = [
+    ...available.flatMap(({ records, relay }) => {
+      const scope = scopes.get(relay.id)
+      return scope
+        ? records.flatMap((record): Array<VisibleAudit> =>
+            scopeAllowsAudit(scope, record)
+              ? [{ copy: null, record, relay }]
+              : []
+          )
         : []
-    })
-  })
+    }),
+    // An inherited event shows once for each copy it's history of.
+    ...inheritedResults.flatMap((result) => {
+      if (result.status !== "fulfilled") return []
+      const { records, relay, source } = result.value
+      return records.flatMap((record) =>
+        source.copies.flatMap((copy): Array<VisibleAudit> =>
+          auditInstanceId(record) === source.instanceId &&
+          record.occurredAt <= copy.until
+            ? [{ copy: copy.copy, record, relay }]
+            : []
+        )
+      )
+    }),
+  ]
 
   const visibleRelayIds = visibleRelays.map((relay) => relay.id)
   const [instanceRows, userRows, appRows, databaseRows] = await Promise.all([
@@ -268,7 +281,6 @@ export async function getActivityForUser(
     return null
   }
 
-  const relayById = new Map(relays.map((relay) => [relay.id, relay]))
   const entries = visibleAudits
     .map(({ copy, record, relay: recordedRelay }) => {
       // An event of the server a copy came from, shown as the copy's.
@@ -292,7 +304,9 @@ export async function getActivityForUser(
         // Kept beside the target: connecting a database to a game server
         // targets the server but belongs in the database's activity too.
         databaseId: auditDatabaseId(record),
-        id: `${recordedRelay.id}:${record.id}`,
+        id: copy
+          ? `${recordedRelay.id}:${record.id}:${copy.relayId}:${copy.instanceId}`
+          : `${recordedRelay.id}:${record.id}`,
         label: activityLabelForAudit(record),
         occurredAt: record.occurredAt,
         permission: activityPermissionForAudit(record),
@@ -317,22 +331,15 @@ export async function getActivityForUser(
     })
     .sort((left, right) => right.occurredAt - left.occurredAt)
 
-  // Relays read only for a copy's history stay out of the person's list.
   return {
     entries,
-    relays: visibleRelays.flatMap((relay) =>
-      scopes.has(relay.id)
-        ? [
-            {
-              id: relay.id,
-              name: relay.name,
-              unavailable: unavailableRelayIds.has(relay.id),
-            },
-          ]
-        : []
-    ),
+    relays: visibleRelays.map((relay) => ({
+      id: relay.id,
+      name: relay.name,
+      unavailable: unavailableRelayIds.has(relay.id),
+    })),
     truncatedRelayIds: available.flatMap(({ records, relay }) =>
-      records.length === 2_000 && scopes.has(relay.id) ? [relay.id] : []
+      records.length === 2_000 ? [relay.id] : []
     ),
   }
 }
@@ -347,18 +354,19 @@ interface LineageRow extends RowDataPacket {
 
 interface VisibleAudit {
   /** Set for an event shown as a copy's, from the server it came from. */
-  readonly copy: InheritedActivity["copy"] | null
+  readonly copy: InheritedActivity["copies"][number]["copy"] | null
   readonly record: RelayAuditRecord
   readonly relay: PersistedRelay
 }
 
 interface InheritedActivity {
-  /** The copy its events show as. */
-  readonly copy: { readonly instanceId: string; readonly relayId: string }
   readonly instanceId: string
   readonly relayId: string
-  /** Its events up to here are the copy's history too. */
-  readonly until: number
+  /** The copies its events show as, each up to when it was made. */
+  readonly copies: ReadonlyArray<{
+    readonly copy: { readonly instanceId: string; readonly relayId: string }
+    readonly until: number
+  }>
 }
 
 // Servers copied with their history, from the server each came from.
@@ -374,8 +382,8 @@ async function listActivityLineage(): Promise<Array<LineageRow>> {
 }
 
 // The servers whose history someone sees through copies they can see,
-// keyed by server: each up to when its copy finished, or the earliest
-// such time along a copy of a copy.
+// keyed by server, with each such copy: up to when it finished, or the
+// earliest such time along a copy of a copy.
 function inheritedActivity(
   lineage: ReadonlyArray<LineageRow>,
   canSee: (relayId: string, instanceId: string) => boolean
@@ -406,13 +414,14 @@ function inheritedActivity(
       if (!source || seen.has(key)) break
       seen.add(key)
       until = Math.min(until, source.until)
-      const sourceKey = instanceKey(source.relayId, source.instanceId)
-      const known = inherited.get(sourceKey)
-      if (
-        !canSee(source.relayId, source.instanceId) &&
-        (!known || known.until < until)
-      ) {
-        inherited.set(sourceKey, { ...source, copy, until })
+      if (!canSee(source.relayId, source.instanceId)) {
+        const sourceKey = instanceKey(source.relayId, source.instanceId)
+        const known = inherited.get(sourceKey)
+        inherited.set(sourceKey, {
+          copies: [...(known?.copies ?? []), { copy, until }],
+          instanceId: source.instanceId,
+          relayId: source.relayId,
+        })
       }
       current = source
     }

@@ -411,8 +411,20 @@ export function copyInstanceAccessEffect(input: {
   return accessPolicyTransaction("access.copyInstance", (transaction) =>
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis
-      yield* lockAccessScopeEffect(transaction, fromScope)
-      const target = yield* lockAccessScopeEffect(transaction, toScope)
+      // Locked in one order whichever way the copy goes, so copies in
+      // opposite directions between two Relays queue rather than deadlock.
+      const fromFirst =
+        `${fromScope.relayId}\0${fromScope.resourceId}` <=
+        `${toScope.relayId}\0${toScope.resourceId}`
+      const first = yield* lockAccessScopeEffect(
+        transaction,
+        fromFirst ? fromScope : toScope
+      )
+      const second = yield* lockAccessScopeEffect(
+        transaction,
+        fromFirst ? toScope : fromScope
+      )
+      const target = fromFirst ? second : first
       const presets = yield* transaction.queryRows<CopiedPresetRow>(
         `SELECT id, name FROM ${databaseTable("permission_preset")}
           WHERE relay_id = ? AND resource_type = 'instance' AND resource_id = ?`,

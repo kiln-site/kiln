@@ -52,6 +52,7 @@ import {
   type InstanceDomainAssignment,
   type ManagedDomain,
 } from "@/effect/domains"
+import { Database } from "@/effect/database"
 import { ExternalServiceError } from "@/effect/errors"
 import { runAppEffect } from "@/effect/runtime"
 import { isPlatformAdmin, requireRelayPermission } from "@/lib/access-control"
@@ -557,28 +558,49 @@ export const moveInstanceDomainsEffect = Effect.fn("domains.instance.move")(
       withInstanceDomainLock(
         to.relayId,
         to.id,
-        Effect.gen(function* () {
-          const optedOut = yield* loadInstanceDomainOptOutEffect(
-            from.relayId,
-            from.instanceId
+        Effect.flatMap(Database, (database) =>
+          // All at once, so a move cut short and run again finds either
+          // nothing done or everything done.
+          database.transaction("domains.instance.move", () =>
+            Effect.gen(function* () {
+              const optedOut = yield* loadInstanceDomainOptOutEffect(
+                from.relayId,
+                from.instanceId
+              )
+              const count = yield* reassignInstanceDomainsEffect(from, {
+                instanceId: to.id,
+                relayId: to.relayId,
+              })
+              yield* setInstanceDomainOptOutEffect(
+                from.relayId,
+                from.instanceId,
+                true
+              )
+              // Run again, the old server is opted out and has nothing
+              // left to move; the new one keeps what the first run gave it.
+              if (count > 0 || !optedOut) {
+                yield* setInstanceDomainOptOutEffect(
+                  to.relayId,
+                  to.id,
+                  optedOut
+                )
+              }
+              return count
+            })
           )
-          const count = yield* reassignInstanceDomainsEffect(from, {
-            instanceId: to.id,
-            relayId: to.relayId,
-          })
-          yield* setInstanceDomainOptOutEffect(
-            from.relayId,
-            from.instanceId,
-            true
-          )
-          yield* setInstanceDomainOptOutEffect(to.relayId, to.id, optedOut)
-          return count
-        })
+        )
       )
     )
     yield* invalidateManagedDomainAddressesEffect
-    // Its records still point at the old server's address until now.
-    if (moved > 0) yield* provisionInstanceDomainEffect(to)
+    // Its records still point at the old server's address until now, also
+    // when a run cut short before this moved them and this run moved none.
+    const assigned = yield* loadInstanceDomainAssignmentsForInstanceEffect(
+      to.relayId,
+      to.id
+    )
+    if (moved > 0 || assigned.length > 0) {
+      yield* provisionInstanceDomainEffect(to)
+    }
     publishDomainChange({ instanceId: from.instanceId, relayId: from.relayId })
     publishDomainChange({ instanceId: to.id, relayId: to.relayId })
     return moved

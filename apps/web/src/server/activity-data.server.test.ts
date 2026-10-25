@@ -257,13 +257,71 @@ describeMysql("Activity permission boundary", () => {
             })),
             [
               {
-                id: "relay-a:server-a-event",
+                id: "relay-a:server-a-event:relay-b:server-copy",
                 relay: "relay-b",
                 target: "server-copy",
               },
             ]
           )
         })
+    )
+
+    it.effect("shows the shared history once for each copy", () =>
+      Effect.gen(function* () {
+        yield* seedCopy(true)
+        // A second copy of server-a, which the viewer can also see.
+        yield* insertGrant({
+          id: "second-copy-grant",
+          relayId: "relay-b",
+          resourceId: "server-copy-2",
+          resourceType: "instance",
+          userId: user.id,
+        })
+        yield* insertRows("access_selection", [
+          {
+            access_id: "second-copy-grant",
+            selection_key: "instance.read",
+            selection_kind: "permission",
+          },
+        ])
+        yield* insertInstance("relay-b", "server-copy-2", {
+          display_name: "server-copy-2",
+        })
+        yield* insertRows("server_migration", {
+          actor: JSON.stringify(user),
+          claim_generation: 1,
+          create_key: randomUUID(),
+          created_at: 1,
+          destination_instance_id: "server-copy-2",
+          destination_name: "server-copy-2",
+          destination_relay_id: "relay-b",
+          finished_at: 5,
+          id: randomUUID(),
+          mode: "duplicate",
+          options: JSON.stringify({
+            backup: null,
+            copyAccess: false,
+            keepActivity: true,
+            moveDomain: false,
+            moveWebRoutes: false,
+            stopSource: false,
+          }),
+          requested_by: user.id,
+          source_instance_id: "server-a",
+          source_name: "server-a",
+          source_relay_id: "relay-a",
+          state: "completed",
+          step: "finish",
+          updated_at: 1,
+        })
+
+        const result = yield* activityFor(user)
+
+        assert.sameMembers(
+          result.entries.map((entry) => entry.target?.id),
+          ["server-copy", "server-copy-2"]
+        )
+      })
     )
 
     it.effect(

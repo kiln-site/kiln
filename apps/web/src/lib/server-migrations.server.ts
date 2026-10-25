@@ -177,20 +177,12 @@ export const startServerMigrationEffect = Effect.fn("serverMigrations.start")(
         : "create"
     yield* database.transaction("serverMigrations.insert", (transaction) =>
       Effect.gen(function* () {
-        // One copy of a server at a time: starts queue on its row, or its
-        // Relay's for a server Hearth keeps no row for, before checking.
-        const [instance] = yield* transaction.queryRows<RowDataPacket>(
-          `SELECT 1 FROM ${databaseTable("instance")}
-            WHERE relay_id = ? AND instance_id = ?
-            FOR UPDATE`,
-          [input.source.relayId, input.source.instanceId]
+        // One copy of a server at a time: starts queue on its Relay's row,
+        // taken first as everything else that locks it does, before checking.
+        yield* transaction.queryRows<RowDataPacket>(
+          `SELECT 1 FROM ${databaseTable("relay")} WHERE id = ? FOR UPDATE`,
+          [input.source.relayId]
         )
-        if (!instance) {
-          yield* transaction.queryRows<RowDataPacket>(
-            `SELECT 1 FROM ${databaseTable("relay")} WHERE id = ? FOR UPDATE`,
-            [input.source.relayId]
-          )
-        }
         const running = yield* transaction.queryRows<RowDataPacket>(
           `SELECT 1 FROM ${databaseTable("server_migration")}
             WHERE source_relay_id = ? AND source_instance_id = ?
