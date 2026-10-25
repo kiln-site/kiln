@@ -253,6 +253,66 @@ describe("Relay joining", () => {
     )
   )
 
+  it.live(
+    "stops reading an answer once it's longer than any Hearth sends",
+    () =>
+      withJoiningRelay((relay) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            // Something between the Relay and a plain-HTTP Hearth answers
+            // without end.
+            let sent = 0
+            const server = yield* Effect.acquireRelease(
+              Effect.promise(async () => {
+                const server: Server = createServer((_request, response) => {
+                  const chunk = Buffer.alloc(64 * 1024, "a")
+                  const write = () => {
+                    while (sent < 64 * 1024 * 1024) {
+                      sent += chunk.byteLength
+                      if (!response.write(chunk)) {
+                        response.once("drain", write)
+                        return
+                      }
+                    }
+                    response.end()
+                  }
+                  response.on("close", () => response.removeAllListeners())
+                  write()
+                })
+                server.listen(0, "127.0.0.1")
+                await once(server, "listening")
+                return server
+              }),
+              (server) =>
+                Effect.promise(
+                  () =>
+                    new Promise<void>((resolve) => {
+                      server.closeAllConnections()
+                      server.close(() => resolve())
+                    })
+                )
+            )
+            const reasons: Array<string> = []
+            yield* runRelayJoin(
+              {
+                ...relay,
+                link: {
+                  hearthOrigin: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+                  secret,
+                },
+              },
+              (event) => {
+                if (event.kind === "unreachable") reasons.push(event.reason)
+              }
+            ).pipe(Effect.timeout(1_000), Effect.ignore)
+
+            assert.include(reasons[0] ?? "", "too large")
+            assert.isBelow(sent, 8 * 1024 * 1024)
+          })
+        )
+      )
+  )
+
   it.live("ends with its join, and never outlives it after a restart", () =>
     withJoiningRelay((relay) =>
       Effect.scoped(

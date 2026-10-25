@@ -572,7 +572,8 @@ if (
 ) {
   await runRelayCli(cliArguments)
   await disposeRelayRuntime()
-  process.exit(0)
+  // With the code a command set, such as a join that didn't pair.
+  process.exit()
 }
 // A Relay joining Hearth pairs through the join's own invitation, so it
 // makes and prints none of its own.

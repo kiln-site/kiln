@@ -268,6 +268,34 @@ const finish = Effect.fnUntraced(function* (
   return outcome
 })
 
+// A response's body, read no further than `limit` bytes: null when it's
+// longer. Anyone between the Relay and a plain-HTTP Hearth can answer, and
+// the answer is only checked once it's read.
+async function readLimitedText(
+  response: Response,
+  limit: number
+): Promise<string | null> {
+  if (Number(response.headers.get("content-length")) > limit) {
+    await response.body?.cancel()
+    return null
+  }
+  if (!response.body) return ""
+  const reader = response.body.getReader()
+  const chunks: Array<Uint8Array> = []
+  let size = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    size += value.byteLength
+    if (size > limit) {
+      await reader.cancel()
+      return null
+    }
+    chunks.push(value)
+  }
+  return Buffer.concat(chunks).toString("utf8")
+}
+
 // One announcement. Fails with why Hearth couldn't be asked, or answered
 // in a way that can't be trusted, so the caller tries again later.
 function announce(
@@ -299,10 +327,8 @@ function announce(
           ]),
         }
       )
-      const text = await response.text()
-      if (text.length > MAX_RESPONSE_BYTES) {
-        throw new Error("Hearth's answer was too large")
-      }
+      const text = await readLimitedText(response, MAX_RESPONSE_BYTES)
+      if (text === null) throw new Error("Hearth's answer was too large")
       return { ok: response.ok, status: response.status, text }
     },
     catch: (cause) =>
