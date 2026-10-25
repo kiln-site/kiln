@@ -282,7 +282,8 @@ A game server copied with **Move or duplicate**
 original's backups along without copying their archives. Each becomes a
 catalog row for the copy that names the backup it was made as in
 `linked_from_backup_id` and `linked_from_target_id`; the archive stays where
-it is.
+it is. Linking needs `backup.download` on the original, since the copy's
+owner can then download and restore them.
 
 - Full archives in S3 can be linked to a copy on any Relay.
 - Archives kept on the Relay can be linked only to a copy on the same Relay,
@@ -293,8 +294,14 @@ Restore and delete tasks for a linked backup carry `archive`, the identity
 it was made as, so the Relay finds the archive by that name and checks its
 manifest against the original server. A Relay advertises this with the
 `linked-backups-v1` feature, and Hearth won't restore a linked backup on a
-Relay without it. Deleting a backup whose archive another available backup
-still shares only marks the row deleted; the last one deletes the archive.
+Relay without it. Downloads Hearth signs for a linked backup, and copies
+to another destination, name the shared archive too.
+
+Each stored copy of an archive, a Relay's own file or an S3 object, is
+deleted with the last backup that still lists it; deleting any other only
+marks its row and that copy deleted. Deletes of backups sharing an archive
+lock the backup it was made as first, or, once that's been forgotten, the
+first record still linked to it, so concurrent deletes see each other.
 
 ## UI
 
