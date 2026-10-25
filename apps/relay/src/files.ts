@@ -11,6 +11,7 @@ import {
   realpath,
   rename,
   rm,
+  rmdir,
   stat,
   writeFile,
 } from "node:fs/promises"
@@ -3215,38 +3216,59 @@ class AnchoredDirectories {
 }
 
 // The folder a transfer installs into, under `parent`: created when
-// missing, or taken as it is when empty.
+// missing, or taken as it is when empty. Only a folder this call made
+// counts as created, so one another process made meanwhile must be empty
+// too, and is never discarded with a failed install.
 async function prepareTransferDestination(
   root: string,
   parent: FileHandle,
   name: string,
   owner: { gid: number; uid: number }
 ): Promise<{ created: boolean; handle: FileHandle }> {
-  const existing = await Effect.runPromise(
+  requireSafeSegment(name)
+  const path = resolve(fileDescriptorPath(parent), name)
+  const made = await Effect.runPromise(
+    Effect.result(promiseEffect(() => mkdir(path, { mode: 0o755 })))
+  )
+  if (Result.isFailure(made) && !isAlreadyExists(made.failure)) {
+    throw made.failure
+  }
+  const created = Result.isSuccess(made)
+  // Its own handle, kept open past the walk that found it, or closed here
+  // when the folder won't do.
+  const folder = new AnchoredDirectories(root, parent)
+  const prepared = await Effect.runPromise(
     Effect.result(
-      promiseEffect(() => lstat(resolve(fileDescriptorPath(parent), name)))
+      promiseEffect(async () => {
+        const handle = await folder.open([name], null)
+        if (!created) await requireEmptyDirectory(handle)
+        else if (process.getuid?.() === 0) {
+          await handle.chown(owner.uid, owner.gid)
+        }
+        return handle
+      })
     )
   )
-  if (Result.isFailure(existing) && !isMissingFile(existing.failure)) {
-    throw existing.failure
+  if (Result.isSuccess(prepared)) return { created, handle: prepared.success }
+  await folder.close()
+  if (created) {
+    await Effect.runPromise(Effect.ignore(promiseEffect(() => rmdir(path))))
   }
-  if (
-    Result.isSuccess(existing) &&
-    (existing.success.isSymbolicLink() || !existing.success.isDirectory())
-  ) {
-    throw archiveExtractionError(
-      "target_exists",
-      "The transfer's destination is not a folder"
-    )
-  }
-  const created = Result.isFailure(existing)
-  // Its own handle, kept open past the walk that found it.
-  const handle = await new AnchoredDirectories(root, parent).open(
-    [name],
-    created ? owner : null
+  throw isNotFolder(prepared.failure)
+    ? archiveExtractionError(
+        "target_exists",
+        "The transfer's destination is not a folder"
+      )
+    : prepared.failure
+}
+
+function isNotFolder(cause: unknown): boolean {
+  return Boolean(
+    cause &&
+    typeof cause === "object" &&
+    "code" in cause &&
+    (cause.code === "ENOTDIR" || cause.code === "ELOOP")
   )
-  if (!created) await requireEmptyDirectory(handle)
-  return { created, handle }
 }
 
 async function requireEmptyDirectory(handle: FileHandle): Promise<void> {
