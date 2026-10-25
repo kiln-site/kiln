@@ -3125,18 +3125,24 @@ async function installTransferTree(input: {
       )
       await tree.close()
       if (Result.isFailure(extracted)) {
-        // What was written leaves the root by a rename the server can't
-        // redirect, and is removed where the server can't reach it.
+        // What was written leaves the folder this install holds, by renames
+        // the server can't redirect, and is removed where it can't reach.
+        // A folder the install made then goes only if it's still empty, so
+        // whatever has taken its name since keeps everything in it.
         const cleaned = await Effect.runPromise(
           Effect.result(
-            promiseEffect(() =>
-              parent && name && destination?.created
-                ? discardTransferPath(
-                    resolve(fileDescriptorPath(parent), name),
-                    input.discarded
+            promiseEffect(async () => {
+              await discardTransferChildren(top, input.discarded)
+              if (parent && name && destination?.created) {
+                await Effect.runPromise(
+                  Effect.ignore(
+                    promiseEffect(() =>
+                      rmdir(resolve(fileDescriptorPath(parent), name))
+                    )
                   )
-                : discardTransferChildren(top, input.discarded)
-            )
+                )
+              }
+            })
           )
         )
         if (Result.isFailure(cleaned)) {
@@ -3240,9 +3246,11 @@ async function prepareTransferDestination(
   const prepared = await Effect.runPromise(
     Effect.result(
       promiseEffect(async () => {
+        // Empty either way: another folder may have taken the new one's
+        // name before it was opened.
         const handle = await folder.open([name], null)
-        if (!created) await requireEmptyDirectory(handle)
-        else if (process.getuid?.() === 0) {
+        await requireEmptyDirectory(handle)
+        if (created && process.getuid?.() === 0) {
           await handle.chown(owner.uid, owner.gid)
         }
         return handle
@@ -3313,16 +3321,21 @@ async function extractTransferEntry(
       fsConstants.O_NOFOLLOW,
     mode
   )
-  await ensuringPromise(
-    async () => {
-      await pipeline(entry, file.createWriteStream({ autoClose: false }), {
-        signal,
+  // Mode and owner first, through the open file; the write then closes it,
+  // however it ends.
+  const prepared = await Effect.runPromise(
+    Effect.result(
+      promiseEffect(async () => {
+        await file.chmod(mode)
+        if (process.getuid?.() === 0) await file.chown(owner.uid, owner.gid)
       })
-      await file.chmod(mode)
-      if (process.getuid?.() === 0) await file.chown(owner.uid, owner.gid)
-    },
-    () => forkPromise(() => file.close())
+    )
   )
+  if (Result.isFailure(prepared)) {
+    await file.close()
+    throw prepared.failure
+  }
+  await pipeline(entry, file.createWriteStream(), { signal })
 }
 
 function requireSafeSegment(segment: string): void {
@@ -3368,8 +3381,12 @@ async function discardTransferChildren(
   discarded: string
 ): Promise<void> {
   const anchored = fileDescriptorPath(folder)
-  for await (const child of await opendir(anchored)) {
-    await discardTransferPath(resolve(anchored, child.name), discarded)
+  // Listed before any leaves, since moving entries out while reading the
+  // folder can skip some.
+  const names: Array<string> = []
+  for await (const child of await opendir(anchored)) names.push(child.name)
+  for (const name of names) {
+    await discardTransferPath(resolve(anchored, name), discarded)
   }
 }
 
