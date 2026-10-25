@@ -1294,6 +1294,10 @@ const migrations = SqliteMigrator.fromRecord({
   // The Hearth client a join's invitation is for.
   "26_invitation_client": Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient
+    const columns = yield* sql<{
+      name: string
+    }>`PRAGMA table_info(relay_invitations)`
+    if (columns.some((column) => column.name === "client_id")) return
     yield* sql`ALTER TABLE relay_invitations ADD COLUMN client_id TEXT`
   }),
 })
