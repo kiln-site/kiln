@@ -1,19 +1,27 @@
 import { renderToStaticMarkup } from "react-dom/server"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import { Effect } from "effect"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import type { ShowToastOptions } from "@workspace/ui/components/sonner"
+import type {
+  RelayTransferError,
+  RelayUploadItem,
+  RelayUploadOutcome,
+} from "@/lib/relay-file-transfer"
 import type { FileWorkspaceInstance } from "@/lib/relay-selectors"
 
 const mocks = vi.hoisted(() => ({
-  upload: vi.fn(),
+  uploadBatch: vi.fn(),
   showToast: vi.fn(
     (options: ShowToastOptions) => options.id ?? "upload-progress"
   ),
   dismissToast: vi.fn(),
 }))
 
-vi.mock("@/lib/relay-file-transfer", () => ({ uploadRelayFile: mocks.upload }))
+vi.mock("@/lib/relay-file-transfer", () => ({
+  uploadRelayFilesEffect: mocks.uploadBatch,
+}))
 vi.mock("@workspace/ui/components/sonner", () => ({
   showToast: mocks.showToast,
   dismissToast: mocks.dismissToast,
@@ -32,19 +40,40 @@ const pending = new Map<
   }
 >()
 
+// Uploads every file at once, each settling when the test says, as the
+// Relay would answer them.
 beforeEach(() => {
   queryClient = new QueryClient()
-  mocks.upload.mockImplementation(
+  mocks.uploadBatch.mockImplementation(
     ({
-      file,
+      items,
       onProgress,
+      onSettled,
+      onStart,
     }: {
-      file: File
-      onProgress: (loaded: number) => void
+      items: ReadonlyArray<RelayUploadItem>
+      onProgress: (item: RelayUploadItem, loaded: number) => void
+      onSettled: (outcome: RelayUploadOutcome) => void
+      onStart: (item: RelayUploadItem) => void
     }) =>
-      new Promise<void>((resolve, reject) => {
-        pending.set(file.name, { onProgress, resolve, reject })
-      })
+      Effect.forEach(
+        items,
+        (item) =>
+          Effect.callback<RelayUploadOutcome>((resume) => {
+            onStart(item)
+            const settle = (outcome: RelayUploadOutcome) => {
+              onSettled(outcome)
+              resume(Effect.succeed(outcome))
+            }
+            pending.set(item.file.name, {
+              onProgress: (loaded) => onProgress(item, loaded),
+              resolve: () => settle({ cause: null, item }),
+              reject: (cause) =>
+                settle({ cause: cause as RelayTransferError, item }),
+            })
+          }),
+        { concurrency: "unbounded" }
+      )
   )
 })
 

@@ -227,7 +227,9 @@ export const uploadRelayFileEffect = Effect.fn("RelayTransfer.upload")(
         (error) =>
           input.file.size > HEARTH_FILE_FALLBACK_LIMIT
             ? Effect.fail(error)
-            : saveThroughHearth(input).pipe(
+            : Effect.sync(() => input.onProgress?.(0)).pipe(
+                // The direct attempt's progress doesn't count toward Hearth's.
+                Effect.andThen(saveThroughHearth(input)),
                 Effect.mapError((cause) => unavailable("upload", cause))
               )
       )

@@ -81,7 +81,6 @@ describe("Relay file transfer requests", () => {
       "https://relay.example.com/v1/browser/files/instance-one?path=%2Fserver%2Fworld.zip"
     )
     expect(request?.init.method).toBe("HEAD")
-    expect(request?.init.signal).toBe(controller.signal)
     const headers = request?.init.headers as Record<string, string>
     expect(headers.Authorization).toBe(`Kiln ${issuedCapability}`)
 
@@ -113,6 +112,38 @@ describe("Relay file transfer requests", () => {
       )
     )
     expect(verified).toBe(true)
+  })
+})
+
+describe("Relay file transfer cancellation", () => {
+  it("cancels the request when the caller's signal aborts", async () => {
+    issueCapability()
+    let requestSignal: AbortSignal | undefined
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (_url: URL, init: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            requestSignal = init.signal ?? undefined
+            init.signal?.addEventListener("abort", () =>
+              reject(new DOMException("Aborted", "AbortError"))
+            )
+          })
+      )
+    )
+    const controller = new AbortController()
+
+    const inspected = inspectRelayFileDownload({
+      instanceId: "instance-one",
+      path: "world.zip",
+      relayId: "relay-one",
+      signal: controller.signal,
+    })
+    await vi.waitFor(() => expect(requestSignal).toBeDefined())
+    controller.abort()
+
+    await expect(inspected).rejects.toThrow()
+    expect(requestSignal?.aborted).toBe(true)
   })
 })
 
