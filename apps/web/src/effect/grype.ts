@@ -198,22 +198,23 @@ function grypeEnvironment(): NodeJS.ProcessEnv {
   }
 }
 
-// Runs Grype at the lowest priority, collecting its output.
+// Runs Grype at the lowest priority, collecting its output. Grype is killed
+// when `signal` aborts, as when the worker running it is interrupted.
 function runGrype(
   args: ReadonlyArray<string>,
-  options: { readonly timeoutMs: number }
+  options: { readonly signal: AbortSignal; readonly timeoutMs: number }
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn(grypePath(), args, {
       env: grypeEnvironment(),
+      killSignal: "SIGKILL",
+      signal: options.signal,
       stdio: ["ignore", "pipe", "pipe"],
     })
     // Priority is a courtesy; a host that refuses it still runs Grype.
     if (child.pid !== undefined) {
       const pid = child.pid
-      Effect.runSync(
-        Effect.try(() => setPriority(pid, 19)).pipe(Effect.ignore)
-      )
+      Effect.runSync(Effect.try(() => setPriority(pid, 19)).pipe(Effect.ignore))
     }
     const stdout: Array<Buffer> = []
     let stderr = ""
@@ -276,11 +277,14 @@ export class Grype extends Context.Service<
       const permit = yield* Semaphore.make(1)
       const databaseBuiltAt = () =>
         Effect.tryPromise({
-          try: async () => {
+          try: async (signal) => {
             // Without a database, Grype exits with an error.
             const output = await recoverPromise(
               () =>
-                runGrype(["db", "status", "-o", "json"], { timeoutMs: 60_000 }),
+                runGrype(["db", "status", "-o", "json"], {
+                  signal,
+                  timeoutMs: 60_000,
+                }),
               () => null
             )
             if (output === null) return null
@@ -299,9 +303,12 @@ export class Grype extends Context.Service<
         updateDatabase: () =>
           permit.withPermit(
             Effect.tryPromise({
-              try: async () => {
+              try: async (signal) => {
                 await mkdir(databaseDirectory(), { recursive: true })
-                await runGrype(["db", "update"], { timeoutMs: 30 * 60_000 })
+                await runGrype(["db", "update"], {
+                  signal,
+                  timeoutMs: 30 * 60_000,
+                })
               },
               catch: failure("Could not update Grype's database"),
             })
@@ -309,7 +316,7 @@ export class Grype extends Context.Service<
         match: (document) =>
           permit.withPermit(
             Effect.tryPromise({
-              try: async () => {
+              try: async (signal) => {
                 const directory = join(databaseDirectory(), "inventories")
                 await mkdir(directory, { recursive: true })
                 const path = join(directory, `${randomUUID()}.json`)
@@ -317,6 +324,7 @@ export class Grype extends Context.Service<
                 const output = await ensuringPromise(
                   () =>
                     runGrype([`sbom:${path}`, "-o", "json", "-q"], {
+                      signal,
                       timeoutMs: 10 * 60_000,
                     }),
                   () => void rm(path, { force: true })

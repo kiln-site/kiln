@@ -34,7 +34,8 @@ import {
   recordMatchFailureEffect,
   securityResourceNamesEffect,
   syncSecurityTargetsEffect,
-  takeSecurityAnnouncementsEffect,
+  pendingSecurityAnnouncementsEffect,
+  recordSecurityAnnouncementsEffect,
   type AnnouncedFinding,
   type DueInventory,
   type SecurityAnnouncement,
@@ -70,6 +71,12 @@ const syncIntervalMs = 15 * 60_000
 // After the host was busy, how soon to ask again.
 const busyRetryMs = 5 * 60_000
 const databaseCheckIntervalMs = 6 * 60 * 60_000
+// How long one sweep spends collecting from one Relay, and checking
+// inventories, before it moves on. What's left continues in the next sweep,
+// which comes at once, so a slow Relay or a new vulnerability database can't
+// hold up the others.
+const collectBudgetMs = 60_000
+const matchBudgetMs = 120_000
 const inventoryChunkTimeoutMs = 60_000
 // Hearth stores inventories in a MEDIUMBLOB.
 const storedInventoryMaxBytes = 16 * 1024 * 1024 - 1
@@ -125,8 +132,14 @@ const syncRelayEffect = Effect.fnUntraced(function* (relay: PersistedRelay) {
   }).pipe(Effect.map((answer) => relaySecurityTargetsSchema.parse(answer)))
   yield* syncSecurityTargetsEffect(relay.id, report)
   const due = yield* dueInventoriesEffect(relay.id)
+  const deadline = (yield* Clock.currentTimeMillis) + collectBudgetMs
   let busy = false
+  let more = false
   for (const inventory of due) {
+    if ((yield* Clock.currentTimeMillis) >= deadline) {
+      more = true
+      break
+    }
     if (report.scanner === null) {
       yield* recordInventoryFailureEffect(
         relay.id,
@@ -154,7 +167,7 @@ const syncRelayEffect = Effect.fnUntraced(function* (relay: PersistedRelay) {
       break
     }
   }
-  return { busy }
+  return { busy, more }
 })
 
 // Reads one inventory from the Relay, in chunks, and keeps it without the
@@ -416,10 +429,15 @@ const matchPendingEffect = Effect.fnUntraced(function* () {
   const touched = new Set<string>()
   if (builtAt === null) return touched
   const grype = yield* Grype
+  const deadline = (yield* Clock.currentTimeMillis) + matchBudgetMs
   for (;;) {
     const pending = yield* pendingMatchesEffect(builtAt)
     if (!pending.length) break
     for (const { relayId, sbomKey } of pending) {
+      if ((yield* Clock.currentTimeMillis) >= deadline) {
+        Queue.offerUnsafe(wake, undefined)
+        return touched
+      }
       const document = yield* loadInventoryDocumentEffect(relayId, sbomKey)
       if (document === null) continue
       const matched = yield* grype
@@ -457,8 +475,15 @@ function wanted(
 const announceEffect = Effect.fn("Security.announce")(function* (
   relayId: string
 ) {
-  const announcements = yield* takeSecurityAnnouncementsEffect(relayId)
-  if (!announcements.length) return
+  // Delivered before they're recorded as told, so a failure partway is
+  // tried again next sweep; notifications already delivered are skipped by
+  // their keys.
+  const { announcements, changes } =
+    yield* pendingSecurityAnnouncementsEffect(relayId)
+  if (!announcements.length) {
+    yield* recordSecurityAnnouncementsEffect(relayId, changes)
+    return
+  }
   const names = yield* securityResourceNamesEffect(relayId)
   const notified = new Set<string>()
   for (const announcement of announcements) {
@@ -481,10 +506,22 @@ const announceEffect = Effect.fn("Security.announce")(function* (
         preferences.get(userId)?.security ?? defaultSecurityNotificationSettings
       )
       if (!findings.length) continue
-      const key = findings
-        .map(
-          (finding) => `${finding.vulnerabilityId}\u0000${finding.packageName}`
-        )
+      // Each finding as it is now: a fix coming out, its being exploited, a
+      // new severity, or its coming back makes it a new notification.
+      const key = [
+        ...new Set(
+          findings.map((finding) =>
+            [
+              finding.vulnerabilityId,
+              finding.packageName,
+              finding.fixable ? "fixed" : "",
+              finding.knownExploited ? "exploited" : "",
+              finding.severity,
+              finding.firstSeenAt,
+            ].join("\u0000")
+          )
+        ),
+      ]
         .sort()
         .join("\u0001")
       const group = groups.get(key) ?? { findings, users: [] }
@@ -508,6 +545,7 @@ const announceEffect = Effect.fn("Security.announce")(function* (
     }
   }
   if (notified.size) publishNotificationChange([...notified])
+  yield* recordSecurityAnnouncementsEffect(relayId, changes)
 })
 
 function notificationContent(
@@ -581,9 +619,14 @@ export function startSecurityScans(): void {
       if (now - (synced.get(relay.id) ?? 0) < syncIntervalMs) continue
       synced.set(relay.id, now)
       yield* syncRelayEffect(relay).pipe(
-        Effect.tap(({ busy }) =>
+        Effect.tap(({ busy, more }) =>
           Effect.sync(() => {
             if (busy) synced.set(relay.id, now - syncIntervalMs + busyRetryMs)
+            else if (more) {
+              // Due again in the next sweep, which comes at once.
+              synced.set(relay.id, now - syncIntervalMs)
+              Queue.offerUnsafe(wake, undefined)
+            }
             changed.add(relay.id)
           })
         ),

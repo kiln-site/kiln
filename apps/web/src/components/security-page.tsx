@@ -528,7 +528,7 @@ const FindingsSection = React.memo(function FindingsSection({
       }
       return [...byResource].map(([resourceScope, target]): FindingRowData => ({
         finding,
-        id: `${finding.vulnerabilityId}\u0000${finding.packageName}\u0000${resourceScope}`,
+        id: `${finding.vulnerabilityId}\u0000${finding.packageName}\u0000${target.targetKey}`,
         resource: resources.get(resourceScope) ?? null,
         target,
       }))

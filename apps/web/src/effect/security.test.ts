@@ -7,7 +7,8 @@ import {
   recordFindingsEffect,
   recordInventoryEffect,
   syncSecurityTargetsEffect,
-  takeSecurityAnnouncementsEffect,
+  pendingSecurityAnnouncementsEffect,
+  recordSecurityAnnouncementsEffect,
 } from "@/effect/security"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRelay, selectRows } from "@/test/seed"
@@ -55,16 +56,25 @@ const finding = (
   vulnerabilityId,
 })
 
-const announced = Effect.map(
-  takeSecurityAnnouncementsEffect("relay-a"),
-  (announcements) =>
+// What's news, as the worker finds it before delivering it.
+const pending = Effect.map(
+  pendingSecurityAnnouncementsEffect("relay-a"),
+  ({ announcements }) =>
     announcements.flatMap((announcement) =>
       announcement.findings.map(
         (item) =>
-          `${announcement.resourceType}:${item.vulnerabilityId}:${item.fixable ? "fixed" : "open"}`
+          `${announcement.resourceType}:${item.vulnerabilityId}:${item.fixable ? "fixed" : "open"}${item.knownExploited ? ":exploited" : ""}`
       )
     )
 )
+
+// What's news, recorded as told once it's delivered.
+const announced = Effect.gen(function* () {
+  const news = yield* pending
+  const { changes } = yield* pendingSecurityAnnouncementsEffect("relay-a")
+  yield* recordSecurityAnnouncementsEffect("relay-a", changes)
+  return news
+})
 
 const seedInventory = Effect.gen(function* () {
   yield* resetDatabase
@@ -82,7 +92,7 @@ const seedInventory = Effect.gen(function* () {
 describeMysql("security", () => {
   layer(TestDatabase)((it) => {
     it.effect(
-      "announces each vulnerability once, again once it can be fixed, and again if it comes back",
+      "announces each vulnerability once it's delivered, and again once it can be fixed, is exploited, or comes back",
       () =>
         Effect.gen(function* () {
           yield* seedInventory
@@ -90,6 +100,11 @@ describeMysql("security", () => {
           yield* recordFindingsEffect("relay-a", image, 1, [
             finding("CVE-1", "not-fixed"),
             finding("CVE-2", "fixed"),
+          ])
+          // Until it's recorded as delivered, it's news every time.
+          assert.deepStrictEqual((yield* pending).sort(), [
+            "app:CVE-1:open",
+            "app:CVE-2:fixed",
           ])
           assert.deepStrictEqual((yield* announced).sort(), [
             "app:CVE-1:open",
@@ -109,14 +124,23 @@ describeMysql("security", () => {
           ])
           assert.deepStrictEqual(yield* announced, ["app:CVE-1:fixed"])
 
-          // One that goes away is forgotten, so it's news when it returns.
+          // So is its being exploited.
           yield* recordFindingsEffect("relay-a", image, 4, [
-            finding("CVE-2", "fixed"),
+            finding("CVE-1", "fixed"),
+            { ...finding("CVE-2", "fixed"), knownExploited: true },
+          ])
+          assert.deepStrictEqual(yield* announced, [
+            "app:CVE-2:fixed:exploited",
+          ])
+
+          // One that goes away is forgotten, so it's news when it returns.
+          yield* recordFindingsEffect("relay-a", image, 5, [
+            { ...finding("CVE-2", "fixed"), knownExploited: true },
           ])
           assert.deepStrictEqual(yield* announced, [])
-          yield* recordFindingsEffect("relay-a", image, 5, [
+          yield* recordFindingsEffect("relay-a", image, 6, [
             finding("CVE-1", "fixed"),
-            finding("CVE-2", "fixed"),
+            { ...finding("CVE-2", "fixed"), knownExploited: true },
           ])
           assert.deepStrictEqual(yield* announced, ["app:CVE-1:fixed"])
         })
@@ -130,7 +154,7 @@ describeMysql("security", () => {
           yield* recordFindingsEffect("relay-a", image, 1, [
             finding("CVE-1", "fixed"),
           ])
-          yield* takeSecurityAnnouncementsEffect("relay-a")
+          yield* announced
 
           yield* syncSecurityTargetsEffect("relay-a", report([]))
 

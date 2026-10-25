@@ -636,8 +636,8 @@ export const loadSecurityTargetsEffect = Effect.fn("security.loadTargets")(
 )
 
 /**
- * The findings in these inventories, one per vulnerability and package,
- * most urgent first: known exploited, then by severity, then by risk.
+ * The findings in these inventories, one per vulnerability and package in
+ * each inventory, most urgent first: known exploited, then by severity, then by risk.
  */
 export const loadSecurityFindingsEffect = Effect.fn("security.loadFindings")(
   function* (
@@ -711,7 +711,8 @@ export const loadSecurityFindingsEffect = Effect.fn("security.loadFindings")(
     )
     const findings = new Map<string, SecurityFindingSummary>()
     for (const row of rows) {
-      const key = `${row.vulnerability_id}\u0000${row.package_name}`
+      // Per inventory, so each says what's installed and what fixes it there.
+      const key = `${row.relay_id}/${row.sbom_key}\u0000${row.vulnerability_id}\u0000${row.package_name}`
       const finding = findings.get(key) ?? {
         firstSeenAt: Number(row.first_seen_at),
         fixState: row.fix_state,
@@ -779,6 +780,8 @@ export interface SecurityAnnouncement {
 }
 
 export interface AnnouncedFinding {
+  /** When this occurrence was first seen, so one that returns is news. */
+  readonly firstSeenAt: number
   readonly fixedVersion: string | null
   readonly fixable: boolean
   readonly knownExploited: boolean
@@ -788,111 +791,144 @@ export interface AnnouncedFinding {
   readonly vulnerabilityId: string
 }
 
+/** Which alerts an announcement records as told, and which it forgets. */
+export interface SecurityAlertChanges {
+  readonly gone: ReadonlyArray<{ alertKey: string; targetKey: string }>
+  readonly told: ReadonlyArray<{ alertKey: string; targetKey: string }>
+}
+
 /**
- * The checked targets' findings nobody has been told about, recorded as
- * told, grouped by resource. A finding that becomes fixable is news again;
- * one that goes away is forgotten, so it's news if it comes back.
+ * The checked targets' findings nobody has been told about, grouped by
+ * resource, and the alert changes to record once they're delivered. A
+ * finding is news again once it can be fixed, once it's known to be
+ * exploited, or once its severity changes; one that goes away is forgotten,
+ * so it's news if it comes back.
  */
-export const takeSecurityAnnouncementsEffect = Effect.fn(
-  "security.takeAnnouncements"
+export const pendingSecurityAnnouncementsEffect = Effect.fn(
+  "security.pendingAnnouncements"
 )(function* (relayId: string) {
   const database = yield* Database
-  const now = yield* Clock.currentTimeMillis
-  return yield* database.transaction("security.takeAnnouncements", (tx) =>
-    Effect.gen(function* () {
-      const rows = yield* tx.queryRows<
-        RowDataPacket & {
-          component: string | null
-          fix_state: string
-          fixed_version: string | null
-          known_exploited: number | null
-          package_name: string
-          package_version: string
-          resource_id: string
-          resource_type: ResourceType
-          severity: number
-          target_key: string
-          vulnerability_id: string
-        }
-      >(
-        `SELECT t.target_key, t.resource_type, t.resource_id, t.component,
-                f.vulnerability_id, ${findingPackage} AS package_name,
-                f.package_version, f.severity, f.fix_state, f.fixed_version,
-                v.known_exploited
-           FROM ${databaseTable("security_target")} t
-           JOIN ${databaseTable("security_sbom")} s
-             ON s.relay_id = t.relay_id AND s.sbom_key = t.sbom_key
-           JOIN ${databaseTable("security_finding")} f
-             ON f.relay_id = s.relay_id AND f.sbom_key = s.sbom_key
-           LEFT JOIN ${databaseTable("security_vulnerability")} v
-             ON v.id = f.vulnerability_id
-          WHERE t.relay_id = ? AND s.matched_db IS NOT NULL
-            AND s.match_error IS NULL`,
-        [relayId]
-      )
-      const alerted = yield* tx.queryRows<
-        RowDataPacket & { alert_key: string; target_key: string }
-      >(
-        `SELECT target_key, alert_key FROM ${databaseTable("security_alert")}
-          WHERE relay_id = ? FOR UPDATE`,
-        [relayId]
-      )
-      const told = new Set(
-        alerted.map((row) => `${row.target_key}\u0000${row.alert_key}`)
-      )
-      const current = new Set<string>()
-      const fresh: Array<{ alertKey: string; targetKey: string }> = []
-      const byResource = new Map<string, SecurityAnnouncement>()
-      for (const row of rows) {
-        const fixable = row.fix_state === "fixed"
-        const alertKey = createHash("sha256")
-          .update(
-            [
-              row.vulnerability_id,
-              row.package_name,
-              fixable ? "fixed" : "",
-            ].join("\u0000")
-          )
-          .digest("hex")
-        const key = `${row.target_key}\u0000${alertKey}`
-        if (current.has(key)) continue
-        current.add(key)
-        if (told.has(key)) continue
-        fresh.push({ alertKey, targetKey: row.target_key })
-        const resourceKey = `${row.resource_type}:${row.resource_id}:${
-          row.resource_type === "relay" ? (row.component ?? "") : ""
-        }`
-        const announcement = byResource.get(resourceKey) ?? {
-          component: row.resource_type === "relay" ? row.component : null,
-          findings: [],
-          relayId,
-          resourceId: row.resource_id,
-          resourceType: row.resource_type,
-        }
-        ;(announcement.findings as Array<AnnouncedFinding>).push({
-          fixable,
-          fixedVersion: row.fixed_version,
-          knownExploited: row.known_exploited === 1,
-          packageName: row.package_name,
-          packageVersion: row.package_version,
-          severity: row.severity,
-          vulnerabilityId: row.vulnerability_id,
-        })
-        byResource.set(resourceKey, announcement)
+  const [rows, alerted] = yield* Effect.all([
+    database.queryRows<
+      RowDataPacket & {
+        component: string | null
+        first_seen_at: number | string
+        fix_state: string
+        fixed_version: string | null
+        known_exploited: number | null
+        package_name: string
+        package_version: string
+        resource_id: string
+        resource_type: ResourceType
+        severity: number
+        target_key: string
+        vulnerability_id: string
       }
-      const gone = alerted.filter(
-        (row) => !current.has(`${row.target_key}\u0000${row.alert_key}`)
+    >(
+      "security.pendingAnnouncements",
+      `SELECT t.target_key, t.resource_type, t.resource_id, t.component,
+              f.vulnerability_id, ${findingPackage} AS package_name,
+              f.package_version, f.severity, f.fix_state, f.fixed_version,
+              f.first_seen_at, v.known_exploited
+         FROM ${databaseTable("security_target")} t
+         JOIN ${databaseTable("security_sbom")} s
+           ON s.relay_id = t.relay_id AND s.sbom_key = t.sbom_key
+         JOIN ${databaseTable("security_finding")} f
+           ON f.relay_id = s.relay_id AND f.sbom_key = s.sbom_key
+         LEFT JOIN ${databaseTable("security_vulnerability")} v
+           ON v.id = f.vulnerability_id
+        WHERE t.relay_id = ? AND s.matched_db IS NOT NULL
+          AND s.match_error IS NULL`,
+      [relayId]
+    ),
+    database.queryRows<
+      RowDataPacket & { alert_key: string; target_key: string }
+    >(
+      "security.pendingAnnouncements.alerts",
+      `SELECT target_key, alert_key FROM ${databaseTable("security_alert")}
+        WHERE relay_id = ?`,
+      [relayId]
+    ),
+  ])
+  const alreadyTold = new Set(
+    alerted.map((row) => `${row.target_key}\u0000${row.alert_key}`)
+  )
+  const current = new Set<string>()
+  const told: Array<{ alertKey: string; targetKey: string }> = []
+  const byResource = new Map<string, SecurityAnnouncement>()
+  for (const row of rows) {
+    const fixable = row.fix_state === "fixed"
+    const knownExploited = row.known_exploited === 1
+    const alertKey = createHash("sha256")
+      .update(
+        [
+          row.vulnerability_id,
+          row.package_name,
+          fixable ? "fixed" : "",
+          knownExploited ? "exploited" : "",
+          String(row.severity),
+        ].join("\u0000")
       )
-      for (let start = 0; start < gone.length; start += 500) {
-        const batch = gone.slice(start, start + 500)
+      .digest("hex")
+    const key = `${row.target_key}\u0000${alertKey}`
+    if (current.has(key)) continue
+    current.add(key)
+    if (alreadyTold.has(key)) continue
+    told.push({ alertKey, targetKey: row.target_key })
+    const resourceKey = `${row.resource_type}:${row.resource_id}:${
+      row.resource_type === "relay" ? (row.component ?? "") : ""
+    }`
+    const announcement = byResource.get(resourceKey) ?? {
+      component: row.resource_type === "relay" ? row.component : null,
+      findings: [],
+      relayId,
+      resourceId: row.resource_id,
+      resourceType: row.resource_type,
+    }
+    ;(announcement.findings as Array<AnnouncedFinding>).push({
+      firstSeenAt: Number(row.first_seen_at),
+      fixable,
+      fixedVersion: row.fixed_version,
+      knownExploited,
+      packageName: row.package_name,
+      packageVersion: row.package_version,
+      severity: row.severity,
+      vulnerabilityId: row.vulnerability_id,
+    })
+    byResource.set(resourceKey, announcement)
+  }
+  const gone = alerted
+    .filter((row) => !current.has(`${row.target_key}\u0000${row.alert_key}`))
+    .map((row) => ({ alertKey: row.alert_key, targetKey: row.target_key }))
+  return {
+    announcements: [...byResource.values()],
+    changes: { gone, told } satisfies SecurityAlertChanges,
+  }
+})
+
+/**
+ * Records announced findings as told and forgets those that went away, once
+ * their notifications are delivered. Until then, every sweep finds them news
+ * again, and delivering them again is a no-op.
+ */
+export const recordSecurityAnnouncementsEffect = Effect.fn(
+  "security.recordAnnouncements"
+)(function* (relayId: string, changes: SecurityAlertChanges) {
+  if (!changes.gone.length && !changes.told.length) return
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  yield* database.transaction("security.recordAnnouncements", (tx) =>
+    Effect.gen(function* () {
+      for (let start = 0; start < changes.gone.length; start += 500) {
+        const batch = changes.gone.slice(start, start + 500)
         yield* tx.execute(
           `DELETE FROM ${databaseTable("security_alert")}
             WHERE relay_id = ? AND (target_key, alert_key) IN (${batch.map(() => "(?, ?)").join(", ")})`,
-          [relayId, ...batch.flatMap((row) => [row.target_key, row.alert_key])]
+          [relayId, ...batch.flatMap((row) => [row.targetKey, row.alertKey])]
         )
       }
-      for (let start = 0; start < fresh.length; start += 500) {
-        const batch = fresh.slice(start, start + 500)
+      for (let start = 0; start < changes.told.length; start += 500) {
+        const batch = changes.told.slice(start, start + 500)
         yield* tx.execute(
           `INSERT IGNORE INTO ${databaseTable("security_alert")}
              (relay_id, target_key, alert_key, alerted_at)
@@ -900,7 +936,6 @@ export const takeSecurityAnnouncementsEffect = Effect.fn(
           batch.flatMap((row) => [relayId, row.targetKey, row.alertKey, now])
         )
       }
-      return [...byResource.values()]
     })
   )
 })
