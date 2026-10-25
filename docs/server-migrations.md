@@ -16,17 +16,19 @@ when the copy starts.
 
 ## What comes along
 
-| Option             | Duplicate | Move     | Notes                                                                                                                                                                                      |
-| ------------------ | --------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Files and settings | Always    | Always   | Its whole folder, the exact Brick it was built from, startup settings, and limits. Ports are allocated afresh on the new Relay.                                                            |
-| People with access | Optional  | Optional | The same grants, permissions, and presets (presets are copied to the new server). Pending invitations aren't. Needs `access.read`.                                                         |
-| Activity history   | Optional  | Optional | The new server's activity shows the old server's history, which stays on the old Relay, to whoever can see the new server.                                                                 |
-| Managed domains    | —         | Optional | With Cloudflare connected, domains move to the new server and their records point at the new Relay. Without it, Kiln manages no DNS and the dialog says to repoint any domain of your own. |
-| Web routes         | Stay      | Optional | Routes move to the new server; their hostnames must then point at the new Relay before HTTPS works.                                                                                        |
-| Backup first       | Optional  | Optional | A full backup to a chosen destination, finished before anything changes. Needs `backup.create`.                                                                                            |
+| Option             | Duplicate | Move     | Notes                                                                                                                                                                                                       |
+| ------------------ | --------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Files and settings | Always    | Always   | Its whole folder, the exact Brick it was built from, startup settings, and limits. Ports are allocated afresh on the new Relay.                                                                             |
+| People with access | Optional  | Optional | The same grants, permissions, and presets (presets are copied to the new server). Pending invitations aren't. Needs `access.read`.                                                                          |
+| Activity history   | Optional  | Optional | The new server's activity shows the old server's history up to when the copy finished, to whoever can see the new server but not the old one. It stays on the old Relay, so removing that Relay removes it. |
+| Managed domains    | —         | Optional | With Cloudflare connected, domains move to the new server and their records point at the new Relay. Without it, Kiln manages no DNS and the dialog says to repoint any domain of your own.                  |
+| Web routes         | Stay      | Optional | Routes move to the new server; their hostnames must then point at the new Relay before HTTPS works.                                                                                                         |
+| Backup first       | Optional  | Optional | A full backup to a chosen destination, finished before anything changes. Needs `backup.create`.                                                                                                             |
 
 A duplicate can stop the old server while its files copy, then start it
-again; a move always stops it. A copy whose owner isn't the person moving
+again; a move always stops it. Stopping needs `instance.power.stop`, and a
+duplicate that stops it also `instance.power.start`, whether or not it runs
+when the copy starts. A copy whose owner isn't the person moving
 it passes to the old server's owner when the move finishes.
 
 ## How it runs
