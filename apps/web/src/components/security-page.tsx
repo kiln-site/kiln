@@ -8,15 +8,24 @@ import {
   useSuspenseQuery,
 } from "@tanstack/react-query"
 import {
+  EllipsisVertical,
   ExternalLink,
   ListFilter,
   LoaderCircle,
   ScanSearch,
   ShieldCheck,
   Siren,
+  Wrench,
 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@workspace/ui/components/dropdown-menu"
 import {
   Select,
   SelectContent,
@@ -28,14 +37,19 @@ import { showToast } from "@workspace/ui/components/sonner"
 import { cn } from "@workspace/ui/lib/utils"
 
 import {
+  DataTableActionGroup,
   DataTableEmptyState,
+  DataTableInlineActions,
+  DataTablePhoneMenuItems,
   dataTableRowLinkClassName,
+  dataTableRowMenuTriggerClassName,
 } from "@/components/data-table"
 import { DataTable } from "@/components/data-table-view"
 import {
   DataTableToolbar,
   DataTableWorkspace,
 } from "@/components/data-table-workspace"
+import { CopyIdentifierMenuItem } from "@/components/copy-identifier-menu-item"
 import { InfraSyncButton } from "@/components/infra-sync-button"
 import { InstanceCard } from "@/components/instance-card"
 import { RelativeTime } from "@/components/relative-time"
@@ -410,7 +424,7 @@ const findingTableDefinition = defineDataTable<FindingRowData>({
         />
       ),
       meta: dataTableColumnMeta(
-        { width: "minmax(10rem,1.2fr)" },
+        { width: "minmax(9rem,1.2fr)" },
         { cellClassName: "p-0" }
       ),
     }),
@@ -419,7 +433,7 @@ const findingTableDefinition = defineDataTable<FindingRowData>({
       header: "Vulnerability",
       sortFn: "text",
       cell: ({ row }) => <VulnerabilityLink finding={row.original.finding} />,
-      meta: dataTableColumnMeta({ width: "10.5rem" }),
+      meta: dataTableColumnMeta({ width: "9.75rem" }),
     }),
     findingColumnHelper.accessor((row) => row.finding.packageName, {
       id: "package",
@@ -437,7 +451,7 @@ const findingTableDefinition = defineDataTable<FindingRowData>({
       ),
       meta: dataTableColumnMeta({
         hideBelow: "md",
-        width: "minmax(7.5rem,1fr)",
+        width: "minmax(7rem,1fr)",
       }),
     }),
     findingColumnHelper.accessor((row) => row.finding.fixedVersion ?? "", {
@@ -468,7 +482,17 @@ const findingTableDefinition = defineDataTable<FindingRowData>({
           <RelativeTime timestamp={row.original.finding.firstSeenAt} />
         </span>
       ),
-      meta: dataTableColumnMeta({ hideBelow: "lg", width: "8.5rem" }),
+      meta: dataTableColumnMeta({ hideBelow: "lg", width: "7.75rem" }),
+    }),
+    findingColumnHelper.display({
+      id: "actions",
+      header: () => <span className="sr-only">Actions</span>,
+      enableSorting: false,
+      cell: ({ row }) => <FindingActions row={row.original} />,
+      meta: dataTableColumnMeta(
+        { width: { base: "3rem", md: "5.5rem" } },
+        { cellClassName: "px-1 sm:px-2", headerClassName: "px-1 sm:px-2" }
+      ),
     }),
   ]),
   getRowId: (row) => row.id,
@@ -656,8 +680,59 @@ const VulnerabilityLink = React.memo(function VulnerabilityLink({
   )
 })
 
+// The Info page of a target's resource, which says what fixes what it runs.
+const ResourceLink = React.forwardRef<
+  HTMLAnchorElement,
+  Omit<React.ComponentPropsWithoutRef<"a">, "href" | "target"> & {
+    inventory: Target
+  }
+>(function ResourceLink({ inventory: target, ...props }, ref) {
+  switch (target.resourceType) {
+    case "app":
+      return (
+        <Link
+          ref={ref}
+          to="/app/$appId/info"
+          params={{ appId: target.resourceId }}
+          preload="intent"
+          {...props}
+        />
+      )
+    case "database":
+      return (
+        <Link
+          ref={ref}
+          to="/db/$databaseId/info"
+          params={{ databaseId: target.resourceId }}
+          preload="intent"
+          {...props}
+        />
+      )
+    case "instance":
+      return (
+        <Link
+          ref={ref}
+          to="/server/$serverId/info"
+          params={{ serverId: target.resourceId }}
+          preload="intent"
+          {...props}
+        />
+      )
+    case "relay":
+      return (
+        <Link
+          ref={ref}
+          to="/relay/$relayId/info"
+          params={{ relayId: target.relayId }}
+          preload="intent"
+          {...props}
+        />
+      )
+  }
+})
+
 // What a target is, named with its resource's identity card and live state,
-// opening the resource's Info page, which says what fixes it.
+// opening the resource's Info page.
 const ResourceIdentityLink = React.memo(function ResourceIdentityLink({
   resource,
   target,
@@ -665,67 +740,110 @@ const ResourceIdentityLink = React.memo(function ResourceIdentityLink({
   resource: SecurityResource | null
   target: Target
 }) {
-  const kind = resource?.kind ?? "relay"
-  const card = (
-    <InstanceCard
-      className="min-w-0 flex-1"
-      instance={{ id: target.resourceId, kind, relayId: target.relayId }}
-      meta={targetLabel(target) || resource?.relayName}
-      name={resource?.name ?? target.resourceId.slice(0, 8)}
-      nameClassName="transition-colors group-hover/resource-link:text-primary-ink"
-      showFavorite={false}
-    />
+  const kind =
+    resource?.kind ??
+    (target.resourceType === "instance" ? "server" : target.resourceType)
+  return (
+    <ResourceLink
+      inventory={target}
+      className={cn(
+        dataTableRowLinkClassName,
+        "group/resource-link flex min-h-14 w-full min-w-0 items-center px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
+      )}
+    >
+      <InstanceCard
+        className="min-w-0 flex-1"
+        instance={{ id: target.resourceId, kind, relayId: target.relayId }}
+        meta={targetLabel(target) || resource?.relayName}
+        name={resource?.name ?? target.resourceId.slice(0, 8)}
+        nameClassName="transition-colors group-hover/resource-link:text-primary-ink"
+        showFavorite={false}
+      />
+    </ResourceLink>
   )
-  const className = cn(
-    dataTableRowLinkClassName,
-    "group/resource-link flex min-h-14 w-full min-w-0 items-center px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
+})
+
+const resourceIdLabels = {
+  app: "App ID",
+  database: "Database ID",
+  instance: "Server ID",
+  relay: "Relay ID",
+} satisfies Record<SecurityTarget["resourceType"], string>
+
+// Fix, which opens the resource's page for now, and a menu of what to copy.
+const FindingActions = React.memo(function FindingActions({
+  row,
+}: {
+  row: FindingRowData
+}) {
+  const { finding, target } = row
+  const name = row.resource?.name ?? target.resourceId.slice(0, 8)
+  const packageName = `${finding.packageName} ${finding.installedVersions.join(", ")}`
+  return (
+    <DataTableActionGroup>
+      <DataTableInlineActions>
+        <Button asChild size="xs" variant="outline">
+          <ResourceLink
+            aria-label={`Fix ${finding.vulnerabilityId} in ${name}`}
+            inventory={target}
+          >
+            <Wrench />
+            Fix
+          </ResourceLink>
+        </Button>
+      </DataTableInlineActions>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            aria-label={`More actions for ${finding.vulnerabilityId} in ${name}`}
+            className={dataTableRowMenuTriggerClassName}
+            size="icon-sm"
+            type="button"
+            variant="ghost"
+          >
+            <EllipsisVertical />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="min-w-52">
+          <DataTablePhoneMenuItems>
+            <DropdownMenuItem asChild>
+              <ResourceLink inventory={target}>
+                <Wrench />
+                Fix
+              </ResourceLink>
+            </DropdownMenuItem>
+          </DataTablePhoneMenuItems>
+          {finding.url ? (
+            <DropdownMenuItem asChild>
+              <a href={finding.url} rel="noreferrer" target="_blank">
+                <ExternalLink />
+                Open advisory
+              </a>
+            </DropdownMenuItem>
+          ) : null}
+          <DropdownMenuSeparator />
+          {target.resourceType !== "relay" ? (
+            <CopyIdentifierMenuItem
+              label={resourceIdLabels[target.resourceType]}
+              value={target.resourceId}
+            />
+          ) : null}
+          <CopyIdentifierMenuItem label="Relay ID" value={target.relayId} />
+          <CopyIdentifierMenuItem
+            label="Vulnerability ID"
+            value={finding.vulnerabilityId}
+          />
+          <CopyIdentifierMenuItem label="Package" value={packageName} />
+          {finding.fixedVersion ? (
+            <CopyIdentifierMenuItem
+              label="Fixed version"
+              value={finding.fixedVersion}
+            />
+          ) : null}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </DataTableActionGroup>
   )
-  switch (kind) {
-    case "app":
-      return (
-        <Link
-          to="/app/$appId/info"
-          params={{ appId: target.resourceId }}
-          preload="intent"
-          className={className}
-        >
-          {card}
-        </Link>
-      )
-    case "database":
-      return (
-        <Link
-          to="/db/$databaseId/info"
-          params={{ databaseId: target.resourceId }}
-          preload="intent"
-          className={className}
-        >
-          {card}
-        </Link>
-      )
-    case "server":
-      return (
-        <Link
-          to="/server/$serverId/info"
-          params={{ serverId: target.resourceId }}
-          preload="intent"
-          className={className}
-        >
-          {card}
-        </Link>
-      )
-    case "relay":
-      return (
-        <Link
-          to="/relay/$relayId/info"
-          params={{ relayId: target.relayId }}
-          preload="intent"
-          className={className}
-        >
-          {card}
-        </Link>
-      )
-  }
 })
 
 const targetColumnHelper = createDataTableColumnHelper<Target>()
