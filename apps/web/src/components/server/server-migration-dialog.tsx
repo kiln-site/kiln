@@ -198,7 +198,7 @@ function MigrationForm({
     preview.source.provisioning ||
     (mode === "migrate" && !preview.allowed.stop)
   const linkableBackups =
-    selected && selected.linksBackups
+    selected && selected.linksBackups && preview.allowed.linkBackups
       ? selected.current
         ? preview.backups.here
         : preview.backups.anywhere
@@ -348,6 +348,7 @@ function MigrationForm({
           onChange={setCopyAccess}
         />
         <BackupsOption
+          allowed={preview.allowed.linkBackups}
           checked={linkBackups && linkableBackups > 0}
           destination={selected}
           disabled={pending}
@@ -502,6 +503,7 @@ function MigrationForm({
 // Relay can't follow a copy to another, and incremental ones belong to this
 // server's repository.
 function BackupsOption({
+  allowed,
   checked,
   destination,
   disabled,
@@ -509,6 +511,7 @@ function BackupsOption({
   onChange,
   total,
 }: {
+  allowed: boolean
   checked: boolean
   destination: ServerMigrationDestination | undefined
   disabled: boolean
@@ -524,6 +527,17 @@ function BackupsOption({
         icon={<Archive />}
         label="Backups"
         detail="This server has no backups."
+      />
+    )
+  }
+  if (!allowed) {
+    return (
+      <OptionRow
+        checked={false}
+        disabled
+        icon={<Archive />}
+        label="Backups"
+        detail="Linking backups needs permission to download this server's backups."
       />
     )
   }

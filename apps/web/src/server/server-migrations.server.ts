@@ -73,6 +73,7 @@ export interface ServerMigrationPreview {
   readonly allowed: {
     readonly backup: boolean
     readonly copyAccess: boolean
+    readonly linkBackups: boolean
     readonly network: boolean
     /** Stopping and starting it, as a duplicate that stops it does. */
     readonly power: boolean
@@ -166,6 +167,7 @@ export async function previewServerMigrationHandler(
     allowed: {
       backup: authorization.allows("backup.create"),
       copyAccess: authorization.allows("access.read"),
+      linkBackups: authorization.allows("backup.download"),
       network: authorization.allows("instance.network.write"),
       power:
         authorization.allows("instance.power.stop") &&
@@ -224,8 +226,10 @@ export async function startServerMigrationHandler(
     if (data.mode === "duplicate") authorization.require("instance.power.start")
   }
   if (options.copyAccess) authorization.require("access.read")
+  // A linked backup is the copy's to download and restore, so linking needs
+  // what downloading this server's backups does.
   if (options.linkBackups) {
-    authorization.require("backup.read")
+    authorization.require("backup.download")
     const { relayConnectionFeatures } = await import("@/lib/relay-connection")
     if (
       !relayConnectionFeatures(destination.id).has(relayLinkedBackupsV1Feature)

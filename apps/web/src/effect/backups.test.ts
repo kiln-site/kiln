@@ -1389,6 +1389,69 @@ describeMysql("linked backups", () => {
         })
     )
 
+    it.effect("links each archive to a copy only once", () =>
+      Effect.gen(function* () {
+        yield* seedBackups
+        const link = linkInstanceBackupsEffect({
+          from: source,
+          linkedBy: "user-one",
+          to: { instanceId: "instance-two", relayId: "relay-two" },
+        })
+
+        yield* link
+        // As a migration resumed after linking, before it noted so, does.
+        const again = yield* link
+
+        assert.strictEqual(again, 0)
+        assert.lengthOf(yield* linkedTo("relay-two", "instance-two"), 1)
+      })
+    )
+
+    it.effect(
+      "deletes a stored copy of an archive once no backup sharing it keeps that copy",
+      () =>
+        Effect.gen(function* () {
+          yield* seedBackups
+          // The S3 archive is also kept on the Relay; only S3 follows a copy
+          // to another Relay.
+          yield* insertArtifact("s3-archive-local", "s3-archive", {
+            bytes: 10,
+            checksum_sha256: "a".repeat(64),
+          })
+          yield* linkInstanceBackupsEffect({
+            from: source,
+            linkedBy: "user-one",
+            to: { instanceId: "instance-two", relayId: "relay-two" },
+          })
+          const [linked] = yield* linkedTo("relay-two", "instance-two")
+
+          const original = yield* reserveBackupDeleteEffect({
+            backupId: "s3-archive",
+            requestedBy: "user-one",
+            taskId: "delete-original",
+          })
+
+          // Its Relay's copy goes; the S3 one the copy shares stays.
+          assert.deepStrictEqual(
+            original?.artifacts.map((artifact) => artifact.artifactId),
+            ["s3-archive-local"]
+          )
+          assert.strictEqual(
+            (yield* artifacts).get("s3-artifact")?.status,
+            "deleted"
+          )
+          const last = yield* reserveBackupDeleteEffect({
+            backupId: linked!.id,
+            requestedBy: "user-one",
+            taskId: "delete-linked",
+          })
+          assert.deepStrictEqual(
+            last?.artifacts.map((artifact) => artifact.objectKey),
+            ["kiln/s3-archive.zip"]
+          )
+        })
+    )
+
     it.effect("restores a linked backup from the archive it shares", () =>
       Effect.gen(function* () {
         yield* seedBackups

@@ -178,7 +178,7 @@ const localBackupCopySourceEffect = Effect.fn("backups.localCopySource")(
       try: () =>
         signLocalBackupDownload(
           relay,
-          { id: task.backupId },
+          { id: task.archiveId },
           task.filename,
           task.requestedBy,
           300
