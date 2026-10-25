@@ -69,6 +69,7 @@ import {
   DataTableTextCell,
   useRowMenuDialogs,
   dataTableRowLinkClassName,
+  dataTableRowMenuTriggerClassName,
 } from "@/components/data-table"
 import {
   AddFirstRelayButton,
@@ -406,9 +407,9 @@ const AppTable = React.memo(function AppTable({
           />
         ),
         meta: dataTableColumnMeta(
-          { width: { base: "2.5rem", md: "7.5rem" } },
+          { width: { base: "3rem", md: "7.5rem" } },
           {
-            cellClassName: "relative z-10 px-1 md:px-3",
+            cellClassName: "relative z-10 px-0 md:px-3",
             headerClassName: "px-1 md:px-3",
           }
         ),
@@ -544,6 +545,7 @@ const AppActions = React.memo(function AppActions({
           <TooltipTrigger asChild>
             <DropdownMenuTrigger asChild>
               <Button
+                className={dataTableRowMenuTriggerClassName}
                 aria-label={`More actions for ${app.name}`}
                 disabled={busy}
                 size="icon-sm"

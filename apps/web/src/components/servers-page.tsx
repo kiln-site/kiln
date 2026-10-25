@@ -62,6 +62,7 @@ import {
   DataTableTextCell,
   useRowMenuDialogs,
   dataTableRowLinkClassName,
+  dataTableRowMenuTriggerClassName,
 } from "@/components/data-table"
 import {
   ServerDeleteDialog,
@@ -518,9 +519,9 @@ const ServerDataTable = React.memo(function ServerDataTable({
           )
         },
         meta: dataTableColumnMeta(
-          { width: { base: "2.5rem", md: "9.5rem" } },
+          { width: { base: "3rem", md: "9.5rem" } },
           {
-            cellClassName: "relative z-10 px-1 md:px-3",
+            cellClassName: "relative z-10 px-0 md:px-3",
             headerClassName: "px-1 md:px-3",
           }
         ),
@@ -638,6 +639,7 @@ const ServerActions = React.memo(function ServerActions({
             type="button"
             size="icon-sm"
             variant="ghost"
+            className={dataTableRowMenuTriggerClassName}
             aria-label={`More actions for ${server.name}`}
           >
             <EllipsisVertical />

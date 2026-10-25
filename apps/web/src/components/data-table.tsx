@@ -567,6 +567,13 @@ export const DataTableTextCell = React.memo(function DataTableTextCell({
 export const dataTableRowLinkClassName =
   "max-md:after:absolute max-md:after:inset-0"
 
+/**
+ * A row menu's trigger. On phones, where it is a row's only action, it fills
+ * its cell so the whole end of the row opens the menu.
+ */
+export const dataTableRowMenuTriggerClassName =
+  "max-md:size-full max-md:rounded-none"
+
 export function DataTableActionGroup({
   children,
   className,
@@ -576,7 +583,10 @@ export function DataTableActionGroup({
 }) {
   return (
     <div
-      className={cn("flex w-full items-center justify-end gap-1", className)}
+      className={cn(
+        "flex w-full items-center justify-end gap-1 max-md:self-stretch",
+        className
+      )}
     >
       {children}
     </div>

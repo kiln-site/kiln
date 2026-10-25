@@ -69,6 +69,7 @@ import {
   DataTableTextCell,
   useRowMenuDialogs,
   dataTableRowLinkClassName,
+  dataTableRowMenuTriggerClassName,
 } from "@/components/data-table"
 import { CopyIdentifierMenuItem } from "@/components/copy-identifier-menu-item"
 import {
@@ -455,9 +456,9 @@ const DatabaseTable = React.memo(function DatabaseTable({
           />
         ),
         meta: dataTableColumnMeta(
-          { width: { base: "2.5rem", md: "9.5rem" } },
+          { width: { base: "3rem", md: "9.5rem" } },
           {
-            cellClassName: "relative z-10 px-1 md:px-3",
+            cellClassName: "relative z-10 px-0 md:px-3",
             headerClassName: "px-1 md:px-3",
           }
         ),
@@ -631,6 +632,7 @@ const DatabaseActions = React.memo(function DatabaseActions({
             <DropdownMenuTrigger asChild>
               <Button
                 ref={menuTriggerRef}
+                className={dataTableRowMenuTriggerClassName}
                 aria-label={`More actions for ${database.name}`}
                 disabled={busy}
                 size="icon-sm"

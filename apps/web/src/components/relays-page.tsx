@@ -102,6 +102,7 @@ import {
   DataTableTextCell,
   useRowMenuDialogs,
   dataTableRowLinkClassName,
+  dataTableRowMenuTriggerClassName,
 } from "@/components/data-table"
 import { DataTable } from "@/components/data-table-view"
 import {
@@ -696,9 +697,9 @@ function RelayTable({
           <RelayActions relay={row.original} onEdit={onEdit} />
         ),
         meta: dataTableColumnMeta(
-          { width: { base: "2.5rem", md: "10rem" } },
+          { width: { base: "3rem", md: "10rem" } },
           {
-            cellClassName: "relative z-10 px-1 md:px-3",
+            cellClassName: "relative z-10 px-0 md:px-3",
             headerClassName: "px-1 md:px-3",
           }
         ),
@@ -775,6 +776,7 @@ const RelayActions = React.memo(function RelayActions({
             type="button"
             size="icon-sm"
             variant="ghost"
+            className={dataTableRowMenuTriggerClassName}
             aria-label={`More actions for ${relay.name}`}
           >
             <EllipsisVertical />
