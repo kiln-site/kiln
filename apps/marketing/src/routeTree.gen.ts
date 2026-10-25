@@ -10,20 +10,41 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as DiscordRouteImport } from './routes/discord'
+import { Route as DonateRouteImport } from './routes/donate'
 import { Route as ForksLegalRouteImport } from './routes/forks-legal'
+import { Route as GithubRouteImport } from './routes/github'
 import { Route as InstallRouteImport } from './routes/install'
 import { Route as PricingRouteImport } from './routes/pricing'
 import { Route as PrivacyRouteImport } from './routes/privacy'
+import { Route as SponsorRouteImport } from './routes/sponsor'
 import { Route as TermsRouteImport } from './routes/terms'
+import { Route as TwitterRouteImport } from './routes/twitter'
+import { Route as XRouteImport } from './routes/x'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DiscordRoute = DiscordRouteImport.update({
+  id: '/discord',
+  path: '/discord',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DonateRoute = DonateRouteImport.update({
+  id: '/donate',
+  path: '/donate',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ForksLegalRoute = ForksLegalRouteImport.update({
   id: '/forks-legal',
   path: '/forks-legal',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const GithubRoute = GithubRouteImport.update({
+  id: '/github',
+  path: '/github',
   getParentRoute: () => rootRouteImport,
 } as any)
 const InstallRoute = InstallRouteImport.update({
@@ -41,60 +62,128 @@ const PrivacyRoute = PrivacyRouteImport.update({
   path: '/privacy',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SponsorRoute = SponsorRouteImport.update({
+  id: '/sponsor',
+  path: '/sponsor',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const TermsRoute = TermsRouteImport.update({
   id: '/terms',
   path: '/terms',
   getParentRoute: () => rootRouteImport,
 } as any)
+const TwitterRoute = TwitterRouteImport.update({
+  id: '/twitter',
+  path: '/twitter',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const XRoute = XRouteImport.update({
+  id: '/x',
+  path: '/x',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/discord': typeof DiscordRoute
+  '/donate': typeof DonateRoute
   '/forks-legal': typeof ForksLegalRoute
+  '/github': typeof GithubRoute
   '/install': typeof InstallRoute
   '/pricing': typeof PricingRoute
   '/privacy': typeof PrivacyRoute
+  '/sponsor': typeof SponsorRoute
   '/terms': typeof TermsRoute
+  '/twitter': typeof TwitterRoute
+  '/x': typeof XRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/discord': typeof DiscordRoute
+  '/donate': typeof DonateRoute
   '/forks-legal': typeof ForksLegalRoute
+  '/github': typeof GithubRoute
   '/install': typeof InstallRoute
   '/pricing': typeof PricingRoute
   '/privacy': typeof PrivacyRoute
+  '/sponsor': typeof SponsorRoute
   '/terms': typeof TermsRoute
+  '/twitter': typeof TwitterRoute
+  '/x': typeof XRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/discord': typeof DiscordRoute
+  '/donate': typeof DonateRoute
   '/forks-legal': typeof ForksLegalRoute
+  '/github': typeof GithubRoute
   '/install': typeof InstallRoute
   '/pricing': typeof PricingRoute
   '/privacy': typeof PrivacyRoute
+  '/sponsor': typeof SponsorRoute
   '/terms': typeof TermsRoute
+  '/twitter': typeof TwitterRoute
+  '/x': typeof XRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
-    '/' | '/forks-legal' | '/install' | '/pricing' | '/privacy' | '/terms'
-  fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/forks-legal' | '/install' | '/pricing' | '/privacy' | '/terms'
-  id:
-    | '__root__'
     | '/'
+    | '/discord'
+    | '/donate'
     | '/forks-legal'
+    | '/github'
     | '/install'
     | '/pricing'
     | '/privacy'
+    | '/sponsor'
     | '/terms'
+    | '/twitter'
+    | '/x'
+  fileRoutesByTo: FileRoutesByTo
+  to:
+    | '/'
+    | '/discord'
+    | '/donate'
+    | '/forks-legal'
+    | '/github'
+    | '/install'
+    | '/pricing'
+    | '/privacy'
+    | '/sponsor'
+    | '/terms'
+    | '/twitter'
+    | '/x'
+  id:
+    | '__root__'
+    | '/'
+    | '/discord'
+    | '/donate'
+    | '/forks-legal'
+    | '/github'
+    | '/install'
+    | '/pricing'
+    | '/privacy'
+    | '/sponsor'
+    | '/terms'
+    | '/twitter'
+    | '/x'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  DiscordRoute: typeof DiscordRoute
+  DonateRoute: typeof DonateRoute
   ForksLegalRoute: typeof ForksLegalRoute
+  GithubRoute: typeof GithubRoute
   InstallRoute: typeof InstallRoute
   PricingRoute: typeof PricingRoute
   PrivacyRoute: typeof PrivacyRoute
+  SponsorRoute: typeof SponsorRoute
   TermsRoute: typeof TermsRoute
+  TwitterRoute: typeof TwitterRoute
+  XRoute: typeof XRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -106,11 +195,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/discord': {
+      id: '/discord'
+      path: '/discord'
+      fullPath: '/discord'
+      preLoaderRoute: typeof DiscordRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/donate': {
+      id: '/donate'
+      path: '/donate'
+      fullPath: '/donate'
+      preLoaderRoute: typeof DonateRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/forks-legal': {
       id: '/forks-legal'
       path: '/forks-legal'
       fullPath: '/forks-legal'
       preLoaderRoute: typeof ForksLegalRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/github': {
+      id: '/github'
+      path: '/github'
+      fullPath: '/github'
+      preLoaderRoute: typeof GithubRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/install': {
@@ -134,6 +244,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PrivacyRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/sponsor': {
+      id: '/sponsor'
+      path: '/sponsor'
+      fullPath: '/sponsor'
+      preLoaderRoute: typeof SponsorRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/terms': {
       id: '/terms'
       path: '/terms'
@@ -141,16 +258,36 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof TermsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/twitter': {
+      id: '/twitter'
+      path: '/twitter'
+      fullPath: '/twitter'
+      preLoaderRoute: typeof TwitterRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/x': {
+      id: '/x'
+      path: '/x'
+      fullPath: '/x'
+      preLoaderRoute: typeof XRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  DiscordRoute: DiscordRoute,
+  DonateRoute: DonateRoute,
   ForksLegalRoute: ForksLegalRoute,
+  GithubRoute: GithubRoute,
   InstallRoute: InstallRoute,
   PricingRoute: PricingRoute,
   PrivacyRoute: PrivacyRoute,
+  SponsorRoute: SponsorRoute,
   TermsRoute: TermsRoute,
+  TwitterRoute: TwitterRoute,
+  XRoute: XRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
