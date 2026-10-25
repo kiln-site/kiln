@@ -33,6 +33,7 @@ import { loadedKilnInstallationId } from "@/effect/installation"
 import {
   mapPairingHttpResponse,
   mapPairingTransportError,
+  unreachablePairingError,
 } from "@/lib/relay-pairing-errors"
 import { relayPairingOrigin } from "@/lib/relay-control-endpoint"
 import { relayNameForNewPairing } from "@/lib/relay-names"
@@ -1420,7 +1421,11 @@ export async function postPairingRequest(
   const request = url.protocol === "https:" ? httpsRequest : httpRequest
   return new Promise((resolve, reject) => {
     const fail = (cause: unknown) => {
-      reject(mapPairingTransportError(cause) ?? cause)
+      reject(
+        mapPairingTransportError(cause) ??
+          unreachablePairingError(cause, url) ??
+          cause
+      )
     }
     const outgoing = request(
       url,

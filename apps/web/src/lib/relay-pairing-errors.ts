@@ -67,6 +67,46 @@ export function mapPairingTransportError(cause: unknown): Error | null {
   return null
 }
 
+// Hearth got no answer from the Relay's address at all: nothing listens
+// there, a router doesn't forward it, or the name doesn't resolve.
+const unreachableCodes = new Set([
+  "ABORT_ERR",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EHOSTDOWN",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "ETIMEDOUT",
+])
+
+export function unreachablePairingError(
+  cause: unknown,
+  url: URL
+): Error | null {
+  const code = errorCode(cause)
+  if (code === "ENOTFOUND" || code === "EAI_AGAIN") {
+    return new Error(
+      `Hearth can't find ${url.hostname}. Check that its DNS points at the Relay's machine.`
+    )
+  }
+  const name = cause instanceof Error ? cause.name : ""
+  if (
+    (code && unreachableCodes.has(code)) ||
+    name === "AbortError" ||
+    name === "TimeoutError"
+  ) {
+    return unreachableRelayError(url)
+  }
+  return null
+}
+
+export function unreachableRelayError(url: URL): Error {
+  const port = url.port || (url.protocol === "http:" ? "80" : "443")
+  return new Error(
+    `Hearth can't reach the Relay at ${url.hostname}:${port}. If its machine is behind a router, forward port ${port} to it.`
+  )
+}
+
 export function mapPairingHttpResponse(
   statusCode: number,
   body: string

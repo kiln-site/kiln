@@ -9,6 +9,7 @@ import {
 } from "node:crypto"
 import { lookup } from "node:dns/promises"
 import { BlockList, isIP } from "node:net"
+import { connect as tlsConnect } from "node:tls"
 
 import {
   isKilnNightlyVersion,
@@ -30,12 +31,17 @@ import type { RowDataPacket } from "mysql2/promise"
 
 import { Database } from "@/effect/database"
 import { loadedKilnInstallationId } from "@/effect/installation"
-import { promiseEffect } from "@/effect/promise"
+import { promiseEffect, recoverPromise } from "@/effect/promise"
 import { forkAppWorker } from "@/effect/runtime"
 import { databaseTable } from "@/lib/database-config"
 import { kilnInstallScriptUrl, kilnPublicUrl } from "@/lib/environment"
 import { relayPairingOrigin } from "@/lib/relay-control-endpoint"
 import { relayNameForNewPairing } from "@/lib/relay-names"
+import {
+  mapPairingTransportError,
+  unreachablePairingError,
+  unreachableRelayError,
+} from "@/lib/relay-pairing-errors"
 import {
   decryptPrivateKey,
   encryptPrivateKey,
@@ -162,6 +168,8 @@ export interface RelayJoinView {
     readonly relayBuild: string
     readonly relayFingerprint: string
     readonly relayName: string
+    // Why Hearth can't reach the Relay yet, while it waits to be confirmed.
+    readonly unreachable: string | null
   } | null
   readonly error: string | null
   readonly expiresAt: number
@@ -235,6 +243,10 @@ const joinView = Effect.fn("relayJoin.view")(function* (row: RelayJoinRow) {
     ? (relays.find((relay) => relay.id === envelope.relayFingerprint) ?? null)
     : null
   const addressTakenBy = envelope ? relayAtAddress(envelope, relays) : null
+  const unreachable =
+    envelope && row.state === "announced"
+      ? yield* promiseEffect(() => relayReachProblem(row.id, envelope))
+      : null
   const defaultName =
     existing?.name ??
     (envelope
@@ -261,6 +273,7 @@ const joinView = Effect.fn("relayJoin.view")(function* (row: RelayJoinRow) {
             relayBuild: envelope.relayBuild,
             relayFingerprint: envelope.relayFingerprint,
             relayName: envelope.relayName,
+            unreachable,
           }
         : null,
     error: row.error,
@@ -1251,6 +1264,70 @@ const finishJoin = Effect.fnUntraced(function* (
 })
 
 // ------------------------------------------------------------- network
+
+const REACH_TIMEOUT_MS = 3_000
+// The dialog asks every two seconds; Hearth looks again at most this often.
+const REACH_RECHECK_MS = 5_000
+const reachChecks = new Map<
+  string,
+  { checkedAt: number; problem: Promise<string | null> }
+>()
+
+// Whether Hearth can open the Relay's HTTPS the way pairing will, so the
+// dialog says what's wrong before anyone confirms: null when it can.
+function relayReachProblem(
+  joinId: string,
+  envelope: RelayJoinEnvelope
+): Promise<string | null> {
+  const now = Date.now()
+  for (const [id, check] of reachChecks) {
+    if (now - check.checkedAt > REACH_RECHECK_MS) reachChecks.delete(id)
+  }
+  const cached = reachChecks.get(joinId)
+  if (cached) return cached.problem
+  const origin = relayPairingOrigin({
+    browserOrigin: new URL(envelope.browserOrigin),
+    caCertificatePem: envelope.caCertificatePem,
+  })
+  const problem = recoverPromise(async () => {
+    await assertRelayDestination(origin.hostname)
+    return tlsReachProblem(origin, envelope.caCertificatePem)
+  }, errorMessage)
+  reachChecks.set(joinId, { checkedAt: now, problem })
+  return problem
+}
+
+function tlsReachProblem(
+  origin: URL,
+  caCertificatePem: string | null
+): Promise<string | null> {
+  const host = origin.hostname.replace(/^\[|\]$/gu, "")
+  return new Promise((resolve) => {
+    const socket = tlsConnect({
+      ca: caCertificatePem ?? undefined,
+      host,
+      port: Number(origin.port || 443),
+      servername: isIP(host) ? undefined : host,
+    })
+    const settle = (problem: string | null) => {
+      socket.destroy()
+      resolve(problem)
+    }
+    socket.setTimeout(REACH_TIMEOUT_MS, () =>
+      settle(unreachableRelayError(origin).message)
+    )
+    socket.once("secureConnect", () => settle(null))
+    socket.once("error", (cause) =>
+      settle(
+        (
+          mapPairingTransportError(cause) ??
+          unreachablePairingError(cause, origin) ??
+          cause
+        ).message
+      )
+    )
+  })
+}
 
 // Addresses Hearth never pairs with, whatever a Relay announces: link-local
 // ones (cloud metadata services live there), unspecified, multicast, and

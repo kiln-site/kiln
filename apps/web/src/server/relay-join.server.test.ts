@@ -5,6 +5,7 @@ import {
   generateKeyPairSync,
   randomBytes,
 } from "node:crypto"
+import { createServer } from "node:net"
 
 import { assert, layer } from "@effect/vitest"
 import { Effect, Schedule } from "effect"
@@ -28,6 +29,22 @@ import { deletePersistedRelayEffect } from "@/lib/relay-registry"
 import { insertRelay } from "@/test/seed"
 
 vi.stubEnv("BETTER_AUTH_SECRETS", `1:${"j".repeat(32)}`)
+
+// A local port nothing listens on.
+function closedPort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = createServer()
+    server.once("error", reject)
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address()
+      server.close(() =>
+        typeof address === "object" && address
+          ? resolve(address.port)
+          : reject(new Error("No port"))
+      )
+    })
+  })
+}
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -176,6 +193,31 @@ describeMysql("Relay joins", () => {
             "203.0.113.1"
           )
           assert.strictEqual(oversized.status, 413)
+        })
+    )
+
+    it.effect(
+      "say when Hearth can't reach a joining Relay, before anyone confirms it",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          const join = yield* openRelayJoinEffect("owner")
+          const port = yield* Effect.promise(closedPort)
+          yield* announce(
+            join.id,
+            join.secret ?? "",
+            relayEnvelope(join.id, {
+              browserOrigin: `https://127.0.0.1:${port}`,
+              controlEndpoint: `wss://127.0.0.1:${port}/v1/socket`,
+            }),
+            "203.0.113.1"
+          )
+
+          const view = yield* relayJoinViewEffect("owner", join.id)
+          assert.strictEqual(
+            view.announcement?.unreachable,
+            `Hearth can't reach the Relay at 127.0.0.1:${port}. If its machine is behind a router, forward port ${port} to it.`
+          )
         })
     )
 

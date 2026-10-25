@@ -118,12 +118,15 @@ export function RelayJoinPanel({
 }
 
 // While something on the Relay's side or Hearth's can still change: also
-// while another Relay holds its address, until someone removes that one.
+// while another Relay holds its address, until someone removes that one,
+// and while Hearth can't reach it, until someone opens the way.
 function polling(view: JoinView | undefined): boolean {
   return (
     view?.state === "waiting" ||
     view?.state === "confirming" ||
-    (view?.state === "announced" && view.announcement?.addressTakenBy != null)
+    (view?.state === "announced" &&
+      (view.announcement?.addressTakenBy != null ||
+        view.announcement?.unreachable != null))
   )
 }
 
@@ -313,6 +316,7 @@ function JoinReview({
       (view.progress === null || view.progress === "pairing"))
   const existing = announcement.existingRelay
   const holder = announcement.addressTakenBy
+  const unreachable = holder ? null : announcement.unreachable
 
   return (
     <div className="min-w-0 space-y-4">
@@ -378,6 +382,15 @@ function JoinReview({
         </div>
       ) : null}
 
+      {unreachable ? (
+        <div className="flex items-start gap-3 border border-amber-400/25 bg-amber-400/8 px-3 py-2.5">
+          <CircleAlert className="mt-0.5 size-3.5 shrink-0 text-amber-200 light:text-amber-800" />
+          <p className="type-meta min-w-0 flex-1 text-amber-200 light:text-amber-800">
+            {unreachable} This updates once Hearth can reach it.
+          </p>
+        </div>
+      ) : null}
+
       {view.state === "needs_review" ? (
         <DialogFeedback message="The Relay's installation ID changed while it was being added. Choose again." />
       ) : null}
@@ -408,7 +421,12 @@ function JoinReview({
         ) : null}
         <Button
           type="button"
-          disabled={working || confirm.isPending || holder !== null}
+          disabled={
+            working ||
+            confirm.isPending ||
+            holder !== null ||
+            unreachable !== null
+          }
           onClick={() => confirm.mutate()}
         >
           {confirm.isPending ? (
