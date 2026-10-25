@@ -529,9 +529,6 @@ interface CountRow extends RowDataPacket {
 }
 
 interface FindingRow extends RowDataPacket {
-  cvss: number | null
-  description: string | null
-  epss: number | null
   first_seen_at: number | string
   fix_state: SecurityFindingSummary["fixState"]
   fixed_version: string | null
@@ -694,8 +691,7 @@ export const loadSecurityFindingsEffect = Effect.fn("security.loadFindings")(
       "security.loadFindings",
       `SELECT f.relay_id, f.sbom_key, f.vulnerability_id,
               ${findingPackage} AS package_name, f.package_version, f.package_type, f.severity, f.fix_state,
-              f.fixed_version, f.first_seen_at, v.description, v.url, v.cvss,
-              v.epss, v.known_exploited
+              f.fixed_version, f.first_seen_at, v.url, v.known_exploited
          FROM ${databaseTable("security_finding")} f
          LEFT JOIN ${databaseTable("security_vulnerability")} v
            ON v.id = f.vulnerability_id
@@ -715,9 +711,6 @@ export const loadSecurityFindingsEffect = Effect.fn("security.loadFindings")(
     for (const row of rows) {
       const key = `${row.vulnerability_id}\u0000${row.package_name}`
       const finding = findings.get(key) ?? {
-        cvss: row.cvss,
-        description: row.description,
-        epss: row.epss,
         firstSeenAt: Number(row.first_seen_at),
         fixState: row.fix_state,
         fixedVersion: row.fixed_version,

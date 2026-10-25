@@ -37,7 +37,9 @@ const viewPermissions = {
   relay: "relay.read",
 } as const satisfies Record<SecurityTarget["resourceType"], AccessPermission>
 
-const findingLimit = 500
+// Rows are virtualized; this keeps one response small for the largest
+// installs.
+const findingLimit = 2_000
 
 // What the user may see and scan, from one read of their grants.
 async function securityAccess(user: AuthenticatedUser) {

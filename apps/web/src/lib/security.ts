@@ -104,9 +104,6 @@ export interface SecurityFindingSummary {
   fixedVersion: string | null
   fixState: "fixed" | "not-fixed" | "unknown" | "wont-fix"
   knownExploited: boolean
-  epss: number | null
-  cvss: number | null
-  description: string | null
   url: string | null
   /** The scan targets, by `targetKey`, it was found in. */
   targets: Array<string>

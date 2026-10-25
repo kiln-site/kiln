@@ -1,4 +1,5 @@
 import * as React from "react"
+import { Link } from "@tanstack/react-router"
 import {
   keepPreviousData,
   useMutation,
@@ -15,7 +16,6 @@ import {
   Siren,
 } from "lucide-react"
 
-import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import { showToast } from "@workspace/ui/components/sonner"
 import {
@@ -25,6 +25,15 @@ import {
 } from "@workspace/ui/components/tooltip"
 import { cn } from "@workspace/ui/lib/utils"
 
+import {
+  DataTableEmptyState,
+  dataTableRowLinkClassName,
+} from "@/components/data-table"
+import { DataTable } from "@/components/data-table-view"
+import {
+  DataTableToolbar,
+  DataTableWorkspace,
+} from "@/components/data-table-workspace"
 import { InstanceCard } from "@/components/instance-card"
 import { RelativeTime } from "@/components/relative-time"
 import {
@@ -37,7 +46,15 @@ import {
   type ServerPickerOption,
 } from "@/components/server-scope-picker"
 import {
+  createDataTableColumnHelper,
+  dataTableColumnMeta,
+  defineDataTable,
+} from "@/lib/data-table"
+import { createDataTableSearchStore } from "@/lib/data-table-search"
+import type { DataTableSource } from "@/lib/data-table-source"
+import {
   securitySeverityLabels,
+  severityRank,
   type SecurityFindingSummary,
   type SecurityOverview,
   type SecurityResource,
@@ -97,9 +114,9 @@ export const SecurityPage = React.memo(function SecurityPage({
           <>
             <SecuritySummary overview={overview} />
             <FindingsSection
-              key={scope ?? "all"}
               overview={overview}
               resources={resources}
+              scope={scope}
             />
             <TargetsSection overview={overview} resources={resources} />
             <SecurityFootnote overview={overview} />
@@ -290,14 +307,6 @@ function SummaryTile({
   )
 }
 
-// The resource a target belongs to, named for the viewer.
-function targetResource(
-  target: SecurityTarget,
-  resources: ReadonlyMap<string, SecurityResource>
-): SecurityResource | undefined {
-  return resources.get(target.scope)
-}
-
 function targetLabel(target: SecurityTarget): string {
   // An app's services are named; its one service and a game server's or
   // database's container are the resource itself.
@@ -311,208 +320,310 @@ function targetLabel(target: SecurityTarget): string {
     : (target.component ?? "")
 }
 
+// One row per vulnerable package in each resource it's found in, so the
+// resource can be sorted on and named with its own identity card.
+interface FindingRowData {
+  finding: SecurityFindingSummary
+  id: string
+  resource: SecurityResource | null
+  target: Target
+}
+
+const findingColumnHelper = createDataTableColumnHelper<FindingRowData>()
+
+const findingSearchFields = [
+  (row: FindingRowData) => row.finding.vulnerabilityId,
+  (row: FindingRowData) => row.finding.packageName,
+  (row: FindingRowData) => row.finding.fixedVersion,
+  (row: FindingRowData) => row.resource?.name,
+  (row: FindingRowData) => row.resource?.relayName,
+  (row: FindingRowData) => targetLabel(row.target),
+] as const
+
+const findingTableDefinition = defineDataTable<FindingRowData>({
+  ariaLabel: "Vulnerabilities",
+  columns: findingColumnHelper.columns([
+    findingColumnHelper.accessor((row) => severityRank(row.finding.severity), {
+      id: "severity",
+      header: "Severity",
+      // Known exploited ones lead their severity.
+      sortFn: (left, right) =>
+        severityRank(left.original.finding.severity) -
+          severityRank(right.original.finding.severity) ||
+        Number(left.original.finding.knownExploited) -
+          Number(right.original.finding.knownExploited),
+      cell: ({ row }) => (
+        <SeverityBadge severity={row.original.finding.severity} />
+      ),
+      meta: dataTableColumnMeta({ width: "7rem" }),
+    }),
+    findingColumnHelper.accessor((row) => row.resource?.name ?? "", {
+      id: "found-in",
+      header: "Found in",
+      sortFn: "text",
+      cell: ({ row }) => (
+        <ResourceIdentityLink
+          resource={row.original.resource}
+          target={row.original.target}
+        />
+      ),
+      meta: dataTableColumnMeta(
+        { width: "minmax(12rem,1.2fr)" },
+        { cellClassName: "p-0" }
+      ),
+    }),
+    findingColumnHelper.accessor((row) => row.finding.vulnerabilityId, {
+      id: "vulnerability",
+      header: "Vulnerability",
+      sortFn: "text",
+      cell: ({ row }) => <VulnerabilityLink finding={row.original.finding} />,
+      meta: dataTableColumnMeta({ width: "minmax(11rem,0.8fr)" }),
+    }),
+    findingColumnHelper.accessor((row) => row.finding.packageName, {
+      id: "package",
+      header: "Package",
+      sortFn: "text",
+      cell: ({ row }) => (
+        <span className="flex min-w-0 flex-col">
+          <span className="truncate font-medium">
+            {row.original.finding.packageName}
+          </span>
+          <span className="type-meta truncate font-mono text-muted-foreground">
+            {row.original.finding.installedVersions.join(", ")}
+          </span>
+        </span>
+      ),
+      meta: dataTableColumnMeta({
+        hideBelow: "md",
+        width: "minmax(10rem,1fr)",
+      }),
+    }),
+    findingColumnHelper.accessor((row) => row.finding.fixedVersion ?? "", {
+      id: "fix",
+      header: "Fix",
+      sortFn: "text",
+      cell: ({ row }) =>
+        row.original.finding.fixedVersion ? (
+          <span className="truncate font-mono text-[0.8125rem] text-emerald-300 light:text-emerald-700">
+            {row.original.finding.fixedVersion}
+          </span>
+        ) : (
+          <span className="type-meta text-muted-foreground">
+            {row.original.finding.fixState === "wont-fix"
+              ? "Won't be fixed"
+              : "No fix yet"}
+          </span>
+        ),
+      meta: dataTableColumnMeta({ hideBelow: "sm", width: "8rem" }),
+    }),
+    findingColumnHelper.accessor((row) => row.finding.firstSeenAt, {
+      id: "first-seen",
+      header: "First seen",
+      sortFn: (left, right) =>
+        left.original.finding.firstSeenAt - right.original.finding.firstSeenAt,
+      cell: ({ row }) => (
+        <span className="type-meta text-muted-foreground">
+          <RelativeTime timestamp={row.original.finding.firstSeenAt} />
+        </span>
+      ),
+      meta: dataTableColumnMeta({ hideBelow: "lg", width: "8.25rem" }),
+    }),
+  ]),
+  getRowId: (row) => row.id,
+  search: { fields: findingSearchFields },
+  virtualization: true,
+})
+
 const FindingsSection = React.memo(function FindingsSection({
   overview,
   resources,
+  scope,
 }: {
   overview: SecurityOverview
   resources: ReadonlyMap<string, SecurityResource>
+  scope: string | null
 }) {
-  const targets = React.useMemo(
-    () => new Map(overview.targets.map((target) => [target.targetKey, target])),
-    [overview.targets]
+  const [searchStore] = React.useState(createDataTableSearchStore)
+  const rows = React.useMemo(() => {
+    const targets = new Map(
+      overview.targets.map((target) => [target.targetKey, target])
+    )
+    return overview.findings.flatMap((finding) => {
+      const byResource = new Map<string, Target>()
+      for (const key of finding.targets) {
+        const target = targets.get(key)
+        if (target && !byResource.has(target.scope)) {
+          byResource.set(target.scope, target)
+        }
+      }
+      return [...byResource].map(([resourceScope, target]): FindingRowData => ({
+        finding,
+        id: `${finding.vulnerabilityId}\u0000${finding.packageName}\u0000${resourceScope}`,
+        resource: resources.get(resourceScope) ?? null,
+        target,
+      }))
+    })
+  }, [overview.findings, overview.targets, resources])
+  const source = React.useMemo(
+    (): DataTableSource<FindingRowData> => ({
+      body: { kind: "ready" },
+      refreshing: false,
+      resetKey: scope ?? "all",
+      rows,
+    }),
+    [rows, scope]
   )
-  // Rows render a page at a time, so a long list doesn't slow the page.
-  const [shown, setShown] = React.useState(findingPage)
-  const findings = overview.findings.slice(0, shown)
+  const checked = overview.targets.some((target) => target.status === "checked")
   return (
     <section className="grid gap-3">
       <div className="flex flex-wrap items-baseline gap-2">
         <h2 className="type-section-title">Vulnerabilities</h2>
-        <p className="type-meta text-muted-foreground">
-          Known exploited first, then by severity, with ones an update fixes
-          first.
-          {overview.truncated
-            ? ` Showing the ${overview.findings.length} most urgent; choose an instance to see all of its own.`
-            : null}
-        </p>
+        {overview.truncated ? (
+          <p className="type-meta text-muted-foreground">
+            The {overview.findings.length.toLocaleString()} most urgent; choose
+            an instance to see all of its own.
+          </p>
+        ) : null}
       </div>
-      {overview.findings.length === 0 ? (
-        <p className="type-meta rounded-xl border border-border/75 bg-card/45 px-4 py-6 text-center text-muted-foreground">
-          {overview.targets.some((target) => target.status === "checked")
-            ? "No known vulnerabilities in what's been checked."
-            : "Kiln is still checking what it inventoried."}
-        </p>
-      ) : (
-        <div className="overflow-x-auto rounded-xl border border-border/75 bg-card/45">
-          <table className="w-full min-w-[64rem] text-left text-sm">
-            <thead className="type-meta border-b border-border/75 text-muted-foreground">
-              <tr>
-                <th className="w-24 px-4 py-2.5 font-medium">Severity</th>
-                <th className="px-4 py-2.5 font-medium">Vulnerability</th>
-                <th className="px-4 py-2.5 font-medium">Package</th>
-                <th className="px-4 py-2.5 font-medium">Fix</th>
-                <th className="w-64 px-4 py-2.5 font-medium">Found in</th>
-                <th className="w-28 px-4 py-2.5 font-medium">First seen</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border/60">
-              {findings.map((finding) => (
-                <FindingRow
-                  key={`${finding.vulnerabilityId}:${finding.packageName}`}
-                  finding={finding}
-                  resources={resources}
-                  targets={targets}
-                />
-              ))}
-            </tbody>
-          </table>
-          {overview.findings.length > shown ? (
-            <div className="border-t border-border/60 px-4 py-2.5 text-center">
-              <Button
-                size="sm"
-                type="button"
-                variant="ghost"
-                onClick={() => setShown((count) => count + findingPage)}
-              >
-                Show more ({overview.findings.length - shown} left)
-              </Button>
-            </div>
-          ) : null}
-        </div>
-      )}
+      <DataTableWorkspace
+        className="h-[min(44rem,75dvh)] flex-none"
+        toolbar={
+          <DataTableToolbar
+            search={{
+              ariaLabel: "Search vulnerabilities",
+              closeMobileWhenEmpty: true,
+              id: "security-search",
+              placeholder: "Search vulnerabilities",
+              store: searchStore,
+            }}
+          />
+        }
+      >
+        <DataTable
+          definition={findingTableDefinition}
+          emptyState={({ searchActive }) => (
+            <DataTableEmptyState
+              description={
+                searchActive
+                  ? "Try a CVE, package, or instance."
+                  : checked
+                    ? "Nothing Kiln has checked has a known vulnerability."
+                    : "Kiln is still checking what it inventoried."
+              }
+              icon={
+                <ShieldCheck className="size-6 text-muted-foreground/45 light:text-muted-foreground/72" />
+              }
+              title={
+                searchActive
+                  ? "No vulnerabilities match your search"
+                  : "No known vulnerabilities"
+              }
+            />
+          )}
+          searchStore={searchStore}
+          source={source}
+        />
+      </DataTableWorkspace>
     </section>
   )
 })
 
-const findingPage = 100
-
-const FindingRow = React.memo(function FindingRow({
+// The vulnerability's ID, linking to its advisory.
+const VulnerabilityLink = React.memo(function VulnerabilityLink({
   finding,
-  resources,
-  targets,
 }: {
   finding: SecurityFindingSummary
-  resources: ReadonlyMap<string, SecurityResource>
-  targets: ReadonlyMap<string, Target>
 }) {
-  const affected = finding.targets.flatMap((key) => {
-    const target = targets.get(key)
-    return target ? [target] : []
-  })
+  if (!finding.url) {
+    return (
+      <span className="truncate font-mono text-[0.8125rem] font-medium">
+        {finding.vulnerabilityId}
+      </span>
+    )
+  }
   return (
-    <tr className="align-top [contain-intrinsic-size:auto_3.5rem] [content-visibility:auto]">
-      <td className="px-4 py-3">
-        <SeverityBadge severity={finding.severity} />
-      </td>
-      <td className="max-w-[26rem] px-4 py-3">
-        <div className="flex flex-wrap items-center gap-1.5">
-          {finding.url ? (
-            <a
-              className="inline-flex items-center gap-1 font-mono text-[0.8125rem] font-medium hover:underline"
-              href={finding.url}
-              rel="noreferrer"
-              target="_blank"
-            >
-              {finding.vulnerabilityId}
-              <ExternalLink className="size-3 opacity-60" />
-            </a>
-          ) : (
-            <span className="font-mono text-[0.8125rem] font-medium">
-              {finding.vulnerabilityId}
-            </span>
-          )}
-          {finding.knownExploited ? (
-            <Badge variant="destructive" className="h-5 gap-1 text-[0.6875rem]">
-              <Siren className="size-3" /> Exploited
-            </Badge>
-          ) : null}
-          {finding.epss !== null && finding.epss >= 0.1 ? (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Badge variant="outline" className="h-5 text-[0.6875rem]">
-                  {Math.round(finding.epss * 100)}% likely exploited
-                </Badge>
-              </TooltipTrigger>
-              <TooltipContent>
-                The chance it's exploited in the next 30 days (EPSS)
-              </TooltipContent>
-            </Tooltip>
-          ) : null}
-        </div>
-        {finding.description ? (
-          <p
-            className="type-meta mt-1 line-clamp-2 text-muted-foreground"
-            title={finding.description}
-          >
-            {finding.description}
-          </p>
-        ) : null}
-      </td>
-      <td className="px-4 py-3">
-        <p className="font-medium break-all">{finding.packageName}</p>
-        <p className="type-meta font-mono text-muted-foreground">
-          {finding.installedVersions.join(", ")}
-        </p>
-      </td>
-      <td className="px-4 py-3">
-        {finding.fixedVersion ? (
-          <span className="font-mono text-[0.8125rem] text-emerald-300 light:text-emerald-700">
-            {finding.fixedVersion}
-          </span>
-        ) : (
-          <span className="type-meta text-muted-foreground">
-            {finding.fixState === "wont-fix" ? "Won't be fixed" : "No fix yet"}
-          </span>
-        )}
-      </td>
-      <td className="px-4 py-3">
-        <div className="grid gap-1.5">
-          {affected.slice(0, 3).map((target) => (
-            <TargetIdentity
-              key={target.targetKey}
-              resources={resources}
-              target={target}
-            />
-          ))}
-          {affected.length > 3 ? (
-            <span className="type-meta text-muted-foreground">
-              and {affected.length - 3} more
-            </span>
-          ) : null}
-        </div>
-      </td>
-      <td className="px-4 py-3">
-        <RelativeTime
-          className="type-meta text-muted-foreground"
-          timestamp={finding.firstSeenAt}
-        />
-      </td>
-    </tr>
+    <a
+      className="inline-flex min-w-0 items-center gap-1 font-mono text-[0.8125rem] font-medium hover:text-primary-ink hover:underline"
+      href={finding.url}
+      rel="noreferrer"
+      target="_blank"
+    >
+      <span className="truncate">{finding.vulnerabilityId}</span>
+      <ExternalLink className="size-3 shrink-0 opacity-60" />
+    </a>
   )
 })
 
-const TargetIdentity = React.memo(function TargetIdentity({
-  resources,
+// What a target is, named with its resource's identity card and live state,
+// opening the resource's Info page, which says what fixes it.
+const ResourceIdentityLink = React.memo(function ResourceIdentityLink({
+  resource,
   target,
 }: {
-  resources: ReadonlyMap<string, SecurityResource>
+  resource: SecurityResource | null
   target: Target
 }) {
-  const resource = targetResource(target, resources)
-  return (
+  const kind = resource?.kind ?? "relay"
+  const card = (
     <InstanceCard
-      instance={{
-        id: target.resourceId,
-        kind: resource?.kind ?? "relay",
-        relayId: target.relayId,
-      }}
+      className="min-w-0 flex-1"
+      instance={{ id: target.resourceId, kind, relayId: target.relayId }}
       meta={targetLabel(target) || resource?.relayName}
       name={resource?.name ?? target.resourceId.slice(0, 8)}
+      nameClassName="transition-colors group-hover/resource-link:text-primary-ink"
       showFavorite={false}
-      showStatus={false}
     />
   )
+  const className = cn(
+    dataTableRowLinkClassName,
+    "group/resource-link flex min-h-14 w-full min-w-0 items-center px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
+  )
+  switch (kind) {
+    case "app":
+      return (
+        <Link
+          to="/app/$appId/info"
+          params={{ appId: target.resourceId }}
+          preload="intent"
+          className={className}
+        >
+          {card}
+        </Link>
+      )
+    case "database":
+      return (
+        <Link
+          to="/db/$databaseId/info"
+          params={{ databaseId: target.resourceId }}
+          preload="intent"
+          className={className}
+        >
+          {card}
+        </Link>
+      )
+    case "server":
+      return (
+        <Link
+          to="/server/$serverId/info"
+          params={{ serverId: target.resourceId }}
+          preload="intent"
+          className={className}
+        >
+          {card}
+        </Link>
+      )
+    case "relay":
+      return (
+        <Link
+          to="/relay/$relayId/info"
+          params={{ relayId: target.relayId }}
+          preload="intent"
+          className={className}
+        >
+          {card}
+        </Link>
+      )
+  }
 })
 
 const TargetsSection = React.memo(function TargetsSection({
@@ -578,8 +689,11 @@ const TargetRow = React.memo(function TargetRow({
 }) {
   return (
     <tr className="align-middle [contain-intrinsic-size:auto_3.25rem] [content-visibility:auto]">
-      <td className="px-4 py-2.5">
-        <TargetIdentity resources={resources} target={target} />
+      <td className="p-0">
+        <ResourceIdentityLink
+          resource={resources.get(target.scope) ?? null}
+          target={target}
+        />
       </td>
       <td className="max-w-[22rem] px-4 py-2.5">
         <p
