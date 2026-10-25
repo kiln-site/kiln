@@ -437,8 +437,21 @@ export const backupResticSourceSchema = z
   })
   .strict()
 
+/**
+ * The backup and server an archive was made as, when it's linked to another
+ * server: a duplicated or moved game server's copy restores the original's
+ * archive, under a catalog record of its own.
+ */
+export const backupArchiveIdentitySchema = z
+  .object({
+    backupId: backupIdSchema,
+    targetId: z.string().min(1).max(120),
+  })
+  .strict()
+
 export const backupRestoreTaskInputSchema = z
   .object({
+    archive: backupArchiveIdentitySchema.optional(),
     backupId: backupIdSchema,
     source: z.discriminatedUnion("kind", [
       backupLocalSourceSchema,
@@ -457,6 +470,7 @@ export const backupS3DeleteDestinationSchema =
 
 export const backupDeleteTaskInputSchema = z
   .object({
+    archive: backupArchiveIdentitySchema.optional(),
     backupId: backupIdSchema,
     destination: z.discriminatedUnion("kind", [
       backupLocalDestinationSchema,

@@ -27,7 +27,10 @@ import {
 
 import type { AppCache } from "@/effect/cache"
 import { Database } from "@/effect/database"
-import { getBackupCatalogRecordEffect } from "@/effect/backups"
+import {
+  getBackupCatalogRecordEffect,
+  linkInstanceBackupsEffect,
+} from "@/effect/backups"
 import {
   notifyUsersEffect,
   publishNotificationChange,
@@ -44,6 +47,7 @@ import {
 } from "@/lib/access-policy-mutations"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { advanceAuthorizationRevisionEffect } from "@/lib/authorization-revision"
+import { publishBackupChange } from "@/lib/backup-realtime.server"
 import { databaseTable } from "@/lib/database-config"
 import { deleteInstanceWithoutFinalBackup } from "@/lib/final-instance-deletion"
 import { startPollingWorker } from "@/lib/polling-worker"
@@ -91,7 +95,13 @@ type MigrationStep =
   | "provision"
   | "copy"
   | "finish"
-type FinishedPart = "access" | "domains" | "owner" | "routes" | "restart"
+type FinishedPart =
+  | "access"
+  | "backups"
+  | "domains"
+  | "owner"
+  | "routes"
+  | "restart"
 
 interface MigrationRow extends RowDataPacket {
   actor: unknown
@@ -729,6 +739,19 @@ const finishMigration = Effect.fnUntraced(function* (
       )
     )
   }
+  if (options.linkBackups) {
+    yield* finish(
+      "backups",
+      linkInstanceBackupsEffect({ from, linkedBy: actor.id, to }).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            publishBackupChange(source.id)
+            publishBackupChange(destination.id)
+          })
+        )
+      )
+    )
+  }
   if (row.mode === "migrate" && options.moveDomain) {
     yield* finish(
       "domains",
@@ -1134,7 +1157,14 @@ function migrationOptions(row: MigrationRow): ServerMigrationOptions {
 }
 
 const FinishedParts = Schema.Array(
-  Schema.Literals(["access", "domains", "owner", "routes", "restart"])
+  Schema.Literals([
+    "access",
+    "backups",
+    "domains",
+    "owner",
+    "routes",
+    "restart",
+  ])
 )
 
 function finishedParts(row: MigrationRow): ReadonlyArray<FinishedPart> {

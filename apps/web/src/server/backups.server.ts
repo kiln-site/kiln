@@ -6,6 +6,7 @@ import {
   relaySnapshotSchema,
   type AccessGrantScopeType,
   type BackupTarget,
+  relayLinkedBackupsV1Feature,
 } from "@workspace/contracts"
 
 import { createBackupDownloadShareEffect } from "@/effect/backup-download-shares"
@@ -496,6 +497,8 @@ export async function deleteBackupHandler(
     })
   )
   publishBackupChange(relay.id, backup.id)
+  // Null when another backup still shares the archive: only the record goes.
+  if (!input) return { forgotten: false as const, relayAccepted: true }
   const dispatched = await Promise.allSettled([
     dispatchBackupTask(relay, input, user.id),
   ])
@@ -620,7 +623,8 @@ export async function getBackupDownloadUrlHandler(
   const { download, sourceName } = await runAppEffect(
     "backups.prepareDownload",
     prepareBackupDestinationDownload({
-      backup,
+      // A linked backup's archive is kept under the backup it was made as.
+      backup: { id: backup.linkedFrom?.backupId ?? backup.id },
       expiresInSeconds: data.expiresInSeconds,
       filename,
       objectKey: artifact.objectKey,
@@ -680,6 +684,16 @@ export async function restoreInstanceBackupHandler(
     throw new Error("You do not have permission to restore this backup")
   }
   const relay = await requireBackupRelay(backup.relayId)
+  // A linked backup restores an archive made as another backup, which only
+  // Relays that know of linked backups accept.
+  if (backup.linkedFrom) {
+    const { relayConnectionFeatures } = await import("@/lib/relay-connection")
+    if (!relayConnectionFeatures(relay.id).has(relayLinkedBackupsV1Feature)) {
+      throw new Error(
+        `Update ${relay.name} to the latest Kiln release to restore backups linked from another server`
+      )
+    }
+  }
   if (data.safetyBackup) {
     await requireRelayPermission({
       instanceId: backup.targetId,
@@ -770,6 +784,16 @@ export async function restoreDatabaseBackupHandler(
     throw new Error("You do not have permission to restore this backup")
   }
   const relay = await requireBackupRelay(backup.relayId)
+  // A linked backup restores an archive made as another backup, which only
+  // Relays that know of linked backups accept.
+  if (backup.linkedFrom) {
+    const { relayConnectionFeatures } = await import("@/lib/relay-connection")
+    if (!relayConnectionFeatures(relay.id).has(relayLinkedBackupsV1Feature)) {
+      throw new Error(
+        `Update ${relay.name} to the latest Kiln release to restore backups linked from another server`
+      )
+    }
+  }
   if (data.safetyBackup) {
     await requireRelayPermission({
       databaseId: backup.targetId,

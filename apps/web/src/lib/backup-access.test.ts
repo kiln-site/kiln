@@ -38,6 +38,7 @@ const backup = {
   createdBy: "another-user",
   filename: "backup.zip",
   id: "15e6df81-575f-421d-a666-e3eaabaafc3b",
+  linkedFrom: null,
   name: "Backup",
   objectKey: null,
   reason: "manual",

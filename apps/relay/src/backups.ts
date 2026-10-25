@@ -53,10 +53,7 @@ import {
 import { createEncryptedPlatformBackup } from "./platform-backups.js"
 import { RelayBackupError } from "./effect/errors.js"
 import { promiseEffect, recoverPromise } from "./effect/promise.js"
-import {
-  RelayStateStore,
-  type ScheduledBackupPrune,
-} from "./effect/state.js"
+import { RelayStateStore, type ScheduledBackupPrune } from "./effect/state.js"
 import { LaneRejectedError } from "./operation-lanes.js"
 import type { OperationLanes } from "./operation-lanes.js"
 import { backupTaskLocks } from "./operation-plans.js"
@@ -1463,14 +1460,16 @@ function deleteBackupArtifact(
     return Effect.succeed({ warnings: [] })
   }
   const destination = input.destination
+  // A linked backup's archive is stored under the backup it was made as.
+  const backupId = input.archive?.backupId ?? input.backupId
   return destination.kind === "local"
     ? backupDestinationFor("local").deleteFullBackup({
-        backupId: input.backupId,
+        backupId,
         config,
         destination,
       })
     : backupDestinationFor("s3").deleteFullBackup({
-        backupId: input.backupId,
+        backupId,
         config,
         destination,
       })

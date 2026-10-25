@@ -135,6 +135,7 @@ function MigrationForm({
     preview.allowed.copyAccess && preview.accessCount > 0
   )
   const [keepActivity, setKeepActivity] = React.useState(true)
+  const [linkBackups, setLinkBackups] = React.useState(true)
   const [moveDomain, setMoveDomain] = React.useState(
     preview.domains.managed && preview.domains.names.length > 0
   )
@@ -170,6 +171,7 @@ function MigrationForm({
               : null,
             copyAccess,
             keepActivity,
+            linkBackups: linkBackups && linkableBackups > 0,
             moveDomain: mode === "migrate" && moveDomain,
             moveWebRoutes: mode === "migrate" && moveWebRoutes,
             stopSource: mode === "migrate" || stopSource,
@@ -195,6 +197,12 @@ function MigrationForm({
     nameTaken ||
     preview.source.provisioning ||
     (mode === "migrate" && !preview.allowed.stop)
+  const linkableBackups =
+    selected && selected.linksBackups
+      ? selected.current
+        ? preview.backups.here
+        : preview.backups.anywhere
+      : 0
   const archMismatch =
     selected?.nodeArch &&
     preview.source.nodeArch &&
@@ -339,6 +347,14 @@ function MigrationForm({
           }
           onChange={setCopyAccess}
         />
+        <BackupsOption
+          checked={linkBackups && linkableBackups > 0}
+          destination={selected}
+          disabled={pending}
+          linkable={linkableBackups}
+          total={preview.backups.total}
+          onChange={setLinkBackups}
+        />
         <OptionRow
           checked={keepActivity}
           disabled={pending}
@@ -479,6 +495,78 @@ function MigrationForm({
         </Button>
       </DialogFooter>
     </form>
+  )
+}
+
+// Full backups restore to the copy as linked backups. Ones kept on this
+// Relay can't follow a copy to another, and incremental ones belong to this
+// server's repository.
+function BackupsOption({
+  checked,
+  destination,
+  disabled,
+  linkable,
+  onChange,
+  total,
+}: {
+  checked: boolean
+  destination: ServerMigrationDestination | undefined
+  disabled: boolean
+  linkable: number
+  onChange: (checked: boolean) => void
+  total: number
+}) {
+  if (total === 0) {
+    return (
+      <OptionRow
+        checked={false}
+        disabled
+        icon={<Archive />}
+        label="Backups"
+        detail="This server has no backups."
+      />
+    )
+  }
+  if (destination && !destination.linksBackups) {
+    return (
+      <OptionRow
+        checked={false}
+        disabled
+        icon={<Archive />}
+        label="Backups"
+        detail={`Update ${destination.name} to the latest Kiln release to link backups to a copy there.`}
+      />
+    )
+  }
+  const staying = total - linkable
+  if (linkable === 0) {
+    return (
+      <OptionRow
+        checked={false}
+        disabled
+        icon={<Archive />}
+        label="Backups"
+        detail={
+          destination?.current
+            ? "Its backups are incremental, so they stay with this server."
+            : "Its backups are kept on this Relay or are incremental, so they stay with this server. Back up to S3 first to bring one along."
+        }
+      />
+    )
+  }
+  return (
+    <OptionRow
+      checked={checked}
+      disabled={disabled}
+      icon={<Archive />}
+      label={linkable === 1 ? "Link 1 backup" : `Link ${linkable} backups`}
+      detail={`They restore to the new server too, and stay until both servers' copies of them are deleted.${
+        staying > 0
+          ? ` ${staying} ${staying === 1 ? "backup stays" : "backups stay"} with this server: ${destination?.current ? "incremental ones" : "ones kept on this Relay, and incremental ones"}.`
+          : ""
+      }`}
+      onChange={onChange}
+    />
   )
 }
 

@@ -16,14 +16,15 @@ when the copy starts.
 
 ## What comes along
 
-| Option             | Duplicate | Move     | Notes                                                                                                                                                                                                       |
-| ------------------ | --------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Files and settings | Always    | Always   | Its whole folder, the exact Brick it was built from, startup settings, and limits. Ports are allocated afresh on the new Relay.                                                                             |
-| People with access | Optional  | Optional | The same grants, permissions, and presets (presets are copied to the new server). Pending invitations aren't. Needs `access.read`.                                                                          |
-| Activity history   | Optional  | Optional | The new server's activity shows the old server's history up to when the copy finished, to whoever can see the new server but not the old one. It stays on the old Relay, so removing that Relay removes it. |
-| Managed domains    | —         | Optional | With Cloudflare connected, domains move to the new server and their records point at the new Relay. Without it, Kiln manages no DNS and the dialog says to repoint any domain of your own.                  |
-| Web routes         | Stay      | Optional | Routes move to the new server; their hostnames must then point at the new Relay before HTTPS works.                                                                                                         |
-| Backup first       | Optional  | Optional | A full backup to a chosen destination, finished before anything changes. Needs `backup.create`.                                                                                                             |
+| Option             | Duplicate | Move     | Notes                                                                                                                                                                                                                                       |
+| ------------------ | --------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Files and settings | Always    | Always   | Its whole folder, the exact Brick it was built from, startup settings, and limits. Ports are allocated afresh on the new Relay.                                                                                                             |
+| People with access | Optional  | Optional | The same grants, permissions, and presets (presets are copied to the new server). Pending invitations aren't. Needs `access.read`.                                                                                                          |
+| Activity history   | Optional  | Optional | The new server's activity shows the old server's history up to when the copy finished, to whoever can see the new server but not the old one. It stays on the old Relay, so removing that Relay removes it.                                 |
+| Managed domains    | —         | Optional | With Cloudflare connected, domains move to the new server and their records point at the new Relay. Without it, Kiln manages no DNS and the dialog says to repoint any domain of your own.                                                  |
+| Web routes         | Stay      | Optional | Routes move to the new server; their hostnames must then point at the new Relay before HTTPS works.                                                                                                                                         |
+| Backups            | Optional  | Optional | Links the old server's full backups to the new one, sharing their archives ([Linked backups](backups.md#linked-backups)). Backups in S3 link anywhere; backups kept on the Relay only to a copy on the same Relay. Needs `backup.download`. |
+| Backup first       | Optional  | Optional | A full backup to a chosen destination, finished before anything changes. Needs `backup.create`.                                                                                                                                             |
 
 A duplicate can stop the old server while its files copy, then start it
 again; a move always stops it. Stopping needs `instance.power.stop`, and a
@@ -43,8 +44,8 @@ The copy runs in Hearth's background as a row in `server_migration`
 4. **provision**: waits for the new server to be created.
 5. **copy**: copies the old server's folder into the new one's, Relay to
    Relay ([Relay transfers](relay-transfers.md#between-relays)).
-6. **finish**: hands over ownership, access, domains, and routes as chosen,
-   each once, and starts a duplicated server's original again.
+6. **finish**: hands over ownership, access, domains, routes, and backups
+   as chosen, each once, and starts a duplicated server's original again.
 
 Every step is safe to repeat. A worker holds a migration under a two-minute
 lease it renews while it works; one whose worker stopped, such as when

@@ -649,11 +649,10 @@ export const deleteCliBackupEffect = Effect.fn("cli.api.backups.delete")(
       "Hearth could not reserve backup deletion."
     )
     yield* Effect.sync(() => publishBackupChange(relay.id, backup.id))
-    const relayAccepted = yield* enqueueCliBackupEffect(
-      principal,
-      relay,
-      dispatch
-    )
+    // Null when another backup still shares the archive: only the record goes.
+    const relayAccepted = dispatch
+      ? yield* enqueueCliBackupEffect(principal, relay, dispatch)
+      : true
     return cliDeleteBackupResponseSchema.parse({
       backupId: backup.id,
       relayAccepted,

@@ -1,6 +1,7 @@
 // The server migration server functions in ./server-migrations authenticate
 // the caller and hand the signed-in user to these handlers.
 import {
+  relayLinkedBackupsV1Feature,
   relayInstanceWebRouteStateSchema,
   relaySnapshotSchema,
   type RelayInstance,
@@ -9,6 +10,7 @@ import { Effect } from "effect"
 import type { RowDataPacket } from "mysql2/promise"
 import type { z } from "zod"
 
+import { countLinkableInstanceBackupsEffect } from "@/effect/backups"
 import {
   loadDomainIntegrationEffect,
   loadInstanceDomainAssignmentsForInstanceEffect,
@@ -46,6 +48,8 @@ import {
 export interface ServerMigrationDestination {
   readonly current: boolean
   readonly id: string
+  /** Whether it can restore backups linked from another server. */
+  readonly linksBackups: boolean
   readonly name: string
   readonly nodeArch: string | null
   readonly problems: ReadonlyArray<RelayTransferProblem>
@@ -57,6 +61,15 @@ export interface ServerMigrationDestination {
 export interface ServerMigrationPreview {
   /** People with access to the server, besides its owner. */
   readonly accessCount: number
+  /**
+   * The server's backups: how many there are, how many full archives would
+   * link to a copy on its own Relay, and how many to a copy elsewhere.
+   */
+  readonly backups: {
+    readonly anywhere: number
+    readonly here: number
+    readonly total: number
+  }
   readonly allowed: {
     readonly backup: boolean
     readonly copyAccess: boolean
@@ -111,9 +124,13 @@ export async function previewServerMigrationHandler(
         ),
         serverNames(candidate, user),
       ])
+      const { relayConnectionFeatures } = await import("@/lib/relay-connection")
       return {
         current: candidate.id === relay.id,
         id: candidate.id,
+        linksBackups: relayConnectionFeatures(candidate.id).has(
+          relayLinkedBackupsV1Feature
+        ),
         name: candidate.name,
         nodeArch: candidate.nodeArch,
         problems,
@@ -122,7 +139,7 @@ export async function previewServerMigrationHandler(
     })
   )
   const allowNetwork = authorization.allows("instance.network.read")
-  const [domains, webRoutes, accessCount] = await Promise.all([
+  const [domains, webRoutes, accessCount, backups] = await Promise.all([
     runAppEffect(
       "serverMigrations.preview.domains",
       Effect.all(
@@ -135,10 +152,17 @@ export async function previewServerMigrationHandler(
     ),
     allowNetwork ? webRouteHostnames(relay, instance.id, user) : [],
     countAccess(relay.id, instance.id),
+    authorization.allows("backup.read")
+      ? runAppEffect(
+          "serverMigrations.preview.backups",
+          countLinkableInstanceBackupsEffect(relay.id, instance.id)
+        )
+      : { anywhere: 0, here: 0, total: 0 },
   ])
   const [integration, assignments] = domains
   return {
     accessCount,
+    backups,
     allowed: {
       backup: authorization.allows("backup.create"),
       copyAccess: authorization.allows("access.read"),
@@ -200,6 +224,17 @@ export async function startServerMigrationHandler(
     if (data.mode === "duplicate") authorization.require("instance.power.start")
   }
   if (options.copyAccess) authorization.require("access.read")
+  if (options.linkBackups) {
+    authorization.require("backup.read")
+    const { relayConnectionFeatures } = await import("@/lib/relay-connection")
+    if (
+      !relayConnectionFeatures(destination.id).has(relayLinkedBackupsV1Feature)
+    ) {
+      throw new Error(
+        `Update ${destination.name} to the latest Kiln release to link backups to a copy there`
+      )
+    }
+  }
   if (options.backup) authorization.require("backup.create")
   if (options.moveDomain || options.moveWebRoutes) {
     authorization.require("instance.network.write")

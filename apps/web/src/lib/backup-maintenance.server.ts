@@ -88,8 +88,9 @@ const applyRetention = Effect.fn("backupMaintenance.applyRetention")(
         started += 1
         publishBackupChange(relay.id, backup.backupId)
         // Undelivered, the delete waits queued; the Relay's next
-        // reconciliation sends it.
-        yield* promiseEffect(() => dispatchBackupTask(relay, input))
+        // reconciliation sends it. Null when only the record went, its
+        // archive still shared with a linked backup.
+        if (input) yield* promiseEffect(() => dispatchBackupTask(relay, input))
       }).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning(

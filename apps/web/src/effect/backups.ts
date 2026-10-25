@@ -131,6 +131,8 @@ interface BackupRow extends RowDataPacket {
   created_at_ms: number
   filename: string | null
   id: string
+  linked_from_backup_id: string | null
+  linked_from_target_id: string | null
   name: string
   reason: "final_delete" | "manual" | "pre_restore" | "scheduled"
   relay_id: string
@@ -200,6 +202,8 @@ interface DispatchableBackupRow extends RowDataPacket {
   checksum_sha256: string | null
   create_task_id: string | null
   exclude_patterns: unknown
+  linked_from_backup_id: string | null
+  linked_from_target_id: string | null
   object_key: string | null
   reason: BackupCreateTaskInput["reason"]
   repository_id: string | null
@@ -269,6 +273,11 @@ export interface BackupCatalogRecord {
   createdAt: string
   filename: string | null
   id: string
+  /**
+   * The backup and server a linked backup's archive was made as: a copied
+   * game server's record of the original's archive. Null for its own.
+   */
+  linkedFrom: { backupId: string; targetId: string } | null
   name: string
   objectKey: string | null
   reason: BackupRow["reason"]
@@ -368,6 +377,7 @@ export interface BackupDeleteDispatch extends Omit<
 }
 
 export interface BackupRestoreDispatch {
+  archive?: BackupRestoreTaskInput["archive"]
   artifactId: string
   backupId: string
   bytes?: number
@@ -1216,6 +1226,7 @@ const backupCatalogColumns = `backup.id, backup.relay_id, backup.target_kind, ba
             backup.status, backup.name, backup.filename, backup.bytes,
             backup.checksum_sha256, backup.restic_snapshot_id, backup.warnings,
             backup.created_by, backup.storage_id, backup.object_key,
+            backup.linked_from_backup_id, backup.linked_from_target_id,
             backup.completed_at AS completed_at_ms,
             backup.created_at AS created_at_ms,
             task.id AS task_id, task.task_kind AS task_kind,
@@ -1334,6 +1345,13 @@ function backupCatalogRecordFromRow(
     createdAt: requiredTimestampIso(row.created_at_ms, "backup created at"),
     filename: row.filename,
     id: row.id,
+    linkedFrom:
+      row.linked_from_backup_id && row.linked_from_target_id
+        ? {
+            backupId: row.linked_from_backup_id,
+            targetId: row.linked_from_target_id,
+          }
+        : null,
     name: row.name,
     objectKey: row.object_key,
     reason: row.reason,
@@ -1650,6 +1668,7 @@ export const listDispatchableBackupTasksEffect = Effect.fn(
             task.id AS task_id, task.task_kind, task.reserved_bytes,
             task.created_at AS task_created_at_ms,
             backup.storage_id, backup.object_key,
+            backup.linked_from_backup_id, backup.linked_from_target_id,
             COALESCE(policy.exclude_patterns, JSON_ARRAY()) AS exclude_patterns
        FROM ${databaseTable("backup")} backup
        JOIN ${databaseTable("backup_task")} task
@@ -1703,6 +1722,7 @@ export const listDispatchableBackupTasksEffect = Effect.fn(
   }
   return rows.map((row): BackupDispatch => {
     const artifacts = artifactsByBackup.get(row.backup_id) ?? []
+    const archive = linkedArchive(row)
     if (row.task_kind === "restore") {
       const artifact = artifacts.find(
         (candidate) => candidate.status === "available"
@@ -1732,6 +1752,7 @@ export const listDispatchableBackupTasksEffect = Effect.fn(
         )
       }
       return {
+        ...archive,
         backupId: row.backup_id,
         bytes,
         checksumSha256: artifact.checksum_sha256,
@@ -1762,6 +1783,7 @@ export const listDispatchableBackupTasksEffect = Effect.fn(
     }
     if (row.task_kind === "delete") {
       return {
+        ...archive,
         artifacts: artifacts.map(dispatchArtifact),
         backupId: row.backup_id,
         kind: "delete",
@@ -1792,6 +1814,22 @@ export const listDispatchableBackupTasksEffect = Effect.fn(
   })
 })
 
+// The archive identity a linked backup's tasks name, so the Relay finds and
+// checks the archive it shares with the backup it was made as.
+function linkedArchive(row: {
+  linked_from_backup_id: string | null
+  linked_from_target_id: string | null
+}) {
+  return row.linked_from_backup_id && row.linked_from_target_id
+    ? {
+        archive: {
+          backupId: row.linked_from_backup_id,
+          targetId: row.linked_from_target_id,
+        },
+      }
+    : {}
+}
+
 export const reserveBackupRestoreEffect = Effect.fn("backups.reserveRestore")(
   function* (input: {
     backupId: string
@@ -1810,7 +1848,8 @@ export const reserveBackupRestoreEffect = Effect.fn("backups.reserveRestore")(
                     backup.target_id, backup.storage_id, backup.object_key,
                     backup.bytes, backup.checksum_sha256, backup.backup_mode,
                     backup.artifact_kind, backup.restic_snapshot_id,
-                    backup.repository_id
+                    backup.repository_id, backup.linked_from_backup_id,
+                    backup.linked_from_target_id
                FROM ${databaseTable("backup")} backup
               WHERE backup.id = ? AND backup.status = 'available'
                 AND (
@@ -1938,6 +1977,7 @@ export const reserveBackupRestoreEffect = Effect.fn("backups.reserveRestore")(
             ]
           )
           return {
+            ...linkedArchive(backup),
             artifactId: artifact.id,
             backupId: input.backupId,
             ...(resticRestore
@@ -1971,7 +2011,8 @@ export const reserveBackupDeleteEffect = Effect.fn("backups.reserveDelete")(
         const rows = yield* transaction.queryRows<BackupRow>(
           `SELECT backup.id, backup.relay_id, backup.target_kind,
                   backup.target_id, backup.storage_id, backup.object_key,
-                  backup.restic_snapshot_id, backup.backup_mode
+                  backup.restic_snapshot_id, backup.backup_mode,
+                  backup.linked_from_backup_id, backup.linked_from_target_id
              FROM ${databaseTable("backup")} backup
             WHERE backup.id = ? AND backup.status IN ('available', 'failed')
               AND NOT EXISTS (
@@ -2004,6 +2045,47 @@ export const reserveBackupDeleteEffect = Effect.fn("backups.reserveDelete")(
           targetId: backup.target_id,
           targetKind: backup.target_kind,
         })
+        // Another record still shares the archive, as a copied server's
+        // linked backup or the original it was linked from, so only this
+        // record goes; the archive goes with the last of them.
+        const sharing = yield* transaction.queryRows<RowDataPacket>(
+          `SELECT 1 FROM ${databaseTable("backup")} other
+            WHERE other.id <> ?
+              AND COALESCE(other.linked_from_backup_id, other.id) = ?
+              AND other.status IN ('available', 'deleting')
+            LIMIT 1`,
+          [input.backupId, backup.linked_from_backup_id ?? input.backupId]
+        )
+        if (sharing.length > 0) {
+          yield* transaction.execute(
+            `UPDATE ${databaseTable("backup")}
+                SET status = 'deleted', deleted_at = ?, updated_at = ?
+              WHERE id = ?`,
+            [now, now, input.backupId]
+          )
+          yield* transaction.execute(
+            `UPDATE ${databaseTable("backup_artifact")}
+                SET status = 'deleted', deleted_at = ?, updated_at = ?
+              WHERE backup_id = ?`,
+            [now, now, input.backupId]
+          )
+          yield* transaction.execute(
+            `INSERT INTO ${databaseTable("backup_task")}
+              (id, backup_id, task_kind, status, requested_by, started_at,
+               finished_at, created_at, updated_at)
+             VALUES (?, ?, 'delete', 'succeeded', ?, ?, ?, ?, ?)`,
+            [
+              input.taskId,
+              input.backupId,
+              input.requestedBy,
+              now,
+              now,
+              now,
+              now,
+            ]
+          )
+          return null
+        }
         yield* transaction.execute(
           `UPDATE ${databaseTable("backup")}
               SET status = 'deleting', updated_at = ?
@@ -2038,6 +2120,7 @@ export const reserveBackupDeleteEffect = Effect.fn("backups.reserveDelete")(
                 ORDER BY (artifact.storage_id IS NULL) DESC, artifact.created_at ASC`,
             [input.backupId]
           )).map(dispatchArtifact),
+          ...linkedArchive(backup),
           backupId: input.backupId,
           kind: "delete",
           ...(backup.restic_snapshot_id
@@ -3511,3 +3594,148 @@ function decryptRepositoryPassword(ciphertext: string) {
       }),
   })
 }
+
+interface LinkableBackupRow extends RowDataPacket {
+  archive_id: string
+  archive_target_id: string
+  id: string
+}
+
+/**
+ * Links a game server's full-archive backups to its copy, so they restore
+ * there: each gets a record of the copy's own that shares the original's
+ * stored archive. Archives in S3 link to a copy on any Relay; ones kept on
+ * the old server's Relay only to a copy on that Relay, since they aren't
+ * the copy's Relay's to keep. Incremental backups don't link: their
+ * repository is the old server's. Returns how many backups were linked.
+ */
+export const linkInstanceBackupsEffect = Effect.fn("backups.link")(
+  function* (input: {
+    readonly from: { readonly instanceId: string; readonly relayId: string }
+    readonly linkedBy: string
+    readonly to: { readonly instanceId: string; readonly relayId: string }
+  }) {
+    const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
+    const sameRelay = input.from.relayId === input.to.relayId
+    return yield* database.transaction("backup_link", (transaction) =>
+      Effect.gen(function* () {
+        const backups = yield* transaction.queryRows<LinkableBackupRow>(
+          `SELECT id,
+                COALESCE(linked_from_backup_id, id) AS archive_id,
+                COALESCE(linked_from_target_id, target_id) AS archive_target_id
+           FROM ${databaseTable("backup")}
+          WHERE relay_id = ? AND target_kind = 'instance' AND target_id = ?
+            AND backup_mode = 'full' AND artifact_kind = 'archive'
+            AND status = 'available'
+          FOR UPDATE`,
+          [input.from.relayId, input.from.instanceId]
+        )
+        let linked = 0
+        for (const backup of backups) {
+          const artifacts = (yield* transaction.queryRows<BackupArtifactRow>(
+            `SELECT artifact.id, artifact.backup_id, artifact.storage_id,
+                  artifact.status, artifact.filename, artifact.object_key,
+                  artifact.bytes, artifact.checksum_sha256, artifact.error,
+                  artifact.error_code
+             FROM ${databaseTable("backup_artifact")} artifact
+            WHERE artifact.backup_id = ? AND artifact.status = 'available'
+            ORDER BY (artifact.storage_id IS NULL) DESC, artifact.created_at ASC`,
+            [backup.id]
+          )).filter((artifact) => sameRelay || artifact.storage_id !== null)
+          const primary = artifacts[0]
+          if (!primary) continue
+          const id = randomUUID()
+          yield* transaction.execute(
+            `INSERT INTO ${databaseTable("backup")}
+             (id, relay_id, target_kind, target_id, storage_id, artifact_kind,
+              backup_mode, reason, status, name, filename, object_key, bytes,
+              checksum_sha256, warnings, created_by, started_at, completed_at,
+              created_at, updated_at, linked_from_backup_id,
+              linked_from_target_id)
+           SELECT ?, ?, 'instance', ?, ?, artifact_kind, backup_mode, reason,
+                  'available', name, ?, ?, bytes, checksum_sha256, warnings,
+                  created_by, started_at, completed_at, created_at, ?, ?, ?
+             FROM ${databaseTable("backup")} WHERE id = ?`,
+            [
+              id,
+              input.to.relayId,
+              input.to.instanceId,
+              primary.storage_id,
+              primary.filename,
+              primary.object_key,
+              now,
+              backup.archive_id,
+              backup.archive_target_id,
+              backup.id,
+            ]
+          )
+          for (const artifact of artifacts) {
+            yield* transaction.execute(
+              `INSERT INTO ${databaseTable("backup_artifact")}
+               (id, backup_id, destination_key, storage_id, status, filename,
+                object_key, bytes, checksum_sha256, completed_at, created_at,
+                updated_at)
+             SELECT ?, ?, destination_key, storage_id, 'available', filename,
+                    object_key, bytes, checksum_sha256, completed_at,
+                    created_at, ?
+               FROM ${databaseTable("backup_artifact")} WHERE id = ?`,
+              [randomUUID(), id, now, artifact.id]
+            )
+          }
+          // The record lists by its latest task, so it gets the create task
+          // the original finished with.
+          yield* transaction.execute(
+            `INSERT INTO ${databaseTable("backup_task")}
+             (id, backup_id, task_kind, status, bytes_completed, bytes_total,
+              requested_by, started_at, finished_at, created_at, updated_at)
+           VALUES (?, ?, 'create', 'succeeded', 0, NULL, ?, ?, ?, ?, ?)`,
+            [randomUUID(), id, input.linkedBy, now, now, now, now]
+          )
+          linked += 1
+        }
+        return linked
+      })
+    )
+  }
+)
+
+/**
+ * How many of a game server's backups would link to a copy on another
+ * Relay, or on its own, and how many wouldn't.
+ */
+export const countLinkableInstanceBackupsEffect = Effect.fn(
+  "backups.countLinkable"
+)(function* (relayId: string, instanceId: string) {
+  const database = yield* Database
+  const rows = yield* database.queryRows<
+    RowDataPacket & {
+      anywhere: number | string
+      here: number | string
+      total: number | string
+    }
+  >(
+    "backup_count_linkable",
+    `SELECT COUNT(*) AS total,
+            SUM(backup.backup_mode = 'full'
+                AND backup.artifact_kind = 'archive') AS here,
+            SUM(backup.backup_mode = 'full'
+                AND backup.artifact_kind = 'archive'
+                AND EXISTS (
+                  SELECT 1 FROM ${databaseTable("backup_artifact")} artifact
+                   WHERE artifact.backup_id = backup.id
+                     AND artifact.status = 'available'
+                     AND artifact.storage_id IS NOT NULL
+                )) AS anywhere
+       FROM ${databaseTable("backup")} backup
+      WHERE backup.relay_id = ? AND backup.target_kind = 'instance'
+        AND backup.target_id = ? AND backup.status = 'available'`,
+    [relayId, instanceId]
+  )
+  const row = rows[0]
+  return {
+    anywhere: Number(row?.anywhere ?? 0),
+    here: Number(row?.here ?? 0),
+    total: Number(row?.total ?? 0),
+  }
+})

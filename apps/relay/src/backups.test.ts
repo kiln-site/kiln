@@ -239,32 +239,37 @@ describe("Relay archive backups", () => {
     )
   )
 
-  it.effect("holds queued tasks while the Relay is paused, then runs them", () =>
-    withRelay("kiln-backup-paused-", ({ config, root }) =>
-      Effect.gen(function* () {
-        yield* Effect.promise(() =>
-          writeFile(resolve(root, "server.txt"), "data")
-        )
-        const lanes = new OperationLanes()
-        const manager = yield* backupManager(
-          config,
-          async () => testInstance(),
-          lanes
-        )
-        const input = backupInput(9)
-        lanes.setPaused(true)
-        yield* manager.enqueue(input)
-        yield* manager.runPending()
-        assert.strictEqual((yield* manager.get(input.taskId))?.status, "queued")
+  it.effect(
+    "holds queued tasks while the Relay is paused, then runs them",
+    () =>
+      withRelay("kiln-backup-paused-", ({ config, root }) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            writeFile(resolve(root, "server.txt"), "data")
+          )
+          const lanes = new OperationLanes()
+          const manager = yield* backupManager(
+            config,
+            async () => testInstance(),
+            lanes
+          )
+          const input = backupInput(9)
+          lanes.setPaused(true)
+          yield* manager.enqueue(input)
+          yield* manager.runPending()
+          assert.strictEqual(
+            (yield* manager.get(input.taskId))?.status,
+            "queued"
+          )
 
-        lanes.setPaused(false)
-        yield* manager.runPending()
-        assert.strictEqual(
-          (yield* manager.get(input.taskId))?.status,
-          "succeeded"
-        )
-      })
-    )
+          lanes.setPaused(false)
+          yield* manager.runPending()
+          assert.strictEqual(
+            (yield* manager.get(input.taskId))?.status,
+            "succeeded"
+          )
+        })
+      )
   )
 
   it.effect("puts back a task a pause withdrew while it waited its turn", () =>
@@ -600,6 +605,64 @@ describe("Relay archive restores", () => {
     )
   )
 
+  it.effect(
+    "restores another server's archive only as the backup it names",
+    () =>
+      withRelay("kiln-backup-restore-linked-", ({ config, root }) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            writeFile(resolve(root, "server.txt"), "original")
+          )
+          const original = backupInput(8)
+          const created = archiveResult(
+            yield* runTask(yield* backupManager(config), original)
+          )
+          yield* Effect.promise(() =>
+            writeFile(resolve(root, "server.txt"), "changed")
+          )
+          // The copy is another server, with the archive linked to it under
+          // a backup ID of its own.
+          const copy = yield* backupManager(config, async () =>
+            testInstance({ directory: "instance-1", id: "instance-2" })
+          )
+          const restore = (taskIndex: number, archiveTarget?: string) =>
+            runTask(copy, {
+              ...(archiveTarget === undefined
+                ? {}
+                : {
+                    archive: {
+                      backupId: original.backupId,
+                      targetId: archiveTarget,
+                    },
+                  }),
+              backupId: "00000000-0000-4000-8000-000000000108",
+              kind: "restore",
+              source: {
+                bytes: created.bytes,
+                checksumSha256: created.checksumSha256,
+                kind: "local",
+              },
+              target: { id: "instance-2", kind: "instance" },
+              taskId: `20000000-0000-4000-8000-00000000010${taskIndex}`,
+            })
+
+          const unnamed = yield* restore(1)
+          const misnamed = yield* restore(2, "instance-9")
+          const named = yield* restore(3, "instance-1")
+
+          assert.strictEqual(unnamed.status, "failed")
+          assert.strictEqual(misnamed.status, "failed")
+          assert.strictEqual(named.status, "succeeded")
+          assert.strictEqual(
+            yield* Effect.promise(() =>
+              readFile(resolve(root, "server.txt"), "utf8")
+            ),
+            "original"
+          )
+        })
+      )
+  )
+
   it.effect("waits for a file change in progress before restoring", () =>
     withRelay("kiln-backup-restore-wait-", ({ config, root }) =>
       Effect.gen(function* () {
@@ -828,57 +891,63 @@ describe("Relay archive restores", () => {
     })
   )
 
-  it.effect("leaves the server's files when a restore stops before installing", () =>
-    Effect.gen(function* () {
-      const directory = yield* scratchDirectory("kiln-backup-restore-stopped-")
-      const config = testRelayConfig(directory)
-      const input = backupInput(9)
-      const archivePath = backupArchivePath(config, input.backupId)
-      const instanceRoot = resolve(config.rootDirectory, "instance-1")
-      yield* Effect.promise(async () => {
-        await Promise.all([
-          mkdir(instanceRoot, { recursive: true }),
-          mkdir(resolve(directory, "backups"), { recursive: true }),
-        ])
-        await writeFile(resolve(instanceRoot, "server.txt"), "current")
-        await writeTestArchive(archivePath, "restored.txt")
-      })
-      const archive = yield* Effect.promise(() => readFile(archivePath))
-      // Its timeout fired while it extracted, which already failed its task.
-      const timedOut = () => {
-        throw new Error("Cancelled after reaching the configured backup timeout")
-      }
+  it.effect(
+    "leaves the server's files when a restore stops before installing",
+    () =>
+      Effect.gen(function* () {
+        const directory = yield* scratchDirectory(
+          "kiln-backup-restore-stopped-"
+        )
+        const config = testRelayConfig(directory)
+        const input = backupInput(9)
+        const archivePath = backupArchivePath(config, input.backupId)
+        const instanceRoot = resolve(config.rootDirectory, "instance-1")
+        yield* Effect.promise(async () => {
+          await Promise.all([
+            mkdir(instanceRoot, { recursive: true }),
+            mkdir(resolve(directory, "backups"), { recursive: true }),
+          ])
+          await writeFile(resolve(instanceRoot, "server.txt"), "current")
+          await writeTestArchive(archivePath, "restored.txt")
+        })
+        const archive = yield* Effect.promise(() => readFile(archivePath))
+        // Its timeout fired while it extracted, which already failed its task.
+        const timedOut = () => {
+          throw new Error(
+            "Cancelled after reaching the configured backup timeout"
+          )
+        }
 
-      const restored = yield* Effect.exit(
-        Effect.tryPromise(() =>
-          restorePortableInstanceBackup(
-            config,
-            {
-              backupId: input.backupId,
-              kind: "restore",
-              source: {
-                bytes: archive.byteLength,
-                checksumSha256: sha256(archive),
-                kind: "local",
+        const restored = yield* Effect.exit(
+          Effect.tryPromise(() =>
+            restorePortableInstanceBackup(
+              config,
+              {
+                backupId: input.backupId,
+                kind: "restore",
+                source: {
+                  bytes: archive.byteLength,
+                  checksumSha256: sha256(archive),
+                  kind: "local",
+                },
+                target: input.target,
+                taskId: "20000000-0000-4000-8000-000000000009",
               },
-              target: input.target,
-              taskId: "20000000-0000-4000-8000-000000000009",
-            },
-            testInstance(),
-            timedOut
+              testInstance(),
+              timedOut
+            )
           )
         )
-      )
 
-      assert.isTrue(Exit.isFailure(restored))
-      assert.strictEqual(
-        yield* Effect.promise(() =>
-          readFile(resolve(instanceRoot, "server.txt"), "utf8")
-        ),
-        "current"
-      )
-      assert.isFalse(existsSync(resolve(instanceRoot, "restored.txt")))
-    })
+        assert.isTrue(Exit.isFailure(restored))
+        assert.strictEqual(
+          yield* Effect.promise(() =>
+            readFile(resolve(instanceRoot, "server.txt"), "utf8")
+          ),
+          "current"
+        )
+        assert.isFalse(existsSync(resolve(instanceRoot, "restored.txt")))
+      })
   )
 })
 

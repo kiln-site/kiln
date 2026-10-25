@@ -12,6 +12,8 @@ export const serverMigrationOptionsSchema = z.object({
   copyAccess: z.boolean(),
   /** The copy's activity includes the old server's history. */
   keepActivity: z.boolean(),
+  /** The old server's full backups restore to the copy too. */
+  linkBackups: z.boolean().default(false),
   /** A move hands the old server's managed domains to the copy. */
   moveDomain: z.boolean(),
   /** A move gives the copy the old server's web routes. */

@@ -238,10 +238,14 @@ async function extractBackupArchive(
         for (const entry of entries) {
           if (entry.fileName === ARCHIVE_MANIFEST_PATH) {
             manifest = await readManifest(zip, entry)
+            // A linked backup's archive was made as another backup of
+            // another server; the task names which.
             if (
-              manifest.backupId !== input.backupId ||
+              manifest.backupId !==
+                (input.archive?.backupId ?? input.backupId) ||
               manifest.target.kind !== "instance" ||
-              manifest.target.id !== input.target.id
+              manifest.target.id !==
+                (input.archive?.targetId ?? input.target.id)
             ) {
               throw restoreError(
                 "manifest_mismatch",
@@ -398,7 +402,7 @@ export async function materializeBackupArtifact(
   }
   const artifact =
     input.source.kind === "local"
-      ? backupArchivePath(config, input.backupId)
+      ? backupArchivePath(config, input.archive?.backupId ?? input.backupId)
       : await downloadRestoreArtifact(destination, input)
   await verifyBackupArtifact(
     artifact,

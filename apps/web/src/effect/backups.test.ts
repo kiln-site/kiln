@@ -19,8 +19,11 @@ import {
   backupReservation,
   canReuseBackupExport,
   getBackupPolicyEffect,
+  linkInstanceBackupsEffect,
   purgeInstanceBackupRepositoriesEffect,
+  reserveBackupDeleteEffect,
   reserveBackupCopyEffect,
+  reserveBackupRestoreEffect,
   reserveInstanceBackupEffect,
   reconcileBackupTaskEffect,
   shouldApplyRelayBackupTaskSnapshot,
@@ -1248,6 +1251,166 @@ describeMysql("backup copy reservation", () => {
           id: retried.taskId,
           error: null,
           status: "queued",
+        })
+      })
+    )
+  })
+})
+
+describeMysql("linked backups", () => {
+  layer(TestDatabase)((it) => {
+    const storageId = "5b0f3c1e-2a4d-4e6f-8a9b-0c1d2e3f4a5b"
+    const source = { instanceId: "instance-one", relayId: "relay-one" }
+    // A full archive in S3, one kept on the Relay, and an incremental one.
+    const seedBackups = Effect.gen(function* () {
+      yield* fresh
+      yield* insertBackupStorage(storageId)
+      yield* insertBackup("s3-archive", {
+        bytes: 10,
+        checksum_sha256: "a".repeat(64),
+        object_key: "kiln/s3-archive.zip",
+        storage_id: storageId,
+      })
+      yield* insertArtifact("s3-artifact", "s3-archive", {
+        bytes: 10,
+        checksum_sha256: "a".repeat(64),
+        destination_key: storageId,
+        object_key: "kiln/s3-archive.zip",
+        storage_id: storageId,
+      })
+      yield* insertBackup("local-archive", { bytes: 10 })
+      yield* insertArtifact("local-artifact", "local-archive", { bytes: 10 })
+      yield* insertBackup("incremental", {
+        artifact_kind: "restic_snapshot",
+        backup_mode: "incremental",
+      })
+      yield* insertArtifact("incremental-artifact", "incremental")
+    })
+    const linkedTo = (relayId: string, instanceId: string) =>
+      selectRows<
+        BackupTableRow & {
+          linked_from_backup_id: string | null
+          linked_from_target_id: string | null
+          target_id: string
+        }
+      >("backup").pipe(
+        Effect.map((rows) =>
+          rows.filter(
+            (row) => row.relay_id === relayId && row.target_id === instanceId
+          )
+        )
+      )
+
+    it.effect(
+      "links only archives the copy's Relay can reach, and never incremental ones",
+      () =>
+        Effect.gen(function* () {
+          yield* seedBackups
+
+          const elsewhere = yield* linkInstanceBackupsEffect({
+            from: source,
+            linkedBy: "user-one",
+            to: { instanceId: "instance-two", relayId: "relay-two" },
+          })
+          const here = yield* linkInstanceBackupsEffect({
+            from: source,
+            linkedBy: "user-one",
+            to: { instanceId: "instance-three", relayId: "relay-one" },
+          })
+
+          assert.strictEqual(elsewhere, 1)
+          assert.deepStrictEqual(
+            (yield* linkedTo("relay-two", "instance-two")).map((row) => ({
+              linked: row.linked_from_backup_id,
+              objectKey: row.object_key,
+              target: row.linked_from_target_id,
+            })),
+            [
+              {
+                linked: "s3-archive",
+                objectKey: "kiln/s3-archive.zip",
+                target: "instance-one",
+              },
+            ]
+          )
+          assert.strictEqual(here, 2)
+          assert.sameMembers(
+            (yield* linkedTo("relay-one", "instance-three")).map(
+              (row) => row.linked_from_backup_id
+            ),
+            ["s3-archive", "local-archive"]
+          )
+        })
+    )
+
+    it.effect(
+      "keeps a shared archive until the last backup linked to it is deleted",
+      () =>
+        Effect.gen(function* () {
+          yield* seedBackups
+          yield* linkInstanceBackupsEffect({
+            from: source,
+            linkedBy: "user-one",
+            to: { instanceId: "instance-two", relayId: "relay-two" },
+          })
+          const [linked] = yield* linkedTo("relay-two", "instance-two")
+
+          // The original goes first, as when the old server is cleaned up.
+          const original = yield* reserveBackupDeleteEffect({
+            backupId: "s3-archive",
+            requestedBy: "user-one",
+            taskId: "delete-original",
+          })
+          assert.isNull(original)
+          assert.strictEqual(
+            (yield* backups).get("s3-archive")?.status,
+            "deleted"
+          )
+          assert.strictEqual(
+            (yield* backups).get(linked!.id)?.status,
+            "available"
+          )
+
+          // The last record sharing it deletes the archive itself, by the
+          // backup it was made as.
+          const last = yield* reserveBackupDeleteEffect({
+            backupId: linked!.id,
+            requestedBy: "user-one",
+            taskId: "delete-linked",
+          })
+          assert.deepInclude(last, {
+            archive: { backupId: "s3-archive", targetId: "instance-one" },
+            kind: "delete",
+          })
+          assert.strictEqual(
+            last?.artifacts[0]?.objectKey,
+            "kiln/s3-archive.zip"
+          )
+        })
+    )
+
+    it.effect("restores a linked backup from the archive it shares", () =>
+      Effect.gen(function* () {
+        yield* seedBackups
+        yield* linkInstanceBackupsEffect({
+          from: source,
+          linkedBy: "user-one",
+          to: { instanceId: "instance-two", relayId: "relay-two" },
+        })
+        const [linked] = yield* linkedTo("relay-two", "instance-two")
+
+        const restore = yield* reserveBackupRestoreEffect({
+          backupId: linked!.id,
+          dependsOnTaskId: null,
+          requestedBy: "user-one",
+          taskId: "restore-linked",
+        })
+
+        assert.deepInclude(restore, {
+          archive: { backupId: "s3-archive", targetId: "instance-one" },
+          backupId: linked!.id,
+          objectKey: "kiln/s3-archive.zip",
+          target: { id: "instance-two", kind: "instance" },
         })
       })
     )

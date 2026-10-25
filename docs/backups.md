@@ -275,6 +275,27 @@ hatch can be added later; it must never be the default. S3 final backups remain
 in the catalog after the resource row is gone. Relay-local final backups remain
 tied to Relay availability.
 
+## Linked backups
+
+A game server copied with **Move or duplicate**
+([Moving and duplicating game servers](server-migrations.md)) can take the
+original's backups along without copying their archives. Each becomes a
+catalog row for the copy that names the backup it was made as in
+`linked_from_backup_id` and `linked_from_target_id`; the archive stays where
+it is.
+
+- Full archives in S3 can be linked to a copy on any Relay.
+- Archives kept on the Relay can be linked only to a copy on the same Relay,
+  so a backup never counts as local on a Relay that doesn't hold it.
+- Incremental snapshots aren't linked; they belong to their own repository.
+
+Restore and delete tasks for a linked backup carry `archive`, the identity
+it was made as, so the Relay finds the archive by that name and checks its
+manifest against the original server. A Relay advertises this with the
+`linked-backups-v1` feature, and Hearth won't restore a linked backup on a
+Relay without it. Deleting a backup whose archive another available backup
+still shares only marks the row deleted; the last one deletes the archive.
+
 ## UI
 
 Backups is the final item in the server navigation and a global page covering
