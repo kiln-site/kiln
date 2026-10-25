@@ -1,4 +1,9 @@
-import { relayReadOnlyMachineActions } from "@workspace/contracts"
+import {
+  appIdFromFileRoot,
+  databaseIdFromFileRoot,
+  isRelayFileRoot,
+  relayReadOnlyMachineActions,
+} from "@workspace/contracts"
 import { Schema } from "effect"
 
 import type { RelayClientRole } from "./effect/state.js"
@@ -119,4 +124,26 @@ export function fileMutationAction(
     default:
       return null
   }
+}
+
+/**
+ * The action that moves files out of or into a file root: a game server's,
+ * an App's data (`app:<appId>`), a database's dumps (`database:<id>`), or
+ * the host's.
+ */
+export function fileTransferAction(
+  rootId: string,
+  direction: "download" | "upload"
+): RelayAction {
+  const upload = direction === "upload"
+  if (isRelayFileRoot(rootId)) {
+    return upload ? "relay.files.upload" : "relay.files.download"
+  }
+  if (databaseIdFromFileRoot(rootId) !== null) {
+    return upload ? "database.dump.import" : "database.dump.export"
+  }
+  if (appIdFromFileRoot(rootId) !== null) {
+    return upload ? "app.files.upload" : "app.files.download"
+  }
+  return upload ? "instance.files.upload" : "instance.files.download"
 }

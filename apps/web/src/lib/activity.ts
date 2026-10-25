@@ -19,7 +19,12 @@ export const activitySources = ["web", "cli"] as const
 export type ActivitySource = (typeof activitySources)[number]
 
 // The Activity page's whole-kind scopes; "relay" is activity on no instance.
-export const activityScopeKinds = ["app", "database", "relay", "server"] as const
+export const activityScopeKinds = [
+  "app",
+  "database",
+  "relay",
+  "server",
+] as const
 export type ActivityScopeKind = (typeof activityScopeKinds)[number]
 
 const activitySourceValues: ReadonlySet<string> = new Set(activitySources)
@@ -108,6 +113,8 @@ export function activityTypeForAudit(audit: RelayAuditRecord): ActivityType {
   }
   if (
     audit.event.startsWith("browser.file.") ||
+    audit.event === "peer.transfer.download" ||
+    operation?.startsWith("transfer.") ||
     operation === "instance.files.write" ||
     operation === "instance.files.put" ||
     operation === "instance.files.database.write" ||
@@ -155,6 +162,9 @@ export function activityLabelForAudit(audit: RelayAuditRecord): string {
   if (audit.event === "browser.console.write") return "Sent a console command"
   if (audit.event === "browser.file.upload") return "Uploaded a file"
   if (audit.event === "browser.file.download") return "Downloaded a file"
+  if (audit.event === "peer.transfer.download") {
+    return "Sent files to another Relay"
+  }
   if (audit.event === "relay.client.paired") return "Paired a Hearth client"
   if (audit.event === "system.update_started") return "Started a system update"
   if (audit.event === "invitation.created") {
@@ -196,6 +206,18 @@ export function activityLabelForAudit(audit: RelayAuditRecord): string {
   }
   if (operation === "instance.files.upload-url") {
     return "Downloaded a URL to a game server"
+  }
+  if (operation === "transfer.source.prepare") {
+    return "Started copying files to another Relay"
+  }
+  if (operation === "transfer.pull.start") {
+    return "Started receiving files from another Relay"
+  }
+  if (
+    operation === "transfer.source.discard" ||
+    operation === "transfer.pull.cancel"
+  ) {
+    return "Ended a copy between Relays"
   }
   if (operation === "instance.console.write") return "Sent a console command"
   if (operation === "instance.network.ports.write") {
@@ -259,6 +281,9 @@ export function activityPermissionForAudit(
   if (audit.event === "browser.file.download") {
     return "instance.files.download"
   }
+  if (audit.event === "peer.transfer.download") {
+    return "instance.files.download"
+  }
   if (audit.event === "system.update_started") return "relay.update"
   if (audit.event === "invitation.created") return "relay.pairing.create"
   if (audit.event === "invitation.revoked") return "relay.pairing.revoke"
@@ -267,6 +292,18 @@ export function activityPermissionForAudit(
   if (audit.event === "relay.renamed") return "relay.rename"
 
   const operation = auditOperation(audit)
+  if (
+    operation === "transfer.source.prepare" ||
+    operation === "transfer.source.discard"
+  ) {
+    return "instance.files.download"
+  }
+  if (
+    operation === "transfer.pull.start" ||
+    operation === "transfer.pull.cancel"
+  ) {
+    return "instance.files.upload"
+  }
   if (operation === "relay.update.apply") return "relay.update"
   if (operation === "relay.restart") return "relay.update"
   if (operation === "relay.host.restart") return "relay.terminal"

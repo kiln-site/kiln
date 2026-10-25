@@ -132,6 +132,26 @@ export function fileRootTransferLocks(rootId: string): Array<LaneLock> {
 }
 
 /**
+ * Packing a root for another Relay reads it whole beside other work, as a
+ * backup does, and waits only for work that replaces it. `rootId` is the
+ * full ID.
+ */
+export function transferPackLocks(rootId: string): Array<LaneLock> {
+  return fileRootTransferLocks(rootId)
+}
+
+/**
+ * Installing a transfer writes a whole tree into a root, so it runs alone:
+ * no SFTP session or upload can change the folder under it.
+ */
+export function transferInstallLocks(rootId: string): Array<LaneLock> {
+  if (isRelayFileRoot(rootId)) return [exclusive(laneKeys.hostFiles)]
+  const appId = appIdFromFileRoot(rootId)
+  if (appId) return appReplaceLocks(appId)
+  return instanceReplaceLocks(rootId)
+}
+
+/**
  * Resolves a game server reference to its full ID. Requests normally carry
  * the full ID, which needs no lookup; a short ID or name is looked up.
  */
@@ -280,6 +300,13 @@ export function controlRequestLocks(
     case "backup.task.cancel":
     case "backup.task.get":
     case "backup.task.list":
+    // A transfer packs its source and installs its pull in lanes of its own.
+    case "transfer.source.prepare":
+    case "transfer.source.get":
+    case "transfer.source.discard":
+    case "transfer.pull.start":
+    case "transfer.pull.get":
+    case "transfer.pull.cancel":
     case "schedule.apply":
     case "schedule.run":
     case "schedule.remove":

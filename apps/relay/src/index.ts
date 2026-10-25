@@ -9,6 +9,7 @@ import { createServer as createHttpsServer } from "node:https"
 import { createHmac, randomBytes, randomUUID } from "node:crypto"
 import { mkdir } from "node:fs/promises"
 import { hostname } from "node:os"
+import { join } from "node:path"
 import { Effect, Predicate, Schema } from "effect"
 
 import {
@@ -39,7 +40,11 @@ import {
   relayPrepareAppSchema,
   relayProvisionAppSchema,
   appIdFromFileRoot,
+  databaseIdFromFileRoot,
   isRelayFileRoot,
+  RelayTransferPullStartSchema,
+  RelayTransferReferenceSchema,
+  RelayTransferSourcePrepareSchema,
   appIdSchema,
   appTailscaleMember,
   relayAppWebRouteStateSchema,
@@ -133,6 +138,10 @@ import { DatabaseConnections } from "./database-connections.js"
 import { BrickCatalog } from "./bricks.js"
 import { backupLinks } from "./transfers/backup-links.js"
 import { TransferGate } from "./transfers/gate.js"
+import { peerTransferRoute } from "./transfers/peer/route.js"
+import { TransferPulls } from "./transfers/peer/pulls.js"
+import type { TransferRootResolver } from "./transfers/peer/roots.js"
+import { TransferSources } from "./transfers/peer/sources.js"
 import { BackupManager } from "./backups.js"
 import { attachBrowserSocket } from "./browser-socket.js"
 import {
@@ -236,6 +245,8 @@ import {
   databaseLocks,
   instanceLifecycleLocks,
   instancePowerLocks,
+  transferInstallLocks,
+  transferPackLocks,
 } from "./operation-plans.js"
 import { actionsForRole, relayActions } from "./permissions.js"
 import { PowerIntents } from "./power-intents.js"
@@ -708,6 +719,66 @@ const backupManager = await runRelayEffect(
   })
 )
 const backupFiber = forkRelayEffect("relay.backups.worker", backupManager.run())
+// Files copied between Relays: artifacts this Relay packs for others, and
+// pulls it makes from them. Game servers, Apps' data, and the host's files
+// can be transferred; databases move through their dumps.
+const transferRoot: TransferRootResolver = async (rootId) => {
+  if (isRelayFileRoot(rootId)) {
+    return {
+      filesystem: hostFilesystem,
+      installLocks: transferInstallLocks(rootId),
+      packLocks: transferPackLocks(rootId),
+      root: await hostFileRoot(rootId),
+    }
+  }
+  const appId = appIdFromFileRoot(rootId)
+  if (appId) {
+    return {
+      filesystem: appFilesystem,
+      installLocks: transferInstallLocks(rootId),
+      packLocks: transferPackLocks(rootId),
+      root: await apps.fileRoot(appId),
+    }
+  }
+  if (databaseIdFromFileRoot(rootId) !== null) {
+    throw new Error("Databases move between Relays through their dumps")
+  }
+  const root = await requiredFileRoot(rootId)
+  return {
+    filesystem,
+    installLocks: transferInstallLocks(root.id),
+    packLocks: transferPackLocks(root.id),
+    root,
+  }
+}
+const transferSources = new TransferSources({
+  directory: join(config.dataDirectory, "transfers", "outgoing"),
+  lanes,
+  resolveRoot: transferRoot,
+})
+const transferPulls = new TransferPulls({
+  directory: join(config.dataDirectory, "transfers", "incoming"),
+  identity: relayIdentity,
+  lanes,
+  resolveRoot: transferRoot,
+})
+if (cliArguments.length === 0) {
+  await runRelayEffect(
+    "relay.startup.transfers",
+    Effect.all([transferSources.load(), transferPulls.load()], {
+      concurrency: 2,
+      discard: true,
+    })
+  )
+}
+const transferSweepFiber = forkRelayEffect(
+  "relay.transfers.sweep",
+  Effect.sleep("1 hour").pipe(
+    Effect.andThen(transferSources.sweep()),
+    Effect.ignore,
+    Effect.forever
+  )
+)
 const scheduleManager = await ScheduleManager.make({
   enqueueBackup: (input) =>
     runRelayEffect(
@@ -792,6 +863,12 @@ const backupDownloads = backupLinks({
   config,
   gate: transferGate,
   identity: relayIdentity,
+  state: startup.state,
+})
+const peerTransfers = peerTransferRoute({
+  gate: transferGate,
+  identity: relayIdentity,
+  sources: transferSources,
   state: startup.state,
 })
 
@@ -1067,6 +1144,7 @@ const requestHandler = (
       if (bootstrapDiscovery(request, response)) return
       if (await pairingRequest(request, response)) return
       if (await backupDownloads.handleRequest(request, response)) return
+      if (await peerTransfers.handleRequest(request, response)) return
       if (await browserSocket.handleRequest(request, response)) return
       json(response, 426, {
         error: "Relay control operations require a WebSocket transport",
@@ -1263,6 +1341,7 @@ const sftpServer = await Effect.runPromise(
         capacityMetricsFiber.interruptUnsafe()
         operationPruneFiber.interruptUnsafe()
         backupFiber.interruptUnsafe()
+        transferSweepFiber.interruptUnsafe()
         provisioningFiber.interruptUnsafe()
         scheduleFiber.interruptUnsafe()
         scheduleManager.close()
@@ -1545,6 +1624,7 @@ function shutdownRelay(signal: NodeJS.Signals): Promise<void> {
         joinFiber?.interruptUnsafe()
         platformFiber.interruptUnsafe()
         backupFiber.interruptUnsafe()
+        transferSweepFiber.interruptUnsafe()
         provisioningFiber.interruptUnsafe()
         scheduleFiber.interruptUnsafe()
         scheduleManager.close()
@@ -2589,6 +2669,44 @@ async function executeControlRequest(
           .pipe(Effect.map((tasks) => tasks.map(sendBackupTask)))
       )
     }
+    case "transfer.source.prepare":
+      return runRelayEffect(
+        "relay.transfers.source.prepare",
+        transferSources.prepare(
+          Schema.decodeUnknownSync(RelayTransferSourcePrepareSchema)(payload)
+        )
+      )
+    case "transfer.source.get":
+      return transferSources.get(
+        Schema.decodeUnknownSync(RelayTransferReferenceSchema)(payload)
+      )
+    case "transfer.source.discard":
+      return runRelayEffect(
+        "relay.transfers.source.discard",
+        transferSources
+          .discard(
+            Schema.decodeUnknownSync(RelayTransferReferenceSchema)(payload)
+          )
+          .pipe(Effect.map((discarded) => ({ discarded })))
+      )
+    case "transfer.pull.start":
+      return runRelayEffect(
+        "relay.transfers.pull.start",
+        transferPulls.start(
+          Schema.decodeUnknownSync(RelayTransferPullStartSchema)(payload)
+        )
+      )
+    case "transfer.pull.get":
+      return transferPulls.get(
+        Schema.decodeUnknownSync(RelayTransferReferenceSchema)(payload)
+      )
+    case "transfer.pull.cancel":
+      return runRelayEffect(
+        "relay.transfers.pull.cancel",
+        transferPulls.cancel(
+          Schema.decodeUnknownSync(RelayTransferReferenceSchema)(payload)
+        )
+      )
     case "schedule.apply":
       return scheduleManager.apply(
         relayScheduleProjectionSchema.parse(request.payload)

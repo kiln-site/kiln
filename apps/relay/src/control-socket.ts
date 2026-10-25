@@ -37,6 +37,7 @@ import {
   relayLogsV1Feature,
   relayProxyConfigurationV1Feature,
   relayHostFilesV1Feature,
+  relayPeerTransfersV1Feature,
   relayRestartV1Feature,
   relayResourcesV1Feature,
   relayFilePutV1Feature,
@@ -86,6 +87,7 @@ import {
 import {
   actionsForRole,
   fileMutationAction,
+  fileTransferAction,
   isActionAllowed,
 } from "./permissions.js"
 import { relayBuildLabel } from "./build-info.js"
@@ -1188,6 +1190,7 @@ function authenticateSocket(
           relayDatabaseDumpFilesV1Feature,
           relayInstallationV1Feature,
           relaySecurityInventoryV1Feature,
+          relayPeerTransfersV1Feature,
         ],
         protocol: relayControlProtocol,
         relayBuild: relayBuildLabel(),
@@ -1659,6 +1662,27 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "backup.task.get":
     case "backup.task.list":
       return "backup.read"
+    // Copying files between Relays is downloading them from the source and
+    // uploading them to the destination.
+    case "transfer.source.prepare":
+    case "transfer.source.get":
+    case "transfer.source.discard":
+      return fileTransferAction(
+        objectString(request.payload, "rootId") ?? "",
+        "download"
+      )
+    case "transfer.pull.start":
+      return fileTransferAction(
+        objectString(objectRecord(request.payload, "target") ?? {}, "rootId") ??
+          "",
+        "upload"
+      )
+    case "transfer.pull.get":
+    case "transfer.pull.cancel":
+      return fileTransferAction(
+        objectString(request.payload, "rootId") ?? "",
+        "upload"
+      )
     case "schedule.apply":
     case "schedule.run":
     case "schedule.remove":
@@ -1732,6 +1756,12 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       return "instance.sftp.connect"
   }
   return null
+}
+
+function objectRecord(value: unknown, key: string): object | null {
+  if (!value || typeof value !== "object" || !(key in value)) return null
+  const field = (value as Record<string, unknown>)[key]
+  return field && typeof field === "object" ? field : null
 }
 
 function objectString(value: unknown, key: string): string | null {

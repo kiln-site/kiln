@@ -43,6 +43,7 @@ import {
 } from "../files.js"
 import type { OperationLanes } from "../operation-lanes.js"
 import { fileRootTransferLocks } from "../operation-plans.js"
+import { fileTransferAction } from "../permissions.js"
 import {
   archiveBody,
   estimateCompressedSizes,
@@ -157,7 +158,7 @@ export function browserFileTransfers(
         }
         return decodeCapability(authorization.slice(5))
       })
-      const requiredAction = fileTransferAction(input.method, input.instanceId)
+      const requiredAction = browserFileAction(input.method, input.instanceId)
       const { nonce, publicKeyJwk, requestedAt } = yield* Effect.try(() => {
         const publicKeyJwk = Schema.decodeUnknownSync(BrowserPublicKeySchema)(
           JSON.parse(
@@ -327,7 +328,7 @@ export function browserFileTransfers(
           instanceId: authentication.instanceId,
           method,
           outcome,
-          permission: fileTransferAction(method, authentication.instanceId),
+          permission: browserFileAction(method, authentication.instanceId),
           subject: authentication.subject,
         },
         event:
@@ -667,20 +668,8 @@ function fileRootKind(rootId: string) {
   return "instance"
 }
 
-// Transfers of an app's files (`app:<appId>`) need its own file actions, and
-// of a database's dumps (`database:<databaseId>`), its dump actions.
-function fileTransferAction(method: BrowserFileMethod, rootId: string) {
-  const upload = method === "PUT"
-  switch (fileRootKind(rootId)) {
-    case "relay":
-      return upload ? "relay.files.upload" : "relay.files.download"
-    case "database":
-      return upload ? "database.dump.import" : "database.dump.export"
-    case "app":
-      return upload ? "app.files.upload" : "app.files.download"
-    case "instance":
-      return upload ? "instance.files.upload" : "instance.files.download"
-  }
+function browserFileAction(method: BrowserFileMethod, rootId: string) {
+  return fileTransferAction(rootId, method === "PUT" ? "upload" : "download")
 }
 
 const readBrowserDownloadForm = Effect.fnUntraced(function* (

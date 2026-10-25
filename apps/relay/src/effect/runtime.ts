@@ -1,6 +1,6 @@
 import * as Telemetry from "@workspace/telemetry"
-import { Effect, Layer, ManagedRuntime, Option } from "effect"
-import type { Fiber, Tracer } from "effect"
+import { Effect, Layer, ManagedRuntime, Option, Tracer } from "effect"
+import type { Fiber } from "effect"
 import { Headers, HttpTraceContext } from "effect/http"
 
 import { makeRelayStateLayer, RelayStateStore } from "./state.js"
@@ -143,6 +143,20 @@ export function traceParentSpan(
     HttpTraceContext.w3c(Headers.fromInput({ traceparent }))
   )
 }
+
+/**
+ * A W3C `traceparent` for work another service does within the current
+ * span, such as another Relay's, or none when no traces are kept.
+ */
+export const currentTraceparent: Effect.Effect<string | undefined> = Effect.gen(
+  function* () {
+    if ((yield* Effect.tracer) === Tracer.nativeTracer) return undefined
+    const span = yield* Effect.option(Effect.currentSpan)
+    return Option.isSome(span)
+      ? HttpTraceContext.toHeaders(span.value).traceparent
+      : undefined
+  }
+)
 
 /**
  * Forks a long-lived worker. It gets no span of its own: a span only exports

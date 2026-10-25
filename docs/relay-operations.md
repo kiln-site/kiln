@@ -24,20 +24,20 @@ A resource and its parts are separate keys. Work on a part takes the whole
 resource shared and the part exclusive; work that replaces the resource takes
 it exclusive, which waits for every part.
 
-| Key                                                | Taken by                                                                                                                                             |
-| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `instance:<id>`                                    | Shared by every change to a game server; exclusive to replace it (restore, reinstall, delete)                                                        |
-| `instance:<id>/lifecycle`                          | Exclusive to power actions, console input, crash recovery, the disk-quota stop, and container recreation for ports, routes, and database connections |
-| `instance:<id>/files`                              | Exclusive to Hearth file writes                                                                                                                      |
-| `instance:<id>/metadata`                           | Exclusive to renames                                                                                                                                 |
-| `app:<id>`, `app:<id>/lifecycle`, `app:<id>/files` | The same shape for Apps; a deployment's build holds the lifecycle lock                                                                               |
-| `database:<id>`                                    | Exclusive to database changes; shared by dumps and backups                                                                                           |
-| `relay:routes`                                     | Shared by starts; exclusive to route, port, proxy, and networking writes                                                                             |
-| `relay:tailscale`                                  | Exclusive to the Relay's Tailscale settings; shared by stack changes                                                                                 |
+| Key                                                | Taken by                                                                                                                                                                                                                                         |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `instance:<id>`                                    | Shared by every change to a game server; exclusive to replace it (restore, reinstall, delete)                                                                                                                                                    |
+| `instance:<id>/lifecycle`                          | Exclusive to power actions, console input, crash recovery, the disk-quota stop, and container recreation for ports, routes, and database connections                                                                                             |
+| `instance:<id>/files`                              | Exclusive to Hearth file writes                                                                                                                                                                                                                  |
+| `instance:<id>/metadata`                           | Exclusive to renames                                                                                                                                                                                                                             |
+| `app:<id>`, `app:<id>/lifecycle`, `app:<id>/files` | The same shape for Apps; a deployment's build holds the lifecycle lock                                                                                                                                                                           |
+| `database:<id>`                                    | Exclusive to database changes; shared by dumps and backups                                                                                                                                                                                       |
+| `relay:routes`                                     | Shared by starts; exclusive to route, port, proxy, and networking writes                                                                                                                                                                         |
+| `relay:tailscale`                                  | Exclusive to the Relay's Tailscale settings; shared by stack changes                                                                                                                                                                             |
 | `relay:allocations`                                | Exclusive to anything that reserves the node's memory, CPU, or disk: limit changes, a deployment's container start, and a game server's check before it's created or replaced, whose reservation stands in for it until its new container exists |
-| `relay:host-files`                                 | The host file root                                                                                                                                   |
-| `volume:<id>`                                      | Exclusive to creating, renaming, and deleting one of the Relay's named volumes                                                                       |
-| `relay:platform`                                   | Exclusive to each pass over Kiln's own services and to restarting or repairing them, when the Relay hosts them ([Self-hosting](self-hosting.md))      |
+| `relay:host-files`                                 | The host file root                                                                                                                                                                                                                               |
+| `volume:<id>`                                      | Exclusive to creating, renaming, and deleting one of the Relay's named volumes                                                                                                                                                                   |
+| `relay:platform`                                   | Exclusive to each pass over Kiln's own services and to restarting or repairing them, when the Relay hosts them ([Self-hosting](self-hosting.md))                                                                                                 |
 
 `apps/relay/src/operation-plans.ts` maps each control operation to its keys.
 Its switch is exhaustive, so a new operation can't compile until it declares
@@ -85,6 +85,11 @@ worker locks the work when it runs it:
 - **App deployments** hold the App's lifecycle lock for the whole build. An
   App delete stops a running deployment before it waits, so it doesn't wait
   for the build it's removing.
+- **Transfers between Relays** pack their source beside other work, as a
+  backup reads it (`transferPackLocks`), and install alone, as a restore
+  does (`transferInstallLocks`), so no upload or SFTP write changes the
+  folder while it's written. Serving and fetching the artifact take no
+  lock. See [Relay transfers](relay-transfers.md#between-relays).
 
 Exports, prunes, and backup deletes touch only stored artifacts and take no
 lock.
@@ -257,15 +262,15 @@ Requests from the browser socket, SFTP, and the Relay's own workers start
 their own traces, except provisioning, which continues the trace of the
 request that claimed it:
 
-| Span | What it times |
-| --- | --- |
-| `relay.provisioning.job` | One instance's create, from its wait for the instance's lanes to its last phase. Under the claim's `relay.control.request`; `relay.provisioning.kind`, `.attempt`, `.outcome`, `.failed_phase`, and `.running`, how many jobs ran once it started |
-| `relay.provisioning.phase` | Each phase: `preparing`, `pulling_image`, `creating_container`, `finalizing` |
-| `relay.apps.deployment` | An App deployment, with `.pull`, `.build`, `.composeConfig`, `.composeUp`, and `.replace` for its steps |
-| `relay.apps.reserve` | Checking an App's limits against the node and applying them, holding the allocations lane |
-| `relay.apps.diskLimit.check` | Measuring one App's data, and stopping it if it's past its limit (`relay.disk.stopped`) |
-| `relay.databases.replaceContainer` | Recreating a database's container to remove a limit |
-| `relay.databases.diskUsage` | Docker measuring every volume, for databases' disk use |
+| Span                               | What it times                                                                                                                                                                                                                                     |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `relay.provisioning.job`           | One instance's create, from its wait for the instance's lanes to its last phase. Under the claim's `relay.control.request`; `relay.provisioning.kind`, `.attempt`, `.outcome`, `.failed_phase`, and `.running`, how many jobs ran once it started |
+| `relay.provisioning.phase`         | Each phase: `preparing`, `pulling_image`, `creating_container`, `finalizing`                                                                                                                                                                      |
+| `relay.apps.deployment`            | An App deployment, with `.pull`, `.build`, `.composeConfig`, `.composeUp`, and `.replace` for its steps                                                                                                                                           |
+| `relay.apps.reserve`               | Checking an App's limits against the node and applying them, holding the allocations lane                                                                                                                                                         |
+| `relay.apps.diskLimit.check`       | Measuring one App's data, and stopping it if it's past its limit (`relay.disk.stopped`)                                                                                                                                                           |
+| `relay.databases.replaceContainer` | Recreating a database's container to remove a limit                                                                                                                                                                                               |
+| `relay.databases.diskUsage`        | Docker measuring every volume, for databases' disk use                                                                                                                                                                                            |
 
 ## Limits
 

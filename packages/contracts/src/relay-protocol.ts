@@ -196,6 +196,12 @@ export const relayControlOperations = [
   "backup.task.cancel",
   "backup.task.get",
   "backup.task.list",
+  "transfer.source.prepare",
+  "transfer.source.get",
+  "transfer.source.discard",
+  "transfer.pull.start",
+  "transfer.pull.get",
+  "transfer.pull.cancel",
   "schedule.apply",
   "schedule.run",
   "schedule.remove",
@@ -314,6 +320,10 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "app.terminal.restart",
   "backup.task.enqueue",
   "backup.task.cancel",
+  "transfer.source.prepare",
+  "transfer.source.discard",
+  "transfer.pull.start",
+  "transfer.pull.cancel",
   "schedule.apply",
   "schedule.run",
   "schedule.remove",
@@ -367,6 +377,8 @@ export function relayControlOperationChanges(
     case "app.image.check":
     case "backup.task.get":
     case "backup.task.list":
+    case "transfer.source.get":
+    case "transfer.pull.get":
     case "schedule.overview":
     case "instance.resources.read":
     case "instance.files.list":
@@ -456,6 +468,10 @@ export function relayControlOperationChanges(
     case "app.network.routes.write":
     case "backup.task.enqueue":
     case "backup.task.cancel":
+    case "transfer.source.prepare":
+    case "transfer.source.discard":
+    case "transfer.pull.start":
+    case "transfer.pull.cancel":
     case "schedule.apply":
     case "schedule.run":
     case "schedule.remove":

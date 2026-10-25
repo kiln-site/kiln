@@ -33,6 +33,7 @@ import {
 import { createHash, randomUUID } from "node:crypto"
 import {
   createGunzip,
+  createGzip,
   gzip,
   gunzip,
   constants as zlibConstants,
@@ -43,6 +44,7 @@ import { Effect, Result, Stream } from "effect"
 import { openPromise, type Entry, type ZipFile } from "yauzl"
 import {
   extract as createTarExtractor,
+  pack as createTarPack,
   type ExtractEvents,
   type Header as TarHeaders,
 } from "tar-stream"
@@ -856,6 +858,113 @@ export class FilesystemDriver {
         Effect.sync(() => this.#invalidateDirectorySizes(instance.id))
       ),
       Effect.withSpan("relay.files.upload")
+    )
+  }
+
+  /**
+   * Packs `paths` under a root, or the whole root when there are none, into
+   * a gzipped tar at `destination`, a path outside every file root. Ends
+   * with the archive's size, SHA-256, and how many entries it holds.
+   */
+  packTransferArchive(
+    instance: FileRoot,
+    paths: ReadonlyArray<string>,
+    destination: string
+  ) {
+    return Effect.gen({ self: this }, function* () {
+      yield* requireLinuxDescriptorAnchoring()
+      const root = yield* this.#instanceRoot(instance)
+      const selected = paths.length
+        ? distinctMutationPaths(paths)
+        : yield* filesystemOperation("transfer.listRoot", async () => {
+            const names: Array<string> = []
+            for await (const child of await opendir(root)) {
+              names.push(child.name)
+            }
+            return names.sort((left, right) => left.localeCompare(right))
+          })
+      const entries = yield* collectArchiveEntries(root, selected)
+      let completed = false
+      return yield* filesystemOperation("transfer.pack", (signal) =>
+        writeTransferArchive(destination, entries, signal)
+      ).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            completed = true
+          })
+        ),
+        Effect.ensuring(
+          Effect.suspend(() =>
+            completed ? Effect.void : cleanupPathEffect(destination)
+          )
+        )
+      )
+    }).pipe(Effect.withSpan("relay.files.packTransfer"))
+  }
+
+  /**
+   * Installs a transfer archive at `requestedPath` under a root: a folder
+   * that must be missing or empty, or the root itself when it's empty. The
+   * archive is checked whole before anything is written, and what was
+   * written is removed if installing fails. New files keep their modes and
+   * belong to the root's owner.
+   */
+  installTransferArchive(
+    instance: FileRoot,
+    requestedPath: string,
+    archive: string
+  ) {
+    return Effect.gen({ self: this }, function* () {
+      yield* requireLinuxDescriptorAnchoring()
+      const root = yield* this.#instanceRoot(instance)
+      const normalizedPath = requestedPath.replace(/\/+$/u, "")
+      if (normalizedPath) yield* validateRelativePath(normalizedPath)
+      const destination = normalizedPath ? resolve(root, normalizedPath) : root
+      yield* ensureContained(root, destination)
+      if (normalizedPath) {
+        const parent = yield* filesystemOperation(
+          "transfer.resolveParent",
+          () => realpath(dirname(destination))
+        )
+        yield* ensureContained(root, parent)
+      }
+      const owner = yield* filesystemOperation("transfer.statRoot", () =>
+        stat(root)
+      )
+      let created = false
+      let wrote = false
+      let completed = false
+      yield* filesystemOperation("transfer.install", async (signal) => {
+        const entries = await inspectTarGzArchive(archive, signal)
+        created = await prepareTransferDestination(destination)
+        wrote = true
+        await extractTarGzEntries(
+          archive,
+          entries,
+          signal,
+          (entry, inspected) =>
+            extractTransferEntry(entry, inspected, destination, owner, signal)
+        )
+      }).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            completed = true
+          })
+        ),
+        Effect.ensuring(
+          Effect.suspend(() => {
+            if (completed || !wrote) return Effect.void
+            return created
+              ? cleanupExtractionEffect(destination)
+              : emptyDirectoryEffect(destination)
+          })
+        )
+      )
+    }).pipe(
+      Effect.tap(() =>
+        Effect.sync(() => this.#invalidateDirectorySizes(instance.id))
+      ),
+      Effect.withSpan("relay.files.installTransfer")
     )
   }
 
@@ -2849,4 +2958,153 @@ function ensureContained(root: string, candidate: string) {
         // Relay's container, not on the host.
         "This path or a link in it leads outside these files"
       )
+}
+
+// A transfer archive: every entry under its path in the root, with its
+// mode, gzipped as it's written, hashed and counted on the way to disk.
+async function writeTransferArchive(
+  destination: string,
+  entries: ReadonlyArray<ArchiveDownloadEntry>,
+  signal: AbortSignal
+): Promise<{ entries: number; sha256: string; size: number }> {
+  const archive = createTarPack()
+  const hash = createHash("sha256")
+  let size = 0
+  const written = pipeline(
+    archive,
+    createGzip({ level: zlibConstants.Z_BEST_SPEED }),
+    async function* (chunks: AsyncIterable<Buffer>) {
+      for await (const chunk of chunks) {
+        hash.update(chunk)
+        size += chunk.byteLength
+        yield chunk
+      }
+    },
+    createWriteStream(destination, { flags: "wx", mode: 0o600 }),
+    { signal }
+  )
+  const added = (async () => {
+    for (const entry of entries) {
+      if (signal.aborted) throw signal.reason
+      const metadata = await stat(entry.absolute)
+      // Named under the selection, as an archive download names them, so a
+      // copied folder lands as that folder.
+      const name = entry.name
+      if (entry.kind === "directory") {
+        await new Promise<void>((resolveEntry, rejectEntry) => {
+          archive.entry(
+            {
+              mode: metadata.mode & 0o777,
+              name: `${name}/`,
+              type: "directory",
+            },
+            (cause) => (cause ? rejectEntry(cause) : resolveEntry())
+          )
+        })
+        continue
+      }
+      const header = {
+        mode: metadata.mode & 0o777,
+        mtime: metadata.mtime,
+        name,
+        size: metadata.size,
+        type: "file" as const,
+      }
+      await new Promise<void>((resolveEntry, rejectEntry) => {
+        const settled = (cause?: Error | null) =>
+          cause ? rejectEntry(cause) : resolveEntry()
+        if (metadata.size === 0) {
+          archive.entry(header, Buffer.alloc(0), settled)
+          return
+        }
+        const target = archive.entry(header, settled)
+        // Exactly the size the header declares, should the file grow.
+        const source = createReadStream(entry.absolute, {
+          end: metadata.size - 1,
+          start: 0,
+        })
+        source.once("error", (cause) => {
+          target.destroy(cause)
+          rejectEntry(cause)
+        })
+        source.pipe(target)
+      })
+    }
+    archive.finalize()
+  })()
+  const [packing] = await Promise.allSettled([added, written])
+  if (packing.status === "rejected") {
+    archive.destroy(packing.reason as Error)
+    throw packing.reason
+  }
+  await written
+  return { entries: entries.length, sha256: hash.digest("hex"), size }
+}
+
+// The folder a transfer installs into: created when missing, or taken as
+// it is when empty. True when it was created.
+async function prepareTransferDestination(destination: string) {
+  const existing = await Effect.runPromise(
+    Effect.result(promiseEffect(() => lstat(destination)))
+  )
+  if (Result.isFailure(existing)) {
+    if (!isMissingFile(existing.failure)) throw existing.failure
+    await mkdir(destination, { mode: 0o755 })
+    return true
+  }
+  if (existing.success.isSymbolicLink() || !existing.success.isDirectory()) {
+    throw archiveExtractionError(
+      "target_exists",
+      "The transfer's destination is not a folder"
+    )
+  }
+  const directory = await opendir(destination)
+  const first = await directory.read()
+  await directory.close()
+  if (first) {
+    throw archiveExtractionError(
+      "target_exists",
+      "The transfer's destination folder is not empty"
+    )
+  }
+  return false
+}
+
+// Writes one entry of a transfer archive, keeping its mode with at least
+// its owner's access, and giving it the root's owner.
+async function extractTransferEntry(
+  entry: TarEntry,
+  inspected: TarArchiveEntry,
+  destination: string,
+  owner: { gid: number; uid: number },
+  signal: AbortSignal
+): Promise<void> {
+  const mode =
+    ((entry.header.mode ?? 0) & 0o777) |
+    (inspected.kind === "directory" ? 0o700 : 0o600)
+  const target = resolve(destination, inspected.name)
+  requireExtractedPathContained(destination, target)
+  if (inspected.kind === "directory") {
+    await drainTarEntry(entry, signal)
+    await mkdir(target, { mode, recursive: true })
+  } else {
+    await mkdir(dirname(target), { mode: 0o755, recursive: true })
+    await pipeline(entry, createWriteStream(target, { flags: "wx", mode }), {
+      signal,
+    })
+  }
+  await chmod(target, mode)
+  if (process.getuid?.() === 0) await chown(target, owner.uid, owner.gid)
+}
+
+function emptyDirectoryEffect(path: string) {
+  return filesystemOperation("cleanup.transfer", async () => {
+    for await (const child of await opendir(path)) {
+      await rm(join(path, child.name), { force: true, recursive: true })
+    }
+  }).pipe(
+    Effect.catch((cause) =>
+      Effect.logWarning("Relay transfer cleanup failed", cause)
+    )
+  )
 }

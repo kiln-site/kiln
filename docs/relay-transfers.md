@@ -4,10 +4,11 @@ A Relay streams files directly to and from whoever asked for them, so
 Hearth stays out of the data path. Every direct transfer runs through the
 same code in `apps/relay/src/transfers/`, whichever route it came in on.
 
-| Route                            | Used for                                                                                      | Authorized by                                                                                |
-| -------------------------------- | --------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `/v1/browser/files/<root>`       | The Files tab's uploads and downloads, App files, host files, and database dump import/export | A capability Hearth signs for one path and action, and a proof from the browser key it names |
-| `/v1/browser/backups/<backupId>` | Backup archive download links                                                                 | A link Hearth signs for one backup, valid until it expires                                   |
+| Route                             | Used for                                                                                      | Authorized by                                                                                               |
+| --------------------------------- | --------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `/v1/browser/files/<root>`        | The Files tab's uploads and downloads, App files, host files, and database dump import/export | A capability Hearth signs for one path and action, and a proof from the browser key it names                |
+| `/v1/browser/backups/<backupId>`  | Backup archive download links                                                                 | A link Hearth signs for one backup, valid until it expires                                                  |
+| `/v1/peer/transfers/<transferId>` | Another Relay pulling files copied to it (below)                                              | A grant Hearth signs for one artifact and one destination Relay, and a proof from that Relay's identity key |
 
 ## Adding a route
 
@@ -59,15 +60,58 @@ together. Relays that predate this ignore the parameter.
   was unreachable, refused, cancelled, or answered with something invalid.
   An unreachable Relay still takes a small text file through Hearth.
 
+## Between Relays
+
+Files move from one Relay to another directly, without passing through
+Hearth (`apps/relay/src/transfers/peer/`, `apps/web/src/server/relay-transfers.server.ts`):
+
+1. Hearth asks the source Relay to pack the files with
+   `transfer.source.prepare`. It writes a gzipped tar under
+   `<data>/transfers/outgoing/` in the background, taking the root's
+   `transferPackLocks` (shared, as a backup's read), and records its size
+   and SHA-256.
+2. Once it's ready, Hearth signs a grant with the key it's paired to the
+   source under. The grant names the artifact by its digest, the source
+   Relay, and the destination Relay by its identity fingerprint, and lasts
+   two days.
+3. Hearth sends the grant to the destination with `transfer.pull.start`,
+   with the addresses it may reach the source at: the listener Hearth
+   itself reaches, trusted through the CA Hearth pinned for it, the address
+   the Relay advertised, and its public browser origin.
+4. The destination fetches the artifact into `<data>/transfers/incoming/`
+   with Range requests, each signed with its identity key. A dropped
+   connection, a busy source, or a restart resumes from what it already
+   has; it backs off for about four minutes before giving up. It then
+   checks the artifact's SHA-256 against the grant and installs it with
+   `transferInstallLocks`, which run alone, into a folder that must be
+   missing or empty. Files keep their modes and belong to the root's owner.
+5. Hearth discards the source's artifact once the pull ends. Artifacts
+   nobody discards are deleted after a day; finished pulls' records after a
+   week.
+
+Copying needs the source root's download action and the destination
+root's upload action, for the person on Hearth and for Hearth's pairing on
+each Relay; no other Relay action is involved. Game servers, Apps' data,
+and host files can be copied. Databases move through their dumps. Each
+Relay's records are the truth about a transfer, so any Hearth process can
+report one. The process that started a transfer drives it between steps;
+if it stops, the transfer stays where it was until it's started again.
+
+`preflightRelayTransfer` lists what would stop a copy and what fixes it:
+an offline or outdated Relay, a database root, or a pairing that can't
+move files in or out. A pull that can't reach its source reports why in
+its `error` while it waits to try again.
+
 ## Limits
 
-| Pool      | At once | Per principal |
-| --------- | ------- | ------------- |
-| `browser` | 32      | 8             |
-| `backup`  | 4       | 4             |
+| Pool      | At once | Per principal        |
+| --------- | ------- | -------------------- |
+| `browser` | 32      | 8                    |
+| `backup`  | 4       | 4                    |
+| `peer`    | 8       | 4, per pulling Relay |
 
 A browser request also has 30 seconds to authenticate, with at most
-`KILN_RELAY_BROWSER_PENDING_FILE_AUTHENTICATIONS` authenticating at once.
+`KILN_RELAY_BROWSER_PENDING_FILE_AUTH_MAX` authenticating at once.
 
 ## Telemetry
 

@@ -9,7 +9,7 @@ import { Effect, Scope } from "effect"
 
 import { TransferRejected } from "./http.js"
 
-export type TransferPool = "backup" | "browser"
+export type TransferPool = "backup" | "browser" | "peer"
 
 export interface TransferPoolLimits {
   readonly total: number
@@ -23,6 +23,8 @@ export const defaultTransferPoolLimits: Readonly<
   browser: { total: 32, perPrincipal: 8 },
   // Backup archives fetched through signed download links.
   backup: { total: 4, perPrincipal: 4 },
+  // Artifacts other Relays pull, a share for each pulling Relay.
+  peer: { total: 8, perPrincipal: 4 },
 }
 
 interface PoolState {
@@ -42,6 +44,7 @@ export class TransferGate {
     this.#pools = {
       backup: { active: 0, byPrincipal: new Map(), limits: limits.backup },
       browser: { active: 0, byPrincipal: new Map(), limits: limits.browser },
+      peer: { active: 0, byPrincipal: new Map(), limits: limits.peer },
     }
   }
 
@@ -75,7 +78,9 @@ export class TransferGate {
               reason:
                 pool === "backup"
                   ? "Relay backup download capacity reached"
-                  : "Relay file transfer capacity reached",
+                  : pool === "peer"
+                    ? "Relay transfer capacity reached"
+                    : "Relay file transfer capacity reached",
             })
           )
         }

@@ -27,6 +27,7 @@ import {
 
 export * from "./access-permissions.js"
 export * from "./relay-protocol.js"
+export * from "./relay-transfers.js"
 export * from "./installation-id.js"
 export * from "./container-identity.js"
 export * from "./relay-join.js"
