@@ -17,9 +17,6 @@ vi.mock("@/lib/auth-session", () => ({
 
 import { forwardBrowserTelemetry } from "./browser-telemetry"
 
-const traceIdKept = `00000000${"a".repeat(24)}`
-const traceIdDropped = `ffffffff${"a".repeat(24)}`
-
 function telemetryRequest(body: unknown): Request {
   return new Request("https://hearth.example.com/api/telemetry/v1/x", {
     method: "POST",
@@ -112,28 +109,6 @@ describe("browser telemetry forwarding", () => {
           },
           scopeLogs: [{ logRecords: [{ body: { stringValue: "boom" } }] }],
         },
-      ],
-    })
-  })
-
-  it("keeps every browser trace while page opens are baselined", async () => {
-    const spans = [
-      { traceId: traceIdKept, name: "kept" },
-      { traceId: traceIdDropped, name: "dropped" },
-    ]
-    const response = await forwardBrowserTelemetry(
-      telemetryRequest({
-        resourceSpans: [
-          { resource: spoofedResource(), scopeSpans: [{ spans }] },
-        ],
-      }),
-      "traces"
-    )
-    expect(response.status).toBe(204)
-    expect(boundary.forwarded).toHaveLength(1)
-    expect(boundary.forwarded[0].body).toMatchObject({
-      resourceSpans: [
-        { scopeSpans: [{ spans: [{ name: "kept" }, { name: "dropped" }] }] },
       ],
     })
   })

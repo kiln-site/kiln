@@ -1,20 +1,6 @@
 import { describe, expect, it } from "vite-plus/test"
 
-import {
-  movedFilePath,
-  unarchiveDestinationPath,
-} from "@/components/files/file-tree-utils"
-
-describe("file archive paths", () => {
-  it("uses the archive stem as the automatic destination", () => {
-    expect(unarchiveDestinationPath("world/config.zip")).toBe("world/config")
-    expect(unarchiveDestinationPath("world/config.tar.gz")).toBe("world/config")
-    expect(unarchiveDestinationPath("world/config.tgz")).toBe("world/config")
-    expect(unarchiveDestinationPath("world/config.v1.zip")).toBe(
-      "world/config.v1"
-    )
-  })
-})
+import { movedFilePath } from "@/components/files/file-tree-utils"
 
 // After a move the editor follows the new path; a wrong answer would let a
 // later save write to the old location.

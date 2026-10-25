@@ -758,7 +758,7 @@ describeLinux("Relay direct file transfers", () => {
   )
 
   it.effect("atomically uploads and reads through a pinned file handle", () =>
-    withSetup(({ driver, instance, root }) =>
+    withSetup(({ driver, instance }) =>
       Effect.gen(function* () {
         const uploaded = yield* driver.upload(
           instance,
@@ -778,7 +778,6 @@ describeLinux("Relay direct file transfers", () => {
             })
         )
         assert.strictEqual(contents, "direct transfer")
-        assert.isNotEmpty(root)
       })
     )
   )

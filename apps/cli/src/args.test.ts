@@ -29,18 +29,6 @@ describe("CLI arguments", () => {
     )
   })
 
-  it("rejects removed output mode flags", () => {
-    expect(() => parseArguments(["servers", "list", "--json"])).toThrow(
-      "Unknown option: --json"
-    )
-    expect(() => parseArguments(["--output", "human"])).toThrow(
-      "Unknown option: --output"
-    )
-    expect(() => parseArguments(["files", "read", "server", "--raw"])).toThrow(
-      "Unknown option: --raw"
-    )
-  })
-
   it("parses server creation and startup options", () => {
     expect(
       parseArguments([

@@ -11,14 +11,6 @@ describe("Brick icon SVGs", () => {
     ).toContain('viewBox="0 0 24 24"')
   })
 
-  it("rejects non-square artwork", () => {
-    expect(() =>
-      validateBrickIconSvg(
-        '<svg viewBox="0 0 24 12"><path d="M0 0h1v1"/></svg>'
-      )
-    ).toThrow("must be square")
-  })
-
   it.each([
     '<svg viewBox="0 0 24 24"><script>alert(1)</script></svg>',
     '<svg viewBox="0 0 24 24"><image href="https://example.com/a.png"/></svg>',

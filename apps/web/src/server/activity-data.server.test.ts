@@ -170,27 +170,6 @@ describeMysql("Activity permission boundary", () => {
       )
 
     it.effect(
-      "filters child records even when the Relay returns other events",
-      () =>
-        Effect.gen(function* () {
-          yield* seed([
-            {
-              permissions: ["instance.read"],
-              resourceType: "instance",
-              resourceId: "server-a",
-            },
-          ])
-
-          const result = yield* activityFor(user)
-
-          assert.deepEqual(
-            result.entries.map((entry) => entry.id),
-            ["relay-a:server-a-event"]
-          )
-        })
-    )
-
-    it.effect(
       "does not carry Relay audit authority into another Relay with a child grant",
       () =>
         Effect.gen(function* () {

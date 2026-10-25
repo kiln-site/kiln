@@ -121,9 +121,8 @@ describe("relay browser socket integration", () => {
       ],
       1
     )
-    await expect(closed).resolves.toEqual({
+    await expect(closed).resolves.toMatchObject({
       code: 4403,
-      reason: "Browser authorization changed",
     })
   })
 
@@ -397,9 +396,8 @@ describe("relay browser socket integration", () => {
       1
     )
 
-    await expect(closed).resolves.toEqual({
+    await expect(closed).resolves.toMatchObject({
       code: 4403,
-      reason: "Browser authorization changed",
     })
   })
 

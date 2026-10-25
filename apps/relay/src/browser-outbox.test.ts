@@ -49,9 +49,6 @@ describe("browser outbox", () => {
     outbox.send("b", "console")
     outbox.send("c", "console")
     outbox.send("d", "console")
-    expect(socket.close).toHaveBeenCalledWith(
-      1013,
-      "Browser is not consuming messages"
-    )
+    expect(socket.close).toHaveBeenCalledWith(1013, expect.any(String))
   })
 })

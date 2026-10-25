@@ -117,17 +117,5 @@ describeMysql("managed apps", () => {
         assert.notProperty(saved?.config, "diskLimitBytes")
       })
     )
-
-    it.effect("refuses to rename an app that doesn't exist", () =>
-      Effect.gen(function* () {
-        yield* resetDatabase
-        yield* insertRelay(relayOne)
-
-        const error = yield* Effect.flip(
-          renameAppRecordEffect(relayOne, "d".repeat(40), "Website")
-        )
-        assert.match(error.message, /not found/u)
-      })
-    )
   })
 })

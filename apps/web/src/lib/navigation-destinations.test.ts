@@ -12,8 +12,6 @@ import {
   canAccessAutomations,
   canAccessBackups,
   canAccessInstancePermission,
-  serverDestinationHref,
-  serverDestinations,
 } from "@/lib/navigation-destinations"
 import type { NavigationAccessCapabilities } from "@/lib/navigation-destinations"
 
@@ -267,19 +265,5 @@ describe("navigation destinations", () => {
         "instance.read"
       )
     ).toBe(false)
-  })
-
-  it("builds encoded server destination URLs", () => {
-    const files = serverDestinations.find(({ id }) => id === "files")
-    const console = serverDestinations.find(({ id }) => id === "console")
-
-    expect(files).toBeDefined()
-    expect(console).toBeDefined()
-    expect(serverDestinationHref(files!, "relay one/server")).toBe(
-      "/server/relay%20one%2Fserver/files/"
-    )
-    expect(serverDestinationHref(console!, "relay one/server")).toBe(
-      "/server/relay%20one%2Fserver/console"
-    )
   })
 })

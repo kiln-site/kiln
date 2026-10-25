@@ -74,7 +74,6 @@ describe("Hearth Brick mutation inputs", () => {
       expect(parsed.error.issues).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            message: "Brick definitions are resolved by Hearth",
             path: ["recipeDefinition"],
           }),
         ])

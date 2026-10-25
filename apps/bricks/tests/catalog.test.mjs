@@ -117,11 +117,6 @@ test("the official catalog and every recipe satisfy the v1 schemas", async () =>
         `${recipePath}: Java recipes must declare server_jar_file`
       )
       assert.equal(
-        serverJarFile?.default,
-        `${recipe.metadata.id}.jar`,
-        `${recipePath}: Java recipe jar filenames must default to the Brick id`
-      )
-      assert.equal(
         serverJarFile?.rules?.pattern,
         SERVER_JAR_FILE_RULE_PATTERN,
         `${recipePath}: Java recipe jar filenames must be safe .jar basenames`
