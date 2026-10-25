@@ -13,6 +13,12 @@ Run `dev:setup` once per clone. It creates `.env` in the primary checkout and
 fills missing secrets; linked worktrees share that file. Open the Hearth URL
 printed at startup.
 
+React Scan is opt-in so its instrumentation and toolbar don't delay fresh
+dev loads, especially on mobile. Start with `VITE_REACT_SCAN=true pnpm dev:docker`
+to enable the toolbar and `window.__hearthRenderAudit` for profiling. Restart
+with ordinary `pnpm dev:docker` to disable it again. For a local web process,
+use `VITE_REACT_SCAN=true pnpm --filter web dev`.
+
 ## Access and worktrees
 
 Standard Docker uses `http://localhost:3000`, with MySQL on port 3306 and SFTP

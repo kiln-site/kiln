@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 
 import { Result } from "effect"
-import { defineConfig, lazyPlugins } from "vite-plus"
+import { defineConfig, lazyPlugins, loadEnv } from "vite-plus"
 import type { Plugin } from "vite-plus"
 import { devtools } from "@tanstack/devtools-vite"
 import { tanstackStart } from "@tanstack/react-start/plugin/vite"
@@ -24,7 +24,7 @@ const hearthStylesheet = resolve(
   "packages/ui/src/styles/globals.css"
 )
 const brandingDirectory = resolve(import.meta.dirname, "src/assets/branding")
-const reactScanProductionShim = resolve(
+const reactScanShim = resolve(
   import.meta.dirname,
   "node_modules/react-scan/dist/rsc-shim.mjs"
 )
@@ -39,9 +39,14 @@ const telemetryEnvironment = [
   "OTEL_TRACES_SAMPLER_ARG",
 ]
 
-const config = defineConfig(({ command }) => {
+const config = defineConfig(({ command, mode }) => {
   const sourceCommit = resolveBuildCommit()
   const buildCommit = command === "serve" ? "" : sourceCommit
+  const reactScanEnabled =
+    command === "serve" &&
+    (process.env.VITE_REACT_SCAN ??
+      loadEnv(mode, repositoryRoot, "VITE_REACT_SCAN").VITE_REACT_SCAN) ===
+      "true"
 
   return {
     run: {
@@ -75,6 +80,7 @@ const config = defineConfig(({ command }) => {
       },
     },
     define: {
+      "import.meta.env.VITE_REACT_SCAN": JSON.stringify(reactScanEnabled),
       "import.meta.env.VITE_KILN_BUILD_SHA": JSON.stringify(buildCommit),
       "import.meta.env.VITE_KILN_SOURCE_SHA": JSON.stringify(sourceCommit),
       "import.meta.env.VITE_KILN_VERSION": JSON.stringify(
@@ -94,16 +100,16 @@ const config = defineConfig(({ command }) => {
     },
     envDir: "../..",
     resolve: {
-      // Keep React Scan's instrumentation and toolbar out of production bundles.
-      alias:
-        command === "serve"
-          ? [
-              {
-                find: /^@workspace\/contracts$/,
-                replacement: contractsSource,
-              },
-            ]
-          : [{ find: /^react-scan$/, replacement: reactScanProductionShim }],
+      // The toolbar still loads and instruments React with enabled: false.
+      // Keep it off the startup path unless explicitly profiling in dev.
+      alias: [
+        ...(command === "serve"
+          ? [{ find: /^@workspace\/contracts$/, replacement: contractsSource }]
+          : []),
+        ...(reactScanEnabled
+          ? []
+          : [{ find: /^react-scan$/, replacement: reactScanShim }]),
+      ],
       tsconfigPaths: true,
     },
     ssr: {
@@ -121,7 +127,10 @@ const config = defineConfig(({ command }) => {
       webAppManifest(),
       devtools(),
       tailwindcss(),
-      tanstackStart(),
+      // __root links the global stylesheet directly. The only side-effect
+      // CSS is xterm's client-only terminal; crawling the route graph for SSR
+      // styles adds an empty, render-blocking request to fresh dev loads.
+      tanstackStart({ dev: { ssrStyles: { enabled: false } } }),
       viteReact(),
     ]),
     test: {

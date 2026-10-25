@@ -15,7 +15,11 @@ import { createRenderAudit } from "@/lib/render-audit"
 
 startBrowserTelemetry()
 
-if (import.meta.env.DEV && typeof window !== "undefined") {
+if (
+  import.meta.env.DEV &&
+  import.meta.env.VITE_REACT_SCAN &&
+  typeof window !== "undefined"
+) {
   const { audit, onRender } = createRenderAudit()
   window.__hearthRenderAudit = audit
   scan({

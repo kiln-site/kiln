@@ -234,6 +234,7 @@ services:
       DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
       DB_TABLE_PREFIX: ${DB_TABLE_PREFIX:-}
       KILN_ENVIRONMENT: dev
+      VITE_REACT_SCAN: ${VITE_REACT_SCAN:-false}
       KILN_GIT_REPO: ${KILN_GIT_REPO:-}
       KILN_BRICKS_CATALOG_URL: file:///workspace/apps/bricks/catalog.yml
       KILN_MARKETING_URL: ${KILN_MARKETING_URL:-}
