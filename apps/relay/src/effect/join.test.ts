@@ -144,7 +144,7 @@ describe("Relay joining", () => {
   )
 
   it.effect(
-    "drops the client it paired when Hearth cancels the join unsaved",
+    "keeps the client it paired whatever Hearth later says of the join",
     () =>
       withJoiningRelay((relay) =>
         Effect.scoped(
@@ -170,13 +170,56 @@ describe("Relay joining", () => {
               state: relay.state,
             })
 
-            // Saving it failed, and someone cancelled the join.
+            // Hearth may have saved it, or not; the Relay can't tell, and
+            // revoking a client Hearth saved would lock Hearth out.
             answers.push({ clientId: null, expiresAt: null, status: "expired" })
             yield* advanceUntil(() => events.includes("finished"))
             assert.strictEqual(yield* Fiber.join(joining), "expired")
             const clients = yield* relay.state.listClients()
-            assert.isFalse(
+            assert.isTrue(
               clients.some((client) => client.id === paired.clientId)
+            )
+          })
+        )
+      )
+  )
+
+  it.effect(
+    "announces itself as it first did after a restart, so Hearth still knows it",
+    () =>
+      withJoiningRelay((relay) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const hearth = yield* fakeHearth([
+              {
+                clientId: fingerprint(ed25519Keys().publicKey),
+                expiresAt: Date.now() + 60_000,
+                status: "pending",
+              },
+            ])
+            const run = (config: typeof relay.config) => {
+              const events: Array<string> = []
+              return runRelayJoin(
+                {
+                  ...relay,
+                  config,
+                  link: { hearthOrigin: hearth.origin, secret },
+                },
+                (event) => events.push(event.kind)
+              ).pipe(
+                Effect.forkChild,
+                Effect.tap(() => advanceUntil(() => events.includes("waiting")))
+              )
+            }
+            yield* Fiber.interrupt(yield* run(relay.config))
+
+            // Restarted with the installation ID Hearth gave it.
+            const asked = hearth.announcements.length
+            yield* run({ ...relay.config, installationId: "hearth-install" })
+            yield* advanceUntil(() => hearth.announcements.length > asked)
+            assert.deepStrictEqual(
+              hearth.announcements.at(-1)?.envelope,
+              hearth.announcements[0]?.envelope
             )
           })
         )

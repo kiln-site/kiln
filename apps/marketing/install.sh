@@ -604,16 +604,37 @@ wait_healthy() {
   dk inspect --format '{{.Name}} {{.Config.Image}} healthy' "$name"
 }
 
-# A `docker run` that failed after creating its container, as when a port
-# is taken, leaves it behind; it never ran, so it goes, and the run fails.
+# Where `docker run` writes the ID of the container it created, so a run
+# that fails after creating it, as when a port is taken, removes that one
+# container and no other: not a Relay another install started meanwhile.
+relay_cidfile=""
+new_relay_cidfile() {
+  relay_cidfile=$(mktemp -u "${TMPDIR:-/tmp}/kiln-relay-cid.XXXXXX")
+}
+
+# Removes that file as whoever ran Docker, which wrote it.
+remove_relay_cidfile() {
+  case "$docker_cmd" in
+    sudo*) sudo rm -f "$relay_cidfile" ;;
+    *) rm -f "$relay_cidfile" ;;
+  esac
+}
+
+# The container the failed run created, if it never ran. The run fails.
 remove_unstarted() {
-  dk rm --force "$container" >/dev/null 2>&1 || true
+  created=$(cat "$relay_cidfile" 2>/dev/null || true)
+  remove_relay_cidfile
+  if [ -n "$created" ] &&
+    [ "$(dk inspect --format '{{.State.Status}}' "$created" 2>/dev/null)" = "created" ]; then
+    dk rm --force "$created" >/dev/null 2>&1 || true
+  fi
   return 1
 }
 
 start_platform_relay() {
   dk volume create "$volume" >/dev/null
-  dk run --detach --name "$container" --restart unless-stopped \
+  new_relay_cidfile
+  dk run --detach --cidfile "$relay_cidfile" --name "$container" --restart unless-stopped \
     --volume /var/run/docker.sock:/var/run/docker.sock \
     --volume "$volume:/data" \
     --publish "$sftp_port:2022" \
@@ -628,11 +649,13 @@ start_platform_relay() {
     ${namespace:+--env KILN_RELAY_RESOURCE_NAMESPACE="$namespace"} \
     ${game_host:+--env KILN_RELAY_GAME_HOST="$game_host"} \
     "$image" || remove_unstarted
+  remove_relay_cidfile
 }
 
 start_node_relay() {
   dk volume create "$volume" >/dev/null
-  dk run --detach --name "$container" --restart unless-stopped \
+  new_relay_cidfile
+  dk run --detach --cidfile "$relay_cidfile" --name "$container" --restart unless-stopped \
     --volume /var/run/docker.sock:/var/run/docker.sock \
     --volume "$volume:/data" \
     --publish 4100:4100 --publish "$sftp_port:2022" \
@@ -641,6 +664,7 @@ start_node_relay() {
     ${namespace:+--env KILN_RELAY_RESOURCE_NAMESPACE="$namespace"} \
     ${game_host:+--env KILN_RELAY_GAME_HOST="$game_host"} \
     "$image" || remove_unstarted
+  remove_relay_cidfile
   waited=0
   until [ "$(dk inspect --format '{{.State.Health.Status}}' "$container" 2>/dev/null)" = "healthy" ]; do
     waited=$((waited + 2))

@@ -50,6 +50,7 @@ import {
   verifyPairingResponse,
   type PersistedRelay,
 } from "@/lib/relay-registry"
+import { readLimitedText } from "@/lib/request-body"
 import { assertRequestRateLimit } from "@/lib/request-rate-limit"
 
 // Joins: adding a Relay from the install command in the Add Relay dialog.
@@ -408,8 +409,9 @@ export const relayJoinViewEffect = Effect.fn("relayJoin.get")(function* (
 
 /**
  * A new command: the old join can no longer pair anything, and tells its
- * Relay it expired. Not while a Relay is being added from it; one whose
- * adding stopped on an error, or that waits for review, can go.
+ * Relay it expired. Not while a Relay is being added from it, nor once
+ * Hearth saved that Relay; one whose adding stopped on an error before
+ * that can go, and frees the Relay to join again.
  */
 export const refreshRelayJoinEffect = Effect.fn("relayJoin.refresh")(function* (
   userId: string,
@@ -421,15 +423,16 @@ export const refreshRelayJoinEffect = Effect.fn("relayJoin.refresh")(function* (
     "relay_join_revoke",
     `UPDATE ${databaseTable("relay_join")}
           SET state = 'revoked', client_private_key_ciphertext = NULL,
-              updated_at = ?
+              claimed_fingerprint = NULL, lease_until = NULL, updated_at = ?
         WHERE id = ? AND created_by = ?
-          AND (state IN ('waiting', 'announced', 'needs_review')
-            OR (state = 'confirming' AND error IS NOT NULL))`,
+          AND (state IN ('waiting', 'announced')
+            OR (state = 'confirming' AND error IS NOT NULL
+              AND (progress IS NULL OR progress = 'pairing')))`,
     [now, joinId, userId]
   )
   if (revoked.affectedRows === 0) {
     const row = yield* loadJoin(joinId, userId)
-    if (row?.state === "confirming") {
+    if (row?.state === "confirming" || row?.state === "needs_review") {
       return yield* Effect.fail(
         new RelayJoinFailure(
           "A Relay is being added from this command; finish or wait for it first"
@@ -453,19 +456,19 @@ const decodeAnnouncement = Schema.decodeUnknownOption(
  */
 export const answerRelayJoinAnnouncement = Effect.fn("relayJoin.answer")(
   function* (request: Request, clientAddress: string) {
-    const declared = Number(request.headers.get("content-length") ?? 0)
-    if (declared > ANNOUNCEMENT_BYTES) {
-      return Response.json({ error: "Too large" }, { status: 413 })
-    }
-    const text = yield* promiseEffect(() => request.text())
-    if (text.length > ANNOUNCEMENT_BYTES) {
-      return Response.json({ error: "Too large" }, { status: 413 })
-    }
+    // Limited before anything is read, and read no further than an
+    // announcement can be: anyone can send to this.
     const limited = Result.try(() =>
       assertRequestRateLimit(`relay.join:${clientAddress}`, 60, 60_000)
     )
     if (Result.isFailure(limited)) {
       return Response.json({ error: "Too many requests" }, { status: 429 })
+    }
+    const text = yield* promiseEffect(() =>
+      readLimitedText(request, ANNOUNCEMENT_BYTES)
+    )
+    if (text === null) {
+      return Response.json({ error: "Too large" }, { status: 413 })
     }
     const announcement = decodeAnnouncement(text)
     if (Option.isNone(announcement)) {
@@ -834,7 +837,10 @@ const claimWrite = Effect.fnUntraced(function* (
   joinId: string,
   generation: number,
   set: string,
-  values: Array<string | number | null>
+  values: Array<string | number | null>,
+  // Whether the claim lets go of its lease, as a stopped worker does so
+  // Try again takes over at once.
+  lease: "renew" | "release" = "renew"
 ) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
@@ -843,7 +849,7 @@ const claimWrite = Effect.fnUntraced(function* (
     `UPDATE ${databaseTable("relay_join")}
         SET ${set}, lease_until = ?, updated_at = ?
       WHERE id = ? AND claim_generation = ? AND state = 'confirming'`,
-    [...values, now + LEASE_MS, now, joinId, generation]
+    [...values, lease === "renew" ? now + LEASE_MS : 0, now, joinId, generation]
   )
   if (result.affectedRows === 0) return yield* Effect.fail(new StaleClaim())
 })
@@ -874,9 +880,13 @@ const driveJoin = Effect.fn("relayJoin.drive")(function* (
           ? Effect.succeed("stop" as const)
           : // The dialog shows why and offers to try again, which takes
             // over this claim.
-            claimWrite(joinId, generation, "error = ?, lease_until = 0", [
-              errorMessage(cause),
-            ]).pipe(
+            claimWrite(
+              joinId,
+              generation,
+              "error = ?",
+              [errorMessage(cause)],
+              "release"
+            ).pipe(
               Effect.as("stop" as const),
               Effect.catch(() => Effect.succeed("stop" as const))
             )

@@ -299,6 +299,12 @@ function JoinReview({
   if (!announcement) return null
   const working = view.state === "confirming" && view.error === null
   const locked = view.state === "confirming"
+  // Until Hearth saved the Relay; after that it can only be finished.
+  const cancellable =
+    view.state === "announced" ||
+    (view.state === "confirming" &&
+      view.error !== null &&
+      (view.progress === null || view.progress === "pairing"))
   const existing = announcement.existingRelay
   const holder = announcement.addressTakenBy
 
@@ -384,7 +390,7 @@ function JoinReview({
             {progressLabel(view.progress)}
           </span>
         ) : null}
-        {working ? null : (
+        {cancellable ? (
           <Button
             type="button"
             variant="ghost"
@@ -393,7 +399,7 @@ function JoinReview({
           >
             Cancel
           </Button>
-        )}
+        ) : null}
         <Button
           type="button"
           disabled={working || confirm.isPending || holder !== null}

@@ -146,13 +146,17 @@ function PairingLinkForm({ onDone }: { onDone: () => void }) {
             const pairingUri = String(form.get("pairingUri") ?? "").trim()
             const preview = await previewRelayPairing({ data: { pairingUri } })
             setReviewedPairing({ pairingUri, preview })
-            // A Relay without an ID takes this Kiln's; one with another
-            // keeps it unless someone chooses otherwise.
+            // A Relay without an ID takes this Kiln's. One with another
+            // keeps it unless someone chooses otherwise, and so does an
+            // older one that doesn't say, since it would take any ID it's
+            // sent.
+            const reported = preview.installation
             setInstallation(
-              preview.installation?.id &&
-                preview.installation.id !== preview.hearthInstallationId
-                ? "keep"
-                : "use"
+              reported &&
+                (reported.id === null ||
+                  reported.id === preview.hearthInstallationId)
+                ? "use"
+                : "keep"
             )
             return
           }

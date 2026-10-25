@@ -8,6 +8,7 @@ import { telemetryDefaults } from "@/effect/runtime"
 import { getAuthenticatedRealtimeIdentityFromHeaders } from "@/lib/auth-session"
 import { keepBrowserTrace } from "@/lib/browser-trace-sampling"
 import { assertRequestRateLimit } from "@/lib/request-rate-limit"
+import { readLimitedText } from "@/lib/request-body"
 
 const maximumBodyBytes = 256 * 1024
 const requestsPerMinute = 120
@@ -181,29 +182,6 @@ export function browserTraceSampleRatio(_target: OtlpTarget): number {
   // Temporarily keeps every browser trace to baseline instance page opens in
   // production; restore `_target.sampleRatio` once that is done.
   return 1
-}
-
-async function readLimitedText(
-  request: Request,
-  limit: number
-): Promise<string | null> {
-  const declared = Number(request.headers.get("content-length"))
-  if (Number.isFinite(declared) && declared > limit) return null
-  if (!request.body) return ""
-  const reader = request.body.getReader()
-  const chunks: Array<Uint8Array> = []
-  let size = 0
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    size += value.byteLength
-    if (size > limit) {
-      await reader.cancel()
-      return null
-    }
-    chunks.push(value)
-  }
-  return Buffer.concat(chunks).toString("utf8")
 }
 
 function status(code: number): Response {

@@ -5,6 +5,7 @@ import {
   RELAY_JOIN_INVITATION_LABEL,
   RELAY_JOIN_LIFETIME_MS,
   type RelayJoinEnvelope,
+  RelayJoinEnvelopeSchema,
   type RelayJoinLink,
   type RelayJoinResponse,
   RelayJoinResponseSchema,
@@ -47,10 +48,13 @@ export class RelayJoinError extends Schema.TaggedError<RelayJoinError>()(
 }
 
 // What the Relay keeps of a join, so a restart neither makes a second
-// invitation nor extends the first.
+// invitation nor extends the first, and announces the Relay as it first
+// did: Hearth knows the Relay by that announcement, which a new
+// installation ID or build would otherwise change.
 const SavedJoinSchema = Schema.fromJsonString(
   Schema.Struct({
     clientId: Schema.NullOr(Schema.String),
+    envelope: Schema.NullOr(RelayJoinEnvelopeSchema),
     expiresAt: Schema.Number,
     hearthOrigin: Schema.String,
     joinId: Schema.String,
@@ -115,13 +119,21 @@ export const runRelayJoin = Effect.fnUntraced(function* (
   }
   report({ kind: "started", fingerprint: input.identity.fingerprint })
   if (link.hearthOrigin.startsWith("http:")) report({ kind: "insecure" })
-  const envelope = yield* joinEnvelope({
-    config: input.config,
-    identity: input.identity,
-    invitationId: saved.joinId,
-    relayBuild: relayBuildLabel(),
-    tls: input.tls,
-  })
+  let envelope = saved.envelope
+  if (!envelope) {
+    envelope = yield* joinEnvelope({
+      config: input.config,
+      identity: input.identity,
+      invitationId: saved.joinId,
+      relayBuild: relayBuildLabel(),
+      tls: input.tls,
+    })
+    saved = { ...saved, envelope }
+    yield* input.state.setMetadata(
+      `${JOIN_METADATA_PREFIX}${saved.joinId}`,
+      JSON.stringify(saved)
+    )
+  }
   let delay = ANNOUNCE_INTERVAL_MS
   let waiting = false
   // Only Hearth's answer says it's paired: Hearth pairs, then saves the
@@ -151,9 +163,6 @@ export const runRelayJoin = Effect.fnUntraced(function* (
       waiting = true
       delay = ANNOUNCE_INTERVAL_MS
     } else {
-      if (answered.response.status !== "paired") {
-        yield* dropJoinClients(input, saved.joinId)
-      }
       return yield* finish(input, saved, answered.response.status, report)
     }
     yield* Effect.sleep(
@@ -178,6 +187,7 @@ const prepareJoin = Effect.fn("RelayJoin.prepare")(function* (
     ? { ...existing, hearthOrigin: link.hearthOrigin }
     : {
         clientId: null,
+        envelope: null,
         expiresAt: Date.now() + RELAY_JOIN_LIFETIME_MS,
         hearthOrigin: link.hearthOrigin,
         joinId,
@@ -201,25 +211,27 @@ const invite = Effect.fnUntraced(function* (
       reason: "Hearth didn't say which of its clients may pair",
     })
   }
-  if (saved.clientId !== null) {
-    if (saved.clientId !== response.clientId) {
-      return yield* new RelayJoinError({
-        reason: "Hearth named another client for this join",
-      })
-    }
-    return saved
+  if (saved.clientId !== null && saved.clientId !== response.clientId) {
+    return yield* new RelayJoinError({
+      reason: "Hearth named another client for this join",
+    })
   }
-  const next: SavedJoin = {
-    ...saved,
-    clientId: response.clientId,
-    expiresAt: Math.min(saved.expiresAt, response.expiresAt),
-  }
+  const next: SavedJoin =
+    saved.clientId !== null
+      ? saved
+      : {
+          ...saved,
+          clientId: response.clientId,
+          expiresAt: Math.min(saved.expiresAt, response.expiresAt),
+        }
   // Saved first, so a restart between the two finds the client and makes
   // the invitation then.
-  yield* input.state.setMetadata(
-    `${JOIN_METADATA_PREFIX}${saved.joinId}`,
-    JSON.stringify(next)
-  )
+  if (next !== saved) {
+    yield* input.state.setMetadata(
+      `${JOIN_METADATA_PREFIX}${saved.joinId}`,
+      JSON.stringify(next)
+    )
+  }
   if (!(yield* input.state.findInvitationById(saved.joinId))) {
     yield* createPairingInvitation({
       config: input.config,
@@ -236,22 +248,6 @@ const invite = Effect.fnUntraced(function* (
     })
   }
   return next
-})
-
-// Hearth proved this join ended without saving the Relay, as when someone
-// cancelled it after pairing failed to save: a client it paired here has
-// a key Hearth threw away, so it goes too. Only on Hearth's word, not when
-// the join just runs out here, since then Hearth may well have it.
-const dropJoinClients = Effect.fnUntraced(function* (
-  input: RelayJoinInput,
-  joinId: string
-) {
-  const now = Date.now()
-  for (const client of yield* input.state.listClients()) {
-    if (client.invitationId === joinId) {
-      yield* input.state.revokeClient(client.id, now)
-    }
-  }
 })
 
 const finish = Effect.fnUntraced(function* (

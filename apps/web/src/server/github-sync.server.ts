@@ -61,6 +61,7 @@ import {
 } from "@/lib/github-sync-targets"
 import { listInstanceDirectoryEffect } from "@/lib/instance-directory"
 import { listPersistedRelays } from "@/lib/relay-registry"
+import { readLimitedText } from "@/lib/request-body"
 import { requireEligibleResourceUser } from "@/server/auth"
 import type {
   GitHubBranchesInput,
@@ -897,26 +898,6 @@ export async function handleGitHubWebhook(request: Request): Promise<Response> {
 const maxDeliveryBytes = 25 * 1024 * 1024
 
 /** The body as text, or null once it passes `limit` bytes. */
-async function readLimitedText(
-  request: Request,
-  limit: number
-): Promise<string | null> {
-  if (!request.body) return ""
-  const reader = request.body.getReader()
-  const chunks: Array<Uint8Array> = []
-  let size = 0
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    size += value.byteLength
-    if (size > limit) {
-      await reader.cancel()
-      return null
-    }
-    chunks.push(value)
-  }
-  return Buffer.concat(chunks).toString("utf8")
-}
 
 function validGitHubSignature(secret: string, body: string, signature: string) {
   const expected = Buffer.from(

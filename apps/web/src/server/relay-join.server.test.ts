@@ -261,49 +261,91 @@ describeMysql("Relay joins", () => {
         })
     )
 
-    it.effect("give way to a new command once adding the Relay failed", () =>
-      // Confirming starts the worker, which reads the real clock.
-      TestClock.withLive(
-        Effect.gen(function* () {
-          yield* resetDatabase
-          const join = yield* openRelayJoinEffect("owner")
-          // At a closed port, so pairing with it fails at once.
-          yield* announce(
-            join.id,
-            join.secret ?? "",
-            relayEnvelope(join.id, {
+    it.effect(
+      "let adding a Relay be tried again, or dropped for a new command, once it failed",
+      () =>
+        // Confirming starts the worker, which reads the real clock.
+        TestClock.withLive(
+          Effect.gen(function* () {
+            yield* resetDatabase
+            const join = yield* openRelayJoinEffect("owner")
+            // At a closed port, so pairing with it fails at once.
+            const envelope = relayEnvelope(join.id, {
               browserOrigin: "https://127.0.0.1:1",
               controlEndpoint: "wss://127.0.0.1:1/v1/socket",
-            }),
-            "203.0.113.6"
-          )
-          yield* confirmRelayJoinEffect({
-            canManageAnyRelay: true,
-            envelopeDigest:
-              (yield* relayJoinViewEffect("owner", join.id)).announcement
-                ?.envelopeDigest ?? "",
-            installation: "use",
-            joinId: join.id,
-            name: null,
-            userId: "owner",
-          })
-          const failed = yield* relayJoinViewEffect("owner", join.id).pipe(
-            Effect.repeat({
-              schedule: Schedule.spaced("100 millis"),
-              until: (view) => view.error !== null,
-            }),
-            Effect.timeout("4 seconds")
-          )
-          assert.strictEqual(failed.state, "confirming")
+            })
+            yield* announce(join.id, join.secret ?? "", envelope, "203.0.113.6")
+            const confirm = (joinId: string) =>
+              Effect.gen(function* () {
+                return yield* confirmRelayJoinEffect({
+                  canManageAnyRelay: true,
+                  envelopeDigest:
+                    (yield* relayJoinViewEffect("owner", joinId)).announcement
+                      ?.envelopeDigest ?? "",
+                  installation: "use",
+                  joinId,
+                  name: null,
+                  userId: "owner",
+                })
+              })
+            const failure = (joinId: string) =>
+              relayJoinViewEffect("owner", joinId).pipe(
+                Effect.repeat({
+                  schedule: Schedule.spaced("100 millis"),
+                  until: (view) => view.error !== null,
+                }),
+                Effect.timeout("4 seconds")
+              )
 
-          const next = yield* refreshRelayJoinEffect("owner", join.id)
-          assert.notStrictEqual(next.id, join.id)
-          assert.strictEqual(
-            (yield* relayJoinViewEffect("owner", join.id)).state,
-            "revoked"
+            yield* confirm(join.id)
+            assert.strictEqual((yield* failure(join.id)).state, "confirming")
+            // Try again takes over at once: the stopped worker let go.
+            assert.isNull((yield* confirm(join.id)).error)
+            yield* failure(join.id)
+
+            const next = yield* refreshRelayJoinEffect("owner", join.id)
+            assert.notStrictEqual(next.id, join.id)
+            assert.strictEqual(
+              (yield* relayJoinViewEffect("owner", join.id)).state,
+              "revoked"
+            )
+            // The same Relay can join with the new command.
+            yield* announce(
+              next.id,
+              next.secret ?? "",
+              { ...envelope, invitationId: next.id },
+              "203.0.113.6"
+            )
+            assert.strictEqual((yield* confirm(next.id)).state, "confirming")
+          })
+        )
+    )
+
+    it.effect(
+      "refuse an oversized announcement without reading all of it",
+      () =>
+        Effect.gen(function* () {
+          const chunk = new Uint8Array(64 * 1024)
+          let sent = 0
+          const body = new ReadableStream<Uint8Array>({
+            pull: (controller) => {
+              sent += chunk.byteLength
+              if (sent > 64 * 1024 * 1024) controller.close()
+              else controller.enqueue(chunk)
+            },
+          })
+          const response = yield* answerRelayJoinAnnouncement(
+            new Request("https://hearth.test/api/relays/join", {
+              body,
+              // @ts-expect-error Node needs this for a streamed body.
+              duplex: "half",
+              method: "POST",
+            }),
+            "203.0.113.7"
           )
+          assert.strictEqual(response.status, 413)
+          assert.isBelow(sent, 1024 * 1024)
         })
-      )
     )
 
     it.effect("belong to whoever opened them", () =>
