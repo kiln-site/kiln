@@ -561,6 +561,16 @@ export const DataTableTextCell = React.memo(function DataTableTextCell({
 })
 
 /**
+ * On phones, the one detail a row shows beside its name, like a host or an
+ * engine. It takes only its content's width, up to half the row, so it sits
+ * against the row's menu and the name gets the rest. Each row, and the
+ * header, sizes it alone; they all end at the menu, so their right edges
+ * line up.
+ */
+export const dataTablePhoneDetailWidth = "fit-content(50%)"
+export const dataTablePhoneDetailCellClassName = "max-md:px-2"
+
+/**
  * On phones, stretches a row's main link over the whole row, so a tap
  * anywhere opens it. Controls in the row sit above it with `relative z-10`.
  */
@@ -840,7 +850,7 @@ function DataTableHeaderCellContent<TData extends RowData>({
       {header.isPlaceholder ? null : canSort ? (
         <button
           aria-label={`Sort by ${sortLabel}`}
-          className="group/sort -mx-2 inline-flex h-full max-w-full items-center gap-1.5 rounded-sm px-2 text-left outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+          className="group/sort -mx-2 inline-flex h-full max-w-[calc(100%+1rem)] items-center gap-1.5 rounded-sm px-2 text-left outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
           type="button"
           onClick={header.column.getToggleSortingHandler()}
         >

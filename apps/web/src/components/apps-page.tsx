@@ -70,6 +70,8 @@ import {
   useRowMenuDialogs,
   dataTableRowLinkClassName,
   dataTableRowMenuTriggerClassName,
+  dataTablePhoneDetailCellClassName,
+  dataTablePhoneDetailWidth,
 } from "@/components/data-table"
 import {
   AddFirstRelayButton,
@@ -367,9 +369,13 @@ const AppTable = React.memo(function AppTable({
         cell: ({ row }) => (
           <AppLinkCell appId={row.original.id} relayId={row.original.relayId} />
         ),
-        meta: dataTableColumnMeta({
-          width: { base: "minmax(0,0.9fr)", md: "minmax(0,1fr)" },
-        }),
+        meta: dataTableColumnMeta(
+          { width: { base: dataTablePhoneDetailWidth, md: "minmax(0,1fr)" } },
+          {
+            cellClassName: dataTablePhoneDetailCellClassName,
+            headerClassName: dataTablePhoneDetailCellClassName,
+          }
+        ),
       }),
       appTableColumnHelper.accessor((app) => appRowContainersLabel(app), {
         id: "containers",

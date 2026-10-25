@@ -63,6 +63,8 @@ import {
   useRowMenuDialogs,
   dataTableRowLinkClassName,
   dataTableRowMenuTriggerClassName,
+  dataTablePhoneDetailCellClassName,
+  dataTablePhoneDetailWidth,
 } from "@/components/data-table"
 import {
   ServerDeleteDialog,
@@ -497,13 +499,19 @@ const ServerDataTable = React.memo(function ServerDataTable({
             />
           )
         },
-        meta: dataTableColumnMeta({
-          width: {
-            base: "minmax(0,0.9fr)",
-            md: "minmax(0,1fr)",
-            xl: "minmax(12rem,1fr)",
+        meta: dataTableColumnMeta(
+          {
+            width: {
+              base: dataTablePhoneDetailWidth,
+              md: "minmax(0,1fr)",
+              xl: "minmax(12rem,1fr)",
+            },
           },
-        }),
+          {
+            cellClassName: dataTablePhoneDetailCellClassName,
+            headerClassName: dataTablePhoneDetailCellClassName,
+          }
+        ),
       }),
       serverTableColumnHelper.display({
         id: "actions",

@@ -70,6 +70,8 @@ import {
   useRowMenuDialogs,
   dataTableRowLinkClassName,
   dataTableRowMenuTriggerClassName,
+  dataTablePhoneDetailCellClassName,
+  dataTablePhoneDetailWidth,
 } from "@/components/data-table"
 import { CopyIdentifierMenuItem } from "@/components/copy-identifier-menu-item"
 import {
@@ -434,7 +436,13 @@ const DatabaseTable = React.memo(function DatabaseTable({
         header: "Engine",
         sortFn: "text",
         cell: ({ row }) => <EngineBadge engine={row.original.engine} />,
-        meta: dataTableColumnMeta({ width: { base: "6.5rem", md: "8.5rem" } }),
+        meta: dataTableColumnMeta(
+          { width: { base: dataTablePhoneDetailWidth, md: "8.5rem" } },
+          {
+            cellClassName: dataTablePhoneDetailCellClassName,
+            headerClassName: dataTablePhoneDetailCellClassName,
+          }
+        ),
       }),
       databaseTableColumnHelper.accessor((database) => database.relayName, {
         id: "relay",

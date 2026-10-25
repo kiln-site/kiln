@@ -103,6 +103,8 @@ import {
   useRowMenuDialogs,
   dataTableRowLinkClassName,
   dataTableRowMenuTriggerClassName,
+  dataTablePhoneDetailCellClassName,
+  dataTablePhoneDetailWidth,
 } from "@/components/data-table"
 import { DataTable } from "@/components/data-table-view"
 import {
@@ -668,9 +670,19 @@ function RelayTable({
             />
           )
         },
-        meta: dataTableColumnMeta({
-          width: { base: "minmax(0,0.9fr)", lg: "minmax(0,1fr)" },
-        }),
+        meta: dataTableColumnMeta(
+          {
+            width: {
+              base: dataTablePhoneDetailWidth,
+              md: "minmax(0,0.9fr)",
+              lg: "minmax(0,1fr)",
+            },
+          },
+          {
+            cellClassName: dataTablePhoneDetailCellClassName,
+            headerClassName: dataTablePhoneDetailCellClassName,
+          }
+        ),
       }),
       relayTableColumnHelper.accessor(
         (relay) =>
