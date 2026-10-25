@@ -11,10 +11,10 @@ import { cn } from "@workspace/ui/lib/utils"
 
 import { useSiteConfig } from "~/lib/use-site-config"
 
-/** The command that installs Kiln, from this site's `/install`. */
-export function useInstallCommand(options: { node?: boolean } = {}): string {
+/** The command that installs Kiln, or just its CLI, from this site's `/install`. */
+export function useInstallCommand(options: { cli?: boolean } = {}): string {
   const { siteUrl } = useSiteConfig()
-  return `curl -fsSL ${siteUrl}/install | sh${options.node ? " -s -- --node" : ""}`
+  return `curl -fsSL ${siteUrl}/install | sh${options.cli ? " -s -- --cli" : ""}`
 }
 
 /** A shell prompt line with the command and a button that copies it. */

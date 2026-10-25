@@ -47,7 +47,11 @@ kiln --version
 kiln whoami
 ```
 
-If the binary is missing, report that before suggesting installation. GitHub
+If the binary is missing, report that before suggesting installation. On Linux
+and macOS, `curl -fsSL https://kiln.site/install | sh -s -- --cli` installs the
+newest stable CLI (the newest nightly until the first stable release; add
+`--nightly` for nightlies) into `/usr/local/bin` as root, else `~/.local/bin`,
+after checking GitHub's SHA-256 digest and the binary's version. GitHub
 releases include standalone archives for Linux/macOS (x64 and ARM64) and Windows
 (x64). Extract `kiln` or `kiln.exe` onto `PATH` for an installation without Node.js
 or Bun. The npm package is a small Node.js bootstrap that fetches the newest complete nightly binary from the distribution's GitHub releases

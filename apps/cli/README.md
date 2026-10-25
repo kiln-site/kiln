@@ -5,7 +5,22 @@ readable tables, plain log and file output, and concise status messages.
 
 ## Install
 
-Run without a global install:
+On Linux or macOS, Kiln's installer downloads the CLI for you:
+
+```sh
+curl -fsSL https://kiln.site/install | sh -s -- --cli
+```
+
+It installs the newest stable release, or with `--nightly` the newest nightly;
+until Kiln's first stable release, both get the newest nightly. The binary goes
+in `/usr/local/bin` when run as root, else in `~/.local/bin`, which the installer
+tells you to add to `PATH` if it isn't there. It checks the download against
+GitHub's SHA-256 digest and size, and that it runs and reports the release's
+version, before putting it in place. Running it again installs a newer release
+if there is one; `kiln update` does the same. With `--url`, it ends by showing
+the `kiln login` command for that Kiln.
+
+Or run it through npm, without a global install:
 
 ```sh
 npx kiln-cli --version

@@ -4,6 +4,7 @@
 #   curl -fsSL https://kiln.site/install | sh
 #   curl -fsSL https://kiln.site/install | sh -s -- --node
 #   curl -fsSL https://kiln.site/install | sh -s -- --node --join '<link>'
+#   curl -fsSL https://kiln.site/install | sh -s -- --cli
 #
 # kiln.site serves this file at /install (apps/marketing/src/routes/install.ts),
 # so it's live once the marketing site deploys from main.
@@ -13,7 +14,8 @@
 # With --node it starts a plain Relay instead, to add this machine to an
 # existing Kiln; with the --join link from Hearth's Add Relay dialog, that
 # Relay connects to Hearth by itself. Run it again to see an installation's
-# status.
+# status. With --cli it installs only the kiln command, on Linux or macOS,
+# and needs no Docker.
 #
 # The terminal shows one line per step. Everything each step ran and printed
 # goes to the install log (~/kiln-install.log), for when something fails.
@@ -27,6 +29,7 @@ set -eu
 main() {
 
 image_prefix="ghcr.io/kiln-site"
+repository="kiln-site/kiln"
 channel="latest"
 container="kiln-relay"
 volume="kiln-relay-data"
@@ -44,6 +47,7 @@ sftp_port="2022"
 assume_yes=0
 install_docker_allowed=1
 asked=0
+cli=0
 proxy=""
 
 usage() {
@@ -75,6 +79,10 @@ Usage: curl -fsSL https://kiln.site/install | sh -s -- [options]
                      (default: this machine's public IP)
   --join LINK        Join the Kiln whose Add Relay dialog gave this link,
                      instead of printing an invitation (implies --node)
+  --cli              Install only the kiln command-line tool, to manage
+                     Kiln from this computer (Linux or macOS). With
+                     --nightly, the newest nightly; with --url, it shows
+                     how to sign in to that Kiln
   --skip-docker-install
                      Don't install Docker if it's missing; stop instead
   -y, --yes          Don't ask; use the defaults for anything not given,
@@ -102,12 +110,21 @@ while [ "$#" -gt 0 ]; do
     --namespace) namespace="${2:?--namespace needs a value}"; shift 2 ;;
     --nightly) channel="latest-nightly"; shift ;;
     --node) mode="node"; shift ;;
+    --cli) cli=1; shift ;;
     --skip-docker-install) install_docker_allowed=0; shift ;;
     -y | --yes) assume_yes=1; shift ;;
     -h | --help) usage; exit 0 ;;
     *) usage >&2; printf 'kiln: unknown option %s\n' "$1" >&2; exit 1 ;;
   esac
 done
+
+if [ "$cli" -eq 1 ]; then
+  [ "$mode" = "platform" ] || {
+    printf 'kiln: --cli installs only the CLI. Add a Relay without it.\n' >&2
+    exit 1
+  }
+  mode="cli"
+fi
 
 # The link from Hearth's Add Relay dialog: its address, then #kj1. and a
 # code. The Relay checks it fully; this only catches a wrong paste early.
@@ -256,6 +273,7 @@ on_exit() {
   code=$?
   if [ -n "$step_pid" ]; then kill_tree "$step_pid"; fi
   if [ -n "${sudo_keeper:-}" ]; then kill "$sudo_keeper" 2>/dev/null || true; fi
+  if [ -n "${cli_work:-}" ]; then rm -rf "$cli_work"; fi
   if [ "$fancy" -eq 1 ]; then printf '\033[?25h'; fi
   exit "$code"
 }
@@ -859,8 +877,226 @@ wait_https() {
   done
 }
 
+# -------------------------------------------------------------------- CLI
+
+# This machine's CLI build, as releases name it, or nothing. A shell under
+# Rosetta reports x86_64 on Apple silicon, which has its own build.
+cli_platform() {
+  case "$(uname -s)" in
+    Linux) os=linux ;;
+    Darwin) os=darwin ;;
+    *) return 0 ;;
+  esac
+  case "$(uname -m)" in
+    x86_64 | amd64) arch=x64 ;;
+    aarch64 | arm64) arch=arm64 ;;
+    *) return 0 ;;
+  esac
+  if [ "$os" = "darwin" ] && [ "$(sysctl -n sysctl.proc_translated 2>/dev/null)" = "1" ]; then
+    arch=arm64
+  fi
+  printf '%s-%s' "$os" "$arch"
+}
+
+# Where the CLI goes: a directory root's PATH has, else the user's own, so
+# `kiln update` can replace it without sudo.
+cli_directory() {
+  if [ "$(id -u)" -eq 0 ]; then
+    printf '/usr/local/bin'
+  else
+    printf '%s/.local/bin' "$HOME"
+  fi
+}
+
+# Asks GitHub for releases, into $cli_work/answer, and prints the HTTP
+# status: 000 when GitHub didn't answer.
+github_releases() {
+  curl -sSL --max-time 30 -H 'Accept: application/vnd.github+json' \
+    -o "$cli_work/answer" -w '%{http_code}' \
+    "https://api.github.com/repos/$repository/$1" 2>>"$log_file" || true
+}
+
+# The CLI builds for this machine in GitHub's answer, one line each: tag,
+# whether it's a prerelease, size, SHA-256 digest, and URL. Every key starts
+# a line first, so this doesn't depend on how GitHub lays out its JSON.
+cli_builds() {
+  tr '\n' ' ' <"$cli_work/answer" | awk '{ gsub(/"[a-z_]+"[ ]*:/, "\n&"); print }' |
+    awk -v platform="$cli_platform" '
+      function value(line) {
+        sub(/^"[a-z_]+"[ ]*:[ ]*/, "", line)
+        if (line ~ /^"/) { line = substr(line, 2); sub(/".*$/, "", line) }
+        else sub(/[^a-z0-9]+.*$/, "", line)
+        return line
+      }
+      /^"tag_name"/ { tag = value($0) }
+      /^"draft"/ { draft = value($0) }
+      /^"prerelease"/ { prerelease = value($0) }
+      /^"name"/ { name = value($0); size = ""; digest = "" }
+      /^"size"/ { size = value($0) }
+      /^"digest"/ { digest = value($0) }
+      /^"browser_download_url"/ {
+        if (draft == "false" && name == "kiln-" tag "-" platform)
+          print tag, prerelease, size, digest, value($0)
+      }
+    '
+}
+
+# Picks the newest stable CLI, or with --nightly the newest nightly. Until
+# Kiln's first stable release, the newest nightly stands in for it, as the
+# images' `latest` tag does. A release can be up before its CLI builds
+# are, so it's the newest one with this machine's build.
+find_cli() {
+  status=404
+  [ "$channel" != "latest" ] || status=$(github_releases releases/latest)
+  nightly=false
+  if [ "$status" = 404 ]; then
+    nightly=true
+    status=$(github_releases 'releases?per_page=100')
+  fi
+  log "GitHub answered HTTP $status"
+  case "$status" in
+    200) ;;
+    403 | 429) stop "GitHub is limiting requests from this address. Try again in an hour." ;;
+    000) stop "Couldn't reach GitHub. Check this computer is online." ;;
+    *) stop "GitHub didn't list Kiln's releases (HTTP $status). Try again later." ;;
+  esac
+  release=$(cli_builds | awk -v nightly="$nightly" '
+    $2 == nightly && $1 ~ /^v[0-9]+\.[0-9]+\.[0-9]+(-nightly\.[0-9]+\.[0-9]+)?$/ &&
+      ($1 ~ /-nightly\./) == (nightly == "true") { print; exit }
+  ')
+  [ -n "$release" ] ||
+    stop "There's no CLI for $cli_platform in the newest release yet. Try again in a few minutes."
+  # shellcheck disable=SC2086 # the release's fields
+  set -- $release
+  case "$3" in "" | *[!0-9]*) stop "GitHub listed the CLI without its size." ;; esac
+  printf '%s\n' "$4" | grep -Eq '^sha256:[0-9a-f]{64}$' ||
+    stop "GitHub listed the CLI without its SHA-256 digest."
+  [ "$5" = "https://github.com/$repository/releases/download/$1/kiln-$1-$cli_platform" ] ||
+    stop "GitHub listed the CLI at an unexpected address."
+  printf '%s\n' "$release" >"$cli_work/release"
+  log "release: $release"
+}
+
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{ print $1 }'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{ print $1 }'
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 "$1" | awk '{ print $NF }'
+  else
+    stop "Checking the CLI needs sha256sum, shasum, or openssl."
+  fi
+}
+
+# How much of the CLI has arrived, as a bar.
+cli_progress() {
+  [ -f "$cli_work/kiln" ] || return 0
+  progress_bar "$(wc -c <"$cli_work/kiln" | tr -d ' ')" "$cli_size"
+}
+
+# Downloads the CLI and checks it's the build GitHub listed, and that it runs
+# here and is the version it should be.
+download_cli() {
+  curl -fsSL --max-time 600 -o "$cli_work/kiln" "$cli_url" ||
+    stop "Couldn't download the CLI. Check this computer can reach github.com."
+  [ "$(wc -c <"$cli_work/kiln" | tr -d ' ')" = "$cli_size" ] &&
+    [ "sha256:$(sha256_of "$cli_work/kiln")" = "$cli_digest" ] ||
+    stop "The CLI didn't download intact. Run this again."
+  chmod 755 "$cli_work/kiln"
+  reported=$("$cli_work/kiln" --version 2>&1) ||
+    stop "The CLI doesn't run on this computer: $reported"
+  [ "$reported" = "kiln $cli_version" ] ||
+    stop "The CLI reports \"$reported\", not kiln $cli_version."
+}
+
+# Into place in one step, so a `kiln` running meanwhile keeps working.
+place_cli() {
+  mv -f "$cli_work/kiln" "$cli_dir/kiln" ||
+    stop "Couldn't install the CLI into $cli_dir."
+}
+
+install_cli() {
+  cli_platform=$(cli_platform)
+  [ -n "$cli_platform" ] ||
+    fail "Kiln's CLI runs on Linux and macOS (x64 or ARM64), not $(uname -sm). On Windows, download kiln.exe from https://github.com/$repository/releases"
+  # Its Linux builds need glibc, which musl systems such as Alpine don't have.
+  case "$cli_platform" in
+    linux-*)
+      getconf GNU_LIBC_VERSION >/dev/null 2>&1 ||
+        fail "Kiln's CLI needs glibc, which this system doesn't have (as on Alpine)."
+      ;;
+  esac
+  command -v curl >/dev/null 2>&1 || fail "Installing the CLI needs curl."
+  cli_dir=$(cli_directory)
+  log "cli: $cli_platform into $cli_dir"
+  mkdir -p "$cli_dir" 2>/dev/null && [ -w "$cli_dir" ] ||
+    fail "Can't write to $cli_dir. Run this again as root, or as its owner."
+  # Beside where it goes, so moving it there can't be a copy across disks.
+  cli_work=$(mktemp -d "$cli_dir/.kiln-install.XXXXXX") ||
+    fail "Can't write to $cli_dir."
+
+  step "Finding the newest CLI" find_cli
+  # shellcheck disable=SC2046 # the release's fields
+  set -- $(cat "$cli_work/release")
+  cli_version=${1#v} cli_size=$3 cli_digest=$4 cli_url=$5
+
+  installed=""
+  [ ! -x "$cli_dir/kiln" ] || installed=$("$cli_dir/kiln" --version 2>/dev/null || true)
+  if [ "$installed" = "kiln $cli_version" ]; then
+    say ""
+    say "  ${green}${bold}Kiln CLI $cli_version$reset is already installed in $cli_dir."
+  else
+    step_progress=cli_progress
+    step "Downloading the CLI" download_cli
+    step "Installing the CLI" place_cli
+    say ""
+    say "  ${green}${bold}Kiln CLI $cli_version is ready$reset ${dim}in $(duration $(($(now) - started_at)))$reset"
+  fi
+  say ""
+
+  # The kiln this shell finds first, if not this one.
+  case ":$PATH:" in
+    *":$cli_dir:"*)
+      found=$(command -v kiln 2>/dev/null || true)
+      if [ -n "$found" ] && [ "$found" != "$cli_dir/kiln" ]; then
+        say "  ${dim}Another kiln comes first on your PATH: $found$reset"
+        say "  ${dim}Remove it to use this one.$reset"
+        say ""
+      fi
+      ;;
+    *)
+      # shellcheck disable=SC2088 # shown, not expanded
+      case "${SHELL:-}" in
+        */zsh) profile="~/.zshrc" ;;
+        */bash) profile="~/.bashrc" ;;
+        *) profile="your shell's profile" ;;
+      esac
+      say "  $cli_dir isn't on your PATH yet. Add this line to $profile,"
+      say "  then open a new terminal:"
+      say "  $arrow ${bold}export PATH=\"$cli_dir:\$PATH\"$reset"
+      say ""
+      ;;
+  esac
+  if [ -n "$url" ]; then
+    say "  Sign in to $url:"
+    say "  $arrow ${bold}kiln login $url$reset"
+  else
+    say "  Sign in with your Kiln's address:"
+    say "  $arrow ${bold}kiln login https://kiln.example.com$reset"
+  fi
+  say ""
+  say "  ${dim}Update it later with kiln update. Install log: $log_file$reset"
+  say ""
+}
+
 # ------------------------------------------------------------------- main
 
+if [ "$mode" = "cli" ]; then
+  logo "Install the CLI"
+  install_cli
+  exit 0
+fi
 if [ "$mode" = "node" ]; then logo "Add this machine"; else logo "Install"; fi
 
 plan_docker

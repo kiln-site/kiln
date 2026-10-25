@@ -380,7 +380,7 @@ function Features() {
 function SelfHost() {
   const { docsUrl } = useSiteConfig()
   const installCommand = useInstallCommand()
-  const nodeCommand = useInstallCommand({ node: true })
+  const cliCommand = useInstallCommand({ cli: true })
   return (
     <section className="border-t border-border">
       <div className="site-container grid gap-12 py-20 sm:py-28 lg:grid-cols-12 lg:items-center lg:gap-16">
@@ -406,23 +406,46 @@ function SelfHost() {
             </Button>
           </div>
         </div>
-        <div className="min-w-0 lg:col-span-7">
-          <div className="border border-border bg-card p-5 sm:p-6">
-            <p className="font-mono text-[0.8125rem] leading-7 text-muted-foreground">
-              # On the machine that will run Kiln.
-            </p>
-            <InstallCommand command={installCommand} />
-            <p className="mt-4 font-mono text-[0.8125rem] leading-7 text-muted-foreground">
-              # Then on each other machine, to add it as a Relay
-            </p>
-            <InstallCommand command={nodeCommand} />
-          </div>
-          <p className="type-support mt-3 text-muted-foreground">
-            It installs Hearth, its database, and a Relay, then prints a link
-            to create your account. Kiln is in early development.
-          </p>
+        <div className="min-w-0 space-y-8 lg:col-span-7">
+          <InstallStep
+            title="On the machine that will run Kiln"
+            command={installCommand}
+          >
+            It installs Hearth, its database, and a Relay, then prints a link to
+            create your account. Add more machines with Add Relay in Kiln. Kiln
+            is in early development.
+          </InstallStep>
+          <InstallStep
+            title="On your computer, for the kiln command"
+            command={cliCommand}
+          >
+            Then sign in with <code className="font-mono">kiln login</code> and
+            your Kiln’s address. Linux and macOS.
+          </InstallStep>
         </div>
       </div>
     </section>
+  )
+}
+
+// One command in its own box, like the hero's, with what it does below.
+function InstallStep({
+  children,
+  command,
+  title,
+}: {
+  children: React.ReactNode
+  command: string
+  title: string
+}) {
+  return (
+    <div>
+      <h3 className="type-card-title text-foreground">{title}</h3>
+      <InstallCommand
+        command={command}
+        className="mt-3 gap-2 border border-border bg-card py-1.5 pr-1.5 pl-3 text-[0.6875rem] tracking-tight sm:gap-3 sm:pl-4 sm:text-[0.8125rem] sm:tracking-normal"
+      />
+      <p className="type-support mt-3 text-muted-foreground">{children}</p>
+    </div>
   )
 }

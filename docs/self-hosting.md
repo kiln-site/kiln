@@ -113,6 +113,19 @@ Relay finds; it doesn't separate anything else, since every Hearth paired
 with full access can manage the Relay. `KILN_INSTALLATION_ID`, or a Relay
 that installed Kiln itself, fixes the ID.
 
+### The CLI
+
+To manage Kiln from a terminal, install the `kiln` command on your own
+computer (Linux or macOS), then sign in with your Kiln's address:
+
+```sh
+curl -fsSL https://kiln.site/install | sh -s -- --cli
+kiln login https://kiln.example.com
+```
+
+It needs no Docker. See [the CLI's README](../apps/cli/README.md#install) for
+where it goes, `--nightly`, and other ways to install it.
+
 ## Platform mode
 
 `KILN_RELAY_MODE` is `node` (the default) or `platform`. Platform mode adds
