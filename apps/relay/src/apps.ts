@@ -2310,7 +2310,7 @@ export class AppDriver {
         ),
         labels: {
           ...service.labels,
-          ...options.routes.labels(name),
+          ...composeLiteralLabels(options.routes.labels(name)),
           ...this.#containerLabels(
             options.appId,
             name,
@@ -2901,6 +2901,20 @@ interface ComposeProject {
   secrets?: Record<string, { file?: unknown; [key: string]: unknown }>
   services: Record<string, ComposeService>
   [key: string]: unknown
+}
+
+// Labels as Compose writes them literally: it interpolates the project it
+// reads back, where a route's redirect such as `https://example.com${1}`
+// would be a variable, so each $ is doubled.
+function composeLiteralLabels(
+  labels: Readonly<Record<string, string>>
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(labels).map(([key, value]) => [
+      key,
+      value.replaceAll("$", "$$$$"),
+    ])
+  )
 }
 
 // What `docker-compose config` makes of a Compose file, interpolated and in

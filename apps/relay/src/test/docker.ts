@@ -731,7 +731,12 @@ export class FakeDocker {
       this.addContainer({
         image,
         labels: {
-          ...settings.labels,
+          ...Object.fromEntries(
+            Object.entries(settings.labels ?? {}).map(([key, value]) => [
+              key,
+              composeInterpolated(value, `services.${service}.labels.${key}`),
+            ])
+          ),
           "com.docker.compose.oneoff": "False",
           "com.docker.compose.project": project,
           "com.docker.compose.service": service,
@@ -2720,4 +2725,21 @@ function readBody(request: IncomingMessage): Promise<string> {
     request.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")))
     request.on("error", reject)
   })
+}
+
+// A value as Compose reads it from a project: `$$` is a literal `$`. Kiln
+// sets no variables there, so Compose would reject any other `$`.
+function composeInterpolated(value: string, path: string): string {
+  let result = ""
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] !== "$") {
+      result += value[index]
+    } else if (value[index + 1] === "$") {
+      result += "$"
+      index += 1
+    } else {
+      throw new Error(`invalid interpolation format for ${path}`)
+    }
+  }
+  return result
 }

@@ -21,7 +21,7 @@ import {
 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
-import { showToast } from "@workspace/ui/components/sonner"
+import { dismissToast, showToast } from "@workspace/ui/components/sonner"
 import {
   Tooltip,
   TooltipContent,
@@ -149,16 +149,32 @@ export function WebRoutesSection({
     [commit, save.isPending, saved]
   )
   // Undo acts on the routes as they are when it's clicked, not as they were
-  // when the toast appeared.
+  // when the toast appeared. Leaving the page takes its Undo away, since
+  // the routes can change elsewhere after that.
   const latest = React.useRef({ pending: save.isPending, saved })
   React.useEffect(() => {
     latest.current = { pending: save.isPending, saved }
   }, [save.isPending, saved])
+  const undoToasts = React.useRef(new Set<number | string>())
+  const mounted = React.useRef(true)
+  React.useEffect(() => {
+    mounted.current = true
+    const toasts = undoToasts.current
+    return () => {
+      mounted.current = false
+      for (const toast of toasts) dismissToast(toast)
+      toasts.clear()
+    }
+  }, [])
   const remove = React.useCallback(
     (route: DisplayedRoute) => {
       if (!saved || save.isPending) return
       const index = saved.findIndex((candidate) => candidate.id === route.id)
       const { rowId: _rowId, ...removed } = route
+      const remaining = saved.filter((candidate) => candidate.id !== route.id)
+      const wasPrimary = primaryWebRoute(saved)?.id === route.id
+      // The route that became primary in its place, if it was primary.
+      const promoted = wasPrimary ? primaryWebRoute(remaining)?.id : undefined
       const restore = () => {
         const current = latest.current
         if (!current.saved || current.pending) {
@@ -171,20 +187,38 @@ export function WebRoutesSection({
         if (current.saved.some((candidate) => candidate.id === route.id)) {
           return
         }
-        const next = [...current.saved]
-        next.splice(Math.min(index, next.length), 0, removed)
+        // It's primary again only if no other route was chosen since.
+        const primary =
+          wasPrimary && primaryWebRoute(current.saved)?.id === promoted
+        const next = current.saved.map((candidate) =>
+          primary ? { ...candidate, primary: false } : candidate
+        )
+        next.splice(Math.min(index, next.length), 0, { ...removed, primary })
         commit(next, "Could not restore the route")
       }
-      commit(
-        saved.filter((candidate) => candidate.id !== route.id),
-        "Could not remove the route",
-        () =>
-          showToast({
-            action: { label: "Undo", onClick: restore },
-            message: `Removed ${route.hostname}${route.path ?? ""}`,
-            type: "success",
-          })
-      )
+      commit(remaining, "Could not remove the route", () => {
+        const message = `Removed ${route.hostname}${route.path ?? ""}`
+        if (!mounted.current) {
+          showToast({ message, type: "success" })
+          return
+        }
+        const toast = showToast({
+          action: {
+            label: "Undo",
+            onClick: () => {
+              undoToasts.current.delete(toast)
+              restore()
+            },
+          },
+          // Long enough to notice a mistaken removal.
+          duration: 10_000,
+          message,
+          onAutoClose: () => undoToasts.current.delete(toast),
+          onDismiss: () => undoToasts.current.delete(toast),
+          type: "success",
+        })
+        undoToasts.current.add(toast)
+      })
     },
     [commit, save.isPending, saved]
   )

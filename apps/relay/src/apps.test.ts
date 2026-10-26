@@ -713,6 +713,44 @@ describe("apps", () => {
     )
   })
 
+  it("deploys a Compose app whose redirect labels Compose must not expand", async () => {
+    const harness = await relayHarness({ KILN_RELAY_PROXY: "none" })
+    await harness.apps.create({ id: appId, name: "Website" })
+    const removeCompose = await composeConfigCommand()
+    fakeDocker.images.set("nginx:alpine", {})
+    await Effect.runPromise(
+      harness.state.replaceInstanceRoutes(appRouteOwner(appId), [
+        {
+          hostname: "example.com",
+          httpsRedirect: true,
+          id: "0a1b2c3d",
+          name: "",
+          path: null,
+          primary: true,
+          redirect: null,
+          service: "web",
+          stripPrefix: true,
+          targetPort: 80,
+          www: "redirect",
+        },
+      ])
+    )
+
+    const app = await deploy(harness, {
+      compose: "services:\n  web:\n    image: nginx:alpine\n",
+      sourceType: "compose",
+    })
+    await removeCompose()
+
+    expect(app.deployment?.state).toBe("succeeded")
+    const [container] = appContainers()
+    expect(
+      container!.labels[
+        "traefik.http.middlewares.kiln-route-0a1b2c3d-www.redirectregex.replacement"
+      ]
+    ).toBe("https://example.com${1}")
+  })
+
   it("puts a service at its Tailscale address when the app deploys", async () => {
     const harness = await createdApp()
     const stackId = "e".repeat(40)
