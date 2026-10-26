@@ -196,6 +196,7 @@ export function controlRequestLocks(
   switch (operation) {
     // Reads, session bookkeeping, and Relay-wide settings that no lane guards.
     case "relay.snapshot":
+    case "relay.tunnel.open":
     case "relay.system.inspect":
     case "relay.update.status":
     case "relay.resources.read":

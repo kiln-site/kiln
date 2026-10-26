@@ -281,7 +281,12 @@ function relayControlUpgrades(): Plugin {
     name: "kiln:relay-control-upgrades",
     configureServer(server) {
       server.httpServer?.on("upgrade", (request, socket, head) => {
-        if (!request.url?.startsWith("/api/relays/control")) return
+        if (
+          !request.url?.startsWith("/api/relays/control") &&
+          !request.url?.startsWith("/api/relays/tunnel")
+        ) {
+          return
+        }
         const environment = server.environments.ssr
         if (!environment || !isRunnableDevEnvironment(environment)) {
           socket.destroy()

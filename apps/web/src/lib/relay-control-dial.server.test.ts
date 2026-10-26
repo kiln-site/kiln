@@ -11,7 +11,9 @@ import { connect } from "node:net"
 import type { AddressInfo } from "node:net"
 
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test"
-import { WebSocket, WebSocketServer } from "ws"
+import { connect, createServer as createTcpServer } from "node:net"
+
+import { createWebSocketStream, WebSocket, WebSocketServer } from "ws"
 
 import {
   relayAuthChallengeTranscript,
@@ -20,6 +22,8 @@ import {
   relayControlDialV1Feature,
   relayControlProtocol,
   relayDialCloseCodes,
+  relayTunnelPath,
+  relayTunnelProtocol,
 } from "@workspace/contracts"
 import type {
   RelayAuthChallenge,
@@ -56,6 +60,8 @@ import {
 } from "@/lib/relay-connection"
 import type { RelayEndpoint } from "@/lib/relay-control-endpoint"
 import { handleRelayControlUpgrade } from "@/lib/relay-control-dial.server"
+import { openRelayTunnel } from "@/lib/relay-tunnel.server"
+import { passRelayBrowserRequest } from "@/lib/relay-browser-passthrough.server"
 import { loadPersistedRelay, loadRelayCredentials } from "@/lib/relay-registry"
 import { subscribeRealtimeChanges } from "@/lib/realtime-source.server"
 
@@ -271,6 +277,78 @@ it("opens its own connection when a Relay it prefers to be dialed by doesn't", a
   expect(listening.connections()).toBe(1)
 })
 
+it("takes a tunnel only for a token it asked for, and carries bytes through it", async () => {
+  relayAt(await closedPort(), "relay")
+  const stranger = new WebSocket(
+    `${hearthOrigin.replace("http", "ws")}${relayTunnelPath}`,
+    relayTunnelProtocol
+  )
+  await advanceUntil(once(stranger, "open"))
+  const strangerClosed = once(stranger, "close")
+  stranger.send(
+    JSON.stringify({
+      token: randomBytes(32).toString("base64url"),
+      type: "tunnel.hello",
+      v: 1,
+    })
+  )
+  expect((await advanceUntil(strangerClosed))[0]).toBe(4401)
+
+  // The Relay's listener, here one that echoes.
+  const listener = createTcpServer((socket) => socket.pipe(socket))
+  listener.listen(0, "127.0.0.1")
+  await once(listener, "listening")
+  onCleanup(
+    () => new Promise<void>((resolve) => listener.close(() => resolve()))
+  )
+  const relay = relayAt(await closedPort(), "relay")
+  const dialing = await dialHearth()
+  await dialing.authenticate()
+  const opened = openRelayTunnel(relay)
+  const request = (await advanceUntil(dialing.nextRequest())) as {
+    readonly id: string
+    readonly operation: string
+    readonly payload: { readonly token: string }
+  }
+  expect(request.operation).toBe("relay.tunnel.open")
+  // As the Relay does: open the tunnel, name it, carry the listener.
+  const tunnel = new WebSocket(
+    `${hearthOrigin.replace("http", "ws")}${relayTunnelPath}`,
+    relayTunnelProtocol
+  )
+  await advanceUntil(once(tunnel, "open"))
+  const local = connect((listener.address() as AddressInfo).port, "127.0.0.1")
+  await advanceUntil(once(local, "connect"))
+  tunnel.send(
+    JSON.stringify({
+      token: request.payload.token,
+      type: "tunnel.hello",
+      v: 1,
+    })
+  )
+  const remote = createWebSocketStream(tunnel)
+  remote.pipe(local).pipe(remote)
+  dialing.answer(request, { tls: false })
+
+  const stream = await advanceUntil(opened)
+  stream.write("through the tunnel")
+  const [echoed] = (await advanceUntil(once(stream, "data"))) as [Buffer]
+  expect(echoed.toString()).toBe("through the tunnel")
+  stream.destroy()
+})
+
+it("passes browsers through to the Relay's transfer routes only", async () => {
+  relayAt(await closedPort(), "relay")
+  for (const route of ["socket", "pair", "files/a/../../socket", "trust"]) {
+    const response = await passRelayBrowserRequest(
+      relayId,
+      route,
+      new Request(`${hearthOrigin}/api/relays/${relayId}/browser/${route}`)
+    )
+    expect(response.status).toBe(404)
+  }
+})
+
 function relayAt(port: number, controlDial: "hearth" | "relay"): RelayEndpoint {
   const relay = {
     controlDial,
@@ -363,7 +441,11 @@ async function dialHearth(
     challenge,
     closed,
     nextRequest: () =>
-      next("request") as Promise<{ readonly id: string }>,
+      next("request") as Promise<{
+        readonly id: string
+        readonly operation?: string
+        readonly payload?: unknown
+      }>,
     get responses() {
       return messages.filter((message) => message.type === "auth.response")
     },

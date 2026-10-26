@@ -101,6 +101,14 @@ export const relayIconReadV1Feature = "icon-read-v1"
 export const relayControlDialV1Feature = "control-dial-v1"
 // Where on Hearth a Relay opens its control connection.
 export const relayControlDialPath = "/api/relays/control"
+// The Relay opens a tunnel to its own listener on request
+// (`relay.tunnel.open`), so Hearth can reach a Relay that dials it.
+export const relayTunnelV1Feature = "tunnel-v1"
+// Where on Hearth a Relay opens those tunnels, and their subprotocol. The
+// Relay's first frame names the tunnel (`RelayTunnelHelloSchema`); every
+// frame after it is bytes to or from the Relay's listener.
+export const relayTunnelPath = "/api/relays/tunnel"
+export const relayTunnelProtocol = "kiln-relay-tunnel.v1" as const
 // How Hearth closes a connection a Relay opened: it already has one to that
 // Relay it keeps, or it doesn't know the Relay.
 export const relayDialCloseCodes = {
@@ -111,6 +119,7 @@ export const relayBrowserAuthorizationReviseMaxItems = 256
 
 export const relayControlOperations = [
   "relay.snapshot",
+  "relay.tunnel.open",
   "relay.system.inspect",
   "relay.update.apply",
   "relay.update.status",
@@ -365,6 +374,7 @@ export function relayControlOperationChanges(
 ): boolean {
   switch (operation) {
     case "relay.snapshot":
+    case "relay.tunnel.open":
     case "relay.system.inspect":
     case "relay.update.status":
     case "relay.resources.read":
@@ -656,6 +666,20 @@ export const RelayDialHelloSchema = Schema.Struct({
 })
 
 export type RelayDialHello = typeof RelayDialHelloSchema.Type
+
+// A tunnel's first frame: the token Hearth asked for it with.
+export const RelayTunnelHelloSchema = Schema.Struct({
+  token: Schema.String.check(Schema.isPattern(/^[A-Za-z\d_-]{43}$/u)),
+  type: Schema.Literal("tunnel.hello"),
+  v: Schema.Literal(1),
+})
+
+// What `relay.tunnel.open` asks and answers: the tunnel's token, and
+// whether the listener it reaches speaks TLS.
+export const RelayTunnelOpenSchema = Schema.Struct({
+  token: Schema.String.check(Schema.isPattern(/^[A-Za-z\d_-]{43}$/u)),
+})
+export const RelayTunnelOpenedSchema = Schema.Struct({ tls: Schema.Boolean })
 
 // What a challenge on a connection the Relay opened is bound to: the Hearth
 // client it's for, so one Hearth paired with a Relay can't pass its

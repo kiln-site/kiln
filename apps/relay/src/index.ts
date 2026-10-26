@@ -130,6 +130,7 @@ import {
   relayPlatformTerminalClaimSchema,
   relayPlatformTerminalRestartSchema,
   relayPlatformTerminalWriteSchema,
+  RelayTunnelOpenSchema,
 } from "@workspace/contracts"
 import { relayScheduleProjectionSchema } from "@workspace/contracts/schedules"
 import type {
@@ -160,6 +161,7 @@ import {
 } from "./config.js"
 import { attachControlSocket } from "./control-socket.js"
 import { startControlDials } from "./control-dial.js"
+import { openControlTunnel } from "./control-tunnel.js"
 import { DockerDriver } from "./docker.js"
 import { DatabaseBrowser, readDatabaseFile } from "./database-browser.js"
 import { DatabaseDriver } from "./databases.js"
@@ -1794,6 +1796,22 @@ async function executeControlRequest(
     })
   const payload = payloadRecord(request.payload)
   switch (request.operation) {
+    case "relay.tunnel.open": {
+      const { token } = Schema.decodeUnknownSync(RelayTunnelOpenSchema)(
+        request.payload
+      )
+      // Only to the Hearth this client asked the Relay to dial.
+      const dialUrl = await controlDials.urlFor(client.id)
+      if (!dialUrl) {
+        throw new Error("This Relay doesn't open connections to this Hearth")
+      }
+      await openControlTunnel({
+        dialUrl,
+        listener: { host: config.host, port: config.port },
+        token,
+      })
+      return { tls: activeTls !== null }
+    }
     case "relay.snapshot": {
       // Hearth reads updates from the pushed snapshots and keeps them from
       // browsers; this read is passed on as is.

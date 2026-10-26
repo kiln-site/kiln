@@ -42,6 +42,7 @@ import {
   relayTransferSpaceV1Feature,
   relayPeerTransfersV1Feature,
   relayControlDialV1Feature,
+  relayTunnelV1Feature,
   relayRestartV1Feature,
   relayResourcesV1Feature,
   relayFilePutV1Feature,
@@ -1245,6 +1246,7 @@ function authenticateSocket(
           relayLinkedBackupsV1Feature,
           relayTransferSpaceV1Feature,
           relayControlDialV1Feature,
+          relayTunnelV1Feature,
         ],
         protocol: relayControlProtocol,
         relayBuild: relayBuildLabel(),
@@ -1537,6 +1539,9 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
   }
   switch (request.operation) {
     case "relay.snapshot":
+    // A tunnel reaches only the Relay's listener, which checks every
+    // request it carries for itself.
+    case "relay.tunnel.open":
     case "relay.system.inspect":
     case "relay.update.status":
     case "relay.resources.read":

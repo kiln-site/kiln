@@ -526,12 +526,6 @@ const authorizeRelayFileRequest = Effect.fn("RelayTransfer.authorize")(
           cause,
         }),
     })
-    if (issued.proxyMode === "hearth") {
-      return yield* unavailable(
-        method === "PUT" ? "upload" : "download",
-        new Error("This Relay is configured to transfer through Hearth")
-      )
-    }
     const payload = yield* Schema.decodeUnknownEffect(CapabilityPayload)(
       atobBase64Url(issued.capability.split(".", 1)[0] ?? "")
     ).pipe(
@@ -564,10 +558,18 @@ const authorizeRelayFileRequest = Effect.fn("RelayTransfer.authorize")(
         )
       )
     )
-    const url = new URL(
-      `/v1/browser/files/${encodeURIComponent(input.instanceId)}`,
-      issued.browserOrigin
-    )
+    // A Relay browsers can't reach gets its transfers through Hearth,
+    // which passes them on unchanged.
+    const url =
+      issued.proxyMode === "hearth"
+        ? new URL(
+            `/api/relays/${encodeURIComponent(input.relayId)}/browser/files/${encodeURIComponent(input.instanceId)}`,
+            window.location.origin
+          )
+        : new URL(
+            `/v1/browser/files/${encodeURIComponent(input.instanceId)}`,
+            issued.browserOrigin
+          )
     url.searchParams.set("path", input.path)
     const traceparent = yield* currentBrowserTraceparent
     if (traceparent) url.searchParams.set("traceparent", traceparent)

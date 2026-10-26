@@ -4,11 +4,14 @@ import type { Duplex } from "node:stream"
 
 import {
   RelayAuthChallengeSchema,
+  RelayTunnelHelloSchema,
   relayAuthenticationWindowMs,
   relayControlDialPath,
   relayControlMaxFrameBytes,
   relayControlProtocol,
   relayDialCloseCodes,
+  relayTunnelPath,
+  relayTunnelProtocol,
 } from "@workspace/contracts"
 import { Option, Result, Schema } from "effect"
 import { WebSocketServer } from "ws"
@@ -18,6 +21,7 @@ import { forkPromise } from "@/effect/promise"
 import { reportAppError } from "@/effect/runtime"
 import { adoptRelayControlSocket } from "@/lib/relay-connection"
 import { loadPersistedRelay } from "@/lib/relay-registry"
+import { acceptRelayTunnel } from "@/lib/relay-tunnel.server"
 import { assertRequestRateLimit } from "@/lib/request-rate-limit"
 
 // Relays dialing Hearth: a Relay Hearth can't reach, such as one behind a
@@ -27,6 +31,9 @@ import { assertRequestRateLimit } from "@/lib/request-rate-limit"
 // connection (`adoptRelayControlSocket`), which runs the same session as
 // one Hearth opened. Anyone can connect, so nothing is trusted until that
 // challenge checks out, and sockets still waiting for one are capped.
+//
+// Relays open tunnels here too (`relayTunnelPath`, relay-tunnel.server.ts):
+// each names, in its first frame, the token Hearth asked for it with.
 
 const MAX_WAITING = 256
 // Per minute, by the address the connection came from.
@@ -34,6 +41,9 @@ const CONNECTIONS_PER_ADDRESS = 120
 
 const decodeChallenge = Schema.decodeUnknownOption(
   Schema.fromJsonString(RelayAuthChallengeSchema)
+)
+const decodeTunnelHello = Schema.decodeUnknownOption(
+  Schema.fromJsonString(RelayTunnelHelloSchema)
 )
 
 let waiting = 0
@@ -43,6 +53,14 @@ const server = new WebSocketServer({
   handleProtocols: (protocols) =>
     protocols.has(relayControlProtocol) ? relayControlProtocol : false,
   maxPayload: relayControlMaxFrameBytes,
+  noServer: true,
+  perMessageDeflate: false,
+})
+const tunnels = new WebSocketServer({
+  clientTracking: false,
+  handleProtocols: (protocols) =>
+    protocols.has(relayTunnelProtocol) ? relayTunnelProtocol : false,
+  maxPayload: 1024 * 1024,
   noServer: true,
   perMessageDeflate: false,
 })
@@ -59,7 +77,9 @@ export function handleRelayControlUpgrade(
   const pathname = Result.getOrNull(
     Result.try(() => new URL(request.url ?? "/", "http://hearth").pathname)
   )
-  if (pathname !== relayControlDialPath) return false
+  if (pathname !== relayControlDialPath && pathname !== relayTunnelPath) {
+    return false
+  }
   const forwarded = request.headers["x-forwarded-for"]
   const address =
     (typeof forwarded === "string"
@@ -82,7 +102,11 @@ export function handleRelayControlUpgrade(
     refuseUpgrade(socket, "429 Too Many Requests")
     return true
   }
-  server.handleUpgrade(request, socket, head, greet)
+  if (pathname === relayTunnelPath) {
+    tunnels.handleUpgrade(request, socket, head, receiveTunnel)
+  } else {
+    server.handleUpgrade(request, socket, head, greet)
+  }
   return true
 }
 
@@ -93,6 +117,35 @@ function refuseUpgrade(socket: Duplex, status: string): void {
   socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\n\r\n`, () =>
     socket.destroy()
   )
+}
+
+// Waits for a tunnel's token and hands it to whoever asked for it.
+function receiveTunnel(socket: WebSocket): void {
+  if (socket.protocol !== relayTunnelProtocol) {
+    socket.close(4400, "Expected the Relay tunnel protocol")
+    return
+  }
+  waiting += 1
+  let counted = true
+  const settle = () => {
+    if (!counted) return
+    counted = false
+    waiting -= 1
+    clearTimeout(timer)
+  }
+  const timer = setTimeout(() => {
+    socket.close(4401, "The tunnel wasn't named in time")
+  }, relayAuthenticationWindowMs)
+  timer.unref()
+  socket.once("close", settle)
+  socket.on("error", () => undefined)
+  socket.once("message", (data, binary) => {
+    settle()
+    const hello = binary ? Option.none() : decodeTunnelHello(data.toString())
+    if (Option.isNone(hello) || !acceptRelayTunnel(socket, hello.value.token)) {
+      socket.close(4401, "Hearth didn't ask for this tunnel")
+    }
+  })
 }
 
 // Says hello and waits for the Relay's challenge, which names the Relay.

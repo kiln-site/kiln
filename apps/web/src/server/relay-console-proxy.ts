@@ -23,6 +23,10 @@ import { kilnPublicUrl } from "@/lib/environment"
 import { forkPromise } from "@/effect/promise"
 import { relayControlEndpoint } from "@/lib/relay-connection"
 import {
+  openRelayTunnel,
+  relayReachedThroughTunnel,
+} from "@/lib/relay-tunnel.server"
+import {
   prepareConsoleCapabilityForIdentity,
   prepareConsoleCapabilityForUser,
 } from "@/server/relay-capability-service"
@@ -82,11 +86,17 @@ export async function* openHearthRelayConsoleStream(input: {
   const { capability, relay, relayCaCertificatePem } = prepared
   const control = relayControlEndpoint(relay)
   const protocol = control.useTls ? "wss" : "ws"
+  // A Relay that dialed Hearth is reached through a tunnel it opens, which
+  // already speaks TLS to its listener when that needs it.
+  const tunnel = relayReachedThroughTunnel(relay.id)
+    ? await openRelayTunnel(relay)
+    : null
   const socket = new WebSocket(
-    `${protocol}://${formatHost(control.hostname)}:${control.port}/v1/browser`,
+    `${tunnel ? "ws" : protocol}://${formatHost(control.hostname)}:${control.port}/v1/browser`,
     [...relayBrowserConsoleProtocols],
     {
       ca: control.useTls ? (relayCaCertificatePem ?? undefined) : undefined,
+      ...(tunnel ? { createConnection: () => tunnel } : {}),
       handshakeTimeout: 5_000,
       maxPayload: relayBrowserMaxFrameBytes,
       origin: kilnPublicUrl().origin,

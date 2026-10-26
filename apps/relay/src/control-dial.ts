@@ -53,6 +53,8 @@ export interface ControlDials {
   readonly close: () => Promise<void>
   /** Saves where a Hearth client asked to be dialed, or forgets it. */
   readonly save: (clientId: string, url: string | null) => void
+  /** Where the Relay dials a Hearth client, as a WebSocket URL, if it does. */
+  readonly urlFor: (clientId: string) => Promise<URL | null>
 }
 
 /**
@@ -141,6 +143,12 @@ export function startControlDials(options: ControlDialOptions): ControlDials {
           return Fiber.interruptAll(fibers)
         })
       ),
+    urlFor: (clientId) =>
+      Effect.runPromise(
+        options.state
+          .getMetadata(`${DIAL_METADATA_PREFIX}${clientId}`)
+          .pipe(Effect.map((saved) => (saved ? relayDialUrl(saved) : null)))
+      ),
     save: (clientId, url) => {
       const key = `${DIAL_METADATA_PREFIX}${clientId}`
       const value = url && relayDialUrl(url) ? url : ""
@@ -173,16 +181,34 @@ const dialLoop = (
   Effect.gen(function* () {
     let failures = 0
     let refusals = 0
+    // Whether the log already says Hearth can't be reached, once a streak.
+    let reported = false
+    const origin = hearthOrigin(dial.url)
     // Spread out, so Relays don't all arrive at once after Hearth restarts.
     yield* Effect.sleep(Math.floor(Math.random() * 2_000))
     while (wanted()) {
       const startedAt = Date.now()
-      const code = yield* dialOnce(options, clientId, dial)
+      const ended = yield* dialOnce(options, clientId, dial)
       if (!wanted()) return
-      refusals = code === relayDialCloseCodes.unknownRelay ? refusals + 1 : 0
+      if (ended.reached) {
+        if (reported) console.log(`Reached Hearth at ${origin} again.`)
+        reported = false
+      } else if (!reported) {
+        reported = true
+        console.log(
+          `Couldn't reach Hearth at ${origin}: ${ended.error ?? "no answer"}. Trying again.`
+        )
+      }
+      refusals =
+        ended.code === relayDialCloseCodes.unknownRelay ? refusals + 1 : 0
+      if (refusals === REFUSALS_BEFORE_WAITING) {
+        console.log(
+          `Hearth at ${origin} doesn't know this Relay. Trying again in a while.`
+        )
+      }
       if (Date.now() - startedAt >= STABLE_SESSION_MS) failures = 0
       failures += 1
-      yield* Effect.sleep(retryDelay(code, failures, refusals))
+      yield* Effect.sleep(retryDelay(ended.code, failures, refusals))
     }
   })
 
@@ -200,11 +226,17 @@ function retryDelay(
   return Math.round(base * (0.75 + Math.random() * 0.5))
 }
 
-// One connection, from dialing to its close. Ends with how it closed, or
-// null when it never opened.
+// One connection, from dialing to its close. Ends with how it closed (null
+// when it never opened), whether Hearth answered, and why it couldn't be
+// reached.
 const dialOnce = (options: ControlDialOptions, clientId: string, dial: Dial) =>
-  Effect.callback<number | null>((resume) => {
+  Effect.callback<{
+    readonly code: number | null
+    readonly error: string | null
+    readonly reached: boolean
+  }>((resume) => {
     let adopted = false
+    let error: string | null = null
     const socket = new WebSocket(dial.url, relayControlProtocol, {
       handshakeTimeout: HANDSHAKE_TIMEOUT_MS,
       maxPayload: relayControlMaxFrameBytes,
@@ -234,12 +266,19 @@ const dialOnce = (options: ControlDialOptions, clientId: string, dial: Dial) =>
           ?.remoteAddress
       )
     })
-    // Without a listener, a failed dial would throw.
-    socket.on("error", () => undefined)
+    socket.on("error", (cause) => {
+      error ??= cause.message
+    })
     socket.once("close", (code) => {
       clearTimeout(helloTimer)
       dial.inSession = false
-      resume(Effect.succeed(adopted || code !== 1006 ? code : null))
+      resume(
+        Effect.succeed({
+          code: adopted || code !== 1006 ? code : null,
+          error,
+          reached: adopted,
+        })
+      )
     })
     return Effect.sync(() => {
       clearTimeout(helloTimer)

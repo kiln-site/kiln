@@ -42,10 +42,19 @@ export async function signLocalBackupDownload(
     Buffer.from(encoded),
     credentials.clientPrivateKeyPem
   ).toString("base64url")
-  const url = new URL(
-    `/v1/browser/backups/${encodeURIComponent(archiveId)}`,
-    relay.browserOrigin
-  )
+  // A Relay browsers can't reach serves its backups through Hearth.
+  const { relayConnectionProxyMode } = await import("@/lib/relay-connection")
+  const { kilnPublicUrl } = await import("@/lib/environment")
+  const url =
+    relayConnectionProxyMode(relay.id) === "hearth"
+      ? new URL(
+          `/api/relays/${encodeURIComponent(relay.id)}/browser/backups/${encodeURIComponent(archiveId)}`,
+          kilnPublicUrl()
+        )
+      : new URL(
+          `/v1/browser/backups/${encodeURIComponent(archiveId)}`,
+          relay.browserOrigin
+        )
   url.searchParams.set("token", `${encoded}.${signature}`)
   return { expiresAt: new Date(expiresAt).toISOString(), url: url.toString() }
 }
