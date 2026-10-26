@@ -1262,8 +1262,12 @@ export class FilesystemDriver {
   }
 
   /**
-   * Bytes a transfer of the whole root packs, as it packs them: each path
-   * of a file linked more than once counts.
+   * Disk a copy of the whole root takes, as its archive or unpacked,
+   * walking it as a transfer packs it, so each name of a file linked more
+   * than once counts. Each entry is rounded up to a filesystem block, with
+   * room for its archive header, which bounds both the archive and the
+   * unpacked files; a sliver more covers compression and large files'
+   * filesystem metadata.
    */
   rootBytes(instance: FileRoot) {
     return Effect.gen({ self: this }, function* () {
@@ -1272,10 +1276,18 @@ export class FilesystemDriver {
         root,
         yield* rootChildNames(root)
       )
-      return entries.reduce(
-        (total, entry) => total + (entry.kind === "file" ? entry.size : 0),
-        0
+      const bytes = entries.reduce(
+        (total, entry) =>
+          total +
+          TAR_BLOCK_BYTES +
+          Math.max(
+            Math.ceil(entry.size / FILESYSTEM_BLOCK_BYTES),
+            entry.kind === "file" ? 0 : 1
+          ) *
+            FILESYSTEM_BLOCK_BYTES,
+        TAR_BLOCK_BYTES * 2
       )
+      return bytes + Math.ceil(bytes / 1024)
     }).pipe(Effect.withSpan("relay.files.rootBytes"))
   }
 
@@ -2006,6 +2018,11 @@ const availableDuplicatePath = Effect.fn("relay.files.availableDuplicatePath")(
     )
   }
 )
+
+// A tar header and its records' unit, and the block size most
+// filesystems allocate in.
+const TAR_BLOCK_BYTES = 512
+const FILESYSTEM_BLOCK_BYTES = 4096
 
 function rootChildNames(root: string) {
   return filesystemOperation("transfer.listRoot", async () => {

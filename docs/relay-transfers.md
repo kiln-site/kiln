@@ -92,8 +92,10 @@ Hearth (`apps/relay/src/transfers/peer/`, `apps/web/src/server/relay-transfers.s
 
 `transfer.space` (`transfer-space-v1`) reports a Relay's free disk where it
 keeps artifacts and where it keeps game servers' folders, and, asked about
-a root, how many bytes a transfer of it packs, so Hearth can check a copy
-fits first. Free disk needs `relay.read`; a root's size needs its download
+a root, the disk a copy of it takes, archived or unpacked, so Hearth can
+check a copy fits first. It walks the root as packing does, counting each
+name of a hard-linked file, and rounds each entry up to a filesystem block
+plus its archive header. Free disk needs `relay.read`; a root's size needs its download
 action.
 
 Copying needs the source root's download action and the destination

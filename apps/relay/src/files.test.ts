@@ -380,12 +380,35 @@ describe("Relay transfer sizing", () => {
     withSetup(({ driver, instance, root }) =>
       Effect.gen(function* () {
         const region = resolve(root, "region.mca")
-        yield* fromPromise(() => writeFile(region, Buffer.alloc(4096, 1)))
+        yield* fromPromise(() => writeFile(region, Buffer.alloc(8192, 1)))
         const before = yield* driver.rootBytes(instance)
 
         yield* fromPromise(() => link(region, resolve(root, "linked.mca")))
 
-        assert.strictEqual(yield* driver.rootBytes(instance), before + 4096)
+        assert.isAtLeast(
+          (yield* driver.rootBytes(instance)) - before,
+          8192
+        )
+      })
+    )
+  )
+
+  // Unpacked, each small file takes a whole filesystem block.
+  it.effect("counts small files at the disk they take", () =>
+    withSetup(({ driver, instance, root }) =>
+      Effect.gen(function* () {
+        const before = yield* driver.rootBytes(instance)
+        yield* fromPromise(() => mkdir(resolve(root, "config")))
+        for (let index = 0; index < 100; index += 1) {
+          yield* fromPromise(() =>
+            writeFile(resolve(root, `config/${index}.yml`), "a")
+          )
+        }
+
+        assert.isAtLeast(
+          (yield* driver.rootBytes(instance)) - before,
+          100 * 4096
+        )
       })
     )
   )
