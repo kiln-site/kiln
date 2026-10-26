@@ -553,21 +553,27 @@ export function FileActionMenuItem({
   label,
   detail,
   disabled = false,
+  ariaDisabled = false,
   onClick,
+  onPointerLeave,
 }: {
   active?: boolean
   icon: React.ReactNode
   label: string
   detail: string
   disabled?: boolean
+  ariaDisabled?: boolean
   onClick?: () => void
+  onPointerLeave?: React.PointerEventHandler<HTMLButtonElement>
 }) {
   return (
     <button
       type="button"
       className="group flex w-full items-center gap-2.5 border-t border-border/45 px-2 py-2 text-left transition-colors first:border-t-0 hover:bg-popover-accent/75 focus-visible:bg-popover-accent focus-visible:outline-none disabled:pointer-events-none disabled:opacity-40"
       disabled={disabled}
-      onClick={onClick}
+      aria-disabled={ariaDisabled || undefined}
+      onClick={ariaDisabled ? undefined : onClick}
+      onPointerLeave={onPointerLeave}
     >
       <span
         className={`grid size-7 shrink-0 place-items-center border transition-colors [&_svg]:size-3.5 ${active ? "border-primary/30 bg-primary/12 text-primary-ink" : "border-border/60 bg-muted/20 text-muted-foreground group-hover:text-foreground"}`}

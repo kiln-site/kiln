@@ -37,23 +37,29 @@ export function ConsoleShareButton({
     streamStore.getHasLinesSnapshot,
     streamStore.getHasLinesSnapshot
   )
-  const { share, state } = useMclogsShareAction(async () => {
-    const result = await uploadConsoleLogToMclogs({
-      data: {
-        instanceId: instance.id,
-        relayId: instance.relayId,
-        implementation: instance.implementation,
-        version: instance.version,
-        redactSensitive: uiStore.getRedactSensitiveSnapshot(),
-      },
-    })
-    await copyToClipboard(result.url)
-  })
+  const { share, state, canOpen, onPointerLeave } = useMclogsShareAction(
+    async () => {
+      const result = await uploadConsoleLogToMclogs({
+        data: {
+          instanceId: instance.id,
+          relayId: instance.relayId,
+          implementation: instance.implementation,
+          version: instance.version,
+          redactSensitive: uiStore.getRedactSensitiveSnapshot(),
+        },
+      })
+      await copyToClipboard(result.url)
+      return result.url
+    }
+  )
 
   if (!canShare || !relayConnected) return null
 
   return (
-    <ConsoleTooltip content={mclogsShareTooltip(state)}>
+    <ConsoleTooltip
+      content={mclogsShareTooltip(state, canOpen)}
+      keepOpen={canOpen}
+    >
       <Button
         variant={
           state === "copied"
@@ -64,8 +70,16 @@ export function ConsoleShareButton({
         }
         size="sm"
         className="type-control-sm h-8 gap-1.5 px-2.5"
-        disabled={state === "uploading" || !hasLines}
+        disabled={!hasLines}
+        aria-disabled={state === "uploading"}
+        aria-busy={state === "uploading"}
+        aria-label={
+          state === "copied" && canOpen
+            ? "Link copied, press again to open on mclo.gs"
+            : undefined
+        }
         onClick={share}
+        onPointerLeave={onPointerLeave}
       >
         {state === "uploading" ? (
           <LoaderCircle className="animate-spin" />

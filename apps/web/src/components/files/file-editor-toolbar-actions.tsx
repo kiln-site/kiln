@@ -1,5 +1,4 @@
 import * as React from "react"
-import { useMutation } from "@tanstack/react-query"
 import type { RelayFileContent } from "@workspace/contracts"
 import {
   ALargeSmall,
@@ -48,7 +47,7 @@ import { EditorTooltip } from "@/components/files/editor-tooltip"
 import {
   mclogsShareLabel,
   mclogsShareTooltip,
-  type MclogsShareState,
+  useMclogsShareAction,
 } from "@/components/use-mclogs-share-action"
 import {
   type EditorSessionStore,
@@ -73,36 +72,20 @@ function useEditorShareAction({
   path: string
   sessionStore: EditorSessionStore
 }) {
-  // Sharing creates a link on mclo.gs without changing cached Relay files.
-  // oxlint-disable-next-line react-doctor/query-mutation-missing-invalidation
-  const mutation = useMutation({
-    mutationFn: async () => {
-      const result = await uploadToMclogs({
-        data: {
-          content: redactSensitiveText(sessionStore.getValue()),
-          instanceId: instance.id,
-          relayId: instance.relayId,
-          path,
-          implementation: instance.implementation,
-          version: instance.version,
-        },
-      })
-      await copyToClipboard(result.url)
-    },
+  return useMclogsShareAction(async () => {
+    const result = await uploadToMclogs({
+      data: {
+        content: redactSensitiveText(sessionStore.getValue()),
+        instanceId: instance.id,
+        relayId: instance.relayId,
+        path,
+        implementation: instance.implementation,
+        version: instance.version,
+      },
+    })
+    await copyToClipboard(result.url)
+    return result.url
   })
-  React.useEffect(() => {
-    if (!mutation.isSuccess && !mutation.isError) return
-    const timer = window.setTimeout(() => mutation.reset(), 2_800)
-    return () => window.clearTimeout(timer)
-  }, [mutation.isError, mutation.isSuccess, mutation.reset])
-  const state: MclogsShareState = mutation.isPending
-    ? "uploading"
-    : mutation.isSuccess
-      ? "copied"
-      : mutation.isError
-        ? "error"
-        : "idle"
-  return { share: () => mutation.mutate(), state }
 }
 
 function EditorShareButton({
@@ -116,14 +99,17 @@ function EditorShareButton({
   path: string
   sessionStore: EditorSessionStore
 }) {
-  const { share, state } = useEditorShareAction({
+  const { share, state, canOpen, onPointerLeave } = useEditorShareAction({
     instance,
     path,
     sessionStore,
   })
 
   return (
-    <EditorTooltip content={mclogsShareTooltip(state)}>
+    <EditorTooltip
+      content={mclogsShareTooltip(state, canOpen)}
+      keepOpen={canOpen}
+    >
       <Button
         variant={
           state === "copied"
@@ -134,9 +120,18 @@ function EditorShareButton({
         }
         size="default"
         className="h-8 shrink-0 gap-1.5 px-2.5 text-xs shadow-none disabled:opacity-100"
-        aria-label={`Share ${formatName(path)} via mclo.gs and copy link`}
-        disabled={state === "uploading" || loading}
+        aria-label={
+          state === "copied"
+            ? canOpen
+              ? "Link copied, press again to open on mclo.gs"
+              : "Link copied"
+            : `Share ${formatName(path)} via mclo.gs and copy link`
+        }
+        disabled={loading}
+        aria-disabled={state === "uploading"}
+        aria-busy={state === "uploading"}
         onClick={share}
+        onPointerLeave={onPointerLeave}
       >
         {state === "uploading" ? (
           <LoaderCircle className="size-[17px] animate-spin" />
@@ -454,7 +449,7 @@ function EditorShareActionMenuItem({
   path: string
   sessionStore: EditorSessionStore
 }) {
-  const { share, state } = useEditorShareAction({
+  const { share, state, canOpen, onPointerLeave } = useEditorShareAction({
     instance,
     path,
     sessionStore,
@@ -482,9 +477,11 @@ function EditorShareActionMenuItem({
               ? "Try mclo.gs again"
               : "Upload to mclo.gs"
       }
-      detail="Copies a shareable link"
-      disabled={state === "uploading" || loading}
+      detail={canOpen ? "Tap again to open" : "Copies a shareable link"}
+      disabled={loading}
+      ariaDisabled={state === "uploading"}
       onClick={share}
+      onPointerLeave={onPointerLeave}
     />
   )
 }

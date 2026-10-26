@@ -15,6 +15,7 @@ export function useDemoShare() {
   return useMclogsShareAction(async () => {
     sharedUrl ??= await uploadShareContent()
     await copyToClipboard(sharedUrl)
+    return sharedUrl
   })
 }
 

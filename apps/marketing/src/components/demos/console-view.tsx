@@ -332,9 +332,12 @@ function respond(input: string): Output {
 
 // Hearth's mclo.gs button. It shares the demo link, not the log.
 function ShareButton() {
-  const { share, state } = useDemoShare()
+  const { share, state, canOpen, onPointerLeave } = useDemoShare()
   return (
-    <ConsoleTooltip content={mclogsShareTooltip(state)}>
+    <ConsoleTooltip
+      content={mclogsShareTooltip(state, canOpen)}
+      keepOpen={canOpen}
+    >
       <Button
         variant={
           state === "copied"
@@ -345,8 +348,15 @@ function ShareButton() {
         }
         size="sm"
         className="type-control-sm h-8 gap-1.5 px-2.5"
-        disabled={state === "uploading"}
+        aria-disabled={state === "uploading"}
+        aria-busy={state === "uploading"}
+        aria-label={
+          state === "copied" && canOpen
+            ? "Link copied, press again to open on mclo.gs"
+            : undefined
+        }
         onClick={share}
+        onPointerLeave={onPointerLeave}
       >
         {state === "uploading" ? (
           <LoaderCircle className="animate-spin" />

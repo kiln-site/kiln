@@ -654,9 +654,12 @@ function DemoDatabase({
 // Hearth's Share, which uploads the file to mclo.gs. It shares the demo
 // link, not the file.
 function ShareButton() {
-  const { share, state } = useDemoShare()
+  const { share, state, canOpen, onPointerLeave } = useDemoShare()
   return (
-    <EditorTooltip content={mclogsShareTooltip(state)}>
+    <EditorTooltip
+      content={mclogsShareTooltip(state, canOpen)}
+      keepOpen={canOpen}
+    >
       <Button
         variant={
           state === "copied"
@@ -666,8 +669,15 @@ function ShareButton() {
               : "ghost"
         }
         className="hidden h-8 shrink-0 gap-1.5 px-2.5 text-xs shadow-none @3xl/window:inline-flex"
-        disabled={state === "uploading"}
+        aria-disabled={state === "uploading"}
+        aria-busy={state === "uploading"}
+        aria-label={
+          state === "copied" && canOpen
+            ? "Link copied, press again to open on mclo.gs"
+            : undefined
+        }
         onClick={share}
+        onPointerLeave={onPointerLeave}
       >
         {state === "uploading" ? (
           <LoaderCircle className="size-[17px] animate-spin" />
