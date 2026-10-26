@@ -30,24 +30,30 @@ export function CopyButton({
       type="button"
       variant={variant}
       size="sm"
-      onClick={() => {
-        void Effect.runPromise(
-          Effect.tryPromise(() => navigator.clipboard.writeText(text)).pipe(
-            Effect.match({
-              onFailure: () =>
-                showToast({ message: "Couldn't copy", type: "error" }),
-              onSuccess: () => {
-                setCopied(true)
-                showToast({ message: toast, type: "success" })
-              },
-            })
-          )
-        )
-      }}
+      onClick={() => copyText(text, toast, () => setCopied(true))}
     >
       {copied ? <Check /> : <Copy />}
       {label}
     </Button>
+  )
+}
+
+// Copies text to the clipboard and says so either way.
+export function copyText(
+  text: string,
+  toast: string,
+  onCopied?: () => void
+): void {
+  void Effect.runPromise(
+    Effect.tryPromise(() => navigator.clipboard.writeText(text)).pipe(
+      Effect.match({
+        onFailure: () => showToast({ message: "Couldn't copy", type: "error" }),
+        onSuccess: () => {
+          onCopied?.()
+          showToast({ message: toast, type: "success" })
+        },
+      })
+    )
   )
 }
 

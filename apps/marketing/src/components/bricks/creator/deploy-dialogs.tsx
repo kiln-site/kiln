@@ -45,7 +45,10 @@ import {
   setIn,
 } from "~/components/bricks/creator/creator-state"
 import { InputDialog } from "~/components/bricks/creator/input-dialog"
-import { PanelDialog } from "~/components/bricks/creator/panel-dialog"
+import {
+  PanelDialog,
+  PanelOpenContext,
+} from "~/components/bricks/creator/panel-dialog"
 
 const SyntaxCodeEditor = React.lazy(() =>
   import("@/components/syntax-code-editor").then((module) => ({
@@ -59,14 +62,46 @@ export function PanelHost({
   brick,
   edit,
   onClose,
+  onMoveInput,
+  open,
   panel,
 }: {
   brick: BrickV2
   edit: Edit
   onClose: () => void
+  // Moves the question being edited and keeps editing it.
+  onMoveInput: (offset: number) => void
+  // False while the dialog animates out, before `panel` is cleared.
+  open: boolean
   panel: CreatorPanel | null
 }) {
   if (!panel) return null
+  return (
+    <PanelOpenContext.Provider value={open}>
+      <Panel
+        brick={brick}
+        edit={edit}
+        onClose={onClose}
+        onMoveInput={onMoveInput}
+        panel={panel}
+      />
+    </PanelOpenContext.Provider>
+  )
+}
+
+function Panel({
+  brick,
+  edit,
+  onClose,
+  onMoveInput,
+  panel,
+}: {
+  brick: BrickV2
+  edit: Edit
+  onClose: () => void
+  onMoveInput: (offset: number) => void
+  panel: CreatorPanel
+}) {
   if (panel.kind === "input") {
     return (
       <InputDialog
@@ -76,6 +111,7 @@ export function PanelHost({
         input={brick.inputs?.[panel.index]}
         keys={(brick.inputs ?? []).map((input) => input.key)}
         onClose={onClose}
+        onMove={onMoveInput}
       />
     )
   }
@@ -196,7 +232,6 @@ function EnvDialog({
   for (const row of rows) counts.set(row.key, (counts.get(row.key) ?? 0) + 1)
   return (
     <PanelDialog
-      open
       onClose={onClose}
       icon={Braces}
       title="Environment"
@@ -357,7 +392,6 @@ function PortsDialog({
   const portsIssue = useIssue("deploy.ports")
   return (
     <PanelDialog
-      open
       onClose={onClose}
       icon={Plug}
       title="Ports"
@@ -480,7 +514,6 @@ function VolumesDialog({
     set("deploy", "volumes")(next.length > 0 ? next : undefined)
   return (
     <PanelDialog
-      open
       onClose={onClose}
       icon={HardDrive}
       title="Kept data"
@@ -542,7 +575,6 @@ function FilesDialog({
     set("deploy", "files")(next.length > 0 ? next : undefined)
   return (
     <PanelDialog
-      open
       onClose={onClose}
       icon={FileText}
       title="Files"
@@ -630,7 +662,6 @@ function ReadyDialog({
   const portNames = (deploy.ports ?? []).map((port) => port.name)
   return (
     <PanelDialog
-      open
       onClose={onClose}
       icon={Activity}
       title="Ready when"
@@ -713,7 +744,6 @@ function AddressDialog({
   const set = useSetter(edit)
   return (
     <PanelDialog
-      open
       onClose={onClose}
       icon={AtSign}
       title="Address"
@@ -743,7 +773,6 @@ function StopDialog({
   const set = useSetter(edit)
   return (
     <PanelDialog
-      open
       onClose={onClose}
       icon={Power}
       title="Console stop"
@@ -769,7 +798,6 @@ function CommandDialog({
   const set = useSetter(edit)
   return (
     <PanelDialog
-      open
       onClose={onClose}
       icon={Terminal}
       title="Command"
@@ -809,14 +837,13 @@ function SourceDialog({
     (deploy.type === "dockerfile" ? deploy.dockerfile : deploy.compose) ?? ""
   return (
     <PanelDialog
-      open
       onClose={onClose}
       icon={FileCode2}
       title={deploy.type === "dockerfile" ? "Dockerfile" : "Compose file"}
       description="Kept in the Brick, so installing it needs no repository."
       className="sm:max-w-4xl"
     >
-      <div className="editor-grid relative h-[min(60vh,32rem)] min-w-0 overflow-hidden border border-border">
+      <div className="editor-grid relative h-[min(45dvh,32rem)] min-w-0 overflow-hidden border border-border md:h-[min(60vh,32rem)]">
         <React.Suspense
           fallback={
             <p className="type-support p-4 text-muted-foreground">
@@ -867,7 +894,6 @@ function DatabaseDialog({
   if (panel === "connection") {
     return (
       <PanelDialog
-        open
         onClose={onClose}
         icon={Link2}
         title="Connect with"
@@ -902,7 +928,6 @@ function DatabaseDialog({
   }
   return (
     <PanelDialog
-      open
       onClose={onClose}
       icon={DatabaseBackup}
       title="Backups"

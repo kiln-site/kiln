@@ -1,5 +1,5 @@
 import * as React from "react"
-import { Plus, Trash2, Wand2, X } from "lucide-react"
+import { ArrowDown, ArrowUp, Plus, Trash2, Wand2, X } from "lucide-react"
 
 import {
   type BrickV2Input,
@@ -24,6 +24,7 @@ import { setIn } from "~/components/bricks/creator/creator-state"
 import {
   inputTypeMeta,
   inputTypes,
+  removeInput,
 } from "~/components/bricks/creator/inputs-card"
 import {
   DialogGroup,
@@ -79,12 +80,15 @@ export function InputDialog({
   input,
   keys,
   onClose,
+  onMove,
 }: {
   edit: Edit
   index: number
   input: BrickV2Input | undefined
   keys: ReadonlyArray<string>
   onClose: () => void
+  // Moves the question and follows it, so the dialog keeps editing it.
+  onMove: (offset: number) => void
 }) {
   if (!input) return null
   // The key follows the label until it's given one of its own.
@@ -100,28 +104,45 @@ export function InputDialog({
 
   return (
     <PanelDialog
-      open
       onClose={onClose}
       icon={Icon}
       title={input.label || "New question"}
       description="One field of the install form. Its answer is {{ key }} anywhere in the Brick."
       className="sm:max-w-2xl"
       footer={
-        <Button
-          variant="destructive"
-          onClick={() => {
-            edit((brick) => ({
-              ...brick,
-              inputs: (brick.inputs ?? []).filter(
-                (_, other) => other !== index
-              ),
-            }))
-            onClose()
-          }}
-        >
-          <Trash2 />
-          Remove
-        </Button>
+        <div className="flex items-center gap-1">
+          <Button
+            variant="outline"
+            size="icon"
+            aria-label="Move up"
+            title="Move up"
+            disabled={index === 0}
+            onClick={() => onMove(-1)}
+          >
+            <ArrowUp />
+          </Button>
+          <Button
+            variant="outline"
+            size="icon"
+            aria-label="Move down"
+            title="Move down"
+            disabled={index === keys.length - 1}
+            onClick={() => onMove(1)}
+          >
+            <ArrowDown />
+          </Button>
+          <Button
+            variant="destructive"
+            className="ml-2"
+            onClick={() => {
+              removeInput(edit, index)
+              onClose()
+            }}
+          >
+            <Trash2 />
+            Remove
+          </Button>
+        </div>
       }
     >
       <div

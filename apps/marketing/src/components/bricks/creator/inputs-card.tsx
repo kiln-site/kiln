@@ -45,8 +45,43 @@ export const inputTypeMeta: Record<
 
 export const inputTypes = Object.keys(inputTypeMeta) as Array<BrickV2InputType>
 
-// The install form, one row per input. Rows open a dialog to edit; the card
-// stays a summary.
+// Adds a question of a type after the others, keyed until it gets a label.
+export function addInput(edit: Edit, type: BrickV2InputType): void {
+  edit((brick) => {
+    const current = brick.inputs ?? []
+    const taken = new Set(current.map((input) => input.key))
+    let index = current.length + 1
+    while (taken.has(`${type}_${index}`)) index += 1
+    const input: BrickV2Input = {
+      key: `${type}_${index}`,
+      label: "",
+      type,
+      ...(type === "select" ? { options: ["one", "two"] } : {}),
+      ...(type === "secret" ? { generate: true } : {}),
+    }
+    return { ...brick, inputs: [...current, input] }
+  })
+}
+
+export function moveInput(edit: Edit, index: number, offset: number): void {
+  edit((brick) => {
+    const next = [...(brick.inputs ?? [])]
+    if (index + offset < 0 || index + offset >= next.length) return brick
+    const [moved] = next.splice(index, 1)
+    next.splice(index + offset, 0, moved!)
+    return { ...brick, inputs: next }
+  })
+}
+
+export function removeInput(edit: Edit, index: number): void {
+  edit((brick) => ({
+    ...brick,
+    inputs: (brick.inputs ?? []).filter((_, other) => other !== index),
+  }))
+}
+
+// The install form, one row per question. Rows open a dialog to edit; the
+// section stays a summary.
 export const InputsCard = React.memo(function InputsCard({
   edit,
   inputs,
@@ -58,65 +93,48 @@ export const InputsCard = React.memo(function InputsCard({
 }) {
   const list = inputs ?? []
   const add = (type: BrickV2InputType) => {
-    edit((brick) => {
-      const current = brick.inputs ?? []
-      const taken = new Set(current.map((input) => input.key))
-      let index = current.length + 1
-      while (taken.has(`${type}_${index}`)) index += 1
-      const input: BrickV2Input = {
-        key: `${type}_${index}`,
-        label: "",
-        type,
-        ...(type === "select" ? { options: ["one", "two"] } : {}),
-        ...(type === "secret" ? { generate: true } : {}),
-      }
-      return { ...brick, inputs: [...current, input] }
-    })
+    addInput(edit, type)
     onOpen(list.length)
   }
-  const move = (index: number, offset: number) =>
-    edit((brick) => {
-      const next = [...(brick.inputs ?? [])]
-      const [moved] = next.splice(index, 1)
-      next.splice(index + offset, 0, moved!)
-      return { ...brick, inputs: next }
-    })
-  const remove = (index: number) =>
-    edit((brick) => ({
-      ...brick,
-      inputs: (brick.inputs ?? []).filter((_, other) => other !== index),
-    }))
+  const move = (index: number, offset: number) => moveInput(edit, index, offset)
+  const remove = (index: number) => removeInput(edit, index)
 
   return (
-    <section aria-label="Install form" className="border border-border">
-      <CardHeader
+    <section aria-label="Install form">
+      <SectionHeader
         title="Install form"
         detail={
           list.length === 0
-            ? "Only a name"
-            : `${list.length} ${list.length === 1 ? "question" : "questions"}`
+            ? "Asks only for a name"
+            : `A name and ${list.length} ${list.length === 1 ? "question" : "questions"}`
         }
         action={<AddInputMenu onAdd={add} />}
       />
       {list.length === 0 ? (
-        <div className="flex flex-wrap gap-2 p-4">
-          {inputTypes.map((type) => {
-            const Icon = inputTypeMeta[type].icon
-            return (
-              <button
-                key={type}
-                type="button"
-                onClick={() => add(type)}
-                className="type-control-sm flex h-8 items-center gap-1.5 border border-dashed border-border px-2.5 text-muted-foreground transition-colors outline-none hover:border-primary/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
-              >
-                <Icon className="size-3.5" />
-                {inputTypeMeta[type].label}
-              </button>
-            )
-          })}
+        <div className="flex flex-col gap-3 px-4 py-4">
+          <p className="type-support text-muted-foreground">
+            Add a question for anything the person installing it should choose,
+            like a version or a password.
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {inputTypes.map((type) => {
+              const Icon = inputTypeMeta[type].icon
+              return (
+                <button
+                  key={type}
+                  type="button"
+                  onClick={() => add(type)}
+                  className="type-control-sm flex h-8 items-center gap-1.5 border border-dashed border-border px-2.5 text-muted-foreground transition-colors outline-none hover:border-primary/50 hover:bg-accent/40 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 active:bg-accent/70"
+                >
+                  <Icon className="size-3.5" />
+                  {inputTypeMeta[type].label}
+                </button>
+              )
+            })}
+          </div>
         </div>
       ) : (
-        <ol className="divide-y divide-border">
+        <ol>
           {list.map((input, index) => (
             <InputRow
               key={index}
@@ -134,7 +152,9 @@ export const InputsCard = React.memo(function InputsCard({
   )
 })
 
-export function CardHeader({
+// A section's heading row in the sheet: its name, a word on its state, and
+// what it can do.
+export function SectionHeader({
   action,
   detail,
   title,
@@ -144,12 +164,14 @@ export function CardHeader({
   title: string
 }) {
   return (
-    <header className="flex h-10 items-center gap-3 border-b border-border bg-card/40 pr-2 pl-4">
-      <h2 className="type-technical-label text-muted-foreground">{title}</h2>
+    <header className="flex h-10 items-center gap-3 border-y border-border bg-card/35 pr-2 pl-4">
+      <h2 className="type-card-title">{title}</h2>
       {detail ? (
-        <span className="type-meta text-muted-foreground/80">{detail}</span>
+        <span className="type-meta min-w-0 truncate text-muted-foreground">
+          {detail}
+        </span>
       ) : null}
-      <div className="ml-auto flex items-center gap-1">{action}</div>
+      <div className="ml-auto flex shrink-0 items-center gap-1">{action}</div>
     </header>
   )
 }
@@ -160,7 +182,7 @@ function AddInputMenu({ onAdd }: { onAdd: (type: BrickV2InputType) => void }) {
       <DropdownMenuTrigger asChild>
         <Button variant="ghost" size="sm">
           <Plus />
-          Add
+          Add question
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-60">
@@ -210,27 +232,35 @@ const InputRow = React.memo(function InputRow({
         : String(input.default)
 
   return (
-    <li className="group relative flex items-center">
+    <li className="group relative flex items-center border-b border-border last:border-b-0">
       <button
         type="button"
         onClick={() => onOpen(index)}
-        className="flex h-10 min-w-0 flex-1 items-center gap-3 pr-4 pl-4 text-left transition-colors outline-none hover:bg-card/60 focus-visible:bg-card/60 focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-inset md:pr-28"
+        className="flex h-10 min-w-0 flex-1 items-center gap-3 px-4 text-left transition-colors outline-none hover:bg-accent/40 focus-visible:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-inset active:bg-accent/60 md:pr-28"
       >
-        <span className="grid size-6 shrink-0 place-items-center border border-border bg-background text-muted-foreground">
-          <Icon className="size-3.5" />
+        <span
+          className={cn(
+            "grid size-6 shrink-0 place-items-center border bg-background",
+            issues > 0
+              ? "border-destructive/50 text-destructive"
+              : "border-border text-muted-foreground"
+          )}
+        >
+          {issues > 0 ? (
+            <CircleAlert className="size-3.5" />
+          ) : (
+            <Icon className="size-3.5" />
+          )}
         </span>
         <span className="type-control truncate">
           {input.label || (
-            <span className="text-muted-foreground">No label</span>
+            <span className="text-muted-foreground">Untitled question</span>
           )}
         </span>
-        <code className="type-code hidden truncate text-[0.75rem] text-muted-foreground/80 sm:inline">
+        <code className="type-code hidden truncate text-[0.75rem] text-muted-foreground/70 sm:inline">
           {input.key}
         </code>
         <span className="ml-auto flex shrink-0 items-center gap-1.5">
-          {issues > 0 ? (
-            <CircleAlert className="size-3.5 text-destructive" />
-          ) : null}
           {input.suggest ? (
             <Badge title="Default follows another answer">
               <Wand2 className="size-3" />
@@ -285,7 +315,7 @@ function Badge({
   return (
     <span
       title={title}
-      className="type-label hidden items-center gap-1 border border-border px-1.5 text-muted-foreground md:inline-flex"
+      className="type-label hidden h-5 items-center gap-1 border border-border px-1.5 text-muted-foreground md:inline-flex"
     >
       {children}
     </span>

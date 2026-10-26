@@ -121,7 +121,7 @@ export function InstallPreview({
       >
         <PaneHeading>
           What Kiln runs
-          <span className="ml-2 font-sans tracking-normal text-muted-foreground/70 normal-case">
+          <span className="type-meta ml-2 text-muted-foreground">
             {brickDeployLabels[brick.deploy.type]}
           </span>
         </PaneHeading>
@@ -133,7 +133,7 @@ export function InstallPreview({
 
 function PaneHeading({ children }: { children: React.ReactNode }) {
   return (
-    <h3 className="type-technical-label border-b border-border bg-card/60 px-5 py-2.5 text-muted-foreground">
+    <h3 className="type-card-title flex h-11 items-center border-b border-border bg-card/50 px-5">
       {children}
     </h3>
   )
