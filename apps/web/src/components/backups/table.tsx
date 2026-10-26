@@ -39,10 +39,8 @@ import {
   BackupTaskFeedback,
   DesktopBackupTaskFeedback,
   backupCanBeRemoved,
-  backupTargetPresentation,
   targetKey,
 } from "@/components/backups/table-row"
-import type { InstanceNameInstance } from "@/components/instance-card"
 import type {
   Backup,
   BackupAvailabilityDestination,
@@ -52,6 +50,7 @@ import type {
   BackupSearchStore,
   BackupSelectionStore,
   BackupStatusFilterStore,
+  BackupTargetIdentity,
 } from "@/components/backups/state"
 import {
   backupDisplayBytes,
@@ -114,7 +113,7 @@ export const BackupTable = React.memo(function BackupTable({
   currentUserId: string
   destinations: ReadonlyArray<BackupAvailabilityDestination>
   dialogStore: BackupDialogStore
-  targetInstances: ReadonlyMap<string, InstanceNameInstance>
+  targetInstances: ReadonlyMap<string, BackupTargetIdentity>
   nameStore: BackupNameStore
   onSortChange: (sort: BackupRunSort, direction: BackupRunSortDirection) => void
   scopeFiltered: boolean
@@ -157,7 +156,6 @@ export const BackupTable = React.memo(function BackupTable({
                 targetKey(backup.targetKind, backup.relayId, backup.targetId)
               )
         }
-        targetName={backup.targetId}
       />
     ),
     [
@@ -262,7 +260,7 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
   currentUserId: string
   destinations: ReadonlyArray<BackupAvailabilityDestination>
   dialogStore: BackupDialogStore
-  targetInstances: ReadonlyMap<string, InstanceNameInstance>
+  targetInstances: ReadonlyMap<string, BackupTargetIdentity>
   nameStore: BackupNameStore
   onSortChange: (sort: BackupRunSort, direction: BackupRunSortDirection) => void
   renderEmpty: (searchActive: boolean, filterActive: boolean) => React.ReactNode
@@ -347,7 +345,6 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
         sortFn: "text",
         cell: ({ row }) => {
           const backup = row.original
-          const target = backupTargetPresentation(backup, backup.targetId)
           const targetAvailable =
             backup.targetKind === "platform"
               ? availableRelayIds.has(backup.relayId)
@@ -358,7 +355,9 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
           return (
             <BackupTargetLink
               available={targetAvailable}
-              displayId={target.id}
+              relayId={backup.relayId}
+              targetId={backup.targetId}
+              targetKind={backup.targetKind}
               instance={targetInstances.get(
                 targetKey(
                   backup.targetKind,
@@ -366,11 +365,6 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
                   backup.targetKind === "platform" ? "kiln" : backup.targetId
                 )
               )}
-              kindLabel={target.kindLabel}
-              name={target.name}
-              relayId={backup.relayId}
-              targetId={backup.targetId}
-              targetKind={backup.targetKind}
             />
           )
         },
@@ -741,7 +735,6 @@ const BackupMobileRow = React.memo(function BackupMobileRow({
   nameStore,
   selectionStore,
   targetAvailable,
-  targetName,
 }: {
   backup: Backup
   canCreate: boolean
@@ -749,13 +742,11 @@ const BackupMobileRow = React.memo(function BackupMobileRow({
   currentUserId: string
   destinations: ReadonlyArray<BackupAvailabilityDestination>
   dialogStore: BackupDialogStore
-  instance?: InstanceNameInstance
+  instance?: BackupTargetIdentity
   nameStore: BackupNameStore
   selectionStore: BackupSelectionStore
   targetAvailable: boolean
-  targetName: string
 }) {
-  const target = backupTargetPresentation(backup, targetName)
   const showsPrimaryTaskFeedback = backupShowsPrimaryTaskFeedback(backup)
   const displayBytes = backupDisplayBytes(backup)
   return (
@@ -777,13 +768,10 @@ const BackupMobileRow = React.memo(function BackupMobileRow({
       <div className="mt-2.5 overflow-hidden rounded-lg border bg-background/45 px-3 py-2.5">
         <BackupTargetLink
           available={targetAvailable}
-          displayId={target.id}
-          instance={instance}
-          kindLabel={target.kindLabel}
-          name={target.name}
           relayId={backup.relayId}
           targetId={backup.targetId}
           targetKind={backup.targetKind}
+          instance={instance}
         />
       </div>
       {showsPrimaryTaskFeedback ? (

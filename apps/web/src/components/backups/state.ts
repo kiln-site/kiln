@@ -3,8 +3,10 @@ import {
   type WorkspaceTableSearchStore,
 } from "@/components/workspace-table"
 import type { BackupRun } from "@/lib/backup-runs"
+import type { InstanceNameInstance } from "@/components/instance-card"
 
 export type Backup = BackupRun
+export type BackupTargetIdentity = InstanceNameInstance & { name: string }
 export type BackupAvailabilityDestination = {
   enabled: boolean
   id: string | null

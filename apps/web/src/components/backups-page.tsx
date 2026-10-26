@@ -55,7 +55,6 @@ import {
 } from "@/components/kiln/kiln-presentation"
 import { ServerScopePicker } from "@/components/server-scope-picker"
 import type { ServerPickerOption } from "@/components/server-scope-picker"
-import type { InstanceNameInstance } from "@/components/instance-card"
 import { backupHasReportedDeleteArtifactProgress } from "@/lib/backup-progress-presentation"
 import {
   readFileDownloadPreferences,
@@ -76,6 +75,7 @@ import {
   type BackupSearchStore,
   type BackupSelectionStore,
   type BackupStatusFilterStore,
+  type BackupTargetIdentity,
 } from "@/components/backups/state"
 import { BackupBulkActions, BackupTable } from "@/components/backups/table"
 import { DataTableWorkspace } from "@/components/data-table-workspace"
@@ -161,15 +161,25 @@ function selectBackupTopology(
 ) {
   return {
     nodes: snapshot.nodes.map(({ relayId }) => ({ relayId })),
-    servers: snapshot.instances.map(({ id, relayId }) => ({ id, relayId })),
+    servers: snapshot.instances.map(
+      ({ brickId, brickSource, id, implementation, name, relayId }) => ({
+        brickId,
+        brickSource,
+        id,
+        implementation,
+        name,
+        relayId,
+      })
+    ),
   }
 }
 
 function selectBackupDatabaseTopology(
   databases: Awaited<ReturnType<typeof getManagedDatabaseDirectory>>
 ) {
-  return databases.map(({ id, relayId, supportsImportExport }) => ({
+  return databases.map(({ id, name, relayId, supportsImportExport }) => ({
     id,
+    name,
     relayId,
     supportsImportExport,
   }))
@@ -381,18 +391,18 @@ export const BackupsPage = React.memo(function BackupsPage({
     return keys
   }, [databases, topology.servers])
   const targetInstances = React.useMemo(() => {
-    const instances = new Map<string, InstanceNameInstance>()
+    const instances = new Map<string, BackupTargetIdentity>()
     for (const server of topology.servers) {
       instances.set(targetKey("instance", server.relayId, server.id), {
-        id: server.id,
+        ...server,
         kind: "server",
-        relayId: server.relayId,
       })
     }
     for (const database of databases) {
       instances.set(targetKey("database", database.relayId, database.id), {
         id: database.id,
         kind: "database",
+        name: database.name,
         relayId: database.relayId,
       })
     }
@@ -400,6 +410,7 @@ export const BackupsPage = React.memo(function BackupsPage({
       instances.set(targetKey("platform", relay.relayId, "kiln"), {
         id: relay.relayId,
         kind: "relay",
+        name: "Kiln",
         platform: true,
         relayId: relay.relayId,
       })
@@ -746,7 +757,7 @@ const BackupDataSurface = React.memo(function BackupDataSurface({
   deleteFeedbackStore: BackupDeleteFeedbackStore
   destinations: ReadonlyArray<BackupAvailabilityDestination>
   dialogStore: BackupDialogStore
-  targetInstances: ReadonlyMap<string, InstanceNameInstance>
+  targetInstances: ReadonlyMap<string, BackupTargetIdentity>
   nameStore: BackupNameStore
   searchStore: BackupSearchStore
   selectedKind: BackupFilters["kind"] | null

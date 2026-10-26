@@ -59,6 +59,7 @@ import type {
   BackupDialogStore,
   BackupFilters,
   BackupNameStore,
+  BackupTargetIdentity,
 } from "@/components/backups/state"
 import { formatBytes } from "@/lib/format-bytes"
 
@@ -905,23 +906,21 @@ function BackupMissingTargetTooltip({
 
 export const BackupTargetLink = React.memo(function BackupTargetLink({
   available,
-  displayId,
   instance,
-  kindLabel,
-  name,
   relayId,
   targetId,
   targetKind,
 }: {
   available: boolean
-  displayId: string
-  instance?: InstanceNameInstance
-  kindLabel: BackupTargetPresentation["kindLabel"]
-  name: string
+  instance?: BackupTargetIdentity
   relayId: string
   targetId: string
   targetKind: Backup["targetKind"]
 }) {
+  const target = backupTargetPresentation(
+    { relayId, targetId, targetKind },
+    instance?.name ?? targetId
+  )
   const fallback: InstanceNameInstance =
     targetKind === "platform"
       ? { id: relayId, kind: "relay", platform: true, relayId }
@@ -934,20 +933,20 @@ export const BackupTargetLink = React.memo(function BackupTargetLink({
     <InstanceCard
       className="w-full"
       instance={instance ?? fallback}
-      name={name}
+      name={target.name}
       nameClassName={
         available
           ? "transition-colors group-hover/target-link:text-primary-ink"
           : "text-muted-foreground"
       }
-      meta={`${kindLabel} · ${displayId.slice(0, 8)}`}
+      meta={`${target.kindLabel} · ${target.id.slice(0, 8)}`}
       metaClassName="font-mono"
     />
   )
   const targetContent = available ? (
     <BackupTargetAnchor
       relayId={relayId}
-      searchId={displayId}
+      searchId={target.id}
       targetId={targetId}
       targetKind={targetKind}
     >
@@ -1188,8 +1187,8 @@ export function backupTargetName(
   )
 }
 
-export function backupTargetPresentation(
-  backup: Backup,
+function backupTargetPresentation(
+  backup: Pick<Backup, "relayId" | "targetId" | "targetKind">,
   targetName: string
 ): BackupTargetPresentation {
   if (backup.targetKind === "platform") {
