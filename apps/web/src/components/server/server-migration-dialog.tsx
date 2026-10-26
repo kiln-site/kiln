@@ -111,8 +111,11 @@ export function ServerMigrationDialog({
       relayId: server.relayId,
     }),
     enabled: open,
-    // Opened once the preview settled; a failure shows as it was, rather
-    // than being asked again and growing into the form. Reopening retries.
+    // Opened once the preview settled, it stays as it was while open: a
+    // failure isn't asked again and grown into the form, nor a form swapped
+    // for a failed refresh. Reopening asks again; starting checks it all.
+    refetchOnReconnect: false,
+    refetchOnWindowFocus: false,
     retryOnMount: false,
   })
   return (
@@ -144,25 +147,25 @@ export function ServerMigrationDialog({
             />
           </div>
         </div>
-        {preview.isPending ? (
-          <div className="type-support flex h-[25rem] items-center justify-center gap-2 text-muted-foreground">
-            <LoaderCircle className="size-4 animate-spin" />
-            Checking where this server can go…
-          </div>
-        ) : preview.isError ? (
-          <p
-            className="type-support flex h-[25rem] items-center justify-center text-destructive"
-            role="alert"
-          >
-            {preview.error.message}
-          </p>
-        ) : (
+        {preview.data ? (
           <MigrationForm
             mode={mode}
             preview={preview.data}
             server={server}
             onDone={() => onOpenChange(false)}
           />
+        ) : preview.isPending ? (
+          <div className="type-support flex h-[25rem] items-center justify-center gap-2 text-muted-foreground">
+            <LoaderCircle className="size-4 animate-spin" />
+            Checking where this server can go…
+          </div>
+        ) : (
+          <p
+            className="type-support flex h-[25rem] items-center justify-center text-destructive"
+            role="alert"
+          >
+            {preview.error?.message}
+          </p>
         )}
       </DialogContent>
     </Dialog>
