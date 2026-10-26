@@ -10,6 +10,7 @@ import {
   ArrowRight,
   ArrowRightLeft,
   Check,
+  ChevronsUpDown,
   Copy,
   Info,
   LoaderCircle,
@@ -30,18 +31,20 @@ import {
   HoverCardTrigger,
 } from "@workspace/ui/components/hover-card"
 import { Input } from "@workspace/ui/components/input"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@workspace/ui/components/select"
 import { Slider } from "@workspace/ui/components/slider"
 import { Switch } from "@workspace/ui/components/switch"
 import { cn } from "@workspace/ui/lib/utils"
 
+import {
+  DrawerPopover,
+  DrawerPopoverContent,
+  DrawerPopoverTrigger,
+} from "@/components/drawer-popover"
 import { InstanceCard } from "@/components/instance-card"
+import {
+  InstancePickerContent,
+  type InstancePickerItem,
+} from "@/components/instance-picker"
 import { LiveServerBrickIcon } from "@/components/server-brick-icon"
 import { formatBytes } from "@/lib/format-bytes"
 import {
@@ -82,7 +85,6 @@ type Status = {
   tone: Tone
 }
 
-const NO_RELAY = "__none__"
 const NAME_LIMIT = 32
 const GIBIBYTE = 1024 ** 3
 
@@ -436,55 +438,13 @@ function MigrationForm({
             name={preview.source.relayName}
           />
         </CardBox>
-        <Select
+        <RelayPicker
+          destinations={destinations}
           disabled={pending || destinations.length === 0}
-          value={selected?.id ?? NO_RELAY}
-          onValueChange={(value) => {
-            if (value && value !== NO_RELAY) setRelayId(value)
-          }}
-        >
-          <SelectTrigger
-            aria-label="Relay"
-            className="h-11 w-full min-w-0 px-2 text-left *:data-[slot=select-value]:flex *:data-[slot=select-value]:min-w-0 *:data-[slot=select-value]:flex-1"
-          >
-            <SelectValue placeholder="No Relay available">
-              {selected ? (
-                <RelayCard
-                  arch={selected.nodeArch}
-                  freeBytes={selected.room ? freeBytes(selected.room) : null}
-                  id={selected.id}
-                  name={selected.name}
-                  tag={relayTag(selected, roomProblemsFor(selected))}
-                />
-              ) : null}
-            </SelectValue>
-          </SelectTrigger>
-          <SelectContent className="min-w-(--radix-select-trigger-width)">
-            {destinations.length === 0 ? (
-              <SelectItem disabled value={NO_RELAY}>
-                No Relay available
-              </SelectItem>
-            ) : (
-              destinations.map((destination) => (
-                <SelectItem
-                  key={destination.id}
-                  className="py-1.5"
-                  value={destination.id}
-                >
-                  <RelayCard
-                    arch={destination.nodeArch}
-                    freeBytes={
-                      destination.room ? freeBytes(destination.room) : null
-                    }
-                    id={destination.id}
-                    name={destination.name}
-                    tag={relayTag(destination, roomProblemsFor(destination))}
-                  />
-                </SelectItem>
-              ))
-            )}
-          </SelectContent>
-        </Select>
+          problemsFor={roomProblemsFor}
+          selected={selected}
+          onSelect={setRelayId}
+        />
       </div>
 
       <section className="grid gap-2">
@@ -654,6 +614,94 @@ function RelayCard({
       }
       showFavorite={false}
     />
+  )
+}
+
+// Where the copy goes, picked from the Relays the person may create game
+// servers on with the searchable picker used across Kiln. Each says whether
+// the copy fits there.
+function RelayPicker({
+  destinations,
+  disabled,
+  onSelect,
+  problemsFor,
+  selected,
+}: {
+  destinations: ReadonlyArray<ServerMigrationDestination>
+  disabled: boolean
+  onSelect: (relayId: string) => void
+  problemsFor: (
+    destination: ServerMigrationDestination
+  ) => ReadonlyArray<MigrationRoomProblem>
+  selected: ServerMigrationDestination | undefined
+}) {
+  const [open, setOpen] = React.useState(false)
+  const items: Array<InstancePickerItem> = destinations.map((destination) => {
+    const tag = relayTag(destination, problemsFor(destination))
+    return {
+      identity: { id: destination.id, kind: "relay", relayId: destination.id },
+      key: destination.id,
+      meta: [
+        destination.nodeArch,
+        destination.room
+          ? `${formatBytes(freeBytes(destination.room))} free`
+          : null,
+        tag?.text,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+      name: destination.name,
+      searchText: destination.id,
+    }
+  })
+  const selectedKeys = React.useMemo(
+    () => new Set(selected ? [selected.id] : []),
+    [selected]
+  )
+  return (
+    <DrawerPopover open={open} onOpenChange={setOpen}>
+      <DrawerPopoverTrigger asChild>
+        <button
+          aria-expanded={open}
+          aria-label="Relay"
+          className="flex h-11 w-full min-w-0 items-center gap-2 rounded-md border border-input/90 bg-input/20 px-2 text-left transition-colors outline-none hover:bg-input/35 focus-visible:border-ring/75 focus-visible:ring-2 focus-visible:ring-ring/40 disabled:pointer-events-none disabled:opacity-50"
+          disabled={disabled}
+          type="button"
+        >
+          {selected ? (
+            <RelayCard
+              arch={selected.nodeArch}
+              freeBytes={selected.room ? freeBytes(selected.room) : null}
+              id={selected.id}
+              name={selected.name}
+              tag={relayTag(selected, problemsFor(selected))}
+            />
+          ) : (
+            <span className="type-label flex-1 text-muted-foreground">
+              No Relay available
+            </span>
+          )}
+          <ChevronsUpDown className="size-4 shrink-0 text-muted-foreground" />
+        </button>
+      </DrawerPopoverTrigger>
+      <DrawerPopoverContent
+        align="start"
+        className="w-[min(26rem,calc(100vw-2rem))] overflow-hidden p-0"
+        title="Choose a Relay"
+      >
+        <InstancePickerContent
+          ariaLabel="Relays"
+          emptyMessage="No Relay can take game servers from you"
+          includeKindGroups={false}
+          items={items}
+          selectedKeys={selectedKeys}
+          onSelect={(item) => {
+            onSelect(item.key)
+            setOpen(false)
+          }}
+        />
+      </DrawerPopoverContent>
+    </DrawerPopover>
   )
 }
 
