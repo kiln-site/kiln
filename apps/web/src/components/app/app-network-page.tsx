@@ -170,6 +170,8 @@ function AppWebRoutes({
 
   return (
     <WebRoutesSection
+      // Another app's routes start fresh, Undo included.
+      key={`${app.relayId}:${app.id}`}
       canWrite={canManage}
       error={state.error}
       kind="app"

@@ -214,6 +214,8 @@ function WebRoutesNetworkPage({
           onRestart={restartPendingRoutes}
         />
         <WebRoutesSection
+          // Another server's routes start fresh, Undo included.
+          key={`${instance.relayId}:${instance.id}`}
           canWrite={
             permissions.networkWrite &&
             instance.managedByRelay &&
