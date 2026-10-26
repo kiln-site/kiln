@@ -1,6 +1,7 @@
 import { z } from "zod"
 
 export { validateBrickIconSvg } from "./brick-icons"
+export * from "./brick-v2.js"
 
 import {
   MAXIMUM_INSTANCE_NAME_LENGTH,

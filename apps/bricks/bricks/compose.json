@@ -1,0 +1,26 @@
+{
+  "$schema": "https://kiln.site/bricks/schema.json",
+  "format": "kiln.brick/v2",
+  "id": "compose",
+  "name": "Docker Compose",
+  "kind": "app",
+  "summary": "Run a multi-container Compose project from a repository.",
+  "author": "Kiln",
+  "icon": "../icons/compose.svg",
+  "color": "#4b98b0",
+  "tags": ["docker", "git", "generic"],
+  "inputs": [
+    {
+      "key": "compose_path",
+      "label": "Compose file",
+      "type": "text",
+      "help": "Where the Compose file is in the repository.",
+      "default": "compose.yaml",
+      "max": 1024
+    }
+  ],
+  "deploy": {
+    "type": "compose",
+    "path": "{{ compose_path }}"
+  }
+}

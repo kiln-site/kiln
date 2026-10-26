@@ -1,0 +1,62 @@
+{
+  "$schema": "https://kiln.site/bricks/schema.json",
+  "format": "kiln.brick/v2",
+  "id": "palworld",
+  "name": "Palworld",
+  "kind": "game-server",
+  "summary": "Native Linux dedicated server installed and updated through SteamCMD.",
+  "author": "Kiln",
+  "icon": "../icons/palworld.svg",
+  "color": "#55b9d1",
+  "tags": ["steam", "survival", "direct"],
+  "platforms": ["amd64"],
+  "inputs": [
+    {
+      "key": "server_args",
+      "label": "Server arguments",
+      "type": "text",
+      "help": "Extra arguments passed directly to PalServer.",
+      "default": "Pal -publiclobby -useperfthreads -NoAsyncLoadingThread -UseMultithreadForDS -port=8211 -publicport=8211",
+      "optional": true,
+      "advanced": true,
+      "max": 2048
+    }
+  ],
+  "deploy": {
+    "type": "image",
+    "image": "ghcr.io/kiln-site/bricks-steamcmd:latest",
+    "user": "1000:1000",
+    "env": {
+      "KILN_VERSION": "latest",
+      "KILN_STEAM_APP_ID": "2394010",
+      "KILN_STEAM_EXECUTABLE": "Pal/Binaries/Linux/PalServer-Linux-Shipping",
+      "KILN_INSTALLATION_MARKER": ".kiln-ember-installed",
+      "KILN_SERVER_ARGS": "{{ server_args }}"
+    },
+    "ports": [
+      {
+        "name": "game",
+        "port": 8211,
+        "protocol": "udp"
+      }
+    ],
+    "volumes": [
+      {
+        "path": "/server"
+      }
+    ],
+    "ready": {
+      "type": "log",
+      "match": ["Setting breakpad minidump AppID = 2394010"]
+    },
+    "resources": {
+      "memory": "16G",
+      "pids": 2048
+    }
+  },
+  "game": {
+    "title": "Palworld",
+    "routing": "direct",
+    "hostname": "{{ kiln.brick }}"
+  }
+}

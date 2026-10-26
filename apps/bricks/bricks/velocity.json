@@ -1,0 +1,116 @@
+{
+  "$schema": "https://kiln.site/bricks/schema.json",
+  "format": "kiln.brick/v2",
+  "id": "velocity",
+  "name": "Velocity",
+  "kind": "game-server",
+  "summary": "Modern Minecraft proxy running on Kiln's standard Java Ember.",
+  "author": "Kiln",
+  "icon": "../icons/velocity.svg",
+  "color": "#4b98b0",
+  "tags": ["minecraft", "java"],
+  "platforms": ["amd64", "arm64"],
+  "inputs": [
+    {
+      "key": "version",
+      "label": "Velocity version",
+      "type": "text",
+      "help": "Velocity release to install.",
+      "default": "4.1.2-SNAPSHOT",
+      "pattern": "^[0-9]+(?:\\.[0-9]+){1,2}(?:-SNAPSHOT)?$",
+      "max": 32
+    },
+    {
+      "key": "java_version",
+      "label": "Java version",
+      "type": "select",
+      "help": "Picked from the version; override it when needed.",
+      "default": "25",
+      "options": ["11", "17", "21", "25"],
+      "suggest": [
+        {
+          "when": "version",
+          "matches": "^[4-9]\\.",
+          "value": "25"
+        },
+        {
+          "when": "version",
+          "matches": "^3\\.(?:[5-9]|\\d{2,})\\.",
+          "value": "21"
+        },
+        {
+          "when": "version",
+          "matches": "^3\\.[34]\\.",
+          "value": "17"
+        },
+        {
+          "when": "version",
+          "matches": "^[12]\\.",
+          "value": "11"
+        }
+      ]
+    },
+    {
+      "key": "server_jar_file",
+      "label": "Server jar file",
+      "type": "text",
+      "help": "Filename Kiln downloads and starts.",
+      "default": "velocity.jar",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._\\-]{0,123}\\.jar$",
+      "max": 128,
+      "advanced": true
+    },
+    {
+      "key": "java_args",
+      "label": "Java arguments",
+      "type": "text",
+      "help": "Extra JVM flags. Heap size and startup command arguments are managed by Kiln and cannot be set here.",
+      "default": "-XX:+UseG1GC -XX:G1HeapRegionSize=4M -XX:+UnlockExperimentalVMOptions -XX:+ParallelRefProcEnabled -XX:+AlwaysPreTouch -XX:MaxInlineLevel=15",
+      "optional": true,
+      "advanced": true,
+      "pattern": "^(?!.*(?:^|\\s)(?:@(?!@)\\S+|-Xm[sx]\\S*|-XX:(?:-UseContainerSupport|-UseCGroupMemoryLimitForHeap|InitialHeapSize|MaxHeapSize|SoftMaxHeapSize|MaxRAMPercentage|MinRAMPercentage|InitialRAMPercentage|MaxRAMFraction|InitialRAMFraction|MinRAMFraction|MaxRAM|VMOptionsFile|Flags)(?:=\\S*)?|--nogui|-jar)(?:\\s|$)).*$",
+      "max": 2048
+    }
+  ],
+  "deploy": {
+    "type": "image",
+    "image": "ghcr.io/kiln-site/bricks-java:{{ java_version }}",
+    "env": {
+      "KILN_IMPLEMENTATION": "velocity",
+      "KILN_VERSION": "{{ version }}",
+      "KILN_ARTIFACT_URL": "https://mcjarfiles.com/api/get-jar/proxies/velocity/{{ version }}",
+      "KILN_ARTIFACT_FILE": "{{ server_jar_file }}",
+      "KILN_INSTALLATION_MARKER": ".kiln-ember-installed",
+      "KILN_SERVER_KIND": "application",
+      "KILN_SERVER_ARGS": "",
+      "KILN_JAVA_ARGS": "{{ java_args }}",
+      "KILN_JAVA_MAX_RAM_PERCENTAGE": "75.0",
+      "MIN_RAM": "512M"
+    },
+    "ports": [
+      {
+        "name": "game",
+        "port": 25565
+      }
+    ],
+    "volumes": [
+      {
+        "path": "/server"
+      }
+    ],
+    "ready": {
+      "type": "log",
+      "match": ["Done ("]
+    },
+    "resources": {
+      "memory": "1G",
+      "pids": 512
+    }
+  },
+  "game": {
+    "title": "Minecraft",
+    "routing": "minecraft",
+    "hostname": "{{ kiln.brick }}",
+    "stop": ["end", "/end", "shutdown", "/shutdown", "stop", "/stop"]
+  }
+}

@@ -40,6 +40,9 @@ export function SiteFooter() {
         <div className="grid grid-cols-2 gap-x-12 gap-y-8 sm:grid-cols-3">
           <FooterGroup title="Product">
             <FooterLink>
+              <Link to="/bricks">Bricks</Link>
+            </FooterLink>
+            <FooterLink>
               <Link to="/pricing">Pricing</Link>
             </FooterLink>
             <FooterLink>

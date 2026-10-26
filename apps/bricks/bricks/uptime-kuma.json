@@ -1,0 +1,39 @@
+{
+  "$schema": "https://kiln.site/bricks/schema.json",
+  "format": "kiln.brick/v2",
+  "id": "uptime-kuma",
+  "name": "Uptime Kuma",
+  "kind": "app",
+  "summary": "Self-hosted monitoring for your sites, services, and game servers.",
+  "author": "Kiln",
+  "color": "#6aa54f",
+  "tags": ["monitoring"],
+  "platforms": ["amd64", "arm64"],
+  "links": {
+    "homepage": "https://uptime.kuma.pet",
+    "source": "https://github.com/louislam/uptime-kuma"
+  },
+  "deploy": {
+    "type": "image",
+    "image": "louislam/uptime-kuma:2",
+    "ports": [
+      {
+        "name": "web",
+        "port": 3001
+      }
+    ],
+    "volumes": [
+      {
+        "path": "/app/data"
+      }
+    ],
+    "ready": {
+      "type": "http",
+      "path": "/",
+      "port": "web"
+    },
+    "resources": {
+      "memory": "512M"
+    }
+  }
+}

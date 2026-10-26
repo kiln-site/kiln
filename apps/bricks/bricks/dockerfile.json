@@ -1,0 +1,26 @@
+{
+  "$schema": "https://kiln.site/bricks/schema.json",
+  "format": "kiln.brick/v2",
+  "id": "dockerfile",
+  "name": "Dockerfile",
+  "kind": "app",
+  "summary": "Build a repository's Dockerfile on every push and run it.",
+  "author": "Kiln",
+  "icon": "../icons/dockerfile.svg",
+  "color": "#3e9e83",
+  "tags": ["docker", "git", "generic"],
+  "inputs": [
+    {
+      "key": "dockerfile_path",
+      "label": "Dockerfile",
+      "type": "text",
+      "help": "Where the Dockerfile is in the repository.",
+      "default": "Dockerfile",
+      "max": 1024
+    }
+  ],
+  "deploy": {
+    "type": "dockerfile",
+    "path": "{{ dockerfile_path }}"
+  }
+}

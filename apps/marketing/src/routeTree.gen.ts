@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as BricksRouteRouteImport } from './routes/bricks/route'
 import { Route as DiscordRouteImport } from './routes/discord'
 import { Route as DonateRouteImport } from './routes/donate'
 import { Route as ForksLegalRouteImport } from './routes/forks-legal'
@@ -21,10 +22,19 @@ import { Route as SponsorRouteImport } from './routes/sponsor'
 import { Route as TermsRouteImport } from './routes/terms'
 import { Route as TwitterRouteImport } from './routes/twitter'
 import { Route as XRouteImport } from './routes/x'
+import { Route as BricksIndexRouteImport } from './routes/bricks/index'
+import { Route as BricksBrickIdRouteImport } from './routes/bricks/$brickId'
+import { Route as BricksNewRouteImport } from './routes/bricks/new'
+import { Route as BricksSchemaDotjsonRouteImport } from './routes/bricks/schema[.]json'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BricksRouteRoute = BricksRouteRouteImport.update({
+  id: '/bricks',
+  path: '/bricks',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DiscordRoute = DiscordRouteImport.update({
@@ -82,9 +92,30 @@ const XRoute = XRouteImport.update({
   path: '/x',
   getParentRoute: () => rootRouteImport,
 } as any)
+const BricksIndexRoute = BricksIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => BricksRouteRoute,
+} as any)
+const BricksBrickIdRoute = BricksBrickIdRouteImport.update({
+  id: '/$brickId',
+  path: '/$brickId',
+  getParentRoute: () => BricksRouteRoute,
+} as any)
+const BricksNewRoute = BricksNewRouteImport.update({
+  id: '/new',
+  path: '/new',
+  getParentRoute: () => BricksRouteRoute,
+} as any)
+const BricksSchemaDotjsonRoute = BricksSchemaDotjsonRouteImport.update({
+  id: '/schema.json',
+  path: '/schema.json',
+  getParentRoute: () => BricksRouteRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/bricks': typeof BricksRouteRouteWithChildren
   '/discord': typeof DiscordRoute
   '/donate': typeof DonateRoute
   '/forks-legal': typeof ForksLegalRoute
@@ -96,6 +127,10 @@ export interface FileRoutesByFullPath {
   '/terms': typeof TermsRoute
   '/twitter': typeof TwitterRoute
   '/x': typeof XRoute
+  '/bricks/$brickId': typeof BricksBrickIdRoute
+  '/bricks/new': typeof BricksNewRoute
+  '/bricks/schema.json': typeof BricksSchemaDotjsonRoute
+  '/bricks/': typeof BricksIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -110,10 +145,15 @@ export interface FileRoutesByTo {
   '/terms': typeof TermsRoute
   '/twitter': typeof TwitterRoute
   '/x': typeof XRoute
+  '/bricks/$brickId': typeof BricksBrickIdRoute
+  '/bricks/new': typeof BricksNewRoute
+  '/bricks/schema.json': typeof BricksSchemaDotjsonRoute
+  '/bricks': typeof BricksIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/bricks': typeof BricksRouteRouteWithChildren
   '/discord': typeof DiscordRoute
   '/donate': typeof DonateRoute
   '/forks-legal': typeof ForksLegalRoute
@@ -125,11 +165,16 @@ export interface FileRoutesById {
   '/terms': typeof TermsRoute
   '/twitter': typeof TwitterRoute
   '/x': typeof XRoute
+  '/bricks/$brickId': typeof BricksBrickIdRoute
+  '/bricks/new': typeof BricksNewRoute
+  '/bricks/schema.json': typeof BricksSchemaDotjsonRoute
+  '/bricks/': typeof BricksIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/bricks'
     | '/discord'
     | '/donate'
     | '/forks-legal'
@@ -141,6 +186,10 @@ export interface FileRouteTypes {
     | '/terms'
     | '/twitter'
     | '/x'
+    | '/bricks/$brickId'
+    | '/bricks/new'
+    | '/bricks/schema.json'
+    | '/bricks/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -155,9 +204,14 @@ export interface FileRouteTypes {
     | '/terms'
     | '/twitter'
     | '/x'
+    | '/bricks/$brickId'
+    | '/bricks/new'
+    | '/bricks/schema.json'
+    | '/bricks'
   id:
     | '__root__'
     | '/'
+    | '/bricks'
     | '/discord'
     | '/donate'
     | '/forks-legal'
@@ -169,10 +223,15 @@ export interface FileRouteTypes {
     | '/terms'
     | '/twitter'
     | '/x'
+    | '/bricks/$brickId'
+    | '/bricks/new'
+    | '/bricks/schema.json'
+    | '/bricks/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  BricksRouteRoute: typeof BricksRouteRouteWithChildren
   DiscordRoute: typeof DiscordRoute
   DonateRoute: typeof DonateRoute
   ForksLegalRoute: typeof ForksLegalRoute
@@ -193,6 +252,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/bricks': {
+      id: '/bricks'
+      path: '/bricks'
+      fullPath: '/bricks'
+      preLoaderRoute: typeof BricksRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/discord': {
@@ -272,11 +338,58 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof XRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/bricks/': {
+      id: '/bricks/'
+      path: '/'
+      fullPath: '/bricks/'
+      preLoaderRoute: typeof BricksIndexRouteImport
+      parentRoute: typeof BricksRouteRoute
+    }
+    '/bricks/$brickId': {
+      id: '/bricks/$brickId'
+      path: '/$brickId'
+      fullPath: '/bricks/$brickId'
+      preLoaderRoute: typeof BricksBrickIdRouteImport
+      parentRoute: typeof BricksRouteRoute
+    }
+    '/bricks/new': {
+      id: '/bricks/new'
+      path: '/new'
+      fullPath: '/bricks/new'
+      preLoaderRoute: typeof BricksNewRouteImport
+      parentRoute: typeof BricksRouteRoute
+    }
+    '/bricks/schema.json': {
+      id: '/bricks/schema.json'
+      path: '/schema.json'
+      fullPath: '/bricks/schema.json'
+      preLoaderRoute: typeof BricksSchemaDotjsonRouteImport
+      parentRoute: typeof BricksRouteRoute
+    }
   }
 }
 
+interface BricksRouteRouteChildren {
+  BricksBrickIdRoute: typeof BricksBrickIdRoute
+  BricksNewRoute: typeof BricksNewRoute
+  BricksSchemaDotjsonRoute: typeof BricksSchemaDotjsonRoute
+  BricksIndexRoute: typeof BricksIndexRoute
+}
+
+const BricksRouteRouteChildren: BricksRouteRouteChildren = {
+  BricksBrickIdRoute: BricksBrickIdRoute,
+  BricksNewRoute: BricksNewRoute,
+  BricksSchemaDotjsonRoute: BricksSchemaDotjsonRoute,
+  BricksIndexRoute: BricksIndexRoute,
+}
+
+const BricksRouteRouteWithChildren = BricksRouteRoute._addFileChildren(
+  BricksRouteRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  BricksRouteRoute: BricksRouteRouteWithChildren,
   DiscordRoute: DiscordRoute,
   DonateRoute: DonateRoute,
   ForksLegalRoute: ForksLegalRoute,

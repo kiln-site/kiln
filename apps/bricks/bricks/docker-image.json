@@ -1,0 +1,26 @@
+{
+  "$schema": "https://kiln.site/bricks/schema.json",
+  "format": "kiln.brick/v2",
+  "id": "docker-image",
+  "name": "Docker image",
+  "kind": "app",
+  "summary": "Run any image from Docker Hub, GHCR, or your own registry.",
+  "author": "Kiln",
+  "icon": "../icons/docker.svg",
+  "color": "#5f83cb",
+  "tags": ["docker", "generic"],
+  "inputs": [
+    {
+      "key": "image",
+      "label": "Image",
+      "type": "text",
+      "help": "The image and tag to run.",
+      "placeholder": "nginx:1.29",
+      "max": 512
+    }
+  ],
+  "deploy": {
+    "type": "image",
+    "image": "{{ image }}"
+  }
+}

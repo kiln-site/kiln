@@ -1,0 +1,85 @@
+{
+  "$schema": "https://kiln.site/bricks/schema.json",
+  "format": "kiln.brick/v2",
+  "id": "postgres",
+  "name": "PostgreSQL",
+  "kind": "database",
+  "summary": "The relational database most apps reach for first.",
+  "author": "Kiln",
+  "icon": "../icons/postgres.svg",
+  "color": "#5f83cb",
+  "tags": ["sql", "relational"],
+  "platforms": ["amd64", "arm64"],
+  "links": {
+    "homepage": "https://www.postgresql.org",
+    "docs": "https://www.postgresql.org/docs/17/"
+  },
+  "inputs": [
+    {
+      "key": "database",
+      "label": "Database name",
+      "type": "text",
+      "help": "The database Kiln creates on first start.",
+      "default": "app",
+      "pattern": "^[a-z][a-z0-9_]{0,47}$"
+    },
+    {
+      "key": "username",
+      "label": "Username",
+      "type": "text",
+      "help": "The user apps connect as.",
+      "default": "kiln",
+      "pattern": "^[a-z][a-z0-9_]{0,31}$"
+    },
+    {
+      "key": "password",
+      "label": "Password",
+      "type": "secret",
+      "help": "Leave it to Kiln to make a strong one.",
+      "generate": true,
+      "min": 24,
+      "max": 256
+    }
+  ],
+  "deploy": {
+    "type": "image",
+    "image": "postgres:17",
+    "env": {
+      "POSTGRES_DB": "{{ database }}",
+      "POSTGRES_USER": "{{ username }}",
+      "POSTGRES_PASSWORD": "{{ password }}"
+    },
+    "ports": [
+      {
+        "name": "postgres",
+        "port": 5432
+      }
+    ],
+    "volumes": [
+      {
+        "path": "/var/lib/postgresql/data"
+      }
+    ],
+    "ready": {
+      "type": "command",
+      "command": "pg_isready -h 127.0.0.1 -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""
+    },
+    "resources": {
+      "memory": "1G"
+    }
+  },
+  "database": {
+    "engine": "postgres",
+    "language": "sql",
+    "port": "postgres",
+    "viewer": "postgres",
+    "connection": "postgres://{{ username }}:{{ password }}@{{ kiln.host }}:5432/{{ database }}",
+    "backup": {
+      "command": "exec pg_dump --clean --if-exists --no-owner --username \"$POSTGRES_USER\" --dbname \"$POSTGRES_DB\"",
+      "extension": "sql"
+    },
+    "restore": {
+      "command": "exec psql --set ON_ERROR_STOP=on --username \"$POSTGRES_USER\" --dbname \"$POSTGRES_DB\""
+    }
+  }
+}

@@ -1,0 +1,68 @@
+{
+  "$schema": "https://kiln.site/bricks/schema.json",
+  "format": "kiln.brick/v2",
+  "id": "valkey",
+  "name": "Valkey",
+  "kind": "database",
+  "summary": "Open-source, Redis-compatible key-value store from the Linux Foundation.",
+  "author": "Kiln",
+  "icon": "../icons/valkey.svg",
+  "color": "#7763a3",
+  "tags": ["key-value", "cache"],
+  "platforms": ["amd64", "arm64"],
+  "links": {
+    "homepage": "https://valkey.io"
+  },
+  "inputs": [
+    {
+      "key": "password",
+      "label": "Password",
+      "type": "secret",
+      "help": "Leave it to Kiln to make a strong one.",
+      "generate": true,
+      "min": 24,
+      "max": 256
+    }
+  ],
+  "deploy": {
+    "type": "image",
+    "image": "valkey/valkey:8",
+    "command": [
+      "valkey-server",
+      "--appendonly",
+      "yes",
+      "--aclfile",
+      "/data/users.acl"
+    ],
+    "files": [
+      {
+        "path": "/data/users.acl",
+        "content": "user default on >{{ password }} ~* &* +@all\n"
+      }
+    ],
+    "ports": [
+      {
+        "name": "valkey",
+        "port": 6379
+      }
+    ],
+    "volumes": [
+      {
+        "path": "/data"
+      }
+    ],
+    "ready": {
+      "type": "command",
+      "command": "valkey-cli ping | grep -qE '^(PONG|NOAUTH)'"
+    },
+    "resources": {
+      "memory": "256M"
+    }
+  },
+  "database": {
+    "engine": "valkey",
+    "language": "redis",
+    "port": "valkey",
+    "connection": "redis://default:{{ password }}@{{ kiln.host }}:6379"
+  }
+}

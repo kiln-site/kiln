@@ -1,0 +1,68 @@
+{
+  "$schema": "https://kiln.site/bricks/schema.json",
+  "format": "kiln.brick/v2",
+  "id": "redis",
+  "name": "Redis",
+  "kind": "database",
+  "summary": "In-memory key-value store for caches, queues, and sessions.",
+  "author": "Kiln",
+  "icon": "../icons/redis.svg",
+  "color": "#e67e7e",
+  "tags": ["key-value", "cache"],
+  "platforms": ["amd64", "arm64"],
+  "links": {
+    "homepage": "https://redis.io"
+  },
+  "inputs": [
+    {
+      "key": "password",
+      "label": "Password",
+      "type": "secret",
+      "help": "Leave it to Kiln to make a strong one.",
+      "generate": true,
+      "min": 24,
+      "max": 256
+    }
+  ],
+  "deploy": {
+    "type": "image",
+    "image": "redis:8",
+    "command": [
+      "redis-server",
+      "--appendonly",
+      "yes",
+      "--aclfile",
+      "/data/users.acl"
+    ],
+    "files": [
+      {
+        "path": "/data/users.acl",
+        "content": "user default on >{{ password }} ~* &* +@all\n"
+      }
+    ],
+    "ports": [
+      {
+        "name": "redis",
+        "port": 6379
+      }
+    ],
+    "volumes": [
+      {
+        "path": "/data"
+      }
+    ],
+    "ready": {
+      "type": "command",
+      "command": "redis-cli ping | grep -qE '^(PONG|NOAUTH)'"
+    },
+    "resources": {
+      "memory": "256M"
+    }
+  },
+  "database": {
+    "engine": "redis",
+    "language": "redis",
+    "port": "redis",
+    "connection": "redis://default:{{ password }}@{{ kiln.host }}:6379"
+  }
+}

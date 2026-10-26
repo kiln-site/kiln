@@ -1,0 +1,27 @@
+{
+  "format": "kiln.catalog/v2",
+  "name": "Kiln",
+  "author": "QarthO",
+  "summary": "The Bricks Kiln maintains: game servers, databases, and every way to deploy an app.",
+  "links": {
+    "docs": "https://kiln.site/docs",
+    "support": "https://discord.gg/gu76VAtSK5"
+  },
+  "bricks": [
+    "bricks/paper.json",
+    "bricks/folia.json",
+    "bricks/fabric.json",
+    "bricks/velocity.json",
+    "bricks/palworld.json",
+    "bricks/postgres.json",
+    "bricks/mysql.json",
+    "bricks/mariadb.json",
+    "bricks/redis.json",
+    "bricks/valkey.json",
+    "bricks/docker-image.json",
+    "bricks/dockerfile.json",
+    "bricks/compose.json",
+    "bricks/static-site.json",
+    "bricks/uptime-kuma.json"
+  ]
+}
