@@ -112,6 +112,56 @@ export const notifyUsersEffect = Effect.fn("notifications.notify")(function* (
 })
 
 /**
+ * Delivers the user a notification that takes the place of their open ones
+ * of its kind, as a running report does: those are cleared, and the new one
+ * arrives as news. `content` gets the newest one's content while it's unread,
+ * to fold in what it said. Inside a transaction it commits with it; then
+ * `publishNotificationChange`.
+ */
+export const replaceNotificationEffect = Effect.fn("notifications.replace")(
+  function* (
+    userId: string,
+    kind: NotificationKind,
+    content: (unread: NotificationContent | null) => NotificationContent
+  ) {
+    const database = yield* Database
+    const table = databaseTable("notification")
+    const now = yield* Clock.currentTimeMillis
+    return yield* database.transaction("notifications.replace", (tx) =>
+      Effect.gen(function* () {
+        const open = yield* tx.queryRows<NotificationRow>(
+          `SELECT id, kind, data, created_at, read_at FROM ${table}
+            WHERE user_id = ? AND kind = ? AND dismissed_at IS NULL
+            ORDER BY created_at DESC, id DESC
+            FOR UPDATE`,
+          [userId, kind]
+        )
+        const newest = open[0]
+        const unread =
+          newest && newest.read_at === null
+            ? Option.getOrNull(
+                decodeNotificationContent(newest.kind, newest.data)
+              )
+            : null
+        if (open.length)
+          yield* tx.execute(
+            `UPDATE ${table}
+                SET dismissed_at = ?, read_at = COALESCE(read_at, ?),
+                    push_pending = NULL
+              WHERE id IN (${open.map(() => "?").join(", ")})`,
+            [now, now, ...open.map((row) => row.id)]
+          )
+        yield* notifyUsersEffect(
+          [userId],
+          `${kind}:${randomUUID()}`,
+          content(unread)
+        )
+      })
+    )
+  }
+)
+
+/**
  * Clears notifications that no longer apply, as an update on offer once it's
  * installed, for everyone who has them. Answers whose inboxes changed, for
  * `publishNotificationChange`; their devices close the cleared ones.

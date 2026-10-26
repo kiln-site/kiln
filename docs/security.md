@@ -65,9 +65,14 @@ inventory takes a few seconds.
 
 ## Notifications
 
-When Grype finds a vulnerability a resource's people haven't heard of, they get
-one notification for the resource, in the inbox and on devices with push
-notifications on. It goes to people who can act on it:
+When Grype finds vulnerabilities a resource's people haven't heard of, each of
+them gets a vulnerability report, in the inbox and on devices with push
+notifications on. A person has one report at a time: a newer one replaces it,
+adding in what it said while it's unread, so the inbox never fills with one
+notification per resource. It says how many new vulnerabilities there are, the
+most severe, how many are known to be exploited, and where. Its **Review**
+button opens the Security page, narrowed to the resource when there's one. It
+goes to people who can act on it:
 
 | Resource                           | Permission                     |
 | ---------------------------------- | ------------------------------ |
@@ -81,9 +86,11 @@ the Security section turns these on or off in Kiln and for push like any other
 notification, and chooses the least severe vulnerability that notifies (high
 and above by default) and whether only ones an update fixes do (on by
 default). Vulnerabilities known to be exploited notify either way. A
-vulnerability notifies once per resource while it stays, again when a fix
-comes out for it, and again if it goes away and comes back. A notification
-opens its resource, whose Info page says what it has and what fixes it.
+vulnerability is reported once per resource while it stays, again when a fix
+comes out for it, and again if it goes away and comes back. People who aren't
+platform administrators can't open the Security page, so their report opens
+its resource when there's one; each resource's Info page says what it has and
+what fixes it.
 
 ## Running it
 

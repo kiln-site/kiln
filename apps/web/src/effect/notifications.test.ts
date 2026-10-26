@@ -9,6 +9,7 @@ import {
   listNotificationsEffect,
   markNotificationsReadEffect,
   notifyUsersEffect,
+  replaceNotificationEffect,
   resolveInvitationNotificationsEffect,
   resolveNotificationsEffect,
 } from "@/effect/notifications"
@@ -158,6 +159,65 @@ describeMysql("notifications", () => {
         yield* notifyUsersEffect(["user-b"], "kiln.release:0.3.0", release)
         assert.deepStrictEqual(yield* contents("user-b"), [])
       })
+    )
+
+    it.effect(
+      "keeps one report, folding in the one it replaces while unread",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* insertUser("user-a")
+          yield* insertUser("user-b")
+          const report = (count: number): NotificationContent => ({
+            count,
+            kind: "security.report",
+            knownExploited: 0,
+            resources: [removed.resource],
+            severity: "high",
+          })
+          // Adds the unread report's count to the news.
+          const replace = (userId: string, count: number) =>
+            replaceNotificationEffect(userId, "security.report", (unread) =>
+              report(
+                count + (unread?.kind === "security.report" ? unread.count : 0)
+              )
+            )
+
+          yield* TestClock.setTime(1_000)
+          yield* replace("user-a", 2)
+          yield* replace("user-b", 1)
+          yield* notifyUsersEffect(
+            ["user-a"],
+            "access.removed:grant-a:1",
+            removed
+          )
+          yield* TestClock.setTime(2_000)
+          yield* replace("user-a", 3)
+          // The new report is the newest, and the others' report is theirs.
+          assert.deepStrictEqual(yield* contents("user-a"), [
+            { content: report(5), read: false },
+            { content: removed, read: false },
+          ])
+          assert.deepStrictEqual(yield* contents("user-b"), [
+            { content: report(1), read: false },
+          ])
+
+          // One already read is replaced by just the news.
+          yield* markNotificationsReadEffect("user-a", "all")
+          yield* replace("user-a", 4)
+          assert.deepStrictEqual(yield* contents("user-a"), [
+            { content: report(4), read: false },
+            { content: removed, read: true },
+          ])
+
+          // And after it's cleared, the news arrives on its own.
+          yield* clearNotificationsEffect("user-a", 2_000)
+          yield* TestClock.setTime(3_000)
+          yield* replace("user-a", 1)
+          assert.deepStrictEqual(yield* contents("user-a"), [
+            { content: report(1), read: false },
+          ])
+        })
     )
 
     it.effect("marks only the user's own notifications read", () =>

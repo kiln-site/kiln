@@ -155,9 +155,7 @@ export const NotificationSettingsPage = React.memo(
               {group.id === "security" ? (
                 <SecurityPreferences
                   choice={preferences.security}
-                  disabled={
-                    !preferences.kinds["security.vulnerabilities"].inbox
-                  }
+                  disabled={!preferences.kinds["security.report"].inbox}
                   onChange={save}
                 />
               ) : null}

@@ -17,9 +17,10 @@ import { Cause, Clock, Effect, Fiber, Queue } from "effect"
 import { ExternalServiceError } from "@/effect/errors"
 import { Grype } from "@/effect/grype"
 import { loadNotificationPreferencesEffect } from "@/effect/notification-preferences"
+import { Database } from "@/effect/database"
 import {
-  notifyUsersEffect,
   publishNotificationChange,
+  replaceNotificationEffect,
 } from "@/effect/notifications"
 import { forkAppWorker } from "@/effect/runtime"
 import {
@@ -40,7 +41,10 @@ import {
   type DueInventory,
   type SecurityAnnouncement,
 } from "@/effect/security"
-import type { NotificationContent } from "@/lib/notifications"
+import type {
+  NotificationContent,
+  NotificationResource,
+} from "@/lib/notifications"
 import { relayConnectionFeatures, relayRpc } from "@/lib/relay-connection"
 import {
   listPersistedRelaysEffect,
@@ -396,9 +400,6 @@ function wanted(
 const announceEffect = Effect.fn("Security.announce")(function* (
   relayId: string
 ) {
-  // Delivered before they're recorded as told, so a failure partway is
-  // tried again next sweep; notifications already delivered are skipped by
-  // their keys.
   const { announcements, changes } =
     yield* pendingSecurityAnnouncementsEffect(relayId)
   if (!announcements.length) {
@@ -406,7 +407,8 @@ const announceEffect = Effect.fn("Security.announce")(function* (
     return
   }
   const names = yield* securityResourceNamesEffect(relayId)
-  const notified = new Set<string>()
+  // What each person wants to hear of, per resource.
+  const news = new Map<string, Array<ResourceNews>>()
   for (const announcement of announcements) {
     const { resourceId, resourceType } = announcement
     const recipients = yield* resourceAudienceEffect(
@@ -416,98 +418,75 @@ const announceEffect = Effect.fn("Security.announce")(function* (
     // Whether it reaches their inbox and devices is the notification's own
     // choice; which vulnerabilities notify at all is the security one.
     const preferences = yield* loadNotificationPreferencesEffect(recipients)
-    // People who want the same findings get the same notification.
-    const groups = new Map<
-      string,
-      { findings: Array<AnnouncedFinding>; users: Array<string> }
-    >()
     for (const userId of recipients) {
       const findings = wanted(
         announcement.findings,
         preferences.get(userId)?.security ?? defaultSecurityNotificationSettings
       )
       if (!findings.length) continue
-      // Each finding as it is now: a fix coming out, its being exploited, a
-      // new severity, or its coming back makes it a new notification.
-      const key = [
-        ...new Set(
-          findings.map((finding) =>
-            [
-              finding.vulnerabilityId,
-              finding.packageName,
-              finding.fixable ? "fixed" : "",
-              finding.knownExploited ? "exploited" : "",
-              finding.severity,
-              finding.firstSeenAt,
-            ].join("\u0000")
-          )
-        ),
-      ]
-        .sort()
-        .join("\u0001")
-      const group = groups.get(key) ?? { findings, users: [] }
-      group.users.push(userId)
-      groups.set(key, group)
-    }
-    for (const [key, group] of groups) {
-      const content = notificationContent(announcement, group.findings, names)
-      const sourceKey = `security:${resourceType}:${resourceId}:${createHash(
-        "sha256"
-      )
-        .update(`${announcement.component ?? ""}\u0000${key}`)
-        .digest("hex")
-        .slice(0, 32)}`
-      const delivered = yield* notifyUsersEffect(
-        group.users,
-        sourceKey,
-        content
-      )
-      if (delivered > 0) for (const user of group.users) notified.add(user)
+      const resource = {
+        id: resourceId,
+        name:
+          names.get(`${resourceType}:${resourceId}`) ??
+          (resourceType === "relay" ? "Relay" : resourceId.slice(0, 8)),
+        relayId,
+        type: resourceType,
+      }
+      news.set(userId, [...(news.get(userId) ?? []), { findings, resource }])
     }
   }
-  if (notified.size) publishNotificationChange([...notified])
-  yield* recordSecurityAnnouncementsEffect(relayId, changes)
+  // Each person gets one report in place of the last, committed with what
+  // it records as told, so a failure partway tells nobody twice.
+  const database = yield* Database
+  yield* database.transaction("Security.announce", () =>
+    Effect.gen(function* () {
+      for (const [userId, items] of news)
+        yield* replaceNotificationEffect(userId, "security.report", (unread) =>
+          reportContent(items, unread)
+        )
+      yield* recordSecurityAnnouncementsEffect(relayId, changes)
+    })
+  )
+  publishNotificationChange([...news.keys()])
 })
 
-function notificationContent(
-  announcement: SecurityAnnouncement,
-  findings: ReadonlyArray<AnnouncedFinding>,
-  names: ReadonlyMap<string, string>
+interface ResourceNews {
+  findings: ReadonlyArray<AnnouncedFinding>
+  resource: NotificationResource
+}
+
+// The report for this news, adding in the unread report it replaces.
+function reportContent(
+  news: ReadonlyArray<ResourceNews>,
+  unread: NotificationContent | null
 ): NotificationContent {
-  const sorted = [...findings].sort(
-    (a, b) =>
-      Number(b.knownExploited) - Number(a.knownExploited) ||
-      b.severity - a.severity ||
-      Number(b.fixable) - Number(a.fixable)
+  const previous = unread?.kind === "security.report" ? unread : null
+  const resources = new Map(
+    previous?.resources.map((resource) => [resourceKey(resource), resource])
   )
-  const top = sorted[0]!
-  const { relayId, resourceId, resourceType } = announcement
-  return {
-    component: announcement.component,
-    count: distinctVulnerabilities(findings),
-    fixable: distinctVulnerabilities(
-      findings.filter((finding) => finding.fixable)
-    ),
-    kind: "security.vulnerabilities",
-    knownExploited: distinctVulnerabilities(
+  let count = previous?.count ?? 0
+  let knownExploited = previous?.knownExploited ?? 0
+  let severity = previous ? severityRank(previous.severity) : 0
+  for (const { findings, resource } of news) {
+    count += distinctVulnerabilities(findings)
+    knownExploited += distinctVulnerabilities(
       findings.filter((finding) => finding.knownExploited)
-    ),
-    resource: {
-      id: resourceId,
-      name:
-        names.get(`${resourceType}:${resourceId}`) ??
-        (resourceType === "relay" ? "Relay" : resourceId.slice(0, 8)),
-      relayId,
-      type: resourceType,
-    },
-    severity: severityAt(top.severity),
-    top: {
-      fixedVersion: top.fixedVersion,
-      id: top.vulnerabilityId,
-      packageName: top.packageName,
-      packageVersion: top.packageVersion,
-    },
+    )
+    for (const finding of findings)
+      severity = Math.max(severity, finding.severity)
+    resources.set(resourceKey(resource), resource)
   }
+  return {
+    count,
+    kind: "security.report",
+    knownExploited,
+    resources: [...resources.values()],
+    severity: severityAt(severity),
+  }
+}
+
+function resourceKey(resource: NotificationResource): string {
+  return `${resource.type}:${resource.relayId}:${resource.id}`
 }
 
 function distinctVulnerabilities(

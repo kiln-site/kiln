@@ -1,5 +1,5 @@
 import * as React from "react"
-import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type { QueryClient } from "@tanstack/react-query"
 import { Link, useNavigate, useRouteContext } from "@tanstack/react-router"
 import {
@@ -39,7 +39,11 @@ import type {
   NotificationResource,
 } from "@/lib/notifications"
 import { notificationDetail, notificationTitle } from "@/lib/notification-text"
-import { appDirectoryQueryOptions } from "@/lib/query-options"
+import {
+  accessCapabilitiesQueryOptions,
+  appDirectoryQueryOptions,
+} from "@/lib/query-options"
+import { securityScopeKey } from "@/lib/security"
 
 export type NotificationListItem =
   | { key: string; kind: "group"; label: string }
@@ -242,11 +246,16 @@ function NotificationActions({
     case "resource.disk-limit":
     case "app.image-update":
     case "app.deployed":
-    // The resource's page says what it has and what fixes it.
-    case "security.vulnerabilities":
       return (
         <OpenResourceButton
           resource={content.resource}
+          onNavigate={onNavigate}
+        />
+      )
+    case "security.report":
+      return (
+        <SecurityReportButton
+          resources={content.resources}
           onNavigate={onNavigate}
         />
       )
@@ -301,6 +310,46 @@ function DeleteMovedServerButton({ server }: { server: NotificationResource }) {
       ) : null}
     </>
   )
+}
+
+// Opens Kiln's Security page, narrowed to the one resource a report is
+// about. The page is for platform administrators; anyone else opens the
+// resource, whose Info page says what it has, when there's just one.
+function SecurityReportButton({
+  onNavigate,
+  resources,
+}: {
+  onNavigate?: () => void
+  resources: ReadonlyArray<NotificationResource>
+}) {
+  const { data: platformAdmin = false } = useQuery({
+    ...accessCapabilitiesQueryOptions(),
+    select: selectPlatformAdmin,
+  })
+  const only = resources.length === 1 ? resources[0] : undefined
+  if (!platformAdmin)
+    return only ? (
+      <OpenResourceButton resource={only} onNavigate={onNavigate} />
+    ) : null
+  return (
+    <Button asChild variant="outline" size="xs" className="relative shrink-0">
+      <Link
+        to="/kiln/security"
+        search={
+          only
+            ? { scope: securityScopeKey(only.type, only.relayId, only.id) }
+            : {}
+        }
+        onClick={onNavigate}
+      >
+        Review
+      </Link>
+    </Button>
+  )
+}
+
+function selectPlatformAdmin(capabilities: { isPlatformAdmin: boolean }) {
+  return capabilities.isPlatformAdmin
 }
 
 // Opens the Updates dialog's changelog.
@@ -444,7 +493,7 @@ const notificationIcons = {
   "resource.disk-limit": HardDrive,
   "app.image-update": PackagePlus,
   "app.deployed": CloudUpload,
-  "security.vulnerabilities": ShieldAlert,
+  "security.report": ShieldAlert,
   "server.migration": ArrowRightLeft,
 } satisfies Record<
   NotificationContent["kind"],

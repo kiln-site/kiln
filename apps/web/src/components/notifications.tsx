@@ -174,6 +174,7 @@ const notificationToastDurationMs = 8_000
 function notificationToastType(content: NotificationContent): AppToastType {
   switch (content.kind) {
     case "resource.disk-limit":
+    case "security.report":
       return "warning"
     case "app.deployed":
       return content.status === "failed" ? "error" : "success"

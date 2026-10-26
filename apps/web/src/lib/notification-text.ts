@@ -67,15 +67,10 @@ export function notificationTitle(content: NotificationContent): string {
         : content.update
           ? "Your App has been updated"
           : "Your App has been deployed"
-    case "security.vulnerabilities": {
-      const subject = securitySubject(content)
-      if (content.count > 1) {
-        return `${subject} has ${content.count} new vulnerabilities`
-      }
-      return content.knownExploited
-        ? `${subject} has an exploited vulnerability`
-        : `${subject} has ${withArticle(securitySeverityLabels[content.severity]).toLowerCase()} vulnerability`
-    }
+    case "security.report":
+      return content.count === 1
+        ? "1 new vulnerability found"
+        : `${content.count} new vulnerabilities found`
     case "server.migration": {
       const action = content.mode === "migrate" ? "move" : "copy"
       switch (content.outcome) {
@@ -114,30 +109,22 @@ export function notificationDetail(
       return content.status === "failed"
         ? `${content.resource.name} couldn't deploy`
         : `${content.resource.name} has deployed successfully`
-    case "security.vulnerabilities": {
-      const { top } = content
-      const fix = top.fixedVersion ? `, fixed in ${top.fixedVersion}` : ""
-      return `${content.resource.name} - ${top.id} in ${top.packageName} ${top.packageVersion}${fix}`
+    case "security.report": {
+      // "Up to critical in Survival and 2 more, 1 exploited".
+      const { count, knownExploited, resources, severity } = content
+      const label = securitySeverityLabels[severity]
+      const others = resources.length - 1
+      const where = `${resources[0]?.name ?? ""}${others ? ` and ${others} more` : ""}`
+      const exploited = !knownExploited
+        ? ""
+        : count === 1
+          ? ", exploited"
+          : `, ${knownExploited} exploited`
+      return `${count === 1 ? label : `Up to ${label.toLowerCase()}`} in ${where}${exploited}`
     }
     case "server.migration":
       return content.outcome === "failed"
         ? `${content.source.name} - ${content.error ?? "The copy stopped"}`
         : `${content.source.name} to ${content.destination.name}`
   }
-}
-
-type SecurityContent = Extract<
-  NotificationContent,
-  { kind: "security.vulnerabilities" }
->
-
-// Whose thing it's about, as titles say it: "Your App", or for a Relay, its
-// host or the Kiln service on it.
-function securitySubject(content: SecurityContent): string {
-  const { component, resource } = content
-  const type = resourceTypeLabels[resource.type]
-  if (resource.type !== "relay" || component === null) return `Your ${type}`
-  return component === "host"
-    ? "Your Relay's host"
-    : `Your Relay's ${component}`
 }

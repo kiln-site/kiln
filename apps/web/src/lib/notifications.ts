@@ -70,23 +70,15 @@ export const notificationContentSchema = z.discriminatedUnion("kind", [
     status: z.enum(["succeeded", "failed"]),
     update: z.boolean(),
   }),
-  // Grype found vulnerabilities its people hadn't heard of in what a
-  // resource runs: for a Relay, its host or one of Kiln's services there,
-  // which `component` names.
+  // Grype found vulnerabilities the user hadn't heard of in what they can
+  // fix, as one report for everything. A newer report replaces it, adding in
+  // what this one said while it's unread. The Security page has the details.
   z.object({
-    component: z.string().nullable(),
     count: z.number().int().positive(),
-    fixable: z.number().int().nonnegative(),
-    kind: z.literal("security.vulnerabilities"),
+    kind: z.literal("security.report"),
     knownExploited: z.number().int().nonnegative(),
-    resource: notificationResourceSchema,
+    resources: z.array(notificationResourceSchema).min(1),
     severity: z.enum(["critical", "high", "medium", "low", "negligible"]),
-    top: z.object({
-      fixedVersion: z.string().nullable(),
-      id: z.string(),
-      packageName: z.string(),
-      packageVersion: z.string(),
-    }),
   }),
   // A game server finished copying to a new one, as a duplicate or a move to
   // another Relay. A finished move offers to delete the server it left;

@@ -8,6 +8,7 @@ import { baseline } from "@/migrations/0001_baseline"
 import { fileActivityRoots } from "@/migrations/0009_file_activity_roots"
 import { incrementalBackupArtifacts } from "@/migrations/0013_incremental_backup_artifacts"
 import { domainZones } from "@/migrations/0015_domain_zones"
+import { securityReports } from "@/migrations/0031_security_reports"
 import { baselineTables } from "@/migrations/baseline-schema"
 import { describeMysql, testDatabaseClient } from "@/test/database"
 import {
@@ -440,6 +441,140 @@ describeMysql("database migrations", () => {
           })
           expect(assignment?.id).toMatch(/^[0-9a-f-]{36}$/u)
           expect(yield* ledger).toEqual(migrationIds)
+        }),
+      120_000
+    )
+    it.effect(
+      "folds each person's vulnerability notifications into one report",
+      () =>
+        Effect.gen(function* () {
+          yield* dropAllTables
+          yield* applyMigrations(
+            migrations.filter((migration) => migration.id < securityReports.id)
+          )
+          const resource = (id: string) => ({
+            id,
+            name: `App ${id}`,
+            relayId: "relay-a",
+            type: "app",
+          })
+          const vulnerabilities = (
+            id: string,
+            userId: string,
+            data: Record<string, unknown>,
+            row: Record<string, unknown> = {}
+          ) => ({
+            id,
+            user_id: userId,
+            kind: "security.vulnerabilities",
+            source_key: `security:${id}`,
+            data: JSON.stringify({
+              component: null,
+              fixable: 0,
+              knownExploited: 0,
+              severity: "high",
+              top: {
+                fixedVersion: null,
+                id: "CVE-1",
+                packageName: "openssl",
+                packageVersion: "1",
+              },
+              ...data,
+            }),
+            created_at: 1_000,
+            read_at: null,
+            dismissed_at: null,
+            ...row,
+          })
+          yield* insertRows("notification", [
+            vulnerabilities("a1", "user-a", {
+              count: 2,
+              resource: resource("one"),
+            }),
+            vulnerabilities(
+              "a2",
+              "user-a",
+              {
+                count: 3,
+                knownExploited: 1,
+                resource: resource("two"),
+                severity: "critical",
+              },
+              { created_at: 2_000, read_at: 2_500 }
+            ),
+            vulnerabilities(
+              "a3",
+              "user-a",
+              { count: 1, resource: resource("one") },
+              { created_at: 3_000 }
+            ),
+            // Cleared ones stay cleared and out of the report.
+            vulnerabilities(
+              "a4",
+              "user-a",
+              { count: 9, resource: resource("three") },
+              { read_at: 1_500, dismissed_at: 1_500 }
+            ),
+            vulnerabilities(
+              "b1",
+              "user-b",
+              { count: 1, resource: resource("one") },
+              { read_at: 4_000 }
+            ),
+          ])
+
+          yield* applyMigrations(migrations)
+
+          const rows = yield* selectRows<{
+            created_at: number
+            data: unknown
+            dismissed_at: number | null
+            kind: string
+            read_at: number | null
+            user_id: string
+          }>("notification")
+          expect(
+            rows
+              .filter((row) => row.kind === "security.vulnerabilities")
+              .every((row) => row.dismissed_at !== null)
+          ).toBe(true)
+          const reports = rows
+            .filter((row) => row.kind === "security.report")
+            .map((row) => ({
+              createdAt: Number(row.created_at),
+              data:
+                typeof row.data === "string" ? JSON.parse(row.data) : row.data,
+              dismissedAt: row.dismissed_at,
+              readAt: row.read_at === null ? null : Number(row.read_at),
+              userId: row.user_id,
+            }))
+            .sort((a, b) => a.userId.localeCompare(b.userId))
+          expect(reports).toEqual([
+            {
+              createdAt: 3_000,
+              data: {
+                count: 6,
+                knownExploited: 1,
+                resources: [resource("one"), resource("two")],
+                severity: "critical",
+              },
+              dismissedAt: null,
+              readAt: null,
+              userId: "user-a",
+            },
+            {
+              createdAt: 1_000,
+              data: {
+                count: 1,
+                knownExploited: 0,
+                resources: [resource("one")],
+                severity: "high",
+              },
+              dismissedAt: null,
+              readAt: 4_000,
+              userId: "user-b",
+            },
+          ])
         }),
       120_000
     )

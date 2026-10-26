@@ -51,7 +51,7 @@ export const notificationPreferenceGroups = [
   {
     adminOnly: false,
     id: "security",
-    kinds: [{ kind: "security.vulnerabilities", label: "Vulnerabilities" }],
+    kinds: [{ kind: "security.report", label: "Vulnerability reports" }],
     label: "Security",
   },
   {
@@ -110,9 +110,14 @@ const allKinds: ReadonlyArray<NotificationKind> = [
   "resource.disk-limit",
   "app.image-update",
   "app.deployed",
-  "security.vulnerabilities",
+  "security.report",
   "server.migration",
 ] satisfies ReadonlyArray<NotificationKind>
+
+// Kinds that replaced one a choice may still be stored under.
+const formerKinds: Partial<Record<NotificationKind, string>> = {
+  "security.report": "security.vulnerabilities",
+}
 
 const storedKindSchema = z.object({
   inbox: z.boolean().optional(),
@@ -168,7 +173,10 @@ export function normalizeNotificationPreferences(
   const stored = readStored(value)
   const kinds = {} as Record<NotificationKind, NotificationKindPreference>
   for (const kind of allKinds) {
-    const choice = stored.kinds?.[kind]
+    const former = formerKinds[kind]
+    const choice =
+      stored.kinds?.[kind] ??
+      (former === undefined ? undefined : stored.kinds?.[former])
     kinds[kind] = {
       inbox: kindsWithRequiredInbox.has(kind) ? true : (choice?.inbox ?? true),
       push: choice?.push ?? true,
