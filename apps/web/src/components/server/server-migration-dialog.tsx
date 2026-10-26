@@ -111,6 +111,9 @@ export function ServerMigrationDialog({
       relayId: server.relayId,
     }),
     enabled: open,
+    // Opened once the preview settled; a failure shows as it was, rather
+    // than being asked again and growing into the form. Reopening retries.
+    retryOnMount: false,
   })
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
