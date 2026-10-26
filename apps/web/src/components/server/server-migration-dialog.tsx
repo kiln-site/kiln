@@ -81,6 +81,7 @@ type Status = {
 }
 
 const NO_RELAY = "__none__"
+const LOCAL = "local"
 const NAME_LIMIT = 32
 const GIBIBYTE = 1024 ** 3
 
@@ -200,7 +201,9 @@ function MigrationForm({
     limits !== null && !sameLimits(limits, preview.source.limits)
 
   const [backup, setBackup] = React.useState(false)
-  const [backupDestination, setBackupDestination] = React.useState("default")
+  // Where the backup first and a deleted server's final backup go: the
+  // server's own Relay, or an S3 destination.
+  const [backupTarget, setBackupTarget] = React.useState<string>(LOCAL)
   // Whether the copy fits there, as the Relays said when the dialog opened.
   // Checked again when it starts and before the server stops.
   const roomProblemsFor = (
@@ -210,13 +213,7 @@ function MigrationForm({
       ? migrationRoomProblems({
           destination: destination.room,
           limits: true,
-          localBackups:
-            backup &&
-            (backupDestination === "local" ||
-              (backupDestination === "default" &&
-                preview.room.defaultBackupLocal))
-              ? 1
-              : 0,
+          localBackups: backup && backupTarget === LOCAL ? 1 : 0,
           server: {
             ...preview.room.server,
             limits: limits ?? preview.source.limits,
@@ -272,7 +269,6 @@ function MigrationForm({
     preview.source.running && preview.allowed.power
   )
   const [deleteSource, setDeleteSource] = React.useState(false)
-  const [deleteDestination, setDeleteDestination] = React.useState("default")
   const deleting = moving && deleteSource && preview.allowed.delete
   const backupStorage = useQuery({
     ...backupStorageQueryOptions(),
@@ -290,9 +286,9 @@ function MigrationForm({
           mode,
           name: effectiveName.trim(),
           options: {
-            backup: backup ? storageChoice(backupDestination) : null,
+            backup: backup ? storageChoice(backupTarget) : null,
             copyAccess: copies("access"),
-            deleteSource: deleting ? storageChoice(deleteDestination) : null,
+            deleteSource: deleting ? storageChoice(backupTarget) : null,
             keepActivity: copies("activity"),
             limits: limitsChanged ? limits : null,
             linkBackups: copies("backups"),
@@ -499,9 +495,9 @@ function MigrationForm({
         </Select>
       </div>
 
-      <section className="grid gap-1.5">
+      <section className="grid gap-2">
         <div className="flex h-5 items-center justify-between">
-          <h3 className="type-label">Limits</h3>
+          <h3 className="type-technical-label text-muted-foreground">Limits</h3>
           <Button
             className={cn("h-5 px-1.5", !limitsChanged && "invisible")}
             disabled={pending}
@@ -551,15 +547,6 @@ function MigrationForm({
         />
         <Check
           checked={backup}
-          control={
-            <StorageSelect
-              disabled={pending || !backup}
-              label="Backup destination"
-              storage={backupStorage.data}
-              value={backupDestination}
-              onChange={setBackupDestination}
-            />
-          }
           disabled={pending || !preview.allowed.backup}
           label="Back up first"
           title={
@@ -571,15 +558,6 @@ function MigrationForm({
         />
         <Check
           checked={deleting}
-          control={
-            <StorageSelect
-              disabled={pending || !deleting}
-              label="Final backup destination"
-              storage={backupStorage.data}
-              value={deleteDestination}
-              onChange={setDeleteDestination}
-            />
-          }
           disabled={pending || !moving || !preview.allowed.delete}
           label="Delete after"
           title={
@@ -590,6 +568,13 @@ function MigrationForm({
                 : "Deleting it needs permission to delete and back it up."
           }
           onChange={setDeleteSource}
+        />
+        <DestinationChoice
+          disabled={pending || (!backup && !deleting)}
+          relayName={preview.source.relayName}
+          storage={backupStorage.data}
+          value={backupTarget}
+          onChange={setBackupTarget}
         />
       </div>
 
@@ -783,7 +768,7 @@ function LimitRows({
   const set = (key: keyof ResourceLimitsDraft) => (value: ResourceLimitDraft) =>
     onChange((current) => ({ ...current, [key]: value }))
   return (
-    <div className="grid grid-cols-[4rem_minmax(0,1fr)_5.5rem] items-start gap-x-3 gap-y-1.5">
+    <div className="grid grid-cols-[4rem_minmax(0,1fr)_5.5rem] items-start gap-x-3 gap-y-3">
       <LimitRow
         assignable={gib(room?.assignableMemoryBytes ?? null)}
         disabled={disabled}
@@ -1276,18 +1261,19 @@ function Check({
   )
 }
 
-// Where a backup goes: wherever this server's backups go by default, the
-// Relay itself, or an S3 destination.
-function StorageSelect({
+// Where backups go, chosen outright: the server's own Relay, or one of the
+// S3 destinations. Its row stays while unused, so choosing a backup doesn't
+// move anything.
+function DestinationChoice({
   disabled,
-  label,
   onChange,
+  relayName,
   storage,
   value,
 }: {
   disabled: boolean
-  label: string
   onChange: (value: string) => void
+  relayName: string
   storage:
     | ReadonlyArray<{
         deleting: boolean
@@ -1298,38 +1284,55 @@ function StorageSelect({
     | undefined
   value: string
 }) {
+  const destinations = (storage ?? []).filter(
+    (item) => item.enabled && !item.deleting
+  )
   return (
-    <Select
-      disabled={disabled}
-      value={value}
-      onValueChange={(next) => {
-        if (next) onChange(next)
-      }}
+    <label
+      className={cn(
+        "flex min-w-0 items-center gap-3 sm:col-span-2",
+        disabled && "opacity-60"
+      )}
     >
-      <SelectTrigger
-        aria-label={label}
-        className="h-7 w-32 shrink-0 *:data-[slot=select-value]:truncate"
+      <span className="type-label shrink-0">Backups go to</span>
+      <Select
+        disabled={disabled}
+        value={value}
+        onValueChange={(next) => {
+          if (next) onChange(next)
+        }}
       >
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent className="min-w-(--radix-select-trigger-width)">
-        <SelectItem value="default">Default storage</SelectItem>
-        <SelectItem value="local">This Relay</SelectItem>
-        {(storage ?? [])
-          .filter((item) => item.enabled && !item.deleting)
-          .map((item) => (
+        <SelectTrigger
+          aria-label="Backups go to"
+          className="h-8 w-72 min-w-0 *:data-[slot=select-value]:truncate"
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent className="min-w-(--radix-select-trigger-width)">
+          <SelectItem value={LOCAL}>
+            <span className="flex items-baseline gap-2">
+              {relayName}
+              <span className="type-meta text-muted-foreground">
+                On the Relay
+              </span>
+            </span>
+          </SelectItem>
+          {destinations.map((item) => (
             <SelectItem key={item.id} value={item.id}>
-              S3 · {item.name}
+              <span className="flex items-baseline gap-2">
+                {item.name}
+                <span className="type-meta text-muted-foreground">S3</span>
+              </span>
             </SelectItem>
           ))}
-      </SelectContent>
-    </Select>
+        </SelectContent>
+      </Select>
+    </label>
   )
 }
 
-function storageChoice(value: string): { storageId?: string | null } {
-  if (value === "default") return {}
-  return { storageId: value === "local" ? null : value }
+function storageChoice(value: string): { storageId: string | null } {
+  return { storageId: value === LOCAL ? null : value }
 }
 
 function roundDown(value: number, step: number): number {

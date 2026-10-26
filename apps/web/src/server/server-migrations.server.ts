@@ -49,7 +49,6 @@ import type {
 import {
   checkMigrationRoom,
   copyLimits,
-  defaultBackupIsLocal,
   loadRelayRoom,
   migrationSourceRoom,
 } from "@/lib/server-migration-room.server"
@@ -106,8 +105,6 @@ export interface ServerMigrationPreview {
    * fits; null when its Relay couldn't say.
    */
   readonly room: {
-    /** Whether its backups go to its own Relay by default. */
-    readonly defaultBackupLocal: boolean
     readonly server: MigrationSourceRoom
     readonly source: MigrationRelayRoom
   } | null
@@ -136,13 +133,10 @@ export async function previewServerMigrationHandler(
 ): Promise<ServerMigrationPreview> {
   const { authorization, instance, relay } = await authorizeSource(user, data)
   const relays = (await listPersistedRelays()).filter((item) => item.enabled)
-  const [sourceRoom, defaultBackupLocal] = await Promise.all([
-    recoverPromise(
-      () => loadRelayRoom(relay, { rootId: instance.id, subject: user.id }),
-      () => null
-    ),
-    defaultBackupIsLocal(relay.id, instance.id),
-  ])
+  const sourceRoom = await recoverPromise(
+    () => loadRelayRoom(relay, { rootId: instance.id, subject: user.id }),
+    () => null
+  )
   const destinations = await Promise.all(
     relays.map(async (candidate) => {
       const allowed = (
@@ -227,7 +221,6 @@ export async function previewServerMigrationHandler(
     destinations: destinations.filter((item) => item !== null),
     room: sourceRoom
       ? {
-          defaultBackupLocal,
           server: migrationSourceRoom(instance, sourceRoom.rootBytes),
           source: sourceRoom.room,
         }
