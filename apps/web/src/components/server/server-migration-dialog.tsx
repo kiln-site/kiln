@@ -11,7 +11,6 @@ import {
   ArrowRightLeft,
   Copy,
   Info,
-  Infinity as InfinityIcon,
   LoaderCircle,
 } from "lucide-react"
 
@@ -36,7 +35,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@workspace/ui/components/select"
-import { Slider, type SliderZone } from "@workspace/ui/components/slider"
+import { Slider } from "@workspace/ui/components/slider"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { InstanceCard } from "@/components/instance-card"
@@ -345,58 +344,50 @@ function MigrationForm({
       [key]: { limited: true, value: String(value) },
     }))
   )
-  const limitsStatus: Status =
-    "error" in parsed
-      ? { text: parsed.error, tone: "error" }
-      : limitProblem
-        ? { fix: fitFix, text: limitProblem.message, tone: "error" }
-        : {
-            text: room
-              ? `${selected?.name} can assign ${formatBytes(room.assignableMemoryBytes)} memory, ${room.cores} ${room.cores === 1 ? "core" : "cores"}, and ${formatBytes(room.assignableDiskBytes)} disk`
-              : "",
-            tone: "muted",
-          }
-
   // Why the copy can't start, or what to know before it does.
   const status: Status | null = start.isError
     ? { text: start.error.message, tone: "error" }
-    : relayProblem
-      ? {
-          text: `${relayProblem.message}. ${relayProblem.remedy}.`,
-          tone: "error",
-        }
-      : spaceProblem
-        ? { text: spaceProblem.message, tone: "error" }
-        : nameTaken && selected
+    : "error" in parsed
+      ? { text: parsed.error, tone: "error" }
+      : limitProblem
+        ? { fix: fitFix, text: limitProblem.message, tone: "error" }
+        : relayProblem
           ? {
-              text: `${selected.name} already has a ${trimmedName}.`,
+              text: `${relayProblem.message}. ${relayProblem.remedy}.`,
               tone: "error",
             }
-          : !trimmedName
-            ? { text: "Give the copy a name.", tone: "error" }
-            : preview.source.provisioning
+          : spaceProblem
+            ? { text: spaceProblem.message, tone: "error" }
+            : nameTaken && selected
               ? {
-                  text: "Still being created; copy it once it's ready.",
-                  tone: "warning",
+                  text: `${selected.name} already has a ${trimmedName}.`,
+                  tone: "error",
                 }
-              : moving && !preview.allowed.stop
-                ? {
-                    text: "A move stops this server, and you can't stop it.",
-                    tone: "error",
-                  }
-                : destinations.length === 0
+              : !trimmedName
+                ? { text: "Give the copy a name.", tone: "error" }
+                : preview.source.provisioning
                   ? {
-                      text: moving
-                        ? "No other Relay can take game servers from you."
-                        : "No Relay can take game servers from you.",
+                      text: "Still being created; copy it once it's ready.",
                       tone: "warning",
                     }
-                  : archMismatch && selected
+                  : moving && !preview.allowed.stop
                     ? {
-                        text: `${selected.name} runs ${selected.nodeArch}; the Brick's image must support it.`,
-                        tone: "warning",
+                        text: "A move stops this server, and you can't stop it.",
+                        tone: "error",
                       }
-                    : null
+                    : destinations.length === 0
+                      ? {
+                          text: moving
+                            ? "No other Relay can take game servers from you."
+                            : "No Relay can take game servers from you.",
+                          tone: "warning",
+                        }
+                      : archMismatch && selected
+                        ? {
+                            text: `${selected.name} runs ${selected.nodeArch}; the Brick's image must support it.`,
+                            tone: "warning",
+                          }
+                        : null
 
   return (
     <form
@@ -531,7 +522,6 @@ function MigrationForm({
           usedBytes={usedBytes}
           onChange={setDraft}
         />
-        <StatusLine status={limitsStatus} />
       </section>
 
       <div className="grid grid-cols-[minmax(0,1fr)] gap-x-6 gap-y-2 sm:grid-cols-2">
@@ -768,9 +758,10 @@ function StatusLine({ status }: { status: Status | null }) {
   )
 }
 
-// The copy's memory, CPU, and disk: a slider each, ticked where the old
-// server's limit is and shaded red where the Relay can't follow, with the
-// value beside it and a switch to no limit.
+// The copy's memory, CPU, and disk: a slider each, on a log scale from the
+// smallest useful limit to what the Relay can assign, notched and labeled
+// along its axis, with a last stop past the end for no limit. The old
+// server's limit is marked, and what the Relay can't follow is shaded red.
 function LimitRows({
   destination,
   disabled,
@@ -789,143 +780,239 @@ function LimitRows({
   const room = destination?.room ?? null
   const gib = (bytes: number | null) =>
     bytes === null ? null : bytes / GIBIBYTE
-  const assignableMemory = gib(room?.assignableMemoryBytes ?? null)
-  const assignableDisk = gib(room?.assignableDiskBytes ?? null)
-  const files = gib(usedBytes)
-  const originalCores =
-    original.cpuMillis === null
-      ? null
-      : original.cpuMillis / CPU_LIMIT_MILLIS_PER_CORE
   const set = (key: keyof ResourceLimitsDraft) => (value: ResourceLimitDraft) =>
     onChange((current) => ({ ...current, [key]: value }))
-  const beyond = (from: number | null): Array<SliderZone> =>
-    from === null ? [] : [{ from, to: Number.POSITIVE_INFINITY }]
-
   return (
-    <div className="grid grid-cols-[4rem_minmax(0,1fr)_5.5rem_1.75rem] items-center gap-x-3 gap-y-1.5">
+    <div className="grid grid-cols-[4rem_minmax(0,1fr)_5.5rem] items-start gap-x-3 gap-y-1.5">
       <LimitRow
+        assignable={gib(room?.assignableMemoryBytes ?? null)}
         disabled={disabled}
+        fallbackMax={16}
         label="Memory"
-        mark={gib(original.memoryBytes)}
-        max={sliderMax(gib(original.memoryBytes), assignableMemory, 4)}
         min={0.25}
-        step={0.25}
+        original={gib(original.memoryBytes)}
+        scale={1}
+        step={(value) => (value < 4 ? 0.25 : value < 16 ? 0.5 : 1)}
         unit="GiB"
         value={draft.memoryGiB}
-        zones={beyond(assignableMemory)}
         onChange={set("memoryGiB")}
       />
       <LimitRow
+        assignable={room ? room.cores * 100 : null}
         disabled={disabled}
+        fallbackMax={400}
         label="CPU"
-        mark={originalCores}
-        max={room?.cores ?? Math.max(originalCores ?? 0, 1)}
-        min={0.1}
-        step={0.1}
-        unit="cores"
+        min={10}
+        original={
+          original.cpuMillis === null
+            ? null
+            : (original.cpuMillis / CPU_LIMIT_MILLIS_PER_CORE) * 100
+        }
+        scale={100}
+        step={(value) => (value < 100 ? 5 : value < 400 ? 10 : 25)}
+        unit="%"
         value={draft.cpuCores}
-        zones={[]}
         onChange={set("cpuCores")}
       />
       <LimitRow
+        assignable={gib(room?.assignableDiskBytes ?? null)}
+        below={gib(usedBytes)}
         disabled={disabled}
+        fallbackMax={100}
         label="Disk"
-        mark={gib(original.diskBytes)}
-        max={sliderMax(
-          Math.max(gib(original.diskBytes) ?? 0, files ?? 0),
-          assignableDisk,
-          10
-        )}
-        min={0.1}
-        step={1}
+        min={0.5}
+        original={gib(original.diskBytes)}
+        scale={1}
+        step={(value) => (value < 2 ? 0.1 : value < 10 ? 0.5 : 1)}
         unit="GiB"
         value={draft.diskGiB}
-        zones={[
-          ...(files !== null && files > 0.1 ? [{ from: 0.1, to: files }] : []),
-          ...beyond(assignableDisk),
-        ]}
         onChange={set("diskGiB")}
       />
     </div>
   )
 }
 
+// Slider positions: the axis runs 0 to AXIS, and NO_LIMIT is the stop past
+// its end; anything past halfway to it snaps there.
+const AXIS = 1000
+const NO_LIMIT = 1200
+
 function LimitRow({
+  assignable,
+  below = null,
   disabled,
+  fallbackMax,
   label,
-  mark,
-  max,
   min,
   onChange,
+  original,
+  scale,
   step,
   unit,
   value,
-  zones,
 }: {
+  /** What the Relay can give, shown as the axis's end; null if unknown. */
+  assignable: number | null
+  /** A value the limit can't go under, shaded red, such as the files. */
+  below?: number | null
   disabled: boolean
+  fallbackMax: number
   label: string
-  mark: number | null
-  max: number
   min: number
   onChange: (value: ResourceLimitDraft) => void
-  step: number
+  original: number | null
+  /** Shown units per stored unit, as percent per core. */
+  scale: number
+  step: (value: number) => number
   unit: string
   value: ResourceLimitDraft
-  zones: ReadonlyArray<SliderZone>
 }) {
-  const number = Number(value.value)
-  const sliderValue =
-    value.limited && Number.isFinite(number) ? Math.max(number, min) : max
+  const stored = Number(value.value)
+  const current =
+    value.limited && value.value.trim() !== "" && Number.isFinite(stored)
+      ? stored * scale
+      : null
+  // The axis ends at what the Relay can assign, or further when the old
+  // server's limit or the value already does.
+  const max = Math.max(
+    assignable ?? fallbackMax,
+    original ?? 0,
+    current ?? 0,
+    min * 2
+  )
+  const span = Math.log(max / min)
+  const position = (shown: number) =>
+    (AXIS * Math.log(Math.max(shown, min) / min)) / span
+  const snap = (shown: number) => {
+    const size = step(shown)
+    const near = Math.round(shown / size) * size
+    return Number(
+      (near > max ? Math.floor(shown / size) * size : near).toFixed(4)
+    )
+  }
+  const ticks = [
+    ...axisTicks(min, max).map((tick) => ({
+      label: formatAxis(tick, unit),
+      value: position(tick),
+    })),
+    { label: "No limit", value: NO_LIMIT },
+  ]
+  const zones = [
+    ...(below !== null && below > min
+      ? [{ from: 0, to: position(below) }]
+      : []),
+    ...(assignable !== null && assignable < max
+      ? [{ from: position(assignable), to: AXIS }]
+      : []),
+  ]
   return (
     <>
-      <span className="type-label">{label}</span>
+      <span className="type-label flex h-7 items-center">{label}</span>
       <Slider
         aria-label={`${label} limit`}
-        disabled={disabled || !value.limited}
-        marks={mark === null ? [] : [mark]}
-        max={Math.max(max, sliderValue)}
-        min={min}
-        step={step}
-        value={sliderValue}
+        disabled={disabled}
+        marks={[original === null ? NO_LIMIT : position(original)]}
+        max={NO_LIMIT}
+        min={0}
+        step={1}
+        ticks={ticks}
+        value={
+          !value.limited
+            ? NO_LIMIT
+            : current === null
+              ? 0
+              : Math.min(position(current), AXIS)
+        }
         zones={zones}
+        className="pt-1.5"
         onValueChange={(next) =>
-          onChange({ limited: true, value: String(Number(next.toFixed(2))) })
+          onChange(
+            next > (AXIS + NO_LIMIT) / 2
+              ? { ...value, limited: false }
+              : {
+                  limited: true,
+                  value: String(
+                    Number(
+                      (
+                        snap(
+                          min * Math.exp((Math.min(next, AXIS) / AXIS) * span)
+                        ) / scale
+                      ).toFixed(4)
+                    )
+                  ),
+                }
+          )
         }
       />
       <label className="relative">
         <Input
           aria-label={`${label} limit in ${unit}`}
-          className="h-7 pr-11 pl-2 text-right font-mono text-xs tabular-nums"
-          disabled={disabled || !value.limited}
+          className={cn(
+            "h-7 pl-2 text-right font-mono text-xs tabular-nums",
+            value.limited ? "pr-9" : "pr-2"
+          )}
+          disabled={disabled}
           inputMode="decimal"
-          placeholder="None"
-          value={value.limited ? value.value : ""}
-          onChange={(event) =>
+          value={
+            !value.limited
+              ? "No limit"
+              : scale === 1 || current === null
+                ? value.value
+                : String(Number(current.toFixed(2)))
+          }
+          onChange={(event) => {
+            const typed = event.currentTarget.value.replace(/[^\d.]/gu, "")
             onChange({
               limited: true,
-              value: event.currentTarget.value.replace(/[^\d.]/gu, ""),
+              value:
+                typed === "" || scale === 1
+                  ? typed
+                  : String(Number(typed) / scale),
             })
-          }
+          }}
         />
-        <span className="type-meta pointer-events-none absolute inset-y-0 right-2 flex items-center text-muted-foreground">
-          {unit}
-        </span>
+        {value.limited ? (
+          <span className="type-meta pointer-events-none absolute inset-y-0 right-2 flex items-center text-muted-foreground">
+            {unit}
+          </span>
+        ) : null}
       </label>
-      <Button
-        aria-label={`No ${label.toLowerCase()} limit`}
-        aria-pressed={!value.limited}
-        className="size-7"
-        disabled={disabled}
-        size="icon-sm"
-        title="No limit"
-        type="button"
-        variant={value.limited ? "ghost" : "default"}
-        onClick={() => onChange({ ...value, limited: !value.limited })}
-      >
-        <InfinityIcon />
-      </Button>
     </>
   )
+}
+
+// Round values along a log axis: 1, 2, and 5 of each power of ten, or only
+// the powers when that's too many, with both ends, dropping any too close
+// to a neighbour to label.
+function axisTicks(min: number, max: number): Array<number> {
+  const candidates: Array<number> = []
+  for (
+    let exponent = Math.floor(Math.log10(min));
+    10 ** exponent <= max;
+    exponent += 1
+  ) {
+    for (const factor of [1, 2, 5]) {
+      const value = Number((factor * 10 ** exponent).toPrecision(3))
+      if (value > min && value < max) candidates.push(value)
+    }
+  }
+  const round =
+    candidates.length > 4
+      ? candidates.filter((value) => Number.isInteger(Math.log10(value)))
+      : candidates
+  const span = Math.log(max / min)
+  const ticks = [min]
+  for (const value of [...round, max]) {
+    const previous = ticks[ticks.length - 1] ?? min
+    if (Math.log(value / previous) / span >= 0.12) ticks.push(value)
+    else if (value === max) ticks[ticks.length - 1] = max
+  }
+  return ticks
+}
+
+function formatAxis(value: number, unit: string): string {
+  const number = Number(value.toFixed(value < 1 ? 2 : value < 10 ? 1 : 0))
+  return unit === "%" ? `${number}%` : String(number)
 }
 
 // The suggestion for a limit that won't fit: the nearest that would.
@@ -938,7 +1025,7 @@ function limitFix(
   if (!problem || !room) return undefined
   if (problem.code === "cpu") {
     return {
-      label: `Use ${room.cores}`,
+      label: `Use ${room.cores * 100}%`,
       run: () => set("cpuCores", room.cores),
     }
   }
@@ -1243,21 +1330,6 @@ function StorageSelect({
 function storageChoice(value: string): { storageId?: string | null } {
   if (value === "default") return {}
   return { storageId: value === "local" ? null : value }
-}
-
-// How far a slider reaches: twice the server's own value, or what the
-// Relay can assign when that's further, rounded up to a whole number.
-function sliderMax(
-  value: number | null,
-  assignable: number | null,
-  floor: number
-): number {
-  const largest = Math.max(value ?? 0, floor / 2)
-  const reach =
-    assignable === null
-      ? largest * 2
-      : Math.max(Math.min(largest * 2, Math.max(assignable, largest)), largest)
-  return Math.max(Math.ceil(reach), 1)
 }
 
 function roundDown(value: number, step: number): number {
