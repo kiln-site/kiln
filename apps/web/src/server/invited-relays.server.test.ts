@@ -113,6 +113,7 @@ describeMysql("Invited Relays", () => {
 
           assert.deepStrictEqual(relays, [
             {
+              createdBy: "owner",
               hostname: "relay-invited.relay.test",
               id: "relay-invited",
               memory: undefined,

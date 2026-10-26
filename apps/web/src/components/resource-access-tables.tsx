@@ -7,7 +7,6 @@ import {
   useSyncExternalStore,
 } from "react"
 import { Link } from "@tanstack/react-router"
-import { useQuery } from "@tanstack/react-query"
 import {
   Activity,
   ArrowRightLeft,
@@ -52,7 +51,6 @@ import {
 } from "@/components/permission-editor"
 import {
   UserActionButton,
-  UserProfilesContext,
   UserRowIdentity,
 } from "@/components/user-table-parts"
 import {
@@ -66,7 +64,6 @@ import {
 } from "@/lib/data-table-search"
 import type { DataTableSource } from "@/lib/data-table-source"
 import type { getResourceAccess } from "@/server/resource-access"
-import { getUserMinecraftProfiles } from "@/server/users"
 
 export type ScopeAccess = Awaited<ReturnType<typeof getResourceAccess>>
 export type Person = ScopeAccess["people"][number]
@@ -94,7 +91,6 @@ type PersonHandlers = Pick<
   "access" | "onEdit" | "onTransfer" | "onRevoke" | "onAccept"
 > & { onView: (person: Person) => void }
 
-const NO_PROFILES: Record<string, string> = {}
 
 export const ResourcePeopleTable = memo(function ResourcePeopleTable({
   access,
@@ -112,31 +108,6 @@ export const ResourcePeopleTable = memo(function ResourcePeopleTable({
     searchStore.getNormalizedServerSnapshot
   )
   const [viewing, setViewing] = useState<Person | null>(null)
-  const scope = access?.scope
-  const userIds = useMemo(
-    () => [
-      ...new Set(
-        source.rows.flatMap((person) => (person.userId ? [person.userId] : []))
-      ),
-    ],
-    [source.rows]
-  )
-  const profiles = useQuery({
-    queryKey: [
-      "users",
-      "minecraft-profiles",
-      scope?.relayId,
-      scope?.resourceType,
-      scope?.resourceId,
-      userIds.join(","),
-    ],
-    queryFn: () =>
-      getUserMinecraftProfiles({
-        data: { userIds: userIds.slice(0, 100), scope: scope! },
-      }),
-    enabled: !!scope && userIds.length > 0,
-    staleTime: 60 * 60_000,
-  })
   const definition = useMemo(() => {
     const names = new Map([
       ...(access?.defaults.map(
@@ -259,8 +230,7 @@ export const ResourcePeopleTable = memo(function ResourcePeopleTable({
         />
       }
     >
-      <UserProfilesContext.Provider value={profiles.data ?? NO_PROFILES}>
-        <DataTable
+      <DataTable
           definition={definition}
           source={source}
           emptyState={
@@ -279,7 +249,6 @@ export const ResourcePeopleTable = memo(function ResourcePeopleTable({
             />
           }
         />
-      </UserProfilesContext.Provider>
       {viewing ? (
         <PersonPermissionsDialog
           person={viewing}

@@ -38,14 +38,20 @@ export const iconSubjectSchema = z.discriminatedUnion("kind", [
 export type IconSubject = z.infer<typeof iconSubjectSchema>
 export type InstanceIconSubject = Exclude<IconSubject, { kind: "user" }>
 
-/** Where an icon came from, shown beside it so people know what to change. */
+/**
+ * Where an icon came from, shown beside it so people know what to change.
+ * Uploads, links, and Minecraft heads are copies, prepared once by the
+ * browser. A file is a link: the icon follows the file in the game
+ * server's or app's files (or, with a service, inside that service's
+ * container), so replacing the file replaces the icon.
+ */
 export const iconOriginSchema = z.discriminatedUnion("type", [
-  // Uploaded from the browser.
   z.strictObject({ type: z.literal("upload") }),
-  // Copied from an image on the web.
   z.strictObject({ type: z.literal("url"), url: z.string().max(2_048) }),
-  // Copied from a file in the game server's or app's files, or, with a
-  // service, from inside that service's container.
+  z.strictObject({
+    type: z.literal("minecraft"),
+    username: z.string().min(3).max(16),
+  }),
   z.strictObject({
     type: z.literal("file"),
     path: z.string().min(1).max(1_024),
@@ -83,12 +89,27 @@ export function iconUrl(subject: IconSubject, digest: string): string {
   return `${path}?v=${encodeURIComponent(digest)}`
 }
 
-/** Each subject's shown icon, by `iconSubjectKey`, as its digest. */
-export type IconIndex = Readonly<Record<string, string>>
+/** The icons a reader may see, and whose pictures it covers. */
+export interface IconIndex {
+  /** Each subject's shown icon, by `iconSubjectKey`, as its digest. */
+  readonly digests: Readonly<Record<string, string>>
+  /**
+   * Whether every user's picture is listed, as for platform administrators.
+   * Otherwise only the reader's own is, and others' load by user ID.
+   */
+  readonly everyone: boolean
+  readonly selfId: string
+}
+
+/** Where a picture loads when the index doesn't say whether it exists. */
+export function userPictureUrl(userId: string): string {
+  return `/api/icons/user/${encodeURIComponent(userId)}`
+}
 
 export interface IconDetails {
   readonly custom: {
-    readonly digest: string
+    /** Null for a linked file that's gone, so the icon falls back. */
+    readonly digest: string | null
     readonly origin: IconOrigin | null
     readonly updatedAt: number
   } | null

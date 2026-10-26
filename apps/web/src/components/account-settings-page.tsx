@@ -50,6 +50,7 @@ import {
   browserAccountsQueryKey,
 } from "@/lib/browser-accounts"
 import { DISPLAY_NAME_MAX_LENGTH, parseDisplayName } from "@/lib/display-name"
+import { isMinecraftUsername } from "@/lib/minecraft-profile"
 import { queryKeys } from "@/lib/query-options"
 import { getCliCredentials, revokeCliCredential } from "@/server/cli"
 import {
@@ -156,6 +157,10 @@ function ProfileCard({ user }: { user: AuthenticatedUser }) {
                 />
               ),
               fit: "cover",
+              // The name is often the person's Minecraft username already.
+              minecraftUsername: isMinecraftUsername(displayName)
+                ? displayName
+                : "",
               noun: "picture",
               subject: { kind: "user", id: user.id },
               title: "Profile picture",

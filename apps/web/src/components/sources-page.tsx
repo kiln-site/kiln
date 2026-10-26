@@ -359,7 +359,7 @@ function SourceOwnerCell({ source }: { source: Source }) {
     <IdentityName
       icon={
         source.ownerName ? (
-          <AccountAvatar name={source.ownerName} />
+          <AccountAvatar name={source.ownerName} userId={source.ownerId} />
         ) : (
           <UserRound className="size-4" aria-hidden="true" />
         )

@@ -120,20 +120,10 @@ import {
 } from "@/components/relay-memory-cell"
 import { UserIdentity } from "@/components/user-identity"
 import { relaysCollectionOptions } from "@/lib/collections/relays"
-import {
-  minecraftUsernameKey,
-  relayOwnerNamesKey,
-  selectOwnerProfileIds,
-} from "@/lib/minecraft-profile"
 import { relayAddress } from "@/lib/relay-route"
-import {
-  myInvitationsQueryOptions,
-  type ResourceInvitation,
-} from "@/lib/resource-invitation-query"
 import {
   accessCapabilitiesQueryOptions,
   queryKeys,
-  relayOwnerMinecraftProfilesQueryOptions,
   relayProxyQueryOptions,
   relaysQueryOptions,
 } from "@/lib/query-options"
@@ -162,13 +152,9 @@ import {
 } from "@/lib/infra-table-source"
 import type { ManagedRelay } from "@/server/relays"
 
-const noOwnerProfileIds: ReadonlyMap<string, string> = new Map()
-// Owner cells read profiles from context so avatars never rebuild columns.
-const RelayOwnerProfileIdsContext =
-  React.createContext<ReadonlyMap<string, string>>(noOwnerProfileIds)
-
 type RelayRegistryTableItem = Pick<
   ManagedRelay,
+  | "createdBy"
   | "enabled"
   | "hostname"
   | "id"
@@ -433,6 +419,7 @@ const FilteredRelayTable = React.memo(function FilteredRelayTable({
         .orderBy(({ relay }) => relay.name)
         .orderBy(({ relay }) => relay.createdAt)
         .select(({ relay }) => ({
+          createdBy: relay.createdBy,
           enabled: relay.enabled,
           hostname: relay.hostname,
           id: relay.id,
@@ -446,46 +433,17 @@ const FilteredRelayTable = React.memo(function FilteredRelayTable({
           useTls: relay.useTls,
         })),
   })
-  const { data: invitedOwners = noInvitedOwners } = useQuery({
-    ...myInvitationsQueryOptions(),
-    select: selectInvitedOwners,
-  })
-  const ownerNames = React.useMemo(
-    () => relayOwnerNamesKey([...data, ...invitedOwners]),
-    [data, invitedOwners]
-  )
   const source = useInfraTableSource({ rows: data, reference: relayReference })
 
   return (
-    <RelayOwnerProfilesProvider ownerNames={ownerNames}>
-      <RelayTable
-        source={source}
-        searchStore={searchStore}
-        onAdd={onAdd}
-        onEdit={onEdit}
-      />
-    </RelayOwnerProfilesProvider>
+    <RelayTable
+      source={source}
+      searchStore={searchStore}
+      onAdd={onAdd}
+      onEdit={onEdit}
+    />
   )
 })
-
-/** Owns the avatar query so profile updates only reach owner cells. */
-function RelayOwnerProfilesProvider({
-  children,
-  ownerNames,
-}: {
-  children: React.ReactNode
-  ownerNames: string
-}) {
-  const { data: ownerProfileIds = noOwnerProfileIds } = useQuery({
-    ...relayOwnerMinecraftProfilesQueryOptions(ownerNames),
-    select: selectOwnerProfileIds,
-  })
-  return (
-    <RelayOwnerProfileIdsContext.Provider value={ownerProfileIds}>
-      {children}
-    </RelayOwnerProfileIdsContext.Provider>
-  )
-}
 
 const RelaySyncButton = React.memo(function RelaySyncButton() {
   const queryClient = useQueryClient()
@@ -693,6 +651,7 @@ function RelayTable({
           sortFn: "text",
           cell: ({ row }) => (
             <RelayOwnerCell
+              createdBy={row.original.createdBy}
               ownerEmail={row.original.ownerEmail}
               ownerName={row.original.ownerName}
             />
@@ -882,14 +841,6 @@ const RelayEditButton = React.memo(function RelayEditButton({
   )
 })
 
-const noInvitedOwners: ReadonlyArray<{ ownerName: string | null }> = []
-// Owners only, so a pending Relay's new memory reading doesn't re-render the
-// table.
-const selectInvitedOwners = (invitations: Array<ResourceInvitation>) =>
-  invitations.flatMap((invitation) =>
-    invitation.relay ? [{ ownerName: invitation.relay.ownerName }] : []
-  )
-
 // A pending Relay shows what its row will once accepted.
 const relayPendingCells: PendingInvitationCells = {
   relay: (invitation) => <PendingInvitationCard invitation={invitation} />,
@@ -910,6 +861,7 @@ const relayPendingCells: PendingInvitationCells = {
   owner: ({ relay }) =>
     relay ? (
       <RelayOwnerCell
+        createdBy={relay.createdBy}
         ownerEmail={relay.ownerEmail}
         ownerName={relay.ownerName}
       />
@@ -917,17 +869,17 @@ const relayPendingCells: PendingInvitationCells = {
 }
 
 const RelayOwnerCell = React.memo(function RelayOwnerCell({
+  createdBy,
   ownerEmail,
   ownerName,
-}: Pick<RelayTableItem, "ownerEmail" | "ownerName">) {
-  const profileIds = React.useContext(RelayOwnerProfileIdsContext)
+}: Pick<RelayTableItem, "createdBy" | "ownerEmail" | "ownerName">) {
   return ownerName ? (
     <UserIdentity
       className="w-full"
       emailClassName={pendingRowDetailClassName}
       email={ownerEmail}
       name={ownerName}
-      profileId={profileIds.get(minecraftUsernameKey(ownerName))}
+      userId={createdBy}
     />
   ) : (
     <IdentityName

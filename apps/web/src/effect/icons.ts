@@ -105,7 +105,7 @@ export const listIconIndexEffect = Effect.fn("icons.index")(function* (
     if (!include(subject)) continue
     index[key] = row.digest
   }
-  return index satisfies IconIndex
+  return index satisfies IconIndex["digests"]
 })
 
 /** The image shown for a subject, or null when it has none. */
@@ -144,10 +144,10 @@ export const getIconDetailsEffect = Effect.fn("icons.details")(function* (
       WHERE subject_kind = ? AND relay_id = ? AND subject_id = ?`,
     subjectKeys(subject)
   )
-  const custom = rows.find((row) => row.source === "custom" && row.digest)
+  const custom = rows.find((row) => row.source === "custom")
   const detected = rows.find((row) => row.source === "detected")
   return {
-    custom: custom?.digest
+    custom: custom
       ? {
           digest: custom.digest,
           origin: parsedOrigin(custom.origin),
@@ -271,4 +271,43 @@ export const listDetectionsEffect = Effect.fn("icons.detections")(function* (
       },
     ])
   )
+})
+
+interface LinkedIconRow extends RowDataPacket {
+  origin: unknown
+  origin_version: string | null
+  subject_id: string
+  subject_kind: "app" | "server"
+}
+
+/**
+ * The custom icons on a Relay that follow a file, with the version of the
+ * file Hearth last copied.
+ */
+export const listLinkedIconsEffect = Effect.fn("icons.linked")(function* (
+  relayId: string,
+  subjectId?: string
+) {
+  const database = yield* Database
+  const rows = yield* database.queryRows<LinkedIconRow>(
+    "icons.linked",
+    `SELECT subject_kind, subject_id, origin, origin_version
+       FROM ${table()}
+      WHERE relay_id = ? AND source = 'custom'
+        AND subject_kind IN ('server', 'app')${subjectId ? " AND subject_id = ?" : ""}`,
+    subjectId ? [relayId, subjectId] : [relayId]
+  )
+  return rows.flatMap((row) => {
+    const origin = parsedOrigin(row.origin)
+    return origin?.type === "file"
+      ? [
+          {
+            id: row.subject_id,
+            kind: row.subject_kind,
+            origin,
+            originVersion: row.origin_version,
+          },
+        ]
+      : []
+  })
 })

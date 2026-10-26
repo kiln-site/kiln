@@ -5,8 +5,8 @@ import { cn } from "@workspace/ui/lib/utils"
 import { UserAvatar } from "@/components/account-avatar"
 import { RedactedText } from "@/components/redacted-text"
 
-// A person as Kiln shows them: their Minecraft head (initials without one),
-// name, and email blurred until clicked.
+// A person as Kiln shows them: their picture (initials without one), name,
+// and email blurred until clicked.
 export const UserIdentity = React.memo(function UserIdentity({
   accessory,
   avatarClassName,
@@ -15,7 +15,7 @@ export const UserIdentity = React.memo(function UserIdentity({
   emailClassName,
   name,
   nameClassName,
-  profileId,
+  userId,
 }: {
   /** Badges after the name. */
   accessory?: React.ReactNode
@@ -26,13 +26,13 @@ export const UserIdentity = React.memo(function UserIdentity({
   emailClassName?: string
   name: string
   nameClassName?: string
-  profileId?: string | null
+  userId?: string | null
 }) {
   return (
     <span className={cn("flex min-w-0 items-center gap-3", className)}>
       <UserAvatar
         name={name}
-        profileId={profileId ?? undefined}
+        userId={userId}
         className={cn("size-9", avatarClassName)}
       />
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">

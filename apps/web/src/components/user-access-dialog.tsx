@@ -125,14 +125,11 @@ function invalidateAccess(client: ReturnType<typeof useQueryClient>) {
  */
 export const UserAccessDialog = memo(function UserAccessDialog({
   userId,
-  profileId,
   initialScope,
   platform,
   onClose,
 }: {
   userId?: string
-  /** Their Minecraft head, when the caller already resolved it. */
-  profileId?: string
   initialScope?: AccessScope
   /** A platform administrator: account controls and platform roles. */
   platform: boolean
@@ -166,7 +163,6 @@ export const UserAccessDialog = memo(function UserAccessDialog({
       ) : access.data ? (
         <AccessForm
           access={access.data}
-          profileId={profileId}
           platform={platform}
           onBusyChange={setBusy}
           onClose={onClose}
@@ -200,14 +196,12 @@ export const UserAccessDialog = memo(function UserAccessDialog({
 
 function AccessForm({
   access,
-  profileId,
   initialScope,
   platform,
   onBusyChange,
   onClose,
 }: {
   access?: UserAccess
-  profileId?: string
   initialScope?: AccessScope
   platform: boolean
   onBusyChange: (busy: boolean) => void
@@ -517,7 +511,6 @@ function AccessForm({
   const header = user ? (
     <UserHeader
       user={user}
-      profileId={profileId}
       tab={tab}
       onTab={platform ? setTab : undefined}
     />
@@ -643,12 +636,10 @@ function saveSummary(invites: number, updates: number, revokes: number) {
 
 function UserHeader({
   user,
-  profileId,
   tab,
   onTab,
 }: {
   user: ManagedUser
-  profileId?: string
   tab: "permissions" | "account"
   onTab?: (tab: "permissions" | "account") => void
 }) {
@@ -657,7 +648,7 @@ function UserHeader({
       <UserIdentity
         name={user.name}
         email={user.email}
-        profileId={profileId}
+        userId={user.id}
         avatarClassName="size-10"
         nameClassName="text-base"
         accessory={<UserBadges user={user} />}

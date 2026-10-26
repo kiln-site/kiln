@@ -1,5 +1,4 @@
 import * as React from "react"
-import { useQuery } from "@tanstack/react-query"
 
 import {
   Avatar,
@@ -8,46 +7,33 @@ import {
 } from "@workspace/ui/components/avatar"
 import { cn } from "@workspace/ui/lib/utils"
 
-import { useIconUrl } from "@/components/icon-image"
-import { minecraftHeadUrl } from "@/lib/minecraft-profile"
-import { minecraftProfileQueryOptions } from "@/lib/query-options"
+import { useUserPictureUrl } from "@/components/icon-image"
 
 interface UserAvatarProps {
   className?: string
   fallbackClassName?: string
   name: string
   size?: "default" | "sm" | "lg"
-  /** Shows the picture they chose, when they have one. */
-  userId?: string
+  /** Whose picture to show; initials without one. */
+  userId?: string | null
 }
 
-/**
- * The signed-in user's avatar: the picture they chose, or else their
- * Minecraft head, or else their initials.
- */
+/** The signed-in user's avatar; the same as any other user's. */
 export const AccountAvatar = React.memo(function AccountAvatar(
   props: UserAvatarProps
 ) {
-  const { data: profile } = useQuery(minecraftProfileQueryOptions(props.name))
-
-  return <UserAvatar {...props} profileId={profile?.id} />
+  return <UserAvatar {...props} />
 })
 
-/** Any user's avatar from an already resolved Minecraft profile. */
+/** A user's avatar: the picture they chose, or else their initials. */
 export const UserAvatar = React.memo(function UserAvatar({
   className,
   fallbackClassName,
   name,
-  profileId,
   size = "sm",
   userId,
-}: UserAvatarProps & { profileId?: string }) {
-  const pictureUrl = useIconUrl(
-    React.useMemo(
-      () => (userId ? { kind: "user" as const, id: userId } : null),
-      [userId]
-    )
-  )
+}: UserAvatarProps) {
+  const pictureUrl = useUserPictureUrl(userId)
   return (
     <Avatar
       aria-hidden="true"
@@ -56,13 +42,6 @@ export const UserAvatar = React.memo(function UserAvatar({
     >
       {pictureUrl ? (
         <AvatarImage src={pictureUrl} alt="" className="object-cover" />
-      ) : profileId ? (
-        <AvatarImage
-          src={minecraftHeadUrl(profileId)}
-          alt=""
-          referrerPolicy="no-referrer"
-          className={size === "lg" ? "[image-rendering:pixelated]" : undefined}
-        />
       ) : null}
       <AvatarFallback
         className={cn(

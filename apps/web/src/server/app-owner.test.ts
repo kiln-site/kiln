@@ -9,7 +9,6 @@ import type { AuthenticatedUser } from "@/lib/auth-session"
 import type { AccessPermission } from "@/lib/permissions"
 import {
   getAppOwnerHandler,
-  getAppOwnerMinecraftProfileIdHandler,
 } from "@/server/app-access"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertGrant, insertRelay, insertRows, insertUser } from "@/test/seed"
@@ -113,7 +112,11 @@ describeMysql("app owner", () => {
 
           assert.deepStrictEqual(owner, {
             canTransfer: false,
-            owner: { email: "owner@example.test", name: "Steve" },
+            owner: {
+              email: "owner@example.test",
+              name: "Steve",
+              userId: "owner",
+            },
           })
         })
     )
@@ -128,7 +131,7 @@ describeMysql("app owner", () => {
 
           assert.deepStrictEqual(owner, {
             canTransfer: false,
-            owner: { email: null, name: "Steve" },
+            owner: { email: null, name: "Steve", userId: "owner" },
           })
         })
     )
@@ -141,12 +144,6 @@ describeMysql("app owner", () => {
           const user = sessionUser(userId)
           assert.instanceOf(
             yield* refusal(getAppOwnerHandler(user, target(appId))),
-            Error
-          )
-          assert.instanceOf(
-            yield* refusal(
-              getAppOwnerMinecraftProfileIdHandler(user, target(appId))
-            ),
             Error
           )
         }
@@ -187,7 +184,7 @@ describeMysql("app owner", () => {
 
         assert.deepStrictEqual(owner, {
           canTransfer: true,
-          owner: { email: null, name: "Steve" },
+          owner: { email: null, name: "Steve", userId: "owner" },
         })
       })
     )

@@ -7,7 +7,6 @@ import {
   loadAppConfigEffect,
   updateAppConfigEffect,
 } from "@/effect/managed-apps"
-import { resolveMinecraftProfileEffect } from "@/effect/minecraft-profile"
 import { ownerDisplayName } from "@/effect/relay-owners"
 import { runAppEffect } from "@/effect/runtime"
 import {
@@ -216,7 +215,7 @@ export async function getAppOwnerHandler(
   data: { appId: string; relayId: string }
 ): Promise<{
   canTransfer: boolean
-  owner: { email: string | null; name: string } | null
+  owner: { email: string | null; name: string; userId: string } | null
 }> {
   const { canReadPeople, row } = await readableAppOwner(user, data)
   return {
@@ -225,6 +224,8 @@ export async function getAppOwnerHandler(
       ? {
           email: canReadPeople ? row.email : null,
           name: ownerDisplayName(row, canReadPeople),
+          // For their picture.
+          userId: row.id,
         }
       : null,
   }
@@ -276,22 +277,4 @@ export async function transferAppOwnershipHandler(
     )
   )
   return { previousOwnerId: result.previousOwnerId, userId: recipient.id }
-}
-
-// The owner's Minecraft profile ID, for their avatar. Only a stored display
-// name reaches Mojang, never one derived from an email.
-export async function getAppOwnerMinecraftProfileIdHandler(
-  user: AuthenticatedUser,
-  data: { appId: string; relayId: string }
-): Promise<string | null> {
-  const { row } = await readableAppOwner(user, data)
-  const name = row?.name?.trim()
-  if (!name) return null
-  const profile = await runAppEffect(
-    "minecraft.appOwnerProfile.resolve",
-    resolveMinecraftProfileEffect(name).pipe(
-      Effect.catch(() => Effect.succeed(null))
-    )
-  )
-  return profile?.id ?? null
 }

@@ -8,6 +8,7 @@ import {
   Link2,
   LoaderCircle,
   Pencil,
+  Pickaxe,
   RefreshCw,
   Trash2,
 } from "lucide-react"
@@ -53,17 +54,30 @@ import { readRelayFile, RelayTransferError } from "@/lib/relay-file-transfer"
 import {
   detectIcon,
   fetchIconSource,
+  fetchMinecraftHead,
+  linkIconFile,
   readIconSourceFile,
   removeCustomIcon,
   saveCustomIcon,
 } from "@/server/icons"
 
-// Choosing an icon: upload a picture, copy one from the web, or, for game
-// servers and apps, copy a file from their files or containers. The browser
-// shrinks what's chosen before it's saved. Game servers and apps also show
-// what Kiln found for them, which their custom icon takes the place of.
+// Choosing an icon: upload a picture, copy one from the web, or, for an
+// account, a Minecraft player's head; the browser shrinks these before
+// they're saved. Game servers and apps can instead follow one of their own
+// files, which Kiln keeps copying as it changes, and show what Kiln found
+// for them, which their custom icon takes the place of.
 
-type SourceKind = "files" | "link" | "upload"
+type SourceKind = "files" | "link" | "minecraft" | "upload"
+
+// What Save would keep: a picture the browser prepared, or a file to follow.
+type Candidate =
+  | { kind: "copy"; icon: PreparedIcon; origin: IconOrigin }
+  | {
+      kind: "link"
+      path: string
+      previewUrl: string
+      service: string | undefined
+    }
 
 /** A game server's or app's files, to copy an icon from. */
 export interface IconFileSource {
@@ -78,6 +92,8 @@ export interface IconEditorProps {
   readonly fallback: React.ReactNode
   readonly files?: IconFileSource
   readonly fit: IconFit
+  /** For an account, the name the Minecraft tab starts with. */
+  readonly minecraftUsername?: string
   /** Lowercase, as "game server" or "picture". */
   readonly noun: string
   readonly subject: IconSubject
@@ -160,6 +176,7 @@ function IconEditorDialog({
   fallback,
   files,
   fit,
+  minecraftUsername,
   noun,
   onOpenChange,
   subject,
@@ -169,16 +186,13 @@ function IconEditorDialog({
   const currentUrl = useIconUrl(subject)
   const details = useQuery(iconDetailsQueryOptions(subject))
   const [source, setSource] = React.useState<SourceKind>("upload")
-  const [candidate, setCandidate] = React.useState<{
-    icon: PreparedIcon
-    origin: IconOrigin
-  } | null>(null)
+  const [candidate, setCandidate] = React.useState<Candidate | null>(null)
   const [preparing, setPreparing] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
 
   React.useEffect(
     () => () => {
-      if (candidate) URL.revokeObjectURL(candidate.icon.previewUrl)
+      if (candidate) URL.revokeObjectURL(candidatePreview(candidate))
     },
     [candidate]
   )
@@ -205,21 +219,59 @@ function IconEditorDialog({
         () => setPreparing(false)
       )
       if ("error" in prepared) setError(prepared.error)
-      else setCandidate({ icon: prepared.icon, origin })
+      else setCandidate({ kind: "copy", icon: prepared.icon, origin })
     },
     [fit]
+  )
+
+  // A file to follow is previewed as it is; Kiln reads and checks it
+  // itself when it's saved.
+  const preview = React.useCallback(
+    async (path: string, service: string | undefined) => {
+      if (subject.kind !== "server" && subject.kind !== "app") return
+      if (!files) return
+      setError(null)
+      setPreparing(true)
+      const loaded = await ensuringPromise(
+        () =>
+          recoverPromise(
+            async () => ({
+              blob: await readSourceFile(subject, files, path, service),
+            }),
+            (cause) => ({ error: errorMessage(cause, "Could not read that file") })
+          ),
+        () => setPreparing(false)
+      )
+      if ("error" in loaded) {
+        setError(loaded.error)
+        return
+      }
+      setCandidate({
+        kind: "link",
+        path,
+        previewUrl: URL.createObjectURL(loaded.blob),
+        service,
+      })
+    },
+    [files, subject]
   )
 
   const save = useMutation({
     mutationFn: async () => {
       if (!candidate) return
-      await saveCustomIcon({
-        data: {
-          contentBase64: await blobToBase64(candidate.icon.blob),
-          origin: candidate.origin,
-          subject,
-        },
-      })
+      if (candidate.kind === "link") {
+        await linkIconFile({
+          data: { path: candidate.path, service: candidate.service, subject },
+        })
+      } else {
+        await saveCustomIcon({
+          data: {
+            contentBase64: await blobToBase64(candidate.icon.blob),
+            origin: candidate.origin,
+            subject,
+          },
+        })
+      }
       await refresh()
     },
     onSuccess: () => {
@@ -250,7 +302,7 @@ function IconEditorDialog({
   })
 
   const busy = preparing || save.isPending || remove.isPending
-  const previewUrl = candidate?.icon.previewUrl ?? currentUrl
+  const previewUrl = candidate ? candidatePreview(candidate) : currentUrl
   const hasCustom = Boolean(details.data?.custom)
   const detectable = subject.kind === "server" || subject.kind === "app"
 
@@ -308,6 +360,7 @@ function IconEditorDialog({
           <div className="flex min-w-0 flex-col gap-3">
             <SourceTabs
               files={Boolean(files)}
+              minecraft={subject.kind === "user"}
               onChange={(next) => {
                 setSource(next)
                 setError(null)
@@ -353,14 +406,7 @@ function IconEditorDialog({
                     disabled={busy}
                     files={files}
                     kind={subject.kind}
-                    onFile={(path, service) =>
-                      void choose(
-                        () => readSourceFile(subject, files, path, service),
-                        service
-                          ? { type: "file", path, service }
-                          : { type: "file", path }
-                      )
-                    }
+                    onFile={(path, service) => void preview(path, service)}
                   >
                     <DetectionStatus
                       details={details.data}
@@ -368,6 +414,29 @@ function IconEditorDialog({
                       onDetected={refresh}
                     />
                   </FilesSource>
+                </SourcePanel>
+              ) : null}
+              {subject.kind === "user" ? (
+                <SourcePanel active={source === "minecraft"}>
+                  <MinecraftSource
+                    active={source === "minecraft"}
+                    defaultUsername={minecraftUsername ?? ""}
+                    disabled={busy}
+                    onUsername={(username) =>
+                      void choose(
+                        async () => {
+                          const head = await fetchMinecraftHead({
+                            data: { username },
+                          })
+                          return base64ToBlob(
+                            head.contentBase64,
+                            head.contentType
+                          )
+                        },
+                        { type: "minecraft", username }
+                      )
+                    }
+                  />
                 </SourcePanel>
               ) : null}
             </div>
@@ -474,10 +543,12 @@ function ListPreview({
 
 function SourceTabs({
   files,
+  minecraft,
   onChange,
   value,
 }: {
   files: boolean
+  minecraft: boolean
   onChange: (value: SourceKind) => void
   value: SourceKind
 }) {
@@ -490,6 +561,9 @@ function SourceTabs({
     { icon: Link2, label: "Link", value: "link" },
     ...(files
       ? [{ icon: FolderOpen, label: "Files", value: "files" as const }]
+      : []),
+    ...(minecraft
+      ? [{ icon: Pickaxe, label: "Minecraft", value: "minecraft" as const }]
       : []),
   ]
   return (
@@ -641,6 +715,58 @@ function LinkSource({
   )
 }
 
+function MinecraftSource({
+  active,
+  defaultUsername,
+  disabled,
+  onUsername,
+}: {
+  active: boolean
+  defaultUsername: string
+  disabled: boolean
+  onUsername: (username: string) => void
+}) {
+  const [username, setUsername] = React.useState(defaultUsername)
+  const input = useFocusWhenActive(active)
+  const value = username.trim()
+  return (
+    <form
+      className="flex flex-col gap-2"
+      onSubmit={(event) => {
+        event.preventDefault()
+        if (value) onUsername(value)
+      }}
+    >
+      <label
+        htmlFor="icon-minecraft"
+        className="type-label text-muted-foreground"
+      >
+        Minecraft username
+      </label>
+      <div className="flex gap-2">
+        <Input
+          id="icon-minecraft"
+          autoComplete="off"
+          spellCheck={false}
+          maxLength={16}
+          placeholder="Notch"
+          value={username}
+          disabled={disabled}
+          onChange={(event) => setUsername(event.target.value)}
+          ref={input}
+        />
+        <Button type="submit" variant="outline" disabled={disabled || !value}>
+          Get
+        </Button>
+      </div>
+      <p className="type-meta text-muted-foreground">
+        Uses that player's head. Kiln keeps a copy, so it stays if their skin
+        changes.
+      </p>
+    </form>
+  )
+}
+
 const APP_FILES = "__files__"
 
 function FilesSource({
@@ -726,10 +852,10 @@ function FilesSource({
       {/* Two lines kept, whichever explanation shows. */}
       <p className="type-meta min-h-[2lh] text-muted-foreground">
         {inContainer
-          ? "Read from the running container. Kiln keeps a copy."
+          ? "In the running container. The icon follows the file as it changes."
           : kind === "server"
-            ? "Relative to the server's folder, as in Files. Kiln keeps a copy."
-            : "Relative to the app's folder, as in Files. Kiln keeps a copy."}
+            ? "In the server's folder, as in Files. The icon follows the file as it changes."
+            : "In the app's folder, as in Files. The icon follows the file as it changes."}
       </p>
       {children ? <div className="mt-auto pt-1">{children}</div> : null}
     </form>
@@ -835,6 +961,11 @@ function currentSourceLabel(details: IconDetails | undefined, noun: string) {
   if (!details) return ""
   if (details.custom) {
     const origin = details.custom.origin
+    if (origin?.type === "file") {
+      return details.custom.digest
+        ? `Follows ${fileLabel(origin)}`
+        : `${fileLabel(origin)} is gone, so the icon fell back`
+    }
     return origin && origin.type !== "upload"
       ? `Custom, from ${originLabel(origin)}`
       : noun === "picture"
@@ -854,11 +985,21 @@ function originLabel(origin: IconOrigin): string {
     case "url":
     case "site":
       return `on ${hostOf(origin.url)}`
+    case "minecraft":
+      return `${origin.username}'s Minecraft head`
     case "file":
-      return origin.service
-        ? `in ${origin.service}: ${origin.path}`
-        : `in ${origin.path}`
+      return `in ${fileLabel(origin)}`
   }
+}
+
+function fileLabel(origin: Extract<IconOrigin, { type: "file" }>): string {
+  return origin.service ? `${origin.service}: ${origin.path}` : origin.path
+}
+
+function candidatePreview(candidate: Candidate): string {
+  return candidate.kind === "link"
+    ? candidate.previewUrl
+    : candidate.icon.previewUrl
 }
 
 function hostOf(url: string): string {

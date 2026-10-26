@@ -4,12 +4,14 @@ import {
   ALargeSmall,
   Archive,
   ArchiveRestore,
+  CircleUserRound,
   Copy,
   Download,
   EllipsisVertical,
   FileIcon,
   Folder,
   FolderInput,
+  Image as ImageIcon,
   Pin,
   PinOff,
   Trash2,
@@ -34,6 +36,10 @@ import {
 import { showToast } from "@workspace/ui/components/sonner"
 import { floatingSurfaceClassName } from "@workspace/ui/lib/surface-styles"
 
+import {
+  isIconImagePath,
+  useFileIconActions,
+} from "@/components/files/file-icon-actions"
 import { useFilePin } from "@/components/files/file-pin"
 
 import {
@@ -264,6 +270,14 @@ function FileActionMenuItems({
         onSelect={request("duplicate")}
         restoreFocus
       />
+      {!directory && paths.length === 1 && isIconImagePath(paths[0] ?? "") ? (
+        <FileIconMenuItems
+          surface={surface}
+          close={close}
+          controller={controller}
+          path={paths[0] ?? ""}
+        />
+      ) : null}
       <FileActionMenuSeparator surface={surface} />
       <FileActionMenuItem
         surface={surface}
@@ -273,6 +287,47 @@ function FileActionMenuItems({
         label="Delete"
         onSelect={request("delete")}
         variant="destructive"
+      />
+    </>
+  )
+}
+
+// An image can become the icon of the game server or app it belongs to, or
+// the person's own picture.
+function FileIconMenuItems({
+  close,
+  controller,
+  path,
+  surface,
+}: {
+  close?: CloseFileActionsMenu
+  controller: FileActionsController
+  path: string
+  surface: FileActionsMenuSurface
+}) {
+  const { setInstanceIcon, setPicture, subject } = useFileIconActions(
+    controller.instance
+  )
+  return (
+    <>
+      <FileActionMenuSeparator surface={surface} />
+      {subject ? (
+        <FileActionMenuItem
+          surface={surface}
+          close={close}
+          icon={<ImageIcon />}
+          label={
+            subject.kind === "app" ? "Use as app icon" : "Use as server icon"
+          }
+          onSelect={() => void setInstanceIcon(path)}
+        />
+      ) : null}
+      <FileActionMenuItem
+        surface={surface}
+        close={close}
+        icon={<CircleUserRound />}
+        label="Use as my picture"
+        onSelect={() => void setPicture(path)}
       />
     </>
   )

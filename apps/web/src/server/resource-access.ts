@@ -37,7 +37,6 @@ import {
 import { displayNameFromEmail } from "@/lib/display-name"
 import {
   getResourceOwnerHandler,
-  getResourceOwnerMinecraftProfileIdHandler,
   getResourceUserCountHandler,
   peopleFilter,
   supportedScopePermissions,
@@ -953,17 +952,6 @@ export const getResourceOwner = createServerFn({ method: "GET" })
   .validator(resourceScopeSchema)
   .handler(async ({ data }) =>
     getResourceOwnerHandler(await requireEligibleResourceUser(), data)
-  )
-
-export const getResourceOwnerMinecraftProfileId = createServerFn({
-  method: "GET",
-})
-  .validator(resourceScopeSchema)
-  .handler(async ({ data }) =>
-    getResourceOwnerMinecraftProfileIdHandler(
-      await requireEligibleResourceUser(),
-      data
-    )
   )
 
 export const getResourceAccess = createServerFn({ method: "GET" })

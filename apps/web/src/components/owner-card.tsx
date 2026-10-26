@@ -11,7 +11,7 @@ export function OwnerCard({
   action,
   email,
   name,
-  profileId,
+  userId,
 }: {
   // Beside the label, such as a way to transfer ownership.
   action?: ReactNode
@@ -19,8 +19,8 @@ export function OwnerCard({
   email: string | null
   // Null when the platform manages the resource.
   name: string | null
-  // The owner's Minecraft profile, for their head; initials without one.
-  profileId?: string | null
+  // Whose picture to show; initials without one.
+  userId?: string | null
 }) {
   return (
     <section className="mt-6 flex min-w-0 items-center gap-3 border bg-background/45 p-3 first:mt-0">
@@ -29,7 +29,7 @@ export function OwnerCard({
           className="flex-1"
           email={email}
           name={name}
-          profileId={profileId}
+          userId={userId}
         />
       ) : (
         <>

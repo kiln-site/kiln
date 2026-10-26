@@ -38,13 +38,24 @@ export async function iconResponse(
   )
   if (!allowed) return failure(404, "Icon not found")
   const icon = await runAppEffect("icons.serve", getIconImageEffect(subject))
-  if (!icon) return failure(404, "Icon not found")
-  const etag = `"${icon.digest}"`
   const requested = new URL(request.url).searchParams.get("v")
+  // Others' pictures load by user ID alone, so whether one exists is kept
+  // a few minutes rather than asked on every render.
+  if (!icon) {
+    return requested === null && subject.kind === "user"
+      ? new Response(null, {
+          headers: { "Cache-Control": "private, max-age=300" },
+          status: 404,
+        })
+      : failure(404, "Icon not found")
+  }
+  const etag = `"${icon.digest}"`
   const cacheControl =
     requested === icon.digest
       ? "private, max-age=31536000, immutable"
-      : "private, no-cache"
+      : requested === null && subject.kind === "user"
+        ? "private, max-age=300"
+        : "private, no-cache"
   if (request.headers.get("if-none-match") === etag) {
     return new Response(null, {
       headers: { ...iconHeaders, "Cache-Control": cacheControl, ETag: etag },

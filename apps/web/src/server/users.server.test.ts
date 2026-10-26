@@ -6,7 +6,6 @@ import { disposeAppRuntime } from "@/effect/runtime"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import {
   getUserAccessHandler,
-  getUserMinecraftProfilesHandler,
   listManagedUsersHandler,
 } from "@/server/users.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
@@ -267,39 +266,6 @@ describeMysql("platform users", () => {
           "55555555-5555-4555-8555-555555555555",
         ])
       })
-    )
-
-    it.effect(
-      "outside the platform view, heads need a resource whose people you can read",
-      () =>
-        Effect.gen(function* () {
-          yield* seed
-          const scope = {
-            relayId,
-            resourceType: "instance",
-            resourceId: otherInstanceId,
-          } as const
-          // No resource at all.
-          const unscoped = yield* Effect.exit(
-            Effect.tryPromise(() =>
-              getUserMinecraftProfilesHandler(sessionUser("member"), [
-                "invited",
-              ])
-            )
-          )
-          assert.isTrue(unscoped._tag === "Failure")
-          // member can read the game server, but not who has access to it.
-          const unreadable = yield* Effect.exit(
-            Effect.tryPromise(() =>
-              getUserMinecraftProfilesHandler(
-                sessionUser("member"),
-                ["invited"],
-                scope
-              )
-            )
-          )
-          assert.isTrue(unreadable._tag === "Failure")
-        })
     )
 
     it.effect(

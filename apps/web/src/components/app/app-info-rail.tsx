@@ -43,7 +43,6 @@ import { warmSyntaxCodeEditorModule } from "@/lib/syntax-editor-module-preload"
 import {
   appConfigQueryOptions,
   appDeploymentSummaryQueryOptions,
-  appOwnerMinecraftProfileQueryOptions,
   appOwnerQueryOptions,
 } from "@/lib/query-options"
 
@@ -180,10 +179,6 @@ const AppOwner = React.memo(function AppOwner({
 }) {
   const { data } = useQuery(appOwnerQueryOptions(relayId, appId))
   const owner = data?.owner
-  const { data: profileId } = useQuery({
-    ...appOwnerMinecraftProfileQueryOptions(relayId, appId, owner?.name ?? ""),
-    enabled: Boolean(owner),
-  })
   const [transferring, setTransferring] = React.useState(false)
   const [transferMounted, setTransferMounted] = React.useState(false)
   if (data === undefined) return null
@@ -207,7 +202,7 @@ const AppOwner = React.memo(function AppOwner({
         }
         email={owner?.email ?? null}
         name={owner?.name ?? null}
-        profileId={profileId}
+        userId={owner?.userId ?? null}
       />
       {transferMounted ? (
         <React.Suspense fallback={null}>

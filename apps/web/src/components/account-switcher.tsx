@@ -142,7 +142,7 @@ export const AccountSwitcherSection = React.memo(
               >
                 <UserAvatar
                   name={account.name}
-                  profileId={account.minecraftProfileId ?? undefined}
+                  userId={account.userId}
                 />
                 <span className="min-w-0 flex-1">
                   <span

@@ -63,7 +63,6 @@ import {
   type ServerPickerOption,
 } from "@/components/server-scope-picker"
 import { UserIdentity } from "@/components/user-identity"
-import { UserProfilesContext } from "@/components/user-table-parts"
 import {
   activityLocalRangeToUtc,
   activityTypes,
@@ -91,12 +90,10 @@ import {
 } from "@/lib/data-table-search"
 import type { DataTableSource } from "@/lib/data-table-source"
 import {
-  accessCapabilitiesQueryOptions,
   activityQueryOptions,
 } from "@/lib/query-options"
 import { relayInstanceRouteId } from "@/lib/relay-fleet"
 import type { ActivityData, ActivityEntry } from "@/server/activity"
-import { getUserMinecraftProfiles } from "@/server/users"
 
 export interface ActivityFilters {
   app?: string
@@ -317,9 +314,7 @@ export const ActivityPage = React.memo(function ActivityPage({
         }
       >
         <ActivityStatusController dataStore={dataStore} />
-        <ActivityActorProfiles dataStore={dataStore}>
-          <ActivityTable filterStore={filterStore} searchStore={searchStore} />
-        </ActivityActorProfiles>
+        <ActivityTable filterStore={filterStore} searchStore={searchStore} />
       </DataTableWorkspace>
     </div>
   )
@@ -1371,45 +1366,6 @@ const ActivityStatusController = React.memo(function ActivityStatusController({
   return <ActivityStatus data={dataStore.getData()} />
 })
 
-const noActorProfiles: Record<string, string> = {}
-
-// Minecraft heads for the people in the log. Only platform administrators
-// may look up anyone's; others see initials. Heads arrive after the rows and
-// repaint only the user cells.
-const ActivityActorProfiles = React.memo(function ActivityActorProfiles({
-  children,
-  dataStore,
-}: {
-  children: React.ReactNode
-  dataStore: ActivityDataStore
-}) {
-  React.useSyncExternalStore(
-    dataStore.subscribeActors,
-    dataStore.getActorsSnapshot,
-    dataStore.getActorsSnapshot
-  )
-  const actors = dataStore.getActors()
-  const { data: platformAdmin = false } = useQuery({
-    ...accessCapabilitiesQueryOptions(),
-    select: selectPlatformAdmin,
-  })
-  const userIds = React.useMemo(
-    () => actors.slice(0, 100).map((actor) => actor.id),
-    [actors]
-  )
-  const { data: profiles = noActorProfiles } = useQuery({
-    queryKey: ["users", "minecraft-profiles", userIds.join(",")],
-    queryFn: () => getUserMinecraftProfiles({ data: { userIds } }),
-    enabled: platformAdmin && userIds.length > 0,
-    staleTime: 60 * 60_000,
-  })
-  return (
-    <UserProfilesContext.Provider value={profiles}>
-      {children}
-    </UserProfilesContext.Provider>
-  )
-})
-
 const ActivityTable = React.memo(function ActivityTable({
   filterStore,
   searchStore,
@@ -1616,7 +1572,6 @@ const ActivityUser = React.memo(function ActivityUser({
   actor: ActivityEntry["actor"]
   source: ActivitySource
 }) {
-  const profileId = React.useContext(UserProfilesContext)[actor.id]
   return (
     <UserIdentity
       accessory={
@@ -1629,7 +1584,7 @@ const ActivityUser = React.memo(function ActivityUser({
       avatarClassName="size-8"
       email={actor.email}
       name={actor.name}
-      profileId={profileId}
+      userId={actor.id}
     />
   )
 })
@@ -1754,12 +1709,6 @@ function activityWhereIdentity({
   return target
     ? { id: target.id, kind: target.kind, relayId: relay.id }
     : { id: relay.id, kind: "relay", relayId: relay.id }
-}
-
-function selectPlatformAdmin(capabilities: {
-  isPlatformAdmin: boolean
-}): boolean {
-  return capabilities.isPlatformAdmin
 }
 
 function activityActors(data: ActivityData): Array<ActivityEntry["actor"]> {

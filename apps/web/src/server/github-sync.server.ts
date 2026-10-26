@@ -103,6 +103,8 @@ export interface GitHubConnectionView {
   manageUrl: string | null
   /** The Kiln user who added it; null if their account is gone. */
   ownerEmail: string | null
+  /** For their picture; null if their account is gone. */
+  ownerId: string | null
   ownerName: string | null
   /** Where the source lives; GitHub is the only one so far. */
   provider: "github"
@@ -318,6 +320,10 @@ async function sourceViews(
       connection.ownerUserId === user.id
         ? user.email
         : (owners[index]?.ownerEmail ?? null),
+    ownerId:
+      connection.ownerUserId === user.id || owners[index]?.ownerName
+        ? connection.ownerUserId
+        : null,
     ownerName:
       connection.ownerUserId === user.id
         ? resolveDisplayName(user.name, user.email)

@@ -16,6 +16,8 @@ interface InvitedRelayRow extends RowDataPacket {
 }
 
 export interface InvitedRelay {
+  /** The owner's user ID, for their picture. */
+  createdBy: string | null
   hostname: string
   id: string
   // Undefined while this process has no connection to the Relay, null when
@@ -64,6 +66,7 @@ export const listInvitedRelaysEffect = Effect.fn(
     includeOwnerDetails
   )
   return relays.map((relay): InvitedRelay => ({
+    createdBy: relay.createdBy,
     hostname: relay.hostname,
     id: relay.id,
     memory: relayMemory(relay.id),

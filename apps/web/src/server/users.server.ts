@@ -1,20 +1,13 @@
 import type { RowDataPacket } from "mysql2/promise"
-import { Effect } from "effect"
 import type { PermissionSelection } from "@workspace/contracts"
 
-import { resolveMinecraftProfileEffect } from "@/effect/minecraft-profile"
-import { runAppEffect } from "@/effect/runtime"
 
 import { isPlatformAdmin } from "@/lib/access-control"
 import { isAccountEnabled } from "@/lib/account-policy"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { databaseTable } from "@/lib/database-config"
 import { databasePool } from "@/lib/database"
-import { isMinecraftUsername } from "@/lib/minecraft-profile"
-import { peopleFilter } from "@/server/resource-access.server"
 import {
-  effectiveScopePermissions,
-  loadResourceGrantsEffect,
   type AccessGrantScope,
   type ResourceScope,
 } from "@/lib/resource-permissions"
@@ -469,54 +462,3 @@ export async function getUserAccessHandler(
   }
 }
 
-/**
- * Minecraft profile IDs for users' heads, by user ID. Only names people chose
- * when signing up reach Mojang; a pending person's name comes from their email.
- */
-export async function getUserMinecraftProfilesHandler(
-  actor: AuthenticatedUser,
-  userIds: ReadonlyArray<string>,
-  /** Outside the platform view: a resource whose people the actor can read. */
-  scope?: AccessGrantScope
-): Promise<Record<string, string>> {
-  const admin = isPlatformAdmin(actor)
-  if (!admin) {
-    if (!scope) throw new Error("Platform administrator required")
-    const grants = await runAppEffect(
-      "access.scope",
-      loadResourceGrantsEffect(actor.id, scope.relayId, undefined, scope)
-    )
-    if (!effectiveScopePermissions(grants, scope).has("access.read"))
-      throw new Error("Resource not found")
-  }
-  if (!userIds.length) return {}
-  // Others only see heads for the people that resource lists: the same
-  // filter as its Access page, inherited Relay access included.
-  const people = admin ? null : peopleFilter(scope!)
-  const [rows] = await databasePool.query<
-    Array<RowDataPacket & { id: string; name: string }>
-  >(
-    `SELECT u.id, u.name FROM ${databaseTable("user")} u WHERE u.id IN (?) AND ${hasCredential}${
-      people
-        ? ` AND EXISTS (SELECT 1 FROM ${databaseTable("access_grant")} g WHERE g.user_id = u.id AND ${people.sql})`
-        : ""
-    }`,
-    people ? [userIds, ...people.values] : [userIds]
-  )
-  const named = rows.filter((row) => isMinecraftUsername(row.name))
-  const profiles = await runAppEffect(
-    "minecraft.userProfiles.resolve",
-    Effect.forEach(
-      named,
-      (row) =>
-        resolveMinecraftProfileEffect(row.name).pipe(
-          Effect.map((profile) => [row.id, profile?.id] as const),
-          Effect.catch(() => Effect.succeed([row.id, undefined] as const))
-        ),
-      { concurrency: 4 }
-    )
-  )
-  return Object.fromEntries(
-    profiles.flatMap(([id, profileId]) => (profileId ? [[id, profileId]] : []))
-  )
-}

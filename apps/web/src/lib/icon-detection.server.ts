@@ -1,4 +1,5 @@
 import {
+  appFileRootId,
   type IconImageContentType,
   relayAppWebRouteStateSchema,
   relayIconMaxBytes,
@@ -11,6 +12,7 @@ import { Cause, Clock, Effect, Fiber, Schedule } from "effect"
 
 import {
   listDetectionsEffect,
+  listLinkedIconsEffect,
   saveIconEffect,
   touchDetectedIconEffect,
 } from "@/effect/icons"
@@ -20,6 +22,7 @@ import { forkAppWorker } from "@/effect/runtime"
 import { fetchPublicHttps } from "@/lib/public-https.server"
 import {
   SERVER_ICON_PATH,
+  type IconOrigin,
   type IconSubject,
   type InstanceIconSubject,
 } from "@/lib/icons"
@@ -40,7 +43,11 @@ import {
   readSitePage,
 } from "@/lib/site-icons"
 
-// Hearth looks for icons nobody chose: a game server's `server-icon.png`,
+// A custom icon copied from a game server's or app's file follows that
+// file: each sweep reads it again when it changed, so replacing the file
+// replaces the icon.
+//
+// Hearth also looks for icons nobody chose: a game server's `server-icon.png`,
 // where Minecraft keeps it, and the largest icon an app's site has, named
 // by its pages or manifest or kept where sites keep them, trying its
 // domains in the order its web routes list them. Game servers are looked
@@ -255,17 +262,81 @@ const detectAppIconEffect = Effect.fn("Icons.detectApp")(function* (
   })
 })
 
+type LinkedFile = Extract<IconOrigin, { type: "file" }>
+
+/**
+ * Copies the file a custom icon follows, unless it's unchanged. A file
+ * that's gone leaves the icon without an image, so the detected or default
+ * one shows until the file is back; one that can't be read right now keeps
+ * the last copy. `actor` reads with someone's own access, as when they
+ * link the file.
+ */
+export const refreshLinkedIconEffect = Effect.fn("Icons.refreshLinked")(
+  function* (
+    relay: PersistedRelay,
+    subject: InstanceIconSubject & { kind: "app" | "server" },
+    origin: LinkedFile,
+    previousVersion: string | null,
+    actor?: string
+  ) {
+    const icon = yield* readRelayIconEffect(
+      relay,
+      subject.kind === "app" && origin.service
+        ? { appId: subject.id, path: origin.path, service: origin.service }
+        : {
+            instanceId:
+              subject.kind === "app" ? appFileRootId(subject.id) : subject.id,
+            path: origin.path.replace(/^\/+/u, ""),
+          },
+      actor
+    )
+    if (icon && icon.version === previousVersion) return false
+    return yield* saveIconEffect(subject, "custom", {
+      contentType: icon?.contentType ?? null,
+      image: icon?.bytes ?? null,
+      origin,
+      originVersion: icon?.version ?? null,
+    })
+  }
+)
+
+const refreshLinkedIconsEffect = Effect.fn("Icons.refreshLinkedRelay")(
+  function* (relay: PersistedRelay, subjectId?: string) {
+    const linked = yield* listLinkedIconsEffect(relay.id, subjectId)
+    return yield* Effect.forEach(
+      linked,
+      (icon) =>
+        refreshLinkedIconEffect(
+          relay,
+          { kind: icon.kind, relayId: relay.id, id: icon.id },
+          icon.origin,
+          icon.originVersion
+        ).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logDebug("Linked icon refresh failed", Cause.pretty(cause)).pipe(
+              Effect.as(false)
+            )
+          )
+        ),
+      { concurrency: 4 }
+    )
+  }
+)
+
 /** Looks for a game server's or app's icon now, as when someone asks. */
 export const detectInstanceIconEffect = Effect.fn("Icons.detect")(function* (
   relay: PersistedRelay,
   subject: InstanceIconSubject
 ) {
-  const changed =
+  const detected =
     subject.kind === "server"
       ? yield* detectServerIconEffect(relay, subject.id, null)
       : subject.kind === "app"
         ? yield* detectAppIconEffect(relay, subject.id)
         : false
+  // A custom icon that follows a file is read again too.
+  const linked = yield* refreshLinkedIconsEffect(relay, subject.id)
+  const changed = detected || linked.some(Boolean)
   if (changed) publishIconChange(subject)
   return changed
 })
@@ -308,7 +379,8 @@ const detectRelayIconsEffect = Effect.fn("Icons.detectRelay")(function* (
     (detection) => detection,
     { concurrency: 4 }
   )
-  if (changes.some(Boolean)) {
+  const linked = yield* refreshLinkedIconsEffect(relay)
+  if (changes.some(Boolean) || linked.some(Boolean)) {
     publishRealtimeChange({
       audience: { kind: "relays", relayIds: [relay.id] },
       topics: ["icons"],

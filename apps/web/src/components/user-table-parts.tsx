@@ -14,14 +14,6 @@ import { UserIdentity } from "@/components/user-identity"
 // Pieces shared by the platform Users table and a resource's people table.
 
 /**
- * Minecraft profile IDs by user ID. Heads load after the rows; reading them
- * from context re-renders only the identity cells, not every row.
- */
-export const UserProfilesContext = React.createContext<Record<string, string>>(
-  {}
-)
-
-/**
  * A row's user card. A button behind it covers the whole row, so clicking
  * anywhere but an action or the email opens the person. The table gives its
  * rows `relative` and its actions cell `relative z-10`.
@@ -41,7 +33,6 @@ export const UserRowIdentity = React.memo(function UserRowIdentity({
   openLabel: string
   onOpen: () => void
 }) {
-  const profileId = React.useContext(UserProfilesContext)[userId ?? ""]
   return (
     <>
       <button
@@ -55,7 +46,7 @@ export const UserRowIdentity = React.memo(function UserRowIdentity({
         emailClassName="pointer-events-auto relative"
         name={name}
         email={email}
-        profileId={profileId}
+        userId={userId}
         accessory={accessory}
       />
     </>

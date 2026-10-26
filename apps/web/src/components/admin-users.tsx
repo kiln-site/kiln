@@ -1,7 +1,6 @@
 import {
   memo,
   useCallback,
-  useContext,
   useDeferredValue,
   useMemo,
   useState,
@@ -64,7 +63,6 @@ import { RelativeTime } from "@/components/relative-time"
 import { UserAccessDialog } from "@/components/user-access-dialog"
 import {
   UserActionButton,
-  UserProfilesContext,
   UserRowIdentity,
 } from "@/components/user-table-parts"
 import {
@@ -90,7 +88,6 @@ import {
 } from "@/server/resource-access"
 import {
   getUserAccess,
-  getUserMinecraftProfiles,
   listUsers,
   setUserStatus,
   type ManagedUser,
@@ -99,11 +96,10 @@ import {
 const pageSize = 50
 const helper = createDataTableColumnHelper<ManagedUser>()
 const userKey = (user: ManagedUser) => user.id
-const NO_PROFILES: Record<string, string> = {}
 const initialTableState = { sorting: [{ id: "role", desc: false }] }
 
 type UserAction =
-  | { kind: "manage"; userId: string; profileId?: string }
+  | { kind: "manage"; userId: string }
   | { kind: "add" }
   | { kind: "remove"; user: ManagedUser }
   | { kind: "status"; user: ManagedUser }
@@ -136,7 +132,6 @@ export const AdminUsers = memo(function AdminUsers() {
       {action?.kind === "manage" || action?.kind === "add" ? (
         <UserAccessDialog
           userId={action.kind === "manage" ? action.userId : undefined}
-          profileId={action.kind === "manage" ? action.profileId : undefined}
           platform
           onClose={close}
         />
@@ -179,17 +174,6 @@ const UserTable = memo(function UserTable({
     query,
     resetKey: search,
     getRowKey: userKey,
-  })
-  const userIds = useMemo(
-    () => source.rows.flatMap((user) => (user.hasCredential ? [user.id] : [])),
-    [source.rows]
-  )
-  const profiles = useQuery({
-    queryKey: ["users", "minecraft-profiles", userIds.join(",")],
-    queryFn: () =>
-      getUserMinecraftProfiles({ data: { userIds: userIds.slice(0, 100) } }),
-    enabled: userIds.length > 0,
-    staleTime: 60 * 60_000,
   })
   const { data: capabilities } = useQuery(accessCapabilitiesQueryOptions())
   const selfId = capabilities?.user.id
@@ -276,8 +260,7 @@ const UserTable = memo(function UserTable({
     [onAction, selfId]
   )
   return (
-    <UserProfilesContext.Provider value={profiles.data ?? NO_PROFILES}>
-      <DataTable
+    <DataTable
         definition={definition}
         source={source}
         emptyState={
@@ -294,7 +277,6 @@ const UserTable = memo(function UserTable({
           />
         }
       />
-    </UserProfilesContext.Provider>
   )
 })
 
@@ -305,14 +287,13 @@ const UserCell = memo(function UserCell({
   user: ManagedUser
   onAction: (action: UserAction) => void
 }) {
-  const profileId = useContext(UserProfilesContext)[user.id]
   return (
     <UserRowIdentity
       userId={user.id}
       name={user.name}
       email={user.email}
       openLabel={`Manage ${user.name}`}
-      onOpen={() => onAction({ kind: "manage", userId: user.id, profileId })}
+      onOpen={() => onAction({ kind: "manage", userId: user.id })}
     />
   )
 })
@@ -326,11 +307,10 @@ const UserAdded = memo(function UserAdded({
   user: ManagedUser
   onAction: (action: UserAction) => void
 }) {
-  const profileId = useContext(UserProfilesContext)[user.id]
   return (
     <span
       className="relative cursor-pointer"
-      onClick={() => onAction({ kind: "manage", userId: user.id, profileId })}
+      onClick={() => onAction({ kind: "manage", userId: user.id })}
     >
       <RelativeTime
         className="type-meta text-foreground"

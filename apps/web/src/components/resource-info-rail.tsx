@@ -33,7 +33,6 @@ import {
   accessCapabilitiesQueryOptions,
   backupUsageQueryOptions,
   relaysQueryOptions,
-  resourceOwnerMinecraftProfileQueryOptions,
   resourceOwnerQueryOptions,
   resourceUserCountQueryOptions,
 } from "@/lib/query-options"
@@ -95,16 +94,12 @@ const InfoRailOwner = React.memo(function InfoRailOwner({
 }) {
   const scope = railScope(resource)
   const { data: owner } = useQuery(resourceOwnerQueryOptions(scope))
-  const { data: profileId } = useQuery({
-    ...resourceOwnerMinecraftProfileQueryOptions(scope, owner?.name ?? ""),
-    enabled: Boolean(owner),
-  })
   if (owner === undefined) return null
   return (
     <OwnerCard
       email={owner?.email ?? null}
       name={owner?.name ?? null}
-      profileId={profileId}
+      userId={owner?.userId ?? null}
     />
   )
 })

@@ -1,5 +1,4 @@
 import { createServerFn } from "@tanstack/react-start"
-import { Effect } from "effect"
 import {
   relayConnectionSettingsSchema,
   relayIdSchema as relayFingerprintSchema,
@@ -15,8 +14,6 @@ import {
 } from "@workspace/contracts"
 import { z } from "zod"
 
-import { resolveMinecraftProfileEffect } from "@/effect/minecraft-profile"
-import { listInvitedRelaysEffect } from "@/server/invited-relays.server"
 import {
   attachRelayOwnersEffect,
   type RelayOwnerFields,
@@ -37,21 +34,12 @@ import {
 } from "@workspace/contracts"
 import { grantHasPermission } from "@/lib/permissions"
 import { runAppEffect } from "@/effect/runtime"
-import {
-  isMinecraftUsername,
-  minecraftUsernameKey,
-} from "@/lib/minecraft-profile"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { requireEligibleResourceUser } from "@/server/auth"
 import { removeRelayThenCleanup } from "@/server/relay-removal"
 
 export type ManagedRelay = PersistedRelay & RelayOwnerFields
-
-export interface RelayOwnerMinecraftProfile {
-  displayName: string
-  profileId: string
-}
 
 const relayIdSchema = z.object({
   id: relayFingerprintSchema,
@@ -167,52 +155,6 @@ async function managedRelays(
 export const getRelays = createServerFn({ method: "GET" }).handler(async () => {
   const user = await requireEligibleResourceUser()
   return attachRelayOwners(await managedRelays(user), isPlatformAdmin(user))
-})
-
-export const getRelayOwnerMinecraftProfiles = createServerFn({
-  method: "GET",
-}).handler(async () => {
-  const user = await requireEligibleResourceUser()
-  // Only stored display names reach Mojang, never email-derived fallbacks.
-  // Pending Relay invitations show their owner too.
-  const [relays, invitedRelays] = await Promise.all([
-    managedRelays(user).then((managed) => attachRelayOwners(managed, false)),
-    runAppEffect(
-      "resourceInvitations.invitedRelays",
-      listInvitedRelaysEffect(user.id, false)
-    ),
-  ])
-  const displayNames = [
-    ...new Map(
-      [...relays, ...invitedRelays].flatMap((relay) =>
-        relay.ownerName && isMinecraftUsername(relay.ownerName)
-          ? [[minecraftUsernameKey(relay.ownerName), relay.ownerName] as const]
-          : []
-      )
-    ).values(),
-  ]
-  const profiles = await runAppEffect(
-    "minecraft.relayOwnerProfiles.resolve",
-    Effect.forEach(
-      displayNames,
-      (displayName) =>
-        resolveMinecraftProfileEffect(displayName).pipe(
-          Effect.map((profile) =>
-            profile
-              ? ({
-                  displayName,
-                  profileId: profile.id,
-                } satisfies RelayOwnerMinecraftProfile)
-              : null
-          ),
-          Effect.catch(() => Effect.succeed(null))
-        ),
-      { concurrency: 4 }
-    )
-  )
-  return profiles.filter(
-    (profile): profile is RelayOwnerMinecraftProfile => profile !== null
-  )
 })
 
 export const addRelay = createServerFn({ method: "POST" })

@@ -10,8 +10,6 @@ export const activeAccountStorageKey = "kiln:active-account"
 export interface BrowserAccount {
   active: boolean
   email: string
-  /** The account's own Minecraft head, if its name is a Minecraft username. */
-  minecraftProfileId: string | null
   name: string
   sessionId: string
   userId: string

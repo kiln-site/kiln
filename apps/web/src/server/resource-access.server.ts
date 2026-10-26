@@ -1,5 +1,4 @@
 import type { RowDataPacket } from "mysql2/promise"
-import { Effect } from "effect"
 import {
   accessPermissionSupported,
   builtinPermissionPresets,
@@ -10,7 +9,6 @@ import {
   type PermissionSelection,
 } from "@workspace/contracts"
 
-import { resolveMinecraftProfileEffect } from "@/effect/minecraft-profile"
 import { ownerDisplayName } from "@/effect/relay-owners"
 import { runAppEffect } from "@/effect/runtime"
 import type { AuthenticatedUser } from "@/lib/auth-session"
@@ -219,29 +217,13 @@ async function readableResourceOwner(
 export async function getResourceOwnerHandler(
   user: AuthenticatedUser,
   data: AccessGrantScope
-): Promise<{ email: string | null; name: string } | null> {
+): Promise<{ email: string | null; name: string; userId: string } | null> {
   const owner = await readableResourceOwner(user, data)
   if (!owner) return null
   return {
     email: owner.canReadPeople ? owner.row.email : null,
     name: ownerDisplayName(owner.row, owner.canReadPeople),
+    // For their picture.
+    userId: owner.row.id,
   }
-}
-
-// The owner's Minecraft profile ID, for their avatar. Only a stored display
-// name reaches Mojang, never one derived from an email.
-export async function getResourceOwnerMinecraftProfileIdHandler(
-  user: AuthenticatedUser,
-  data: AccessGrantScope
-): Promise<string | null> {
-  const owner = await readableResourceOwner(user, data)
-  const name = owner?.row.name?.trim()
-  if (!name) return null
-  const profile = await runAppEffect(
-    "minecraft.resourceOwnerProfile.resolve",
-    resolveMinecraftProfileEffect(name).pipe(
-      Effect.catch(() => Effect.succeed(null))
-    )
-  )
-  return profile?.id ?? null
 }

@@ -17,7 +17,7 @@ export class BrowserAccountMissingError extends Error {
 /** Accounts this browser holds a live session for, in a stable user ID order. */
 export async function listBrowserAccounts(
   headers: Headers
-): Promise<Array<Omit<BrowserAccount, "minecraftProfileId">>> {
+): Promise<Array<BrowserAccount>> {
   const [sessions, current] = await Promise.all([
     auth.api.listDeviceSessions({ headers }),
     auth.api.getSession({ headers }),
@@ -34,7 +34,7 @@ export async function listBrowserAccounts(
     .sort((left, right) =>
       left.user.id < right.user.id ? -1 : left.user.id > right.user.id ? 1 : 0
     )
-    .map(({ session, user }): Omit<BrowserAccount, "minecraftProfileId"> => ({
+    .map(({ session, user }): BrowserAccount => ({
       active: session.id === current?.session.id,
       email: user.email,
       name: resolveDisplayName(user.name, user.email),

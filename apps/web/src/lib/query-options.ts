@@ -49,10 +49,6 @@ import {
   getManagedDatabaseContainer,
   getManagedDatabaseDirectory,
 } from "@/server/databases"
-import {
-  isMinecraftUsername,
-  minecraftUsernameKey,
-} from "@/lib/minecraft-profile"
 import { getUiPreferences } from "@/server/preferences"
 import {
   getInstanceFavorites,
@@ -64,7 +60,6 @@ import {
   instanceFavoriteKey,
   type InstanceFavorite,
 } from "@/lib/instance-favorites"
-import { getMinecraftProfile } from "@/server/minecraft"
 import { getRelayResources } from "@/server/relay-host"
 import { getRelayVolumes } from "@/server/relay-volumes"
 import { isDatabaseFilePath } from "@/lib/database-files"
@@ -85,7 +80,6 @@ import {
   getRelayTree,
 } from "@/server/relay"
 import {
-  getRelayOwnerMinecraftProfiles,
   getRelayProxy,
   getRelayWebRoutes,
   getRelayHostFiles,
@@ -102,7 +96,6 @@ import {
 } from "@/server/updates"
 import {
   getResourceOwner,
-  getResourceOwnerMinecraftProfileId,
   getResourceUserCount,
 } from "@/server/resource-access"
 import { getScheduleOptions, getSchedules } from "@/server/schedules"
@@ -123,7 +116,6 @@ import {
   getAppConfig,
   getAppDirectory,
   getAppOwner,
-  getAppOwnerMinecraftProfileId,
   getAppWebRoutes,
 } from "@/server/apps"
 import {
@@ -147,12 +139,6 @@ const relayPollHeaders = { "x-kiln-request-purpose": "relay-poll" }
 export const queryKeys = {
   auth: {
     state: ["auth", "state"] as const,
-  },
-  minecraft: {
-    profile: (displayName: string) =>
-      ["minecraft", "profile", displayName] as const,
-    relayOwners: (ownerNames: string) =>
-      ["minecraft", "relay-owner-profiles", ownerNames] as const,
   },
   access: {
     capabilities: ["access", "capabilities"] as const,
@@ -367,30 +353,6 @@ export function authStateQueryOptions() {
   })
 }
 
-export function minecraftProfileQueryOptions(displayName: string) {
-  const username = minecraftUsernameKey(displayName)
-  return queryOptions({
-    queryKey: queryKeys.minecraft.profile(username),
-    queryFn: ({ signal }) => getMinecraftProfile({ signal }),
-    enabled: isMinecraftUsername(displayName),
-    gcTime: 60 * 60_000,
-    retry: false,
-    staleTime: 60 * 60_000,
-  })
-}
-
-/** Keyed by the visible owners so pairing or sharing a Relay refetches. */
-export function relayOwnerMinecraftProfilesQueryOptions(ownerNames: string) {
-  return queryOptions({
-    queryKey: queryKeys.minecraft.relayOwners(ownerNames),
-    queryFn: ({ signal }) => getRelayOwnerMinecraftProfiles({ signal }),
-    enabled: ownerNames.length > 0,
-    gcTime: 60 * 60_000,
-    retry: false,
-    staleTime: 60 * 60_000,
-  })
-}
-
 export function backupRunsInfiniteQueryOptions(input: BackupRunsQuery) {
   const normalized = normalizeBackupRunsQuery(input)
   const { cursor: _, ...query } = normalized
@@ -465,35 +427,6 @@ export function resourceOwnerQueryOptions(scope: {
     queryFn: () => getResourceOwner({ data: scope }),
     retry: false,
     staleTime: 30_000,
-  })
-}
-
-// The owner's Minecraft head, apart from the owner so their card shows
-// before Mojang answers. Keyed by the owner's name too, so a new owner or
-// name looks the head up again.
-export function resourceOwnerMinecraftProfileQueryOptions(
-  scope: {
-    relayId: string
-    resourceId: string
-    resourceType: "database" | "instance" | "relay"
-  },
-  ownerName: string
-) {
-  return queryOptions({
-    queryKey: [
-      "resource-access",
-      scope.relayId,
-      scope.resourceType,
-      scope.resourceId,
-      "owner",
-      "minecraft",
-      ownerName,
-    ] as const,
-    queryFn: ({ signal }) =>
-      getResourceOwnerMinecraftProfileId({ data: scope, signal }),
-    gcTime: 60 * 60_000,
-    retry: false,
-    staleTime: 60 * 60_000,
   })
 }
 
@@ -715,23 +648,6 @@ export function appOwnerQueryOptions(relayId: string, appId: string) {
     queryFn: () => getAppOwner({ data: { appId, relayId } }),
     retry: false,
     staleTime: 30_000,
-  })
-}
-
-// The owner's Minecraft head, keyed by their name so a new name looks it up
-// again.
-export function appOwnerMinecraftProfileQueryOptions(
-  relayId: string,
-  appId: string,
-  ownerName: string
-) {
-  return queryOptions({
-    queryKey: ["app-owner", relayId, appId, "minecraft", ownerName] as const,
-    queryFn: ({ signal }) =>
-      getAppOwnerMinecraftProfileId({ data: { appId, relayId }, signal }),
-    gcTime: 60 * 60_000,
-    retry: false,
-    staleTime: 60 * 60_000,
   })
 }
 

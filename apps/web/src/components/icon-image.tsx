@@ -6,6 +6,7 @@ import { cn } from "@workspace/ui/lib/utils"
 import {
   iconSubjectKey,
   iconUrl,
+  userPictureUrl,
   type IconIndex,
   type IconSubject,
 } from "@/lib/icons"
@@ -19,7 +20,7 @@ import { iconIndexQueryOptions } from "@/lib/query-options"
 export function useIconUrl(subject: IconSubject | null): string | null {
   const key = subject ? iconSubjectKey(subject) : null
   const select = React.useCallback(
-    (index: IconIndex) => (key ? (index[key] ?? null) : null),
+    (index: IconIndex) => (key ? (index.digests[key] ?? null) : null),
     [key]
   )
   const { data: digest } = useQuery({
@@ -29,6 +30,33 @@ export function useIconUrl(subject: IconSubject | null): string | null {
     select,
   })
   return subject && digest ? iconUrl(subject, digest) : null
+}
+
+/**
+ * Where a user's picture loads from, or null when they have none. The index
+ * knows the reader's own and, for administrators, everyone's; anyone else's
+ * loads by user ID and shows initials until it does, or if there's none.
+ */
+export function useUserPictureUrl(userId: string | null | undefined) {
+  const select = React.useCallback(
+    (index: IconIndex) => {
+      if (!userId) return null
+      const subject: IconSubject = { kind: "user", id: userId }
+      const digest = index.digests[iconSubjectKey(subject)]
+      if (digest) return iconUrl(subject, digest)
+      return index.everyone || index.selfId === userId
+        ? null
+        : userPictureUrl(userId)
+    },
+    [userId]
+  )
+  const { data } = useQuery({
+    ...iconIndexQueryOptions(),
+    enabled: Boolean(userId),
+    notifyOnChangeProps: ["data"],
+    select,
+  })
+  return data ?? null
 }
 
 /**

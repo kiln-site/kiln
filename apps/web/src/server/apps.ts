@@ -51,7 +51,6 @@ import {
   authorizedApp,
   getAppConfigHandler,
   getAppOwnerHandler,
-  getAppOwnerMinecraftProfileIdHandler,
   hasAppPermission,
   updateAppConfigHandler,
 } from "@/server/app-access"
@@ -143,15 +142,6 @@ export const getAppOwner = createServerFn({ method: "GET" })
   .validator(appInputSchema)
   .handler(async ({ data }) =>
     getAppOwnerHandler(await requireEligibleResourceUser(), data)
-  )
-
-export const getAppOwnerMinecraftProfileId = createServerFn({ method: "GET" })
-  .validator(appInputSchema)
-  .handler(async ({ data }) =>
-    getAppOwnerMinecraftProfileIdHandler(
-      await requireEligibleResourceUser(),
-      data
-    )
   )
 
 const cancelledSchema = z.object({ cancelled: z.boolean() })

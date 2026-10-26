@@ -9,7 +9,6 @@ import type { AuthenticatedUser } from "@/lib/auth-session"
 import type { AccessPermission } from "@/lib/permissions"
 import {
   getResourceOwnerHandler,
-  getResourceOwnerMinecraftProfileIdHandler,
 } from "@/server/resource-access.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import {
@@ -113,6 +112,7 @@ describeMysql("resource owner", () => {
           assert.deepStrictEqual(owner, {
             email: "owner@example.test",
             name: "Steve",
+            userId: "owner",
           })
         })
     )
@@ -125,7 +125,11 @@ describeMysql("resource owner", () => {
 
           const owner = yield* ownerFor("player", ownedId)
 
-          assert.deepStrictEqual(owner, { email: null, name: "Steve" })
+          assert.deepStrictEqual(owner, {
+            email: null,
+            name: "Steve",
+            userId: "owner",
+          })
         })
     )
 
@@ -139,12 +143,6 @@ describeMysql("resource owner", () => {
             yield* refusal(getResourceOwnerHandler(user, scope(ownedId))),
             Error
           )
-          assert.instanceOf(
-            yield* refusal(
-              getResourceOwnerMinecraftProfileIdHandler(user, scope(ownedId))
-            ),
-            Error
-          )
         }
       })
     )
@@ -155,7 +153,11 @@ describeMysql("resource owner", () => {
 
         const owner = yield* ownerFor("relay-player", ownedId)
 
-        assert.deepStrictEqual(owner, { email: null, name: "Steve" })
+        assert.deepStrictEqual(owner, {
+          email: null,
+          name: "Steve",
+          userId: "owner",
+        })
       })
     )
 
