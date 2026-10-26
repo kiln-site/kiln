@@ -7,29 +7,36 @@ Both make a new game server with its own ID from the old one:
   on, including its own, and keeps the old server as it was.
 - **Move** copies it to another Relay, stops the old server and leaves it
   stopped, and hands its place to the copy. Once the move finishes, its
-  notification offers to delete the old server, with the usual confirmation,
-  unless the move was told to delete it: then a final full backup of it is
-  taken, to a chosen destination, and it's deleted once that finishes, as
-  deleting a server with a final backup does. That needs `instance.delete`
-  and `backup.create`.
+  notification offers to delete the old server, with the usual confirmation
+  and its optional final backup.
+
+The dialog asks for neither a backup first nor deleting the old server.
+The start request still takes both (`backup`, and `deleteSource` for a
+move: a final full backup, then deletion, as deleting a server with a final
+backup does, needing `instance.delete` and `backup.create`).
 
 Copying needs the old server's `instance.files.read` and
 `instance.configuration.read`, and `instance.create` on the Relay the copy
 goes to. Each option needs its own permission on the old server, checked
 when the copy starts.
 
+The dialog brings everything besides files, settings, and limits along as
+one choice, **Copy metadata**: people with access, backups, activity
+history, and for a move, domains and web routes. Its info card says which
+parts come and why any can't.
+
 ## What comes along
 
-| Option             | Duplicate | Move     | Notes                                                                                                                                                                                                                                       |
-| ------------------ | --------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Files and settings | Always    | Always   | Its whole folder, the exact Brick it was built from, and startup settings. Ports are allocated afresh on the new Relay.                                                                                                                    |
-| Limits             | Always    | Always   | Memory, CPU, and disk limits start as the old server's and can be changed for the copy in the dialog, which offers the nearest that fit.                                                                                                  |
-| People with access | Optional  | Optional | The same grants, permissions, and presets (presets are copied to the new server). Pending invitations aren't. Needs `access.read`.                                                                                                          |
+| Option             | Duplicate | Move     | Notes                                                                                                                                                                                                                                                                                             |
+| ------------------ | --------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Files and settings | Always    | Always   | Its whole folder, the exact Brick it was built from, and startup settings. Ports are allocated afresh on the new Relay.                                                                                                                                                                           |
+| Limits             | Always    | Always   | Memory, CPU, and disk limits start as the old server's and can be changed for the copy in the dialog, which offers the nearest that fit.                                                                                                                                                          |
+| People with access | Optional  | Optional | The same grants, permissions, and presets (presets are copied to the new server). Pending invitations aren't. Needs `access.read`.                                                                                                                                                                |
 | Activity history   | Optional  | Optional | The new server's activity includes the old server's history up to when the copy finished: shown as the old server's, and listed under the new one too, to whoever can see both; as the new server's own to whoever can see only it. It stays on the old Relay, so removing that Relay removes it. |
-| Managed domains    | —         | Optional | With Cloudflare connected, domains move to the new server and their records point at the new Relay. Without it, Kiln manages no DNS and the dialog says to repoint any domain of your own.                                                  |
-| Web routes         | Stay      | Optional | Routes move to the new server; their hostnames must then point at the new Relay before HTTPS works.                                                                                                                                         |
-| Backups            | Optional  | Optional | Links the old server's full backups to the new one, sharing their archives ([Linked backups](backups.md#linked-backups)). Backups in S3 link anywhere; backups kept on the Relay only to a copy on the same Relay. Needs `backup.download`. |
-| Backup first       | Optional  | Optional | A full backup to a chosen destination, finished before anything changes. Needs `backup.create`.                                                                                                                                             |
+| Managed domains    | —         | Optional | With Cloudflare connected, domains move to the new server and their records point at the new Relay. Without it, Kiln manages no DNS and the dialog says to repoint any domain of your own.                                                                                                        |
+| Web routes         | Stay      | Optional | Routes move to the new server; their hostnames must then point at the new Relay before HTTPS works.                                                                                                                                                                                               |
+| Backups            | Optional  | Optional | Links the old server's full backups to the new one, sharing their archives ([Linked backups](backups.md#linked-backups)). Backups in S3 link anywhere; backups kept on the Relay only to a copy on the same Relay. Needs `backup.download`.                                                       |
+| Backup first       | Optional  | Optional | A full backup to a chosen destination, finished before anything changes. Needs `backup.create`. Not offered by the dialog.                                                                                                                                                                        |
 
 A duplicate can stop the old server while its files copy, then start it
 again; a move always stops it. Stopping needs `instance.power.stop`, and a

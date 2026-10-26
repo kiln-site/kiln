@@ -9,9 +9,11 @@ import {
 import {
   ArrowRight,
   ArrowRightLeft,
+  Check,
   Copy,
   Info,
   LoaderCircle,
+  Minus,
 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
@@ -22,12 +24,12 @@ import {
   DialogFooter,
   DialogTitle,
 } from "@workspace/ui/components/dialog"
-import { Input } from "@workspace/ui/components/input"
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@workspace/ui/components/popover"
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from "@workspace/ui/components/hover-card"
+import { Input } from "@workspace/ui/components/input"
 import {
   Select,
   SelectContent,
@@ -36,12 +38,12 @@ import {
   SelectValue,
 } from "@workspace/ui/components/select"
 import { Slider } from "@workspace/ui/components/slider"
+import { Switch } from "@workspace/ui/components/switch"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { InstanceCard } from "@/components/instance-card"
 import { LiveServerBrickIcon } from "@/components/server-brick-icon"
 import { formatBytes } from "@/lib/format-bytes"
-import { backupStorageQueryOptions } from "@/lib/query-options"
 import {
   parseResourceLimitsDraft,
   resourceLimitsDraft,
@@ -81,7 +83,6 @@ type Status = {
 }
 
 const NO_RELAY = "__none__"
-const LOCAL = "local"
 const NAME_LIMIT = 32
 const GIBIBYTE = 1024 ** 3
 
@@ -200,10 +201,6 @@ function MigrationForm({
   const limitsChanged =
     limits !== null && !sameLimits(limits, preview.source.limits)
 
-  const [backup, setBackup] = React.useState(false)
-  // Where the backup first and a deleted server's final backup go: the
-  // server's own Relay, or an S3 destination.
-  const [backupTarget, setBackupTarget] = React.useState<string>(LOCAL)
   // Whether the copy fits there, as the Relays said when the dialog opened.
   // Checked again when it starts and before the server stops.
   const roomProblemsFor = (
@@ -213,7 +210,7 @@ function MigrationForm({
       ? migrationRoomProblems({
           destination: destination.room,
           limits: true,
-          localBackups: backup && backupTarget === LOCAL ? 1 : 0,
+          localBackups: 0,
           server: {
             ...preview.room.server,
             limits: limits ?? preview.source.limits,
@@ -255,25 +252,14 @@ function MigrationForm({
     preview,
     relay: selected,
   })
-  const [chosen, setChosen] = React.useState<Record<MetadataKey, boolean>>({
-    access: true,
-    activity: true,
-    backups: true,
-    domains: true,
-    routes: true,
-  })
+  // Everything besides files and settings comes along, or none of it.
+  const [copyMetadata, setCopyMetadata] = React.useState(true)
   const copies = (key: MetadataKey) =>
-    chosen[key] && metadata.find((item) => item.key === key)?.reason === null
+    copyMetadata && metadata.find((item) => item.key === key)?.reason === null
 
   const [stopSource, setStopSource] = React.useState(
     preview.source.running && preview.allowed.power
   )
-  const [deleteSource, setDeleteSource] = React.useState(false)
-  const deleting = moving && deleteSource && preview.allowed.delete
-  const backupStorage = useQuery({
-    ...backupStorageQueryOptions(),
-    enabled: preview.allowed.backup,
-  })
 
   const start = useMutation({
     mutationFn: () => {
@@ -286,9 +272,9 @@ function MigrationForm({
           mode,
           name: effectiveName.trim(),
           options: {
-            backup: backup ? storageChoice(backupTarget) : null,
+            backup: null,
             copyAccess: copies("access"),
-            deleteSource: deleting ? storageChoice(backupTarget) : null,
+            deleteSource: null,
             keepActivity: copies("activity"),
             limits: limitsChanged ? limits : null,
             linkBackups: copies("backups"),
@@ -520,14 +506,15 @@ function MigrationForm({
         />
       </section>
 
-      <div className="grid grid-cols-[minmax(0,1fr)] gap-x-6 gap-y-2 sm:grid-cols-2">
-        <MetadataChoice
-          chosen={chosen}
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-x-8 gap-y-2 sm:grid-cols-2">
+        <SwitchRow
+          checked={copyMetadata}
           disabled={pending}
-          items={metadata}
-          onChange={setChosen}
+          label="Copy metadata"
+          info={<MetadataCard items={metadata} />}
+          onCheckedChange={setCopyMetadata}
         />
-        <Check
+        <SwitchRow
           checked={moving || (stopSource && preview.source.running)}
           disabled={
             pending ||
@@ -543,38 +530,7 @@ function MigrationForm({
                 ? "It starts again afterwards. A running world can be caught mid-save."
                 : "It isn't running."
           }
-          onChange={setStopSource}
-        />
-        <Check
-          checked={backup}
-          disabled={pending || !preview.allowed.backup}
-          label="Back up first"
-          title={
-            preview.allowed.backup
-              ? "A full backup, finished before anything changes."
-              : "You can't back up this server."
-          }
-          onChange={setBackup}
-        />
-        <Check
-          checked={deleting}
-          disabled={pending || !moving || !preview.allowed.delete}
-          label="Delete after"
-          title={
-            !moving
-              ? "Only a move can delete this server."
-              : preview.allowed.delete
-                ? "Once moved, this server is deleted after a full backup, which stays."
-                : "Deleting it needs permission to delete and back it up."
-          }
-          onChange={setDeleteSource}
-        />
-        <DestinationChoice
-          disabled={pending || (!backup && !deleting)}
-          relayName={preview.source.relayName}
-          storage={backupStorage.data}
-          value={backupTarget}
-          onChange={setBackupTarget}
+          onCheckedChange={setStopSource}
         />
       </div>
 
@@ -1129,210 +1085,91 @@ function metadataItems({
   ]
 }
 
-// One checkbox for everything besides files and settings, and a checklist
-// behind its info button to pick from.
-function MetadataChoice({
-  chosen,
-  disabled,
-  items,
-  onChange,
-}: {
-  chosen: Record<MetadataKey, boolean>
-  disabled: boolean
-  items: ReadonlyArray<MetadataItem>
-  onChange: React.Dispatch<React.SetStateAction<Record<MetadataKey, boolean>>>
-}) {
-  const available = items.filter((item) => item.reason === null)
-  const count = available.filter((item) => chosen[item.key]).length
-  const ref = React.useRef<HTMLInputElement>(null)
-  React.useEffect(() => {
-    if (ref.current) {
-      ref.current.indeterminate = count > 0 && count < available.length
-    }
-  }, [available.length, count])
-  return (
-    <div className="flex h-7 min-w-0 items-center gap-2">
-      <label className="flex min-w-0 items-center gap-2">
-        <input
-          ref={ref}
-          checked={available.length > 0 && count === available.length}
-          className="size-4 shrink-0 accent-primary"
-          disabled={disabled || available.length === 0}
-          type="checkbox"
-          onChange={(event) => {
-            const on = event.currentTarget.checked
-            onChange((current) => {
-              const next = { ...current }
-              for (const item of available) next[item.key] = on
-              return next
-            })
-          }}
-        />
-        <span className="type-label truncate">Copy metadata</span>
-      </label>
-      <Popover>
-        <PopoverTrigger asChild>
-          <Button
-            aria-label="Choose what metadata comes along"
-            className="h-6 gap-1 px-1.5 text-muted-foreground"
-            disabled={disabled}
-            size="xs"
-            type="button"
-            variant="ghost"
-          >
-            <span className="tabular-nums">
-              {count}/{items.length}
-            </span>
-            <Info className="size-3.5" />
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent align="start" className="w-80 p-1">
-          {items.map((item) => (
-            <label
-              key={item.key}
-              className={cn(
-                "flex items-start gap-2.5 rounded-md px-2 py-1.5",
-                item.reason === null
-                  ? "cursor-pointer hover:bg-popover-accent"
-                  : "opacity-60"
-              )}
-            >
-              <input
-                checked={item.reason === null && chosen[item.key]}
-                className="mt-0.5 size-4 shrink-0 accent-primary"
-                disabled={item.reason !== null}
-                type="checkbox"
-                onChange={(event) => {
-                  const on = event.currentTarget.checked
-                  onChange((current) => ({ ...current, [item.key]: on }))
-                }}
-              />
-              <span className="min-w-0">
-                <span className="type-label block">{item.label}</span>
-                <span className="type-meta block text-muted-foreground">
-                  {item.reason ?? item.detail}
-                </span>
-              </span>
-            </label>
-          ))}
-        </PopoverContent>
-      </Popover>
-    </div>
-  )
-}
-
-// A checkbox choice, its explanation in a tooltip, with room for a control
-// of its own.
-function Check({
+// A label and its switch, the label's explanation in a tooltip or, with
+// `info`, in a card behind an info button.
+function SwitchRow({
   checked,
-  control,
   disabled,
+  info,
   label,
-  onChange,
+  onCheckedChange,
   title,
 }: {
   checked: boolean
-  control?: React.ReactNode
   disabled: boolean
+  info?: React.ReactNode
   label: string
-  onChange: (checked: boolean) => void
-  title: string
+  onCheckedChange: (checked: boolean) => void
+  title?: string
 }) {
   return (
-    <div className="flex h-7 min-w-0 items-center gap-2">
-      <label
-        className={cn(
-          "flex min-w-0 flex-1 items-center gap-2",
-          disabled && !checked && "opacity-60"
-        )}
-        title={title}
-      >
-        <input
-          checked={checked}
-          className="size-4 shrink-0 accent-primary"
-          disabled={disabled}
-          type="checkbox"
-          onChange={(event) => onChange(event.currentTarget.checked)}
-        />
+    <div
+      className={cn(
+        "flex h-8 min-w-0 items-center justify-between gap-3",
+        disabled && !checked && "opacity-60"
+      )}
+    >
+      <span className="flex min-w-0 items-center gap-1.5" title={title}>
         <span className="type-label truncate">{label}</span>
-      </label>
-      {control}
+        {info ? (
+          <HoverCard closeDelay={100} openDelay={100}>
+            <HoverCardTrigger asChild>
+              <button
+                aria-label={`What ${label.toLowerCase()} includes`}
+                className="grid size-5 place-items-center rounded text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40"
+                type="button"
+              >
+                <Info className="size-3.5" />
+              </button>
+            </HoverCardTrigger>
+            <HoverCardContent align="start" className="w-80 p-0">
+              {info}
+            </HoverCardContent>
+          </HoverCard>
+        ) : null}
+      </span>
+      <Switch
+        aria-label={label}
+        checked={checked}
+        disabled={disabled}
+        onCheckedChange={onCheckedChange}
+      />
     </div>
   )
 }
 
-// Where backups go, chosen outright: the server's own Relay, or one of the
-// S3 destinations. Its row stays while unused, so choosing a backup doesn't
-// move anything.
-function DestinationChoice({
-  disabled,
-  onChange,
-  relayName,
-  storage,
-  value,
-}: {
-  disabled: boolean
-  onChange: (value: string) => void
-  relayName: string
-  storage:
-    | ReadonlyArray<{
-        deleting: boolean
-        enabled: boolean
-        id: string
-        name: string
-      }>
-    | undefined
-  value: string
-}) {
-  const destinations = (storage ?? []).filter(
-    (item) => item.enabled && !item.deleting
-  )
+// What copying metadata takes along: a check for each part that comes, and
+// why not for each that can't.
+function MetadataCard({ items }: { items: ReadonlyArray<MetadataItem> }) {
   return (
-    <label
-      className={cn(
-        "flex min-w-0 items-center gap-3 sm:col-span-2",
-        disabled && "opacity-60"
-      )}
-    >
-      <span className="type-label shrink-0">Backups go to</span>
-      <Select
-        disabled={disabled}
-        value={value}
-        onValueChange={(next) => {
-          if (next) onChange(next)
-        }}
-      >
-        <SelectTrigger
-          aria-label="Backups go to"
-          className="h-8 w-72 min-w-0 *:data-[slot=select-value]:truncate"
-        >
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent className="min-w-(--radix-select-trigger-width)">
-          <SelectItem value={LOCAL}>
-            <span className="flex items-baseline gap-2">
-              {relayName}
-              <span className="type-meta text-muted-foreground">
-                On the Relay
-              </span>
+    <div className="py-1.5">
+      <p className="type-technical-label px-3 pb-1 text-[0.6875rem] text-muted-foreground">
+        Comes along
+      </p>
+      {items.map((item) => (
+        <div key={item.key} className="flex items-start gap-2.5 px-3 py-1.5">
+          {item.reason === null ? (
+            <Check className="mt-0.5 size-3.5 shrink-0 text-emerald-400 light:text-emerald-700" />
+          ) : (
+            <Minus className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+          )}
+          <span className="min-w-0">
+            <span
+              className={cn(
+                "type-label block",
+                item.reason !== null && "text-muted-foreground"
+              )}
+            >
+              {item.label}
             </span>
-          </SelectItem>
-          {destinations.map((item) => (
-            <SelectItem key={item.id} value={item.id}>
-              <span className="flex items-baseline gap-2">
-                {item.name}
-                <span className="type-meta text-muted-foreground">S3</span>
-              </span>
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </label>
+            <span className="type-meta block text-muted-foreground">
+              {item.reason ?? item.detail}
+            </span>
+          </span>
+        </div>
+      ))}
+    </div>
   )
-}
-
-function storageChoice(value: string): { storageId: string | null } {
-  return { storageId: value === LOCAL ? null : value }
 }
 
 function roundDown(value: number, step: number): number {
