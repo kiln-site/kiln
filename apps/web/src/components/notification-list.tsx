@@ -261,7 +261,9 @@ function NotificationActions({
       }
       return (
         <div className="relative flex shrink-0 items-center gap-1.5">
-          {content.mode === "migrate" && !content.sourceDeleted ? (
+          {content.mode === "migrate" &&
+          !content.sourceDeleted &&
+          !content.sourceDeleting ? (
             <DeleteMovedServerButton server={content.source} />
           ) : null}
           <OpenResourceButton

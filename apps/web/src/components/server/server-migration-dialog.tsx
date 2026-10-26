@@ -10,6 +10,7 @@ import {
   LoaderCircle,
   Route,
   Square,
+  Trash2,
   Users,
 } from "lucide-react"
 
@@ -33,6 +34,7 @@ import {
 import { cn } from "@workspace/ui/lib/utils"
 
 import { backupStorageQueryOptions } from "@/lib/query-options"
+import { migrationRoomProblems } from "@/lib/server-migration-room"
 import {
   serverMigrationPreviewQueryOptions,
   serverMigrationsQueryOptions,
@@ -124,10 +126,35 @@ function MigrationForm({
       ),
     [mode, preview.destinations]
   )
+  const [backup, setBackup] = React.useState(false)
+  const [backupDestination, setBackupDestination] = React.useState("default")
+  // Whether the copy fits there, as the Relays said when the dialog opened.
+  // Checked again when it starts and before the server stops.
+  const roomProblemsFor = (destination: ServerMigrationDestination) =>
+    destination.room && preview.room
+      ? migrationRoomProblems({
+          destination: destination.room,
+          limits: true,
+          localBackups:
+            backup &&
+            (backupDestination === "local" ||
+              (backupDestination === "default" &&
+                preview.room.defaultBackupLocal))
+              ? 1
+              : 0,
+          server: preview.room.server,
+          source: preview.room.source,
+        })
+      : []
   const [relayId, setRelayId] = React.useState<string | null>(null)
   const selected =
     destinations.find((destination) => destination.id === relayId) ??
-    defaultDestination(destinations, mode)
+    defaultDestination(
+      destinations,
+      mode,
+      (destination) =>
+        !destination.problems.length && !roomProblemsFor(destination).length
+    )
   const [name, setName] = React.useState<string | null>(null)
   const effectiveName =
     name ?? defaultName(server.name, mode, selected?.takenNames ?? [])
@@ -145,11 +172,12 @@ function MigrationForm({
   const [stopSource, setStopSource] = React.useState(
     preview.source.running && preview.allowed.power
   )
-  const [backup, setBackup] = React.useState(false)
-  const [backupDestination, setBackupDestination] = React.useState("default")
+  const [deleteSource, setDeleteSource] = React.useState(false)
+  const [deleteDestination, setDeleteDestination] = React.useState("default")
+  const deleting = mode === "migrate" && deleteSource && preview.allowed.delete
   const backupStorage = useQuery({
     ...backupStorageQueryOptions(),
-    enabled: backup,
+    enabled: backup || deleting,
   })
   const start = useMutation({
     mutationFn: () => {
@@ -161,15 +189,9 @@ function MigrationForm({
           mode,
           name: effectiveName.trim(),
           options: {
-            backup: backup
-              ? backupDestination === "default"
-                ? {}
-                : {
-                    storageId:
-                      backupDestination === "local" ? null : backupDestination,
-                  }
-              : null,
+            backup: backup ? storageChoice(backupDestination) : null,
             copyAccess,
+            deleteSource: deleting ? storageChoice(deleteDestination) : null,
             keepActivity,
             linkBackups: linkBackups && linkableBackups > 0,
             moveDomain: mode === "migrate" && moveDomain,
@@ -190,9 +212,11 @@ function MigrationForm({
   const pending = start.isPending
   const trimmedName = effectiveName.trim()
   const nameTaken = selected?.takenNames.includes(trimmedName) ?? false
+  const roomProblems = selected ? roomProblemsFor(selected) : []
   const blocked =
     !selected ||
     selected.problems.length > 0 ||
+    roomProblems.length > 0 ||
     !trimmedName ||
     nameTaken ||
     preview.source.provisioning ||
@@ -265,7 +289,11 @@ function MigrationForm({
                   <SelectItem key={destination.id} value={destination.id}>
                     {destination.name}
                     {destination.current ? " · this Relay" : ""}
-                    {destination.problems.length ? " · unavailable" : ""}
+                    {destination.problems.length
+                      ? " · unavailable"
+                      : roomProblemsFor(destination).length
+                        ? " · not enough room"
+                        : ""}
                   </SelectItem>
                 ))
               )}
@@ -304,6 +332,11 @@ function MigrationForm({
         <Callout key={`${problem.code}:${problem.relayId}`} tone="error">
           <span className="font-medium">{problem.message}.</span>{" "}
           {problem.remedy}.
+        </Callout>
+      ))}
+      {roomProblems.map((problem) => (
+        <Callout key={`${problem.code}:${problem.relayId}`} tone="error">
+          {problem.message}.
         </Callout>
       ))}
       {archMismatch && selected ? (
@@ -412,31 +445,13 @@ function MigrationForm({
           onChange={setBackup}
         />
         {backup ? (
-          <Select
+          <BackupDestinationSelect
             disabled={pending}
+            label="Backup destination"
+            storage={backupStorage.data}
             value={backupDestination}
-            onValueChange={setBackupDestination}
-          >
-            <SelectTrigger
-              aria-label="Backup destination"
-              className="h-9 w-full bg-background"
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent className="min-w-(--radix-select-trigger-width)">
-              <SelectItem value="default">
-                Default · Preferred destination
-              </SelectItem>
-              <SelectItem value="local">Local Relay</SelectItem>
-              {(backupStorage.data ?? [])
-                .filter((storage) => storage.enabled && !storage.deleting)
-                .map((storage) => (
-                  <SelectItem key={storage.id} value={storage.id}>
-                    S3 · {storage.name}
-                  </SelectItem>
-                ))}
-            </SelectContent>
-          </Select>
+            onChange={setBackupDestination}
+          />
         ) : null}
         {mode === "migrate" ? (
           <OptionRow
@@ -445,9 +460,11 @@ function MigrationForm({
             icon={<Square />}
             label="Stop this server"
             detail={
-              preview.allowed.stop
-                ? "It stops for the move and stays stopped. Once the move finishes, you'll be asked whether to delete it."
-                : "A move stops this server, and you can't stop it."
+              !preview.allowed.stop
+                ? "A move stops this server, and you can't stop it."
+                : deleting
+                  ? "It stops for the move and stays stopped until it's deleted."
+                  : "It stops for the move and stays stopped. Once the move finishes, you'll be asked whether to delete it."
             }
           />
         ) : (
@@ -467,6 +484,35 @@ function MigrationForm({
           />
         )}
       </fieldset>
+
+      {mode === "migrate" ? (
+        <fieldset className="grid gap-3 rounded-lg border border-border/80 bg-background/45 p-3">
+          <legend className="type-technical-label px-1 text-muted-foreground">
+            Once moved
+          </legend>
+          <OptionRow
+            checked={deleting}
+            disabled={pending || !preview.allowed.delete}
+            icon={<Trash2 />}
+            label="Delete this server"
+            detail={
+              preview.allowed.delete
+                ? "Kiln takes a full backup of it first, then deletes it. The backup stays after it's gone."
+                : "Deleting it needs permission to delete and back up this server."
+            }
+            onChange={setDeleteSource}
+          />
+          {deleting ? (
+            <BackupDestinationSelect
+              disabled={pending}
+              label="Final backup destination"
+              storage={backupStorage.data}
+              value={deleteDestination}
+              onChange={setDeleteDestination}
+            />
+          ) : null}
+        </fieldset>
+      ) : null}
 
       {preview.source.provisioning ? (
         <Callout tone="warning">
@@ -497,6 +543,53 @@ function MigrationForm({
       </DialogFooter>
     </form>
   )
+}
+
+// Where a backup goes: wherever this server's backups go by default, the
+// Relay itself, or an S3 destination.
+function BackupDestinationSelect({
+  disabled,
+  label,
+  onChange,
+  storage,
+  value,
+}: {
+  disabled: boolean
+  label: string
+  onChange: (value: string) => void
+  storage:
+    | ReadonlyArray<{
+        deleting: boolean
+        enabled: boolean
+        id: string
+        name: string
+      }>
+    | undefined
+  value: string
+}) {
+  return (
+    <Select disabled={disabled} value={value} onValueChange={onChange}>
+      <SelectTrigger aria-label={label} className="h-9 w-full bg-background">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent className="min-w-(--radix-select-trigger-width)">
+        <SelectItem value="default">Default · Preferred destination</SelectItem>
+        <SelectItem value="local">Local Relay</SelectItem>
+        {(storage ?? [])
+          .filter((item) => item.enabled && !item.deleting)
+          .map((item) => (
+            <SelectItem key={item.id} value={item.id}>
+              S3 · {item.name}
+            </SelectItem>
+          ))}
+      </SelectContent>
+    </Select>
+  )
+}
+
+function storageChoice(value: string): { storageId?: string | null } {
+  if (value === "default") return {}
+  return { storageId: value === "local" ? null : value }
 }
 
 // Full backups restore to the copy as linked backups. Ones kept on this
@@ -738,16 +831,15 @@ function Callout({
 
 function defaultDestination(
   destinations: ReadonlyArray<ServerMigrationDestination>,
-  mode: ServerMigrationMode
+  mode: ServerMigrationMode,
+  usable: (destination: ServerMigrationDestination) => boolean
 ) {
-  const usable = destinations.filter(
-    (destination) => !destination.problems.length
-  )
+  const candidates = destinations.filter(usable)
   return (
     (mode === "duplicate"
-      ? usable.find((destination) => destination.current)
+      ? candidates.find((destination) => destination.current)
       : null) ??
-    usable[0] ??
+    candidates[0] ??
     destinations[0]
   )
 }

@@ -122,7 +122,9 @@ export function notificationDetail(
     case "server.migration":
       return content.outcome === "failed"
         ? `${content.source.name} - ${content.error ?? "The copy stopped"}`
-        : `${content.source.name} to ${content.destination.name}`
+        : content.sourceDeleting && !content.sourceDeleted
+          ? `${content.source.name} to ${content.destination.name} - the old server is deleted after its final backup`
+          : `${content.source.name} to ${content.destination.name}`
   }
 }
 

@@ -39,6 +39,17 @@ import {
   listServerMigrationsEffect,
   startServerMigrationEffect,
 } from "@/lib/server-migrations.server"
+import { resolveAuthorizedBackupStorageSelection } from "@/lib/backup-storage-selection.server"
+import type {
+  MigrationRelayRoom,
+  MigrationSourceRoom,
+} from "@/lib/server-migration-room"
+import {
+  checkMigrationRoom,
+  defaultBackupIsLocal,
+  loadRelayRoom,
+  migrationSourceRoom,
+} from "@/lib/server-migration-room.server"
 import {
   relayTransferProblemsEffect,
   type RelayTransferProblem,
@@ -53,6 +64,8 @@ export interface ServerMigrationDestination {
   readonly name: string
   readonly nodeArch: string | null
   readonly problems: ReadonlyArray<RelayTransferProblem>
+  /** What it can give the copy; null when it couldn't say. */
+  readonly room: MigrationRelayRoom | null
   /** Names of game servers there already, which a copy can't take. */
   readonly takenNames: ReadonlyArray<string>
 }
@@ -73,6 +86,8 @@ export interface ServerMigrationPreview {
   readonly allowed: {
     readonly backup: boolean
     readonly copyAccess: boolean
+    /** Deleting it after a move, which backs it up first. */
+    readonly delete: boolean
     readonly linkBackups: boolean
     readonly network: boolean
     /** Stopping and starting it, as a duplicate that stops it does. */
@@ -81,6 +96,16 @@ export interface ServerMigrationPreview {
     readonly stop: boolean
   }
   readonly destinations: ReadonlyArray<ServerMigrationDestination>
+  /**
+   * What the server takes and its Relay has room for, to check a copy
+   * fits; null when its Relay couldn't say.
+   */
+  readonly room: {
+    /** Whether its backups go to its own Relay by default. */
+    readonly defaultBackupLocal: boolean
+    readonly server: MigrationSourceRoom
+    readonly source: MigrationRelayRoom
+  } | null
   readonly domains: {
     /** Whether Hearth manages domains through Cloudflare. */
     readonly managed: boolean
@@ -104,6 +129,13 @@ export async function previewServerMigrationHandler(
 ): Promise<ServerMigrationPreview> {
   const { authorization, instance, relay } = await authorizeSource(user, data)
   const relays = (await listPersistedRelays()).filter((item) => item.enabled)
+  const [sourceRoom, defaultBackupLocal] = await Promise.all([
+    recoverPromise(
+      () => loadRelayRoom(relay, { rootId: instance.id, subject: user.id }),
+      () => null
+    ),
+    defaultBackupIsLocal(relay.id, instance.id),
+  ])
   const destinations = await Promise.all(
     relays.map(async (candidate) => {
       const allowed = (
@@ -113,7 +145,7 @@ export async function previewServerMigrationHandler(
         })
       ).allows("instance.create")
       if (!allowed) return null
-      const [problems, takenNames] = await Promise.all([
+      const [problems, takenNames, room] = await Promise.all([
         runAppEffect(
           "serverMigrations.preview.problems",
           relayTransferProblemsEffect({
@@ -124,6 +156,13 @@ export async function previewServerMigrationHandler(
           })
         ),
         serverNames(candidate, user),
+        candidate.id === relay.id
+          ? (sourceRoom?.room ?? null)
+          : recoverPromise(
+              async () =>
+                (await loadRelayRoom(candidate, { subject: user.id })).room,
+              () => null
+            ),
       ])
       const { relayConnectionFeatures } = await import("@/lib/relay-connection")
       return {
@@ -135,6 +174,7 @@ export async function previewServerMigrationHandler(
         name: candidate.name,
         nodeArch: candidate.nodeArch,
         problems,
+        room,
         takenNames,
       } satisfies ServerMigrationDestination
     })
@@ -167,6 +207,9 @@ export async function previewServerMigrationHandler(
     allowed: {
       backup: authorization.allows("backup.create"),
       copyAccess: authorization.allows("access.read"),
+      delete:
+        authorization.allows("instance.delete") &&
+        authorization.allows("backup.create"),
       linkBackups: authorization.allows("backup.download"),
       network: authorization.allows("instance.network.write"),
       power:
@@ -175,6 +218,13 @@ export async function previewServerMigrationHandler(
       stop: authorization.allows("instance.power.stop"),
     },
     destinations: destinations.filter((item) => item !== null),
+    room: sourceRoom
+      ? {
+          defaultBackupLocal,
+          server: migrationSourceRoom(instance, sourceRoom.rootBytes),
+          source: sourceRoom.room,
+        }
+      : null,
     domains: {
       managed: Boolean(integration?.enabled),
       names: assignments
@@ -218,6 +268,7 @@ export async function startServerMigrationHandler(
     moveDomain: data.mode === "migrate" && data.options.moveDomain,
     moveWebRoutes: data.mode === "migrate" && data.options.moveWebRoutes,
     stopSource: data.mode === "migrate" || data.options.stopSource,
+    deleteSource: data.mode === "migrate" ? data.options.deleteSource : null,
   }
   // Checked whether or not it runs now: it may be started before the copy
   // reaches the step that stops it, and starts again after a duplicate.
@@ -240,6 +291,20 @@ export async function startServerMigrationHandler(
     }
   }
   if (options.backup) authorization.require("backup.create")
+  // Deleting the old server backs it up first, to a destination they may use.
+  if (options.deleteSource) {
+    authorization.require("instance.delete")
+    authorization.require("backup.create")
+    await resolveAuthorizedBackupStorageSelection({
+      relayId: relay.id,
+      targetId: instance.id,
+      targetKind: "instance",
+      user,
+      ...(options.deleteSource.storageId === undefined
+        ? {}
+        : { storageId: options.deleteSource.storageId }),
+    })
+  }
   if (options.moveDomain || options.moveWebRoutes) {
     authorization.require("instance.network.write")
   }
@@ -259,6 +324,17 @@ export async function startServerMigrationHandler(
     throw new Error(
       `A server on ${destination.name} is already named ${data.name}`
     )
+  }
+  const room = await checkMigrationRoom({
+    backup: options.backup,
+    destination,
+    instanceId: instance.id,
+    limits: true,
+    source: relay,
+    subject: user.id,
+  })
+  if (room.length) {
+    throw new Error(room.map((problem) => problem.message).join(". "))
   }
   const id = await runAppEffect(
     "serverMigrations.start",

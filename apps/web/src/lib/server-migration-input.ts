@@ -20,6 +20,15 @@ export const serverMigrationOptionsSchema = z.object({
   moveWebRoutes: z.boolean(),
   /** The old server stops while its files are copied, then starts again. */
   stopSource: z.boolean(),
+  /**
+   * A finished move deletes the old server once a final full backup of it
+   * has finished: to an S3 destination, the Relay itself (null), or
+   * wherever its backups go by default (left out).
+   */
+  deleteSource: z
+    .object({ storageId: z.uuid().nullable().optional() })
+    .nullable()
+    .default(null),
 })
 export type ServerMigrationOptions = z.infer<
   typeof serverMigrationOptionsSchema

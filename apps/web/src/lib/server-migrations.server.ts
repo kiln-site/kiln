@@ -49,11 +49,15 @@ import type { AuthenticatedUser } from "@/lib/auth-session"
 import { advanceAuthorizationRevisionEffect } from "@/lib/authorization-revision"
 import { publishBackupChange } from "@/lib/backup-realtime.server"
 import { databaseTable } from "@/lib/database-config"
-import { deleteInstanceWithoutFinalBackup } from "@/lib/final-instance-deletion"
+import {
+  deleteInstanceWithoutFinalBackup,
+  ensureFinalInstanceDeletion,
+} from "@/lib/final-instance-deletion"
 import { startPollingWorker } from "@/lib/polling-worker"
 import { provisioningInstanceId } from "@/lib/provisioning.server"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { relayResourceLimitsRequest } from "@/lib/resource-limits.server"
+import { checkMigrationRoom } from "@/lib/server-migration-room.server"
 import { activeRelay, type PersistedRelay } from "@/lib/relay-registry"
 import { provisionServer } from "@/lib/server-provisioning.server"
 import { createInstanceBackupHandler } from "@/server/backups.server"
@@ -88,16 +92,20 @@ type MigrationState =
   | "completed"
   | "failed"
   | "cancelled"
+// In order: the copy is made and checked for room before the old server
+// is backed up or stopped, so nothing changes for a copy that can't fit,
+// and the old server keeps running while the new one is built.
 type MigrationStep =
-  | "backup"
-  | "stop"
   | "create"
   | "provision"
+  | "backup"
+  | "stop"
   | "copy"
   | "finish"
 type FinishedPart =
   | "access"
   | "backups"
+  | "delete"
   | "domains"
   | "owner"
   | "routes"
@@ -180,11 +188,7 @@ export const startServerMigrationEffect = Effect.fn("serverMigrations.start")(
     const now = yield* Clock.currentTimeMillis
     const id = randomUUID()
     const createKey = randomUUID()
-    const step: MigrationStep = input.options.backup
-      ? "backup"
-      : input.options.stopSource
-        ? "stop"
-        : "create"
+    const step: MigrationStep = "create"
     yield* database.transaction("serverMigrations.insert", (transaction) =>
       Effect.gen(function* () {
         // One copy of a server at a time: starts queue on its Relay's row,
@@ -443,11 +447,11 @@ const migrationStep = Effect.fnUntraced(function* (
     case "backup":
       return yield* backupSource(row, generation, actor, options)
     case "stop":
-      return yield* stopSource(row, generation, actor)
+      return yield* stopSource(row, generation, actor, options)
     case "create":
       return yield* createDestination(row, generation, actor, options)
     case "provision":
-      return yield* awaitProvisioned(row, generation, actor)
+      return yield* awaitProvisioned(row, generation, actor, options)
     case "copy":
       return yield* copyFiles(row, generation, actor)
     case "finish":
@@ -507,7 +511,7 @@ const backupSource = Effect.fnUntraced(function* (
     })
   )
   yield* claimWrite(row.id, generation, "step = ?", [
-    options.stopSource ? "stop" : "create",
+    nextStep(row, options, "backup"),
   ])
 })
 
@@ -516,9 +520,15 @@ const backupSource = Effect.fnUntraced(function* (
 const stopSource = Effect.fnUntraced(function* (
   row: MigrationRow,
   generation: number,
-  actor: AuthenticatedUser
+  actor: AuthenticatedUser,
+  options: ServerMigrationOptions
 ) {
   const source = yield* relay(row.source_relay_id)
+  // Asked again before the server stops, since other work may have filled
+  // a disk since the copy was made. Its limits are already reserved.
+  if (row.source_was_running === null) {
+    yield* requireRoom(row, actor, options, false)
+  }
   const instance = yield* snapshotInstance(
     source,
     row.source_instance_id,
@@ -550,7 +560,9 @@ const stopSource = Effect.fnUntraced(function* (
         )
     )
   }
-  yield* claimWrite(row.id, generation, "step = 'create'", [])
+  yield* claimWrite(row.id, generation, "step = ?", [
+    nextStep(row, options, "stop"),
+  ])
 })
 
 // Creates the copy, stopped, from the exact Brick the old server was built
@@ -574,6 +586,15 @@ const createDestination = Effect.fnUntraced(function* (
     return yield* Effect.fail(
       new Error(`${row.source_name} has no Brick to build its copy from`)
     )
+  }
+  // Before anything is made or changed: a copy that can't fit stops here.
+  // One the Relay already made, before a restart could record it, holds its
+  // limits already.
+  if (
+    !row.destination_created &&
+    !(yield* snapshotInstance(destination, row.destination_instance_id, actor))
+  ) {
+    yield* requireRoom(row, actor, options, true)
   }
   const recipe = yield* promise(() => loadInstanceRecipe(source, instance))
   const diskLimitBytes =
@@ -622,7 +643,8 @@ const createDestination = Effect.fnUntraced(function* (
 const awaitProvisioned = Effect.fnUntraced(function* (
   row: MigrationRow,
   generation: number,
-  actor: AuthenticatedUser
+  actor: AuthenticatedUser,
+  options: ServerMigrationOptions
 ) {
   const destination = yield* relay(row.destination_relay_id)
   yield* waitUntil(
@@ -648,7 +670,9 @@ const awaitProvisioned = Effect.fnUntraced(function* (
         })
       )
   )
-  yield* claimWrite(row.id, generation, "step = 'copy'", [])
+  yield* claimWrite(row.id, generation, "step = ?", [
+    nextStep(row, options, "provision"),
+  ])
 })
 
 // Copies the old server's whole folder into the new one's, Relay to Relay.
@@ -791,6 +815,26 @@ const finishMigration = Effect.fnUntraced(function* (
   }
   if (row.mode === "duplicate") {
     yield* finish("restart", restartSourceEffect(row, actor))
+  }
+  // Last, once everything it held belongs to the copy: the old server is
+  // backed up in full and then deleted, in the background, as deleting it
+  // with a final backup does.
+  const deleteSource = row.mode === "migrate" ? options.deleteSource : null
+  if (deleteSource) {
+    yield* finish(
+      "delete",
+      promise(() =>
+        ensureFinalInstanceDeletion({
+          instanceId: from.instanceId,
+          relay: source,
+          requestedBy: actor.id,
+          user: actor,
+          ...(deleteSource.storageId === undefined
+            ? {}
+            : { storageId: deleteSource.storageId }),
+        })
+      )
+    )
   }
   yield* endMigration(row, generation, "completed", null)
 })
@@ -954,6 +998,11 @@ const endMigration = Effect.fnUntraced(function* (
       type: "instance",
     },
     ...(message ? { error: message } : {}),
+    ...(state === "completed" &&
+    row.mode === "migrate" &&
+    migrationOptions(row).deleteSource
+      ? { sourceDeleting: true }
+      : {}),
     kind: "server.migration",
     migrationId: row.id,
     mode: row.mode,
@@ -970,6 +1019,57 @@ const endMigration = Effect.fnUntraced(function* (
 })
 
 // ---------------------------------------------------------- helpers
+
+// The step after one that finished. A migration started before the copy was
+// made first may have backed up or stopped the old server already, so a
+// step that's done is passed over whichever order it ran in.
+function nextStep(
+  row: MigrationRow,
+  options: ServerMigrationOptions,
+  after: "provision" | "backup" | "stop"
+): MigrationStep {
+  if (after === "provision" && options.backup && row.backup_id === null) {
+    return "backup"
+  }
+  if (
+    after !== "stop" &&
+    options.stopSource &&
+    row.source_was_running === null
+  ) {
+    return "stop"
+  }
+  return row.destination_created ? "copy" : "create"
+}
+
+// Fails unless the copy still fits: its limits, before it's created, and
+// the disk the move needs on both Relays. A backup already taken is counted
+// in what's free, not again.
+const requireRoom = Effect.fnUntraced(function* (
+  row: MigrationRow,
+  actor: AuthenticatedUser,
+  options: ServerMigrationOptions,
+  limits: boolean
+) {
+  const [source, destination] = yield* Effect.all(
+    [relay(row.source_relay_id), relay(row.destination_relay_id)],
+    { concurrency: 2 }
+  )
+  const problems = yield* promise(() =>
+    checkMigrationRoom({
+      backup: row.backup_id === null ? options.backup : null,
+      destination,
+      instanceId: row.source_instance_id,
+      limits,
+      source,
+      subject: actor.id,
+    })
+  )
+  if (problems.length) {
+    return yield* Effect.fail(
+      new Error(problems.map((problem) => problem.message).join(". "))
+    )
+  }
+})
 
 // Polls `check` until it holds, renewing the lease and stopping for a
 // cancellation; fails once `timeoutMs` passes, unless it's null.
@@ -1160,6 +1260,7 @@ const FinishedParts = Schema.Array(
   Schema.Literals([
     "access",
     "backups",
+    "delete",
     "domains",
     "owner",
     "routes",
