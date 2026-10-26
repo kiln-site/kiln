@@ -882,13 +882,7 @@ export class FilesystemDriver {
       const root = yield* this.#instanceRoot(instance)
       const selected = paths.length
         ? distinctMutationPaths(paths)
-        : yield* filesystemOperation("transfer.listRoot", async () => {
-            const names: Array<string> = []
-            for await (const child of await opendir(root)) {
-              names.push(child.name)
-            }
-            return names.sort((left, right) => left.localeCompare(right))
-          })
+        : yield* rootChildNames(root)
       const entries = yield* collectArchiveEntries(root, selected)
       let completed = false
       return yield* filesystemOperation("transfer.pack", (signal) =>
@@ -1267,12 +1261,22 @@ export class FilesystemDriver {
     })
   }
 
-  /** Bytes under a root, all of which a transfer of it packs. */
+  /**
+   * Bytes a transfer of the whole root packs, as it packs them: each path
+   * of a file linked more than once counts.
+   */
   rootBytes(instance: FileRoot) {
-    return this.#instanceRoot(instance).pipe(
-      Effect.flatMap((root) => directoryApparentSizeEffect(root)),
-      Effect.withSpan("relay.files.rootBytes")
-    )
+    return Effect.gen({ self: this }, function* () {
+      const root = yield* this.#instanceRoot(instance)
+      const entries = yield* collectArchiveEntries(
+        root,
+        yield* rootChildNames(root)
+      )
+      return entries.reduce(
+        (total, entry) => total + (entry.kind === "file" ? entry.size : 0),
+        0
+      )
+    }).pipe(Effect.withSpan("relay.files.rootBytes"))
   }
 
   #instanceRoot(instance: FileRoot) {
@@ -2002,6 +2006,16 @@ const availableDuplicatePath = Effect.fn("relay.files.availableDuplicatePath")(
     )
   }
 )
+
+function rootChildNames(root: string) {
+  return filesystemOperation("transfer.listRoot", async () => {
+    const names: Array<string> = []
+    for await (const child of await opendir(root)) {
+      names.push(child.name)
+    }
+    return names.sort((left, right) => left.localeCompare(right))
+  })
+}
 
 const collectArchiveEntries = Effect.fn("relay.files.collectArchiveEntries")(
   function* (root: string, requestedPaths: ReadonlyArray<string>) {

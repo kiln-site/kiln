@@ -357,6 +357,28 @@ describe("Relay control socket", () => {
     })
   })
 
+  it("tells a Relay reader its free disk, and only a file reader a root's size", async () => {
+    const relay = await startRelay()
+    const reader = await relay.connect(
+      await relay.pair({ actions: ["relay.read"], role: "custom" })
+    )
+
+    const free = sendRequest(reader.socket, "transfer.space", {})
+    expect(await reader.inbox.next()).toMatchObject({
+      payload: { ok: true },
+      replyTo: free,
+      type: "response",
+    })
+    const root = sendRequest(reader.socket, "transfer.space", {
+      rootId: "b".repeat(40),
+    })
+    expect(await reader.inbox.next()).toMatchObject({
+      code: "forbidden",
+      replyTo: root,
+      type: "error",
+    })
+  })
+
   it("keeps host files behind their own grants", async () => {
     const relay = await startRelay()
     const hostId = "H".repeat(43)

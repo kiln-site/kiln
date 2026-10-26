@@ -1675,10 +1675,13 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
         objectString(request.payload, "rootId") ?? "",
         "download"
       )
-    // Measuring a root reads what a transfer of it would download.
+    // Free disk is the Relay's state; measuring a root reads what a
+    // transfer of it would download.
     case "transfer.space": {
       const rootId = objectString(request.payload, "rootId")
-      return rootId === null ? null : fileTransferAction(rootId, "download")
+      return rootId === null
+        ? "relay.read"
+        : fileTransferAction(rootId, "download")
     }
     case "transfer.pull.start":
       return fileTransferAction(

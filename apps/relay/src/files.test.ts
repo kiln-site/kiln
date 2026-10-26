@@ -373,6 +373,24 @@ describe("Relay file editing", () => {
   )
 })
 
+describe("Relay transfer sizing", () => {
+  // A transfer packs each name of a hard-linked file as its own file, so
+  // the room a copy needs counts every one.
+  it.effect("measures a root as its transfer packs it, hard links and all", () =>
+    withSetup(({ driver, instance, root }) =>
+      Effect.gen(function* () {
+        const region = resolve(root, "region.mca")
+        yield* fromPromise(() => writeFile(region, Buffer.alloc(4096, 1)))
+        const before = yield* driver.rootBytes(instance)
+
+        yield* fromPromise(() => link(region, resolve(root, "linked.mca")))
+
+        assert.strictEqual(yield* driver.rootBytes(instance), before + 4096)
+      })
+    )
+  )
+})
+
 describe("Relay NBT file editing", () => {
   it.effect(
     "opens, validates, force saves, and repairs compressed player data",
