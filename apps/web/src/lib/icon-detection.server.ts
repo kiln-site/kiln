@@ -1,4 +1,5 @@
 import {
+  type IconImageContentType,
   relayAppWebRouteStateSchema,
   relayIconMaxBytes,
   relayIconReadResultSchema,
@@ -32,11 +33,17 @@ import {
   listPersistedRelaysEffect,
   type PersistedRelay,
 } from "@/lib/relay-registry"
-import { siteIconCandidates } from "@/lib/site-icons"
+import {
+  conventionalIcons,
+  rankSiteIcons,
+  readManifestIcons,
+  readSitePage,
+} from "@/lib/site-icons"
 
 // Hearth looks for icons nobody chose: a game server's `server-icon.png`,
-// where Minecraft keeps it, and the icon an app's first domain names for
-// itself, its largest, or else its `/favicon.ico`. Game servers are looked
+// where Minecraft keeps it, and the largest icon an app's site has, named
+// by its pages or manifest or kept where sites keep them, trying its
+// domains in the order its web routes list them. Game servers are looked
 // at every few minutes, since reading one unchanged file is cheap; sites
 // a few times a day, and whenever someone asks.
 
@@ -44,8 +51,12 @@ const sweepInterval = "5 minutes"
 const siteCheckIntervalMs = 6 * 60 * 60_000
 const relayReadTimeoutMs = 15_000
 const SITE_PAGE_MAX_BYTES = 512 * 1024
-// How many of a page's icons to try before giving up on it.
-const SITE_ICON_ATTEMPTS = 4
+const SITE_MANIFEST_MAX_BYTES = 128 * 1024
+// Icons a site might have are tried this many at a time, each briefly.
+const SITE_PROBE_BATCH = 4
+const SITE_PROBE_TIMEOUT_MS = 5_000
+// How many of an app's domains to look at before giving up.
+const SITE_ROUTE_ATTEMPTS = 3
 
 declare global {
   var kilnIconDetector: Fiber.Fiber<void> | undefined
@@ -133,10 +144,16 @@ const detectServerIconEffect = Effect.fn("Icons.detectServer")(function* (
   })
 })
 
-/** The icon an app's first domain names for itself, if it has one. */
+interface SiteIcon {
+  readonly bytes: Buffer
+  readonly contentType: IconImageContentType
+  readonly url: string
+}
+
+/** The largest icon a site has: one it names, or one where sites keep them. */
 const findSiteIconEffect = Effect.fn("Icons.findSiteIcon")(function* (
   pageUrl: URL
-) {
+): Effect.fn.Return<SiteIcon | null> {
   const page = yield* promiseEffect(() =>
     fetchPublicHttps(pageUrl, {
       accept: "text/html,application/xhtml+xml",
@@ -145,35 +162,64 @@ const findSiteIconEffect = Effect.fn("Icons.findSiteIcon")(function* (
       truncate: true,
     })
   ).pipe(Effect.option)
-  const candidates =
+  const named =
     page._tag === "Some" && page.value.contentType?.includes("html") !== false
-      ? siteIconCandidates(
-          page.value.body.toString("utf8"),
-          page.value.url.href
-        )
-      : []
-  const fallback = new URL("/favicon.ico", pageUrl).href
-  const urls = [
-    ...candidates.map((candidate) => candidate.url),
-    ...(candidates.some((candidate) => candidate.url === fallback)
-      ? []
-      : [fallback]),
-  ].slice(0, SITE_ICON_ATTEMPTS + 1)
-  for (const url of urls) {
-    const image = yield* promiseEffect(() =>
-      fetchPublicHttps(url, {
-        accept: "image/*",
-        maxBytes: relayIconMaxBytes,
-      })
-    ).pipe(Effect.option)
-    if (image._tag === "None") continue
-    const contentType = sniffIconImage(image.value.body)
-    if (contentType) return { bytes: image.value.body, contentType, url }
+      ? readSitePage(page.value.body.toString("utf8"), page.value.url.href)
+      : { icons: [], manifestUrl: null }
+  const manifest = named.manifestUrl
+    ? yield* promiseEffect(() =>
+        fetchPublicHttps(named.manifestUrl ?? "", {
+          accept: "application/manifest+json,application/json",
+          maxBytes: SITE_MANIFEST_MAX_BYTES,
+          timeoutMs: SITE_PROBE_TIMEOUT_MS,
+        })
+      ).pipe(
+        Effect.flatMap((response) =>
+          Effect.try(() => JSON.parse(response.body.toString("utf8")) as unknown)
+        ),
+        Effect.map((json) => readManifestIcons(json, named.manifestUrl ?? "")),
+        Effect.orElseSucceed(() => [])
+      )
+    : []
+  const candidates = rankSiteIcons([
+    ...named.icons,
+    ...manifest,
+    ...conventionalIcons(page._tag === "Some" ? page.value.url.href : pageUrl.href),
+  ])
+  // A few at a time, largest first; most guessed spots don't exist, so the
+  // first batch with an image settles it.
+  for (let start = 0; start < candidates.length; start += SITE_PROBE_BATCH) {
+    const batch = candidates.slice(start, start + SITE_PROBE_BATCH)
+    const images = yield* Effect.forEach(
+      batch,
+      (candidate) =>
+        promiseEffect(() =>
+          fetchPublicHttps(candidate.url, {
+            accept: "image/*",
+            maxBytes: relayIconMaxBytes,
+            timeoutMs: SITE_PROBE_TIMEOUT_MS,
+          })
+        ).pipe(
+          Effect.map((image) => {
+            const contentType = sniffIconImage(image.body)
+            return contentType
+              ? { bytes: image.body, contentType, url: candidate.url }
+              : null
+          }),
+          Effect.orElseSucceed(() => null)
+        ),
+      { concurrency: SITE_PROBE_BATCH }
+    )
+    const found = images.find((image) => image !== null)
+    if (found) return found
   }
   return null
 })
 
-/** Looks for the icon an app's first domain names for itself. */
+/**
+ * Looks for an app's icon on its domains, in the order its web routes list
+ * them, until one has an icon.
+ */
 const detectAppIconEffect = Effect.fn("Icons.detectApp")(function* (
   relay: PersistedRelay,
   appId: string
@@ -188,17 +234,24 @@ const detectAppIconEffect = Effect.fn("Icons.detectApp")(function* (
       relayRpc(relay, "app.network.routes.read", { appId }, relayReadTimeoutMs)
     )
   )
-  const route = state.routes[0]
-  const icon = route
-    ? yield* findSiteIconEffect(
-        new URL(`https://${route.hostname}${route.path ?? "/"}`)
-      )
-    : null
+  const sites = [
+    ...new Map(
+      state.routes.map((route) => {
+        const url = `https://${route.hostname}${route.path ?? "/"}`
+        return [url, new URL(url)] as const
+      })
+    ).values(),
+  ].slice(0, SITE_ROUTE_ATTEMPTS)
+  let icon: SiteIcon | null = null
+  for (const site of sites) {
+    icon = yield* findSiteIconEffect(site)
+    if (icon) break
+  }
   return yield* saveIconEffect(subject, "detected", {
     contentType: icon?.contentType ?? null,
     image: icon?.bytes ?? null,
     origin: icon ? { type: "site", url: icon.url } : null,
-    originVersion: route ? `${route.hostname}${route.path ?? ""}` : null,
+    originVersion: sites[0] ? (sites[0].host + sites[0].pathname).slice(0, 64) : null,
   })
 })
 

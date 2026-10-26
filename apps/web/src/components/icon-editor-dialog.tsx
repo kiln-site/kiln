@@ -314,57 +314,71 @@ function IconEditorDialog({
               }}
               value={source}
             />
-            {source === "upload" ? (
-              <UploadSource
-                disabled={busy}
-                onFile={(file) =>
-                  void choose(async () => file, { type: "upload" })
-                }
-              />
-            ) : source === "link" ? (
-              <LinkSource
-                disabled={busy}
-                onUrl={(url) =>
-                  void choose(
-                    async () => {
-                      const fetched = await fetchIconSource({ data: { url } })
-                      return base64ToBlob(
-                        fetched.contentBase64,
-                        fetched.contentType
-                      )
-                    },
-                    { type: "url", url }
-                  )
-                }
-              />
-            ) : files &&
+            {/* Every source shares one cell, so switching between them never
+                resizes the dialog; the tallest sets the height. */}
+            <div className="grid flex-1 *:col-start-1 *:row-start-1">
+              <SourcePanel active={source === "upload"}>
+                <UploadSource
+                  disabled={busy}
+                  onFile={(file) =>
+                    void choose(async () => file, { type: "upload" })
+                  }
+                />
+              </SourcePanel>
+              <SourcePanel active={source === "link"}>
+                <LinkSource
+                  active={source === "link"}
+                  disabled={busy}
+                  onUrl={(url) =>
+                    void choose(
+                      async () => {
+                        const fetched = await fetchIconSource({
+                          data: { url },
+                        })
+                        return base64ToBlob(
+                          fetched.contentBase64,
+                          fetched.contentType
+                        )
+                      },
+                      { type: "url", url }
+                    )
+                  }
+                />
+              </SourcePanel>
+              {files &&
               (subject.kind === "server" || subject.kind === "app") ? (
-              <FilesSource
-                disabled={busy}
-                files={files}
-                kind={subject.kind}
-                onFile={(path, service) =>
-                  void choose(
-                    () => readSourceFile(subject, files, path, service),
-                    service
-                      ? { type: "file", path, service }
-                      : { type: "file", path }
-                  )
-                }
-              />
-            ) : null}
-            {error ? (
-              <p className="type-meta text-destructive" role="alert">
-                {error}
-              </p>
-            ) : null}
-            {detectable ? (
-              <DetectionStatus
-                details={details.data}
-                subject={subject}
-                onDetected={refresh}
-              />
-            ) : null}
+                <SourcePanel active={source === "files"}>
+                  <FilesSource
+                    active={source === "files"}
+                    disabled={busy}
+                    files={files}
+                    kind={subject.kind}
+                    onFile={(path, service) =>
+                      void choose(
+                        () => readSourceFile(subject, files, path, service),
+                        service
+                          ? { type: "file", path, service }
+                          : { type: "file", path }
+                      )
+                    }
+                  >
+                    <DetectionStatus
+                      details={details.data}
+                      subject={subject}
+                      onDetected={refresh}
+                    />
+                  </FilesSource>
+                </SourcePanel>
+              ) : null}
+            </div>
+            {/* Room for one line is kept, so an error doesn't move anything. */}
+            <p
+              className="type-meta min-h-[1lh] truncate text-destructive"
+              role="alert"
+              title={error ?? undefined}
+            >
+              {error}
+            </p>
           </div>
         </div>
 
@@ -504,6 +518,26 @@ function SourceTabs({
   )
 }
 
+// A source's controls, kept in place but hidden and unreachable while
+// another source is chosen.
+function SourcePanel({
+  active,
+  children,
+}: {
+  active: boolean
+  children: React.ReactNode
+}) {
+  return (
+    <div
+      aria-hidden={!active}
+      className={cn("flex min-w-0 flex-col", !active && "invisible")}
+      inert={!active}
+    >
+      {children}
+    </div>
+  )
+}
+
 function UploadSource({
   disabled,
   onFile,
@@ -516,7 +550,7 @@ function UploadSource({
   return (
     <div
       className={cn(
-        "flex min-h-32 flex-col items-center justify-center gap-2 rounded-lg border border-dashed p-4 text-center transition-colors",
+        "flex min-h-32 flex-1 flex-col items-center justify-center gap-2 rounded-lg border border-dashed p-4 text-center transition-colors",
         dragging ? "border-primary bg-primary/5" : "bg-background/40"
       )}
       onDragOver={(event) => {
@@ -563,13 +597,16 @@ function UploadSource({
 }
 
 function LinkSource({
+  active,
   disabled,
   onUrl,
 }: {
+  active: boolean
   disabled: boolean
   onUrl: (url: string) => void
 }) {
   const [url, setUrl] = React.useState("")
+  const input = useFocusWhenActive(active)
   const value = url.trim()
   return (
     <form
@@ -591,7 +628,7 @@ function LinkSource({
           value={url}
           disabled={disabled}
           onChange={(event) => setUrl(event.target.value)}
-          autoFocus
+          ref={input}
         />
         <Button type="submit" variant="outline" disabled={disabled || !value}>
           Get
@@ -607,11 +644,16 @@ function LinkSource({
 const APP_FILES = "__files__"
 
 function FilesSource({
+  active,
+  children,
   disabled,
   files,
   kind,
   onFile,
 }: {
+  active: boolean
+  /** Below the form, such as what Kiln found by itself. */
+  children?: React.ReactNode
   disabled: boolean
   files: IconFileSource
   kind: "app" | "server"
@@ -623,10 +665,11 @@ function FilesSource({
   const [path, setPath] = React.useState(
     kind === "server" ? SERVER_ICON_PATH : ""
   )
+  const input = useFocusWhenActive(active)
   const value = path.trim()
   return (
     <form
-      className="flex flex-col gap-2"
+      className="flex flex-1 flex-col gap-2"
       onSubmit={(event) => {
         event.preventDefault()
         if (value) onFile(value, inContainer ? service : undefined)
@@ -674,20 +717,35 @@ function FilesSource({
           value={path}
           disabled={disabled}
           onChange={(event) => setPath(event.target.value)}
+          ref={input}
         />
         <Button type="submit" variant="outline" disabled={disabled || !value}>
           Load
         </Button>
       </div>
-      <p className="type-meta text-muted-foreground">
+      {/* Two lines kept, whichever explanation shows. */}
+      <p className="type-meta min-h-[2lh] text-muted-foreground">
         {inContainer
           ? "Read from the running container. Kiln keeps a copy."
           : kind === "server"
             ? "Relative to the server's folder, as in Files. Kiln keeps a copy."
             : "Relative to the app's folder, as in Files. Kiln keeps a copy."}
       </p>
+      {children ? <div className="mt-auto pt-1">{children}</div> : null}
     </form>
   )
+}
+
+// Focuses a source's field when its tab is chosen, not when the dialog
+// opens on another one.
+function useFocusWhenActive(active: boolean) {
+  const input = React.useRef<HTMLInputElement>(null)
+  const wasActive = React.useRef(active)
+  React.useEffect(() => {
+    if (active && !wasActive.current) input.current?.focus()
+    wasActive.current = active
+  }, [active])
+  return input
 }
 
 // A file under the root comes straight from the Relay to this page; one
@@ -746,25 +804,24 @@ function DetectionStatus({
   const found = detected?.digest ? detected.origin : null
   const looksFor =
     subject.kind === "server"
-      ? `${SERVER_ICON_PATH} in the server's folder`
-      : "an icon on the app's first domain"
+      ? `Kiln checks ${SERVER_ICON_PATH} on its own`
+      : "Kiln checks the app's domains on its own"
   return (
-    <div className="mt-auto flex items-start gap-3 rounded-lg border bg-muted/25 px-3 py-2.5">
-      <div className="min-w-0 flex-1 text-[0.8125rem]">
-        <p className="font-medium">
-          {found ? `Found ${originLabel(found)}` : "Nothing found yet"}
-        </p>
-        <p className="type-meta mt-0.5 text-muted-foreground">
-          Kiln looks for {looksFor}
-          {details?.custom && found ? "; your icon is shown instead" : ""}.
-          {detected ? ` Checked ${relativeTime(detected.checkedAt)}.` : ""}
-        </p>
-      </div>
+    <div className="flex items-center gap-2 border-t pt-2.5 text-[0.8125rem]">
+      <p className="min-w-0 flex-1 truncate text-muted-foreground">
+        <span className="text-foreground">
+          {found ? `Found ${originLabel(found)}` : "Nothing found"}
+        </span>
+        {" · "}
+        {detected ? `checked ${relativeTime(detected.checkedAt)}` : looksFor}
+      </p>
       <Button
         type="button"
         size="sm"
         variant="ghost"
+        className="shrink-0"
         disabled={detect.isPending}
+        title={found && details?.custom ? "Your own icon is shown instead" : looksFor}
         onClick={() => detect.mutate()}
       >
         <RefreshCw className={cn(detect.isPending && "animate-spin")} />

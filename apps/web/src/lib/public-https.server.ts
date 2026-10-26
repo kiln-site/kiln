@@ -34,6 +34,7 @@ export function fetchPublicHttps(
     readonly signal?: AbortSignal
     /** Keep the first `maxBytes` of a longer body, as for a page's head. */
     readonly truncate?: boolean
+    readonly timeoutMs?: number
   }
 ): Promise<PublicHttpsResponse> {
   const url = typeof input === "string" ? new URL(input) : input
@@ -47,6 +48,7 @@ function request(
     readonly maxBytes: number
     readonly signal?: AbortSignal
     readonly truncate?: boolean
+    readonly timeoutMs?: number
   },
   redirects: number
 ): Promise<PublicHttpsResponse> {
@@ -66,7 +68,7 @@ function request(
   }
   const signal = AbortSignal.any([
     ...(options.signal ? [options.signal] : []),
-    AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS),
   ])
   return new Promise<PublicHttpsResponse>((resolve, reject) => {
     const call = get(
