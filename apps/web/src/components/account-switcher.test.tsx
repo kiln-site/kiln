@@ -15,7 +15,7 @@ vi.mock("@/server/browser-accounts", () => ({
 }))
 
 it("keeps every account in its row as the active account changes", () => {
-  const accounts: Array<BrowserAccount> = ["alice", "bob", "charlie"].map(
+  const accounts: Array<BrowserAccount> = ["charlie", "alice", "bob"].map(
     (name) => ({
       active: false,
       email: `${name}@example.test`,

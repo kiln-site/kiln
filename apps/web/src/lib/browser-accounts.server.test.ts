@@ -125,7 +125,7 @@ describeMysql("browser accounts", () => {
     )
 
     it.effect(
-      "keeps account order when switching and reloading the session",
+      "keeps sign-in order across account switches, reloads, and renames",
       () =>
         Effect.gen(function* () {
           yield* resetDatabase
@@ -145,7 +145,22 @@ describeMysql("browser accounts", () => {
             listBrowserAccounts(browser.headers())
           )
           const order = accounts.map(({ userId }) => userId)
-          expect(order).toEqual(["alice", "bob", "charlie"])
+          expect(order).toEqual(["charlie", "alice", "bob"])
+
+          const renamed = yield* Effect.promise(() =>
+            browser.request("/update-user", {
+              method: "POST",
+              body: { name: "Aaron" },
+            })
+          )
+          expect(renamed.status).toBe(200)
+          const afterRename = yield* Effect.promise(() =>
+            listBrowserAccounts(browser.headers())
+          )
+          expect(afterRename.map(({ userId }) => userId)).toEqual(order)
+          expect(afterRename.find(({ userId }) => userId === "bob")?.name).toBe(
+            "Aaron"
+          )
 
           for (const account of accounts) {
             // Exercise the same activation endpoint used by switchBrowserAccount
