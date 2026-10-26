@@ -186,14 +186,21 @@ export class TransferPulls {
 
   /**
    * Stops a pull that hasn't started installing and deletes what it
-   * fetched. One already installing finishes, since stopping it halfway
-   * would leave part of its files behind.
+   * fetched, including what a failed one kept to resume from. One already
+   * installing finishes, since stopping it halfway would leave part of its
+   * files behind.
    */
   cancel(reference: RelayTransferReference) {
     return Effect.gen({ self: this }, function* () {
       const pull = this.get(reference)
       if (!pull) return null
-      if (pull.state !== "pulling" && pull.state !== "verifying") return pull
+      if (
+        pull.state !== "pulling" &&
+        pull.state !== "verifying" &&
+        pull.state !== "failed"
+      ) {
+        return pull
+      }
       const running = this.#running.get(pull.transferId)
       if (running) yield* Fiber.interrupt(running)
       yield* this.#removePart(pull.transferId)

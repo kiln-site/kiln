@@ -202,6 +202,7 @@ export const relayControlOperations = [
   "transfer.pull.start",
   "transfer.pull.get",
   "transfer.pull.cancel",
+  "transfer.space",
   "schedule.apply",
   "schedule.run",
   "schedule.remove",
@@ -379,6 +380,7 @@ export function relayControlOperationChanges(
     case "backup.task.list":
     case "transfer.source.get":
     case "transfer.pull.get":
+    case "transfer.space":
     case "schedule.overview":
     case "instance.resources.read":
     case "instance.files.list":
@@ -584,6 +586,8 @@ export function relayControlDeadlineMs(
   if (operation === "database.dump.export") return 60 * 60_000
   // Docker walks every volume to measure them.
   if (operation === "database.inspect") return 75_000
+  // Measuring a root walks every file in it.
+  if (operation === "transfer.space") return 120_000
   if (operation === "database.wipe") return 120_000
   if (operation === "database.dump.import") return 60 * 60_000
   if (operation === "instance.action") return 180_000

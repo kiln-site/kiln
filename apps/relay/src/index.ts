@@ -44,6 +44,7 @@ import {
   isRelayFileRoot,
   RelayTransferPullStartSchema,
   RelayTransferReferenceSchema,
+  RelayTransferSpaceRequestSchema,
   RelayTransferSourcePrepareSchema,
   appIdSchema,
   appTailscaleMember,
@@ -140,6 +141,7 @@ import { backupLinks } from "./transfers/backup-links.js"
 import { TransferGate } from "./transfers/gate.js"
 import { peerTransferRoute } from "./transfers/peer/route.js"
 import { TransferPulls } from "./transfers/peer/pulls.js"
+import { transferSpace } from "./transfers/peer/space.js"
 import type { TransferRootResolver } from "./transfers/peer/roots.js"
 import { TransferSources } from "./transfers/peer/sources.js"
 import { BackupManager } from "./backups.js"
@@ -2707,6 +2709,25 @@ async function executeControlRequest(
           Schema.decodeUnknownSync(RelayTransferReferenceSchema)(payload)
         )
       )
+    case "transfer.space": {
+      const input = Schema.decodeUnknownSync(RelayTransferSpaceRequestSchema)(
+        payload
+      )
+      return runRelayEffect(
+        "relay.transfers.space",
+        Effect.gen(function* () {
+          const target =
+            input.rootId === undefined
+              ? null
+              : yield* Effect.tryPromise(() => transferRoot(input.rootId ?? ""))
+          return yield* transferSpace({
+            dataDirectory: config.dataDirectory,
+            rootBytes: target ? target.filesystem.rootBytes(target.root) : null,
+            rootsDirectory: config.rootDirectory,
+          })
+        })
+      )
+    }
     case "schedule.apply":
       return scheduleManager.apply(
         relayScheduleProjectionSchema.parse(request.payload)

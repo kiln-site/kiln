@@ -93,6 +93,26 @@ describeLinux("transfers between Relays", () => {
     )
   })
 
+  it("deletes what a failed pull fetched once it's cancelled", async () => {
+    const source = await startSource({ dropEveryResponseAfter: 64 * 1024 })
+    await writeFile(join(source.root, "world.bin"), randomBytes(2 * 1024 * 1024))
+    const destination = await startDestination()
+    const artifact = await source.prepare("transfer-give-up-1")
+
+    const pull = await destination.pull(source, artifact, { path: "" })
+    expect(pull.state).toBe("failed")
+    expect((await stat(destination.partPath(artifact.transferId))).size).toBe(
+      pull.receivedBytes
+    )
+
+    const cancelled = await destination.cancel(artifact.transferId)
+
+    expect(cancelled?.state).toBe("cancelled")
+    await expect(
+      stat(destination.partPath(artifact.transferId))
+    ).rejects.toThrow()
+  })
+
   it("refuses a grant presented by a Relay it doesn't name", async () => {
     const source = await startSource()
     await writeFile(join(source.root, "secret.txt"), "only for the peer")
@@ -147,7 +167,12 @@ interface ReadyArtifact {
 
 type Source = Awaited<ReturnType<typeof startSource>>
 
-async function startSource(options: { dropFirstResponseAfter?: number } = {}) {
+async function startSource(
+  options: {
+    dropFirstResponseAfter?: number
+    dropEveryResponseAfter?: number
+  } = {}
+) {
   const dataDirectory = await mkdtemp(join(tmpdir(), "kiln-peer-source-"))
   const root = join(dataDirectory, "instances", "instance-1")
   await mkdir(root, { recursive: true })
@@ -201,9 +226,13 @@ async function startSource(options: { dropFirstResponseAfter?: number } = {}) {
   })
   let dropNext = options.dropFirstResponseAfter
   const server: Server = createServer((request, response) => {
-    // Cuts the first artifact response off partway, as a network might.
-    if (dropNext !== undefined && request.method === "GET") {
-      const limit = dropNext
+    // Cuts the first artifact response off partway, as a network might, or
+    // every one, as a network that keeps failing does.
+    if (
+      (dropNext !== undefined || options.dropEveryResponseAfter) &&
+      request.method === "GET"
+    ) {
+      const limit = dropNext ?? options.dropEveryResponseAfter ?? 0
       dropNext = undefined
       let sent = 0
       const write = response.write.bind(response)
@@ -290,6 +319,10 @@ async function startDestination() {
   return {
     identity,
     root,
+    cancel: (transferId: string) =>
+      Effect.runPromise(pulls.cancel({ rootId: "instance-1", transferId })),
+    partPath: (transferId: string) =>
+      join(dataDirectory, "transfers", "incoming", `${transferId}.part`),
     pull: async (
       source: Source,
       artifact: ReadyArtifact,

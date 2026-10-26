@@ -307,6 +307,8 @@ export function controlRequestLocks(
     case "transfer.pull.start":
     case "transfer.pull.get":
     case "transfer.pull.cancel":
+    // Measuring a root reads it beside whatever else runs.
+    case "transfer.space":
     case "schedule.apply":
     case "schedule.run":
     case "schedule.remove":

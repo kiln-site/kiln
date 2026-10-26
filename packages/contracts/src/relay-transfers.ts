@@ -15,6 +15,10 @@ export const relayPeerTransfersV1Feature = "peer-transfers-v1"
 // its restore and delete tasks name in `archive`.
 export const relayLinkedBackupsV1Feature = "linked-backups-v1"
 
+// The Relay reports through `transfer.space` how much a root holds and how
+// much room it has for transfers and new roots.
+export const relayTransferSpaceV1Feature = "transfer-space-v1"
+
 /** The HTTP route a source Relay serves an artifact on. */
 export function relayPeerTransferPath(transferId: string): string {
   return `/v1/peer/transfers/${encodeURIComponent(transferId)}`
@@ -172,3 +176,25 @@ export const RelayTransferReferenceSchema = Schema.Struct({
   rootId: Schema.String.check(Schema.isMaxLength(128)),
 })
 export type RelayTransferReference = typeof RelayTransferReferenceSchema.Type
+
+/**
+ * `transfer.space`: what a transfer needs room for, asked before one
+ * starts. With a root, also how much that root holds.
+ */
+export const RelayTransferSpaceRequestSchema = Schema.Struct({
+  rootId: Schema.optional(Schema.String.check(Schema.isMaxLength(128))),
+})
+export type RelayTransferSpaceRequest =
+  typeof RelayTransferSpaceRequestSchema.Type
+
+export const RelayTransferSpaceSchema = Schema.Struct({
+  /** Bytes under the root asked about; null when none was. */
+  rootBytes: Schema.NullOr(ByteCount),
+  /** Free bytes where artifacts and pulls are kept, and backups. */
+  transferFreeBytes: ByteCount,
+  /** Free bytes where game servers' folders are kept. */
+  rootsFreeBytes: ByteCount,
+  /** Whether both are on one filesystem, so they share their free bytes. */
+  sharedFilesystem: Schema.Boolean,
+})
+export type RelayTransferSpace = typeof RelayTransferSpaceSchema.Type

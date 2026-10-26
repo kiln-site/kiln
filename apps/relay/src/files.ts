@@ -1267,6 +1267,14 @@ export class FilesystemDriver {
     })
   }
 
+  /** Bytes under a root, all of which a transfer of it packs. */
+  rootBytes(instance: FileRoot) {
+    return this.#instanceRoot(instance).pipe(
+      Effect.flatMap((root) => directoryApparentSizeEffect(root)),
+      Effect.withSpan("relay.files.rootBytes")
+    )
+  }
+
   #instanceRoot(instance: FileRoot) {
     const config = this.#config
     return Effect.gen(function* () {
