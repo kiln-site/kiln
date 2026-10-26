@@ -617,9 +617,9 @@ describe("Relay schedule persistence", () => {
         nextRunAt: redeployedNextRunAt,
       },
     ])
-    expect(
-      await recovered.apply({ ...projection, revision: 2 })
-    ).toMatchObject({ acknowledgedRevision: 3, nextRunAt: null })
+    expect(await recovered.apply({ ...projection, revision: 2 })).toMatchObject(
+      { acknowledgedRevision: 3, nextRunAt: null }
+    )
     expect((await latestRun(recovered))?.id).toBe("legacy-run")
     await expect(
       readFile(join(directory, "schedules.json"), "utf8")

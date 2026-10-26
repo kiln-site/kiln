@@ -1539,6 +1539,22 @@ export const relayInstanceWebRouteSchema =
     id: relayInstanceWebRouteIdSchema,
   })
 
+// Whether a redirect lands back on the route it came from. With the path
+// kept, the destination's path is followed by the request's, which starts
+// with the route's own path.
+function redirectsToItself(
+  route: { readonly hostname: string; readonly path: string | null },
+  target: URL,
+  preservePath: boolean
+): boolean {
+  if (!webRouteHostnames(route).includes(target.hostname)) return false
+  const prefix = route.path ?? "/"
+  const landing = preservePath
+    ? `${target.pathname.replace(/\/$/u, "")}${prefix}`
+    : target.pathname
+  return landing.startsWith(prefix)
+}
+
 function relayInstanceWebRouteArraySchema<
   Route extends z.ZodType<
     z.output<typeof relayInstanceWebRouteConfigurationSchema>
@@ -1567,10 +1583,7 @@ function relayInstanceWebRouteArraySchema<
             issue("A redirect has no port", "targetPort")
           }
           const target = new URL(item.redirect.to)
-          if (
-            webRouteHostnames(item).includes(target.hostname) &&
-            target.pathname.startsWith(item.path ?? "/")
-          ) {
+          if (redirectsToItself(item, target, item.redirect.preservePath)) {
             issue("A route can't redirect to itself", "redirect")
           }
           if (item.redirect.preservePath && (target.search || target.hash)) {

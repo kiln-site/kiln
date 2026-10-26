@@ -317,8 +317,7 @@ export class SystemUpdateManager {
 
           const volumesFrom =
             prepared.find(({ operation }) => operation.component === "relay")
-              ?.container ??
-            (yield* inspectContainerEffect(engine, hostname()))
+              ?.container ?? (yield* inspectContainerEffect(engine, hostname()))
           const volumesFromLabels = volumesFrom.Config.Labels ?? {}
           if (
             kilnComponent(volumesFromLabels["io.kiln.component"]) !== "relay" ||
@@ -1214,7 +1213,9 @@ function helperStateEffect(
     Effect.flatMap((inspected) =>
       isHelperInspect(inspected)
         ? Effect.succeed(
-            inspected.State?.Running ? ("running" as const) : ("stopped" as const)
+            inspected.State?.Running
+              ? ("running" as const)
+              : ("stopped" as const)
           )
         : systemUpdateFailure(
             "status.decodeHelper",

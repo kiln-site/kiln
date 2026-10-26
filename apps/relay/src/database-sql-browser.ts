@@ -90,11 +90,9 @@ export function browseManagedDatabase(
   const target = {
     databaseName: database.databaseName,
     open: () =>
-      databases.process(
-        database,
-        [...CONTAINER_SOCKET_COMMAND, String(port)],
-        { stdin: true }
-      ),
+      databases.process(database, [...CONTAINER_SOCKET_COMMAND, String(port)], {
+        stdin: true,
+      }),
     port,
     ...credentials,
   }

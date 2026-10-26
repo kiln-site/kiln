@@ -502,16 +502,14 @@ function listTables(database: DatabaseSync): Array<DatabaseTable> {
       }>
     )
       .filter(({ hidden }) => hidden !== 1)
-      .map(
-        (column): DatabaseColumn => ({
-          defaultValue: column.dflt_value,
-          generated: column.hidden === 2 || column.hidden === 3,
-          name: column.name,
-          nullable: column.notnull === 0 && column.pk === 0,
-          primaryKey: column.pk,
-          type: column.type,
-        })
-      )
+      .map((column): DatabaseColumn => ({
+        defaultValue: column.dflt_value,
+        generated: column.hidden === 2 || column.hidden === 3,
+        name: column.name,
+        nullable: column.notnull === 0 && column.pk === 0,
+        primaryKey: column.pk,
+        type: column.type,
+      }))
     const kind = entry.type === "view" ? "view" : "table"
     // Prefer rowid: outside WITHOUT ROWID tables SQLite lets primary key
     // columns hold NULL, and NULL keys are not unique. Either way a change

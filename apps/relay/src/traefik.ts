@@ -85,6 +85,9 @@ export function traefikRouteLabels(
       router(`${name}-https`, hosts, "https", NOOP_SERVICE, [`${name}-to`])
       router(`${name}-http`, hosts, "http", NOOP_SERVICE, [`${name}-to`])
       redirectRegex(`${name}-to`, traefikRedirect(route.redirect))
+      // Unused, but without a service of its own Docker's provider makes one
+      // from the container's exposed ports, and drops a container with none.
+      labels[`traefik.http.services.${name}.loadbalancer.server.port`] = "80"
       continue
     }
 
@@ -494,7 +497,23 @@ function traefikFileRoutes(
 
     const strip = route.path && route.stripPrefix ? [`${name}-strip`] : []
     router(name, served, "websecure", name, strip)
-    if (!route.httpsRedirect) router(`${name}-http`, served, "web", name, strip)
+    // Its own HTTP router, so plain HTTP can't fall through to a shorter
+    // path's route that serves HTTP.
+    router(
+      `${name}-http`,
+      served,
+      "web",
+      name,
+      route.httpsRedirect ? [`${name}-redirect`] : strip
+    )
+    if (route.httpsRedirect) {
+      middlewares.push(
+        `    ${name}-redirect:`,
+        "      redirectScheme:",
+        "        scheme: https",
+        "        permanent: true"
+      )
+    }
     services.push(
       `    ${name}:`,
       "      loadBalancer:",

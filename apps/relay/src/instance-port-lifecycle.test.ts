@@ -10,7 +10,9 @@ const first = "a".repeat(40)
 const second = "b".repeat(40)
 
 function serverContainer(harness: RelayHarness, id: string) {
-  const container = fakeDocker.container(harness.resources.instanceContainer(id))
+  const container = fakeDocker.container(
+    harness.resources.instanceContainer(id)
+  )
   if (!container) throw new Error(`Server ${id} has no container`)
   return container
 }
@@ -41,15 +43,15 @@ describe("instance port lifecycle", () => {
     const one = await harness.createServer({ id: first })
     const two = await harness.createServer({ id: second })
 
-    expect(
-      new Set([one.publicPort, two.publicPort])
-    ).toEqual(new Set([32_123, 32_124]))
+    expect(new Set([one.publicPort, two.publicPort])).toEqual(
+      new Set([32_123, 32_124])
+    )
     expect(serverContainer(harness, first).portBindings).toEqual({
       "25565/tcp": [{ HostIp: "", HostPort: String(one.publicPort) }],
     })
-    await expect(
-      harness.createServer({ id: "c".repeat(40) })
-    ).rejects.toThrow("No game ports are available")
+    await expect(harness.createServer({ id: "c".repeat(40) })).rejects.toThrow(
+      "No game ports are available"
+    )
     expect(
       fakeDocker.container(harness.resources.instanceContainer("c".repeat(40)))
     ).toBeUndefined()
@@ -192,14 +194,21 @@ describe("instance port lifecycle", () => {
   })
 
   it("expires abandoned leases, enforces lease ownership, and lets one concurrent reservation win", async () => {
-    vi.useFakeTimers({ now: Date.parse("2026-07-30T12:00:00.000Z"), toFake: ["Date"] })
+    vi.useFakeTimers({
+      now: Date.parse("2026-07-30T12:00:00.000Z"),
+      toFake: ["Date"],
+    })
     try {
       const harness = await relayHarness({
         KILN_RELAY_GAME_PORT_RANGE: "32125-32125",
       })
       await harness.seedServer({ id: first })
       await harness.seedServer({ id: second })
-      const reserve = (instanceId: string, leaseId?: string, externalPort?: number) =>
+      const reserve = (
+        instanceId: string,
+        leaseId?: string,
+        externalPort?: number
+      ) =>
         Effect.runPromiseExit(
           harness.lifecycle.reserveInstancePortEffect(instanceId, {
             externalPort,
@@ -211,13 +220,16 @@ describe("instance port lifecycle", () => {
         Effect.runPromiseExit(
           harness.lifecycle.releaseInstancePortEffect(instanceId, leaseId)
         )
-      const lease = (exit: Exit.Exit<{ externalPort: number; id: string }, unknown>) => {
+      const lease = (
+        exit: Exit.Exit<{ externalPort: number; id: string }, unknown>
+      ) => {
         if (Exit.isFailure(exit)) throw new Error("Expected a port lease")
         return exit.value
       }
       const failureCode = (exit: Exit.Exit<unknown, { code: string }>) =>
         Exit.isFailure(exit)
-          ? exit.cause.reasons.find((reason) => reason._tag === "Fail")?.error.code
+          ? exit.cause.reasons.find((reason) => reason._tag === "Fail")?.error
+              .code
           : undefined
 
       const abandoned = lease(await reserve(first))

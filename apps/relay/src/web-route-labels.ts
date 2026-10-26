@@ -1,6 +1,7 @@
 import {
   relayInstanceWebRouteIdSchema,
   relayInstanceWebRouteSchema,
+  relayInstanceWebRoutesSchema,
   webRouteEndpoints,
 } from "@workspace/contracts"
 import type {
@@ -101,7 +102,19 @@ function decodeWebRouteRecoveryLabels(
       warnings.push(`${label}: ${parsed.message}`)
       continue
     }
-    const claimed = webRouteEndpoints(parsed.route)
+    // The checks a saved route passes, such as a redirect having no port,
+    // so a hand-edited label can't stop the Relay from storing it.
+    const checked = relayInstanceWebRoutesSchema.safeParse([parsed.route])
+    if (!checked.success) {
+      warnings.push(
+        `${label}: ${checked.error.issues[0]?.message ?? "route is invalid"}`
+      )
+      continue
+    }
+    const route = routes.some((recovered) => recovered.primary)
+      ? { ...parsed.route, primary: false }
+      : parsed.route
+    const claimed = webRouteEndpoints(route)
     const duplicate = claimed.find((endpoint) => endpoints.has(endpoint))
     if (duplicate) {
       warnings.push(`${label} duplicates ${duplicate}`)
@@ -114,7 +127,7 @@ function decodeWebRouteRecoveryLabels(
       continue
     }
     for (const endpoint of claimed) endpoints.add(endpoint)
-    routes.push(parsed.route)
+    routes.push(route)
   }
 
   return { routes, warnings }

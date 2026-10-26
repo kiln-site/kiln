@@ -18,6 +18,7 @@ import {
   isAuditedRelayControlOperation,
   relayAuthenticationWindowMs,
   relayBackupFailureCodesV1Feature,
+  relayWebRouteOptionsV1Feature,
   relayBrowserCapabilityV2Feature,
   relayBrowserLeaseRenewalV1Feature,
   relayFileRequestReplayV1Feature,
@@ -1336,6 +1337,7 @@ class RelayConnection {
           relayBrowserLeaseRenewalV1Feature,
           relayFileRequestReplayV1Feature,
           relayBackupFailureCodesV1Feature,
+          relayWebRouteOptionsV1Feature,
         ],
         signature: sign(
           null,

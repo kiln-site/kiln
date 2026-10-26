@@ -306,9 +306,7 @@ export async function restoreEncryptedPlatformBackup(
             if (exit._tag === "Failure") child.kill()
           })
       ).pipe(
-        Effect.ensuring(
-          Effect.promise(() => rm(stagedDump, { force: true }))
-        )
+        Effect.ensuring(Effect.promise(() => rm(stagedDump, { force: true })))
       )
     )
   )

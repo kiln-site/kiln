@@ -148,19 +148,39 @@ export function WebRoutesSection({
     },
     [commit, save.isPending, saved]
   )
+  // Undo acts on the routes as they are when it's clicked, not as they were
+  // when the toast appeared.
+  const latest = React.useRef({ pending: save.isPending, saved })
+  React.useEffect(() => {
+    latest.current = { pending: save.isPending, saved }
+  }, [save.isPending, saved])
   const remove = React.useCallback(
     (route: DisplayedRoute) => {
       if (!saved || save.isPending) return
-      const previous = saved
+      const index = saved.findIndex((candidate) => candidate.id === route.id)
+      const { rowId: _rowId, ...removed } = route
+      const restore = () => {
+        const current = latest.current
+        if (!current.saved || current.pending) {
+          showToast({
+            message: "Undo once the current change has saved",
+            type: "warning",
+          })
+          return
+        }
+        if (current.saved.some((candidate) => candidate.id === route.id)) {
+          return
+        }
+        const next = [...current.saved]
+        next.splice(Math.min(index, next.length), 0, removed)
+        commit(next, "Could not restore the route")
+      }
       commit(
         saved.filter((candidate) => candidate.id !== route.id),
         "Could not remove the route",
         () =>
           showToast({
-            action: {
-              label: "Undo",
-              onClick: () => commit(previous, "Could not restore the route"),
-            },
+            action: { label: "Undo", onClick: restore },
             message: `Removed ${route.hostname}${route.path ?? ""}`,
             type: "success",
           })
@@ -523,7 +543,7 @@ const RouteDestinationCell = React.memo(function RouteDestinationCell({
   services: ReadonlyArray<WebRouteServiceOption> | undefined
 }) {
   const detail = route.redirect
-    ? `${route.redirect.permanent ? "308 permanent" : "307 temporary"} · ${
+    ? `${route.redirect.permanent ? "301 permanent" : "302 temporary"} · ${
         route.redirect.preservePath ? "keeps path" : "drops path"
       }`
     : route.path && route.stripPrefix

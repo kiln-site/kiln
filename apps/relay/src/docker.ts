@@ -1574,7 +1574,11 @@ export class DockerDriver {
       const { Config: containerConfig, State: state } = discovered.container
       // The probe attaches to the console's TTY, which needs only a running
       // container that keeps stdin open.
-      if (!state.Running || !containerConfig.Tty || !containerConfig.OpenStdin) {
+      if (
+        !state.Running ||
+        !containerConfig.Tty ||
+        !containerConfig.OpenStdin
+      ) {
         return emptyResult
       }
 
@@ -2090,10 +2094,7 @@ export class DockerDriver {
       statfs(directory),
     ])
     const instanceStorageUsed = this.#directoryUsageFor(instance)
-    const { cpu, memory } = containerCpuAndMemory(
-      stats,
-      instance.config.limits
-    )
+    const { cpu, memory } = containerCpuAndMemory(stats, instance.config.limits)
     const nodeStorageTotal = filesystem.blocks * filesystem.bsize
     const nodeStorageAvailable = filesystem.bavail * filesystem.bsize
     const nodeStorageUsed = Math.max(nodeStorageTotal - nodeStorageAvailable, 0)
@@ -2171,7 +2172,9 @@ export class DockerDriver {
     const dataUsed = this.#relayDataUsage()
     return {
       sampledAt: new Date().toISOString(),
-      ...(stats ? containerCpuAndMemory(stats, NO_RESOURCE_LIMITS) : this.#relayProcessUsage()),
+      ...(stats
+        ? containerCpuAndMemory(stats, NO_RESOURCE_LIMITS)
+        : this.#relayProcessUsage()),
       storage: {
         totalBytes: nodeStorageTotal,
         usedBytes: dataUsed,
@@ -2740,7 +2743,6 @@ export class DockerDriver {
       managedByRelay: owned,
     }
   }
-
 }
 
 function normalizedBrickNetworkMode(

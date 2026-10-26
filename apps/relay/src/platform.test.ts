@@ -296,7 +296,9 @@ describe("platform mode", () => {
     await writeFile(join(updates, `${names.hearth}.lock`), "running\n")
     await writeUpdateRecord(updates, "running", "running")
 
-    await relay.start({ environment: { RESEND_FROM_EMAIL: "kiln@example.test" } })
+    await relay.start({
+      environment: { RESEND_FROM_EMAIL: "kiln@example.test" },
+    })
     await relay.pass()
 
     expect(fakeDocker.container(names.hearth)?.id).toBe(hearth)
@@ -318,7 +320,9 @@ describe("platform mode", () => {
 
     await relay.start()
 
-    expect(relay.config.platformBackupKey).toBe(state?.secrets.platformBackupKey)
+    expect(relay.config.platformBackupKey).toBe(
+      state?.secrets.platformBackupKey
+    )
   })
 
   it("lets one process at a time change the installation", async () => {
@@ -329,7 +333,10 @@ describe("platform mode", () => {
       release = resolve
     })
     const holder = run(
-      withPlatformLock(relay.config.dataDirectory, Effect.promise(() => held))
+      withPlatformLock(
+        relay.config.dataDirectory,
+        Effect.promise(() => held)
+      )
     )
     await new Promise((resolve) => setTimeout(resolve, 50))
 
@@ -359,9 +366,7 @@ describe("platform mode", () => {
     await writeUpdateRecord(updates, "running", "running")
     await expect(relay.cli("stop-hearth")).rejects.toThrow("being updated")
     await expect(
-      run(
-        withPlatformRestoreHold(relay.config, Effect.succeed("restored"))
-      )
+      run(withPlatformRestoreHold(relay.config, Effect.succeed("restored")))
     ).rejects.toThrow("being updated")
 
     // Once it finishes, Hearth stops and stays stopped.
@@ -646,7 +651,10 @@ describe("platform mode", () => {
     await relay.start()
     // The volume appears between the Relay's check and its create, and
     // Docker answers the create with it.
-    const held = fakeDocker.hold({ command: "volume create", target: names.volume })
+    const held = fakeDocker.hold({
+      command: "volume create",
+      target: names.volume,
+    })
     const pass = relay.pass()
     await held.reached
     fakeDocker.addVolume({

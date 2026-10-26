@@ -901,7 +901,9 @@ export class DockerEngine {
         Internal: options.internal ?? false,
         Labels: { ...options.labels },
         Name: options.name,
-        ...(options.subnet && { IPAM: { Config: [{ Subnet: options.subnet }] } }),
+        ...(options.subnet && {
+          IPAM: { Config: [{ Subnet: options.subnet }] },
+        }),
       },
       method: "POST",
       path: "/networks/create",

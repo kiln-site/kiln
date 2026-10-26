@@ -9,17 +9,15 @@ import { describe, expect, it, vi } from "vite-plus/test"
 vi.mock("./command.js", () => import("./test/docker.js"))
 
 import { fakeDocker } from "./test/docker.js"
-import {
-  relayHarness,
-  serverRecipe,
-  type RelayHarness,
-} from "./test/relay.js"
+import { relayHarness, serverRecipe, type RelayHarness } from "./test/relay.js"
 
 const id = "a".repeat(40)
 const GIBIBYTE = 1024 ** 3
 
 function serverContainer(harness: RelayHarness) {
-  const container = fakeDocker.container(harness.resources.instanceContainer(id))
+  const container = fakeDocker.container(
+    harness.resources.instanceContainer(id)
+  )
   if (!container) throw new Error("The server has no container")
   return container
 }
@@ -143,7 +141,11 @@ describe("startup reinstall", () => {
     })
 
     const changed = await reconfigure(harness, {
-      limits: { cpuMillis: null, diskBytes: null, memoryBytes: 512 * 1024 ** 2 },
+      limits: {
+        cpuMillis: null,
+        diskBytes: null,
+        memoryBytes: 512 * 1024 ** 2,
+      },
       start: false,
       variables: { version: "2.0.0" },
     })
@@ -200,11 +202,13 @@ describe("startup reinstall", () => {
     const harness = await relayHarness()
     await harness.createServer({ id, start: true })
     const before = serverContainer(harness)
-    fakeDocker.unreachableImages.add("registry.example.com/example/server:1.2.3")
+    fakeDocker.unreachableImages.add(
+      "registry.example.com/example/server:1.2.3"
+    )
 
-    await expect(
-      reconfigure(harness, { reinstall: true })
-    ).rejects.toThrow("registry timeout")
+    await expect(reconfigure(harness, { reinstall: true })).rejects.toThrow(
+      "registry timeout"
+    )
 
     expect(serverContainer(harness)).toBe(before)
     expect(before.state.running).toBe(true)

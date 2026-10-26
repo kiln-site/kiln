@@ -243,13 +243,7 @@ describe("instance power state", () => {
       instanceStateReason(oomKilled, "failed", undefined, null, "running")
     ).toEqual({ code: "out_of_memory" })
     expect(
-      instanceStateReason(
-        oomKilled,
-        "failed",
-        undefined,
-        null,
-        "stopped"
-      )
+      instanceStateReason(oomKilled, "failed", undefined, null, "stopped")
     ).toEqual({ code: "out_of_memory_while_stopping" })
   })
 })

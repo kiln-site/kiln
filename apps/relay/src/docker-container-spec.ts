@@ -101,8 +101,10 @@ export interface ContainerSpec {
 function containerCreateBody(spec: ContainerSpec): unknown {
   const network = spec.network
   const exposed: Record<string, object> = {}
-  const bindings: Record<string, Array<{ HostIp: string; HostPort: string }>> =
-    {}
+  const bindings: Record<
+    string,
+    Array<{ HostIp: string; HostPort: string }>
+  > = {}
   for (const port of spec.ports ?? []) {
     const key = `${port.containerPort}/${port.protocol}`
     exposed[key] = {}

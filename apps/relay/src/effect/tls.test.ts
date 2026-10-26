@@ -22,7 +22,8 @@ describe("Relay managed TLS", () => {
       })
       assert.isNull(yield* loadRelayTls(coolify))
       assert.isNull(yield* loadRelayTls(bundled))
-    }))
+    })
+  )
 
   it.live("persists its CA and renews its leaf certificate", () =>
     withTemporaryDirectory((directory) =>

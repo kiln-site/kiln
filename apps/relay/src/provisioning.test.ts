@@ -30,11 +30,7 @@ import {
   ProvisioningManager,
 } from "./provisioning.js"
 import { serverProvisioning } from "./server-provisioning.js"
-import {
-  provisioningWorker,
-  relayHarness,
-  serverRecipe,
-} from "./test/relay.js"
+import { provisioningWorker, relayHarness, serverRecipe } from "./test/relay.js"
 
 const pullFailure = new Error(
   "Command failed: docker pull private.example/image --env TOKEN=secret\nError response from daemon: manifest unknown\n"

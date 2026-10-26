@@ -84,6 +84,7 @@ import {
   relayInstancePortLeaseRequestSchema,
   relayInstancePortInputsSchema,
   relayInstanceWebRouteInputsSchema,
+  relayWebRouteOptionsV1Feature,
   relayNetworkingSchema,
   relayProxyBrowserMetadataSchema,
   relayProxyReadInputSchema,
@@ -132,6 +133,7 @@ import type {
   RelayControlRequest,
   RelayDirectorySizes,
   RelayInstance,
+  RelayInstanceWebRoute,
 } from "@workspace/contracts"
 
 import { DatabaseConnections } from "./database-connections.js"
@@ -286,6 +288,10 @@ import {
   type PlatformPassResult,
 } from "./platform.js"
 import { ScheduleManager } from "./schedules.js"
+import {
+  webRoutesForHearth,
+  webRoutesFromHearth,
+} from "./web-route-compatibility.js"
 import { assignRelayWebRouteIds, webRouteCollision } from "./web-route-ids.js"
 import { planWebRouteRecovery } from "./web-route-labels.js"
 import type {
@@ -2011,7 +2017,11 @@ async function executeControlRequest(
         dynamicConfiguration: bundled
           ? traefikDynamicConfiguration(config, routes, settings)
           : null,
-        routes: routes.map((route) => {
+        // An older Hearth reads only routes with a port.
+        routes: (hearthFeatures.has(relayWebRouteOptionsV1Feature)
+          ? routes
+          : routes.filter((route) => !route.redirect)
+        ).map((route) => {
           const appId = appIdFromRouteOwner(route.instanceId)
           return {
             hostname: route.hostname,
@@ -2505,7 +2515,10 @@ async function executeControlRequest(
       return apps.updateNetwork(relayAppNetworkSchema.parse(request.payload))
     case "app.network.routes.read": {
       const appId = appIdSchema.parse(payload.appId)
-      return appWebRouteState(appId)
+      return webRouteStateForHearth(
+        hearthFeatures,
+        await appWebRouteState(appId)
+      )
     }
     case "app.network.routes.write": {
       const input = relayAppWebRoutesWriteSchema.parse(request.payload)
@@ -2517,7 +2530,13 @@ async function executeControlRequest(
       )
       const routes = assignRelayWebRouteIds(
         owner,
-        input.routes,
+        relayAppWebRoutesWriteSchema.shape.routes.parse(
+          webRoutesFromHearth(
+            hearthFeatures,
+            input.routes,
+            configuredRoutes.filter((route) => route.instanceId === owner)
+          )
+        ),
         configuredRoutes
       )
       const collision = webRouteCollision(owner, routes, configuredRoutes)
@@ -2559,7 +2578,10 @@ async function executeControlRequest(
           )
         )
       )
-      return appWebRouteState(input.appId)
+      return webRouteStateForHearth(
+        hearthFeatures,
+        await appWebRouteState(input.appId)
+      )
     }
     case "app.terminal.attach": {
       const input = relayAppTerminalAttachSchema.parse(request.payload)
@@ -3211,7 +3233,10 @@ async function executeControlRequest(
         "relay.network.routes.read",
         startup.state.listInstanceRoutes(instance.id)
       )
-      return lifecycle.webRouteState(instance.id, routes)
+      return webRouteStateForHearth(
+        hearthFeatures,
+        await lifecycle.webRouteState(instance.id, routes)
+      )
     }
     case "instance.network.databases.remove": {
       const input = relayRemoveDatabaseConnectionSchema.parse(payload)
@@ -3239,7 +3264,13 @@ async function executeControlRequest(
       )
       const routes = assignRelayWebRouteIds(
         instance.id,
-        requestedRoutes,
+        relayInstanceWebRouteInputsSchema.parse(
+          webRoutesFromHearth(
+            hearthFeatures,
+            requestedRoutes,
+            configuredRoutes.filter((route) => route.instanceId === instance.id)
+          )
+        ),
         configuredRoutes
       )
       const collision = webRouteCollision(instance.id, routes, configuredRoutes)
@@ -3280,7 +3311,10 @@ async function executeControlRequest(
           )
         )
       )
-      return lifecycle.webRouteState(instance.id, routes)
+      return webRouteStateForHearth(
+        hearthFeatures,
+        await lifecycle.webRouteState(instance.id, routes)
+      )
     }
     case "relay.installation.read":
       await requireFullAccess(client.id, "read this Relay's installation ID")
@@ -3774,6 +3808,17 @@ function systemUpdateTarget(value: unknown): {
 }
 
 // An app's routes, and whether Traefik serves them yet.
+// A route state with its routes as the connected Hearth reads them.
+function webRouteStateForHearth<
+  State extends {
+    readonly routes: ReadonlyArray<
+      RelayInstanceWebRoute & { readonly service?: string }
+    >
+  },
+>(hearthFeatures: ReadonlySet<string>, state: State) {
+  return { ...state, routes: webRoutesForHearth(hearthFeatures, state.routes) }
+}
+
 async function appWebRouteState(appId: string) {
   const [app, routes] = await Promise.all([
     apps.get(appId),

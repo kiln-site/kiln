@@ -374,10 +374,10 @@ export function WebRouteDialog({
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="permanent">
-                      Permanent (308) · browsers remember it
+                      Permanent (301) · browsers remember it
                     </SelectItem>
                     <SelectItem value="temporary">
-                      Temporary (307) · checked every visit
+                      Temporary (302) · checked every visit
                     </SelectItem>
                   </SelectContent>
                 </Select>

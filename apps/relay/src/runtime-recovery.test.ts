@@ -97,7 +97,8 @@ const reconcileAt = (
   manager: RuntimeRecoveryManager,
   time: number,
   observations: ReadonlyArray<RuntimeRecoveryObservation>
-) => TestClock.setTime(time).pipe(Effect.andThen(manager.reconcile(observations)))
+) =>
+  TestClock.setTime(time).pipe(Effect.andThen(manager.reconcile(observations)))
 
 describe("runtime recovery", () => {
   layer(makeRelayStateLayer(join(testDirectory, "relay.sqlite")))((it) => {
@@ -122,7 +123,9 @@ describe("runtime recovery", () => {
           finishedAt: new Date(firstCrashAt).toISOString(),
           startedAt: firstStartedAt,
         })
-        const scheduled = yield* reconcileAt(manager, firstCrashAt, [firstCrash])
+        const scheduled = yield* reconcileAt(manager, firstCrashAt, [
+          firstCrash,
+        ])
         assert.deepInclude(scheduled.get(instanceId)?.recovery, {
           attempt: 1,
           maxAttempts: 2,
@@ -132,8 +135,13 @@ describe("runtime recovery", () => {
         })
 
         const firstRetryAt = firstCrashAt + 5_000
-        const restarting = yield* reconcileAt(manager, firstRetryAt, [firstCrash])
-        assert.strictEqual(restarting.get(instanceId)?.recovery?.phase, "restarting")
+        const restarting = yield* reconcileAt(manager, firstRetryAt, [
+          firstCrash,
+        ])
+        assert.strictEqual(
+          restarting.get(instanceId)?.recovery?.phase,
+          "restarting"
+        )
         yield* dockerIdle
         assert.strictEqual(container.starts, 1)
 
@@ -370,29 +378,33 @@ describe("runtime recovery", () => {
       })
     )
 
-    it.effect("clears stale stop compensation when running intent is observed", () =>
-      Effect.gen(function* () {
-        const state = yield* RelayStateStore
-        const instanceId = "b".repeat(40)
-        const initialManager = yield* makeManager()
-        yield* initialManager.recordProvisioned(instanceId, "running")
-        const initial = yield* state.getRuntimeRecovery(instanceId)
-        if (!initial) return yield* Effect.die("expected a recovery record")
-        yield* state.setRuntimeRecovery({ ...initial, stopPending: true })
+    it.effect(
+      "clears stale stop compensation when running intent is observed",
+      () =>
+        Effect.gen(function* () {
+          const state = yield* RelayStateStore
+          const instanceId = "b".repeat(40)
+          const initialManager = yield* makeManager()
+          yield* initialManager.recordProvisioned(instanceId, "running")
+          const initial = yield* state.getRuntimeRecovery(instanceId)
+          if (!initial) return yield* Effect.die("expected a recovery record")
+          yield* state.setRuntimeRecovery({ ...initial, stopPending: true })
 
-        const manager = yield* makeManager()
-        yield* manager.reconcile([observation(instanceId)])
+          const manager = yield* makeManager()
+          yield* manager.reconcile([observation(instanceId)])
 
-        assert.isFalse(
-          (yield* state.getRuntimeRecovery(instanceId))?.stopPending ?? true
-        )
-      })
+          assert.isFalse(
+            (yield* state.getRuntimeRecovery(instanceId))?.stopPending ?? true
+          )
+        })
     )
 
     it.effect("observes a manual start after the retry circuit opens", () =>
       Effect.gen(function* () {
         const state = yield* RelayStateStore
-        const manager = yield* makeManager({ KILN_RELAY_CRASH_RETRY_LIMIT: "0" })
+        const manager = yield* makeManager({
+          KILN_RELAY_CRASH_RETRY_LIMIT: "0",
+        })
         const instanceId = "4".repeat(40)
         yield* TestClock.setTime(100)
         yield* manager.recordProvisioned(instanceId, "running")
@@ -457,87 +469,105 @@ describe("runtime recovery", () => {
       })
     )
 
-    it.effect("takes over a failed container with a legacy restart policy", () =>
-      Effect.gen(function* () {
-        const manager = yield* makeManager()
-        const instanceId = "7".repeat(40)
+    it.effect(
+      "takes over a failed container with a legacy restart policy",
+      () =>
+        Effect.gen(function* () {
+          const manager = yield* makeManager()
+          const instanceId = "7".repeat(40)
 
-        const result = yield* reconcileAt(
-          manager,
-          Date.parse("2026-08-06T12:00:02.000Z"),
-          [
-            crashed(instanceId, {
-              dockerRestartConfigured: true,
-              finishedAt: "2026-08-06T12:00:02.000Z",
-            }),
-          ]
-        )
+          const result = yield* reconcileAt(
+            manager,
+            Date.parse("2026-08-06T12:00:02.000Z"),
+            [
+              crashed(instanceId, {
+                dockerRestartConfigured: true,
+                finishedAt: "2026-08-06T12:00:02.000Z",
+              }),
+            ]
+          )
 
-        assert.deepInclude(result.get(instanceId)?.recovery, {
-          attempt: 1,
-          phase: "pending",
-          reason: "process_exit",
+          assert.deepInclude(result.get(instanceId)?.recovery, {
+            attempt: 1,
+            phase: "pending",
+            reason: "process_exit",
+          })
         })
-      })
     )
 
-    it.effect("does not block reconciliation on an in-flight Docker start", () =>
-      Effect.gen(function* () {
-        const manager = yield* makeManager({
-          KILN_RELAY_CRASH_RETRY_DELAY_SECONDS: "0",
+    it.effect(
+      "does not block reconciliation on an in-flight Docker start",
+      () =>
+        Effect.gen(function* () {
+          const manager = yield* makeManager({
+            KILN_RELAY_CRASH_RETRY_DELAY_SECONDS: "0",
+          })
+          const instanceId = "8".repeat(40)
+          server(instanceId, false)
+          const start = fakeDocker.hold({
+            command: "start",
+            target: service(instanceId),
+          })
+          yield* manager.recordProvisioned(instanceId, "running")
+          yield* manager.reconcile([crashed(instanceId)])
+
+          const reconcileFiber = yield* manager
+            .reconcile([crashed(instanceId)])
+            .pipe(Effect.forkChild)
+          yield* Effect.promise(() => start.reached)
+          const second = yield* manager.reconcile([crashed(instanceId)])
+
+          assert.strictEqual(
+            second.get(instanceId)?.recovery?.phase,
+            "restarting"
+          )
+          start.release()
+          yield* Fiber.join(reconcileFiber)
         })
-        const instanceId = "8".repeat(40)
-        server(instanceId, false)
-        const start = fakeDocker.hold({ command: "start", target: service(instanceId) })
-        yield* manager.recordProvisioned(instanceId, "running")
-        yield* manager.reconcile([crashed(instanceId)])
-
-        const reconcileFiber = yield* manager
-          .reconcile([crashed(instanceId)])
-          .pipe(Effect.forkChild)
-        yield* Effect.promise(() => start.reached)
-        const second = yield* manager.reconcile([crashed(instanceId)])
-
-        assert.strictEqual(second.get(instanceId)?.recovery?.phase, "restarting")
-        start.release()
-        yield* Fiber.join(reconcileFiber)
-      })
     )
 
-    it.effect("stops a recovery start that lands after the user stopped the server", () =>
-      Effect.gen(function* () {
-        const state = yield* RelayStateStore
-        const manager = yield* makeManager({
-          KILN_RELAY_CRASH_RETRY_DELAY_SECONDS: "0",
-        })
-        const instanceId = "c".repeat(40)
-        const container = server(instanceId, false)
-        const start = fakeDocker.hold({ command: "start", target: container.name })
-        const stop = fakeDocker.hold({ command: "stop", target: container.name })
-        yield* manager.recordProvisioned(instanceId, "running")
-        yield* manager.reconcile([crashed(instanceId)])
-        yield* manager.reconcile([crashed(instanceId)])
-        yield* Effect.promise(() => start.reached)
+    it.effect(
+      "stops a recovery start that lands after the user stopped the server",
+      () =>
+        Effect.gen(function* () {
+          const state = yield* RelayStateStore
+          const manager = yield* makeManager({
+            KILN_RELAY_CRASH_RETRY_DELAY_SECONDS: "0",
+          })
+          const instanceId = "c".repeat(40)
+          const container = server(instanceId, false)
+          const start = fakeDocker.hold({
+            command: "start",
+            target: container.name,
+          })
+          const stop = fakeDocker.hold({
+            command: "stop",
+            target: container.name,
+          })
+          yield* manager.recordProvisioned(instanceId, "running")
+          yield* manager.reconcile([crashed(instanceId)])
+          yield* manager.reconcile([crashed(instanceId)])
+          yield* Effect.promise(() => start.reached)
 
-        yield* manager.recordPowerAction(instanceId, "stop")
-        start.release()
-        yield* Effect.promise(() => stop.reached)
-        // Reconciliation keeps working while the compensating stop is running.
-        const during = yield* manager.reconcile([observation(instanceId)])
-        assert.strictEqual(during.get(instanceId)?.desiredState, "stopped")
-        stop.release()
-        yield* dockerIdle
+          yield* manager.recordPowerAction(instanceId, "stop")
+          start.release()
+          yield* Effect.promise(() => stop.reached)
+          // Reconciliation keeps working while the compensating stop is running.
+          const during = yield* manager.reconcile([observation(instanceId)])
+          assert.strictEqual(during.get(instanceId)?.desiredState, "stopped")
+          stop.release()
+          yield* dockerIdle
 
-        assert.isFalse(container.state.running)
-        assert.deepStrictEqual(manager.snapshot(instanceId), {
-          desiredState: "stopped",
-          recovery: null,
+          assert.isFalse(container.state.running)
+          assert.deepStrictEqual(manager.snapshot(instanceId), {
+            desiredState: "stopped",
+            recovery: null,
+          })
+          assert.strictEqual(
+            (yield* state.getRuntimeRecovery(instanceId))?.desiredState,
+            "stopped"
+          )
         })
-        assert.strictEqual(
-          (yield* state.getRuntimeRecovery(instanceId))?.desiredState,
-          "stopped"
-        )
-      })
     )
 
     it.effect("retries a failed compensating stop after a Relay restart", () =>
@@ -547,8 +577,14 @@ describe("runtime recovery", () => {
         const manager = yield* makeManager(environment)
         const instanceId = "d".repeat(40)
         const container = server(instanceId, false)
-        const start = fakeDocker.hold({ command: "start", target: container.name })
-        const firstStop = fakeDocker.hold({ command: "stop", target: container.name })
+        const start = fakeDocker.hold({
+          command: "start",
+          target: container.name,
+        })
+        const firstStop = fakeDocker.hold({
+          command: "stop",
+          target: container.name,
+        })
         yield* manager.recordProvisioned(instanceId, "running")
         yield* manager.reconcile([crashed(instanceId)])
         yield* manager.reconcile([crashed(instanceId)])
@@ -560,10 +596,15 @@ describe("runtime recovery", () => {
         yield* dockerIdle
 
         assert.isTrue(container.state.running)
-        assert.isTrue((yield* state.getRuntimeRecovery(instanceId))?.stopPending)
+        assert.isTrue(
+          (yield* state.getRuntimeRecovery(instanceId))?.stopPending
+        )
 
         const restarted = yield* makeManager(environment)
-        const retry = fakeDocker.hold({ command: "stop", target: container.name })
+        const retry = fakeDocker.hold({
+          command: "stop",
+          target: container.name,
+        })
         yield* restarted.reconcile([observation(instanceId)])
         yield* Effect.promise(() => retry.reached)
         retry.release()
@@ -575,41 +616,45 @@ describe("runtime recovery", () => {
           recovery: null,
         })
         yield* restarted.reconcile([crashed(instanceId, { exitCode: 0 })])
-        assert.isFalse((yield* state.getRuntimeRecovery(instanceId))?.stopPending)
+        assert.isFalse(
+          (yield* state.getRuntimeRecovery(instanceId))?.stopPending
+        )
       })
     )
 
-    it.effect("counts a start Docker never confirms against the retry budget", () =>
-      Effect.gen(function* () {
-        const manager = yield* makeManager({
-          KILN_RELAY_CRASH_RETRY_DELAY_SECONDS: "0",
-          KILN_RELAY_CRASH_RETRY_LIMIT: "2",
-        })
-        const instanceId = "9".repeat(40)
-        const container = server(instanceId, false)
-        const stopped = crashed(instanceId)
-        yield* TestClock.setTime(100)
-        yield* manager.recordProvisioned(instanceId, "running")
-        yield* reconcileAt(manager, 200, [stopped])
-        const restarting = yield* reconcileAt(manager, 201, [stopped])
-        yield* dockerIdle
+    it.effect(
+      "counts a start Docker never confirms against the retry budget",
+      () =>
+        Effect.gen(function* () {
+          const manager = yield* makeManager({
+            KILN_RELAY_CRASH_RETRY_DELAY_SECONDS: "0",
+            KILN_RELAY_CRASH_RETRY_LIMIT: "2",
+          })
+          const instanceId = "9".repeat(40)
+          const container = server(instanceId, false)
+          const stopped = crashed(instanceId)
+          yield* TestClock.setTime(100)
+          yield* manager.recordProvisioned(instanceId, "running")
+          yield* reconcileAt(manager, 200, [stopped])
+          const restarting = yield* reconcileAt(manager, 201, [stopped])
+          yield* dockerIdle
 
-        const confirmationAt = Date.parse(
-          restarting.get(instanceId)?.recovery?.nextAttemptAt ?? ""
-        )
-        assert.isAbove(confirmationAt, 201)
-        yield* reconcileAt(manager, confirmationAt - 1, [stopped])
-        assert.strictEqual(container.starts, 1)
+          const confirmationAt = Date.parse(
+            restarting.get(instanceId)?.recovery?.nextAttemptAt ?? ""
+          )
+          assert.isAbove(confirmationAt, 201)
+          yield* reconcileAt(manager, confirmationAt - 1, [stopped])
+          assert.strictEqual(container.starts, 1)
 
-        // Docker accepted the start, but the container never came up.
-        const retry = yield* reconcileAt(manager, confirmationAt, [stopped])
-        assert.deepInclude(retry.get(instanceId)?.recovery, {
-          attempt: 2,
-          phase: "pending",
-          reason: "start_failed",
+          // Docker accepted the start, but the container never came up.
+          const retry = yield* reconcileAt(manager, confirmationAt, [stopped])
+          assert.deepInclude(retry.get(instanceId)?.recovery, {
+            attempt: 2,
+            phase: "pending",
+            reason: "start_failed",
+          })
+          assert.strictEqual(container.starts, 1)
         })
-        assert.strictEqual(container.starts, 1)
-      })
     )
   })
 })

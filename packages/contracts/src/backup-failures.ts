@@ -89,7 +89,9 @@ export function describeBackupFailure(
       }
     case "storage_unreachable":
       return {
-        title: provider ? `Couldn't reach ${provider}` : "Couldn't reach storage",
+        title: provider
+          ? `Couldn't reach ${provider}`
+          : "Couldn't reach storage",
         detail:
           "The Relay couldn't connect to the storage endpoint. Check the destination's endpoint and the Relay's network.",
         // The Relay's own network is as likely as the provider.

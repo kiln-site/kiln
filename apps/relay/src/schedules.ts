@@ -253,7 +253,10 @@ export class ScheduleManager {
         )
         for (const occurrence of due.occurrences) {
           if (occurrence.run.status === "running")
-            this.#launchOccurrence(occurrence.definition, occurrence.scheduledAt)
+            this.#launchOccurrence(
+              occurrence.definition,
+              occurrence.scheduledAt
+            )
         }
         if (due.failure) return this.#claimFailed(due.failure.cause)
         this.#claimFailures = 0
@@ -968,7 +971,9 @@ function readScheduleState(path: string) {
         })
       ),
       Effect.catch((cause) =>
-        hasErrorCode(cause, "ENOENT") ? Effect.succeed(null) : Effect.fail(cause)
+        hasErrorCode(cause, "ENOENT")
+          ? Effect.succeed(null)
+          : Effect.fail(cause)
       )
     )
   )

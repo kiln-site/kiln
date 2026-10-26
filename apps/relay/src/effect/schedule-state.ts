@@ -55,7 +55,8 @@ export interface ScheduleOccurrence {
 export type RelayScheduleState = ReturnType<typeof makeRelayScheduleState>
 
 const historyLimit = 1_000
-export const relayTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
+export const relayTimezone =
+  Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
 
 const deployment = (
   scheduleId: string,
@@ -341,7 +342,9 @@ export function makeRelayScheduleState(sql: SqlClient) {
               FROM relay_schedules WHERE schedule_id = ${input.scheduleId}`
             const row = rows[0]
             if (!row) {
-              return { error: "Schedule is not deployed on this Relay" } as const
+              return {
+                error: "Schedule is not deployed on this Relay",
+              } as const
             }
             if (row.revision !== input.revision) {
               return { error: "Schedule deployment is out of date" } as const

@@ -14,10 +14,7 @@ import {
 } from "@workspace/contracts"
 
 import type { DatabaseDriver } from "./databases.js"
-import {
-  type DockerExecProcess,
-  streamIntoProcess,
-} from "./docker-engine.js"
+import { type DockerExecProcess, streamIntoProcess } from "./docker-engine.js"
 
 const DATABASE_BACKUP_TIMEOUT_MS = 30 * 60_000
 const MAX_DATABASE_ERROR_BYTES = 64 * 1024

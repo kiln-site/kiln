@@ -106,11 +106,19 @@ describe("Tailscale stack addressing", () => {
       "10.165.55.0/24",
       [
         { address: "10.165.55.10", hostname: "removed", instanceId: "removed" },
-        { address: "10.165.55.11", hostname: "retained", instanceId: "retained" },
+        {
+          address: "10.165.55.11",
+          hostname: "retained",
+          instanceId: "retained",
+        },
       ],
       [
         { hostname: "replacement", instanceId: "replacement" },
-        { enabled: false, hostname: "retained-new-name", instanceId: "retained" },
+        {
+          enabled: false,
+          hostname: "retained-new-name",
+          instanceId: "retained",
+        },
       ]
     )
 
@@ -152,7 +160,11 @@ describe("Tailscale stack DNS records", () => {
     const config = relayTailscaleStackConfigSchema.parse({
       bindings: [
         { address: "10.165.55.10", hostname: "paper", instanceId: removedId },
-        { address: "10.165.55.11", hostname: "survival", instanceId: retainedId },
+        {
+          address: "10.165.55.11",
+          hostname: "survival",
+          instanceId: retainedId,
+        },
       ],
       domain: "test",
       hostname: "private-network",
@@ -171,9 +183,9 @@ describe("Tailscale stack DNS records", () => {
       removedId
     )
 
-    expect(detached.config.bindings.map(({ instanceId }) => instanceId)).toEqual([
-      retainedId,
-    ])
+    expect(
+      detached.config.bindings.map(({ instanceId }) => instanceId)
+    ).toEqual([retainedId])
     expect(detached.records).toEqual([
       { address: "10.165.55.11", hostname: "survival" },
       { address: "10.140.2.10", hostname: "remote" },

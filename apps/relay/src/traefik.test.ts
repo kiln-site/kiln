@@ -241,7 +241,10 @@ describe("web route options", () => {
       )
     ) as DynamicConfiguration & {
       http: {
-        routers: Record<string, { entryPoints: Array<string> }>
+        routers: Record<
+          string,
+          { entryPoints: Array<string>; priority: number }
+        >
       }
     }
 
@@ -277,6 +280,24 @@ describe("web route options", () => {
       entryPoints: ["web"],
       rule,
       service: name,
+    })
+  })
+
+  it("redirects HTTP for a path route even when its hostname serves HTTP", () => {
+    const { http } = configuration([
+      { ...route, httpsRedirect: false, path: null },
+      { ...route, id: "decafbad", path: "/admin" },
+    ])
+    const root = http.routers["kiln-route-b00d4423-http"]
+    const admin = http.routers["kiln-route-decafbad-http"]
+
+    expect(root?.middlewares).toBeUndefined()
+    expect(admin?.rule).toBe(
+      "Host(`donutsmp.example.com`) && PathPrefix(`/admin`)"
+    )
+    expect(admin?.priority).toBeGreaterThan(root?.priority ?? Infinity)
+    expect(http.middlewares[admin?.middlewares?.[0] ?? ""]).toMatchObject({
+      redirectScheme: { scheme: "https" },
     })
   })
 
@@ -365,9 +386,10 @@ describe("web route options", () => {
     expect(labels[`traefik.http.routers.${name}-https.service`]).toBe(
       "noop@internal"
     )
+    // A placeholder, so a container without an exposed port keeps its labels.
     expect(
       labels[`traefik.http.services.${name}.loadbalancer.server.port`]
-    ).toBeUndefined()
+    ).toBe("80")
   })
 })
 

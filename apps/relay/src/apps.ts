@@ -988,9 +988,8 @@ export class AppDriver {
           const mounts = await this.#configMounts(input, deployment, host)
           const checkout =
             config.sourceType === "github" && input.github
-              ? await traceRelayPromise(
-                  "relay.apps.deployment.checkout",
-                  () => this.#checkOut(input, deployment)
+              ? await traceRelayPromise("relay.apps.deployment.checkout", () =>
+                  this.#checkOut(input, deployment)
                 )
               : null
           if (
@@ -2665,8 +2664,7 @@ export class AppDriver {
         mounts: (container.Mounts ?? []).map((mount) => ({
           destination: mount.Destination ?? "",
           readOnly: mount.RW === false,
-          source:
-            (mount.Type === "volume" ? mount.Name : mount.Source) ?? "",
+          source: (mount.Type === "volume" ? mount.Name : mount.Source) ?? "",
           type: mount.Type,
         })),
         name: container.Name.replace(/^\//u, ""),
@@ -3177,7 +3175,9 @@ function isoTime(value: string | undefined): string | null {
 // One app's containers' limits as one allocation: their memory adds up,
 // and CPU, shared, is its widest.
 function combinedLimits(
-  services: ReadonlyArray<Pick<ServiceResourceLimits, "cpuMillis" | "memoryBytes">>
+  services: ReadonlyArray<
+    Pick<ServiceResourceLimits, "cpuMillis" | "memoryBytes">
+  >
 ): ResourceLimits {
   return {
     cpuMillis: services.reduce<number | null>(
@@ -3228,9 +3228,7 @@ function deploymentStamp(earlier: ReadonlyArray<string | undefined>): string {
     .match(/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})$/u)!
     .slice(1)
     .map(Number)
-  return stamp(
-    Date.UTC(year!, month! - 1, day, hour, minute, second! + 1)
-  )
+  return stamp(Date.UTC(year!, month! - 1, day, hour, minute, second! + 1))
 }
 
 // A directory's deployment logs, newest first: their names are their UTC

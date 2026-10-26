@@ -257,39 +257,50 @@ describe("operation lanes", () => {
       refused.cancel()
       assert.strictEqual(lanes.exclusiveGeneration("a"), 0)
 
-      yield* lanes.run({ label: "restore", locks: [exclusive("a")] }, Effect.void)
+      yield* lanes.run(
+        { label: "restore", locks: [exclusive("a")] },
+        Effect.void
+      )
       assert.strictEqual(lanes.exclusiveGeneration("a"), 1)
     })
   )
 
-  it.effect("starts nothing new while paused, and lets running work finish", () =>
-    Effect.gen(function* () {
-      const lanes = new OperationLanes()
-      const log: Array<string> = []
-      const running = yield* start(lanes, log, "running", [exclusive("a")])
-      const waiting = yield* start(lanes, log, "waiting", [exclusive("a")])
+  it.effect(
+    "starts nothing new while paused, and lets running work finish",
+    () =>
+      Effect.gen(function* () {
+        const lanes = new OperationLanes()
+        const log: Array<string> = []
+        const running = yield* start(lanes, log, "running", [exclusive("a")])
+        const waiting = yield* start(lanes, log, "waiting", [exclusive("a")])
 
-      // Granted while its request was still being checked, not yet started.
-      const granted = lanes.admit({ label: "granted", locks: [exclusive("c")] })
+        // Granted while its request was still being checked, not yet started.
+        const granted = lanes.admit({
+          label: "granted",
+          locks: [exclusive("c")],
+        })
 
-      lanes.setPaused(true)
-      const withdrawn = yield* Effect.flip(Fiber.join(waiting.fiber))
-      assert.strictEqual((withdrawn as LaneRejectedError).reason, "paused")
-      const lateStart = yield* Effect.flip(
-        granted.run(Effect.sync(() => log.push("granted")))
-      )
-      assert.strictEqual((lateStart as LaneRejectedError).reason, "paused")
-      const refused = yield* Effect.flip(
-        lanes.run({ label: "refused", locks: [exclusive("b")] }, Effect.void)
-      )
-      assert.strictEqual((refused as LaneRejectedError).reason, "paused")
+        lanes.setPaused(true)
+        const withdrawn = yield* Effect.flip(Fiber.join(waiting.fiber))
+        assert.strictEqual((withdrawn as LaneRejectedError).reason, "paused")
+        const lateStart = yield* Effect.flip(
+          granted.run(Effect.sync(() => log.push("granted")))
+        )
+        assert.strictEqual((lateStart as LaneRejectedError).reason, "paused")
+        const refused = yield* Effect.flip(
+          lanes.run({ label: "refused", locks: [exclusive("b")] }, Effect.void)
+        )
+        assert.strictEqual((refused as LaneRejectedError).reason, "paused")
 
-      yield* running.finish
-      assert.strictEqual(yield* Fiber.join(running.fiber), "running")
-      lanes.setPaused(false)
-      yield* lanes.run({ label: "after", locks: [exclusive("a")] }, Effect.void)
-      assert.deepStrictEqual(log, ["running"])
-    })
+        yield* running.finish
+        assert.strictEqual(yield* Fiber.join(running.fiber), "running")
+        lanes.setPaused(false)
+        yield* lanes.run(
+          { label: "after", locks: [exclusive("a")] },
+          Effect.void
+        )
+        assert.deepStrictEqual(log, ["running"])
+      })
   )
 
   it.effect("refuses new work past its waiting limit", () =>

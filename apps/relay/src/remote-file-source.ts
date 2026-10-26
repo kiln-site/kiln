@@ -114,9 +114,7 @@ function openHttpsResponse(
             )
             return
           }
-          const redirected = Result.try(
-            () => new URL(redirectLocation, source)
-          )
+          const redirected = Result.try(() => new URL(redirectLocation, source))
           if (Result.isFailure(redirected)) {
             rejectResponse(
               remoteFileError(

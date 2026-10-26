@@ -117,7 +117,10 @@ describe("Kiln platform backups", () => {
       running: true,
     })
     const source = join(testDirectory, "restore.kiln")
-    await writeFile(source, platformBundle("CREATE TABLE secrets (value text);"))
+    await writeFile(
+      source,
+      platformBundle("CREATE TABLE secrets (value text);")
+    )
     // It stops after it was found, before its client starts.
     fakeDocker.failNext(
       { command: "exec", target: "kiln-test-database" },

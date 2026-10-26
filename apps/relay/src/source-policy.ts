@@ -163,9 +163,7 @@ function normalizePeerAddress(value: string): string {
   if (isIP(withoutZone) !== 6) return withoutZone
   return Result.try(() => {
     const hostname = new URL(`http://[${withoutZone}]/`).hostname.slice(1, -1)
-    const mappedHex = /^::ffff:([\da-f]{1,4}):([\da-f]{1,4})$/iu.exec(
-      hostname
-    )
+    const mappedHex = /^::ffff:([\da-f]{1,4}):([\da-f]{1,4})$/iu.exec(hostname)
     if (!mappedHex?.[1] || !mappedHex[2]) return withoutZone
     const high = Number.parseInt(mappedHex[1], 16)
     const low = Number.parseInt(mappedHex[2], 16)

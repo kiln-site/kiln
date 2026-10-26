@@ -170,7 +170,8 @@ describe("console history", () => {
       const container = await harness.seedServer({
         id,
         labels: {
-          "kiln.brick.snapshot-sha256": await harness.bricks.saveSnapshot(recipe),
+          "kiln.brick.snapshot-sha256":
+            await harness.bricks.saveSnapshot(recipe),
           "kiln.brick.source": await harness.publishRecipe(recipe),
         },
         logs: [

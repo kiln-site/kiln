@@ -453,10 +453,7 @@ export class ProvisioningManager {
           await adapterFor(adapters, job).provision(job, onPhase)
         },
         catch: (cause) => cause,
-      }).pipe(
-        Effect.ensuring(Queue.offer(phases, null)),
-        Effect.forkChild
-      )
+      }).pipe(Effect.ensuring(Queue.offer(phases, null)), Effect.forkChild)
       let phase = yield* Queue.take(phases)
       while (phase !== null) {
         phase = yield* Queue.take(phases).pipe(
@@ -468,7 +465,10 @@ export class ProvisioningManager {
       yield* Fiber.join(work)
       yield* state.completeProvisioningJob(job.instanceId)
       yield* this.#announce(job.kind)
-      yield* Effect.annotateCurrentSpan("relay.provisioning.outcome", "succeeded")
+      yield* Effect.annotateCurrentSpan(
+        "relay.provisioning.outcome",
+        "succeeded"
+      )
     }).pipe(
       Effect.catch((cause) => {
         const message = provisioningErrorMessage(cause)

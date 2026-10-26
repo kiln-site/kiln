@@ -20,7 +20,8 @@ import { fakeDocker } from "./test/docker.js"
 import { relayHarness, TEST_NAMESPACE } from "./test/relay.js"
 
 const databaseId = "d".repeat(40)
-const dump = "CREATE TABLE players (name text);\nINSERT INTO players VALUES ('alex');\n"
+const dump =
+  "CREATE TABLE players (name text);\nINSERT INTO players VALUES ('alex');\n"
 
 async function harnessWithDatabase(engine: "mysql" | "postgres") {
   const harness = await relayHarness()
@@ -55,7 +56,8 @@ describe("database backups", () => {
   it.each(["postgres", "mysql"] as const)(
     "stores the %s dump compressed and restores it into the database",
     async (engine) => {
-      const { container, directory, harness } = await harnessWithDatabase(engine)
+      const { container, directory, harness } =
+        await harnessWithDatabase(engine)
       container.sqlDump = dump
       const destination = join(directory, "backup.sql.gz")
 
@@ -67,7 +69,9 @@ describe("database backups", () => {
         progress
       )
 
-      expect(gunzipSync(await readFile(destination)).toString("utf8")).toBe(dump)
+      expect(gunzipSync(await readFile(destination)).toString("utf8")).toBe(
+        dump
+      )
       expect(progress.completed).toBe(Buffer.byteLength(dump))
 
       await restoreCompressedDatabaseBackup(
@@ -80,7 +84,8 @@ describe("database backups", () => {
   )
 
   it("fails with the client's error and keeps no partial backup", async () => {
-    const { container, directory, harness } = await harnessWithDatabase("postgres")
+    const { container, directory, harness } =
+      await harnessWithDatabase("postgres")
     container.sqlDump = dump
     fakeDocker.programFailures.set(
       "pg_dump",
@@ -117,7 +122,8 @@ describe("database backups", () => {
   })
 
   it("removes an oversized backup and reports the size limit", async () => {
-    const { container, directory, harness } = await harnessWithDatabase("postgres")
+    const { container, directory, harness } =
+      await harnessWithDatabase("postgres")
     container.sqlDump = dump
     const destination = join(directory, "backup.sql.gz")
 
@@ -133,7 +139,8 @@ describe("database backups", () => {
   })
 
   it("removes a backup cancelled while the client is dumping", async () => {
-    const { container, directory, harness } = await harnessWithDatabase("postgres")
+    const { container, directory, harness } =
+      await harnessWithDatabase("postgres")
     container.sqlDump = dump
     const destination = join(directory, "backup.sql.gz")
     const controller = new AbortController()
@@ -182,7 +189,10 @@ describe("database backups", () => {
 
   it("fails a restore the client rejects", async () => {
     const { directory, harness } = await harnessWithDatabase("postgres")
-    fakeDocker.programFailures.set("psql", "ERROR:  syntax error at or near \"CREAT\"")
+    fakeDocker.programFailures.set(
+      "psql",
+      'ERROR:  syntax error at or near "CREAT"'
+    )
     const source = join(directory, "backup.sql.gz")
     await writeFile(source, gzipSync("CREAT TABLE broken;"))
 

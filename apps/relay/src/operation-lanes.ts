@@ -285,11 +285,13 @@ export class OperationLanes {
           )
         )
         if (waiter.state !== "granted") {
-          return yield* (waiter.refusal ??
-            new LaneRejectedError({
-              message: `${waiter.label} was already run or withdrawn`,
-              reason: "cancelled",
-            }))
+          return yield* (
+            waiter.refusal ??
+              new LaneRejectedError({
+                message: `${waiter.label} was already run or withdrawn`,
+                reason: "cancelled",
+              })
+          )
         }
         waiter.state = "running"
         // Counted once it runs, so a request refused or withdrawn after its

@@ -15,7 +15,10 @@ import { gzipSync } from "node:zlib"
 import { pack } from "tar-stream"
 import { afterEach, describe, expect, it } from "vite-plus/test"
 
-import { checkoutFile, extractRepositoryArchive } from "./repository-checkout.js"
+import {
+  checkoutFile,
+  extractRepositoryArchive,
+} from "./repository-checkout.js"
 
 type Entry =
   | { name: string; body: string; mode?: number }
@@ -162,9 +165,17 @@ describe("repository checkouts", () => {
       { name: "repo-sha/releases/v1/", type: "directory" },
       { body: "<h1>v1</h1>", name: "repo-sha/releases/v1/index.html" },
       // Leads through a link the archive only lists after it.
-      { linkname: "releases/latest", name: "repo-sha/current", type: "symlink" },
+      {
+        linkname: "releases/latest",
+        name: "repo-sha/current",
+        type: "symlink",
+      },
       { linkname: "v1", name: "repo-sha/releases/latest", type: "symlink" },
-      { linkname: "current/index.html", name: "repo-sha/home.html", type: "symlink" },
+      {
+        linkname: "current/index.html",
+        name: "repo-sha/home.html",
+        type: "symlink",
+      },
     ])
 
     expect(summary.skipped).toBe(0)
@@ -187,9 +198,7 @@ describe("repository checkouts", () => {
 
     const compose = join(await realpath(destination), "compose.yaml")
     expect(await checkoutFile(destination, "compose.yaml")).toBe(compose)
-    expect(await checkoutFile(destination, "deploy/compose.yaml")).toBe(
-      compose
-    )
+    expect(await checkoutFile(destination, "deploy/compose.yaml")).toBe(compose)
     expect(await checkoutFile(destination, "../outside.yaml")).toBeNull()
     expect(await checkoutFile(destination, "missing.yaml")).toBeNull()
     expect(await checkoutFile(destination, "deploy")).toBeNull()

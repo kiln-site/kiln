@@ -29,7 +29,10 @@ describe("exec processes", () => {
 
   it("reports a client that exits before reading all of its input", async () => {
     const engine = await engineWithContainer()
-    fakeDocker.programFailures.set("psql", 'ERROR:  syntax error at or near "x"')
+    fakeDocker.programFailures.set(
+      "psql",
+      'ERROR:  syntax error at or near "x"'
+    )
     const process = await Effect.runPromise(
       engine.execProcess("kiln-database", ["psql"], { stdin: true })
     )

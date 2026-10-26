@@ -122,7 +122,10 @@ class Installation {
       name: "kiln-hearth",
       running: true,
     })
-    for (const prefix of new Set(["ghcr.io/kiln-site", this.currentImagePrefix])) {
+    for (const prefix of new Set([
+      "ghcr.io/kiln-site",
+      this.currentImagePrefix,
+    ])) {
       for (const component of ["relay", "hearth"] as const) {
         fakeDocker.images.set(
           `${prefix}/${component}@sha256:${(component === "relay" ? "a" : "b").repeat(64)}`,
@@ -160,7 +163,9 @@ describe("release image versions", () => {
   effectIt.effect("starts a stable update from the promoted image digest", () =>
     withTemporaryDataDirectory((dataDirectory) =>
       Effect.gen(function* () {
-        const manager = yield* Effect.promise(() => docker.manager({ dataDirectory }))
+        const manager = yield* Effect.promise(() =>
+          docker.manager({ dataDirectory })
+        )
 
         const operation = yield* manager.start({
           ...relayTarget,
@@ -187,47 +192,53 @@ describe("release image versions", () => {
   // A Relay that installed Kiln holds Hearth for maintenance by taking its
   // update lock, then checking for updates; updates check maintenance again
   // once they hold that lock, so one admitted just before never starts it.
-  effectIt.effect("refuses a target that maintenance holds by the time it's locked", () =>
-    withTemporaryDataDirectory((dataDirectory) =>
-      Effect.gen(function* () {
-        let checks = 0
-        const manager = yield* Effect.promise(() =>
-          docker.manager(
-            { dataDirectory },
-            {
-              refuseTarget: () =>
-                Effect.sync(() =>
-                  ++checks > 1 ? "Kiln's Hearth is held stopped" : null
-                ),
-            }
+  effectIt.effect(
+    "refuses a target that maintenance holds by the time it's locked",
+    () =>
+      withTemporaryDataDirectory((dataDirectory) =>
+        Effect.gen(function* () {
+          let checks = 0
+          const manager = yield* Effect.promise(() =>
+            docker.manager(
+              { dataDirectory },
+              {
+                refuseTarget: () =>
+                  Effect.sync(() =>
+                    ++checks > 1 ? "Kiln's Hearth is held stopped" : null
+                  ),
+              }
+            )
           )
-        )
 
-        const operation = yield* manager.start({
-          ...relayTarget,
-          version: "0.1.0",
-        })
+          const operation = yield* manager.start({
+            ...relayTarget,
+            version: "0.1.0",
+          })
 
-        expect(operation).toMatchObject({
-          error: "Kiln's Hearth is held stopped",
-          status: "failed",
+          expect(operation).toMatchObject({
+            error: "Kiln's Hearth is held stopped",
+            status: "failed",
+          })
+          expect(docker.helpers.size).toBe(0)
+          // Its lock is given back.
+          expect(
+            yield* Effect.promise(() =>
+              readdir(join(dataDirectory, "updates"))
+            ).pipe(
+              Effect.map((files) => files.filter((f) => f.endsWith(".lock")))
+            )
+          ).toEqual([])
         })
-        expect(docker.helpers.size).toBe(0)
-        // Its lock is given back.
-        expect(
-          yield* Effect.promise(() =>
-            readdir(join(dataDirectory, "updates"))
-          ).pipe(Effect.map((files) => files.filter((f) => f.endsWith(".lock"))))
-        ).toEqual([])
-      })
-    )
+      )
   )
 
   effectIt.effect("fails an image whose version is not the release", () =>
     withTemporaryDataDirectory((dataDirectory) =>
       Effect.gen(function* () {
         docker.imageVersion = "0.1.1-nightly.1"
-        const manager = yield* Effect.promise(() => docker.manager({ dataDirectory }))
+        const manager = yield* Effect.promise(() =>
+          docker.manager({ dataDirectory })
+        )
 
         const operation = yield* manager.start({
           ...relayTarget,
@@ -269,7 +280,9 @@ describe("release image versions", () => {
   effectIt.effect("launches one helper for a co-located update batch", () =>
     withTemporaryDataDirectory((dataDirectory) =>
       Effect.gen(function* () {
-        const manager = yield* Effect.promise(() => docker.manager({ dataDirectory }))
+        const manager = yield* Effect.promise(() =>
+          docker.manager({ dataDirectory })
+        )
 
         const operations = yield* manager.startBatch({
           helperImage: targetImage,
@@ -304,7 +317,9 @@ describe("release image versions", () => {
     withTemporaryDataDirectory((dataDirectory) =>
       Effect.gen(function* () {
         docker.currentVersion = "0.1.0-nightly.12"
-        const manager = yield* Effect.promise(() => docker.manager({ dataDirectory }))
+        const manager = yield* Effect.promise(() =>
+          docker.manager({ dataDirectory })
+        )
 
         const failure = yield* manager
           .start({ ...relayTarget, version: "0.1.0-nightly.8" })
@@ -323,7 +338,9 @@ describe("release image versions", () => {
       withTemporaryDataDirectory((dataDirectory) =>
         Effect.gen(function* () {
           docker.currentVersion = "0.1.0"
-          const manager = yield* Effect.promise(() => docker.manager({ dataDirectory }))
+          const manager = yield* Effect.promise(() =>
+            docker.manager({ dataDirectory })
+          )
 
           const operation = yield* manager.start({
             ...relayTarget,
@@ -341,7 +358,9 @@ describe("release image versions", () => {
       Effect.gen(function* () {
         docker.currentVersion = "0.1.0-nightly.20260726.171529"
         docker.imageVersion = "0.1.0-nightly.20260726.171530"
-        const manager = yield* Effect.promise(() => docker.manager({ dataDirectory }))
+        const manager = yield* Effect.promise(() =>
+          docker.manager({ dataDirectory })
+        )
 
         const operation = yield* manager.start({
           ...relayTarget,
@@ -361,7 +380,9 @@ describe("update operation lifecycle", () => {
       withTemporaryDataDirectory((dataDirectory) =>
         Effect.gen(function* () {
           docker.holdPull = true
-          const manager = yield* Effect.promise(() => docker.manager({ dataDirectory }))
+          const manager = yield* Effect.promise(() =>
+            docker.manager({ dataDirectory })
+          )
           const controller = new AbortController()
           const first = yield* manager
             .start({ ...relayTarget, version: "0.1.0" }, controller.signal)
@@ -406,7 +427,9 @@ describe("update operation lifecycle", () => {
     () =>
       withTemporaryDataDirectory((dataDirectory) =>
         Effect.gen(function* () {
-          const manager = yield* Effect.promise(() => docker.manager({ dataDirectory }))
+          const manager = yield* Effect.promise(() =>
+            docker.manager({ dataDirectory })
+          )
           const operation = staleOperation()
           const helperName = `kiln-updater-${operation.id}`
           docker.addHelper(helperName)
@@ -437,7 +460,9 @@ describe("update operation lifecycle", () => {
       withTemporaryDataDirectory((dataDirectory) =>
         Effect.gen(function* () {
           docker.holdPull = true
-          const manager = yield* Effect.promise(() => docker.manager({ dataDirectory }))
+          const manager = yield* Effect.promise(() =>
+            docker.manager({ dataDirectory })
+          )
           const controller = new AbortController()
           const first = yield* manager
             .start({ ...relayTarget, version: "0.1.0" }, controller.signal)
@@ -567,7 +592,9 @@ describe("update operation lifecycle", () => {
   effectIt.effect("recovers an orphaned target lock", () =>
     withTemporaryDataDirectory((dataDirectory) =>
       Effect.gen(function* () {
-        const manager = yield* Effect.promise(() => docker.manager({ dataDirectory }))
+        const manager = yield* Effect.promise(() =>
+          docker.manager({ dataDirectory })
+        )
         const updatesDirectory = join(dataDirectory, "updates")
         const lockPath = join(updatesDirectory, "kiln-relay.lock")
         yield* Effect.promise(() =>
@@ -595,7 +622,9 @@ describe("container identity", () => {
     () =>
       withTemporaryDataDirectory((dataDirectory) =>
         Effect.gen(function* () {
-          const manager = yield* Effect.promise(() => docker.manager({ dataDirectory }))
+          const manager = yield* Effect.promise(() =>
+            docker.manager({ dataDirectory })
+          )
 
           const inspection = yield* manager.inspect("custom-relay-hostname")
 
@@ -667,26 +696,24 @@ describe("container identity", () => {
       )
   )
 
-  effectIt.effect(
-    "rejects a container labeled for another installation",
-    () =>
-      withTemporaryDataDirectory((dataDirectory) =>
-        Effect.gen(function* () {
-          const manager = yield* Effect.promise(() =>
-            docker.manager({
-              dataDirectory,
-              installationId: "0b7e5f0e-6d0f-4a4f-9a51-0f1f6c1d2a3b",
-            })
-          )
-          fakeDocker.container("kiln-hearth")!.labels["io.kiln.installation"] =
-            "another-installation"
+  effectIt.effect("rejects a container labeled for another installation", () =>
+    withTemporaryDataDirectory((dataDirectory) =>
+      Effect.gen(function* () {
+        const manager = yield* Effect.promise(() =>
+          docker.manager({
+            dataDirectory,
+            installationId: "0b7e5f0e-6d0f-4a4f-9a51-0f1f6c1d2a3b",
+          })
+        )
+        fakeDocker.container("kiln-hearth")!.labels["io.kiln.installation"] =
+          "another-installation"
 
-          const inspection = yield* manager.inspect("hearth-hostname")
+        const inspection = yield* manager.inspect("hearth-hostname")
 
-          expect(inspection.sameInstallation).toBe(false)
-          expect(inspection.eligible).toBe(false)
-        })
-      )
+        expect(inspection.sameInstallation).toBe(false)
+        expect(inspection.eligible).toBe(false)
+      })
+    )
   )
 })
 

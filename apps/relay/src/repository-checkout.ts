@@ -1,13 +1,6 @@
 import { createGunzip } from "node:zlib"
 import { createWriteStream } from "node:fs"
-import {
-  chmod,
-  lstat,
-  mkdir,
-  realpath,
-  rm,
-  symlink,
-} from "node:fs/promises"
+import { chmod, lstat, mkdir, realpath, rm, symlink } from "node:fs/promises"
 import {
   basename,
   dirname,

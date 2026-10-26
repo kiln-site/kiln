@@ -98,6 +98,19 @@ describe("Relay web route recovery labels", () => {
     expect(plan.warnings).toHaveLength(1)
   })
 
+  it("skips a label whose route breaks a saved route's rules", () => {
+    const plan = recoverFromLabels({
+      "kiln.relay.web-routes.b00d4423":
+        "donutsmp.com:8080|name=Site,redirect=https%3A%2F%2Fnew.example.com",
+      "kiln.relay.web-routes.decafbad": "map.donutsmp.com:8100|name=Map",
+    })
+
+    expect(plan.recoveries[0]?.routes.map((route) => route.id)).toEqual([
+      "decafbad",
+    ])
+    expect(plan.warnings).toHaveLength(1)
+  })
+
   it("recovers routes from labels and ignores the revision marker", () => {
     const plan = recoverFromLabels({
       "kiln.relay.web-routes.b00d4423":

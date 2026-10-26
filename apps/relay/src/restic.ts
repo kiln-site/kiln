@@ -434,7 +434,10 @@ export function createResticDriver(options?: {
         }
         return dumped.success
       }
-      return readsWithoutLock(["dump", "-a", "zip", input.selector, "/"], attempt)
+      return readsWithoutLock(
+        ["dump", "-a", "zip", input.selector, "/"],
+        attempt
+      )
     },
     forget: async (input) => {
       const result = await resultOf(() =>
@@ -585,8 +588,7 @@ export async function validateStagingTree(
   if (skipped > warnings.length) {
     warnings.push(`Skipped ${skipped - warnings.length} more non-regular files`)
   }
-  const maximumBytes =
-    limits.diskBytes ?? MAX_UNLIMITED_RESTORE_BYTES
+  const maximumBytes = limits.diskBytes ?? MAX_UNLIMITED_RESTORE_BYTES
   if (logicalBytes > maximumBytes) {
     throw resticError(
       "restore_too_large",

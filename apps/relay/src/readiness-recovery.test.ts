@@ -61,7 +61,10 @@ describe("rediscovered startup readiness", () => {
 
     const [instance] = await harness.docker.inspectInstances()
 
-    expect(instance).toMatchObject({ lifecycle: ready, observedState: "running" })
+    expect(instance).toMatchObject({
+      lifecycle: ready,
+      observedState: "running",
+    })
     expect(await storedLifecycle(harness)).toEqual(ready)
 
     // After a Relay restart the session comes from state, even once Docker
@@ -118,7 +121,9 @@ describe("rediscovered startup readiness", () => {
     const harness = await relayHarness()
     const startedAt = "2026-08-21T20:39:57.000Z"
     await legacyServer(harness, undefined, {
-      logs: [{ text: 'Done (21.758s)! For help, type "help"', time: startedAt }],
+      logs: [
+        { text: 'Done (21.758s)! For help, type "help"', time: startedAt },
+      ],
       startedAt,
     })
 

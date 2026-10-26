@@ -47,9 +47,7 @@ describe("registry credentials for pulls", () => {
       serveraddress: "https://index.docker.io/v1/",
       username: "hub-user",
     })
-    expect(
-      fakeDocker.pulls.get("ghcr.io/kiln-site/relay:latest")
-    ).toEqual({
+    expect(fakeDocker.pulls.get("ghcr.io/kiln-site/relay:latest")).toEqual({
       password: "gh-secret",
       serveraddress: "ghcr.io",
       username: "gh-user",

@@ -28,15 +28,18 @@ describe("server connect addresses", () => {
     ["games.example.com", "games.example.com:49172"],
     ["203.0.113.5", "203.0.113.5:49172"],
     ["2001:db8::5", "[2001:db8::5]:49172"],
-  ])("publishes the game host %s with the assigned port", async (host, address) => {
-    const harness = await relayHarness({ KILN_RELAY_GAME_HOST: host })
-    await publishedServer(harness)
+  ])(
+    "publishes the game host %s with the assigned port",
+    async (host, address) => {
+      const harness = await relayHarness({ KILN_RELAY_GAME_HOST: host })
+      await publishedServer(harness)
 
-    expect(await discovered(harness)).toMatchObject({
-      connectAddress: address,
-      publicPort: 49_172,
-    })
-  })
+      expect(await discovered(harness)).toMatchObject({
+        connectAddress: address,
+        publicPort: 49_172,
+      })
+    }
+  )
 
   it("uses the Relay's live game host ahead of a stale container label", async () => {
     const harness = await relayHarness({ KILN_RELAY_GAME_HOST: "203.0.113.6" })
@@ -52,7 +55,9 @@ describe("server connect addresses", () => {
   })
 
   it("prefers the Tailscale hostname when Tailscale is enabled", async () => {
-    const harness = await relayHarness({ KILN_RELAY_GAME_HOST: "games.example.com" })
+    const harness = await relayHarness({
+      KILN_RELAY_GAME_HOST: "games.example.com",
+    })
     await publishedServer(harness, {
       id,
       labels: {
@@ -66,7 +71,9 @@ describe("server connect addresses", () => {
   })
 
   it("reports no public port for a server without a published primary port", async () => {
-    const harness = await relayHarness({ KILN_RELAY_GAME_HOST: "games.example.com" })
+    const harness = await relayHarness({
+      KILN_RELAY_GAME_HOST: "games.example.com",
+    })
     await harness.seedServer({ id })
 
     const instance = await discovered(harness)
@@ -82,7 +89,9 @@ describe("server connect addresses", () => {
       labels: { "kiln.brick.network-mode": "minecraft-proxy" },
     })
 
-    expect((await discovered(harness)).brickNetworkMode).toBe("minecraft-backend")
+    expect((await discovered(harness)).brickNetworkMode).toBe(
+      "minecraft-backend"
+    )
   })
 })
 

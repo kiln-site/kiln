@@ -291,7 +291,9 @@ describe("managed database provisioning", () => {
 
     release()
     await held
-    expect(await settled(harness, id)).toMatchObject({ observedState: "running" })
+    expect(await settled(harness, id)).toMatchObject({
+      observedState: "running",
+    })
   })
 })
 
@@ -457,9 +459,12 @@ describe("managed database replacement recovery", () => {
     await start.reached
     const replacement = `${TEST_NAMESPACE}-kiln-db-${id}-database`
     await Effect.runPromise(
-      new DockerEngine(harness.config.dockerSocket).startContainer(replacement, {
-        timeout: 5_000,
-      })
+      new DockerEngine(harness.config.dockerSocket).startContainer(
+        replacement,
+        {
+          timeout: 5_000,
+        }
+      )
     )
     expect(fakeDocker.container(replacement)?.state.health).toBe("unhealthy")
     const restarted = await harness.restart()
@@ -511,10 +516,7 @@ describe("managed database replacement recovery", () => {
       })
     )
     await Effect.runPromise(
-      engine.renameContainer(
-        original.id,
-        `${original.name}-replaced-0000`
-      )
+      engine.renameContainer(original.id, `${original.name}-replaced-0000`)
     )
     expect(await harness.databases.list()).toHaveLength(0)
 
