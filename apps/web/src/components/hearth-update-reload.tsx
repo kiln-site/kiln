@@ -56,10 +56,21 @@ function HearthReloadNotification({
       id: reloadToastId,
       type: "success",
       message: "Kiln has been updated",
-      description: `Reloading in ${seconds}…`,
+      description:
+        seconds === 0
+          ? "Reload to finish updating."
+          : `Reloading in ${seconds}…`,
       duration: Infinity,
       dismissible: false,
       closeButton: false,
+      action: {
+        label: "Reload now",
+        onClick: (event) => {
+          // Keep the toast if an unsaved-work prompt cancels the reload.
+          event.preventDefault()
+          window.location.reload()
+        },
+      },
     })
   }, [open, seconds])
 
@@ -80,7 +91,7 @@ export function HearthReloadCountdown() {
     store.getSnapshot,
     store.getSnapshot
   )
-  if (seconds === null) return null
+  if (seconds === null || seconds === 0) return null
   return (
     <span aria-live="polite" className="shrink-0 tabular-nums">
       Reloading in {seconds}…
