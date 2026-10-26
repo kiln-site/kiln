@@ -49,6 +49,7 @@ import {
 import {
   ICON_SOURCE_MAX_BYTES,
   SERVER_ICON_PATH,
+  iconSubjectKey,
   type IconDetails,
   type IconOrigin,
   type IconSubject,
@@ -123,7 +124,13 @@ export function EditableIcon({
 }) {
   const [open, setOpen] = React.useState(false)
   const url = useIconUrl(editor.subject)
-  const icon = children ?? <IconImage fallback={editor.fallback} url={url} />
+  const icon = children ?? (
+    <IconImage
+      key={iconSubjectKey(editor.subject)}
+      fallback={editor.fallback}
+      url={url}
+    />
+  )
   if (!canEdit) {
     return <span className={cn(iconFrameClassName, className)}>{icon}</span>
   }

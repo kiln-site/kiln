@@ -73,8 +73,11 @@ export const SubjectIcon = React.memo(function SubjectIcon({
   fallback: React.ReactNode
   subject: IconSubject | null
 }) {
+  // Keyed by subject, so another subject never shows this one's image
+  // while its own loads.
   return (
     <IconImage
+      key={subject ? iconSubjectKey(subject) : ""}
       className={className}
       fallback={fallback}
       url={useIconUrl(subject)}
@@ -112,7 +115,7 @@ export function IconImage({
       () => false
     ).then((decoded) => {
       if (!current) return
-      if (!decoded) setFailed(url)
+      setFailed(decoded ? null : url)
       setShown(url)
     })
     return () => {

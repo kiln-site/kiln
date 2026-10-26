@@ -27,6 +27,8 @@ const changeIconEffect = Effect.fn("Icons.change")(function* (
     return { ...index, digests: digest ? { ...digests, [key]: digest } : digests }
   })
   yield* Effect.annotateCurrentSpan("kiln.icon.shown", digest !== null)
+  // Then the whole index again, for any other change the cancel set aside.
+  void queryClient.invalidateQueries({ queryKey })
   void queryClient.invalidateQueries({
     queryKey: queryKeys.icons.detail(key),
   })
