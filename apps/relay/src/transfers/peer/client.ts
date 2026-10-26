@@ -67,7 +67,10 @@ export const fetchArtifactRange = Effect.fn("RelayTransfer.fetchRange")(
     })
     const url = yield* Effect.try({
       try: () =>
-        new URL(relayPeerTransferPath(input.transferId), input.endpoint.url),
+        // Beneath the endpoint's own path, as Hearth's pass-through has.
+        new URL(
+          `${input.endpoint.url.replace(/\/+$/u, "")}${relayPeerTransferPath(input.transferId)}`
+        ),
       catch: (cause) =>
         new PeerFetchError({
           reason: "The source Relay's address is invalid",

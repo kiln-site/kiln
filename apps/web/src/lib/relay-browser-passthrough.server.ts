@@ -8,28 +8,35 @@ import { relayControlEndpoint } from "@/lib/relay-control-endpoint"
 import { kilnPublicUrl } from "@/lib/environment"
 import { acquirePassthroughSlot } from "@/lib/relay-passthrough-limits.server"
 import { checkBrowserTicket } from "@/lib/relay-passthrough-tickets.server"
+import type {
+  PassthroughSigner,
+  PassthroughTicket,
+} from "@/lib/relay-passthrough-tickets.server"
 import { loadPersistedRelay, loadRelayCredentials } from "@/lib/relay-registry"
 import {
   openRelayTunnel,
   relayReachedThroughTunnel,
 } from "@/lib/relay-tunnel.server"
 
-// Browser transfers through Hearth: a Relay browsers can't reach directly
+// Transfers through Hearth: a Relay browsers can't reach directly
 // (`hearth` proxy mode, such as one that dials Hearth from behind a home
 // router) has its file transfers and backup downloads passed through Hearth
-// unchanged, to the same `/v1/browser` routes. The Relay checks each
-// request's capability and proof for itself, as it would one sent straight
-// to it, so Hearth only carries bytes: it forwards no cookies, and only
-// these routes. What it carries is served under Hearth's origin, so it's
-// never run as a page there, whatever the Relay says it is.
+// unchanged, to the same `/v1/browser` routes. So do copies another Relay
+// pulls from it when that Relay can't reach it (`/v1/peer`). The Relay
+// checks each request's capability or grant, and proof, for itself, as it
+// would one sent straight to it, so Hearth only carries bytes: it forwards
+// no cookies, and only these routes. What it carries is served under
+// Hearth's origin, so it's never run as a page there, whatever the Relay
+// says it is.
 //
 // Before Hearth spends anything on a request, it checks the credential it
 // carries is one Hearth signed for this Relay
 // (relay-passthrough-tickets.server.ts), then waits its turn among the
 // transfers it carries (relay-passthrough-limits.server.ts).
 
-// `route` is decoded: its name is encoded again for the Relay.
-const ROUTE = /^(files|backups)\/([^/]+)$/u
+// Routes arrive decoded: their names are encoded again for the Relay.
+const BROWSER_ROUTE = /^(files|backups)\/([^/]+)$/u
+const PEER_ROUTE = /^transfers\/([A-Za-z0-9_-]{8,64})$/u
 const REQUEST_HEADERS = [
   "authorization",
   "content-length",
@@ -37,6 +44,7 @@ const REQUEST_HEADERS = [
   "if-range",
   "range",
   "x-kiln-nonce",
+  "x-kiln-peer-key",
   "x-kiln-proof",
   "x-kiln-public-key",
   "x-kiln-requested-at",
@@ -65,28 +73,65 @@ const SANDBOX_HEADERS = {
 
 /**
  * Passes a browser's request for `/v1/browser/<route>` on to the Relay and
- * returns its answer: through a tunnel when the Relay dials Hearth, else
- * straight to the listener Hearth connects to.
+ * returns its answer.
  */
-export async function passRelayBrowserRequest(
+export function passRelayBrowserRequest(
   relayId: string,
   route: string,
   request: Request
 ): Promise<Response> {
-  const [, kind, name] = ROUTE.exec(route) ?? []
-  if (!kind || !name || name === "." || name === "..") {
-    return Response.json({ error: "Not a Relay transfer" }, { status: 404 })
-  }
+  const [, kind, name] = BROWSER_ROUTE.exec(route) ?? []
+  return kind && name && name !== "." && name !== ".."
+    ? passRelayRequest(
+        relayId,
+        `/v1/browser/${kind}/${encodeURIComponent(name)}`,
+        request,
+        (signer) =>
+          checkBrowserTicket({
+            kind: kind as "backups" | "files",
+            name,
+            relayId,
+            request,
+            signer,
+          })
+      )
+    : Promise.resolve(notTransfer())
+}
+
+/** Passes another Relay's pull of `/v1/peer/<route>` on to this Relay. */
+export function passRelayPeerRequest(
+  relayId: string,
+  route: string,
+  request: Request
+): Promise<Response> {
+  const [, transferId] = PEER_ROUTE.exec(route) ?? []
+  return transferId && (request.method === "GET" || request.method === "HEAD")
+    ? passRelayRequest(
+        relayId,
+        `/v1/peer/transfers/${transferId}`,
+        request,
+        async () => ({ allowed: true, body: null })
+      )
+    : Promise.resolve(notTransfer())
+}
+
+function notTransfer(): Response {
+  return Response.json({ error: "Not a Relay transfer" }, { status: 404 })
+}
+
+// Sends the request on to the Relay's `path` and returns its answer, once
+// `check` finds it carries a ticket: through a tunnel when the Relay dials
+// Hearth, else straight to the listener Hearth connects to.
+async function passRelayRequest(
+  relayId: string,
+  path: string,
+  request: Request,
+  check: (signer: PassthroughSigner) => Promise<PassthroughTicket>
+): Promise<Response> {
   const relay = await loadPersistedRelay(relayId)
   if (!relay) return Response.json({ error: "Unknown Relay" }, { status: 404 })
   const credentials = await loadRelayCredentials(relay.id)
-  const ticket = await checkBrowserTicket({
-    kind: kind as "backups" | "files",
-    name,
-    relayId: relay.id,
-    request,
-    signer: credentials,
-  })
+  const ticket = await check(credentials)
   if (!ticket.allowed) {
     return ticket.busy
       ? Response.json(
@@ -156,7 +201,7 @@ export async function passRelayBrowserRequest(
                 }),
             headers,
             method: request.method,
-            path: `/v1/browser/${kind}/${encodeURIComponent(name)}${url.search}`,
+            path: `${path}${url.search}`,
             signal: request.signal,
           },
           (incoming) => {

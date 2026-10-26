@@ -1,6 +1,8 @@
 import { createHash, generateKeyPairSync, randomBytes, sign } from "node:crypto"
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
-import { createServer, type Server } from "node:http"
+import { once } from "node:events"
+import { createServer, request as httpRequest, type Server } from "node:http"
+import { createServer as createTcpServer, type AddressInfo } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Effect, ManagedRuntime, Schedule } from "effect"
@@ -93,9 +95,59 @@ describeLinux("transfers between Relays", () => {
     )
   })
 
+  it("falls back to a pass-through when it can't reach the source", async () => {
+    const source = await startSource()
+    const contents = randomBytes(256 * 1024)
+    await writeFile(join(source.root, "world.bin"), contents)
+    const destination = await startDestination()
+    // As Hearth passes pulls through to a Relay that dialed it: beneath a
+    // path of its own, forwarding the request as it is.
+    const passThrough = createServer((request, response) => {
+      const forwarded = httpRequest(
+        `${source.url}${(request.url ?? "").replace(/^\/api\/relays\/source\/peer/u, "")}`,
+        { headers: request.headers, method: request.method },
+        (answer) => {
+          response.writeHead(answer.statusCode ?? 502, answer.headers)
+          answer.pipe(response)
+        }
+      )
+      request.pipe(forwarded)
+    })
+    passThrough.listen(0, "127.0.0.1")
+    await once(passThrough, "listening")
+    cleanups.push(
+      () => new Promise<void>((resolve) => passThrough.close(() => resolve()))
+    )
+    const { port } = passThrough.address() as AddressInfo
+
+    const artifact = await source.prepare("transfer-through-hearth-1")
+    const pull = await destination.pull(source, artifact, {
+      endpoints: [
+        // Nothing answers here, as for a Relay behind a home router.
+        {
+          caCertificatePem: null,
+          url: `http://127.0.0.1:${await closedPort()}`,
+        },
+        {
+          caCertificatePem: null,
+          url: `http://127.0.0.1:${port}/api/relays/source/peer`,
+        },
+      ],
+      path: "",
+    })
+
+    expect(pull.state).toBe("completed")
+    expect(digest(await readFile(join(destination.root, "world.bin")))).toBe(
+      digest(contents)
+    )
+  })
+
   it("deletes what a failed pull fetched once it's cancelled", async () => {
     const source = await startSource({ dropEveryResponseAfter: 64 * 1024 })
-    await writeFile(join(source.root, "world.bin"), randomBytes(2 * 1024 * 1024))
+    await writeFile(
+      join(source.root, "world.bin"),
+      randomBytes(2 * 1024 * 1024)
+    )
     const destination = await startDestination()
     const artifact = await source.prepare("transfer-give-up-1")
 
@@ -326,11 +378,16 @@ async function startDestination() {
     pull: async (
       source: Source,
       artifact: ReadyArtifact,
-      target: { path: string }
+      target: {
+        endpoints?: ReadonlyArray<{ caCertificatePem: null; url: string }>
+        path: string
+      }
     ) => {
       await Effect.runPromise(
         pulls.start({
-          endpoints: [{ caCertificatePem: null, url: source.url }],
+          endpoints: target.endpoints ?? [
+            { caCertificatePem: null, url: source.url },
+          ],
           grant: source.grant(artifact, identity.fingerprint),
           target: { path: target.path, rootId: "instance-1" },
           transferId: artifact.transferId,
@@ -351,6 +408,16 @@ async function startDestination() {
       )
     },
   }
+}
+
+// A local port nothing listens on.
+async function closedPort(): Promise<number> {
+  const server = createTcpServer()
+  server.listen(0, "127.0.0.1")
+  await once(server, "listening")
+  const { port } = server.address() as AddressInfo
+  await new Promise<void>((resolve) => server.close(() => resolve()))
+  return port
 }
 
 // Game server roots under a data directory, as the Relay resolves them.

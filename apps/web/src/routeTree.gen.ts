@@ -132,6 +132,7 @@ import { Route as AppAppAppIdFilesSplatRouteImport } from './routes/_app/app/$ap
 import { Route as AppRelayRelayIdFilesSplatRouteImport } from './routes/_app/relay/$relayId.files.$'
 import { Route as AppServerServerIdFilesSplatRouteImport } from './routes/_app/server/$serverId.files.$'
 import { Route as ApiRelaysRelayIdBrowserSplatRouteImport } from './routes/api.relays.$relayId.browser.$'
+import { Route as ApiRelaysRelayIdPeerSplatRouteImport } from './routes/api.relays.$relayId.peer.$'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -757,6 +758,12 @@ const ApiRelaysRelayIdBrowserSplatRoute =
     path: '/api/relays/$relayId/browser/$',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiRelaysRelayIdPeerSplatRoute =
+  ApiRelaysRelayIdPeerSplatRouteImport.update({
+    id: '/api/relays/$relayId/peer/$',
+    path: '/api/relays/$relayId/peer/$',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -881,6 +888,7 @@ export interface FileRoutesByFullPath {
   '/relay/$relayId/files/$': typeof AppRelayRelayIdFilesSplatRoute
   '/server/$serverId/files/$': typeof AppServerServerIdFilesSplatRoute
   '/api/relays/$relayId/browser/$': typeof ApiRelaysRelayIdBrowserSplatRoute
+  '/api/relays/$relayId/peer/$': typeof ApiRelaysRelayIdPeerSplatRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -996,6 +1004,7 @@ export interface FileRoutesByTo {
   '/relay/$relayId/files/$': typeof AppRelayRelayIdFilesSplatRoute
   '/server/$serverId/files/$': typeof AppServerServerIdFilesSplatRoute
   '/api/relays/$relayId/browser/$': typeof ApiRelaysRelayIdBrowserSplatRoute
+  '/api/relays/$relayId/peer/$': typeof ApiRelaysRelayIdPeerSplatRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -1122,6 +1131,7 @@ export interface FileRoutesById {
   '/_app/relay/$relayId/files/$': typeof AppRelayRelayIdFilesSplatRoute
   '/_app/server/$serverId/files/$': typeof AppServerServerIdFilesSplatRoute
   '/api/relays/$relayId/browser/$': typeof ApiRelaysRelayIdBrowserSplatRoute
+  '/api/relays/$relayId/peer/$': typeof ApiRelaysRelayIdPeerSplatRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -1248,6 +1258,7 @@ export interface FileRouteTypes {
     | '/relay/$relayId/files/$'
     | '/server/$serverId/files/$'
     | '/api/relays/$relayId/browser/$'
+    | '/api/relays/$relayId/peer/$'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -1363,6 +1374,7 @@ export interface FileRouteTypes {
     | '/relay/$relayId/files/$'
     | '/server/$serverId/files/$'
     | '/api/relays/$relayId/browser/$'
+    | '/api/relays/$relayId/peer/$'
   id:
     | '__root__'
     | '/'
@@ -1488,6 +1500,7 @@ export interface FileRouteTypes {
     | '/_app/relay/$relayId/files/$'
     | '/_app/server/$serverId/files/$'
     | '/api/relays/$relayId/browser/$'
+    | '/api/relays/$relayId/peer/$'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -1530,6 +1543,7 @@ export interface RootRouteChildren {
   ApiCliV1SplatRoute: typeof ApiCliV1SplatRoute
   ApiTelemetryV1SignalRoute: typeof ApiTelemetryV1SignalRoute
   ApiRelaysRelayIdBrowserSplatRoute: typeof ApiRelaysRelayIdBrowserSplatRoute
+  ApiRelaysRelayIdPeerSplatRoute: typeof ApiRelaysRelayIdPeerSplatRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -2395,6 +2409,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiRelaysRelayIdBrowserSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/relays/$relayId/peer/$': {
+      id: '/api/relays/$relayId/peer/$'
+      path: '/api/relays/$relayId/peer/$'
+      fullPath: '/api/relays/$relayId/peer/$'
+      preLoaderRoute: typeof ApiRelaysRelayIdPeerSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -2732,6 +2753,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiCliV1SplatRoute: ApiCliV1SplatRoute,
   ApiTelemetryV1SignalRoute: ApiTelemetryV1SignalRoute,
   ApiRelaysRelayIdBrowserSplatRoute: ApiRelaysRelayIdBrowserSplatRoute,
+  ApiRelaysRelayIdPeerSplatRoute: ApiRelaysRelayIdPeerSplatRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

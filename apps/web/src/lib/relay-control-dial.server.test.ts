@@ -61,7 +61,10 @@ import {
 import type { RelayEndpoint } from "@/lib/relay-control-endpoint"
 import { handleRelayControlUpgrade } from "@/lib/relay-control-dial.server"
 import { openRelayTunnel } from "@/lib/relay-tunnel.server"
-import { passRelayBrowserRequest } from "@/lib/relay-browser-passthrough.server"
+import {
+  passRelayBrowserRequest,
+  passRelayPeerRequest,
+} from "@/lib/relay-browser-passthrough.server"
 import { loadPersistedRelay, loadRelayCredentials } from "@/lib/relay-registry"
 import { subscribeRealtimeChanges } from "@/lib/realtime-source.server"
 
@@ -372,6 +375,19 @@ it("passes browsers through to the Relay's transfer routes only", async () => {
       relayId,
       route,
       new Request(`${hearthOrigin}/api/relays/${relayId}/browser/${route}`)
+    )
+    expect(response.status).toBe(404)
+  }
+  for (const [route, method] of [
+    ["transfers/a/../../socket", "GET"],
+    ["transfers/a", "PUT"],
+  ] as const) {
+    const response = await passRelayPeerRequest(
+      relayId,
+      route,
+      new Request(`${hearthOrigin}/api/relays/${relayId}/peer/${route}`, {
+        method,
+      })
     )
     expect(response.status).toBe(404)
   }

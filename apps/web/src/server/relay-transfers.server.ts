@@ -518,11 +518,13 @@ const signGrant = Effect.fn("RelayTransfers.signGrant")(function* (
 
 // Where the destination may reach the source: the listener Hearth itself
 // reaches, through the CA Hearth pinned for it, then the address the Relay
-// advertised, then its public origin.
+// advertised, then its public origin, and last through Hearth, which every
+// Relay reaches, for a source the destination can't, such as one behind a
+// home router.
 const sourceEndpoints = Effect.fn("RelayTransfers.sourceEndpoints")(function* (
   source: PersistedRelay
 ) {
-  const [{ loadRelayCredentials }, { relayControlEndpoint }] =
+  const [{ loadRelayCredentials }, { hearthDialUrl, relayControlEndpoint }] =
     yield* Effect.all(
       [
         Effect.promise(() => import("@/lib/relay-registry")),
@@ -549,6 +551,7 @@ const sourceEndpoints = Effect.fn("RelayTransfers.sourceEndpoints")(function* (
     ...(source.browserOrigin
       ? [{ caCertificatePem: null, url: source.browserOrigin }]
       : []),
+    ...throughHearth(hearthDialUrl(), source.id),
   ]
   return candidates.filter(
     (candidate, index) =>
@@ -557,6 +560,23 @@ const sourceEndpoints = Effect.fn("RelayTransfers.sourceEndpoints")(function* (
       ) === index
   )
 })
+
+function throughHearth(
+  hearth: string | null,
+  relayId: string
+): Array<RelayPeerEndpoint> {
+  return hearth
+    ? [
+        {
+          caCertificatePem: null,
+          url: new URL(
+            `/api/relays/${encodeURIComponent(relayId)}/peer`,
+            hearth
+          ).href,
+        },
+      ]
+    : []
+}
 
 function rpc(
   relay: PersistedRelay,
