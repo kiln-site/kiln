@@ -451,6 +451,63 @@ describeMysql("notifications", () => {
       })
     )
 
+    it.effect(
+      "reads a per-resource vulnerability notification as a report it replaces",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* insertUser("user-a")
+          // As a Hearth from before reports writes it.
+          yield* insertRows("notification", {
+            id: "00000000-0000-4000-8000-0000000000b1",
+            user_id: "user-a",
+            kind: "security.vulnerabilities",
+            source_key: "security:app:app-a:1",
+            data: JSON.stringify({
+              component: null,
+              count: 2,
+              fixable: 1,
+              knownExploited: 1,
+              resource: removed.resource,
+              severity: "critical",
+              top: {
+                fixedVersion: null,
+                id: "CVE-1",
+                packageName: "openssl",
+                packageVersion: "1",
+              },
+            }),
+            created_at: 1_000,
+          })
+          const report = (
+            count: number,
+            knownExploited: number
+          ): NotificationContent => ({
+            count,
+            kind: "security.report",
+            knownExploited,
+            resources: [removed.resource],
+            severity: "critical",
+          })
+          assert.deepStrictEqual(yield* contents("user-a"), [
+            { content: report(2, 1), read: false },
+          ])
+
+          yield* TestClock.setTime(2_000)
+          yield* replaceNotificationEffect(
+            "user-a",
+            "security.report",
+            (unread) =>
+              unread?.kind === "security.report"
+                ? report(unread.count + 3, unread.knownExploited)
+                : report(3, 0)
+          )
+          assert.deepStrictEqual(yield* contents("user-a"), [
+            { content: report(5, 1), read: false },
+          ])
+        })
+    )
+
     it.effect("skips notifications this version cannot show", () =>
       Effect.gen(function* () {
         yield* resetDatabase

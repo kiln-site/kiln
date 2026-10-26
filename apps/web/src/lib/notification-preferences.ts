@@ -1,7 +1,10 @@
 import { Predicate } from "effect"
 import { z } from "zod"
 
-import type { NotificationKind } from "@/lib/notifications"
+import {
+  formerNotificationKinds,
+  type NotificationKind,
+} from "@/lib/notifications"
 import {
   defaultSecurityNotificationSettings,
   securityNotificationSettingsSchema,
@@ -114,11 +117,6 @@ const allKinds: ReadonlyArray<NotificationKind> = [
   "server.migration",
 ] satisfies ReadonlyArray<NotificationKind>
 
-// Kinds that replaced one a choice may still be stored under.
-const formerKinds: Partial<Record<NotificationKind, string>> = {
-  "security.report": "security.vulnerabilities",
-}
-
 const storedKindSchema = z.object({
   inbox: z.boolean().optional(),
   push: z.boolean().optional(),
@@ -173,10 +171,9 @@ export function normalizeNotificationPreferences(
   const stored = readStored(value)
   const kinds = {} as Record<NotificationKind, NotificationKindPreference>
   for (const kind of allKinds) {
-    const former = formerKinds[kind]
-    const choice =
-      stored.kinds?.[kind] ??
-      (former === undefined ? undefined : stored.kinds?.[former])
+    const choice = [kind, ...(formerNotificationKinds[kind] ?? [])]
+      .map((name) => stored.kinds?.[name])
+      .find((found) => found !== undefined)
     kinds[kind] = {
       inbox: kindsWithRequiredInbox.has(kind) ? true : (choice?.inbox ?? true),
       push: choice?.push ?? true,

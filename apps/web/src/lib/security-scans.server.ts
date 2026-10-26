@@ -41,6 +41,7 @@ import {
   type DueInventory,
   type SecurityAnnouncement,
 } from "@/effect/security"
+import { databaseTable } from "@/lib/database-config"
 import type {
   NotificationContent,
   NotificationResource,
@@ -400,14 +401,38 @@ function wanted(
 const announceEffect = Effect.fn("Security.announce")(function* (
   relayId: string
 ) {
-  const { announcements, changes } =
-    yield* pendingSecurityAnnouncementsEffect(relayId)
-  if (!announcements.length) {
-    yield* recordSecurityAnnouncementsEffect(relayId, changes)
-    return
-  }
+  const database = yield* Database
+  // One announcer per Relay at a time: another Hearth's waits for this one,
+  // then finds its news told. Each person's report and what's recorded as
+  // told commit together, so a failure partway tells nobody twice.
+  const notified = yield* database.transaction("Security.announce", (tx) =>
+    Effect.gen(function* () {
+      yield* tx.queryRows(
+        `SELECT id FROM ${databaseTable("relay")} WHERE id = ? FOR UPDATE`,
+        [relayId]
+      )
+      const { announcements, changes } =
+        yield* pendingSecurityAnnouncementsEffect(relayId)
+      const news = announcements.length
+        ? yield* newsEffect(relayId, announcements)
+        : new Map<string, Array<ResourceNews>>()
+      for (const [userId, items] of news)
+        yield* replaceNotificationEffect(userId, "security.report", (unread) =>
+          reportContent(items, unread)
+        )
+      yield* recordSecurityAnnouncementsEffect(relayId, changes)
+      return [...news.keys()]
+    })
+  )
+  publishNotificationChange(notified)
+})
+
+// What each person wants to hear of, per resource.
+const newsEffect = Effect.fnUntraced(function* (
+  relayId: string,
+  announcements: ReadonlyArray<SecurityAnnouncement>
+) {
   const names = yield* securityResourceNamesEffect(relayId)
-  // What each person wants to hear of, per resource.
   const news = new Map<string, Array<ResourceNews>>()
   for (const announcement of announcements) {
     const { resourceId, resourceType } = announcement
@@ -435,19 +460,7 @@ const announceEffect = Effect.fn("Security.announce")(function* (
       news.set(userId, [...(news.get(userId) ?? []), { findings, resource }])
     }
   }
-  // Each person gets one report in place of the last, committed with what
-  // it records as told, so a failure partway tells nobody twice.
-  const database = yield* Database
-  yield* database.transaction("Security.announce", () =>
-    Effect.gen(function* () {
-      for (const [userId, items] of news)
-        yield* replaceNotificationEffect(userId, "security.report", (unread) =>
-          reportContent(items, unread)
-        )
-      yield* recordSecurityAnnouncementsEffect(relayId, changes)
-    })
-  )
-  publishNotificationChange([...news.keys()])
+  return news
 })
 
 interface ResourceNews {

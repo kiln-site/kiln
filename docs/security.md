@@ -89,7 +89,7 @@ default). Vulnerabilities known to be exploited notify either way. A
 vulnerability is reported once per resource while it stays, again when a fix
 comes out for it, and again if it goes away and comes back. People who aren't
 platform administrators can't open the Security page, so their report opens
-its resource when there's one; each resource's Info page says what it has and
+the resources it names instead; each resource's Info page says what it has and
 what fixes it.
 
 ## Running it

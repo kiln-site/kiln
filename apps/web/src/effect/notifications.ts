@@ -12,8 +12,9 @@ import {
   loadUserNotificationPreferencesEffect,
 } from "@/effect/notification-preferences"
 import {
-  notificationContentSchema,
+  formerNotificationKinds,
   notificationHistoryLimit,
+  storedNotificationContentSchema,
   type InvitationOutcome,
   type KilnNotification,
   type NotificationContent,
@@ -113,7 +114,7 @@ export const notifyUsersEffect = Effect.fn("notifications.notify")(function* (
 
 /**
  * Delivers the user a notification that takes the place of their open ones
- * of its kind, as a running report does: those are cleared, and the new one
+ * of its kind, or a kind it replaced, as a running report does: those are cleared, and the new one
  * arrives as news. `content` gets the newest one's content while it's unread,
  * to fold in what it said. Inside a transaction it commits with it; then
  * `publishNotificationChange`.
@@ -129,12 +130,14 @@ export const replaceNotificationEffect = Effect.fn("notifications.replace")(
     const now = yield* Clock.currentTimeMillis
     return yield* database.transaction("notifications.replace", (tx) =>
       Effect.gen(function* () {
+        const kinds = [kind, ...(formerNotificationKinds[kind] ?? [])]
         const open = yield* tx.queryRows<NotificationRow>(
           `SELECT id, kind, data, created_at, read_at FROM ${table}
-            WHERE user_id = ? AND kind = ? AND dismissed_at IS NULL
+            WHERE user_id = ? AND dismissed_at IS NULL
+              AND kind IN (${kinds.map(() => "?").join(", ")})
             ORDER BY created_at DESC, id DESC
             FOR UPDATE`,
-          [userId, kind]
+          [userId, ...kinds]
         )
         const newest = open[0]
         const unread =
@@ -503,7 +506,10 @@ export function decodeNotificationContent(
   return value.pipe(
     Option.filter(Predicate.isObject),
     Option.flatMap((value) => {
-      const parsed = notificationContentSchema.safeParse({ ...value, kind })
+      const parsed = storedNotificationContentSchema.safeParse({
+        ...value,
+        kind,
+      })
       return parsed.success ? Option.some(parsed.data) : Option.none()
     })
   )
