@@ -5,6 +5,7 @@ import {
   relayInstanceWebRouteStateSchema,
   relaySnapshotSchema,
   type RelayInstance,
+  type ResourceLimits,
 } from "@workspace/contracts"
 import { Effect } from "effect"
 import type { RowDataPacket } from "mysql2/promise"
@@ -40,12 +41,14 @@ import {
   startServerMigrationEffect,
 } from "@/lib/server-migrations.server"
 import { resolveAuthorizedBackupStorageSelection } from "@/lib/backup-storage-selection.server"
+import type { ResourceLimitsCapacity } from "@/lib/resource-limits"
 import type {
   MigrationRelayRoom,
   MigrationSourceRoom,
 } from "@/lib/server-migration-room"
 import {
   checkMigrationRoom,
+  copyLimits,
   defaultBackupIsLocal,
   loadRelayRoom,
   migrationSourceRoom,
@@ -66,6 +69,8 @@ export interface ServerMigrationDestination {
   readonly problems: ReadonlyArray<RelayTransferProblem>
   /** What it can give the copy; null when it couldn't say. */
   readonly room: MigrationRelayRoom | null
+  /** The same, as the limits editor shows it. */
+  readonly capacity: ResourceLimitsCapacity | null
   /** Names of game servers there already, which a copy can't take. */
   readonly takenNames: ReadonlyArray<string>
 }
@@ -113,6 +118,8 @@ export interface ServerMigrationPreview {
   }
   readonly source: {
     readonly instanceId: string
+    /** The limits its copy takes unless it's given others. */
+    readonly limits: ResourceLimits
     readonly name: string
     readonly nodeArch: string | null
     readonly provisioning: boolean
@@ -145,7 +152,7 @@ export async function previewServerMigrationHandler(
         })
       ).allows("instance.create")
       if (!allowed) return null
-      const [problems, takenNames, room] = await Promise.all([
+      const [problems, takenNames, space] = await Promise.all([
         runAppEffect(
           "serverMigrations.preview.problems",
           relayTransferProblemsEffect({
@@ -157,10 +164,9 @@ export async function previewServerMigrationHandler(
         ),
         serverNames(candidate, user),
         candidate.id === relay.id
-          ? (sourceRoom?.room ?? null)
+          ? sourceRoom
           : recoverPromise(
-              async () =>
-                (await loadRelayRoom(candidate, { subject: user.id })).room,
+              () => loadRelayRoom(candidate, { subject: user.id }),
               () => null
             ),
       ])
@@ -174,7 +180,8 @@ export async function previewServerMigrationHandler(
         name: candidate.name,
         nodeArch: candidate.nodeArch,
         problems,
-        room,
+        room: space?.room ?? null,
+        capacity: space?.capacity ?? null,
         takenNames,
       } satisfies ServerMigrationDestination
     })
@@ -233,6 +240,7 @@ export async function previewServerMigrationHandler(
     },
     source: {
       instanceId: instance.id,
+      limits: copyLimits(instance),
       name: instance.name,
       nodeArch: relay.nodeArch,
       provisioning: Boolean(instance.provisioning),
@@ -327,6 +335,7 @@ export async function startServerMigrationHandler(
   }
   const room = await checkMigrationRoom({
     backup: options.backup,
+    copyLimits: options.limits,
     destination,
     instanceId: instance.id,
     limits: true,

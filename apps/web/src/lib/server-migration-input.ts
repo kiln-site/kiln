@@ -1,4 +1,7 @@
-import { relayInstanceNameSchema } from "@workspace/contracts"
+import {
+  relayInstanceNameSchema,
+  resourceLimitsSchema,
+} from "@workspace/contracts"
 import { z } from "zod"
 
 /** What someone chose to carry over when copying a game server. */
@@ -29,6 +32,8 @@ export const serverMigrationOptionsSchema = z.object({
     .object({ storageId: z.uuid().nullable().optional() })
     .nullable()
     .default(null),
+  /** The copy's limits, when they differ from the old server's. */
+  limits: resourceLimitsSchema.nullable().default(null),
 })
 export type ServerMigrationOptions = z.infer<
   typeof serverMigrationOptionsSchema

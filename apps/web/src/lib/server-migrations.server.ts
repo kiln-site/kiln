@@ -586,7 +586,8 @@ const stopSource = Effect.fnUntraced(function* (
 })
 
 // Creates the copy, stopped, from the exact Brick the old server was built
-// from, with its settings and limits. Repeating it resumes the same server.
+// from, with its settings, and its limits unless it was given its own.
+// Repeating it resumes the same server.
 const createDestination = Effect.fnUntraced(function* (
   row: MigrationRow,
   generation: number,
@@ -618,13 +619,14 @@ const createDestination = Effect.fnUntraced(function* (
   }
   const recipe = yield* promise(() => loadInstanceRecipe(source, instance))
   const diskLimitBytes =
-    instance.limits.diskBytes ?? DEFAULT_INSTANCE_DISK_LIMIT_BYTES
+    (options.limits ?? instance.limits).diskBytes ??
+    DEFAULT_INSTANCE_DISK_LIMIT_BYTES
   const create = relayCreateInstanceSchema.parse({
     diskLimitBytes,
     ...relayResourceLimitsRequest(
       destination.id,
       { cpuMillis: null, diskBytes: diskLimitBytes, memoryBytes: null },
-      instance.limits
+      options.limits ?? instance.limits
     ),
     name: row.destination_name,
     recipe: recipe.brickSource,
@@ -1108,6 +1110,7 @@ const requireRoom = Effect.fnUntraced(function* (
   const problems = yield* promise(() =>
     checkMigrationRoom({
       backup: row.backup_id === null ? options.backup : null,
+      copyLimits: options.limits,
       destination,
       instanceId: row.source_instance_id,
       limits,

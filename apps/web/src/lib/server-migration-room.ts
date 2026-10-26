@@ -41,7 +41,7 @@ export interface MigrationSourceRoom {
 }
 
 export interface MigrationRoomProblem {
-  readonly code: "cpu" | "disk_limit" | "memory" | "space"
+  readonly code: "cpu" | "disk_files" | "disk_limit" | "memory" | "space"
   readonly message: string
   readonly relayId: string
 }
@@ -83,6 +83,17 @@ export function migrationRoomProblems(input: {
       problems.push({
         code: "disk_limit",
         message: `${destination.name} can assign ${formatBytes(destination.assignableDiskBytes)} more disk, and this server's limit is ${formatBytes(diskBytes)}`,
+        relayId: destination.relayId,
+      })
+    } else if (
+      diskBytes !== null &&
+      server.usedFrom !== "limit" &&
+      diskBytes < server.usedBytes
+    ) {
+      // A copy whose files already fill its disk couldn't start.
+      problems.push({
+        code: "disk_files",
+        message: `This server's files take ${formatBytes(server.usedBytes)}, more than a ${formatBytes(diskBytes)} disk limit`,
         relayId: destination.relayId,
       })
     }

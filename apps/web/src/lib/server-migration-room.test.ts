@@ -48,6 +48,22 @@ describe("Room for a game server's copy", () => {
     expect(codes(problems)).toEqual(["s01:memory"])
   })
 
+  it("refuses a disk limit the server's files wouldn't fit in", () => {
+    const check = (diskBytes: number) =>
+      codes(
+        migrationRoomProblems({
+          destination: relay("s01"),
+          limits: true,
+          localBackups: 0,
+          server: { ...server, limits: { ...server.limits, diskBytes } },
+          source: relay("q02"),
+        })
+      )
+
+    expect(check(1 * GiB)).toEqual(["s01:disk_files"])
+    expect(check(3 * GiB)).toEqual([])
+  })
+
   it("needs room for both the archive and the unpacked files on the destination", () => {
     const check = (free: number) =>
       codes(

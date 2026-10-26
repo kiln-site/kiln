@@ -22,7 +22,8 @@ when the copy starts.
 
 | Option             | Duplicate | Move     | Notes                                                                                                                                                                                                                                       |
 | ------------------ | --------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Files and settings | Always    | Always   | Its whole folder, the exact Brick it was built from, startup settings, and limits. Ports are allocated afresh on the new Relay.                                                                                                             |
+| Files and settings | Always    | Always   | Its whole folder, the exact Brick it was built from, and startup settings. Ports are allocated afresh on the new Relay.                                                                                                                    |
+| Limits             | Always    | Always   | Memory, CPU, and disk limits start as the old server's and can be changed for the copy in the dialog, which offers the nearest that fit.                                                                                                  |
 | People with access | Optional  | Optional | The same grants, permissions, and presets (presets are copied to the new server). Pending invitations aren't. Needs `access.read`.                                                                                                          |
 | Activity history   | Optional  | Optional | The new server's activity includes the old server's history up to when the copy finished: shown as the old server's, and listed under the new one too, to whoever can see both; as the new server's own to whoever can see only it. It stays on the old Relay, so removing that Relay removes it. |
 | Managed domains    | —         | Optional | With Cloudflare connected, domains move to the new server and their records point at the new Relay. Without it, Kiln manages no DNS and the dialog says to repoint any domain of your own.                                                  |
@@ -44,7 +45,8 @@ copy, and its first step each check, from what the Relays report
 
 - **Limits**: the copy's memory and disk limits must fit what the new
   server's Relay can still assign past every instance's limits, and its CPU
-  limit that Relay's cores.
+  limit that Relay's cores. A disk limit given to the copy must also hold
+  the old server's files.
 - **Disk**: the old server's Relay packs its folder into an archive, beside
   a backup first kept on that Relay; the new server's Relay fetches the
   archive and unpacks it, holding both until the files are in. The archive
