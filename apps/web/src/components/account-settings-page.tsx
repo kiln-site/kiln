@@ -44,7 +44,10 @@ import { ensuringPromise, recoverPromise } from "@/effect/promise"
 import { authClient } from "@/lib/auth-client"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { clearAppearanceCache } from "@/lib/appearance"
-import { announceActiveAccount } from "@/lib/browser-accounts"
+import {
+  announceActiveAccount,
+  browserAccountsQueryKey,
+} from "@/lib/browser-accounts"
 import { DISPLAY_NAME_MAX_LENGTH, parseDisplayName } from "@/lib/display-name"
 import { queryKeys } from "@/lib/query-options"
 import { getCliCredentials, revokeCliCredential } from "@/server/cli"
@@ -230,6 +233,7 @@ function DisplayNameAction({
     showToast({ message: "Display name updated.", type: "success" })
     await Promise.all([
       session.refetch(),
+      queryClient.invalidateQueries({ queryKey: browserAccountsQueryKey }),
       queryClient.invalidateQueries({ queryKey: queryKeys.auth.state }),
       queryClient.invalidateQueries({
         queryKey: queryKeys.access.capabilities,
@@ -298,6 +302,7 @@ function DisplayNameAction({
 }
 
 function EmailAddressAction({ currentEmail }: { currentEmail: string }) {
+  const queryClient = useQueryClient()
   const session = authClient.useSession()
   const [open, setOpen] = React.useState(false)
   const [email, setEmail] = React.useState(currentEmail)
@@ -374,7 +379,10 @@ function EmailAddressAction({ currentEmail }: { currentEmail: string }) {
 
     showToast({ message: "Email address changed.", type: "success" })
     changeOpen(false)
-    await session.refetch()
+    await Promise.all([
+      session.refetch(),
+      queryClient.invalidateQueries({ queryKey: browserAccountsQueryKey }),
+    ])
   }
 
   function changeOpen(nextOpen: boolean) {

@@ -31,7 +31,9 @@ export async function listBrowserAccounts(
   // remembered for switching.
   const listed = unremembered ? [...sessions, current] : sessions
   return listed
-    .sort((left, right) => left.user.id.localeCompare(right.user.id))
+    .sort((left, right) =>
+      left.user.id < right.user.id ? -1 : left.user.id > right.user.id ? 1 : 0
+    )
     .map(({ session, user }): Omit<BrowserAccount, "minecraftProfileId"> => ({
       active: session.id === current?.session.id,
       email: user.email,
