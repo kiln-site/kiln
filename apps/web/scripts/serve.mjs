@@ -44,6 +44,11 @@ const server = serve({
 
 await server.ready()
 
+// Relays dialing Hearth open WebSockets, which the fetch handler can't take.
+server.node?.server?.on("upgrade", (request, socket, head) => {
+  if (!appModule.handleUpgrade?.(request, socket, head)) socket.destroy()
+})
+
 const shutdownHearth = Effect.fn("hearth.shutdown")(function* () {
   yield* Effect.tryPromise(() => server.close(true))
   yield* Effect.tryPromise(async () => {

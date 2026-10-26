@@ -1,5 +1,6 @@
 import { randomUUID, sign, verify } from "node:crypto"
 import {
+  Cause,
   Effect,
   Fiber,
   Option,
@@ -31,6 +32,8 @@ import {
   RelayOperationLookupSchema,
   relayControlRequestTimeoutMs,
   relayControlProtocol,
+  relayControlDialV1Feature,
+  relayDialCloseCodes,
   relaySnapshotControlDelta,
   relaySnapshotDeltaFeature,
   relaySnapshotDeltaSchema,
@@ -57,7 +60,9 @@ import {
 import { z } from "zod"
 
 import {
+  hearthDialUrl,
   relayControlEndpoint,
+  type RelayControlDirection,
   type RelayEndpoint,
 } from "@/lib/relay-control-endpoint"
 import type { Database } from "@/effect/database"
@@ -221,7 +226,38 @@ function connectionFor(relay: RelayEndpoint): RelayConnection {
     connection = new RelayConnection(effectiveRelay)
     connections.set(relay.id, connection)
   }
+  if (relay.controlDial) connection.prefer(relay.controlDial)
   return connection
+}
+
+/**
+ * Takes a control connection a Relay opened to this Hearth, once its
+ * challenge for Hearth's `nonce` arrived, unless Hearth keeps the one it
+ * has (see `RelayConnection.adopt`).
+ */
+export function adoptRelayControlSocket(
+  relay: RelayEndpoint,
+  socket: WebSocket,
+  challenge: RelayAuthChallenge,
+  nonce: string
+): void {
+  connectionFor(relay).adopt(socket, challenge, nonce)
+}
+
+/**
+ * Who opened the Relay's control connection, while it's connected: Hearth,
+ * or the Relay dialing Hearth.
+ */
+export function relayConnectionOpener(
+  relayId: string
+): RelayControlDirection | null {
+  const connection = connections.get(relayId)
+  return connection?.state.status === "authenticated" ? connection.opener : null
+}
+
+/** Whether the Relay said it can open the control connection itself. */
+export function relayConnectionDials(relayId: string): boolean {
+  return connections.get(relayId)?.relayDials ?? false
 }
 
 /**
@@ -494,6 +530,8 @@ class RelayConnection {
   #pushedSnapshot: RelaySnapshot | null = null
   #eventSequence = 0
   #features = new Set<string>()
+  // Whether the Relay said it can dial Hearth.
+  #relayDials = false
   #browserAuthorizationAdvance: Promise<number> | null = null
   #browserAuthorizationReadiness: BrowserAuthorizationReadiness | null = null
   #browserIssuerGeneration = 0
@@ -511,6 +549,13 @@ class RelayConnection {
   // One pause write at a time, so an older one can't land after a newer.
   readonly #pauseWrites = Semaphore.makeUnsafe(1)
   #socket: WebSocket | null = null
+  // Who opened the socket: Hearth, or the Relay dialing out to Hearth.
+  #opener: RelayControlDirection = "hearth"
+  // Which of the two this Hearth keeps when both can connect.
+  #preference: RelayControlDirection
+  // Set while the connection moves to another socket, which isn't the
+  // Relay going away.
+  #swapping = false
   #state: RelayConnectionState = {
     lastError: null,
     status: "disconnected",
@@ -519,6 +564,82 @@ class RelayConnection {
 
   constructor(relay: RelayEndpoint) {
     this.#relay = relay
+    this.#preference = relay.controlDial ?? "hearth"
+  }
+
+  get opener(): RelayControlDirection {
+    return this.#opener
+  }
+
+  /** Whether the Relay said, on its last connection, that it can dial. */
+  get relayDials(): boolean {
+    return this.#relayDials
+  }
+
+  prefer(direction: RelayControlDirection): void {
+    this.#preference = direction
+  }
+
+  /**
+   * Takes a socket the Relay opened, whose challenge is for Hearth's
+   * `nonce`, in place of the one Hearth has. It's refused (and the Relay
+   * tries again later) while Hearth keeps its own: one it prefers, one
+   * that's busy, or one it's still opening for the first time.
+   */
+  adopt(socket: WebSocket, challenge: RelayAuthChallenge, nonce: string): void {
+    if (this.#closed) {
+      socket.close(1001, "Hearth connection closed")
+      return
+    }
+    const connected =
+      this.#socket?.readyState === WebSocket.OPEN &&
+      this.#state.status === "authenticated"
+    const idle =
+      this.#pending.size === 0 &&
+      this.#reverseInFlight.size === 0 &&
+      this.#unsettled.size === 0
+    if (
+      connected &&
+      this.#opener === "hearth" &&
+      (this.#preference === "hearth" || !idle)
+    ) {
+      socket.close(
+        relayDialCloseCodes.duplicate,
+        "Hearth keeps its own connection to this Relay"
+      )
+      return
+    }
+    // Preferring its own connection, Hearth tries that first; the Relay
+    // tries again shortly, and is taken once Hearth's try failed.
+    if (!connected && this.#preference === "hearth" && this.#attempt === 0) {
+      socket.close(1013, "Hearth is connecting to this Relay")
+      if (!this.#connecting) {
+        forkAppEffect(
+          "relay.connection.preferred",
+          this.#connectEffect().pipe(Effect.ignore)
+        )
+      }
+      return
+    }
+    const previous = this.#socket
+    this.#swapping = connected
+    this.#connecting?.interruptUnsafe()
+    this.#connecting = null
+    this.#reconnectFiber?.interruptUnsafe()
+    this.#reconnectFiber = null
+    this.#socket = null
+    if (previous) {
+      if (!idle) {
+        const replaced = new Error("The Relay replaced its connection")
+        this.#abortReverseRequests()
+        this.#rejectPending(replaced)
+      }
+      previous.close(1000, "The Relay opened another connection")
+    }
+    this.#forkConnecting(
+      "relay.connection.adopt",
+      this.#adoptEffect(socket, challenge, nonce)
+    )
   }
 
   get state(): RelayConnectionState {
@@ -873,53 +994,82 @@ class RelayConnection {
   }
 
   #connectEffect(): Effect.Effect<void, RelayUnavailableError> {
-    if (
-      this.#socket?.readyState === WebSocket.OPEN &&
-      this.#state.status === "authenticated"
-    ) {
-      return Effect.void
-    }
-    if (!this.#connecting) {
-      let connecting: Fiber.Fiber<void, unknown>
-      connecting = forkAppEffect(
-        "relay.connection.open",
-        this.#openEffect().pipe(
-          Effect.ensuring(
-            Effect.sync(() => {
-              if (this.#connecting === connecting) {
-                this.#connecting = null
-              }
-            })
+    return Effect.suspend(() => {
+      if (
+        this.#socket?.readyState === WebSocket.OPEN &&
+        this.#state.status === "authenticated"
+      ) {
+        return Effect.void
+      }
+      const connecting =
+        this.#connecting ??
+        this.#forkConnecting("relay.connection.open", this.#openEffect())
+      return Fiber.join(connecting).pipe(
+        Effect.catchCause((cause) => {
+          // A connection the Relay opened took this attempt's place.
+          if (this.#connecting !== null && this.#connecting !== connecting) {
+            return this.#connectEffect()
+          }
+          if (
+            this.#socket?.readyState === WebSocket.OPEN &&
+            this.#state.status === "authenticated"
+          ) {
+            return Effect.void
+          }
+          const failure = Cause.squash(cause)
+          return Effect.fail(
+            failure instanceof RelayUnavailableError
+              ? failure
+              : RelayUnavailableError.make({
+                  message: asError(failure).message,
+                  cause: failure,
+                })
           )
+        })
+      )
+    })
+  }
+
+  #forkConnecting(
+    name: string,
+    effect: Effect.Effect<void, RelayUnavailableError>
+  ): Fiber.Fiber<void, unknown> {
+    let connecting: Fiber.Fiber<void, unknown>
+    connecting = forkAppEffect(
+      name,
+      effect.pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (this.#connecting === connecting) this.#connecting = null
+          })
         )
       )
-      this.#connecting = connecting
-    }
-    return Fiber.join(this.#connecting).pipe(
-      Effect.mapError((cause) =>
-        cause instanceof RelayUnavailableError
-          ? cause
-          : RelayUnavailableError.make({
-              message: asError(cause).message,
-              cause,
-            })
-      )
+    )
+    this.#connecting = connecting
+    return connecting
+  }
+
+  // Forgets the last socket's session before another one starts.
+  #beginSocket(): void {
+    this.#livenessFiber?.interruptUnsafe()
+    this.#livenessFiber = null
+    this.#setState("connecting", null)
+    this.#eventSequence = 0
+    this.#hasPushedSnapshot = false
+    this.#pushedSnapshot = null
+    this.#socket = null
+    this.#browserAuthorizationAdvance = null
+    this.#browserIssuerGeneration = 0
+    this.#rejectBrowserAuthorizationReadiness(
+      new Error("Relay connection was replaced")
     )
   }
 
-  #openEffect(): Effect.Effect<void, RelayUnavailableError> {
-    let socket: WebSocket | null = null
+  #credentialsEffect(): Effect.Effect<
+    RelayConnectionCredentials,
+    RelayUnavailableError
+  > {
     return Effect.gen({ self: this }, function* () {
-      this.#setState("connecting", null)
-      this.#eventSequence = 0
-      this.#hasPushedSnapshot = false
-      this.#pushedSnapshot = null
-      this.#socket = null
-      this.#browserAuthorizationAdvance = null
-      this.#browserIssuerGeneration = 0
-      this.#rejectBrowserAuthorizationReadiness(
-        new Error("Relay connection was replaced")
-      )
       const { loadRelayCredentials } = yield* Effect.tryPromise({
         try: () => import("@/lib/relay-registry"),
         catch: (cause) =>
@@ -928,7 +1078,7 @@ class RelayConnection {
             cause,
           }),
       })
-      const credentials = yield* Effect.tryPromise({
+      return yield* Effect.tryPromise({
         try: () => loadRelayCredentials(this.#relay.id),
         catch: (cause) =>
           RelayUnavailableError.make({
@@ -936,8 +1086,62 @@ class RelayConnection {
             cause,
           }),
       })
+    })
+  }
+
+  // Serves a socket the Relay opened, from its challenge on.
+  #adoptEffect(
+    socket: WebSocket,
+    challenge: RelayAuthChallenge,
+    nonce: string
+  ): Effect.Effect<void, RelayUnavailableError> {
+    return Effect.gen({ self: this }, function* () {
+      this.#beginSocket()
+      const credentials = yield* this.#credentialsEffect()
+      if (this.#closed) {
+        socket.close(1001, "Hearth connection closed")
+        return
+      }
+      this.#credentials = credentials
+      this.#opener = "relay"
+      this.#socket = socket
+      yield* this.#authenticateEffect(socket, { challenge, nonce }).pipe(
+        Effect.timeout(relayAuthenticationWindowMs),
+        Effect.catchTag("TimeoutError", () =>
+          relayConnectionFailure("Relay authentication timed out")
+        )
+      )
+    }).pipe(
+      Effect.catch((cause) =>
+        Effect.sync(() => {
+          socket.terminate()
+          this.#swapping = false
+          this.#setState("unreachable", cause.message)
+          this.#scheduleReconnect()
+        }).pipe(Effect.andThen(Effect.fail(cause)))
+      ),
+      Effect.ensuring(
+        Effect.sync(() => {
+          this.#swapping = false
+        })
+      )
+    )
+  }
+
+  #openEffect(): Effect.Effect<void, RelayUnavailableError> {
+    let socket: WebSocket | null = null
+    return Effect.gen({ self: this }, function* () {
+      this.#beginSocket()
+      // A Relay that dials this Hearth gets the first chance to, so
+      // Hearth's own connection doesn't take its place. Its connection
+      // interrupts this wait (`adopt`).
+      if (this.#preference === "relay") {
+        yield* Effect.sleep(RELAY_DIAL_GRACE_MS)
+      }
+      const credentials = yield* this.#credentialsEffect()
       if (this.#closed) return
       this.#credentials = credentials
+      this.#opener = "hearth"
       const protocol = this.#relay.useTls ? "wss" : "ws"
       const activeSocket = yield* Effect.try({
         try: () =>
@@ -979,12 +1183,44 @@ class RelayConnection {
   }
 
   #authenticateEffect(
-    activeSocket: WebSocket
+    activeSocket: WebSocket,
+    // On a socket the Relay opened: its challenge, already read, and the
+    // nonce Hearth asked it to carry.
+    dialed?: { readonly challenge: RelayAuthChallenge; readonly nonce: string }
   ): Effect.Effect<void, RelayUnavailableError> {
     return Effect.callback<void, RelayUnavailableError>((resume) => {
       let authenticated = false
       let challengeAnswered = false
+      const answerChallenge = (message: RelayAuthChallenge) => {
+        if (challengeAnswered) {
+          resume(
+            relayConnectionFailure(
+              "Relay repeated its authentication challenge"
+            )
+          )
+          return
+        }
+        const answered = Effect.runSync(
+          Effect.try({
+            try: () =>
+              this.#answerChallenge(activeSocket, message, dialed?.nonce),
+            catch: asError,
+          }).pipe(
+            Effect.match({
+              onFailure: (cause) => Option.some(cause),
+              onSuccess: () => Option.none<Error>(),
+            })
+          )
+        )
+        if (Option.isSome(answered)) {
+          resume(relayConnectionFailure(answered.value.message, answered.value))
+          return
+        }
+        challengeAnswered = true
+      }
       activeSocket.on("message", (data, binary) => {
+        // A socket another one replaced says nothing more here.
+        if (this.#socket !== activeSocket) return
         if (binary) {
           resume(
             relayConnectionFailure(
@@ -1002,32 +1238,7 @@ class RelayConnection {
         }
         const message = decoded.value
         if (message.type === "auth.challenge") {
-          if (challengeAnswered) {
-            resume(
-              relayConnectionFailure(
-                "Relay repeated its authentication challenge"
-              )
-            )
-            return
-          }
-          const answered = Effect.runSync(
-            Effect.try({
-              try: () => this.#answerChallenge(activeSocket, message),
-              catch: asError,
-            }).pipe(
-              Effect.match({
-                onFailure: (cause) => Option.some(cause),
-                onSuccess: () => Option.none<Error>(),
-              })
-            )
-          )
-          if (Option.isSome(answered)) {
-            resume(
-              relayConnectionFailure(answered.value.message, answered.value)
-            )
-            return
-          }
-          challengeAnswered = true
+          answerChallenge(message)
           return
         }
         if (message.type === "auth.ready") {
@@ -1044,6 +1255,9 @@ class RelayConnection {
           }
           this.#attempt = 0
           this.#features = new Set(message.features ?? [])
+          // A Relay that can dial Hearth stands by to, should Hearth's own
+          // connection fail.
+          this.#relayDials = this.#features.has(relayControlDialV1Feature)
           this.#browserAuthorizationReadiness = browserAuthorizationReadiness()
           this.#setState("authenticated", null)
           this.#watchLiveness(activeSocket)
@@ -1227,6 +1441,11 @@ class RelayConnection {
             ? "Relay stopped responding"
             : `Relay connection closed (${code}${reason.length ? `: ${reason.toString()}` : ""})`
         )
+        // Replaced, or closed with the whole connection: nothing else to do.
+        if (this.#socket !== activeSocket) {
+          resume(relayConnectionFailure(error.message, error))
+          return
+        }
         this.#socket = null
         this.#unresponsiveSocket = null
         this.#auditFiber?.interruptUnsafe()
@@ -1248,9 +1467,11 @@ class RelayConnection {
         this.#scheduleReconnect()
         resume(relayConnectionFailure(error.message, error))
       })
+      if (dialed) answerChallenge(dialed.challenge)
       return Effect.sync(() => {
         if (
-          this.#state.status !== "authenticated" &&
+          (this.#state.status !== "authenticated" ||
+            this.#socket !== activeSocket) &&
           activeSocket.readyState !== WebSocket.CLOSED
         ) {
           activeSocket.terminate()
@@ -1303,9 +1524,27 @@ class RelayConnection {
     }
   }
 
-  #answerChallenge(socket: WebSocket, challenge: RelayAuthChallenge): void {
+  #answerChallenge(
+    socket: WebSocket,
+    challenge: RelayAuthChallenge,
+    // Given on a socket the Relay opened: the nonce Hearth said hello with.
+    dialNonce?: string
+  ): void {
     const credentials = this.#credentials
     if (!credentials) throw new Error("Relay credentials are unavailable")
+    // A challenge on a socket the Relay opened must be the one this Hearth
+    // asked for, for this client; one on a socket Hearth opened is bound
+    // by the TLS Hearth checked instead.
+    const dial = challenge.dial
+    if (
+      dialNonce === undefined
+        ? dial !== undefined
+        : dial === undefined ||
+          dial.hearthNonce !== dialNonce ||
+          dial.clientId !== credentials.clientId
+    ) {
+      throw new Error("Relay challenge isn't for this connection")
+    }
     if (
       challenge.relayId !== this.#relay.id ||
       !verify(
@@ -1350,6 +1589,7 @@ class RelayConnection {
         v: 1,
         ...(installationId ? { installationId } : {}),
         ...(hearthContainer ? { hearthContainer } : {}),
+        dial: dialTarget(),
       })
     )
   }
@@ -1683,6 +1923,8 @@ class RelayConnection {
     const wasReachable = this.#state.status === "authenticated"
     const isReachable = status === "authenticated"
     this.#state = { lastError, status, updatedAt: Date.now() }
+    // Moving to another socket isn't the Relay going away.
+    if (this.#swapping && !isReachable) return
     if (
       wasReachable &&
       !isReachable &&
@@ -1866,6 +2108,13 @@ function snapshotDeltaChangesDirectory(
   )
 }
 
+// Where Hearth asks Relays to open their own control connections, or null
+// to stop them when no Relay could reach it.
+function dialTarget(): { readonly url: string } | null {
+  const url = hearthDialUrl()
+  return url ? { url } : null
+}
+
 function formatHost(hostname: string): string {
   return hostname.includes(":") && !hostname.startsWith("[")
     ? `[${hostname}]`
@@ -1998,6 +2247,9 @@ const AUDIT_RECONCILE_PASSES = 6
 const PAUSE_RECHECK_MS = 30_000
 const AUDIT_START_WAIT_MS = 2_000
 // Hearth pings each Relay this often, and the Relay pings Hearth as often.
+// How long Hearth waits for a Relay that dials it before opening its own
+// connection instead.
+const RELAY_DIAL_GRACE_MS = 8_000
 const LIVENESS_INTERVAL_MS = 15_000
 // Intervals without a frame from the Relay before its socket is dropped, so a
 // stalled Relay reads as unreachable within 30-45 seconds.

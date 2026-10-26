@@ -1,8 +1,13 @@
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 
-import { Result } from "effect"
-import { defineConfig, lazyPlugins, loadEnv } from "vite-plus"
+import { Effect, Result } from "effect"
+import {
+  defineConfig,
+  isRunnableDevEnvironment,
+  lazyPlugins,
+  loadEnv,
+} from "vite-plus"
 import type { Plugin } from "vite-plus"
 import { devtools } from "@tanstack/devtools-vite"
 import { tanstackStart } from "@tanstack/react-start/plugin/vite"
@@ -124,6 +129,7 @@ const config = defineConfig(({ command, mode }) => {
       host: "0.0.0.0",
     },
     plugins: lazyPlugins(() => [
+      relayControlUpgrades(),
       webAppManifest(),
       devtools(),
       tailwindcss(),
@@ -206,8 +212,16 @@ function webAppManifest(): Plugin {
   const icons = [
     { file: "app-icon-192.png", sizes: "192x192", purpose: "any" },
     { file: "app-icon-512.png", sizes: "512x512", purpose: "any" },
-    { file: "app-icon-maskable-192.png", sizes: "192x192", purpose: "maskable" },
-    { file: "app-icon-maskable-512.png", sizes: "512x512", purpose: "maskable" },
+    {
+      file: "app-icon-maskable-192.png",
+      sizes: "192x192",
+      purpose: "maskable",
+    },
+    {
+      file: "app-icon-maskable-512.png",
+      sizes: "512x512",
+      purpose: "maskable",
+    },
   ]
   const manifest = (iconUrl: (file: string) => string) =>
     JSON.stringify({
@@ -253,6 +267,47 @@ function webAppManifest(): Plugin {
         type: "asset",
         fileName: "manifest.json",
         source: manifest((file) => `/${fileNames.get(file)}`),
+      })
+    },
+  }
+}
+
+// In development, Relays dialing Hearth (lib/relay-control-dial.server.ts)
+// reach it through Vite's server, as they do through serve.mjs once built.
+// The handler loads in the SSR environment's runner, beside the app's own
+// modules, so it shares their Relay connections.
+function relayControlUpgrades(): Plugin {
+  return {
+    name: "kiln:relay-control-upgrades",
+    configureServer(server) {
+      server.httpServer?.on("upgrade", (request, socket, head) => {
+        if (!request.url?.startsWith("/api/relays/control")) return
+        const environment = server.environments.ssr
+        if (!environment || !isRunnableDevEnvironment(environment)) {
+          socket.destroy()
+          return
+        }
+        Effect.runFork(
+          Effect.tryPromise(() =>
+            environment.runner.import<
+              typeof import("./src/lib/relay-control-dial.server")
+            >("/src/lib/relay-control-dial.server.ts")
+          ).pipe(
+            Effect.match({
+              onFailure: (cause) => {
+                server.config.logger.error(
+                  `Couldn't take a Relay's control connection: ${String(cause)}`
+                )
+                socket.destroy()
+              },
+              onSuccess: (module) => {
+                if (!module.handleRelayControlUpgrade(request, socket, head)) {
+                  socket.destroy()
+                }
+              },
+            })
+          )
+        )
       })
     },
   }

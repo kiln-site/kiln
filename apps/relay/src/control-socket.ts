@@ -41,6 +41,7 @@ import {
   relayLinkedBackupsV1Feature,
   relayTransferSpaceV1Feature,
   relayPeerTransfersV1Feature,
+  relayControlDialV1Feature,
   relayRestartV1Feature,
   relayResourcesV1Feature,
   relayFilePutV1Feature,
@@ -76,6 +77,7 @@ import type {
   RelayControlRequest,
   RelayControlResponse,
   RelayControlOperation,
+  RelayDialBinding,
   RelayOperationLookup,
   RelaySnapshot,
 } from "@workspace/contracts"
@@ -173,11 +175,26 @@ export interface ControlSocketOptions {
     listener: (snapshot: unknown) => void
   ) => () => void
   readonly runEffect: <T, E>(effect: EffectType.Effect<T, E>) => Promise<T>
+  /**
+   * Keeps where an authenticated Hearth asked the Relay to open its own
+   * control connection (`auth.response`'s `dial`), or forgets it on null.
+   */
+  readonly saveDial?: (clientId: string, url: string | null) => void
   readonly server: Server
   readonly state: RelayStateStore["Service"]
 }
 
 export interface ControlSocketServer {
+  /**
+   * Serves a control connection the Relay opened to a Hearth, once Hearth
+   * said hello: the same session as one Hearth opened, but its challenge
+   * is bound to `binding` and only that Hearth client may answer it.
+   */
+  readonly adoptDialed: (
+    socket: WebSocket,
+    binding: RelayDialBinding,
+    peerAddress: string | undefined
+  ) => void
   /** How full the control sessions are, across every Hearth session. */
   readonly capacity: () => ControlCapacity
   readonly close: () => Promise<void>
@@ -239,7 +256,12 @@ export function attachControlSocket(
     })
   })
 
-  wss.on("connection", (socket, request) => {
+  // Every control connection, whichever side opened it.
+  const serve = (
+    socket: WebSocket,
+    peerAddress: string | undefined,
+    dial: RelayDialBinding | null
+  ) => {
     if (sockets.size >= MAX_CONTROL_SESSIONS) {
       socket.close(1013, "Relay control session capacity reached")
       return
@@ -254,7 +276,8 @@ export function attachControlSocket(
       reverseRequesters,
       operations,
       capacity,
-      request.socket.remoteAddress
+      peerAddress,
+      dial
     )
     socket.once("close", () => {
       sockets.delete(socket)
@@ -263,6 +286,10 @@ export function attachControlSocket(
       authenticatedSockets.delete(socket)
       reverseRequesters.delete(socket)
     })
+  }
+
+  wss.on("connection", (socket, request) => {
+    serve(socket, request.socket.remoteAddress, null)
   })
 
   const heartbeatFiber = Effect.runFork(
@@ -285,6 +312,9 @@ export function attachControlSocket(
   )
 
   return {
+    adoptDialed: (socket, binding, peerAddress) => {
+      serve(socket, peerAddress, binding)
+    },
     capacity: () => {
       const now = Date.now()
       let inFlight = 0
@@ -410,9 +440,11 @@ function authenticateSocket(
   >,
   operations: OperationRegistry,
   capacity: CapacityTracking,
-  peerAddress: string | undefined
+  peerAddress: string | undefined,
+  dial: RelayDialBinding | null
 ): void {
   const unsignedChallenge = {
+    ...(dial ? { dial } : {}),
     expiresAt: Date.now() + relayAuthenticationWindowMs,
     nonce: randomBytes(32).toString("base64url"),
     relayId: options.identity.fingerprint,
@@ -488,6 +520,15 @@ function authenticateSocket(
           message.installationId,
           message.hearthContainer
         ).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              if (message.dial === undefined || !authenticatedClient) return
+              options.saveDial?.(
+                authenticatedClient.id,
+                message.dial?.url ?? null
+              )
+            })
+          ),
           Effect.catch(() =>
             Effect.sync(() => {
               socket.close(4401, "Authentication failed")
@@ -671,6 +712,10 @@ function authenticateSocket(
         return yield* controlFailure(
           "Expired or consumed authentication challenge"
         )
+      }
+      // On a connection the Relay opened, only the client it opened it for.
+      if (dial && dial.clientId !== clientId) {
+        return yield* controlFailure("Invalid Hearth identity proof")
       }
       const client = yield* promiseOperation(() =>
         options.runEffect(options.state.findClientById(clientId))
@@ -1199,6 +1244,7 @@ function authenticateSocket(
           relayIconReadV1Feature,
           relayLinkedBackupsV1Feature,
           relayTransferSpaceV1Feature,
+          relayControlDialV1Feature,
         ],
         protocol: relayControlProtocol,
         relayBuild: relayBuildLabel(),

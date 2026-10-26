@@ -159,6 +159,7 @@ import {
   relayStateDatabasePath,
 } from "./config.js"
 import { attachControlSocket } from "./control-socket.js"
+import { startControlDials } from "./control-dial.js"
 import { DockerDriver } from "./docker.js"
 import { DatabaseBrowser, readDatabaseFile } from "./database-browser.js"
 import { DatabaseDriver } from "./databases.js"
@@ -1241,10 +1242,18 @@ const controlSocket = attachControlSocket({
       resolveInstanceReference
     ),
   runEffect: (effect) => runRelayEffect("relay.control.state", effect),
+  saveDial: (clientId, url) => {
+    controlDials.save(clientId, url)
+  },
   server,
   state: startup.state,
   subscribeSnapshots: (listener) =>
     snapshotHub.subscribe(({ snapshot }) => listener(snapshot), false),
+})
+// The control connections this Relay opens to Hearths that asked for one.
+const controlDials = startControlDials({
+  adopt: controlSocket.adoptDialed,
+  state: startup.state,
 })
 rejectMalformedUpgrades(server)
 const browserSocket = attachBrowserSocket({
@@ -1363,6 +1372,7 @@ const sftpServer = await Effect.runPromise(
         Effect.andThen(
           Effect.all(
             [
+              cleanupOperation("control dials", () => controlDials.close()),
               cleanupOperation("control socket", () => controlSocket.close()),
               cleanupOperation("browser socket", () => browserSocket.close()),
               cleanupOperation("SFTP server", () =>
@@ -1372,7 +1382,7 @@ const sftpServer = await Effect.runPromise(
               ),
               cleanupOperation("Effect runtime", disposeRelayRuntime),
             ],
-            { concurrency: 4, discard: true }
+            { concurrency: 5, discard: true }
           )
         )
       )
@@ -1645,11 +1655,12 @@ function shutdownRelay(signal: NodeJS.Signals): Promise<void> {
       })
       yield* Effect.all(
         [
+          cleanupOperation("control dials", () => controlDials.close()),
           cleanupOperation("control socket", () => controlSocket.close()),
           cleanupOperation("browser socket", () => browserSocket.close()),
           cleanupOperation("SFTP server", () => sftpServer.close()),
         ],
-        { concurrency: 3, discard: true }
+        { concurrency: 4, discard: true }
       )
       const result = yield* relayOperation(() => closeRelayServer(server)).pipe(
         Effect.catch((cause) =>

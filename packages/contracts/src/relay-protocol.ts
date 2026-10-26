@@ -96,6 +96,17 @@ export const relayWebRouteOptionsV1Feature = "web-route-options-v1"
 // The Relay answers `instance.icon.read` with a small image's bytes, from a
 // file root or from inside one of an app's containers.
 export const relayIconReadV1Feature = "icon-read-v1"
+// The Relay opens its control connection to Hearth when Hearth asks it to
+// (`auth.response`'s `dial`), as well as answering Hearth's.
+export const relayControlDialV1Feature = "control-dial-v1"
+// Where on Hearth a Relay opens its control connection.
+export const relayControlDialPath = "/api/relays/control"
+// How Hearth closes a connection a Relay opened: it already has one to that
+// Relay it keeps, or it doesn't know the Relay.
+export const relayDialCloseCodes = {
+  duplicate: 4409,
+  unknownRelay: 4404,
+} as const
 export const relayBrowserAuthorizationReviseMaxItems = 256
 
 export const relayControlOperations = [
@@ -635,7 +646,32 @@ export const relaySnapshotDeltaFeature = "relay.snapshot.delta.v1"
 export const relaySnapshotNodeResourcesFeature =
   "relay.snapshot.node-resources.v1"
 
+// On a connection the Relay opened, Hearth speaks first: the nonce the
+// Relay's challenge must carry. Hearth trusts no challenge it didn't ask
+// for, so a recorded one can't be replayed to it.
+export const RelayDialHelloSchema = Schema.Struct({
+  nonce: Schema.String.check(Schema.isPattern(/^[A-Za-z\d_-]{43}$/u)),
+  type: Schema.Literal("dial.hello"),
+  v: Schema.Literal(1),
+})
+
+export type RelayDialHello = typeof RelayDialHelloSchema.Type
+
+// What a challenge on a connection the Relay opened is bound to: the Hearth
+// client it's for, so one Hearth paired with a Relay can't pass its
+// challenge to another, Hearth's nonce, so it can't be replayed, and the
+// Hearth origin the Relay dialed, which Hearth doesn't hold it to: a Relay
+// still dialing an address Hearth moved from learns its new one.
+export const RelayDialBindingSchema = Schema.Struct({
+  clientId: Schema.String,
+  hearthNonce: Schema.String,
+  hearthOrigin: Schema.String,
+})
+
+export type RelayDialBinding = typeof RelayDialBindingSchema.Type
+
 export const RelayAuthChallengeSchema = Schema.Struct({
+  dial: Schema.optionalKey(RelayDialBindingSchema),
   expiresAt: Schema.Number,
   nonce: Schema.String,
   relayId: Schema.String,
@@ -657,6 +693,11 @@ export const RelayAuthResponseSchema = Schema.Struct({
   // It then finds Kiln's services without Kiln's labels, as under Coolify.
   hearthContainer: Schema.optionalKey(
     Schema.Struct({ id: Schema.String, proof: Schema.String })
+  ),
+  // Where the Relay should open its own control connection to this Hearth,
+  // or null to stop. Relays with `relayControlDialV1Feature` keep it.
+  dial: Schema.optionalKey(
+    Schema.NullOr(Schema.Struct({ url: Schema.String }))
   ),
   signature: Schema.String,
   type: Schema.Literal("auth.response"),
@@ -937,6 +978,14 @@ export function relayAuthChallengeTranscript(
     challenge.sessionId,
     challenge.nonce,
     challenge.expiresAt,
+    ...(challenge.dial
+      ? [
+          "dial",
+          challenge.dial.clientId,
+          challenge.dial.hearthNonce,
+          challenge.dial.hearthOrigin,
+        ]
+      : []),
   ])
 }
 

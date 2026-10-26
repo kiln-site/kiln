@@ -36,7 +36,10 @@ import {
   mapPairingTransportError,
   unreachablePairingError,
 } from "@/lib/relay-pairing-errors"
-import { relayPairingOrigin } from "@/lib/relay-control-endpoint"
+import {
+  relayPairingOrigin,
+  type RelayControlDirection,
+} from "@/lib/relay-control-endpoint"
 import { relayNameForNewPairing } from "@/lib/relay-names"
 import { CredentialError, ResourceNotFoundError } from "@/effect/errors"
 import { runAppEffect } from "@/effect/runtime"
@@ -59,6 +62,9 @@ export interface PersistedRelay {
   actions: ReadonlyArray<string>
   browserOrigin: string
   clientId: string
+  // Which side opens the control connection when both can: Hearth, or the
+  // Relay dialing out to Hearth. The other stays a fallback.
+  controlDial: RelayControlDirection
   createdAt: string
   createdBy: string | null
   enabled: boolean
@@ -144,6 +150,7 @@ export interface RelayRow extends RowDataPacket {
   client_private_key_ciphertext: string
   client_public_key: string
   client_role: "custom" | "full_access" | "read_only"
+  control_dial: RelayControlDirection
   created_at: number
   created_by: string | null
   enabled: number
@@ -255,7 +262,7 @@ export async function findPersistedRelayRow(
     `SELECT id, name, hostname, port, use_tls, browser_origin,
             client_id, client_role, client_actions, issuer_generation, enabled,
             last_connected_at, last_error, managed_ember_count,
-            node_arch, node_platform, node_version,
+            node_arch, node_platform, node_version, control_dial,
             relay_public_key, relay_ca_certificate,
             client_public_key, client_private_key_ciphertext, created_by, created_at
        FROM ${databaseTable("relay")}
@@ -273,7 +280,7 @@ export const listPersistedRelaysEffect = Effect.fn("relays.list")(function* () {
     `SELECT id, name, hostname, port, use_tls, browser_origin,
             client_id, client_role, client_actions, issuer_generation, enabled,
             last_connected_at, last_error, managed_ember_count,
-            node_arch, node_platform, node_version,
+            node_arch, node_platform, node_version, control_dial,
             relay_public_key, relay_ca_certificate,
             client_public_key, client_private_key_ciphertext, created_by, created_at
        FROM ${databaseTable("relay")}
@@ -291,7 +298,7 @@ export const loadEnabledRelayForIssuanceEffect = Effect.fn(
     `SELECT id, name, hostname, port, use_tls, browser_origin,
             client_id, client_role, client_actions, issuer_generation, enabled,
             last_connected_at, last_error, managed_ember_count,
-            node_arch, node_platform, node_version,
+            node_arch, node_platform, node_version, control_dial,
             relay_public_key, relay_ca_certificate,
             client_public_key, client_private_key_ciphertext, created_by, created_at
        FROM ${databaseTable("relay")}
@@ -911,6 +918,9 @@ export function persistPairedRelayEffect(input: {
   port: number
   relayCaCertificate: string | null
   relayPublicKey: string
+  // Which side opens the control connection; left as it was on a saved
+  // Relay when not given, and Hearth for a new one.
+  controlDial?: RelayControlDirection
   // Whether Hearth sends its installation ID when it connects; left as it
   // was on a saved Relay when not given.
   sendInstallationId?: boolean
@@ -957,6 +967,7 @@ export function persistPairedRelayEffect(input: {
                       client_role = ?, client_actions = ?, enabled = TRUE,
                       issuer_generation = issuer_generation + 1,
                       send_installation_id = COALESCE(?, send_installation_id),
+                      control_dial = COALESCE(?, control_dial),
                       last_error = NULL, updated_at = ?
                 WHERE id = ?`,
             [
@@ -973,6 +984,7 @@ export function persistPairedRelayEffect(input: {
               input.clientRole,
               input.clientActions,
               input.sendInstallationId ?? null,
+              input.controlDial ?? null,
               now,
               input.id,
             ]
@@ -984,8 +996,8 @@ export function persistPairedRelayEffect(input: {
                 relay_public_key, relay_ca_certificate,
                 client_id, client_public_key, client_private_key_ciphertext,
                 client_role, client_actions, enabled, created_by,
-                send_installation_id, created_at, updated_at
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?, ?, ?, ?)`,
+                send_installation_id, control_dial, created_at, updated_at
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?, ?, ?, ?, ?)`,
             [
               input.id,
               input.name,
@@ -1002,6 +1014,7 @@ export function persistPairedRelayEffect(input: {
               input.clientActions,
               input.createdBy,
               input.sendInstallationId ?? true,
+              input.controlDial ?? "hearth",
               now,
               now,
             ]
@@ -1320,7 +1333,7 @@ export const loadRelayCredentialsEffect = Effect.fn("relays.credentials")(
       `SELECT id, name, hostname, port, use_tls, browser_origin,
               client_id, client_role, client_actions, issuer_generation, enabled,
               last_connected_at, last_error, managed_ember_count,
-              node_arch, node_platform, node_version,
+              node_arch, node_platform, node_version, control_dial,
               relay_public_key, relay_ca_certificate,
               client_public_key, client_private_key_ciphertext,
               send_installation_id
@@ -1585,6 +1598,7 @@ function toPersistedRelay(row: RelayRow): PersistedRelay {
       ),
     browserOrigin: row.browser_origin,
     clientId: row.client_id,
+    controlDial: row.control_dial,
     createdAt: new Date(row.created_at).toISOString(),
     createdBy: row.created_by,
     enabled: Boolean(row.enabled),

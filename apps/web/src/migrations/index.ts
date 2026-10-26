@@ -32,6 +32,7 @@ import { serverMigrations } from "./0029_server_migrations"
 import { linkedBackups } from "./0030_linked_backups"
 import { securityReports } from "./0031_security_reports"
 import { icons } from "./0032_icons"
+import { relayControlDial } from "./0033_relay_control_dial"
 
 // Append new migrations with the next id. Never edit or reorder applied ones.
 export const migrations: ReadonlyArray<Migration> = [
@@ -67,4 +68,5 @@ export const migrations: ReadonlyArray<Migration> = [
   linkedBackups,
   securityReports,
   icons,
+  relayControlDial,
 ]

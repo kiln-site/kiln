@@ -1,3 +1,6 @@
+import type { IncomingMessage } from "node:http"
+import type { Duplex } from "node:stream"
+
 import { createStartHandler } from "@tanstack/react-start/server"
 import { createServerEntry } from "@tanstack/react-start/server-entry"
 import { Effect, Schedule } from "effect"
@@ -47,6 +50,7 @@ import {
   maintainPersistedRelayConnections,
 } from "./lib/relay-registry"
 import { relayConnectionsCapacity } from "./lib/relay-connection"
+import { handleRelayControlUpgrade } from "./lib/relay-control-dial.server"
 import {
   startSecurityScans,
   stopSecurityScans,
@@ -136,6 +140,18 @@ forkPromise(wakePendingAuthorizationDelivery, (cause) => {
 })
 
 const handleStartRequest = createStartHandler(hearthStreamHandler)
+
+/**
+ * Takes a WebSocket upgrade the fetch handler can't: a Relay opening its
+ * control connection to Hearth. False for any other.
+ */
+export function handleUpgrade(
+  request: IncomingMessage,
+  socket: Duplex,
+  head: Buffer
+): boolean {
+  return handleRelayControlUpgrade(request, socket, head)
+}
 
 let shutdownPromise: Promise<void> | undefined
 

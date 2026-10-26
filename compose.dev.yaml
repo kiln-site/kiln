@@ -265,6 +265,8 @@ services:
       KILN_ENABLE_SIGNUPS: ${KILN_ENABLE_SIGNUPS:-false}
       KILN_RELAY_BOOTSTRAP_TOKEN: ${KILN_RELAY_BOOTSTRAP_TOKEN:-}
       KILN_RELAY_CONTROL_URL: ${KILN_RELAY_CONTROL_URL:-}
+      # Where the dev Relay dials Hearth: its service on the Compose network.
+      KILN_RELAY_DIAL_URL: ${KILN_RELAY_DIAL_URL:-http://hearth:3000}
       KILN_RELAY_HOST: ${KILN_RELAY_HOST:-relay.hearth.orb.local}
       KILN_RELAY_PORT: ${KILN_RELAY_PORT:-4100}
       KILN_RELAY_PUBLIC_URL: ${KILN_RELAY_PUBLIC_URL:-}

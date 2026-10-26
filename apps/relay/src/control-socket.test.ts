@@ -14,8 +14,16 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Duplex } from "node:stream"
 import { Effect, ManagedRuntime } from "effect"
-import { WebSocket } from "ws"
-import { describe, expect, it, onTestFinished, vi } from "vite-plus/test"
+import { WebSocket, WebSocketServer } from "ws"
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vite-plus/test"
 
 import {
   relayAuthChallengeTranscript,
@@ -34,6 +42,11 @@ import type {
 } from "@workspace/contracts"
 
 import { attachControlSocket } from "./control-socket.js"
+import {
+  relayDialUrl,
+  startControlDials,
+  type ControlDials,
+} from "./control-dial.js"
 import type {
   ControlSocketOptions,
   HearthContainerClaim,
@@ -1642,9 +1655,168 @@ describe("Relay control socket", () => {
 
 const initialSnapshot = { instances: [], node: {} }
 
+describe("Relay dialing Hearth", () => {
+  // Fake only timeouts: the Relay's waits between dials run on virtual time,
+  // while sockets and Effect's scheduler keep running.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it("dials the Hearth a session asked it to, with a challenge only that Hearth's client can answer", async () => {
+    const relay = await startRelay({ dials: true })
+    const hearth = await relay.pair()
+    const stranger = await relay.pair()
+    const fakeHearth = await startFakeHearth()
+
+    // A session Hearth opened says where to dial it.
+    await relay.connect(hearth, { dial: fakeHearth.url })
+
+    const first = await fakeHearth.nextDial()
+    expect(first.challenge.dial).toEqual({
+      clientId: hearth.id,
+      hearthNonce: first.nonce,
+      hearthOrigin: new URL(fakeHearth.url).origin,
+    })
+    // The binding is part of what the Relay signed.
+    expect(
+      verify(
+        null,
+        Buffer.from(relayAuthChallengeTranscript(first.challenge)),
+        relay.publicKey,
+        Buffer.from(first.challenge.signature, "base64url")
+      )
+    ).toBe(true)
+    expect(
+      verify(
+        null,
+        Buffer.from(
+          relayAuthChallengeTranscript({
+            ...first.challenge,
+            dial: { ...first.challenge.dial!, hearthNonce: "replayed" },
+          })
+        ),
+        relay.publicKey,
+        Buffer.from(first.challenge.signature, "base64url")
+      )
+    ).toBe(false)
+
+    // Another of the Relay's Hearth clients can't take a dialed session.
+    const refused = once(first.socket, "close")
+    first.socket.send(JSON.stringify(authResponse(first.challenge, stranger)))
+    expect((await refused)[0]).toBe(4401)
+
+    // The Relay dials again, and the Hearth it dialed for gets a session.
+    const second = await fakeHearth.nextDial()
+    second.socket.send(JSON.stringify(authResponse(second.challenge, hearth)))
+    expect(await second.inbox.next()).toMatchObject({
+      clientId: hearth.id,
+      type: "auth.ready",
+    })
+    expect((await second.inbox.next()).type).toBe("event")
+    const id = sendRequest(second.socket, "relay.snapshot", {})
+    expect(await second.inbox.next()).toMatchObject({
+      payload: { ok: true },
+      replyTo: id,
+      type: "response",
+    })
+  })
+
+  it("stops dialing when Hearth asks it to", async () => {
+    const relay = await startRelay({ dials: true })
+    const hearth = await relay.pair()
+    const fakeHearth = await startFakeHearth()
+    await relay.connect(hearth, { dial: fakeHearth.url })
+    const dialed = await fakeHearth.nextDial()
+    dialed.socket.send(
+      JSON.stringify({ ...authResponse(dialed.challenge, hearth), dial: null })
+    )
+    expect((await dialed.inbox.next()).type).toBe("auth.ready")
+    // The session it has carries on.
+    expect((await dialed.inbox.next()).type).toBe("event")
+    const id = sendRequest(dialed.socket, "relay.snapshot", {})
+    expect(await dialed.inbox.next()).toMatchObject({ replyTo: id })
+
+    dialed.socket.close()
+    expect(await fakeHearth.dialsWithin(10 * 60_000)).toBe(0)
+  })
+
+  it("dials only Hearth's control path over HTTP(S)", () => {
+    expect(relayDialUrl("https://kiln.example/api/relays/control")?.href).toBe(
+      "wss://kiln.example/api/relays/control"
+    )
+    for (const url of [
+      "https://kiln.example/elsewhere",
+      "https://user:secret@kiln.example/api/relays/control",
+      "file:///api/relays/control",
+      "https://kiln.example/api/relays/control?redirect=1",
+    ]) {
+      expect(relayDialUrl(url)).toBeNull()
+    }
+  })
+})
+
 interface TestHearth {
   readonly id: string
   readonly privateKey: string
+}
+
+// A Hearth Relays dial: it says hello with a nonce, then hands over each
+// connection with the challenge that came back.
+async function startFakeHearth() {
+  const server = createServer()
+  const wss = new WebSocketServer({ server })
+  const arrivals: Array<{
+    readonly challenge: RelayAuthChallenge
+    readonly inbox: ReturnType<typeof messageInbox>
+    readonly nonce: string
+    readonly socket: WebSocket
+  }> = []
+  wss.on("connection", (socket) => {
+    const nonce = randomBytes(32).toString("base64url")
+    socket.send(JSON.stringify({ nonce, type: "dial.hello", v: 1 }))
+    socket.once("message", (data) => {
+      arrivals.push({
+        challenge: JSON.parse(data.toString()) as RelayAuthChallenge,
+        inbox: messageInbox(socket),
+        nonce,
+        socket,
+      })
+    })
+  })
+  server.listen(0, "127.0.0.1")
+  await once(server, "listening")
+  const { port } = server.address() as AddressInfo
+  onTestFinished(async () => {
+    for (const client of wss.clients) client.terminate()
+    wss.close()
+    server.closeAllConnections()
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  })
+  // Lets virtual time pass in steps, with real I/O between them, until a
+  // dial arrives or `ms` have passed.
+  const passUntilDial = async (ms: number) => {
+    for (let passed = 0; arrivals.length === 0 && passed < ms;) {
+      await vi.advanceTimersByTimeAsync(250)
+      passed += 250
+      await new Promise((resolve) => setImmediate(resolve))
+    }
+  }
+  return {
+    dialsWithin: async (ms: number) => {
+      await passUntilDial(ms)
+      return arrivals.length
+    },
+    nextDial: async () => {
+      await passUntilDial(5 * 60_000)
+      const arrival = arrivals.shift()
+      if (!arrival) throw new Error("No dial arrived")
+      return arrival
+    },
+    url: `http://127.0.0.1:${port}/api/relays/control`,
+  }
 }
 
 async function startRelay(
@@ -1659,6 +1831,8 @@ async function startRelay(
     readonly journalReads?: Promise<void>
     /** Each request's client lookup waits for the next of these, if any. */
     readonly clientLookups?: Array<Promise<void>>
+    /** Dials the Hearths that ask it to, as the Relay does. */
+    readonly dials?: boolean
   } = {}
 ) {
   const directory = mkdtempSync(join(tmpdir(), "kiln-relay-control-"))
@@ -1673,6 +1847,7 @@ async function startRelay(
   const adoptions: Array<Promise<void>> = []
   const installation = options.installation
   const lanes = new OperationLanes()
+  let dials: ControlDials | null = null
   const control = attachControlSocket({
     ...(installation
       ? {
@@ -1705,6 +1880,7 @@ async function startRelay(
     },
     initialSnapshot: options.initialSnapshot ?? (async () => initialSnapshot),
     runEffect: (effect) => runtime.runPromise(effect),
+    saveDial: (clientId, url) => dials?.save(clientId, url),
     server,
     state: {
       ...state,
@@ -1728,6 +1904,9 @@ async function startRelay(
       return () => listeners.delete(listener)
     },
   })
+  if (options.dials) {
+    dials = startControlDials({ adopt: control.adoptDialed, state })
+  }
   server.listen(0, "127.0.0.1")
   await once(server, "listening")
   const address = server.address()
@@ -1735,6 +1914,7 @@ async function startRelay(
 
   onTestFinished(async () => {
     for (const socket of sockets) socket.terminate()
+    await dials?.close()
     await control.close()
     server.closeAllConnections()
     await new Promise<void>((resolve) => server.close(() => resolve()))
@@ -1757,6 +1937,8 @@ async function startRelay(
     connect: async (
       hearth: TestHearth,
       connectOptions: {
+        // Where this Hearth asks the Relay to dial it.
+        readonly dial?: string
         readonly features?: ReadonlyArray<string>
         // The container it runs in, proven with this secret as Hearth does.
         readonly hearthContainer?: { id: string; secret: string }
@@ -1774,6 +1956,9 @@ async function startRelay(
           ),
           ...(connectOptions.installationId
             ? { installationId: connectOptions.installationId }
+            : {}),
+          ...(connectOptions.dial
+            ? { dial: { url: connectOptions.dial } }
             : {}),
           ...(connectOptions.hearthContainer
             ? {

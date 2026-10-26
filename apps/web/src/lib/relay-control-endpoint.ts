@@ -1,9 +1,41 @@
+import { relayControlDialPath } from "@workspace/contracts"
+
+import { kilnPublicUrl } from "@/lib/environment"
+
+// Which side opens a Relay's control connection: Hearth dialing the Relay,
+// or the Relay dialing Hearth.
+export type RelayControlDirection = "hearth" | "relay"
+
 export interface RelayEndpoint {
+  // Which side this Hearth keeps when both can connect; left as the
+  // connection has it when not given.
+  controlDial?: RelayControlDirection
   hostname: string
   id: string
   managedTls?: boolean
   port: number
   useTls: boolean
+}
+
+/**
+ * Where Relays should open their control connections to this Hearth:
+ * KILN_RELAY_DIAL_URL when Relays reach it at another address than people
+ * do, such as the platform Relay beside it, else Hearth's public URL. Null
+ * when that's this machine's own loopback, which no Relay can dial.
+ */
+export function hearthDialUrl(): string | null {
+  const configured = process.env.KILN_RELAY_DIAL_URL?.trim()
+  const base = configured ? new URL(configured) : kilnPublicUrl()
+  if (!configured && isLoopbackHost(base.hostname)) return null
+  return new URL(relayControlDialPath, base.origin).href
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  return (
+    hostname === "localhost" ||
+    hostname === "[::1]" ||
+    /^127(?:\.\d{1,3}){3}$/u.test(hostname)
+  )
 }
 
 export function relayControlEndpoint(relay: RelayEndpoint): RelayEndpoint {
