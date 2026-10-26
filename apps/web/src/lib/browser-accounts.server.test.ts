@@ -17,7 +17,9 @@ class Browser {
 
   headers(): Headers {
     return new Headers({
-      cookie: [...this.cookies].map(([name, value]) => `${name}=${value}`).join("; "),
+      cookie: [...this.cookies]
+        .map(([name, value]) => `${name}=${value}`)
+        .join("; "),
       origin,
     })
   }
@@ -28,7 +30,8 @@ class Browser {
   ) {
     const { auth } = await import("@/lib/auth")
     const headers = this.headers()
-    for (const [name, value] of new Headers(init.headers)) headers.set(name, value)
+    for (const [name, value] of new Headers(init.headers))
+      headers.set(name, value)
     if (init.body) headers.set("content-type", "application/json")
     const response = await auth.handler(
       new Request(`${origin}/api/auth${path}`, {
@@ -104,18 +107,72 @@ describeMysql("browser accounts", () => {
           )
           expect(activated.status).toBe(404)
 
-          const { listBrowserAccounts } =
-            yield* Effect.promise(() => import("@/lib/browser-accounts.server"))
+          const { listBrowserAccounts } = yield* Effect.promise(
+            () => import("@/lib/browser-accounts.server")
+          )
           const accounts = yield* Effect.promise(() =>
             listBrowserAccounts(browser.headers())
           )
           expect(
             accounts.map(({ active, userId }) => ({ active, userId }))
           ).toEqual([
-            { active: true, userId: "bob" },
             { active: false, userId: "alice" },
+            { active: true, userId: "bob" },
           ])
           expect(JSON.stringify(accounts)).not.toMatch(/token/i)
+        }),
+      { timeout: 30_000 }
+    )
+
+    it.effect(
+      "keeps account order when switching and reloading the session",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* seedAccount("alice")
+          yield* seedAccount("bob")
+          yield* seedAccount("charlie")
+          const browser = new Browser()
+          yield* Effect.promise(() => browser.signIn("charlie@example.test"))
+          yield* Effect.promise(() => browser.signIn("alice@example.test"))
+          yield* Effect.promise(() => browser.signIn("bob@example.test"))
+
+          const { auth } = yield* Effect.promise(() => import("@/lib/auth"))
+          const { listBrowserAccounts } = yield* Effect.promise(
+            () => import("@/lib/browser-accounts.server")
+          )
+          const accounts = yield* Effect.promise(() =>
+            listBrowserAccounts(browser.headers())
+          )
+          const order = accounts.map(({ userId }) => userId)
+          expect(order).toEqual(["alice", "bob", "charlie"])
+
+          for (const account of accounts) {
+            // Exercise the same activation endpoint used by switchBrowserAccount
+            // and keep its cookies, as a browser does across the full reload.
+            const sessions = yield* Effect.promise(() =>
+              auth.api.listDeviceSessions({ headers: browser.headers() })
+            )
+            const target = sessions.find(
+              ({ session }) => session.id === account.sessionId
+            )!
+            const activated = yield* Effect.promise(() =>
+              auth.api.setActiveSession({
+                headers: browser.headers(),
+                body: { sessionToken: target.session.token },
+                returnHeaders: true,
+              })
+            )
+            browser.store(activated.headers)
+
+            const reloaded = yield* Effect.promise(() =>
+              listBrowserAccounts(browser.headers())
+            )
+            expect(reloaded.map(({ userId }) => userId)).toEqual(order)
+            expect(reloaded.find(({ active }) => active)?.userId).toBe(
+              account.userId
+            )
+          }
         }),
       { timeout: 30_000 }
     )
@@ -202,8 +259,9 @@ describeMysql("browser accounts", () => {
           browser.store(remembered.headers)
           yield* Effect.promise(() => browser.signIn("bob@example.test"))
 
-          const { listBrowserAccounts } =
-            yield* Effect.promise(() => import("@/lib/browser-accounts.server"))
+          const { listBrowserAccounts } = yield* Effect.promise(
+            () => import("@/lib/browser-accounts.server")
+          )
           const accounts = yield* Effect.promise(() =>
             listBrowserAccounts(browser.headers())
           )

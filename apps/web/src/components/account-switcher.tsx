@@ -90,21 +90,22 @@ export const AccountSwitcherSection = React.memo(
   }) {
     const accounts = useBrowserAccounts(!user.isDevelopmentBypass)
     const [switchingTo, setSwitchingTo] = React.useState<string | null>(null)
-    const others = accounts.data?.filter((account) => !account.active) ?? []
     const atLimit = (accounts.data?.length ?? 0) >= maximumBrowserAccounts
 
     return (
       <div className="grid gap-0.5">
-        <div className="flex items-center gap-2.5 px-2 py-2">
-          <AccountAvatar name={user.name} />
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium">{user.name}</p>
-            <p className="truncate text-xs text-muted-foreground">
-              {user.email}
-            </p>
+        {user.isDevelopmentBypass || (!accounts.data && accounts.isError) ? (
+          <div className="flex items-center gap-2.5 px-2 py-2">
+            <AccountAvatar name={user.name} />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium">{user.name}</p>
+              <p className="truncate text-xs text-muted-foreground">
+                {user.email}
+              </p>
+            </div>
+            <Check className="size-4 shrink-0 text-primary-ink" aria-hidden />
           </div>
-          <Check className="size-4 shrink-0 text-primary-ink" aria-hidden />
-        </div>
+        ) : null}
         {user.isDevelopmentBypass ? null : (
           <>
             {accounts.isPending ? (
@@ -113,12 +114,16 @@ export const AccountSwitcherSection = React.memo(
                 Loading accounts
               </div>
             ) : null}
-            {others.map((account) => (
+            {accounts.data?.map((account) => (
               <button
                 key={account.sessionId}
                 type="button"
                 className={cn(menuRowClassName, "h-11")}
-                aria-label={`Switch to ${account.name} (${account.email})`}
+                aria-label={
+                  account.active
+                    ? `Continue as ${account.name}`
+                    : `Switch to ${account.name} (${account.email})`
+                }
                 disabled={switchingTo !== null}
                 onClick={() => {
                   setSwitchingTo(account.sessionId)
@@ -135,13 +140,25 @@ export const AccountSwitcherSection = React.memo(
                   profileId={account.minecraftProfileId ?? undefined}
                 />
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate">{account.name}</span>
+                  <span
+                    className={cn(
+                      "block truncate",
+                      account.active && "font-medium"
+                    )}
+                  >
+                    {account.name}
+                  </span>
                   <span className="block truncate text-xs text-muted-foreground">
                     {account.email}
                   </span>
                 </span>
                 {switchingTo === account.sessionId ? (
                   <LoaderCircle className="size-4 shrink-0 animate-spin" />
+                ) : account.active ? (
+                  <Check
+                    className="size-4 shrink-0 text-primary-ink"
+                    aria-hidden
+                  />
                 ) : null}
               </button>
             ))}

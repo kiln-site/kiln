@@ -14,7 +14,7 @@ export class BrowserAccountMissingError extends Error {
   }
 }
 
-/** Accounts this browser holds a live session for, active account first. */
+/** Accounts this browser holds a live session for, in a stable name order. */
 export async function listBrowserAccounts(
   headers: Headers
 ): Promise<Array<Omit<BrowserAccount, "minecraftProfileId">>> {
@@ -24,7 +24,8 @@ export async function listBrowserAccounts(
   ])
   await forgetEndedSessions(headers, sessions)
   const unremembered =
-    current && !sessions.some(({ session }) => session.id === current.session.id)
+    current &&
+    !sessions.some(({ session }) => session.id === current.session.id)
   if (unremembered) await rememberActiveBrowserAccount(headers)
   // An account signed in past the browser limit stays active without being
   // remembered for switching.
@@ -40,8 +41,9 @@ export async function listBrowserAccounts(
   )
   return accounts.sort(
     (left, right) =>
-      Number(right.active) - Number(left.active) ||
-      left.name.localeCompare(right.name)
+      left.name.localeCompare(right.name) ||
+      left.email.localeCompare(right.email) ||
+      left.userId.localeCompare(right.userId)
   )
 }
 
