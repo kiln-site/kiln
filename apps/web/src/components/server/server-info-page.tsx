@@ -195,7 +195,10 @@ function ServerMigrationSection({
               open
               initialMode={mode}
               server={{
+                brickId: instance.brickId,
+                brickSource: instance.brickSource,
                 id: instance.id,
+                implementation: instance.implementation,
                 name: instance.name,
                 relayId: instance.relayId,
               }}
