@@ -1,4 +1,5 @@
 import * as React from "react"
+import { useQueryClient } from "@tanstack/react-query"
 import { ArrowRightLeft, Copy } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
@@ -26,6 +27,7 @@ import type {
   RelayNodeSummary,
 } from "@/lib/relay-selectors"
 import { ResourceSecurityAlert } from "@/components/resource-security-alert"
+import { serverMigrationPreviewQueryOptions } from "@/lib/server-migration-queries"
 
 // The game server's details, each section with the actions that change it,
 // and a rail summing up where it runs and who can reach it. While it's
@@ -145,6 +147,16 @@ function ServerMigrationSection({
   relayConnected: boolean
 }) {
   const [mode, setMode] = React.useState<ServerMigrationMode | null>(null)
+  const queryClient = useQueryClient()
+  // Asked for as the pointer reaches a button, so the dialog opens whole.
+  const prefetch = () => {
+    void queryClient.prefetchQuery(
+      serverMigrationPreviewQueryOptions({
+        instanceId: instance.id,
+        relayId: instance.relayId,
+      })
+    )
+  }
   const unavailable = relayConnected
     ? undefined
     : "Reconnect this server's Relay first"
@@ -160,6 +172,8 @@ function ServerMigrationSection({
             disabled={!relayConnected}
             title={unavailable}
             onClick={() => setMode("duplicate")}
+            onFocus={prefetch}
+            onPointerEnter={prefetch}
           >
             <Copy />
             Duplicate
@@ -170,6 +184,8 @@ function ServerMigrationSection({
             disabled={!relayConnected}
             title={unavailable}
             onClick={() => setMode("migrate")}
+            onFocus={prefetch}
+            onPointerEnter={prefetch}
           >
             <ArrowRightLeft />
             Move to another Relay

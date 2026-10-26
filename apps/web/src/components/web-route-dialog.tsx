@@ -29,6 +29,7 @@ import {
 import { Switch } from "@workspace/ui/components/switch"
 import { cn } from "@workspace/ui/lib/utils"
 
+import { Field, ModeButton } from "@/components/dialog-fields"
 import { ensuringPromise, recoverPromise } from "@/effect/promise"
 
 // One of an app's services, as its containers show it.
@@ -430,55 +431,6 @@ export function WebRouteDialog({
         </form>
       </DialogContent>
     </Dialog>
-  )
-}
-
-function ModeButton({
-  checked,
-  description,
-  disabled,
-  icon,
-  label,
-  onSelect,
-}: {
-  checked: boolean
-  description: string
-  disabled: boolean
-  icon: React.ReactNode
-  label: string
-  onSelect: () => void
-}) {
-  return (
-    <Button
-      aria-checked={checked}
-      className="h-auto items-start justify-start px-3 py-2.5 text-left"
-      disabled={disabled}
-      role="radio"
-      type="button"
-      variant={checked ? "default" : "outline"}
-      onClick={onSelect}
-    >
-      <span className="mt-0.5 [&_svg]:size-4">{icon}</span>
-      <span>
-        <span className="block text-xs">{label}</span>
-        <span className="type-meta mt-0.5 block">{description}</span>
-      </span>
-    </Button>
-  )
-}
-
-function Field({
-  children,
-  label,
-}: {
-  children: React.ReactNode
-  label: React.ReactNode
-}) {
-  return (
-    <label className="type-label grid min-w-0 gap-1.5">
-      {label}
-      {children}
-    </label>
   )
 }
 

@@ -37,7 +37,9 @@ export function serverMigrationPreviewQueryOptions(server: {
       server.instanceId,
     ],
     queryFn: () => previewServerMigration({ data: server }),
-    staleTime: 0,
+    // Long enough that the dialog opens on what pointing at its button
+    // fetched; starting the copy checks everything again.
+    staleTime: 30_000,
     retry: false,
   })
 }
