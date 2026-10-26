@@ -85,6 +85,7 @@ import {
   provisionInstanceDomainBestEffort,
 } from "@/server/domains.server"
 import { syncInstanceDomainAfterPortUpdateBestEffort } from "@/server/relay-port-update.server"
+import { webRoutesForRelay } from "@/server/web-route-compatibility.server"
 import {
   deleteInstanceWithoutFinalBackup,
   deleteInstanceWithFinalBackup,
@@ -683,7 +684,9 @@ export const updateInstanceWebRoutes = createServerFn({ method: "POST" })
     const value = await relayRequest(
       `/v1/instances/${encodeURIComponent(data.instanceId)}/web-routes`,
       {
-        body: JSON.stringify({ routes: data.routes }),
+        body: JSON.stringify({
+          routes: webRoutesForRelay(data.relayId, data.routes),
+        }),
         headers: { "Content-Type": "application/json" },
         method: "PUT",
       },

@@ -14,7 +14,7 @@ import {
   relayAppTerminalClaimSchema,
   relayAppTerminalRestartSchema,
   relayAppTerminalWriteSchema,
-  relayAppWebRouteInputSchema,
+  relayAppWebRoutesWriteSchema,
   relayAppWebRouteStateSchema,
   relayIdSchema,
 } from "@workspace/contracts"
@@ -44,6 +44,7 @@ import {
   claimPreparedProvisioning,
 } from "@/lib/provisioning.server"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
+import { webRoutesForRelay } from "@/server/web-route-compatibility.server"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import {
   appConfigPatchSchema,
@@ -108,10 +109,7 @@ export const getAppDirectory = createServerFn({ method: "GET" }).handler(
     )
     return records.flatMap((record) => {
       const relayName = relayNames.get(record.relayId)
-      if (
-        !relayName ||
-        !hasAppPermission(user, grants, record, "app.read")
-      ) {
+      if (!relayName || !hasAppPermission(user, grants, record, "app.read")) {
         return []
       }
       return [
@@ -297,9 +295,8 @@ export const deployApp = createServerFn({ method: "POST" })
   .validator(appInputSchema)
   .handler(async ({ data }) => {
     const { relay, user } = await authorizedApp(data, "app.manage")
-    const { startAppDeploymentEffect } = await import(
-      "@/lib/app-deployments.server"
-    )
+    const { startAppDeploymentEffect } =
+      await import("@/lib/app-deployments.server")
     const started = await runAppEffect(
       "apps.deploy",
       startAppDeploymentEffect({
@@ -322,9 +319,7 @@ export const updateAppLimits = createServerFn({ method: "POST" })
     if (!(await relayAppLimitsSupported(relay.id))) {
       throw new Error("Update this Relay to set app limits")
     }
-    const limits = appConfigSchema
-      .pick({ serviceLimits: true })
-      .parse(data)
+    const limits = appConfigSchema.pick({ serviceLimits: true }).parse(data)
     // Saved once the Relay applies them, so limits it refuses aren't used
     // by the next deployment, and into the config saved by then, so other
     // edits made meanwhile stay.
@@ -422,7 +417,7 @@ export const getAppWebRoutes = createServerFn({ method: "GET" })
 export const updateAppWebRoutes = createServerFn({ method: "POST" })
   .validator(
     appInputSchema.extend({
-      routes: z.array(relayAppWebRouteInputSchema).max(16),
+      routes: relayAppWebRoutesWriteSchema.shape.routes,
     })
   )
   .handler(async ({ data }) => {
@@ -431,7 +426,10 @@ export const updateAppWebRoutes = createServerFn({ method: "POST" })
       await databaseRpc(
         relay,
         "app.network.routes.write",
-        { appId: data.appId, routes: data.routes },
+        {
+          appId: data.appId,
+          routes: webRoutesForRelay(relay.id, data.routes),
+        },
         240_000,
         user.id
       )

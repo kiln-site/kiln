@@ -174,7 +174,10 @@ const provisioningSchemas = {
     input: relayCreateDatabaseSchema,
     placeholder: relayManagedDatabaseSchema,
   },
-  server: { input: relayCreateInstanceSchema, placeholder: relayInstanceSchema },
+  server: {
+    input: relayCreateInstanceSchema,
+    placeholder: relayInstanceSchema,
+  },
 }
 
 export type RelayProvisioningKind = keyof typeof provisioningSchemas
@@ -192,7 +195,9 @@ export type RelayProvisioningJob<
     /** The ID of the instance it provisions. */
     readonly instanceId: string
     readonly kind: K
-    readonly placeholder: z.infer<(typeof provisioningSchemas)[K]["placeholder"]>
+    readonly placeholder: z.infer<
+      (typeof provisioningSchemas)[K]["placeholder"]
+    >
     readonly status: RelayProvisioningJobStatus
     readonly updatedAt: number
   }
@@ -283,13 +288,19 @@ const RelayAuditRowSchema = Schema.Struct({
 
 const RelayWebRouteRowSchema = Schema.Struct({
   hostname: Schema.String,
+  httpsRedirect: Schema.Number,
   id: Schema.String,
   instanceId: Schema.String,
+  isPrimary: Schema.Number,
   name: Schema.String,
   path: Schema.String,
+  redirectPermanent: Schema.Number,
+  redirectPreservePath: Schema.Number,
+  redirectTo: Schema.NullOr(Schema.String),
   service: Schema.NullOr(Schema.String),
   stripPrefix: Schema.Number,
-  targetPort: Schema.Number,
+  targetPort: Schema.NullOr(Schema.Number),
+  www: Schema.Literals(["none", "redirect", "serve"]),
 })
 
 const RelayInstancePortProtocolSchema = Schema.Literals(["tcp", "udp", "both"])
@@ -1300,6 +1311,54 @@ const migrations = SqliteMigrator.fromRecord({
     if (columns.some((column) => column.name === "client_id")) return
     yield* sql`ALTER TABLE relay_invitations ADD COLUMN client_id TEXT`
   }),
+  // Routes take a www counterpart, plain HTTP, a primary flag, and a
+  // redirect, which has no port.
+  "27_web_route_options": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    yield* sql`
+      CREATE TABLE relay_web_routes_next (
+        id TEXT PRIMARY KEY NOT NULL,
+        instance_id TEXT NOT NULL,
+        hostname TEXT NOT NULL,
+        path TEXT NOT NULL DEFAULT '',
+        strip_prefix INTEGER NOT NULL CHECK (strip_prefix IN (0, 1)),
+        target_port INTEGER
+          CHECK (target_port IS NULL OR target_port BETWEEN 1 AND 65535),
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        name TEXT NOT NULL DEFAULT '',
+        service TEXT,
+        www TEXT NOT NULL DEFAULT 'none'
+          CHECK (www IN ('none', 'redirect', 'serve')),
+        https_redirect INTEGER NOT NULL DEFAULT 1
+          CHECK (https_redirect IN (0, 1)),
+        is_primary INTEGER NOT NULL DEFAULT 0 CHECK (is_primary IN (0, 1)),
+        redirect_to TEXT,
+        redirect_permanent INTEGER NOT NULL DEFAULT 1
+          CHECK (redirect_permanent IN (0, 1)),
+        redirect_preserve_path INTEGER NOT NULL DEFAULT 1
+          CHECK (redirect_preserve_path IN (0, 1)),
+        CHECK ((redirect_to IS NULL) <> (target_port IS NULL)),
+        UNIQUE (hostname, path)
+      ) STRICT
+    `
+    yield* sql`
+      INSERT INTO relay_web_routes_next (
+        id, instance_id, hostname, path, strip_prefix, target_port,
+        created_at, updated_at, name, service
+      )
+      SELECT
+        id, instance_id, hostname, path, strip_prefix, target_port,
+        created_at, updated_at, name, service
+      FROM relay_web_routes
+    `
+    yield* sql`DROP TABLE relay_web_routes`
+    yield* sql`ALTER TABLE relay_web_routes_next RENAME TO relay_web_routes`
+    yield* sql`
+      CREATE INDEX relay_web_routes_instance
+      ON relay_web_routes (instance_id)
+    `
+  }),
 })
 
 function scrubBackupTaskInputJson(inputJson: string): string {
@@ -1785,10 +1844,16 @@ const makeRelayStateStore = Effect.gen(function* () {
             path,
             service,
             strip_prefix AS stripPrefix,
-            target_port AS targetPort
+            target_port AS targetPort,
+            www,
+            https_redirect AS httpsRedirect,
+            is_primary AS isPrimary,
+            redirect_to AS redirectTo,
+            redirect_permanent AS redirectPermanent,
+            redirect_preserve_path AS redirectPreservePath
           FROM relay_web_routes
           WHERE instance_id = ${instanceId}
-          ORDER BY created_at ASC
+          ORDER BY created_at ASC, rowid ASC
         `
       : yield* sql<Record<string, unknown>>`
           SELECT
@@ -1799,20 +1864,37 @@ const makeRelayStateStore = Effect.gen(function* () {
             path,
             service,
             strip_prefix AS stripPrefix,
-            target_port AS targetPort
+            target_port AS targetPort,
+            www,
+            https_redirect AS httpsRedirect,
+            is_primary AS isPrimary,
+            redirect_to AS redirectTo,
+            redirect_permanent AS redirectPermanent,
+            redirect_preserve_path AS redirectPreservePath
           FROM relay_web_routes
-          ORDER BY created_at ASC
+          ORDER BY created_at ASC, rowid ASC
         `
     const decoded = yield* decodeWebRouteRows(rows)
     return decoded.map((row) => ({
       hostname: row.hostname,
+      httpsRedirect: row.httpsRedirect === 1,
       id: row.id,
       instanceId: row.instanceId,
       name: row.name,
       path: row.path || null,
+      primary: row.isPrimary === 1,
+      redirect:
+        row.redirectTo === null
+          ? null
+          : {
+              permanent: row.redirectPermanent === 1,
+              preservePath: row.redirectPreservePath === 1,
+              to: row.redirectTo,
+            },
       ...(row.service === null ? {} : { service: row.service }),
       stripPrefix: row.stripPrefix === 1,
       targetPort: row.targetPort,
+      www: row.www,
     }))
   })
 
@@ -3453,6 +3535,12 @@ const makeRelayStateStore = Effect.gen(function* () {
                   service,
                   strip_prefix,
                   target_port,
+                  www,
+                  https_redirect,
+                  is_primary,
+                  redirect_to,
+                  redirect_permanent,
+                  redirect_preserve_path,
                   created_at,
                   updated_at
                 ) VALUES (
@@ -3464,6 +3552,12 @@ const makeRelayStateStore = Effect.gen(function* () {
                   ${route.service ?? null},
                   ${route.stripPrefix ? 1 : 0},
                   ${route.targetPort},
+                  ${route.www},
+                  ${route.httpsRedirect ? 1 : 0},
+                  ${route.primary ? 1 : 0},
+                  ${route.redirect?.to ?? null},
+                  ${route.redirect?.permanent === false ? 0 : 1},
+                  ${route.redirect?.preservePath === false ? 0 : 1},
                   ${now},
                   ${now}
                 )

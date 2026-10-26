@@ -1208,6 +1208,24 @@ async function createPortableInstanceBackup(
   })
 }
 
+// A route as the manifest records it: the options it adds to the format
+// older Relays read appear only when set, and a route without a label is
+// named for its hostname, as those Relays require.
+function backupWebRoute(route: RelayInstanceWebRoute) {
+  return {
+    hostname: route.hostname,
+    id: route.id,
+    name: route.name || route.hostname.slice(0, 32),
+    path: route.path,
+    stripPrefix: route.stripPrefix,
+    targetPort: route.targetPort,
+    ...(route.httpsRedirect ? {} : { httpsRedirect: false as const }),
+    ...(route.primary ? { primary: true as const } : {}),
+    ...(route.redirect ? { redirect: route.redirect } : {}),
+    ...(route.www === "none" ? {} : { www: route.www }),
+  }
+}
+
 async function instanceBackupManifest(
   config: RelayConfig,
   input: BackupCreateTaskInput,
@@ -1249,7 +1267,7 @@ async function instanceBackupManifest(
         ports: instance.ports,
         publicHost: instance.publicHost ?? null,
         publicPort: instance.publicPort ?? null,
-        webRoutes: [...webRoutes],
+        webRoutes: webRoutes.map(backupWebRoute),
       },
       startup: {
         // Backups keep the format older Relays restore, where 0 is no limit.

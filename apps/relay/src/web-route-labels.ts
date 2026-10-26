@@ -1,6 +1,7 @@
 import {
   relayInstanceWebRouteIdSchema,
   relayInstanceWebRouteSchema,
+  webRouteEndpoints,
 } from "@workspace/contracts"
 import type {
   RelayInstanceWebRoute,
@@ -15,11 +16,32 @@ export const WEB_ROUTE_REVISION_LABEL = `${WEB_ROUTE_LABEL_PREFIX}revision`
 
 const KEEP_PREFIX_OPTION = "keep-prefix"
 const NAME_OPTION_PREFIX = "name="
+const WWW_OPTION_PREFIX = "www="
+const HTTP_OPTION = "http"
+const PRIMARY_OPTION = "primary"
+const REDIRECT_OPTION_PREFIX = "redirect="
+const REDIRECT_TEMPORARY_OPTION = "redirect-temporary"
+const REDIRECT_DROP_PATH_OPTION = "redirect-drop-path"
+const FLAG_OPTIONS = new Set([
+  HTTP_OPTION,
+  KEEP_PREFIX_OPTION,
+  PRIMARY_OPTION,
+  REDIRECT_DROP_PATH_OPTION,
+  REDIRECT_TEMPORARY_OPTION,
+])
+const VALUE_OPTION_PREFIXES = [
+  NAME_OPTION_PREFIX,
+  REDIRECT_OPTION_PREFIX,
+  WWW_OPTION_PREFIX,
+]
 const MAX_INSTANCE_WEB_ROUTES = 16
 
 // One label per route:
-// kiln.relay.web-routes.<id>=hostname:port[/path]|name=<encoded>[,keep-prefix]
-// A configured path is stripped unless keep-prefix is present.
+// kiln.relay.web-routes.<id>=hostname[:port][/path]|name=<encoded>[,options]
+// A configured path is stripped unless keep-prefix is present. The other
+// options are www=redirect|serve, http (plain HTTP is served rather than
+// redirected), primary, and, for a route without a port,
+// redirect=<encoded URL> with redirect-temporary and redirect-drop-path.
 export interface RelayWebRouteLabelSnapshot {
   readonly instanceId: string
   readonly labels: Readonly<Record<string, string | undefined>>
@@ -79,11 +101,10 @@ function decodeWebRouteRecoveryLabels(
       warnings.push(`${label}: ${parsed.message}`)
       continue
     }
-    const endpoint = routeEndpoint(parsed.route)
-    if (endpoints.has(endpoint)) {
-      warnings.push(
-        `${label} duplicates ${parsed.route.hostname}${parsed.route.path ?? ""}`
-      )
+    const claimed = webRouteEndpoints(parsed.route)
+    const duplicate = claimed.find((endpoint) => endpoints.has(endpoint))
+    if (duplicate) {
+      warnings.push(`${label} duplicates ${duplicate}`)
       continue
     }
     if (routes.length === MAX_INSTANCE_WEB_ROUTES) {
@@ -92,7 +113,7 @@ function decodeWebRouteRecoveryLabels(
       )
       continue
     }
-    endpoints.add(endpoint)
+    for (const endpoint of claimed) endpoints.add(endpoint)
     routes.push(parsed.route)
   }
 
@@ -105,7 +126,7 @@ export function planWebRouteRecovery(
 ): RelayWebRouteRecoveryPlan {
   const persistedInstances = new Set(persisted.map((route) => route.instanceId))
   const routeIds = new Set(persisted.map((route) => route.id))
-  const endpoints = new Set(persisted.map(routeEndpoint))
+  const endpoints = new Set(persisted.flatMap(webRouteEndpoints))
   const recoveries: Array<RelayWebRouteRecovery> = []
   const warnings: Array<string> = []
 
@@ -125,15 +146,16 @@ export function planWebRouteRecovery(
         )
         return false
       }
-      const endpoint = routeEndpoint(route)
-      if (endpoints.has(endpoint)) {
+      const claimed = webRouteEndpoints(route)
+      const duplicate = claimed.find((endpoint) => endpoints.has(endpoint))
+      if (duplicate) {
         warnings.push(
-          `${snapshot.service}: ${route.hostname}${route.path ?? ""} is already used on this Relay`
+          `${snapshot.service}: ${duplicate} is already used on this Relay`
         )
         return false
       }
       routeIds.add(route.id)
-      endpoints.add(endpoint)
+      for (const endpoint of claimed) endpoints.add(endpoint)
       return true
     })
     if (routes.length > 0) {
@@ -145,10 +167,23 @@ export function planWebRouteRecovery(
 }
 
 function encodeWebRouteRecoveryValue(route: RelayInstanceWebRoute): string {
-  const endpoint = `${route.hostname}:${route.targetPort}${route.path ?? ""}`
+  const authority =
+    route.targetPort === null
+      ? route.hostname
+      : `${route.hostname}:${route.targetPort}`
   const options = [`${NAME_OPTION_PREFIX}${encodeURIComponent(route.name)}`]
   if (!route.stripPrefix) options.push(KEEP_PREFIX_OPTION)
-  return `${endpoint}|${options.join(",")}`
+  if (route.www !== "none") options.push(`${WWW_OPTION_PREFIX}${route.www}`)
+  if (!route.httpsRedirect) options.push(HTTP_OPTION)
+  if (route.primary) options.push(PRIMARY_OPTION)
+  if (route.redirect) {
+    options.push(
+      `${REDIRECT_OPTION_PREFIX}${encodeURIComponent(route.redirect.to)}`
+    )
+    if (!route.redirect.permanent) options.push(REDIRECT_TEMPORARY_OPTION)
+    if (!route.redirect.preservePath) options.push(REDIRECT_DROP_PATH_OPTION)
+  }
+  return `${authority}${route.path ?? ""}|${options.join(",")}`
 }
 
 function parseWebRouteRecoveryValue(
@@ -167,47 +202,75 @@ function parseWebRouteRecoveryValue(
   const authority = pathStart === -1 ? endpoint : endpoint.slice(0, pathStart)
   const path = pathStart === -1 ? null : endpoint.slice(pathStart)
   const portSeparator = authority.lastIndexOf(":")
-  if (portSeparator <= 0) {
-    return { success: false, message: "route must include a target port" }
-  }
 
   const options =
     segments[1] === undefined
       ? []
       : segments[1].split(",").filter((option) => option.length > 0)
-  const nameOptions = options.filter((option) =>
-    option.startsWith(NAME_OPTION_PREFIX)
-  )
+  const optionsWith = (prefix: string) =>
+    options.filter((option) => option.startsWith(prefix))
   if (
     segments[1] === "" ||
     options.some(
       (option) =>
-        option !== KEEP_PREFIX_OPTION && !option.startsWith(NAME_OPTION_PREFIX)
+        !FLAG_OPTIONS.has(option) &&
+        !VALUE_OPTION_PREFIXES.some((prefix) => option.startsWith(prefix))
     ) ||
-    nameOptions.length > 1 ||
+    VALUE_OPTION_PREFIXES.some((prefix) => optionsWith(prefix).length > 1) ||
     new Set(options).size !== options.length
   ) {
     return { success: false, message: "route options are invalid" }
   }
+  const decode = (option: string | undefined, prefix: string) =>
+    option === undefined
+      ? Result.succeed(undefined)
+      : Result.try(() => decodeURIComponent(option.slice(prefix.length)))
 
-  let name = authority.slice(0, portSeparator).slice(0, 32)
-  if (nameOptions[0]) {
-    const decodedName = Result.try(() =>
-      decodeURIComponent(nameOptions[0]!.slice(NAME_OPTION_PREFIX.length))
-    )
-    if (Result.isFailure(decodedName)) {
-      return { success: false, message: "route name is invalid" }
-    }
-    name = decodedName.success
+  const redirectTo = decode(
+    optionsWith(REDIRECT_OPTION_PREFIX)[0],
+    REDIRECT_OPTION_PREFIX
+  )
+  if (Result.isFailure(redirectTo)) {
+    return { success: false, message: "route redirect is invalid" }
   }
+  // A route reaches a port, or redirects without one.
+  if (redirectTo.success === undefined && portSeparator <= 0) {
+    return { success: false, message: "route must include a target port" }
+  }
+  const hostname =
+    portSeparator <= 0 ? authority : authority.slice(0, portSeparator)
+
+  let name = hostname.slice(0, 32)
+  const decodedName = decode(
+    optionsWith(NAME_OPTION_PREFIX)[0],
+    NAME_OPTION_PREFIX
+  )
+  if (Result.isFailure(decodedName)) {
+    return { success: false, message: "route name is invalid" }
+  }
+  if (decodedName.success !== undefined) name = decodedName.success
 
   const parsed = relayInstanceWebRouteSchema.safeParse({
-    hostname: authority.slice(0, portSeparator),
+    hostname,
+    httpsRedirect: !options.includes(HTTP_OPTION),
     id,
     name,
     path,
+    primary: options.includes(PRIMARY_OPTION),
+    redirect:
+      redirectTo.success === undefined
+        ? null
+        : {
+            permanent: !options.includes(REDIRECT_TEMPORARY_OPTION),
+            preservePath: !options.includes(REDIRECT_DROP_PATH_OPTION),
+            to: redirectTo.success,
+          },
     stripPrefix: !options.includes(KEEP_PREFIX_OPTION),
-    targetPort: Number(authority.slice(portSeparator + 1)),
+    targetPort:
+      portSeparator <= 0 ? null : Number(authority.slice(portSeparator + 1)),
+    www:
+      optionsWith(WWW_OPTION_PREFIX)[0]?.slice(WWW_OPTION_PREFIX.length) ??
+      "none",
   })
   if (!parsed.success) {
     return {
@@ -216,11 +279,4 @@ function parseWebRouteRecoveryValue(
     }
   }
   return { route: parsed.data, success: true }
-}
-
-function routeEndpoint(route: {
-  readonly hostname: string
-  readonly path: string | null
-}): string {
-  return `${route.hostname}\n${route.path ?? ""}`
 }

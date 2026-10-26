@@ -15,6 +15,11 @@ import {
 } from "./resource-limits.js"
 import { relayInstanceStateReasonSchema } from "./instance-state-reason.js"
 import {
+  webRouteEndpoints,
+  webRouteHostnames,
+  wwwCounterpart,
+} from "./web-routes.js"
+import {
   databaseReadRequestSchema,
   databaseWriteRequestSchema,
 } from "./database-browser.js"
@@ -26,6 +31,7 @@ import {
 } from "./tailscale.js"
 
 export * from "./access-permissions.js"
+export * from "./web-routes.js"
 export * from "./relay-protocol.js"
 export * from "./relay-transfers.js"
 export * from "./installation-id.js"
@@ -631,7 +637,9 @@ export const appRepositoryPathSchema = z
       !path.includes("\0") &&
       path
         .split("/")
-        .every((segment) => segment !== "" && segment !== "." && segment !== ".."),
+        .every(
+          (segment) => segment !== "" && segment !== "." && segment !== ".."
+        ),
     "Use a path inside the repository, like Dockerfile or deploy/compose.yaml"
   )
 
@@ -833,9 +841,7 @@ export const relayPrepareAppSchema = relayCreateAppSchema.extend({
   idempotencyKey: z.uuid(),
 })
 
-export const relayProvisionAppSchema = z
-  .object({ appId: appIdSchema })
-  .strict()
+export const relayProvisionAppSchema = z.object({ appId: appIdSchema }).strict()
 
 /** A manifest digest, as registries name an image's exact content. */
 export const imageDigestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/u)
@@ -860,7 +866,10 @@ export const relayAppImageCheckSchema = z
     apps: z
       .array(
         z
-          .object({ appId: appIdSchema, image: z.string().trim().min(1).max(512) })
+          .object({
+            appId: appIdSchema,
+            image: z.string().trim().min(1).max(512),
+          })
           .strict()
       )
       .min(1)
@@ -1471,12 +1480,34 @@ export const relayInstanceWebRouteIdSchema = z.union([
   z.uuid(),
 ])
 
-export const relayInstanceWebRouteNameSchema = z.string().trim().min(1).max(32)
+// A label shown beside the hostname. Empty when the route has none.
+export const relayInstanceWebRouteNameSchema = z.string().trim().max(32)
+
+// Whether the hostname's www counterpart (www.example.com for example.com,
+// or example.com for www.example.com) redirects to it or serves the same.
+export const relayWebRouteWwwSchema = z.enum(["none", "redirect", "serve"])
+
+// A route that sends its visitors to another URL instead of a port.
+export const relayWebRouteRedirectSchema = z
+  .object({
+    permanent: z.boolean().default(true),
+    preservePath: z.boolean().default(true),
+    to: z
+      .url({
+        hostname: z.regexes.domain,
+        normalize: true,
+        protocol: /^https?$/u,
+      })
+      .max(2_048),
+  })
+  .strict()
 
 const relayInstanceWebRouteConfigurationSchema = z
   .object({
     hostname: webRouteHostnameSchema,
-    name: relayInstanceWebRouteNameSchema,
+    // Whether plain HTTP requests redirect to HTTPS, or are served as well.
+    httpsRedirect: z.boolean().default(true),
+    name: relayInstanceWebRouteNameSchema.default(""),
     path: z
       .string()
       .trim()
@@ -1488,8 +1519,13 @@ const relayInstanceWebRouteConfigurationSchema = z
         "Use an encoded URL path without spaces or routing metacharacters"
       )
       .nullable(),
+    // The domain shown for the server or app, such as in its header.
+    primary: z.boolean().default(false),
+    redirect: relayWebRouteRedirectSchema.nullable().default(null),
     stripPrefix: z.boolean().default(true),
-    targetPort: z.number().int().min(1).max(65_535),
+    // The port it serves; none for a redirect.
+    targetPort: z.number().int().min(1).max(65_535).nullable(),
+    www: relayWebRouteWwwSchema.default("none"),
   })
   .strict()
 
@@ -1504,23 +1540,53 @@ export const relayInstanceWebRouteSchema =
   })
 
 function relayInstanceWebRouteArraySchema<
-  Route extends z.ZodType<{ hostname: string; path: string | null }>,
+  Route extends z.ZodType<
+    z.output<typeof relayInstanceWebRouteConfigurationSchema>
+  >,
 >(route: Route) {
   return z
     .array(route)
     .max(16)
     .superRefine((routes, context) => {
       const seen = new Set<string>()
+      let primary = false
       routes.forEach((item, index) => {
-        const key = `${item.hostname}\n${item.path ?? ""}`
-        if (seen.has(key)) {
-          context.addIssue({
-            code: "custom",
-            message: "Each hostname and path combination must be unique",
-            path: [index, "hostname"],
-          })
+        const issue = (message: string, field: string) =>
+          context.addIssue({ code: "custom", message, path: [index, field] })
+        if (item.www !== "none" && wwwCounterpart(item.hostname) === null) {
+          issue(`${item.hostname} has no www counterpart`, "www")
         }
-        seen.add(key)
+        for (const endpoint of webRouteEndpoints(item)) {
+          if (seen.has(endpoint)) {
+            issue(`${endpoint} is already routed`, "hostname")
+          }
+          seen.add(endpoint)
+        }
+        if (item.redirect) {
+          if (item.targetPort !== null) {
+            issue("A redirect has no port", "targetPort")
+          }
+          const target = new URL(item.redirect.to)
+          if (
+            webRouteHostnames(item).includes(target.hostname) &&
+            target.pathname.startsWith(item.path ?? "/")
+          ) {
+            issue("A route can't redirect to itself", "redirect")
+          }
+          if (item.redirect.preservePath && (target.search || target.hash)) {
+            issue(
+              "Remove the query from the destination, or don't keep the path",
+              "redirect"
+            )
+          }
+          if (item.primary) issue("A redirect can't be primary", "primary")
+        } else if (item.targetPort === null) {
+          issue("Enter the port the route serves", "targetPort")
+        }
+        if (item.primary) {
+          if (primary) issue("Only one route can be primary", "primary")
+          primary = true
+        }
       })
     })
 }
@@ -1598,9 +1664,14 @@ export const relayProxyConfigurationSchema = z.object({
         service: z.string().nullable(),
       }),
       path: z.string().nullable(),
+      // Absent from older Relays.
+      primary: z.boolean().default(false),
+      redirect: relayWebRouteRedirectSchema.nullable().default(null),
       stripPrefix: z.boolean(),
-      targetPort: z.number().int(),
+      targetPort: z.number().int().nullable(),
+      // Where requests go: the upstream it proxies to, or a redirect's URL.
       upstream: z.string(),
+      www: relayWebRouteWwwSchema.default("none"),
     })
   ),
   staticConfiguration: z.string().nullable(),
@@ -2251,9 +2322,7 @@ const relaySnapshotRelaySchema = z.object({
    * Present when Kiln's own services run on this Relay's Docker host. See
    * `relay.platform.read`.
    */
-  platform: z
-    .object({ management: relayPlatformManagementSchema })
-    .optional(),
+  platform: z.object({ management: relayPlatformManagementSchema }).optional(),
   proxyMode: relayProxyModeSchema.optional(),
   sftp: relaySftpSnapshotSchema,
   tls: z

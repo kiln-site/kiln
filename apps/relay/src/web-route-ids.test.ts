@@ -24,6 +24,10 @@ const route = {
   name: "Live Map",
   path: "/map",
   stripPrefix: true,
+  httpsRedirect: true,
+  primary: false,
+  redirect: null,
+  www: "none" as const,
   targetPort: 8_100,
 }
 const otherInstanceRoute = {

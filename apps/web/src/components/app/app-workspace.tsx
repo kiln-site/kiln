@@ -6,6 +6,8 @@ import { instanceStatePresentation } from "@/lib/instance-state-presentation"
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useHydrated, useNavigate } from "@tanstack/react-router"
+import { primaryWebRoute, webRouteUrl } from "@workspace/contracts"
+import type { RelayInstanceWebRoute } from "@workspace/contracts"
 import { Rocket, Trash2 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
@@ -257,21 +259,25 @@ const AppWorkspaceHeader = React.memo(function AppWorkspaceHeader({
   )
 })
 
-// The app's first domain, where people reach it, or its address inside the
-// Relay's network when it has none.
+// The app's primary domain, where people reach it, or its address inside
+// the Relay's network when it has none.
 function AppHeaderAddress({ app }: { app: App }) {
-  const route = useQuery({
+  const url = useQuery({
     ...appWebRoutesQueryOptions(app.relayId, app.id),
-    select: (state) => state.routes[0],
+    select: selectPrimaryUrl,
   }).data
-  return route ? (
-    <WorkspaceCopyLinkButton
-      href={`https://${route.hostname}${route.path ?? ""}`}
-      label="domain"
-    />
+  return url ? (
+    <WorkspaceCopyLinkButton href={url} label="domain" />
   ) : (
     <WorkspaceCopyValueButton label="internal address" value={app.hostname} />
   )
+}
+
+function selectPrimaryUrl(state: {
+  routes: ReadonlyArray<RelayInstanceWebRoute>
+}): string | null {
+  const route = primaryWebRoute(state.routes)
+  return route ? webRouteUrl(route) : null
 }
 
 function AppPowerControls({

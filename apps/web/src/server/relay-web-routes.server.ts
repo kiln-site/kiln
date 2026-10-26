@@ -19,6 +19,9 @@ export interface RelayWebRoute {
   id: string
   owner: { id: string; kind: "app" | "server"; service: string | null }
   path: string | null
+  primary: boolean
+  // Where a redirect sends visitors; null for a route that serves.
+  redirectTo: string | null
 }
 
 /**
@@ -54,7 +57,18 @@ export async function relayWebRoutesHandler(
           resourceType: "instance",
           resourceId: owner.id,
         }).has("instance.network.read"))
-  return routes.flatMap(({ hostname, id, owner, path }) =>
-    canRead(owner) ? [{ hostname, id, owner, path }] : []
+  return routes.flatMap(({ hostname, id, owner, path, primary, redirect }) =>
+    canRead(owner)
+      ? [
+          {
+            hostname,
+            id,
+            owner,
+            path,
+            primary,
+            redirectTo: redirect?.to ?? null,
+          },
+        ]
+      : []
   )
 }

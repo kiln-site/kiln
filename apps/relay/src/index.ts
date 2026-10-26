@@ -286,7 +286,7 @@ import {
   type PlatformPassResult,
 } from "./platform.js"
 import { ScheduleManager } from "./schedules.js"
-import { assignRelayWebRouteIds } from "./web-route-ids.js"
+import { assignRelayWebRouteIds, webRouteCollision } from "./web-route-ids.js"
 import { planWebRouteRecovery } from "./web-route-labels.js"
 import type {
   IncomingMessage,
@@ -2025,9 +2025,12 @@ async function executeControlRequest(
                 }
               : { id: route.instanceId, kind: "server", service: null },
             path: route.path,
+            primary: route.primary,
+            redirect: route.redirect,
             stripPrefix: route.stripPrefix,
             targetPort: route.targetPort,
             upstream: traefikRouteUpstream(config, route),
+            www: route.www,
           }
         }),
         staticConfiguration: bundled
@@ -2517,17 +2520,10 @@ async function executeControlRequest(
         input.routes,
         configuredRoutes
       )
-      const collision = routes.find((route) =>
-        configuredRoutes.some(
-          (configured) =>
-            configured.instanceId !== owner &&
-            configured.hostname === route.hostname &&
-            configured.path === route.path
-        )
-      )
+      const collision = webRouteCollision(owner, routes, configuredRoutes)
       if (collision) {
         throw new Error(
-          `Another server or app already uses https://${collision.hostname}${collision.path ?? ""}. Hostname and path routes must be unique on a Relay.`
+          `Another server or app already uses https://${collision}. Hostname and path routes must be unique on a Relay.`
         )
       }
       const previous = await runRelayEffect(
@@ -3246,17 +3242,10 @@ async function executeControlRequest(
         requestedRoutes,
         configuredRoutes
       )
-      const collision = routes.find((route) =>
-        configuredRoutes.some(
-          (configured) =>
-            configured.instanceId !== instance.id &&
-            configured.hostname === route.hostname &&
-            configured.path === route.path
-        )
-      )
+      const collision = webRouteCollision(instance.id, routes, configuredRoutes)
       if (collision) {
         throw new Error(
-          `Another Ember already uses https://${collision.hostname}${collision.path ?? ""}. Hostname and path routes must be unique on a Relay.`
+          `Another server or app already uses https://${collision}. Hostname and path routes must be unique on a Relay.`
         )
       }
       const previous = await runRelayEffect(

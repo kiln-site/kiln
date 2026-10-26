@@ -4,6 +4,7 @@ import { afterEach, beforeAll, describe, expect, it } from "vite-plus/test"
 
 import { loadConfig } from "./config.js"
 import { DockerEngine } from "./docker-engine.js"
+import type { RelayStoredWebRoute } from "./effect/state.js"
 import { type ContainerSeed, fakeDocker } from "./test/docker.js"
 import {
   discoverExternalTraefikContainer,
@@ -19,13 +20,17 @@ const settings = {
   mode: "traefik" as const,
   traefikImage: "traefik:v3.7.13",
 }
-const route = {
+const route: RelayStoredWebRoute = {
   hostname: "donutsmp.example.com",
   id: "b00d4423",
   instanceId: "a".repeat(40),
   name: "Live Map",
   path: "/map",
   stripPrefix: true,
+  httpsRedirect: true,
+  primary: false,
+  redirect: null,
+  www: "none" as const,
   targetPort: 8080,
 }
 const coolify = {
@@ -65,12 +70,14 @@ function dynamicConfiguration(environment: Record<string, string> = {}) {
 
 describe("bundled Traefik configuration", () => {
   it("obtains certificates over HTTP-01 without access to the Docker socket", () => {
-    const configuration = parse(traefikStaticConfiguration(settings, {
+    const configuration = parse(
+      traefikStaticConfiguration(settings, {
         advertisedHost: "relay.example.com",
         platformEdge: null,
         proxyMode: "traefik",
         traefikAcmeCaServer: null,
-      })) as {
+      })
+    ) as {
       certificatesResolvers: { kiln: { acme: Record<string, unknown> } }
       providers: Record<string, unknown>
     }
@@ -206,6 +213,164 @@ describe("bundled Traefik configuration", () => {
   )
 })
 
+// Where a redirectRegex middleware sends a request, as Traefik's Go regexp
+// expands its replacement.
+function redirectTarget(middleware: Record<string, unknown>, url: string) {
+  const { regex, replacement } = middleware.redirectRegex as {
+    regex: string
+    replacement: string
+  }
+  const match = new RegExp(regex, "u").exec(url)
+  if (!match) return null
+  return replacement.replace(/\$\$|\$\{(\d+)\}/gu, (token, group) =>
+    token === "$$" ? "$" : (match[Number(group)] ?? "")
+  )
+}
+
+describe("web route options", () => {
+  const configuration = (routes: Array<typeof route>) =>
+    parse(
+      traefikDynamicConfiguration(
+        loadConfig({
+          KILN_RELAY_HOST: "relay.example.com",
+          KILN_RELAY_PROXY: "traefik",
+          NODE_ENV: "development",
+        }),
+        routes,
+        settings
+      )
+    ) as DynamicConfiguration & {
+      http: {
+        routers: Record<string, { entryPoints: Array<string> }>
+      }
+    }
+
+  it("sends a hostname's www counterpart to it in one hop", () => {
+    const { http } = configuration([{ ...route, path: null, www: "redirect" }])
+    const name = "kiln-route-b00d4423"
+
+    expect(http.routers[name]?.rule).toBe("Host(`donutsmp.example.com`)")
+    for (const router of [`${name}-www`, `${name}-www-http`]) {
+      expect(http.routers[router]?.rule).toBe(
+        "Host(`www.donutsmp.example.com`)"
+      )
+      const [middleware] = http.routers[router]?.middlewares ?? []
+      expect(
+        redirectTarget(
+          http.middlewares[middleware ?? ""] ?? {},
+          "http://www.donutsmp.example.com/shop?id=4"
+        )
+      ).toBe("https://donutsmp.example.com/shop?id=4")
+    }
+  })
+
+  it("serves both hostnames, and plain HTTP when a route asks", () => {
+    const { http } = configuration([
+      { ...route, httpsRedirect: false, path: null, www: "serve" },
+    ])
+    const name = "kiln-route-b00d4423"
+    const rule =
+      "Host(`donutsmp.example.com`) || Host(`www.donutsmp.example.com`)"
+
+    expect(http.routers[name]).toMatchObject({ rule, service: name })
+    expect(http.routers[`${name}-http`]).toMatchObject({
+      entryPoints: ["web"],
+      rule,
+      service: name,
+    })
+  })
+
+  it("redirects a domain elsewhere, keeping or dropping the path", () => {
+    const { http } = configuration([
+      {
+        ...route,
+        path: null,
+        redirect: {
+          permanent: false,
+          preservePath: true,
+          to: "https://new.example.com/legacy",
+        },
+        targetPort: null,
+      },
+      {
+        ...route,
+        hostname: "old.example.com",
+        id: "decafbad",
+        path: null,
+        redirect: {
+          permanent: true,
+          preservePath: false,
+          to: "https://new.example.com/",
+        },
+        targetPort: null,
+      },
+    ])
+    const kept = http.middlewares["kiln-route-b00d4423-to"] ?? {}
+    const dropped = http.middlewares["kiln-route-decafbad-to"] ?? {}
+
+    expect(http.routers["kiln-route-b00d4423"]?.service).toBe("noop@internal")
+    expect(http.routers["kiln-route-b00d4423-http"]?.middlewares).toEqual([
+      "kiln-route-b00d4423-to",
+    ])
+    expect(http.services["kiln-route-b00d4423"]).toBeUndefined()
+    expect(kept).toMatchObject({ redirectRegex: { permanent: false } })
+    expect(redirectTarget(kept, "https://donutsmp.example.com/a/b?c=1")).toBe(
+      "https://new.example.com/legacy/a/b?c=1"
+    )
+    expect(redirectTarget(dropped, "http://old.example.com/a/b")).toBe(
+      "https://new.example.com/"
+    )
+  })
+
+  it("lets a route's own HTTP router win over the entry point redirect", () => {
+    const configuration = parse(
+      traefikStaticConfiguration(settings, {
+        advertisedHost: "relay.example.com",
+        platformEdge: null,
+        proxyMode: "traefik",
+        traefikAcmeCaServer: null,
+      })
+    ) as {
+      entryPoints: {
+        web: { http: { redirections: { entryPoint: { priority: number } } } }
+      }
+    }
+
+    expect(
+      configuration.entryPoints.web.http.redirections.entryPoint.priority
+    ).toBe(1)
+  })
+
+  it("labels an external Traefik's redirect with a built-in service", () => {
+    const labels = traefikRouteLabels(
+      [
+        {
+          ...route,
+          redirect: {
+            permanent: true,
+            preservePath: true,
+            to: "https://new.example.com",
+          },
+          targetPort: null,
+          www: "redirect",
+        },
+      ],
+      coolify
+    )
+    const name = "kiln-route-b00d4423"
+
+    expect(labels[`traefik.http.routers.${name}-https.rule`]).toBe(
+      "(Host(`donutsmp.example.com`) || Host(`www.donutsmp.example.com`)) && PathPrefix(`/map`)"
+    )
+    expect(labels[`traefik.http.routers.${name}-https.service`]).toBe(
+      "noop@internal"
+    )
+    expect(
+      labels[`traefik.http.services.${name}.loadbalancer.server.port`]
+    ).toBeUndefined()
+  })
+})
+
 describe("Hearth behind bundled Traefik in platform mode", () => {
   function platformConfiguration(host: string) {
     const config = loadConfig({
@@ -287,10 +452,18 @@ describe("external Traefik labels", () => {
     const withoutRoutes = traefikRouteLabels([], coolify)
 
     expect(
-      routeLabelsRequireRestart({ "traefik.enable": "false" }, [], withoutRoutes)
+      routeLabelsRequireRestart(
+        { "traefik.enable": "false" },
+        [],
+        withoutRoutes
+      )
     ).toBe(false)
     expect(
-      routeLabelsRequireRestart(traefikRouteLabels([route], coolify), [], withoutRoutes)
+      routeLabelsRequireRestart(
+        traefikRouteLabels([route], coolify),
+        [],
+        withoutRoutes
+      )
     ).toBe(true)
     const routed = traefikRouteLabels([route], coolify)
     expect(routeLabelsRequireRestart(routed, [route], routed)).toBe(false)

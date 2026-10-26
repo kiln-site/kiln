@@ -148,6 +148,10 @@ describe("Relay archive backups", () => {
               name: "Map",
               path: "/world",
               stripPrefix: true,
+              httpsRedirect: true,
+              primary: false,
+              redirect: null,
+              www: "none" as const,
               targetPort: 8_123,
             },
           ]
@@ -198,7 +202,17 @@ describe("Relay archive backups", () => {
                 ports: instance.ports,
                 publicHost: "play.kiln.test",
                 publicPort: 25_565,
-                webRoutes,
+                // Options at their defaults stay out, as older Relays read it.
+                webRoutes: [
+                  {
+                    hostname: "map.kiln.test",
+                    id: "deadbeef",
+                    name: "Map",
+                    path: "/world",
+                    stripPrefix: true,
+                    targetPort: 8_123,
+                  },
+                ],
               },
               startup: {
                 limits: {

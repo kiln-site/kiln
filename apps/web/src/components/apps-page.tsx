@@ -1,3 +1,4 @@
+import { primaryWebRoute } from "@workspace/contracts"
 import type { AppTableInventory, InstanceInventory } from "@workspace/contracts"
 import { AppKindIcon } from "@/components/instance-kind-icon"
 import type { getAppDirectory } from "@/server/apps"
@@ -628,7 +629,7 @@ const AppActions = React.memo(function AppActions({
   )
 })
 
-// An app's first web route. The Relay's routes come in one request, shared
+// An app's primary web route. The Relay's routes come in one request, shared
 // by every app on it; each cell re-renders only when its own link changes.
 const AppLinkCell = React.memo(function AppLinkCell({
   appId,
@@ -639,8 +640,13 @@ const AppLinkCell = React.memo(function AppLinkCell({
 }) {
   const selectLink = React.useCallback(
     (routes: Awaited<ReturnType<typeof getRelayWebRoutes>>) => {
-      const route = routes?.find(
-        ({ owner }) => owner.kind === "app" && owner.id === appId
+      const route = primaryWebRoute(
+        (routes ?? [])
+          .filter(({ owner }) => owner.kind === "app" && owner.id === appId)
+          .map((candidate) => ({
+            ...candidate,
+            redirect: candidate.redirectTo,
+          }))
       )
       return route ? `${route.hostname}${route.path ?? ""}` : null
     },

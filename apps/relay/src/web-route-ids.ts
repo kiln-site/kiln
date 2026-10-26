@@ -1,6 +1,9 @@
 import { randomBytes } from "node:crypto"
 
-import { relayInstanceWebRouteShortIdSchema } from "@workspace/contracts"
+import {
+  relayInstanceWebRouteShortIdSchema,
+  webRouteEndpoints,
+} from "@workspace/contracts"
 import type {
   RelayInstanceWebRoute,
   RelayInstanceWebRouteInput,
@@ -36,6 +39,23 @@ export function assignRelayWebRouteIds<
     used.add(id)
     return { ...route, id }
   })
+}
+
+// The first hostname and path one of an owner's routes would take from
+// another server's or app's, counting www counterparts.
+export function webRouteCollision(
+  owner: string,
+  routes: ReadonlyArray<RelayInstanceWebRoute>,
+  configuredRoutes: ReadonlyArray<RelayStoredWebRoute>
+): string | undefined {
+  const taken = new Set(
+    configuredRoutes
+      .filter((configured) => configured.instanceId !== owner)
+      .flatMap(webRouteEndpoints)
+  )
+  return routes
+    .flatMap(webRouteEndpoints)
+    .find((endpoint) => taken.has(endpoint))
 }
 
 function availableRouteId(used: ReadonlySet<string>): string {

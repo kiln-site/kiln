@@ -70,6 +70,7 @@ import {
   cancelRelayTransferEffect,
   type RelayTransferRequest,
 } from "@/server/relay-transfers.server"
+import { webRoutesForRelay } from "@/server/web-route-compatibility.server"
 
 // A worker holds a migration this long between renewals; one that stops
 // renewing, as when Hearth stops, can be taken over once it lapses.
@@ -777,9 +778,15 @@ const finishMigration = Effect.fnUntraced(function* (
           })
         )
         if (!state.routes.length) return
+        const routes = yield* Effect.try(() =>
+          webRoutesForRelay(
+            destination.id,
+            state.routes.map(({ id: _id, ...route }) => route)
+          )
+        )
         yield* rpc(destination, "instance.network.routes.write", actor, {
           instanceId: to.instanceId,
-          routes: state.routes.map(({ id: _id, ...route }) => route),
+          routes,
         })
         // Its hostnames belong to the copy now.
         yield* rpc(source, "instance.network.routes.write", actor, {

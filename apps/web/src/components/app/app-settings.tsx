@@ -1,5 +1,6 @@
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { primaryWebRoute } from "@workspace/contracts"
 import type { RelayAppWebRoute } from "@workspace/contracts"
 import {
   Cable,
@@ -403,6 +404,11 @@ export function AppWebRouteSettings({
   const state = useQuery(appWebRoutesQueryOptions(app.relayId, app.id))
   const routes = state.data?.routes ?? []
   const empty = !state.data || routes.length === 0
+  const primary = primaryWebRoute(routes)
+  // The primary domain leads.
+  const orderedRoutes = primary
+    ? [primary, ...routes.filter((route) => route !== primary)]
+    : routes
 
   return (
     <InfoSection
@@ -437,8 +443,13 @@ export function AppWebRouteSettings({
           service over HTTPS.
         </p>
       ) : (
-        routes.map((route) => (
-          <WebRouteFact key={route.id} app={app} route={route} />
+        orderedRoutes.map((route) => (
+          <WebRouteFact
+            key={route.id}
+            app={app}
+            primary={route === primary}
+            route={route}
+          />
         ))
       )}
     </InfoSection>
@@ -449,9 +460,11 @@ export function AppWebRouteSettings({
 // service and port it reaches on the right.
 const WebRouteFact = React.memo(function WebRouteFact({
   app,
+  primary,
   route,
 }: {
   app: App
+  primary: boolean
   route: RelayAppWebRoute
 }) {
   const address = `${route.hostname}${route.path ?? ""}`
@@ -468,16 +481,27 @@ const WebRouteFact = React.memo(function WebRouteFact({
           {address}
         </a>
         <span className="hidden shrink-0 truncate text-xs text-muted-foreground sm:inline">
-          {route.name}
-          {route.path && route.stripPrefix ? " · strips path" : ""}
+          {[
+            primary ? "Primary" : null,
+            route.name || null,
+            route.path && route.stripPrefix ? "strips path" : null,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
         </span>
       </dt>
-      <dd className="flex shrink-0 items-center justify-end">
-        <ServiceTarget
-          app={app}
-          port={String(route.targetPort)}
-          service={route.service}
-        />
+      <dd className="flex min-w-0 shrink-0 items-center justify-end">
+        {route.redirect ? (
+          <span className="max-w-56 truncate font-mono text-xs text-muted-foreground">
+            → {route.redirect.to}
+          </span>
+        ) : (
+          <ServiceTarget
+            app={app}
+            port={String(route.targetPort)}
+            service={route.service}
+          />
+        )}
       </dd>
     </div>
   )

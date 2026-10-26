@@ -670,11 +670,24 @@ const backupArchiveServerConfigurationSchema = z
             z
               .object({
                 hostname: z.string().trim().toLowerCase().min(1).max(253),
+                // Written only when they differ from the defaults, so
+                // Relays that predate them can still read the manifest.
+                httpsRedirect: z.literal(false).optional(),
                 id: z.union([z.string().regex(/^[a-f0-9]{8}$/u), z.uuid()]),
                 name: z.string().trim().min(1).max(32),
                 path: z.string().trim().min(1).max(256).nullable(),
+                primary: z.literal(true).optional(),
+                redirect: z
+                  .object({
+                    permanent: z.boolean(),
+                    preservePath: z.boolean(),
+                    to: z.string().min(1).max(2_048),
+                  })
+                  .strict()
+                  .optional(),
                 stripPrefix: z.boolean(),
-                targetPort: z.number().int().min(1).max(65_535),
+                targetPort: z.number().int().min(1).max(65_535).nullable(),
+                www: z.enum(["redirect", "serve"]).optional(),
               })
               .strict()
           )

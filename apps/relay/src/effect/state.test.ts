@@ -471,6 +471,10 @@ describe("Relay state", () => {
           name: "Live Map",
           path: null,
           stripPrefix: true,
+          httpsRedirect: true,
+          primary: false,
+          redirect: null,
+          www: "none" as const,
           targetPort: 8080,
         }
         yield* store.replaceInstanceRoutes("instance-a", [first])
@@ -1289,7 +1293,8 @@ describe("Relay state", () => {
       assert.strictEqual(duplicate.instanceId, instanceId)
 
       assert.strictEqual(
-        (yield* store.claimProvisioningJob("server", instanceId, 1_010))?.status,
+        (yield* store.claimProvisioningJob("server", instanceId, 1_010))
+          ?.status,
         "queued"
       )
       const running = yield* store.claimNextProvisioningJob(1_020)
@@ -1515,3 +1520,65 @@ function withTemporaryDirectory<A, E, R>(
       Effect.sync(() => rmSync(directory, { force: true, recursive: true }))
   )
 }
+
+describe("web route options migration", () => {
+  it.effect("keeps existing routes, which serve their port over HTTPS", () =>
+    withTemporaryDirectory((directory) =>
+      Effect.gen(function* () {
+        const filename = join(directory, "relay.sqlite")
+        const layer = makeRelayStateLayer(filename)
+        yield* Effect.provide(Effect.asVoid(RelayStateStore), layer)
+        yield* Effect.sync(() => {
+          const database = new DatabaseSync(filename)
+          try {
+            database.exec(
+              `DROP TABLE relay_web_routes;
+               CREATE TABLE relay_web_routes (
+                 id TEXT PRIMARY KEY NOT NULL,
+                 instance_id TEXT NOT NULL,
+                 hostname TEXT NOT NULL,
+                 path TEXT NOT NULL DEFAULT '',
+                 strip_prefix INTEGER NOT NULL CHECK (strip_prefix IN (0, 1)),
+                 target_port INTEGER NOT NULL CHECK (target_port BETWEEN 1 AND 65535),
+                 created_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL,
+                 name TEXT NOT NULL DEFAULT 'Web Route',
+                 service TEXT,
+                 UNIQUE (hostname, path)
+               ) STRICT;
+               INSERT INTO relay_web_routes
+                 (id, instance_id, hostname, path, strip_prefix, target_port,
+                  created_at, updated_at, name, service)
+               VALUES
+                 ('b00d4423', 'app:abc', 'donutsmp.com', '/map', 0, 8100, 1, 1,
+                  'Live map', 'web');
+               DELETE FROM effect_sql_migrations WHERE migration_id >= 27`
+            )
+          } finally {
+            database.close()
+          }
+        })
+        const routes = yield* Effect.provide(
+          Effect.flatMap(RelayStateStore, (state) => state.listWebRoutes()),
+          layer
+        )
+        assert.deepStrictEqual(routes, [
+          {
+            hostname: "donutsmp.com",
+            httpsRedirect: true,
+            id: "b00d4423",
+            instanceId: "app:abc",
+            name: "Live map",
+            path: "/map",
+            primary: false,
+            redirect: null,
+            service: "web",
+            stripPrefix: false,
+            targetPort: 8100,
+            www: "none",
+          },
+        ])
+      })
+    )
+  )
+})

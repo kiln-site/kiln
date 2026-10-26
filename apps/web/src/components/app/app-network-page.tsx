@@ -4,13 +4,11 @@ import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import { appTailscaleMemberId } from "@workspace/contracts"
-import type { AppPort, RelayAppWebRoute } from "@workspace/contracts"
+import type { AppPort } from "@workspace/contracts"
 import {
   Cable,
-  Globe2,
   LoaderCircle,
   Network,
-  Pencil,
   Plus,
   Radio,
   Rocket,
@@ -19,14 +17,6 @@ import {
 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@workspace/ui/components/dialog"
 import { Input } from "@workspace/ui/components/input"
 import {
   Select,
@@ -39,6 +29,7 @@ import { showToast } from "@workspace/ui/components/sonner"
 
 import {
   appAddresses,
+  appContainers,
   appRelayAvailable,
   appServices,
   showAppOperationError,
@@ -48,10 +39,12 @@ import { useAppRunsCompose } from "@/components/app/app-compose"
 import { useAppWorkspace } from "@/components/app/app-workspace-context"
 import { CopyMetaRow, InfoCard, InfoCardHeader } from "@/components/info-card"
 import { TailscaleMembershipSection } from "@/components/tailscale-network-membership"
+import type { IdentityStatusPresentation } from "@/components/identity-name"
 import {
-  parseWebRouteForm,
-  WebRouteFields,
-} from "@/components/web-route-fields"
+  WebRoutesSection,
+  type WebRouteRow,
+  type WebRouteServiceOption,
+} from "@/components/web-routes-section"
 import {
   accessCapabilitiesQueryOptions,
   appConfigQueryOptions,
@@ -149,25 +142,104 @@ function AppWebRoutes({
 }) {
   const queryClient = useQueryClient()
   const state = useQuery(appWebRoutesQueryOptions(app.relayId, app.id))
-  const [editing, setEditing] = React.useState<RelayAppWebRoute | "new" | null>(
-    null
+  const services = React.useMemo(
+    () => appServiceOptions(app, compose),
+    [app, compose]
   )
-  const save = useMutation({
-    mutationFn: (
-      routes: Array<RelayAppWebRoute | Omit<RelayAppWebRoute, "id">>
-    ) =>
-      updateAppWebRoutes({
-        data: { appId: app.id, relayId: app.relayId, routes },
-      }),
-    onSuccess: (next) => {
+  const save = React.useCallback(
+    async (routes: Array<WebRouteRow>) => {
+      const next = await updateAppWebRoutes({
+        data: {
+          appId: app.id,
+          relayId: app.relayId,
+          routes: routes.map((route) => ({
+            ...route,
+            // A redirect reaches no service; it rides on the first one's
+            // container.
+            service: route.service ?? services[0]?.name ?? APP_SERVICE_NAME,
+          })),
+        },
+      })
       queryClient.setQueryData(
         queryKeys.apps.webRoutes(app.relayId, app.id),
         next
       )
-      setEditing(null)
     },
-    onError: (error) => showAppOperationError("Could not save routes", error),
-  })
+    [app.id, app.relayId, queryClient, services]
+  )
+
+  return (
+    <WebRoutesSection
+      canWrite={canManage}
+      error={state.error}
+      kind="app"
+      routes={state.data?.routes}
+      services={services}
+      status={state.data ? appWebRouteStatus(state.data) : null}
+      statusAction={
+        canManage && state.data?.status === "pending_restart" ? (
+          <AppDeployButton app={app} />
+        ) : null
+      }
+      onSave={save}
+    />
+  )
+}
+
+function appWebRouteStatus(state: {
+  message: string
+  status: string
+}): IdentityStatusPresentation {
+  if (state.status === "ready")
+    return { detail: state.message, label: "Live", tone: "success" }
+  if (state.status === "pending_restart")
+    return { detail: state.message, label: "Pending deploy", tone: "warning" }
+  return { detail: state.message, label: "Unavailable", tone: "danger" }
+}
+
+// The services a route can reach: those the app's containers run, or the
+// one an image or Dockerfile app runs before its first deploy. A Compose
+// app names its services in its file, so until then they're typed.
+function appServiceOptions(
+  app: App,
+  compose: boolean
+): Array<WebRouteServiceOption> {
+  const byService = new Map<string, Array<App["containers"][number]>>()
+  for (const container of appContainers(app)) {
+    byService.set(container.service, [
+      ...(byService.get(container.service) ?? []),
+      container,
+    ])
+  }
+  const options = [...byService].map(([name, containers]) => ({
+    image: containers[0]?.image ?? "",
+    name,
+    ports: [
+      ...new Set(
+        containers.flatMap((container) =>
+          container.ports.map(({ containerPort }) => containerPort)
+        )
+      ),
+    ],
+    running: containers.some((container) => container.running),
+    state: containers.some((container) => container.running)
+      ? "running"
+      : (containers[0]?.state ?? "stopped"),
+  }))
+  if (options.length > 0 || compose) return options
+  return [
+    {
+      image: "",
+      name: APP_SERVICE_NAME,
+      ports: [],
+      running: false,
+      state: "not deployed",
+    },
+  ]
+}
+
+function AppDeployButton({ app }: { app: App }) {
+  const queryClient = useQueryClient()
   const deploy = useMutation({
     mutationFn: () =>
       deployApp({ data: { appId: app.id, relayId: app.relayId } }),
@@ -175,271 +247,18 @@ function AppWebRoutes({
       queryClient.invalidateQueries({ queryKey: queryKeys.apps.all }),
     onError: (error) => showAppOperationError("Deploy failed", error),
   })
-  const routes = state.data?.routes ?? []
-  const deploying = app.deployment?.state === "running"
-
+  const deploying = deploy.isPending || app.deployment?.state === "running"
   return (
-    <InfoCard>
-      <InfoCardHeader
-        icon={<Globe2 />}
-        title="Web routes"
-        action={
-          canManage ? (
-            <Button
-              size="xs"
-              type="button"
-              variant="ghost"
-              onClick={() => setEditing("new")}
-            >
-              <Plus />
-              Add route
-            </Button>
-          ) : null
-        }
-      />
-      {state.isPending ? (
-        <div className="grid h-20 place-items-center">
-          <LoaderCircle className="size-4 animate-spin text-muted-foreground" />
-        </div>
-      ) : state.isError ? (
-        <p className="px-4 py-4 text-xs text-destructive">
-          {state.error.message}
-        </p>
-      ) : routes.length === 0 ? (
-        <p className="border-b px-4 py-4 text-xs text-muted-foreground">
-          No domains point at this app. Add a route to serve one of its services
-          over HTTPS through Traefik.
-        </p>
-      ) : (
-        <ul className="border-b">
-          {routes.map((route) => (
-            <li
-              key={route.id}
-              className="flex items-center gap-3 border-b px-4 py-3 last:border-b-0"
-            >
-              <Globe2 className="size-4 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 flex-1">
-                <span className="flex items-center gap-2">
-                  <a
-                    className="truncate text-sm font-medium hover:text-primary-ink"
-                    href={`https://${route.hostname}${route.path ?? ""}`}
-                    rel="noreferrer"
-                    target="_blank"
-                  >
-                    {route.hostname}
-                    {route.path ?? ""}
-                  </a>
-                  <span className="type-meta text-muted-foreground">
-                    {route.name}
-                  </span>
-                </span>
-                <span className="type-meta block font-mono text-muted-foreground">
-                  → {route.service}:{route.targetPort}
-                  {route.path && route.stripPrefix ? " · strips path" : ""}
-                </span>
-              </span>
-              {canManage ? (
-                <>
-                  <Button
-                    aria-label={`Edit ${route.hostname}`}
-                    disabled={save.isPending}
-                    size="icon-sm"
-                    type="button"
-                    variant="ghost"
-                    onClick={() => setEditing(route)}
-                  >
-                    <Pencil />
-                  </Button>
-                  <Button
-                    aria-label={`Remove ${route.hostname}`}
-                    className="text-muted-foreground hover:text-destructive"
-                    disabled={save.isPending}
-                    size="icon-sm"
-                    type="button"
-                    variant="ghost"
-                    onClick={() =>
-                      save.mutate(
-                        routes.filter((candidate) => candidate.id !== route.id)
-                      )
-                    }
-                  >
-                    <Trash2 />
-                  </Button>
-                </>
-              ) : null}
-            </li>
-          ))}
-        </ul>
-      )}
-      {state.data ? (
-        <div className="flex items-center gap-3 px-4 py-3">
-          <span
-            aria-hidden="true"
-            className={`size-2 shrink-0 rounded-full ${
-              state.data.status === "ready"
-                ? "bg-emerald-400"
-                : state.data.status === "pending_restart"
-                  ? "bg-amber-400"
-                  : "bg-destructive"
-            }`}
-          />
-          <span className="type-meta min-w-0 flex-1 text-muted-foreground">
-            {state.data.message}
-          </span>
-          {canManage && state.data.status === "pending_restart" ? (
-            <Button
-              disabled={deploy.isPending || deploying}
-              size="sm"
-              type="button"
-              onClick={() => deploy.mutate()}
-            >
-              {deploy.isPending || deploying ? (
-                <LoaderCircle className="animate-spin" />
-              ) : (
-                <Rocket />
-              )}
-              Deploy to apply
-            </Button>
-          ) : null}
-        </div>
-      ) : null}
-      {editing ? (
-        <AppWebRouteDialog
-          compose={compose}
-          pending={save.isPending}
-          route={editing === "new" ? undefined : editing}
-          services={appServices(app)}
-          onOpenChange={(open) => {
-            if (!open) setEditing(null)
-          }}
-          onSubmit={(route) =>
-            save.mutate(
-              editing === "new"
-                ? [...routes, route]
-                : routes.map((candidate) =>
-                    candidate.id === editing.id
-                      ? { ...route, id: editing.id }
-                      : candidate
-                  )
-            )
-          }
-        />
-      ) : null}
-    </InfoCard>
-  )
-}
-
-function AppWebRouteDialog({
-  compose,
-  onOpenChange,
-  onSubmit,
-  pending,
-  route,
-  services,
-}: {
-  compose: boolean
-  onOpenChange: (open: boolean) => void
-  onSubmit: (route: Omit<RelayAppWebRoute, "id">) => void
-  pending: boolean
-  route?: RelayAppWebRoute
-  services: ReadonlyArray<string>
-}) {
-  const [error, setError] = React.useState<string | null>(null)
-  const [service, setService] = React.useState(
-    route?.service ?? services[0] ?? (compose ? "" : "app")
-  )
-  // A Compose app names its services in its file; before it's deployed they
-  // can't be listed yet.
-  const chooseService = compose || services.length > 1
-
-  return (
-    <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>
-            {route ? "Edit web route" : "Add web route"}
-          </DialogTitle>
-          <DialogDescription>
-            Traefik serves this domain over HTTPS from one of the app’s
-            services.
-          </DialogDescription>
-        </DialogHeader>
-        <form
-          className="space-y-4"
-          onSubmit={(event) => {
-            event.preventDefault()
-            const parsed = parseWebRouteForm(
-              new FormData(event.currentTarget),
-              route?.id
-            )
-            if (!parsed.success) {
-              setError(
-                parsed.error.issues[0]?.message ?? "Web route is invalid"
-              )
-              return
-            }
-            if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/u.test(service)) {
-              setError("Choose the service this route reaches")
-              return
-            }
-            setError(null)
-            const { id: _id, ...fields } = parsed.data
-            onSubmit({ ...fields, service })
-          }}
-        >
-          <WebRouteFields route={route}>
-            {chooseService ? (
-              <label className="type-label block space-y-1.5">
-                Service
-                {services.length > 0 ? (
-                  <Select value={service} onValueChange={setService}>
-                    <SelectTrigger
-                      aria-label="Service"
-                      className="h-9 w-full px-3 font-mono text-xs"
-                    >
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {services.map((name) => (
-                        <SelectItem
-                          key={name}
-                          value={name}
-                          className="font-mono"
-                        >
-                          {name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                ) : (
-                  <Input
-                    className="font-mono"
-                    placeholder="web"
-                    value={service}
-                    onChange={(event) => setService(event.currentTarget.value)}
-                  />
-                )}
-              </label>
-            ) : null}
-          </WebRouteFields>
-          {error ? <p className="text-xs text-destructive">{error}</p> : null}
-          <DialogFooter>
-            <Button
-              disabled={pending}
-              type="button"
-              variant="ghost"
-              onClick={() => onOpenChange(false)}
-            >
-              Cancel
-            </Button>
-            <Button disabled={pending} type="submit">
-              {pending ? <LoaderCircle className="animate-spin" /> : null}
-              {route ? "Save route" : "Add route"}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+    <Button
+      disabled={deploying}
+      size="sm"
+      type="button"
+      variant="outline"
+      onClick={() => deploy.mutate()}
+    >
+      {deploying ? <LoaderCircle className="animate-spin" /> : <Rocket />}
+      Deploy to apply
+    </Button>
   )
 }
 

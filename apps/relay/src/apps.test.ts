@@ -573,9 +573,9 @@ describe("apps", () => {
       "fulfilled",
       "rejected",
     ])
-    expect(results.find((result) => result.status === "rejected")).toMatchObject(
-      { reason: new Error("A deployment is already running") }
-    )
+    expect(
+      results.find((result) => result.status === "rejected")
+    ).toMatchObject({ reason: new Error("A deployment is already running") })
     expect((await settledDeployment(harness)).deployment?.state).toBe(
       "succeeded"
     )
@@ -689,6 +689,10 @@ describe("apps", () => {
           path: null,
           service: "app",
           stripPrefix: true,
+          httpsRedirect: true,
+          primary: false,
+          redirect: null,
+          www: "none" as const,
           targetPort: 80,
         },
       ])
@@ -764,6 +768,10 @@ describe("apps", () => {
       path: null,
       service: "app",
       stripPrefix: true,
+      httpsRedirect: true,
+      primary: false,
+      redirect: null,
+      www: "none" as const,
       targetPort: 80,
     }
 
@@ -902,9 +910,9 @@ describe("apps", () => {
         },
       })
     ).rejects.toThrow(/Memory limit exceeds/u)
-    expect(
-      appContainers().map((container) => container.memoryBytes)
-    ).toContain(64 * MIB)
+    expect(appContainers().map((container) => container.memoryBytes)).toContain(
+      64 * MIB
+    )
     await removeCompose()
   })
 
@@ -1077,9 +1085,7 @@ describe("apps", () => {
     const deletion = Effect.runPromise(
       harness.lanes.run(
         { label: "app.delete", locks: appReplaceLocks(appId) },
-        Effect.promise(() =>
-          harness.apps.delete({ appId, deleteData: true })
-        )
+        Effect.promise(() => harness.apps.delete({ appId, deleteData: true }))
       )
     )
     await harness.apps.deploy(
@@ -1146,7 +1152,10 @@ describe("apps", () => {
       locks: [exclusive("busy")],
     })
     const queued = Array.from({ length: 512 }, (_, index) =>
-      harness.lanes.admit({ label: `queued-${index}`, locks: [exclusive("busy")] })
+      harness.lanes.admit({
+        label: `queued-${index}`,
+        locks: [exclusive("busy")],
+      })
     )
     await harness.apps.deploy(
       relayDeployAppSchema.parse({
@@ -1225,9 +1234,7 @@ describe("rolling deployments", () => {
     const app = await settledDeployment(harness)
 
     expect(app.deployment).toMatchObject({ rolling: true, state: "succeeded" })
-    expect(appContainers().map((container) => container.id)).toEqual([
-      next!.id,
-    ])
+    expect(appContainers().map((container) => container.id)).toEqual([next!.id])
   })
 
   it("keeps the running container, and its name, when the replacement fails its health check", async () => {
@@ -1331,17 +1338,13 @@ describe("rolling deployments", () => {
     })
     const after = appContainers()
     expect(after).toHaveLength(2)
-    expect(after.some((container) => before.includes(container.id))).toBe(
-      false
-    )
+    expect(after.some((container) => before.includes(container.id))).toBe(false)
     expect(
       new Set(
         after.map((container) => container.labels["com.docker.compose.project"])
       )
     ).toEqual(
-      new Set([
-        `${TEST_NAMESPACE}-kiln-app-${appId}-${second.deployment!.id}`,
-      ])
+      new Set([`${TEST_NAMESPACE}-kiln-app-${appId}-${second.deployment!.id}`])
     )
     expect(
       containerAliases(
@@ -1388,9 +1391,11 @@ describe("rolling deployments", () => {
       error: expect.stringContaining("failed its health check"),
       state: "failed",
     })
-    expect(appContainers().map((container) => container.id).sort()).toEqual(
-      [...before].sort()
-    )
+    expect(
+      appContainers()
+        .map((container) => container.id)
+        .sort()
+    ).toEqual([...before].sort())
     await removeCompose()
   })
 
@@ -1843,8 +1848,10 @@ describe("image updates", () => {
   const nginx = "docker.io/library/nginx:alpine"
   const first = `sha256:${"1".repeat(64)}`
   const second = `sha256:${"2".repeat(64)}`
-  const check = (harness: RelayHarness, apps: Array<{ appId: string; image: string }>) =>
-    harness.apps.checkImages({ apps }, new AbortController().signal)
+  const check = (
+    harness: RelayHarness,
+    apps: Array<{ appId: string; image: string }>
+  ) => harness.apps.checkImages({ apps }, new AbortController().signal)
 
   it("runs an image app at the digest its tag names, labelled with the image its config gave", async () => {
     const harness = await createdApp()
@@ -1869,7 +1876,12 @@ describe("image updates", () => {
     await deploy(harness, {})
 
     expect(await check(harness, [{ appId, image: "nginx:alpine" }])).toEqual([
-      { appId, latestDigest: first, runningDigests: [first], status: "checked" },
+      {
+        appId,
+        latestDigest: first,
+        runningDigests: [first],
+        status: "checked",
+      },
     ])
 
     fakeDocker.registryDigests.set(nginx, second)
@@ -1879,7 +1891,12 @@ describe("image updates", () => {
         { appId: "d".repeat(40), image: "nginx:alpine" },
       ])
     ).toEqual([
-      { appId, latestDigest: second, runningDigests: [first], status: "checked" },
+      {
+        appId,
+        latestDigest: second,
+        runningDigests: [first],
+        status: "checked",
+      },
       { appId: "d".repeat(40), status: "not_deployed" },
     ])
     // Its config names another image since it deployed.
@@ -1896,7 +1913,12 @@ describe("image updates", () => {
         { appId: "d".repeat(40), image: "nginx:alpine" },
       ])
     ).toEqual([
-      { appId, latestDigest: second, runningDigests: [first], status: "checked" },
+      {
+        appId,
+        latestDigest: second,
+        runningDigests: [first],
+        status: "checked",
+      },
       { appId: "d".repeat(40), status: "changed" },
     ])
 
@@ -1925,7 +1947,12 @@ describe("image updates", () => {
     expect(container!.image).toBe(`docker.io/library/nginx@${first}`)
     expect(container!.labels["kiln.app.image.digest"]).toBe(first)
     expect(await check(harness, [{ appId, image: "nginx:alpine" }])).toEqual([
-      { appId, latestDigest: second, runningDigests: [first], status: "checked" },
+      {
+        appId,
+        latestDigest: second,
+        runningDigests: [first],
+        status: "checked",
+      },
     ])
   })
 
@@ -1941,7 +1968,12 @@ describe("image updates", () => {
     expect(container!.image).toBe("nginx:alpine")
     expect(container!.labels["kiln.app.image.digest"]).toBeUndefined()
     expect(await check(harness, [{ appId, image: "nginx:alpine" }])).toEqual([
-      { appId, latestDigest: first, runningDigests: [first], status: "checked" },
+      {
+        appId,
+        latestDigest: first,
+        runningDigests: [first],
+        status: "checked",
+      },
     ])
   })
 })

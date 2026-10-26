@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto"
 import { isIP } from "node:net"
 
+import { webRouteHosts } from "@workspace/contracts"
 import type {
   RelayInstanceWebRoute,
   RelayProxySettings,
+  WebRouteRedirect,
 } from "@workspace/contracts"
 import { Effect } from "effect"
 
@@ -46,43 +48,82 @@ export function traefikRouteLabels(
 
   for (const route of routes) {
     const name = traefikRouteName(route.id)
-    const httpRouter = `${name}-http`
-    const httpsRouter = `${name}-https`
-    const rule = route.path
-      ? `Host(\`${route.hostname}\`) && PathPrefix(\`${route.path}\`)`
-      : `Host(\`${route.hostname}\`)`
-    labels[`traefik.http.routers.${httpRouter}.entrypoints`] =
-      profile.httpEntryPoint
-    labels[`traefik.http.routers.${httpRouter}.middlewares`] =
-      `${name}-redirect`
-    labels[`traefik.http.routers.${httpRouter}.priority`] = String(
-      route.path ? 100 + route.path.length : 10
+    const priority = String(traefikRoutePriority(route))
+    const router = (
+      router: string,
+      hosts: ReadonlyArray<string>,
+      entryPoint: "http" | "https",
+      service: string,
+      middlewares: ReadonlyArray<string>
+    ) => {
+      const key = `traefik.http.routers.${router}`
+      labels[`${key}.entrypoints`] =
+        entryPoint === "https"
+          ? profile.httpsEntryPoint
+          : profile.httpEntryPoint
+      labels[`${key}.priority`] = priority
+      labels[`${key}.rule`] = traefikRouteRule(hosts, route.path)
+      labels[`${key}.service`] = service
+      if (middlewares.length > 0) {
+        labels[`${key}.middlewares`] = middlewares.join(",")
+      }
+      if (entryPoint === "https") {
+        labels[`${key}.tls`] = "true"
+        labels[`${key}.tls.certresolver`] = profile.certificateResolver
+      }
+    }
+    const redirectRegex = (middleware: string, redirect: TraefikRedirect) => {
+      const key = `traefik.http.middlewares.${middleware}.redirectregex`
+      labels[`${key}.regex`] = redirect.regex
+      labels[`${key}.replacement`] = redirect.replacement
+      labels[`${key}.permanent`] = String(redirect.permanent)
+    }
+    const { aliases, served } = webRouteHosts(route)
+
+    if (route.redirect) {
+      const hosts = [...served, ...aliases]
+      router(`${name}-https`, hosts, "https", NOOP_SERVICE, [`${name}-to`])
+      router(`${name}-http`, hosts, "http", NOOP_SERVICE, [`${name}-to`])
+      redirectRegex(`${name}-to`, traefikRedirect(route.redirect))
+      continue
+    }
+
+    const strip = route.path && route.stripPrefix ? [`${name}-strip`] : []
+    router(`${name}-https`, served, "https", name, strip)
+    router(
+      `${name}-http`,
+      served,
+      "http",
+      name,
+      route.httpsRedirect ? [`${name}-redirect`] : strip
     )
-    labels[`traefik.http.routers.${httpRouter}.rule`] = rule
-    labels[`traefik.http.routers.${httpRouter}.service`] = name
-    labels[`traefik.http.middlewares.${name}-redirect.redirectscheme.scheme`] =
-      "https"
-    labels[
-      `traefik.http.middlewares.${name}-redirect.redirectscheme.permanent`
-    ] = "true"
-    labels[`traefik.http.routers.${httpsRouter}.entrypoints`] =
-      profile.httpsEntryPoint
-    labels[`traefik.http.routers.${httpsRouter}.priority`] = String(
-      route.path ? 100 + route.path.length : 10
-    )
-    labels[`traefik.http.routers.${httpsRouter}.rule`] = rule
-    labels[`traefik.http.routers.${httpsRouter}.service`] = name
-    labels[`traefik.http.routers.${httpsRouter}.tls`] = "true"
-    labels[`traefik.http.routers.${httpsRouter}.tls.certresolver`] =
-      profile.certificateResolver
+    if (route.httpsRedirect) {
+      labels[
+        `traefik.http.middlewares.${name}-redirect.redirectscheme.scheme`
+      ] = "https"
+      labels[
+        `traefik.http.middlewares.${name}-redirect.redirectscheme.permanent`
+      ] = "true"
+    }
     labels[`traefik.http.services.${name}.loadbalancer.server.port`] = String(
       route.targetPort
     )
-    if (route.path && route.stripPrefix) {
-      labels[`traefik.http.routers.${httpsRouter}.middlewares`] =
-        `${name}-strip`
+    if (strip.length > 0 && route.path) {
       labels[`traefik.http.middlewares.${name}-strip.stripprefix.prefixes`] =
         route.path
+    }
+    if (aliases.length > 0) {
+      router(`${name}-www-https`, aliases, "https", name, [`${name}-www`])
+      router(`${name}-www-http`, aliases, "http", name, [
+        route.httpsRedirect ? `${name}-www` : `${name}-www-plain`,
+      ])
+      redirectRegex(`${name}-www`, traefikCanonicalRedirect(route, "https"))
+      if (!route.httpsRedirect) {
+        redirectRegex(
+          `${name}-www-plain`,
+          traefikCanonicalRedirect(route, "http")
+        )
+      }
     }
   }
 
@@ -175,6 +216,8 @@ ${email}${directory}      profile: shortlived
           to: websecure
           scheme: https
           permanent: true
+          # Below every route's own router, so a route can serve plain HTTP.
+          priority: 1
   websecure:
     address: ":443"
 
@@ -214,7 +257,67 @@ export function traefikRouteUpstream(
   config: RelayConfig,
   route: RelayStoredWebRoute
 ): string {
-  return `http://${routeUpstreamHost(relayResourceNames(config), route)}:${route.targetPort}`
+  return route.redirect
+    ? route.redirect.to
+    : `http://${routeUpstreamHost(relayResourceNames(config), route)}:${route.targetPort}`
+}
+
+// Traefik's built-in service for routers whose middleware answers every
+// request, such as a redirect.
+const NOOP_SERVICE = "noop@internal"
+
+interface TraefikRedirect {
+  readonly permanent: boolean
+  readonly regex: string
+  readonly replacement: string
+}
+
+// Matches a request's whole URL, capturing its path and query.
+const REQUEST_URL_PATTERN = "^https?://[^/]+(/.*)?$"
+
+function traefikRedirect(redirect: WebRouteRedirect): TraefikRedirect {
+  return redirect.preservePath
+    ? {
+        permanent: redirect.permanent,
+        regex: REQUEST_URL_PATTERN,
+        replacement: `${literalReplacement(redirect.to.replace(/\/$/u, ""))}\${1}`,
+      }
+    : {
+        permanent: redirect.permanent,
+        regex: "^.*$",
+        replacement: literalReplacement(redirect.to),
+      }
+}
+
+// Sends a route's www counterpart to its hostname, keeping the path.
+function traefikCanonicalRedirect(
+  route: RelayInstanceWebRoute,
+  scheme: "http" | "https"
+): TraefikRedirect {
+  return {
+    permanent: true,
+    regex: REQUEST_URL_PATTERN,
+    replacement: `${scheme}://${route.hostname}\${1}`,
+  }
+}
+
+// Go's regexp expands $ in a replacement; $$ is a literal one.
+function literalReplacement(value: string): string {
+  return value.split("$").join("$$")
+}
+
+function traefikRouteRule(
+  hosts: ReadonlyArray<string>,
+  path: string | null
+): string {
+  const host = hosts.map((hostname) => `Host(\`${hostname}\`)`).join(" || ")
+  if (!path) return host
+  return `${hosts.length > 1 ? `(${host})` : host} && PathPrefix(\`${path}\`)`
+}
+
+// Longer paths win over shorter ones and over a whole hostname.
+function traefikRoutePriority(route: { readonly path: string | null }): number {
+  return route.path ? 100 + route.path.length : 10
 }
 
 export function traefikDynamicConfiguration(
@@ -276,25 +379,8 @@ export function traefikDynamicConfiguration(
         : [])
     )
   }
-  for (const route of served) {
-    const name = traefikRouteName(route.id)
-    const rule = route.path
-      ? `Host(\`${route.hostname}\`) && PathPrefix(\`${route.path}\`)`
-      : `Host(\`${route.hostname}\`)`
-    lines.push(
-      `    ${name}:`,
-      `      rule: ${JSON.stringify(rule)}`,
-      `      priority: ${route.path ? 100 + route.path.length : 10}`,
-      "      entryPoints:",
-      "        - websecure",
-      `      service: ${name}`,
-      "      tls:",
-      "        certResolver: kiln"
-    )
-    if (route.path && route.stripPrefix) {
-      lines.push("      middlewares:", `        - ${name}-strip`)
-    }
-  }
+  const routeConfiguration = traefikFileRoutes(resources, served)
+  lines.push(...routeConfiguration.routers)
 
   lines.push("  services:")
   if (edge) {
@@ -313,15 +399,7 @@ export function traefikDynamicConfiguration(
       `          - url: ${JSON.stringify(`http://${resources.relayEdgeAlias}:${config.port}`)}`
     )
   }
-  for (const route of served) {
-    const name = traefikRouteName(route.id)
-    lines.push(
-      `    ${name}:`,
-      "      loadBalancer:",
-      "        servers:",
-      `          - url: ${JSON.stringify(`http://${routeUpstreamHost(resources, route)}:${route.targetPort}`)}`
-    )
-  }
+  lines.push(...routeConfiguration.services)
 
   lines.push("  middlewares:")
   if (relayRouted) {
@@ -336,16 +414,7 @@ export function traefikDynamicConfiguration(
       "            ipv6Subnet: 64"
     )
   }
-  for (const route of served) {
-    if (!route.path || !route.stripPrefix) continue
-    const name = traefikRouteName(route.id)
-    lines.push(
-      `    ${name}-strip:`,
-      "      stripPrefix:",
-      "        prefixes:",
-      `          - ${JSON.stringify(route.path)}`
-    )
-  }
+  lines.push(...routeConfiguration.middlewares)
   // Clients send no server name for an address, so its certificate has to
   // be the one Traefik answers with by default.
   if (ipHost) {
@@ -363,6 +432,100 @@ export function traefikDynamicConfiguration(
   return `${lines.join("\n")}\n`
 }
 
+// Routers, services, and middlewares for routes the bundled Traefik serves.
+// Plain HTTP falls through to the entry point's redirect to HTTPS unless a
+// route serves it, redirects it in one hop, or sends it elsewhere.
+function traefikFileRoutes(
+  resources: ReturnType<typeof relayResourceNames>,
+  routes: ReadonlyArray<RelayStoredWebRoute>
+): {
+  readonly middlewares: ReadonlyArray<string>
+  readonly routers: ReadonlyArray<string>
+  readonly services: ReadonlyArray<string>
+} {
+  const routers: Array<string> = []
+  const services: Array<string> = []
+  const middlewares: Array<string> = []
+  for (const route of routes) {
+    const name = traefikRouteName(route.id)
+    const router = (
+      router: string,
+      hosts: ReadonlyArray<string>,
+      entryPoint: "web" | "websecure",
+      service: string,
+      routeMiddlewares: ReadonlyArray<string>
+    ) => {
+      routers.push(
+        `    ${router}:`,
+        `      rule: ${JSON.stringify(traefikRouteRule(hosts, route.path))}`,
+        `      priority: ${traefikRoutePriority(route)}`,
+        "      entryPoints:",
+        `        - ${entryPoint}`,
+        `      service: ${service}`
+      )
+      if (entryPoint === "websecure") {
+        routers.push("      tls:", "        certResolver: kiln")
+      }
+      if (routeMiddlewares.length > 0) {
+        routers.push(
+          "      middlewares:",
+          ...routeMiddlewares.map((middleware) => `        - ${middleware}`)
+        )
+      }
+    }
+    const redirectRegex = (middleware: string, redirect: TraefikRedirect) => {
+      middlewares.push(
+        `    ${middleware}:`,
+        "      redirectRegex:",
+        `        regex: ${JSON.stringify(redirect.regex)}`,
+        `        replacement: ${JSON.stringify(redirect.replacement)}`,
+        `        permanent: ${redirect.permanent}`
+      )
+    }
+    const { aliases, served } = webRouteHosts(route)
+
+    if (route.redirect) {
+      const hosts = [...served, ...aliases]
+      router(name, hosts, "websecure", NOOP_SERVICE, [`${name}-to`])
+      router(`${name}-http`, hosts, "web", NOOP_SERVICE, [`${name}-to`])
+      redirectRegex(`${name}-to`, traefikRedirect(route.redirect))
+      continue
+    }
+
+    const strip = route.path && route.stripPrefix ? [`${name}-strip`] : []
+    router(name, served, "websecure", name, strip)
+    if (!route.httpsRedirect) router(`${name}-http`, served, "web", name, strip)
+    services.push(
+      `    ${name}:`,
+      "      loadBalancer:",
+      "        servers:",
+      `          - url: ${JSON.stringify(`http://${routeUpstreamHost(resources, route)}:${route.targetPort}`)}`
+    )
+    if (strip.length > 0) {
+      middlewares.push(
+        `    ${name}-strip:`,
+        "      stripPrefix:",
+        "        prefixes:",
+        `          - ${JSON.stringify(route.path)}`
+      )
+    }
+    if (aliases.length > 0) {
+      router(`${name}-www`, aliases, "websecure", NOOP_SERVICE, [`${name}-www`])
+      router(`${name}-www-http`, aliases, "web", NOOP_SERVICE, [
+        route.httpsRedirect ? `${name}-www` : `${name}-www-plain`,
+      ])
+      redirectRegex(`${name}-www`, traefikCanonicalRedirect(route, "https"))
+      if (!route.httpsRedirect) {
+        redirectRegex(
+          `${name}-www-plain`,
+          traefikCanonicalRedirect(route, "http")
+        )
+      }
+    }
+  }
+  return { middlewares, routers, services }
+}
+
 // The address Traefik serves by IP rather than by name, if any: Hearth's in
 // platform mode, or the Relay's own when it's in Traefik mode at an address.
 // None for a Traefik too old to load the IP resolver, which then keeps
@@ -373,7 +536,9 @@ function traefikIpHost(
 ): string | null {
   if (!traefikLoadsIpResolver(image)) return null
   if (config.platformEdge) {
-    return isIP(config.platformEdge.host) !== 0 ? config.platformEdge.host : null
+    return isIP(config.platformEdge.host) !== 0
+      ? config.platformEdge.host
+      : null
   }
   return config.proxyMode === "traefik" && isIP(config.advertisedHost) !== 0
     ? config.advertisedHost

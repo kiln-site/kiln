@@ -89,6 +89,10 @@ export const relayInstallationV1Feature = "relay-installation-v1"
 // inventories its host and images with Syft (`relay.security.inventory`),
 // so Hearth can check them for known vulnerabilities.
 export const relaySecurityInventoryV1Feature = "security-inventory-v1"
+// Web routes take a www counterpart, plain HTTP, a primary flag, an optional
+// label, and redirects to another URL. Older Relays need a name and a port
+// on every route.
+export const relayWebRouteOptionsV1Feature = "web-route-options-v1"
 export const relayBrowserAuthorizationReviseMaxItems = 256
 
 export const relayControlOperations = [
