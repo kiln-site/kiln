@@ -67,9 +67,9 @@ const createRelaySchema = z.object({
   installation: z.enum(["keep", "use"]),
   pairingUri: z.string().trim().min(64).max(32_768),
 })
-const updateRelaySchema = relayIdSchema.extend(
-  relayConnectionSettingsSchema.shape
-)
+const updateRelaySchema = relayIdSchema
+  .extend(relayConnectionSettingsSchema.shape)
+  .extend({ controlDial: z.enum(["hearth", "relay"]).optional() })
 const renameRelaySchema = z.object({
   name: relayNameSchema,
   relayId: relayFingerprintSchema,
@@ -197,6 +197,20 @@ export const updateRelay = createServerFn({ method: "POST" })
     await requireRelayAdministrator(data.id)
     const { updatePersistedRelay } = await import("@/lib/relay-registry")
     return updatePersistedRelay(data)
+  })
+
+// Which side opened the Relay's control connection, while it's connected,
+// and whether the Relay can open it itself.
+export const getRelayConnection = createServerFn({ method: "GET" })
+  .validator(relayIdSchema)
+  .handler(async ({ data }) => {
+    await requireRelayAdministrator(data.id, "relay.read")
+    const { relayConnectionDials, relayConnectionOpener } =
+      await import("@/lib/relay-connection")
+    return {
+      openedBy: relayConnectionOpener(data.id),
+      relayDials: relayConnectionDials(data.id),
+    }
   })
 
 export const checkRelay = createServerFn({ method: "POST" })
@@ -429,9 +443,8 @@ export const getRelayWebRoutes = createServerFn({ method: "GET" })
   .validator(relayIdSchema)
   .handler(async ({ data }) => {
     const user = await requireEligibleResourceUser()
-    const { relayWebRoutesHandler } = await import(
-      "@/server/relay-web-routes.server"
-    )
+    const { relayWebRoutesHandler } =
+      await import("@/server/relay-web-routes.server")
     return relayWebRoutesHandler(user, data.id)
   })
 

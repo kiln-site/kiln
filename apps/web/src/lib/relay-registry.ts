@@ -1029,20 +1029,36 @@ export function persistPairedRelayEffect(input: {
 }
 
 export async function updatePersistedRelay(input: {
+  // Which side opens the control connection; left as it was when not given.
+  controlDial?: RelayControlDirection
   hostname: string
   id: string
   port: number
   useTls: boolean
 }): Promise<PersistedRelay> {
+  const before = await loadPersistedRelay(input.id)
   const [result] = await databasePool.execute<
     import("mysql2/promise").ResultSetHeader
   >(
     `UPDATE ${databaseTable("relay")}
-        SET hostname = ?, port = ?, use_tls = ?, updated_at = ?
+        SET hostname = ?, port = ?, use_tls = ?,
+            control_dial = COALESCE(?, control_dial), updated_at = ?
       WHERE id = ?`,
-    [input.hostname, input.port, input.useTls, Date.now(), input.id]
+    [
+      input.hostname,
+      input.port,
+      input.useTls,
+      input.controlDial ?? null,
+      Date.now(),
+      input.id,
+    ]
   )
   if (result.affectedRows !== 1) throw new Error("Relay not found")
+  // Connecting again, the side it now prefers opens the connection.
+  if (input.controlDial && input.controlDial !== before?.controlDial) {
+    const { closeRelayConnection } = await import("@/lib/relay-connection")
+    closeRelayConnection(input.id)
+  }
   const relay = await inspectPersistedRelay(input.id)
   publishRelayCollectionChange(relay.id)
   return relay

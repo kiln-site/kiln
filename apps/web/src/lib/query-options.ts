@@ -81,6 +81,7 @@ import {
 } from "@/server/relay"
 import {
   getRelayProxy,
+  getRelayConnection,
   getRelayWebRoutes,
   getRelayHostFiles,
   getRelayTailscale,
@@ -265,6 +266,8 @@ export const queryKeys = {
   },
   relays: ["relays"] as const,
   relayProxy: (relayId: string) => ["relays", "proxy", relayId] as const,
+  relayControlDial: (relayId: string) =>
+    ["relays", "control-dial", relayId] as const,
   relayVolumes: (relayId: string) => ["relays", "volumes", relayId] as const,
   relayProxyModes: ["relays", "proxy-modes"] as const,
   // Beside each game server's own routes, so route changes refresh both.
@@ -870,6 +873,17 @@ export function relayVolumesQueryOptions(relayId: string) {
     refetchInterval: (query) => (query.state.data?.measuring ? 2_000 : false),
     retry: false,
     staleTime: 30_000,
+  })
+}
+
+// Which side opened the Relay's control connection. It changes only when
+// the connection does, so it's read now and then while someone looks.
+export function relayControlDialQueryOptions(relayId: string) {
+  return queryOptions({
+    queryFn: () => getRelayConnection({ data: { id: relayId } }),
+    queryKey: queryKeys.relayControlDial(relayId),
+    refetchInterval: 30_000,
+    staleTime: 10_000,
   })
 }
 

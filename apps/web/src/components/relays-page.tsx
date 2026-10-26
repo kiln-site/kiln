@@ -188,6 +188,7 @@ const relayTableSearchFields = [
 ] as const
 
 interface RelayEditView {
+  controlDial: "hearth" | "relay"
   enabled: boolean
   hostname: string
   id: string
@@ -364,6 +365,7 @@ const RelayDialogHost = React.memo(function RelayDialogHost({
       const relay = relays.find((item) => item.id === state.relayId)
       return relay
         ? {
+            controlDial: relay.controlDial,
             enabled: relay.enabled,
             hostname: relay.hostname,
             id: relay.id,
@@ -1013,6 +1015,8 @@ export function EditRelayDialog({
           }
           await updateConnection.mutateAsync({
             data: {
+              controlDial:
+                form.get("controlDial") === "hearth" ? "hearth" : "relay",
               id: relay.id,
               ...parsedConnection.data,
             },
@@ -1101,6 +1105,28 @@ export function EditRelayDialog({
               />
             </Field>
           </div>
+
+          <Field
+            label="Who connects"
+            htmlFor={`relay-control-dial-${relay.id}`}
+          >
+            <Select name="controlDial" defaultValue={relay.controlDial}>
+              <SelectTrigger
+                id={`relay-control-dial-${relay.id}`}
+                className="type-control-sm h-8 w-full"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="relay">
+                  The Relay connects to Hearth
+                </SelectItem>
+                <SelectItem value="hearth">
+                  Hearth connects to the Relay
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </Field>
 
           <div className="border-t border-border/70 pt-4">
             <p className="type-technical-label mb-3 text-primary-ink">Proxy</p>
