@@ -38,9 +38,6 @@ import {
   Dialog,
   DialogClose,
   DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
   DialogTitle,
 } from "@workspace/ui/components/dialog"
 import {
@@ -63,6 +60,10 @@ import {
 } from "@workspace/ui/components/tooltip"
 
 import { RelayKindIcon } from "@/components/instance-kind-icon"
+import {
+  HearthReloadCountdown,
+  HearthUpdateReload,
+} from "@/components/hearth-update-reload"
 import type { PublicKilnRelease } from "@/effect/github-releases"
 import type { InfraUpdateDialogView } from "@/components/infra-update-dialog-provider"
 import { useKilnGitRepository } from "@/lib/git-repository"
@@ -965,7 +966,7 @@ export const InfraUpdatesDialog = React.memo(function InfraUpdatesDialog({
   )
 
   return (
-    <>
+    <HearthUpdateReload open={open} ready={hearthCompletion !== null}>
       <ActiveUpdatePollers
         active={active}
         activityStore={activityStore}
@@ -983,26 +984,7 @@ export const InfraUpdatesDialog = React.memo(function InfraUpdatesDialog({
         onOpenChange={onOpenChange}
         onUpdate={handleUpdate}
       />
-      <Dialog
-        open={hearthCompletion !== null && !open}
-        onOpenChange={() => undefined}
-      >
-        <DialogContent showCloseButton={false}>
-          <DialogHeader>
-            <DialogTitle>Kiln successfully updated</DialogTitle>
-            <DialogDescription>
-              {hearthCompletion?.versionName ?? "The new version"} is ready.
-              Reload the page to reconnect to the updated Kiln.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button type="button" onClick={() => window.location.reload()}>
-              Reload page
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </>
+    </HearthUpdateReload>
   )
 })
 
@@ -2315,10 +2297,13 @@ const UpdaterFooter = React.memo(function UpdaterFooter({
         <span className="truncate">
           Reload Kiln to start using {latestName}.
         </span>
-        <Button type="button" onClick={() => window.location.reload()}>
-          <RefreshCw />
-          Reload now
-        </Button>
+        <span className="flex shrink-0 items-center gap-3">
+          <HearthReloadCountdown />
+          <Button type="button" onClick={() => window.location.reload()}>
+            <RefreshCw />
+            Reload now
+          </Button>
+        </span>
       </UpdaterFooterBar>
     )
   }
