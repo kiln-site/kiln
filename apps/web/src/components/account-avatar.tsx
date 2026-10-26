@@ -1,13 +1,9 @@
 import * as React from "react"
 
-import {
-  Avatar,
-  AvatarFallback,
-  AvatarImage,
-} from "@workspace/ui/components/avatar"
+import { Avatar, AvatarFallback } from "@workspace/ui/components/avatar"
 import { cn } from "@workspace/ui/lib/utils"
 
-import { useUserPictureUrl } from "@/components/icon-image"
+import { IconImage, useUserPictureUrl } from "@/components/icon-image"
 
 interface UserAvatarProps {
   className?: string
@@ -40,17 +36,22 @@ export const UserAvatar = React.memo(function UserAvatar({
       size={size}
       className={cn("rounded-none", className)}
     >
-      {pictureUrl ? (
-        <AvatarImage src={pictureUrl} alt="" className="object-cover" />
-      ) : null}
-      <AvatarFallback
-        className={cn(
-          "type-label rounded-none bg-primary/12 font-bold text-primary-ink",
-          fallbackClassName
-        )}
-      >
-        {initials(name)}
-      </AvatarFallback>
+      {/* Swaps a new picture in once it's loaded, never initials between. */}
+      <IconImage
+        key={userId ?? ""}
+        className="object-cover"
+        fallback={
+          <AvatarFallback
+            className={cn(
+              "type-label rounded-none bg-primary/12 font-bold text-primary-ink",
+              fallbackClassName
+            )}
+          >
+            {initials(name)}
+          </AvatarFallback>
+        }
+        url={pictureUrl}
+      />
     </Avatar>
   )
 })
