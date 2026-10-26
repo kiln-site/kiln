@@ -29,6 +29,7 @@ import type { AppCache } from "@/effect/cache"
 import { Database } from "@/effect/database"
 import {
   getBackupCatalogRecordEffect,
+  getFinalInstanceDeletionEffect,
   linkInstanceBackupsEffect,
 } from "@/effect/backups"
 import {
@@ -909,8 +910,8 @@ const restartSourceEffect = Effect.fnUntraced(function* (
 const endMigration = Effect.fnUntraced(function* (
   claimed: MigrationRow,
   generation: number,
-  state: "completed" | "failed" | "cancelled",
-  error: string | null
+  ending: "completed" | "failed" | "cancelled",
+  endingError: string | null
 ) {
   // What the failed step recorded, such as whether it stopped the old
   // server, and only while this worker still holds it: one that took over
@@ -923,6 +924,20 @@ const endMigration = Effect.fnUntraced(function* (
   ) {
     return
   }
+  // Handing the old server to its deletion is the move's last part, and
+  // can't be taken back: once its final backup is planned, the move is
+  // done, and the old server stays stopped for it, however the move ended.
+  const sourceDeleting =
+    ending !== "completed" &&
+    row.mode === "migrate" &&
+    row.step === "finish" &&
+    migrationOptions(row).deleteSource !== null &&
+    ((yield* getFinalInstanceDeletionEffect(
+      row.source_relay_id,
+      row.source_instance_id
+    ))?.status ?? "failed") !== "failed"
+  const state = sourceDeleting ? "completed" : ending
+  const error = sourceDeleting ? null : endingError
   // Recorded as ending before anything is undone, by a write that holds
   // only while this worker does, so a worker that takes over from here
   // finishes the cleanup rather than carrying on the copy it removes.
