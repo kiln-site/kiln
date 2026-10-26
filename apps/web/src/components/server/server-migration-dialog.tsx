@@ -400,10 +400,16 @@ function MigrationForm({
             showFavorite={false}
           />
         </CardBox>
-        <ArrowRight
+        {/* A duplicate shows a copy above the arrow, which stays put. */}
+        <span
           aria-hidden="true"
-          className="hidden size-4 self-center text-muted-foreground sm:row-span-2 sm:block"
-        />
+          className="relative hidden self-center text-muted-foreground sm:row-span-2 sm:block"
+        >
+          {moving ? null : (
+            <Copy className="absolute bottom-full left-1/2 mb-1.5 size-3.5 -translate-x-1/2 text-primary-ink" />
+          )}
+          <ArrowRight className="size-4" />
+        </span>
         <CardBox interactive>
           <span className="grid size-8 shrink-0 place-items-center rounded-md border border-border/70 bg-background/35 text-muted-foreground">
             <LiveServerBrickIcon
