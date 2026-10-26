@@ -87,7 +87,8 @@ they can close or cancel from. However it ends, they get a
 `server.migration` notification, so a closed toast or tab misses nothing.
 A copy that fails or is cancelled before its last step is deleted and the
 old server started again if the copy stopped it; one that fails while
-handing things over keeps the new server, which may hold what moved. A
-move whose old server's final backup was already asked for can't be taken
-back: it ends as finished, and the old server stays stopped for deletion.
-Either way, what either Relay fetched or packed for it is deleted.
+handing things over keeps the new server, which may hold what moved.
+Either way, what either Relay fetched or packed for it is deleted. A move
+that deletes its old server can't be cancelled once it's handing things
+over, and one whose old server's final backup was already asked for ends as
+finished, however it ended, with the old server stopped for deletion.

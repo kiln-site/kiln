@@ -144,6 +144,8 @@ interface MigrationRow extends RowDataPacket {
 
 /** A migration as its person sees it. */
 export interface ServerMigrationView {
+  /** Whether it can still be cancelled. */
+  readonly cancellable: boolean
   readonly createdAt: number
   readonly destination: {
     readonly instanceId: string
@@ -164,6 +166,12 @@ export interface ServerMigrationView {
   readonly step: MigrationStep
   readonly totalBytes: number | null
 }
+
+// A move that deletes its old server can't be cancelled once it's handing
+// things over: its last part, asking for the old server's final backup and
+// deletion, can't be taken back.
+const handingOverDeletion = `step = 'finish' AND mode = 'migrate'
+  AND COALESCE(JSON_TYPE(JSON_EXTRACT(options, '$.deleteSource')), '') = 'OBJECT'`
 
 class StaleClaim extends Error {}
 class MigrationCancelled extends Error {}
@@ -272,11 +280,21 @@ export const cancelServerMigrationEffect = Effect.fn("serverMigrations.cancel")(
       "serverMigrations.cancel",
       `UPDATE ${databaseTable("server_migration")}
           SET state = 'cancelling', updated_at = ?
-        WHERE id = ? AND requested_by = ? AND state = 'running'`,
+        WHERE id = ? AND requested_by = ? AND state = 'running'
+          AND NOT (${handingOverDeletion})`,
       [now, id, userId]
     )
     if (result.affectedRows === 0) {
-      return yield* Effect.fail(new Error("This copy is no longer running"))
+      const row = yield* loadMigration(id)
+      return yield* Effect.fail(
+        new Error(
+          row?.requested_by === userId &&
+            row.state === "running" &&
+            !migrationCancellable(row)
+            ? "This move is handing over to the new server and can't be cancelled"
+            : "This copy is no longer running"
+        )
+      )
     }
     publishMigrationChange(userId)
   }
@@ -821,6 +839,17 @@ const finishMigration = Effect.fnUntraced(function* (
   // backed up in full and then deleted, in the background, as deleting it
   // with a final backup does.
   const deleteSource = row.mode === "migrate" ? options.deleteSource : null
+  if (deleteSource && !done.has("delete")) {
+    // Cancelled before it got here, as it may be while the parts above run
+    // under an older worker: cleaned up, not handed to deletion.
+    const current = yield* loadMigration(row.id)
+    if (!current || Number(current.claim_generation) !== generation) {
+      return yield* Effect.fail(new StaleClaim())
+    }
+    if (current.state === "cancelling") {
+      return yield* Effect.fail(new MigrationCancelled())
+    }
+  }
   if (deleteSource) {
     yield* finish(
       "delete",
@@ -1294,6 +1323,7 @@ function finishedParts(row: MigrationRow): ReadonlyArray<FinishedPart> {
 
 function migrationView(row: MigrationRow): ServerMigrationView {
   return {
+    cancellable: row.state === "running" && migrationCancellable(row),
     createdAt: Number(row.created_at),
     destination: {
       instanceId: row.destination_instance_id,
@@ -1314,6 +1344,14 @@ function migrationView(row: MigrationRow): ServerMigrationView {
     step: row.step,
     totalBytes: row.total_bytes === null ? null : Number(row.total_bytes),
   }
+}
+
+function migrationCancellable(row: MigrationRow): boolean {
+  return !(
+    row.step === "finish" &&
+    row.mode === "migrate" &&
+    migrationOptions(row).deleteSource !== null
+  )
 }
 
 function publishMigrationChange(userId: string) {
