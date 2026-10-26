@@ -286,6 +286,81 @@ export const deleteCloudflareRecordEffect = Effect.fn("cloudflare.dns.delete")(
   }
 )
 
+/**
+ * A web hostname's record, pointing at its Relay. `comment` says what it's
+ * for, as Cloudflare's dashboard shows it.
+ */
+export const createCloudflareWebRecordEffect = Effect.fn(
+  "cloudflare.dns.createWeb"
+)(function* (
+  apiToken: string,
+  zoneId: string,
+  record: CloudflareAddressRecord,
+  comment: string
+) {
+  return yield* mutateCloudflareRecord(
+    apiToken,
+    zoneId,
+    undefined,
+    webAddressRecordBody(record, comment),
+    "POST"
+  )
+})
+
+/** Points a web hostname's record at another address of the same type. */
+export const updateCloudflareWebRecordEffect = Effect.fn(
+  "cloudflare.dns.updateWeb"
+)(function* (
+  apiToken: string,
+  zoneId: string,
+  recordId: string,
+  record: CloudflareAddressRecord,
+  comment: string
+) {
+  return yield* mutateCloudflareRecord(
+    apiToken,
+    zoneId,
+    recordId,
+    webAddressRecordBody(record, comment),
+    "PATCH"
+  )
+})
+
+/**
+ * Swaps a web hostname's record for one of another type, as an address
+ * changing between an IP and a name needs, in one batch.
+ */
+export const replaceCloudflareWebRecordEffect = Effect.fn(
+  "cloudflare.dns.replaceWeb"
+)(function* (
+  apiToken: string,
+  zoneId: string,
+  recordId: string,
+  record: CloudflareAddressRecord,
+  comment: string
+) {
+  const result = yield* requestCloudflareResult(
+    apiToken,
+    `/zones/${encodeURIComponent(zoneId)}/dns_records/batch`,
+    CloudflareDnsRecordBatchSchema,
+    {
+      body: JSON.stringify({
+        deletes: [{ id: recordId }],
+        posts: [webAddressRecordBody(record, comment)],
+      }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    }
+  )
+  const replacement = result.posts[0]
+  if (!replacement) {
+    return yield* cloudflareFailure(
+      "Cloudflare did not return the replacement DNS record"
+    )
+  }
+  return replacement
+})
+
 function mutateCloudflareRecord(
   apiToken: string,
   zoneId: string,
@@ -310,8 +385,12 @@ function cloudflareAddressRecordBody(
   record: CloudflareAddressRecord,
   instanceId: string
 ) {
+  return webAddressRecordBody(record, `Managed by Kiln for server ${instanceId}`)
+}
+
+function webAddressRecordBody(record: CloudflareAddressRecord, comment: string) {
   return {
-    comment: `Managed by Kiln for server ${instanceId}`,
+    comment,
     content: record.content,
     name: record.name,
     proxied: false,

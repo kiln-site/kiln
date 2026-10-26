@@ -45,6 +45,7 @@ import {
   type DatabaseReadRequest,
   type DatabaseWriteRequest,
   relaySnapshotSchema,
+  webRouteHostnames,
 } from "@workspace/contracts"
 import { z } from "zod"
 
@@ -702,6 +703,19 @@ export const updateInstanceWebRoutes = createServerFn({ method: "POST" })
       topics: ["instance-web-routes"],
       type: "hearth.invalidate",
     })
+    // Kiln keeps the DNS records of hostnames in zones it manages.
+    const { syncWebRouteHostnames } = await import(
+      "@/server/web-hostname-access.server"
+    )
+    await syncWebRouteHostnames(
+      await requireEligibleResourceUser(),
+      {
+        relayId: data.relayId,
+        resourceId: data.instanceId,
+        resourceType: "instance",
+      },
+      routes.routes.flatMap(webRouteHostnames)
+    )
     return routes
   })
 

@@ -34,6 +34,7 @@ import { securityReports } from "./0031_security_reports"
 import { icons } from "./0032_icons"
 import { relayControlDial } from "./0033_relay_control_dial"
 import { relayJoinPairing } from "./0034_relay_join_pairing"
+import { cloudflareConnections } from "./0035_cloudflare_connections"
 
 // Append new migrations with the next id. Never edit or reorder applied ones.
 export const migrations: ReadonlyArray<Migration> = [
@@ -71,4 +72,5 @@ export const migrations: ReadonlyArray<Migration> = [
   icons,
   relayControlDial,
   relayJoinPairing,
+  cloudflareConnections,
 ]

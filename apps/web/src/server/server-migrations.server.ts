@@ -14,7 +14,7 @@ import type { z } from "zod"
 
 import { countLinkableInstanceBackupsEffect } from "@/effect/backups"
 import {
-  loadDomainIntegrationEffect,
+  anyDomainConnectionEffect,
   loadInstanceDomainAssignmentsForInstanceEffect,
 } from "@/effect/domains"
 import { recoverPromise } from "@/effect/promise"
@@ -183,7 +183,7 @@ export async function previewServerMigrationHandler(
       "serverMigrations.preview.domains",
       Effect.all(
         [
-          loadDomainIntegrationEffect(),
+          anyDomainConnectionEffect(),
           loadInstanceDomainAssignmentsForInstanceEffect(relay.id, instance.id),
         ],
         { concurrency: 2 }
@@ -198,7 +198,7 @@ export async function previewServerMigrationHandler(
         )
       : { anywhere: 0, here: 0, total: 0 },
   ])
-  const [integration, assignments] = domains
+  const [connected, assignments] = domains
   return {
     accessCount,
     backups,
@@ -223,7 +223,7 @@ export async function previewServerMigrationHandler(
         }
       : null,
     domains: {
-      managed: Boolean(integration?.enabled),
+      managed: connected,
       names: assignments
         .filter((assignment) => assignment.status !== "removing")
         .map((assignment) => `${assignment.vanityLabel}.${assignment.domain}`),

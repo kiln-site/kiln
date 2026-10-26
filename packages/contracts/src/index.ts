@@ -2338,6 +2338,11 @@ const relaySnapshotRelaySchema = z.object({
    */
   platform: z.object({ management: relayPlatformManagementSchema }).optional(),
   proxyMode: relayProxyModeSchema.optional(),
+  /**
+   * The address players and web visitors reach this Relay's node at, as
+   * game servers advertise it. Absent from Relays that predate it.
+   */
+  publicHost: z.string().min(1).max(253).optional(),
   sftp: relaySftpSnapshotSchema,
   tls: z
     .object({

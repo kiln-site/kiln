@@ -13,41 +13,70 @@ import { betterAuthSecrets } from "@/lib/environment"
 
 import { decryptWithKeyring, encryptWithKeyring } from "../../keyring.mjs"
 
-const CLOUDFLARE_INTEGRATION_ID = "cloudflare"
+/** The connection an install that predates owned connections kept. */
+export const PLATFORM_CONNECTION_ID = "cloudflare"
 const CLOUDFLARE_API_TOKEN_PURPOSE = "kiln-cloudflare-api-token"
 const decodeJsonString = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Unknown)
 )
+const ZonesSchema = Schema.Array(
+  Schema.Struct({ id: Schema.String, name: Schema.String })
+)
 
 export type DomainAssignmentStrategy = "balanced" | "default" | "random"
 
-/** A domain Kiln can create `<vanity>.<domain>` names under. */
+/**
+ * A vanity domain: Kiln creates `<name>.<domain>` addresses under it for game
+ * servers and apps.
+ */
 export interface ManagedDomain {
+  /** The Cloudflare connection whose token manages its zone. */
+  connectionId: string
   domain: string
   /**
-   * Offered to new game servers. A disabled domain still serves, syncs, and
-   * renames the game server domains already on it.
+   * Offered to new game servers and apps. A disabled domain still serves,
+   * syncs, and renames the addresses already on it.
    */
   enabled: boolean
+  /** Its owner's default; each owner has at most one. */
   isDefault: boolean
+  /** Null for the platform's domains, which everyone may use. */
+  ownerId: string | null
   zoneId: string
   zoneName: string
 }
 
-export interface DomainIntegration {
-  blacklistPatterns: Array<string>
-  /** The default first, then enabled domains, each sorted by name. */
+export interface DomainZone {
+  id: string
+  name: string
+}
+
+/** A Cloudflare API token someone, or the platform, connected. */
+export interface DomainConnection {
+  /** Its vanity domains, the default first, then enabled ones by name. */
   domains: Array<ManagedDomain>
-  enabled: boolean
   id: string
   lastError: string | null
   lastVerifiedAt: string | null
+  name: string
+  /** Null for the platform's. */
+  ownerId: string | null
   provider: "cloudflare"
-  strategy: DomainAssignmentStrategy
+  /** The zones its token reached when last checked, by name. */
+  zones: Array<DomainZone>
 }
 
-export interface CloudflareIntegrationCredential extends DomainIntegration {
+export interface DomainConnectionCredential extends DomainConnection {
   apiToken: string
+}
+
+/** How an owner's vanity domains are handed out. */
+export interface VanitySettings {
+  /** Whether new game servers and apps get an address on their own. */
+  autoAssign: boolean
+  /** Names nobody may take under these domains. */
+  blacklistPatterns: Array<string>
+  strategy: DomainAssignmentStrategy
 }
 
 export interface InstanceDomainAssignment {
@@ -73,23 +102,32 @@ export interface InstanceDomainAssignment {
   zoneId: string | null
 }
 
-interface DomainIntegrationRow extends RowDataPacket {
+interface DomainConnectionRow extends RowDataPacket {
   api_token_ciphertext: string
-  assignment_strategy: DomainAssignmentStrategy
-  blacklist_patterns: unknown
-  enabled: boolean | number
   id: string
   last_error: string | null
   last_verified_at: number | null
+  name: string
+  owner_id: string | null
   provider: "cloudflare"
+  zones: unknown
 }
 
 interface DomainZoneRow extends RowDataPacket {
   domain: string
   enabled: boolean | number
+  integration_id: string
   is_default: boolean | number
+  owner_id: string | null
   zone_id: string
   zone_name: string
+}
+
+interface VanitySettingsRow extends RowDataPacket {
+  assignment_strategy: DomainAssignmentStrategy
+  auto_assign: boolean | number
+  blacklist_patterns: unknown
+  owner_key: string
 }
 
 interface InstanceDomainRow extends RowDataPacket {
@@ -113,54 +151,103 @@ interface InstanceDomainRow extends RowDataPacket {
   zone_id: string | null
 }
 
-const loadIntegrationRowEffect = Effect.fnUntraced(function* (
-  operation: string
-) {
+const connectionColumns = `id, provider, owner_id, name, api_token_ciphertext,
+       zones, last_verified_at, last_error`
+const domainZoneSelect = `SELECT zone.domain, zone.integration_id, zone.zone_id,
+       zone.zone_name, zone.is_default, zone.enabled, connection.owner_id
+  FROM ${databaseTable("domain_zone")} zone
+  JOIN ${databaseTable("domain_integration")} connection
+    ON connection.id = zone.integration_id`
+
+/** The platform's settings key; people use their user ID. */
+function ownerKey(ownerId: string | null): string {
+  return ownerId ?? ""
+}
+
+/**
+ * Connections, each with its vanity domains: the platform's (`null`) and
+ * the named people's, or every one.
+ */
+export const listDomainConnectionsEffect = Effect.fn(
+  "domains.connections.list"
+)(function* (owners: ReadonlyArray<string | null> | "all") {
   const database = yield* Database
+  const people = owners === "all" ? [] : owners.filter((id) => id !== null)
+  const platform = owners === "all" || owners.includes(null)
+  if (owners !== "all" && people.length === 0 && !platform) return []
+  const where =
+    owners === "all"
+      ? ""
+      : `WHERE ${[
+          platform ? "connection.owner_id IS NULL" : null,
+          people.length > 0
+            ? `connection.owner_id IN (${people.map(() => "?").join(", ")})`
+            : null,
+        ]
+          .filter(Boolean)
+          .join(" OR ")}`
   const [rows, zones] = yield* Effect.all(
     [
-      database.queryRows<DomainIntegrationRow>(
-        operation,
-        `SELECT id, provider, api_token_ciphertext, blacklist_patterns,
-                enabled, assignment_strategy, last_verified_at, last_error
-           FROM ${databaseTable("domain_integration")}
-          WHERE id = ?
-          LIMIT 1`,
-        [CLOUDFLARE_INTEGRATION_ID]
+      database.queryRows<DomainConnectionRow>(
+        "domains.connections.list",
+        `SELECT ${connectionColumns}
+           FROM ${databaseTable("domain_integration")} connection
+          ${where}
+          ORDER BY connection.owner_id IS NOT NULL, connection.created_at,
+                   connection.id`,
+        people
       ),
       database.queryRows<DomainZoneRow>(
-        `${operation}.domains`,
-        `SELECT domain, zone_id, zone_name, is_default, enabled
-           FROM ${databaseTable("domain_zone")}
-          WHERE integration_id = ?
-          ORDER BY is_default DESC, enabled DESC, domain`,
-        [CLOUDFLARE_INTEGRATION_ID]
+        "domains.connections.domains",
+        `${domainZoneSelect}
+          ${where}
+          ORDER BY zone.is_default DESC, zone.enabled DESC, zone.domain`,
+        people
       ),
     ],
     { concurrency: 2 }
   )
-  const row = rows[0]
-  return row ? { row, zones } : null
+  return rows.map((row) => publicConnection(row, zones))
 })
 
-export const loadDomainIntegrationEffect = Effect.fn(
-  "domains.integration.load"
-)(function* () {
-  const loaded = yield* loadIntegrationRowEffect("domains.integration.load")
-  return loaded ? publicIntegration(loaded.row, loaded.zones) : null
-})
+export const loadDomainConnectionEffect = Effect.fn("domains.connection.load")(
+  function* (id: string) {
+    const database = yield* Database
+    const [rows, zones] = yield* Effect.all(
+      [
+        database.queryRows<DomainConnectionRow>(
+          "domains.connection.load",
+          `SELECT ${connectionColumns}
+             FROM ${databaseTable("domain_integration")}
+            WHERE id = ?
+            LIMIT 1`,
+          [id]
+        ),
+        database.queryRows<DomainZoneRow>(
+          "domains.connection.domains",
+          `${domainZoneSelect}
+            WHERE zone.integration_id = ?
+            ORDER BY zone.is_default DESC, zone.enabled DESC, zone.domain`,
+          [id]
+        ),
+      ],
+      { concurrency: 2 }
+    )
+    const row = rows[0]
+    return row ? { connection: publicConnection(row, zones), row } : null
+  }
+)
 
-export const loadCloudflareIntegrationCredentialEffect = Effect.fn(
-  "domains.integration.credential"
-)(function* () {
+/** A connection with its decrypted token, for calling Cloudflare. */
+export const loadDomainConnectionCredentialEffect = Effect.fn(
+  "domains.connection.credential"
+)(function* (id: string) {
   const database = yield* Database
-  const loaded = yield* loadIntegrationRowEffect(
-    "domains.integration.credential"
-  )
+  const loaded = yield* loadDomainConnectionEffect(id)
   if (!loaded) {
     return yield* ResourceNotFoundError.make({
-      message: "Connect Cloudflare in Infrastructure → Domains first",
-      resource: "cloudflare_integration",
+      message: "That Cloudflare connection was removed",
+      resource: "cloudflare_connection",
     })
   }
   const ciphertext = loaded.row.api_token_ciphertext
@@ -181,146 +268,370 @@ export const loadCloudflareIntegrationCredentialEffect = Effect.fn(
     const rotated = yield* encryptApiToken(decrypted.plaintext)
     const now = yield* Clock.currentTimeMillis
     yield* database.execute(
-      "domains.integration.rotateCredential",
+      "domains.connection.rotateCredential",
       `UPDATE ${databaseTable("domain_integration")}
           SET api_token_ciphertext = ?, updated_at = ?
         WHERE id = ? AND api_token_ciphertext = ?`,
-      [rotated, now, CLOUDFLARE_INTEGRATION_ID, ciphertext]
+      [rotated, now, id, ciphertext]
     )
   }
   return {
-    ...publicIntegration(loaded.row, loaded.zones),
+    ...loaded.connection,
     apiToken: decrypted.plaintext,
-  } satisfies CloudflareIntegrationCredential
+  } satisfies DomainConnectionCredential
 })
 
 /**
- * Saves the integration and its enabled domains. A domain left out keeps a
- * disabled row while game server domains are on it, since their records
+ * Saves a connection and its enabled vanity domains. A domain left out keeps
+ * a disabled row while game server domains are on it, since their records
  * live in its zone; otherwise it goes. Decided under locks, so a game server
  * domain reserved meanwhile can't lose its zone.
  */
-export const saveCloudflareIntegrationEffect = Effect.fn(
-  "domains.integration.save"
-)(function* (input: {
-  apiToken: string
-  blacklistPatterns: Array<string>
-  /** The enabled domains, in zones the token reaches. */
-  domains: ReadonlyArray<ManagedDomain>
-  enabled: boolean
-  /** Zones the token can manage; kept domains must be among them. */
-  reachableZoneIds: ReadonlySet<string>
-  strategy: DomainAssignmentStrategy
-}) {
-  const database = yield* Database
-  const ciphertext = yield* encryptApiToken(input.apiToken)
-  const now = yield* Clock.currentTimeMillis
-  yield* database.transaction("domains.integration.save", (transaction) =>
-    Effect.gen(function* () {
-      yield* transaction.execute(
-        `INSERT INTO ${databaseTable("domain_integration")}
-           (id, provider, api_token_ciphertext, blacklist_patterns, enabled,
-            assignment_strategy, last_verified_at, last_error, created_at,
-            updated_at)
-         VALUES (?, 'cloudflare', ?, ?, ?, ?, ?, NULL, ?, ?)
-         ON DUPLICATE KEY UPDATE
-           api_token_ciphertext = VALUES(api_token_ciphertext),
-           blacklist_patterns = VALUES(blacklist_patterns),
-           enabled = VALUES(enabled),
-           assignment_strategy = VALUES(assignment_strategy),
-           last_verified_at = VALUES(last_verified_at),
-           last_error = NULL,
-           updated_at = VALUES(updated_at)`,
-        [
-          CLOUDFLARE_INTEGRATION_ID,
-          ciphertext,
-          JSON.stringify(input.blacklistPatterns),
-          input.enabled,
-          input.strategy,
-          now,
-          now,
-          now,
-        ]
-      )
-      // Locking reads: a reservation waits for this save, or this save sees it.
-      const previous = yield* transaction.queryRows<DomainZoneRow>(
-        `SELECT domain, zone_id, zone_name, is_default, enabled
-           FROM ${databaseTable("domain_zone")}
-          WHERE integration_id = ?
-          FOR UPDATE`,
-        [CLOUDFLARE_INTEGRATION_ID]
-      )
-      const assigned = yield* transaction.queryRows<
-        RowDataPacket & { domain: string }
-      >(`SELECT domain FROM ${databaseTable("instance_domain")} FOR SHARE`)
-      const usage = new Map<string, number>()
-      for (const row of assigned) {
-        usage.set(row.domain, (usage.get(row.domain) ?? 0) + 1)
-      }
-      const requested = new Map(
-        input.domains.map((domain) => [domain.domain, domain])
-      )
-      const requestedZones = new Set(
-        input.domains.map((domain) => domain.zoneId)
-      )
-      const kept: Array<ManagedDomain> = []
-      for (const row of previous) {
-        const total = usage.get(row.domain) ?? 0
-        if (total === 0) continue
-        const count = `${total} game server ${total === 1 ? "domain" : "domains"}`
-        const next = requested.get(row.domain)
-        if (next) {
-          if (next.zoneId !== row.zone_id) {
+export const saveDomainConnectionEffect = Effect.fn("domains.connection.save")(
+  function* (input: {
+    /** Omitted to keep the saved token. */
+    apiToken: string | undefined
+    /** The enabled domains, in zones the token reaches. */
+    domains: ReadonlyArray<Omit<ManagedDomain, "connectionId" | "ownerId">>
+    id: string
+    /** A new connection; an existing ID fails rather than taking it over. */
+    insert: boolean
+    name: string
+    ownerId: string | null
+    /** Zones the token can manage; kept domains must be among them. */
+    zones: ReadonlyArray<DomainZone>
+  }) {
+    const database = yield* Database
+    const ciphertext =
+      input.apiToken === undefined
+        ? null
+        : yield* encryptApiToken(input.apiToken)
+    const now = yield* Clock.currentTimeMillis
+    const reachableZoneIds = new Set(input.zones.map((zone) => zone.id))
+    yield* database.transaction("domains.connection.save", (transaction) =>
+      Effect.gen(function* () {
+        if (input.insert) {
+          if (ciphertext === null) {
             return yield* DomainConfigurationError.make({
-              message: `Delete the ${count} on ${row.domain} before moving it to another zone`,
+              message: "Enter a Cloudflare API token",
             })
           }
-          continue
+          yield* transaction.execute(
+            `INSERT INTO ${databaseTable("domain_integration")}
+               (id, provider, owner_id, name, api_token_ciphertext, zones,
+                last_verified_at, last_error, created_at, updated_at)
+             VALUES (?, 'cloudflare', ?, ?, ?, ?, ?, NULL, ?, ?)`,
+            [
+              input.id,
+              input.ownerId,
+              input.name,
+              ciphertext,
+              JSON.stringify(input.zones),
+              now,
+              now,
+              now,
+            ]
+          )
+        } else {
+          const result = yield* transaction.execute(
+            `UPDATE ${databaseTable("domain_integration")}
+                SET name = ?,
+                    api_token_ciphertext = COALESCE(?, api_token_ciphertext),
+                    zones = ?,
+                    last_verified_at = ?,
+                    last_error = NULL,
+                    updated_at = ?
+              WHERE id = ? AND owner_id <=> ?`,
+            [
+              input.name,
+              ciphertext,
+              JSON.stringify(input.zones),
+              now,
+              now,
+              input.id,
+              input.ownerId,
+            ]
+          )
+          if (result.affectedRows === 0) {
+            return yield* ResourceNotFoundError.make({
+              message: "That Cloudflare connection was removed",
+              resource: "cloudflare_connection",
+            })
+          }
         }
-        if (!input.reachableZoneIds.has(row.zone_id)) {
-          return yield* DomainConfigurationError.make({
-            message: `This token can't manage ${row.domain}, which still has ${count}. Use a token that can, or delete them first.`,
+        // Locking reads: a reservation waits for this save, or this save sees it.
+        const previous = yield* transaction.queryRows<DomainZoneRow>(
+          `SELECT domain, integration_id, zone_id, zone_name, is_default,
+                  enabled, NULL AS owner_id
+             FROM ${databaseTable("domain_zone")}
+            WHERE integration_id = ?
+            FOR UPDATE`,
+          [input.id]
+        )
+        const requested = new Map(
+          input.domains.map((domain) => [domain.domain, domain])
+        )
+        // Domains are unique across connections: two can't hand out the
+        // same names.
+        if (requested.size > 0) {
+          const taken = yield* transaction.queryRows<
+            RowDataPacket & { domain: string }
+          >(
+            `SELECT domain FROM ${databaseTable("domain_zone")}
+              WHERE integration_id <> ?
+                AND domain IN (${[...requested.keys()].map(() => "?").join(", ")})
+              FOR SHARE`,
+            [input.id, ...requested.keys()]
+          )
+          const [conflict] = taken
+          if (conflict) {
+            return yield* DomainConfigurationError.make({
+              message: `${conflict.domain} is already a vanity domain on another Cloudflare connection`,
+            })
+          }
+        }
+        const assigned = yield* transaction.queryRows<
+          RowDataPacket & { domain: string }
+        >(
+          `SELECT assignment.domain
+             FROM ${databaseTable("instance_domain")} assignment
+             JOIN ${databaseTable("domain_zone")} zone
+               ON zone.domain = assignment.domain
+            WHERE zone.integration_id = ?
+            FOR SHARE`,
+          [input.id]
+        )
+        const usage = new Map<string, number>()
+        for (const row of assigned) {
+          usage.set(row.domain, (usage.get(row.domain) ?? 0) + 1)
+        }
+        const requestedZones = new Set(
+          input.domains.map((domain) => domain.zoneId)
+        )
+        const kept: Array<Omit<ManagedDomain, "connectionId" | "ownerId">> = []
+        for (const row of previous) {
+          const total = usage.get(row.domain) ?? 0
+          if (total === 0) continue
+          const count = `${total} game server ${total === 1 ? "domain" : "domains"}`
+          const next = requested.get(row.domain)
+          if (next) {
+            if (next.zoneId !== row.zone_id) {
+              return yield* DomainConfigurationError.make({
+                message: `Delete the ${count} on ${row.domain} before moving it to another zone`,
+              })
+            }
+            continue
+          }
+          if (!reachableZoneIds.has(row.zone_id)) {
+            return yield* DomainConfigurationError.make({
+              message: `This token can't manage ${row.domain}, which still has ${count}. Use a token that can, or delete them first.`,
+            })
+          }
+          if (requestedZones.has(row.zone_id)) {
+            return yield* DomainConfigurationError.make({
+              message: `Delete the ${count} on ${row.domain} before using another domain in its zone`,
+            })
+          }
+          kept.push({
+            domain: row.domain,
+            enabled: false,
+            isDefault: false,
+            zoneId: row.zone_id,
+            zoneName: row.zone_name,
           })
         }
-        if (requestedZones.has(row.zone_id)) {
+        // One default per owner, across their connections.
+        if (input.domains.some((domain) => domain.isDefault)) {
+          yield* transaction.execute(
+            `UPDATE ${databaseTable("domain_zone")} zone
+               JOIN ${databaseTable("domain_integration")} connection
+                 ON connection.id = zone.integration_id
+                SET zone.is_default = 0
+              WHERE connection.owner_id <=> ? AND zone.integration_id <> ?`,
+            [input.ownerId, input.id]
+          )
+        }
+        yield* transaction.execute(
+          `DELETE FROM ${databaseTable("domain_zone")}
+            WHERE integration_id = ?`,
+          [input.id]
+        )
+        for (const domain of [...input.domains, ...kept]) {
+          yield* transaction.execute(
+            `INSERT INTO ${databaseTable("domain_zone")}
+               (domain, integration_id, zone_id, zone_name, is_default,
+                enabled, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              domain.domain,
+              input.id,
+              domain.zoneId,
+              domain.zoneName,
+              domain.isDefault,
+              domain.enabled,
+              now,
+              now,
+            ]
+          )
+        }
+      })
+    )
+  }
+)
+
+/** Remembers the zones a connection's token reaches now. */
+export const updateDomainConnectionZonesEffect = Effect.fn(
+  "domains.connection.updateZones"
+)(function* (id: string, zones: ReadonlyArray<DomainZone>) {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  yield* database.execute(
+    "domains.connection.updateZones",
+    `UPDATE ${databaseTable("domain_integration")}
+        SET zones = ?, last_verified_at = ?, last_error = NULL, updated_at = ?
+      WHERE id = ?`,
+    [JSON.stringify(zones), now, now, id]
+  )
+})
+
+/**
+ * Forgets a connection and its vanity domains. Refused while game server
+ * domains are on them; the caller deletes its web hostnames' records first.
+ */
+export const deleteDomainConnectionEffect = Effect.fn(
+  "domains.connection.delete"
+)(function* (id: string) {
+  const database = yield* Database
+  yield* database.transaction("domains.connection.delete", (transaction) =>
+    Effect.gen(function* () {
+      const zones = yield* transaction.queryRows<
+        RowDataPacket & { domain: string }
+      >(
+        `SELECT domain FROM ${databaseTable("domain_zone")}
+          WHERE integration_id = ?
+          FOR UPDATE`,
+        [id]
+      )
+      if (zones.length > 0) {
+        const [used] = yield* transaction.queryRows<
+          RowDataPacket & { total: number }
+        >(
+          `SELECT COUNT(*) AS total FROM ${databaseTable("instance_domain")}
+            WHERE domain IN (${zones.map(() => "?").join(", ")})
+            FOR SHARE`,
+          zones.map((zone) => zone.domain)
+        )
+        const total = Number(used?.total ?? 0)
+        if (total > 0) {
           return yield* DomainConfigurationError.make({
-            message: `Delete the ${count} on ${row.domain} before using another domain in its zone`,
+            message: `Delete the ${total} game server ${total === 1 ? "domain" : "domains"} on this connection's domains first`,
           })
         }
-        kept.push({
-          domain: row.domain,
-          enabled: false,
-          isDefault: false,
-          zoneId: row.zone_id,
-          zoneName: row.zone_name,
-        })
       }
       yield* transaction.execute(
-        `DELETE FROM ${databaseTable("domain_zone")}
-          WHERE integration_id = ?`,
-        [CLOUDFLARE_INTEGRATION_ID]
+        `DELETE FROM ${databaseTable("domain_zone")} WHERE integration_id = ?`,
+        [id]
       )
-      for (const domain of [...input.domains, ...kept]) {
-        yield* transaction.execute(
-          `INSERT INTO ${databaseTable("domain_zone")}
-             (domain, integration_id, zone_id, zone_name, is_default,
-              enabled, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            domain.domain,
-            CLOUDFLARE_INTEGRATION_ID,
-            domain.zoneId,
-            domain.zoneName,
-            domain.isDefault,
-            domain.enabled,
-            now,
-            now,
-          ]
-        )
-      }
+      yield* transaction.execute(
+        `DELETE FROM ${databaseTable("web_hostname")} WHERE integration_id = ?`,
+        [id]
+      )
+      yield* transaction.execute(
+        `DELETE FROM ${databaseTable("domain_integration")} WHERE id = ?`,
+        [id]
+      )
     })
   )
 })
+
+/** An owner's vanity settings, or the defaults if they never saved any. */
+export const loadVanitySettingsEffect = Effect.fn("domains.settings.load")(
+  function* (ownerId: string | null) {
+    const database = yield* Database
+    const rows = yield* database.queryRows<VanitySettingsRow>(
+      "domains.settings.load",
+      `SELECT owner_key, auto_assign, assignment_strategy, blacklist_patterns
+         FROM ${databaseTable("domain_owner_settings")}
+        WHERE owner_key = ?
+        LIMIT 1`,
+      [ownerKey(ownerId)]
+    )
+    const row = rows[0]
+    return row ? vanitySettings(row) : defaultVanitySettings()
+  }
+)
+
+export const saveVanitySettingsEffect = Effect.fn("domains.settings.save")(
+  function* (ownerId: string | null, settings: VanitySettings) {
+    const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
+    yield* database.execute(
+      "domains.settings.save",
+      `INSERT INTO ${databaseTable("domain_owner_settings")}
+         (owner_key, auto_assign, assignment_strategy, blacklist_patterns,
+          created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         auto_assign = VALUES(auto_assign),
+         assignment_strategy = VALUES(assignment_strategy),
+         blacklist_patterns = VALUES(blacklist_patterns),
+         updated_at = VALUES(updated_at)`,
+      [
+        ownerKey(ownerId),
+        settings.autoAssign,
+        settings.strategy,
+        JSON.stringify(settings.blacklistPatterns),
+        now,
+        now,
+      ]
+    )
+  }
+)
+
+/** A vanity domain by name, with its owner. */
+export const loadManagedDomainEffect = Effect.fn("domains.domain.load")(
+  function* (domain: string) {
+    const database = yield* Database
+    const rows = yield* database.queryRows<DomainZoneRow>(
+      "domains.domain.load",
+      `${domainZoneSelect} WHERE zone.domain = ? LIMIT 1`,
+      [domain]
+    )
+    const row = rows[0]
+    return row ? managedDomain(row) : null
+  }
+)
+
+/**
+ * The vanity domains a resource owned by `ownerId` may use: its owner's
+ * and the platform's, each owner's default first.
+ */
+export const listUsableVanityDomainsEffect = Effect.fn(
+  "domains.domains.usable"
+)(function* (ownerId: string | null) {
+  const database = yield* Database
+  const rows = yield* database.queryRows<DomainZoneRow>(
+    "domains.domains.usable",
+    `${domainZoneSelect}
+      WHERE connection.owner_id IS NULL${ownerId ? " OR connection.owner_id = ?" : ""}
+      ORDER BY connection.owner_id IS NULL, zone.is_default DESC,
+               zone.enabled DESC, zone.domain`,
+    ownerId ? [ownerId] : []
+  )
+  return rows.map(managedDomain)
+})
+
+/** Whether anyone has connected Cloudflare. */
+export const anyDomainConnectionEffect = Effect.fn("domains.connections.any")(
+  function* () {
+    const database = yield* Database
+    const rows = yield* database.queryRows<RowDataPacket>(
+      "domains.connections.any",
+      `SELECT 1 FROM ${databaseTable("domain_integration")} LIMIT 1`
+    )
+    return rows.length > 0
+  }
+)
 
 export const loadInstanceDomainAssignmentEffect = Effect.fn(
   "domains.assignment.load"
@@ -494,6 +805,10 @@ export const countInstanceDomainsByDomainEffect = Effect.fn(
   return new Map(rows.map((row) => [row.domain, Number(row.total)]))
 })
 
+/**
+ * Names taken under a vanity domain, by game server domains and web
+ * hostnames. `excludeId` is the one being renamed, whose own name isn't.
+ */
 export const loadUsedVanityLabelsEffect = Effect.fn(
   "domains.assignments.usedLabels"
 )(function* (domain: string, excludeId?: string) {
@@ -504,13 +819,19 @@ export const loadUsedVanityLabelsEffect = Effect.fn(
     "domains.assignments.usedLabels",
     `SELECT vanity_label
        FROM ${databaseTable("instance_domain")}
-      WHERE domain = ?${excludeId ? " AND id <> ?" : ""}`,
-    excludeId ? [domain, excludeId] : [domain]
+      WHERE domain = ?${excludeId ? " AND id <> ?" : ""}
+     UNION
+     SELECT SUBSTRING_INDEX(hostname, '.', 1)
+       FROM ${databaseTable("web_hostname")}
+      WHERE vanity_domain = ?${excludeId ? " AND id <> ?" : ""}`,
+    excludeId ? [domain, excludeId, domain, excludeId] : [domain, domain]
   )
   return new Set(rows.map((row) => row.vanity_label))
 })
 
 interface DomainReservation {
+  /** The connection whose token manages the domain's zone. */
+  connectionId: string
   domain: string
   id: string
   instanceId: string
@@ -546,13 +867,13 @@ export const insertInstanceDomainAssignmentEffect = Effect.fn(
         srv_protocol, status, last_error, created_at, updated_at)
      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, ?, ?
        FROM ${databaseTable("domain_zone")}
-      WHERE domain = ? AND zone_id = ? AND enabled = 1`,
+      WHERE domain = ? AND zone_id = ? AND integration_id = ? AND enabled = 1`,
     [
       input.id,
       input.relayId,
       input.instanceId,
       input.primary,
-      CLOUDFLARE_INTEGRATION_ID,
+      input.connectionId,
       input.vanityLabel,
       input.domain,
       input.publicHost,
@@ -564,6 +885,7 @@ export const insertInstanceDomainAssignmentEffect = Effect.fn(
       now,
       input.domain,
       input.zoneId,
+      input.connectionId,
     ]
   )
   if (result.affectedRows === 0) {
@@ -581,7 +903,10 @@ export const insertInstanceDomainAssignmentEffect = Effect.fn(
 export const reserveInstanceDomainAssignmentEffect = Effect.fn(
   "domains.assignment.reserve"
 )(function* (
-  input: Omit<DomainReservation, "instanceId" | "primary" | "relayId">
+  input: Omit<
+    DomainReservation,
+    "connectionId" | "instanceId" | "primary" | "relayId"
+  >
 ) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
@@ -830,26 +1155,53 @@ const instanceDomainSelect = `SELECT assignment.id, assignment.relay_id,
   LEFT JOIN ${databaseTable("domain_zone")} zone
     ON zone.domain = assignment.domain`
 
-function publicIntegration(
-  row: DomainIntegrationRow,
+function publicConnection(
+  row: DomainConnectionRow,
   zones: ReadonlyArray<DomainZoneRow>
-): DomainIntegration {
+): DomainConnection {
   return {
-    blacklistPatterns: parseBlacklistPatterns(row.blacklist_patterns),
-    domains: zones.map((zone) => ({
-      domain: zone.domain,
-      enabled: Boolean(zone.enabled),
-      isDefault: Boolean(zone.is_default),
-      zoneId: zone.zone_id,
-      zoneName: zone.zone_name,
-    })),
-    enabled: Boolean(row.enabled),
+    domains: zones
+      .filter((zone) => zone.integration_id === row.id)
+      .map(managedDomain),
     id: row.id,
     lastError: row.last_error,
     lastVerifiedAt: timestamp(row.last_verified_at),
+    name: row.name,
+    ownerId: row.owner_id,
     provider: row.provider,
+    zones: parseZones(row.zones),
+  }
+}
+
+function managedDomain(zone: DomainZoneRow): ManagedDomain {
+  return {
+    connectionId: zone.integration_id,
+    domain: zone.domain,
+    enabled: Boolean(zone.enabled),
+    isDefault: Boolean(zone.is_default),
+    ownerId: zone.owner_id,
+    zoneId: zone.zone_id,
+    zoneName: zone.zone_name,
+  }
+}
+
+function vanitySettings(row: VanitySettingsRow): VanitySettings {
+  return {
+    autoAssign: Boolean(row.auto_assign),
+    blacklistPatterns: parseBlacklistPatterns(row.blacklist_patterns),
     strategy: row.assignment_strategy,
   }
+}
+
+export function defaultVanitySettings(): VanitySettings {
+  return { autoAssign: true, blacklistPatterns: [], strategy: "default" }
+}
+
+function parseZones(value: unknown): Array<DomainZone> {
+  return Schema.decodeUnknownOption(ZonesSchema)(decodeJson(value)).pipe(
+    Option.map((zones) => zones.map((zone) => ({ ...zone }))),
+    Option.getOrElse((): Array<DomainZone> => [])
+  )
 }
 
 function domainAssignment(row: InstanceDomainRow): InstanceDomainAssignment {

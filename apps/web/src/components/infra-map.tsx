@@ -474,9 +474,9 @@ const noServices: ServiceIndex = { relays: new Map(), instances: new Map() }
 
 /**
  * Which Relays and instances use Cloudflare (a managed domain) or Tailscale
- * (a game server on a tailnet). Domains are a platform-admin setting, so
- * others see only Tailscale. The map never waits for them: the logos appear
- * once the domains arrive.
+ * (a game server on a tailnet). People without the Domains page see only
+ * Tailscale. The map never waits for them: the logos appear once the domains
+ * arrive.
  */
 function useServices(
   includeDomains: boolean,
@@ -517,8 +517,7 @@ function useServices(
 const noService: OverviewServices = { cloudflare: false, tailscale: false }
 
 function selectDomainAssignments(settings: {
-  integration?: { enabled: boolean } | null
-  managedDomains?: ReadonlyArray<{ relayId: string; instanceId: string }>
+  managedDomains: ReadonlyArray<{ relayId: string; instanceId: string }>
 }) {
-  return settings.integration?.enabled ? (settings.managedDomains ?? []) : []
+  return settings.managedDomains
 }

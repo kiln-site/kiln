@@ -136,6 +136,14 @@ function WebRoutesNetworkPage({
   const instance = useInstanceIdentity()
   const permissions = useInstancePermissions()
   const relayConnected = useInstanceRelayConnected()
+  const dnsResource = React.useMemo(
+    () => ({
+      relayId: instance.relayId,
+      resourceId: instance.id,
+      resourceType: "instance" as const,
+    }),
+    [instance.id, instance.relayId]
+  )
   const queryClient = useQueryClient()
   const queryKey = React.useMemo(
     () => queryKeys.relay.webRoutes(instance.relayId, instance.id),
@@ -221,6 +229,7 @@ function WebRoutesNetworkPage({
             instance.managedByRelay &&
             relayConnected
           }
+          dnsResource={dnsResource}
           error={routes.error}
           kind="server"
           routes={routes.data?.routes}

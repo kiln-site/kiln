@@ -1,0 +1,541 @@
+import { randomUUID } from "node:crypto"
+
+import {
+  builtinTailscaleBrickId,
+  relaySnapshotSchema,
+} from "@workspace/contracts"
+import { Effect } from "effect"
+
+import { listCloudflareZonesEffect } from "@/effect/cloudflare-api"
+import {
+  deleteDomainConnectionEffect,
+  listDomainConnectionsEffect,
+  listUsableVanityDomainsEffect,
+  loadDomainConnectionCredentialEffect,
+  loadDomainConnectionEffect,
+  loadInstanceDomainAssignmentsEffect,
+  loadVanitySettingsEffect,
+  saveDomainConnectionEffect,
+  saveVanitySettingsEffect,
+  type DomainConnection,
+  type ManagedDomain,
+} from "@/effect/domains"
+import { listAppRecordsEffect } from "@/effect/managed-apps"
+import { runAppEffect } from "@/effect/runtime"
+import { listWebHostnamesEffect } from "@/effect/web-hostnames"
+import { isPlatformAdmin, listUserGrants } from "@/lib/access-control"
+import type { AuthenticatedUser } from "@/lib/auth-session"
+import {
+  domainHasActiveSrvRecord,
+  managedDomainConnectAddress,
+} from "@/lib/domain-address"
+import { publishDomainChange } from "@/lib/domain-realtime.server"
+import { domainInZone, validateBlacklistPatterns } from "@/lib/domain-schemas"
+import { kilnRootDomain } from "@/lib/environment"
+import { listInstanceDirectoryEffect } from "@/lib/instance-directory"
+import { relayInstanceRouteId } from "@/lib/relay-fleet"
+import { listPersistedRelays } from "@/lib/relay-registry"
+import { relayJsonEffect } from "@/lib/relay-client"
+import { effectiveScopePermissions } from "@/lib/resource-permissions"
+import { shortIdRouteIdentifier } from "@/lib/short-id-route"
+import { hasAppPermission } from "@/server/app-access"
+import { requireEligibleResourceUser } from "@/server/auth"
+import {
+  invalidateManagedDomainAddressesEffect,
+  provisionInstanceDomainEffect,
+} from "@/server/domains.server"
+import {
+  removeConnectionWebHostnamesEffect,
+  resyncWebHostnamesEffect,
+} from "@/server/web-hostnames.server"
+import type {
+  DeleteDomainConnectionInput,
+  DiscoverDomainsInput,
+  ManagedDomainOverview,
+  SaveDomainConnectionInput,
+  SaveVanitySettingsInput,
+  WebHostnameOverview,
+} from "@/server/domains"
+
+/** Whether a person may see and change a connection. */
+function canManageConnection(
+  user: AuthenticatedUser,
+  connection: Pick<DomainConnection, "ownerId">
+): boolean {
+  return connection.ownerId === null
+    ? isPlatformAdmin(user)
+    : connection.ownerId === user.id
+}
+
+/** What a person can do on the game servers and apps they reach. */
+async function resourceAccess(user: AuthenticatedUser) {
+  if (isPlatformAdmin(user)) {
+    return {
+      app: (_relayId: string, _appId: string, _manage: boolean) => true,
+      instance: (_relayId: string, _instanceId: string, _write: boolean) =>
+        true,
+    }
+  }
+  const grants = await listUserGrants(user.id)
+  return {
+    app: (relayId: string, appId: string, manage: boolean) =>
+      hasAppPermission(
+        user,
+        grants,
+        { appId, relayId },
+        manage ? "app.manage" : "app.read"
+      ),
+    instance: (relayId: string, instanceId: string, write: boolean) =>
+      effectiveScopePermissions(grants, {
+        relayId,
+        resourceId: instanceId,
+        resourceType: "instance",
+      }).has(write ? "instance.network.write" : "instance.network.read"),
+  }
+}
+
+/**
+ * The Domains page: the person's Cloudflare connections (and the
+ * platform's, for administrators), the vanity domains they may use, and the
+ * game server domains and web hostnames on what they can read. Hearth's own
+ * tables only, so the page never waits on a Relay or Cloudflare.
+ */
+export async function getDomainSettingsHandler() {
+  const user = await requireEligibleResourceUser()
+  const admin = isPlatformAdmin(user)
+  const [
+    connections,
+    usable,
+    personalSettings,
+    platformSettings,
+    assignments,
+    hostnames,
+    relays,
+    directory,
+    apps,
+    access,
+  ] = await Promise.all([
+    runAppEffect(
+      "domains.connections.list",
+      listDomainConnectionsEffect(admin ? [null, user.id] : [user.id])
+    ),
+    runAppEffect(
+      "domains.domains.usable",
+      listUsableVanityDomainsEffect(user.id)
+    ),
+    runAppEffect("domains.settings.load", loadVanitySettingsEffect(user.id)),
+    admin
+      ? runAppEffect("domains.settings.load", loadVanitySettingsEffect(null))
+      : null,
+    runAppEffect(
+      "domains.assignments.all",
+      loadInstanceDomainAssignmentsEffect()
+    ),
+    runAppEffect("webHostnames.list", listWebHostnamesEffect()),
+    listPersistedRelays(),
+    runAppEffect("instances.directory.list", listInstanceDirectoryEffect()),
+    runAppEffect("apps.list", listAppRecordsEffect()),
+    resourceAccess(user),
+  ])
+  const relayNames = new Map(relays.map((relay) => [relay.id, relay.name]))
+  const zoneNames = new Map<string, string>()
+  const connectionNames = new Map<string, string>()
+  for (const domain of usable) zoneNames.set(domain.domain, domain.zoneName)
+  for (const connection of connections) {
+    connectionNames.set(connection.id, connection.name)
+    for (const domain of connection.domains) {
+      zoneNames.set(domain.domain, domain.zoneName)
+    }
+  }
+  const servers = new Map(
+    directory.map((record) => [
+      serverKey(record.relayId, record.id),
+      record,
+    ])
+  )
+  // Match the Game Servers table: a short ID routes on its own unless another
+  // game server shares it.
+  const shortIdCounts = new Map<string, number>()
+  for (const record of directory) {
+    if (record.brickId === builtinTailscaleBrickId) continue
+    const shortId = record.id.slice(0, 8)
+    shortIdCounts.set(shortId, (shortIdCounts.get(shortId) ?? 0) + 1)
+  }
+  const serverRoute = (relayId: string, instanceId: string) => {
+    const shortId = instanceId.slice(0, 8)
+    // Otherwise the Relay-qualified full ID, which names exactly one server
+    // even where short IDs collide or the server is missing from the
+    // directory.
+    return servers.has(serverKey(relayId, instanceId)) &&
+      shortIdCounts.get(shortId) === 1
+      ? shortId
+      : relayInstanceRouteId(relayId, instanceId)
+  }
+  const appIds = apps.map((app) => ({ id: app.appId }))
+  const appsByKey = new Map(
+    apps.map((app) => [serverKey(app.relayId, app.appId), app])
+  )
+
+  const visibleAssignments = assignments.filter((assignment) =>
+    access.instance(assignment.relayId, assignment.instanceId, false)
+  )
+  const domainCounts = new Map<string, number>()
+  for (const assignment of visibleAssignments) {
+    const key = serverKey(assignment.relayId, assignment.instanceId)
+    domainCounts.set(key, (domainCounts.get(key) ?? 0) + 1)
+  }
+  const managedDomains = visibleAssignments.map(
+    (assignment): ManagedDomainOverview => {
+      const key = serverKey(assignment.relayId, assignment.instanceId)
+      const server = servers.get(key)
+      return {
+        address: managedDomainConnectAddress(assignment),
+        canManage: access.instance(
+          assignment.relayId,
+          assignment.instanceId,
+          true
+        ),
+        domain: assignment.domain,
+        domainCount: domainCounts.get(key) ?? 1,
+        id: assignment.id,
+        instanceId: assignment.instanceId,
+        lastError: assignment.lastError,
+        port: assignment.publicPort,
+        primary: assignment.primary,
+        relayId: assignment.relayId,
+        relayName: relayNames.get(assignment.relayId) ?? "Unknown Relay",
+        server: {
+          brickId: server?.brickId,
+          game: server?.game,
+          implementation: server?.implementation,
+          name: server?.name ?? assignment.instanceId.slice(0, 8),
+          routeId: serverRoute(assignment.relayId, assignment.instanceId),
+        },
+        srvActive: domainHasActiveSrvRecord(assignment),
+        status: assignment.status,
+        supportsSrv: assignment.supportsSrv,
+        vanityLabel: assignment.vanityLabel,
+        zoneName: zoneNames.get(assignment.domain) ?? null,
+      }
+    }
+  )
+
+  const webHostnames = hostnames.flatMap((row): Array<WebHostnameOverview> => {
+    const isApp = row.resourceType === "app"
+    const readable = isApp
+      ? access.app(row.relayId, row.resourceId, false)
+      : access.instance(row.relayId, row.resourceId, false)
+    if (!readable) return []
+    const key = serverKey(row.relayId, row.resourceId)
+    const app = isApp ? appsByKey.get(key) : undefined
+    const server = isApp ? undefined : servers.get(key)
+    return [
+      {
+        canManage: isApp
+          ? access.app(row.relayId, row.resourceId, true)
+          : access.instance(row.relayId, row.resourceId, true),
+        connectionName: connectionNames.get(row.connectionId) ?? null,
+        generated: row.generated,
+        hostname: row.hostname,
+        id: row.id,
+        lastError: row.lastError,
+        relayId: row.relayId,
+        relayName: relayNames.get(row.relayId) ?? "Unknown Relay",
+        resource: isApp
+          ? {
+              id: row.resourceId,
+              kind: "app",
+              name: app?.name ?? row.resourceId.slice(0, 8),
+              routeId: shortIdRouteIdentifier(appIds, { id: row.resourceId }),
+            }
+          : {
+              brickId: server?.brickId,
+              id: row.resourceId,
+              implementation: server?.implementation,
+              kind: "server",
+              name: server?.name ?? row.resourceId.slice(0, 8),
+              routeId: serverRoute(row.relayId, row.resourceId),
+            },
+        status: row.status,
+        target: row.target,
+        vanity: row.vanityDomain !== null,
+        zoneName:
+          zoneNameFor(row.hostname, connections, row.connectionId) ??
+          (row.vanityDomain ? (zoneNames.get(row.vanityDomain) ?? null) : null),
+      },
+    ]
+  })
+
+  const platformDomains = usable
+    .filter((domain) => domain.ownerId === null && domain.enabled)
+    .map((domain) => ({ domain: domain.domain, isDefault: domain.isDefault }))
+
+  return {
+    canManagePlatform: admin,
+    connections: connections.map(publicConnection),
+    hearthDomain: kilnRootDomain(),
+    managedDomains,
+    platformDomains,
+    settings: { personal: personalSettings, platform: platformSettings },
+    userId: user.id,
+    webHostnames,
+  }
+}
+
+/** Hides nothing secret; the token never leaves Hearth. */
+function publicConnection(connection: DomainConnection) {
+  return {
+    domains: connection.domains,
+    id: connection.id,
+    lastError: connection.lastError,
+    lastVerifiedAt: connection.lastVerifiedAt,
+    name: connection.name,
+    platform: connection.ownerId === null,
+    zones: connection.zones,
+  }
+}
+
+function zoneNameFor(
+  hostname: string,
+  connections: ReadonlyArray<DomainConnection>,
+  connectionId: string
+): string | null {
+  const connection = connections.find((item) => item.id === connectionId)
+  let best: string | null = null
+  for (const zone of connection?.zones ?? []) {
+    if (domainInZone(hostname, zone.name) && zone.name.length > (best?.length ?? 0)) {
+      best = zone.name
+    }
+  }
+  return best
+}
+
+/** The zones a pasted token, or a saved connection's, can manage. */
+export async function discoverCloudflareDomainsHandler(
+  data: DiscoverDomainsInput
+) {
+  const user = await requireEligibleResourceUser()
+  const apiToken =
+    data.apiToken ??
+    (data.connectionId
+      ? await savedApiToken(user, data.connectionId)
+      : undefined)
+  if (!apiToken) throw new Error("Enter a Cloudflare API token")
+  const zones = await runAppEffect(
+    "cloudflare.zones.list",
+    listCloudflareZonesEffect(apiToken)
+  )
+  if (zones.length === 0) {
+    throw new Error(
+      "This token can't read any active zones. Give it Zone Read and DNS Edit on the domains Kiln should use."
+    )
+  }
+  return { zones }
+}
+
+/**
+ * Saves a Cloudflare connection: its name, token, and which of its zones'
+ * domains are vanity domains. A person's own, or the platform's for an
+ * administrator.
+ */
+export async function saveDomainConnectionHandler(
+  data: SaveDomainConnectionInput
+) {
+  const user = await requireEligibleResourceUser()
+  const existing = data.id
+    ? await runAppEffect(
+        "domains.connection.load",
+        loadDomainConnectionEffect(data.id)
+      )
+    : null
+  if (data.id && (!existing || !canManageConnection(user, existing.connection))) {
+    throw new Error("That Cloudflare connection was removed")
+  }
+  const ownerId = existing
+    ? existing.connection.ownerId
+    : data.platform
+      ? null
+      : user.id
+  if (ownerId === null && !isPlatformAdmin(user)) {
+    throw new Error("Platform administrator access required")
+  }
+  const requested = [
+    ...new Map(data.domains.map((item) => [item.domain, item])).values(),
+  ]
+  if (
+    data.defaultDomain &&
+    !requested.some((item) => item.domain === data.defaultDomain)
+  ) {
+    throw new Error("Choose a default domain from the list")
+  }
+  // The dialog lists one domain per zone, so its choices can't collapse.
+  const zoneIds = new Set(requested.map((item) => item.zoneId))
+  if (zoneIds.size !== requested.length) {
+    throw new Error("Choose one domain per Cloudflare zone")
+  }
+  const apiToken =
+    data.apiToken ??
+    (data.id ? await savedApiToken(user, data.id) : undefined)
+  if (!apiToken) throw new Error("Enter a Cloudflare API token")
+  const zones = await runAppEffect(
+    "cloudflare.zones.list",
+    listCloudflareZonesEffect(apiToken)
+  )
+  const zonesById = new Map(zones.map((zone) => [zone.id, zone]))
+  const domains = requested.map(
+    (item): Omit<ManagedDomain, "connectionId" | "ownerId"> => {
+      const zone = zonesById.get(item.zoneId)
+      if (!zone) {
+        throw new Error(`This token can't manage the zone for ${item.domain}`)
+      }
+      if (!domainInZone(item.domain, zone.name)) {
+        throw new Error(`${item.domain} is not in the ${zone.name} zone`)
+      }
+      return {
+        domain: item.domain,
+        enabled: true,
+        isDefault: item.domain === data.defaultDomain,
+        zoneId: zone.id,
+        zoneName: zone.name,
+      }
+    }
+  )
+  const id = existing?.connection.id ?? randomUUID().replaceAll("-", "")
+  // Domains left out that still have game server domains stay, disabled;
+  // the save decides which under its locks.
+  await runAppEffect(
+    "domains.connection.save",
+    saveDomainConnectionEffect({
+      apiToken: data.apiToken,
+      domains,
+      id,
+      insert: !existing,
+      name: data.name,
+      ownerId,
+      zones,
+    }).pipe(Effect.andThen(invalidateManagedDomainAddressesEffect))
+  )
+  publishDomainChange()
+  return { id }
+}
+
+/**
+ * Removes a connection after deleting the records it made for web
+ * hostnames. Refused while game server domains use its vanity domains.
+ */
+export async function deleteDomainConnectionHandler(
+  data: DeleteDomainConnectionInput
+) {
+  const user = await requireEligibleResourceUser()
+  const existing = await runAppEffect(
+    "domains.connection.load",
+    loadDomainConnectionEffect(data.id)
+  )
+  if (!existing || !canManageConnection(user, existing.connection)) return
+  await runAppEffect(
+    "domains.connection.delete",
+    removeConnectionWebHostnamesEffect(data.id).pipe(
+      Effect.andThen(deleteDomainConnectionEffect(data.id)),
+      Effect.andThen(invalidateManagedDomainAddressesEffect)
+    )
+  )
+  publishDomainChange()
+}
+
+/** How a person's vanity domains, or the platform's, are handed out. */
+export async function saveVanitySettingsHandler(data: SaveVanitySettingsInput) {
+  const user = await requireEligibleResourceUser()
+  if (data.platform && !isPlatformAdmin(user)) {
+    throw new Error("Platform administrator access required")
+  }
+  await runAppEffect(
+    "domains.settings.save",
+    saveVanitySettingsEffect(data.platform ? null : user.id, {
+      autoAssign: data.autoAssign,
+      // Names under a person's own domains are theirs to pick.
+      blacklistPatterns: data.platform
+        ? validateBlacklistPatterns(data.blacklistPatterns)
+        : [],
+      strategy: data.strategy,
+    })
+  )
+  publishDomainChange()
+}
+
+/**
+ * Brings game server domains in line with their servers and web hostnames
+ * with their Relays, retrying failed ones: every one for administrators,
+ * otherwise those on what the person can change.
+ */
+export async function resyncDomainAssignmentsHandler() {
+  const user = await requireEligibleResourceUser()
+  const access = await resourceAccess(user)
+  const relays = (await listPersistedRelays()).filter((relay) => relay.enabled)
+  const snapshots = await Promise.all(
+    relays.map(async (relay) => ({
+      relay,
+      snapshot: relaySnapshotSchema.parse(
+        await runAppEffect(
+          "relay.snapshot.domains.resync",
+          relayJsonEffect(relay, "/v1/snapshot", (input) => input)
+        )
+      ),
+    }))
+  )
+  const instances = snapshots.flatMap(({ relay, snapshot }) =>
+    snapshot.instances
+      .filter((instance) => access.instance(relay.id, instance.id, true))
+      .map((instance) => ({ ...instance, relayId: relay.id }))
+  )
+  const [[, failures], hostnames] = await Promise.all([
+    runAppEffect(
+      "domains.instances.resync",
+      Effect.partition(instances, provisionInstanceDomainEffect, {
+        concurrency: 1,
+      })
+    ),
+    runAppEffect(
+      "webHostnames.resync",
+      resyncWebHostnamesEffect((row) =>
+        row.resourceType === "app"
+          ? access.app(row.relayId, row.resourceId, true)
+          : access.instance(row.relayId, row.resourceId, true)
+      )
+    ),
+  ])
+  publishDomainChange()
+  if (failures.length > 0) {
+    const reason = failures[0]
+    throw new Error(
+      `Could not sync ${failures.length} of ${instances.length} server addresses: ${
+        reason instanceof Error ? reason.message : "Cloudflare sync failed"
+      }`
+    )
+  }
+  if (hostnames.failure) {
+    throw new Error(`Could not sync every web hostname: ${hostnames.failure}`)
+  }
+  return {
+    syncedHostnameCount: hostnames.checked,
+    syncedServerCount: instances.length,
+  }
+}
+
+async function savedApiToken(
+  user: AuthenticatedUser,
+  connectionId: string
+): Promise<string | undefined> {
+  const credential = await runAppEffect(
+    "domains.connection.credential",
+    loadDomainConnectionCredentialEffect(connectionId).pipe(
+      Effect.orElseSucceed(() => null)
+    )
+  )
+  return credential && canManageConnection(user, credential)
+    ? credential.apiToken
+    : undefined
+}
+
+function serverKey(relayId: string, id: string): string {
+  return `${relayId}:${id}`
+}

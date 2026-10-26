@@ -4,17 +4,14 @@ import { afterAll, afterEach, vi } from "vite-plus/test"
 import { relayInstanceSchema } from "@workspace/contracts"
 
 import { AppCache } from "@/effect/cache"
-import type {
-  CloudflareIntegrationCredential,
-  InstanceDomainAssignment,
-} from "@/effect/domains"
+import type { InstanceDomainAssignment } from "@/effect/domains"
 import { disposeAppRuntime } from "@/effect/runtime"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRows, selectRows } from "@/test/seed"
 import { betterAuthSecrets } from "@/lib/environment"
 import {
   insertInstanceDomainAssignmentEffect,
-  saveCloudflareIntegrationEffect,
+  saveDomainConnectionEffect,
 } from "@/effect/domains"
 import { finalizeInstanceDeletionEffect } from "@/server/instance-deletion-cleanup"
 
@@ -91,21 +88,35 @@ const insertCredential = (
   } = {}
 ) =>
   Effect.gen(function* () {
+    const domains = options.domains ?? ["kiln.site"]
+    // The platform's connection, as an install that predates owned ones has.
     yield* insertRows("domain_integration", {
       id: "cloudflare",
       provider: "cloudflare",
+      owner_id: null,
+      name: "Cloudflare",
       api_token_ciphertext: encryptWithKeyring(
         "api-token",
         betterAuthSecrets(),
         "kiln-cloudflare-api-token"
       ),
-      assignment_strategy: options.strategy ?? "default",
-      blacklist_patterns: "[]",
-      enabled: true,
+      zones: JSON.stringify(
+        domains.map((domain, index) => ({
+          id: index === 0 ? "zone-id" : `zone-${index}`,
+          name: domain,
+        }))
+      ),
       created_at: 0,
       updated_at: 0,
     })
-    const domains = options.domains ?? ["kiln.site"]
+    yield* insertRows("domain_owner_settings", {
+      owner_key: "",
+      auto_assign: true,
+      assignment_strategy: options.strategy ?? "default",
+      blacklist_patterns: "[]",
+      created_at: 0,
+      updated_at: 0,
+    })
     yield* insertRows(
       "domain_zone",
       domains.map((domain, index) => ({
@@ -312,7 +323,7 @@ describeMysql("managed domain deletion", () => {
 
         yield* deleteManagedDomainAssignmentEffect(
           testAssignment(),
-          testCredential()
+          "api-token"
         )
 
         assert.deepEqual(dns.records(), [])
@@ -328,7 +339,7 @@ describeMysql("managed domain deletion", () => {
 
         const failure = yield* deleteManagedDomainAssignmentEffect(
           testAssignment(),
-          testCredential()
+          "api-token"
         ).pipe(Effect.flip)
 
         assert.strictEqual(failure._tag, "ExternalServiceError")
@@ -782,13 +793,22 @@ describeMysql("saving vanity domains", () => {
           .sort()
     )
     const save = (reachableZoneIds: Array<string>) =>
-      saveCloudflareIntegrationEffect({
+      saveDomainConnectionEffect({
         apiToken: "api-token",
-        blacklistPatterns: [],
-        domains: [testCredential().domains[0]!],
-        enabled: true,
-        reachableZoneIds: new Set(reachableZoneIds),
-        strategy: "default",
+        domains: [
+          {
+            domain: "kiln.site",
+            enabled: true,
+            isDefault: true,
+            zoneId: "zone-id",
+            zoneName: "kiln.site",
+          },
+        ],
+        id: "cloudflare",
+        insert: false,
+        name: "Cloudflare",
+        ownerId: null,
+        zones: reachableZoneIds.map((id) => ({ id, name: id })),
       })
 
     it.effect(
@@ -806,6 +826,7 @@ describeMysql("saving vanity domains", () => {
           assert.deepEqual(yield* zoneRows, ["kiln.site:on", "other.site:off"])
           // Disabled, so it takes no new game server domains.
           const refused = yield* insertInstanceDomainAssignmentEffect({
+            connectionId: "cloudflare",
             domain: "other.site",
             id: aliasId,
             instanceId: "c".repeat(40),
@@ -833,6 +854,7 @@ describeMysql("saving vanity domains", () => {
           // Loaded before the domain moved zones, so its records would land
           // in the old zone.
           const refused = yield* insertInstanceDomainAssignmentEffect({
+            connectionId: "cloudflare",
             domain: "kiln.site",
             id: aliasId,
             instanceId,
@@ -929,27 +951,5 @@ function testAlias(): InstanceDomainAssignment {
     primary: false,
     srvRecordId: null,
     vanityLabel: "alias",
-  }
-}
-
-function testCredential(): CloudflareIntegrationCredential {
-  return {
-    apiToken: "api-token",
-    blacklistPatterns: [],
-    domains: [
-      {
-        domain: "kiln.site",
-        enabled: true,
-        isDefault: true,
-        zoneId: "zone-id",
-        zoneName: "kiln.site",
-      },
-    ],
-    enabled: true,
-    id: "cloudflare",
-    lastError: null,
-    lastVerifiedAt: null,
-    provider: "cloudflare",
-    strategy: "default",
   }
 }

@@ -8,6 +8,10 @@ import {
   infraServersCollectionOptions,
 } from "@/lib/collections/infra-directories"
 import { relaysCollectionOptions } from "@/lib/collections/relays"
+import {
+  canAccessInfrastructureDestination,
+  infrastructureDestinations,
+} from "@/lib/navigation-destinations"
 import { pageTitle } from "@/lib/page-title"
 import {
   domainSettingsQueryOptions,
@@ -31,17 +35,22 @@ export const Route = createFileRoute("/_app/infra/overview")({
   // Hearth database reads only, so the first HTML draws the whole map.
   loader: async ({ context }) => {
     const capabilities = await routeAccessCapabilities(context.queryClient)
+    const includeDomains = infrastructureDestinations.some(
+      (destination) =>
+        destination.to === "/infra/domains" &&
+        canAccessInfrastructureDestination(capabilities, destination)
+    )
     await Promise.all([
       context.dbClient.collection(relaysCollectionOptions).preload(),
       context.dbClient.collection(infraServersCollectionOptions).preload(),
       context.dbClient.collection(infraAppsCollectionOptions).preload(),
       context.dbClient.collection(infraDatabasesCollectionOptions).preload(),
       context.queryClient.ensureQueryData(hearthEdgeQueryOptions()),
-      capabilities.isPlatformAdmin
+      includeDomains
         ? context.queryClient.ensureQueryData(domainSettingsQueryOptions())
         : undefined,
     ])
-    return { includeDomains: capabilities.isPlatformAdmin }
+    return { includeDomains }
   },
   head: () => ({ meta: [{ title: pageTitle("Infrastructure Overview") }] }),
   component: InfraOverviewRoute,

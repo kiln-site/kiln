@@ -52,6 +52,8 @@ import {
   serverKey,
   strategyOptions,
   type DirectoryServer,
+  type DomainConnectionOverview,
+  type VanityDomainChoice,
 } from "@/components/domains-shared"
 import { InstanceCard } from "@/components/instance-card"
 import {
@@ -63,11 +65,7 @@ import {
   InstancePickerContent,
   type InstancePickerItem,
 } from "@/components/instance-picker"
-import type {
-  DomainAssignmentStrategy,
-  DomainIntegration,
-  ManagedDomain,
-} from "@/effect/domains"
+import type { DomainAssignmentStrategy, VanitySettings } from "@/effect/domains"
 import {
   defaultDomainBlacklistPatterns,
   domainInZone,
@@ -77,13 +75,17 @@ import {
 } from "@/lib/domain-schemas"
 import { queryKeys, serverDirectoryQueryOptions } from "@/lib/query-options"
 import {
-  configureDomainIntegration,
   createInstanceDomain,
+  deleteDomainConnection,
   discoverCloudflareDomains,
+  releaseWebHostname,
   removeInstanceDomain,
+  saveDomainConnection,
+  saveVanitySettings,
   updateInstanceDomain,
   type DiscoveredCloudflareZone,
   type ManagedDomainOverview,
+  type WebHostnameOverview,
 } from "@/server/domains"
 
 export function CreateDomainDialog({
@@ -92,7 +94,7 @@ export function CreateDomainDialog({
   managedDomains,
   onOpenChange,
 }: {
-  domains: Array<ManagedDomain>
+  domains: ReadonlyArray<VanityDomainChoice>
   /** The game server the table is filtered to. */
   initialServerKey: string | null
   managedDomains: Array<ManagedDomainOverview>
@@ -341,7 +343,7 @@ function VanityNameField({
 }: {
   autoFocus?: boolean
   domain: string
-  domains: ReadonlyArray<ManagedDomain>
+  domains: ReadonlyArray<VanityDomainChoice>
   error: string | null
   hint: string
   onDomainChange: (domain: string) => void
@@ -440,7 +442,7 @@ export function EditDomainDialog({
   onOpenChange,
 }: {
   domain: ManagedDomainOverview
-  domains: ReadonlyArray<ManagedDomain>
+  domains: ReadonlyArray<VanityDomainChoice>
   onOpenChange: (open: boolean) => void
 }) {
   const queryClient = useQueryClient()
@@ -454,17 +456,8 @@ export function EditDomainDialog({
     () =>
       domains.some((item) => item.domain === domain.domain)
         ? domains
-        : [
-            ...domains,
-            {
-              domain: domain.domain,
-              enabled: false,
-              isDefault: false,
-              zoneId: "",
-              zoneName: domain.zoneName ?? domain.domain,
-            },
-          ],
-    [domain.domain, domain.zoneName, domains]
+        : [...domains, { domain: domain.domain, platform: false }],
+    [domain.domain, domains]
   )
   const unchanged =
     parsed.success &&
@@ -633,12 +626,13 @@ export function DeleteDomainDialog({
   )
 }
 
-/** A Cloudflare zone in the configuration list. */
+/** A Cloudflare zone in the connection's list. */
 interface DomainChoice {
-  /** The suffix Kiln uses: the zone itself or a name inside it. */
+  /** The suffix Kiln names addresses under: the zone itself. */
   domain: string
-  /** Configured, but the current token can't reach its zone. */
+  /** A vanity domain, but the current token can't reach its zone. */
   missing: boolean
+  /** A vanity domain: new game servers and apps get addresses under it. */
   selected: boolean
   zoneId: string
   zoneName: string
@@ -650,46 +644,53 @@ type TokenCheck =
   | { count: number; status: "ready" }
   | { message: string; status: "error" }
 
-export function DomainConfigurationDialog({
+/**
+ * Connects a Cloudflare API token, or edits one. Kiln keeps the records of
+ * web route hostnames in every zone it reaches; the zones marked vanity also
+ * give new game servers and apps addresses.
+ */
+export function DomainConnectionDialog({
+  canManagePlatform,
+  connection,
   domainUsage,
   hearthDomain,
-  integration,
   onOpenChange,
 }: {
+  canManagePlatform: boolean
+  /** Null to connect a new token. */
+  connection: DomainConnectionOverview | null
   domainUsage: ReadonlyMap<string, number>
   hearthDomain: string
-  integration: DomainIntegration | null
   onOpenChange: (open: boolean) => void
 }) {
   const queryClient = useQueryClient()
-  const hasIntegration = integration !== null
+  const saved = connection !== null
   const [mode, setMode] = React.useState<"settings" | "permissions">("settings")
+  const [name, setName] = React.useState(connection?.name ?? "Cloudflare")
+  const [platform, setPlatform] = React.useState(connection?.platform ?? false)
   const [apiToken, setApiToken] = React.useState("")
-  const [choices, setChoices] = React.useState<Array<DomainChoice>>(
-    () =>
-      integration?.domains.map((domain) => ({
+  const [choices, setChoices] = React.useState<Array<DomainChoice>>(() => {
+    const vanity = new Map(
+      connection?.domains.map((domain) => [domain.zoneId, domain]) ?? []
+    )
+    return mergeDiscoveredZones(
+      [...vanity.values()].map((domain) => ({
         domain: domain.domain,
         missing: false,
         selected: domain.enabled,
         zoneId: domain.zoneId,
         zoneName: domain.zoneName,
-      })) ?? []
-  )
+      })),
+      connection?.zones ?? []
+    )
+  })
   const [defaultZoneId, setDefaultZoneId] = React.useState(
-    () => integration?.domains.find((domain) => domain.isDefault)?.zoneId ?? ""
-  )
-  const [strategy, setStrategy] = React.useState<DomainAssignmentStrategy>(
-    integration?.strategy ?? "default"
-  )
-  const [enabled, setEnabled] = React.useState(integration?.enabled ?? true)
-  const [blacklistPatterns, setBlacklistPatterns] = React.useState(() =>
-    (
-      integration?.blacklistPatterns ?? [...defaultDomainBlacklistPatterns]
-    ).join("\n")
+    () => connection?.domains.find((domain) => domain.isDefault)?.zoneId ?? ""
   )
   const [tokenCheck, setTokenCheck] = React.useState<TokenCheck>({
     status: "idle",
   })
+  const [confirmDelete, setConfirmDelete] = React.useState(false)
   // Bumped by the refresh button to list the zones again.
   const [scan, setScan] = React.useState(0)
   const handledScan = React.useRef(scan)
@@ -701,7 +702,8 @@ export function DomainConfigurationDialog({
     const refreshed = scan !== handledScan.current
     handledScan.current = scan
     const token = apiToken.trim()
-    if (token ? token.length < 20 : !hasIntegration) {
+    // A saved connection's zones show until it's refreshed.
+    if (token ? token.length < 20 : !saved || !refreshed) {
       setTokenCheck({ status: "idle" })
       return
     }
@@ -714,7 +716,10 @@ export function DomainConfigurationDialog({
           Effect.tryPromise({
             try: (signal) =>
               discoverCloudflareDomains({
-                data: { apiToken: token || undefined },
+                data: {
+                  apiToken: token || undefined,
+                  connectionId: token ? undefined : connection?.id,
+                },
                 signal,
               }),
             catch: (cause) => cause,
@@ -733,28 +738,31 @@ export function DomainConfigurationDialog({
     return () => {
       Effect.runFork(Fiber.interrupt(fiber))
     }
-  }, [apiToken, hasIntegration, scan])
+  }, [apiToken, connection?.id, saved, scan])
 
   const selected = choices.filter((choice) => choice.selected)
   // The first chosen domain stands in until one is picked.
   const effectiveDefault =
     selected.find((choice) => choice.zoneId === defaultZoneId) ?? selected[0]
-  const configure = useMutation({
-    mutationFn: configureDomainIntegration,
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: queryKeys.domains.settings,
-        }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.relay.snapshot }),
-      ])
-      showToast({
-        message: "Cloudflare vanity configuration saved",
-        type: "success",
-      })
-      onOpenChange(false)
-    },
+  const settle = async (message: string) => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.domains.settings }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.relay.snapshot }),
+    ])
+    showToast({ message, type: "success" })
+    onOpenChange(false)
+  }
+  const save = useMutation({
+    mutationFn: saveDomainConnection,
+    onSuccess: () =>
+      settle(saved ? `Saved ${name.trim()}` : "Cloudflare connected"),
   })
+  const remove = useMutation({
+    mutationFn: () =>
+      deleteDomainConnection({ data: { id: connection?.id ?? "" } }),
+    onSuccess: () => settle(`Removed ${connection?.name ?? "connection"}`),
+  })
+  const pending = save.isPending || remove.isPending
 
   const updateChoice = React.useCallback(
     (zoneId: string, change: Partial<DomainChoice>) =>
@@ -766,7 +774,7 @@ export function DomainConfigurationDialog({
     []
   )
 
-  const save = () => {
+  const submit = () => {
     const domains: Array<{ domain: string; zoneId: string }> = []
     for (const choice of selected) {
       const parsed = domainNameSchema.safeParse(choice.domain)
@@ -782,53 +790,37 @@ export function DomainConfigurationDialog({
     const defaultDomain = effectiveDefault
       ? domains[selected.indexOf(effectiveDefault)]?.domain
       : undefined
-    if (!defaultDomain) {
-      showToast({ message: "Choose at least one domain", type: "error" })
-      return
-    }
-    const patternsResult = Result.try(() =>
-      validateBlacklistPatterns(
-        blacklistPatterns
-          .split(/\r?\n/u)
-          .map((pattern) => pattern.trim())
-          .filter(Boolean)
-      )
-    )
-    if (Result.isFailure(patternsResult)) {
-      showToast({
-        message: errorMessage(patternsResult.failure),
-        type: "error",
-      })
-      return
-    }
     const token = apiToken.trim()
-    configure.mutate({
+    save.mutate({
       data: {
         apiToken: token || undefined,
-        blacklistPatterns: patternsResult.success,
         defaultDomain,
         domains,
-        enabled,
-        strategy,
+        id: connection?.id,
+        name: name.trim(),
+        platform,
       },
     })
   }
 
   const tokenLength = apiToken.trim().length
-  const tokenInvalid = tokenLength < 20 && (!hasIntegration || tokenLength > 0)
+  const tokenInvalid = tokenLength < 20 && (!saved || tokenLength > 0)
 
   return (
-    <Dialog open onOpenChange={configure.isPending ? undefined : onOpenChange}>
+    <Dialog open onOpenChange={pending ? undefined : onOpenChange}>
       <DialogContent
         className={mode === "permissions" ? "sm:max-w-3xl" : "sm:max-w-xl"}
       >
         <DialogHeader>
           {mode === "settings" ? (
             <>
-              <DialogTitle>Configure Vanity URLs</DialogTitle>
-              <DialogDescription className="sr-only">
-                Connect Cloudflare and choose the domains Kiln gives game
-                servers addresses under.
+              <DialogTitle>
+                {saved ? `Edit ${connection.name}` : "Connect Cloudflare"}
+              </DialogTitle>
+              <DialogDescription>
+                Kiln creates DNS records for web routes in every zone this
+                token reaches. Zones marked vanity also give new game servers
+                and apps addresses.
               </DialogDescription>
             </>
           ) : (
@@ -852,62 +844,72 @@ export function DomainConfigurationDialog({
 
         {mode === "settings" ? (
           <div className="space-y-4">
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between gap-3">
-                <label
-                  className="type-control-sm"
-                  htmlFor="cloudflare-api-token"
-                >
-                  Cloudflare API token
-                </label>
-                <a
-                  className="type-label inline-flex items-center gap-1 text-primary-ink hover:underline"
-                  href="https://dash.cloudflare.com/profile/api-tokens"
-                  rel="noreferrer"
-                  target="_blank"
-                >
-                  Create token <ExternalLink className="size-2.5" />
-                </a>
-              </div>
-              <div className="flex items-center gap-2">
+            <div className="grid gap-3 sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+              <label className="type-control-sm block space-y-1.5">
+                Name
                 <Input
-                  autoComplete="new-password"
-                  autoFocus={!hasIntegration}
-                  className="min-w-0 flex-1 font-mono"
-                  id="cloudflare-api-token"
-                  minLength={20}
-                  name="apiToken"
-                  placeholder={
-                    hasIntegration ? "Saved token" : "Paste a Cloudflare token"
-                  }
-                  required={!hasIntegration}
-                  type="password"
-                  value={apiToken}
-                  onChange={(event) => setApiToken(event.currentTarget.value)}
+                  autoComplete="off"
+                  maxLength={64}
+                  name="name"
+                  value={name}
+                  onChange={(event) => setName(event.currentTarget.value)}
                 />
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      aria-label="Preview required Cloudflare permissions"
-                      size="icon"
-                      type="button"
-                      variant="outline"
-                      onClick={() => setMode("permissions")}
-                    >
-                      <CircleHelp />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="left">
-                    Preview required permissions
-                  </TooltipContent>
-                </Tooltip>
+              </label>
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between gap-3">
+                  <label
+                    className="type-control-sm"
+                    htmlFor="cloudflare-api-token"
+                  >
+                    API token
+                  </label>
+                  <a
+                    className="type-label inline-flex items-center gap-1 text-primary-ink hover:underline"
+                    href="https://dash.cloudflare.com/profile/api-tokens"
+                    rel="noreferrer"
+                    target="_blank"
+                  >
+                    Create token <ExternalLink className="size-2.5" />
+                  </a>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Input
+                    autoComplete="new-password"
+                    autoFocus={!saved}
+                    className="min-w-0 flex-1 font-mono"
+                    id="cloudflare-api-token"
+                    minLength={20}
+                    name="apiToken"
+                    placeholder={saved ? "Saved token" : "Paste a token"}
+                    required={!saved}
+                    type="password"
+                    value={apiToken}
+                    onChange={(event) => setApiToken(event.currentTarget.value)}
+                  />
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        aria-label="Preview required Cloudflare permissions"
+                        size="icon"
+                        type="button"
+                        variant="outline"
+                        onClick={() => setMode("permissions")}
+                      >
+                        <CircleHelp />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="left">
+                      Preview required permissions
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
               </div>
             </div>
 
             <div className="space-y-1.5">
               <div className="flex items-center justify-between gap-3">
-                <p className="type-control-sm" id="vanity-domains">
-                  Domains
+                <p className="type-control-sm" id="connection-zones">
+                  Zones
                 </p>
                 <div className="flex items-center gap-2">
                   {tokenCheck.status === "error" && choices.length > 0 ? (
@@ -917,18 +919,16 @@ export function DomainConfigurationDialog({
                     </span>
                   ) : choices.length > 0 ? (
                     <span className="type-meta text-muted-foreground tabular-nums">
-                      {selected.length} of {choices.length} enabled
+                      {selected.length} of {choices.length} vanity
                     </span>
                   ) : null}
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <Button
-                        aria-label="Refresh domains from Cloudflare"
+                        aria-label="Refresh zones from Cloudflare"
                         disabled={
                           tokenCheck.status === "checking" ||
-                          (tokenLength === 0
-                            ? !hasIntegration
-                            : tokenLength < 20)
+                          (tokenLength === 0 ? !saved : tokenLength < 20)
                         }
                         size="icon-xs"
                         type="button"
@@ -952,14 +952,12 @@ export function DomainConfigurationDialog({
               </div>
               <div className="max-h-60 overflow-y-auto rounded-md border border-border/75 bg-background/35">
                 <table
-                  aria-labelledby="vanity-domains"
+                  aria-labelledby="connection-zones"
                   className="w-full table-fixed border-collapse"
                 >
                   <thead className="sticky top-0 z-10 bg-[color-mix(in_oklab,var(--surface-overlay)_92%,transparent)] backdrop-blur">
                     <tr className="type-technical-label text-left text-muted-foreground">
-                      <th className="w-10 px-3 py-2 font-normal">
-                        <span className="sr-only">Use</span>
-                      </th>
+                      <th className="w-16 px-3 py-2 font-normal">Vanity</th>
                       <th className="px-1 py-2 font-normal">Domain</th>
                       <th className="w-20 px-2 py-2 text-right font-normal">
                         In use
@@ -988,13 +986,13 @@ export function DomainConfigurationDialog({
                           colSpan={4}
                         >
                           {tokenCheck.status === "checking" ? (
-                            "Listing the token's domains…"
+                            "Listing the token's zones…"
                           ) : tokenCheck.status === "error" ? (
                             <span className="text-destructive">
                               {tokenCheck.message}
                             </span>
                           ) : (
-                            "Paste a token to list the domains it can manage."
+                            "Paste a token to list the zones it can manage."
                           )}
                         </td>
                       </tr>
@@ -1004,89 +1002,71 @@ export function DomainConfigurationDialog({
               </div>
             </div>
 
-            <div className="flex flex-col gap-3 border border-border/75 bg-background/35 p-3 sm:flex-row sm:items-center">
-              <div className="min-w-0 flex-1">
-                <p className="type-control-sm" id="automatic-provisioning">
-                  Automatic provisioning
-                </p>
-              </div>
-              <div className="flex shrink-0 items-center gap-3">
-                <Select
-                  disabled={!enabled}
-                  value={strategy}
-                  onValueChange={(value) =>
-                    setStrategy(value as DomainAssignmentStrategy)
-                  }
-                >
-                  <SelectTrigger
-                    aria-label="Domain for new game servers"
-                    className="w-36 text-xs"
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className="z-[70]">
-                    {strategyOptions.map((option) => (
-                      <SelectItem
-                        key={option.value}
-                        className="text-xs"
-                        value={option.value}
-                      >
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+            {canManagePlatform && !saved ? (
+              <div className="flex items-center justify-between gap-4 border border-border/75 bg-background/35 p-3">
+                <div>
+                  <p className="type-control-sm" id="platform-connection">
+                    Kiln-provided
+                  </p>
+                  <p className="type-meta mt-0.5 text-muted-foreground">
+                    Everyone&apos;s new game servers and apps get addresses
+                    under its vanity domains, unless they add their own.
+                  </p>
+                </div>
                 <Switch
-                  aria-labelledby="automatic-provisioning"
-                  checked={enabled}
-                  onCheckedChange={setEnabled}
+                  aria-labelledby="platform-connection"
+                  checked={platform}
+                  onCheckedChange={setPlatform}
                 />
               </div>
-            </div>
-
-            <label className="type-label block space-y-1.5">
-              Blacklisted vanity names
-              <Textarea
-                aria-label="Blacklisted vanity name patterns"
-                className="min-h-24 font-mono text-xs"
-                placeholder={"^(admin|api|www)$\n^staff-"}
-                value={blacklistPatterns}
-                onChange={(event) =>
-                  setBlacklistPatterns(event.currentTarget.value)
-                }
-              />
-              <span className="type-meta block text-muted-foreground">
-                One case-insensitive regular expression per line.
-              </span>
-            </label>
-
-            {configure.error ? (
-              <ConfigurationError error={configure.error} />
             ) : null}
 
-            <DialogFooter>
-              <Button
-                disabled={configure.isPending}
-                type="button"
-                variant="outline"
-                onClick={() => onOpenChange(false)}
-              >
-                Cancel
-              </Button>
-              <Button
-                disabled={
-                  configure.isPending || tokenInvalid || selected.length === 0
-                }
-                type="button"
-                onClick={save}
-              >
-                {configure.isPending ? (
-                  <LoaderCircle className="animate-spin" />
-                ) : (
-                  <Check />
-                )}
-                {tokenLength ? "Verify & save" : "Save configuration"}
-              </Button>
+            {save.error ? <ConfigurationError error={save.error} /> : null}
+            {remove.error ? <ConfigurationError error={remove.error} /> : null}
+
+            <DialogFooter className="sm:justify-between">
+              {saved ? (
+                <Button
+                  className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                  disabled={pending}
+                  type="button"
+                  variant="ghost"
+                  onClick={() =>
+                    confirmDelete ? remove.mutate() : setConfirmDelete(true)
+                  }
+                >
+                  {remove.isPending ? (
+                    <LoaderCircle className="animate-spin" />
+                  ) : (
+                    <Trash2 />
+                  )}
+                  {confirmDelete ? "Remove and delete its records" : "Remove"}
+                </Button>
+              ) : (
+                <span />
+              )}
+              <div className="flex flex-col-reverse gap-2 sm:flex-row">
+                <Button
+                  disabled={pending}
+                  type="button"
+                  variant="outline"
+                  onClick={() => onOpenChange(false)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  disabled={pending || tokenInvalid || !name.trim()}
+                  type="button"
+                  onClick={submit}
+                >
+                  {save.isPending ? (
+                    <LoaderCircle className="animate-spin" />
+                  ) : (
+                    <Check />
+                  )}
+                  {tokenLength ? "Verify & save" : "Save"}
+                </Button>
+              </div>
             </DialogFooter>
           </div>
         ) : (
@@ -1117,7 +1097,7 @@ const DomainZoneRow = React.memo(function DomainZoneRow({
       <td className="px-3 py-1.5 align-middle">
         <label className="flex cursor-pointer items-center">
           <input
-            aria-label={`Use ${choice.zoneName}`}
+            aria-label={`Use ${choice.zoneName} as a vanity domain`}
             checked={choice.selected}
             className="peer sr-only"
             type="checkbox"
@@ -1201,15 +1181,14 @@ const DomainZoneRow = React.memo(function DomainZoneRow({
 })
 
 /**
- * Keeps choices for zones still reachable, adds new zones, and flags chosen
- * zones the token lost. A first setup starts with every zone chosen.
+ * Keeps choices for zones still reachable, adds new zones unmarked, and flags
+ * vanity zones the token lost.
  */
 function mergeDiscoveredZones(
   current: ReadonlyArray<DomainChoice>,
   zones: ReadonlyArray<DiscoveredCloudflareZone>
 ): Array<DomainChoice> {
   const byZone = new Map(current.map((choice) => [choice.zoneId, choice]))
-  const selectNew = !current.some((choice) => choice.selected)
   const reachable = new Set(zones.map((zone) => zone.id))
   return [
     ...zones.map((zone): DomainChoice => {
@@ -1219,7 +1198,7 @@ function mergeDiscoveredZones(
         : {
             domain: zone.name,
             missing: false,
-            selected: selectNew,
+            selected: false,
             zoneId: zone.id,
             zoneName: zone.name,
           }
@@ -1228,6 +1207,254 @@ function mergeDiscoveredZones(
       .filter((choice) => choice.selected && !reachable.has(choice.zoneId))
       .map((choice) => ({ ...choice, missing: true })),
   ]
+}
+
+/**
+ * Whether new game servers and apps get addresses under the person's vanity
+ * domains, and how one is picked. Administrators also set Kiln's, which
+ * everyone without vanity domains of their own gets.
+ */
+export function VanitySettingsDialog({
+  onOpenChange,
+  personalSettings,
+  platformSettings,
+}: {
+  onOpenChange: (open: boolean) => void
+  personalSettings: VanitySettings
+  platformSettings: VanitySettings | null
+}) {
+  const queryClient = useQueryClient()
+  const [personal, setPersonal] = React.useState(personalSettings)
+  const [platform, setPlatform] = React.useState(platformSettings)
+  const [blacklistPatterns, setBlacklistPatterns] = React.useState(() =>
+    (platformSettings && platformSettings.blacklistPatterns.length > 0
+      ? platformSettings.blacklistPatterns
+      : [...defaultDomainBlacklistPatterns]
+    ).join("\n")
+  )
+  const save = useMutation({
+    mutationFn: async () => {
+      await saveVanitySettings({
+        data: { ...personal, blacklistPatterns: [], platform: false },
+      })
+      if (!platform) return
+      const patterns = Result.try(() =>
+        validateBlacklistPatterns(
+          blacklistPatterns
+            .split(/\r?\n/u)
+            .map((pattern) => pattern.trim())
+            .filter(Boolean)
+        )
+      )
+      if (Result.isFailure(patterns)) throw patterns.failure
+      await saveVanitySettings({
+        data: {
+          ...platform,
+          blacklistPatterns: patterns.success,
+          platform: true,
+        },
+      })
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: queryKeys.domains.settings,
+      })
+      showToast({ message: "Vanity settings saved", type: "success" })
+      onOpenChange(false)
+    },
+  })
+
+  return (
+    <Dialog open onOpenChange={save.isPending ? undefined : onOpenChange}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Vanity addresses</DialogTitle>
+          <DialogDescription>
+            New game servers and apps get an address under a vanity domain:
+            yours when you have any, otherwise Kiln&apos;s.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <AutomaticAddresses
+            description="Under the vanity domains on your connections."
+            id="personal-addresses"
+            settings={personal}
+            title="Your domains"
+            onChange={setPersonal}
+          />
+          {platform ? (
+            <>
+              <AutomaticAddresses
+                description="Under Kiln-provided vanity domains, for everyone without their own."
+                id="platform-addresses"
+                settings={platform}
+                title="Kiln-provided domains"
+                onChange={setPlatform}
+              />
+              <label className="type-label block space-y-1.5">
+                Reserved names on Kiln-provided domains
+                <Textarea
+                  aria-label="Reserved vanity name patterns"
+                  className="min-h-24 font-mono text-xs"
+                  placeholder={"^(admin|api|www)$\n^staff-"}
+                  value={blacklistPatterns}
+                  onChange={(event) =>
+                    setBlacklistPatterns(event.currentTarget.value)
+                  }
+                />
+                <span className="type-meta block text-muted-foreground">
+                  One case-insensitive regular expression per line.
+                </span>
+              </label>
+            </>
+          ) : null}
+
+          {save.error ? <ConfigurationError error={save.error} /> : null}
+
+          <DialogFooter>
+            <Button
+              disabled={save.isPending}
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              disabled={save.isPending}
+              type="button"
+              onClick={() => save.mutate()}
+            >
+              {save.isPending ? (
+                <LoaderCircle className="animate-spin" />
+              ) : (
+                <Check />
+              )}
+              Save
+            </Button>
+          </DialogFooter>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function AutomaticAddresses({
+  description,
+  id,
+  onChange,
+  settings,
+  title,
+}: {
+  description: string
+  id: string
+  onChange: (settings: VanitySettings) => void
+  settings: VanitySettings
+  title: string
+}) {
+  return (
+    <div className="flex flex-col gap-3 border border-border/75 bg-background/35 p-3 sm:flex-row sm:items-center">
+      <div className="min-w-0 flex-1">
+        <p className="type-control-sm" id={id}>
+          {title}
+        </p>
+        <p className="type-meta mt-0.5 text-muted-foreground">{description}</p>
+      </div>
+      <div className="flex shrink-0 items-center gap-3">
+        <Select
+          disabled={!settings.autoAssign}
+          value={settings.strategy}
+          onValueChange={(value) =>
+            onChange({
+              ...settings,
+              strategy: value as DomainAssignmentStrategy,
+            })
+          }
+        >
+          <SelectTrigger
+            aria-label={`${title}: domain for new addresses`}
+            className="w-36 text-xs"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent className="z-[70]">
+            {strategyOptions.map((option) => (
+              <SelectItem
+                key={option.value}
+                className="text-xs"
+                value={option.value}
+              >
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Switch
+          aria-labelledby={id}
+          checked={settings.autoAssign}
+          onCheckedChange={(autoAssign) => onChange({ ...settings, autoAssign })}
+        />
+      </div>
+    </div>
+  )
+}
+
+/** Releases an app's generated address, deleting its record. */
+export function ReleaseHostnameDialog({
+  hostname,
+  onOpenChange,
+}: {
+  hostname: WebHostnameOverview
+  onOpenChange: (open: boolean) => void
+}) {
+  const queryClient = useQueryClient()
+  const release = useMutation({
+    mutationFn: () => releaseWebHostname({ data: { id: hostname.id } }),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: ["domains"] }),
+    onSuccess: () => {
+      showToast({ message: `Released ${hostname.hostname}`, type: "success" })
+      onOpenChange(false)
+    },
+  })
+  return (
+    <Dialog open onOpenChange={release.isPending ? undefined : onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Release address</DialogTitle>
+          <DialogDescription>
+            Kiln deletes <span className="font-mono">{hostname.hostname}</span>{" "}
+            from Cloudflare. Routes on {hostname.resource.name} that use it
+            stop resolving.
+          </DialogDescription>
+        </DialogHeader>
+        {release.error ? <ConfigurationError error={release.error} /> : null}
+        <DialogFooter>
+          <Button
+            disabled={release.isPending}
+            type="button"
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+          >
+            Cancel
+          </Button>
+          <Button
+            disabled={release.isPending}
+            type="button"
+            variant="destructive"
+            onClick={() => release.mutate()}
+          >
+            {release.isPending ? (
+              <LoaderCircle className="animate-spin" />
+            ) : (
+              <Trash2 />
+            )}
+            Release
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
 }
 
 function CloudflarePermissionsPreview({ domain }: { domain: string }) {

@@ -69,6 +69,7 @@ import {
   provisionInstanceDomainBestEffort,
 } from "@/server/domains.server"
 import { setInstanceDomainOptOutEffect } from "@/effect/domains"
+import { moveResourceWebHostnamesEffect } from "@/server/web-hostnames.server"
 import {
   advanceRelayTransferEffect,
   beginRelayTransferEffect,
@@ -838,11 +839,24 @@ const finishMigration = Effect.fnUntraced(function* (
           instanceId: to.instanceId,
           routes,
         })
-        // Its hostnames belong to the copy now.
+        // Its hostnames belong to the copy now, and their DNS records
+        // point at its Relay.
         yield* rpc(source, "instance.network.routes.write", actor, {
           instanceId: from.instanceId,
           routes: [],
         })
+        yield* moveResourceWebHostnamesEffect(
+          {
+            relayId: from.relayId,
+            resourceId: from.instanceId,
+            resourceType: "instance",
+          },
+          {
+            relayId: destination.id,
+            resourceId: to.instanceId,
+            resourceType: "instance",
+          }
+        )
       })
     )
   }

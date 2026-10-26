@@ -41,7 +41,11 @@ import {
   listGitHubFolders,
   listGitHubRepositories,
 } from "@/server/github-sync"
-import { getDomainSettings, getInstanceDomain } from "@/server/domains"
+import {
+  getDomainSettings,
+  getInstanceDomain,
+  getResourceWebHostnames,
+} from "@/server/domains"
 import { getHearthEdge } from "@/server/hearth-edge"
 import { getResourceLimitsCapacity } from "@/server/resource-limits"
 import {
@@ -163,6 +167,11 @@ export const queryKeys = {
   brickVersions: (type: string, variant: string) =>
     ["bricks", "versions", type, variant] as const,
   domains: {
+    hostnames: (
+      relayId: string,
+      resourceType: "app" | "instance",
+      resourceId: string
+    ) => ["domains", "hostnames", relayId, resourceType, resourceId] as const,
     instance: (relayId: string, instanceId: string) =>
       ["domains", "instances", relayId, instanceId] as const,
     settings: ["domains", "settings"] as const,
@@ -1159,6 +1168,26 @@ export function hearthEdgeQueryOptions() {
     queryKey: queryKeys.hearthEdge,
     queryFn: () => getHearthEdge(),
     staleTime: Infinity,
+  })
+}
+
+/** The DNS records Kiln keeps for a game server's or app's web routes. */
+export function resourceWebHostnamesQueryOptions(
+  relayId: string,
+  resourceType: "app" | "instance",
+  resourceId: string
+) {
+  return queryOptions({
+    queryKey: queryKeys.domains.hostnames(relayId, resourceType, resourceId),
+    queryFn: () =>
+      getResourceWebHostnames({
+        data:
+          resourceType === "app"
+            ? { relayId, resourceId, resourceType }
+            : { relayId, resourceId, resourceType },
+      }),
+    retry: false,
+    staleTime: 10_000,
   })
 }
 

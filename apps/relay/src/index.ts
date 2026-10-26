@@ -1763,6 +1763,7 @@ async function relaySnapshot() {
           ? { platform: { management: "external" as const } }
           : {}),
       proxyMode: config.proxyMode,
+      ...(config.gameHost ? { publicHost: config.gameHost } : {}),
       sftp: {
         developmentAuthentication: config.sftpDevAuthentication,
         host: config.advertisedHost,

@@ -19,6 +19,7 @@ import {
 } from "@/effect/backups"
 import { runAppEffect } from "@/effect/runtime"
 import { deleteInstanceDomainEffect } from "@/server/domains.server"
+import { deleteResourceWebHostnamesEffect } from "@/server/web-hostnames.server"
 import { finalizeInstanceDeletionEffect } from "@/server/instance-deletion-cleanup"
 import { timestampedBackupName } from "@/lib/backup-name"
 import type { AuthenticatedUser } from "@/lib/auth-session"
@@ -254,7 +255,15 @@ async function deleteInstanceResources(input: {
 }): Promise<void> {
   await runAppEffect(
     "domains.instance.finalDelete",
-    deleteInstanceDomainEffect(input.relay.id, input.instanceId)
+    deleteInstanceDomainEffect(input.relay.id, input.instanceId).pipe(
+      Effect.andThen(
+        deleteResourceWebHostnamesEffect({
+          relayId: input.relay.id,
+          resourceId: input.instanceId,
+          resourceType: "instance",
+        })
+      )
+    )
   )
   const relayDeletion = await Effect.runPromise(
     Effect.result(

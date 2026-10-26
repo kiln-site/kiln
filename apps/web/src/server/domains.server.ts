@@ -1,12 +1,8 @@
 import { randomUUID } from "node:crypto"
 
 import type { RelayInstance } from "@workspace/contracts"
-import {
-  builtinTailscaleBrickId,
-  relayInstanceSchema,
-  relaySnapshotSchema,
-} from "@workspace/contracts"
-import { Effect, Option, Random, Result, Semaphore } from "effect"
+import { relayInstanceSchema, relaySnapshotSchema } from "@workspace/contracts"
+import { Effect, Option, Result, Semaphore } from "effect"
 import { z } from "zod"
 
 import {
@@ -15,47 +11,44 @@ import {
   createCloudflareAddressRecordEffect,
   createCloudflareSrvRecordEffect,
   deleteCloudflareRecordEffect,
-  listCloudflareZonesEffect,
   replaceCloudflareAddressRecordEffect,
   updateCloudflareAddressRecordEffect,
   updateCloudflareSrvRecordEffect,
 } from "@/effect/cloudflare-api"
-import { ensuringPromise, recoverPromise } from "@/effect/promise"
+import { ensuringPromise } from "@/effect/promise"
 import {
   activateInstanceDomainAssignmentEffect,
+  anyDomainConnectionEffect,
   clearInstanceDomainRecordsEffect,
-  countInstanceDomainsByDomainEffect,
   deleteInstanceDomainAssignmentEffect,
   deleteRelayInstanceDomainAssignmentsEffect,
   insertInstanceDomainAssignmentEffect,
   loadActiveInstanceDomainAssignmentsEffect,
-  loadCloudflareIntegrationCredentialEffect,
-  loadDomainIntegrationEffect,
+  loadDomainConnectionCredentialEffect,
   loadInstanceDomainAssignmentEffect,
-  loadInstanceDomainAssignmentsEffect,
   loadInstanceDomainAssignmentsForInstanceEffect,
   loadInstanceDomainOptOutEffect,
+  loadManagedDomainEffect,
   loadRelayInstanceDomainAssignmentsEffect,
   loadUsedVanityLabelsEffect,
+  loadVanitySettingsEffect,
   markInstanceDomainRemovingEffect,
   reassignInstanceDomainsEffect,
   recordInstanceDomainErrorEffect,
   recordInstanceDomainSyncErrorEffect,
   reserveInstanceDomainAssignmentEffect,
-  saveCloudflareIntegrationEffect,
   setInstanceDomainOptOutEffect,
   setInstanceDomainPrimaryEffect,
   updateInstanceDomainAddressRecordEffect,
   updateInstanceDomainEndpointEffect,
   updateInstanceDomainLabelEffect,
-  type CloudflareIntegrationCredential,
   type InstanceDomainAssignment,
   type ManagedDomain,
 } from "@/effect/domains"
 import { Database } from "@/effect/database"
 import { ExternalServiceError } from "@/effect/errors"
 import { runAppEffect } from "@/effect/runtime"
-import { isPlatformAdmin, requireRelayPermission } from "@/lib/access-control"
+import { requireRelayPermission } from "@/lib/access-control"
 import {
   invalidateCached,
   readThroughCache,
@@ -67,33 +60,28 @@ import {
   managedDomainConnectAddress,
   managedDomainEndpointMatches,
 } from "@/lib/domain-address"
-import {
-  domainInZone,
-  validateBlacklistPatterns,
-  vanityLabelAllowed,
-} from "@/lib/domain-schemas"
+import { vanityLabelAllowed } from "@/lib/domain-schemas"
 import { publishDomainChange } from "@/lib/domain-realtime.server"
-import { kilnRootDomain } from "@/lib/environment"
-import { listInstanceDirectoryEffect } from "@/lib/instance-directory"
-import {
-  relayInstanceRouteId,
-  type FleetRelayInstance,
-} from "@/lib/relay-fleet"
+import type { FleetRelayInstance } from "@/lib/relay-fleet"
 import type { PersistedRelay } from "@/lib/relay-registry"
-import { activeRelay, listPersistedRelays } from "@/lib/relay-registry"
+import { activeRelay } from "@/lib/relay-registry"
 import { relayJsonEffect } from "@/lib/relay-client"
 import { requireEligibleResourceUser } from "@/server/auth"
+import {
+  chooseVanityDomainEffect,
+  domainActor,
+  loadResourceOwnerIdEffect,
+  vanityDomainUsable,
+  type DomainActor,
+} from "@/server/domain-access.server"
 import {
   generateVanityCandidates,
   managedDomainSrvConfiguration,
 } from "@/server/vanity-names"
 import type {
-  ConfigureDomainInput,
   CreateInstanceDomainInput,
-  DiscoverDomainsInput,
   InstanceDomainInput,
   InstanceDomainOverview,
-  ManagedDomainOverview,
   RemoveInstanceDomainInput,
   UpdateInstanceDomainInput,
 } from "@/server/domains"
@@ -113,7 +101,7 @@ const managedDomainAddressMapSchema = z.record(
     publicPort: z.number().int().min(1).max(65_535),
   })
 )
-const invalidateManagedDomainAddressesEffect = invalidateCached(
+export const invalidateManagedDomainAddressesEffect = invalidateCached(
   managedDomainAddressCachePolicy
 )
 
@@ -137,206 +125,6 @@ function withInstanceDomainLock<A, E, R>(
   return lock.withPermit(effect)
 }
 
-export async function getDomainSettingsHandler() {
-  await requireDomainAdministrator()
-  // Hearth's own tables only, so the page never waits on a Relay.
-  const [integration, assignments, relays, directory] = await Promise.all([
-    runAppEffect("domains.integration.load", loadDomainIntegrationEffect()),
-    runAppEffect(
-      "domains.assignments.all",
-      loadInstanceDomainAssignmentsEffect()
-    ),
-    listPersistedRelays(),
-    runAppEffect("instances.directory.list", listInstanceDirectoryEffect()),
-  ])
-  const relayNames = new Map(relays.map((relay) => [relay.id, relay.name]))
-  const zoneNames = new Map(
-    integration?.domains.map((domain) => [domain.domain, domain.zoneName])
-  )
-  const servers = new Map(
-    directory.map((record) => [
-      assignmentKey(record.relayId, record.id),
-      record,
-    ])
-  )
-  // Match the Game Servers table: a short ID routes on its own unless another
-  // game server shares it.
-  const shortIdCounts = new Map<string, number>()
-  for (const record of directory) {
-    if (record.brickId === builtinTailscaleBrickId) continue
-    const shortId = record.id.slice(0, 8)
-    shortIdCounts.set(shortId, (shortIdCounts.get(shortId) ?? 0) + 1)
-  }
-  const domainCounts = new Map<string, number>()
-  for (const assignment of assignments) {
-    const key = assignmentKey(assignment.relayId, assignment.instanceId)
-    domainCounts.set(key, (domainCounts.get(key) ?? 0) + 1)
-  }
-  const managedDomains = assignments.map(
-    (assignment): ManagedDomainOverview => {
-      const key = assignmentKey(assignment.relayId, assignment.instanceId)
-      const server = servers.get(key)
-      const shortId = assignment.instanceId.slice(0, 8)
-      return {
-        address: managedDomainConnectAddress(assignment),
-        domain: assignment.domain,
-        domainCount: domainCounts.get(key) ?? 1,
-        id: assignment.id,
-        instanceId: assignment.instanceId,
-        lastError: assignment.lastError,
-        port: assignment.publicPort,
-        primary: assignment.primary,
-        relayId: assignment.relayId,
-        relayName: relayNames.get(assignment.relayId) ?? "Unknown Relay",
-        server: {
-          brickId: server?.brickId,
-          game: server?.game,
-          implementation: server?.implementation,
-          name: server?.name ?? shortId,
-          // Otherwise the Relay-qualified full ID, which names exactly one
-          // server even where short IDs collide or the server is missing
-          // from the directory.
-          routeId:
-            server && shortIdCounts.get(shortId) === 1
-              ? shortId
-              : relayInstanceRouteId(assignment.relayId, assignment.instanceId),
-        },
-        srvActive: domainHasActiveSrvRecord(assignment),
-        status: assignment.status,
-        supportsSrv: assignment.supportsSrv,
-        vanityLabel: assignment.vanityLabel,
-        zoneName: zoneNames.get(assignment.domain) ?? null,
-      }
-    }
-  )
-  return {
-    hearthDomain: kilnRootDomain(),
-    integration,
-    managedDomains,
-  }
-}
-
-/** The zones a pasted token, or the saved one, can manage. */
-export async function discoverCloudflareDomainsHandler(
-  data: DiscoverDomainsInput
-) {
-  await requireDomainAdministrator()
-  const apiToken = data.apiToken ?? (await savedApiToken())
-  if (!apiToken) throw new Error("Enter a Cloudflare API token")
-  const zones = await runAppEffect(
-    "cloudflare.zones.list",
-    listCloudflareZonesEffect(apiToken)
-  )
-  if (zones.length === 0) {
-    throw new Error(
-      "This token can't read any active zones. Give it Zone Read and DNS Edit on the domains Kiln should use."
-    )
-  }
-  return { zones }
-}
-
-export async function configureDomainIntegrationHandler(
-  data: ConfigureDomainInput
-) {
-  await requireDomainAdministrator()
-  const blacklistPatterns = validateBlacklistPatterns(data.blacklistPatterns)
-  const requested = [
-    ...new Map(data.domains.map((item) => [item.domain, item])).values(),
-  ]
-  if (!requested.some((item) => item.domain === data.defaultDomain)) {
-    throw new Error("Choose a default domain from the list")
-  }
-  // The dialog lists one domain per zone, so its choices can't collapse.
-  const zoneIds = new Set(requested.map((item) => item.zoneId))
-  if (zoneIds.size !== requested.length) {
-    throw new Error("Choose one domain per Cloudflare zone")
-  }
-  const apiToken = data.apiToken ?? (await savedApiToken())
-  if (!apiToken) throw new Error("Enter a Cloudflare API token")
-  const zones = await runAppEffect(
-    "cloudflare.zones.list",
-    listCloudflareZonesEffect(apiToken)
-  )
-  const zonesById = new Map(zones.map((zone) => [zone.id, zone]))
-  const domains = requested.map((item): ManagedDomain => {
-    const zone = zonesById.get(item.zoneId)
-    if (!zone) {
-      throw new Error(`This token can't manage the zone for ${item.domain}`)
-    }
-    if (!domainInZone(item.domain, zone.name)) {
-      throw new Error(`${item.domain} is not in the ${zone.name} zone`)
-    }
-    return {
-      domain: item.domain,
-      enabled: true,
-      isDefault: item.domain === data.defaultDomain,
-      zoneId: zone.id,
-      zoneName: zone.name,
-    }
-  })
-  // Domains left out that still have game server domains stay, disabled;
-  // the save decides which under its locks.
-  await runAppEffect(
-    "domains.integration.save",
-    saveCloudflareIntegrationEffect({
-      apiToken,
-      blacklistPatterns,
-      domains,
-      enabled: data.enabled,
-      reachableZoneIds: new Set(zonesById.keys()),
-      strategy: data.strategy,
-    }).pipe(Effect.andThen(invalidateManagedDomainAddressesEffect))
-  )
-  return {
-    integration: await runAppEffect(
-      "domains.integration.load",
-      loadDomainIntegrationEffect()
-    ),
-  }
-}
-
-export async function resyncDomainAssignmentsHandler() {
-  await requireDomainAdministrator()
-  const integration = await runAppEffect(
-    "domains.integration.load",
-    loadDomainIntegrationEffect()
-  )
-  if (!integration) {
-    throw new Error("Configure vanity domains before syncing")
-  }
-
-  const relays = (await listPersistedRelays()).filter((relay) => relay.enabled)
-  const snapshots = await Promise.all(
-    relays.map(async (relay) => ({
-      relay,
-      snapshot: relaySnapshotSchema.parse(
-        await runAppEffect(
-          "relay.snapshot.domains.resync",
-          relayJsonEffect(relay, "/v1/snapshot", (input) => input)
-        )
-      ),
-    }))
-  )
-  const instances = snapshots.flatMap(({ relay, snapshot }) =>
-    snapshot.instances.map((instance) => ({ ...instance, relayId: relay.id }))
-  )
-  const [, failures] = await runAppEffect(
-    "domains.instances.resync",
-    Effect.partition(instances, provisionInstanceDomainEffect, {
-      concurrency: 1,
-    })
-  )
-  if (failures.length > 0) {
-    const reason = failures[0]
-    throw new Error(
-      `Could not sync ${failures.length} of ${instances.length} server addresses: ${
-        reason instanceof Error ? reason.message : "Cloudflare sync failed"
-      }`
-    )
-  }
-  return { syncedServerCount: instances.length }
-}
-
 export async function getInstanceDomainHandler(data: InstanceDomainInput) {
   const user = await requireEligibleResourceUser()
   await requireRelayPermission({
@@ -345,7 +133,7 @@ export async function getInstanceDomainHandler(data: InstanceDomainInput) {
     relayId: data.relayId,
     user,
   })
-  const [assignments, integration] = await Promise.all([
+  const [assignments, choice] = await Promise.all([
     runAppEffect(
       "domains.assignments.instance",
       loadInstanceDomainAssignmentsForInstanceEffect(
@@ -353,28 +141,35 @@ export async function getInstanceDomainHandler(data: InstanceDomainInput) {
         data.instanceId
       )
     ),
-    runAppEffect("domains.integration.load", loadDomainIntegrationEffect()),
+    runAppEffect(
+      "domains.instance.nextDomain",
+      loadResourceOwnerIdEffect({
+        relayId: data.relayId,
+        resourceId: data.instanceId,
+        resourceType: "instance",
+      }).pipe(Effect.flatMap(chooseVanityDomainEffect))
+    ),
   ])
   const primary = assignments[0]
   return {
     assignment: primary ? assignmentOverview(primary) : null,
-    managedDomain:
-      integration?.enabled === true
-        ? (integration.domains[0]?.domain ?? null)
-        : null,
+    managedDomain: choice?.domain.domain ?? null,
   }
 }
 
 /**
  * Points a new domain at a game server. Its first domain becomes its connect
- * address; later ones do when `primary` is set. Administrators only: each
- * domain is a record under the platform's zones.
+ * address; later ones do when `primary` is set. Needs the game server's
+ * network, and a vanity domain it may use: its owner's, the platform's, or
+ * the person's own.
  */
 export async function createInstanceDomainHandler(
   data: CreateInstanceDomainInput
 ) {
-  await requireDomainAdministrator()
-  const { instance } = await loadWritableInstance(data.relayId, data.instanceId)
+  const { instance, user } = await loadWritableInstance(
+    data.relayId,
+    data.instanceId
+  )
   // A failed create still leaves a failed row behind, so publish either way.
   return ensuringPromise(
     () =>
@@ -385,7 +180,8 @@ export async function createInstanceDomainHandler(
           data.instanceId,
           createInstanceDomainEffect(
             { ...instance, relayId: data.relayId },
-            data
+            data,
+            domainActor(user)
           ).pipe(
             // Adding a domain undoes a removal.
             Effect.tap(() =>
@@ -420,7 +216,7 @@ export async function updateInstanceDomainHandler(
     instanceId: assignment.instanceId,
     relayId: assignment.relayId,
   }
-  const { instance } = await loadWritableInstance(
+  const { instance, user } = await loadWritableInstance(
     scope.relayId,
     scope.instanceId
   )
@@ -434,7 +230,8 @@ export async function updateInstanceDomainHandler(
           scope.instanceId,
           updateInstanceDomainEffect(
             { ...instance, relayId: scope.relayId },
-            data
+            data,
+            domainActor(user)
           )
         )
       ),
@@ -449,7 +246,8 @@ export async function updateInstanceDomainHandler(
 export async function removeInstanceDomainHandler(
   data: RemoveInstanceDomainInput
 ) {
-  await requireDomainAdministrator()
+  // Signed in before the lookup, so an ID's existence isn't revealed.
+  const user = await requireEligibleResourceUser()
   const assignment = await runAppEffect(
     "domains.assignment.load",
     loadInstanceDomainAssignmentEffect(data.id)
@@ -459,6 +257,12 @@ export async function removeInstanceDomainHandler(
     instanceId: assignment.instanceId,
     relayId: assignment.relayId,
   }
+  await requireRelayPermission({
+    instanceId: scope.instanceId,
+    permission: "instance.network.write",
+    relayId: scope.relayId,
+    user,
+  })
   // A failed removal still changes the row, so publish either way.
   await ensuringPromise(
     () =>
@@ -670,16 +474,13 @@ export const removeInstanceDomainEffect = Effect.fn("domains.instance.remove")(
 // isn't active. Delete them before choosing a name again, so the new records
 // don't orphan them and they don't make the domain's own name look taken.
 const releaseRecordsEffect = Effect.fn("domains.instance.releaseRecords")(
-  function* (
-    assignment: InstanceDomainAssignment,
-    credential: CloudflareIntegrationCredential
-  ) {
+  function* (assignment: InstanceDomainAssignment, apiToken: string) {
     const recordIds = assignmentRecordIds(assignment)
     if (recordIds.length === 0) return
     const zoneId = yield* assignmentZoneIdEffect(assignment)
     yield* Effect.all(
       recordIds.map((recordId) =>
-        deleteCloudflareRecordEffect(credential.apiToken, zoneId, recordId)
+        deleteCloudflareRecordEffect(apiToken, zoneId, recordId)
       ),
       { concurrency: "unbounded" }
     )
@@ -690,22 +491,19 @@ const releaseRecordsEffect = Effect.fn("domains.instance.releaseRecords")(
 const deleteAssignmentRecordsEffect = Effect.fn(
   "domains.instance.deleteRecords"
 )(function* (assignment: InstanceDomainAssignment) {
-  const credential =
+  const apiToken =
     assignmentRecordIds(assignment).length > 0
-      ? yield* loadCloudflareIntegrationCredentialEffect()
+      ? yield* assignmentApiTokenEffect(assignment)
       : null
-  yield* deleteManagedDomainAssignmentEffect(assignment, credential)
+  yield* deleteManagedDomainAssignmentEffect(assignment, apiToken)
 })
 
 export const deleteManagedDomainAssignmentEffect = Effect.fn(
   "domains.instance.deleteAssignment"
-)(function* (
-  assignment: InstanceDomainAssignment,
-  credential: CloudflareIntegrationCredential | null
-) {
+)(function* (assignment: InstanceDomainAssignment, apiToken: string | null) {
   const recordIds = assignmentRecordIds(assignment)
   if (recordIds.length > 0) {
-    if (!credential) {
+    if (!apiToken) {
       return yield* domainFailure(
         "Cloudflare credentials are required to remove this managed address"
       )
@@ -713,7 +511,7 @@ export const deleteManagedDomainAssignmentEffect = Effect.fn(
     const zoneId = yield* assignmentZoneIdEffect(assignment)
     yield* Effect.all(
       recordIds.map((recordId) =>
-        deleteCloudflareRecordEffect(credential.apiToken, zoneId, recordId)
+        deleteCloudflareRecordEffect(apiToken, zoneId, recordId)
       ),
       { concurrency: "unbounded" }
     )
@@ -730,18 +528,16 @@ export const removeRelayManagedDomainsEffect = Effect.fn(
     (assignment) => assignmentRecordIds(assignment).length > 0
   )
   if (removeCloudflareRecords && withRecords.length > 0) {
-    const credential = yield* loadCloudflareIntegrationCredentialEffect()
     yield* Effect.all(
       withRecords.map((assignment) =>
-        assignmentZoneIdEffect(assignment).pipe(
-          Effect.flatMap((zoneId) =>
+        Effect.all([
+          assignmentApiTokenEffect(assignment),
+          assignmentZoneIdEffect(assignment),
+        ]).pipe(
+          Effect.flatMap(([apiToken, zoneId]) =>
             Effect.all(
               assignmentRecordIds(assignment).map((recordId) =>
-                deleteCloudflareRecordEffect(
-                  credential.apiToken,
-                  zoneId,
-                  recordId
-                )
+                deleteCloudflareRecordEffect(apiToken, zoneId, recordId)
               ),
               { concurrency: "unbounded" }
             )
@@ -761,17 +557,18 @@ export const removeRelayManagedDomainsEffect = Effect.fn(
  * ones, and gives a server without any its first domain. Reports whether
  * anything changed.
  */
-const provisionInstanceDomainEffect = Effect.fn("domains.instance.provision")(
+export const provisionInstanceDomainEffect = Effect.fn(
+  "domains.instance.provision"
+)(
   function* (instance: DomainInstance) {
     if (!instance.publicHost || !instance.publicPort) return false
-    const integration = yield* loadDomainIntegrationEffect()
-    if (!integration) return false
+    // Most installs never connect Cloudflare; they stop here.
+    if (!(yield* anyDomainConnectionEffect())) return false
     const assignments = yield* loadInstanceDomainAssignmentsForInstanceEffect(
       instance.relayId,
       instance.id
     )
     if (assignments.length === 0) {
-      if (!integration.enabled) return false
       // A game server whose last domain was removed doesn't get a new one.
       // Its other domains still follow it below, since someone kept or added
       // them, and ones being deleted are left to their delete.
@@ -780,14 +577,23 @@ const provisionInstanceDomainEffect = Effect.fn("domains.instance.provision")(
       ) {
         return false
       }
-      const credential = yield* loadCloudflareIntegrationCredentialEffect()
-      const domain = yield* chooseDomainEffect(credential)
-      const vanityLabel = yield* availableVanityLabelEffect(
-        credential,
-        domain,
-        generateVanityCandidates(credential.blacklistPatterns)
+      const ownerId = yield* loadResourceOwnerIdEffect({
+        relayId: instance.relayId,
+        resourceId: instance.id,
+        resourceType: "instance",
+      })
+      const choice = yield* chooseVanityDomainEffect(ownerId)
+      if (!choice) return false
+      const { domain, settings } = choice
+      const { apiToken } = yield* loadDomainConnectionCredentialEffect(
+        domain.connectionId
       )
-      yield* provisionVanityRecordsEffect(credential, instance, domain, {
+      const vanityLabel = yield* availableVanityLabelEffect(
+        { apiToken, blacklistPatterns: settings.blacklistPatterns },
+        domain,
+        generateVanityCandidates(settings.blacklistPatterns)
+      )
+      yield* provisionVanityRecordsEffect(apiToken, instance, domain, {
         id: randomUUID(),
         insert: true,
         primary: true,
@@ -796,7 +602,6 @@ const provisionInstanceDomainEffect = Effect.fn("domains.instance.provision")(
       return true
     }
 
-    const credential = yield* loadCloudflareIntegrationCredentialEffect()
     const srvConfiguration = managedDomainSrvConfiguration(instance)
     let changed = false
     // Brings one domain in line with the endpoint. Reports whether it changed.
@@ -812,14 +617,15 @@ const provisionInstanceDomainEffect = Effect.fn("domains.instance.provision")(
         ) {
           return false
         }
-        yield* syncVanityEndpointEffect(credential, assignment, instance)
+        const apiToken = yield* assignmentApiTokenEffect(assignment)
+        yield* syncVanityEndpointEffect(apiToken, assignment, instance)
         return true
       }
-      yield* releaseRecordsEffect(assignment, credential)
-      const domain = yield* configuredDomainEffect(
-        credential,
-        assignment.domain,
-        true
+      const apiToken = yield* assignmentApiTokenEffect(assignment)
+      yield* releaseRecordsEffect(assignment, apiToken)
+      const domain = yield* configuredDomainEffect(assignment.domain, true)
+      const { blacklistPatterns } = yield* loadVanitySettingsEffect(
+        domain.ownerId
       )
       // The primary was likely named by Kiln, so it may take a new name;
       // other domains were named by hand and keep theirs.
@@ -827,12 +633,12 @@ const provisionInstanceDomainEffect = Effect.fn("domains.instance.provision")(
         ? [
             ...new Set([
               assignment.vanityLabel,
-              ...generateVanityCandidates(credential.blacklistPatterns),
+              ...generateVanityCandidates(blacklistPatterns),
             ]),
           ]
         : [assignment.vanityLabel]
       const vanityLabel = yield* availableVanityLabelEffect(
-        credential,
+        { apiToken, blacklistPatterns },
         domain,
         candidates,
         assignment.id
@@ -841,7 +647,7 @@ const provisionInstanceDomainEffect = Effect.fn("domains.instance.provision")(
           recordInstanceDomainErrorEffect(assignment.id, error.message)
         )
       )
-      yield* provisionVanityRecordsEffect(credential, instance, domain, {
+      yield* provisionVanityRecordsEffect(apiToken, instance, domain, {
         id: assignment.id,
         insert: false,
         primary: assignment.primary,
@@ -894,18 +700,26 @@ const provisionInstanceDomainEffect = Effect.fn("domains.instance.provision")(
 const createInstanceDomainEffect = Effect.fn("domains.instance.create")(
   function* (
     instance: DomainInstance,
-    input: Pick<CreateInstanceDomainInput, "domain" | "primary" | "vanityLabel">
+    input: Pick<CreateInstanceDomainInput, "domain" | "primary" | "vanityLabel">,
+    actor: DomainActor
   ) {
     if (!instance.publicHost || !instance.publicPort) {
       return yield* domainFailure(
         "Update this Relay before assigning a vanity address"
       )
     }
-    const credential = yield* loadCloudflareIntegrationCredentialEffect()
-    const domain = yield* configuredDomainEffect(credential, input.domain)
+    const domain = yield* configuredDomainEffect(input.domain)
+    yield* requireUsableDomainEffect(instance, domain, actor)
+    const [{ apiToken }, { blacklistPatterns }] = yield* Effect.all(
+      [
+        loadDomainConnectionCredentialEffect(domain.connectionId),
+        loadVanitySettingsEffect(domain.ownerId),
+      ],
+      { concurrency: 2 }
+    )
     if (
       input.vanityLabel !== undefined &&
-      !vanityLabelAllowed(input.vanityLabel, credential.blacklistPatterns)
+      !vanityLabelAllowed(input.vanityLabel, blacklistPatterns)
     ) {
       return yield* domainFailure(
         "That server address is reserved by the platform administrator"
@@ -916,17 +730,17 @@ const createInstanceDomainEffect = Effect.fn("domains.instance.create")(
       instance.id
     )
     const vanityLabel = yield* availableVanityLabelEffect(
-      credential,
+      { apiToken, blacklistPatterns },
       domain,
       input.vanityLabel === undefined
-        ? generateVanityCandidates(credential.blacklistPatterns)
+        ? generateVanityCandidates(blacklistPatterns)
         : [input.vanityLabel]
     )
     const id = randomUUID()
     // Promoted only once its records exist, so a failed create leaves the
     // current connect address alone.
     const overview = yield* provisionVanityRecordsEffect(
-      credential,
+      apiToken,
       instance,
       domain,
       { id, insert: true, primary: existing.length === 0, vanityLabel }
@@ -948,7 +762,8 @@ const updateInstanceDomainEffect = Effect.fn("domains.instance.update")(
     input: Pick<
       UpdateInstanceDomainInput,
       "domain" | "id" | "primary" | "vanityLabel"
-    >
+    >,
+    actor: DomainActor
   ) {
     if (!instance.publicHost || !instance.publicPort) {
       return yield* domainFailure(
@@ -968,14 +783,25 @@ const updateInstanceDomainEffect = Effect.fn("domains.instance.update")(
         "Finish deleting this domain before editing it"
       )
     }
-    const credential = yield* loadCloudflareIntegrationCredentialEffect()
     // Renaming within a disabled domain is fine; moving onto one isn't.
     const domain = yield* configuredDomainEffect(
-      credential,
       input.domain,
       input.domain === assignment.domain
     )
-    if (!vanityLabelAllowed(input.vanityLabel, credential.blacklistPatterns)) {
+    if (input.domain !== assignment.domain) {
+      yield* requireUsableDomainEffect(instance, domain, actor)
+    }
+    const [{ apiToken }, { blacklistPatterns }, currentToken] =
+      yield* Effect.all(
+        [
+          loadDomainConnectionCredentialEffect(domain.connectionId),
+          loadVanitySettingsEffect(domain.ownerId),
+          assignmentApiTokenEffect(assignment),
+        ],
+        { concurrency: 3 }
+      )
+    const credential = { apiToken, blacklistPatterns }
+    if (!vanityLabelAllowed(input.vanityLabel, blacklistPatterns)) {
       return yield* domainFailure(
         "That server address is reserved by the platform administrator"
       )
@@ -985,7 +811,7 @@ const updateInstanceDomainEffect = Effect.fn("domains.instance.update")(
         assignment.domain !== domain.domain ||
         assignment.vanityLabel !== input.vanityLabel
       if (assignment.status !== "active") {
-        yield* releaseRecordsEffect(assignment, credential)
+        yield* releaseRecordsEffect(assignment, currentToken)
         yield* availableVanityLabelEffect(
           credential,
           domain,
@@ -993,7 +819,7 @@ const updateInstanceDomainEffect = Effect.fn("domains.instance.update")(
           assignment.id
         )
         return yield* provisionVanityRecordsEffect(
-          credential,
+          apiToken,
           instance,
           domain,
           {
@@ -1006,7 +832,7 @@ const updateInstanceDomainEffect = Effect.fn("domains.instance.update")(
       }
       const current = managedDomainEndpointMatches(assignment, instance)
         ? assignment
-        : yield* syncVanityEndpointEffect(credential, assignment, instance)
+        : yield* syncVanityEndpointEffect(currentToken, assignment, instance)
       if (!renamed) return assignmentOverview(current)
       yield* availableVanityLabelEffect(
         credential,
@@ -1014,17 +840,20 @@ const updateInstanceDomainEffect = Effect.fn("domains.instance.update")(
         [input.vanityLabel],
         assignment.id
       )
-      if (current.zoneId === domain.zoneId) {
+      if (
+        current.zoneId === domain.zoneId &&
+        current.integrationId === domain.connectionId
+      ) {
         return yield* renameVanityRecordsEffect(
-          credential,
+          apiToken,
           current,
           domain.domain,
           input.vanityLabel
         )
       }
       // Records can't move between zones: replace them in the new one.
-      yield* releaseRecordsEffect(current, credential)
-      return yield* provisionVanityRecordsEffect(credential, instance, domain, {
+      yield* releaseRecordsEffect(current, currentToken)
+      return yield* provisionVanityRecordsEffect(apiToken, instance, domain, {
         id: assignment.id,
         insert: false,
         primary: assignment.primary,
@@ -1045,39 +874,10 @@ const updateInstanceDomainEffect = Effect.fn("domains.instance.update")(
   }
 )
 
-/** Picks the domain a new game server's first domain goes under. */
-const chooseDomainEffect = Effect.fn("domains.instance.chooseDomain")(
-  function* (credential: CloudflareIntegrationCredential) {
-    // Loaded default first, so it wins ties.
-    const domains = credential.domains.filter((domain) => domain.enabled)
-    const [fallback] = domains
-    if (!fallback) {
-      return yield* domainFailure(
-        "Enable a domain in the vanity configuration first"
-      )
-    }
-    if (credential.strategy === "random") {
-      const index = yield* Random.nextIntBetween(0, domains.length, {
-        halfOpen: true,
-      })
-      return domains[index] ?? fallback
-    }
-    if (credential.strategy === "balanced") {
-      const usage = yield* countInstanceDomainsByDomainEffect()
-      return domains.reduce((least, domain) =>
-        (usage.get(domain.domain) ?? 0) < (usage.get(least.domain) ?? 0)
-          ? domain
-          : least
-      )
-    }
-    return fallback
-  }
-)
-
 const provisionVanityRecordsEffect = Effect.fn(
   "domains.instance.createRecords"
 )(function* (
-  credential: CloudflareIntegrationCredential,
+  apiToken: string,
   instance: DomainInstance,
   domain: ManagedDomain,
   target: {
@@ -1112,6 +912,7 @@ const provisionVanityRecordsEffect = Effect.fn(
   yield* target.insert
     ? insertInstanceDomainAssignmentEffect({
         ...reservation,
+        connectionId: domain.connectionId,
         instanceId: instance.id,
         primary: target.primary,
         relayId: instance.relayId,
@@ -1120,7 +921,7 @@ const provisionVanityRecordsEffect = Effect.fn(
   const hostname = `${vanityLabel}.${domain.domain}`
   const address = cloudflareAddressRecord(hostname, publicHost)
   const addressRecord = yield* createCloudflareAddressRecordEffect(
-    credential.apiToken,
+    apiToken,
     domain.zoneId,
     address,
     instance.id
@@ -1132,7 +933,7 @@ const provisionVanityRecordsEffect = Effect.fn(
   const srvRecord =
     supportsSrv && srvProtocol && srvService
       ? yield* createCloudflareSrvRecordEffect(
-          credential.apiToken,
+          apiToken,
           domain.zoneId,
           srvRecordInput(
             hostname,
@@ -1145,7 +946,7 @@ const provisionVanityRecordsEffect = Effect.fn(
         ).pipe(
           Effect.catch((error) =>
             deleteCloudflareRecordEffect(
-              credential.apiToken,
+              apiToken,
               domain.zoneId,
               addressRecord.id
             ).pipe(
@@ -1167,13 +968,13 @@ const provisionVanityRecordsEffect = Effect.fn(
     Effect.catch((error) =>
       Effect.all([
         deleteCloudflareRecordEffect(
-          credential.apiToken,
+          apiToken,
           domain.zoneId,
           addressRecord.id
         ).pipe(Effect.catch(() => Effect.void)),
         srvRecord
           ? deleteCloudflareRecordEffect(
-              credential.apiToken,
+              apiToken,
               domain.zoneId,
               srvRecord.id
             ).pipe(Effect.catch(() => Effect.void))
@@ -1193,7 +994,7 @@ const provisionVanityRecordsEffect = Effect.fn(
 
 const syncVanityEndpointEffect = Effect.fn("domains.instance.syncEndpoint")(
   function* (
-    credential: CloudflareIntegrationCredential,
+    apiToken: string,
     assignment: InstanceDomainAssignment,
     instance: DomainInstance
   ) {
@@ -1215,7 +1016,7 @@ const syncVanityEndpointEffect = Effect.fn("domains.instance.syncEndpoint")(
       const zoneId = yield* assignmentZoneIdEffect(assignment)
       if (assignment.addressRecordType === address.type) {
         yield* updateCloudflareAddressRecordEffect(
-          credential.apiToken,
+          apiToken,
           zoneId,
           addressRecordId,
           address,
@@ -1223,7 +1024,7 @@ const syncVanityEndpointEffect = Effect.fn("domains.instance.syncEndpoint")(
         )
       } else {
         const replacement = yield* replaceCloudflareAddressRecordEffect(
-          credential.apiToken,
+          apiToken,
           zoneId,
           addressRecordId,
           address,
@@ -1239,7 +1040,7 @@ const syncVanityEndpointEffect = Effect.fn("domains.instance.syncEndpoint")(
       const nextSrvRecordId = srvConfiguration
         ? assignment.srvRecordId
           ? (yield* updateCloudflareSrvRecordEffect(
-              credential.apiToken,
+              apiToken,
               zoneId,
               assignment.srvRecordId,
               srvRecordInput(
@@ -1252,7 +1053,7 @@ const syncVanityEndpointEffect = Effect.fn("domains.instance.syncEndpoint")(
               assignment.instanceId
             )).id
           : (yield* createCloudflareSrvRecordEffect(
-              credential.apiToken,
+              apiToken,
               zoneId,
               srvRecordInput(
                 hostname,
@@ -1266,7 +1067,7 @@ const syncVanityEndpointEffect = Effect.fn("domains.instance.syncEndpoint")(
         : null
       if (!srvConfiguration && assignment.srvRecordId) {
         yield* deleteCloudflareRecordEffect(
-          credential.apiToken,
+          apiToken,
           zoneId,
           assignment.srvRecordId
         )
@@ -1300,7 +1101,7 @@ const syncVanityEndpointEffect = Effect.fn("domains.instance.syncEndpoint")(
 /** Renames a domain's records within their zone. */
 const renameVanityRecordsEffect = Effect.fn("domains.instance.renameRecords")(
   function* (
-    credential: CloudflareIntegrationCredential,
+    apiToken: string,
     assignment: InstanceDomainAssignment,
     domain: string,
     vanityLabel: string
@@ -1317,7 +1118,7 @@ const renameVanityRecordsEffect = Effect.fn("domains.instance.renameRecords")(
     const nextHostname = `${vanityLabel}.${domain}`
     const rename = Effect.gen(function* () {
       yield* updateCloudflareAddressRecordEffect(
-        credential.apiToken,
+        apiToken,
         zoneId,
         addressRecordId,
         cloudflareAddressRecord(nextHostname, assignment.publicHost),
@@ -1330,7 +1131,7 @@ const renameVanityRecordsEffect = Effect.fn("domains.instance.renameRecords")(
         assignment.srvProtocol
       ) {
         yield* updateCloudflareSrvRecordEffect(
-          credential.apiToken,
+          apiToken,
           zoneId,
           assignment.srvRecordId,
           srvRecordInput(
@@ -1354,7 +1155,7 @@ const renameVanityRecordsEffect = Effect.fn("domains.instance.renameRecords")(
     yield* rename.pipe(
       Effect.catch((error) =>
         rollbackVanityRenameEffect(
-          credential,
+          apiToken,
           zoneId,
           assignment,
           previousHostname
@@ -1369,14 +1170,14 @@ const renameVanityRecordsEffect = Effect.fn("domains.instance.renameRecords")(
 
 const rollbackVanityRenameEffect = Effect.fn("domains.instance.rollbackRename")(
   function* (
-    credential: CloudflareIntegrationCredential,
+    apiToken: string,
     zoneId: string,
     assignment: InstanceDomainAssignment,
     hostname: string
   ) {
     if (assignment.addressRecordId) {
       yield* updateCloudflareAddressRecordEffect(
-        credential.apiToken,
+        apiToken,
         zoneId,
         assignment.addressRecordId,
         cloudflareAddressRecord(hostname, assignment.publicHost),
@@ -1389,7 +1190,7 @@ const rollbackVanityRenameEffect = Effect.fn("domains.instance.rollbackRename")(
       assignment.srvProtocol
     ) {
       yield* updateCloudflareSrvRecordEffect(
-        credential.apiToken,
+        apiToken,
         zoneId,
         assignment.srvRecordId,
         srvRecordInput(
@@ -1413,7 +1214,7 @@ const rollbackVanityRenameEffect = Effect.fn("domains.instance.rollbackRename")(
  */
 const availableVanityLabelEffect = Effect.fn("domains.instance.availableLabel")(
   function* (
-    credential: CloudflareIntegrationCredential,
+    credential: { apiToken: string; blacklistPatterns: Array<string> },
     domain: ManagedDomain,
     candidates: Array<string>,
     excludeId?: string
@@ -1445,19 +1246,44 @@ const availableVanityLabelEffect = Effect.fn("domains.instance.availableLabel")(
  * A configured domain. Only enabled ones take new game server domains;
  * `existing` also accepts a disabled one a game server domain is already on.
  */
-function configuredDomainEffect(
-  credential: CloudflareIntegrationCredential,
+const configuredDomainEffect = Effect.fnUntraced(function* (
   name: string,
   existing = false
-): Effect.Effect<ManagedDomain, ExternalServiceError> {
-  const domain = credential.domains.find((item) => item.domain === name)
+) {
+  const domain = yield* loadManagedDomainEffect(name)
   if (!domain) {
-    return domainFailure(`${name} is not a configured vanity domain`)
+    return yield* domainFailure(`${name} is not a configured vanity domain`)
   }
   return domain.enabled || existing
-    ? Effect.succeed(domain)
-    : domainFailure(`${name} isn't taking new game server domains`)
-}
+    ? domain
+    : yield* domainFailure(`${name} isn't taking new game server domains`)
+})
+
+/** Refuses a vanity domain the game server's owner and the person can't use. */
+const requireUsableDomainEffect = Effect.fnUntraced(function* (
+  instance: DomainInstance,
+  domain: ManagedDomain,
+  actor: DomainActor
+) {
+  const ownerId = yield* loadResourceOwnerIdEffect({
+    relayId: instance.relayId,
+    resourceId: instance.id,
+    resourceType: "instance",
+  })
+  if (!vanityDomainUsable(domain, ownerId, actor)) {
+    return yield* domainFailure(`${domain.domain} is not a configured vanity domain`)
+  }
+})
+
+/** The token of the connection whose zone holds an assignment's records. */
+const assignmentApiTokenEffect = Effect.fnUntraced(function* (
+  assignment: InstanceDomainAssignment
+) {
+  const credential = yield* loadDomainConnectionCredentialEffect(
+    assignment.integrationId
+  )
+  return credential.apiToken
+})
 
 function assignmentZoneIdEffect(
   assignment: InstanceDomainAssignment
@@ -1508,7 +1334,7 @@ function domainSrvConfigurationMatches(
   )
 }
 
-function assignmentOverview(
+export function assignmentOverview(
   assignment: InstanceDomainAssignment
 ): InstanceDomainOverview {
   return {
@@ -1543,26 +1369,6 @@ export function managedAddressForInstance(
     : instance.connectAddress
 }
 
-async function savedApiToken(): Promise<string | undefined> {
-  const credential = await recoverPromise(
-    () =>
-      runAppEffect(
-        "domains.integration.credential",
-        loadCloudflareIntegrationCredentialEffect()
-      ),
-    () => null
-  )
-  return credential?.apiToken
-}
-
-async function requireDomainAdministrator() {
-  const user = await requireEligibleResourceUser()
-  if (!isPlatformAdmin(user)) {
-    throw new Error("Platform administrator access required")
-  }
-  return user
-}
-
 async function loadWritableInstance(relayId: string, instanceId: string) {
   const user = await requireEligibleResourceUser()
   const relay = await requiredRelay(relayId)
@@ -1580,7 +1386,7 @@ async function loadWritableInstance(relayId: string, instanceId: string) {
   )
   const instance = snapshot.instances.find((item) => item.id === instanceId)
   if (!instance) throw new Error("Instance not found")
-  return { instance: relayInstanceSchema.parse(instance) }
+  return { instance: relayInstanceSchema.parse(instance), user }
 }
 
 async function requiredRelay(id: string): Promise<PersistedRelay> {

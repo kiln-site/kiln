@@ -1,7 +1,7 @@
 import { showToast } from "@workspace/ui/components/sonner"
 
 import type { DomainAssignmentStrategy } from "@/effect/domains"
-import type { ManagedDomainOverview } from "@/server/domains"
+import type { getDomainSettings, ManagedDomainOverview } from "@/server/domains"
 import type { getInfraServerDirectory } from "@/server/infra-directory"
 
 // Shared by the Domains page and its dialogs, which load separately.
@@ -9,6 +9,18 @@ import type { getInfraServerDirectory } from "@/server/infra-directory"
 export type DirectoryServer = Awaited<
   ReturnType<typeof getInfraServerDirectory>
 >[number]
+
+export type DomainSettings = Awaited<ReturnType<typeof getDomainSettings>>
+
+/** A Cloudflare connection as the Domains page shows it. */
+export type DomainConnectionOverview = DomainSettings["connections"][number]
+
+/** A vanity domain the person may put a game server's address under. */
+export interface VanityDomainChoice {
+  domain: string
+  /** The platform's, rather than one of the person's connections'. */
+  platform: boolean
+}
 
 export const strategyOptions: ReadonlyArray<{
   label: string

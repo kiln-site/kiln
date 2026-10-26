@@ -17,6 +17,7 @@ import {
   relayAppWebRoutesWriteSchema,
   relayAppWebRouteStateSchema,
   relayIdSchema,
+  webRouteHostnames,
 } from "@workspace/contracts"
 import type { RelayApp } from "@workspace/contracts"
 import { Effect, Result } from "effect"
@@ -221,6 +222,7 @@ export const createApp = createServerFn({ method: "POST" })
         unregister,
       })
       publishAppChange(relay.id, true)
+      generateAppHostname(relay.id, id)
       return {
         id: placeholder.id,
         relayId: relay.id,
@@ -250,8 +252,22 @@ export const createApp = createServerFn({ method: "POST" })
       throw persisted.failure
     }
     publishAppChange(relay.id, true)
+    generateAppHostname(relay.id, id)
     return { id: created.id, relayId: relay.id, shortId: created.shortId }
   })
+
+// A new app gets an address under a vanity domain, as game servers do. In
+// the background: it calls Cloudflare, and the app opens without it.
+function generateAppHostname(relayId: string, appId: string) {
+  void import("@/server/web-hostname-access.server").then(
+    ({ generateAppHostnameBestEffort }) =>
+      generateAppHostnameBestEffort({
+        relayId,
+        resourceId: appId,
+        resourceType: "app",
+      })
+  )
+}
 
 export const updateAppConfig = createServerFn({ method: "POST" })
   .validator(appConfigInputSchema)
@@ -425,6 +441,15 @@ export const updateAppWebRoutes = createServerFn({ method: "POST" })
       )
     )
     publishAppChange(relay.id, false)
+    // Kiln keeps the DNS records of hostnames in zones it manages.
+    const { syncWebRouteHostnames } = await import(
+      "@/server/web-hostname-access.server"
+    )
+    await syncWebRouteHostnames(
+      user,
+      { relayId: relay.id, resourceId: data.appId, resourceType: "app" },
+      state.routes.flatMap(webRouteHostnames)
+    )
     return state
   })
 
@@ -455,6 +480,14 @@ export const deleteApp = createServerFn({ method: "POST" })
       "apps.record.delete",
       deleteAppRecordEffect(relay.id, data.appId)
     )
+    const { deleteResourceWebHostnamesBestEffort } = await import(
+      "@/server/web-hostname-access.server"
+    )
+    await deleteResourceWebHostnamesBestEffort({
+      relayId: relay.id,
+      resourceId: data.appId,
+      resourceType: "app",
+    })
     publishAppChange(relay.id, true)
     return { deleted: true }
   })

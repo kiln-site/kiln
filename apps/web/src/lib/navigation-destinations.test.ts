@@ -253,6 +253,7 @@ describe("navigation destinations", () => {
         "/infra/databases",
         "/infra/servers",
         "/infra/apps",
+        "/infra/domains",
         "/infra/sources",
         "/infra/deployments",
       ],

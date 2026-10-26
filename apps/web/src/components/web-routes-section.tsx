@@ -41,6 +41,10 @@ import {
   type WebRouteServiceOption,
 } from "@/components/web-route-dialog"
 import {
+  WebHostnameDnsStatus,
+  type WebHostnameResourceRef,
+} from "@/components/web-hostname-dns"
+import {
   createDataTableColumnHelper,
   dataTableColumnMeta,
   defineDataTable,
@@ -61,6 +65,7 @@ export type { WebRouteServiceOption }
 // change saves the whole list, and the table shows it while it saves.
 export function WebRoutesSection({
   canWrite,
+  dnsResource,
   error,
   kind,
   routes,
@@ -70,6 +75,8 @@ export function WebRoutesSection({
   onSave,
 }: {
   canWrite: boolean
+  // Whose DNS records the domains' badges read.
+  dnsResource: WebHostnameResourceRef
   error: Error | null
   kind: "app" | "server"
   routes:
@@ -256,6 +263,7 @@ export function WebRoutesSection({
       <WebRoutesTable
         canWrite={canWrite}
         disabled={busy}
+        dnsResource={dnsResource}
         error={error}
         pending={save.isPending}
         primaryRowId={primary?.rowId}
@@ -311,6 +319,7 @@ const columnHelper = createDataTableColumnHelper<DisplayedRoute>()
 const WebRoutesTable = React.memo(function WebRoutesTable({
   canWrite,
   disabled,
+  dnsResource,
   error,
   pending,
   primaryRowId,
@@ -324,6 +333,7 @@ const WebRoutesTable = React.memo(function WebRoutesTable({
 }: {
   canWrite: boolean
   disabled: boolean
+  dnsResource: WebHostnameResourceRef
   error: Error | null
   pending: boolean
   primaryRowId: string | undefined
@@ -378,7 +388,11 @@ const WebRoutesTable = React.memo(function WebRoutesTable({
             header: "Domain",
             enableSorting: false,
             cell: ({ row }) => (
-              <RouteDomainCell route={row.original} services={services} />
+              <RouteDomainCell
+                dnsResource={dnsResource}
+                route={row.original}
+                services={services}
+              />
             ),
             meta: dataTableColumnMeta(
               { width: { base: "minmax(0,1fr)", sm: "minmax(0,1.3fr)" } },
@@ -422,6 +436,7 @@ const WebRoutesTable = React.memo(function WebRoutesTable({
     [
       canWrite,
       disabled,
+      dnsResource,
       onEdit,
       onMakePrimary,
       onRemove,
@@ -527,9 +542,11 @@ const RouteKindCell = React.memo(function RouteKindCell({
 })
 
 const RouteDomainCell = React.memo(function RouteDomainCell({
+  dnsResource,
   route,
   services,
 }: {
+  dnsResource: WebHostnameResourceRef
   route: DisplayedRoute
   services: ReadonlyArray<WebRouteServiceOption> | undefined
 }) {
@@ -547,16 +564,19 @@ const RouteDomainCell = React.memo(function RouteDomainCell({
   ].filter(Boolean)
   return (
     <div className="min-w-0">
-      <a
-        className="block truncate text-sm font-medium transition-colors hover:text-primary-ink"
-        href={webRouteUrl(route)}
-        rel="noreferrer"
-        target="_blank"
-        title={webRouteUrl(route)}
-      >
-        {route.hostname}
-        {route.path ?? ""}
-      </a>
+      <span className="flex min-w-0 items-center gap-2">
+        <a
+          className="truncate text-sm font-medium transition-colors hover:text-primary-ink"
+          href={webRouteUrl(route)}
+          rel="noreferrer"
+          target="_blank"
+          title={webRouteUrl(route)}
+        >
+          {route.hostname}
+          {route.path ?? ""}
+        </a>
+        <WebHostnameDnsStatus hostname={route.hostname} resource={dnsResource} />
+      </span>
       <span className="type-meta block truncate text-muted-foreground">
         {/* Phones hide the destination column; it leads the details. */}
         <span className="sm:hidden">

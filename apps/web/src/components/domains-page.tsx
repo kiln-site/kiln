@@ -7,8 +7,10 @@ import {
 import { Link } from "@tanstack/react-router"
 import {
   Check,
+  CircleAlert,
   ExternalLink,
   Globe2,
+  KeyRound,
   Pencil,
   Plus,
   Settings2,
@@ -55,9 +57,11 @@ import {
   showErrorToast,
   strategyOptions,
   type DirectoryServer,
+  type DomainConnectionOverview,
+  type DomainSettings,
+  type VanityDomainChoice,
 } from "@/components/domains-shared"
 import { WorkspacePage } from "@/components/workspace-page"
-import type { DomainIntegration, ManagedDomain } from "@/effect/domains"
 import { ensuringPromise, forkPromise, tapPromiseError } from "@/effect/promise"
 import {
   createDataTableColumnHelper,
@@ -77,14 +81,20 @@ import {
 import {
   resyncDomainAssignments,
   type ManagedDomainOverview,
+  type WebHostnameOverview,
 } from "@/server/domains"
 
 type DomainDialog =
-  | { kind: "configure" }
+  | { connection: DomainConnectionOverview | null; kind: "connection" }
   | { kind: "create" }
   | { kind: "delete"; domain: ManagedDomainOverview }
   | { kind: "edit"; domain: ManagedDomainOverview }
+  | { hostname: WebHostnameOverview; kind: "release" }
+  | { kind: "vanity" }
   | null
+
+/** Which table shows: game servers' vanity addresses, or web hostnames. */
+type DomainView = "servers" | "web"
 
 const domainTableColumnHelper =
   createDataTableColumnHelper<ManagedDomainOverview>()
@@ -124,8 +134,14 @@ const CreateDomainDialog = React.lazy(async () => ({
 const DeleteDomainDialog = React.lazy(async () => ({
   default: (await loadDomainDialogs()).DeleteDomainDialog,
 }))
-const DomainConfigurationDialog = React.lazy(async () => ({
-  default: (await loadDomainDialogs()).DomainConfigurationDialog,
+const DomainConnectionDialog = React.lazy(async () => ({
+  default: (await loadDomainDialogs()).DomainConnectionDialog,
+}))
+const ReleaseHostnameDialog = React.lazy(async () => ({
+  default: (await loadDomainDialogs()).ReleaseHostnameDialog,
+}))
+const VanitySettingsDialog = React.lazy(async () => ({
+  default: (await loadDomainDialogs()).VanitySettingsDialog,
 }))
 const EditDomainDialog = React.lazy(async () => ({
   default: (await loadDomainDialogs()).EditDomainDialog,
@@ -175,18 +191,31 @@ export const DomainsPage = React.memo(function DomainsPage({
         : data.managedDomains,
     [data.managedDomains, scope]
   )
-  const openConfiguration = React.useCallback(
-    () => setDialog({ kind: "configure" }),
+  const scopedHostnames = React.useMemo(
+    () =>
+      scope
+        ? data.webHostnames.filter(
+            (hostname) =>
+              hostname.resource.id === scope.instanceId &&
+              (!scope.relayId || hostname.relayId === scope.relayId)
+          )
+        : data.webHostnames,
+    [data.webHostnames, scope]
+  )
+  const [view, setView] = React.useState<DomainView>("servers")
+  const openCreate = React.useCallback(() => setDialog({ kind: "create" }), [])
+  const openVanity = React.useCallback(() => setDialog({ kind: "vanity" }), [])
+  const openConnection = React.useCallback(
+    (connection: DomainConnectionOverview | null) =>
+      setDialog({ connection, kind: "connection" }),
     []
   )
-  const openCreate = React.useCallback(() => setDialog({ kind: "create" }), [])
   const closeDialog = React.useCallback((open: boolean) => {
     if (!open) setDialog(null)
   }, [])
-  const domains = data.integration?.domains
-  const enabledDomains = React.useMemo(
-    () => domains?.filter((domain) => domain.enabled) ?? [],
-    [domains]
+  const vanityDomains = React.useMemo(
+    () => vanityDomainChoices(data),
+    [data]
   )
   const domainUsage = React.useMemo(() => {
     const usage = new Map<string, number>()
@@ -199,42 +228,71 @@ export const DomainsPage = React.memo(function DomainsPage({
   return (
     <WorkspacePage
       rail={
-        <DomainsRail
-          integration={data.integration}
-          onConfigure={openConfiguration}
-        />
+        <>
+          <CloudflareRail
+            connections={data.connections}
+            onOpen={openConnection}
+          />
+          <VanityRail
+            settings={data}
+            vanityDomains={vanityDomains}
+            onConfigure={openVanity}
+          />
+        </>
       }
       summary={<DomainScopePicker scope={scope} onSelect={selectScope} />}
     >
       <DataTableWorkspace
         toolbar={
           <DomainsToolbar
-            canCreate={enabledDomains.length > 0}
-            syncEnabled={data.integration !== null}
+            canCreate={view === "servers" && vanityDomains.length > 0}
+            counts={{
+              servers: scopedDomains.length,
+              web: scopedHostnames.length,
+            }}
             searchStore={searchStore}
+            view={view}
             onCreate={openCreate}
+            onViewChange={setView}
           />
         }
       >
-        <ManagedDomainsTable
-          domains={scopedDomains}
-          searchStore={searchStore}
-          onDialog={setDialog}
-        />
+        {view === "servers" ? (
+          <ManagedDomainsTable
+            domains={scopedDomains}
+            searchStore={searchStore}
+            onDialog={setDialog}
+          />
+        ) : (
+          <WebHostnamesTable
+            hostnames={scopedHostnames}
+            searchStore={searchStore}
+            onDialog={setDialog}
+          />
+        )}
       </DataTableWorkspace>
 
       <React.Suspense fallback={null}>
-        {dialog?.kind === "configure" ? (
-          <DomainConfigurationDialog
+        {dialog?.kind === "connection" ? (
+          <DomainConnectionDialog
+            key={dialog.connection?.id ?? "new"}
+            canManagePlatform={data.canManagePlatform}
+            connection={dialog.connection}
             domainUsage={domainUsage}
             hearthDomain={data.hearthDomain}
-            integration={data.integration}
+            onOpenChange={closeDialog}
+          />
+        ) : null}
+        {dialog?.kind === "vanity" ? (
+          <VanitySettingsDialog
+            platformSettings={data.settings.platform}
+            personalSettings={data.settings.personal}
             onOpenChange={closeDialog}
           />
         ) : null}
         {dialog?.kind === "create" ? (
           <CreateDomainDialog
-            domains={enabledDomains}
+            domains={vanityDomains}
             initialServerKey={
               scope?.relayId ? serverKey(scope.relayId, scope.instanceId) : null
             }
@@ -246,7 +304,7 @@ export const DomainsPage = React.memo(function DomainsPage({
           <EditDomainDialog
             key={dialog.domain.id}
             domain={dialog.domain}
-            domains={enabledDomains}
+            domains={vanityDomains}
             onOpenChange={closeDialog}
           />
         ) : null}
@@ -257,10 +315,40 @@ export const DomainsPage = React.memo(function DomainsPage({
             onOpenChange={closeDialog}
           />
         ) : null}
+        {dialog?.kind === "release" ? (
+          <ReleaseHostnameDialog
+            key={dialog.hostname.id}
+            hostname={dialog.hostname}
+            onOpenChange={closeDialog}
+          />
+        ) : null}
       </React.Suspense>
     </WorkspacePage>
   )
 })
+
+/**
+ * The vanity domains the person may put addresses under: their own, then the
+ * platform's. An administrator's platform connections count as the
+ * platform's.
+ */
+function vanityDomainChoices(data: DomainSettings): Array<VanityDomainChoice> {
+  const choices = new Map<string, VanityDomainChoice>()
+  for (const connection of data.connections) {
+    if (connection.platform) continue
+    for (const domain of connection.domains) {
+      if (domain.enabled) {
+        choices.set(domain.domain, { domain: domain.domain, platform: false })
+      }
+    }
+  }
+  for (const domain of data.platformDomains) {
+    if (!choices.has(domain.domain)) {
+      choices.set(domain.domain, { domain: domain.domain, platform: true })
+    }
+  }
+  return [...choices.values()]
+}
 
 /** Filters the table to one game server, as Backups and Activity do. */
 const DomainScopePicker = React.memo(function DomainScopePicker({
@@ -329,15 +417,218 @@ const DomainsRefreshButton = React.memo(function DomainsRefreshButton() {
   )
 })
 
+/** The person's Cloudflare connections, and the platform's for admins. */
+const CloudflareRail = React.memo(function CloudflareRail({
+  connections,
+  onOpen,
+}: {
+  connections: DomainSettings["connections"]
+  onOpen: (connection: DomainConnectionOverview | null) => void
+}) {
+  return (
+    <InfoRailCard
+      action={
+        <div className="flex items-center gap-1.5">
+          {connections.length > 0 ? <DomainsRefreshButton /> : null}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-label="Connect Cloudflare"
+                size="icon-sm"
+                type="button"
+                variant="outline"
+                onClick={() => onOpen(null)}
+              >
+                <Plus />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" sideOffset={6}>
+              Connect Cloudflare
+            </TooltipContent>
+          </Tooltip>
+        </div>
+      }
+      className="xl:flex-none"
+      icon={<KeyRound />}
+      sections={
+        connections.length > 0 ? (
+          <InfoRailCardSection
+            action={
+              <span className="type-meta text-muted-foreground tabular-nums">
+                {connections.length}
+              </span>
+            }
+            contentClassName="max-h-[calc(4.5*3rem)] overflow-y-auto"
+            title="Connections"
+          >
+            <ul aria-label="Cloudflare connections">
+              {connections.map((connection) => (
+                <li
+                  key={connection.id}
+                  className="relative after:absolute after:inset-x-[7.5%] after:bottom-0 after:h-px after:bg-border/60 last:after:hidden"
+                >
+                  <button
+                    aria-label={`Edit ${connection.name}`}
+                    className="group flex h-12 w-full items-center gap-2 px-2 text-left outline-none hover:bg-muted/60 focus-visible:bg-muted/60"
+                    type="button"
+                    onClick={() => onOpen(connection)}
+                  >
+                    <span className="min-w-0 flex-1">
+                      <span className="flex min-w-0 items-center gap-1.5 text-[0.8125rem]">
+                        <span className="truncate">{connection.name}</span>
+                        {connection.platform ? (
+                          <span className="type-technical-label shrink-0 border border-border/70 px-1 text-muted-foreground">
+                            Everyone
+                          </span>
+                        ) : null}
+                      </span>
+                      <span className="type-meta block truncate text-muted-foreground">
+                        {connectionSummary(connection)}
+                      </span>
+                    </span>
+                    {connection.lastError ? (
+                      <CircleAlert
+                        aria-label={connection.lastError}
+                        className="size-3.5 shrink-0 text-destructive"
+                      />
+                    ) : null}
+                    <Pencil className="size-3 shrink-0 text-muted-foreground/40 transition-colors group-hover:text-primary-ink group-focus-visible:text-primary-ink" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </InfoRailCardSection>
+        ) : null
+      }
+      title="Cloudflare"
+    >
+      {connections.length === 0 ? (
+        <p className="type-meta py-2 text-muted-foreground">
+          Connect a Cloudflare API token and Kiln creates DNS records for web
+          routes in its zones, and addresses for new game servers and apps
+          under the domains you choose.
+        </p>
+      ) : (
+        <InfoFact label="Zones">
+          <span className="tabular-nums">
+            {new Set(
+              connections.flatMap((connection) =>
+                connection.zones.map((zone) => zone.id)
+              )
+            ).size}
+          </span>
+        </InfoFact>
+      )}
+    </InfoRailCard>
+  )
+})
+
+function connectionSummary(connection: DomainConnectionOverview): string {
+  const zones = connection.zones.length
+  const vanity = connection.domains.filter((domain) => domain.enabled).length
+  return [
+    `${zones} ${zones === 1 ? "zone" : "zones"}`,
+    vanity > 0 ? `${vanity} vanity` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ")
+}
+
 /**
- * The configured domains, set apart from the facts above. Beside the table it
- * fills the rail; stacked below it, it shows seven and a half rows so the
- * cut-off row says the list scrolls.
+ * How new game servers and apps get addresses: under the person's own vanity
+ * domains when they have any, otherwise the platform's.
+ */
+const VanityRail = React.memo(function VanityRail({
+  onConfigure,
+  settings,
+  vanityDomains,
+}: {
+  onConfigure: () => void
+  settings: Pick<DomainSettings, "connections" | "platformDomains" | "settings">
+  vanityDomains: ReadonlyArray<VanityDomainChoice>
+}) {
+  const own = vanityDomains.filter((domain) => !domain.platform)
+  const applied = own.length > 0 ? settings.settings.personal : null
+  const strategy = strategyOptions.find(
+    (option) => option.value === applied?.strategy
+  )
+  const ownDefault = settings.connections
+    .filter((connection) => !connection.platform)
+    .flatMap((connection) => connection.domains)
+    .find((domain) => domain.isDefault && domain.enabled)?.domain
+  const platformDefault =
+    settings.platformDomains.find((domain) => domain.isDefault)?.domain ??
+    settings.platformDomains[0]?.domain
+  return (
+    <InfoRailCard
+      action={
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              aria-label="Configure vanity"
+              size="icon-sm"
+              type="button"
+              variant="outline"
+              onClick={onConfigure}
+            >
+              <Settings2 />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" sideOffset={6}>
+            Configure vanity
+          </TooltipContent>
+        </Tooltip>
+      }
+      // The domain list fills what's left of the rail.
+      className="xl:flex xl:min-h-0 xl:flex-1 xl:flex-col"
+      icon={<Globe2 />}
+      sections={
+        vanityDomains.length > 0 ? (
+          <VanityDomainList domains={vanityDomains} />
+        ) : null
+      }
+      title="Vanity"
+    >
+      {vanityDomains.length === 0 ? (
+        <InfoFact label="New addresses">
+          <span className="text-muted-foreground">No vanity domains</span>
+        </InfoFact>
+      ) : applied ? (
+        <>
+          <InfoFact label="New addresses">
+            {applied.autoAssign
+              ? `Yours · ${strategy?.label ?? "Default only"}`
+              : "Off"}
+          </InfoFact>
+          {ownDefault ? (
+            <InfoFact label="Default">
+              <span className="truncate font-mono">{ownDefault}</span>
+            </InfoFact>
+          ) : null}
+        </>
+      ) : (
+        <>
+          <InfoFact label="New addresses">Kiln&apos;s domains</InfoFact>
+          {platformDefault ? (
+            <InfoFact label="Default">
+              <span className="truncate font-mono">{platformDefault}</span>
+            </InfoFact>
+          ) : null}
+        </>
+      )}
+    </InfoRailCard>
+  )
+})
+
+/**
+ * The vanity domains the person may use. Beside the table it fills the
+ * rail; stacked below it, it shows seven and a half rows so the cut-off row
+ * says the list scrolls.
  */
 function VanityDomainList({
   domains,
 }: {
-  domains: ReadonlyArray<ManagedDomain>
+  domains: ReadonlyArray<VanityDomainChoice>
 }) {
   return (
     <InfoRailCardSection
@@ -355,20 +646,14 @@ function VanityDomainList({
           // Dividers span the middle 85%, centered.
           <li
             key={domain.domain}
-            className="relative after:absolute after:inset-x-[7.5%] after:bottom-0 after:h-px after:bg-border/60 last:after:hidden"
+            className="relative flex h-9 items-center gap-2 px-2 font-mono text-[0.8125rem] after:absolute after:inset-x-[7.5%] after:bottom-0 after:h-px after:bg-border/60 last:after:hidden"
           >
-            <a
-              aria-label={`View ${domain.domain} on Cloudflare`}
-              className={`group flex h-9 items-center gap-2 px-2 font-mono text-[0.8125rem] outline-none hover:bg-muted/60 focus-visible:bg-muted/60 ${
-                domain.enabled ? "" : "text-muted-foreground"
-              }`}
-              href={cloudflareDnsRecordsUrl(domain.zoneName)}
-              rel="noreferrer"
-              target="_blank"
-            >
-              <span className="min-w-0 flex-1 truncate">{domain.domain}</span>
-              <ExternalLink className="size-3 shrink-0 text-muted-foreground/40 transition-colors group-hover:text-primary-ink group-focus-visible:text-primary-ink" />
-            </a>
+            <span className="min-w-0 flex-1 truncate">{domain.domain}</span>
+            {domain.platform ? (
+              <span className="type-technical-label shrink-0 font-sans text-muted-foreground">
+                Kiln
+              </span>
+            ) : null}
           </li>
         ))}
       </ul>
@@ -376,97 +661,63 @@ function VanityDomainList({
   )
 }
 
-/** What vanity is set up to do, beside the table. */
-const DomainsRail = React.memo(function DomainsRail({
-  integration,
-  onConfigure,
-}: {
-  integration: DomainIntegration | null
-  onConfigure: () => void
-}) {
-  const strategy = strategyOptions.find(
-    (option) => option.value === integration?.strategy
-  )
-  const defaultDomain = integration?.domains.find((domain) => domain.isDefault)
-  return (
-    <InfoRailCard
-      action={
-        <div className="flex items-center gap-1.5">
-          {integration ? <DomainsRefreshButton /> : null}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                aria-label="Configure vanity"
-                size="icon-sm"
-                type="button"
-                variant="outline"
-                onClick={onConfigure}
-              >
-                <Settings2 />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom" sideOffset={6}>
-              Configure vanity
-            </TooltipContent>
-          </Tooltip>
-        </div>
-      }
-      // Half the rail beside the table, leaving the rest for more cards. The
-      // domain list fills what's left of the card.
-      className="xl:flex xl:min-h-0 xl:flex-none xl:basis-1/2 xl:flex-col"
-      icon={<Globe2 />}
-      sections={
-        integration && integration.domains.length > 0 ? (
-          <VanityDomainList domains={integration.domains} />
-        ) : null
-      }
-      title="Vanity"
-    >
-      {integration ? (
-        <>
-          <InfoFact label="Auto provisioning">
-            {integration.enabled ? (strategy?.label ?? "Default only") : "Off"}
-          </InfoFact>
-          {defaultDomain ? (
-            <InfoFact label="Default">
-              <span className="truncate font-mono">{defaultDomain.domain}</span>
-            </InfoFact>
-          ) : null}
-        </>
-      ) : (
-        <InfoFact label="Cloudflare">
-          <span className="text-muted-foreground">Not connected</span>
-        </InfoFact>
-      )}
-    </InfoRailCard>
-  )
-})
-
 const DomainsToolbar = React.memo(function DomainsToolbar({
   canCreate,
+  counts,
   onCreate,
+  onViewChange,
   searchStore,
-  syncEnabled,
+  view,
 }: {
   canCreate: boolean
+  counts: Record<DomainView, number>
   onCreate: () => void
+  onViewChange: (view: DomainView) => void
   searchStore: DataTableSearchStore
-  syncEnabled: boolean
+  view: DomainView
 }) {
   return (
     <DataTableToolbar
       actions={
-        <Button
-          aria-label="New domain"
-          disabled={!canCreate}
-          type="button"
-          onClick={onCreate}
-        >
-          <Plus />
-          <span className="hidden sm:inline">New domain</span>
-        </Button>
+        view === "servers" ? (
+          <Button
+            aria-label="New domain"
+            disabled={!canCreate}
+            type="button"
+            onClick={onCreate}
+          >
+            <Plus />
+            <span className="hidden sm:inline">New domain</span>
+          </Button>
+        ) : null
       }
-      leading={<DomainSyncButton enabled={syncEnabled} />}
+      leading={
+        <div className="flex items-center gap-2">
+          <DomainSyncButton />
+          <div
+            aria-label="Domains to show"
+            className="flex h-8 items-center border border-border/75 bg-background/35 p-0.5"
+            role="radiogroup"
+          >
+            {domainViews.map((option) => (
+              <button
+                key={option.value}
+                aria-checked={view === option.value}
+                className="type-control-sm flex h-full items-center gap-1.5 px-2.5 text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 aria-checked:bg-muted aria-checked:text-foreground"
+                role="radio"
+                type="button"
+                onClick={() => onViewChange(option.value)}
+              >
+                <span className="hidden 2xl:inline">{option.label}</span>
+                <span className="2xl:hidden">{option.short}</span>
+                <span className="type-meta tabular-nums text-muted-foreground">
+                  {counts[option.value]}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      }
       search={{
         ariaLabel: "Search domains",
         closeMobileWhenEmpty: true,
@@ -479,11 +730,16 @@ const DomainsToolbar = React.memo(function DomainsToolbar({
   )
 })
 
-const DomainSyncButton = React.memo(function DomainSyncButton({
-  enabled,
-}: {
-  enabled: boolean
-}) {
+const domainViews: ReadonlyArray<{
+  label: string
+  short: string
+  value: DomainView
+}> = [
+  { label: "Game servers", short: "Servers", value: "servers" },
+  { label: "Web hostnames", short: "Web", value: "web" },
+]
+
+const DomainSyncButton = React.memo(function DomainSyncButton() {
   const queryClient = useQueryClient()
   const sync = React.useCallback(async () => {
     const result = await ensuringPromise(
@@ -497,19 +753,15 @@ const DomainSyncButton = React.memo(function DomainSyncButton({
         })
       }
     )
+    const synced = result.syncedServerCount + result.syncedHostnameCount
     showToast({
-      message: `Synced ${result.syncedServerCount} ${
-        result.syncedServerCount === 1
-          ? "game server address"
-          : "game server addresses"
-      }`,
+      message: `Synced ${synced} ${synced === 1 ? "address" : "addresses"}`,
       type: "success",
     })
   }, [queryClient])
 
   return (
     <InfraSyncButton
-      disabled={!enabled}
       label="Sync managed domains"
       sync={sync}
       onError={showErrorToast}
@@ -712,7 +964,7 @@ const DomainActions = React.memo(function DomainActions({
             aria-label={`Edit ${hostname}`}
             className="text-muted-foreground hover:text-primary-ink"
             // A domain being deleted can only be deleted again.
-            disabled={domain.status === "removing"}
+            disabled={!domain.canManage || domain.status === "removing"}
             size="icon-sm"
             type="button"
             variant="ghost"
@@ -728,6 +980,7 @@ const DomainActions = React.memo(function DomainActions({
           <Button
             aria-label={`Delete ${hostname}`}
             className="text-destructive hover:bg-destructive/10 hover:text-destructive light:hover:bg-destructive/20"
+            disabled={!domain.canManage}
             size="icon-sm"
             type="button"
             variant="ghost"
@@ -764,6 +1017,280 @@ const DomainActions = React.memo(function DomainActions({
   )
 })
 
+const webHostnameColumnHelper =
+  createDataTableColumnHelper<WebHostnameOverview>()
+const webHostnameSearchFields = [
+  (row: WebHostnameOverview) => row.hostname,
+  (row: WebHostnameOverview) => row.resource.name,
+  (row: WebHostnameOverview) => row.resource.id,
+  (row: WebHostnameOverview) => row.relayName,
+  (row: WebHostnameOverview) => row.target,
+  (row: WebHostnameOverview) => row.connectionName,
+  (row: WebHostnameOverview) => row.status,
+] as const
+
+/** Web route hostnames and generated app addresses whose records Kiln keeps. */
+const WebHostnamesTable = React.memo(function WebHostnamesTable({
+  hostnames,
+  onDialog,
+  searchStore,
+}: {
+  hostnames: Array<WebHostnameOverview>
+  onDialog: (dialog: DomainDialog) => void
+  searchStore: DataTableSearchStore
+}) {
+  // Match rows by ID instead of position, so only changed rows repaint.
+  const [rowCache] = React.useState(
+    () => new Map<string, { json: string; row: WebHostnameOverview }>()
+  )
+  const source = React.useMemo<DataTableSource<WebHostnameOverview>>(() => {
+    const seen = new Set<string>()
+    const rows = hostnames.map((hostname) => {
+      const json = JSON.stringify(hostname)
+      seen.add(hostname.id)
+      const cached = rowCache.get(hostname.id)
+      if (cached?.json === json) return cached.row
+      rowCache.set(hostname.id, { json, row: hostname })
+      return hostname
+    })
+    for (const key of rowCache.keys()) {
+      if (!seen.has(key)) rowCache.delete(key)
+    }
+    return { body: { kind: "ready" }, refreshing: false, rows }
+  }, [hostnames, rowCache])
+  const [initialTableState] = React.useState(() => ({
+    sorting: [{ desc: false, id: "hostname" }],
+  }))
+  const definition = React.useMemo(() => {
+    const columns = webHostnameColumnHelper.columns([
+      webHostnameColumnHelper.accessor((row) => row.status, {
+        id: "status",
+        header: () => <span className="sr-only sm:not-sr-only">Status</span>,
+        sortFn: "text",
+        cell: ({ row }) => (
+          <StatusIndicator status={hostnameStatusPresentation(row.original)} />
+        ),
+        meta: dataTableColumnMeta(
+          { width: { base: "2.5rem", sm: statusColumnWidth } },
+          {
+            cellClassName: "px-2 sm:px-3",
+            headerClassName: "px-2 sm:px-3",
+            headerLabelClassName: "shrink-0 overflow-visible text-clip",
+          }
+        ),
+      }),
+      webHostnameColumnHelper.accessor((row) => row.resource.name, {
+        id: "instance",
+        header: "Instance",
+        sortFn: "text",
+        cell: ({ row }) => <HostnameResourceCell hostname={row.original} />,
+        meta: dataTableColumnMeta(
+          { hideBelow: "sm", width: "clamp(13rem,18vw,15rem)" },
+          { cellClassName: "px-0" }
+        ),
+      }),
+      webHostnameColumnHelper.accessor((row) => row.hostname, {
+        id: "hostname",
+        header: "Hostname",
+        sortFn: "text",
+        cell: ({ row }) => (
+          <div className="type-meta flex w-full min-w-0 flex-col items-start">
+            <WorkspaceCopyValueButton
+              label="hostname"
+              value={row.original.hostname}
+            />
+            <span className="type-meta max-w-full truncate text-muted-foreground">
+              {[
+                row.original.generated ? "Kiln address" : null,
+                row.original.target ? `→ ${row.original.target}` : null,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+            </span>
+          </div>
+        ),
+        meta: dataTableColumnMeta({ width: "minmax(0,1.6fr)" }),
+      }),
+      webHostnameColumnHelper.display({
+        id: "actions",
+        header: () => <span className="sr-only">Actions</span>,
+        enableSorting: false,
+        cell: ({ row }) => (
+          <HostnameActions hostname={row.original} onDialog={onDialog} />
+        ),
+        meta: dataTableColumnMeta(
+          { width: "6.5rem" },
+          { cellClassName: "px-1 sm:px-2", headerClassName: "px-1 sm:px-2" }
+        ),
+      }),
+    ])
+    return defineDataTable({
+      ariaLabel: "Web hostnames",
+      columns,
+      getRowId: (row) => row.id,
+      model: { initialState: initialTableState },
+      search: { fields: webHostnameSearchFields },
+      virtualization: true,
+    })
+  }, [initialTableState, onDialog])
+
+  return (
+    <DataTable
+      definition={definition}
+      emptyState={renderEmptyHostnames}
+      searchStore={searchStore}
+      source={source}
+    />
+  )
+})
+
+const HostnameResourceCell = React.memo(function HostnameResourceCell({
+  hostname,
+}: {
+  hostname: WebHostnameOverview
+}) {
+  const { resource } = hostname
+  const card = (
+    <InstanceCard
+      className="min-w-0 flex-1"
+      instance={
+        resource.kind === "app"
+          ? { id: resource.id, kind: "app", relayId: hostname.relayId }
+          : {
+              brickId: resource.brickId,
+              id: resource.id,
+              implementation: resource.implementation,
+              kind: "server",
+              relayId: hostname.relayId,
+            }
+      }
+      meta={hostname.relayName}
+      name={resource.name}
+      nameClassName="transition-colors group-hover/server-link:text-primary-ink"
+      showFavorite={false}
+      showStatus={false}
+    />
+  )
+  const className =
+    "group/server-link flex min-h-14 w-full min-w-0 items-center px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
+  return resource.kind === "app" ? (
+    <Link
+      to="/app/$appId/network"
+      params={{ appId: resource.routeId }}
+      preload="intent"
+      className={className}
+    >
+      {card}
+    </Link>
+  ) : (
+    <Link
+      to="/server/$serverId/network"
+      params={{ serverId: resource.routeId }}
+      preload="intent"
+      className={className}
+    >
+      {card}
+    </Link>
+  )
+})
+
+const HostnameActions = React.memo(function HostnameActions({
+  hostname,
+  onDialog,
+}: {
+  hostname: WebHostnameOverview
+  onDialog: (dialog: DomainDialog) => void
+}) {
+  return (
+    <DataTableActionGroup>
+      {hostname.generated ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              aria-label={`Release ${hostname.hostname}`}
+              className="text-destructive hover:bg-destructive/10 hover:text-destructive light:hover:bg-destructive/20"
+              disabled={!hostname.canManage}
+              size="icon-sm"
+              type="button"
+              variant="ghost"
+              onClick={() => onDialog({ hostname, kind: "release" })}
+            >
+              <Trash2 />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Release</TooltipContent>
+        </Tooltip>
+      ) : null}
+      {hostname.zoneName ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              asChild
+              className="text-muted-foreground hover:text-primary-ink"
+              size="icon-sm"
+              variant="ghost"
+            >
+              <a
+                aria-label={`View ${hostname.hostname} on Cloudflare`}
+                href={cloudflareDnsRecordsUrl(hostname.zoneName)}
+                rel="noreferrer"
+                target="_blank"
+              >
+                <ExternalLink />
+              </a>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">View on Cloudflare</TooltipContent>
+        </Tooltip>
+      ) : null}
+    </DataTableActionGroup>
+  )
+})
+
+function renderEmptyHostnames({ searchActive }: { searchActive: boolean }) {
+  return (
+    <DataTableEmptyState
+      description={
+        <span className="block max-w-sm">
+          {searchActive
+            ? "Try a hostname, game server, app, Relay, or status."
+            : "Add a web route whose hostname is in a connected Cloudflare zone, or under a vanity domain, and Kiln keeps its DNS record pointed at the Relay."}
+        </span>
+      }
+      icon={
+        <Globe2 className="size-6 text-muted-foreground/45 light:text-muted-foreground/72" />
+      }
+      title={searchActive ? "No hostnames match your search" : "No Web Hostnames"}
+    />
+  )
+}
+
+function hostnameStatusPresentation(
+  hostname: WebHostnameOverview
+): IdentityStatusPresentation {
+  if (hostname.status === "active") return { label: "Active", tone: "success" }
+  if (hostname.status === "pending") {
+    return { label: "Pending", pulse: true, tone: "warning" }
+  }
+  if (hostname.status === "external") {
+    return {
+      detail: hostname.lastError ?? undefined,
+      label: "Existing record",
+      tone: "warning",
+    }
+  }
+  if (hostname.status === "removing") {
+    return hostname.lastError
+      ? { detail: hostname.lastError, label: "Delete failed", tone: "danger" }
+      : { label: "Deleting", pulse: true, tone: "warning" }
+  }
+  return {
+    detail: hostname.lastError ?? undefined,
+    label: "Error",
+    tone: "danger",
+  }
+}
+
 function renderEmptyDomains({ searchActive }: { searchActive: boolean }) {
   return (
     <DataTableEmptyState
@@ -771,7 +1298,7 @@ function renderEmptyDomains({ searchActive }: { searchActive: boolean }) {
         <span className="block max-w-sm">
           {searchActive
             ? "Try a vanity address, game server, Relay, port, status, or ID."
-            : "Create a domain for a game server, or turn on automatic provisioning to give new game servers one."}
+            : "Create a domain for a game server, or add a vanity domain so new game servers get one."}
         </span>
       }
       icon={

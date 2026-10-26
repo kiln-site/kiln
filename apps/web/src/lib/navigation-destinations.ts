@@ -51,6 +51,7 @@ export interface NavigationDestination {
 export type InfrastructureDestinationAccess =
   | "app-read"
   | "database-read"
+  | "domains"
   | "instance-read"
   | "manage-relays"
   | "platform-admin"
@@ -127,10 +128,10 @@ export const infrastructureDestinations = [
     to: "/infra/tailscale",
   },
   {
-    access: "platform-admin",
+    access: "domains",
     group: "network",
     icon: Globe2,
-    keywords: ["infrastructure", "cloudflare", "urls"],
+    keywords: ["infrastructure", "cloudflare", "urls", "dns", "vanity"],
     label: "Domains",
     to: "/infra/domains",
   },
@@ -746,6 +747,20 @@ export function canAccessInfrastructureDestination(
   if (destination.access === "sources") {
     // Sources feed syncs. Each person's sources are their own.
     return canUseSyncs(capabilities)
+  }
+  if (destination.access === "domains") {
+    // Each person's Cloudflare connections are their own, for the game
+    // servers and apps they reach.
+    return (
+      capabilities.isPlatformAdmin ||
+      hasScopedPermission(capabilities, "instance.read", [
+        "instance",
+        "relay",
+      ]) ||
+      hasScopedPermission(capabilities, "instance.create", ["relay"]) ||
+      hasScopedPermission(capabilities, "app.read", ["relay", "app"]) ||
+      hasScopedPermission(capabilities, "app.create", ["relay"])
+    )
   }
   // Each list also opens for people who can only create there; its create
   // action is what they came for.

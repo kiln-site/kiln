@@ -142,6 +142,14 @@ function AppWebRoutes({
 }) {
   const queryClient = useQueryClient()
   const state = useQuery(appWebRoutesQueryOptions(app.relayId, app.id))
+  const dnsResource = React.useMemo(
+    () => ({
+      relayId: app.relayId,
+      resourceId: app.id,
+      resourceType: "app" as const,
+    }),
+    [app.id, app.relayId]
+  )
   const services = React.useMemo(
     () => appServiceOptions(app, compose),
     [app, compose]
@@ -173,6 +181,7 @@ function AppWebRoutes({
       // Another app's routes start fresh, Undo included.
       key={`${app.relayId}:${app.id}`}
       canWrite={canManage}
+      dnsResource={dnsResource}
       error={state.error}
       kind="app"
       routes={state.data?.routes}
