@@ -97,11 +97,62 @@ export const RelayJoinEnvelopeSchema = Schema.Struct({
 
 export type RelayJoinEnvelope = typeof RelayJoinEnvelopeSchema.Type
 
+// A Relay with this pairs through its announcements: Hearth's answer carries
+// the pairing request it would otherwise send the Relay (`pairing`), and the
+// Relay's next announcement carries its signed reply. Hearth then needn't
+// reach the Relay at all, as for one behind a home router.
+export const relayJoinPairingV1Feature = "join-pairing-v1"
+
+const PEM = Schema.String.check(
+  Schema.isMinLength(80),
+  Schema.isMaxLength(2_048)
+)
+
+// Hearth's signed pairing request (`RelayPairingRequestContract`).
+export const RelayJoinPairingRequestSchema = Schema.Struct({
+  bootstrapProof: Schema.NullOr(Schema.String.check(Schema.isMaxLength(512))),
+  hearthName: Schema.String.check(Schema.isMaxLength(256)),
+  hearthOrigin: Schema.String.check(Schema.isMaxLength(512)),
+  invitationId: Schema.String.check(Schema.isMaxLength(128)),
+  nonce: Schema.String.check(Schema.isMaxLength(128)),
+  publicKeyPem: PEM,
+  signature: Schema.String.check(Schema.isMaxLength(512)),
+  token: Schema.NullOr(Schema.String.check(Schema.isMaxLength(512))),
+  version: Schema.Literal(1),
+})
+
+// The Relay's signed reply (`RelayPairingResponseContract`).
+export const RelayJoinPairingResponseSchema = Schema.Struct({
+  actions: Schema.Array(Schema.String.check(Schema.isMaxLength(128))).check(
+    Schema.isMaxLength(256)
+  ),
+  clientId: Schema.String.check(Schema.isPattern(FINGERPRINT)),
+  expiresAt: Schema.Number,
+  nonce: Schema.String.check(Schema.isMaxLength(128)),
+  relayFingerprint: Schema.String.check(Schema.isPattern(FINGERPRINT)),
+  relayName: Schema.String.check(Schema.isMaxLength(120)),
+  relayPublicKeyPem: PEM,
+  role: Schema.Literals(["custom", "full_access", "read_only"]),
+  signature: Schema.String.check(Schema.isMaxLength(512)),
+  version: Schema.Literal(1),
+})
+
 export const RelayJoinAnnouncementSchema = Schema.Struct({
   envelope: RelayJoinEnvelopeSchema,
+  // What the Relay can do, such as `relayJoinPairingV1Feature`. Outside the
+  // MAC, so Hearths that predate it check announcements as before; it only
+  // ever offers something, which Hearth's own answer then asks for.
+  features: Schema.optionalKey(
+    Schema.Array(Schema.String.check(Schema.isMaxLength(64))).check(
+      Schema.isMaxLength(32)
+    )
+  ),
   joinId: Schema.String.check(Schema.isPattern(JOIN_ID)),
   mac: Schema.String.check(Schema.isMaxLength(128)),
   nonce: Schema.String.check(Schema.isPattern(/^[A-Za-z\d_-]{22,86}$/u)),
+  // The Relay's reply to the pairing request Hearth's answer carried. It's
+  // signed with the Relay's key, which is what Hearth checks.
+  pairing: Schema.optionalKey(RelayJoinPairingResponseSchema),
   version: Schema.Literal(1),
 })
 
@@ -124,6 +175,15 @@ export const RelayJoinResponseSchema = Schema.Struct({
   clientId: Schema.NullOr(Schema.String.check(Schema.isPattern(FINGERPRINT))),
   expiresAt: Schema.NullOr(Schema.Number),
   mac: Schema.String.check(Schema.isMaxLength(128)),
+  // For a Relay with `relayJoinPairingV1Feature`, once someone confirmed it:
+  // Hearth's pairing request, and where the Relay should open its control
+  // connection to Hearth (or null when it can't).
+  pairing: Schema.optionalKey(
+    Schema.Struct({
+      dialUrl: Schema.NullOr(Schema.String.check(Schema.isMaxLength(512))),
+      request: RelayJoinPairingRequestSchema,
+    })
+  ),
   status: Schema.Literals(relayJoinStatuses),
 })
 
@@ -166,5 +226,19 @@ export function relayJoinResponseTranscript(
     input.status,
     input.clientId,
     input.expiresAt,
+    ...(input.pairing
+      ? [
+          "pairing",
+          input.pairing.dialUrl,
+          input.pairing.request.bootstrapProof,
+          input.pairing.request.hearthName,
+          input.pairing.request.hearthOrigin,
+          input.pairing.request.invitationId,
+          input.pairing.request.nonce,
+          input.pairing.request.publicKeyPem,
+          input.pairing.request.signature,
+          input.pairing.request.token,
+        ]
+      : []),
   ])
 }

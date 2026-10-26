@@ -87,6 +87,21 @@ interface Dial {
   readonly url: string
 }
 
+/**
+ * Saves where to dial a Hearth client, as the Relay's dialer reads it: a
+ * running Relay picks it up within its next pass, even when another
+ * process, such as `kiln-relay pair join`, saved it.
+ */
+export const saveControlDial = (
+  state: RelayStateStore["Service"],
+  clientId: string,
+  url: string | null
+) =>
+  state.setMetadata(
+    `${DIAL_METADATA_PREFIX}${clientId}`,
+    url && relayDialUrl(url) ? url : ""
+  )
+
 export function startControlDials(options: ControlDialOptions): ControlDials {
   const dials = new Map<string, Dial>()
   let closed = false
@@ -157,9 +172,9 @@ export function startControlDials(options: ControlDialOptions): ControlDials {
           Effect.flatMap((saved) =>
             (saved ?? "") === value
               ? Effect.void
-              : options.state
-                  .setMetadata(key, value)
-                  .pipe(Effect.andThen(reconcile))
+              : saveControlDial(options.state, clientId, value).pipe(
+                  Effect.andThen(reconcile)
+                )
           ),
           Effect.catchCause((cause) =>
             Effect.logWarning("Couldn't save where to dial Hearth", cause)

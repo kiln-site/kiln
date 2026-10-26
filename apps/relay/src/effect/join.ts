@@ -4,6 +4,9 @@ import {
   RELAY_JOIN_ID_LABEL,
   RELAY_JOIN_INVITATION_LABEL,
   RELAY_JOIN_LIFETIME_MS,
+  relayControlDialV1Feature,
+  relayJoinPairingV1Feature,
+  type RelayJoinPairingResponseSchema,
   type RelayJoinEnvelope,
   RelayJoinEnvelopeSchema,
   type RelayJoinLink,
@@ -18,7 +21,13 @@ import { Effect, Option, Schema } from "effect"
 
 import { relayBuildLabel } from "../build-info.js"
 import type { RelayConfig } from "../config.js"
-import { createPairingInvitation, joinEnvelope } from "./pairing.js"
+import { saveControlDial } from "../control-dial.js"
+import {
+  createPairingInvitation,
+  decodePairingRequest,
+  joinEnvelope,
+  pairHearth,
+} from "./pairing.js"
 import type { RelayIdentity } from "./identity.js"
 import type { RelayStateStore } from "./state.js"
 import type { RelayTlsMaterial } from "./tls.js"
@@ -36,7 +45,11 @@ const JOIN_METADATA_PREFIX = "relay_join:"
 const ANNOUNCE_INTERVAL_MS = 5_000
 const MAX_RETRY_DELAY_MS = 60_000
 const REQUEST_TIMEOUT_MS = 15_000
-const MAX_RESPONSE_BYTES = 4_096
+// Room for the pairing request a join's answer can carry.
+const MAX_RESPONSE_BYTES = 16_384
+// What the Relay tells Hearth it can do when it announces itself: pair
+// through its announcements, and open its control connection to Hearth.
+const JOIN_FEATURES = [relayJoinPairingV1Feature, relayControlDialV1Feature]
 
 export class RelayJoinError extends Schema.TaggedError<RelayJoinError>()(
   "RelayJoinError",
@@ -136,13 +149,23 @@ export const runRelayJoin = Effect.fnUntraced(function* (
   }
   let delay = ANNOUNCE_INTERVAL_MS
   let waiting = false
+  // The Relay's reply to the pairing request Hearth's answer carried, sent
+  // with each announcement until Hearth says it's paired.
+  let paired: typeof RelayJoinPairingResponseSchema.Type | null = null
   // Only Hearth's answer says it's paired: Hearth pairs, then saves the
   // Relay, and pairing here alone doesn't mean it saved it.
   while (true) {
     if (Date.now() >= saved.expiresAt) {
       return yield* finish(input, saved, "expired", report)
     }
-    const answered = yield* announce(link, saved.joinId, envelope).pipe(
+    const answered:
+      | { readonly response: RelayJoinResponse }
+      | { readonly reason: string } = yield* announce(
+      link,
+      saved.joinId,
+      envelope,
+      paired
+    ).pipe(
       Effect.withSpan("RelayJoin.announce"),
       Effect.map((response) => ({ response })),
       Effect.catch((error: RelayJoinError) =>
@@ -162,6 +185,13 @@ export const runRelayJoin = Effect.fnUntraced(function* (
       }
       waiting = true
       delay = ANNOUNCE_INTERVAL_MS
+      // Someone confirmed it, and Hearth pairs through the announcements.
+      const pairing: RelayJoinResponse["pairing"] = answered.response.pairing
+      if (pairing && !paired) {
+        paired = yield* pairThroughAnnouncements(input, pairing)
+        // Answer at once rather than at the next announcement.
+        continue
+      }
     } else {
       return yield* finish(input, saved, answered.response.status, report)
     }
@@ -197,6 +227,24 @@ const prepareJoin = Effect.fn("RelayJoin.prepare")(function* (
     yield* state.setMetadata(key, JSON.stringify(saved))
   }
   return saved
+})
+
+// Pairs with the request Hearth's answer carried, as the Relay would one
+// Hearth sent it, and saves where to dial Hearth. A request that comes again,
+// as after a restart, gets the same answer for the client it paired.
+const pairThroughAnnouncements = Effect.fn("RelayJoin.pair")(function* (
+  input: RelayJoinInput,
+  pairing: NonNullable<RelayJoinResponse["pairing"]>
+) {
+  const request = yield* decodePairingRequest(pairing.request)
+  const response = yield* pairHearth({
+    bootstrapToken: input.config.bootstrapToken,
+    identity: input.identity,
+    request,
+    state: input.state,
+  })
+  yield* saveControlDial(input.state, response.clientId, pairing.dialUrl)
+  return response
 })
 
 // Makes the join's one invitation once Hearth names its client, for that
@@ -301,15 +349,18 @@ async function readLimitedText(
 function announce(
   link: RelayJoinLink,
   joinId: string,
-  envelope: RelayJoinEnvelope
+  envelope: RelayJoinEnvelope,
+  paired: typeof RelayJoinPairingResponseSchema.Type | null
 ) {
   const nonce = randomBytes(32).toString("base64url")
   const unsigned = { envelope, joinId, nonce, version: 1 as const }
   const body = JSON.stringify({
     ...unsigned,
+    features: JOIN_FEATURES,
     mac: createHmac("sha256", link.secret)
       .update(relayJoinAnnouncementTranscript(unsigned))
       .digest("base64url"),
+    ...(paired ? { pairing: paired } : {}),
   })
   return Effect.tryPromise({
     try: async (signal) => {

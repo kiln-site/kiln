@@ -315,6 +315,8 @@ function JoinReview({
   const existing = announcement.existingRelay
   const holder = announcement.addressTakenBy
   const unreachable = holder ? null : announcement.unreachable
+  // A Relay that connects to Hearth itself can be added all the same.
+  const blocked = unreachable !== null && !announcement.reachesHearth
 
   return (
     <div className="min-w-0 space-y-4">
@@ -380,13 +382,18 @@ function JoinReview({
         </div>
       ) : null}
 
-      {unreachable ? (
+      {blocked ? (
         <div className="flex items-start gap-3 border border-amber-400/25 bg-amber-400/8 px-3 py-2.5">
           <CircleAlert className="mt-0.5 size-3.5 shrink-0 text-amber-200 light:text-amber-800" />
           <p className="type-meta min-w-0 flex-1 text-amber-200 light:text-amber-800">
             {unreachable} This updates once Hearth can reach it.
           </p>
         </div>
+      ) : unreachable ? (
+        <p className="type-meta text-muted-foreground">
+          Hearth can't reach this machine, so the Relay connects to Hearth
+          instead, and its consoles and file transfers go through Hearth.
+        </p>
       ) : null}
 
       {view.state === "needs_review" ? (
@@ -419,12 +426,7 @@ function JoinReview({
         ) : null}
         <Button
           type="button"
-          disabled={
-            working ||
-            confirm.isPending ||
-            holder !== null ||
-            unreachable !== null
-          }
+          disabled={working || confirm.isPending || holder !== null || blocked}
           onClick={() => confirm.mutate()}
         >
           {confirm.isPending ? (

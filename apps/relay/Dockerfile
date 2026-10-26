@@ -121,7 +121,7 @@ LABEL org.opencontainers.image.source="${KILN_IMAGE_SOURCE}" \
   org.opencontainers.image.version="${KILN_VERSION}" \
   org.opencontainers.image.revision="${SOURCE_COMMIT}" \
   io.kiln.component="relay" \
-  io.kiln.relay.features="ip-certificates"
+  io.kiln.relay.features="ip-certificates,control-dial"
 
 EXPOSE 4100 2022
 # The checker probes the loopback-only plain-HTTP listener on

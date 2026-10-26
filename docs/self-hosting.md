@@ -81,19 +81,20 @@ certificate (the six-day one for an IP address). Apps on that machine get
 their domains and HTTPS from the same Traefik. The installer waits for the
 certificate before the Relay announces itself to Hearth. When Let's Encrypt
 can't reach the machine on port 80, as when a router sends 80 and 443 to
-another machine, the installer offers to use port 4100 instead. When
+another machine, the Relay opens no ports at all and connects to Kiln
+instead (below); `--proxy hearth` asks for that from the start. When
 something else already has 80 or 443, or the machine has no curl to check
-HTTPS with, the Relay uses port 4100 and its own certificate from the
-start: `--proxy none` asks for that.
+HTTPS with, the Relay uses port 4100 and its own certificate: `--proxy
+none` asks for that.
 
 Once the Relay announces itself, the installer prints a link to confirm it
 in Hearth, which opens the dialog on that Relay, and its fingerprint, which
-the dialog shows too. Until Hearth can reach the Relay, the dialog says
-where it tried and waits. Confirming takes an optional name; left blank,
-the Relay gets the next free default name (K100, then K101, and so on). The
-machine must be able to reach Hearth at `KILN_URL`, and Hearth the machine:
-on 443 behind Traefik, or 4100, at its public IP, with a router forwarding
-the port. For another address, such as a domain or an internal address,
+the dialog shows too. Confirming takes an optional name; left blank, the
+Relay gets the next free default name (K100, then K101, and so on). The
+machine must be able to reach Hearth at `KILN_URL`. Hearth needn't be able
+to reach the machine: when it can't, the dialog says so, and the Relay
+pairs through its announcements and connects to Hearth itself. For another
+address, such as a domain or an internal address,
 add `--relay-host <address>` to the command; for another SFTP port, add
 `--sftp-port <port>`. The installer stops before starting anything when a
 port it needs is taken, and names what has it. A machine whose Relay data
@@ -115,6 +116,28 @@ Joining needs the Relay's own HTTPS (the default). The link's secret never
 leaves the two machines: the Relay proves it holds it, and Hearth answers
 in kind, so the dialog asks first when Hearth's address is plain HTTP,
 where someone on the network could still get in the way.
+
+#### Relays Hearth can't reach
+
+A Relay's control connection can be opened from either end. Hearth opens
+it to the Relay, or the Relay opens it to Hearth (`/api/relays/control` on
+`KILN_URL`), and each Relay saved in Hearth prefers one, with the other as a
+fallback: Relays joined since Kiln could do this prefer to connect
+themselves, and older ones are still reached by Hearth. Every Relay keeps
+connecting to Hearth as a standby, so one whose address stops working
+reconnects on its own.
+
+When Hearth can't reach a joining Relay, it also puts the Relay in
+`hearth` proxy mode. Its consoles, file uploads and downloads, and backup
+downloads then go through Hearth: Hearth asks the Relay, over its
+connection, to open a tunnel back to Hearth for each one, and passes the
+traffic through unchanged. That traffic counts against Hearth's bandwidth.
+Websites and game ports on such a machine still need a port forwarded, or a
+Relay that browsers and players can reach to enter through.
+
+Set `KILN_RELAY_DIAL_URL` on Hearth when Relays should connect to another
+address than `KILN_URL`. Hearth doesn't ask Relays to connect when
+`KILN_URL` is on `localhost`.
 
 #### Installation IDs
 

@@ -62,9 +62,10 @@ Usage: curl -fsSL https://kiln.site/install | sh -s -- [options]
   --proxy MODE       What serves Kiln over HTTPS: traefik (started on
                      ports 80 and 443), coolify (Coolify's proxy), or none
                      (default: coolify on a Coolify server, else traefik).
-                     With --node: traefik, or none for the Relay's own
-                     HTTPS on port 4100 (default: traefik when 80 and 443
-                     are free)
+                     With --node: traefik, none for the Relay's own
+                     HTTPS on port 4100, or hearth to open no ports and
+                     connect to Kiln instead (default: traefik when 80 and
+                     443 are free)
   --port PORT        Host port Kiln also listens on, without HTTPS
                      (default: 3000)
   --game-host HOST   Address players connect to game servers at
@@ -686,6 +687,8 @@ start_node_relay() {
     relay_port=""
     relay_join=""
   fi
+  # Connecting to Kiln itself, the Relay needs no port of its own.
+  [ "$proxy" != "hearth" ] || relay_port=""
   new_relay_cidfile
   # shellcheck disable=SC2086 # the port's flag and value
   dk run --detach --cidfile "$relay_cidfile" --name "$container" --restart unless-stopped \
@@ -804,7 +807,7 @@ check_ports() {
     owner=$(web_ports_owner)
     [ -z "$owner" ] ||
       fail "Port 80 or 443 is in use by $owner, and the Relay's Traefik needs them. Run this again with --proxy none added to use port 4100 instead."
-  elif [ "$mode" = "node" ]; then
+  elif [ "$mode" = "node" ] && [ "$proxy" = "none" ]; then
     owner=$(port_owner 4100)
     [ -z "$owner" ] ||
       fail "Port 4100 is in use by $owner, and a Relay needs it for Kiln to reach it."
@@ -824,8 +827,8 @@ check_ports() {
 # 80 or 443. A Relay's data from before keeps how it was reached.
 choose_node_proxy() {
   case "$proxy" in
-    traefik | none | "") ;;
-    *) fail "--proxy with --node must be traefik or none." ;;
+    traefik | none | hearth | "") ;;
+    *) fail "--proxy with --node must be traefik, none, or hearth." ;;
   esac
   stored=$(stored_proxy_mode)
   if [ -n "$stored" ]; then
@@ -897,11 +900,23 @@ wait_relay_https() {
 
 # Let's Encrypt couldn't check the Relay's address, as when ports 80 and
 # 443 there reach another machine. A Relay this install just made, which
-# hasn't joined anything, starts again at port 4100 instead.
+# hasn't joined anything, starts again connecting to Kiln itself when its
+# release can and it's joining, else at port 4100.
 use_direct_port() {
   say ""
   say "  Let's Encrypt couldn't reach this machine at $relay_host"
-  say "  on port 80. Ports 80 and 443 there have to lead here."
+  say "  on port 80."
+  if [ "$volume_created" -eq 1 ] && [ -n "$join" ] &&
+    relay_feature control-dial; then
+    say "  It will connect to Kiln itself instead, with no ports"
+    say "  opened, and its consoles and files will go through Kiln."
+    say ""
+    proxy=hearth
+    step "Switching to connecting to Kiln" remove_new_relay
+    step "Starting the Relay" start_node_relay
+    return 0
+  fi
+  say "  Ports 80 and 443 there have to lead here."
   if [ "$volume_created" -eq 1 ] && [ -z "$(port_owner 4100)" ] &&
     confirm "Use port 4100 instead?"; then
     say ""
