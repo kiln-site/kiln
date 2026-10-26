@@ -797,6 +797,7 @@ function LimitRows({
         disabled={disabled}
         fallbackMax={400}
         label="CPU"
+        decimals={false}
         min={10}
         original={
           original.cpuMillis === null
@@ -814,11 +815,12 @@ function LimitRows({
         below={gib(usedBytes)}
         disabled={disabled}
         fallbackMax={100}
+        decimals={false}
         label="Disk"
-        min={0.5}
+        min={1}
         original={gib(original.diskBytes)}
         scale={1}
-        step={(value) => (value < 2 ? 0.1 : value < 10 ? 0.5 : 1)}
+        step={() => 1}
         unit="GiB"
         value={draft.diskGiB}
         onChange={set("diskGiB")}
@@ -835,6 +837,7 @@ const NO_LIMIT = 1200
 function LimitRow({
   assignable,
   below = null,
+  decimals = true,
   disabled,
   fallbackMax,
   label,
@@ -850,6 +853,8 @@ function LimitRow({
   assignable: number | null
   /** A value the limit can't go under, shaded red, such as the files. */
   below?: number | null
+  /** Whether the limit takes fractions, as memory does; else whole units. */
+  decimals?: boolean
   disabled: boolean
   fallbackMax: number
   label: string
@@ -920,24 +925,45 @@ function LimitRow({
         }
         zones={zones}
         className="pt-1.5"
-        onValueChange={(next) =>
-          onChange(
-            next > (AXIS + NO_LIMIT) / 2
-              ? { ...value, limited: false }
-              : {
-                  limited: true,
-                  value: String(
-                    Number(
-                      (
-                        snap(
-                          min * Math.exp((Math.min(next, AXIS) / AXIS) * span)
-                        ) / scale
-                      ).toFixed(4)
-                    )
-                  ),
-                }
-          )
-        }
+        onValueChange={(next, reason) => {
+          const limitTo = (shown: number) =>
+            onChange({
+              limited: true,
+              value: String(Number((shown / scale).toFixed(4))),
+            })
+          if (reason === "keyboard") {
+            // A key moves one snapped value, and past the axis's end, or
+            // back from it, to no limit and the largest limit.
+            const sliderAt = !value.limited
+              ? NO_LIMIT
+              : current === null
+                ? 0
+                : position(current)
+            if (next <= 0) return limitTo(min)
+            if (next >= NO_LIMIT && next > sliderAt) {
+              return onChange({ ...value, limited: false })
+            }
+            if (!value.limited) {
+              const largest = Math.floor(max / step(max)) * step(max)
+              return limitTo(Number(largest.toFixed(4)))
+            }
+            const at = current ?? min
+            const up = next > sliderAt
+            const size = step(up ? at : at - Number.EPSILON * 16)
+            const stepped = Number(
+              (up
+                ? Math.floor(at / size + 1e-9) * size + size
+                : Math.ceil(at / size - 1e-9) * size - size
+              ).toFixed(4)
+            )
+            if (stepped > max) return onChange({ ...value, limited: false })
+            return limitTo(Math.max(stepped, min))
+          }
+          if (next > (AXIS + NO_LIMIT) / 2) {
+            return onChange({ ...value, limited: false })
+          }
+          limitTo(snap(min * Math.exp((Math.min(next, AXIS) / AXIS) * span)))
+        }}
       />
       <label className="relative">
         <Input
@@ -947,7 +973,7 @@ function LimitRow({
             value.limited ? "pr-9" : "pr-2"
           )}
           disabled={disabled}
-          inputMode="decimal"
+          inputMode={decimals ? "decimal" : "numeric"}
           value={
             !value.limited
               ? "No limit"
@@ -956,7 +982,10 @@ function LimitRow({
                 : String(Number(current.toFixed(2)))
           }
           onChange={(event) => {
-            const typed = event.currentTarget.value.replace(/[^\d.]/gu, "")
+            const typed = event.currentTarget.value.replace(
+              decimals ? /[^\d.]/gu : /\D/gu,
+              ""
+            )
             onChange({
               limited: true,
               value:

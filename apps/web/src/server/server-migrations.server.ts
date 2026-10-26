@@ -41,7 +41,6 @@ import {
   startServerMigrationEffect,
 } from "@/lib/server-migrations.server"
 import { resolveAuthorizedBackupStorageSelection } from "@/lib/backup-storage-selection.server"
-import type { ResourceLimitsCapacity } from "@/lib/resource-limits"
 import type {
   MigrationRelayRoom,
   MigrationSourceRoom,
@@ -68,8 +67,6 @@ export interface ServerMigrationDestination {
   readonly problems: ReadonlyArray<RelayTransferProblem>
   /** What it can give the copy; null when it couldn't say. */
   readonly room: MigrationRelayRoom | null
-  /** The same, as the limits editor shows it. */
-  readonly capacity: ResourceLimitsCapacity | null
   /** Names of game servers there already, which a copy can't take. */
   readonly takenNames: ReadonlyArray<string>
 }
@@ -175,7 +172,6 @@ export async function previewServerMigrationHandler(
         nodeArch: candidate.nodeArch,
         problems,
         room: space?.room ?? null,
-        capacity: space?.capacity ?? null,
         takenNames,
       } satisfies ServerMigrationDestination
     })

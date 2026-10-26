@@ -21,7 +21,8 @@ type SliderProps = Omit<
   marks?: ReadonlyArray<number>
   max: number
   min: number
-  onValueChange?: (value: number) => void
+  /** With what moved it: "keyboard", "drag", "track-press", and so on. */
+  onValueChange?: (value: number, reason: string) => void
   ticks?: ReadonlyArray<SliderTick>
   zones?: ReadonlyArray<SliderZone>
 }
@@ -49,7 +50,7 @@ function Slider({
       )}
       max={max}
       min={min}
-      onValueChange={(value) => onValueChange?.(value)}
+      onValueChange={(value, details) => onValueChange?.(value, details.reason)}
       {...props}
     >
       <SliderPrimitive.Control className="flex h-4 w-full cursor-pointer items-center data-[disabled]:cursor-default">

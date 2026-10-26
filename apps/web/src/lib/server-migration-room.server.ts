@@ -14,7 +14,6 @@ import { Schema } from "effect"
 import { resolveBackupStorageSelection } from "@/lib/backup-storage-selection.server"
 import { relayConnectionFeatures, relayRpc } from "@/lib/relay-connection"
 import type { PersistedRelay } from "@/lib/relay-registry"
-import type { ResourceLimitsCapacity } from "@/lib/resource-limits"
 import { relayAllocations } from "@/lib/resource-limits.server"
 import {
   migrationRoomProblems,
@@ -33,8 +32,6 @@ export async function loadRelayRoom(
   relay: PersistedRelay,
   input: { readonly rootId?: string; readonly subject?: string } = {}
 ): Promise<{
-  /** The same, as the limits editor shows a node's capacity. */
-  readonly capacity: ResourceLimitsCapacity
   readonly room: MigrationRelayRoom
   readonly rootBytes: number | null
   readonly snapshot: RelaySnapshot
@@ -72,19 +69,6 @@ export async function loadRelayRoom(
     0
   )
   return {
-    capacity: {
-      cpu: { nodeCores: node.cpu.cores },
-      memory: {
-        availableBytes: assignableMemoryBytes,
-        nodeTotalBytes: node.memory.totalBytes,
-        nodeUsedBytes: node.memory.usedBytes,
-      },
-      storage: {
-        availableBytes: assignableDiskBytes,
-        nodeTotalBytes: node.storage.totalBytes,
-        nodeUsedBytes: node.storage.usedBytes,
-      },
-    },
     room: {
       assignableDiskBytes,
       assignableMemoryBytes,
@@ -119,8 +103,7 @@ export function migrationSourceRoom(
   given: ResourceLimits | null = null
 ): MigrationSourceRoom {
   const limits = given ?? copyLimits(instance)
-  const ownDisk =
-    instance.limits.diskBytes ?? DEFAULT_INSTANCE_DISK_LIMIT_BYTES
+  const ownDisk = instance.limits.diskBytes ?? DEFAULT_INSTANCE_DISK_LIMIT_BYTES
   if (rootBytes !== null) {
     return { limits, usedBytes: rootBytes, usedFrom: "measured" }
   }
