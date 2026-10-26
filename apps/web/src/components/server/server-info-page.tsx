@@ -1,6 +1,6 @@
 import * as React from "react"
 import { useQueryClient } from "@tanstack/react-query"
-import { ArrowRightLeft, Copy } from "lucide-react"
+import { ArrowRightLeft, Copy, LoaderCircle } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 
@@ -27,6 +27,7 @@ import type {
   RelayNodeSummary,
 } from "@/lib/relay-selectors"
 import { ResourceSecurityAlert } from "@/components/resource-security-alert"
+import { ensuringPromise, recoverPromise } from "@/effect/promise"
 import { serverMigrationPreviewQueryOptions } from "@/lib/server-migration-queries"
 
 // The game server's details, each section with the actions that change it,
@@ -147,14 +148,30 @@ function ServerMigrationSection({
   relayConnected: boolean
 }) {
   const [mode, setMode] = React.useState<ServerMigrationMode | null>(null)
+  const [opening, setOpening] = React.useState<ServerMigrationMode | null>(null)
   const queryClient = useQueryClient()
-  // Asked for as the pointer reaches a button, so the dialog opens whole.
+  const previewOptions = serverMigrationPreviewQueryOptions({
+    instanceId: instance.id,
+    relayId: instance.relayId,
+  })
+  // Asked for as the pointer reaches a button, and waited for on click, so
+  // the dialog opens whole rather than growing once it loads.
   const prefetch = () => {
-    void queryClient.prefetchQuery(
-      serverMigrationPreviewQueryOptions({
-        instanceId: instance.id,
-        relayId: instance.relayId,
-      })
+    void queryClient.prefetchQuery(previewOptions)
+  }
+  const open = (next: ServerMigrationMode) => {
+    setOpening(next)
+    // The dialog shows a failed preview itself.
+    void ensuringPromise(
+      () =>
+        recoverPromise(
+          () => queryClient.fetchQuery(previewOptions),
+          () => undefined
+        ),
+      () => {
+        setOpening(null)
+        setMode(next)
+      }
     )
   }
   const unavailable = relayConnected
@@ -169,25 +186,33 @@ function ServerMigrationSection({
           <Button
             variant="outline"
             size="sm"
-            disabled={!relayConnected}
+            disabled={!relayConnected || opening !== null}
             title={unavailable}
-            onClick={() => setMode("duplicate")}
+            onClick={() => open("duplicate")}
             onFocus={prefetch}
             onPointerEnter={prefetch}
           >
-            <Copy />
+            {opening === "duplicate" ? (
+              <LoaderCircle className="animate-spin" />
+            ) : (
+              <Copy />
+            )}
             Duplicate
           </Button>
           <Button
             variant="outline"
             size="sm"
-            disabled={!relayConnected}
+            disabled={!relayConnected || opening !== null}
             title={unavailable}
-            onClick={() => setMode("migrate")}
+            onClick={() => open("migrate")}
             onFocus={prefetch}
             onPointerEnter={prefetch}
           >
-            <ArrowRightLeft />
+            {opening === "migrate" ? (
+              <LoaderCircle className="animate-spin" />
+            ) : (
+              <ArrowRightLeft />
+            )}
             Move to another Relay
           </Button>
           {mode ? (

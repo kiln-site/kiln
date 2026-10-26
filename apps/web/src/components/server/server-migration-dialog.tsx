@@ -25,11 +25,6 @@ import {
   DialogFooter,
   DialogTitle,
 } from "@workspace/ui/components/dialog"
-import {
-  HoverCard,
-  HoverCardContent,
-  HoverCardTrigger,
-} from "@workspace/ui/components/hover-card"
 import { Input } from "@workspace/ui/components/input"
 import { Slider } from "@workspace/ui/components/slider"
 import { Switch } from "@workspace/ui/components/switch"
@@ -911,6 +906,13 @@ function LimitRow({
       <Slider
         aria-label={`${label} limit`}
         disabled={disabled}
+        valueText={() =>
+          !value.limited
+            ? "No limit"
+            : current === null
+              ? "Not set"
+              : `${decimals ? Number(current.toFixed(2)) : Math.round(current)} ${unit === "%" ? "percent" : unit}`
+        }
         marks={[original === null ? NO_LIMIT : position(original)]}
         max={NO_LIMIT}
         min={0}
@@ -1190,6 +1192,7 @@ function SwitchRow({
   onCheckedChange: (checked: boolean) => void
   title?: string
 }) {
+  const [infoOpen, setInfoOpen] = React.useState(false)
   return (
     <div
       className={cn(
@@ -1200,8 +1203,8 @@ function SwitchRow({
       <span className="flex min-w-0 items-center gap-1.5" title={title}>
         <span className="type-label truncate">{label}</span>
         {info ? (
-          <HoverCard closeDelay={100} openDelay={100}>
-            <HoverCardTrigger asChild>
+          <DrawerPopover open={infoOpen} onOpenChange={setInfoOpen}>
+            <DrawerPopoverTrigger asChild>
               <button
                 aria-label={`What ${label.toLowerCase()} includes`}
                 className="grid size-5 place-items-center rounded text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40"
@@ -1209,11 +1212,15 @@ function SwitchRow({
               >
                 <Info className="size-3.5" />
               </button>
-            </HoverCardTrigger>
-            <HoverCardContent align="start" className="w-80 p-0">
+            </DrawerPopoverTrigger>
+            <DrawerPopoverContent
+              align="start"
+              className="w-80 p-0"
+              title={`What ${label.toLowerCase()} includes`}
+            >
               {info}
-            </HoverCardContent>
-          </HoverCard>
+            </DrawerPopoverContent>
+          </DrawerPopover>
         ) : null}
       </span>
       <Switch

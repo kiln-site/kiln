@@ -621,18 +621,23 @@ const createDestination = Effect.fnUntraced(function* (
   const diskLimitBytes =
     (options.limits ?? instance.limits).diskBytes ??
     DEFAULT_INSTANCE_DISK_LIMIT_BYTES
-  const create = relayCreateInstanceSchema.parse({
-    diskLimitBytes,
-    ...relayResourceLimitsRequest(
-      destination.id,
-      { cpuMillis: null, diskBytes: diskLimitBytes, memoryBytes: null },
-      options.limits ?? instance.limits
-    ),
-    name: row.destination_name,
-    recipe: recipe.brickSource,
-    recipeDefinition: brickRecipeDefinition(recipe.brick),
-    start: false,
-    variables: instance.variables ?? {},
+  // A Relay that can't take these limits fails the copy, not the worker.
+  const create = yield* Effect.try({
+    try: () =>
+      relayCreateInstanceSchema.parse({
+        diskLimitBytes,
+        ...relayResourceLimitsRequest(
+          destination.id,
+          { cpuMillis: null, diskBytes: diskLimitBytes, memoryBytes: null },
+          options.limits ?? instance.limits
+        ),
+        name: row.destination_name,
+        recipe: recipe.brickSource,
+        recipeDefinition: brickRecipeDefinition(recipe.brick),
+        start: false,
+        variables: instance.variables ?? {},
+      }),
+    catch: (cause) => cause,
   })
   // A move takes the old server's domains along, so the copy isn't given
   // one of its own when it's provisioned.

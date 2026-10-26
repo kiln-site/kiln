@@ -24,6 +24,8 @@ type SliderProps = Omit<
   /** With what moved it: "keyboard", "drag", "track-press", and so on. */
   onValueChange?: (value: number, reason: string) => void
   ticks?: ReadonlyArray<SliderTick>
+  /** What a screen reader says for a value, when the number isn't it. */
+  valueText?: (value: number) => string
   zones?: ReadonlyArray<SliderZone>
 }
 
@@ -35,6 +37,7 @@ function Slider({
   min,
   onValueChange,
   ticks = [],
+  valueText,
   zones = [],
   ...props
 }: SliderProps) {
@@ -87,6 +90,9 @@ function Slider({
           ))}
           <SliderPrimitive.Thumb
             aria-label={label}
+            getAriaValueText={
+              valueText ? (_formatted, value) => valueText(value) : undefined
+            }
             className="size-3.5 border-2 border-background bg-primary shadow-sm ring-1 ring-primary outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
           />
         </SliderPrimitive.Track>
