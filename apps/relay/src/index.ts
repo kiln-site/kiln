@@ -98,6 +98,10 @@ import {
   relayDirectorySizesInputSchema,
   relayFileMutationInputSchema,
   relayFilePutInputSchema,
+  relayIconMaxBytes,
+  relayIconReadInputSchema,
+  relayIconReadResultSchema,
+  sniffIconImage,
   relayFilePutResultSchema,
   relayFileSearchPageInputSchema,
   relayFileStatInputSchema,
@@ -3052,6 +3056,39 @@ async function executeControlRequest(
           target.filesystem.read(target.root, requiredString(payload, "path"))
         )
       )
+    case "instance.icon.read": {
+      const input = relayIconReadInputSchema.parse(payload)
+      if ("instanceId" in input) {
+        return withFileTarget(input, (target) =>
+          runRelayEffect(
+            "relay.icon.read",
+            target.filesystem.readIcon(target.root, input.path)
+          )
+        )
+      }
+      const container = await apps.serviceContainer(input.appId, input.service)
+      if (!container) throw new Error(`Service ${input.service} isn't running`)
+      const file = await runRelayEffect(
+        "relay.icon.readContainer",
+        relayEngine.readContainerFile(
+          container.id,
+          input.path,
+          relayIconMaxBytes
+        )
+      )
+      if (!file) return null
+      // Only images, so nothing else in the container can be read this way.
+      if (!sniffIconImage(file.bytes)) {
+        throw new Error(
+          "This file isn't a PNG, JPEG, GIF, WebP, ICO, or SVG image"
+        )
+      }
+      return relayIconReadResultSchema.parse({
+        contentBase64: file.bytes.toString("base64"),
+        modifiedAt: Math.max(0, Math.trunc(file.modifiedAt)),
+        size: file.bytes.byteLength,
+      })
+    }
     case "instance.files.write": {
       const input = relaySaveFileInputSchema.parse(payload)
       return withFileTarget(payload, (target) =>

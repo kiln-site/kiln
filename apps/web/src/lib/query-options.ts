@@ -58,6 +58,8 @@ import {
   getInstanceFavorites,
   setInstanceFavorite,
 } from "@/server/instance-favorites"
+import { getIconDetails, getIconIndex } from "@/server/icons"
+import { iconSubjectKey, type IconSubject } from "@/lib/icons"
 import {
   instanceFavoriteKey,
   type InstanceFavorite,
@@ -295,6 +297,11 @@ export const queryKeys = {
   relayRelease: (relayId: string, version: string) =>
     ["updates", "relay", relayId, version] as const,
   instanceFavorites: ["instance-favorites"] as const,
+  icons: {
+    index: ["icons", "index"] as const,
+    details: ["icons", "details"] as const,
+    detail: (key: string) => ["icons", "details", key] as const,
+  },
   notifications: ["notifications"] as const,
   notificationPreferences: ["notification-preferences"] as const,
   uiPreferences: ["ui", "preferences"] as const,
@@ -819,6 +826,22 @@ export function invitationPreviewQueryOptions(token: string) {
   return queryOptions({
     queryKey: queryKeys.access.invitation(token),
     queryFn: () => getInvitationPreview({ data: { token } }),
+    staleTime: 30_000,
+  })
+}
+
+export function iconIndexQueryOptions() {
+  return queryOptions({
+    queryKey: queryKeys.icons.index,
+    queryFn: () => getIconIndex(),
+    staleTime: Infinity,
+  })
+}
+
+export function iconDetailsQueryOptions(subject: IconSubject) {
+  return queryOptions({
+    queryKey: queryKeys.icons.detail(iconSubjectKey(subject)),
+    queryFn: () => getIconDetails({ data: { subject } }),
     staleTime: 30_000,
   })
 }

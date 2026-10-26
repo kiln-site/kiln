@@ -125,6 +125,59 @@ export function InfoSection({
   )
 }
 
+// What the resource is, as a profile: its icon, which those who may change
+// it click to, its name and Kiln ID, and its actions, such as Rename. Facts
+// about it follow below.
+export function InfoProfile({
+  actions,
+  children,
+  icon,
+  id,
+  idLabel,
+  name,
+}: {
+  actions?: React.ReactNode
+  children?: React.ReactNode
+  icon: React.ReactNode
+  id: string
+  // Lowercase noun, for example "server ID".
+  idLabel: string
+  name: string
+}) {
+  return (
+    <section className="min-w-0 border bg-background/45">
+      <header className="flex flex-wrap items-center gap-x-4 gap-y-3 p-4">
+        {icon}
+        <div className="min-w-0 flex-1 basis-40">
+          <h3
+            className="truncate font-heading text-lg font-semibold tracking-[-0.02em]"
+            title={name}
+          >
+            {name}
+          </h3>
+          <div className="type-meta mt-1 flex min-w-0 items-center gap-1.5 text-muted-foreground">
+            <span className="shrink-0">Kiln ID</span>
+            <InfoCopyValue
+              className="text-muted-foreground"
+              display={id.slice(0, 12)}
+              label={idLabel}
+              value={id}
+            />
+          </div>
+        </div>
+        {actions ? (
+          <div className="flex flex-wrap items-center justify-end gap-1.5">
+            {actions}
+          </div>
+        ) : null}
+      </header>
+      {children == null ? null : (
+        <dl className="@container border-t px-4">{children}</dl>
+      )}
+    </section>
+  )
+}
+
 // A section action that opens the page where more of it changes, such as
 // Network.
 const InfoSectionLinkAnchor = React.forwardRef<

@@ -31,6 +31,7 @@ import { kilnFavorite } from "./0028_kiln_favorite"
 import { serverMigrations } from "./0029_server_migrations"
 import { linkedBackups } from "./0030_linked_backups"
 import { securityReports } from "./0031_security_reports"
+import { icons } from "./0032_icons"
 
 // Append new migrations with the next id. Never edit or reorder applied ones.
 export const migrations: ReadonlyArray<Migration> = [
@@ -65,4 +66,5 @@ export const migrations: ReadonlyArray<Migration> = [
   serverMigrations,
   linkedBackups,
   securityReports,
+  icons,
 ]

@@ -22,14 +22,15 @@ import {
 import { showToast } from "@workspace/ui/components/sonner"
 
 import { CodeDocumentPanel } from "@/components/code-document-panel"
+import { EditableIcon } from "@/components/icon-editor-dialog"
 import {
   InfoCopyValue,
   InfoFact,
+  InfoProfile,
   InfoSection,
   InfoSectionLink,
 } from "@/components/info-page"
 import { InstanceFavoriteButton } from "@/components/instance-favorite"
-import { ServerKindIcon } from "@/components/instance-kind-icon"
 import { LiveServerBrickIcon } from "@/components/server-brick-icon"
 import { RenameButton } from "@/components/rename-dialog"
 import { StatusIndicator } from "@/components/status-indicator"
@@ -53,11 +54,42 @@ export function ServerGeneralSettings({
   instance: InstanceSettingsInstance
   relayConnected: boolean
 }) {
+  const editor = React.useMemo(
+    () => ({
+      fallback: (
+        // Scales with whichever box shows it.
+        <LiveServerBrickIcon
+          brickId={instance.brickId}
+          brickSource={instance.brickSource}
+          className="size-[44%]"
+          implementation={instance.implementation}
+        />
+      ),
+      files: { rootId: instance.id },
+      fit: "contain" as const,
+      noun: "game server",
+      subject: {
+        kind: "server" as const,
+        relayId: instance.relayId,
+        id: instance.id,
+      },
+      title: "Game server icon",
+    }),
+    [
+      instance.brickId,
+      instance.brickSource,
+      instance.id,
+      instance.implementation,
+      instance.relayId,
+    ]
+  )
   return (
-    <InfoSection
-      icon={<ServerKindIcon />}
-      title="Server"
-      action={
+    <InfoProfile
+      icon={<EditableIcon canEdit={canRename} editor={editor} />}
+      id={instance.id}
+      idLabel="server ID"
+      name={instance.name}
+      actions={
         <>
           {canRename ? (
             <ServerRenameButton
@@ -73,14 +105,8 @@ export function ServerGeneralSettings({
         </>
       }
     >
-      <InfoFact label="Name">
-        <InfoCopyValue label="server name" mono={false} value={instance.name} />
-      </InfoFact>
-      <InfoFact label="Kiln ID">
-        <InfoCopyValue label="server ID" value={instance.id} />
-      </InfoFact>
       <InfoFact label="Game">{instance.game}</InfoFact>
-    </InfoSection>
+    </InfoProfile>
   )
 }
 

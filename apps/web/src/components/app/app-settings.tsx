@@ -1,6 +1,6 @@
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { primaryWebRoute } from "@workspace/contracts"
+import { appFileRootId, primaryWebRoute } from "@workspace/contracts"
 import type { RelayAppWebRoute } from "@workspace/contracts"
 import {
   Cable,
@@ -31,9 +31,11 @@ import {
   showAppOperationError,
   type App,
 } from "@/components/app/app-presentation"
+import { EditableIcon } from "@/components/icon-editor-dialog"
 import {
   InfoCopyValue,
   InfoFact,
+  InfoProfile,
   InfoSection,
   InfoSectionLink,
 } from "@/components/info-page"
@@ -67,11 +69,29 @@ export function AppGeneralSettings({
 }) {
   const available = appRelayAvailable(app)
   const compose = useAppRunsCompose(app)
+  const services = appServices(app)
+  const serviceKey = services.join("\n")
+  const editor = React.useMemo(
+    () => ({
+      fallback: <AppKindIcon />,
+      files: {
+        rootId: appFileRootId(app.id),
+        ...(compose && serviceKey ? { services: serviceKey.split("\n") } : {}),
+      },
+      fit: "contain" as const,
+      noun: "app",
+      subject: { kind: "app" as const, relayId: app.relayId, id: app.id },
+      title: "App icon",
+    }),
+    [app.id, app.relayId, compose, serviceKey]
+  )
   return (
-    <InfoSection
-      icon={<AppKindIcon />}
-      title="App"
-      action={
+    <InfoProfile
+      icon={<EditableIcon canEdit={canRename} editor={editor} />}
+      id={app.id}
+      idLabel="app ID"
+      name={app.name}
+      actions={
         <>
           {canRename ? <AppRenameButton app={app} /> : null}
           <InstanceFavoriteButton
@@ -82,12 +102,6 @@ export function AppGeneralSettings({
         </>
       }
     >
-      <InfoFact label="Name">
-        <InfoCopyValue label="app name" mono={false} value={app.name} />
-      </InfoFact>
-      <InfoFact label="Kiln ID">
-        <InfoCopyValue label="app ID" value={app.id} />
-      </InfoFact>
       {/* Only a Compose file runs more than one container. */}
       {compose ? (
         <InfoFact label="Containers">
@@ -99,14 +113,14 @@ export function AppGeneralSettings({
             <span className="text-muted-foreground">Not deployed</span>
           ) : (
             <span className="flex min-w-0 flex-wrap justify-end gap-1">
-              {appServices(app).map((service) => (
+              {services.map((service) => (
                 <ServiceTag key={service} app={app} service={service} />
               ))}
             </span>
           )}
         </InfoFact>
       ) : null}
-    </InfoSection>
+    </InfoProfile>
   )
 }
 

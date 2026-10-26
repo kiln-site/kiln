@@ -33,6 +33,7 @@ import { showToast } from "@workspace/ui/components/sonner"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { AccountAvatar } from "@/components/account-avatar"
+import { EditableIcon } from "@/components/icon-editor-dialog"
 import { RedactedText } from "@/components/redacted-text"
 import {
   SettingsEmptyState,
@@ -142,12 +143,32 @@ function ProfileCard({ user }: { user: AuthenticatedUser }) {
     >
       <div className="flex flex-wrap items-center gap-x-4 gap-y-4 p-4 sm:p-5">
         <div className="flex min-w-0 flex-1 basis-72 items-center gap-4">
-          <AccountAvatar
-            name={displayName}
-            size="lg"
-            className="data-[size=lg]:size-14"
-            fallbackClassName="text-base"
-          />
+          <EditableIcon
+            canEdit={!user.isDevelopmentBypass}
+            className="size-14 rounded-none border-0 bg-transparent"
+            editor={{
+              fallback: (
+                <AccountAvatar
+                  name={displayName}
+                  size="lg"
+                  className="size-full data-[size=lg]:size-full"
+                  fallbackClassName="text-base"
+                />
+              ),
+              fit: "cover",
+              noun: "picture",
+              subject: { kind: "user", id: user.id },
+              title: "Profile picture",
+            }}
+          >
+            <AccountAvatar
+              name={displayName}
+              size="lg"
+              className="data-[size=lg]:size-14"
+              fallbackClassName="text-base"
+              userId={user.id}
+            />
+          </EditableIcon>
           <div className="min-w-0">
             <h2 className="type-section-title break-words">{displayName}</h2>
             <div className="mt-1.5 min-w-0">

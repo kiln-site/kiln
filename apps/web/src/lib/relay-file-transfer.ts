@@ -47,7 +47,7 @@ interface FileTransferInput {
 }
 
 export type DownloadCompression = FileArchiveFormat | "none"
-type FileRequestMethod = "HEAD" | "POST" | "PUT"
+type FileRequestMethod = "GET" | "HEAD" | "POST" | "PUT"
 
 interface RelayFileAuthorization {
   readonly headers: {
@@ -133,6 +133,48 @@ export const inspectRelayFileDownloadEffect = Effect.fn(
     size,
     zipSizeEstimate,
   } satisfies RelayFileDownloadPreview
+})
+
+/**
+ * A small file's bytes, read straight from the Relay into the page, as for
+ * an icon chosen from a game server's files. Larger files are refused
+ * before they're read.
+ */
+export const readRelayFileEffect = Effect.fn("RelayTransfer.read")(function* (
+  input: FileTransferInput & { readonly maxBytes: number }
+) {
+  const authorization = yield* authorizeRelayFileRequest(input, "GET")
+  const response = yield* Effect.tryPromise({
+    try: (signal) =>
+      fetch(authorization.url, {
+        headers: authorization.headers,
+        method: "GET",
+        mode: "cors",
+        signal,
+      }),
+    catch: (cause) => unavailable("download", cause),
+  })
+  if (!response.ok) return yield* rejected(response, "download")
+  const size = Number(response.headers.get("Content-Length") ?? "0")
+  if (size > input.maxBytes) {
+    yield* Effect.promise(() => response.body?.cancel() ?? Promise.resolve())
+    return yield* new RelayTransferError({
+      reason: "rejected",
+      message: `Files larger than ${Math.round(input.maxBytes / 1024)} KiB can't be used`,
+    })
+  }
+  const blob = yield* Effect.tryPromise({
+    try: () => response.blob(),
+    catch: (cause) => unavailable("download", cause),
+  })
+  yield* Effect.annotateCurrentSpan("kiln.transfer.bytes", blob.size)
+  if (blob.size > input.maxBytes) {
+    return yield* new RelayTransferError({
+      reason: "rejected",
+      message: `Files larger than ${Math.round(input.maxBytes / 1024)} KiB can't be used`,
+    })
+  }
+  return blob
 })
 
 /**
@@ -318,6 +360,12 @@ export function downloadRelayArchive(
   }
 ): Promise<void> {
   return runBrowserEffect(downloadRelayArchiveEffect(input))
+}
+
+export function readRelayFile(
+  input: FileTransferInput & { maxBytes: number; signal?: AbortSignal }
+): Promise<Blob> {
+  return runBrowserEffect(readRelayFileEffect(input), { signal: input.signal })
 }
 
 export function uploadRelayFile(

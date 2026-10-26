@@ -240,6 +240,7 @@ export function controlRequestLocks(
     case "instance.files.search":
     case "instance.files.stat":
     case "instance.files.read":
+    case "instance.icon.read":
     case "instance.files.database.read":
     case "instance.console.history":
     case "instance.logs.share":

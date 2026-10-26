@@ -44,6 +44,7 @@ export * from "./instance-limits.js"
 export * from "./resource-limits.js"
 export * from "./security.js"
 export * from "./instance-overview.js"
+export * from "./icon-images.js"
 export * from "./instance-state.js"
 export * from "./instance-inventory.js"
 export * from "./instance-lifecycle.js"
@@ -2542,6 +2543,48 @@ export const relayFilePutResultSchema = z.union([
     .strict(),
 ])
 
+// The largest image `instance.icon.read` returns. Its base64 stays well
+// under `relayControlMaxFrameBytes`.
+export const relayIconMaxBytes = 512 * 1024
+
+/**
+ * An image for an icon: a file under a file root (a game server's files, or
+ * an app's data directory), or a file inside one of an app's containers, by
+ * its absolute path there.
+ */
+export const relayIconReadInputSchema = z.union([
+  z
+    .object({
+      instanceId: fileRootIdSchema,
+      path: relayFileMutationPathSchema,
+    })
+    .strict(),
+  z
+    .object({
+      appId: appIdSchema,
+      service: appServiceNameSchema,
+      path: z
+        .string()
+        .min(2)
+        .max(1_024)
+        .refine(
+          (path) => path.startsWith("/") && !path.includes("\0"),
+          "Enter an absolute path inside the container"
+        ),
+    })
+    .strict(),
+])
+
+/** The image's bytes, or null when nothing is at the path. */
+export const relayIconReadResultSchema = z
+  .object({
+    contentBase64: z.base64().max(Math.ceil(relayIconMaxBytes / 3) * 4),
+    modifiedAt: z.number().int().nonnegative(),
+    size: z.number().int().nonnegative().max(relayIconMaxBytes),
+  })
+  .strict()
+  .nullable()
+
 export const relayFileMutationInputSchema = z.discriminatedUnion("operation", [
   z.object({
     operation: z.literal("rename"),
@@ -3162,6 +3205,8 @@ export type RelayRemoteFileUploadResult = z.infer<
 >
 export type RelayFilePutInput = z.infer<typeof relayFilePutInputSchema>
 export type RelayFilePutResult = z.infer<typeof relayFilePutResultSchema>
+export type RelayIconReadInput = z.infer<typeof relayIconReadInputSchema>
+export type RelayIconReadResult = z.infer<typeof relayIconReadResultSchema>
 export type RelayFileActivityEntry = z.infer<
   typeof relayFileActivityEntrySchema
 >

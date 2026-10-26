@@ -50,6 +50,7 @@ import {
   relayAppGitHubV1Feature,
   relayAppImageUpdatesV1Feature,
   relaySecurityInventoryV1Feature,
+  relayIconReadV1Feature,
   relayPlatformV1Feature,
   relayPlatformV2Feature,
   relayPlatformDatabaseV1Feature,
@@ -1195,6 +1196,7 @@ function authenticateSocket(
           relaySecurityInventoryV1Feature,
           relayWebRouteOptionsV1Feature,
           relayPeerTransfersV1Feature,
+          relayIconReadV1Feature,
           relayLinkedBackupsV1Feature,
           relayTransferSpaceV1Feature,
         ],
@@ -1743,6 +1745,16 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       return "instance.files.upload-url"
     case "instance.files.database.read":
       return "instance.files.read"
+    // An icon is read like a file under its root. One inside an app's
+    // container takes reading the app's files; the Relay returns only
+    // images from either.
+    case "instance.icon.read": {
+      if (objectString(request.payload, "appId")) return "app.files.read"
+      const root = objectString(request.payload, "instanceId") ?? ""
+      if (isRelayFileRoot(root)) return "relay.files.read"
+      if (appIdFromFileRoot(root)) return "app.files.read"
+      return "instance.files.read"
+    }
     case "instance.files.database.write":
       return "instance.files.write"
     case "instance.console.history":

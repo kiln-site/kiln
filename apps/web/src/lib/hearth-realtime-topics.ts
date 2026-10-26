@@ -14,6 +14,7 @@ export const hearthRealtimeTopics = [
   "databases",
   "domains",
   "favorites",
+  "icons",
   "file-activity",
   "github-sync",
   "instance-directory",

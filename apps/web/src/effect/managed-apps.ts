@@ -7,6 +7,7 @@ import { appConfigSchema, defaultAppConfig } from "@workspace/contracts"
 import { decryptWithKeyring, encryptWithKeyring } from "../../keyring.mjs"
 import { Database } from "@/effect/database"
 import { CredentialError } from "@/effect/errors"
+import { removeIconsEffect } from "@/effect/icons"
 import { databaseTable } from "@/lib/database-config"
 import { betterAuthSecrets } from "@/lib/environment"
 
@@ -228,6 +229,7 @@ export const deleteAppRecordEffect = Effect.fn("apps.delete")(function* (
     `DELETE FROM ${databaseTable("app")} WHERE relay_id = ? AND app_id = ?`,
     [relayId, appId]
   )
+  yield* removeIconsEffect({ kind: "app", relayId, id: appId })
 })
 
 function toRecord(row: AppRow): AppRecord {

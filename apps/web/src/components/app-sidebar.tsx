@@ -1813,6 +1813,7 @@ function CollapsedAccountMenu({ user }: { user: AuthenticatedUser }) {
             <AccountAvatar
               className="data-[size=sm]:size-[30px]"
               name={user.name}
+              userId={user.id}
             />
             <UnreadNotificationsIndicator />
           </button>
@@ -1881,7 +1882,7 @@ function ExpandedAccountRow({
             aria-label={`Open account menu for ${user.name}`}
             {...prefetchAccounts}
           >
-            <AccountAvatar name={user.name} />
+            <AccountAvatar name={user.name} userId={user.id} />
             <span className="min-w-0 flex-1 truncate text-xs font-semibold">
               {user.name}
             </span>

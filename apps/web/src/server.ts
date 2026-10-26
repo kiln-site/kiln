@@ -31,6 +31,10 @@ import {
   startAppImageUpdateChecks,
   stopAppImageUpdateChecks,
 } from "./lib/app-image-updates.server"
+import {
+  startIconDetection,
+  stopIconDetection,
+} from "./lib/icon-detection.server"
 import { startDiskLimitWarnings } from "./lib/disk-limit-warnings.server"
 import { startNotificationPushes } from "./lib/notification-pushes.server"
 import { startServerMigrationResumption } from "./lib/server-migrations.server"
@@ -57,6 +61,7 @@ startInstanceDirectorySync()
 startGitHubSyncPolling()
 startAppDeploymentPolling()
 startAppImageUpdateChecks()
+startIconDetection()
 startSecurityScans()
 startRelayMetrics(relayConnectionsCapacity)
 
@@ -141,6 +146,7 @@ export function shutdownHearth(): Promise<void> {
     stopGitHubSyncPolling(),
     stopAppDeploymentPolling(),
     stopAppImageUpdateChecks(),
+    stopIconDetection(),
     stopBackupMaintenance(),
     stopPollingWorkers(),
     stopSecurityScans(),

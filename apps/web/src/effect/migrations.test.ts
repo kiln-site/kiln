@@ -77,8 +77,8 @@ describeMysql("database migrations", () => {
           // events, apps' GitHub sources and deployments, image apps'
           // updates, push subscriptions, Relay joins, and the security
           // checks' targets, inventories, findings, vulnerabilities, and
-          // alerts, and game server migrations.
-          expect(count).toBe(baselineTables.length + 24)
+          // alerts, game server migrations, and icons.
+          expect(count).toBe(baselineTables.length + 25)
           expect(yield* ledger).toEqual(migrationIds)
           // Only better-auth keeps dates, as DATETIME.
           expect((yield* columnTypes).map((row) => row.dataType)).toEqual([

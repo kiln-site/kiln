@@ -23,6 +23,7 @@
 import { Agent, type IncomingHttpHeaders, request } from "node:http"
 import { type Duplex, PassThrough, Writable } from "node:stream"
 import { StringDecoder } from "node:string_decoder"
+import { extract as createTarExtractor } from "tar-stream"
 import { Effect, Predicate, Result } from "effect"
 
 import {
@@ -465,6 +466,54 @@ export class DockerEngine {
     }).pipe(
       Effect.as(true),
       Effect.catchIf(isDockerNotFound, () => Effect.succeed(false))
+    )
+  }
+
+  /**
+   * One file's bytes from the container's filesystem, as Docker sees it
+   * (`GET /containers/{id}/archive`), following a link at the path; null
+   * when the container or the path doesn't exist. Fails for anything but a
+   * file of at most `maxBytes`.
+   */
+  readContainerFile(
+    reference: string,
+    path: string,
+    maxBytes: number
+  ): Effect.Effect<
+    { readonly bytes: Buffer; readonly modifiedAt: number } | null,
+    DockerEngineError
+  > {
+    const operation = "GET /containers/{id}/archive"
+    return this.containerPathTarget(reference, path).pipe(
+      Effect.flatMap((target) =>
+        target === null
+          ? Effect.succeed(null)
+          : this.#exchange({
+              // The archive wraps the file in a tar header and padding.
+              maxBytes: maxBytes + 64 * 1024,
+              method: "GET",
+              path: `/containers/${segment(reference)}/archive${query({ path: target })}`,
+              timeout: 15_000,
+            }).pipe(
+              Effect.catchIf(isDockerNotFound, () => Effect.succeed(null)),
+              Effect.flatMap((archive) =>
+                archive === null
+                  ? Effect.succeed(null)
+                  : Effect.tryPromise({
+                      try: () => firstTarFile(archive, maxBytes),
+                      catch: (cause) =>
+                        new DockerEngineError({
+                          cause,
+                          operation,
+                          reason:
+                            cause instanceof Error
+                              ? cause.message
+                              : "Docker returned an invalid archive",
+                        }),
+                    })
+              )
+            )
+      )
     )
   }
 
@@ -1761,4 +1810,53 @@ export function ensureImage(
     Effect.catch(() => engine.pullImage(image, { timeout: 300_000 })),
     Effect.asVoid
   )
+}
+
+// The file at the start of a container archive, which holds just the path
+// asked for.
+function firstTarFile(
+  archive: Buffer,
+  maxBytes: number
+): Promise<{ bytes: Buffer; modifiedAt: number }> {
+  return new Promise((resolve, reject) => {
+    const extractor = createTarExtractor()
+    let settled = false
+    const settle = (result: () => void) => {
+      if (settled) return
+      settled = true
+      result()
+      extractor.destroy()
+    }
+    extractor.on("entry", (header, stream, next) => {
+      if (header.type !== "file") {
+        stream.resume()
+        settle(() => reject(new Error("Path is not a file")))
+        return
+      }
+      if ((header.size ?? 0) > maxBytes) {
+        stream.resume()
+        settle(() => reject(new Error("File is too large for an icon")))
+        return
+      }
+      const chunks: Array<Buffer> = []
+      stream.on("data", (chunk: unknown) => {
+        if (Buffer.isBuffer(chunk)) chunks.push(chunk)
+      })
+      stream.on("end", () => {
+        settle(() =>
+          resolve({
+            bytes: Buffer.concat(chunks),
+            modifiedAt: header.mtime?.getTime() ?? 0,
+          })
+        )
+        next()
+      })
+      stream.on("error", (error) => settle(() => reject(error)))
+    })
+    extractor.on("finish", () =>
+      settle(() => reject(new Error("Docker returned an empty archive")))
+    )
+    extractor.on("error", (error) => settle(() => reject(error)))
+    extractor.end(archive)
+  })
 }

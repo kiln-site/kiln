@@ -96,7 +96,7 @@ export const AccountSwitcherSection = React.memo(
       <div className="grid gap-0.5">
         {user.isDevelopmentBypass || (!accounts.data && accounts.isError) ? (
           <div className="flex items-center gap-2.5 px-2 py-2">
-            <AccountAvatar name={user.name} />
+            <AccountAvatar name={user.name} userId={user.id} />
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-medium">{user.name}</p>
               <p className="truncate text-xs text-muted-foreground">

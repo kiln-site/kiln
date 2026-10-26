@@ -63,6 +63,7 @@ import type {
   RelayFileSearchPage,
   RelayFileSearchPageInput,
   RelayFileTree,
+  RelayIconReadResult,
   RelayLatestLog,
   RelaySaveFileInput,
 } from "@workspace/contracts"
@@ -70,6 +71,8 @@ import {
   formatSnbt,
   parseSnbt,
   relayFileUnarchiveSuffix,
+  relayIconMaxBytes,
+  sniffIconImage,
 } from "@workspace/contracts"
 
 import type { RelayConfig, RelayInstanceConfig } from "./config.js"
@@ -609,6 +612,83 @@ export class FilesystemDriver {
         modifiedAt: metadata.mtime.toISOString(),
       } satisfies RelayFileContent
     }).pipe(Effect.withSpan("relay.files.read"))
+  }
+
+  /**
+   * An image's bytes for an icon, or null when no file is at the path. A
+   * file that isn't an image is refused, so nothing else can be read this
+   * way.
+   */
+  readIcon(instance: FileRoot, requestedPath: string) {
+    return Effect.gen({ self: this }, function* () {
+      const path = yield* this.#existingFile(instance, requestedPath).pipe(
+        Effect.catchIf(
+          (error) => isMissingFile(error.cause),
+          () => Effect.succeed(null)
+        )
+      )
+      if (path === null) return null
+      const read = yield* Effect.acquireUseRelease(
+        filesystemOperation("icon.open", () =>
+          open(
+            path,
+            fsConstants.O_RDONLY |
+              fsConstants.O_NOFOLLOW |
+              fsConstants.O_NONBLOCK
+          )
+        ),
+        (handle) =>
+          filesystemOperation("icon.read", async () => {
+            const metadata = await handle.stat()
+            if (!metadata.isFile()) return null
+            // One byte past the limit tells a file that's too large.
+            const buffer = Buffer.alloc(relayIconMaxBytes + 1)
+            let size = 0
+            while (size < buffer.length) {
+              const { bytesRead } = await handle.read(
+                buffer,
+                size,
+                buffer.length - size,
+                size
+              )
+              if (bytesRead === 0) break
+              size += bytesRead
+            }
+            return {
+              bytes: buffer.subarray(0, size),
+              modifiedAt: metadata.mtimeMs,
+            }
+          }),
+        (handle) =>
+          Effect.tryPromise(() => handle.close()).pipe(Effect.ignore)
+      )
+      if (!read) {
+        return yield* filesystemFailure(
+          "not_a_file",
+          "icon",
+          "Path is not a file"
+        )
+      }
+      if (read.bytes.byteLength > relayIconMaxBytes) {
+        return yield* filesystemFailure(
+          "file_too_large",
+          "icon",
+          `Icons must be at most ${relayIconMaxBytes / 1024} KiB`
+        )
+      }
+      if (!sniffIconImage(read.bytes)) {
+        return yield* filesystemFailure(
+          "unsupported_file",
+          "icon",
+          "This file isn't a PNG, JPEG, GIF, WebP, ICO, or SVG image"
+        )
+      }
+      return {
+        contentBase64: read.bytes.toString("base64"),
+        modifiedAt: Math.trunc(read.modifiedAt),
+        size: read.bytes.byteLength,
+      } satisfies RelayIconReadResult
+    }).pipe(Effect.withSpan("relay.files.readIcon"))
   }
 
   write(instance: FileRoot, requestedPath: string, input: RelaySaveFileInput) {

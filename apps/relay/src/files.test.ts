@@ -1294,6 +1294,50 @@ describeLinux("Relay direct file transfers", () => {
   )
 })
 
+describe("Relay icon reads", () => {
+  const png = Buffer.from(
+    "89504e470d0a1a0a0000000d4948445200000001000000010806000000",
+    "hex"
+  )
+
+  it.effect("reads an image under the root, and nothing else", () =>
+    withSetup(({ directory, driver, instance, root }) =>
+      Effect.gen(function* () {
+        yield* fromPromise(() => writeFile(resolve(root, "server-icon.png"), png))
+        const icon = yield* driver.readIcon(instance, "server-icon.png")
+        assert.deepStrictEqual(
+          Buffer.from(icon?.contentBase64 ?? "", "base64"),
+          png
+        )
+
+        assert.isNull(yield* driver.readIcon(instance, "missing.png"))
+
+        // A file that isn't an image can't be read as an icon.
+        yield* fromPromise(() =>
+          writeFile(resolve(root, "server.properties"), "rcon.password=secret")
+        )
+        const text = yield* driver
+          .readIcon(instance, "server.properties")
+          .pipe(Effect.flip)
+        assert.strictEqual(text.code, "unsupported_file")
+
+        // Nor can an image outside the root, by path or through a link.
+        const outside = resolve(directory, "outside.png")
+        yield* fromPromise(() => writeFile(outside, png))
+        const traversal = yield* driver
+          .readIcon(instance, "../../outside.png")
+          .pipe(Effect.flip)
+        assert.instanceOf(traversal, RelayFilesystemError)
+        yield* fromPromise(() => symlink(outside, resolve(root, "linked.png")))
+        const linked = yield* driver
+          .readIcon(instance, "linked.png")
+          .pipe(Effect.flip)
+        assert.instanceOf(linked, RelayFilesystemError)
+      })
+    )
+  )
+})
+
 function withSetup<TResult>(
   use: (setup: {
     directory: string

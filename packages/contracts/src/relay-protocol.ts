@@ -93,6 +93,9 @@ export const relaySecurityInventoryV1Feature = "security-inventory-v1"
 // label, and redirects to another URL. Older Relays need a name and a port
 // on every route.
 export const relayWebRouteOptionsV1Feature = "web-route-options-v1"
+// The Relay answers `instance.icon.read` with a small image's bytes, from a
+// file root or from inside one of an app's containers.
+export const relayIconReadV1Feature = "icon-read-v1"
 export const relayBrowserAuthorizationReviseMaxItems = 256
 
 export const relayControlOperations = [
@@ -226,6 +229,7 @@ export const relayControlOperations = [
   "instance.files.search",
   "instance.files.stat",
   "instance.files.read",
+  "instance.icon.read",
   "instance.files.write",
   "instance.files.put",
   "instance.files.upload-url",
@@ -393,6 +397,7 @@ export function relayControlOperationChanges(
     case "instance.files.search":
     case "instance.files.stat":
     case "instance.files.read":
+    case "instance.icon.read":
     case "instance.files.database.read":
     case "instance.console.history":
     case "instance.logs.latest":

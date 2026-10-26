@@ -86,6 +86,7 @@ import { Route as ApiDatabaseTerminalDatabaseIdRouteImport } from './routes/api.
 import { Route as ApiGithubManifestRouteImport } from './routes/api.github.manifest'
 import { Route as ApiGithubSetupRouteImport } from './routes/api.github.setup'
 import { Route as ApiGithubWebhookRouteImport } from './routes/api.github.webhook'
+import { Route as ApiIconsSplatRouteImport } from './routes/api.icons.$'
 import { Route as ApiKilnDatabaseExportRouteImport } from './routes/api.kiln.database-export'
 import { Route as ApiPlatformTerminalRelayIdRouteImport } from './routes/api.platform-terminal.$relayId'
 import { Route as ApiRelayTerminalRelayIdRouteImport } from './routes/api.relay-terminal.$relayId'
@@ -517,6 +518,11 @@ const ApiGithubWebhookRoute = ApiGithubWebhookRouteImport.update({
   path: '/api/github/webhook',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiIconsSplatRoute = ApiIconsSplatRouteImport.update({
+  id: '/api/icons/$',
+  path: '/api/icons/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiKilnDatabaseExportRoute = ApiKilnDatabaseExportRouteImport.update({
   id: '/api/kiln/database-export',
   path: '/api/kiln/database-export',
@@ -817,6 +823,7 @@ export interface FileRoutesByFullPath {
   '/api/github/manifest': typeof ApiGithubManifestRoute
   '/api/github/setup': typeof ApiGithubSetupRoute
   '/api/github/webhook': typeof ApiGithubWebhookRoute
+  '/api/icons/$': typeof ApiIconsSplatRoute
   '/api/kiln/database-export': typeof ApiKilnDatabaseExportRoute
   '/api/platform-terminal/$relayId': typeof ApiPlatformTerminalRelayIdRoute
   '/api/relay-terminal/$relayId': typeof ApiRelayTerminalRelayIdRoute
@@ -930,6 +937,7 @@ export interface FileRoutesByTo {
   '/api/github/manifest': typeof ApiGithubManifestRoute
   '/api/github/setup': typeof ApiGithubSetupRoute
   '/api/github/webhook': typeof ApiGithubWebhookRoute
+  '/api/icons/$': typeof ApiIconsSplatRoute
   '/api/kiln/database-export': typeof ApiKilnDatabaseExportRoute
   '/api/platform-terminal/$relayId': typeof ApiPlatformTerminalRelayIdRoute
   '/api/relay-terminal/$relayId': typeof ApiRelayTerminalRelayIdRoute
@@ -1054,6 +1062,7 @@ export interface FileRoutesById {
   '/api/github/manifest': typeof ApiGithubManifestRoute
   '/api/github/setup': typeof ApiGithubSetupRoute
   '/api/github/webhook': typeof ApiGithubWebhookRoute
+  '/api/icons/$': typeof ApiIconsSplatRoute
   '/api/kiln/database-export': typeof ApiKilnDatabaseExportRoute
   '/api/platform-terminal/$relayId': typeof ApiPlatformTerminalRelayIdRoute
   '/api/relay-terminal/$relayId': typeof ApiRelayTerminalRelayIdRoute
@@ -1178,6 +1187,7 @@ export interface FileRouteTypes {
     | '/api/github/manifest'
     | '/api/github/setup'
     | '/api/github/webhook'
+    | '/api/icons/$'
     | '/api/kiln/database-export'
     | '/api/platform-terminal/$relayId'
     | '/api/relay-terminal/$relayId'
@@ -1291,6 +1301,7 @@ export interface FileRouteTypes {
     | '/api/github/manifest'
     | '/api/github/setup'
     | '/api/github/webhook'
+    | '/api/icons/$'
     | '/api/kiln/database-export'
     | '/api/platform-terminal/$relayId'
     | '/api/relay-terminal/$relayId'
@@ -1414,6 +1425,7 @@ export interface FileRouteTypes {
     | '/api/github/manifest'
     | '/api/github/setup'
     | '/api/github/webhook'
+    | '/api/icons/$'
     | '/api/kiln/database-export'
     | '/api/platform-terminal/$relayId'
     | '/api/relay-terminal/$relayId'
@@ -1495,6 +1507,7 @@ export interface RootRouteChildren {
   ApiGithubManifestRoute: typeof ApiGithubManifestRoute
   ApiGithubSetupRoute: typeof ApiGithubSetupRoute
   ApiGithubWebhookRoute: typeof ApiGithubWebhookRoute
+  ApiIconsSplatRoute: typeof ApiIconsSplatRoute
   ApiKilnDatabaseExportRoute: typeof ApiKilnDatabaseExportRoute
   ApiPlatformTerminalRelayIdRoute: typeof ApiPlatformTerminalRelayIdRoute
   ApiRelayTerminalRelayIdRoute: typeof ApiRelayTerminalRelayIdRoute
@@ -2044,6 +2057,13 @@ declare module '@tanstack/react-router' {
       path: '/api/github/webhook'
       fullPath: '/api/github/webhook'
       preLoaderRoute: typeof ApiGithubWebhookRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/icons/$': {
+      id: '/api/icons/$'
+      path: '/api/icons/$'
+      fullPath: '/api/icons/$'
+      preLoaderRoute: typeof ApiIconsSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/kiln/database-export': {
@@ -2681,6 +2701,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiGithubManifestRoute: ApiGithubManifestRoute,
   ApiGithubSetupRoute: ApiGithubSetupRoute,
   ApiGithubWebhookRoute: ApiGithubWebhookRoute,
+  ApiIconsSplatRoute: ApiIconsSplatRoute,
   ApiKilnDatabaseExportRoute: ApiKilnDatabaseExportRoute,
   ApiPlatformTerminalRelayIdRoute: ApiPlatformTerminalRelayIdRoute,
   ApiRelayTerminalRelayIdRoute: ApiRelayTerminalRelayIdRoute,

@@ -8,6 +8,7 @@ import {
 } from "@workspace/ui/components/avatar"
 import { cn } from "@workspace/ui/lib/utils"
 
+import { useIconUrl } from "@/components/icon-image"
 import { minecraftHeadUrl } from "@/lib/minecraft-profile"
 import { minecraftProfileQueryOptions } from "@/lib/query-options"
 
@@ -16,9 +17,14 @@ interface UserAvatarProps {
   fallbackClassName?: string
   name: string
   size?: "default" | "sm" | "lg"
+  /** Shows the picture they chose, when they have one. */
+  userId?: string
 }
 
-/** The signed-in user's avatar; resolves their Minecraft head. */
+/**
+ * The signed-in user's avatar: the picture they chose, or else their
+ * Minecraft head, or else their initials.
+ */
 export const AccountAvatar = React.memo(function AccountAvatar(
   props: UserAvatarProps
 ) {
@@ -34,14 +40,23 @@ export const UserAvatar = React.memo(function UserAvatar({
   name,
   profileId,
   size = "sm",
+  userId,
 }: UserAvatarProps & { profileId?: string }) {
+  const pictureUrl = useIconUrl(
+    React.useMemo(
+      () => (userId ? { kind: "user" as const, id: userId } : null),
+      [userId]
+    )
+  )
   return (
     <Avatar
       aria-hidden="true"
       size={size}
       className={cn("rounded-none", className)}
     >
-      {profileId ? (
+      {pictureUrl ? (
+        <AvatarImage src={pictureUrl} alt="" className="object-cover" />
+      ) : profileId ? (
         <AvatarImage
           src={minecraftHeadUrl(profileId)}
           alt=""

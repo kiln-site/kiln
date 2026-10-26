@@ -1,6 +1,7 @@
 import { Effect } from "effect"
 
 import { setInstanceDomainOptOutEffect } from "@/effect/domains"
+import { removeIconsEffect } from "@/effect/icons"
 import {
   publishNotificationChange,
   resolveMigrationSourceNotificationsEffect,
@@ -42,6 +43,12 @@ export const finalizeInstanceDeletionEffect = Effect.fn(
         Effect.sync(() => publishNotificationChange(userIds))
       )
     )
+  )
+  yield* postDeleteCleanupStep(
+    "icons.remove",
+    relayId,
+    instanceId,
+    removeIconsEffect({ kind: "server", relayId, id: instanceId })
   )
   // The Relay has removed the server, so its directory record goes too.
   // Live snapshots never remove records on their own.
