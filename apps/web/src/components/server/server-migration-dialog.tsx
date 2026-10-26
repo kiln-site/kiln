@@ -7,20 +7,12 @@ import {
   type ResourceLimits,
 } from "@workspace/contracts"
 import {
-  Activity,
-  Archive,
   ArrowRight,
   ArrowRightLeft,
   Copy,
-  Cpu,
-  Globe,
-  HardDrive,
+  Info,
+  Infinity as InfinityIcon,
   LoaderCircle,
-  MemoryStick,
-  Power,
-  Route,
-  Trash2,
-  Users,
 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
@@ -33,6 +25,11 @@ import {
 } from "@workspace/ui/components/dialog"
 import { Input } from "@workspace/ui/components/input"
 import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@workspace/ui/components/popover"
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -40,7 +37,6 @@ import {
   SelectValue,
 } from "@workspace/ui/components/select"
 import { Slider, type SliderZone } from "@workspace/ui/components/slider"
-import { Switch } from "@workspace/ui/components/switch"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { InstanceCard } from "@/components/instance-card"
@@ -78,9 +74,12 @@ type MigrationServer = {
   relayId: string
 }
 
-type LimitKind = "cpu" | "disk" | "memory"
-
-type Note = { text: string; tone: "error" | "muted" }
+type Tone = "error" | "muted" | "warning"
+type Status = {
+  fix?: { label: string; run: () => void }
+  text: string
+  tone: Tone
+}
 
 const NO_RELAY = "__none__"
 const NAME_LIMIT = 32
@@ -91,10 +90,10 @@ const GIBIBYTE = 1024 ** 3
  * may create servers on, or a move to another Relay. It starts the copy and
  * closes; the copy carries on in the background with a progress toast.
  *
- * It reads as before and after: the server and its Relay on the left, the
- * copy and where it goes on the right, then the copy's limits beside what
- * comes along. Every row stays in place whatever is chosen, and each
- * message has a line of its own, so the dialog never changes size.
+ * The server and its Relay sit beside the copy and where it goes, then the
+ * copy's limits and a few choices. Explanations live in tooltips and the
+ * metadata checklist; what's wrong takes one line, so the dialog keeps its
+ * size whatever is chosen.
  */
 export function ServerMigrationDialog({
   initialMode,
@@ -117,7 +116,7 @@ export function ServerMigrationDialog({
   })
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="gap-3 sm:max-w-5xl">
+      <DialogContent className="gap-4 sm:max-w-2xl">
         <div className="flex flex-wrap items-center justify-between gap-3 pr-10">
           <DialogTitle>Move or duplicate</DialogTitle>
           <DialogDescription className="sr-only">
@@ -125,7 +124,7 @@ export function ServerMigrationDialog({
           </DialogDescription>
           <div
             aria-label="What to do"
-            className="grid grid-cols-2 gap-1 border border-border/75 bg-background/45 p-1"
+            className="grid grid-cols-2 gap-1 border border-border/75 bg-background/45 p-0.5"
             role="radiogroup"
           >
             <ModeButton
@@ -145,13 +144,13 @@ export function ServerMigrationDialog({
           </div>
         </div>
         {preview.isPending ? (
-          <div className="type-support flex h-[36rem] items-center justify-center gap-2 text-muted-foreground">
+          <div className="type-support flex h-[25rem] items-center justify-center gap-2 text-muted-foreground">
             <LoaderCircle className="size-4 animate-spin" />
             Checking where this server can go…
           </div>
         ) : preview.isError ? (
           <p
-            className="type-support flex h-[36rem] items-center justify-center text-destructive"
+            className="type-support flex h-[25rem] items-center justify-center text-destructive"
             role="alert"
           >
             {preview.error.message}
@@ -248,17 +247,28 @@ function MigrationForm({
   const effectiveName =
     name ?? defaultName(server.name, mode, selected?.takenNames ?? [])
 
-  const [copyAccess, setCopyAccess] = React.useState(
-    preview.allowed.copyAccess && preview.accessCount > 0
-  )
-  const [keepActivity, setKeepActivity] = React.useState(true)
-  const [linkBackups, setLinkBackups] = React.useState(true)
-  const [moveDomain, setMoveDomain] = React.useState(
-    preview.domains.managed && preview.domains.names.length > 0
-  )
-  const [moveWebRoutes, setMoveWebRoutes] = React.useState(
-    preview.webRoutes.length > 0 && preview.allowed.network
-  )
+  const linkableBackups =
+    selected && selected.linksBackups && preview.allowed.linkBackups
+      ? selected.current
+        ? preview.backups.here
+        : preview.backups.anywhere
+      : 0
+  const metadata = metadataItems({
+    linkableBackups,
+    moving,
+    preview,
+    relay: selected,
+  })
+  const [chosen, setChosen] = React.useState<Record<MetadataKey, boolean>>({
+    access: true,
+    activity: true,
+    backups: true,
+    domains: true,
+    routes: true,
+  })
+  const copies = (key: MetadataKey) =>
+    chosen[key] && metadata.find((item) => item.key === key)?.reason === null
+
   const [stopSource, setStopSource] = React.useState(
     preview.source.running && preview.allowed.power
   )
@@ -270,12 +280,6 @@ function MigrationForm({
     enabled: preview.allowed.backup,
   })
 
-  const linkableBackups =
-    selected && selected.linksBackups && preview.allowed.linkBackups
-      ? selected.current
-        ? preview.backups.here
-        : preview.backups.anywhere
-      : 0
   const start = useMutation({
     mutationFn: () => {
       if (!selected) throw new Error("Choose a Relay")
@@ -288,13 +292,13 @@ function MigrationForm({
           name: effectiveName.trim(),
           options: {
             backup: backup ? storageChoice(backupDestination) : null,
-            copyAccess,
+            copyAccess: copies("access"),
             deleteSource: deleting ? storageChoice(deleteDestination) : null,
-            keepActivity,
+            keepActivity: copies("activity"),
             limits: limitsChanged ? limits : null,
-            linkBackups: linkBackups && linkableBackups > 0,
-            moveDomain: moving && moveDomain,
-            moveWebRoutes: moving && moveWebRoutes,
+            linkBackups: copies("backups"),
+            moveDomain: copies("domains"),
+            moveWebRoutes: copies("routes"),
             stopSource: moving || stopSource,
           },
           relayId: server.relayId,
@@ -313,10 +317,8 @@ function MigrationForm({
   const trimmedName = effectiveName.trim()
   const nameTaken = selected?.takenNames.includes(trimmedName) ?? false
   const roomProblems = selected ? roomProblemsFor(selected) : []
-  const fieldProblems = limitProblemsByField(roomProblems)
-  const spaceProblems = roomProblems.filter(
-    (problem) => problem.code === "space"
-  )
+  const limitProblem = roomProblems.find((problem) => problem.code !== "space")
+  const spaceProblem = roomProblems.find((problem) => problem.code === "space")
   const relayProblem = selected?.problems[0]
   const archMismatch =
     selected?.nodeArch &&
@@ -332,59 +334,69 @@ function MigrationForm({
     preview.source.provisioning ||
     (moving && !preview.allowed.stop)
 
-  // Why the copy can't start, or what to know before it does; one line.
-  const notice: { text: string; tone: "error" | "warning" } | null =
-    start.isError
-      ? { text: start.error.message, tone: "error" }
-      : "error" in parsed
-        ? { text: parsed.error, tone: "error" }
-        : preview.source.provisioning
-          ? {
-              text: "This server is still being created; copy it once it's ready.",
-              tone: "warning",
-            }
-          : moving && !preview.allowed.stop
-            ? {
-                text: "A move stops this server, and you can't stop it.",
-                tone: "error",
-              }
-            : destinations.length === 0
-              ? {
-                  text: moving
-                    ? "There's no other Relay you can create game servers on."
-                    : "There's no Relay you can create game servers on.",
-                  tone: "warning",
-                }
-              : archMismatch && selected
-                ? {
-                    text: `${selected.name} runs ${selected.nodeArch} and this server ${preview.source.nodeArch}; its Brick's image must support both.`,
-                    tone: "warning",
-                  }
-                : null
-
-  const sourceRoom = preview.room?.source ?? null
   const usedBytes =
     preview.room && preview.room.server.usedFrom !== "limit"
       ? preview.room.server.usedBytes
       : null
-  const destinationNote: Note | null = relayProblem
-    ? {
-        text: `${relayProblem.message}. ${relayProblem.remedy}.`,
-        tone: "error",
-      }
-    : spaceProblems.length
+  const room = selected?.room ?? null
+  const fitFix = limitFix(limitProblem, room, usedBytes, (key, value) =>
+    setDraft((current) => ({
+      ...current,
+      [key]: { limited: true, value: String(value) },
+    }))
+  )
+  const limitsStatus: Status =
+    "error" in parsed
+      ? { text: parsed.error, tone: "error" }
+      : limitProblem
+        ? { fix: fitFix, text: limitProblem.message, tone: "error" }
+        : {
+            text: room
+              ? `${selected?.name} can assign ${formatBytes(room.assignableMemoryBytes)} memory, ${room.cores} ${room.cores === 1 ? "core" : "cores"}, and ${formatBytes(room.assignableDiskBytes)} disk`
+              : "",
+            tone: "muted",
+          }
+
+  // Why the copy can't start, or what to know before it does.
+  const status: Status | null = start.isError
+    ? { text: start.error.message, tone: "error" }
+    : relayProblem
       ? {
-          text: spaceProblems.map((problem) => problem.message).join(". "),
+          text: `${relayProblem.message}. ${relayProblem.remedy}.`,
           tone: "error",
         }
-      : nameTaken && selected
-        ? {
-            text: `A game server on ${selected.name} already has this name.`,
-            tone: "error",
-          }
-        : !trimmedName
-          ? { text: "Give the copy a name.", tone: "error" }
-          : null
+      : spaceProblem
+        ? { text: spaceProblem.message, tone: "error" }
+        : nameTaken && selected
+          ? {
+              text: `${selected.name} already has a ${trimmedName}.`,
+              tone: "error",
+            }
+          : !trimmedName
+            ? { text: "Give the copy a name.", tone: "error" }
+            : preview.source.provisioning
+              ? {
+                  text: "Still being created; copy it once it's ready.",
+                  tone: "warning",
+                }
+              : moving && !preview.allowed.stop
+                ? {
+                    text: "A move stops this server, and you can't stop it.",
+                    tone: "error",
+                  }
+                : destinations.length === 0
+                  ? {
+                      text: moving
+                        ? "No other Relay can take game servers from you."
+                        : "No Relay can take game servers from you.",
+                      tone: "warning",
+                    }
+                  : archMismatch && selected
+                    ? {
+                        text: `${selected.name} runs ${selected.nodeArch}; the Brick's image must support it.`,
+                        tone: "warning",
+                      }
+                    : null
 
   return (
     <form
@@ -394,320 +406,207 @@ function MigrationForm({
         if (!blocked) start.mutate()
       }}
     >
-      <div className="grid grid-cols-[minmax(0,1fr)] gap-3 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
-        <Side label="From">
-          <CardBox>
-            <InstanceCard
-              className="min-w-0 flex-1"
-              instance={{
-                brickId: server.brickId,
-                brickSource: server.brickSource,
-                id: server.id,
-                implementation: server.implementation,
-                kind: "server",
-                relayId: server.relayId,
-              }}
-              meta={
-                usedBytes === null
-                  ? server.id.slice(0, 8)
-                  : `${server.id.slice(0, 8)} · files take ${formatBytes(usedBytes)}`
-              }
-              metaClassName="font-mono"
-              name={server.name}
-              showFavorite={false}
-            />
-          </CardBox>
-          <CardBox>
-            <RelayCard
-              arch={preview.source.nodeArch}
-              freeBytes={sourceRoom ? freeBytes(sourceRoom) : null}
-              id={preview.source.relayId}
-              name={preview.source.relayName}
-            />
-          </CardBox>
-          <Line
-            note={{
-              text: moving
-                ? deleting
-                  ? "Stops for the move, then is deleted after a final backup."
-                  : "Stops for the move and stays stopped."
-                : stopSource && preview.source.running
-                  ? "Stops while its files copy, then starts again."
-                  : "Stays as it is.",
-              tone: "muted",
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-2 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
+        <CardBox>
+          <InstanceCard
+            className="min-w-0 flex-1"
+            instance={{
+              brickId: server.brickId,
+              brickSource: server.brickSource,
+              id: server.id,
+              implementation: server.implementation,
+              kind: "server",
+              relayId: server.relayId,
             }}
+            meta={
+              usedBytes === null
+                ? server.id.slice(0, 8)
+                : `${formatBytes(usedBytes)} of files`
+            }
+            name={server.name}
+            showFavorite={false}
           />
-        </Side>
+        </CardBox>
         <ArrowRight
           aria-hidden="true"
-          className="mt-[2.4rem] hidden size-4 text-muted-foreground md:block"
+          className="hidden size-4 self-center text-muted-foreground sm:row-span-2 sm:block"
         />
-        <Side label="To">
-          <CardBox interactive>
-            <span className="grid size-8 shrink-0 place-items-center rounded-md border border-border/70 bg-background/35 text-muted-foreground">
-              <LiveServerBrickIcon
-                brickId={server.brickId}
-                brickSource={server.brickSource}
-                implementation={server.implementation ?? ""}
-              />
-            </span>
-            <Input
-              aria-invalid={nameTaken || !trimmedName}
-              aria-label="New server's name"
-              className="h-8 min-w-0 border-0 bg-transparent px-1 text-xs font-semibold shadow-none focus-visible:ring-0 dark:bg-transparent"
-              disabled={pending}
-              maxLength={NAME_LIMIT}
-              value={effectiveName}
-              onChange={(event) => setName(event.currentTarget.value)}
+        <CardBox interactive>
+          <span className="grid size-8 shrink-0 place-items-center rounded-md border border-border/70 bg-background/35 text-muted-foreground">
+            <LiveServerBrickIcon
+              brickId={server.brickId}
+              brickSource={server.brickSource}
+              implementation={server.implementation ?? ""}
             />
-          </CardBox>
-          <Select
-            disabled={pending || destinations.length === 0}
-            value={selected?.id ?? NO_RELAY}
-            onValueChange={(value) => {
-              if (value && value !== NO_RELAY) setRelayId(value)
-            }}
-          >
-            <SelectTrigger
-              aria-label="Relay"
-              className="h-12 w-full min-w-0 px-2 text-left *:data-[slot=select-value]:flex *:data-[slot=select-value]:min-w-0 *:data-[slot=select-value]:flex-1"
-            >
-              <SelectValue placeholder="No Relay available">
-                {selected ? (
-                  <RelayCard
-                    arch={selected.nodeArch}
-                    freeBytes={selected.room ? freeBytes(selected.room) : null}
-                    id={selected.id}
-                    name={selected.name}
-                    tag={relayTag(selected, roomProblemsFor(selected))}
-                  />
-                ) : null}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent className="min-w-(--radix-select-trigger-width)">
-              {destinations.length === 0 ? (
-                <SelectItem disabled value={NO_RELAY}>
-                  No Relay available
-                </SelectItem>
-              ) : (
-                destinations.map((destination) => (
-                  <SelectItem
-                    key={destination.id}
-                    className="py-1.5"
-                    value={destination.id}
-                  >
-                    <RelayCard
-                      arch={destination.nodeArch}
-                      freeBytes={
-                        destination.room ? freeBytes(destination.room) : null
-                      }
-                      id={destination.id}
-                      name={destination.name}
-                      tag={relayTag(destination, roomProblemsFor(destination))}
-                    />
-                  </SelectItem>
-                ))
-              )}
-            </SelectContent>
-          </Select>
-          <Line
-            note={
-              destinationNote ??
-              (selected
-                ? {
-                    text: "Made stopped, then filled with this server's files.",
-                    tone: "muted",
-                  }
-                : null)
-            }
-          />
-        </Side>
-      </div>
-
-      <div className="grid grid-cols-[minmax(0,1fr)] gap-x-5 gap-y-4 md:grid-cols-2">
-        <section className="grid grid-cols-[minmax(0,1fr)] content-start gap-2">
-          <div className="flex h-5 items-center justify-between gap-3">
-            <h3 className="type-label">Limits</h3>
-            <Button
-              className={cn(!limitsChanged && "invisible")}
-              disabled={pending}
-              size="xs"
-              type="button"
-              variant="ghost"
-              onClick={() => setDraft(sourceDraft)}
-            >
-              Use {server.name}'s
-            </Button>
-          </div>
-          <LimitRows
-            destination={selected}
+          </span>
+          <Input
+            aria-invalid={nameTaken || !trimmedName}
+            aria-label="New server's name"
+            className="h-8 min-w-0 border-0 bg-transparent px-1 text-xs font-semibold shadow-none focus-visible:ring-0 dark:bg-transparent"
             disabled={pending}
-            draft={draft}
-            original={preview.source.limits}
-            problems={fieldProblems}
-            usedBytes={usedBytes}
-            onChange={setDraft}
+            maxLength={NAME_LIMIT}
+            value={effectiveName}
+            onChange={(event) => setName(event.currentTarget.value)}
           />
-          <h3 className="type-label mt-2 flex h-5 items-center">
-            Before and after
-          </h3>
-          <Rows>
-            <OptionRow
-              checked={backup}
-              control={
-                <BackupDestinationSelect
-                  disabled={pending || !backup}
-                  label="Backup destination"
-                  storage={backupStorage.data}
-                  value={backupDestination}
-                  onChange={setBackupDestination}
+        </CardBox>
+        <CardBox>
+          <RelayCard
+            arch={preview.source.nodeArch}
+            freeBytes={preview.room ? freeBytes(preview.room.source) : null}
+            id={preview.source.relayId}
+            name={preview.source.relayName}
+          />
+        </CardBox>
+        <Select
+          disabled={pending || destinations.length === 0}
+          value={selected?.id ?? NO_RELAY}
+          onValueChange={(value) => {
+            if (value && value !== NO_RELAY) setRelayId(value)
+          }}
+        >
+          <SelectTrigger
+            aria-label="Relay"
+            className="h-11 w-full min-w-0 px-2 text-left *:data-[slot=select-value]:flex *:data-[slot=select-value]:min-w-0 *:data-[slot=select-value]:flex-1"
+          >
+            <SelectValue placeholder="No Relay available">
+              {selected ? (
+                <RelayCard
+                  arch={selected.nodeArch}
+                  freeBytes={selected.room ? freeBytes(selected.room) : null}
+                  id={selected.id}
+                  name={selected.name}
+                  tag={relayTag(selected, roomProblemsFor(selected))}
                 />
-              }
-              description={
-                preview.allowed.backup
-                  ? "A full backup before anything changes."
-                  : "You can't back up this server."
-              }
-              disabled={pending || !preview.allowed.backup}
-              icon={<Archive />}
-              label="Back up first"
-              onCheckedChange={setBackup}
-            />
-            <OptionRow
-              checked={moving || (stopSource && preview.source.running)}
-              description={
-                moving
-                  ? "A move always stops it."
-                  : preview.source.running
-                    ? "Starts again after; a running world can be mid-save."
-                    : "It isn't running."
-              }
-              disabled={
-                pending ||
-                moving ||
-                !preview.allowed.power ||
-                !preview.source.running
-              }
-              icon={<Power />}
-              label={moving ? "Stop this server" : "Stop while copying"}
-              onCheckedChange={setStopSource}
-            />
-            <OptionRow
-              checked={deleting}
-              control={
-                <BackupDestinationSelect
-                  disabled={pending || !deleting}
-                  label="Final backup destination"
-                  storage={backupStorage.data}
-                  value={deleteDestination}
-                  onChange={setDeleteDestination}
-                />
-              }
-              description={
-                !moving
-                  ? "Only a move can delete it."
-                  : preview.allowed.delete
-                    ? "Once moved, after a full backup that stays."
-                    : "Needs permission to delete and back it up."
-              }
-              disabled={pending || !moving || !preview.allowed.delete}
-              icon={<Trash2 />}
-              label="Delete this server"
-              onCheckedChange={setDeleteSource}
-            />
-          </Rows>
-        </section>
-
-        <section className="grid grid-cols-[minmax(0,1fr)] content-start gap-2">
-          <h3 className="type-label flex h-5 items-center">Bring along</h3>
-          <Rows>
-            <OptionRow
-              checked={copyAccess}
-              description={
-                !preview.allowed.copyAccess
-                  ? "You can't see who has access to this server."
-                  : preview.accessCount === 0
-                    ? "Only its owner can reach it now."
-                    : "The same permissions on the copy."
-              }
-              disabled={
-                pending ||
-                !preview.allowed.copyAccess ||
-                preview.accessCount === 0
-              }
-              icon={<Users />}
-              label={
-                preview.accessCount === 0
-                  ? "People with access"
-                  : preview.accessCount === 1
-                    ? "1 person with access"
-                    : `${preview.accessCount} people with access`
-              }
-              onCheckedChange={setCopyAccess}
-            />
-            <BackupsOption
-              allowed={preview.allowed.linkBackups}
-              checked={linkBackups && linkableBackups > 0}
-              destination={selected}
-              disabled={pending}
-              linkable={linkableBackups}
-              total={preview.backups.total}
-              onCheckedChange={setLinkBackups}
-            />
-            <OptionRow
-              checked={keepActivity}
-              description="The copy's activity includes this server's."
-              disabled={pending}
-              icon={<Activity />}
-              label="Activity history"
-              onCheckedChange={setKeepActivity}
-            />
-            <DomainOption
-              checked={moving && moveDomain}
-              destination={selected}
-              disabled={pending || !moving || !preview.allowed.network}
-              moving={moving}
-              preview={preview}
-              onCheckedChange={setMoveDomain}
-            />
-            <OptionRow
-              checked={moving && moveWebRoutes && preview.webRoutes.length > 0}
-              description={
-                preview.webRoutes.length === 0
-                  ? "This server has no web routes."
-                  : moving
-                    ? `${preview.webRoutes.join(", ")} point at ${selected?.name ?? "the new Relay"}.`
-                    : `${preview.webRoutes.join(", ")} stay with this server.`
-              }
-              disabled={
-                pending ||
-                !moving ||
-                !preview.allowed.network ||
-                preview.webRoutes.length === 0
-              }
-              icon={<Route />}
-              label="Web routes"
-              onCheckedChange={setMoveWebRoutes}
-            />
-          </Rows>
-        </section>
+              ) : null}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent className="min-w-(--radix-select-trigger-width)">
+            {destinations.length === 0 ? (
+              <SelectItem disabled value={NO_RELAY}>
+                No Relay available
+              </SelectItem>
+            ) : (
+              destinations.map((destination) => (
+                <SelectItem
+                  key={destination.id}
+                  className="py-1.5"
+                  value={destination.id}
+                >
+                  <RelayCard
+                    arch={destination.nodeArch}
+                    freeBytes={
+                      destination.room ? freeBytes(destination.room) : null
+                    }
+                    id={destination.id}
+                    name={destination.name}
+                    tag={relayTag(destination, roomProblemsFor(destination))}
+                  />
+                </SelectItem>
+              ))
+            )}
+          </SelectContent>
+        </Select>
       </div>
 
-      <p
-        aria-live="polite"
-        className={cn(
-          "type-meta -my-2 min-h-[1lh] truncate",
-          notice?.tone === "warning"
-            ? "text-amber-300 light:text-amber-800"
-            : "text-destructive"
-        )}
-        role={notice?.tone === "error" ? "alert" : undefined}
-        title={notice?.text}
-      >
-        {notice?.text}
-      </p>
+      <section className="grid gap-1.5">
+        <div className="flex h-5 items-center justify-between">
+          <h3 className="type-label">Limits</h3>
+          <Button
+            className={cn("h-5 px-1.5", !limitsChanged && "invisible")}
+            disabled={pending}
+            size="xs"
+            title={`Use ${server.name}'s limits`}
+            type="button"
+            variant="ghost"
+            onClick={() => setDraft(sourceDraft)}
+          >
+            Reset
+          </Button>
+        </div>
+        <LimitRows
+          destination={selected}
+          disabled={pending}
+          draft={draft}
+          original={preview.source.limits}
+          usedBytes={usedBytes}
+          onChange={setDraft}
+        />
+        <StatusLine status={limitsStatus} />
+      </section>
 
-      <DialogFooter>
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-x-6 gap-y-2 sm:grid-cols-2">
+        <MetadataChoice
+          chosen={chosen}
+          disabled={pending}
+          items={metadata}
+          onChange={setChosen}
+        />
+        <Check
+          checked={moving || (stopSource && preview.source.running)}
+          disabled={
+            pending ||
+            moving ||
+            !preview.allowed.power ||
+            !preview.source.running
+          }
+          label={moving ? "Stop this server" : "Stop while copying"}
+          title={
+            moving
+              ? "A move always stops it, and it stays stopped."
+              : preview.source.running
+                ? "It starts again afterwards. A running world can be caught mid-save."
+                : "It isn't running."
+          }
+          onChange={setStopSource}
+        />
+        <Check
+          checked={backup}
+          control={
+            <StorageSelect
+              disabled={pending || !backup}
+              label="Backup destination"
+              storage={backupStorage.data}
+              value={backupDestination}
+              onChange={setBackupDestination}
+            />
+          }
+          disabled={pending || !preview.allowed.backup}
+          label="Back up first"
+          title={
+            preview.allowed.backup
+              ? "A full backup, finished before anything changes."
+              : "You can't back up this server."
+          }
+          onChange={setBackup}
+        />
+        <Check
+          checked={deleting}
+          control={
+            <StorageSelect
+              disabled={pending || !deleting}
+              label="Final backup destination"
+              storage={backupStorage.data}
+              value={deleteDestination}
+              onChange={setDeleteDestination}
+            />
+          }
+          disabled={pending || !moving || !preview.allowed.delete}
+          label="Delete after"
+          title={
+            !moving
+              ? "Only a move can delete this server."
+              : preview.allowed.delete
+                ? "Once moved, this server is deleted after a full backup, which stays."
+                : "Deleting it needs permission to delete and back it up."
+          }
+          onChange={setDeleteSource}
+        />
+      </div>
+
+      <DialogFooter className="items-center">
+        <div className="min-w-0 sm:mr-auto">
+          <StatusLine status={status} />
+        </div>
         <Button
           disabled={pending}
           type="button"
@@ -717,12 +616,12 @@ function MigrationForm({
           Cancel
         </Button>
         <Button
-          className="min-w-36"
+          className="min-w-32"
           disabled={blocked || pending}
           type="submit"
         >
           {pending ? <LoaderCircle className="animate-spin" /> : null}
-          {moving ? "Move server" : "Duplicate server"}
+          {moving ? "Move" : "Duplicate"}
         </Button>
       </DialogFooter>
     </form>
@@ -759,23 +658,7 @@ function ModeButton({
   )
 }
 
-// One side of before and after.
-function Side({
-  children,
-  label,
-}: {
-  children: React.ReactNode
-  label: string
-}) {
-  return (
-    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] content-start gap-1.5">
-      <span className="type-label">{label}</span>
-      {children}
-    </div>
-  )
-}
-
-// A box an identity sits in, as tall as the Relay picker beside it.
+// A box an identity sits in, as tall as the Relay picker.
 function CardBox({
   children,
   interactive = false,
@@ -786,7 +669,7 @@ function CardBox({
   return (
     <div
       className={cn(
-        "flex h-12 min-w-0 items-center gap-1.5 rounded-md border px-2",
+        "flex h-11 min-w-0 items-center gap-1.5 rounded-md border px-2",
         interactive
           ? "border-input/90 bg-input/20 focus-within:border-ring/75 focus-within:ring-2 focus-within:ring-ring/40"
           : "border-border/60 bg-background/30"
@@ -808,7 +691,7 @@ function RelayCard({
   freeBytes: number | null
   id: string
   name: string
-  tag?: Note | null
+  tag?: { text: string; tone: Tone } | null
 }) {
   return (
     <InstanceCard
@@ -817,7 +700,6 @@ function RelayCard({
       meta={[arch, freeBytes === null ? null : `${formatBytes(freeBytes)} free`]
         .filter(Boolean)
         .join(" · ")}
-      metaClassName="font-mono"
       name={name}
       nameAccessory={
         tag ? (
@@ -841,9 +723,9 @@ function RelayCard({
 function relayTag(
   destination: ServerMigrationDestination,
   problems: ReadonlyArray<MigrationRoomProblem>
-): Note | null {
+): { text: string; tone: Tone } | null {
   if (destination.problems.length) return { text: "Unavailable", tone: "error" }
-  if (problems.length) return { text: "Not enough room", tone: "error" }
+  if (problems.length) return { text: "Won't fit", tone: "error" }
   if (destination.current) return { text: "This Relay", tone: "muted" }
   return null
 }
@@ -855,31 +737,46 @@ function freeBytes(room: {
   return Math.min(room.rootsFreeBytes, room.transferFreeBytes)
 }
 
-// One line under a field, kept whether or not it has anything to say.
-function Line({ note }: { note: Note | null }) {
+// One line, kept whether or not it has anything to say.
+function StatusLine({ status }: { status: Status | null }) {
   return (
-    <p
-      className={cn(
-        "type-meta min-h-[1lh] truncate",
-        note?.tone === "error" ? "text-destructive" : "text-muted-foreground"
-      )}
-      title={note?.text}
-    >
-      {note?.text}
+    <p className="type-meta flex min-h-[1lh] min-w-0 items-center gap-2">
+      <span
+        className={cn(
+          "truncate",
+          status?.tone === "error"
+            ? "text-destructive"
+            : status?.tone === "warning"
+              ? "text-amber-300 light:text-amber-800"
+              : "text-muted-foreground"
+        )}
+        role={status?.tone === "error" ? "alert" : undefined}
+        title={status?.text}
+      >
+        {status?.text}
+      </span>
+      {status?.fix ? (
+        <button
+          className="shrink-0 font-medium text-primary-ink underline-offset-2 hover:underline"
+          type="button"
+          onClick={status.fix.run}
+        >
+          {status.fix.label}
+        </button>
+      ) : null}
     </p>
   )
 }
 
-// The copy's memory, CPU, and disk, each a slider with its value beside
-// it. A stretch of track that won't fit is marked, and a limit that won't
-// fit says why under it, with the nearest that would.
+// The copy's memory, CPU, and disk: a slider each, ticked where the old
+// server's limit is and shaded red where the Relay can't follow, with the
+// value beside it and a switch to no limit.
 function LimitRows({
   destination,
   disabled,
   draft,
   onChange,
   original,
-  problems,
   usedBytes,
 }: {
   destination: ServerMigrationDestination | undefined
@@ -887,107 +784,43 @@ function LimitRows({
   draft: ResourceLimitsDraft
   onChange: React.Dispatch<React.SetStateAction<ResourceLimitsDraft>>
   original: ResourceLimits
-  problems: Partial<Record<LimitKind, MigrationRoomProblem>>
   usedBytes: number | null
 }) {
   const room = destination?.room ?? null
-  const relayName = destination?.name ?? "the Relay"
   const gib = (bytes: number | null) =>
     bytes === null ? null : bytes / GIBIBYTE
   const assignableMemory = gib(room?.assignableMemoryBytes ?? null)
   const assignableDisk = gib(room?.assignableDiskBytes ?? null)
   const files = gib(usedBytes)
-  const cores = room?.cores ?? null
-
-  const memoryMax = sliderMax(gib(original.memoryBytes), assignableMemory, 4)
-  const diskMax = sliderMax(
-    Math.max(gib(original.diskBytes) ?? 0, files ?? 0),
-    assignableDisk,
-    10
-  )
-  const cpuMax =
-    cores ?? Math.max((original.cpuMillis ?? 0) / CPU_LIMIT_MILLIS_PER_CORE, 1)
-
+  const originalCores =
+    original.cpuMillis === null
+      ? null
+      : original.cpuMillis / CPU_LIMIT_MILLIS_PER_CORE
   const set = (key: keyof ResourceLimitsDraft) => (value: ResourceLimitDraft) =>
     onChange((current) => ({ ...current, [key]: value }))
-  const fit = (key: keyof ResourceLimitsDraft, value: number | null) =>
-    value === null
-      ? undefined
-      : () => set(key)({ limited: true, value: String(value) })
-
-  const memorySuggestion =
-    room &&
-    roundDown(room.assignableMemoryBytes, GIBIBYTE / 4) >=
-      MINIMUM_MEMORY_LIMIT_BYTES
-      ? roundDown(room.assignableMemoryBytes, GIBIBYTE / 4) / GIBIBYTE
-      : null
-  const smallestDisk = Math.max(
-    usedBytes ?? 0,
-    MINIMUM_INSTANCE_DISK_LIMIT_BYTES
-  )
-  const diskSuggestion = !room
-    ? null
-    : problems.disk?.code === "disk_files"
-      ? roundUp(smallestDisk, GIBIBYTE) <= room.assignableDiskBytes
-        ? roundUp(smallestDisk, GIBIBYTE) / GIBIBYTE
-        : null
-      : roundDown(room.assignableDiskBytes, GIBIBYTE) >= smallestDisk
-        ? roundDown(room.assignableDiskBytes, GIBIBYTE) / GIBIBYTE
-        : null
-  const unknown = `${relayName} didn't say what it can assign`
+  const beyond = (from: number | null): Array<SliderZone> =>
+    from === null ? [] : [{ from, to: Number.POSITIVE_INFINITY }]
 
   return (
-    <Rows>
+    <div className="grid grid-cols-[4rem_minmax(0,1fr)_5.5rem_1.75rem] items-center gap-x-3 gap-y-1.5">
       <LimitRow
         disabled={disabled}
-        fix={
-          problems.memory && memorySuggestion !== null
-            ? {
-                label: `Use ${formatBytes(memorySuggestion * GIBIBYTE)}`,
-                run: fit("memoryGiB", memorySuggestion),
-              }
-            : null
-        }
-        icon={<MemoryStick />}
         label="Memory"
-        max={memoryMax}
+        mark={gib(original.memoryBytes)}
+        max={sliderMax(gib(original.memoryBytes), assignableMemory, 4)}
         min={0.25}
-        note={{
-          text: room
-            ? `${formatBytes(room.assignableMemoryBytes)} assignable on ${relayName}`
-            : unknown,
-          tone: problems.memory ? "error" : "muted",
-          title: problems.memory?.message,
-        }}
         step={0.25}
         unit="GiB"
         value={draft.memoryGiB}
-        zones={
-          assignableMemory === null
-            ? []
-            : [{ from: assignableMemory, to: Number.POSITIVE_INFINITY }]
-        }
+        zones={beyond(assignableMemory)}
         onChange={set("memoryGiB")}
       />
       <LimitRow
         disabled={disabled}
-        fix={
-          problems.cpu && cores !== null
-            ? { label: `Use ${cores}`, run: fit("cpuCores", cores) }
-            : null
-        }
-        icon={<Cpu />}
         label="CPU"
-        max={cpuMax}
+        mark={originalCores}
+        max={room?.cores ?? Math.max(originalCores ?? 0, 1)}
         min={0.1}
-        note={{
-          text:
-            cores === null
-              ? unknown
-              : `${cores} ${cores === 1 ? "core" : "cores"} on ${relayName}`,
-          tone: problems.cpu ? "error" : "muted",
-          title: problems.cpu?.message,
-        }}
         step={0.1}
         unit="cores"
         value={draft.cpuCores}
@@ -996,51 +829,33 @@ function LimitRows({
       />
       <LimitRow
         disabled={disabled}
-        fix={
-          problems.disk && diskSuggestion !== null
-            ? {
-                label: `Use ${formatBytes(diskSuggestion * GIBIBYTE)}`,
-                run: fit("diskGiB", diskSuggestion),
-              }
-            : null
-        }
-        icon={<HardDrive />}
         label="Disk"
-        max={diskMax}
+        mark={gib(original.diskBytes)}
+        max={sliderMax(
+          Math.max(gib(original.diskBytes) ?? 0, files ?? 0),
+          assignableDisk,
+          10
+        )}
         min={0.1}
-        note={{
-          text:
-            problems.disk?.code === "disk_files" && usedBytes !== null
-              ? `Its files take ${formatBytes(usedBytes)}`
-              : room
-                ? `${formatBytes(room.assignableDiskBytes)} assignable on ${relayName}`
-                : unknown,
-          tone: problems.disk ? "error" : "muted",
-          title: problems.disk?.message,
-        }}
         step={1}
         unit="GiB"
         value={draft.diskGiB}
         zones={[
           ...(files !== null && files > 0.1 ? [{ from: 0.1, to: files }] : []),
-          ...(assignableDisk === null
-            ? []
-            : [{ from: assignableDisk, to: Number.POSITIVE_INFINITY }]),
+          ...beyond(assignableDisk),
         ]}
         onChange={set("diskGiB")}
       />
-    </Rows>
+    </div>
   )
 }
 
 function LimitRow({
   disabled,
-  fix,
-  icon,
   label,
+  mark,
   max,
   min,
-  note,
   onChange,
   step,
   unit,
@@ -1048,12 +863,10 @@ function LimitRow({
   zones,
 }: {
   disabled: boolean
-  fix: { label: string; run: (() => void) | undefined } | null
-  icon: React.ReactNode
   label: string
+  mark: number | null
   max: number
   min: number
-  note: Note & { title?: string | undefined }
   onChange: (value: ResourceLimitDraft) => void
   step: number
   unit: string
@@ -1064,138 +877,321 @@ function LimitRow({
   const sliderValue =
     value.limited && Number.isFinite(number) ? Math.max(number, min) : max
   return (
-    <div className="grid gap-0.5 px-3 py-1.5">
-      <div className="flex items-center gap-3">
-        <span className="type-label flex w-20 shrink-0 items-center gap-2 [&_svg]:size-3.5 [&_svg]:text-muted-foreground">
-          {icon}
-          {label}
-        </span>
-        <Slider
-          aria-label={`${label} limit`}
-          className="min-w-0 flex-1"
+    <>
+      <span className="type-label">{label}</span>
+      <Slider
+        aria-label={`${label} limit`}
+        disabled={disabled || !value.limited}
+        marks={mark === null ? [] : [mark]}
+        max={Math.max(max, sliderValue)}
+        min={min}
+        step={step}
+        value={sliderValue}
+        zones={zones}
+        onValueChange={(next) =>
+          onChange({ limited: true, value: String(Number(next.toFixed(2))) })
+        }
+      />
+      <label className="relative">
+        <Input
+          aria-label={`${label} limit in ${unit}`}
+          className="h-7 pr-11 pl-2 text-right font-mono text-xs tabular-nums"
           disabled={disabled || !value.limited}
-          max={Math.max(max, sliderValue)}
-          min={min}
-          step={step}
-          value={sliderValue}
-          zones={zones}
-          onValueChange={(next) =>
-            onChange({ limited: true, value: String(Number(next.toFixed(2))) })
+          inputMode="decimal"
+          placeholder="None"
+          value={value.limited ? value.value : ""}
+          onChange={(event) =>
+            onChange({
+              limited: true,
+              value: event.currentTarget.value.replace(/[^\d.]/gu, ""),
+            })
           }
         />
-        <span className="flex w-24 shrink-0 items-center gap-1.5">
-          <Input
-            aria-label={`${label} limit in ${unit}`}
-            className="h-8 w-14 px-2 text-right font-mono tabular-nums"
-            disabled={disabled || !value.limited}
-            inputMode="decimal"
-            placeholder="∞"
-            value={value.limited ? value.value : ""}
-            onChange={(event) =>
-              onChange({
-                limited: true,
-                value: event.currentTarget.value.replace(/[^\d.]/gu, ""),
-              })
-            }
-          />
-          <span className="type-meta text-muted-foreground">{unit}</span>
+        <span className="type-meta pointer-events-none absolute inset-y-0 right-2 flex items-center text-muted-foreground">
+          {unit}
         </span>
-        <Button
-          aria-pressed={!value.limited}
-          className="w-[4.75rem] shrink-0"
-          disabled={disabled}
-          size="xs"
-          type="button"
-          variant={value.limited ? "outline" : "default"}
-          onClick={() => onChange({ ...value, limited: !value.limited })}
-        >
-          No limit
-        </Button>
-      </div>
-      <p className="type-meta flex min-h-[1lh] min-w-0 items-center gap-2 pl-[5.75rem]">
-        <span
-          className={cn(
-            "truncate",
-            note.tone === "error" ? "text-destructive" : "text-muted-foreground"
-          )}
-          title={note.title ?? note.text}
-        >
-          {note.text}
-        </span>
-        {fix?.run ? (
-          <button
-            className="shrink-0 font-medium text-primary-ink underline-offset-2 hover:underline disabled:opacity-50"
-            disabled={disabled}
-            type="button"
-            onClick={fix.run}
-          >
-            {fix.label}
-          </button>
-        ) : null}
-      </p>
-    </div>
+      </label>
+      <Button
+        aria-label={`No ${label.toLowerCase()} limit`}
+        aria-pressed={!value.limited}
+        className="size-7"
+        disabled={disabled}
+        size="icon-sm"
+        title="No limit"
+        type="button"
+        variant={value.limited ? "ghost" : "default"}
+        onClick={() => onChange({ ...value, limited: !value.limited })}
+      >
+        <InfinityIcon />
+      </Button>
+    </>
   )
 }
 
-// Rows in one bordered list.
-function Rows({ children }: { children: React.ReactNode }) {
+// The suggestion for a limit that won't fit: the nearest that would.
+function limitFix(
+  problem: MigrationRoomProblem | undefined,
+  room: ServerMigrationDestination["room"] | null,
+  usedBytes: number | null,
+  set: (key: keyof ResourceLimitsDraft, value: number) => void
+): Status["fix"] {
+  if (!problem || !room) return undefined
+  if (problem.code === "cpu") {
+    return {
+      label: `Use ${room.cores}`,
+      run: () => set("cpuCores", room.cores),
+    }
+  }
+  if (problem.code === "memory") {
+    const bytes = roundDown(room.assignableMemoryBytes, GIBIBYTE / 4)
+    return bytes >= MINIMUM_MEMORY_LIMIT_BYTES
+      ? {
+          label: `Use ${formatBytes(bytes)}`,
+          run: () => set("memoryGiB", bytes / GIBIBYTE),
+        }
+      : undefined
+  }
+  const smallest = Math.max(usedBytes ?? 0, MINIMUM_INSTANCE_DISK_LIMIT_BYTES)
+  const bytes =
+    problem.code === "disk_files"
+      ? roundUp(smallest, GIBIBYTE)
+      : roundDown(room.assignableDiskBytes, GIBIBYTE)
+  return bytes >= smallest && bytes <= room.assignableDiskBytes
+    ? {
+        label: `Use ${formatBytes(bytes)}`,
+        run: () => set("diskGiB", bytes / GIBIBYTE),
+      }
+    : undefined
+}
+
+type MetadataKey = "access" | "activity" | "backups" | "domains" | "routes"
+
+type MetadataItem = {
+  detail: string
+  key: MetadataKey
+  label: string
+  /** Why it can't come along; null when it can. */
+  reason: string | null
+}
+
+// What a copy can take besides its files and settings, and why not when
+// it can't.
+function metadataItems({
+  linkableBackups,
+  moving,
+  preview,
+  relay,
+}: {
+  linkableBackups: number
+  moving: boolean
+  preview: ServerMigrationPreview
+  relay: ServerMigrationDestination | undefined
+}): ReadonlyArray<MetadataItem> {
+  const { allowed, backups, domains, webRoutes } = preview
+  return [
+    {
+      detail:
+        preview.accessCount === 1
+          ? "1 person, with the same permissions"
+          : `${preview.accessCount} people, with the same permissions`,
+      key: "access",
+      label: "User access",
+      reason: !allowed.copyAccess
+        ? "You can't see who has access"
+        : preview.accessCount === 0
+          ? "Only its owner has access"
+          : null,
+    },
+    {
+      detail:
+        linkableBackups === 1
+          ? "1 full backup, linked to the copy"
+          : `${linkableBackups} full backups, linked to the copy`,
+      key: "backups",
+      label: "Backups",
+      reason:
+        backups.total === 0
+          ? "It has no backups"
+          : !allowed.linkBackups
+            ? "Needs permission to download its backups"
+            : relay && !relay.linksBackups
+              ? `Update ${relay.name} to link backups`
+              : linkableBackups === 0
+                ? relay?.current
+                  ? "Its backups are incremental"
+                  : "Its backups are on this Relay or incremental"
+                : null,
+    },
+    {
+      detail: "Its history, up to the copy",
+      key: "activity",
+      label: "Activity history",
+      reason: null,
+    },
+    {
+      detail: `${domains.names.join(", ")}, pointed at ${relay?.name ?? "the new Relay"}`,
+      key: "domains",
+      label: "Domains",
+      reason: !moving
+        ? "Only a move takes its domains"
+        : !domains.managed
+          ? "Kiln doesn't manage DNS without Cloudflare"
+          : !domains.names.length
+            ? "It has no managed domain"
+            : !allowed.network
+              ? "Needs permission to change its network"
+              : null,
+    },
+    {
+      detail: `${webRoutes.join(", ")}, once DNS reaches ${relay?.name ?? "the new Relay"}`,
+      key: "routes",
+      label: "Web routes",
+      reason: !moving
+        ? "Only a move takes its web routes"
+        : !webRoutes.length
+          ? "It has no web routes"
+          : !allowed.network
+            ? "Needs permission to change its network"
+            : null,
+    },
+  ]
+}
+
+// One checkbox for everything besides files and settings, and a checklist
+// behind its info button to pick from.
+function MetadataChoice({
+  chosen,
+  disabled,
+  items,
+  onChange,
+}: {
+  chosen: Record<MetadataKey, boolean>
+  disabled: boolean
+  items: ReadonlyArray<MetadataItem>
+  onChange: React.Dispatch<React.SetStateAction<Record<MetadataKey, boolean>>>
+}) {
+  const available = items.filter((item) => item.reason === null)
+  const count = available.filter((item) => chosen[item.key]).length
+  const ref = React.useRef<HTMLInputElement>(null)
+  React.useEffect(() => {
+    if (ref.current) {
+      ref.current.indeterminate = count > 0 && count < available.length
+    }
+  }, [available.length, count])
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)] divide-y divide-border/65 rounded-md border border-border/75 bg-background/45">
-      {children}
+    <div className="flex h-7 min-w-0 items-center gap-2">
+      <label className="flex min-w-0 items-center gap-2">
+        <input
+          ref={ref}
+          checked={available.length > 0 && count === available.length}
+          className="size-4 shrink-0 accent-primary"
+          disabled={disabled || available.length === 0}
+          type="checkbox"
+          onChange={(event) => {
+            const on = event.currentTarget.checked
+            onChange((current) => {
+              const next = { ...current }
+              for (const item of available) next[item.key] = on
+              return next
+            })
+          }}
+        />
+        <span className="type-label truncate">Copy metadata</span>
+      </label>
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button
+            aria-label="Choose what metadata comes along"
+            className="h-6 gap-1 px-1.5 text-muted-foreground"
+            disabled={disabled}
+            size="xs"
+            type="button"
+            variant="ghost"
+          >
+            <span className="tabular-nums">
+              {count}/{items.length}
+            </span>
+            <Info className="size-3.5" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent align="start" className="w-80 p-1">
+          {items.map((item) => (
+            <label
+              key={item.key}
+              className={cn(
+                "flex items-start gap-2.5 rounded-md px-2 py-1.5",
+                item.reason === null
+                  ? "cursor-pointer hover:bg-popover-accent"
+                  : "opacity-60"
+              )}
+            >
+              <input
+                checked={item.reason === null && chosen[item.key]}
+                className="mt-0.5 size-4 shrink-0 accent-primary"
+                disabled={item.reason !== null}
+                type="checkbox"
+                onChange={(event) => {
+                  const on = event.currentTarget.checked
+                  onChange((current) => ({ ...current, [item.key]: on }))
+                }}
+              />
+              <span className="min-w-0">
+                <span className="type-label block">{item.label}</span>
+                <span className="type-meta block text-muted-foreground">
+                  {item.reason ?? item.detail}
+                </span>
+              </span>
+            </label>
+          ))}
+        </PopoverContent>
+      </Popover>
     </div>
   )
 }
 
-// An option with a switch, and room for a control of its own beside it.
-// It keeps to one line; its description is whole in its tooltip.
-function OptionRow({
+// A checkbox choice, its explanation in a tooltip, with room for a control
+// of its own.
+function Check({
   checked,
   control,
-  description,
-  disabled = false,
-  icon,
+  disabled,
   label,
-  onCheckedChange,
+  onChange,
+  title,
 }: {
   checked: boolean
   control?: React.ReactNode
-  description: string
-  disabled?: boolean
-  icon: React.ReactNode
+  disabled: boolean
   label: string
-  onCheckedChange?: (checked: boolean) => void
+  onChange: (checked: boolean) => void
+  title: string
 }) {
   return (
-    <div
-      className={cn(
-        "flex h-10 items-center gap-3 px-3",
-        disabled && !checked && "opacity-60"
-      )}
-    >
-      <span className="text-muted-foreground [&_svg]:size-4">{icon}</span>
-      <span
-        className="flex min-w-0 flex-1 items-baseline gap-2"
-        title={description}
+    <div className="flex h-7 min-w-0 items-center gap-2">
+      <label
+        className={cn(
+          "flex min-w-0 flex-1 items-center gap-2",
+          disabled && !checked && "opacity-60"
+        )}
+        title={title}
       >
-        <span className="type-label shrink-0">{label}</span>
-        <span className="type-meta min-w-0 truncate text-muted-foreground">
-          {description}
-        </span>
-      </span>
+        <input
+          checked={checked}
+          className="size-4 shrink-0 accent-primary"
+          disabled={disabled}
+          type="checkbox"
+          onChange={(event) => onChange(event.currentTarget.checked)}
+        />
+        <span className="type-label truncate">{label}</span>
+      </label>
       {control}
-      <Switch
-        aria-label={label}
-        checked={checked}
-        disabled={disabled}
-        onCheckedChange={(next) => onCheckedChange?.(next)}
-      />
     </div>
   )
 }
 
 // Where a backup goes: wherever this server's backups go by default, the
 // Relay itself, or an S3 destination.
-function BackupDestinationSelect({
+function StorageSelect({
   disabled,
   label,
   onChange,
@@ -1247,115 +1243,6 @@ function BackupDestinationSelect({
 function storageChoice(value: string): { storageId?: string | null } {
   if (value === "default") return {}
   return { storageId: value === "local" ? null : value }
-}
-
-// Full backups restore to the copy as linked backups. Ones kept on this
-// Relay can't follow a copy to another, and incremental ones belong to this
-// server's repository.
-function BackupsOption({
-  allowed,
-  checked,
-  destination,
-  disabled,
-  linkable,
-  onCheckedChange,
-  total,
-}: {
-  allowed: boolean
-  checked: boolean
-  destination: ServerMigrationDestination | undefined
-  disabled: boolean
-  linkable: number
-  onCheckedChange: (checked: boolean) => void
-  total: number
-}) {
-  const staying = total - linkable
-  const description =
-    total === 0
-      ? "This server has no backups."
-      : !allowed
-        ? "Linking backups needs permission to download them."
-        : destination && !destination.linksBackups
-          ? `Update ${destination.name} to link backups to a copy there.`
-          : linkable === 0
-            ? destination?.current
-              ? "Its backups are incremental, so they stay."
-              : "Its backups are on this Relay or incremental, so they stay."
-            : `They restore to the copy too.${
-                staying > 0
-                  ? ` ${staying} ${staying === 1 ? "stays" : "stay"} here.`
-                  : ""
-              }`
-  return (
-    <OptionRow
-      checked={checked}
-      description={description}
-      disabled={disabled || linkable === 0}
-      icon={<Archive />}
-      label={
-        linkable === 0
-          ? "Backups"
-          : linkable === 1
-            ? "Link 1 backup"
-            : `Link ${linkable} backups`
-      }
-      onCheckedChange={onCheckedChange}
-    />
-  )
-}
-
-// A move takes managed domains along and points them at the new Relay;
-// without Cloudflare, Kiln manages no DNS, so the person updates their own.
-function DomainOption({
-  checked,
-  destination,
-  disabled,
-  moving,
-  onCheckedChange,
-  preview,
-}: {
-  checked: boolean
-  destination: ServerMigrationDestination | undefined
-  disabled: boolean
-  moving: boolean
-  onCheckedChange: (checked: boolean) => void
-  preview: ServerMigrationPreview
-}) {
-  const relayName = destination?.name ?? "the new Relay"
-  const names = preview.domains.names
-  const description = !preview.domains.managed
-    ? moving
-      ? `Kiln doesn't manage DNS; point yours at ${relayName}.`
-      : "Kiln doesn't manage DNS here."
-    : !names.length
-      ? "This server has no managed domain."
-      : !moving
-        ? `${names.join(", ")} stays; the copy gets its own.`
-        : `${names.join(", ")} points at ${relayName}.`
-  return (
-    <OptionRow
-      checked={checked && preview.domains.managed && names.length > 0}
-      description={description}
-      disabled={disabled || !preview.domains.managed || !names.length}
-      icon={<Globe />}
-      label={names.length > 1 ? "Domains" : "Domain"}
-      onCheckedChange={onCheckedChange}
-    />
-  )
-}
-
-function limitProblemsByField(
-  problems: ReadonlyArray<MigrationRoomProblem>
-): Partial<Record<LimitKind, MigrationRoomProblem>> {
-  const byField: Partial<Record<LimitKind, MigrationRoomProblem>> = {}
-  for (const problem of problems) {
-    if (problem.code === "cpu") byField.cpu ??= problem
-    if (problem.code === "memory") byField.memory ??= problem
-    if (problem.code === "disk_limit" || problem.code === "disk_files") {
-      byField.disk ??= problem
-    }
-  }
-  return byField
 }
 
 // How far a slider reaches: twice the server's own value, or what the
