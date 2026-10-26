@@ -65,7 +65,7 @@ class Browser {
   }
 
   async listAccounts(): Promise<
-    Array<Omit<BrowserAccount, "minecraftProfileId">>
+    Array<BrowserAccount>
   > {
     const { listBrowserAccounts } =
       await import("@/lib/browser-accounts.server")

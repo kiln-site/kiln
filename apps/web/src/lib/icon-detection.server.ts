@@ -1,6 +1,7 @@
 import {
   appFileRootId,
   type IconImageContentType,
+  primaryWebRoute,
   relayAppWebRouteStateSchema,
   relayIconMaxBytes,
   relayIconReadResultSchema,
@@ -52,7 +53,7 @@ import {
 // Hearth also looks for icons nobody chose: a game server's `server-icon.png`,
 // where Minecraft keeps it, and the largest icon an app's site has, named
 // by its pages or manifest or kept where sites keep them, trying its
-// domains in the order its web routes list them. Game servers are looked
+// domains, its primary one first. Game servers are looked
 // at every few minutes, since reading one unchanged file is cheap; sites
 // a few times a day, and whenever someone asks.
 
@@ -226,8 +227,8 @@ const findSiteIconEffect = Effect.fn("Icons.findSiteIcon")(function* (
 })
 
 /**
- * Looks for an app's icon on its domains, in the order its web routes list
- * them, until one has an icon.
+ * Looks for an app's icon on its domains, its primary one first, then in
+ * the order its web routes list them, until one has an icon.
  */
 const detectAppIconEffect = Effect.fn("Icons.detectApp")(function* (
   relay: PersistedRelay,
@@ -243,9 +244,14 @@ const detectAppIconEffect = Effect.fn("Icons.detectApp")(function* (
       relayRpc(relay, "app.network.routes.read", { appId }, relayReadTimeoutMs)
     )
   )
+  // The primary route first; a redirect serves another site, not the app.
+  const primary = primaryWebRoute(state.routes)
+  const serving = state.routes.filter(
+    (route) => !route.redirect && route !== primary
+  )
   const sites = [
     ...new Map(
-      state.routes.map((route) => {
+      (primary ? [primary, ...serving] : serving).map((route) => {
         const url = `https://${route.hostname}${route.path ?? "/"}`
         return [url, new URL(url)] as const
       })

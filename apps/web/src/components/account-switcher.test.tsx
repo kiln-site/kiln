@@ -19,7 +19,6 @@ it("keeps every account in its row as the active account changes", () => {
     (name) => ({
       active: false,
       email: `${name}@example.test`,
-      minecraftProfileId: null,
       name,
       sessionId: `session-${name}`,
       userId: name,
