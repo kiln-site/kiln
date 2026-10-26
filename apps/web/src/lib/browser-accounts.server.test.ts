@@ -1,7 +1,9 @@
 import { layer } from "@effect/vitest"
+import { requestHandler } from "@tanstack/react-start/server"
 import { Effect } from "effect"
 import { expect, vi } from "vite-plus/test"
 
+import type { BrowserAccount } from "@/lib/browser-accounts"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRows, insertUser, selectRows } from "@/test/seed"
 
@@ -60,6 +62,22 @@ class Browser {
       method: "POST",
       body: { email, password },
     })
+  }
+
+  async listAccounts(): Promise<
+    Array<Omit<BrowserAccount, "minecraftProfileId">>
+  > {
+    const { listBrowserAccounts } =
+      await import("@/lib/browser-accounts.server")
+    const handler = requestHandler(async (request) =>
+      Response.json(await listBrowserAccounts(request.headers))
+    )
+    const response = await handler(
+      new Request(`${origin}/accounts`, { headers: this.headers() }),
+      {}
+    )
+    this.store(response.headers)
+    return response.json()
   }
 }
 
@@ -125,7 +143,7 @@ describeMysql("browser accounts", () => {
     )
 
     it.effect(
-      "keeps sign-in order across account switches, reloads, and renames",
+      "keeps account order across switches, renames, and session replacements",
       () =>
         Effect.gen(function* () {
           yield* resetDatabase
@@ -138,14 +156,9 @@ describeMysql("browser accounts", () => {
           yield* Effect.promise(() => browser.signIn("bob@example.test"))
 
           const { auth } = yield* Effect.promise(() => import("@/lib/auth"))
-          const { listBrowserAccounts } = yield* Effect.promise(
-            () => import("@/lib/browser-accounts.server")
-          )
-          const accounts = yield* Effect.promise(() =>
-            listBrowserAccounts(browser.headers())
-          )
+          const accounts = yield* Effect.promise(() => browser.listAccounts())
           const order = accounts.map(({ userId }) => userId)
-          expect(order).toEqual(["charlie", "alice", "bob"])
+          expect(order).toEqual(["alice", "bob", "charlie"])
 
           const renamed = yield* Effect.promise(() =>
             browser.request("/update-user", {
@@ -155,7 +168,7 @@ describeMysql("browser accounts", () => {
           )
           expect(renamed.status).toBe(200)
           const afterRename = yield* Effect.promise(() =>
-            listBrowserAccounts(browser.headers())
+            browser.listAccounts()
           )
           expect(afterRename.map(({ userId }) => userId)).toEqual(order)
           expect(afterRename.find(({ userId }) => userId === "bob")?.name).toBe(
@@ -180,13 +193,26 @@ describeMysql("browser accounts", () => {
             )
             browser.store(activated.headers)
 
-            const reloaded = yield* Effect.promise(() =>
-              listBrowserAccounts(browser.headers())
-            )
+            const reloaded = yield* Effect.promise(() => browser.listAccounts())
             expect(reloaded.map(({ userId }) => userId)).toEqual(order)
             expect(reloaded.find(({ active }) => active)?.userId).toBe(
               account.userId
             )
+
+            const confirmed = yield* Effect.promise(() =>
+              browser.request("/password-confirmation/confirm", {
+                method: "POST",
+                body: { password },
+              })
+            )
+            expect(confirmed.status).toBe(200)
+            const refreshed = yield* Effect.promise(() =>
+              browser.listAccounts()
+            )
+            expect(refreshed.map(({ userId }) => userId)).toEqual(order)
+            const active = refreshed.find(({ active }) => active)
+            expect(active?.userId).toBe(account.userId)
+            expect(active?.sessionId).not.toBe(account.sessionId)
           }
         }),
       { timeout: 30_000 }
@@ -280,10 +306,7 @@ describeMysql("browser accounts", () => {
           const accounts = yield* Effect.promise(() =>
             listBrowserAccounts(browser.headers())
           )
-          expect(accounts.map(({ userId }) => userId).sort()).toEqual([
-            "alice",
-            "bob",
-          ])
+          expect(accounts.map(({ userId }) => userId)).toEqual(["alice", "bob"])
         }),
       { timeout: 30_000 }
     )

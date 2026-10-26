@@ -119,6 +119,7 @@ export const AccountSwitcherSection = React.memo(
                 key={account.sessionId}
                 type="button"
                 className={cn(menuRowClassName, "h-11")}
+                aria-current={account.active ? true : undefined}
                 aria-label={
                   account.active
                     ? `Continue as ${account.name}`
@@ -126,6 +127,10 @@ export const AccountSwitcherSection = React.memo(
                 }
                 disabled={switchingTo !== null}
                 onClick={() => {
+                  if (account.active) {
+                    onNavigate()
+                    return
+                  }
                   setSwitchingTo(account.sessionId)
                   void switchToAccount(account).then((switched) => {
                     if (!switched) {

@@ -52,6 +52,10 @@ it("keeps every account in its row as the active account changes", () => {
       )
       const emails = [...new Set(markup.match(/\w+@example\.test/g))]
       expect(emails).toEqual(accounts.map(({ email }) => email))
+      const currentRow = markup.match(
+        /<button\b[^>]*aria-current="true"[^>]*>(.*?)<\/button>/s
+      )?.[1]
+      expect(currentRow).toContain(activeAccount.email)
     } finally {
       client.clear()
     }

@@ -14,7 +14,7 @@ export class BrowserAccountMissingError extends Error {
   }
 }
 
-/** Accounts this browser holds a live session for, oldest sign-in first. */
+/** Accounts this browser holds a live session for, in a stable user ID order. */
 export async function listBrowserAccounts(
   headers: Headers
 ): Promise<Array<Omit<BrowserAccount, "minecraftProfileId">>> {
@@ -31,11 +31,7 @@ export async function listBrowserAccounts(
   // remembered for switching.
   const listed = unremembered ? [...sessions, current] : sessions
   return listed
-    .sort(
-      (left, right) =>
-        left.session.createdAt.getTime() - right.session.createdAt.getTime() ||
-        left.user.id.localeCompare(right.user.id)
-    )
+    .sort((left, right) => left.user.id.localeCompare(right.user.id))
     .map(({ session, user }): Omit<BrowserAccount, "minecraftProfileId"> => ({
       active: session.id === current?.session.id,
       email: user.email,
