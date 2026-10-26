@@ -9,10 +9,10 @@
   "icon": "../icons/redis.svg",
   "color": "#e67e7e",
   "tags": ["key-value", "cache"],
-  "platforms": ["amd64", "arm64"],
   "links": {
     "homepage": "https://redis.io"
   },
+  "platforms": ["amd64", "arm64"],
   "inputs": [
     {
       "key": "password",
@@ -34,34 +34,25 @@
       "--aclfile",
       "/data/users.acl"
     ],
-    "files": [
-      {
-        "path": "/data/users.acl",
-        "content": "user default on >{{ password }} ~* &* +@all\n"
-      }
-    ],
     "ports": [
       {
         "name": "redis",
         "port": 6379
       }
     ],
-    "volumes": [
+    "volumes": ["/data"],
+    "files": [
       {
-        "path": "/data"
+        "path": "/data/users.acl",
+        "content": "user default on >{{ password }} ~* &* +@all\n"
       }
     ],
     "ready": {
-      "type": "command",
       "command": "redis-cli ping | grep -qE '^(PONG|NOAUTH)'"
     },
-    "resources": {
-      "memory": "256M"
-    }
+    "memory": "256M"
   },
   "database": {
-    "engine": "redis",
-    "language": "redis",
     "port": "redis",
     "connection": "redis://default:{{ password }}@{{ kiln.host }}:6379"
   }

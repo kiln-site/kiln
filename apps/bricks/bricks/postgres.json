@@ -9,11 +9,11 @@
   "icon": "../icons/postgres.svg",
   "color": "#5f83cb",
   "tags": ["sql", "relational"],
-  "platforms": ["amd64", "arm64"],
   "links": {
     "homepage": "https://www.postgresql.org",
     "docs": "https://www.postgresql.org/docs/17/"
   },
+  "platforms": ["amd64", "arm64"],
   "inputs": [
     {
       "key": "database",
@@ -55,31 +55,17 @@
         "port": 5432
       }
     ],
-    "volumes": [
-      {
-        "path": "/var/lib/postgresql/data"
-      }
-    ],
+    "volumes": ["/var/lib/postgresql/data"],
     "ready": {
-      "type": "command",
       "command": "pg_isready -h 127.0.0.1 -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""
     },
-    "resources": {
-      "memory": "1G"
-    }
+    "memory": "1G"
   },
   "database": {
-    "engine": "postgres",
-    "language": "sql",
     "port": "postgres",
-    "viewer": "postgres",
     "connection": "postgres://{{ username }}:{{ password }}@{{ kiln.host }}:5432/{{ database }}",
-    "backup": {
-      "command": "exec pg_dump --clean --if-exists --no-owner --username \"$POSTGRES_USER\" --dbname \"$POSTGRES_DB\"",
-      "extension": "sql"
-    },
-    "restore": {
-      "command": "exec psql --set ON_ERROR_STOP=on --username \"$POSTGRES_USER\" --dbname \"$POSTGRES_DB\""
-    }
+    "viewer": "postgres",
+    "backup": "exec pg_dump --clean --if-exists --no-owner --username \"$POSTGRES_USER\" --dbname \"$POSTGRES_DB\"",
+    "restore": "exec psql --set ON_ERROR_STOP=on --username \"$POSTGRES_USER\" --dbname \"$POSTGRES_DB\""
   }
 }

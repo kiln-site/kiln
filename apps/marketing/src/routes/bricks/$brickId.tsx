@@ -4,6 +4,7 @@ import { ArrowLeft, Download, ExternalLink, PencilRuler } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 
+import { Attribution } from "~/components/bricks/attribution"
 import { BrickCard } from "~/components/bricks/brick-card"
 import { BrickTile } from "~/components/bricks/brick-glyph"
 import { CopyButton, downloadText } from "~/components/bricks/copy-button"
@@ -39,13 +40,6 @@ export const Route = createFileRoute("/bricks/$brickId")({
   },
   component: BrickPage,
 })
-
-const linkLabels = {
-  homepage: "Website",
-  docs: "Docs",
-  source: "Source",
-  support: "Support",
-} as const
 
 function BrickPage() {
   const { id } = Route.useLoaderData()
@@ -86,9 +80,13 @@ function BrickPage() {
                   <span className="inline-flex items-center gap-1.5 text-foreground">
                     <BrickKindIcon kind={brick.kind} className="size-4" />
                     {brickKindLabels[brick.kind]}
+                    {brick.game ? (
+                      <span className="text-muted-foreground">
+                        · {brick.game}
+                      </span>
+                    ) : null}
                   </span>
                   <span>{brickDeployLabels[brick.deploy.type]}</span>
-                  <span>by {brick.author}</span>
                   <span
                     className={
                       listed.tier === "official"
@@ -98,18 +96,12 @@ function BrickPage() {
                   >
                     {listed.tier === "official" ? "Official" : "Community"}
                   </span>
-                  {Object.entries(brick.links ?? {}).map(([key, href]) => (
-                    <a
-                      key={key}
-                      href={href}
-                      {...newTab}
-                      className="inline-flex items-center gap-1 underline-offset-4 hover:text-foreground hover:underline"
-                    >
-                      {linkLabels[key as keyof typeof linkLabels]}
-                      <ExternalLink className="size-3" />
-                    </a>
-                  ))}
                 </p>
+                <Attribution
+                  author={brick.author}
+                  links={brick.links}
+                  className="mt-3"
+                />
                 {brick.tags?.length ? (
                   <ul className="mt-3 flex flex-wrap gap-1.5">
                     {brick.tags.map((tag) => (

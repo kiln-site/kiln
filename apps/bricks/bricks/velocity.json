@@ -4,6 +4,7 @@
   "id": "velocity",
   "name": "Velocity",
   "kind": "game-server",
+  "game": "Minecraft",
   "summary": "Modern Minecraft proxy running on Kiln's standard Java Ember.",
   "author": "Kiln",
   "icon": "../icons/velocity.svg",
@@ -93,23 +94,11 @@
         "port": 25565
       }
     ],
-    "volumes": [
-      {
-        "path": "/server"
-      }
-    ],
+    "volumes": ["/server"],
     "ready": {
-      "type": "log",
-      "match": ["Done ("]
+      "log": ["Done ("]
     },
-    "resources": {
-      "memory": "1G",
-      "pids": 512
-    }
-  },
-  "game": {
-    "title": "Minecraft",
-    "routing": "minecraft",
+    "memory": "1G",
     "hostname": "{{ kiln.brick }}",
     "stop": ["end", "/end", "shutdown", "/shutdown", "stop", "/stop"]
   }

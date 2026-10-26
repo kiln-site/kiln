@@ -3,9 +3,9 @@ import { z } from "zod"
 
 // `kiln.brick/v2`: one JSON document that says what something is (`kind`),
 // what someone fills in to install it (`inputs`), and how Kiln runs it
-// (`deploy`). Game servers and databases add one block of their own. Fields
-// are optional unless a Relay can't run the Brick without them, and parsing
-// adds no defaults, so a document round-trips through an editor unchanged.
+// (`deploy`). Databases add how to connect and back up. Fields are optional
+// unless Kiln can't run the Brick without them, and parsing adds no defaults,
+// so a document round-trips through an editor unchanged.
 // See apps/bricks/docs/brick-v2.md.
 
 export const BRICK_V2_FORMAT = "kiln.brick/v2"
@@ -38,7 +38,8 @@ export const brickV2Builtins = {
 
 const brickV2IdSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/u)
 const inputKeySchema = z.string().regex(/^[a-z][a-z0-9_]{0,47}$/u)
-const resourceNameSchema = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/u)
+const portNameSchema = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/u)
+const serviceNameSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/u)
 const scalarSchema = z.union([
   z.string().max(8_192),
   z.number().finite(),
@@ -105,24 +106,14 @@ export const brickV2InputSchema = z.strictObject({
 })
 
 export const brickV2PortSchema = z.strictObject({
-  name: resourceNameSchema,
+  name: portNameSchema,
   port: z.number().int().min(1).max(65_535),
   // tcp unless set.
   protocol: z.enum(["tcp", "udp", "both"]).optional(),
   // public for game servers, http for apps, private for databases unless set.
   expose: z.enum(brickV2PortExposures).optional(),
-  // A fixed host port. Kiln picks a free one unless set.
-  host: z.number().int().min(1).max(65_535).optional(),
   // The Compose service that listens on it.
-  service: z
-    .string()
-    .regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/u)
-    .optional(),
-})
-
-export const brickV2VolumeSchema = z.strictObject({
-  path: absolutePathSchema,
-  name: resourceNameSchema.optional(),
+  service: serviceNameSchema.optional(),
 })
 
 export const brickV2FileSchema = z.strictObject({
@@ -132,52 +123,49 @@ export const brickV2FileSchema = z.strictObject({
   once: z.boolean().optional(),
 })
 
-export const brickV2ReadySchema = z.discriminatedUnion("type", [
+// When it counts as started: a log line, a command that succeeds in the
+// container, or an HTTP check on a port.
+export const brickV2ReadySchema = z.union([
   z.strictObject({
-    type: z.literal("log"),
-    match: z.array(z.string().min(1).max(256)).min(1).max(8),
+    log: z.array(z.string().min(1).max(256)).min(1).max(8),
   }),
+  z.strictObject({ command: templateSchema.min(1).max(2_048) }),
   z.strictObject({
-    type: z.literal("command"),
-    command: templateSchema.min(1).max(2_048),
-  }),
-  z.strictObject({
-    type: z.literal("http"),
-    path: z.string().regex(/^\//u, "Start the path with /").max(512),
-    port: resourceNameSchema.optional(),
+    http: z.string().regex(/^\//u, "Start the path with /").max(512),
+    port: portNameSchema.optional(),
   }),
 ])
 
-// Defaults for the limits Hearth lets each instance change.
-export const brickV2ResourcesSchema = z.strictObject({
-  memory: z
-    .string()
-    .regex(/^\d+(?:\.\d+)?[MG]$/u, "Use a size like 512M or 2G")
-    .optional(),
-  cpu: z.number().positive().max(256).optional(),
-  pids: z.number().int().min(16).max(32_768).optional(),
-})
+const memorySchema = z
+  .string()
+  .regex(/^\d+(?:\.\d+)?[MG]$/u, "Use a size like 512M or 2G")
 
-const containerFields = {
+// What every way of running in containers shares.
+const runFields = {
   env: z
     .record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/u), templateSchema)
     .optional(),
+  ports: z.array(brickV2PortSchema).max(16).optional(),
+  ready: brickV2ReadySchema.optional(),
+  // A starting memory limit. Hearth's own limit wins.
+  memory: memorySchema.optional(),
+  // The address it gets under the Relay's domain.
+  hostname: templateSchema.min(1).max(256).optional(),
+  // Console commands that stop it on purpose, so Kiln doesn't restart it.
+  stop: z.array(z.string().min(1).max(128)).min(1).max(8).optional(),
+}
+
+// What a single container adds.
+const containerFields = {
+  ...runFields,
   command: z.array(templateSchema.max(2_048)).max(64).optional(),
-  entrypoint: z.array(templateSchema.max(2_048)).max(32).optional(),
-  workdir: absolutePathSchema.optional(),
   user: z
     .string()
     .regex(/^[0-9]+(?::[0-9]+)?$/u)
     .optional(),
-  stopSignal: z
-    .string()
-    .regex(/^SIG[A-Z0-9]+$/u)
-    .optional(),
-  ports: z.array(brickV2PortSchema).max(16).optional(),
-  volumes: z.array(brickV2VolumeSchema).max(16).optional(),
+  // Folders kept across restarts. The first is the one Files opens.
+  volumes: z.array(absolutePathSchema).max(16).optional(),
   files: z.array(brickV2FileSchema).max(16).optional(),
-  ready: brickV2ReadySchema.optional(),
-  resources: brickV2ResourcesSchema.optional(),
 }
 
 export const brickV2DeploySchema = z.discriminatedUnion("type", [
@@ -192,7 +180,6 @@ export const brickV2DeploySchema = z.discriminatedUnion("type", [
     type: z.literal("dockerfile"),
     dockerfile: z.string().min(1).max(200_000).optional(),
     path: relativePathSchema.optional(),
-    context: relativePathSchema.optional(),
     ...containerFields,
   }),
   // Runs `compose` as written, or the file at `path` in the source chosen at
@@ -201,17 +188,12 @@ export const brickV2DeploySchema = z.discriminatedUnion("type", [
     type: z.literal("compose"),
     compose: z.string().min(1).max(400_000).optional(),
     path: relativePathSchema.optional(),
-    service: z
-      .string()
-      .regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/u)
-      .optional(),
-    env: containerFields.env,
-    ports: containerFields.ports,
-    ready: containerFields.ready,
-    resources: containerFields.resources,
+    // The service whose console and logs Hearth opens first.
+    service: serviceNameSchema.optional(),
+    ...runFields,
   }),
   // Served by the Relay's shared web server from the source chosen at install
-  // time. A build runs once per deploy, in its own container.
+  // time. The build runs once per deploy, skipped when its command is empty.
   z.strictObject({
     type: z.literal("static"),
     root: z.string().min(1).max(1_024).optional(),
@@ -222,47 +204,25 @@ export const brickV2DeploySchema = z.discriminatedUnion("type", [
       })
       .optional(),
     spa: z.boolean().optional(),
-    headers: z
-      .record(z.string().min(1).max(128), z.string().max(1_024))
-      .optional(),
   }),
 ])
 
-export const brickV2GameSchema = z.strictObject({
-  title: z.string().min(1).max(80),
-  // minecraft puts it behind Kiln's Minecraft routing and SRV records;
-  // direct publishes its ports as they are.
-  routing: z.enum(["minecraft", "direct"]),
-  hostname: templateSchema.min(1).max(256).optional(),
-  // Console commands that stop it on purpose, so Kiln doesn't restart it.
-  stop: z.array(z.string().min(1).max(128)).min(1).max(8).optional(),
-})
-
 export const brickV2DatabaseSchema = z.strictObject({
-  engine: z.string().regex(/^[a-z][a-z0-9-]{0,31}$/u),
-  language: z.enum(["sql", "redis", "mongodb", "other"]),
   // The port clients connect to.
-  port: resourceNameSchema,
+  port: portNameSchema,
   connection: templateSchema.min(1).max(1_024),
-  // One of Hearth's own viewers. Hearth honours it for official Bricks only.
+  // One of Hearth's own viewers. Hearth opens it for official Bricks only.
   viewer: z.enum(["mysql", "postgres"]).optional(),
-  // Runs in the container: backup writes the dump to stdout, restore reads
-  // it from stdin. Without them, backups snapshot the volume.
-  backup: z
-    .strictObject({
-      command: templateSchema.min(1).max(2_048),
-      extension: z.string().regex(/^[a-z0-9]{1,8}$/u),
-    })
-    .optional(),
-  restore: z
-    .strictObject({ command: templateSchema.min(1).max(2_048) })
-    .optional(),
+  // Run in the container: backup writes a dump to stdout, restore reads one
+  // from stdin. Without them, backups snapshot the volume.
+  backup: templateSchema.min(1).max(2_048).optional(),
+  restore: templateSchema.min(1).max(2_048).optional(),
 })
 
 export const brickV2LinksSchema = z.strictObject({
   homepage: httpsUrlSchema.optional(),
-  docs: httpsUrlSchema.optional(),
   source: httpsUrlSchema.optional(),
+  docs: httpsUrlSchema.optional(),
   support: httpsUrlSchema.optional(),
 })
 
@@ -274,6 +234,8 @@ const brickV2ShapeSchema = z.strictObject({
   kind: z.enum(brickV2Kinds),
   summary: z.string().min(1).max(280),
   author: z.string().min(1).max(80),
+  // Game servers: the game it runs, like Minecraft.
+  game: z.string().min(1).max(80).optional(),
   icon: z.string().min(1).max(2_048).optional(),
   color: z
     .string()
@@ -290,7 +252,6 @@ const brickV2ShapeSchema = z.strictObject({
     .optional(),
   inputs: z.array(brickV2InputSchema).max(48).optional(),
   deploy: brickV2DeploySchema,
-  game: brickV2GameSchema.optional(),
   database: brickV2DatabaseSchema.optional(),
 })
 
@@ -301,18 +262,23 @@ export type BrickV2Kind = BrickV2["kind"]
 export type BrickV2Input = z.infer<typeof brickV2InputSchema>
 export type BrickV2InputType = BrickV2Input["type"]
 export type BrickV2Option = z.infer<typeof brickV2OptionSchema>
+export type BrickV2Suggestion = z.infer<typeof brickV2SuggestionSchema>
 export type BrickV2Deploy = z.infer<typeof brickV2DeploySchema>
 export type BrickV2DeployType = BrickV2Deploy["type"]
 export type BrickV2Port = z.infer<typeof brickV2PortSchema>
-export type BrickV2Volume = z.infer<typeof brickV2VolumeSchema>
 export type BrickV2File = z.infer<typeof brickV2FileSchema>
 export type BrickV2Ready = z.infer<typeof brickV2ReadySchema>
-export type BrickV2Resources = z.infer<typeof brickV2ResourcesSchema>
-export type BrickV2Game = z.infer<typeof brickV2GameSchema>
 export type BrickV2Database = z.infer<typeof brickV2DatabaseSchema>
 export type BrickV2Links = z.infer<typeof brickV2LinksSchema>
 export type BrickV2Value = z.infer<typeof scalarSchema>
 export type BrickV2PortExposure = (typeof brickV2PortExposures)[number]
+// The deploy types that run in containers, with env, ports, and the rest.
+export type BrickV2RunDeploy = Exclude<BrickV2Deploy, { type: "static" }>
+// The deploy types that run one container, with volumes and files.
+export type BrickV2ContainerDeploy = Extract<
+  BrickV2Deploy,
+  { type: "image" | "dockerfile" }
+>
 
 export const brickV2CatalogSchema = z.strictObject({
   $schema: z.string().max(2_048).optional(),
@@ -365,6 +331,14 @@ export function brickV2OptionLabel(option: BrickV2Option): string {
   return typeof option === "object" ? option.label : String(option)
 }
 
+// An input's or suggestion's pattern as a RegExp, or null when it isn't one.
+export function brickV2Pattern(pattern: string): RegExp | null {
+  return Result.getOrElse(
+    Result.try(() => new RegExp(pattern, "u")),
+    () => null
+  )
+}
+
 // The default an input starts with given the other inputs' values: the first
 // matching suggestion, then its own default.
 export function brickV2InputDefault(
@@ -373,8 +347,12 @@ export function brickV2InputDefault(
 ): BrickV2Value | undefined {
   for (const rule of input.suggest ?? []) {
     const value = values[rule.when]
-    const pattern = brickV2Pattern(rule.matches)
-    if (value !== undefined && pattern?.test(String(value))) return rule.value
+    if (
+      value !== undefined &&
+      brickV2Pattern(rule.matches)?.test(String(value))
+    ) {
+      return rule.value
+    }
   }
   return input.default
 }
@@ -420,30 +398,26 @@ export function brickV2Templates(
     add(["deploy", "root"], deploy.root)
     add(["deploy", "build", "image"], deploy.build?.image)
     add(["deploy", "build", "command"], deploy.build?.command)
-  }
-  if (deploy.type !== "static") {
+  } else {
     for (const [name, value] of Object.entries(deploy.env ?? {})) {
       add(["deploy", "env", name], value)
     }
-    if (deploy.ready?.type === "command") {
+    if (deploy.ready && "command" in deploy.ready) {
       add(["deploy", "ready", "command"], deploy.ready.command)
     }
+    add(["deploy", "hostname"], deploy.hostname)
   }
   if (deploy.type === "image" || deploy.type === "dockerfile") {
     deploy.command?.forEach((part, index) =>
       add(["deploy", "command", index], part)
     )
-    deploy.entrypoint?.forEach((part, index) =>
-      add(["deploy", "entrypoint", index], part)
-    )
     deploy.files?.forEach((file, index) =>
       add(["deploy", "files", index, "content"], file.content)
     )
   }
-  add(["game", "hostname"], brick.game?.hostname)
   add(["database", "connection"], brick.database?.connection)
-  add(["database", "backup", "command"], brick.database?.backup?.command)
-  add(["database", "restore", "command"], brick.database?.restore?.command)
+  add(["database", "backup"], brick.database?.backup)
+  add(["database", "restore"], brick.database?.restore)
   return templates
 }
 
@@ -498,39 +472,26 @@ function checkBrickV2(brick: BrickV2, context: z.RefinementCtx): void {
   })
 
   if (deploy.type === "image" || deploy.type === "dockerfile") {
-    const volumePaths = new Set<string>()
-    deploy.volumes?.forEach((volume, index) => {
-      if (volumePaths.has(volume.path)) {
-        issue(["deploy", "volumes", index, "path"], "Mount each path once")
-      }
-      volumePaths.add(volume.path)
-    })
-  }
-  if (deploy.type === "dockerfile") {
-    if (deploy.dockerfile !== undefined && deploy.path !== undefined) {
-      issue(
-        ["deploy", "path"],
-        "Write the Dockerfile or point to one, not both"
-      )
-    }
-    if (deploy.dockerfile === undefined && deploy.path === undefined) {
-      issue(["deploy", "path"], "Write the Dockerfile or point to one")
+    const volumes = deploy.volumes ?? []
+    if (new Set(volumes).size !== volumes.length) {
+      issue(["deploy", "volumes"], "Keep each folder once")
     }
   }
-  if (deploy.type === "compose") {
-    if (deploy.compose !== undefined && deploy.path !== undefined) {
-      issue(
-        ["deploy", "path"],
-        "Write the Compose file or point to one, not both"
-      )
+  if (deploy.type === "dockerfile" || deploy.type === "compose") {
+    const written =
+      deploy.type === "dockerfile" ? deploy.dockerfile : deploy.compose
+    const label = deploy.type === "dockerfile" ? "Dockerfile" : "Compose file"
+    if (written !== undefined && deploy.path !== undefined) {
+      issue(["deploy", "path"], `Write the ${label} or point to one, not both`)
     }
-    if (deploy.compose === undefined && deploy.path === undefined) {
-      issue(["deploy", "path"], "Write the Compose file or point to one")
+    if (written === undefined && deploy.path === undefined) {
+      issue(["deploy", "path"], `Write the ${label} or point to one`)
     }
   }
   if (
     deploy.type !== "static" &&
-    deploy.ready?.type === "http" &&
+    deploy.ready &&
+    "http" in deploy.ready &&
     deploy.ready.port &&
     !portNames.has(deploy.ready.port)
   ) {
@@ -538,17 +499,20 @@ function checkBrickV2(brick: BrickV2, context: z.RefinementCtx): void {
   }
 
   if (brick.kind === "game-server") {
-    if (!brick.game) issue(["game"], "A game server describes its game")
+    if (!brick.game) issue(["game"], "Name the game it runs")
     if (deploy.type === "static") {
       issue(["deploy", "type"], "Game servers run in containers")
     }
-    if (ports.length === 0) issue(["deploy", "ports"], "Declare its port")
-  } else if (brick.game) {
-    issue(["game"], "Only game servers have a game block")
+    if (ports.length === 0)
+      issue(["deploy", "ports"], "Add the port players join")
+  } else if (brick.game !== undefined) {
+    issue(["game"], "Only game servers name a game")
   }
 
   if (brick.kind === "database") {
-    if (!brick.database) issue(["database"], "A database describes its engine")
+    if (!brick.database) {
+      issue(["database"], "Say how apps connect to it")
+    }
     if (deploy.type === "static") {
       issue(["deploy", "type"], "Databases run in containers")
     }
@@ -578,15 +542,6 @@ function checkInput(
     ...(input.default === undefined ? [] : [input.default]),
     ...(input.suggest ?? []).map((rule) => rule.value),
   ]
-  for (const value of values) {
-    if (input.type === "select") continue
-    if (typeof value !== valueType) {
-      issue(
-        [...path, "default"],
-        `Use a ${valueType} for a ${input.type} input`
-      )
-    }
-  }
 
   if (input.type === "select") {
     if (!input.options) issue([...path, "options"], "List its options")
@@ -596,8 +551,18 @@ function checkInput(
         issue([...path, "default"], `${String(value)} isn't one of its options`)
       }
     }
-  } else if (input.options) {
-    issue([...path, "options"], "Only select inputs have options")
+  } else {
+    for (const value of values) {
+      if (typeof value !== valueType) {
+        issue(
+          [...path, "default"],
+          `Use a ${valueType} for a ${input.type} input`
+        )
+      }
+    }
+    if (input.options) {
+      issue([...path, "options"], "Only select inputs have options")
+    }
   }
 
   if (input.generate && input.type !== "secret") {
@@ -633,12 +598,4 @@ function checkInput(
   ) {
     issue([...path, "max"], "max is below min")
   }
-}
-
-// An input's or suggestion's pattern as a RegExp, or null when it isn't one.
-export function brickV2Pattern(pattern: string): RegExp | null {
-  return Result.getOrElse(
-    Result.try(() => new RegExp(pattern, "u")),
-    () => null
-  )
 }

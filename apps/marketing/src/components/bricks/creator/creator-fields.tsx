@@ -34,6 +34,21 @@ export class IssueStore {
 
   get = (path: string): string | undefined => this.#byPath.get(path)
 
+  // How many issues sit at or under any of the paths.
+  count = (prefixes: ReadonlyArray<string>): number => {
+    let total = 0
+    for (const path of this.#byPath.keys()) {
+      if (
+        prefixes.some(
+          (prefix) => path === prefix || path.startsWith(`${prefix}.`)
+        )
+      ) {
+        total += 1
+      }
+    }
+    return total
+  }
+
   subscribe = (listener: () => void): (() => void) => {
     this.#listeners.add(listener)
     return () => this.#listeners.delete(listener)
@@ -48,6 +63,17 @@ export function useIssue(path: string | undefined): string | undefined {
     store?.subscribe ?? noSubscribe,
     () => (path === undefined ? undefined : store?.get(path)),
     () => undefined
+  )
+}
+
+// Issues under any of the paths, for a tile's badge. `prefixes` is joined
+// with commas so callers can pass a literal without a memo.
+export function useIssueCount(prefixes: string): number {
+  const store = React.useContext(IssueStoreContext)
+  return React.useSyncExternalStore(
+    store?.subscribe ?? noSubscribe,
+    () => store?.count(prefixes.split(",")) ?? 0,
+    () => 0
   )
 }
 
@@ -361,56 +387,6 @@ export function Segmented<T extends string>({
           <span className="truncate">{option.label}</span>
         </button>
       ))}
-    </div>
-  )
-}
-
-export function SectionCard({
-  actions,
-  children,
-  description,
-  id,
-  title,
-}: {
-  actions?: React.ReactNode
-  children: React.ReactNode
-  description?: React.ReactNode
-  id: string
-  title: React.ReactNode
-}) {
-  return (
-    <section
-      id={id}
-      className="scroll-mt-36 border border-border bg-background"
-    >
-      <header className="flex flex-wrap items-start justify-between gap-3 border-b border-border px-5 py-4">
-        <div className="min-w-0">
-          <h2 className="type-section-title">{title}</h2>
-          {description ? (
-            <p className="type-support mt-0.5 text-muted-foreground">
-              {description}
-            </p>
-          ) : null}
-        </div>
-        {actions}
-      </header>
-      <div className="flex flex-col gap-5 p-5">{children}</div>
-    </section>
-  )
-}
-
-// A smaller heading inside a section.
-export function Subheading({
-  actions,
-  children,
-}: {
-  actions?: React.ReactNode
-  children: React.ReactNode
-}) {
-  return (
-    <div className="flex items-center justify-between gap-3 border-t border-border pt-5">
-      <h3 className="type-technical-label text-muted-foreground">{children}</h3>
-      {actions}
     </div>
   )
 }

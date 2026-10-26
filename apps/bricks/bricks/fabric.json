@@ -4,6 +4,7 @@
   "id": "fabric",
   "name": "Fabric",
   "kind": "game-server",
+  "game": "Minecraft",
   "summary": "Minimal Minecraft mod-loader runtime with automatic provisioning.",
   "author": "Kiln",
   "icon": "../icons/fabric.svg",
@@ -87,23 +88,11 @@
         "port": 25565
       }
     ],
-    "volumes": [
-      {
-        "path": "/server"
-      }
-    ],
+    "volumes": ["/server"],
     "ready": {
-      "type": "log",
-      "match": [")! For help, type "]
+      "log": [")! For help, type "]
     },
-    "resources": {
-      "memory": "2G",
-      "pids": 512
-    }
-  },
-  "game": {
-    "title": "Minecraft",
-    "routing": "minecraft",
+    "memory": "2G",
     "hostname": "{{ version }}.{{ kiln.brick }}",
     "stop": ["stop", "/stop"]
   }

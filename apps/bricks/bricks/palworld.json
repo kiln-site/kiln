@@ -4,6 +4,7 @@
   "id": "palworld",
   "name": "Palworld",
   "kind": "game-server",
+  "game": "Palworld",
   "summary": "Native Linux dedicated server installed and updated through SteamCMD.",
   "author": "Kiln",
   "icon": "../icons/palworld.svg",
@@ -40,23 +41,11 @@
         "protocol": "udp"
       }
     ],
-    "volumes": [
-      {
-        "path": "/server"
-      }
-    ],
+    "volumes": ["/server"],
     "ready": {
-      "type": "log",
-      "match": ["Setting breakpad minidump AppID = 2394010"]
+      "log": ["Setting breakpad minidump AppID = 2394010"]
     },
-    "resources": {
-      "memory": "16G",
-      "pids": 2048
-    }
-  },
-  "game": {
-    "title": "Palworld",
-    "routing": "direct",
+    "memory": "16G",
     "hostname": "{{ kiln.brick }}"
   }
 }

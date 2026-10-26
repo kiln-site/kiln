@@ -7,9 +7,11 @@ server, an app, or a database. It says three things:
 2. **What it asks for**: `inputs`, which become the install form.
 3. **How it runs**: `deploy`, one of four ways.
 
-Game servers and databases add one block for what only they need (`game`,
-`database`). Everything else, like memory limits, domains, and environment
-added later, stays a setting in Hearth; a Brick only suggests defaults.
+Databases add one more block, for how apps connect and how backups work.
+Nothing in a Brick turns on behaviour for one kind or one game: readiness,
+addresses, and SRV records work the same for every Brick. Everything else,
+like memory limits, domains, and environment added later, stays a setting in
+Hearth; a Brick only suggests defaults.
 
 v2 is a preview. Relays run `kiln.brick/v1` (see [recipe-v1.md](recipe-v1.md))
 until they learn v2; the official v2 Bricks in `bricks/` sit beside the v1
@@ -36,6 +38,7 @@ gets completion in any editor that reads `$schema`.
   "id": "paper",
   "name": "Paper",
   "kind": "game-server",
+  "game": "Minecraft",
   "summary": "Fast, plugin-compatible Minecraft server for most projects.",
   "author": "Kiln",
   "inputs": [
@@ -59,11 +62,11 @@ gets completion in any editor that reads `$schema`.
     "image": "ghcr.io/kiln-site/bricks-java:{{ java_version }}",
     "env": { "KILN_VERSION": "{{ version }}" },
     "ports": [{ "name": "game", "port": 25565 }],
-    "volumes": [{ "path": "/server" }],
-    "ready": { "type": "log", "match": [")! For help, type "] },
-    "resources": { "memory": "2G" }
-  },
-  "game": { "title": "Minecraft", "routing": "minecraft", "stop": ["stop"] }
+    "volumes": ["/server"],
+    "ready": { "log": [")! For help, type "] },
+    "memory": "2G",
+    "stop": ["stop"]
+  }
 }
 ```
 
@@ -80,23 +83,26 @@ gets completion in any editor that reads `$schema`.
 
 ## Top level
 
-| Field       |              |                                                                                                     |
-| ----------- | ------------ | --------------------------------------------------------------------------------------------------- |
-| `format`    | required     | `kiln.brick/v2`                                                                                     |
-| `id`        | required     | Lowercase letters, numbers, and dashes. Unique in its catalog.                                      |
-| `name`      | required     |                                                                                                     |
-| `kind`      | required     | `game-server`, `app`, or `database`. Decides where it shows in Hearth.                              |
-| `summary`   | required     | One line for the catalog.                                                                           |
-| `author`    | required     |                                                                                                     |
-| `icon`      |              | A square, single-colour SVG: a path relative to the Brick, or an `https://` link. Same rules as v1. |
-| `color`     |              | `#rrggbb`. Hearth picks one from the id without it.                                                 |
-| `tags`      |              | For search.                                                                                         |
-| `links`     |              | `homepage`, `docs`, `source`, `support`, each `https://`.                                           |
-| `platforms` |              | `amd64`, `arm64`. Any, without it.                                                                  |
-| `inputs`    |              | The install form, in order.                                                                         |
-| `deploy`    | required     | How it runs.                                                                                        |
-| `game`      | game servers |                                                                                                     |
-| `database`  | databases    |                                                                                                     |
+| Field       |              |                                                                                   |
+| ----------- | ------------ | --------------------------------------------------------------------------------- |
+| `format`    | required     | `kiln.brick/v2`                                                                   |
+| `id`        | required     | Lowercase letters, numbers, and dashes. Unique in its catalog.                    |
+| `name`      | required     |                                                                                   |
+| `kind`      | required     | `game-server`, `app`, or `database`. Decides where it shows in Hearth.            |
+| `game`      | game servers | The game it runs, like `Minecraft`. Groups servers and names their SRV record.    |
+| `summary`   | required     | One line for the catalog.                                                         |
+| `author`    | required     | Who made it.                                                                      |
+| `icon`      |              | A square, single-colour SVG: a path relative to the Brick, or an `https://` link. |
+| `color`     |              | `#rrggbb`. Hearth picks one from the id without it.                               |
+| `tags`      |              | For search.                                                                       |
+| `links`     |              | `homepage`, `source`, `docs`, `support`, each `https://`. Shown with the author.  |
+| `platforms` |              | `amd64`, `arm64`. Any, without it.                                                |
+| `inputs`    |              | The install form, in order.                                                       |
+| `deploy`    | required     | How it runs.                                                                      |
+| `database`  | databases    | How apps connect, and how it's backed up.                                         |
+
+Official icons live in [`icons/`](../icons) and can be linked from any Brick
+as `https://raw.githubusercontent.com/kiln-site/kiln/main/apps/bricks/icons/<name>.svg`.
 
 ## Inputs
 
@@ -127,8 +133,8 @@ change the value.
 
 ## Templates
 
-Strings in `deploy`, `game.hostname`, and the `database` commands can use
-`{{ name }}`, where the name is an input's key or one of:
+Strings in `deploy` and `database` can use `{{ name }}`, where the name is an
+input's key or one of:
 
 |              |                                          |
 | ------------ | ---------------------------------------- |
@@ -154,32 +160,39 @@ A source is a Git repository, built on every push, or an upload. It's chosen
 at install, not written in the Brick, so one Brick serves every repository
 with a Dockerfile.
 
-`image` and `dockerfile` share these container fields:
+Every type but `static` takes:
 
-| Field                           |                                                                                           |
-| ------------------------------- | ----------------------------------------------------------------------------------------- |
-| `env`                           | Environment variables. Values take templates.                                             |
-| `command`, `entrypoint`         | Lists of arguments.                                                                       |
-| `user`, `workdir`, `stopSignal` |                                                                                           |
-| `ports`                         | The first is the one Hearth shows.                                                        |
-| `volumes`                       | `{ "path" }` folders kept across restarts. The first is the one Files opens.              |
-| `files`                         | `{ "path", "content", "once" }` written before it starts; with `once`, only when missing. |
-| `ready`                         | When it counts as started (below).                                                        |
-| `resources`                     | Suggested `memory` (`512M`, `2G`), `cpu`, and `pids`. Hearth's limits win.                |
+| Field      |                                                                                        |
+| ---------- | -------------------------------------------------------------------------------------- |
+| `env`      | Environment variables. Values take templates. For Compose, the project's `.env`.       |
+| `ports`    | What it listens on. The first is the one Hearth shows.                                 |
+| `ready`    | When it counts as started (below).                                                     |
+| `memory`   | A starting memory limit, like `512M` or `2G`. Hearth's own limit wins.                 |
+| `hostname` | The name it gets under the Relay's domain. Takes templates. Kiln names it without one. |
+| `stop`     | Console commands that stop it on purpose, so Kiln doesn't restart it.                  |
 
-`compose` takes `env` (written to the project's `.env`), `ports` (each naming
-its `service`), `ready`, `resources`, and `service`, the one whose console and
-logs Hearth opens first. The Compose file declares everything else.
+`image` and `dockerfile` also take:
+
+| Field     |                                                                                           |
+| --------- | ----------------------------------------------------------------------------------------- |
+| `command` | Replaces the image's command, one argument per entry.                                     |
+| `user`    | A numeric `user:group` to run as.                                                         |
+| `volumes` | Absolute paths kept across restarts. The first is the one Files opens.                    |
+| `files`   | `{ "path", "content", "once" }` written before it starts; with `once`, only when missing. |
+
+`compose` also takes `service`, the one whose console and logs Hearth opens
+first; ports name their `service` too. The Compose file declares everything
+else.
 
 `static` takes `root`, the folder to serve; `build`, an `image` and `command`
-run once per deploy (skipped when the command is empty); `spa`, which answers
-unknown paths with `index.html`; and `headers`. Static sites share one web
-server per Relay, so they have no container or limits of their own.
+run once per deploy (skipped when the command is empty); and `spa`, which
+answers unknown paths with `index.html`. Static sites share one web server
+per Relay, so they have no container or limits of their own.
 
 ### Ports
 
-`{ "name", "port", "protocol", "expose", "host", "service" }`. `protocol` is
-`tcp` (default), `udp`, or `both`. `expose` is how it's reached:
+`{ "name", "port", "protocol", "expose", "service" }`. `protocol` is `tcp`
+(default), `udp`, or `both`. `expose` is how it's reached:
 
 |           |                                                              |
 | --------- | ------------------------------------------------------------ |
@@ -187,38 +200,28 @@ server per Relay, so they have no container or limits of their own.
 | `http`    | An HTTPS domain through the Relay's proxy. Default for apps. |
 | `private` | Only from instances connected to it. Default for databases.  |
 
-Kiln picks a free host port unless `host` fixes one.
+Kiln always picks the host port. Game servers get an SRV record for their
+first port, so players join with a name and no port.
 
 ### Ready
 
-|                                                  |                                                |
-| ------------------------------------------------ | ---------------------------------------------- |
-| `{ "type": "log", "match": [...] }`              | The log shows any of these lines.              |
-| `{ "type": "command", "command": "..." }`        | The command succeeds in the container.         |
-| `{ "type": "http", "path": "/", "port": "web" }` | A GET answers, on the named port or the first. |
+|                                  |                                                |
+| -------------------------------- | ---------------------------------------------- |
+| `{ "log": [...] }`               | The log shows any of these lines.              |
+| `{ "command": "..." }`           | The command succeeds in the container.         |
+| `{ "http": "/", "port": "web" }` | A GET answers, on the named port or the first. |
 
-Without `ready`, it's ready when its process starts.
-
-## Game
-
-| Field      |          |                                                                                                                |
-| ---------- | -------- | -------------------------------------------------------------------------------------------------------------- |
-| `title`    | required | The game, like Minecraft.                                                                                      |
-| `routing`  | required | `minecraft` puts it behind Kiln's Minecraft routing and SRV records; `direct` publishes its ports as they are. |
-| `hostname` |          | The address players see, under the Relay's domain. Takes templates.                                            |
-| `stop`     |          | Console commands that stop it on purpose, so Kiln doesn't restart it.                                          |
+Without `ready`, it's ready once its first port answers.
 
 ## Database
 
-| Field        |          |                                                                                                 |
-| ------------ | -------- | ----------------------------------------------------------------------------------------------- |
-| `engine`     | required | Like `postgres`.                                                                                |
-| `language`   | required | `sql`, `redis`, `mongodb`, or `other`.                                                          |
-| `port`       | required | The port clients connect to, by name.                                                           |
-| `connection` | required | The URL Hearth hands to apps that connect. Takes templates.                                     |
-| `viewer`     |          | `mysql` or `postgres`: one of Hearth's viewers. Hearth opens it for official Bricks only.       |
-| `backup`     |          | `{ "command", "extension" }`. Writes a dump to stdout. Without it, backups snapshot the volume. |
-| `restore`    |          | `{ "command" }`. Reads a dump from stdin. Needs `backup`.                                       |
+| Field        |          |                                                                                           |
+| ------------ | -------- | ----------------------------------------------------------------------------------------- |
+| `port`       | required | The port clients connect to, by name.                                                     |
+| `connection` | required | The URL Hearth hands to apps that connect. Takes templates.                               |
+| `viewer`     |          | `mysql` or `postgres`: one of Hearth's viewers. Hearth opens it for official Bricks only. |
+| `backup`     |          | A command that writes a dump to stdout. Without it, backups snapshot the volume.          |
+| `restore`    |          | A command that reads a dump from stdin. Needs `backup`.                                   |
 
 ## Catalogs
 
@@ -239,18 +242,21 @@ in [`community/`](../community/README.md).
 
 ## From v1
 
-| v1                                                       | v2                                                                                          |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `metadata.*`                                             | Top level; `metadata.game` moves to `game.title`.                                           |
-| `variables` (a map)                                      | `inputs` (a list, so the form keeps its order).                                             |
-| `required: true`                                         | The default; `optional: true` otherwise.                                                    |
-| `rules.{pattern,min,max,minLength,maxLength}`            | `pattern`, `min`, `max`.                                                                    |
-| `{{ variables.x }}`, `{{ brick.id }}`                    | `{{ x }}`, `{{ kiln.brick }}`                                                               |
-| `runtime`                                                | `deploy` with `type: "image"`; `environment` is `env`, `storage.mount` is the first volume. |
-| A `memory` variable mapped to `runtime.resources.memory` | `deploy.resources.memory`, a default for Hearth's own limit.                                |
-| `network.ports` and `primaryPort`                        | `deploy.ports`; the first is primary.                                                       |
-| `network.mode`                                           | `game.routing`                                                                              |
-| `readiness.logs`                                         | `deploy.ready` with `type: "log"`.                                                          |
-| `console.stopCommands`                                   | `game.stop`                                                                                 |
-| `constraints.architectures`                              | `platforms`                                                                                 |
-| Java chosen by the Relay from the version                | `suggest` rules on the Java input.                                                          |
+| v1                                                                       | v2                                                                |
+| ------------------------------------------------------------------------ | ----------------------------------------------------------------- |
+| `metadata.*`                                                             | Top level; `metadata.game` is `game`.                             |
+| `variables` (a map)                                                      | `inputs` (a list, so the form keeps its order).                   |
+| `required: true`                                                         | The default; `optional: true` otherwise.                          |
+| `rules.{pattern,min,max,minLength,maxLength}`                            | `pattern`, `min`, `max`.                                          |
+| `{{ variables.x }}`, `{{ brick.id }}`                                    | `{{ x }}`, `{{ kiln.brick }}`                                     |
+| `runtime`                                                                | `deploy` with `type: "image"`; `environment` is `env`.            |
+| `runtime.storage.mount`                                                  | The first of `deploy.volumes`.                                    |
+| A `memory` variable mapped to `runtime.resources.memory`                 | `deploy.memory`, a default for Hearth's own limit.                |
+| `runtime.resources.pids`, `entrypoint`, `workingDirectory`, `stopSignal` | Dropped: Kiln's defaults cover every official Brick.              |
+| `network.ports` and `primaryPort`                                        | `deploy.ports`; the first is primary. No fixed host ports.        |
+| `network.mode` (`minecraft-backend`, `direct`)                           | Dropped: readiness and SRV records work the same for every Brick. |
+| `network.hostname`                                                       | `deploy.hostname`                                                 |
+| `readiness.logs`                                                         | `deploy.ready.log`                                                |
+| `console.stopCommands`                                                   | `deploy.stop`                                                     |
+| `constraints.architectures`                                              | `platforms`                                                       |
+| Java chosen by the Relay from the version                                | `suggest` rules on the Java input.                                |

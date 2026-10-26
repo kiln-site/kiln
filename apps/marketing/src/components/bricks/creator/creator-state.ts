@@ -88,7 +88,7 @@ export interface CreatorIssue {
   section: CreatorSection
 }
 
-export type CreatorSection = "basics" | "inputs" | "deploy" | "kind"
+export type CreatorSection = "basics" | "inputs" | "deploy" | "database"
 
 export function brickIssues(brick: BrickV2): Array<CreatorIssue> {
   const result = brickV2Schema.safeParse(brick)
@@ -113,7 +113,7 @@ function valueAt(value: unknown, path: ReadonlyArray<PropertyKey>): unknown {
 function sectionOf(key: PropertyKey | undefined): CreatorSection {
   if (key === "inputs") return "inputs"
   if (key === "deploy") return "deploy"
-  if (key === "game" || key === "database") return "kind"
+  if (key === "database") return "database"
   return "basics"
 }
 
@@ -212,36 +212,31 @@ export function convertDeploy(
   type: BrickV2DeployType
 ): BrickV2Deploy {
   if (deploy.type === type) return deploy
-  const shared =
+  const run =
     deploy.type === "static"
       ? {}
       : {
           env: deploy.env,
+          hostname: deploy.hostname,
+          memory: deploy.memory,
           ports: deploy.ports,
           ready: deploy.ready,
-          resources: deploy.resources,
+          stop: deploy.stop,
         }
   const container =
     deploy.type === "image" || deploy.type === "dockerfile"
       ? {
           command: deploy.command,
-          entrypoint: deploy.entrypoint,
           files: deploy.files,
-          stopSignal: deploy.stopSignal,
           user: deploy.user,
           volumes: deploy.volumes,
-          workdir: deploy.workdir,
         }
       : {}
-  if (type === "image") {
-    return { type, image: "", ...shared, ...container }
-  }
+  if (type === "image") return { type, image: "", ...run, ...container }
   if (type === "dockerfile") {
-    return { type, path: "Dockerfile", ...shared, ...container }
+    return { type, path: "Dockerfile", ...run, ...container }
   }
-  if (type === "compose") {
-    return { type, path: "compose.yaml", ...shared }
-  }
+  if (type === "compose") return { type, path: "compose.yaml", ...run }
   return { type, root: "." }
 }
 
@@ -255,14 +250,10 @@ export function changeKind(brick: BrickV2, kind: BrickV2Kind): BrickV2 {
     ...rest,
     kind,
     deploy,
-    ...(kind === "game-server"
-      ? { game: game ?? { title: "", routing: "direct" } }
-      : {}),
+    ...(kind === "game-server" ? { game: game ?? "" } : {}),
     ...(kind === "database"
       ? {
           database: database ?? {
-            engine: "",
-            language: "sql",
             port: ports[0]?.name ?? "",
             connection: "",
           },
@@ -295,8 +286,11 @@ export function starterBrick(
         ? { name: "db", port: 5432 }
         : { name: "web", port: 8080 }
   const deploy = { ...brick.deploy, ports: [port] } as BrickV2Deploy
-  if (deploy.type === "image" || deploy.type === "dockerfile") {
-    deploy.volumes = kind === "app" ? [] : [{ path: "/data" }]
+  if (
+    (deploy.type === "image" || deploy.type === "dockerfile") &&
+    kind !== "app"
+  ) {
+    deploy.volumes = ["/data"]
   }
   return {
     ...brick,
@@ -305,4 +299,62 @@ export function starterBrick(
       ? { database: { ...brick.database, port: port.name } }
       : {}),
   }
+}
+
+// The dialogs the workspace opens to edit one part of the Brick.
+export type CreatorPanel =
+  | { kind: "input"; index: number }
+  | {
+      kind:
+        | "env"
+        | "ports"
+        | "volumes"
+        | "files"
+        | "ready"
+        | "address"
+        | "stop"
+        | "command"
+        | "source"
+        | "connection"
+        | "backups"
+    }
+
+// Where to fix an issue: the dialog that edits it, or the field on the
+// canvas that does.
+export function panelFor(
+  path: string
+): { panel: CreatorPanel } | { field: string } {
+  const [head, second, third] = path.split(".")
+  if (head === "inputs" && second !== undefined) {
+    return { panel: { kind: "input", index: Number(second) } }
+  }
+  if (head === "database") {
+    return {
+      panel: {
+        kind:
+          second === "backup" || second === "restore"
+            ? "backups"
+            : "connection",
+      },
+    }
+  }
+  if (head === "deploy") {
+    const byField: Record<string, CreatorPanel["kind"]> = {
+      env: "env",
+      ports: "ports",
+      volumes: "volumes",
+      files: "files",
+      ready: "ready",
+      hostname: "address",
+      stop: "stop",
+      command: "command",
+      user: "command",
+      dockerfile: "source",
+      compose: "source",
+    }
+    const kind = second === undefined ? undefined : byField[second]
+    if (kind) return { panel: { kind } as CreatorPanel }
+    return { field: third === undefined ? path : `deploy.${second}` }
+  }
+  return { field: head ?? "" }
 }

@@ -55,12 +55,32 @@ export const officialCatalog: BrickV2Catalog = brickV2CatalogSchema.parse(
   catalogFiles["../../../bricks/catalog.json"]
 )
 
+export const officialIconRoot = `${rawRoot}/apps/bricks/icons/`
+
+// The official icons, by name, as links any Brick can use and the URLs this
+// site draws them from.
+export const officialIcons: ReadonlyArray<{
+  link: string
+  name: string
+  url: string
+}> = Object.entries(iconFiles)
+  .map(([file, url]) => {
+    const name = file.slice(file.lastIndexOf("/") + 1, -".svg".length)
+    return { link: `${officialIconRoot}${name}.svg`, name, url }
+  })
+  .sort((left, right) => left.name.localeCompare(right.name))
+
 // Where a Brick's icon can be drawn from: an official icon by its path in
-// apps/bricks, or a link.
+// apps/bricks or its link, or any other https:// link.
 export function brickIconUrl(icon: string | undefined): string | undefined {
   if (!icon) return undefined
-  if (icon.startsWith("../icons/")) {
-    return iconFiles[`../../../bricks/icons/${icon.slice("../icons/".length)}`]
+  const official = icon.startsWith("../icons/")
+    ? icon.slice("../icons/".length)
+    : icon.startsWith(officialIconRoot)
+      ? icon.slice(officialIconRoot.length)
+      : null
+  if (official !== null) {
+    return iconFiles[`../../../bricks/icons/${official}`]
   }
   return /^https:\/\//iu.test(icon) ? icon : undefined
 }
@@ -102,6 +122,11 @@ export const listedBricks: ReadonlyArray<ListedBrick> = [
   ...officialBricks,
   ...communityBricks,
 ]
+
+// Every tag the listed Bricks use, for suggestions.
+export const catalogTags: ReadonlyArray<string> = [
+  ...new Set(listedBricks.flatMap((listed) => listed.brick.tags ?? [])),
+].sort((left, right) => left.localeCompare(right))
 
 export function findListedBrick(id: string): ListedBrick | undefined {
   return listedBricks.find((listed) => listed.brick.id === id)

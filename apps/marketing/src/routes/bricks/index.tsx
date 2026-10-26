@@ -144,7 +144,7 @@ function Catalog() {
         brick.id,
         brick.summary,
         brick.author,
-        brick.game?.title,
+        brick.game,
         ...(brick.tags ?? []),
       ]
         .join(" ")
@@ -273,19 +273,19 @@ const anatomy = [
         type: "image",
         image: "ghcr.io/kiln-site/bricks-java:{{ java_version }}",
         ports: [{ name: "game", port: 25565 }],
-        volumes: [{ path: "/server" }],
+        volumes: ["/server"],
+        ready: { log: [")! For help, type"] },
       },
     },
   },
   {
-    title: "What its kind needs",
-    body: "Game servers say how players connect and stop. Databases say how to connect, back up, and restore.",
+    title: "How apps connect",
+    body: "Databases add one block: the URL apps get, a viewer, and the commands that back them up and restore them.",
     code: {
       database: {
-        engine: "postgres",
         port: "postgres",
-        connection: "postgres://{{ username }}@{{ kiln.host }}",
-        backup: { command: "pg_dump …", extension: "sql" },
+        connection: "postgres://{{ username }}@{{ kiln.host }}/{{ database }}",
+        backup: "exec pg_dump …",
       },
     },
   },

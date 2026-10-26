@@ -27,22 +27,21 @@ import {
   IssueStore,
   IssueStoreContext,
 } from "~/components/bricks/creator/creator-fields"
-import {
-  BasicsSection,
-  DatabaseSection,
-  DeploySection,
-  type Edit,
-  GameSection,
-  InputsSection,
-} from "~/components/bricks/creator/creator-sections"
+import type { Edit } from "~/components/bricks/creator/creator-edit"
+import { DeployCard } from "~/components/bricks/creator/deploy-card"
+import { PanelHost } from "~/components/bricks/creator/deploy-dialogs"
+import { IdentityCard } from "~/components/bricks/creator/identity-card"
+import { InputsCard } from "~/components/bricks/creator/inputs-card"
 import {
   type CreatorIssue,
+  type CreatorPanel,
   type CreatorSection,
   brickIssues,
   creatorReducer,
   creatorState,
   fieldDomId,
   kindLabels,
+  panelFor,
   readBrickText,
   starterBrick,
 } from "~/components/bricks/creator/creator-state"
@@ -312,9 +311,9 @@ type View = "edit" | "preview" | "json" | "issues"
 
 const sectionLabels: Record<CreatorSection, string> = {
   basics: "Basics",
-  inputs: "Inputs",
-  deploy: "Deploy",
-  kind: "Game or database",
+  inputs: "Install form",
+  deploy: "How it runs",
+  database: "Database",
 }
 
 function Workspace({
@@ -332,12 +331,22 @@ function Workspace({
     creatorState
   )
   const [view, setView] = React.useState<View>("edit")
+  const [panel, setPanel] = React.useState<CreatorPanel | null>(null)
   const edit = React.useCallback<Edit>(
     (update) => dispatch({ type: "edit", update }),
     []
   )
   const onText = React.useCallback(
     (text: string) => dispatch({ type: "text", text }),
+    []
+  )
+  const closePanel = React.useCallback(() => setPanel(null), [])
+  const openInput = React.useCallback(
+    (index: number) => setPanel({ kind: "input", index }),
+    []
+  )
+  const openDeployPanel = React.useCallback(
+    (kind: Exclude<CreatorPanel["kind"], "input">) => setPanel({ kind }),
     []
   )
   const [store] = React.useState(() => new IssueStore())
@@ -360,197 +369,197 @@ function Workspace({
     return () => window.clearTimeout(timeout)
   }, [brick])
 
+  // Opens the dialog that fixes an issue, or goes to its field.
   const goToIssue = React.useCallback((issue: CreatorIssue) => {
+    const target = panelFor(issue.path)
+    if ("panel" in target) {
+      setPanel(target.panel)
+      return
+    }
     setView("edit")
     window.requestAnimationFrame(() => {
-      const target =
-        document.getElementById(fieldDomId(issue.path)) ??
-        document.getElementById(issue.section)
-      target?.scrollIntoView({ behavior: "smooth", block: "center" })
-      target?.querySelector<HTMLElement>("input, textarea, button")?.focus({
-        preventScroll: true,
-      })
+      const element = document.getElementById(fieldDomId(target.field))
+      element?.scrollIntoView({ behavior: "smooth", block: "center" })
+      if (element instanceof HTMLButtonElement) element.click()
+      else element?.focus({ preventScroll: true })
     })
   }, [])
 
   const iconUrl = brickIconUrl(deferred.icon)
   const inputKeys = (brick.inputs ?? []).map((input) => input.key).join(",")
-  const portNames =
-    brick.deploy.type === "static"
-      ? ""
-      : (brick.deploy.ports ?? []).map((port) => port.name).join(",")
   const fileName = `${brick.id || "brick"}.json`
   const issueCount = issues.length + (state.textProblem ? 1 : 0)
   const pane = view === "edit" ? "preview" : view
 
   return (
     <IssueStoreContext.Provider value={store}>
-      <div className="sticky top-16 z-30 border-b border-border bg-background/90 backdrop-blur-md">
-        <div className="site-container flex h-14 items-center gap-3">
-          <BrickTile
-            color={deferred.color}
-            iconUrl={iconUrl}
-            id={deferred.id || "brick"}
-            className="size-9"
-          />
-          <div className="min-w-0 flex-1">
-            <p className="type-card-title truncate">
-              {brick.name || "Untitled Brick"}
-            </p>
-            <button
-              type="button"
-              onClick={() => setView("issues")}
-              className={cn(
-                "type-meta flex items-center gap-1 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/60",
-                issueCount === 0 ? "text-emerald-400" : "text-amber-400"
-              )}
-            >
-              {issueCount === 0 ? (
-                <>
-                  <CheckCircle2 className="size-3.5" />
-                  Valid kiln.brick/v2
-                </>
-              ) : (
-                <>
-                  <AlertTriangle className="size-3.5" />
-                  {issueCount} {issueCount === 1 ? "thing" : "things"} to fix
-                </>
-              )}
-            </button>
-          </div>
-          <div className="flex items-center gap-1">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={onStartOver}
-              className="hidden sm:inline-flex"
-            >
-              <RotateCcw />
-              Start over
-            </Button>
-            <span className="hidden sm:contents">
-              <ImportButton onOpen={onOpen} variant="ghost" />
-            </span>
-            <CopyButton
-              label="Copy"
-              text={state.text}
-              toast="Brick JSON copied"
-              variant="ghost"
+      <div className="flex flex-col lg:h-[calc(100dvh-4rem)]">
+        <div className="sticky top-16 z-30 border-b border-border bg-background/90 backdrop-blur-md lg:static">
+          <div className="flex h-12 items-center gap-3 px-4 lg:px-6">
+            <BrickTile
+              color={deferred.color}
+              iconUrl={iconUrl}
+              id={deferred.id || "brick"}
+              className="size-8"
             />
-            <Button
-              size="sm"
-              onClick={() => downloadText(fileName, state.text)}
-            >
-              <Download />
-              <span className="hidden sm:inline">Download</span>
-            </Button>
+            <div className="flex min-w-0 flex-1 items-baseline gap-3">
+              <p className="type-card-title truncate">
+                {brick.name || "Untitled Brick"}
+              </p>
+              <button
+                type="button"
+                onClick={() => setView("issues")}
+                className={cn(
+                  "type-meta flex shrink-0 items-center gap-1 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/60",
+                  issueCount === 0 ? "text-emerald-400" : "text-amber-400"
+                )}
+              >
+                {issueCount === 0 ? (
+                  <>
+                    <CheckCircle2 className="size-3.5" />
+                    Valid
+                  </>
+                ) : (
+                  <>
+                    <AlertTriangle className="size-3.5" />
+                    {issueCount} to fix
+                  </>
+                )}
+              </button>
+            </div>
+            <div className="flex items-center gap-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={onStartOver}
+                className="hidden sm:inline-flex"
+              >
+                <RotateCcw />
+                Start over
+              </Button>
+              <span className="hidden sm:contents">
+                <ImportButton onOpen={onOpen} variant="ghost" />
+              </span>
+              <CopyButton
+                label="Copy"
+                text={state.text}
+                toast="Brick JSON copied"
+                variant="ghost"
+              />
+              <Button
+                size="sm"
+                onClick={() => downloadText(fileName, state.text)}
+              >
+                <Download />
+                <span className="hidden sm:inline">Download</span>
+              </Button>
+            </div>
           </div>
-        </div>
-        <div
-          role="tablist"
-          aria-label="Creator view"
-          className="site-container flex gap-px lg:hidden"
-        >
-          {(["edit", "preview", "json", "issues"] as const).map((option) => (
-            <ViewTab
-              key={option}
-              active={view === option}
-              onSelect={() => setView(option)}
-            >
-              {viewLabel(option, issueCount)}
-            </ViewTab>
-          ))}
-        </div>
-      </div>
-
-      <div className="site-container grid gap-6 py-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-        <div
-          className={cn(
-            "flex min-w-0 flex-col gap-6",
-            view !== "edit" && "hidden lg:flex"
-          )}
-        >
-          <BasicsSection
-            author={brick.author}
-            color={brick.color}
-            edit={edit}
-            icon={brick.icon}
-            id={brick.id}
-            kind={brick.kind}
-            links={brick.links}
-            name={brick.name}
-            platforms={brick.platforms}
-            summary={brick.summary}
-            tags={brick.tags}
-          />
-          <InputsSection edit={edit} inputs={brick.inputs} />
-          <DeploySection
-            deploy={brick.deploy}
-            edit={edit}
-            inputKeys={inputKeys}
-            kind={brick.kind}
-          />
-          {brick.kind === "game-server" ? (
-            <GameSection edit={edit} game={brick.game} />
-          ) : null}
-          {brick.kind === "database" ? (
-            <DatabaseSection
-              database={brick.database}
-              edit={edit}
-              portNames={portNames}
-            />
-          ) : null}
-        </div>
-
-        <aside
-          className={cn(
-            "min-w-0 lg:sticky lg:top-[8.5rem] lg:flex lg:h-[calc(100dvh-9.5rem)] lg:flex-col",
-            view === "edit" ? "hidden" : "flex flex-col"
-          )}
-        >
           <div
             role="tablist"
-            aria-label="Preview"
-            className="hidden gap-px border border-b-0 border-border bg-border lg:flex"
+            aria-label="Creator view"
+            className="flex gap-px px-4 lg:hidden"
           >
-            {(["preview", "json", "issues"] as const).map((option) => (
+            {(["edit", "preview", "json", "issues"] as const).map((option) => (
               <ViewTab
                 key={option}
-                active={pane === option}
+                active={view === option}
                 onSelect={() => setView(option)}
-                boxed
               >
                 {viewLabel(option, issueCount)}
               </ViewTab>
             ))}
           </div>
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden border border-border bg-background">
-            {pane === "preview" ? (
-              <div className="min-h-0 flex-1 overflow-auto">
-                <InstallPreview
-                  brick={deferred}
-                  iconUrl={iconUrl}
-                  layout="stacked"
-                />
-              </div>
-            ) : null}
-            {pane === "json" ? (
-              <JsonPane
-                onText={onText}
-                problem={state.textProblem}
-                text={state.text}
+        </div>
+
+        <div className="grid min-h-0 flex-1 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+          <div
+            className={cn(
+              "min-h-0 min-w-0 lg:overflow-y-auto",
+              view !== "edit" && "hidden lg:block"
+            )}
+          >
+            <div className="mx-auto flex max-w-3xl flex-col gap-4 p-4 lg:p-6">
+              <IdentityCard
+                author={brick.author}
+                color={brick.color}
+                edit={edit}
+                game={brick.game}
+                icon={brick.icon}
+                id={brick.id}
+                kind={brick.kind}
+                links={brick.links}
+                name={brick.name}
+                platforms={brick.platforms}
+                summary={brick.summary}
+                tags={brick.tags}
               />
-            ) : null}
-            {pane === "issues" ? (
-              <IssuesPane
-                issues={issues}
-                onSelect={goToIssue}
-                textProblem={state.textProblem}
+              <InputsCard
+                edit={edit}
+                inputs={brick.inputs}
+                onOpen={openInput}
               />
-            ) : null}
+              <DeployCard
+                database={brick.database}
+                deploy={brick.deploy}
+                edit={edit}
+                inputKeys={inputKeys}
+                kind={brick.kind}
+                onOpen={openDeployPanel}
+              />
+            </div>
           </div>
-        </aside>
+
+          <aside
+            className={cn(
+              "min-h-0 min-w-0 flex-col border-border bg-card/20 lg:flex lg:border-l",
+              view === "edit" ? "hidden" : "flex"
+            )}
+          >
+            <div
+              role="tablist"
+              aria-label="Preview"
+              className="hidden h-11 shrink-0 border-b border-border lg:flex"
+            >
+              {(["preview", "json", "issues"] as const).map((option) => (
+                <ViewTab
+                  key={option}
+                  active={pane === option}
+                  onSelect={() => setView(option)}
+                >
+                  {viewLabel(option, issueCount)}
+                </ViewTab>
+              ))}
+            </div>
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+              {pane === "preview" ? (
+                <div className="min-h-0 flex-1 overflow-auto p-4">
+                  <InstallPreview
+                    brick={deferred}
+                    iconUrl={iconUrl}
+                    layout="stacked"
+                  />
+                </div>
+              ) : null}
+              {pane === "json" ? (
+                <JsonPane
+                  onText={onText}
+                  problem={state.textProblem}
+                  text={state.text}
+                />
+              ) : null}
+              {pane === "issues" ? (
+                <IssuesPane
+                  issues={issues}
+                  onSelect={goToIssue}
+                  textProblem={state.textProblem}
+                />
+              ) : null}
+            </div>
+          </aside>
+        </div>
       </div>
+      <PanelHost brick={brick} edit={edit} onClose={closePanel} panel={panel} />
     </IssueStoreContext.Provider>
   )
 }
@@ -564,12 +573,10 @@ function viewLabel(view: View, issueCount: number): string {
 
 function ViewTab({
   active,
-  boxed,
   children,
   onSelect,
 }: {
   active: boolean
-  boxed?: boolean
   children: React.ReactNode
   onSelect: () => void
 }) {
@@ -579,12 +586,7 @@ function ViewTab({
       role="tab"
       aria-selected={active}
       onClick={onSelect}
-      className={cn(
-        "type-control-sm h-10 flex-1 px-3 text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-inset aria-selected:text-foreground",
-        boxed
-          ? "bg-card/60 aria-selected:bg-background"
-          : "border-b-2 border-transparent aria-selected:border-primary"
-      )}
+      className="type-control-sm h-10 flex-1 border-b-2 border-transparent px-3 text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-inset aria-selected:border-primary aria-selected:text-foreground lg:h-auto"
     >
       {children}
     </button>

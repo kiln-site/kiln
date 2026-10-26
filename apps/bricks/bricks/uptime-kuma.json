@@ -8,11 +8,11 @@
   "author": "Kiln",
   "color": "#6aa54f",
   "tags": ["monitoring"],
-  "platforms": ["amd64", "arm64"],
   "links": {
     "homepage": "https://uptime.kuma.pet",
     "source": "https://github.com/louislam/uptime-kuma"
   },
+  "platforms": ["amd64", "arm64"],
   "deploy": {
     "type": "image",
     "image": "louislam/uptime-kuma:2",
@@ -22,18 +22,11 @@
         "port": 3001
       }
     ],
-    "volumes": [
-      {
-        "path": "/app/data"
-      }
-    ],
+    "volumes": ["/app/data"],
     "ready": {
-      "type": "http",
-      "path": "/",
+      "http": "/",
       "port": "web"
     },
-    "resources": {
-      "memory": "512M"
-    }
+    "memory": "512M"
   }
 }

@@ -1,5 +1,32 @@
 import * as React from "react"
-import { ChevronRight, GitBranch, KeyRound, Sparkles } from "lucide-react"
+import {
+  Activity,
+  AtSign,
+  Braces,
+  ChevronRight,
+  Container,
+  Cpu,
+  DatabaseBackup,
+  FileText,
+  FolderOpen,
+  Gamepad2,
+  GitBranch,
+  Globe,
+  Hammer,
+  HardDrive,
+  KeyRound,
+  Layers,
+  Link2,
+  type LucideIcon,
+  MemoryStick,
+  Plug,
+  Power,
+  Route,
+  Sparkles,
+  Star,
+  Table2,
+  Terminal,
+} from "lucide-react"
 
 import {
   type BrickV2,
@@ -88,8 +115,16 @@ export function InstallPreview({
           values={values}
         />
       </section>
-      <section aria-label="What Kiln runs" className="min-w-0 bg-background">
-        <PaneHeading>What Kiln runs</PaneHeading>
+      <section
+        aria-label="What Kiln runs"
+        className="@container min-w-0 bg-background"
+      >
+        <PaneHeading>
+          What Kiln runs
+          <span className="ml-2 font-sans tracking-normal text-muted-foreground/70 normal-case">
+            {brickDeployLabels[brick.deploy.type]}
+          </span>
+        </PaneHeading>
         <RunSummary brick={brick} shown={shown} />
       </section>
     </div>
@@ -123,7 +158,7 @@ const InstallForm = React.memo(function InstallForm({
   const basic = inputs.filter((input) => !input.advanced)
   const advanced = inputs.filter((input) => input.advanced)
   const memory =
-    brick.deploy.type === "static" ? undefined : brick.deploy.resources?.memory
+    brick.deploy.type === "static" ? undefined : brick.deploy.memory
 
   return (
     <div className="flex flex-col gap-4 px-5 py-5">
@@ -427,55 +462,46 @@ const RunSummary = React.memo(function RunSummary({
   const deploy = brick.deploy
   const render = (template: string) => renderBrickV2Template(template, shown)
   const rows: Array<React.ReactNode> = []
-  const row = (label: string, value: React.ReactNode, template?: string) =>
+  const row = (
+    icon: LucideIcon,
+    label: string,
+    value: React.ReactNode,
+    template?: string
+  ) =>
     rows.push(
-      <Row key={label} label={label} template={template}>
+      <Row key={label} icon={icon} label={label} template={template}>
         {value}
       </Row>
     )
 
-  row("Runs", brickDeployLabels[deploy.type])
   if (deploy.type === "image") {
-    row("Image", <Code>{render(deploy.image)}</Code>, deploy.image)
+    row(Container, "Image", <Code>{render(deploy.image)}</Code>, deploy.image)
   }
-  if (deploy.type === "dockerfile") {
+  if (deploy.type === "dockerfile" || deploy.type === "compose") {
+    const label = deploy.type === "dockerfile" ? "Builds" : "Runs"
+    const written =
+      deploy.type === "dockerfile" ? deploy.dockerfile : deploy.compose
     row(
-      "Builds",
-      deploy.dockerfile !== undefined ? (
-        <CodeBlock text={render(deploy.dockerfile)} />
+      deploy.type === "dockerfile" ? Hammer : Layers,
+      label,
+      written !== undefined ? (
+        <CodeBlock text={render(written)} />
       ) : (
         <span>
-          <Code>{render(deploy.path ?? "Dockerfile")}</Code> from the chosen
-          repository
-          {deploy.context ? (
-            <>
-              , in <Code>{deploy.context}</Code>
-            </>
-          ) : null}
+          <Code>{render(deploy.path ?? "")}</Code> from the chosen repository
         </span>
       ),
       deploy.path
     )
-  }
-  if (deploy.type === "compose") {
-    row(
-      "Project",
-      deploy.compose !== undefined ? (
-        <CodeBlock text={render(deploy.compose)} />
-      ) : (
-        <span>
-          <Code>{render(deploy.path ?? "compose.yaml")}</Code> from the chosen
-          repository
-        </span>
-      ),
-      deploy.path
-    )
-    if (deploy.service) row("Main service", <Code>{deploy.service}</Code>)
+    if (deploy.type === "compose" && deploy.service) {
+      row(Star, "Main service", <Code>{deploy.service}</Code>)
+    }
   }
   if (deploy.type === "static") {
-    row("Served by", "The Relay's shared web server, no container of its own")
+    row(Globe, "Served by", "The Relay's shared web server")
     const command = deploy.build ? render(deploy.build.command).trim() : ""
     row(
+      Hammer,
       "Build",
       deploy.build && command ? (
         <span className="flex flex-col gap-1">
@@ -485,31 +511,40 @@ const RunSummary = React.memo(function RunSummary({
           </span>
         </span>
       ) : (
-        "None, the files are served as they are"
+        "None, files are served as they are"
       ),
       deploy.build?.command
     )
-    row("Folder", <Code>{render(deploy.root ?? ".")}</Code>, deploy.root)
-    if (deploy.spa) row("Unknown paths", <span>Answered with index.html</span>)
-    if (deploy.headers && Object.keys(deploy.headers).length > 0) {
-      row("Headers", <KeyValues entries={Object.entries(deploy.headers)} />)
+    row(
+      FolderOpen,
+      "Folder",
+      <Code>{render(deploy.root ?? ".")}</Code>,
+      deploy.root
+    )
+    if (deploy.spa) row(Route, "Unknown paths", "Answered with index.html")
+  } else {
+    if (deploy.type === "image" || deploy.type === "dockerfile") {
+      if (deploy.command?.length || deploy.user) {
+        row(
+          Terminal,
+          "Command",
+          <span className="flex flex-col gap-1">
+            {deploy.command?.length ? (
+              <Code>{deploy.command.map(render).join(" ")}</Code>
+            ) : null}
+            {deploy.user ? (
+              <span className="type-meta text-muted-foreground">
+                as user <Code>{deploy.user}</Code>
+              </span>
+            ) : null}
+          </span>
+        )
+      }
     }
-  }
-
-  if (deploy.type === "image" || deploy.type === "dockerfile") {
-    if (deploy.entrypoint?.length) {
-      row("Entrypoint", <Code>{deploy.entrypoint.map(render).join(" ")}</Code>)
-    }
-    if (deploy.command?.length) {
-      row("Command", <Code>{deploy.command.map(render).join(" ")}</Code>)
-    }
-    if (deploy.user) row("User", <Code>{deploy.user}</Code>)
-    if (deploy.workdir) row("Working folder", <Code>{deploy.workdir}</Code>)
-  }
-  if (deploy.type !== "static") {
     const env = Object.entries(deploy.env ?? {})
     if (env.length > 0) {
       row(
+        Braces,
         "Environment",
         <KeyValues entries={env.map(([key, value]) => [key, render(value)])} />
       )
@@ -517,6 +552,7 @@ const RunSummary = React.memo(function RunSummary({
     const ports = deploy.ports ?? []
     if (ports.length > 0) {
       row(
+        Plug,
         "Ports",
         <ul className="flex flex-col gap-1.5">
           {ports.map((port, index) => (
@@ -534,134 +570,132 @@ const RunSummary = React.memo(function RunSummary({
                 </span>
               ) : null}
               <Exposure exposure={brickV2PortExposure(brick.kind, port)} />
-              {index === 0 ? (
-                <span className="type-meta text-muted-foreground">primary</span>
-              ) : null}
             </li>
           ))}
         </ul>
       )
     }
-  }
-  if (deploy.type === "image" || deploy.type === "dockerfile") {
-    if (deploy.volumes?.length) {
-      row(
-        "Keeps",
-        <ul className="flex flex-col gap-1">
-          {deploy.volumes.map((volume, index) => (
-            <li key={volume.path} className="flex items-center gap-2">
-              <Code>{volume.path}</Code>
-              {index === 0 ? (
-                <span className="type-meta text-muted-foreground">
-                  shown in Files
+    if (deploy.type === "image" || deploy.type === "dockerfile") {
+      if (deploy.volumes?.length) {
+        row(
+          HardDrive,
+          "Keeps",
+          <ul className="flex flex-col gap-1">
+            {deploy.volumes.map((path, index) => (
+              <li key={path} className="flex items-center gap-2">
+                <Code>{path}</Code>
+                {index === 0 ? (
+                  <span className="type-meta text-muted-foreground">
+                    in Files
+                  </span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )
+      }
+      if (deploy.files?.length) {
+        row(
+          FileText,
+          "Writes",
+          <ul className="flex flex-col gap-2">
+            {deploy.files.map((file) => (
+              <li key={file.path} className="flex flex-col gap-1">
+                <span className="flex items-center gap-2">
+                  <Code>{file.path}</Code>
+                  <span className="type-meta text-muted-foreground">
+                    {file.once ? "once" : "every start"}
+                  </span>
                 </span>
-              ) : null}
-            </li>
-          ))}
-        </ul>
-      )
+                <CodeBlock text={render(file.content)} />
+              </li>
+            ))}
+          </ul>
+        )
+      }
     }
-    if (deploy.files?.length) {
-      row(
-        "Writes",
-        <ul className="flex flex-col gap-2">
-          {deploy.files.map((file) => (
-            <li key={file.path} className="flex flex-col gap-1">
-              <span className="flex items-center gap-2">
-                <Code>{file.path}</Code>
-                <span className="type-meta text-muted-foreground">
-                  {file.once ? "once" : "every start"}
-                </span>
-              </span>
-              <CodeBlock text={render(file.content)} />
-            </li>
-          ))}
-        </ul>
-      )
-    }
-  }
-  if (deploy.type !== "static" && deploy.ready) {
     const ready = deploy.ready
     row(
+      Activity,
       "Ready when",
-      ready.type === "log" ? (
+      !ready ? (
+        "Its port answers"
+      ) : "log" in ready ? (
         <span className="flex flex-col gap-1">
           the log shows
-          {ready.match.map((line) => (
+          {ready.log.map((line) => (
             <Code key={line}>{line}</Code>
           ))}
         </span>
-      ) : ready.type === "command" ? (
+      ) : "command" in ready ? (
         <span className="flex flex-col gap-1">
           this succeeds <Code>{render(ready.command)}</Code>
         </span>
       ) : (
         <span>
-          <Code>GET {ready.path}</Code> answers
+          <Code>GET {ready.http}</Code> answers
           {ready.port ? <> on {ready.port}</> : null}
         </span>
       )
     )
-  }
-  if (deploy.type !== "static" && deploy.resources) {
-    const { cpu, memory, pids } = deploy.resources
-    const parts = [
-      memory ? `${memory} memory` : null,
-      cpu ? `${cpu} CPU` : null,
-      pids ? `${pids} processes` : null,
-    ].filter(Boolean)
-    if (parts.length > 0) row("Starts with", parts.join(", "))
-  }
-  if (brick.platforms?.length) {
-    row("Runs on", brick.platforms.join(", "))
-  }
-
-  if (brick.game) {
-    const game = brick.game
-    row("Game", game.title || "Untitled")
-    row(
-      "Players connect",
-      game.routing === "minecraft"
-        ? "Through Kiln's Minecraft routing, with SRV records"
-        : "Straight to its published ports"
-    )
-    if (game.hostname) {
-      row("Address", <Code>{render(game.hostname)}</Code>, game.hostname)
-    }
-    if (game.stop?.length) {
+    if (deploy.memory) row(MemoryStick, "Memory", `${deploy.memory} to start`)
+    if (deploy.hostname || brick.kind === "game-server") {
       row(
-        "Stops with",
+        AtSign,
+        "Address",
+        <span className="flex flex-col gap-1">
+          <Code>
+            {deploy.hostname ? render(deploy.hostname) : "named after it"}
+            .your-domain
+          </Code>
+          {brick.kind === "game-server" ? (
+            <span className="type-meta text-muted-foreground">
+              with an SRV record, so players join without a port
+            </span>
+          ) : null}
+        </span>,
+        deploy.hostname
+      )
+    }
+    if (deploy.stop?.length) {
+      row(
+        Power,
+        "Console stop",
         <span className="flex flex-wrap gap-1.5">
-          {game.stop.map((command) => (
+          {deploy.stop.map((command) => (
             <Code key={command}>{command}</Code>
           ))}
         </span>
       )
     }
   }
+  if (brick.platforms?.length) row(Cpu, "Runs on", brick.platforms.join(", "))
+  if (brick.game) row(Gamepad2, "Game", brick.game)
+
   if (brick.database) {
     const database = brick.database
-    row("Engine", <Code>{database.engine}</Code>)
     row(
+      Link2,
       "Connect with",
       <Code>{render(database.connection)}</Code>,
       database.connection
     )
     row(
+      Table2,
       "Viewer",
       database.viewer
         ? `Hearth's ${database.viewer === "mysql" ? "MySQL" : "PostgreSQL"} viewer`
-        : "None, connect a client of your own"
+        : "None, use a client of your own"
     )
     row(
+      DatabaseBackup,
       "Backups",
       database.backup ? (
         <span className="flex flex-col gap-1">
-          <Code>{render(database.backup.command)}</Code>
-          <span className="type-meta text-muted-foreground">
-            saved as .{database.backup.extension}
-            {database.restore ? ", restorable" : ""}
-          </span>
+          <Code>{render(database.backup)}</Code>
+          {database.restore ? (
+            <span className="type-meta text-muted-foreground">restorable</span>
+          ) : null}
         </span>
       ) : (
         "Snapshots of its volume"
@@ -674,20 +708,26 @@ const RunSummary = React.memo(function RunSummary({
 
 function Row({
   children,
+  icon: Icon,
   label,
   template,
 }: {
   children: React.ReactNode
+  icon: LucideIcon
   label: string
   template?: string | undefined
 }) {
   return (
-    <div className="grid gap-1 px-5 py-3 sm:grid-cols-[8.5rem_minmax(0,1fr)] sm:gap-4">
+    <div className="grid grid-cols-[1.25rem_minmax(0,1fr)] gap-x-3 px-5 py-3 @md:grid-cols-[1.25rem_8rem_minmax(0,1fr)]">
+      <Icon
+        aria-hidden="true"
+        className="mt-0.5 size-4 text-muted-foreground"
+      />
       <dt className="type-label pt-0.5 text-muted-foreground">{label}</dt>
-      <dd className="type-support min-w-0">
+      <dd className="type-support col-start-2 min-w-0 @md:col-start-3">
         {children}
         {template?.includes("{{") ? (
-          <span className="type-meta mt-1 block truncate font-mono text-muted-foreground/80">
+          <span className="type-meta mt-1 block truncate font-mono text-muted-foreground/70">
             from {template}
           </span>
         ) : null}

@@ -4,6 +4,7 @@
   "id": "folia",
   "name": "Folia",
   "kind": "game-server",
+  "game": "Minecraft",
   "summary": "Paper's regionized multithreaded server for concurrency-heavy worlds.",
   "author": "Kiln",
   "icon": "../icons/folia.svg",
@@ -92,23 +93,11 @@
         "port": 25565
       }
     ],
-    "volumes": [
-      {
-        "path": "/server"
-      }
-    ],
+    "volumes": ["/server"],
     "ready": {
-      "type": "log",
-      "match": [")! For help, type "]
+      "log": [")! For help, type "]
     },
-    "resources": {
-      "memory": "3G",
-      "pids": 1024
-    }
-  },
-  "game": {
-    "title": "Minecraft",
-    "routing": "minecraft",
+    "memory": "3G",
     "hostname": "{{ version }}.{{ kiln.brick }}",
     "stop": ["stop", "/stop"]
   }
