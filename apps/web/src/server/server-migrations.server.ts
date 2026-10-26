@@ -47,7 +47,6 @@ import type {
 } from "@/lib/server-migration-room"
 import {
   checkMigrationRoom,
-  copyLimits,
   loadRelayRoom,
   migrationSourceRoom,
 } from "@/lib/server-migration-room.server"
@@ -229,7 +228,7 @@ export async function previewServerMigrationHandler(
     },
     source: {
       instanceId: instance.id,
-      limits: copyLimits(instance),
+      limits: instance.limits,
       name: instance.name,
       nodeArch: relay.nodeArch,
       provisioning: Boolean(instance.provisioning),

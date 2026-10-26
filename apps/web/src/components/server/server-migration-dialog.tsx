@@ -949,7 +949,8 @@ function LimitRow({
             }
             const at = current ?? min
             const up = next > sliderAt
-            const size = step(up ? at : at - Number.EPSILON * 16)
+            // Going down from a tier's first value takes the tier below.
+            const size = step(up ? at : at * (1 - 1e-9))
             const stepped = Number(
               (up
                 ? Math.floor(at / size + 1e-9) * size + size
@@ -979,7 +980,11 @@ function LimitRow({
               ? "No limit"
               : scale === 1 || current === null
                 ? value.value
-                : String(Number(current.toFixed(2)))
+                : // A whole-number limit shows whole, so typing into a
+                  // fraction like 123.4% can't run its digits together.
+                  String(
+                    decimals ? Number(current.toFixed(2)) : Math.round(current)
+                  )
           }
           onChange={(event) => {
             const typed = event.currentTarget.value.replace(

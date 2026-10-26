@@ -84,25 +84,17 @@ export async function loadRelayRoom(
   }
 }
 
-/** The limits a copy of the server takes unless it's given others. */
-export function copyLimits(instance: RelayInstance): ResourceLimits {
-  return {
-    ...instance.limits,
-    diskBytes: instance.limits.diskBytes ?? DEFAULT_INSTANCE_DISK_LIMIT_BYTES,
-  }
-}
-
 /**
  * The limits its copy takes, its own or those it's given, and the server's
  * folder's size: measured, else a running server's live figure, else its
- * disk limit.
+ * disk limit, or the default one when it has none.
  */
 export function migrationSourceRoom(
   instance: RelayInstance,
   rootBytes: number | null,
   given: ResourceLimits | null = null
 ): MigrationSourceRoom {
-  const limits = given ?? copyLimits(instance)
+  const limits = given ?? instance.limits
   const ownDisk = instance.limits.diskBytes ?? DEFAULT_INSTANCE_DISK_LIMIT_BYTES
   if (rootBytes !== null) {
     return { limits, usedBytes: rootBytes, usedFrom: "measured" }
