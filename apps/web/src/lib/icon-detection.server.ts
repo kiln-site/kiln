@@ -14,6 +14,8 @@ import {
   listDetectionsEffect,
   listLinkedIconsEffect,
   saveIconEffect,
+  removeIconsEffect,
+  shownIconDigestEffect,
   touchDetectedIconEffect,
 } from "@/effect/icons"
 import { listAppRecordsEffect } from "@/effect/managed-apps"
@@ -340,6 +342,45 @@ export const detectInstanceIconEffect = Effect.fn("Icons.detect")(function* (
   if (changed) publishIconChange(subject)
   return changed
 })
+
+/**
+ * Saves someone's chosen icon and answers the digest browsers show next,
+ * so the one who chose it sees it without asking again.
+ */
+export const saveCustomIconEffect = Effect.fn("Icons.saveCustom")(function* (
+  subject: IconSubject,
+  input: Parameters<typeof saveIconEffect>[2]
+) {
+  yield* Effect.annotateCurrentSpan("kiln.icon.kind", subject.kind)
+  const changed = yield* saveIconEffect(subject, "custom", input)
+  if (changed) publishIconChange(subject)
+  return yield* shownIconDigestEffect(subject)
+})
+
+/**
+ * Removes someone's chosen icon. Only Hearth's copy goes; the file a linked
+ * icon follows is never touched. A game server falls back to its
+ * `server-icon.png`, so that's read again first, or a stale copy would
+ * look as though removing did nothing.
+ */
+export const removeCustomIconEffect = Effect.fn("Icons.removeCustom")(
+  function* (relay: PersistedRelay | null, subject: IconSubject) {
+    yield* Effect.annotateCurrentSpan("kiln.icon.kind", subject.kind)
+    const removed = yield* removeIconsEffect(subject, "custom")
+    if (removed && relay && subject.kind === "server" && readsIcons(relay.id)) {
+      yield* detectServerIconEffect(relay, subject.id, null).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logDebug(
+            "Server icon recheck failed",
+            Cause.pretty(cause)
+          ).pipe(Effect.as(false))
+        )
+      )
+    }
+    if (removed) publishIconChange(subject)
+    return yield* shownIconDigestEffect(subject)
+  }
+)
 
 const detectRelayIconsEffect = Effect.fn("Icons.detectRelay")(function* (
   relay: PersistedRelay

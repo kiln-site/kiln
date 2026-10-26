@@ -11,7 +11,8 @@ import {
   prepareIconImage,
 } from "@/lib/icon-image"
 import { ICON_SOURCE_MAX_BYTES, type InstanceIconSubject } from "@/lib/icons"
-import { iconIndexQueryOptions, queryKeys } from "@/lib/query-options"
+import { changeIcon } from "@/lib/icon-changes"
+import { iconIndexQueryOptions } from "@/lib/query-options"
 import { readRelayFile, RelayTransferError } from "@/lib/relay-file-transfer"
 import {
   linkIconFile,
@@ -54,23 +55,15 @@ export function useFileIconActions(root: { id: string; relayId: string }) {
   const queryClient = useQueryClient()
   const subject = fileRootIconSubject(root)
 
-  const refresh = React.useCallback(
-    () =>
-      Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.icons.index }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.icons.details }),
-      ]),
-    [queryClient]
-  )
-
   const setInstanceIcon = React.useCallback(
     async (path: string) => {
       if (!subject) return
       const noun = subject.kind === "app" ? "App" : "Game server"
       const outcome = await recoverPromise(
         async () => {
-          await linkIconFile({ data: { path, subject } })
-          await refresh()
+          await changeIcon(queryClient, subject, () =>
+            linkIconFile({ data: { path, subject } })
+          )
           return null
         },
         (cause) => errorMessage(cause, `Could not set the ${noun.toLowerCase()} icon`)
@@ -84,7 +77,7 @@ export function useFileIconActions(root: { id: string; relayId: string }) {
             }
       )
     },
-    [refresh, subject]
+    [queryClient, subject]
   )
 
   const setPicture = React.useCallback(
@@ -97,14 +90,13 @@ export function useFileIconActions(root: { id: string; relayId: string }) {
           const source = await readPictureFile(root, path)
           const picture = await prepareIconImage(source, "cover")
           URL.revokeObjectURL(picture.previewUrl)
-          await saveCustomIcon({
-            data: {
-              contentBase64: await blobToBase64(picture.blob),
-              origin: { type: "upload" },
-              subject: { kind: "user", id: index.selfId },
-            },
-          })
-          await refresh()
+          const self = { kind: "user" as const, id: index.selfId }
+          const contentBase64 = await blobToBase64(picture.blob)
+          await changeIcon(queryClient, self, () =>
+            saveCustomIcon({
+              data: { contentBase64, origin: { type: "upload" }, subject: self },
+            })
+          )
           return null
         },
         (cause) => errorMessage(cause, "Could not set your picture")
@@ -115,7 +107,7 @@ export function useFileIconActions(root: { id: string; relayId: string }) {
           : { message: "Picture updated", type: "success" }
       )
     },
-    [queryClient, refresh, root]
+    [queryClient, root]
   )
 
   return { subject, setInstanceIcon, setPicture }

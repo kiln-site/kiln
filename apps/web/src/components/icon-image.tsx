@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query"
 
 import { cn } from "@workspace/ui/lib/utils"
 
+import { recoverPromise } from "@/effect/promise"
 import {
   iconSubjectKey,
   iconUrl,
@@ -72,9 +73,53 @@ export const SubjectIcon = React.memo(function SubjectIcon({
   fallback: React.ReactNode
   subject: IconSubject | null
 }) {
-  const url = useIconUrl(subject)
+  return (
+    <IconImage
+      className={className}
+      fallback={fallback}
+      url={useIconUrl(subject)}
+    />
+  )
+})
+
+/**
+ * An icon's image, or `fallback` without one. A new image is swapped in
+ * once it's decoded, so a change never shows a blank box or the fallback
+ * in between.
+ */
+export function IconImage({
+  className,
+  fallback,
+  url,
+}: {
+  className?: string
+  fallback: React.ReactNode
+  url: string | null
+}) {
+  const [shown, setShown] = React.useState(url)
   const [failed, setFailed] = React.useState<string | null>(null)
-  if (!url || failed === url) return <>{fallback}</>
+  React.useEffect(() => {
+    if (url === shown) return
+    if (!url) {
+      setShown(null)
+      return
+    }
+    let current = true
+    const image = new Image()
+    image.src = url
+    void recoverPromise(
+      () => image.decode().then(() => true),
+      () => false
+    ).then((decoded) => {
+      if (!current) return
+      if (!decoded) setFailed(url)
+      setShown(url)
+    })
+    return () => {
+      current = false
+    }
+  }, [shown, url])
+  if (!shown || failed === shown) return <>{fallback}</>
   return (
     <img
       alt=""
@@ -85,12 +130,12 @@ export const SubjectIcon = React.memo(function SubjectIcon({
       )}
       decoding="async"
       draggable={false}
-      onError={() => setFailed(url)}
+      onError={() => setFailed(shown)}
       onLoad={markSmallIcon}
-      src={url}
+      src={shown}
     />
   )
-})
+}
 
 /**
  * Marks a tiny icon drawn larger than it is, such as a 64-pixel Minecraft

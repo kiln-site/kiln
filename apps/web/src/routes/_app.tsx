@@ -5,6 +5,7 @@ import { AppNotFoundPage } from "@/components/app-error-page"
 import {
   accessCapabilitiesQueryOptions,
   appDirectoryQueryOptions,
+  iconIndexQueryOptions,
   authStateQueryOptions,
   instanceFavoritesQueryOptions,
   managedDatabaseDirectoryQueryOptions,
@@ -57,6 +58,9 @@ export const Route = createFileRoute("/_app")({
       context.queryClient.ensureQueryData(relaysQueryOptions()),
       // Stars render with their rows instead of popping in afterwards.
       context.queryClient.ensureQueryData(instanceFavoritesQueryOptions()),
+      // Icons too, so no kind icon shows first and is swapped out. They're
+      // only decoration, so failing to load them never fails the page.
+      context.queryClient.prefetchQuery(iconIndexQueryOptions()),
     ])
   },
   component: AuthenticatedApp,

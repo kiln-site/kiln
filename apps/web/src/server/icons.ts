@@ -9,17 +9,14 @@ import {
 import { Effect } from "effect"
 import { z } from "zod"
 
-import {
-  getIconDetailsEffect,
-  removeIconsEffect,
-  saveIconEffect,
-} from "@/effect/icons"
+import { getIconDetailsEffect } from "@/effect/icons"
 import { resolveMinecraftProfileEffect } from "@/effect/minecraft-profile"
 import { runAppEffect } from "@/effect/runtime"
 import {
   detectInstanceIconEffect,
-  publishIconChange,
   readRelayIconEffect,
+  removeCustomIconEffect,
+  saveCustomIconEffect,
 } from "@/lib/icon-detection.server"
 import {
   ICON_SOURCE_MAX_BYTES,
@@ -74,26 +71,26 @@ export const saveCustomIcon = createServerFn({ method: "POST" })
     await authorizedIconSubject(data.subject, "edit")
     const image = Buffer.from(data.contentBase64, "base64")
     const contentType = validateUploadedIcon(image)
-    const changed = await runAppEffect(
+    const digest = await runAppEffect(
       "icons.saveCustom",
-      saveIconEffect(data.subject, "custom", {
+      saveCustomIconEffect(data.subject, {
         contentType,
         image,
         origin: data.origin,
       })
     )
-    if (changed) publishIconChange(data.subject)
+    return { digest }
   })
 
 export const removeCustomIcon = createServerFn({ method: "POST" })
   .validator(subjectInput)
   .handler(async ({ data }) => {
-    await authorizedIconSubject(data.subject, "edit")
-    const removed = await runAppEffect(
+    const { relay } = await authorizedIconSubject(data.subject, "edit")
+    const digest = await runAppEffect(
       "icons.removeCustom",
-      removeIconsEffect(data.subject, "custom")
+      removeCustomIconEffect(relay, data.subject)
     )
-    if (removed) publishIconChange(data.subject)
+    return { digest }
   })
 
 /** Looks for a game server's or app's icon again, now. */
@@ -227,16 +224,16 @@ export const linkIconFile = createServerFn({ method: "POST" })
       )
     )
     if (!icon) throw new Error(`Nothing is at ${path}`)
-    const changed = await runAppEffect(
+    const digest = await runAppEffect(
       "icons.saveLinked",
-      saveIconEffect(subject, "custom", {
+      saveCustomIconEffect(subject, {
         contentType: icon.contentType,
         image: icon.bytes,
         origin,
         originVersion: icon.version,
       })
     )
-    if (changed) publishIconChange(subject)
+    return { digest }
   })
 
 /**

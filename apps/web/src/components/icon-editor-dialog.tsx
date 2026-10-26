@@ -10,6 +10,7 @@ import {
   Pencil,
   Pickaxe,
   RefreshCw,
+  RotateCcw,
   Trash2,
 } from "lucide-react"
 
@@ -33,7 +34,10 @@ import {
 import { showToast } from "@workspace/ui/components/sonner"
 import { cn } from "@workspace/ui/lib/utils"
 
-import { markSmallIcon, useIconUrl } from "@/components/icon-image"
+import {
+  IconImage,
+  useIconUrl,
+} from "@/components/icon-image"
 import { ensuringPromise, recoverPromise } from "@/effect/promise"
 import {
   base64ToBlob,
@@ -49,6 +53,7 @@ import {
   type IconOrigin,
   type IconSubject,
 } from "@/lib/icons"
+import { changeIcon } from "@/lib/icon-changes"
 import { iconDetailsQueryOptions, queryKeys } from "@/lib/query-options"
 import { readRelayFile, RelayTransferError } from "@/lib/relay-file-transfer"
 import {
@@ -118,7 +123,7 @@ export function EditableIcon({
 }) {
   const [open, setOpen] = React.useState(false)
   const url = useIconUrl(editor.subject)
-  const icon = children ?? <IconPreview fallback={editor.fallback} url={url} />
+  const icon = children ?? <IconImage fallback={editor.fallback} url={url} />
   if (!canEdit) {
     return <span className={cn(iconFrameClassName, className)}>{icon}</span>
   }
@@ -149,28 +154,6 @@ export function EditableIcon({
 
 const iconFrameClassName =
   "relative grid size-16 shrink-0 place-items-center rounded-xl border border-border/70 bg-background/60 text-muted-foreground [&_svg]:size-7"
-
-function IconPreview({
-  fallback,
-  url,
-}: {
-  fallback: React.ReactNode
-  url: string | null
-}) {
-  const [failed, setFailed] = React.useState<string | null>(null)
-  if (!url || failed === url) return <>{fallback}</>
-  return (
-    <img
-      alt=""
-      className="size-full rounded-[inherit] object-contain data-[small]:[image-rendering:pixelated]"
-      decoding="async"
-      draggable={false}
-      onError={() => setFailed(url)}
-      onLoad={markSmallIcon}
-      src={url}
-    />
-  )
-}
 
 function IconEditorDialog({
   fallback,
@@ -259,20 +242,20 @@ function IconEditorDialog({
   const save = useMutation({
     mutationFn: async () => {
       if (!candidate) return
-      if (candidate.kind === "link") {
-        await linkIconFile({
-          data: { path: candidate.path, service: candidate.service, subject },
-        })
-      } else {
-        await saveCustomIcon({
-          data: {
-            contentBase64: await blobToBase64(candidate.icon.blob),
-            origin: candidate.origin,
-            subject,
-          },
-        })
-      }
-      await refresh()
+      const chosen = candidate
+      await changeIcon(queryClient, subject, async () =>
+        chosen.kind === "link"
+          ? linkIconFile({
+              data: { path: chosen.path, service: chosen.service, subject },
+            })
+          : saveCustomIcon({
+              data: {
+                contentBase64: await blobToBase64(chosen.icon.blob),
+                origin: chosen.origin,
+                subject,
+              },
+            })
+      )
     },
     onSuccess: () => {
       showToast({
@@ -287,8 +270,9 @@ function IconEditorDialog({
 
   const remove = useMutation({
     mutationFn: async () => {
-      await removeCustomIcon({ data: { subject } })
-      await refresh()
+      await changeIcon(queryClient, subject, () =>
+        removeCustomIcon({ data: { subject } })
+      )
     },
     onSuccess: () => {
       showToast({
@@ -462,8 +446,11 @@ function IconEditorDialog({
             >
               {remove.isPending ? (
                 <LoaderCircle className="animate-spin" />
-              ) : (
+              ) : noun === "picture" ? (
                 <Trash2 />
+              ) : (
+                // Only Hearth's copy goes, never a file it came from.
+                <RotateCcw />
               )}
               {noun === "picture"
                 ? "Remove picture"

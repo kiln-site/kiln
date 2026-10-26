@@ -132,6 +132,27 @@ export const getIconImageEffect = Effect.fn("icons.image")(function* (
     : null
 })
 
+/**
+ * The digest of a subject's shown icon, or null when it has none, so a
+ * change can answer what browsers show next without another request.
+ */
+export const shownIconDigestEffect = Effect.fn("icons.shownDigest")(function* (
+  subject: IconSubject
+) {
+  const database = yield* Database
+  const [row] = yield* database.queryRows<IconImageRow>(
+    "icons.shownDigest",
+    `SELECT digest
+       FROM ${table()}
+      WHERE subject_kind = ? AND relay_id = ? AND subject_id = ?
+        AND digest IS NOT NULL
+      ORDER BY source = 'custom' DESC
+      LIMIT 1`,
+    subjectKeys(subject)
+  )
+  return row?.digest ?? null
+})
+
 /** Both of a subject's icons, without their images. */
 export const getIconDetailsEffect = Effect.fn("icons.details")(function* (
   subject: IconSubject
