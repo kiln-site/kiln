@@ -468,18 +468,23 @@ interface ResourceNews {
   resource: NotificationResource
 }
 
-// The report for this news, adding in the unread report it replaces.
+// The report for this news, adding in the unread reports it replaces.
 function reportContent(
   news: ReadonlyArray<ResourceNews>,
-  unread: NotificationContent | null
+  unread: ReadonlyArray<NotificationContent>
 ): NotificationContent {
-  const previous = unread?.kind === "security.report" ? unread : null
-  const resources = new Map(
-    previous?.resources.map((resource) => [resourceKey(resource), resource])
-  )
-  let count = previous?.count ?? 0
-  let knownExploited = previous?.knownExploited ?? 0
-  let severity = previous ? severityRank(previous.severity) : 0
+  const resources = new Map<string, NotificationResource>()
+  let count = 0
+  let knownExploited = 0
+  let severity = 0
+  for (const previous of unread) {
+    if (previous.kind !== "security.report") continue
+    count += previous.count
+    knownExploited += previous.knownExploited
+    severity = Math.max(severity, severityRank(previous.severity))
+    for (const resource of previous.resources)
+      resources.set(resourceKey(resource), resource)
+  }
   for (const { findings, resource } of news) {
     count += distinctVulnerabilities(findings)
     knownExploited += distinctVulnerabilities(

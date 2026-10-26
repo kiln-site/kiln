@@ -175,11 +175,17 @@ describeMysql("notifications", () => {
             resources: [removed.resource],
             severity: "high",
           })
-          // Adds the unread report's count to the news.
+          // Adds the unread reports' counts to the news.
           const replace = (userId: string, count: number) =>
             replaceNotificationEffect(userId, "security.report", (unread) =>
               report(
-                count + (unread?.kind === "security.report" ? unread.count : 0)
+                unread.reduce(
+                  (sum, content) =>
+                    content.kind === "security.report"
+                      ? sum + content.count
+                      : sum,
+                  count
+                )
               )
             )
 
@@ -452,12 +458,37 @@ describeMysql("notifications", () => {
     )
 
     it.effect(
-      "reads a per-resource vulnerability notification as a report it replaces",
+      "reads per-resource vulnerability notifications as reports it replaces",
       () =>
         Effect.gen(function* () {
           yield* resetDatabase
           yield* insertUser("user-a")
-          // As a Hearth from before reports writes it.
+          const report = (
+            count: number,
+            knownExploited: number
+          ): NotificationContent => ({
+            count,
+            kind: "security.report",
+            knownExploited,
+            resources: [removed.resource],
+            severity: "critical",
+          })
+          // Adds every unread report to the news.
+          const replace = (count: number) =>
+            replaceNotificationEffect("user-a", "security.report", (unread) => {
+              let exploited = 0
+              for (const content of unread)
+                if (content.kind === "security.report") {
+                  count += content.count
+                  exploited += content.knownExploited
+                }
+              return report(count, exploited)
+            })
+
+          yield* TestClock.setTime(1_000)
+          yield* replace(1)
+          // As a Hearth from before reports writes it, after this one's
+          // report arrived.
           yield* insertRows("notification", {
             id: "00000000-0000-4000-8000-0000000000b1",
             user_id: "user-a",
@@ -477,33 +508,18 @@ describeMysql("notifications", () => {
                 packageVersion: "1",
               },
             }),
-            created_at: 1_000,
-          })
-          const report = (
-            count: number,
-            knownExploited: number
-          ): NotificationContent => ({
-            count,
-            kind: "security.report",
-            knownExploited,
-            resources: [removed.resource],
-            severity: "critical",
+            created_at: 2_000,
           })
           assert.deepStrictEqual(yield* contents("user-a"), [
             { content: report(2, 1), read: false },
+            { content: report(1, 0), read: false },
           ])
 
-          yield* TestClock.setTime(2_000)
-          yield* replaceNotificationEffect(
-            "user-a",
-            "security.report",
-            (unread) =>
-              unread?.kind === "security.report"
-                ? report(unread.count + 3, unread.knownExploited)
-                : report(3, 0)
-          )
+          // Neither was read, so the next report holds both.
+          yield* TestClock.setTime(3_000)
+          yield* replace(3)
           assert.deepStrictEqual(yield* contents("user-a"), [
-            { content: report(5, 1), read: false },
+            { content: report(6, 1), read: false },
           ])
         })
     )

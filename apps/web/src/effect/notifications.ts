@@ -114,16 +114,16 @@ export const notifyUsersEffect = Effect.fn("notifications.notify")(function* (
 
 /**
  * Delivers the user a notification that takes the place of their open ones
- * of its kind, or a kind it replaced, as a running report does: those are cleared, and the new one
- * arrives as news. `content` gets the newest one's content while it's unread,
- * to fold in what it said. Inside a transaction it commits with it; then
- * `publishNotificationChange`.
+ * of its kind, or of a kind it replaced, as a running report does: those are
+ * cleared, and the new one arrives as news. `content` gets the unread ones,
+ * oldest first, to fold in what they said. Inside a transaction it commits
+ * with it; then `publishNotificationChange`.
  */
 export const replaceNotificationEffect = Effect.fn("notifications.replace")(
   function* (
     userId: string,
     kind: NotificationKind,
-    content: (unread: NotificationContent | null) => NotificationContent
+    content: (unread: ReadonlyArray<NotificationContent>) => NotificationContent
   ) {
     const database = yield* Database
     const table = databaseTable("notification")
@@ -139,13 +139,13 @@ export const replaceNotificationEffect = Effect.fn("notifications.replace")(
             FOR UPDATE`,
           [userId, ...kinds]
         )
-        const newest = open[0]
-        const unread =
-          newest && newest.read_at === null
-            ? Option.getOrNull(
-                decodeNotificationContent(newest.kind, newest.data)
-              )
-            : null
+        // Oldest first, as they arrived.
+        const unread = open
+          .filter((row) => row.read_at === null)
+          .reverse()
+          .flatMap((row) =>
+            Option.toArray(decodeNotificationContent(row.kind, row.data))
+          )
         if (open.length)
           yield* tx.execute(
             `UPDATE ${table}
