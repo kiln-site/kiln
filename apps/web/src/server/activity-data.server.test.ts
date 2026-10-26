@@ -266,6 +266,74 @@ describeMysql("Activity permission boundary", () => {
         })
     )
 
+    it.effect(
+      "marks a copied server's earlier history as the copy's too, to those who can see both",
+      () =>
+        Effect.gen(function* () {
+          yield* seedCopy(true)
+          yield* insertGrant({
+            id: "source-grant",
+            relayId: "relay-a",
+            resourceId: "server-a",
+            resourceType: "instance",
+            userId: user.id,
+          })
+          yield* insertRows("access_selection", [
+            {
+              access_id: "source-grant",
+              selection_key: "instance.read",
+              selection_kind: "permission",
+            },
+          ])
+
+          const result = yield* activityFor(user)
+
+          assert.deepEqual(
+            result.entries.map((entry) => ({
+              id: entry.id,
+              inheritedBy: entry.inheritedBy,
+              target: entry.target?.id,
+            })),
+            [
+              {
+                id: "relay-a:server-a-event",
+                inheritedBy: [{ instanceId: "server-copy", relayId: "relay-b" }],
+                target: "server-a",
+              },
+            ]
+          )
+        })
+    )
+
+    it.effect(
+      "marks a copied server's earlier history as the copy's too, for platform administrators",
+      () =>
+        Effect.gen(function* () {
+          yield* seedCopy(true)
+
+          const result = yield* activityFor({ ...user, role: "admin" })
+
+          assert.deepEqual(
+            result.entries
+              .filter((entry) => entry.inheritedBy.length > 0)
+              .map((entry) => ({
+                id: entry.id,
+                inheritedBy: entry.inheritedBy,
+              })),
+            [
+              {
+                id: "relay-a:server-a-event",
+                inheritedBy: [{ instanceId: "server-copy", relayId: "relay-b" }],
+              },
+            ]
+          )
+          assert.notInclude(
+            result.entries.map((entry) => entry.target?.id),
+            "server-copy"
+          )
+        })
+    )
+
     it.effect("shows the shared history once for each copy", () =>
       Effect.gen(function* () {
         yield* seedCopy(true)

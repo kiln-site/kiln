@@ -1925,8 +1925,23 @@ function filterActivity(
     if (filters.type && entry.type !== filters.type) return false
     if (filters.user && entry.actor.id !== filters.user) return false
     if (filters.source && entry.source !== filters.source) return false
-    if (filters.relay && entry.relay.id !== filters.relay) return false
-    if (filters.server && !targetIs(target, "server", filters.server)) {
+    // A server's activity includes the history it was copied with, which
+    // happened to the server it came from, maybe on another Relay.
+    const inherited =
+      filters.server !== undefined &&
+      entry.inheritedBy.some(
+        (copy) =>
+          copy.instanceId === filters.server &&
+          (!filters.relay || copy.relayId === filters.relay)
+      )
+    if (filters.relay && entry.relay.id !== filters.relay && !inherited) {
+      return false
+    }
+    if (
+      filters.server &&
+      !targetIs(target, "server", filters.server) &&
+      !inherited
+    ) {
       return false
     }
     if (filters.app && !targetIs(target, "app", filters.app)) return false
