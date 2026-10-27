@@ -173,8 +173,20 @@ export function startControlDials(options: ControlDialOptions): ControlDials {
   const wake = () => {
     if (!closed) Effect.runFork(reconcile(true))
   }
-  const wakeListener = options.wakePath
-    ? listenForDialWake(options.wakePath, wake)
+  // Listens for as long as the dialer runs.
+  const wakeFiber = options.wakePath
+    ? Effect.runFork(
+        listenForDialWake(options.wakePath, wake).pipe(
+          Effect.andThen(Effect.never),
+          Effect.scoped,
+          Effect.catch((error) =>
+            Effect.logWarning(
+              "Couldn't listen for joins finishing, so the Relay finds them within 15 seconds instead",
+              error
+            )
+          )
+        )
+      )
     : null
 
   return {
@@ -182,9 +194,9 @@ export function startControlDials(options: ControlDialOptions): ControlDials {
       Effect.runPromise(
         Effect.suspend(() => {
           closed = true
-          wakeListener?.close()
           const fibers = [
             reconcileFiber,
+            ...(wakeFiber ? [wakeFiber] : []),
             ...[...dials.values()].flatMap((dial) =>
               dial.fiber ? [dial.fiber] : []
             ),

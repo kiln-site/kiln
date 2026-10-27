@@ -6,7 +6,7 @@ import type { AddressInfo } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Fiber } from "effect"
+import { Clock, Effect, Fiber } from "effect"
 import { TestClock } from "effect/testing"
 
 import {
@@ -159,8 +159,8 @@ describe("Relay joining", () => {
       )
   )
 
-  it.live(
-    "lets Hearth hold its announcements once invited, and wakes its dialer once Hearth took its reply",
+  it.effect(
+    "lets Hearth hold its announcements once invited, and dials Hearth once Hearth has it",
     () =>
       withJoiningRelay((relay) =>
         Effect.scoped(
@@ -184,22 +184,24 @@ describe("Relay joining", () => {
               ],
               { held: true }
             )
-            // How many announcements Hearth had answered at each wake.
-            const wakes: Array<number> = []
-            const started = Date.now()
+            // Whether Hearth had the Relay each time its dialer was woken.
+            const hearthHadIt: Array<boolean> = []
+            const events: Array<string> = []
+            const started = yield* Clock.currentTimeMillis
 
-            const outcome = yield* runRelayJoin(
+            const joining = yield* runRelayJoin(
               {
                 ...relay,
                 link: { hearthOrigin: hearth.origin, secret },
                 wakeDials: Effect.sync(() => {
-                  wakes.push(hearth.asked())
+                  hearthHadIt.push(hearth.answeredReply())
                 }),
               },
-              () => undefined
-            )
+              (event) => events.push(event.kind)
+            ).pipe(Effect.forkChild)
+            yield* advanceUntil(() => events.includes("finished"))
 
-            assert.strictEqual(outcome, "paired")
+            assert.strictEqual(yield* Fiber.join(joining), "paired")
             // Not before it has its invitation, which the installer prints
             // the confirmation link from.
             assert.deepStrictEqual(hearth.holds, [
@@ -208,15 +210,13 @@ describe("Relay joining", () => {
               String(RELAY_JOIN_HOLD_MAX_MS),
               String(RELAY_JOIN_HOLD_MAX_MS),
             ])
-            assert.isDefined(hearth.announcements[2]?.pairing)
-            assert.deepStrictEqual(wakes, [3])
+            assert.deepStrictEqual(hearthHadIt, [true])
             // Held answers are asked for again at once, not after the usual
             // pause between announcements.
-            assert.isBelow(Date.now() - started, 4_000)
+            assert.isBelow((yield* Clock.currentTimeMillis) - started, 5_000)
           })
         )
-      ),
-    10_000
+      )
   )
 
   it.effect(
@@ -584,6 +584,8 @@ function fakeHearth(
   // How long each announcement asked Hearth to hold it, if at all.
   const holds: Array<string | null> = []
   let asked = 0
+  // Whether Hearth answered the Relay's pairing reply.
+  let answeredReply = false
   return Effect.acquireRelease(
     Effect.promise(async () => {
       const server: Server = createServer((request, response) => {
@@ -604,6 +606,7 @@ function fakeHearth(
           if (!answer) throw new Error("The fake Hearth has no answers")
           response.setHeader("content-type", "application/json")
           if (options.held) response.setHeader(relayJoinHeldHeader, "1")
+          if (announcement.pairing) answeredReply = true
           response.end(
             JSON.stringify({
               ...answer,
@@ -631,6 +634,7 @@ function fakeHearth(
   ).pipe(
     Effect.map((server) => ({
       announcements,
+      answeredReply: () => answeredReply,
       holds,
       // How many announcements Hearth has answered.
       asked: () => asked,

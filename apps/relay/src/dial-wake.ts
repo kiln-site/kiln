@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto"
 import { chmodSync, rmSync } from "node:fs"
-import { createConnection, createServer } from "node:net"
+import { createConnection, createServer, type Server } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-import { Effect } from "effect"
+import { Effect, Result, Schema } from "effect"
 
 // Waking the Relay's dialer from another process. `kiln-relay pair join`
 // runs beside the Relay server, in the same container, and saves where to
@@ -12,6 +12,15 @@ import { Effect } from "effect"
 // next pass (control-dial.ts). So the server listens on a local socket, and
 // opening it is the whole message: look now. Nothing is read from it, so
 // whoever can open it can only make the Relay read its own state again.
+
+export class DialWakeError extends Schema.TaggedError<DialWakeError>()(
+  "DialWakeError",
+  { reason: Schema.String }
+) {
+  override get message() {
+    return this.reason
+  }
+}
 
 /** The wake socket of the Relay that keeps its data in `dataDirectory`. */
 export function dialWakePath(dataDirectory: string): string {
@@ -22,33 +31,59 @@ export function dialWakePath(dataDirectory: string): string {
   return join(tmpdir(), `kiln-relay-${id}.sock`)
 }
 
-/** Calls `onWake` whenever another process opens the wake socket. */
-export function listenForDialWake(
-  path: string,
-  onWake: () => void
-): { readonly close: () => void } {
-  // Left behind by a Relay that didn't shut down cleanly.
-  rmSync(path, { force: true })
-  const server = createServer((socket) => {
-    socket.on("error", () => undefined)
-    socket.end()
-    onWake()
+/**
+ * Listens on the wake socket for as long as the scope lasts, only for this
+ * user, calling `onWake` whenever another process opens it.
+ */
+export const listenForDialWake = (path: string, onWake: () => void) =>
+  Effect.acquireRelease(
+    Effect.try({
+      // Left behind by a Relay that didn't shut down cleanly.
+      try: () => rmSync(path, { force: true }),
+      catch: dialWakeError,
+    }).pipe(
+      Effect.andThen(
+        Effect.callback<Server, DialWakeError>((resume) => {
+          const server = createServer((socket) => {
+            socket.on("error", () => undefined)
+            socket.end()
+            onWake()
+          })
+          let listening = false
+          server.on("error", (cause) => {
+            if (!listening) resume(Effect.fail(dialWakeError(cause)))
+          })
+          server.listen(path, () => {
+            const secured = Result.try({
+              try: () => chmodSync(path, 0o600),
+              catch: dialWakeError,
+            })
+            if (Result.isFailure(secured)) {
+              server.close()
+              resume(Effect.fail(secured.failure))
+              return
+            }
+            listening = true
+            resume(Effect.succeed(server))
+          })
+          server.unref()
+          return Effect.sync(() => {
+            server.close()
+          })
+        })
+      )
+    ),
+    (server) =>
+      Effect.sync(() => {
+        server.close()
+        rmSync(path, { force: true })
+      })
+  )
+
+function dialWakeError(cause: unknown): DialWakeError {
+  return new DialWakeError({
+    reason: cause instanceof Error ? cause.message : String(cause),
   })
-  server.on("error", (cause) => {
-    console.warn(
-      `Couldn't listen for joins finishing, so the Relay finds them within 15 seconds instead: ${cause.message}`
-    )
-  })
-  server.listen(path, () => {
-    chmodSync(path, 0o600)
-  })
-  server.unref()
-  return {
-    close: () => {
-      server.close()
-      rmSync(path, { force: true })
-    },
-  }
 }
 
 /** Wakes the Relay server's dialer; false when no server answered. */

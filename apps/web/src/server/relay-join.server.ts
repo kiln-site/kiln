@@ -33,7 +33,16 @@ import {
   type RelayPairingRequestContract,
   type RelayPairingResponseContract,
 } from "@workspace/contracts"
-import { Clock, Effect, Fiber, Option, Result, Schema } from "effect"
+import {
+  Clock,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Option,
+  Result,
+  Schema,
+} from "effect"
 import type { Tracer } from "effect"
 import type { RowDataPacket } from "mysql2/promise"
 import { z } from "zod"
@@ -113,27 +122,37 @@ const HOLD_RECHECK_MS = 500
 const joinListeners = new Map<string, Set<() => void>>()
 
 function joinChanged(joinId: string): void {
-  const listeners = joinListeners.get(joinId)
-  joinListeners.delete(joinId)
-  for (const listener of listeners ?? []) listener()
+  for (const listener of joinListeners.get(joinId) ?? []) listener()
 }
 
-// Until the join changes in this process, or `ms` passes.
-const awaitJoinChange = (joinId: string, ms: number) =>
-  Effect.race(
-    Effect.sleep(ms),
-    Effect.callback<void>((resume) => {
+// Watches for a change to the join in this process for as long as the scope
+// lasts. Taken before the caller looks at the join, so a change that lands
+// while it looks still counts: the wait it gives ends at once then, and
+// otherwise at the next change or after `ms`.
+const watchJoin = (joinId: string) =>
+  Effect.acquireRelease(
+    Effect.sync(() => {
+      const changed = Deferred.makeUnsafe<void>()
+      const listener = () => {
+        Deferred.doneUnsafe(changed, Exit.void)
+      }
       const listeners = joinListeners.get(joinId) ?? new Set<() => void>()
       joinListeners.set(joinId, listeners)
-      const listener = () => resume(Effect.void)
       listeners.add(listener)
-      return Effect.sync(() => {
-        listeners.delete(listener)
-        if (listeners.size === 0 && joinListeners.get(joinId) === listeners) {
-          joinListeners.delete(joinId)
-        }
+      return { changed, listener }
+    }),
+    ({ listener }) =>
+      Effect.sync(() => {
+        const listeners = joinListeners.get(joinId)
+        listeners?.delete(listener)
+        if (listeners?.size === 0) joinListeners.delete(joinId)
       })
-    })
+  ).pipe(
+    Effect.map(
+      ({ changed }) =>
+        (ms: number) =>
+          Effect.raceFirst(Deferred.await(changed), Effect.sleep(ms))
+    )
   )
 
 export type RelayJoinState =
@@ -569,10 +588,16 @@ export const answerRelayJoinAnnouncement = Effect.fn("relayJoin.answer")(
     while (!changed && !request.signal.aborted) {
       const left = start + holdMs - (yield* Clock.currentTimeMillis)
       if (left <= 0) break
-      yield* awaitJoinChange(joinId, Math.min(left, HOLD_RECHECK_MS))
-      // Not a span each look: the hold's own span says how long it took.
-      const row = yield* Effect.withTracerEnabled(loadJoin(joinId), false)
-      changed = !row || joinKey(row) !== answer.key
+      changed = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const untilChange = yield* watchJoin(joinId)
+          // Not a span each look: the hold's own span says how long it took.
+          const row = yield* Effect.withTracerEnabled(loadJoin(joinId), false)
+          if (!row || joinKey(row) !== answer.key) return true
+          yield* untilChange(Math.min(left, HOLD_RECHECK_MS))
+          return false
+        })
+      )
     }
     yield* Effect.annotateCurrentSpan({
       "relay_join.held_ms": (yield* Clock.currentTimeMillis) - start,
@@ -1072,39 +1097,46 @@ const driveJoin = Effect.fnUntraced(function* (
 ) {
   let renewedAt = 0
   while (true) {
-    const row = yield* loadJoin(joinId)
-    if (
-      !row ||
-      row.state !== "confirming" ||
-      Number(row.claim_generation) !== generation
-    ) {
-      return
-    }
-    const now = yield* Clock.currentTimeMillis
-    if (now - renewedAt > LEASE_RENEW_MS) {
-      yield* claimWrite(joinId, generation, "error = error", [])
-      renewedAt = now
-    }
-    const step = joinStep(row, generation).pipe(
-      Effect.map(() => "next" as const),
-      Effect.catch((cause) =>
-        cause instanceof StaleClaim
-          ? Effect.succeed("stop" as const)
-          : // The dialog shows why and offers to try again, which takes
-            // over this claim.
-            claimWrite(
-              joinId,
-              generation,
-              "error = ?",
-              [errorMessage(cause)],
-              "release"
-            ).pipe(
-              Effect.as("stop" as const),
-              Effect.catch(() => Effect.succeed("stop" as const))
-            )
-      )
+    const next = yield* Effect.scoped(
+      Effect.gen(function* () {
+        // Before looking at the join, so a reply that lands meanwhile ends
+        // the wait for it.
+        const untilChange = yield* watchJoin(joinId)
+        const row = yield* loadJoin(joinId)
+        if (
+          !row ||
+          row.state !== "confirming" ||
+          Number(row.claim_generation) !== generation
+        ) {
+          return "stop" as const
+        }
+        const now = yield* Clock.currentTimeMillis
+        if (now - renewedAt > LEASE_RENEW_MS) {
+          yield* claimWrite(joinId, generation, "error = error", [])
+          renewedAt = now
+        }
+        return yield* joinStep(row, generation, untilChange).pipe(
+          Effect.as("next" as const),
+          Effect.catch((cause) =>
+            cause instanceof StaleClaim
+              ? Effect.succeed("stop" as const)
+              : // The dialog shows why and offers to try again, which takes
+                // over this claim.
+                claimWrite(
+                  joinId,
+                  generation,
+                  "error = ?",
+                  [errorMessage(cause)],
+                  "release"
+                ).pipe(
+                  Effect.as("stop" as const),
+                  Effect.catch(() => Effect.succeed("stop" as const))
+                )
+          )
+        )
+      })
     )
-    const next = yield* step
+    // Outside the watch, so the worker doesn't wake itself.
     joinChanged(joinId)
     if (next === "stop") return
   }
@@ -1112,7 +1144,9 @@ const driveJoin = Effect.fnUntraced(function* (
 
 const joinStep = Effect.fnUntraced(function* (
   row: RelayJoinRow,
-  generation: number
+  generation: number,
+  // Until the join changes, or the given time passes.
+  untilChange: (ms: number) => Effect.Effect<void>
 ) {
   const intent = json(row.intent)
   const envelope = json(row.envelope)
@@ -1122,7 +1156,13 @@ const joinStep = Effect.fnUntraced(function* (
   switch (row.progress) {
     case null:
     case "pairing":
-      return yield* pairJoinedRelay(row, envelope, intent, generation)
+      return yield* pairJoinedRelay(
+        row,
+        envelope,
+        intent,
+        generation,
+        untilChange
+      )
     case "saved":
       return yield* connectJoinedRelay(row, envelope, intent, generation)
     case "connected":
@@ -1140,7 +1180,8 @@ const pairJoinedRelay = Effect.fn("relayJoin.pair")(function* (
   row: RelayJoinRow,
   envelope: RelayJoinEnvelope,
   intent: RelayJoinIntent,
-  generation: number
+  generation: number,
+  untilChange: (ms: number) => Effect.Effect<void>
 ) {
   const now = yield* Clock.currentTimeMillis
   if (row.progress === null) {
@@ -1178,7 +1219,7 @@ const pairJoinedRelay = Effect.fn("relayJoin.pair")(function* (
         )
       )
     }
-    yield* awaitJoinChange(row.id, REPLY_POLL_MS)
+    yield* untilChange(REPLY_POLL_MS)
     return
   }
   const response = throughAnnouncements
@@ -1646,9 +1687,9 @@ const joinReach = Effect.fn("relayJoin.reach")(function* (
   envelope: RelayJoinEnvelope
 ) {
   const check = reachChecks.get(joinId)
+  const now = yield* Clock.currentTimeMillis
   const cached =
-    check?.problem !== undefined &&
-    Date.now() - check.checkedAt <= REACH_FORGET_MS
+    check?.problem !== undefined && now - check.checkedAt <= REACH_FORGET_MS
   const problem =
     cached && check.problem !== undefined
       ? check.problem
