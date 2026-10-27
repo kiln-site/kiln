@@ -126,12 +126,20 @@ export async function passRelayBrowserRequest(
   }
   const send = tunnel || !control.useTls ? httpRequest : httpsRequest
   return new Promise<Response>((resolve, reject) => {
-    let responded = false
-    // Once the Relay answered, the answer holds the slot until it's done.
-    const fail = (cause: Error) => {
-      if (!responded) slot.release()
-      reject(cause)
+    // The slot is held until both ways are done: sending the request, with
+    // any upload, and passing the answer on.
+    const pending = new Set(["sending", "answering"])
+    const done = (part: "answering" | "sending") => {
+      if (pending.delete(part) && pending.size === 0) slot.release()
     }
+    let responded = false
+    const fail = (cause: Error) => {
+      if (!responded) reject(cause)
+    }
+    const parts: Array<{ destroy: () => unknown }> = []
+    slot.onStall(() => {
+      for (const part of parts) part.destroy()
+    })
     const outgoing = send(
       {
         ...(tunnel
@@ -149,14 +157,11 @@ export async function passRelayBrowserRequest(
       },
       (incoming) => {
         responded = true
-        slot.onStall(() => {
-          incoming.destroy()
-          outgoing.destroy()
-        })
+        parts.push(incoming)
         const status = incoming.statusCode ?? 0
         // Only answers a Response can carry, so a Relay can't throw here.
         if (status < 200 || status > 599) {
-          incoming.once("close", slot.release)
+          incoming.once("close", () => done("answering"))
           incoming.destroy()
           resolve(
             Response.json(
@@ -169,7 +174,7 @@ export async function passRelayBrowserRequest(
         const bodyless =
           request.method === "HEAD" || NULL_BODY_STATUSES.has(status)
         if (bodyless) {
-          incoming.once("close", slot.release)
+          incoming.once("close", () => done("answering"))
           incoming.resume()
           resolve(
             new Response(null, {
@@ -179,16 +184,11 @@ export async function passRelayBrowserRequest(
           )
           return
         }
-        // Held until the browser has it all, or stops: bytes can still be
+        // Done once the browser has it all, or stops: bytes can still be
         // on their way through Hearth after the Relay finished sending.
-        const body = slot.meter("fromRelay")
-        body.once("close", slot.release)
-        slot.onStall(() => {
-          body.destroy()
-          incoming.destroy()
-          outgoing.destroy()
-        })
-        pipeline(incoming, body, () => undefined)
+        const body = slot.meter("fromRelay", incoming)
+        parts.push(body)
+        body.once("close", () => done("answering"))
         resolve(
           new Response(Readable.toWeb(body) as ReadableStream<Uint8Array>, {
             headers: responseHeaders(incoming.headers),
@@ -197,30 +197,30 @@ export async function passRelayBrowserRequest(
         )
       }
     )
-    // Without an answer, the slot is free once the request is.
+    parts.push(outgoing)
+    // Without an answer, nothing's left to pass on once the request ends.
     outgoing.once("close", () => {
-      if (!responded) slot.release()
+      done("sending")
+      if (!responded) done("answering")
     })
-    slot.onStall(() => outgoing.destroy())
     const upload =
       ticket.body ??
       (request.body && request.method !== "GET" && request.method !== "HEAD"
         ? request.body
         : null)
     if (upload) {
-      // An upload that breaks off ends the request to the Relay too.
-      pipeline(
+      const sent = slot.meter(
+        "toRelay",
         Buffer.isBuffer(upload)
           ? Readable.from([upload])
-          : Readable.fromWeb(
-              upload as import("node:stream/web").ReadableStream
-            ),
-        slot.meter("toRelay"),
-        outgoing,
-        (cause) => {
-          if (cause) fail(cause)
-        }
+          : Readable.fromWeb(upload as import("node:stream/web").ReadableStream)
       )
+      parts.push(sent)
+      // An upload that breaks off ends the request to the Relay too.
+      pipeline(sent, outgoing, (cause) => {
+        done("sending")
+        if (cause) fail(cause)
+      })
     } else {
       outgoing.once("error", fail)
       outgoing.end()

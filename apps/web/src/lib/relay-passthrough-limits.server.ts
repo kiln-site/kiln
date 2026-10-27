@@ -1,4 +1,6 @@
-import { Transform } from "node:stream"
+import { Readable } from "node:stream"
+
+import { ensuringPromise, forkPromise } from "@/effect/promise"
 
 // Limits on what Hearth carries for Relays it passes transfers through to:
 // how many at once, for each Relay and for all of them, how long one may
@@ -93,8 +95,15 @@ export function relayPassthroughUsages(): ReadonlyArray<
 }
 
 export interface PassthroughSlot {
-  /** Counts bytes one way, and holds the stall timer off. */
-  readonly meter: (direction: "fromRelay" | "toRelay") => Transform
+  /**
+   * `source` as passed on one way: counted, kept to the shared rate, and
+   * holding the stall timer off while bytes move. It reads `source` only as
+   * fast as it's read, and destroying it ends `source`.
+   */
+  readonly meter: (
+    direction: "fromRelay" | "toRelay",
+    source: AsyncIterable<Buffer>
+  ) => Readable
   /** Called when the transfer stalls, to end it. */
   readonly onStall: (end: () => void) => void
   readonly release: () => void
@@ -142,7 +151,7 @@ export async function acquirePassthroughSlot(
   let released = false
   let stalled: () => void = () => undefined
   // Pieces of this transfer waiting their turn at the rate, which isn't a
-  // stall; a reader that stops reading is.
+  // stall; a reader that stops reading, or a side that stops sending, is.
   let pacing = 0
   const stall = setTimeout(() => {
     if (pacing > 0) stall.refresh()
@@ -150,40 +159,66 @@ export async function acquirePassthroughSlot(
   }, STALL_MS)
   stall.unref()
   return {
-    meter: (direction) => {
-      let cancel: () => void = () => undefined
-      return new Transform({
-        // Passed on in pieces small enough to share the rate, each counted
-        // and charged only as it goes.
-        transform(chunk: Buffer, _encoding, callback) {
-          let offset = 0
-          const next = () => {
-            if (offset >= chunk.length) {
-              callback()
+    meter: (direction, source) => {
+      const iterator = source[Symbol.asyncIterator]()
+      const ended = new AbortController()
+      let pending: Buffer | null = null
+      let producing = false
+      // Passes on pieces while the reader wants them, each small enough to
+      // share the rate, and counted and charged only as it goes.
+      const produce = async () => {
+        while (!readable.destroyed) {
+          if (!pending?.length) {
+            // oxlint-disable-next-line react-doctor/async-await-in-loop -- a stream is read in order
+            const next = await iterator.next()
+            if (readable.destroyed) return
+            if (next.done) {
+              readable.push(null)
               return
             }
-            const size = Math.min(chunk.length - offset, pieceBytes())
-            pacing += 1
-            cancel = awaitRate(size, () => {
-              pacing -= 1
-              cancel = () => undefined
-              stall.refresh()
-              const piece = chunk.subarray(offset, offset + size)
-              offset += size
-              if (direction === "toRelay") usage.bytesToRelay += size
-              else usage.bytesFromRelay += size
-              this.push(piece)
-              next()
-            })
+            pending = next.value
+            continue
           }
-          next()
+          const size = Math.min(pending.length, pieceBytes())
+          pacing += 1
+          // oxlint-disable-next-line react-doctor/async-await-in-loop -- pieces pass in order
+          await ensuringPromise(
+            () => awaitRate(size, ended.signal),
+            () => {
+              pacing -= 1
+            }
+          )
+          if (readable.destroyed) return
+          stall.refresh()
+          const piece = pending.subarray(0, size)
+          pending = pending.subarray(size)
+          if (direction === "toRelay") usage.bytesToRelay += size
+          else usage.bytesFromRelay += size
+          // Stops once the reader has enough, until it reads again.
+          if (!readable.push(piece)) {
+            producing = false
+            return
+          }
+        }
+      }
+      const readable: Readable = new Readable({
+        highWaterMark: 64 * 1024,
+        read() {
+          if (producing) return
+          producing = true
+          forkPromise(produce, (cause) => {
+            readable.destroy(cause instanceof Error ? cause : undefined)
+          })
         },
         destroy(cause, callback) {
-          // A piece still waiting leaves its turn, uncharged.
-          cancel()
+          // A piece still waiting leaves its turn, uncharged, and the source
+          // is let go.
+          ended.abort()
+          forkPromise(async () => iterator.return?.())
           callback(cause)
         },
       })
+      return readable
     },
     onStall: (end) => {
       stalled = end
@@ -210,38 +245,49 @@ function pieceBytes(): number {
     : Math.max(1, Math.min(16 * 1024, Math.floor(rate)))
 }
 
-// Calls `grant` once `bytes` may pass at the shared rate, in turn with every
-// other piece waiting, and charges them then; at once without a rate.
-// Returns what takes the piece out of its turn, uncharged, if it's waiting.
-function awaitRate(bytes: number, grant: () => void): () => void {
+// Resolves once `bytes` may pass at the shared rate, in turn with every
+// other piece waiting, charging them then; at once without a rate. Rejects,
+// uncharged, if `signal` aborts first.
+function awaitRate(bytes: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(new Error("Transfer ended"))
   if (passthroughRate() === null) {
-    grant()
-    return () => undefined
+    // Any still waiting from when there was one go now too.
+    if (state.rateQueue.length > 0) pace()
+    return Promise.resolve()
   }
-  let waiting = true
-  const waiter: RateWaiter = {
-    bytes,
-    grant: () => {
-      if (!waiting) return
-      waiting = false
-      grant()
-    },
-  }
-  state.rateQueue.push(waiter)
-  pace()
-  return () => {
-    if (!waiting) return
-    waiting = false
-    const index = state.rateQueue.indexOf(waiter)
-    if (index === -1) {
-      // Granted, but not yet passed on: given back.
-      state.budget += bytes
-    } else {
-      state.rateQueue.splice(index, 1)
+  return new Promise<void>((resolve, reject) => {
+    let settled = false
+    const waiter: RateWaiter = {
+      bytes,
+      grant: () => {
+        if (settled) return
+        settled = true
+        signal.removeEventListener("abort", abandon)
+        resolve()
+      },
     }
+    const abandon = () => {
+      if (settled) return
+      settled = true
+      const index = state.rateQueue.indexOf(waiter)
+      if (index === -1) {
+        // Granted, but not yet passed on: given back.
+        state.budget += bytes
+      } else {
+        state.rateQueue.splice(index, 1)
+      }
+      pace()
+      reject(new Error("Transfer ended"))
+    }
+    signal.addEventListener("abort", abandon, { once: true })
+    state.rateQueue.push(waiter)
     pace()
-  }
+  })
 }
+
+// How long the pacer waits at most before looking again, so a rate changed
+// or removed takes effect for pieces already waiting.
+const PACE_RECHECK_MS = 1_000
 
 // Lets waiting pieces through, first come first served, as the budget
 // allows, and wakes again when the next one fits.
@@ -267,7 +313,10 @@ function pace(): void {
     if (state.budget < next.bytes) {
       state.pacer = setTimeout(
         pace,
-        Math.ceil(((next.bytes - state.budget) / rate) * 1000)
+        Math.min(
+          PACE_RECHECK_MS,
+          Math.ceil(((next.bytes - state.budget) / rate) * 1000)
+        )
       )
       break
     }

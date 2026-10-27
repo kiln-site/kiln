@@ -572,3 +572,99 @@ it("shares the rate between transfers in turn", async () => {
   expect(received[0]).toBeGreaterThanOrEqual(4 * 1024)
   expect(received[1]).toBeGreaterThanOrEqual(4 * 1024)
 })
+
+it("holds the slot until an upload the Relay answered early is done", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] })
+  vi.stubEnv("KILN_RELAY_PASSTHROUGH_BYTES_PER_SECOND", "1024")
+  onTestFinished(() => {
+    vi.useRealTimers()
+  })
+  const answering = "relay-passthrough-answering"
+  let received = 0
+  let uploaded: () => void = () => undefined
+  const upload = new Promise<void>((resolve) => {
+    uploaded = resolve
+  })
+  await relayListener((request, response) => {
+    response.end("ok")
+    request.on("data", (chunk: Buffer) => {
+      received += chunk.length
+    })
+    request.on("end", uploaded)
+  }, answering)
+  const response = await advanceUntil(
+    passRelayBrowserRequest(
+      answering,
+      "files/root",
+      fileRequest(
+        "root",
+        { body: "u".repeat(8 * 1024), method: "PUT" },
+        signed({ audience: answering, instanceId: "root" })
+      )
+    )
+  )
+  expect(await readAll(response)).toBe(2)
+  await advanceUntil(Promise.resolve())
+  // The answer is done, the upload isn't.
+  expect(received).toBeLessThan(8 * 1024)
+  expect(relayPassthroughUsage(answering).open).toBe(1)
+  await advanceUntil(upload)
+  await advanceUntil(Promise.resolve())
+  expect(received).toBe(8 * 1024)
+  expect(relayPassthroughUsage(answering).open).toBe(0)
+})
+
+it("reads from the Relay only as fast as the browser does, and ends a transfer it stopped reading", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] })
+  vi.stubEnv("KILN_RELAY_PASSTHROUGH_BYTES_PER_SECOND", "16384")
+  onTestFinished(() => {
+    vi.useRealTimers()
+  })
+  const unread = "relay-passthrough-unread"
+  await relayListener((_request, response) => {
+    response.end("r".repeat(2 * 1024 * 1024))
+  }, unread)
+  await advanceUntil(
+    passRelayBrowserRequest(
+      unread,
+      "files/root",
+      fileRequest("root", {}, signed({ audience: unread, instanceId: "root" }))
+    )
+  )
+  // Nobody reads it: Hearth takes no more than it holds for the browser,
+  // its own buffer and the response's, then ends it as stalled.
+  for (let step = 0; step < 900; step += 1) {
+    // oxlint-disable-next-line react-doctor/async-await-in-loop -- each step must observe the I/O of the previous one
+    await vi.advanceTimersByTimeAsync(100)
+    // oxlint-disable-next-line react-doctor/async-await-in-loop -- see above
+    await new Promise<void>((resolve) => setImmediate(resolve))
+  }
+  const usage = relayPassthroughUsage(unread)
+  expect(usage.bytesFromRelay).toBeLessThanOrEqual(160 * 1024)
+  expect(usage.open).toBe(0)
+})
+
+it("lets waiting transfers go once the rate is lifted", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] })
+  vi.stubEnv("KILN_RELAY_PASSTHROUGH_BYTES_PER_SECOND", "1")
+  onTestFinished(() => {
+    vi.useRealTimers()
+  })
+  const lifted = "relay-passthrough-lifted"
+  await relayListener((_request, response) => {
+    response.end("l".repeat(1024))
+  }, lifted)
+  const response = await advanceUntil(
+    passRelayBrowserRequest(
+      lifted,
+      "files/root",
+      fileRequest("root", {}, signed({ audience: lifted, instanceId: "root" }))
+    )
+  )
+  const read = readAll(response)
+  await vi.advanceTimersByTimeAsync(2_000)
+  vi.stubEnv("KILN_RELAY_PASSTHROUGH_BYTES_PER_SECOND", "")
+  const started = Date.now()
+  expect(await read).toBe(1024)
+  expect(Date.now() - started).toBeLessThan(3_000)
+})
