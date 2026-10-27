@@ -14,10 +14,13 @@ import {
 
 import { encryptWithKeyring } from "../../keyring.mjs"
 
+import { insertWebHostnameEffect } from "@/effect/web-hostnames"
+
 import type { DomainActor } from "./domain-access.server"
 import {
   claimWebRouteHostnamesEffect,
   generateAppHostnameEffect,
+  saveClaimingWebRouteHostnamesEffect,
   moveResourceWebHostnamesEffect,
   syncResourceWebHostnamesEffect,
 } from "./web-hostnames.server"
@@ -453,6 +456,7 @@ describeMysql("web route hostnames", () => {
 
           const hostnames = [
             "survival.play.kiln.site",
+            "www.survival.play.kiln.site",
             "map.play.kiln.site",
             "www.map.play.kiln.site",
           ]
@@ -467,11 +471,28 @@ describeMysql("web route hostnames", () => {
             "map.play.kiln.site": "relay-one.relay.test",
             "survival.play.kiln.site": "relay-one.relay.test",
             "www.map.play.kiln.site": "relay-one.relay.test",
+            "www.survival.play.kiln.site": "relay-one.relay.test",
           })
           assert.deepEqual(Object.keys(yield* hostnameRows).sort(), [
             "map.play.kiln.site",
             "www.map.play.kiln.site",
+            "www.survival.play.kiln.site",
           ])
+          // A web hostname can't take a game server's address, whichever
+          // takes it first.
+          const taken = yield* insertWebHostnameEffect({
+            ...app,
+            connectionId: "cloudflare",
+            generated: false,
+            hostname: "survival.play.kiln.site",
+            id: "00000000-0000-4000-8000-00000000000a",
+            vanityDomain: "play.kiln.site",
+            zoneId: platformZone.id,
+          }).pipe(Effect.flip)
+          assert.strictEqual(
+            taken.message,
+            "survival.play.kiln.site is already in use"
+          )
           // Only beside a name the resource holds.
           yield* sync(collaborator, ["www.shop.play.kiln.site"])
           assert.strictEqual(
@@ -479,6 +500,20 @@ describeMysql("web route hostnames", () => {
             undefined
           )
         })
+    )
+
+    it.effect("lets a failed save's claims go", () =>
+      Effect.gen(function* () {
+        yield* seed
+        fakeCloudflare([ownerZone])
+        const failed = yield* saveClaimingWebRouteHostnamesEffect(
+          { actor: owner, hostnames: ["shop.owner.example"], resource: app },
+          Effect.fail("The Relay refused the routes")
+        ).pipe(Effect.flip)
+
+        assert.strictEqual(failed, "The Relay refused the routes")
+        assert.deepEqual(yield* hostnameRows, {})
+      })
     )
 
     it.effect("keeps its record through a Cloudflare outage", () =>

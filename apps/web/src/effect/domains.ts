@@ -537,6 +537,20 @@ export const deleteDomainConnectionEffect = Effect.fn(
         [id, id]
       )
       yield* connectionInUseFailure(Number(used?.total ?? 0))
+      // Its web records were deleted first; one made since keeps the token.
+      const recorded = yield* transaction.queryRows<RowDataPacket>(
+        `SELECT 1 FROM ${databaseTable("web_hostname")}
+          WHERE integration_id = ? AND record_id IS NOT NULL
+          LIMIT 1
+          FOR UPDATE`,
+        [id]
+      )
+      if (recorded.length > 0) {
+        return yield* DomainConfigurationError.make({
+          message:
+            "A web route on this connection got a DNS record meanwhile. Try again.",
+        })
+      }
       yield* transaction.execute(
         `DELETE FROM ${databaseTable("domain_zone")} WHERE integration_id = ?`,
         [id]
@@ -816,7 +830,8 @@ export const insertInstanceDomainAssignmentEffect = Effect.fn(
         srv_protocol, status, last_error, created_at, updated_at)
      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, ?, ?
        FROM ${databaseTable("domain_zone")}
-      WHERE domain = ? AND zone_id = ? AND integration_id = ? AND enabled = 1`,
+      WHERE domain = ? AND zone_id = ? AND integration_id = ? AND enabled = 1
+        AND NOT EXISTS (${webHostnameTaken})`,
     [
       input.id,
       input.relayId,
@@ -835,13 +850,36 @@ export const insertInstanceDomainAssignmentEffect = Effect.fn(
       input.domain,
       input.zoneId,
       input.connectionId,
+      `${input.vanityLabel}.${input.domain}`,
     ]
   )
   if (result.affectedRows === 0) {
-    return yield* DomainConfigurationError.make({
-      message: `${input.domain} isn't taking new game server domains`,
-    })
+    return yield* (yield* webHostnameHeldEffect(
+      `${input.vanityLabel}.${input.domain}`
+    ))
+      ? DomainConfigurationError.make({
+          message: `${input.vanityLabel}.${input.domain} is already in use`,
+        })
+      : DomainConfigurationError.make({
+          message: `${input.domain} isn't taking new game server domains`,
+        })
   }
+})
+
+// A web route's hostname, or an app's address, holds the name; checked in
+// the same statement that takes it, as the web hostname insert checks
+// game server domains.
+const webHostnameTaken = `SELECT 1 FROM ${databaseTable("web_hostname")}
+  WHERE hostname = ?`
+
+const webHostnameHeldEffect = Effect.fnUntraced(function* (hostname: string) {
+  const database = yield* Database
+  const rows = yield* database.queryRows<RowDataPacket>(
+    "domains.webHostnameHeld",
+    webHostnameTaken,
+    [hostname]
+  )
+  return rows.length > 0
 })
 
 /**
@@ -869,6 +907,16 @@ export const reserveInstanceDomainAssignmentEffect = Effect.fn(
       if (zones.length === 0) {
         return yield* DomainConfigurationError.make({
           message: `${input.domain} is no longer a configured vanity domain`,
+        })
+      }
+      const hostname = `${input.vanityLabel}.${input.domain}`
+      const taken = yield* transaction.queryRows<RowDataPacket>(
+        `${webHostnameTaken} FOR SHARE`,
+        [hostname]
+      )
+      if (taken.length > 0) {
+        return yield* DomainConfigurationError.make({
+          message: `${hostname} is already in use`,
         })
       }
       yield* transaction.execute(

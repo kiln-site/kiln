@@ -1,5 +1,6 @@
 import { Effect } from "effect"
 
+import { HostnameInUseError } from "@/effect/errors"
 import { promiseEffect, recoverPromise } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
 import {
@@ -18,11 +19,10 @@ import type {
   ResourceWebHostnamesInput,
 } from "@/server/domains"
 import {
-  claimWebRouteHostnamesEffect,
+  saveClaimingWebRouteHostnamesEffect,
   deleteResourceWebHostnamesEffect,
   generateAppHostnameEffect,
   publishWebHostnameChange,
-  releaseWebHostnameClaimsEffect,
   releaseWebHostnameEffect,
   syncResourceWebHostnamesEffect,
 } from "@/server/web-hostnames.server"
@@ -108,22 +108,17 @@ export async function saveClaimingWebRouteHostnames<T>(
 ): Promise<T> {
   return runAppEffect(
     "webHostnames.claimAndSave",
-    Effect.gen(function* () {
-      const claimed = yield* claimWebRouteHostnamesEffect({
-        actor: domainActor(user),
-        hostnames,
-        resource,
-      }).pipe(
-        Effect.catchTag("HostnameInUseError", (error) =>
-          explainHostnameInUseEffect(user, error)
-        )
+    saveClaimingWebRouteHostnamesEffect(
+      { actor: domainActor(user), hostnames, resource },
+      promiseEffect(save)
+    ).pipe(
+      // The save's own failure passes through as it was thrown.
+      Effect.catchIf(
+        (error): error is HostnameInUseError =>
+          error instanceof HostnameInUseError,
+        (error) => explainHostnameInUseEffect(user, error)
       )
-      return yield* promiseEffect(save).pipe(
-        Effect.tapError(() =>
-          releaseWebHostnameClaimsEffect(claimed).pipe(Effect.ignore)
-        )
-      )
-    })
+    )
   )
 }
 

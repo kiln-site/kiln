@@ -828,23 +828,26 @@ const finishMigration = Effect.fnUntraced(function* (
             instanceId: from.instanceId,
           })
         )
-        if (!state.routes.length) return
-        const routes = yield* Effect.try(() =>
-          webRoutesForRelay(
-            destination.id,
-            state.routes.map(({ id: _id, ...route }) => route)
+        // A retry after the routes moved finds none, and still hands the
+        // hostnames over.
+        if (state.routes.length > 0) {
+          const routes = yield* Effect.try(() =>
+            webRoutesForRelay(
+              destination.id,
+              state.routes.map(({ id: _id, ...route }) => route)
+            )
           )
-        )
-        yield* rpc(destination, "instance.network.routes.write", actor, {
-          instanceId: to.instanceId,
-          routes,
-        })
+          yield* rpc(destination, "instance.network.routes.write", actor, {
+            instanceId: to.instanceId,
+            routes,
+          })
+          yield* rpc(source, "instance.network.routes.write", actor, {
+            instanceId: from.instanceId,
+            routes: [],
+          })
+        }
         // Its hostnames belong to the copy now, and their DNS records
         // point at its Relay.
-        yield* rpc(source, "instance.network.routes.write", actor, {
-          instanceId: from.instanceId,
-          routes: [],
-        })
         yield* moveResourceWebHostnamesEffect(
           {
             relayId: from.relayId,

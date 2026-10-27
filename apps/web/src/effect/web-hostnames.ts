@@ -186,10 +186,16 @@ export const insertWebHostnameEffect = Effect.fn("webHostnames.insert")(
     const now = yield* Clock.currentTimeMillis
     const result = yield* database.execute(
       "webHostnames.insert",
+      // Nor one a game server's address has; that insert checks this
+      // table the same way.
       `INSERT IGNORE INTO ${databaseTable("web_hostname")}
          (id, hostname, relay_id, resource_type, resource_id, integration_id,
           zone_id, vanity_domain, is_generated, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?
+         FROM DUAL
+        WHERE NOT EXISTS (
+          SELECT 1 FROM ${databaseTable("instance_domain")}
+           WHERE CONCAT(vanity_label, '.', domain) = ?)`,
       [
         input.id,
         input.hostname,
@@ -202,6 +208,7 @@ export const insertWebHostnameEffect = Effect.fn("webHostnames.insert")(
         input.generated,
         now,
         now,
+        input.hostname,
       ]
     )
     if (result.affectedRows === 0) {
@@ -212,7 +219,10 @@ export const insertWebHostnameEffect = Effect.fn("webHostnames.insert")(
   }
 )
 
-/** Records the DNS record Kiln made or updated for a hostname. */
+/**
+ * Records the DNS record Kiln made or updated for a hostname. False when the
+ * hostname was let go meanwhile, so the caller deletes the record it made.
+ */
 export const activateWebHostnameEffect = Effect.fn("webHostnames.activate")(
   function* (input: {
     id: string
@@ -222,7 +232,7 @@ export const activateWebHostnameEffect = Effect.fn("webHostnames.activate")(
   }) {
     const database = yield* Database
     const now = yield* Clock.currentTimeMillis
-    yield* database.execute(
+    const result = yield* database.execute(
       "webHostnames.activate",
       `UPDATE ${databaseTable("web_hostname")}
           SET record_id = ?, record_type = ?, target = ?, status = 'active',
@@ -230,6 +240,7 @@ export const activateWebHostnameEffect = Effect.fn("webHostnames.activate")(
         WHERE id = ?`,
       [input.recordId, input.recordType, input.target, now, input.id]
     )
+    return result.affectedRows > 0
   }
 )
 
