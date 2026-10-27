@@ -56,9 +56,8 @@ function ComparePage() {
           Game server panel or app platform? Kiln is both.
         </h1>
         <p className="site-copy mt-3 max-w-2xl text-muted-foreground">
-          Most panels pick a side: game servers, or apps, or containers. Kiln
-          runs all three on your machines, from one modern panel built for
-          speed. Here’s how it lines up, and when another tool fits better.
+          Most panels do game servers or apps. Kiln does both, on your own
+          machines, from one fast panel.
         </p>
       </section>
 
@@ -183,7 +182,7 @@ function ComparisonTable() {
           />
           Best at it
         </li>
-        <li>Hover or tap a half or quarter dot to see why.</li>
+        <li>Hover or tap partial support to see why.</li>
       </ul>
     </>
   )
