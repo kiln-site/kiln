@@ -952,6 +952,83 @@ relay_feature() {
   return 1
 }
 
+# The release a container or image is, from its version label.
+release_of() {
+  dk inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' \
+    "$1" 2>/dev/null || true
+}
+
+# Takes the Relay's update lock and records the update as Kiln does, run with
+# the downloaded release on the Relay's volumes: the Relay then reports it,
+# and an update Kiln starts meanwhile waits for it. Prints its ID.
+# shellcheck disable=SC2016 # JavaScript's ${…}, not the shell's
+update_take_script='
+import { randomUUID } from "node:crypto"
+import { link, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises"
+const { KILN_IMAGE: image, KILN_PREVIOUS: previous, KILN_TARGET: target, KILN_VERSION: version } = process.env
+const directory = "/data/updates"
+const lock = `${directory}/${target}.lock`
+const read = (path) => readFile(path, "utf8").then((text) => text.trim(), () => "")
+await mkdir(directory, { mode: 0o700, recursive: true })
+const held = await read(lock)
+if (held) {
+  const recorded = await read(`${directory}/${held}.json`)
+  const status = recorded ? JSON.parse(recorded).status : null
+  const age = await stat(lock).then((found) => Date.now() - found.mtimeMs, () => Infinity)
+  if (status === "running" || (status === null && age < 30_000)) {
+    console.log("kiln: Kiln is updating this Relay already. Run this again once it is done.")
+    process.exit(1)
+  }
+  await rm(lock, { force: true })
+}
+const id = randomUUID()
+const operation = {
+  component: "relay", error: null, finishedAt: null, id, previousImage: previous,
+  requestedImage: image, startedAt: new Date().toISOString(), status: "running",
+  targetContainer: target, targetReference: image, version,
+}
+await writeFile(`${directory}/${id}.json`, `${JSON.stringify(operation, null, 2)}\n`, { mode: 0o600 })
+const candidate = `${lock}.${id}.tmp`
+await writeFile(candidate, `${id}\n`, { flag: "wx", mode: 0o600 })
+await link(candidate, lock).finally(() => rm(candidate, { force: true }))
+console.log(id)
+'
+
+# Gives back the lock update_take_script took, if it still holds it, and
+# says why the update failed, which only its record has.
+# shellcheck disable=SC2016 # JavaScript's ${…}, not the shell's
+update_release_script='
+import { readFile, rm } from "node:fs/promises"
+const { KILN_OPERATION: id, KILN_TARGET: target } = process.env
+const lock = `/data/updates/${target}.lock`
+const held = await readFile(lock, "utf8").then((text) => text.trim(), () => "")
+if (held === id) await rm(lock, { force: true })
+const recorded = await readFile(`/data/updates/${id}.json`, "utf8").then(JSON.parse, () => null)
+if (recorded?.status === "failed") console.log(`kiln: ${recorded.error}`)
+'
+
+# Replaces the Relay here with the downloaded release $1, as Kiln updates
+# it: the release's own updater keeps the Relay's settings and data, and
+# puts it back as it was if the new one doesn't become healthy.
+update_relay() {
+  previous=$(dk inspect --format '{{.Config.Image}}' "$container")
+  operation=$(dk run --rm --network none --volumes-from "$container" \
+    --env KILN_IMAGE="$image" --env KILN_PREVIOUS="$previous" \
+    --env KILN_TARGET="$container" --env KILN_VERSION="$1" \
+    "$image" --input-type=module -e "$update_take_script")
+  status=0
+  dk run --rm --name "kiln-updater-$operation" --label io.kiln.update-helper=true \
+    --volumes-from "$container" \
+    --env KILN_UPDATE_DATA_DIR=/data/updates \
+    --env KILN_UPDATE_OPERATION_ID="$operation" \
+    --env KILN_UPDATE_TARGET_REFERENCE="$image" \
+    "$image" dist/src/updater.mjs || status=$?
+  dk run --rm --network none --volumes-from "$container" \
+    --env KILN_OPERATION="$operation" --env KILN_TARGET="$container" \
+    "$image" --input-type=module -e "$update_release_script" || true
+  [ "$status" -eq 0 ] || stop "The Relay couldn't be updated, so it stays as it was."
+}
+
 # Which proxy gives Kiln HTTPS: Coolify's on a Coolify server, otherwise
 # Traefik on ports 80 and 443 when they're free.
 choose_proxy() {
@@ -1329,10 +1406,27 @@ if docker_reachable && dk container inspect "$container" >/dev/null 2>&1; then
   if [ -n "$join" ]; then
     [ "$(dk inspect --format '{{.State.Running}}' "$container" 2>/dev/null)" = "true" ] ||
       fail "A Relay is installed here but stopped. Start it with \`docker start $container\`, then run this again."
-    dk exec "$container" kiln-relay pair join --check >/dev/null 2>&1 ||
-      fail "This Relay is older than joining needs. Update it, or pair it by hand: run \`docker exec $container kiln-relay pair create\` and paste the link into Hearth's Pairing link tab."
     say "  A Relay is already running here; joining it to that Kiln."
     say ""
+    # An older Relay can't join, or connect to Kiln itself when Kiln can't
+    # reach it, so it's updated first, as Kiln would.
+    step_progress=pull_progress
+    step "Downloading Kiln" pull_relay
+    current=$(release_of "$container")
+    release=$(release_of "$image")
+    if [ -n "$current" ] && [ -n "$release" ] && newer_version "$release" "$current"; then
+      step_soft=1
+      if ! step "Updating the Relay" update_relay "$release"; then
+        say ""
+        say "  The Relay couldn't be updated to $release, so it joins as"
+        say "  $current. Why is in the install log."
+        say ""
+      fi
+      [ "$(dk inspect --format '{{.State.Running}}' "$container" 2>/dev/null)" = "true" ] ||
+        fail "The Relay isn't running after its update. Start it with \`docker start $container\`, then run this again."
+    fi
+    dk exec "$container" kiln-relay pair join --check >/dev/null 2>&1 ||
+      fail "This Relay is older than joining needs. Update it, or pair it by hand: run \`docker exec $container kiln-relay pair create\` and paste the link into Hearth's Pairing link tab."
     join_output=$(mktemp)
     dk exec "$container" kiln-relay pair join "$join" >"$join_output" 2>&1 &
     join_hearth

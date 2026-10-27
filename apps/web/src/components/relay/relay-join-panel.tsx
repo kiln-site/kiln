@@ -386,7 +386,9 @@ function JoinReview({
         <div className="flex items-start gap-3 border border-amber-400/25 bg-amber-400/8 px-3 py-2.5">
           <CircleAlert className="mt-0.5 size-3.5 shrink-0 text-amber-200 light:text-amber-800" />
           <p className="type-meta min-w-0 flex-1 text-amber-200 light:text-amber-800">
-            {unreachable} This updates once Hearth can reach it.
+            {unreachable} This updates once Hearth can reach it. Or, since
+            this Relay's version can't connect to Hearth itself, cancel
+            and run the new command on its machine, which updates it.
           </p>
         </div>
       ) : unreachable ? (
