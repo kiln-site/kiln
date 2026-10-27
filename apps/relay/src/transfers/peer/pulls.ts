@@ -330,7 +330,7 @@ export class TransferPulls {
           Effect.map(() => true),
           Effect.catchIf(
             (error): error is PeerFetchError =>
-              error instanceof PeerFetchError && error.retryable,
+              error instanceof PeerFetchError && triesAnotherEndpoint(error),
             (error) =>
               Effect.sync(() => {
                 lastError = error
@@ -459,6 +459,14 @@ export class TransferPulls {
   #partPath(transferId: string) {
     return join(this.#options.directory, `${transferId}.part`)
   }
+}
+
+// Whether another of the source's addresses may serve what this one didn't:
+// one that's down or busy, or one that refused. An address can reach
+// something other than the source, such as another Relay or a proxy, so a
+// refusal ends the pull only once every address gave one.
+function triesAnotherEndpoint(error: PeerFetchError): boolean {
+  return error.retryable || (error.status ?? 0) >= 400
 }
 
 // The endpoint that last answered first, then the rest in Hearth's order.

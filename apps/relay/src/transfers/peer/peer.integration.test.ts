@@ -135,6 +135,8 @@ describeLinux("transfers between Relays", () => {
           caCertificatePem: null,
           url: `http://127.0.0.1:${await closedPort()}`,
         },
+        // Something else answers here, as a router's own page would.
+        { caCertificatePem: null, url: await somethingElse() },
         {
           caCertificatePem: null,
           url: `http://127.0.0.1:${port}/api/relays/source/peer`,
@@ -418,6 +420,19 @@ async function startDestination() {
 }
 
 // A local port nothing listens on.
+// An address where something other than the source answers, refusing.
+async function somethingElse(): Promise<string> {
+  const server = createServer((_request, response) => {
+    response.writeHead(404).end("Not found")
+  })
+  server.listen(0, "127.0.0.1")
+  await once(server, "listening")
+  cleanups.push(
+    () => new Promise<void>((resolve) => server.close(() => resolve()))
+  )
+  return `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+}
+
 async function closedPort(): Promise<number> {
   const server = createTcpServer()
   server.listen(0, "127.0.0.1")
