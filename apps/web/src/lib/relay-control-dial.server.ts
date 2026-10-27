@@ -79,17 +79,29 @@ export function handleRelayControlUpgrade(
       )
     )
   if (!admitted) {
-    socket.end("HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\n\r\n")
+    refuseUpgrade(socket, "429 Too Many Requests")
     return true
   }
   server.handleUpgrade(request, socket, head, greet)
   return true
 }
 
+// Answers an upgrade Hearth won't take, then lets go of its socket, whether
+// or not the other end closes its side.
+function refuseUpgrade(socket: Duplex, status: string): void {
+  socket.on("error", () => undefined)
+  socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\n\r\n`, () =>
+    socket.destroy()
+  )
+}
+
 // Says hello and waits for the Relay's challenge, which names the Relay.
 function greet(socket: WebSocket): void {
+  // Before anything else: a bad frame is an error on the socket.
+  socket.on("error", () => undefined)
+  // Not a Relay at all, so it isn't owed a closing handshake.
   if (socket.protocol !== relayControlProtocol) {
-    socket.close(4400, "Expected the Relay control protocol")
+    socket.terminate()
     return
   }
   waiting += 1
@@ -105,7 +117,6 @@ function greet(socket: WebSocket): void {
   }, relayAuthenticationWindowMs)
   timer.unref()
   socket.once("close", settle)
-  socket.on("error", () => undefined)
   const nonce = randomBytes(32).toString("base64url")
   socket.send(JSON.stringify({ nonce, type: "dial.hello", v: 1 }))
   socket.once("message", (data, binary) => {

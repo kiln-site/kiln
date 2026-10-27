@@ -7,6 +7,7 @@ import {
 } from "node:crypto"
 import { once } from "node:events"
 import { createServer } from "node:http"
+import { connect } from "node:net"
 import type { AddressInfo } from "node:net"
 
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test"
@@ -168,6 +169,28 @@ it("refuses a challenge it didn't ask for, and a Relay it doesn't know", async (
   await expect(advanceUntil(unknown.closed)).resolves.toBe(
     relayDialCloseCodes.unknownRelay
   )
+})
+
+it("closes, rather than throws on, a malformed connection without the protocol", async () => {
+  const raw = connect(Number(new URL(hearthOrigin).port), "127.0.0.1")
+  await once(raw, "connect")
+  raw.on("error", () => undefined)
+  raw.resume()
+  // An upgrade with no subprotocol, and an unmasked frame right behind it.
+  raw.write(
+    [
+      `GET ${relayControlDialPath} HTTP/1.1`,
+      "Host: hearth",
+      "Upgrade: websocket",
+      "Connection: Upgrade",
+      `Sec-WebSocket-Key: ${randomBytes(16).toString("base64")}`,
+      "Sec-WebSocket-Version: 13",
+      "",
+      "",
+    ].join("\r\n")
+  )
+  raw.write(Buffer.from([0x82, 0x00]))
+  await advanceUntil(once(raw, "close"))
 })
 
 it("still closes a connection in time while its challenge waits to be checked", async () => {
