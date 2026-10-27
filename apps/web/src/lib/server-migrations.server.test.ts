@@ -25,6 +25,17 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/relay-connection")>()),
   relayRpc: async (_relay: unknown, operation: string, payload: unknown) => {
     if (operation === "relay.snapshot") return relaySnapshot()
+    // The old server's routes already moved, before its worker stopped.
+    if (operation === "instance.network.routes.read") {
+      return {
+        edgeConnected: true,
+        message: "Ready",
+        proxyConnected: true,
+        requiresRestart: false,
+        routes: [],
+        status: "ready",
+      }
+    }
     relayCalls.push(
       `${operation}:${(payload as { action?: string }).action ?? ""}`
     )
@@ -55,6 +66,7 @@ const seedMove = (input: {
   deleteSource: boolean
   deletion: "backing_up" | "failed" | null
   ending: boolean
+  moveWebRoutes?: boolean
 }) =>
   Effect.gen(function* () {
     yield* resetDatabase
@@ -100,7 +112,7 @@ const seedMove = (input: {
       error: input.ending ? "Relay connection closed" : null,
       finished_parts: JSON.stringify([]),
       id,
-      lease_until: input.ending ? 0 : at * 2,
+      lease_until: input.ending || input.moveWebRoutes ? 0 : at * 2,
       mode: "migrate",
       options: JSON.stringify({
         backup: null,
@@ -108,7 +120,7 @@ const seedMove = (input: {
         deleteSource: input.deleteSource ? {} : null,
         keepActivity: false,
         moveDomain: false,
-        moveWebRoutes: false,
+        moveWebRoutes: input.moveWebRoutes ?? false,
         stopSource: true,
       }),
       requested_by: user.id,
@@ -220,6 +232,42 @@ describeMysql("Server migration deleting its old server", () => {
           assert.strictEqual(
             (yield* migrationRows).find((row) => row.id === keeping)?.state,
             "cancelling"
+          )
+        })
+    )
+
+    it.effect(
+      "hands its hostnames over when a retry finds the routes already moved",
+      () =>
+        Effect.gen(function* () {
+          const id = yield* seedMove({
+            deleteSource: false,
+            deletion: null,
+            ending: false,
+            moveWebRoutes: true,
+          })
+          yield* insertRows("web_hostname", {
+            id: randomUUID(),
+            hostname: "map.example.test",
+            relay_id: sourceRelayId,
+            resource_type: "instance",
+            resource_id: sourceId,
+            integration_id: "gone",
+            zone_id: "zone",
+            is_generated: false,
+            status: "active",
+            created_at: at,
+            updated_at: at,
+          })
+
+          const row = yield* resumeUntilEnded(id)
+
+          assert.strictEqual(row?.state, "completed")
+          assert.deepEqual(
+            (yield* selectRows<{ relay_id: string; resource_id: string }>(
+              "web_hostname"
+            )).map((item) => `${item.relay_id.trim()}:${item.resource_id}`),
+            [`${destinationRelayId}:${copyId}`]
           )
         })
     )

@@ -10,6 +10,7 @@ import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRows, selectRows } from "@/test/seed"
 import { betterAuthSecrets } from "@/lib/environment"
 import {
+  claimInstanceDomainLabelEffect,
   insertInstanceDomainAssignmentEffect,
   reserveInstanceDomainAssignmentEffect,
   saveDomainConnectionEffect,
@@ -887,6 +888,60 @@ describeMysql("saving vanity domains", () => {
             ["mine.site@personal"]
           )
         })
+    )
+
+    it.effect("refuses a token that can't reach the web records it keeps", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        yield* insertCredential({ domains: ["kiln.site", "other.site"] })
+        yield* insertRows("web_hostname", {
+          id: "00000000-0000-4000-8000-0000000000aa",
+          hostname: "shop.other.site",
+          relay_id: relayId,
+          resource_type: "app",
+          resource_id: "a".repeat(40),
+          integration_id: "cloudflare",
+          zone_id: "zone-1",
+          is_generated: false,
+          record_id: "record",
+          status: "active",
+          created_at: 0,
+          updated_at: 0,
+        })
+
+        const refused = yield* save(["zone-id"]).pipe(Effect.flip)
+
+        assert.include(refused.message, "shop.other.site")
+      })
+    )
+
+    it.effect("won't rename a domain onto a web route's hostname", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        yield* insertCredential()
+        yield* insertAssignment(testAssignment())
+        yield* insertRows("web_hostname", {
+          id: "00000000-0000-4000-8000-0000000000ab",
+          hostname: "shop.kiln.site",
+          relay_id: relayId,
+          resource_type: "app",
+          resource_id: "a".repeat(40),
+          integration_id: "cloudflare",
+          zone_id: "zone-id",
+          is_generated: false,
+          status: "active",
+          created_at: 0,
+          updated_at: 0,
+        })
+
+        const refused = yield* claimInstanceDomainLabelEffect({
+          domain: "kiln.site",
+          id: testAssignment().id,
+          vanityLabel: "shop",
+        }).pipe(Effect.flip)
+
+        assert.strictEqual(refused.message, "shop.kiln.site is already in use")
+      })
     )
 
     it.effect(

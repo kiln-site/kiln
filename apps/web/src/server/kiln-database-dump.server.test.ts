@@ -38,12 +38,16 @@ const insertManyRows = Effect.gen(function* () {
   }
 })
 
-// An export's connection holds the only read-only transaction.
+// An export's connection holds the only read-only transaction on this
+// worker's database; other test files run in parallel on their own.
 const exportTransactions = Effect.flatMap(
   SqlClient.SqlClient,
   (sql) => sql<{ id: number }>`
-    SELECT trx_mysql_thread_id AS id FROM information_schema.INNODB_TRX
-    WHERE trx_is_read_only = 1`
+    SELECT trx.trx_mysql_thread_id AS id
+      FROM information_schema.INNODB_TRX trx
+      JOIN information_schema.PROCESSLIST process
+        ON process.ID = trx.trx_mysql_thread_id
+     WHERE trx.trx_is_read_only = 1 AND process.DB = DATABASE()`
 )
 
 const killExport = Effect.gen(function* () {

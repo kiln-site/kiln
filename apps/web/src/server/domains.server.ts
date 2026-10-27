@@ -40,7 +40,8 @@ import {
   setInstanceDomainPrimaryEffect,
   updateInstanceDomainAddressRecordEffect,
   updateInstanceDomainEndpointEffect,
-  updateInstanceDomainLabelEffect,
+  claimInstanceDomainLabelEffect,
+  restoreInstanceDomainLabelEffect,
   type InstanceDomainAssignment,
   type ManagedDomain,
 } from "@/effect/domains"
@@ -1136,6 +1137,13 @@ const renameVanityRecordsEffect = Effect.fn("domains.instance.renameRecords")(
     const zoneId = yield* assignmentZoneIdEffect(assignment)
     const previousHostname = `${assignment.vanityLabel}.${assignment.domain}`
     const nextHostname = `${vanityLabel}.${domain}`
+    // The new name is taken first, in the statement that checks no web
+    // hostname holds it, so nothing takes it while Cloudflare changes.
+    yield* claimInstanceDomainLabelEffect({
+      domain,
+      id: assignment.id,
+      vanityLabel,
+    })
     const rename = Effect.gen(function* () {
       yield* updateCloudflareAddressRecordEffect(
         apiToken,
@@ -1166,11 +1174,6 @@ const renameVanityRecordsEffect = Effect.fn("domains.instance.renameRecords")(
           assignment.instanceId
         )
       }
-      yield* updateInstanceDomainLabelEffect({
-        domain,
-        id: assignment.id,
-        vanityLabel,
-      })
     })
     yield* rename.pipe(
       Effect.catch((error) =>
@@ -1179,7 +1182,16 @@ const renameVanityRecordsEffect = Effect.fn("domains.instance.renameRecords")(
           zoneId,
           assignment,
           previousHostname
-        ).pipe(Effect.andThen(Effect.fail(error)))
+        ).pipe(
+          Effect.andThen(
+            restoreInstanceDomainLabelEffect({
+              domain: assignment.domain,
+              id: assignment.id,
+              vanityLabel: assignment.vanityLabel,
+            })
+          ),
+          Effect.andThen(Effect.fail(error))
+        )
       )
     )
     const updated = yield* loadInstanceDomainAssignmentEffect(assignment.id)

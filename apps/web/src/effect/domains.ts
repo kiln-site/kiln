@@ -390,6 +390,23 @@ export const saveDomainConnectionEffect = Effect.fn("domains.connection.save")(
             FOR SHARE`,
           [input.id]
         )
+        // The web records it keeps stay reachable, to repoint or delete.
+        const webRecords = yield* transaction.queryRows<
+          RowDataPacket & { hostname: string; zone_id: string }
+        >(
+          `SELECT hostname, zone_id FROM ${databaseTable("web_hostname")}
+            WHERE integration_id = ?
+            FOR SHARE`,
+          [input.id]
+        )
+        const stranded = webRecords.find(
+          (row) => !reachableZoneIds.has(row.zone_id)
+        )
+        if (stranded) {
+          return yield* DomainConfigurationError.make({
+            message: `This token can't manage ${stranded.hostname}, which Kiln keeps a DNS record for. Use a token that can, or remove its web route first.`,
+          })
+        }
         const usage = new Map<string, number>()
         for (const row of assigned) {
           usage.set(row.domain, (usage.get(row.domain) ?? 0) + 1)
@@ -1035,16 +1052,40 @@ export const setInstanceDomainPrimaryEffect = Effect.fn(
   )
 })
 
-export const updateInstanceDomainLabelEffect = Effect.fn(
-  "domains.assignment.updateLabel"
+/**
+ * Renames a domain, unless a web hostname holds the new name: checked in the
+ * same statement, as taking a new one is.
+ */
+export const claimInstanceDomainLabelEffect = Effect.fn(
+  "domains.assignment.claimLabel"
+)(function* (input: { domain: string; id: string; vanityLabel: string }) {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  const hostname = `${input.vanityLabel}.${input.domain}`
+  const result = yield* database.execute(
+    "domains.assignment.claimLabel",
+    `UPDATE ${databaseTable("instance_domain")}
+        SET vanity_label = ?, domain = ?, last_error = NULL, updated_at = ?
+      WHERE id = ? AND NOT EXISTS (${webHostnameTaken})`,
+    [input.vanityLabel, input.domain, now, input.id, hostname]
+  )
+  if (result.affectedRows === 0) {
+    return yield* DomainConfigurationError.make({
+      message: `${hostname} is already in use`,
+    })
+  }
+})
+
+/** Puts back the name a rename that failed in Cloudflare took. */
+export const restoreInstanceDomainLabelEffect = Effect.fn(
+  "domains.assignment.restoreLabel"
 )(function* (input: { domain: string; id: string; vanityLabel: string }) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
   yield* database.execute(
-    "domains.assignment.updateLabel",
+    "domains.assignment.restoreLabel",
     `UPDATE ${databaseTable("instance_domain")}
-        SET vanity_label = ?, domain = ?, status = 'active',
-            last_error = NULL, updated_at = ?
+        SET vanity_label = ?, domain = ?, updated_at = ?
       WHERE id = ?`,
     [input.vanityLabel, input.domain, now, input.id]
   )

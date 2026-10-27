@@ -560,15 +560,18 @@ export const generateAppHostnameEffect = Effect.fn("webHostnames.generate")(
 /**
  * Points a hostname's record at `target`, making it when there's none. A
  * name Cloudflare already has a record for, that Kiln didn't make, is left
- * alone and marked `external`.
+ * alone and marked `external`. One that looks in step is left alone too,
+ * unless `verify` asks Cloudflare, as Sync does, so a record deleted there
+ * is made again.
  */
 const reconcileWebHostnameEffect = Effect.fn("webHostnames.reconcile")(
-  function* (row: WebHostname, target: string) {
+  function* (row: WebHostname, target: string, verify = false) {
     if (row.status === "removing") {
       return yield* removeWebHostnameEffect(row)
     }
     const record = cloudflareAddressRecord(row.hostname, target)
     if (
+      !verify &&
       row.status === "active" &&
       row.recordId &&
       row.target === target &&
@@ -677,12 +680,14 @@ const removeWebHostnameEffect = Effect.fn("webHostnames.remove")(function* (
   )
 })
 
-/** Releases one hostname, such as an app's generated address. */
+/**
+ * Releases one hostname, such as an app's generated address, as it is once
+ * work already on it finishes, and only while it's still the resource's.
+ */
 export const releaseWebHostnameEffect = Effect.fn("webHostnames.release")(
   function* (row: WebHostname) {
-    yield* removeWebHostnameEffect(row)
-  },
-  (effect, row) => withResourceLock(row, effect)
+    yield* withCurrentRow(row, removeWebHostnameEffect)
+  }
 )
 
 /** Deletes every record a deleted game server or app had. */
@@ -794,7 +799,7 @@ export const resyncWebHostnamesEffect = Effect.fn("webHostnames.resync")(
             // or moved it since the list was read.
             const current = yield* loadWebHostnameEffect(row.id)
             if (!current || !sameResource(current, row)) return null
-            yield* reconcileWebHostnameEffect(current, relayTarget)
+            yield* reconcileWebHostnameEffect(current, relayTarget, true)
             const after = yield* loadWebHostnameEffect(row.id)
             return after?.status === "error" ? after.lastError : null
           })

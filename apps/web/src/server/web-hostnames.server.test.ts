@@ -1,5 +1,5 @@
 import { assert, layer } from "@effect/vitest"
-import { Effect } from "effect"
+import { Effect, Fiber } from "effect"
 import { afterAll, afterEach, vi } from "vite-plus/test"
 
 import { disposeAppRuntime } from "@/effect/runtime"
@@ -14,12 +14,17 @@ import {
 
 import { encryptWithKeyring } from "../../keyring.mjs"
 
-import { insertWebHostnameEffect } from "@/effect/web-hostnames"
+import {
+  insertWebHostnameEffect,
+  listWebHostnamesEffect,
+} from "@/effect/web-hostnames"
 
 import type { DomainActor } from "./domain-access.server"
 import {
   claimWebRouteHostnamesEffect,
   generateAppHostnameEffect,
+  releaseWebHostnameEffect,
+  resyncWebHostnamesEffect,
   saveClaimingWebRouteHostnamesEffect,
   moveResourceWebHostnamesEffect,
   syncResourceWebHostnamesEffect,
@@ -48,6 +53,11 @@ function fakeCloudflare(zones: Array<{ id: string; name: string }>) {
   const records = new Map<string, FakeRecord>()
   // Methods whose next request Cloudflare fails, as an outage would.
   const failing = new Set<string>()
+  // Methods whose next request waits until the test lets it through.
+  const holds = new Map<
+    string,
+    { reached: () => void; released: Promise<void> }
+  >()
   let nextId = 0
   const success = (result: unknown) =>
     Response.json({ errors: [], result, success: true })
@@ -56,6 +66,12 @@ function fakeCloudflare(zones: Array<{ id: string; name: string }>) {
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input))
       const method = init?.method ?? "GET"
+      const hold = holds.get(method)
+      if (hold) {
+        holds.delete(method)
+        hold.reached()
+        await hold.released
+      }
       if (failing.delete(method)) {
         return Response.json(
           { errors: [{ code: 10_000, message: "Service unavailable" }] },
@@ -107,6 +123,24 @@ function fakeCloudflare(zones: Array<{ id: string; name: string }>) {
       ),
     failNext: (method: string) => {
       failing.add(method)
+    },
+    /** Holds the next `method` request until `release`, once it arrives. */
+    hold: (method: string) => {
+      let arrive = () => {}
+      let release = () => {}
+      const reached = new Promise<void>((resolve) => {
+        arrive = resolve
+      })
+      const released = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      holds.set(method, { reached: arrive, released })
+      return { reached: Effect.promise(() => reached), release }
+    },
+    /** Deletes a record behind Kiln's back. */
+    remove: (name: string) => {
+      for (const [id, record] of records)
+        if (record.name === name) records.delete(id)
     },
     seed: (record: FakeRecord) => {
       nextId += 1
@@ -513,6 +547,91 @@ describeMysql("web route hostnames", () => {
 
         assert.strictEqual(failed, "The Relay refused the routes")
         assert.deepEqual(yield* hostnameRows, {})
+      })
+    )
+
+    it.effect("deletes a record made while its hostname was released", () =>
+      Effect.gen(function* () {
+        yield* seed
+        const cloudflare = fakeCloudflare([ownerZone])
+        yield* claimWebRouteHostnamesEffect({
+          actor: owner,
+          hostnames: ["shop.owner.example"],
+          resource: app,
+        })
+        const [claimed] = yield* listWebHostnamesEffect()
+        assert.isDefined(claimed)
+
+        // Released while the sync is making its record.
+        const creating = cloudflare.hold("POST")
+        const syncing = yield* Effect.forkChild(
+          sync(owner, ["shop.owner.example"])
+        )
+        yield* creating.reached
+        const releasing = yield* Effect.forkChild(
+          releaseWebHostnameEffect(claimed!)
+        )
+        creating.release()
+        yield* Fiber.join(syncing)
+        yield* Fiber.join(releasing)
+
+        assert.deepEqual(cloudflare.dns(), {})
+        assert.deepEqual(yield* hostnameRows, {})
+      })
+    )
+
+    it.effect(
+      "refuses a name another resource claims while it checks Cloudflare",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          const cloudflare = fakeCloudflare([ownerZone, platformZone])
+          const server = {
+            relayId,
+            resourceId: instanceId,
+            resourceType: "instance",
+          } as const
+          const checking = cloudflare.hold("GET")
+          const claiming = yield* Effect.forkChild(
+            Effect.flip(
+              claimWebRouteHostnamesEffect({
+                actor: collaborator,
+                hostnames: ["race.play.kiln.site"],
+                resource: server,
+              })
+            )
+          )
+          yield* checking.reached
+          yield* claimWebRouteHostnamesEffect({
+            actor: collaborator,
+            hostnames: ["race.play.kiln.site"],
+            resource: app,
+          })
+          checking.release()
+
+          const refused = yield* Fiber.join(claiming)
+          assert.strictEqual(
+            refused.message,
+            "race.play.kiln.site is already in use"
+          )
+          assert.deepEqual(yield* hostnameRows, {
+            "race.play.kiln.site": "pending@relay-one",
+          })
+        })
+    )
+
+    it.effect("makes a record deleted in Cloudflare again on Sync", () =>
+      Effect.gen(function* () {
+        yield* seed
+        const cloudflare = fakeCloudflare([ownerZone])
+        yield* sync(owner, ["shop.owner.example"])
+        cloudflare.remove("shop.owner.example")
+
+        yield* resyncWebHostnamesEffect(() => true)
+
+        assert.deepEqual(cloudflare.dns(), {
+          "shop.owner.example": "relay-one.relay.test",
+        })
       })
     )
 
