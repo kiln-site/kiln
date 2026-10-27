@@ -6,8 +6,8 @@ import { ensuringPromise, forkPromise, recoverPromise } from "@/effect/promise"
 
 // Tickets: what lets a request through Hearth's pass-through as far as the
 // Relay. Every one already carries a credential Hearth signed for that
-// Relay with its own key for it: a browser capability, or a backup link's
-// token. Hearth checks its own signature, and that the credential is for
+// Relay with its own key for it: a browser capability, a backup link's
+// token, or the grant for a copy another Relay pulls. Hearth checks its own signature, and that the credential is for
 // this Relay and this route and still valid, before it spends anything on
 // the request, such as a tunnel. The Relay still checks all it does today:
 // the browser's proof, nonces, revocation and paths.
@@ -25,9 +25,10 @@ const decodePayload = Schema.decodeUnknownOption(
       audience: Schema.String,
       expiresAt: Schema.Number,
       issuer: Schema.String,
-      // Named by browser capabilities, and by backup links.
+      // Named by browser capabilities, backup links, and copies' grants.
       instanceId: Schema.optionalKey(Schema.String),
       backupId: Schema.optionalKey(Schema.String),
+      transferId: Schema.optionalKey(Schema.String),
     })
   )
 )
@@ -94,6 +95,25 @@ export async function checkBrowserTicket(input: {
 }
 
 /**
+ * Whether another Relay's pull of a copy from this one carries the grant
+ * Hearth signed for that copy.
+ */
+export function checkPeerTicket(input: {
+  readonly relayId: string
+  readonly request: Request
+  readonly signer: PassthroughSigner
+  readonly transferId: string
+}): PassthroughTicket {
+  const authorization = input.request.headers.get("authorization")
+  return authorization?.startsWith("KilnPeer ") &&
+    signedFor(authorization.slice(9), input.signer, input.relayId, {
+      transferId: input.transferId,
+    })
+    ? { allowed: true, body: null }
+    : { allowed: false }
+}
+
+/**
  * Whether `credential`, as `<payload>.<signature>`, is one Hearth signed
  * for this Relay, naming `names`, that hasn't expired.
  */
@@ -101,7 +121,11 @@ export function signedFor(
   credential: string,
   signer: PassthroughSigner,
   relayId: string,
-  names: { readonly backupId?: string; readonly instanceId?: string }
+  names: {
+    readonly backupId?: string
+    readonly instanceId?: string
+    readonly transferId?: string
+  }
 ): boolean {
   if (credential.length > MAX_CREDENTIAL_BYTES) return false
   const [encoded, signature, extra] = credential.split(".")
@@ -117,6 +141,8 @@ export function signedFor(
     (names.backupId === undefined || payload.backupId === names.backupId) &&
     (names.instanceId === undefined ||
       payload.instanceId === names.instanceId) &&
+    (names.transferId === undefined ||
+      payload.transferId === names.transferId) &&
     verify(
       null,
       Buffer.from(encoded),

@@ -276,14 +276,16 @@ request that claimed it:
 
 A Relay browsers can't reach, such as one that dials Hearth from behind a
 home router, has its file transfers and backup downloads passed through
-Hearth (`/api/relays/<id>/browser/...`). Hearth reaches the Relay through a
-tunnel when the Relay dialed it, and directly otherwise.
+Hearth (`/api/relays/<id>/browser/...`), as are copies another Relay pulls
+from it when it can't reach it (`/api/relays/<id>/peer/...`). Hearth
+reaches the Relay through a tunnel when the Relay dialed it, and directly
+otherwise.
 
 - **Tickets.** Before it spends anything on a request, Hearth checks that
   the credential it carries is one Hearth signed for that Relay: a browser
-  capability, in the `Authorization` header or a native download's form, or
-  a backup link's token. It must name this Relay and this file root or
-  backup, and not have expired. Anything else gets 401 before a tunnel is
+  capability, in the `Authorization` header or a native download's form, a
+  backup link's token, or a copy's grant. It must name this Relay and this
+  file root, backup or copy, and not have expired. Anything else gets 401 before a tunnel is
   opened. The Relay still checks all it does for a direct request, such as
   the browser's proof, nonces, revocation and paths.
 - **Slots.** Hearth carries at most 8 transfers to one Relay at once, and

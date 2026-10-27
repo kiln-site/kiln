@@ -7,7 +7,10 @@ import { tapPromiseError } from "@/effect/promise"
 import { relayControlEndpoint } from "@/lib/relay-control-endpoint"
 import { kilnPublicUrl } from "@/lib/environment"
 import { acquirePassthroughSlot } from "@/lib/relay-passthrough-limits.server"
-import { checkBrowserTicket } from "@/lib/relay-passthrough-tickets.server"
+import {
+  checkBrowserTicket,
+  checkPeerTicket,
+} from "@/lib/relay-passthrough-tickets.server"
 import type {
   PassthroughSigner,
   PassthroughTicket,
@@ -112,7 +115,8 @@ export function passRelayPeerRequest(
         relayId,
         `/v1/peer/transfers/${transferId}`,
         request,
-        async () => ({ allowed: true, body: null })
+        async (signer) =>
+          checkPeerTicket({ relayId, request, signer, transferId })
       )
     : Promise.resolve(notTransfer())
 }

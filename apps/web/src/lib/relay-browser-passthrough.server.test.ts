@@ -727,18 +727,37 @@ it("passes a pull another Relay makes through Hearth on to the source", async ()
   // A Relay puts its usual route beneath the pass-through's path, which
   // arrives as the route here.
   const route = relayPeerTransferPath("transfer-1").slice(1)
+  const grant = (transferId: string) => ({
+    authorization: `KilnPeer ${signed({ transferId })}`,
+  })
   const pulled = await passRelayPeerRequest(
     relayId,
     route,
-    new Request("https://kiln.example/api?traceparent=t")
+    new Request("https://kiln.example/api?traceparent=t", {
+      headers: grant("transfer-1"),
+    })
   )
   expect(pulled.status).toBe(200)
   expect(paths).toEqual(["/v1/peer/transfers/transfer-1?traceparent=t"])
 
+  // Only with the grant Hearth signed for that copy.
+  for (const headers of [{}, grant("transfer-2")]) {
+    const refused = await passRelayPeerRequest(
+      relayId,
+      route,
+      new Request("https://kiln.example/api", { headers })
+    )
+    expect(refused.status).toBe(401)
+  }
   const written = await passRelayPeerRequest(
     relayId,
     route,
-    new Request("https://kiln.example/api", { body: "x", method: "POST" })
+    new Request("https://kiln.example/api", {
+      body: "x",
+      headers: grant("transfer-1"),
+      method: "POST",
+    })
   )
   expect(written.status).toBe(404)
+  expect(paths).toHaveLength(1)
 })
