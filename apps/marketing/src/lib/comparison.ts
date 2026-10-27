@@ -101,6 +101,54 @@ export const rows: Array<Row> = [
     },
   },
   {
+    label: "Permissions",
+    cells: {
+      kiln: "yes",
+      pterodactyl: "yes",
+      amp: "yes",
+      coolify: "partly",
+      dokploy: "partly",
+      openship: "partly",
+      portainer: "partly",
+    },
+  },
+  {
+    label: "Automatic DNS",
+    cells: {
+      kiln: "yes",
+      pterodactyl: "no",
+      amp: "no",
+      coolify: "yes",
+      dokploy: "no",
+      openship: "no",
+      portainer: "no",
+    },
+  },
+  {
+    label: "Updates from the panel",
+    cells: {
+      kiln: "yes",
+      pterodactyl: "no",
+      amp: "yes",
+      coolify: "yes",
+      dokploy: "yes",
+      openship: "no",
+      portainer: "partly",
+    },
+  },
+  {
+    label: "Vulnerability scanning",
+    cells: {
+      kiln: "yes",
+      pterodactyl: "no",
+      amp: "no",
+      coolify: "no",
+      dokploy: "no",
+      openship: "no",
+      portainer: "partly",
+    },
+  },
+  {
     label: "Swarm or Kubernetes",
     cells: {
       kiln: "no",
