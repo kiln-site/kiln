@@ -42,11 +42,14 @@ export async function signLocalBackupDownload(
     Buffer.from(encoded),
     credentials.clientPrivateKeyPem
   ).toString("base64url")
-  // A Relay browsers can't reach serves its backups through Hearth.
+  // A Relay browsers can't reach serves its backups through Hearth. So does
+  // one Hearth hasn't heard from yet, as while it reconnects: Hearth reaches
+  // any Relay it can serve the link from.
   const { relayConnectionProxyMode } = await import("@/lib/relay-connection")
   const { kilnPublicUrl } = await import("@/lib/environment")
+  const mode = relayConnectionProxyMode(relay.id)
   const url =
-    relayConnectionProxyMode(relay.id) === "hearth"
+    mode === "hearth" || mode === null
       ? new URL(
           `/api/relays/${encodeURIComponent(relay.id)}/browser/backups/${encodeURIComponent(archiveId)}`,
           kilnPublicUrl()

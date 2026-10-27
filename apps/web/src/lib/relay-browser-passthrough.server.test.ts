@@ -106,3 +106,26 @@ it("fails the request, not Hearth, when an upload breaks off", async () => {
     )
   ).rejects.toThrow("The browser went away")
 })
+
+it("answers for a Relay whose status no response can carry", async () => {
+  let status = 205
+  await relayListener((_request, response) => {
+    response.writeHead(status, { "content-length": "4" })
+    response.end(status === 205 ? undefined : "body")
+  })
+  const reset = await passRelayBrowserRequest(
+    relayId,
+    "files/root",
+    new Request("https://kiln.example/api")
+  )
+  expect(reset.status).toBe(205)
+  expect(reset.body).toBeNull()
+
+  status = 600
+  const invalid = await passRelayBrowserRequest(
+    relayId,
+    "files/root",
+    new Request("https://kiln.example/api")
+  )
+  expect(invalid.status).toBe(502)
+})

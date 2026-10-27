@@ -44,6 +44,7 @@ const RESPONSE_HEADERS = [
   "etag",
   "last-modified",
 ]
+const NULL_BODY_STATUSES = new Set([204, 205, 304])
 const SANDBOX_HEADERS = {
   "content-security-policy": "default-src 'none'; sandbox",
   "x-content-type-options": "nosniff",
@@ -66,12 +67,13 @@ export async function passRelayBrowserRequest(
   const relay = await loadPersistedRelay(relayId)
   if (!relay) return Response.json({ error: "Unknown Relay" }, { status: 404 })
   const control = relayControlEndpoint(relay)
-  const tunnel = relayReachedThroughTunnel(relay.id)
-    ? await openRelayTunnel(relay)
-    : null
-  const ca = control.useTls
-    ? ((await loadRelayCredentials(relay.id)).caCertificatePem ?? undefined)
-    : undefined
+  const throughTunnel = relayReachedThroughTunnel(relay.id)
+  const ca =
+    !throughTunnel && control.useTls
+      ? ((await loadRelayCredentials(relay.id)).caCertificatePem ?? undefined)
+      : undefined
+  // Opened last, so nothing can fail between here and the request taking it.
+  const tunnel = throughTunnel ? await openRelayTunnel(relay) : null
   const url = new URL(request.url)
   const headers: Record<string, string> = {
     // The Relay accepts the origins of the Hearths paired with it.
@@ -99,17 +101,28 @@ export async function passRelayBrowserRequest(
         signal: request.signal,
       },
       (incoming) => {
-        const body =
-          request.method === "HEAD" ||
-          incoming.statusCode === 204 ||
-          incoming.statusCode === 304
-            ? null
-            : (Readable.toWeb(incoming) as ReadableStream<Uint8Array>)
+        const status = incoming.statusCode ?? 0
+        // Only answers a Response can carry, so a Relay can't throw here.
+        if (status < 200 || status > 599) {
+          incoming.destroy()
+          resolve(
+            Response.json(
+              { error: "The Relay answered with an invalid status" },
+              { status: 502 }
+            )
+          )
+          return
+        }
+        const bodyless =
+          request.method === "HEAD" || NULL_BODY_STATUSES.has(status)
+        if (bodyless) incoming.resume()
         resolve(
-          new Response(body, {
-            headers: responseHeaders(incoming.headers),
-            status: incoming.statusCode ?? 502,
-          })
+          new Response(
+            bodyless
+              ? null
+              : (Readable.toWeb(incoming) as ReadableStream<Uint8Array>),
+            { headers: responseHeaders(incoming.headers), status }
+          )
         )
       }
     )
