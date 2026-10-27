@@ -35,6 +35,8 @@ export type Level = "yes" | "partly" | "no"
 export interface Row {
   label: string
   cells: Record<ProductId, Level>
+  // Who does this best, highlighted in the chart. Kiln unless said otherwise.
+  best?: Array<ProductId>
 }
 
 // Only rows where the projects differ. Anything that runs Docker can run a
@@ -73,6 +75,19 @@ export const rows: Array<Row> = [
       coolify: "yes",
       dokploy: "yes",
       openship: "yes",
+      portainer: "partly",
+    },
+  },
+  {
+    label: "1-click apps and servers",
+    best: ["pterodactyl", "coolify"],
+    cells: {
+      kiln: "partly",
+      pterodactyl: "yes",
+      amp: "yes",
+      coolify: "yes",
+      dokploy: "yes",
+      openship: "no",
       portainer: "partly",
     },
   },
@@ -150,6 +165,7 @@ export const rows: Array<Row> = [
   },
   {
     label: "Swarm or Kubernetes",
+    best: ["dokploy", "portainer"],
     cells: {
       kiln: "no",
       pterodactyl: "no",
@@ -162,6 +178,7 @@ export const rows: Array<Row> = [
   },
   {
     label: "Runs on Windows",
+    best: ["amp"],
     cells: {
       kiln: "no",
       pterodactyl: "no",
@@ -267,6 +284,10 @@ const levelSuffix: Record<Level, string | null> = {
 
 // The page's chart and cards as schema.org data, so search engines and AI
 // assistants read the same comparison people see.
+export function bestAt(row: Row): Array<ProductId> {
+  return row.best ?? ["kiln"]
+}
+
 export function comparisonStructuredData({
   description,
   siteUrl,

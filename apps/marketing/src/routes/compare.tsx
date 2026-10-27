@@ -10,6 +10,7 @@ import {
   type Level,
   type Reason,
   alternatives,
+  bestAt,
   checkedOn,
   comparisonStructuredData,
   products,
@@ -108,45 +109,48 @@ function ComparisonTable() {
                   key={product.id}
                   scope="col"
                   className={cn(
-                    "relative border-b border-border px-2 pt-4 pb-3 text-center align-bottom font-semibold tracking-[-0.02em]",
+                    "border-b border-border px-2 pt-4 pb-3 text-center align-bottom font-semibold tracking-[-0.02em]",
                     product.id === "kiln"
-                      ? "bg-card text-primary-ink"
+                      ? "text-primary-ink"
                       : "text-foreground"
                   )}
                 >
-                  {product.id === "kiln" ? (
-                    <span
-                      aria-hidden="true"
-                      className="absolute inset-x-0 top-0 h-0.5 bg-primary"
-                    />
-                  ) : null}
                   {product.name}
                 </th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => (
-              <tr key={row.label}>
-                <th
-                  scope="row"
-                  className="sticky left-0 z-10 border-b border-border bg-background py-3.5 pr-3 text-left font-normal text-muted-foreground"
-                >
-                  {row.label}
-                </th>
-                {products.map((product) => (
-                  <td
-                    key={product.id}
-                    className={cn(
-                      "border-b border-border px-2 py-3.5",
-                      product.id === "kiln" && "bg-card"
-                    )}
+            {rows.map((row) => {
+              const best = bestAt(row)
+              return (
+                <tr key={row.label}>
+                  <th
+                    scope="row"
+                    className="sticky left-0 z-10 border-b border-border bg-background py-3.5 pr-3 text-left font-normal text-muted-foreground"
                   >
-                    <LevelMark level={row.cells[product.id]} />
-                  </td>
-                ))}
-              </tr>
-            ))}
+                    {row.label}
+                  </th>
+                  {products.map((product) => {
+                    const isBest = best.includes(product.id)
+                    return (
+                      <td
+                        key={product.id}
+                        className={cn(
+                          "border-b border-border px-2 py-3.5",
+                          isBest && "bg-primary/10"
+                        )}
+                      >
+                        <LevelMark
+                          best={isBest}
+                          level={row.cells[product.id]}
+                        />
+                      </td>
+                    )
+                  })}
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       </div>
@@ -157,6 +161,13 @@ function ComparisonTable() {
             {levelLabels[level]}
           </li>
         ))}
+        <li className="flex items-center gap-2">
+          <span
+            aria-hidden="true"
+            className="size-3 bg-primary/10 ring-1 ring-primary/30"
+          />
+          Best at it
+        </li>
       </ul>
     </>
   )
@@ -170,9 +181,11 @@ const levelLabels: Record<Level, string> = {
 
 // A filled, half-filled, or empty dot, so a row reads at a glance.
 function LevelMark({
+  best = false,
   decorative = false,
   level,
 }: {
+  best?: boolean
   decorative?: boolean
   level: Level
 }) {
@@ -189,7 +202,9 @@ function LevelMark({
         )}
       />
       {decorative ? null : (
-        <span className="sr-only">{levelLabels[level]}</span>
+        <span className="sr-only">
+          {best ? `${levelLabels[level]}, best at it` : levelLabels[level]}
+        </span>
       )}
     </span>
   )
