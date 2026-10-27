@@ -106,6 +106,7 @@ export const rows: Array<Row> = [
     label: "1-click catalog",
     notes: {
       kiln: "Only a few so far.",
+      openship: "About 40 templates so far.",
       portainer: "A short list of templates.",
     },
     best: ["pterodactyl", "coolify"],
@@ -115,7 +116,7 @@ export const rows: Array<Row> = [
       amp: "yes",
       coolify: "yes",
       dokploy: "yes",
-      openship: "no",
+      openship: "partly",
       portainer: "partly",
     },
   },
