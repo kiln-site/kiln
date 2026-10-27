@@ -185,42 +185,47 @@ export interface RelayPassthroughSample {
 // The totals last recorded for each Relay, so counters only add what's new.
 const recordedPassthrough = new Map<string, RelayPassthroughSample>()
 
-const samplePassthrough = (read: () => ReadonlyArray<RelayPassthroughSample>) =>
-  Effect.forEach(
-    read(),
-    (sample) => {
-      const last = recordedPassthrough.get(sample.relayId)
-      recordedPassthrough.set(sample.relayId, sample)
-      const relay = { "relay.id": sample.relayId }
-      return Effect.all(
-        [
-          Metric.update(
-            Metric.withAttributes(passthroughOpen, relay),
-            sample.open
-          ),
-          Metric.update(
-            Metric.withAttributes(passthroughBytes, {
-              ...relay,
-              direction: "to_relay",
-            }),
-            sample.bytesToRelay - (last?.bytesToRelay ?? 0)
-          ),
-          Metric.update(
-            Metric.withAttributes(passthroughBytes, {
-              ...relay,
-              direction: "from_relay",
-            }),
-            sample.bytesFromRelay - (last?.bytesFromRelay ?? 0)
-          ),
-          Metric.update(
-            Metric.withAttributes(passthroughRefused, relay),
-            sample.refused - (last?.refused ?? 0)
-          ),
-        ],
-        { discard: true }
-      )
-    },
-    { discard: true }
+// Reads afresh each time the sample runs, not once.
+export const samplePassthrough = (
+  read: () => ReadonlyArray<RelayPassthroughSample>
+) =>
+  Effect.suspend(() =>
+    Effect.forEach(
+      read(),
+      (sample) => {
+        const last = recordedPassthrough.get(sample.relayId)
+        recordedPassthrough.set(sample.relayId, sample)
+        const relay = { "relay.id": sample.relayId }
+        return Effect.all(
+          [
+            Metric.update(
+              Metric.withAttributes(passthroughOpen, relay),
+              sample.open
+            ),
+            Metric.update(
+              Metric.withAttributes(passthroughBytes, {
+                ...relay,
+                direction: "to_relay",
+              }),
+              sample.bytesToRelay - (last?.bytesToRelay ?? 0)
+            ),
+            Metric.update(
+              Metric.withAttributes(passthroughBytes, {
+                ...relay,
+                direction: "from_relay",
+              }),
+              sample.bytesFromRelay - (last?.bytesFromRelay ?? 0)
+            ),
+            Metric.update(
+              Metric.withAttributes(passthroughRefused, relay),
+              sample.refused - (last?.refused ?? 0)
+            ),
+          ],
+          { discard: true }
+        )
+      },
+      { discard: true }
+    )
   )
 
 declare global {

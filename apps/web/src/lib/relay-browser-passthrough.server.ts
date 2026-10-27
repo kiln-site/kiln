@@ -127,8 +127,9 @@ export async function passRelayBrowserRequest(
   const send = tunnel || !control.useTls ? httpRequest : httpsRequest
   return new Promise<Response>((resolve, reject) => {
     let responded = false
+    // Once the Relay answered, the answer holds the slot until it's done.
     const fail = (cause: Error) => {
-      slot.release()
+      if (!responded) slot.release()
       reject(cause)
     }
     const outgoing = send(

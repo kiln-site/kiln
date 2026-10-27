@@ -480,3 +480,95 @@ it("reads only a few forms at once, each for a short while", async () => {
     expect(response.status).toBe(401)
   }
 })
+
+it("keeps an answer's slot when the upload breaks off after the Relay answered", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] })
+  vi.stubEnv("KILN_RELAY_PASSTHROUGH_BYTES_PER_SECOND", "1024")
+  onTestFinished(() => {
+    vi.useRealTimers()
+  })
+  const early = "relay-passthrough-early"
+  await relayListener((_request, response) => {
+    response.end("e".repeat(4 * 1024))
+  }, early)
+  let breakOff: () => void = () => undefined
+  const brokenOff = new Promise<void>((resolve) => {
+    breakOff = resolve
+  })
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode("partial"))
+    },
+    async pull(controller) {
+      await brokenOff
+      controller.error(new Error("The browser went away"))
+    },
+  })
+  const response = await advanceUntil(
+    passRelayBrowserRequest(
+      early,
+      "files/root",
+      fileRequest(
+        "root",
+        { body, duplex: "half", method: "PUT" } as RequestInit,
+        signed({ audience: early, instanceId: "root" })
+      )
+    )
+  )
+  // The upload breaks off once Hearth has the Relay's answer.
+  breakOff()
+  await vi.advanceTimersByTimeAsync(100)
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  expect(relayPassthroughUsage(early).open).toBe(1)
+  expect(await readAll(response)).toBe(4 * 1024)
+  await advanceUntil(Promise.resolve())
+  expect(relayPassthroughUsage(early).open).toBe(0)
+})
+
+it("shares the rate between transfers in turn", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] })
+  vi.stubEnv("KILN_RELAY_PASSTHROUGH_BYTES_PER_SECOND", "1024")
+  onTestFinished(() => {
+    vi.useRealTimers()
+  })
+  const shared = "relay-passthrough-shared"
+  await relayListener((_request, response) => {
+    response.end("s".repeat(64 * 1024))
+  }, shared)
+  const ticket = signed({ audience: shared, instanceId: "root" })
+  const [first, second] = await advanceUntil(
+    Promise.all([
+      passRelayBrowserRequest(
+        shared,
+        "files/root",
+        fileRequest("root", {}, ticket)
+      ),
+      passRelayBrowserRequest(
+        shared,
+        "files/root",
+        fileRequest("root", {}, ticket)
+      ),
+    ])
+  )
+  const received = [0, 0]
+  const drain = async (response: Response, index: number) => {
+    const reader = response.body!.getReader()
+    for (;;) {
+      // oxlint-disable-next-line react-doctor/async-await-in-loop -- a stream is read in order
+      const { done, value } = await reader.read()
+      if (done) return
+      received[index]! += value.byteLength
+    }
+  }
+  void drain(first!, 0)
+  void drain(second!, 1)
+  for (let step = 0; step < 100; step += 1) {
+    // oxlint-disable-next-line react-doctor/async-await-in-loop -- each step must observe the I/O of the previous one
+    await vi.advanceTimersByTimeAsync(100)
+    // oxlint-disable-next-line react-doctor/async-await-in-loop -- see above
+    await new Promise<void>((resolve) => setImmediate(resolve))
+  }
+  // Ten seconds at 1 KiB/s, taken in turn.
+  expect(received[0]).toBeGreaterThanOrEqual(4 * 1024)
+  expect(received[1]).toBeGreaterThanOrEqual(4 * 1024)
+})

@@ -39,13 +39,22 @@ interface Usage {
   refused: number
 }
 
+// A piece waiting its turn at the shared rate.
+interface RateWaiter {
+  readonly bytes: number
+  readonly grant: () => void
+}
+
 interface PassthroughState {
   readonly usage: Map<string, Usage>
   readonly waiting: Array<() => void>
   open: number
-  // The shared rate's budget, in bytes, as of `refilledAt`.
+  // The shared rate's budget, in bytes, as of `refilledAt`, and the pieces
+  // waiting on it in turn, which the pacer lets through.
   budget: number
   refilledAt: number
+  readonly rateQueue: Array<RateWaiter>
+  pacer: ReturnType<typeof setTimeout> | undefined
 }
 
 declare global {
@@ -55,6 +64,8 @@ declare global {
 const state: PassthroughState = (globalThis.kilnRelayPassthrough ??= {
   budget: 0,
   open: 0,
+  pacer: undefined,
+  rateQueue: [],
   refilledAt: Date.now(),
   usage: new Map(),
   waiting: [],
@@ -130,40 +141,46 @@ export async function acquirePassthroughSlot(
   }
   let released = false
   let stalled: () => void = () => undefined
-  const stall = setTimeout(() => stalled(), STALL_MS)
+  // Pieces of this transfer waiting their turn at the rate, which isn't a
+  // stall; a reader that stops reading is.
+  let pacing = 0
+  const stall = setTimeout(() => {
+    if (pacing > 0) stall.refresh()
+    else stalled()
+  }, STALL_MS)
   stall.unref()
   return {
     meter: (direction) => {
-      let paced: ReturnType<typeof setTimeout> | undefined
+      let cancel: () => void = () => undefined
       return new Transform({
-        // Passed on in pieces small enough to keep to the shared rate, each
-        // counted and charged only as it goes. Waiting on the rate isn't a
-        // stall; a reader that stops reading is.
+        // Passed on in pieces small enough to share the rate, each counted
+        // and charged only as it goes.
         transform(chunk: Buffer, _encoding, callback) {
           let offset = 0
           const next = () => {
-            paced = undefined
-            while (offset < chunk.length) {
-              const size = Math.min(chunk.length - offset, pieceBytes())
-              const wait = rateWait(size)
+            if (offset >= chunk.length) {
+              callback()
+              return
+            }
+            const size = Math.min(chunk.length - offset, pieceBytes())
+            pacing += 1
+            cancel = awaitRate(size, () => {
+              pacing -= 1
+              cancel = () => undefined
               stall.refresh()
-              if (wait > 0) {
-                paced = setTimeout(next, wait)
-                return
-              }
               const piece = chunk.subarray(offset, offset + size)
               offset += size
               if (direction === "toRelay") usage.bytesToRelay += size
               else usage.bytesFromRelay += size
               this.push(piece)
-            }
-            callback()
+              next()
+            })
           }
           next()
         },
         destroy(cause, callback) {
-          // What wasn't passed on isn't charged.
-          clearTimeout(paced)
+          // A piece still waiting leaves its turn, uncharged.
+          cancel()
           callback(cause)
         },
       })
@@ -193,22 +210,72 @@ function pieceBytes(): number {
     : Math.max(1, Math.min(16 * 1024, Math.floor(rate)))
 }
 
-// How long until `bytes` fit the shared rate, if one is set; 0 when they do
-// now, in which case they're charged.
-function rateWait(bytes: number): number {
-  const rate = passthroughRate()
-  if (rate === null) return 0
-  const now = Date.now()
-  // A clock that steps back refills nothing, rather than taking budget away.
-  const elapsed = Math.max(0, now - state.refilledAt)
-  state.budget = Math.min(
-    Math.max(rate, bytes),
-    state.budget + (elapsed / 1000) * rate
-  )
-  state.refilledAt = now
-  if (state.budget >= bytes) {
-    state.budget -= bytes
-    return 0
+// Calls `grant` once `bytes` may pass at the shared rate, in turn with every
+// other piece waiting, and charges them then; at once without a rate.
+// Returns what takes the piece out of its turn, uncharged, if it's waiting.
+function awaitRate(bytes: number, grant: () => void): () => void {
+  if (passthroughRate() === null) {
+    grant()
+    return () => undefined
   }
-  return Math.ceil(((bytes - state.budget) / rate) * 1000)
+  let waiting = true
+  const waiter: RateWaiter = {
+    bytes,
+    grant: () => {
+      if (!waiting) return
+      waiting = false
+      grant()
+    },
+  }
+  state.rateQueue.push(waiter)
+  pace()
+  return () => {
+    if (!waiting) return
+    waiting = false
+    const index = state.rateQueue.indexOf(waiter)
+    if (index === -1) {
+      // Granted, but not yet passed on: given back.
+      state.budget += bytes
+    } else {
+      state.rateQueue.splice(index, 1)
+    }
+    pace()
+  }
+}
+
+// Lets waiting pieces through, first come first served, as the budget
+// allows, and wakes again when the next one fits.
+function pace(): void {
+  clearTimeout(state.pacer)
+  state.pacer = undefined
+  const rate = passthroughRate()
+  const granted: Array<RateWaiter> = []
+  for (let next = state.rateQueue[0]; next; next = state.rateQueue[0]) {
+    if (rate === null) {
+      granted.push(...state.rateQueue.splice(0))
+      break
+    }
+    const now = Date.now()
+    // A clock that steps back refills nothing, rather than taking budget
+    // away.
+    const elapsed = Math.max(0, now - state.refilledAt)
+    state.budget = Math.min(
+      Math.max(rate, next.bytes),
+      state.budget + (elapsed / 1000) * rate
+    )
+    state.refilledAt = now
+    if (state.budget < next.bytes) {
+      state.pacer = setTimeout(
+        pace,
+        Math.ceil(((next.bytes - state.budget) / rate) * 1000)
+      )
+      break
+    }
+    state.budget -= next.bytes
+    granted.push(state.rateQueue.shift()!)
+  }
+  // Granted after the queue settles, since each may ask for its next piece.
+  queueMicrotask(() => {
+    for (const waiter of granted) waiter.grant()
+  })
 }
