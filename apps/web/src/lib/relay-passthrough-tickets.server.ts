@@ -1,0 +1,134 @@
+import { verify } from "node:crypto"
+
+import { Option, Schema } from "effect"
+
+// Tickets: what lets a request through Hearth's pass-through as far as the
+// Relay. Every one already carries a credential Hearth signed for that
+// Relay with its own key for it: a browser capability, or a backup link's
+// token. Hearth checks its own signature, and that the credential is for
+// this Relay and this route and still valid, before it spends anything on
+// the request, such as a tunnel. The Relay still checks all it does today:
+// the browser's proof, nonces, revocation and paths.
+
+// As the Relay bounds a download's form.
+const MAX_FORM_BYTES = 2 * 1024 * 1024
+const MAX_CREDENTIAL_BYTES = 16 * 1024
+
+const decodePayload = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Struct({
+      audience: Schema.String,
+      expiresAt: Schema.Number,
+      issuer: Schema.String,
+      // Named by browser capabilities, and by backup links.
+      instanceId: Schema.optionalKey(Schema.String),
+      backupId: Schema.optionalKey(Schema.String),
+    })
+  )
+)
+
+export interface PassthroughSigner {
+  readonly clientId: string
+  readonly clientPublicKeyPem: string
+}
+
+export type PassthroughTicket =
+  // Allowed, with the body as read when finding the credential needed it.
+  | { readonly allowed: true; readonly body: Buffer | null }
+  | { readonly allowed: false }
+
+/**
+ * Whether a browser's request for `<kind>/<name>` on the Relay carries a
+ * credential Hearth signed for it that's still valid.
+ */
+export async function checkBrowserTicket(input: {
+  readonly kind: "backups" | "files"
+  readonly name: string
+  readonly relayId: string
+  readonly request: Request
+  readonly signer: PassthroughSigner
+}): Promise<PassthroughTicket> {
+  const { kind, name, relayId, request, signer } = input
+  if (kind === "backups") {
+    const token = new URL(request.url).searchParams.get("token") ?? ""
+    return signedFor(token, signer, relayId, { backupId: name })
+      ? { allowed: true, body: null }
+      : { allowed: false }
+  }
+  let authorization = request.headers.get("authorization")
+  let body: Buffer | null = null
+  // A native download posts its credentials in a form, which can't set
+  // headers; the form is passed on as read.
+  if (
+    authorization === null &&
+    request.method === "POST" &&
+    request.headers
+      .get("content-type")
+      ?.startsWith("application/x-www-form-urlencoded")
+  ) {
+    body = await readBounded(request, MAX_FORM_BYTES)
+    if (!body) return { allowed: false }
+    authorization = new URLSearchParams(body.toString("utf8")).get(
+      "authorization"
+    )
+  }
+  return authorization?.startsWith("Kiln ") &&
+    signedFor(authorization.slice(5), signer, relayId, { instanceId: name })
+    ? { allowed: true, body }
+    : { allowed: false }
+}
+
+/**
+ * Whether `credential`, as `<payload>.<signature>`, is one Hearth signed
+ * for this Relay, naming `names`, that hasn't expired.
+ */
+export function signedFor(
+  credential: string,
+  signer: PassthroughSigner,
+  relayId: string,
+  names: { readonly backupId?: string; readonly instanceId?: string }
+): boolean {
+  if (credential.length > MAX_CREDENTIAL_BYTES) return false
+  const [encoded, signature, extra] = credential.split(".")
+  if (!encoded || !signature || extra !== undefined) return false
+  const payload = Option.getOrNull(
+    decodePayload(Buffer.from(encoded, "base64url").toString("utf8"))
+  )
+  return (
+    payload !== null &&
+    payload.audience === relayId &&
+    payload.issuer === signer.clientId &&
+    payload.expiresAt > Date.now() &&
+    (names.backupId === undefined || payload.backupId === names.backupId) &&
+    (names.instanceId === undefined ||
+      payload.instanceId === names.instanceId) &&
+    verify(
+      null,
+      Buffer.from(encoded),
+      signer.clientPublicKeyPem,
+      Buffer.from(signature, "base64url")
+    )
+  )
+}
+
+// The request's body, or null once it's longer than `limit`.
+async function readBounded(
+  request: Request,
+  limit: number
+): Promise<Buffer | null> {
+  if (!request.body) return Buffer.alloc(0)
+  const chunks: Array<Uint8Array> = []
+  let size = 0
+  const reader = request.body.getReader()
+  for (;;) {
+    // oxlint-disable-next-line react-doctor/async-await-in-loop -- a stream is read in order
+    const { done, value } = await reader.read()
+    if (done) return Buffer.concat(chunks)
+    size += value.byteLength
+    if (size > limit) {
+      await reader.cancel()
+      return null
+    }
+    chunks.push(value)
+  }
+}

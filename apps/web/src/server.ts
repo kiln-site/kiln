@@ -56,6 +56,7 @@ import {
   stopSecurityScans,
 } from "./lib/security-scans.server"
 import { startRelayMetrics, stopRelayMetrics } from "./lib/relay-metrics"
+import { relayPassthroughUsages } from "./lib/relay-passthrough-limits.server"
 
 await migrateDatabase()
 // Before the app runtime starts, so telemetry carries the ID, and before
@@ -67,7 +68,7 @@ startAppDeploymentPolling()
 startAppImageUpdateChecks()
 startIconDetection()
 startSecurityScans()
-startRelayMetrics(relayConnectionsCapacity)
+startRelayMetrics(relayConnectionsCapacity, relayPassthroughUsages)
 
 const pairRelayFromEnvironment = Effect.tryPromise({
   try: initializeRelayFromEnvironment,

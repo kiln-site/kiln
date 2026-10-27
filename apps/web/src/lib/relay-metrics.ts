@@ -41,6 +41,29 @@ const requestDuration = Metric.histogram("hearth.relay.request.duration", {
   ],
 })
 
+/**
+ * What Hearth carries for Relays it passes transfers through to
+ * (relay-passthrough-limits.server.ts): those open now, the bytes each way,
+ * and those turned away for want of a slot.
+ */
+const passthroughOpen = Metric.gauge("hearth.relay.passthrough.open", {
+  description: "Transfers Hearth is carrying through to a Relay now",
+  attributes: { unit: "{transfer}" },
+})
+
+const passthroughBytes = Metric.counter("hearth.relay.passthrough.bytes", {
+  description:
+    "Bytes Hearth carried to or from a Relay through its pass-through",
+  attributes: { unit: "By" },
+  incremental: true,
+})
+
+const passthroughRefused = Metric.counter("hearth.relay.passthrough.refused", {
+  description: "Transfers through Hearth turned away because no slot came free",
+  attributes: { unit: "{transfer}" },
+  incremental: true,
+})
+
 const sampleInterval = "10 seconds"
 
 /** Counts a request Hearth didn't send because the connection was full. */
@@ -150,16 +173,71 @@ const sampleConnections = (
     )
   })
 
+/** What Hearth carried for one Relay, as the sampler reads it. */
+export interface RelayPassthroughSample {
+  readonly relayId: string
+  readonly open: number
+  readonly bytesToRelay: number
+  readonly bytesFromRelay: number
+  readonly refused: number
+}
+
+// The totals last recorded for each Relay, so counters only add what's new.
+const recordedPassthrough = new Map<string, RelayPassthroughSample>()
+
+const samplePassthrough = (read: () => ReadonlyArray<RelayPassthroughSample>) =>
+  Effect.forEach(
+    read(),
+    (sample) => {
+      const last = recordedPassthrough.get(sample.relayId)
+      recordedPassthrough.set(sample.relayId, sample)
+      const relay = { "relay.id": sample.relayId }
+      return Effect.all(
+        [
+          Metric.update(
+            Metric.withAttributes(passthroughOpen, relay),
+            sample.open
+          ),
+          Metric.update(
+            Metric.withAttributes(passthroughBytes, {
+              ...relay,
+              direction: "to_relay",
+            }),
+            sample.bytesToRelay - (last?.bytesToRelay ?? 0)
+          ),
+          Metric.update(
+            Metric.withAttributes(passthroughBytes, {
+              ...relay,
+              direction: "from_relay",
+            }),
+            sample.bytesFromRelay - (last?.bytesFromRelay ?? 0)
+          ),
+          Metric.update(
+            Metric.withAttributes(passthroughRefused, relay),
+            sample.refused - (last?.refused ?? 0)
+          ),
+        ],
+        { discard: true }
+      )
+    },
+    { discard: true }
+  )
+
 declare global {
   var kilnRelayMetricsWorker: Fiber.Fiber<void> | undefined
 }
 
-/** Records each Relay connection's gauges every ten seconds. */
+/**
+ * Records each Relay connection's gauges every ten seconds, and what Hearth
+ * carried for each Relay through its pass-through.
+ */
 export function startRelayMetrics(
-  read: () => ReadonlyArray<RelayConnectionCapacity>
+  read: () => ReadonlyArray<RelayConnectionCapacity>,
+  readPassthrough: () => ReadonlyArray<RelayPassthroughSample> = () => []
 ) {
   globalThis.kilnRelayMetricsWorker ??= forkAppWorker(
     sampleConnections(read).pipe(
+      Effect.andThen(samplePassthrough(readPassthrough)),
       Effect.andThen(Effect.sleep(sampleInterval)),
       Effect.forever
     )

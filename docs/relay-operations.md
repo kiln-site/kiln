@@ -272,6 +272,33 @@ request that claimed it:
 | `relay.databases.replaceContainer` | Recreating a database's container to remove a limit                                                                                                                                                                                               |
 | `relay.databases.diskUsage`        | Docker measuring every volume, for databases' disk use                                                                                                                                                                                            |
 
+## Transfers through Hearth
+
+A Relay browsers can't reach, such as one that dials Hearth from behind a
+home router, has its file transfers and backup downloads passed through
+Hearth (`/api/relays/<id>/browser/...`). Hearth reaches the Relay through a
+tunnel when the Relay dialed it, and directly otherwise.
+
+- **Tickets.** Before it spends anything on a request, Hearth checks that
+  the credential it carries is one Hearth signed for that Relay: a browser
+  capability, in the `Authorization` header or a native download's form, or
+  a backup link's token. It must name this Relay and this file root or
+  backup, and not have expired. Anything else gets 401 before a tunnel is
+  opened. The Relay still checks all it does for a direct request, such as
+  the browser's proof, nonces, revocation and paths.
+- **Slots.** Hearth carries at most 8 transfers to one Relay at once, and
+  64 for all Relays together (`KILN_RELAY_PASSTHROUGH_MAX`). Past that, a
+  request waits up to 5 seconds for a slot, then gets 503 with
+  `Retry-After`. Control connections don't count against these.
+- **Stalls.** A transfer through Hearth that moves no bytes either way for
+  60 seconds is ended, freeing its slot.
+- **Rate.** `KILN_RELAY_PASSTHROUGH_BYTES_PER_SECOND` caps all transfers
+  through Hearth together, for a Hearth on a metered or small server. It's
+  off unless set.
+- **Meters.** Hearth counts what it carries for each Relay: transfers open,
+  bytes each way, and those turned away. The Relay's page shows them, and
+  they're recorded as `hearth.relay.passthrough.*` metrics.
+
 ## Limits
 
 - **No preemption.** A kill waits behind a running start or stop like any

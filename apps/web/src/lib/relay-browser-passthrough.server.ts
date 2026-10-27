@@ -3,8 +3,11 @@ import type { IncomingHttpHeaders } from "node:http"
 import { request as httpsRequest } from "node:https"
 import { pipeline, Readable } from "node:stream"
 
+import { tapPromiseError } from "@/effect/promise"
 import { relayControlEndpoint } from "@/lib/relay-control-endpoint"
 import { kilnPublicUrl } from "@/lib/environment"
+import { acquirePassthroughSlot } from "@/lib/relay-passthrough-limits.server"
+import { checkBrowserTicket } from "@/lib/relay-passthrough-tickets.server"
 import { loadPersistedRelay, loadRelayCredentials } from "@/lib/relay-registry"
 import {
   openRelayTunnel,
@@ -19,6 +22,11 @@ import {
 // to it, so Hearth only carries bytes: it forwards no cookies, and only
 // these routes. What it carries is served under Hearth's origin, so it's
 // never run as a page there, whatever the Relay says it is.
+//
+// Before Hearth spends anything on a request, it checks the credential it
+// carries is one Hearth signed for this Relay
+// (relay-passthrough-tickets.server.ts), then waits its turn among the
+// transfers it carries (relay-passthrough-limits.server.ts).
 
 // `route` is decoded: its name is encoded again for the Relay.
 const ROUTE = /^(files|backups)\/([^/]+)$/u
@@ -71,14 +79,37 @@ export async function passRelayBrowserRequest(
   }
   const relay = await loadPersistedRelay(relayId)
   if (!relay) return Response.json({ error: "Unknown Relay" }, { status: 404 })
+  const credentials = await loadRelayCredentials(relay.id)
+  const ticket = await checkBrowserTicket({
+    kind: kind as "backups" | "files",
+    name,
+    relayId: relay.id,
+    request,
+    signer: credentials,
+  })
+  if (!ticket.allowed) {
+    return Response.json(
+      { error: "Not a transfer Hearth allowed" },
+      { status: 401 }
+    )
+  }
+  const slot = await acquirePassthroughSlot(relay.id)
+  if (!slot) {
+    return Response.json(
+      { error: "Hearth is carrying as many transfers as it can. Try again." },
+      { headers: { "retry-after": "5" }, status: 503 }
+    )
+  }
   const control = relayControlEndpoint(relay)
   const throughTunnel = relayReachedThroughTunnel(relay.id)
   const ca =
     !throughTunnel && control.useTls
-      ? ((await loadRelayCredentials(relay.id)).caCertificatePem ?? undefined)
+      ? (credentials.caCertificatePem ?? undefined)
       : undefined
   // Opened last, so nothing can fail between here and the request taking it.
-  const tunnel = throughTunnel ? await openRelayTunnel(relay) : null
+  const tunnel = throughTunnel
+    ? await tapPromiseError(() => openRelayTunnel(relay), slot.release)
+    : null
   const url = new URL(request.url)
   const headers: Record<string, string> = {
     // The Relay accepts the origins of the Hearths paired with it.
@@ -90,6 +121,11 @@ export async function passRelayBrowserRequest(
   }
   const send = tunnel || !control.useTls ? httpRequest : httpsRequest
   return new Promise<Response>((resolve, reject) => {
+    let responded = false
+    const fail = (cause: Error) => {
+      slot.release()
+      reject(cause)
+    }
     const outgoing = send(
       {
         ...(tunnel
@@ -106,6 +142,12 @@ export async function passRelayBrowserRequest(
         signal: request.signal,
       },
       (incoming) => {
+        responded = true
+        incoming.once("close", slot.release)
+        slot.onStall(() => {
+          incoming.destroy()
+          outgoing.destroy()
+        })
         const status = incoming.statusCode ?? 0
         // Only answers a Response can carry, so a Relay can't throw here.
         if (status < 200 || status > 599) {
@@ -120,30 +162,52 @@ export async function passRelayBrowserRequest(
         }
         const bodyless =
           request.method === "HEAD" || NULL_BODY_STATUSES.has(status)
-        if (bodyless) incoming.resume()
-        resolve(
-          new Response(
-            bodyless
-              ? null
-              : (Readable.toWeb(incoming) as ReadableStream<Uint8Array>),
-            { headers: responseHeaders(incoming.headers), status }
+        if (bodyless) {
+          incoming.resume()
+          resolve(
+            new Response(null, {
+              headers: responseHeaders(incoming.headers),
+              status,
+            })
           )
+          return
+        }
+        const body = slot.meter("fromRelay")
+        pipeline(incoming, body, () => undefined)
+        resolve(
+          new Response(Readable.toWeb(body) as ReadableStream<Uint8Array>, {
+            headers: responseHeaders(incoming.headers),
+            status,
+          })
         )
       }
     )
-    if (request.body && request.method !== "GET" && request.method !== "HEAD") {
+    // Without an answer, the slot is free once the request is.
+    outgoing.once("close", () => {
+      if (!responded) slot.release()
+    })
+    slot.onStall(() => outgoing.destroy())
+    const upload =
+      ticket.body ??
+      (request.body && request.method !== "GET" && request.method !== "HEAD"
+        ? request.body
+        : null)
+    if (upload) {
       // An upload that breaks off ends the request to the Relay too.
       pipeline(
-        Readable.fromWeb(
-          request.body as import("node:stream/web").ReadableStream
-        ),
+        Buffer.isBuffer(upload)
+          ? Readable.from([upload])
+          : Readable.fromWeb(
+              upload as import("node:stream/web").ReadableStream
+            ),
+        slot.meter("toRelay"),
         outgoing,
         (cause) => {
-          if (cause) reject(cause)
+          if (cause) fail(cause)
         }
       )
     } else {
-      outgoing.once("error", reject)
+      outgoing.once("error", fail)
       outgoing.end()
     }
   })
