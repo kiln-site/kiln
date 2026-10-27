@@ -38,25 +38,41 @@ export interface Row {
   cells: Record<ProductId, Level>
   // Who does this best, highlighted in the chart. Kiln unless said otherwise.
   best?: Array<ProductId>
+  // Why a cell is only "partly" or "weak", shown when it's hovered or tapped.
+  // Every partial cell needs one.
+  notes?: Partial<Record<ProductId, string>>
 }
+
+const noGameTooling =
+  "No game server tooling. It can run one as a plain Docker container, but you set up the image, ports, and updates yourself."
 
 // Only rows where the projects differ. Anything that runs Docker can run a
 // game server, so "partly" there means without game tooling.
 export const rows: Array<Row> = [
   {
     label: "Game servers",
+    notes: {
+      coolify: noGameTooling,
+      dokploy: noGameTooling,
+      openship: noGameTooling,
+      portainer: noGameTooling,
+    },
     cells: {
       kiln: "yes",
       pterodactyl: "yes",
       amp: "yes",
       coolify: "weak",
-      dokploy: "partly",
-      openship: "partly",
-      portainer: "partly",
+      dokploy: "weak",
+      openship: "weak",
+      portainer: "weak",
     },
   },
   {
     label: "Apps from Git",
+    notes: {
+      portainer:
+        "Redeploys Compose stacks from a Git repository, but doesn't build your code.",
+    },
     cells: {
       kiln: "yes",
       pterodactyl: "no",
@@ -69,6 +85,12 @@ export const rows: Array<Row> = [
   },
   {
     label: "Databases",
+    notes: {
+      pterodactyl:
+        "Creates MySQL databases for game servers to use, not database servers of their own.",
+      portainer:
+        "Runs a database as a plain container, without backups or connection details set up for you.",
+    },
     cells: {
       kiln: "yes",
       pterodactyl: "partly",
@@ -81,6 +103,10 @@ export const rows: Array<Row> = [
   },
   {
     label: "1-click apps and servers",
+    notes: {
+      kiln: "Game servers start from a Brick in one click. Apps start from your own repository, image, or Compose file, with no catalog of ready-made apps yet.",
+      portainer: "Has app templates, but a short list of them.",
+    },
     best: ["pterodactyl", "coolify"],
     cells: {
       kiln: "partly",
@@ -94,6 +120,10 @@ export const rows: Array<Row> = [
   },
   {
     label: "File editor",
+    notes: {
+      portainer:
+        "Browses volumes through its agent, but isn't a full file editor.",
+    },
     cells: {
       kiln: "yes",
       pterodactyl: "yes",
@@ -118,6 +148,16 @@ export const rows: Array<Row> = [
   },
   {
     label: "Permissions",
+    notes: {
+      coolify:
+        "Team-wide roles only, so you can't limit someone to one app or server.",
+      dokploy:
+        "Members can be limited to projects and services. Custom roles are a paid feature.",
+      openship:
+        "An organization shares its projects with its members, without finer roles.",
+      portainer:
+        "Teams can be given environments. Role-based access is in the paid Business Edition.",
+    },
     cells: {
       kiln: "yes",
       pterodactyl: "yes",
@@ -142,6 +182,9 @@ export const rows: Array<Row> = [
   },
   {
     label: "Updates from the panel",
+    notes: {
+      portainer: "Upgrading from the panel is in the paid Business Edition.",
+    },
     cells: {
       kiln: "yes",
       pterodactyl: "no",
@@ -154,6 +197,10 @@ export const rows: Array<Row> = [
   },
   {
     label: "Vulnerability scanning",
+    notes: {
+      coolify: "Limited checks, not a scan of every host and image you run.",
+      portainer: "Image scanning is in the paid Business Edition.",
+    },
     cells: {
       kiln: "yes",
       pterodactyl: "no",
@@ -166,6 +213,10 @@ export const rows: Array<Row> = [
   },
   {
     label: "Swarm or Kubernetes",
+    notes: {
+      coolify:
+        "Docker Swarm support is experimental, and there's no Kubernetes.",
+    },
     best: ["dokploy", "portainer"],
     cells: {
       kiln: "no",
@@ -192,6 +243,12 @@ export const rows: Array<Row> = [
   },
   {
     label: "Free and open source",
+    notes: {
+      dokploy:
+        "Apache-2.0, but SSO, audit logs, and custom roles need a paid license.",
+      portainer:
+        "The Community Edition is open source. The Business Edition is paid per node.",
+    },
     cells: {
       kiln: "yes",
       pterodactyl: "yes",
@@ -279,8 +336,8 @@ export const reasons: Array<Reason> = [
 
 const levelSuffix: Record<Level, string | null> = {
   yes: "",
-  partly: " (partly)",
-  weak: " (barely)",
+  partly: "partly",
+  weak: "barely",
   no: null,
 }
 
@@ -352,7 +409,10 @@ export function comparisonStructuredData({
             applicationCategory: "DeveloperApplication",
             featureList: rows.flatMap((row) => {
               const suffix = levelSuffix[row.cells[product.id]]
-              return suffix === null ? [] : [`${row.label}${suffix}`]
+              if (suffix === null) return []
+              if (!suffix) return [row.label]
+              const note = row.notes?.[product.id]
+              return [`${row.label} (${suffix}${note ? `: ${note}` : ""})`]
             }),
             name: product.name,
             url: product.url ?? siteUrl,

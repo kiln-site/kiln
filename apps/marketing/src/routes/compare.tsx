@@ -1,8 +1,13 @@
-import type * as React from "react"
+import * as React from "react"
 import { Link, createFileRoute } from "@tanstack/react-router"
 import { ArrowUpRight, Gauge, Layers, LockOpen, Server } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
+import {
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from "@workspace/ui/components/hover-card"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { InstallCommand, useInstallCommand } from "~/components/install-command"
@@ -150,9 +155,10 @@ function ComparisonTable() {
                           product.id === "kiln" && pinnedKilnClassName
                         )}
                       >
-                        <LevelMark
+                        <CellMark
                           best={isBest}
                           level={row.cells[product.id]}
+                          note={row.notes?.[product.id]}
                         />
                       </td>
                     )
@@ -177,6 +183,7 @@ function ComparisonTable() {
           />
           Best at it
         </li>
+        <li>Hover or tap a half or quarter dot to see why.</li>
       </ul>
     </>
   )
@@ -189,15 +196,56 @@ const levelLabels: Record<Level, string> = {
   no: "No",
 }
 
+// A cell's dot. A partial one explains itself on hover, or on tap on a
+// phone, where hovering isn't possible.
+function CellMark({
+  best,
+  level,
+  note,
+}: {
+  best: boolean
+  level: Level
+  note: string | undefined
+}) {
+  const [open, setOpen] = React.useState(false)
+  if (!note) return <LevelMark best={best} level={level} />
+  return (
+    <HoverCard
+      open={open}
+      onOpenChange={setOpen}
+      openDelay={100}
+      closeDelay={100}
+    >
+      <HoverCardTrigger asChild>
+        <button
+          type="button"
+          className="mx-auto -my-1 flex cursor-help p-1 outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+          onClick={() => setOpen(true)}
+        >
+          <LevelMark best={best} level={level} note={note} />
+        </button>
+      </HoverCardTrigger>
+      <HoverCardContent side="top" className="type-support w-60 text-left">
+        <span className="type-label block text-muted-foreground">
+          {levelLabels[level]}
+        </span>
+        <span className="mt-1 block text-foreground">{note}</span>
+      </HoverCardContent>
+    </HoverCard>
+  )
+}
+
 // A filled, half, quarter, or empty dot, so a row reads at a glance.
 function LevelMark({
   best = false,
   decorative = false,
   level,
+  note,
 }: {
   best?: boolean
   decorative?: boolean
   level: Level
+  note?: string
 }) {
   return (
     <span className="flex justify-center">
@@ -215,7 +263,10 @@ function LevelMark({
       />
       {decorative ? null : (
         <span className="sr-only">
-          {best ? `${levelLabels[level]}, best at it` : levelLabels[level]}
+          {[levelLabels[level], best && "best at it"]
+            .filter(Boolean)
+            .join(", ")}
+          {note ? `. ${note}` : null}
         </span>
       )}
     </span>
