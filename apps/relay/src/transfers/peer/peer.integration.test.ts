@@ -103,8 +103,15 @@ describeLinux("transfers between Relays", () => {
     // As Hearth passes pulls through to a Relay that dialed it: beneath a
     // path of its own, forwarding the request as it is.
     const passThrough = createServer((request, response) => {
+      const route = (request.url ?? "").match(
+        /^\/api\/relays\/source\/peer(\/v1\/peer\/transfers\/[^/?]+(?:\?.*)?)$/u
+      )?.[1]
+      if (!route) {
+        response.writeHead(404).end()
+        return
+      }
       const forwarded = httpRequest(
-        `${source.url}${(request.url ?? "").replace(/^\/api\/relays\/source\/peer/u, "")}`,
+        `${source.url}${route}`,
         { headers: request.headers, method: request.method },
         (answer) => {
           response.writeHead(answer.statusCode ?? 502, answer.headers)

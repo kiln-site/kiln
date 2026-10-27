@@ -36,7 +36,9 @@ import {
 
 // Routes arrive decoded: their names are encoded again for the Relay.
 const BROWSER_ROUTE = /^(files|backups)\/([^/]+)$/u
-const PEER_ROUTE = /^transfers\/([A-Za-z0-9_-]{8,64})$/u
+// A Relay pulling through Hearth puts its usual route (`relayPeerTransferPath`)
+// beneath the pass-through's own path.
+const PEER_ROUTE = /^v1\/peer\/transfers\/([A-Za-z0-9_-]{8,64})$/u
 const REQUEST_HEADERS = [
   "authorization",
   "content-length",
@@ -98,7 +100,7 @@ export function passRelayBrowserRequest(
     : Promise.resolve(notTransfer())
 }
 
-/** Passes another Relay's pull of `/v1/peer/<route>` on to this Relay. */
+/** Passes another Relay's pull of `/<route>` on to this Relay. */
 export function passRelayPeerRequest(
   relayId: string,
   route: string,
