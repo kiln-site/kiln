@@ -51,7 +51,7 @@ const config = defineConfig(({ command }) => ({
     // kiln.site (see scripts/serve.mjs).
     proxy: process.env.KILN_DOCS_ORIGIN
       ? {
-          "^/docs(/|$)": {
+          "^/docs([/?]|$)": {
             target: process.env.KILN_DOCS_ORIGIN,
             ws: true,
           },

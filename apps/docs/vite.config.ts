@@ -4,6 +4,7 @@ import viteReact from "@vitejs/plugin-react"
 import tailwindcss from "@tailwindcss/vite"
 
 import { docsContent } from "./content-plugin"
+import { docsRedirect } from "./scripts/redirects.mjs"
 
 // Kiln's docs. They're served under a path on kiln.site, `/docs` unless
 // KILN_DOCS_BASE_PATH says otherwise when building; every route and asset
@@ -38,6 +39,21 @@ const config = defineConfig(({ command }) => ({
     host: "0.0.0.0",
   },
   plugins: lazyPlugins(() => [
+    {
+      // The same redirects as production, ahead of Vite's own handling of
+      // the base path.
+      name: "kiln-docs:redirects",
+      configureServer(server) {
+        server.middlewares.use((request, response, next) => {
+          const url = new URL(request.url ?? "/", "http://localhost")
+          const location = docsRedirect(url, base.replace(/\/$/, ""))
+          if (!location) return next()
+          response.statusCode = 308
+          response.setHeader("Location", location)
+          response.end()
+        })
+      },
+    },
     docsContent(),
     tailwindcss(),
     tanstackStart(),

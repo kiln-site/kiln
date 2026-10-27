@@ -50,7 +50,7 @@ LABEL org.opencontainers.image.source="${KILN_IMAGE_SOURCE}" \
 
 COPY --from=runtime-deps --chown=65532:65532 /runtime/node_modules ./node_modules
 COPY --from=build --chown=65532:65532 /source/apps/docs/dist ./dist
-COPY --from=build --chown=65532:65532 /source/apps/docs/scripts/serve.mjs ./scripts/serve.mjs
+COPY --from=build --chown=65532:65532 /source/apps/docs/scripts/serve.mjs /source/apps/docs/scripts/redirects.mjs ./scripts/
 COPY --from=build --chown=65532:65532 /source/apps/docs/package.runtime.json ./package.json
 
 USER 65532:65532

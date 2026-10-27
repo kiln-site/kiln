@@ -44,7 +44,7 @@ export function SiteFooter() {
               <Link to="/compare">Compare</Link>
             </FooterLink>
             <FooterLink>
-              <a href={docsUrl}>Docs</a>
+              <a href={`${docsUrl}/`}>Docs</a>
             </FooterLink>
             <FooterLink>
               <a href={signInUrl(hearthUrl)}>Log in</a>

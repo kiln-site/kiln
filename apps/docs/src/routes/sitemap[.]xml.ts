@@ -9,7 +9,7 @@ export const Route = createFileRoute("/sitemap.xml")({
       GET: async () => {
         const { siteUrl } = await getSiteConfig()
         const urls = [
-          pageUrl(siteUrl, ""),
+          pageUrl(siteUrl, "/"),
           ...pagesInOrder().map((page) => pageUrl(siteUrl, page.path)),
         ]
         const body = [

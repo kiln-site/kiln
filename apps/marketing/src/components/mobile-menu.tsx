@@ -58,7 +58,7 @@ export function MobileMenu() {
           <PageLink to="/compare" onNavigate={close}>
             Compare
           </PageLink>
-          <a href={docsUrl} className={pageLinkClassName}>
+          <a href={`${docsUrl}/`} className={pageLinkClassName}>
             Docs
           </a>
         </nav>

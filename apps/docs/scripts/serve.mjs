@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url"
 import { serve } from "srvx/node"
 import { staticMiddleware } from "srvx/static"
 
+import { docsRedirect } from "./redirects.mjs"
+
 const { default: app } = await import("../dist/server/server.js")
 
 if (!app || typeof app.fetch !== "function") {
@@ -20,6 +22,13 @@ const basePath = trimmedBase ? `/${trimmedBase}` : ""
 const serveStatic = staticMiddleware({
   dir: fileURLToPath(new URL("../dist/client", import.meta.url)),
 })
+
+function redirects(request, next) {
+  const location = docsRedirect(new URL(request.url), basePath)
+  return location
+    ? new Response(null, { status: 308, headers: { Location: location } })
+    : next()
+}
 
 async function staticFiles(request, next) {
   const url = new URL(request.url)
@@ -40,7 +49,7 @@ async function staticFiles(request, next) {
 const server = serve({
   ...app,
   hostname: process.env.HOST || "0.0.0.0",
-  middleware: [staticFiles],
+  middleware: [redirects, staticFiles],
   port: process.env.PORT || 3000,
 })
 

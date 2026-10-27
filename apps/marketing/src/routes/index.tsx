@@ -114,7 +114,7 @@ function Hero() {
                   variant="outline"
                   className="h-11 px-5 text-[0.9375rem]"
                 >
-                  <a href={docsUrl}>Read the docs</a>
+                  <a href={`${docsUrl}/`}>Read the docs</a>
                 </Button>
               </div>
             )}

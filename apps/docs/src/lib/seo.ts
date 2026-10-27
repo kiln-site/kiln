@@ -23,7 +23,7 @@ export function pageHead({
   title: string
 }): { links: AnyRouteMatch["links"]; meta: AnyRouteMatch["meta"] } {
   const siteUrl = siteUrlOf(matches)
-  const url = `${siteUrl}${withBase(path === "/" ? "" : path)}`
+  const url = `${siteUrl}${withBase(path)}`
   const image = `${siteUrl}/og.png`
   return {
     links: [{ rel: "canonical", href: url }],
