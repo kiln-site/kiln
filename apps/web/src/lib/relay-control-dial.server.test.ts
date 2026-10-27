@@ -279,20 +279,15 @@ it("opens its own connection when a Relay it prefers to be dialed by doesn't", a
 
 it("takes a tunnel only for a token it asked for, and carries bytes through it", async () => {
   relayAt(await closedPort(), "relay")
-  const stranger = new WebSocket(
+  // Hearth waits for no tunnel, so it takes none.
+  const early = new WebSocket(
     `${hearthOrigin.replace("http", "ws")}${relayTunnelPath}`,
     relayTunnelProtocol
   )
-  await advanceUntil(once(stranger, "open"))
-  const strangerClosed = once(stranger, "close")
-  stranger.send(
-    JSON.stringify({
-      token: randomBytes(32).toString("base64url"),
-      type: "tunnel.hello",
-      v: 1,
-    })
-  )
-  expect((await advanceUntil(strangerClosed))[0]).toBe(4401)
+  const [, refused] = (await advanceUntil(
+    once(early, "unexpected-response")
+  )) as [unknown, { readonly statusCode: number }]
+  expect(refused.statusCode).toBe(429)
 
   // The Relay's listener, here one that echoes.
   const listener = createTcpServer((socket) => socket.pipe(socket))
@@ -311,6 +306,21 @@ it("takes a tunnel only for a token it asked for, and carries bytes through it",
     readonly payload: { readonly token: string }
   }
   expect(request.operation).toBe("relay.tunnel.open")
+  // Another tunnel, while Hearth waits for one, but not named for it.
+  const stranger = new WebSocket(
+    `${hearthOrigin.replace("http", "ws")}${relayTunnelPath}`,
+    relayTunnelProtocol
+  )
+  await advanceUntil(once(stranger, "open"))
+  const strangerClosed = once(stranger, "close")
+  stranger.send(
+    JSON.stringify({
+      token: randomBytes(32).toString("base64url"),
+      type: "tunnel.hello",
+      v: 1,
+    })
+  )
+  expect((await advanceUntil(strangerClosed))[0]).toBe(4401)
   // As the Relay does: open the tunnel, name it, carry the listener.
   const tunnel = new WebSocket(
     `${hearthOrigin.replace("http", "ws")}${relayTunnelPath}`,

@@ -141,6 +141,11 @@ const openRelayTunnelEffect = Effect.fn("RelayTunnel.open")(function* (
   )
 })
 
+/** How many tunnels Hearth asked for that haven't arrived. */
+export function relayTunnelsAwaited(): number {
+  return waiting.size
+}
+
 /**
  * Hands a tunnel the Relay opened to whoever asked for it with its token.
  * False when nobody is waiting for that token.

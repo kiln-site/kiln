@@ -21,7 +21,10 @@ import { forkPromise } from "@/effect/promise"
 import { reportAppError } from "@/effect/runtime"
 import { adoptRelayControlSocket } from "@/lib/relay-connection"
 import { loadPersistedRelay } from "@/lib/relay-registry"
-import { acceptRelayTunnel } from "@/lib/relay-tunnel.server"
+import {
+  acceptRelayTunnel,
+  relayTunnelsAwaited,
+} from "@/lib/relay-tunnel.server"
 import { assertRequestRateLimit } from "@/lib/request-rate-limit"
 
 // Relays dialing Hearth: a Relay Hearth can't reach, such as one behind a
@@ -47,6 +50,7 @@ const decodeTunnelHello = Schema.decodeUnknownOption(
 )
 
 let waiting = 0
+let waitingTunnels = 0
 
 const server = new WebSocketServer({
   clientTracking: false,
@@ -80,6 +84,17 @@ export function handleRelayControlUpgrade(
   if (pathname !== relayControlDialPath && pathname !== relayTunnelPath) {
     return false
   }
+  // Tunnels come as often as transfers through Hearth do, so they don't
+  // count against control connections: as many may wait to be named as
+  // Hearth waits for.
+  if (pathname === relayTunnelPath) {
+    if (waitingTunnels >= relayTunnelsAwaited()) {
+      socket.end("HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\n\r\n")
+    } else {
+      tunnels.handleUpgrade(request, socket, head, receiveTunnel)
+    }
+    return true
+  }
   const forwarded = request.headers["x-forwarded-for"]
   const address =
     (typeof forwarded === "string"
@@ -102,11 +117,7 @@ export function handleRelayControlUpgrade(
     refuseUpgrade(socket, "429 Too Many Requests")
     return true
   }
-  if (pathname === relayTunnelPath) {
-    tunnels.handleUpgrade(request, socket, head, receiveTunnel)
-  } else {
-    server.handleUpgrade(request, socket, head, greet)
-  }
+  server.handleUpgrade(request, socket, head, greet)
   return true
 }
 
@@ -125,12 +136,12 @@ function receiveTunnel(socket: WebSocket): void {
     socket.close(4400, "Expected the Relay tunnel protocol")
     return
   }
-  waiting += 1
+  waitingTunnels += 1
   let counted = true
   const settle = () => {
     if (!counted) return
     counted = false
-    waiting -= 1
+    waitingTunnels -= 1
     clearTimeout(timer)
   }
   const timer = setTimeout(() => {
