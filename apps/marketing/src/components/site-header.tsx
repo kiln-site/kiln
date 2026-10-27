@@ -32,6 +32,7 @@ export function SiteHeader() {
 
         <nav aria-label="Main" className="hidden items-center gap-1 md:flex">
           <HeaderLink to="/pricing">Pricing</HeaderLink>
+          <HeaderLink to="/compare">Compare</HeaderLink>
           <ComingSoon soon={comingSoon.docs} label="Docs">
             <HeaderAnchor href={docsUrl} {...newTab}>
               Docs
@@ -79,6 +80,9 @@ export function SiteHeader() {
             <MobileLink to="/pricing" onNavigate={() => setMenuOpen(false)}>
               Pricing
             </MobileLink>
+            <MobileLink to="/compare" onNavigate={() => setMenuOpen(false)}>
+              Compare
+            </MobileLink>
             <ComingSoon soon={comingSoon.docs} label="Docs" className="flex">
               <MobileAnchor href={docsUrl} {...newTab}>
                 Docs
@@ -102,7 +106,7 @@ function HeaderLink({
   to,
   children,
 }: {
-  to: "/pricing"
+  to: "/pricing" | "/compare"
   children: React.ReactNode
 }) {
   return (
@@ -128,7 +132,7 @@ function MobileLink({
   onNavigate,
   children,
 }: {
-  to: "/pricing"
+  to: "/pricing" | "/compare"
   onNavigate: () => void
   children: React.ReactNode
 }) {

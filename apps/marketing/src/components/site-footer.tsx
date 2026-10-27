@@ -43,6 +43,9 @@ export function SiteFooter() {
               <Link to="/pricing">Pricing</Link>
             </FooterLink>
             <FooterLink>
+              <Link to="/compare">Compare</Link>
+            </FooterLink>
+            <FooterLink>
               <ComingSoon soon={comingSoon.docs} label="Docs">
                 <a href={docsUrl} {...newTab}>
                   Docs
