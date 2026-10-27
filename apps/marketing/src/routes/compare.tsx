@@ -92,16 +92,20 @@ function ComparePage() {
 const bestClassName =
   "bg-[color-mix(in_oklab,var(--primary)_10%,var(--background))]"
 
-// On a phone the labels and Kiln stay put while the others scroll past.
+// Where the chart scrolls sideways, the labels and Kiln stay put.
 const pinnedKilnClassName =
-  "sticky left-36 z-10 sm:left-48 max-sm:shadow-[1px_0_0_var(--border)]"
+  "sticky left-32 z-10 sm:left-48 max-sm:shadow-[1px_0_0_var(--border)]"
 
 function ComparisonTable() {
   return (
     <>
-      {/* Wider than a phone, so it scrolls sideways with the labels and Kiln pinned. */}
-      <div className="relative overflow-x-auto">
-        <table className="w-full min-w-[46rem] table-fixed border-separate border-spacing-0 text-sm">
+      {/*
+        On a phone the names tilt so every column fits without scrolling, and
+        the chart runs into the page's left padding. The tilted names may
+        spill past the box, so it doesn't clip them there.
+      */}
+      <div className="relative overflow-x-auto max-sm:-ml-[clamp(1.25rem,4vw,2.5rem)] max-sm:overflow-visible">
+        <table className="w-full table-fixed border-separate border-spacing-0 text-sm sm:min-w-[46rem]">
           <caption className="sr-only">
             Features of Kiln, Pterodactyl, AMP, Coolify, Dokploy, Openship, and
             Portainer
@@ -110,7 +114,7 @@ function ComparisonTable() {
             <tr>
               <th
                 scope="col"
-                className="sticky left-0 z-10 w-36 border-b border-border bg-background sm:w-48"
+                className="sticky left-0 z-10 w-32 border-b border-border bg-background sm:w-48"
               >
                 <span className="sr-only">Feature</span>
               </th>
@@ -119,13 +123,21 @@ function ComparisonTable() {
                   key={product.id}
                   scope="col"
                   className={cn(
-                    "border-b border-border bg-background px-2 pt-4 pb-3 text-center align-bottom font-semibold tracking-[-0.02em]",
+                    "relative border-b border-border px-2 pt-4 pb-3 text-center align-bottom font-semibold tracking-[-0.02em]",
+                    // Only the pinned Kiln header needs a background; the
+                    // others stay clear so a long name can spill over them.
                     product.id === "kiln"
-                      ? cn("text-primary-ink", pinnedKilnClassName)
-                      : "text-foreground"
+                      ? cn(
+                          "bg-background text-primary-ink",
+                          pinnedKilnClassName
+                        )
+                      : "text-foreground",
+                    "max-sm:h-24 max-sm:px-0 max-sm:pb-2 max-sm:text-xs"
                   )}
                 >
-                  {product.name}
+                  <span className="block max-sm:absolute max-sm:bottom-2.5 max-sm:left-1/2 max-sm:origin-bottom-left max-sm:-rotate-[55deg] max-sm:whitespace-nowrap">
+                    {product.name}
+                  </span>
                 </th>
               ))}
             </tr>
@@ -137,7 +149,7 @@ function ComparisonTable() {
                 <tr key={row.label}>
                   <th
                     scope="row"
-                    className="sticky left-0 z-10 border-b border-border bg-background py-3.5 pr-3 text-left font-normal text-muted-foreground"
+                    className="sticky left-0 z-10 border-b border-border bg-background py-3.5 pr-3 text-left font-normal text-muted-foreground max-sm:py-3 max-sm:pl-[clamp(1.25rem,4vw,2.5rem)] max-sm:text-[0.8125rem] max-sm:leading-snug"
                   >
                     {row.label}
                   </th>
@@ -147,7 +159,7 @@ function ComparisonTable() {
                       <td
                         key={product.id}
                         className={cn(
-                          "border-b border-border bg-background px-2 py-3.5",
+                          "border-b border-border bg-background px-2 py-3.5 max-sm:px-0 max-sm:py-3",
                           isBest && bestClassName,
                           product.id === "kiln" && pinnedKilnClassName
                         )}
