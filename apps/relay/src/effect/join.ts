@@ -1,10 +1,13 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto"
 
 import {
+  RELAY_JOIN_HOLD_MAX_MS,
   RELAY_JOIN_ID_LABEL,
   RELAY_JOIN_INVITATION_LABEL,
   RELAY_JOIN_LIFETIME_MS,
   relayControlDialV1Feature,
+  relayJoinHeldHeader,
+  relayJoinHoldHeader,
   relayJoinPairingV1Feature,
   type RelayJoinPairingResponseSchema,
   type RelayJoinEnvelope,
@@ -48,6 +51,9 @@ const MAX_RETRY_DELAY_MS = 60_000
 // so one that didn't arrive in time doesn't keep being refused.
 const PAIRED_RENEW_MS = 20_000
 const REQUEST_TIMEOUT_MS = 15_000
+// Between announcements Hearth held: it answered because something changed,
+// so the Relay asks again at once, but never in a tight loop.
+const HELD_GAP_MS = 250
 // Room for the pairing request a join's answer can carry.
 const MAX_RESPONSE_BYTES = 16_384
 // What the Relay tells Hearth it can do when it announces itself: pair
@@ -96,6 +102,11 @@ export interface RelayJoinInput {
   readonly link: RelayJoinLink
   readonly state: RelayStateStore["Service"]
   readonly tls: RelayTlsMaterial | null
+  /**
+   * Has the Relay server dial Hearth now, rather than on its next pass,
+   * once Hearth has the Relay's reply and saved it.
+   */
+  readonly wakeDials?: Effect.Effect<void>
 }
 
 /** A join's ID, derived from its code. */
@@ -152,6 +163,8 @@ export const runRelayJoin = Effect.fnUntraced(function* (
   }
   let delay = ANNOUNCE_INTERVAL_MS
   let waiting = false
+  // Whether the Relay server was told to dial Hearth.
+  let woken = false
   // The Relay's reply to the pairing request Hearth's answer carried, sent
   // with each announcement until Hearth says it's paired.
   let paired: typeof RelayJoinPairingResponseSchema.Type | null = null
@@ -162,19 +175,35 @@ export const runRelayJoin = Effect.fnUntraced(function* (
       return yield* finish(input, saved, "expired", report)
     }
     const answered:
-      | { readonly response: RelayJoinResponse }
+      | { readonly held: boolean; readonly response: RelayJoinResponse }
       | { readonly reason: string } = yield* announce(
       link,
       saved.joinId,
       envelope,
-      paired
+      paired,
+      // Once the Relay has its invitation, Hearth may hold the next
+      // announcement until it has news.
+      waiting ? RELAY_JOIN_HOLD_MAX_MS : 0
     ).pipe(
-      Effect.withSpan("RelayJoin.announce"),
-      Effect.map((response) => ({ response })),
+      Effect.withSpan("RelayJoin.announce", {
+        attributes: {
+          "relay_join.id": saved.joinId,
+          "relay_join.reply": paired !== null,
+        },
+      }),
       Effect.catch((error: RelayJoinError) =>
         Effect.succeed({ reason: error.reason })
       )
     )
+    // Hearth took the Relay's reply, and a Hearth that holds announcements
+    // answers only once it saved the Relay, so the Relay can dial it now.
+    // Its dialer would find Hearth on its next pass anyway.
+    if (paired && !woken && !("reason" in answered)) {
+      woken = true
+      if (input.wakeDials) {
+        yield* input.wakeDials.pipe(Effect.withSpan("RelayJoin.wakeDials"))
+      }
+    }
     if ("reason" in answered) {
       report({ kind: "unreachable", reason: answered.reason })
       delay = Math.min(delay * 2, MAX_RETRY_DELAY_MS)
@@ -202,7 +231,10 @@ export const runRelayJoin = Effect.fnUntraced(function* (
       return yield* finish(input, saved, answered.response.status, report)
     }
     yield* Effect.sleep(
-      Math.min(delay, Math.max(0, saved.expiresAt - Date.now()))
+      Math.min(
+        "held" in answered && answered.held ? HELD_GAP_MS : delay,
+        Math.max(0, saved.expiresAt - Date.now())
+      )
     )
   }
 })
@@ -356,7 +388,9 @@ function announce(
   link: RelayJoinLink,
   joinId: string,
   envelope: RelayJoinEnvelope,
-  paired: typeof RelayJoinPairingResponseSchema.Type | null
+  paired: typeof RelayJoinPairingResponseSchema.Type | null,
+  // How long Hearth may hold it for news; 0 for an answer at once.
+  holdMs: number
 ) {
   const nonce = randomBytes(32).toString("base64url")
   const unsigned = { envelope, joinId, nonce, version: 1 as const }
@@ -374,26 +408,37 @@ function announce(
         new URL("/api/relays/join", link.hearthOrigin),
         {
           body,
-          headers: { "content-type": "application/json" },
+          headers: {
+            "content-type": "application/json",
+            ...(holdMs > 0 ? { [relayJoinHoldHeader]: String(holdMs) } : {}),
+          },
           method: "POST",
           // Never somewhere else, and never down to plain HTTP.
           redirect: "error",
+          // A held announcement gets its usual time on top of the hold:
+          // Hearth counts the hold from when it starts on it, which can be
+          // later than when it was sent.
           signal: AbortSignal.any([
             signal,
-            AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+            AbortSignal.timeout(holdMs + REQUEST_TIMEOUT_MS),
           ]),
         }
       )
       const text = await readLimitedText(response, MAX_RESPONSE_BYTES)
       if (text === null) throw new Error("Hearth's answer was too large")
-      return { ok: response.ok, status: response.status, text }
+      return {
+        held: response.headers.get(relayJoinHeldHeader) === "1",
+        ok: response.ok,
+        status: response.status,
+        text,
+      }
     },
     catch: (cause) =>
       new RelayJoinError({
         reason: `Hearth didn't answer: ${cause instanceof Error ? cause.message : String(cause)}`,
       }),
   }).pipe(
-    Effect.flatMap(({ ok, status, text }) => {
+    Effect.flatMap(({ held, ok, status, text }) => {
       const answer = Schema.decodeUnknownOption(
         Schema.fromJsonString(RelayJoinResponseSchema)
       )(text)
@@ -413,7 +458,7 @@ function announce(
       const actual = Buffer.from(mac, "base64url")
       return expected.length === actual.length &&
         timingSafeEqual(expected, actual)
-        ? Effect.succeed(answer.value)
+        ? Effect.succeed({ held, response: answer.value })
         : Effect.fail(
             new RelayJoinError({
               reason: "Hearth's answer didn't prove it holds the join",

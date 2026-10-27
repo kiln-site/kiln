@@ -10,10 +10,13 @@ import { Effect, Fiber } from "effect"
 import { TestClock } from "effect/testing"
 
 import {
+  RELAY_JOIN_HOLD_MAX_MS,
   RELAY_JOIN_LIFETIME_MS,
   type RelayJoinAnnouncement,
   type RelayJoinResponse,
   relayJoinAnnouncementTranscript,
+  relayJoinHeldHeader,
+  relayJoinHoldHeader,
   relayJoinResponseTranscript,
   relayPairingRequestTranscript,
 } from "@workspace/contracts"
@@ -154,6 +157,66 @@ describe("Relay joining", () => {
           })
         )
       )
+  )
+
+  it.live(
+    "lets Hearth hold its announcements once invited, and wakes its dialer once Hearth took its reply",
+    () =>
+      withJoiningRelay((relay) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const hearthKeys = ed25519Keys()
+            const clientId = fingerprint(hearthKeys.publicKey)
+            const request = joinPairingRequest(hearthKeys)
+            const expiresAt = Date.now() + 60_000
+            const hearth = yield* fakeHearth(
+              [
+                { clientId, expiresAt, status: "pending" },
+                {
+                  clientId,
+                  expiresAt,
+                  pairing: { dialUrl: "https://hearth.test/x", request },
+                  status: "pending",
+                },
+                // Its reply, answered once Hearth saved the Relay.
+                { clientId, expiresAt, status: "pending" },
+                { clientId: null, expiresAt: null, status: "paired" },
+              ],
+              { held: true }
+            )
+            // How many announcements Hearth had answered at each wake.
+            const wakes: Array<number> = []
+            const started = Date.now()
+
+            const outcome = yield* runRelayJoin(
+              {
+                ...relay,
+                link: { hearthOrigin: hearth.origin, secret },
+                wakeDials: Effect.sync(() => {
+                  wakes.push(hearth.asked())
+                }),
+              },
+              () => undefined
+            )
+
+            assert.strictEqual(outcome, "paired")
+            // Not before it has its invitation, which the installer prints
+            // the confirmation link from.
+            assert.deepStrictEqual(hearth.holds, [
+              null,
+              String(RELAY_JOIN_HOLD_MAX_MS),
+              String(RELAY_JOIN_HOLD_MAX_MS),
+              String(RELAY_JOIN_HOLD_MAX_MS),
+            ])
+            assert.isDefined(hearth.announcements[2]?.pairing)
+            assert.deepStrictEqual(wakes, [3])
+            // Held answers are asked for again at once, not after the usual
+            // pause between announcements.
+            assert.isBelow(Date.now() - started, 4_000)
+          })
+        )
+      ),
+    10_000
   )
 
   it.effect(
@@ -513,9 +576,13 @@ function withJoiningRelay<A, E>(
 // last: MAC'd with the join's code, or with another key when forging.
 function fakeHearth(
   answers: ReadonlyArray<Omit<RelayJoinResponse, "mac">>,
-  options: { readonly forge?: boolean } = {}
+  // `held`: says it held each announcement, as a Hearth that holds them
+  // does once it has news.
+  options: { readonly forge?: boolean; readonly held?: boolean } = {}
 ) {
   const announcements: Array<RelayJoinAnnouncement> = []
+  // How long each announcement asked Hearth to hold it, if at all.
+  const holds: Array<string | null> = []
   let asked = 0
   return Effect.acquireRelease(
     Effect.promise(async () => {
@@ -530,10 +597,13 @@ function fakeHearth(
             .update(relayJoinAnnouncementTranscript(announcement))
             .digest("base64url")
           if (announcement.mac === expected) announcements.push(announcement)
+          const hold = request.headers[relayJoinHoldHeader]
+          holds.push(typeof hold === "string" ? hold : null)
           const answer = answers[Math.min(asked, answers.length - 1)]
           asked += 1
           if (!answer) throw new Error("The fake Hearth has no answers")
           response.setHeader("content-type", "application/json")
+          if (options.held) response.setHeader(relayJoinHeldHeader, "1")
           response.end(
             JSON.stringify({
               ...answer,
@@ -561,6 +631,7 @@ function fakeHearth(
   ).pipe(
     Effect.map((server) => ({
       announcements,
+      holds,
       // How many announcements Hearth has answered.
       asked: () => asked,
       origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,

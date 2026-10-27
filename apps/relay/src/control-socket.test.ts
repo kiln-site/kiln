@@ -45,6 +45,7 @@ import type {
 import { attachControlSocket } from "./control-socket.js"
 import {
   relayDialUrl,
+  saveControlDial,
   startControlDials,
   type ControlDials,
 } from "./control-dial.js"
@@ -1760,6 +1761,18 @@ describe("Relay dialing Hearth", () => {
     expect(await fakeHearth.dialsWithin(10 * 60_000)).toBe(0)
   })
 
+  it("dials a Hearth another process saved as soon as it's woken, without the usual spread", async () => {
+    const relay = await startRelay({ dials: true })
+    const hearth = await relay.pair()
+    const fakeHearth = await startFakeHearth()
+
+    await relay.saveDialElsewhere(hearth.id, fakeHearth.url)
+    expect(await fakeHearth.dialedAtOnce()).toBe(false)
+    relay.dials?.wake()
+
+    expect(await fakeHearth.dialedAtOnce()).toBe(true)
+  })
+
   it("dials only Hearth's control path over HTTP(S)", () => {
     expect(relayDialUrl("https://kiln.example/api/relays/control")?.href).toBe(
       "wss://kiln.example/api/relays/control"
@@ -1822,6 +1835,14 @@ async function startFakeHearth() {
     }
   }
   return {
+    // Whether a dial arrived while only real I/O ran, with no virtual time
+    // passing at all.
+    dialedAtOnce: async () => {
+      for (let turn = 0; arrivals.length === 0 && turn < 5_000; turn += 1) {
+        await new Promise((resolve) => setImmediate(resolve))
+      }
+      return arrivals.length > 0
+    },
     dialsWithin: async (ms: number) => {
       await passUntilDial(ms)
       return arrivals.length
@@ -1951,6 +1972,11 @@ async function startRelay(
   return {
     adoptions,
     audits: () => runtime.runPromise(state.listAudits({ limit: 100 })),
+    dials,
+    // Saves where to dial a Hearth as another process, such as
+    // `kiln-relay pair join`, does: without telling the dialer.
+    saveDialElsewhere: (clientId: string, url: string) =>
+      runtime.runPromise(saveControlDial(state, clientId, url)),
     connect: async (
       hearth: TestHearth,
       connectOptions: {

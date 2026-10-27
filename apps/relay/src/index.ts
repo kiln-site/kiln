@@ -161,6 +161,7 @@ import {
 } from "./config.js"
 import { attachControlSocket } from "./control-socket.js"
 import { startControlDials } from "./control-dial.js"
+import { dialWakePath, sendDialWake } from "./dial-wake.js"
 import { openControlTunnel } from "./control-tunnel.js"
 import { DockerDriver } from "./docker.js"
 import { DatabaseBrowser, readDatabaseFile } from "./database-browser.js"
@@ -1031,6 +1032,10 @@ async function runRelayCli(arguments_: ReadonlyArray<string>): Promise<void> {
           link,
           state: startup.state,
           tls: startup.tls,
+          // The Relay server, running beside this command.
+          wakeDials: sendDialWake(dialWakePath(config.dataDirectory)).pipe(
+            Effect.asVoid
+          ),
         },
         (event) => console.log(describeRelayJoinEvent(event, link.hearthOrigin))
       )
@@ -1256,6 +1261,10 @@ const controlSocket = attachControlSocket({
 const controlDials = startControlDials({
   adopt: controlSocket.adoptDialed,
   state: startup.state,
+  // Only the Relay itself listens; a command never takes its socket.
+  ...(cliArguments.length === 0
+    ? { wakePath: dialWakePath(config.dataDirectory) }
+    : {}),
 })
 rejectMalformedUpgrades(server)
 const browserSocket = attachBrowserSocket({
@@ -1415,6 +1424,9 @@ const joinFiber = joining
           link: joining,
           state: startup.state,
           tls: startup.tls,
+          wakeDials: Effect.sync(() => {
+            controlDials.wake()
+          }),
         },
         (event) =>
           console.log(describeRelayJoinEvent(event, joining.hearthOrigin))

@@ -9,6 +9,7 @@ import type { RelayDialBinding } from "@workspace/contracts"
 import { Effect, Fiber, Option, Schema } from "effect"
 import { WebSocket } from "ws"
 
+import { listenForDialWake } from "./dial-wake.js"
 import type { RelayStateStore } from "./effect/state.js"
 
 // Dialing: besides answering the control connections Hearth opens, a Relay
@@ -47,6 +48,11 @@ export interface ControlDialOptions {
     peerAddress: string | undefined
   ) => void
   readonly state: RelayStateStore["Service"]
+  /**
+   * The local socket another process, such as `kiln-relay pair join`, opens
+   * to have the Relay dial a Hearth it just saved (dial-wake.ts).
+   */
+  readonly wakePath?: string
 }
 
 export interface ControlDials {
@@ -55,6 +61,11 @@ export interface ControlDials {
   readonly save: (clientId: string, url: string | null) => void
   /** Where the Relay dials a Hearth client, as a WebSocket URL, if it does. */
   readonly urlFor: (clientId: string) => Promise<URL | null>
+  /**
+   * Dials any Hearth saved since the last pass now, without the spread a
+   * pass gives new dials: one that just paired is waiting for it.
+   */
+  readonly wake: () => void
 }
 
 /**
@@ -80,6 +91,9 @@ export function relayDialUrl(value: string): URL | null {
 }
 
 interface Dial {
+  // Whether the log says when it first reaches Hearth, as for a Relay that
+  // just joined.
+  announce: boolean
   fiber: Fiber.Fiber<void> | null
   // While a session it opened is open, which ends on its own once Hearth no
   // longer wants it.
@@ -90,7 +104,8 @@ interface Dial {
 /**
  * Saves where to dial a Hearth client, as the Relay's dialer reads it: a
  * running Relay picks it up within its next pass, even when another
- * process, such as `kiln-relay pair join`, saved it.
+ * process, such as `kiln-relay pair join`, saved it, or at once when that
+ * process wakes it (`ControlDials.wake`).
  */
 export const saveControlDial = (
   state: RelayStateStore["Service"],
@@ -106,48 +121,68 @@ export function startControlDials(options: ControlDialOptions): ControlDials {
   const dials = new Map<string, Dial>()
   let closed = false
 
-  const reconcile = Effect.gen(function* () {
-    const clients = yield* options.state.listClients()
-    const wanted = new Map<string, string>()
-    for (const client of clients) {
-      const saved = yield* options.state.getMetadata(
-        `${DIAL_METADATA_PREFIX}${client.id}`
+  const reconcile = (woken: boolean) =>
+    Effect.gen(function* () {
+      const clients = yield* options.state.listClients()
+      const wanted = new Map<string, string>()
+      for (const client of clients) {
+        const saved = yield* options.state.getMetadata(
+          `${DIAL_METADATA_PREFIX}${client.id}`
+        )
+        const url = saved ? relayDialUrl(saved) : null
+        if (url) wanted.set(client.id, url.href)
+      }
+      if (closed) return
+      for (const [clientId, dial] of dials) {
+        if (wanted.get(clientId) === dial.url) continue
+        dials.delete(clientId)
+        if (!dial.inSession && dial.fiber) yield* Fiber.interrupt(dial.fiber)
+      }
+      for (const [clientId, url] of wanted) {
+        if (dials.has(clientId)) continue
+        const dial: Dial = {
+          announce: woken,
+          fiber: null,
+          inSession: false,
+          url,
+        }
+        dials.set(clientId, dial)
+        dial.fiber = Effect.runFork(
+          dialLoop(
+            options,
+            clientId,
+            dial,
+            () => dials.get(clientId) === dial,
+            woken
+          )
+        )
+      }
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("Couldn't read which Hearths to dial", cause)
       )
-      const url = saved ? relayDialUrl(saved) : null
-      if (url) wanted.set(client.id, url.href)
-    }
-    if (closed) return
-    for (const [clientId, dial] of dials) {
-      if (wanted.get(clientId) === dial.url) continue
-      dials.delete(clientId)
-      if (!dial.inSession && dial.fiber) yield* Fiber.interrupt(dial.fiber)
-    }
-    for (const [clientId, url] of wanted) {
-      if (dials.has(clientId)) continue
-      const dial: Dial = { fiber: null, inSession: false, url }
-      dials.set(clientId, dial)
-      dial.fiber = Effect.runFork(
-        dialLoop(options, clientId, dial, () => dials.get(clientId) === dial)
-      )
-    }
-  }).pipe(
-    Effect.catchCause((cause) =>
-      Effect.logWarning("Couldn't read which Hearths to dial", cause)
     )
-  )
 
   const reconcileFiber = Effect.runFork(
-    reconcile.pipe(
+    reconcile(false).pipe(
       Effect.andThen(Effect.sleep(RECONCILE_INTERVAL_MS)),
       Effect.forever
     )
   )
+
+  const wake = () => {
+    if (!closed) Effect.runFork(reconcile(true))
+  }
+  const wakeListener = options.wakePath
+    ? listenForDialWake(options.wakePath, wake)
+    : null
 
   return {
     close: () =>
       Effect.runPromise(
         Effect.suspend(() => {
           closed = true
+          wakeListener?.close()
           const fibers = [
             reconcileFiber,
             ...[...dials.values()].flatMap((dial) =>
@@ -173,7 +208,7 @@ export function startControlDials(options: ControlDialOptions): ControlDials {
             (saved ?? "") === value
               ? Effect.void
               : saveControlDial(options.state, clientId, value).pipe(
-                  Effect.andThen(reconcile)
+                  Effect.andThen(reconcile(false))
                 )
           ),
           Effect.catchCause((cause) =>
@@ -182,6 +217,7 @@ export function startControlDials(options: ControlDialOptions): ControlDials {
         )
       )
     },
+    wake,
   }
 }
 
@@ -191,7 +227,8 @@ const dialLoop = (
   options: ControlDialOptions,
   clientId: string,
   dial: Dial,
-  wanted: () => boolean
+  wanted: () => boolean,
+  woken: boolean
 ) =>
   Effect.gen(function* () {
     let failures = 0
@@ -199,8 +236,9 @@ const dialLoop = (
     // Whether the log already says Hearth can't be reached, once a streak.
     let reported = false
     const origin = hearthOrigin(dial.url)
-    // Spread out, so Relays don't all arrive at once after Hearth restarts.
-    yield* Effect.sleep(Math.floor(Math.random() * 2_000))
+    // Spread out, so Relays don't all arrive at once after Hearth restarts;
+    // not one that was woken, which Hearth is waiting for.
+    if (!woken) yield* Effect.sleep(Math.floor(Math.random() * 2_000))
     while (wanted()) {
       const startedAt = Date.now()
       const ended = yield* dialOnce(options, clientId, dial)
@@ -270,6 +308,10 @@ const dialOnce = (options: ControlDialOptions, clientId: string, dial: Dial) =>
       }
       adopted = true
       dial.inSession = true
+      if (dial.announce) {
+        dial.announce = false
+        console.log(`Connected to Hearth at ${hearthOrigin(dial.url)}.`)
+      }
       options.adopt(
         socket,
         {
