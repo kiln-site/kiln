@@ -142,7 +142,7 @@ export const rows: Array<Row> = [
       kiln: "yes",
       pterodactyl: "no",
       amp: "no",
-      coolify: "no",
+      coolify: "partly",
       dokploy: "no",
       openship: "no",
       portainer: "partly",
