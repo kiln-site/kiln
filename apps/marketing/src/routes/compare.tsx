@@ -1,6 +1,6 @@
 import * as React from "react"
 import { Link, createFileRoute } from "@tanstack/react-router"
-import { ArrowUpRight, Gauge, Layers, LockOpen, Server } from "lucide-react"
+import { ArrowUpRight } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import {
@@ -13,13 +13,11 @@ import { cn } from "@workspace/ui/lib/utils"
 import { InstallCommand, useInstallCommand } from "~/components/install-command"
 import {
   type Level,
-  type Reason,
   alternatives,
   bestAt,
   checkedOn,
   comparisonStructuredData,
   products,
-  reasons,
   rows,
 } from "~/lib/comparison"
 import { newTab } from "~/lib/new-tab"
@@ -85,7 +83,6 @@ function ComparePage() {
       </section>
 
       <Alternatives />
-      <WhyKiln />
       <TryKiln />
     </>
   )
@@ -323,49 +320,6 @@ function Alternatives() {
               </li>
             )
           })}
-        </ul>
-      </div>
-    </section>
-  )
-}
-
-const reasonIcons: Record<Reason["id"], React.ReactNode> = {
-  fast: <Gauge />,
-  "one-panel": <Layers />,
-  "your-machines": <Server />,
-  "open-source": <LockOpen />,
-}
-
-function WhyKiln() {
-  return (
-    <section
-      id="why-kiln"
-      aria-labelledby="why-kiln-heading"
-      className="border-t border-border"
-    >
-      <div className="site-container py-20 sm:py-28">
-        <h2 id="why-kiln-heading" className="site-title max-w-2xl">
-          For everything else, pick Kiln
-        </h2>
-        <ul className="mt-12 grid gap-px border border-border bg-border sm:grid-cols-2 lg:grid-cols-4">
-          {reasons.map((reason) => (
-            <li
-              key={reason.id}
-              className="flex flex-col gap-5 bg-background p-6"
-            >
-              <span className="grid size-10 place-items-center border border-primary/25 bg-primary/10 text-primary-ink [&_svg]:size-5">
-                {reasonIcons[reason.id]}
-              </span>
-              <div>
-                <h3 className="font-semibold tracking-[-0.01em] text-foreground">
-                  {reason.title}
-                </h3>
-                <p className="type-support mt-1.5 text-muted-foreground">
-                  {reason.description}
-                </p>
-              </div>
-            </li>
-          ))}
         </ul>
       </div>
     </section>

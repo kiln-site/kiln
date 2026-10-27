@@ -319,40 +319,6 @@ export const alternatives: Array<Alternative> = [
   },
 ]
 
-export interface Reason {
-  id: "fast" | "one-panel" | "your-machines" | "open-source"
-  title: string
-  description: string
-}
-
-// Why to pick Kiln, said once rather than on every card.
-export const reasons: Array<Reason> = [
-  {
-    id: "fast",
-    title: "Fast and modern",
-    description:
-      "Built for speed and a smooth experience, from the console to the file editor.",
-  },
-  {
-    id: "one-panel",
-    title: "One panel for everything",
-    description:
-      "Game servers, apps, and databases, with the same console, files, backups, and access.",
-  },
-  {
-    id: "your-machines",
-    title: "Your machines",
-    description:
-      "Each instance runs on the machine you choose, even one behind NAT with no ports forwarded.",
-  },
-  {
-    id: "open-source",
-    title: "Free and open source",
-    description:
-      "AGPL-3.0, with no cap on instances or machines when you host it yourself.",
-  },
-]
-
 const levelSuffix: Record<Level, string | null> = {
   yes: "",
   partly: "partly",
@@ -390,16 +356,6 @@ export function comparisonStructuredData({
         },
       },
     ]
-  })
-  questions.push({
-    "@type": "Question",
-    name: "When should I pick Kiln?",
-    acceptedAnswer: {
-      "@type": "Answer",
-      text: reasons
-        .map((reason) => `${reason.title}: ${reason.description}`)
-        .join(" "),
-    },
   })
 
   return JSON.stringify({
