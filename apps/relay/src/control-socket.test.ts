@@ -30,6 +30,7 @@ import {
   relayAuthResponseTranscript,
   relayControlMaxFrameBytes,
   relayControlProtocol,
+  relayDialCloseCodes,
   relayHearthContainerTranscript,
   relaySnapshotDeltaFeature,
   relaySnapshotNodeResourcesFeature,
@@ -1740,6 +1741,22 @@ describe("Relay dialing Hearth", () => {
     expect(await dialed.inbox.next()).toMatchObject({ replyTo: id })
 
     dialed.socket.close()
+    expect(await fakeHearth.dialsWithin(10 * 60_000)).toBe(0)
+  })
+
+  it("dials again soon when Hearth doesn't know it yet, then waits", async () => {
+    const relay = await startRelay({ dials: true })
+    const hearth = await relay.pair()
+    const fakeHearth = await startFakeHearth()
+    await relay.connect(hearth, { dial: fakeHearth.url })
+    // As when the Relay just paired, and Hearth is still saving it.
+    for (let refusal = 1; refusal <= 5; refusal += 1) {
+      if (refusal > 1) expect(await fakeHearth.dialsWithin(30_000)).toBe(1)
+      const dialed = await fakeHearth.nextDial()
+      const closed = once(dialed.socket, "close")
+      dialed.socket.close(relayDialCloseCodes.unknownRelay)
+      await closed
+    }
     expect(await fakeHearth.dialsWithin(10 * 60_000)).toBe(0)
   })
 

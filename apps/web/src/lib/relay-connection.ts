@@ -230,6 +230,39 @@ function connectionFor(relay: RelayEndpoint): RelayConnection {
   return connection
 }
 
+// Throws unless the Relay signed `challenge`. One on a socket the Relay
+// opened must also be the one this Hearth asked for with `dialNonce`, for
+// this client; one on a socket Hearth opened is bound by the TLS Hearth
+// checked instead.
+function checkRelayChallenge(
+  relayId: string,
+  credentials: RelayConnectionCredentials,
+  challenge: RelayAuthChallenge,
+  dialNonce: string | undefined
+): void {
+  const dial = challenge.dial
+  if (
+    dialNonce === undefined
+      ? dial !== undefined
+      : dial === undefined ||
+        dial.hearthNonce !== dialNonce ||
+        dial.clientId !== credentials.clientId
+  ) {
+    throw new Error("Relay challenge isn't for this connection")
+  }
+  if (
+    challenge.relayId !== relayId ||
+    !verify(
+      null,
+      Buffer.from(relayAuthChallengeTranscript(challenge)),
+      credentials.relayPublicKeyPem,
+      Buffer.from(challenge.signature, "base64url")
+    )
+  ) {
+    throw new Error("Relay identity challenge could not be verified")
+  }
+}
+
 /**
  * Takes a control connection a Relay opened to this Hearth, once its
  * challenge for Hearth's `nonce` arrived, unless Hearth keeps the one it
@@ -587,6 +620,41 @@ class RelayConnection {
    * that's busy, or one it's still opening for the first time.
    */
   adopt(socket: WebSocket, challenge: RelayAuthChallenge, nonce: string): void {
+    if (this.#closed) {
+      socket.close(1001, "Hearth connection closed")
+      return
+    }
+    // Anyone can say they're this Relay, so nothing changes until its
+    // signed challenge checks out.
+    forkAppEffect(
+      "relay.connection.check-dialed",
+      this.#credentialsEffect().pipe(
+        Effect.flatMap((credentials) =>
+          Effect.try({
+            try: () =>
+              checkRelayChallenge(this.#relay.id, credentials, challenge, nonce),
+            catch: asError,
+          })
+        ),
+        Effect.match({
+          onFailure: () => {
+            socket.close(4401, "Relay challenge isn't for this connection")
+          },
+          onSuccess: () => {
+            if (socket.readyState === WebSocket.OPEN) {
+              this.#takeDialed(socket, challenge, nonce)
+            }
+          },
+        })
+      )
+    )
+  }
+
+  #takeDialed(
+    socket: WebSocket,
+    challenge: RelayAuthChallenge,
+    nonce: string
+  ): void {
     if (this.#closed) {
       socket.close(1001, "Hearth connection closed")
       return
@@ -1532,30 +1600,7 @@ class RelayConnection {
   ): void {
     const credentials = this.#credentials
     if (!credentials) throw new Error("Relay credentials are unavailable")
-    // A challenge on a socket the Relay opened must be the one this Hearth
-    // asked for, for this client; one on a socket Hearth opened is bound
-    // by the TLS Hearth checked instead.
-    const dial = challenge.dial
-    if (
-      dialNonce === undefined
-        ? dial !== undefined
-        : dial === undefined ||
-          dial.hearthNonce !== dialNonce ||
-          dial.clientId !== credentials.clientId
-    ) {
-      throw new Error("Relay challenge isn't for this connection")
-    }
-    if (
-      challenge.relayId !== this.#relay.id ||
-      !verify(
-        null,
-        Buffer.from(relayAuthChallengeTranscript(challenge)),
-        credentials.relayPublicKeyPem,
-        Buffer.from(challenge.signature, "base64url")
-      )
-    ) {
-      throw new Error("Relay identity challenge could not be verified")
-    }
+    checkRelayChallenge(this.#relay.id, credentials, challenge, dialNonce)
     // A Relay without an installation ID saves Hearth's, so the whole
     // installation shares it. Not to one where someone chose to keep the
     // ID it has, or before a join's choice is applied.

@@ -170,6 +170,23 @@ it("refuses a challenge it didn't ask for, and a Relay it doesn't know", async (
   )
 })
 
+it("keeps the Relay's connection when someone else says they're that Relay", async () => {
+  const relay = relayAt(await closedPort(), "relay")
+  const dialing = await dialHearth()
+  await dialing.authenticate()
+  await advanceUntil(until(() => relayConnectionOpener(relayId) === "relay"))
+
+  const forged = await dialHearth({
+    nonce: randomBytes(32).toString("base64url"),
+  })
+  await expect(advanceUntil(forged.closed)).resolves.toBe(4401)
+
+  const answered = relayRpc(relay, "relay.proxy.read", {})
+  const request = await advanceUntil(dialing.nextRequest())
+  dialing.answer(request, { mode: "hearth" })
+  await expect(advanceUntil(answered)).resolves.toEqual({ mode: "hearth" })
+})
+
 it("keeps its own connection when it prefers to, and hands over quietly when it prefers the Relay's", async () => {
   const listening = await listeningRelay()
   const relay = relayAt(listening.port, "hearth")

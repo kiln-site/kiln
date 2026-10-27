@@ -29,8 +29,11 @@ const MAX_RETRY_MS = 60_000
 const STABLE_SESSION_MS = 60_000
 // Hearth kept another connection to this Relay.
 const DUPLICATE_RETRY_MS = 2 * 60_000
-// Hearth doesn't know this Relay, as when it was removed there.
+// Hearth doesn't know this Relay, as when it was removed there. A few tries
+// back off as usual first: one that just paired can dial before Hearth has
+// saved it.
 const REFUSED_RETRY_MS = 30 * 60_000
+const REFUSALS_BEFORE_WAITING = 5
 
 const decodeHello = Schema.decodeUnknownOption(
   Schema.fromJsonString(RelayDialHelloSchema)
@@ -169,23 +172,29 @@ const dialLoop = (
 ) =>
   Effect.gen(function* () {
     let failures = 0
+    let refusals = 0
     // Spread out, so Relays don't all arrive at once after Hearth restarts.
     yield* Effect.sleep(Math.floor(Math.random() * 2_000))
     while (wanted()) {
       const startedAt = Date.now()
       const code = yield* dialOnce(options, clientId, dial)
       if (!wanted()) return
+      refusals = code === relayDialCloseCodes.unknownRelay ? refusals + 1 : 0
       if (Date.now() - startedAt >= STABLE_SESSION_MS) failures = 0
       failures += 1
-      yield* Effect.sleep(retryDelay(code, failures))
+      yield* Effect.sleep(retryDelay(code, failures, refusals))
     }
   })
 
-function retryDelay(code: number | null, failures: number): number {
+function retryDelay(
+  code: number | null,
+  failures: number,
+  refusals: number
+): number {
   const base =
     code === relayDialCloseCodes.duplicate
       ? DUPLICATE_RETRY_MS
-      : code === relayDialCloseCodes.unknownRelay
+      : refusals >= REFUSALS_BEFORE_WAITING
         ? REFUSED_RETRY_MS
         : Math.min(MIN_RETRY_MS * 2 ** (failures - 1), MAX_RETRY_MS)
   return Math.round(base * (0.75 + Math.random() * 0.5))
