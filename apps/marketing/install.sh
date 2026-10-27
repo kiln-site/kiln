@@ -960,64 +960,58 @@ release_of() {
 
 # Takes the Relay's update lock, then records the update, as Kiln does: run
 # with the downloaded release on the Relay's volumes, so the Relay reports
-# it, and an update Kiln starts meanwhile waits for it. Prints its ID.
+# it, and an update Kiln starts meanwhile waits for it. A lock already there
+# is left alone, even one an earlier update left behind: giving it back
+# can't be made safe against Kiln taking it at the same time, and the
+# Relay can join without the update. Prints the update's ID.
 # shellcheck disable=SC2016 # JavaScript's ${…}, not the shell's
 update_take_script='
 import { randomUUID } from "node:crypto"
-import { rmSync } from "node:fs"
-import { link, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises"
+import { link, mkdir, rm, writeFile } from "node:fs/promises"
 const { KILN_IMAGE: image, KILN_PREVIOUS: previous, KILN_TARGET: target, KILN_VERSION: version } = process.env
 const directory = "/data/updates"
 const lock = `${directory}/${target}.lock`
-const read = (path) => readFile(path, "utf8").then((text) => text.trim(), () => "")
 await mkdir(directory, { mode: 0o700, recursive: true })
 const id = randomUUID()
+const candidate = `${lock}.${id}.tmp`
+await writeFile(candidate, `${id}\n`, { flag: "wx", mode: 0o600 })
+const taken = await link(candidate, lock).then(() => true, (cause) => {
+  if (cause.code !== "EEXIST") throw cause
+  return false
+}).finally(() => rm(candidate, { force: true }))
+if (!taken) {
+  console.log("kiln: Another update holds the update lock of this Relay.")
+  process.exit(1)
+}
 const operation = {
   component: "relay", error: null, finishedAt: null, id, previousImage: previous,
   requestedImage: image, startedAt: new Date().toISOString(), status: "running",
   targetContainer: target, targetReference: image, version,
 }
-const candidate = `${lock}.${id}.tmp`
-await writeFile(candidate, `${id}\n`, { flag: "wx", mode: 0o600 })
-const busy = () => {
-  rmSync(candidate, { force: true })
-  console.log("kiln: Kiln is updating this Relay already. Run this again once it is done.")
-  process.exit(1)
-}
-// As the Relay takes it: a lock whose update finished, or that names none
-// and is old, is given back only while it still names that one.
-for (let attempt = 0; ; attempt++) {
-  const taken = await link(candidate, lock).then(() => true, (cause) => {
-    if (cause.code !== "EEXIST") throw cause
-    return false
-  })
-  if (taken) break
-  if (attempt === 3) busy()
-  const held = await read(lock)
-  if (!held) continue
-  const status = await readFile(`${directory}/${held}.json`, "utf8")
-    .then((text) => JSON.parse(text).status)
-    .catch(() => null)
-  const age = await stat(lock).then((found) => Date.now() - found.mtimeMs, () => Infinity)
-  if (status === "running" || (status === null && age < 30_000)) busy()
-  if ((await read(lock)) === held) await rm(lock, { force: true })
-}
-await rm(candidate, { force: true })
 await writeFile(`${directory}/${id}.json`, `${JSON.stringify(operation, null, 2)}\n`, { mode: 0o600 })
 console.log(id)
 '
 
-# Gives back the lock update_take_script took, if it still holds it, and
-# says why the update failed, which only its record has.
+# Once the update's helper has stopped: records an update it stopped without
+# finishing as failed, as the Relay does, says why one failed, and gives
+# back the lock update_take_script took, if it still holds it.
 # shellcheck disable=SC2016 # JavaScript's ${…}, not the shell's
 update_release_script='
-import { readFile, rm } from "node:fs/promises"
+import { readFile, rm, writeFile } from "node:fs/promises"
 const { KILN_OPERATION: id, KILN_TARGET: target } = process.env
+const record = `/data/updates/${id}.json`
+let recorded = await readFile(record, "utf8").then(JSON.parse).catch(() => null)
+if (recorded?.status === "running") {
+  recorded = {
+    ...recorded, error: "The update helper stopped without reporting an outcome.",
+    finishedAt: new Date().toISOString(), status: "failed",
+  }
+  await writeFile(record, `${JSON.stringify(recorded, null, 2)}\n`, { mode: 0o600 })
+}
+if (recorded?.status === "failed") console.log(`kiln: ${recorded.error}`)
 const lock = `/data/updates/${target}.lock`
 const held = await readFile(lock, "utf8").then((text) => text.trim(), () => "")
 if (held === id) await rm(lock, { force: true })
-const recorded = await readFile(`/data/updates/${id}.json`, "utf8").then(JSON.parse, () => null)
-if (recorded?.status === "failed") console.log(`kiln: ${recorded.error}`)
 '
 
 # Replaces the Relay here with the downloaded release $1, as Kiln updates
@@ -1044,6 +1038,11 @@ update_relay() {
     --env KILN_UPDATE_OPERATION_ID="$operation" \
     --env KILN_UPDATE_TARGET_REFERENCE="$image" \
     "$image" dist/src/updater.mjs || status=$?
+  # `docker run` can return while its container runs on, as when its output
+  # is cut off, so the helper is waited for, and its lock kept while it runs.
+  dk wait "kiln-updater-$operation" >/dev/null 2>&1 || true
+  [ "$(dk inspect --format '{{.State.Running}}' "kiln-updater-$operation" 2>/dev/null)" != "true" ] ||
+    stop "The Relay's update is still running, as kiln-updater-$operation."
   dk run --rm --network none --volumes-from "$container" \
     --env KILN_OPERATION="$operation" --env KILN_TARGET="$container" \
     "$image" --input-type=module -e "$update_release_script" || true
