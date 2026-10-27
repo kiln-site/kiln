@@ -141,6 +141,33 @@ describe("container replacement", () => {
   )
 
   effectIt.effect(
+    "replaces a Relay on Docker's default bridge, which takes no aliases",
+    () =>
+      Effect.gen(function* () {
+        const docker = yield* Effect.promise(async () => {
+          // Started by the installer without a proxy: no network of its own.
+          const current = fakeDocker.addContainer({
+            image: channelReference,
+            name: "hearth",
+            running: true,
+          })
+          current.networks.set("bridge", { aliases: [], ipAddress: "" })
+          fakeDocker.images.set(targetDigest, targetLabels)
+          fakeDocker.imageConfigs.set(targetDigest, {
+            Healthcheck: { Test: ["CMD", "new-healthcheck"] },
+          })
+          return new DockerEngine(await fakeDocker.listen())
+        })
+
+        yield* replaceContainerEffect(replacement, docker, ignorePhase)
+
+        expect(hearth()?.labels).toMatchObject(targetLabels)
+        expect(hearth()?.state.running).toBe(true)
+        expect(fakeDocker.container("hearth-backup")).toBeUndefined()
+      })
+  )
+
+  effectIt.effect(
     "labels a container from before installation IDs with this installation",
     () =>
       Effect.gen(function* () {

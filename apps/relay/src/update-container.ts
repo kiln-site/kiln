@@ -183,12 +183,14 @@ export function replaceContainerEffect(
           },
           NetworkingConfig: {
             EndpointsConfig: {
-              [primaryNetwork]: {
-                Aliases: networkAliases(
-                  networks[primaryNetwork]?.Aliases,
-                  input.targetContainer
-                ),
-              },
+              [primaryNetwork]: userDefinedNetwork(primaryNetwork)
+                ? {
+                    Aliases: networkAliases(
+                      networks[primaryNetwork]?.Aliases,
+                      input.targetContainer
+                    ),
+                  }
+                : {},
             },
           },
         })
@@ -203,12 +205,18 @@ export function replaceContainerEffect(
         (network) =>
           updateOperation(
             "replace.connectNetwork",
-            docker.connectNetwork(network, input.targetContainer, {
-              aliases: networkAliases(
-                networks[network]?.Aliases,
-                input.targetContainer
-              ),
-            })
+            docker.connectNetwork(
+              network,
+              input.targetContainer,
+              userDefinedNetwork(network)
+                ? {
+                    aliases: networkAliases(
+                      networks[network]?.Aliases,
+                      input.targetContainer
+                    ),
+                  }
+                : {}
+            )
           ),
         { discard: true }
       )
@@ -480,6 +488,15 @@ export function isDockerGeneratedHostname(
   containerId: string
 ): boolean {
   return hostname === containerId.slice(0, 12) || hostname === containerId
+}
+
+// Docker's own bridge, host, and none networks take no aliases: a Relay
+// the installer started without a proxy is on the bridge.
+export function userDefinedNetwork(network: string): boolean {
+  return (
+    !["bridge", "host", "none"].includes(network) &&
+    !network.startsWith("container:")
+  )
 }
 
 export function networkAliases(

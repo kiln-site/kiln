@@ -11,6 +11,7 @@ import { HostAccessDisabledError } from "./host-shell.js"
 import {
   isDockerGeneratedHostname,
   networkAliases,
+  userDefinedNetwork,
   type ContainerInspect,
 } from "./update-container.js"
 
@@ -334,14 +335,6 @@ function namedVolumeMounts(current: ContainerInspect): Array<unknown> {
       ReadOnly: volume.RW === false,
     }))
   return [...named, ...unlisted]
-}
-
-// Docker's own bridge, host, and none networks take no aliases.
-function userDefinedNetwork(network: string): boolean {
-  return (
-    !["bridge", "host", "none"].includes(network) &&
-    !network.startsWith("container:")
-  )
 }
 
 // Passes once the replacement's health check does, or at once without one.
