@@ -16,6 +16,7 @@ import { InstanceFavoriteButton } from "@/components/instance-favorite"
 import { RelayKindIcon } from "@/components/instance-kind-icon"
 import { useRelayLiveStatus } from "@/components/relay/relay-presentation"
 import { RelayVersion } from "@/components/relay/relay-version"
+import { formatBytes } from "@/lib/format-bytes"
 import { canAccessRelayPermission } from "@/lib/navigation-destinations"
 import type { AccessPermission } from "@/lib/permissions"
 import {
@@ -190,6 +191,7 @@ function RelayConnectionFact({ relay }: { relay: RelayDirectoryEntry }) {
     enabled: connected,
   })
   const openedBy = connected ? (data?.openedBy ?? null) : null
+  const carried = data?.throughHearth
   return (
     <InfoDetails
       title="Connection"
@@ -215,6 +217,27 @@ function RelayConnectionFact({ relay }: { relay: RelayDirectoryEntry }) {
         }
       />
       <p>Configure changes which side Hearth prefers.</p>
+      {carried &&
+      (carried.open > 0 ||
+        carried.bytesToRelay + carried.bytesFromRelay > 0 ||
+        carried.refused > 0) ? (
+        <>
+          <InfoDetailRow
+            label="Through Hearth"
+            value={`${carried.open} open · ${formatBytes(carried.bytesToRelay + carried.bytesFromRelay)} carried`}
+          />
+          {carried.refused > 0 ? (
+            <InfoDetailRow
+              label="Turned away"
+              value={`${carried.refused} while Hearth was full`}
+            />
+          ) : null}
+          <p>
+            Transfers browsers can't send this Relay directly pass through
+            Hearth. Counted since Hearth last started.
+          </p>
+        </>
+      ) : null}
     </InfoDetails>
   )
 }
