@@ -86,10 +86,18 @@ function ComparePage() {
   )
 }
 
+// Opaque, so the pinned Kiln column covers what scrolls beneath it.
+const bestClassName =
+  "bg-[color-mix(in_oklab,var(--primary)_10%,var(--background))]"
+
+// On a phone the labels and Kiln stay put while the others scroll past.
+const pinnedKilnClassName =
+  "sticky left-36 z-10 sm:left-48 max-sm:shadow-[1px_0_0_var(--border)]"
+
 function ComparisonTable() {
   return (
     <>
-      {/* Wider than a phone, so it scrolls sideways with the labels pinned. */}
+      {/* Wider than a phone, so it scrolls sideways with the labels and Kiln pinned. */}
       <div className="relative overflow-x-auto">
         <table className="w-full min-w-[46rem] table-fixed border-separate border-spacing-0 text-sm">
           <caption className="sr-only">
@@ -109,9 +117,9 @@ function ComparisonTable() {
                   key={product.id}
                   scope="col"
                   className={cn(
-                    "border-b border-border px-2 pt-4 pb-3 text-center align-bottom font-semibold tracking-[-0.02em]",
+                    "border-b border-border bg-background px-2 pt-4 pb-3 text-center align-bottom font-semibold tracking-[-0.02em]",
                     product.id === "kiln"
-                      ? "text-primary-ink"
+                      ? cn("text-primary-ink", pinnedKilnClassName)
                       : "text-foreground"
                   )}
                 >
@@ -137,8 +145,9 @@ function ComparisonTable() {
                       <td
                         key={product.id}
                         className={cn(
-                          "border-b border-border px-2 py-3.5",
-                          isBest && "bg-primary/10"
+                          "border-b border-border bg-background px-2 py-3.5",
+                          isBest && bestClassName,
+                          product.id === "kiln" && pinnedKilnClassName
                         )}
                       >
                         <LevelMark
@@ -155,7 +164,7 @@ function ComparisonTable() {
         </table>
       </div>
       <ul className="type-meta mt-4 flex flex-wrap gap-x-6 gap-y-2 text-muted-foreground">
-        {(["yes", "partly", "no"] as const).map((level) => (
+        {(["yes", "partly", "weak", "no"] as const).map((level) => (
           <li key={level} className="flex items-center gap-2">
             <LevelMark level={level} decorative />
             {levelLabels[level]}
@@ -164,7 +173,7 @@ function ComparisonTable() {
         <li className="flex items-center gap-2">
           <span
             aria-hidden="true"
-            className="size-3 bg-primary/10 ring-1 ring-primary/30"
+            className={cn("size-3 ring-1 ring-primary/30", bestClassName)}
           />
           Best at it
         </li>
@@ -176,10 +185,11 @@ function ComparisonTable() {
 const levelLabels: Record<Level, string> = {
   yes: "Built in",
   partly: "Partly, or with extra work",
+  weak: "Barely",
   no: "No",
 }
 
-// A filled, half-filled, or empty dot, so a row reads at a glance.
+// A filled, half, quarter, or empty dot, so a row reads at a glance.
 function LevelMark({
   best = false,
   decorative = false,
@@ -198,6 +208,8 @@ function LevelMark({
           level === "yes" && "bg-primary",
           level === "partly" &&
             "border border-primary bg-[linear-gradient(90deg,var(--primary)_50%,transparent_50%)]",
+          level === "weak" &&
+            "border border-primary bg-[conic-gradient(var(--primary)_0_25%,transparent_0)]",
           level === "no" && "border border-muted-foreground/40"
         )}
       />

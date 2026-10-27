@@ -29,8 +29,9 @@ export const products: Array<Product> = [
   { id: "portainer", name: "Portainer", url: "https://www.portainer.io" },
 ]
 
-// Read at a glance, so no notes: full, partial, or none.
-export type Level = "yes" | "partly" | "no"
+// Read at a glance, so no notes: full, partial, barely, or none. "weak" is
+// for support that exists but falls well short.
+export type Level = "yes" | "partly" | "weak" | "no"
 
 export interface Row {
   label: string
@@ -121,7 +122,7 @@ export const rows: Array<Row> = [
       kiln: "yes",
       pterodactyl: "yes",
       amp: "yes",
-      coolify: "partly",
+      coolify: "weak",
       dokploy: "partly",
       openship: "partly",
       portainer: "partly",
@@ -157,7 +158,7 @@ export const rows: Array<Row> = [
       kiln: "yes",
       pterodactyl: "no",
       amp: "no",
-      coolify: "partly",
+      coolify: "weak",
       dokploy: "no",
       openship: "no",
       portainer: "partly",
@@ -170,7 +171,7 @@ export const rows: Array<Row> = [
       kiln: "no",
       pterodactyl: "no",
       amp: "no",
-      coolify: "partly",
+      coolify: "weak",
       dokploy: "yes",
       openship: "no",
       portainer: "yes",
@@ -178,7 +179,7 @@ export const rows: Array<Row> = [
   },
   {
     label: "Runs on Windows",
-    best: ["amp"],
+    best: ["amp", "portainer"],
     cells: {
       kiln: "no",
       pterodactyl: "no",
@@ -279,6 +280,7 @@ export const reasons: Array<Reason> = [
 const levelSuffix: Record<Level, string | null> = {
   yes: "",
   partly: " (partly)",
+  weak: " (barely)",
   no: null,
 }
 
