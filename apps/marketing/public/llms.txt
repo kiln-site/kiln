@@ -6,7 +6,7 @@ Kiln has two parts. Hearth is the web panel. A Relay runs on each machine you ow
 
 ## What it runs
 
-- Game servers, started from Bricks: Paper, Fabric, Folia, and Velocity for Minecraft, and Palworld. Kiln sets up ports and the right Java version. You can write your own Bricks or add community catalogs.
+- Game servers, started from Bricks, such as Minecraft and Palworld. Kiln sets up ports and the right Java version. You can write your own Bricks or add community catalogs.
 - Apps, deployed from a GitHub repository, a Docker image, or a Compose file. Kiln builds each push and switches over once the new containers are healthy.
 - Databases: MySQL, MariaDB, PostgreSQL, Redis, and Valkey, next to the app or server that uses them.
 

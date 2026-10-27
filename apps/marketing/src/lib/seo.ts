@@ -88,7 +88,7 @@ export function siteStructuredData(
         applicationSubCategory: "Server management panel",
         description: siteDescription,
         featureList: [
-          "Game servers from Bricks, including Minecraft (Paper, Fabric, Folia, Velocity) and Palworld",
+          "Game servers from Bricks, including Minecraft and Palworld",
           "Apps deployed from GitHub, Docker images, or Compose",
           "MySQL, MariaDB, PostgreSQL, Redis, and Valkey databases",
           "Browser console, file editor, NBT and SQLite editing",
