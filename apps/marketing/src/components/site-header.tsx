@@ -31,6 +31,7 @@ export function SiteHeader() {
         </Link>
 
         <nav aria-label="Main" className="hidden items-center gap-1 md:flex">
+          <HeaderLink to="/bricks">Bricks</HeaderLink>
           <HeaderLink to="/pricing">Pricing</HeaderLink>
           <ComingSoon soon={comingSoon.docs} label="Docs">
             <HeaderAnchor href={docsUrl} {...newTab}>
@@ -76,6 +77,9 @@ export function SiteHeader() {
           className="border-t border-border/70 md:hidden"
         >
           <div className="site-container flex flex-col py-2">
+            <MobileLink to="/bricks" onNavigate={() => setMenuOpen(false)}>
+              Bricks
+            </MobileLink>
             <MobileLink to="/pricing" onNavigate={() => setMenuOpen(false)}>
               Pricing
             </MobileLink>
@@ -102,7 +106,7 @@ function HeaderLink({
   to,
   children,
 }: {
-  to: "/pricing"
+  to: "/bricks" | "/pricing"
   children: React.ReactNode
 }) {
   return (
@@ -128,7 +132,7 @@ function MobileLink({
   onNavigate,
   children,
 }: {
-  to: "/pricing"
+  to: "/bricks" | "/pricing"
   onNavigate: () => void
   children: React.ReactNode
 }) {

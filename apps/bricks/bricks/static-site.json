@@ -1,0 +1,39 @@
+{
+  "$schema": "https://kiln.site/bricks/schema.json",
+  "format": "kiln.brick/v2",
+  "id": "static-site",
+  "name": "Static site",
+  "kind": "app",
+  "summary": "Serve HTML, CSS, and JavaScript from the Relay's shared web server.",
+  "author": "Kiln",
+  "icon": "../icons/static-site.svg",
+  "color": "#dc895c",
+  "tags": ["static", "git", "generic"],
+  "inputs": [
+    {
+      "key": "build_command",
+      "label": "Build command",
+      "type": "text",
+      "help": "Leave it empty for files that are ready to serve.",
+      "placeholder": "npm ci && npm run build",
+      "optional": true,
+      "max": 4000
+    },
+    {
+      "key": "root",
+      "label": "Folder to serve",
+      "type": "text",
+      "help": "The folder with index.html, after the build.",
+      "default": ".",
+      "max": 1024
+    }
+  ],
+  "deploy": {
+    "type": "static",
+    "root": "{{ root }}",
+    "build": {
+      "image": "node:24-alpine",
+      "command": "{{ build_command }}"
+    }
+  }
+}

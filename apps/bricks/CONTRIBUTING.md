@@ -1,5 +1,11 @@
 # Contributing a Brick
 
+For a `kiln.brick/v2` Brick, build it in the
+[creator](https://kiln.site/bricks/new), save the JSON as `bricks/<id>.json`
+(official) or `community/<author>/<id>.json` (community), list official ones
+in `catalog.json`, and run the tests below. The rest of this guide covers v1
+recipes.
+
 1. Copy the closest recipe in `recipes/`.
 2. Give it a globally recognizable lowercase `metadata.id`.
 3. Pin or deliberately channel the container image tag.

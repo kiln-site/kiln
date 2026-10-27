@@ -1,0 +1,104 @@
+{
+  "$schema": "https://kiln.site/bricks/schema.json",
+  "format": "kiln.brick/v2",
+  "id": "paper",
+  "name": "Paper",
+  "kind": "game-server",
+  "game": "Minecraft",
+  "summary": "Fast, plugin-compatible Minecraft server for most projects.",
+  "author": "Kiln",
+  "icon": "../icons/paper.svg",
+  "color": "#e67e7e",
+  "tags": ["minecraft", "java", "plugins"],
+  "platforms": ["amd64", "arm64"],
+  "inputs": [
+    {
+      "key": "version",
+      "label": "Minecraft version",
+      "type": "text",
+      "help": "Paper release to install.",
+      "default": "26.2",
+      "pattern": "^[0-9]+(?:\\.[0-9]+){1,2}$",
+      "max": 32
+    },
+    {
+      "key": "java_version",
+      "label": "Java version",
+      "type": "select",
+      "help": "Picked from the version; override it when needed.",
+      "default": "21",
+      "options": ["11", "17", "21", "25"],
+      "suggest": [
+        {
+          "when": "version",
+          "matches": "^26\\.",
+          "value": "25"
+        },
+        {
+          "when": "version",
+          "matches": "^1\\.2[01](?:\\.|$)",
+          "value": "21"
+        },
+        {
+          "when": "version",
+          "matches": "^1\\.1[789](?:\\.|$)",
+          "value": "17"
+        },
+        {
+          "when": "version",
+          "matches": "^1\\.1[2-6](?:\\.|$)",
+          "value": "11"
+        }
+      ]
+    },
+    {
+      "key": "server_jar_file",
+      "label": "Server jar file",
+      "type": "text",
+      "help": "Filename Kiln downloads and starts.",
+      "default": "paper.jar",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._\\-]{0,123}\\.jar$",
+      "max": 128,
+      "advanced": true
+    },
+    {
+      "key": "java_args",
+      "label": "Java arguments",
+      "type": "text",
+      "help": "Extra JVM flags. Heap size and startup command arguments are managed by Kiln and cannot be set here.",
+      "default": "-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:+AlwaysPreTouch -XX:G1HeapWastePercent=5 -XX:G1MixedGCCountTarget=4 -XX:InitiatingHeapOccupancyPercent=15 -XX:G1MixedGCLiveThresholdPercent=90 -XX:G1RSetUpdatingPauseTimePercent=5 -XX:SurvivorRatio=32 -XX:+PerfDisableSharedMem -XX:MaxTenuringThreshold=1 -Dusing.aikars.flags=https://mcflags.emc.gs -Daikars.new.flags=true -XX:G1NewSizePercent=30 -XX:G1MaxNewSizePercent=40 -XX:G1HeapRegionSize=8M -XX:G1ReservePercent=20",
+      "optional": true,
+      "advanced": true,
+      "pattern": "^(?!.*(?:^|\\s)(?:@(?!@)\\S+|-Xm[sx]\\S*|-XX:(?:-UseContainerSupport|-UseCGroupMemoryLimitForHeap|InitialHeapSize|MaxHeapSize|SoftMaxHeapSize|MaxRAMPercentage|MinRAMPercentage|InitialRAMPercentage|MaxRAMFraction|InitialRAMFraction|MinRAMFraction|MaxRAM|VMOptionsFile|Flags)(?:=\\S*)?|--nogui|-jar)(?:\\s|$)).*$",
+      "max": 2048
+    }
+  ],
+  "deploy": {
+    "type": "image",
+    "image": "ghcr.io/kiln-site/bricks-java:{{ java_version }}",
+    "env": {
+      "KILN_IMPLEMENTATION": "paper",
+      "KILN_VERSION": "{{ version }}",
+      "KILN_ARTIFACT_URL": "https://mcjarfiles.com/api/get-jar/servers/paper/{{ version }}",
+      "KILN_ARTIFACT_FILE": "{{ server_jar_file }}",
+      "KILN_INSTALLATION_MARKER": ".kiln-ember-installed",
+      "KILN_SERVER_KIND": "minecraft",
+      "KILN_JAVA_ARGS": "{{ java_args }}",
+      "KILN_JAVA_MAX_RAM_PERCENTAGE": "75.0",
+      "MIN_RAM": "512M"
+    },
+    "ports": [
+      {
+        "name": "game",
+        "port": 25565
+      }
+    ],
+    "volumes": ["/server"],
+    "ready": {
+      "log": [")! For help, type "]
+    },
+    "memory": "2G",
+    "hostname": "{{ version }}.{{ kiln.brick }}",
+    "stop": ["stop", "/stop"]
+  }
+}
