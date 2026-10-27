@@ -93,7 +93,10 @@ the dialog shows too. Confirming takes an optional name; left blank, the
 Relay gets the next free default name (K100, then K101, and so on). The
 machine must be able to reach Hearth at `KILN_URL`. Hearth needn't be able
 to reach the machine: when it can't, the dialog says so, and the Relay
-pairs through its announcements and connects to Hearth itself. For another
+pairs through its announcements and connects to Hearth itself. Hearth holds
+each announcement until it has news for the Relay, and answers the Relay's
+reply only once it saved the Relay, which then connects at once: adding it
+takes about a second after confirming. For another
 address, such as a domain or an internal address,
 add `--relay-host <address>` to the command; for another SFTP port, add
 `--sftp-port <port>`. The installer stops before starting anything when a

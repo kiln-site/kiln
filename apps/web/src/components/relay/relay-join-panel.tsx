@@ -38,6 +38,9 @@ type OpenedJoin = Awaited<ReturnType<typeof openRelayJoin>>
 type JoinView = Awaited<ReturnType<typeof getRelayJoin>>
 
 const POLL_MS = 2_000
+// While a Relay is being added, which takes about a second when it goes
+// well, so the dialog doesn't lag it.
+const ADDING_POLL_MS = 500
 
 // Not under the Relays list's key: invalidating that mustn't open a new join.
 const relayJoinQueryKey = ["relay-join"] as const
@@ -63,8 +66,11 @@ export function RelayJoinPanel({
     enabled: join !== undefined,
     queryFn: () => getRelayJoin({ data: { joinId: join?.id ?? "" } }),
     queryKey: [...relayJoinQueryKey, join?.id],
-    refetchInterval: (query) =>
-      polling(query.state.data ?? join) ? POLL_MS : false,
+    refetchInterval: (query) => {
+      const current = query.state.data ?? join
+      if (!polling(current)) return false
+      return current?.state === "confirming" ? ADDING_POLL_MS : POLL_MS
+    },
   })
   const view: JoinView | undefined = polled.data ?? join
   const refresh = useMutation({
@@ -386,9 +392,9 @@ function JoinReview({
         <div className="flex items-start gap-3 border border-amber-400/25 bg-amber-400/8 px-3 py-2.5">
           <CircleAlert className="mt-0.5 size-3.5 shrink-0 text-amber-200 light:text-amber-800" />
           <p className="type-meta min-w-0 flex-1 text-amber-200 light:text-amber-800">
-            {unreachable} This updates once Hearth can reach it. Or, since
-            this Relay's version can't connect to Hearth itself, cancel
-            and run the new command on its machine, which updates it.
+            {unreachable} This updates once Hearth can reach it. Or, since this
+            Relay's version can't connect to Hearth itself, cancel and run the
+            new command on its machine, which updates it.
           </p>
         </div>
       ) : unreachable ? (
