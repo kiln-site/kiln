@@ -1,26 +1,41 @@
 import * as React from "react"
-import { useQueries, useQuery, useSuspenseQuery } from "@tanstack/react-query"
+import { useQuery, useSuspenseQuery } from "@tanstack/react-query"
 import { useLiveSuspenseQuery } from "@tanstack/react-db"
-import type { InstanceInventory, RelayProxyMode } from "@workspace/contracts"
 import { useIsMobile } from "@workspace/ui/hooks/use-mobile"
 
 import { engineLabel } from "@/components/database/database-presentation"
 import { DataTableEmptyState } from "@/components/data-table"
+import {
+  MapViewport,
+  type MapViewportHandle,
+} from "@/components/infra-map-canvas"
 import { RelayKindIcon } from "@/components/instance-kind-icon"
-import { MapLinks, MapViewport } from "@/components/infra-map-canvas"
+import {
+  BackToFleet,
+  EmptyCard,
+  emptyCardId,
+  fleetGroups,
+  GroupHeadings,
+  layoutFleet,
+  layoutRelay,
+  overviewWorldClass,
+  relayGroups,
+  Trunk,
+  type OverviewInstance,
+  type OverviewKind,
+  type OverviewRelay,
+  type OverviewServices,
+} from "@/components/overview-map-cards"
+import {
+  LiveFocusRelayCard,
+  LiveHearthCard,
+  LiveInstanceCard,
+  LiveRelayCard,
+} from "@/components/overview-map-live"
 import {
   AddFirstRelayButton,
   useAwaitingFirstRelay,
 } from "@/components/relay/pair-first-relay"
-import {
-  MapGroup,
-  MapNode,
-  type SelectScope,
-} from "@/components/infra-map-nodes"
-import {
-  ServerScopePicker,
-  type ServerPickerOption,
-} from "@/components/server-scope-picker"
 import {
   infraAppsCollectionOptions,
   infraDatabasesCollectionOptions,
@@ -28,29 +43,39 @@ import {
 } from "@/lib/collections/infra-directories"
 import { relaysCollectionOptions } from "@/lib/collections/relays"
 import { replaceDataTableUrlSearch } from "@/lib/data-table-search"
-import {
-  buildInfraMapView,
-  infraMapScopeKey,
-  parseInfraMapScope,
-  resourceKey,
-  type InfraMapData,
-  type InfraMapResource,
-  type InfraMapScope,
-  type InfraMapService,
-} from "@/lib/infra-map-model"
-import { instanceInventoryQueryOptions } from "@/lib/instance-inventory"
+import type { OverviewRect } from "@/lib/overview-map-layout"
 import {
   domainSettingsQueryOptions,
   hearthEdgeQueryOptions,
-  relayProxyModesQueryOptions,
-  relaySnapshotQueryOptions,
-  relayWebRoutesQueryOptions,
 } from "@/lib/query-options"
-import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 import { relayAddress } from "@/lib/relay-route"
 
-type ScopeKind = "app" | "database" | "relay" | "server"
-type DatabaseLinks = InfraMapData["databaseLinks"]
+/**
+ * The infrastructure overview: Hearth and every Relay, or one Relay and its
+ * instances. Opening a Relay zooms into its map; its instances open their
+ * own pages.
+ */
+type OverviewScope = { kind: "all" } | { kind: "relay"; relayId: string }
+
+/**
+ * The scope's URL form. Older links name an instance; they open its Relay.
+ */
+function parseScope(value: string | undefined): OverviewScope {
+  const [kind, relayId] = value?.split(":") ?? []
+  if (
+    relayId &&
+    (kind === "relay" ||
+      kind === "server" ||
+      kind === "app" ||
+      kind === "database")
+  )
+    return { kind: "relay", relayId }
+  return { kind: "all" }
+}
+
+function scopeKey(scope: OverviewScope) {
+  return scope.kind === "all" ? "" : `relay:${scope.relayId}:${scope.relayId}`
+}
 
 export function InfraOverviewPage({
   includeDomains,
@@ -60,16 +85,14 @@ export function InfraOverviewPage({
   initialScope: string | undefined
 }) {
   // Read once: the page keeps the scope and writes the URL itself.
-  const [scope, setScope] = React.useState(() =>
-    parseInfraMapScope(initialScope)
-  )
-  const select = React.useCallback<SelectScope>((next) => {
+  const [scope, setScope] = React.useState(() => parseScope(initialScope))
+  const select = React.useCallback((next: OverviewScope) => {
     setScope(next)
-    replaceDataTableUrlSearch(infraMapScopeKey(next), "scope")
+    replaceDataTableUrlSearch(scopeKey(next), "scope")
   }, [])
   return (
-    <div className="mx-auto flex h-full min-h-[34rem] w-full max-w-[90rem] flex-col px-2 pb-3 sm:px-5 sm:pb-5">
-      <InfraMap
+    <div className="mx-auto flex h-full min-h-[34rem] w-full max-w-[90rem] flex-col px-2 pt-3 pb-3 sm:px-5 sm:pb-5">
+      <OverviewMap
         includeDomains={includeDomains}
         scope={scope}
         onSelect={select}
@@ -78,153 +101,213 @@ export function InfraOverviewPage({
   )
 }
 
-const InfraMap = React.memo(function InfraMap({
+const OverviewMap = React.memo(function OverviewMap({
   includeDomains,
   onSelect,
   scope,
 }: {
   includeDomains: boolean
-  onSelect: SelectScope
-  scope: InfraMapScope
+  onSelect: (scope: OverviewScope) => void
+  scope: OverviewScope
 }) {
   const directory = useDirectory()
   const { data: hearthEdge } = useSuspenseQuery(hearthEdgeQueryOptions())
-  const scopedRelayId = scope.kind === "all" ? null : scope.relayId
-  const { data: domainSettings } = useQuery({
-    ...domainSettingsQueryOptions(),
-    enabled: includeDomains,
-  })
-  const { data: proxyModes } = useQuery({
-    ...relayProxyModesQueryOptions(),
-    select: selectProxyModes,
-  })
-  // Links between instances only show inside one Relay, so the fleet view
-  // asks no Relay anything.
-  const { data: serverDatabaseLinks } = useQuery({
-    ...relaySnapshotQueryOptions(),
-    enabled: scopedRelayId !== null,
-    select: selectServerDatabaseLinks,
-  })
-  // Routes need the Relay itself to be readable.
-  const routesReadable =
-    scopedRelayId !== null &&
-    directory.relays.some((relay) => relay.id === scopedRelayId)
-  const { data: webRoutes } = useQuery({
-    ...relayWebRoutesQueryOptions(scopedRelayId ?? ""),
-    enabled: routesReadable,
-  })
-  // Only the apps the scope draws: a Relay's or a database's neighbours,
-  // or the one app in view. The fleet and a game server need none.
-  const scopedApps = React.useMemo(() => {
-    if (scope.kind === "relay" || scope.kind === "database")
-      return directory.apps.filter((app) => app.relayId === scope.relayId)
-    if (scope.kind === "app")
-      return directory.apps.filter(
-        (app) => app.relayId === scope.relayId && app.id === scope.id
-      )
-    return noApps
-  }, [directory.apps, scope])
-  const appDetails = useAppDetails(scopedApps)
+  const relays = React.useMemo(() => overviewRelays(directory), [directory])
+  const instances = React.useMemo(
+    () => overviewInstances(directory),
+    [directory]
+  )
+  const services = useServices(includeDomains, instances)
+  const focus =
+    scope.kind === "relay"
+      ? relays.find((relay) => relay.id === scope.relayId)
+      : undefined
 
-  const data = React.useMemo((): InfraMapData => {
-    const integration = domainSettings?.integration?.enabled
-      ? domainSettings.integration
-      : null
-    return {
-      hearthHost: hearthEdge.host,
-      provider: hearthEdge.provider,
-      relays: directory.relays.map((relay) => ({
-        id: relay.id,
-        name: relay.name,
-        enabled: relay.enabled,
-        address: relayAddress(relay),
-        nodeArch: relay.nodeArch,
-      })),
-      resources: directoryResources(directory),
-      domains: integration
-        ? {
-            zones: integration.domains.map((domain) => domain.domain),
-            assignments: domainSettings?.managedDomains ?? [],
-          }
-        : null,
-      proxyModes: proxyModes ?? noProxyModes,
-      databaseLinks: [...(serverDatabaseLinks ?? []), ...appDetails.links],
-      appServices: appDetails.services,
-      webRoutes:
-        scopedRelayId && webRoutes
-          ? new Map([
-              [
-                scopedRelayId,
-                webRoutes.map((route) => ({
-                  hostname: route.hostname,
-                  path: route.path,
-                  owner: route.owner,
-                })),
-              ],
-            ])
-          : noWebRoutes,
+  // One viewport for both maps, so opening a Relay or going back carries
+  // its zoom from one map into the next.
+  const viewport = React.useRef<MapViewportHandle>(null)
+  const open = React.useCallback(
+    (relayId: string, rect: OverviewRect) =>
+      viewport.current
+        ? viewport.current.leave(rect, () =>
+            onSelect({ kind: "relay", relayId })
+          )
+        : onSelect({ kind: "relay", relayId }),
+    [onSelect]
+  )
+  const back = React.useCallback(
+    () =>
+      viewport.current
+        ? viewport.current.leave(null, () => onSelect({ kind: "all" }))
+        : onSelect({ kind: "all" }),
+    [onSelect]
+  )
+  React.useEffect(() => {
+    if (!focus) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !event.defaultPrevented) back()
     }
-  }, [
-    appDetails,
-    directory,
-    domainSettings,
-    hearthEdge,
-    proxyModes,
-    scopedRelayId,
-    serverDatabaseLinks,
-    webRoutes,
-  ])
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [back, focus])
 
   // Wide screens read left to right; phones scroll down.
   const direction = useIsMobile() ? "down" : "right"
-  const view = React.useMemo(
-    () => buildInfraMapView(data, scope, direction),
-    [data, direction, scope]
-  )
-  const { layout } = view
+  const fleet = useFleetView(focus ? null : relays, instances, direction)
+  const relayView = useRelayView(focus ?? null, instances, direction)
 
+  if (relays.length === 0) return <EmptyOverview />
+  const layout = relayView?.layout ?? fleet!.layout
   return (
-    <>
-      <InfraMapScopePicker data={data} scope={scope} onSelect={onSelect} />
-      {data.relays.length === 0 && data.resources.length === 0 ? (
-        <EmptyInfraMap />
+    <MapViewport
+      controller={viewport}
+      fitKey={`${focus ? `relay:${focus.id}` : "all"}:${direction}`}
+      width={layout.width}
+      height={layout.height}
+      overlay={focus ? <BackToFleet name={focus.name} onBack={back} /> : null}
+    >
+      {relayView && focus ? (
+        <RelayContent
+          key={focus.id}
+          relay={focus}
+          services={services}
+          view={relayView}
+        />
       ) : (
-        <MapViewport
-          fitKey={infraMapScopeKey(scope)}
-          width={layout.width}
-          height={layout.height}
-        >
-          {layout.groups.map((group) => {
-            const label = view.groupLabels.get(group.id)
-            return group.labelled && label ? (
-              <MapGroup
-                key={group.id}
-                label={label}
-                rect={group.rect}
-                onSelect={onSelect}
-              />
-            ) : null
-          })}
-          <MapLinks layout={layout} />
-          {[...layout.nodes].map(([id, rect]) => (
-            <MapNode
-              key={id}
-              includeDomains={includeDomains}
-              node={view.nodes.get(id)!}
-              rect={rect}
-              onSelect={onSelect}
-            />
-          ))}
-        </MapViewport>
+        <FleetContent
+          hearth={hearthEdge}
+          relays={relays}
+          services={services}
+          view={fleet!}
+          onOpen={open}
+        />
       )}
-    </>
+    </MapViewport>
   )
 })
 
-function EmptyInfraMap() {
+type FleetView = NonNullable<ReturnType<typeof useFleetView>>
+
+function useFleetView(
+  relays: ReadonlyArray<OverviewRelay> | null,
+  instances: ReadonlyArray<OverviewInstance>,
+  direction: "right" | "down"
+) {
+  const counts = React.useMemo(() => countByRelay(instances), [instances])
+  const groups = React.useMemo(
+    () => (relays ? fleetGroups(relays) : null),
+    [relays]
+  )
+  return React.useMemo(
+    () => groups && { counts, groups, layout: layoutFleet(groups, direction) },
+    [counts, direction, groups]
+  )
+}
+
+const FleetContent = React.memo(function FleetContent({
+  hearth,
+  onOpen,
+  relays,
+  services,
+  view,
+}: {
+  hearth: { host: string; provider: "cloudflare" | "vercel" | null }
+  onOpen: (relayId: string, rect: OverviewRect) => void
+  relays: ReadonlyArray<OverviewRelay>
+  services: ServiceIndex
+  view: FleetView
+}) {
+  const { counts, groups, layout } = view
+  return (
+    <div className={overviewWorldClass}>
+      <Trunk path={layout.trunk} />
+      <LiveHearthCard
+        host={hearth.host}
+        provider={hearth.provider}
+        rect={layout.root}
+        relays={relays}
+      />
+      <GroupHeadings groups={groups} layout={layout} />
+      {groups.flatMap((group) =>
+        group.relays.map((relay) => (
+          <LiveRelayCard
+            key={relay.id}
+            counts={counts.get(relay.id) ?? noCounts}
+            rect={layout.cards.get(relay.id)!}
+            relay={relay}
+            services={services.relays.get(relay.id)}
+            wire={layout.wires.get(relay.id)}
+            onOpen={onOpen}
+          />
+        ))
+      )}
+    </div>
+  )
+})
+
+type RelayView = NonNullable<ReturnType<typeof useRelayView>>
+
+function useRelayView(
+  relay: OverviewRelay | null,
+  instances: ReadonlyArray<OverviewInstance>,
+  direction: "right" | "down"
+) {
+  const relayId = relay?.id ?? null
+  const groups = React.useMemo(
+    () => (relayId ? relayGroups(instances, relayId) : null),
+    [instances, relayId]
+  )
+  return React.useMemo(
+    () => groups && { groups, layout: layoutRelay(groups, direction) },
+    [direction, groups]
+  )
+}
+
+const RelayContent = React.memo(function RelayContent({
+  relay,
+  services,
+  view,
+}: {
+  relay: OverviewRelay
+  services: ServiceIndex
+  view: RelayView
+}) {
+  const { groups, layout } = view
+  const empty = layout.cards.get(emptyCardId)
+  return (
+    <div className={overviewWorldClass}>
+      <Trunk path={layout.trunk} />
+      <LiveFocusRelayCard
+        rect={layout.root}
+        relay={relay}
+        services={services.relays.get(relay.id)}
+      />
+      {empty ? (
+        <EmptyCard rect={empty}>No instances on this Relay yet.</EmptyCard>
+      ) : (
+        <>
+          <GroupHeadings groups={groups} layout={layout} />
+          {groups.flatMap((group) =>
+            group.instances.map((instance) => (
+              <LiveInstanceCard
+                key={instance.key}
+                instance={instance}
+                rect={layout.cards.get(instance.key)!}
+                services={services.instances.get(instance.key)}
+                wire={layout.wires.get(instance.key)}
+              />
+            ))
+          )}
+        </>
+      )}
+    </div>
+  )
+})
+
+function EmptyOverview() {
   const awaitingFirstRelay = useAwaitingFirstRelay()
   return (
-    <div className="flex min-h-0 flex-1 items-center justify-center rounded-xl border border-border/75 bg-card/25">
+    <div className="flex min-h-0 flex-1 items-center justify-center border border-border/75 bg-card/25">
       <DataTableEmptyState
         action={awaitingFirstRelay ? <AddFirstRelayButton /> : null}
         description={
@@ -241,70 +324,6 @@ function EmptyInfraMap() {
   )
 }
 
-const InfraMapScopePicker = React.memo(function InfraMapScopePicker({
-  data,
-  onSelect,
-  scope,
-}: {
-  data: InfraMapData
-  onSelect: SelectScope
-  scope: InfraMapScope
-}) {
-  const options = React.useMemo(() => {
-    return [
-      ...data.relays.map((relay): ServerPickerOption<ScopeKind> => ({
-        id: relay.id,
-        kind: "relay",
-        name: relay.name,
-        relayId: relay.id,
-        relayName: relay.name,
-      })),
-      ...data.resources.map((resource): ServerPickerOption<ScopeKind> => ({
-        id: resource.id,
-        kind: resource.kind,
-        name: resource.name,
-        relayId: resource.relayId,
-        relayName: resource.relayName,
-      })),
-    ]
-  }, [data.relays, data.resources])
-  const selected = React.useMemo(() => {
-    if (scope.kind === "all") return null
-    const id = scope.kind === "relay" ? scope.relayId : scope.id
-    return (
-      options.find(
-        (option) =>
-          option.kind === scope.kind &&
-          option.relayId === scope.relayId &&
-          option.id === id
-      ) ?? null
-    )
-  }, [options, scope])
-  const select = React.useCallback(
-    (option: ServerPickerOption<ScopeKind> | null) => {
-      if (!option?.kind) return onSelect({ kind: "all" })
-      onSelect(
-        option.kind === "relay"
-          ? { kind: "relay", relayId: option.relayId }
-          : { kind: option.kind, relayId: option.relayId, id: option.id }
-      )
-    },
-    [onSelect]
-  )
-  return (
-    <ServerScopePicker<ScopeKind>
-      allLabel="All instances"
-      ariaLabel="Accessible instances"
-      changeLabel="Change scope"
-      chooseLabel="Choose scope"
-      emptyMessage="No accessible instances found."
-      selectedServer={selected}
-      servers={options}
-      onSelect={select}
-    />
-  )
-})
-
 function useDirectory() {
   const { data: relays } = useLiveSuspenseQuery({
     query: (query) =>
@@ -313,11 +332,13 @@ function useDirectory() {
         .orderBy(({ relay }) => relay.name)
         .orderBy(({ relay }) => relay.createdAt)
         .select(({ relay }) => ({
+          controlDial: relay.controlDial,
           enabled: relay.enabled,
           hostname: relay.hostname,
           id: relay.id,
+          lastConnectedAt: relay.lastConnectedAt,
+          lastError: relay.lastError,
           name: relay.name,
-          nodeArch: relay.nodeArch,
           port: relay.port,
           useTls: relay.useTls,
         })),
@@ -346,38 +367,73 @@ function useDirectory() {
   )
 }
 
-function directoryResources(
-  directory: ReturnType<typeof useDirectory>
-): Array<InfraMapResource> {
+type Directory = ReturnType<typeof useDirectory>
+
+/**
+ * Every Relay the user can read, then any they can't but hold instances
+ * they can, drawn with only their name.
+ */
+function overviewRelays(directory: Directory): Array<OverviewRelay> {
+  const readable = directory.relays.map((relay): OverviewRelay => ({
+    id: relay.id,
+    name: relay.name,
+    enabled: relay.enabled,
+    lastError: relay.lastError,
+    lastConnectedAt: relay.lastConnectedAt,
+    controlDial: relay.controlDial,
+    address: relayAddress(relay),
+  }))
+  const known = new Set(readable.map((relay) => relay.id))
+  const shared = new Map<string, OverviewRelay>()
+  for (const entry of [
+    ...directory.servers,
+    ...directory.apps,
+    ...directory.databases,
+  ]) {
+    if (known.has(entry.relayId) || shared.has(entry.relayId)) continue
+    shared.set(entry.relayId, {
+      id: entry.relayId,
+      name: entry.relayName,
+      enabled: true,
+      lastError: null,
+      lastConnectedAt: null,
+      controlDial: "hearth",
+      address: "",
+      restricted: true,
+    })
+  }
   return [
-    ...directory.servers.map((server): InfraMapResource => ({
-      key: resourceKey("server", server.relayId, server.id),
+    ...readable,
+    ...[...shared.values()].sort((a, b) => a.name.localeCompare(b.name)),
+  ]
+}
+
+function overviewInstances(directory: Directory): Array<OverviewInstance> {
+  return [
+    ...directory.servers.map((server): OverviewInstance => ({
+      key: instanceKey("server", server.relayId, server.id),
       kind: "server",
       id: server.id,
       relayId: server.relayId,
-      relayName: server.relayName,
       name: server.name,
       meta: server.connectAddress || server.game,
       routeId: server.routeId,
-      brickId: server.brickId,
-      implementation: server.implementation,
+      tailscale: server.tailscale,
     })),
-    ...directory.apps.map((app): InfraMapResource => ({
-      key: resourceKey("app", app.relayId, app.id),
+    ...directory.apps.map((app): OverviewInstance => ({
+      key: instanceKey("app", app.relayId, app.id),
       kind: "app",
       id: app.id,
       relayId: app.relayId,
-      relayName: app.relayName,
       name: app.name,
       meta: app.shortId,
       routeId: app.id,
     })),
-    ...directory.databases.map((database): InfraMapResource => ({
-      key: resourceKey("database", database.relayId, database.id),
+    ...directory.databases.map((database): OverviewInstance => ({
+      key: instanceKey("database", database.relayId, database.id),
       kind: "database",
       id: database.id,
       relayId: database.relayId,
-      relayName: database.relayName,
       name: database.name,
       meta: `${engineLabel(database.engine)} · ${database.shortId}`,
       routeId: database.id,
@@ -385,111 +441,84 @@ function directoryResources(
   ]
 }
 
-const noApps: ReadonlyArray<{ id: string; relayId: string }> = []
-const noLinks: DatabaseLinks = []
-const noProxyModes: InfraMapData["proxyModes"] = new Map()
-const noWebRoutes: InfraMapData["webRoutes"] = new Map()
-
-function selectProxyModes(
-  modes: ReadonlyArray<{ relayId: string; mode: RelayProxyMode | null }>
-) {
-  return new Map(modes.map(({ mode, relayId }) => [relayId, mode]))
+function instanceKey(kind: OverviewKind, relayId: string, id: string) {
+  return `${kind}:${relayId}:${id}`
 }
 
-function selectServerDatabaseLinks(snapshot: RelayFleetSnapshot) {
-  return snapshot.instances.flatMap((instance): DatabaseLinks =>
-    (instance.savedDatabaseConnections ?? []).flatMap((connection) =>
-      connection.relayId === instance.relayId
-        ? [
-            {
-              relayId: instance.relayId,
-              consumer: { kind: "server" as const, id: instance.id },
-              databaseId: connection.databaseId,
-            },
-          ]
-        : []
-    )
-  )
+const noCounts: Record<OverviewKind, number> = {
+  server: 0,
+  app: 0,
+  database: 0,
 }
 
-interface AppDetails {
-  links: DatabaseLinks
-  services: InfraMapData["appServices"]
-}
-
-const noAppDetails: AppDetails = { links: noLinks, services: new Map() }
-
-// Docker names a database's network `…db-<database ID>-network`.
-const databaseNetwork = /db-([a-f0-9]{40})-network$/u
-
-const combineAppDetails = (
-  results: ReadonlyArray<{ data: InstanceInventory | undefined }>
-): AppDetails => {
-  const links: Array<DatabaseLinks[number]> = []
-  const services = new Map<string, Array<InfraMapService>>()
-  for (const { data } of results) {
-    if (data?.kind !== "app" || data.view !== "detail" || !data.data) continue
-    const { relayId, id } = data.observation
-    for (const databaseId of data.data.connectedDatabaseIds)
-      links.push({ relayId, consumer: { kind: "app", id }, databaseId })
-    const byName = new Map<string, InfraMapService>()
-    for (const container of data.data.containers) {
-      const service = byName.get(container.service) ?? {
-        name: container.service,
-        image: container.image,
-        running: 0,
-        containers: 0,
-        databaseIds: [],
-      }
-      byName.set(container.service, {
-        ...service,
-        containers: service.containers + 1,
-        running: service.running + (container.running ? 1 : 0),
-        databaseIds: [
-          ...new Set([
-            ...service.databaseIds,
-            ...container.networks.flatMap(
-              (network) => databaseNetwork.exec(network)?.[1] ?? []
-            ),
-          ]),
-        ],
-      })
+function countByRelay(instances: ReadonlyArray<OverviewInstance>) {
+  const counts = new Map<string, Record<OverviewKind, number>>()
+  for (const instance of instances) {
+    const relayCounts = counts.get(instance.relayId) ?? {
+      server: 0,
+      app: 0,
+      database: 0,
     }
-    if (byName.size > 0)
-      services.set(resourceKey("app", relayId, id), [...byName.values()])
+    relayCounts[instance.kind] += 1
+    counts.set(instance.relayId, relayCounts)
   }
-  return links.length === 0 && services.size === 0
-    ? noAppDetails
-    : { links, services }
+  return counts
 }
+
+interface ServiceIndex {
+  relays: ReadonlyMap<string, OverviewServices>
+  instances: ReadonlyMap<string, OverviewServices>
+}
+
+const noServices: ServiceIndex = { relays: new Map(), instances: new Map() }
 
 /**
- * Each app's containers and the databases it joins, read from its Relay.
- * Lookups for one Relay share a request, so a Relay's apps cost one round
- * trip.
+ * Which Relays and instances use Cloudflare (a managed domain) or Tailscale
+ * (a game server on a tailnet). Domains are a platform-admin setting, so
+ * others see only Tailscale. The map never waits for them: the logos appear
+ * once the domains arrive.
  */
-function useAppDetails(
-  apps: ReadonlyArray<{ id: string; relayId: string }>
-): AppDetails {
-  const details = useQueries({
-    queries: apps.map((app) =>
-      instanceInventoryQueryOptions(
-        { kind: "app", id: app.id, relayId: app.relayId },
-        "detail"
-      )
-    ),
-    combine: combineAppDetails,
+function useServices(
+  includeDomains: boolean,
+  instances: ReadonlyArray<OverviewInstance>
+): ServiceIndex {
+  const { data: domains } = useQuery({
+    ...domainSettingsQueryOptions(),
+    enabled: includeDomains,
+    select: selectDomainAssignments,
   })
-  // Apps poll; keep unchanged details identical so the map holds still.
-  const stable = React.useRef(noAppDetails)
-  if (
-    JSON.stringify(stable.current, mapReplacer) !==
-    JSON.stringify(details, mapReplacer)
-  )
-    stable.current = details
-  return stable.current
+  return React.useMemo(() => {
+    const relays = new Map<string, OverviewServices>()
+    const marked = new Map<string, OverviewServices>()
+    const mark = (
+      relayId: string,
+      key: string,
+      service: keyof OverviewServices
+    ) => {
+      relays.set(relayId, {
+        ...(relays.get(relayId) ?? noService),
+        [service]: true,
+      })
+      marked.set(key, { ...(marked.get(key) ?? noService), [service]: true })
+    }
+    // A managed domain names a game server.
+    for (const domain of domains ?? [])
+      mark(
+        domain.relayId,
+        instanceKey("server", domain.relayId, domain.instanceId),
+        "cloudflare"
+      )
+    for (const instance of instances)
+      if (instance.tailscale) mark(instance.relayId, instance.key, "tailscale")
+    return relays.size === 0 ? noServices : { relays, instances: marked }
+  }, [domains, instances])
 }
 
-function mapReplacer(_key: string, value: unknown) {
-  return value instanceof Map ? [...value] : value
+const noService: OverviewServices = { cloudflare: false, tailscale: false }
+
+function selectDomainAssignments(settings: {
+  integration?: { enabled: boolean } | null
+  managedDomains?: ReadonlyArray<{ relayId: string; instanceId: string }>
+}) {
+  return settings.integration?.enabled ? (settings.managedDomains ?? []) : []
 }

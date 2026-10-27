@@ -1,34 +1,87 @@
 import * as React from "react"
-import { ArrowLeft } from "lucide-react"
+import { TriangleAlert } from "lucide-react"
 
-import { Button } from "@workspace/ui/components/button"
 import { TooltipProvider } from "@workspace/ui/components/tooltip"
+import { cn } from "@workspace/ui/lib/utils"
 
-import { MapLinks, MapViewport } from "@/components/infra-map-canvas"
 import {
-  buildInfraMapView,
-  infraMapScopeKey,
-  type InfraMapScope,
-} from "@/lib/infra-map-model"
+  MapViewport,
+  nodeStyle,
+  type MapViewportHandle,
+} from "@/components/infra-map-canvas"
+import {
+  BackToFleet,
+  Entry,
+  Flag,
+  fleetGroups,
+  FocusRelayContent,
+  focusCardClass,
+  GroupHeadings,
+  HearthCard,
+  InstanceContent,
+  instanceCardClass,
+  layoutFleet,
+  layoutRelay,
+  overviewWorldClass,
+  RelayCard,
+  relayGroups,
+  StatusDot,
+  Trunk,
+  usageWarning,
+  type OverviewKind,
+} from "@/components/overview-map-cards"
+import type { OverviewRect } from "@/lib/overview-map-layout"
 
-import { demoFleet } from "~/components/demos/overview-data"
-import { MapGroup, MapNode } from "~/components/demos/overview-nodes"
+import {
+  demoInstances,
+  demoRelays,
+  instanceServices,
+  instanceStatus,
+  relayReadings,
+  relayServices,
+  relayStatus,
+} from "~/components/demos/overview-data"
 
-// The map from Hearth's infrastructure overview, for a small fleet: Hearth,
-// each Relay, and what runs on it. Choosing a Relay or an instance scopes
-// the map, as it does in Hearth.
+// Hearth's overview map, for a small fleet: Hearth and each Relay, grouped
+// by whether Hearth can reach it. Opening a Relay zooms into its map, as it
+// does in Hearth; its instances stay put here.
 export default function OverviewDemo() {
-  const [scope, setScope] = React.useState<InfraMapScope>({ kind: "all" })
+  const [relayId, setRelayId] = React.useState<string | null>(null)
   const frameRef = React.useRef<HTMLDivElement>(null)
-  // The fleet stays left to right even when narrow: down, Hearth sets its
-  // Relays side by side, too small to read in a phone-sized window.
-  const narrow = useNarrow(frameRef)
-  const direction = narrow && scope.kind !== "all" ? "down" : "right"
-  const view = React.useMemo(
-    () => buildInfraMapView(demoFleet, scope, direction),
-    [direction, scope]
+  const viewport = React.useRef<MapViewportHandle>(null)
+  // Phone-sized, the map flows down, as Hearth's does.
+  const direction = useNarrow(frameRef) ? "down" : "right"
+
+  const fleet = React.useMemo(() => fleetGroups(demoRelays), [])
+  const fleetLayout = React.useMemo(
+    () => layoutFleet(fleet, direction),
+    [direction, fleet]
   )
-  const { layout } = view
+  const focus = demoRelays.find((relay) => relay.id === relayId)
+  const relay = React.useMemo(
+    () => (focus ? relayGroups(demoInstances, focus.id) : null),
+    [focus]
+  )
+  const relayLayout = React.useMemo(
+    () => (relay ? layoutRelay(relay, direction) : null),
+    [direction, relay]
+  )
+  const layout = relayLayout ?? fleetLayout
+
+  const open = React.useCallback(
+    (id: string, rect: OverviewRect) =>
+      viewport.current
+        ? viewport.current.leave(rect, () => setRelayId(id))
+        : setRelayId(id),
+    []
+  )
+  const back = React.useCallback(
+    () =>
+      viewport.current
+        ? viewport.current.leave(null, () => setRelayId(null))
+        : setRelayId(null),
+    []
+  )
 
   // Hearth's map pans on every wheel event. On this page a plain scroll
   // should move the page, so only a pinch (ctrl + wheel) reaches the map.
@@ -49,46 +102,112 @@ export default function OverviewDemo() {
         className="relative flex h-[30rem] flex-col text-left sm:h-[38rem] [&_[role=region]]:touch-pan-y"
       >
         <MapViewport
-          fitKey={`${infraMapScopeKey(scope)}:${direction}`}
+          controller={viewport}
+          fitKey={`${relayId ?? "all"}:${direction}`}
           width={layout.width}
           height={layout.height}
+          overlay={
+            focus ? <BackToFleet name={focus.name} onBack={back} /> : null
+          }
         >
-          {layout.groups.map((group) => {
-            const label = view.groupLabels.get(group.id)
-            return group.labelled && label ? (
-              <MapGroup
-                key={group.id}
-                label={label}
-                rect={group.rect}
-                onSelect={setScope}
-              />
-            ) : null
-          })}
-          <MapLinks layout={layout} />
-          {[...layout.nodes].map(([id, rect]) => (
-            <MapNode
-              key={id}
-              node={view.nodes.get(id)!}
-              rect={rect}
-              onSelect={setScope}
-            />
-          ))}
+          {focus && relay && relayLayout ? (
+            <div className={overviewWorldClass}>
+              <Trunk path={relayLayout.trunk} />
+              <div
+                className={focusCardClass}
+                style={nodeStyle(relayLayout.root)}
+              >
+                <FocusRelayContent
+                  readings={relayReadings[focus.id] ?? null}
+                  relay={focus}
+                  services={relayServices[focus.id]}
+                  status={relayStatus[focus.id]!}
+                />
+              </div>
+              <GroupHeadings groups={relay} layout={relayLayout} />
+              {relay.flatMap((group) =>
+                group.instances.map((instance) => {
+                  const status = instanceStatus(instance)
+                  return (
+                    <Entry
+                      key={instance.key}
+                      status={status}
+                      wire={relayLayout.wires.get(instance.key)}
+                    >
+                      <div
+                        className={cn(instanceCardClass, "cursor-default")}
+                        style={nodeStyle(relayLayout.cards.get(instance.key)!)}
+                      >
+                        <InstanceContent
+                          instance={instance}
+                          services={instanceServices[instance.key]}
+                          status={status}
+                        />
+                      </div>
+                    </Entry>
+                  )
+                })
+              )}
+            </div>
+          ) : (
+            <div className={overviewWorldClass}>
+              <Trunk path={fleetLayout.trunk} />
+              <HearthCard
+                host="panel.kiln.site"
+                provider="cloudflare"
+                rect={fleetLayout.root}
+                relayCount={demoRelays.length}
+              >
+                {demoRelays.map((relay) => (
+                  <StatusDot
+                    key={relay.id}
+                    name={relay.name}
+                    status={relayStatus[relay.id]!}
+                  />
+                ))}
+              </HearthCard>
+              <GroupHeadings groups={fleet} layout={fleetLayout} />
+              {fleet.flatMap((group) =>
+                group.relays.map((relay) => {
+                  const warning = usageWarning(relayReadings[relay.id]!)
+                  return (
+                    <RelayCard
+                      key={relay.id}
+                      counts={countFor(relay.id)}
+                      flag={
+                        warning ? (
+                          <Flag tone="warning">
+                            <TriangleAlert
+                              className="size-3 shrink-0"
+                              aria-hidden="true"
+                            />
+                            {warning}
+                          </Flag>
+                        ) : null
+                      }
+                      rect={fleetLayout.cards.get(relay.id)!}
+                      relay={relay}
+                      services={relayServices[relay.id]}
+                      status={relayStatus[relay.id]!}
+                      wire={fleetLayout.wires.get(relay.id)}
+                      onOpen={open}
+                    />
+                  )
+                })
+              )}
+            </div>
+          )}
         </MapViewport>
-        {scope.kind === "all" ? null : (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="absolute top-3 right-3 bg-card shadow-sm"
-            onClick={() => setScope({ kind: "all" })}
-          >
-            <ArrowLeft />
-            All instances
-          </Button>
-        )}
       </div>
     </TooltipProvider>
   )
+}
+
+function countFor(relayId: string): Record<OverviewKind, number> {
+  const counts = { server: 0, app: 0, database: 0 }
+  for (const instance of demoInstances)
+    if (instance.relayId === relayId) counts[instance.kind] += 1
+  return counts
 }
 
 // Whether the map is phone-sized, where Hearth draws it top to bottom.

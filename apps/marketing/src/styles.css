@@ -6,6 +6,7 @@
  */
 @source not "../dist";
 /* The demos render these Hearth components, so their classes must exist. */
+@source "../../web/src/components/brand-logos.tsx";
 @source "../../web/src/components/console";
 @source "../../web/src/components/database-viewer";
 @source "../../web/src/components/file-tree-loading-panel.tsx";
@@ -15,6 +16,7 @@
 @source "../../web/src/components/infra-map-canvas.tsx";
 @source "../../web/src/components/instance-kind-icon.tsx";
 @source "../../web/src/components/overlay-notice.tsx";
+@source "../../web/src/components/overview-map-cards.tsx";
 @source "../../web/src/components/panel-resize-handle.tsx";
 @source "../../web/src/components/resource-history-chart.tsx";
 @source "../../web/src/components/resource-meters.tsx";

@@ -7,11 +7,10 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
-import { cn } from "@workspace/ui/lib/utils"
 
-import type { InfraMapLayout, InfraMapRect } from "@/lib/infra-map-layout"
+import type { OverviewRect } from "@/lib/overview-map-layout"
 
-export function nodeStyle(rect: InfraMapRect): React.CSSProperties {
+export function nodeStyle(rect: OverviewRect): React.CSSProperties {
   return {
     height: rect.height,
     left: rect.x,
@@ -20,55 +19,21 @@ export function nodeStyle(rect: InfraMapRect): React.CSSProperties {
   }
 }
 
-// Opaque strokes, so lines sharing a track draw as one line.
-const linkClasses = {
-  uplink: "stroke-[color-mix(in_oklab,var(--muted-foreground)_75%,var(--background))]",
-  dns: "stroke-orange-400",
-  route: "stroke-violet-400",
-  database: "stroke-blue-400",
-} as const
-
-export const MapLinks = React.memo(function MapLinks({
-  layout,
-}: {
-  layout: InfraMapLayout
-}) {
-  return (
-    <svg
-      aria-hidden="true"
-      data-map-links=""
-      className="group/links pointer-events-none absolute top-0 left-0 overflow-visible"
-      width={layout.width}
-      height={layout.height}
-      fill="none"
-    >
-      {layout.links.map((link) => (
-        <path
-          key={link.id}
-          d={link.path}
-          data-from={link.from}
-          data-to={link.to}
-          className={cn(
-            linkClasses[link.kind],
-            link.muted && "opacity-50",
-            // While a node is hovered, its own links stand out.
-            "group-data-[highlighting]/links:opacity-15 data-[active]:!opacity-100"
-          )}
-          strokeDasharray={
-            link.kind === "dns" ? "3 5" : link.muted ? "6 6" : undefined
-          }
-          strokeLinecap="round"
-          strokeWidth={1.5}
-        />
-      ))}
-    </svg>
-  )
-})
-
 const minZoom = 0.1
 const maxZoom = 2
 const fitPadding = 40
 const dotSpacing = 20
+const exitMs = 200
+const enterMs = 260
+
+export interface MapViewportHandle {
+  /**
+   * Leaves the current map: toward a rect in map coordinates, as when
+   * opening it, or back out when there's none. The next map fitted comes in
+   * from the same direction. Calls `done` once the old map is gone.
+   */
+  leave(toward: OverviewRect | null, done: () => void): void
+}
 
 /**
  * A pannable, zoomable canvas. The view lives in a ref and is written to the
@@ -76,14 +41,19 @@ const dotSpacing = 20
  */
 export function MapViewport({
   children,
+  controller,
   fitKey,
   height,
+  overlay,
   width,
 }: {
   children: React.ReactNode
+  controller?: React.Ref<MapViewportHandle>
   /** Refits the view whenever this changes, as when the scope does. */
   fitKey: string
   height: number
+  /** Drawn over the map beside the zoom controls. */
+  overlay?: React.ReactNode
   width: number
 }) {
   const viewportRef = React.useRef<HTMLDivElement>(null)
@@ -125,10 +95,7 @@ export function MapViewport({
     view.current = {
       scale,
       x: (bounds.width - contentWidth * scale) / 2,
-      y: Math.max(
-        fitPadding,
-        (bounds.height - contentHeight * scale) / 2
-      ),
+      y: Math.max(fitPadding, (bounds.height - contentHeight * scale) / 2),
     }
     apply()
   }, [apply])
@@ -154,16 +121,101 @@ export function MapViewport({
     [apply]
   )
 
+  // Set once the old map has left: the next map fitted arrives from that
+  // direction. Leaving, arriving, and their fallback each keep their own
+  // timer, so a refit mid-way (as on a resize) can't cancel the navigation.
+  const arriving = React.useRef<"in" | "out" | null>(null)
+  const settle = React.useRef<ReturnType<typeof setTimeout>>(undefined)
+  const leaving = React.useRef<ReturnType<typeof setTimeout>>(undefined)
+  const unclaimed = React.useRef<ReturnType<typeof setTimeout>>(undefined)
+  React.useEffect(
+    () => () => {
+      clearTimeout(settle.current)
+      clearTimeout(leaving.current)
+      clearTimeout(unclaimed.current)
+    },
+    []
+  )
+
+  // Animates the next transform and opacity written to the map.
+  const transition = React.useCallback((ms: number, easing: string) => {
+    const world = worldRef.current
+    if (!world) return
+    world.style.transition = `transform ${ms}ms ${easing}, opacity ${ms}ms ${easing}`
+    clearTimeout(settle.current)
+    settle.current = setTimeout(() => {
+      world.style.transition = ""
+    }, ms)
+  }, [])
+
+  React.useImperativeHandle(
+    controller,
+    () => ({
+      leave(toward, done) {
+        const viewport = viewportRef.current
+        const world = worldRef.current
+        if (!viewport || !world || prefersReducedMotion()) return done()
+        const bounds = viewport.getBoundingClientRect()
+        const current = view.current
+        // Opening grows the map around the card; going back shrinks it.
+        const scale = current.scale * (toward ? 1.6 : 0.85)
+        const centreX = toward
+          ? toward.x + toward.width / 2
+          : (bounds.width / 2 - current.x) / current.scale
+        const centreY = toward
+          ? toward.y + toward.height / 2
+          : (bounds.height / 2 - current.y) / current.scale
+        clearTimeout(leaving.current)
+        clearTimeout(unclaimed.current)
+        transition(exitMs, "cubic-bezier(0.4, 0, 1, 1)")
+        world.style.transform = `translate(${bounds.width / 2 - centreX * scale}px, ${bounds.height / 2 - centreY * scale}px) scale(${scale})`
+        world.style.opacity = "0"
+        leaving.current = setTimeout(() => {
+          arriving.current = toward ? "in" : "out"
+          done()
+          // No new map came, so bring the old one back.
+          unclaimed.current = setTimeout(() => {
+            if (!arriving.current) return
+            arriving.current = null
+            world.style.opacity = "1"
+            fit()
+          }, 400)
+        }, exitMs)
+      },
+    }),
+    [fit, transition]
+  )
+
   // Fit before the first paint, and again whenever the content or the
   // viewport changes size, until the person moves the map themselves.
   const fittedKey = React.useRef(fitKey)
   React.useLayoutEffect(() => {
+    let changed = false
     if (fittedKey.current !== fitKey) {
       fittedKey.current = fitKey
       moved.current = false
+      changed = true
     }
     if (!moved.current) fit()
-  }, [fit, fitKey, width, height])
+    const from = arriving.current
+    const world = worldRef.current
+    if (!changed || !from || !world) return
+    arriving.current = null
+    clearTimeout(unclaimed.current)
+    // Start a little closer, or a little further, then settle into place.
+    const viewport = viewportRef.current!
+    const bounds = viewport.getBoundingClientRect()
+    const target = { ...view.current }
+    const factor = from === "in" ? 0.9 : 1.08
+    const scale = target.scale * factor
+    world.style.transition = ""
+    world.style.transform = `translate(${bounds.width / 2 - ((bounds.width / 2 - target.x) / target.scale) * scale}px, ${bounds.height / 2 - ((bounds.height / 2 - target.y) / target.scale) * scale}px) scale(${scale})`
+    world.style.opacity = "0"
+    void world.offsetWidth
+    transition(enterMs, "cubic-bezier(0, 0, 0.2, 1)")
+    apply()
+    world.style.opacity = "1"
+  }, [apply, fit, fitKey, transition, width, height])
 
   React.useEffect(() => {
     const viewport = viewportRef.current
@@ -261,7 +313,6 @@ export function MapViewport({
   // Keep keyboard focus in view. The viewport clips its content, so the
   // browser would otherwise scroll it and desync the view.
   const onFocus = (event: React.FocusEvent<HTMLDivElement>) => {
-    highlight(event.target)
     const viewport = viewportRef.current
     if (!viewport || event.target === viewport) return
     viewport.scrollTo(0, 0)
@@ -284,38 +335,6 @@ export function MapViewport({
     moved.current = true
     apply()
   }
-
-  // Hovering or focusing a node lights its links. Written to the DOM, so
-  // moving across the map re-renders nothing.
-  const highlighted = React.useRef<string | null>(null)
-  const highlight = (target: EventTarget | null) => {
-    const element =
-      target instanceof Element ? target.closest("[data-node-id]") : null
-    const id = element?.getAttribute("data-node-id") ?? null
-    if (id === highlighted.current) return
-    highlighted.current = id
-    const links = worldRef.current?.querySelector("[data-map-links]")
-    if (!links) return
-    for (const path of links.querySelectorAll("path[data-active]"))
-      path.removeAttribute("data-active")
-    if (!id) {
-      links.removeAttribute("data-highlighting")
-      return
-    }
-    let found = false
-    for (const path of links.querySelectorAll("path")) {
-      if (path.dataset.from === id || path.dataset.to === id) {
-        path.setAttribute("data-active", "")
-        found = true
-      }
-    }
-    if (found) links.setAttribute("data-highlighting", "")
-    else links.removeAttribute("data-highlighting")
-  }
-  const onPointerOver = (event: React.PointerEvent) => {
-    if (!drag.current?.dragging) highlight(event.target)
-  }
-  const onPointerLeave = () => highlight(null)
 
   const resetView = React.useCallback(() => {
     moved.current = false
@@ -340,8 +359,6 @@ export function MapViewport({
       onPointerCancel={endDrag}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
-      onPointerLeave={onPointerLeave}
-      onPointerOver={onPointerOver}
       onPointerUp={endDrag}
     >
       <div
@@ -365,6 +382,11 @@ export function MapViewport({
           <Maximize />
         </MapControl>
       </div>
+      {overlay ? (
+        <div data-map-control="" className="absolute top-3 left-14">
+          {overlay}
+        </div>
+      ) : null}
       <span
         ref={zoomLabelRef}
         data-map-control=""
@@ -405,6 +427,10 @@ function MapControl({
       </TooltipContent>
     </Tooltip>
   )
+}
+
+function prefersReducedMotion() {
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches
 }
 
 function preventDefault(event: React.SyntheticEvent) {

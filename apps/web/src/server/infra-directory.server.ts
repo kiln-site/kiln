@@ -57,6 +57,8 @@ export const readInfraServerDirectory = Effect.fn("Infra.directory.servers")(
           connectAddress: tailscaleEnabled
             ? record.connectAddress
             : managedAddressForInstance(addresses, record),
+          // On a tailnet, where its connect address is the tailnet one.
+          tailscale: tailscaleEnabled,
           relayName,
           shortId: record.id.slice(0, 8),
           routeId: relayInstanceRouteId(record.relayId, record.id.slice(0, 8)),
