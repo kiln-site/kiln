@@ -487,36 +487,56 @@ export const updateDomainConnectionZonesEffect = Effect.fn(
  * Forgets a connection and its vanity domains. Refused while game server
  * domains are on them; the caller deletes its web hostnames' records first.
  */
+/**
+ * Refuses removing a connection whose domains still name game servers, so
+ * nothing is torn down before a removal that can't finish.
+ */
+export const requireConnectionUnusedEffect = Effect.fn(
+  "domains.connection.requireUnused"
+)(function* (id: string) {
+  const database = yield* Database
+  const [used] = yield* database.queryRows<RowDataPacket & { total: number }>(
+    "domains.connection.requireUnused",
+    `SELECT COUNT(*) AS total FROM ${databaseTable("instance_domain")}
+      WHERE ${connectionDomainsMatch}`,
+    [id, id]
+  )
+  yield* connectionInUseFailure(Number(used?.total ?? 0))
+})
+
+// Game server domains a connection manages, or on its vanity domains.
+const connectionDomainsMatch = `integration_id = ? OR domain IN (
+  SELECT domain FROM ${databaseTable("domain_zone")} WHERE integration_id = ?)`
+
+function connectionInUseFailure(total: number) {
+  return total > 0
+    ? DomainConfigurationError.make({
+        message: `Delete the ${total} game server ${total === 1 ? "domain" : "domains"} on this connection's domains first`,
+      })
+    : Effect.void
+}
+
 export const deleteDomainConnectionEffect = Effect.fn(
   "domains.connection.delete"
 )(function* (id: string) {
   const database = yield* Database
   yield* database.transaction("domains.connection.delete", (transaction) =>
     Effect.gen(function* () {
-      const zones = yield* transaction.queryRows<
-        RowDataPacket & { domain: string }
-      >(
+      yield* transaction.queryRows(
         `SELECT domain FROM ${databaseTable("domain_zone")}
           WHERE integration_id = ?
           FOR UPDATE`,
         [id]
       )
-      if (zones.length > 0) {
-        const [used] = yield* transaction.queryRows<
-          RowDataPacket & { total: number }
-        >(
-          `SELECT COUNT(*) AS total FROM ${databaseTable("instance_domain")}
-            WHERE domain IN (${zones.map(() => "?").join(", ")})
-            FOR SHARE`,
-          zones.map((zone) => zone.domain)
-        )
-        const total = Number(used?.total ?? 0)
-        if (total > 0) {
-          return yield* DomainConfigurationError.make({
-            message: `Delete the ${total} game server ${total === 1 ? "domain" : "domains"} on this connection's domains first`,
-          })
-        }
-      }
+      const [used] = yield* transaction.queryRows<
+        RowDataPacket & { total: number }
+      >(
+        `SELECT COUNT(*) AS total FROM ${databaseTable("instance_domain")}
+          WHERE ${connectionDomainsMatch}
+          FOR SHARE`,
+        [id, id]
+      )
+      yield* connectionInUseFailure(Number(used?.total ?? 0))
       yield* transaction.execute(
         `DELETE FROM ${databaseTable("domain_zone")} WHERE integration_id = ?`,
         [id]
@@ -827,15 +847,14 @@ export const insertInstanceDomainAssignmentEffect = Effect.fn(
 /**
  * Holds a new name for a domain whose records were released. Locks its
  * domain's row before the assignment's, the order a save takes them in, and
- * only while the domain is still in the zone its records will go in.
+ * only while the domain is still in the zone, and on the connection, its
+ * records will go in. The connection moves with it, so later syncs and the
+ * delete use the token that made them.
  */
 export const reserveInstanceDomainAssignmentEffect = Effect.fn(
   "domains.assignment.reserve"
 )(function* (
-  input: Omit<
-    DomainReservation,
-    "connectionId" | "instanceId" | "primary" | "relayId"
-  >
+  input: Omit<DomainReservation, "instanceId" | "primary" | "relayId">
 ) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
@@ -843,9 +862,9 @@ export const reserveInstanceDomainAssignmentEffect = Effect.fn(
     Effect.gen(function* () {
       const zones = yield* transaction.queryRows<RowDataPacket>(
         `SELECT 1 FROM ${databaseTable("domain_zone")}
-          WHERE domain = ? AND zone_id = ?
+          WHERE domain = ? AND zone_id = ? AND integration_id = ?
           FOR SHARE`,
-        [input.domain, input.zoneId]
+        [input.domain, input.zoneId, input.connectionId]
       )
       if (zones.length === 0) {
         return yield* DomainConfigurationError.make({
@@ -856,6 +875,7 @@ export const reserveInstanceDomainAssignmentEffect = Effect.fn(
         `UPDATE ${databaseTable("instance_domain")}
             SET vanity_label = ?,
                 domain = ?,
+                integration_id = ?,
                 public_host = ?,
                 public_port = ?,
                 supports_srv = ?,
@@ -871,6 +891,7 @@ export const reserveInstanceDomainAssignmentEffect = Effect.fn(
         [
           input.vanityLabel,
           input.domain,
+          input.connectionId,
           input.publicHost,
           input.publicPort,
           input.supportsSrv,

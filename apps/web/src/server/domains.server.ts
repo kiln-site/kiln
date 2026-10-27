@@ -934,7 +934,10 @@ const provisionVanityRecordsEffect = Effect.fn(
         primary: target.primary,
         relayId: instance.relayId,
       })
-    : reserveInstanceDomainAssignmentEffect(reservation)
+    : reserveInstanceDomainAssignmentEffect({
+        ...reservation,
+        connectionId: domain.connectionId,
+      })
   const hostname = `${vanityLabel}.${domain.domain}`
   const address = cloudflareAddressRecord(hostname, publicHost)
   const addressRecord = yield* createCloudflareAddressRecordEffect(

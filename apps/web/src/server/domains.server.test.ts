@@ -11,6 +11,7 @@ import { insertRows, selectRows } from "@/test/seed"
 import { betterAuthSecrets } from "@/lib/environment"
 import {
   insertInstanceDomainAssignmentEffect,
+  reserveInstanceDomainAssignmentEffect,
   saveDomainConnectionEffect,
 } from "@/effect/domains"
 import { finalizeInstanceDeletionEffect } from "@/server/instance-deletion-cleanup"
@@ -833,6 +834,58 @@ describeMysql("saving vanity domains", () => {
 
           assert.strictEqual(refused._tag, "DomainConfigurationError")
           assert.deepEqual(yield* assignmentKeys, [])
+        })
+    )
+
+    it.effect(
+      "moves a renamed domain onto the connection its new domain is on",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* insertCredential()
+          yield* insertAssignment(testAssignment())
+          yield* insertRows("domain_integration", {
+            id: "personal",
+            provider: "cloudflare",
+            owner_id: "owner",
+            name: "Personal",
+            api_token_ciphertext: "ciphertext",
+            blacklist_patterns: "[]",
+            zones: JSON.stringify([{ id: "personal-zone", name: "mine.site" }]),
+            created_at: 0,
+            updated_at: 0,
+          })
+          yield* insertRows("domain_zone", {
+            domain: "mine.site",
+            integration_id: "personal",
+            zone_id: "personal-zone",
+            zone_name: "mine.site",
+            is_default: true,
+            enabled: true,
+            created_at: 0,
+            updated_at: 0,
+          })
+
+          // Its later syncs and its delete use the token that made it.
+          yield* reserveInstanceDomainAssignmentEffect({
+            ...testAssignment(),
+            connectionId: "personal",
+            domain: "mine.site",
+            srvProtocol: null,
+            srvService: null,
+            supportsSrv: false,
+            zoneId: "personal-zone",
+          })
+          assert.deepEqual(
+            yield* selectRows<{ domain: string; integration_id: string }>(
+              "instance_domain"
+            ).pipe(
+              Effect.map((rows) =>
+                rows.map((row) => `${row.domain}@${row.integration_id}`)
+              )
+            ),
+            ["mine.site@personal"]
+          )
         })
     )
 

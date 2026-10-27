@@ -433,24 +433,25 @@ export const updateAppWebRoutes = createServerFn({ method: "POST" })
       resourceId: data.appId,
       resourceType: "app" as const,
     }
-    const { checkWebRouteHostnames, syncWebRouteHostnames } =
+    const { saveClaimingWebRouteHostnames, syncWebRouteHostnames } =
       await import("@/server/web-hostname-access.server")
-    await checkWebRouteHostnames(
+    const state = await saveClaimingWebRouteHostnames(
       user,
       resource,
-      data.routes.flatMap(webRouteHostnames)
-    )
-    const state = relayAppWebRouteStateSchema.parse(
-      await databaseRpc(
-        relay,
-        "app.network.routes.write",
-        {
-          appId: data.appId,
-          routes: webRoutesForRelay(relay.id, data.routes),
-        },
-        240_000,
-        user.id
-      )
+      data.routes.flatMap(webRouteHostnames),
+      async () =>
+        relayAppWebRouteStateSchema.parse(
+          await databaseRpc(
+            relay,
+            "app.network.routes.write",
+            {
+              appId: data.appId,
+              routes: webRoutesForRelay(relay.id, data.routes),
+            },
+            240_000,
+            user.id
+          )
+        )
     )
     publishAppChange(relay.id, false)
     // Kiln keeps the DNS records of hostnames in zones it manages.

@@ -16,7 +16,7 @@ import { encryptWithKeyring } from "../../keyring.mjs"
 
 import type { DomainActor } from "./domain-access.server"
 import {
-  checkWebRouteHostnamesEffect,
+  claimWebRouteHostnamesEffect,
   generateAppHostnameEffect,
   moveResourceWebHostnamesEffect,
   syncResourceWebHostnamesEffect,
@@ -43,6 +43,8 @@ interface FakeRecord {
 // Cloudflare is the external system: zones, each a set of DNS records by ID.
 function fakeCloudflare(zones: Array<{ id: string; name: string }>) {
   const records = new Map<string, FakeRecord>()
+  // Methods whose next request Cloudflare fails, as an outage would.
+  const failing = new Set<string>()
   let nextId = 0
   const success = (result: unknown) =>
     Response.json({ errors: [], result, success: true })
@@ -51,6 +53,12 @@ function fakeCloudflare(zones: Array<{ id: string; name: string }>) {
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input))
       const method = init?.method ?? "GET"
+      if (failing.delete(method)) {
+        return Response.json(
+          { errors: [{ code: 10_000, message: "Service unavailable" }] },
+          { status: 503 }
+        )
+      }
       const [, , , , zoneId, , recordId] = url.pathname.split("/")
       if (url.pathname.endsWith("/zones")) {
         return success(zones.map((zone) => ({ ...zone, status: "active" })))
@@ -94,6 +102,9 @@ function fakeCloudflare(zones: Array<{ id: string; name: string }>) {
       Object.fromEntries(
         [...records.values()].map((record) => [record.name, record.content])
       ),
+    failNext: (method: string) => {
+      failing.add(method)
+    },
     seed: (record: FakeRecord) => {
       nextId += 1
       records.set(`manual-${nextId}`, record)
@@ -286,7 +297,7 @@ describeMysql("web route hostnames", () => {
     )
 
     it.effect(
-      "refuses names another resource holds, and reserved or taken ones on others' vanity domains",
+      "claims names before a save, refusing another resource's, and reserved or taken ones on others' vanity domains",
       () =>
         Effect.gen(function* () {
           yield* seed
@@ -322,7 +333,7 @@ describeMysql("web route hostnames", () => {
             resourceType: "instance",
           } as const
           const refusal = (actor: DomainActor, hostname: string) =>
-            checkWebRouteHostnamesEffect({
+            claimWebRouteHostnamesEffect({
               actor,
               hostnames: [hostname],
               resource: server,
@@ -362,29 +373,134 @@ describeMysql("web route hostnames", () => {
             message: "www.games.example is reserved",
           })
 
-          // A free name passes, as do the app's own and reserved ones for
-          // the domain's owner: the person, or Kiln's administrators.
-          yield* checkWebRouteHostnamesEffect({
+          // A free name is claimed, as are the app's own and reserved ones
+          // for the domain's owner: the person, or Kiln's administrators.
+          yield* claimWebRouteHostnamesEffect({
             actor: owner,
             hostnames: ["www.games.example"],
             resource: server,
           })
-          yield* checkWebRouteHostnamesEffect({
+          yield* claimWebRouteHostnamesEffect({
             actor: collaborator,
             hostnames: ["free.play.kiln.site"],
             resource: server,
           })
-          yield* checkWebRouteHostnamesEffect({
+          yield* claimWebRouteHostnamesEffect({
             actor: collaborator,
             hostnames: ["shop.play.kiln.site"],
             resource: app,
           })
-          yield* checkWebRouteHostnamesEffect({
+          yield* claimWebRouteHostnamesEffect({
             actor: admin,
             hostnames: ["admin.play.kiln.site"],
             resource: server,
           })
+          assert.deepEqual(yield* hostnameRows, {
+            "admin.play.kiln.site": "pending@relay-one",
+            "free.play.kiln.site": "pending@relay-one",
+            "shop.play.kiln.site": "active@relay-one",
+            "www.games.example": "pending@relay-one",
+          })
+          // So a second save can't take a claimed name before its routes
+          // land.
+          assert.deepEqual(
+            yield* claimWebRouteHostnamesEffect({
+              actor: collaborator,
+              hostnames: ["free.play.kiln.site"],
+              resource: app,
+            }).pipe(
+              Effect.flip,
+              Effect.map((error) => error.message)
+            ),
+            "free.play.kiln.site is already in use"
+          )
         })
+    )
+
+    it.effect(
+      "lets a game server route its own address, and a vanity name's www counterpart",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          const cloudflare = fakeCloudflare([ownerZone, platformZone])
+          const server = {
+            relayId,
+            resourceId: instanceId,
+            resourceType: "instance",
+          } as const
+          // The game server's address, whose record Kiln already keeps.
+          yield* insertRows("instance_domain", {
+            id: "00000000-0000-4000-8000-000000000009",
+            relay_id: relayId,
+            instance_id: instanceId,
+            is_primary: true,
+            integration_id: "cloudflare",
+            vanity_label: "survival",
+            domain: "play.kiln.site",
+            public_host: "relay-one.relay.test",
+            public_port: 25_565,
+            supports_srv: false,
+            status: "active",
+            created_at: 0,
+            updated_at: 0,
+          })
+          cloudflare.seed({
+            content: "relay-one.relay.test",
+            name: "survival.play.kiln.site",
+            type: "CNAME",
+            zoneId: platformZone.id,
+          })
+
+          const hostnames = [
+            "survival.play.kiln.site",
+            "map.play.kiln.site",
+            "www.map.play.kiln.site",
+          ]
+          yield* claimWebRouteHostnamesEffect({
+            actor: collaborator,
+            hostnames,
+            resource: server,
+          })
+          yield* sync(collaborator, hostnames, server)
+
+          assert.deepEqual(cloudflare.dns(), {
+            "map.play.kiln.site": "relay-one.relay.test",
+            "survival.play.kiln.site": "relay-one.relay.test",
+            "www.map.play.kiln.site": "relay-one.relay.test",
+          })
+          assert.deepEqual(Object.keys(yield* hostnameRows).sort(), [
+            "map.play.kiln.site",
+            "www.map.play.kiln.site",
+          ])
+          // Only beside a name the resource holds.
+          yield* sync(collaborator, ["www.shop.play.kiln.site"])
+          assert.strictEqual(
+            cloudflare.dns()["www.shop.play.kiln.site"],
+            undefined
+          )
+        })
+    )
+
+    it.effect("keeps its record through a Cloudflare outage", () =>
+      Effect.gen(function* () {
+        yield* seed
+        const cloudflare = fakeCloudflare([ownerZone])
+        yield* sync(owner, ["shop.owner.example"])
+
+        // The move's update fails, so the record stays Kiln's to retry.
+        cloudflare.failNext("PATCH")
+        yield* moveResourceWebHostnamesEffect(app, {
+          ...app,
+          relayId: otherRelayId,
+        })
+        assert.deepEqual(yield* hostnameRows, {
+          "shop.owner.example": "error@relay-two",
+        })
+
+        // And removing the route deletes it.
+        yield* sync(owner, [], { ...app, relayId: otherRelayId })
+        assert.deepEqual(cloudflare.dns(), {})
+      })
     )
 
     it.effect("only syncs hostnames it already keeps without a person", () =>

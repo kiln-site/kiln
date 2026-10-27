@@ -35,10 +35,12 @@ Which connections a hostname may use is a security boundary:
 - the resource owner's connections only when the person is that owner, so
   someone an app is shared with can't publish names in its owner's zones;
 - Kiln's connections' whole zones only for platform administrators;
-- anyone may take a single name under a vanity domain they may use (below).
+- anyone may take a single name under a vanity domain they may use (below),
+  and its `www` counterpart with it.
 
-A save is refused, before anything reaches the Relay, when a hostname is
-already held by another game server or app ("already in use by" names it
+A save claims its new hostnames before anything reaches the Relay, and lets
+them go if the save fails, so two saves can't both take one. It's refused
+when a hostname is already held by another game server or app ("already in use by" names it
 when the person can see it). Under a vanity domain someone else owns, such
 as a Kiln provided one, it's also refused when the name is reserved or
 Cloudflare already has a record for it. Names are compared case-insensitively.

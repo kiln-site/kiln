@@ -4,7 +4,10 @@ import {
   badWordsPattern,
   validateBlacklistPatterns,
 } from "@/lib/domain-schemas"
-import { vanityLabelAllowed } from "@/server/reserved-names"
+import {
+  requireFastReservedPatterns,
+  vanityLabelAllowed,
+} from "@/server/reserved-names"
 
 describe("reserved vanity names", () => {
   it("validates reserved name patterns", () => {
@@ -24,5 +27,17 @@ describe("reserved vanity names", () => {
     // Words that only contain one stay usable.
     for (const label of ["classic-smp", "assassin-games", "scunthorpe"])
       expect(vanityLabelAllowed(label, patterns), label).toBe(true)
+  })
+
+  it("refuses a pattern that backtracks, and never hangs on one", () => {
+    const slow = "^(((.*)*)*)*!$"
+    expect(() => requireFastReservedPatterns(["^www$", slow])).toThrow(
+      "Reserved name pattern 2 is too slow"
+    )
+    // Saved anyway, it reserves names instead of stalling Hearth.
+    const started = performance.now()
+    for (let index = 0; index < 20; index += 1)
+      expect(vanityLabelAllowed("a".repeat(40), [slow])).toBe(false)
+    expect(performance.now() - started).toBeLessThan(1_000)
   })
 })

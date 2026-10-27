@@ -1,6 +1,6 @@
 import { Effect } from "effect"
 
-import { recoverPromise } from "@/effect/promise"
+import { promiseEffect, recoverPromise } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
 import {
   listResourceWebHostnamesEffect,
@@ -18,10 +18,11 @@ import type {
   ResourceWebHostnamesInput,
 } from "@/server/domains"
 import {
-  checkWebRouteHostnamesEffect,
+  claimWebRouteHostnamesEffect,
   deleteResourceWebHostnamesEffect,
   generateAppHostnameEffect,
   publishWebHostnameChange,
+  releaseWebHostnameClaimsEffect,
   releaseWebHostnameEffect,
   syncResourceWebHostnamesEffect,
 } from "@/server/web-hostnames.server"
@@ -93,26 +94,36 @@ export async function releaseWebHostnameHandler(data: ReleaseWebHostnameInput) {
 }
 
 /**
- * Refuses web route hostnames the resource may not take, before its routes
- * save, naming the game server or app that holds one when the person can
- * see it.
+ * Saves a resource's web routes with `save`, holding the hostnames they use
+ * first so no other game server or app takes them meanwhile. Refuses
+ * hostnames the resource may not take, naming the game server or app that
+ * holds one when the person can see it, and lets go of its claims if the
+ * save fails.
  */
-export async function checkWebRouteHostnames(
+export async function saveClaimingWebRouteHostnames<T>(
   user: AuthenticatedUser,
   resource: WebHostnameResource,
-  hostnames: ReadonlyArray<string>
-): Promise<void> {
-  await runAppEffect(
-    "webHostnames.check",
-    checkWebRouteHostnamesEffect({
-      actor: domainActor(user),
-      hostnames,
-      resource,
-    }).pipe(
-      Effect.catchTag("HostnameInUseError", (error) =>
-        explainHostnameInUseEffect(user, error)
+  hostnames: ReadonlyArray<string>,
+  save: () => Promise<T>
+): Promise<T> {
+  return runAppEffect(
+    "webHostnames.claimAndSave",
+    Effect.gen(function* () {
+      const claimed = yield* claimWebRouteHostnamesEffect({
+        actor: domainActor(user),
+        hostnames,
+        resource,
+      }).pipe(
+        Effect.catchTag("HostnameInUseError", (error) =>
+          explainHostnameInUseEffect(user, error)
+        )
       )
-    )
+      return yield* promiseEffect(save).pipe(
+        Effect.tapError(() =>
+          releaseWebHostnameClaimsEffect(claimed).pipe(Effect.ignore)
+        )
+      )
+    })
   )
 }
 

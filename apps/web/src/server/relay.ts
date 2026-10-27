@@ -694,28 +694,30 @@ export const updateInstanceWebRoutes = createServerFn({ method: "POST" })
       resourceId: data.instanceId,
       resourceType: "instance" as const,
     }
-    const { checkWebRouteHostnames, syncWebRouteHostnames } =
+    const { saveClaimingWebRouteHostnames, syncWebRouteHostnames } =
       await import("@/server/web-hostname-access.server")
-    await checkWebRouteHostnames(
+    const routes = await saveClaimingWebRouteHostnames(
       user,
       resource,
-      data.routes.flatMap(webRouteHostnames)
+      data.routes.flatMap(webRouteHostnames),
+      async () =>
+        relayInstanceWebRouteStateSchema.parse(
+          await relayRequest(
+            `/v1/instances/${encodeURIComponent(data.instanceId)}/web-routes`,
+            {
+              body: JSON.stringify({
+                routes: webRoutesForRelay(data.relayId, data.routes),
+              }),
+              headers: { "Content-Type": "application/json" },
+              method: "PUT",
+            },
+            "instance.network.write",
+            data.instanceId,
+            data.relayId,
+            240_000
+          )
+        )
     )
-    const value = await relayRequest(
-      `/v1/instances/${encodeURIComponent(data.instanceId)}/web-routes`,
-      {
-        body: JSON.stringify({
-          routes: webRoutesForRelay(data.relayId, data.routes),
-        }),
-        headers: { "Content-Type": "application/json" },
-        method: "PUT",
-      },
-      "instance.network.write",
-      data.instanceId,
-      data.relayId,
-      240_000
-    )
-    const routes = relayInstanceWebRouteStateSchema.parse(value)
     publishRealtimeChange({
       audience: { kind: "relays", relayIds: [data.relayId] },
       scope: { instanceId: data.instanceId, relayId: data.relayId },

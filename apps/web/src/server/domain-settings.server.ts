@@ -16,6 +16,7 @@ import {
   loadDomainConnectionCredentialEffect,
   loadDomainConnectionEffect,
   loadInstanceDomainAssignmentsEffect,
+  requireConnectionUnusedEffect,
   saveDomainConnectionEffect,
   type DomainConnection,
   type ManagedDomain,
@@ -41,6 +42,7 @@ import { relayJsonEffect } from "@/lib/relay-client"
 import { shortIdRouteIdentifier } from "@/lib/short-id-route"
 import { requireEligibleResourceUser } from "@/server/auth"
 import { resourceAccess } from "@/server/domain-resource-access.server"
+import { requireFastReservedPatterns } from "@/server/reserved-names"
 import {
   invalidateManagedDomainAddressesEffect,
   provisionInstanceDomainEffect,
@@ -485,13 +487,15 @@ export async function saveDomainConnectionHandler(
   const id = existing?.connection.id ?? randomUUID().replaceAll("-", "")
   // Domains left out that still have game server domains stay, disabled;
   // the save decides which under its locks.
+  const blacklistPatterns = validateBlacklistPatterns(
+    data.blacklistPatterns ?? existing?.connection.blacklistPatterns ?? []
+  )
+  requireFastReservedPatterns(blacklistPatterns)
   await runAppEffect(
     "domains.connection.save",
     saveDomainConnectionEffect({
       apiToken: data.apiToken,
-      blacklistPatterns: validateBlacklistPatterns(
-        data.blacklistPatterns ?? existing?.connection.blacklistPatterns ?? []
-      ),
+      blacklistPatterns,
       domains,
       id,
       insert: !existing,
@@ -519,7 +523,8 @@ export async function deleteDomainConnectionHandler(
   if (!existing || !canManageConnection(user, existing.connection)) return
   await runAppEffect(
     "domains.connection.delete",
-    removeConnectionWebHostnamesEffect(data.id).pipe(
+    requireConnectionUnusedEffect(data.id).pipe(
+      Effect.andThen(removeConnectionWebHostnamesEffect(data.id)),
       Effect.andThen(deleteDomainConnectionEffect(data.id)),
       Effect.andThen(invalidateManagedDomainAddressesEffect)
     )

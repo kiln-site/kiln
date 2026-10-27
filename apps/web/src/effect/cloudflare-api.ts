@@ -307,7 +307,10 @@ export const createCloudflareWebRecordEffect = Effect.fn(
   )
 })
 
-/** Points a web hostname's record at another address of the same type. */
+/**
+ * Points a web hostname's record at another address of the same type. Null
+ * when the record no longer exists; any other failure fails.
+ */
 export const updateCloudflareWebRecordEffect = Effect.fn(
   "cloudflare.dns.updateWeb"
 )(function* (
@@ -317,18 +320,23 @@ export const updateCloudflareWebRecordEffect = Effect.fn(
   record: CloudflareAddressRecord,
   comment: string
 ) {
-  return yield* mutateCloudflareRecord(
+  return yield* requestCloudflareResult(
     apiToken,
-    zoneId,
-    recordId,
-    webAddressRecordBody(record, comment),
-    "PATCH"
+    `/zones/${encodeURIComponent(zoneId)}/dns_records/${encodeURIComponent(recordId)}`,
+    Schema.NullOr(CloudflareDnsRecordSchema),
+    {
+      body: JSON.stringify(webAddressRecordBody(record, comment)),
+      headers: { "Content-Type": "application/json" },
+      method: "PATCH",
+    },
+    { notFoundResult: null }
   )
 })
 
 /**
  * Swaps a web hostname's record for one of another type, as an address
- * changing between an IP and a name needs, in one batch.
+ * changing between an IP and a name needs, in one batch. Null when the old
+ * record no longer exists; any other failure fails.
  */
 export const replaceCloudflareWebRecordEffect = Effect.fn(
   "cloudflare.dns.replaceWeb"
@@ -342,7 +350,7 @@ export const replaceCloudflareWebRecordEffect = Effect.fn(
   const result = yield* requestCloudflareResult(
     apiToken,
     `/zones/${encodeURIComponent(zoneId)}/dns_records/batch`,
-    CloudflareDnsRecordBatchSchema,
+    Schema.NullOr(CloudflareDnsRecordBatchSchema),
     {
       body: JSON.stringify({
         deletes: [{ id: recordId }],
@@ -350,8 +358,10 @@ export const replaceCloudflareWebRecordEffect = Effect.fn(
       }),
       headers: { "Content-Type": "application/json" },
       method: "POST",
-    }
+    },
+    { notFoundResult: null }
   )
+  if (!result) return null
   const replacement = result.posts[0]
   if (!replacement) {
     return yield* cloudflareFailure(
@@ -385,10 +395,16 @@ function cloudflareAddressRecordBody(
   record: CloudflareAddressRecord,
   instanceId: string
 ) {
-  return webAddressRecordBody(record, `Managed by Kiln for server ${instanceId}`)
+  return webAddressRecordBody(
+    record,
+    `Managed by Kiln for server ${instanceId}`
+  )
 }
 
-function webAddressRecordBody(record: CloudflareAddressRecord, comment: string) {
+function webAddressRecordBody(
+  record: CloudflareAddressRecord,
+  comment: string
+) {
   return {
     comment,
     content: record.content,

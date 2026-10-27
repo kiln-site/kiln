@@ -221,20 +221,25 @@ export const syncResourceWebHostnamesEffect = Effect.fn("webHostnames.sync")(
       else yield* removeWebHostnameEffect(row).pipe(Effect.ignore)
     }
     const target = yield* relayPublicHostEffect(resource.relayId)
-    const known = new Set(existing.map((row) => row.hostname))
+    const held = new Map(existing.map((row) => [row.hostname, row]))
     const added: Array<WebHostname> = []
     if (actor) {
-      const fresh = [...wanted].filter((name) => !known.has(name))
+      const fresh = freshHostnames([...wanted], held)
       const ownerId =
         fresh.length > 0 ? yield* loadResourceOwnerIdEffect(resource) : null
       for (const hostname of fresh) {
-        const row = yield* reserveHostnameEffect(
+        // Saves claim their names first; one that couldn't is left alone.
+        const row = yield* claimHostnameEffect(
           resource,
           hostname,
           ownerId,
-          actor
+          actor,
+          held
         ).pipe(Effect.orElseSucceed(() => null))
-        if (row) added.push(row)
+        if (row) {
+          added.push(row)
+          held.set(row.hostname, row)
+        }
       }
     }
     for (const row of [...kept, ...added]) {
@@ -246,63 +251,56 @@ export const syncResourceWebHostnamesEffect = Effect.fn("webHostnames.sync")(
 )
 
 /**
- * Refuses web route hostnames a resource may not take, before its routes
- * save: one another game server or app holds, and, under a vanity domain
- * someone else owns (such as one Kiln provides), a reserved name or one
- * Cloudflare already has a record for. Names the resource already holds
- * pass.
+ * Claims the hostnames a resource's web routes are about to use, before they
+ * save, so two saves can't both take one. Refuses, without claiming any:
+ * one another game server or app holds, and, under a vanity domain someone
+ * else owns (such as one Kiln provides), a reserved name or one Cloudflare
+ * already has a record for. Names the resource holds, its game server
+ * addresses included, pass. Returns the rows it claimed, to release if the
+ * save fails.
  */
-export const checkWebRouteHostnamesEffect = Effect.fn("webHostnames.check")(
+export const claimWebRouteHostnamesEffect = Effect.fn("webHostnames.claim")(
   function* (input: {
     actor: DomainActor
     hostnames: ReadonlyArray<string>
     resource: WebHostnameResource
   }) {
     const { actor, resource } = input
-    const held = new Set(
-      (yield* listResourceWebHostnamesEffect(resource)).map(
-        (row) => row.hostname
-      )
+    const held = new Map(
+      (yield* listResourceWebHostnamesEffect(resource)).map((row) => [
+        row.hostname,
+        row,
+      ])
     )
-    const fresh = [
-      ...new Set(input.hostnames.map((name) => name.toLowerCase())),
-    ].filter((name) => !held.has(name))
-    if (fresh.length === 0) return
+    const fresh = freshHostnames(input.hostnames, held)
+    if (fresh.length === 0) return []
     const ownerId = yield* loadResourceOwnerIdEffect(resource)
     for (const hostname of fresh) {
       const holder = yield* loadHostnameHolderEffect(hostname)
-      if (
-        holder &&
-        !(
-          holder.relayId === resource.relayId &&
-          holder.resourceId === resource.resourceId &&
-          holder.resourceType === resource.resourceType
-        )
-      ) {
+      if (holder) {
+        if (sameResource(holder, resource)) continue
         return yield* HostnameInUseError.make({
           holder,
           hostname,
           message: `${hostname} is already in use`,
         })
       }
-      const dot = hostname.indexOf(".")
-      const vanity =
-        dot > 0 ? yield* loadManagedDomainEffect(hostname.slice(dot + 1)) : null
+      const name = yield* vanityNameEffect(hostname)
       if (
-        !vanity ||
-        !vanityDomainUsable(vanity, ownerId, actor) ||
-        ownsVanityDomain(vanity, actor)
+        !name ||
+        !vanityDomainUsable(name.domain, ownerId, actor) ||
+        ownsVanityDomain(name.domain, actor)
       ) {
         continue
       }
-      if (!vanity.enabled) {
+      if (!name.domain.enabled) {
         return yield* DomainConfigurationError.make({
-          message: `${vanity.domain} isn't taking new addresses`,
+          message: `${name.domain.domain} isn't taking new addresses`,
         })
       }
       const { apiToken, blacklistPatterns } =
-        yield* loadDomainConnectionCredentialEffect(vanity.connectionId)
-      if (!vanityLabelAllowed(hostname.slice(0, dot), blacklistPatterns)) {
+        yield* loadDomainConnectionCredentialEffect(name.domain.connectionId)
+      if (!vanityLabelAllowed(name.label, blacklistPatterns)) {
         return yield* DomainConfigurationError.make({
           message: `${hostname} is reserved`,
         })
@@ -310,7 +308,7 @@ export const checkWebRouteHostnamesEffect = Effect.fn("webHostnames.check")(
       if (
         !(yield* cloudflareHostnameAvailableEffect(
           apiToken,
-          vanity.zoneId,
+          name.domain.zoneId,
           hostname
         ))
       ) {
@@ -321,16 +319,98 @@ export const checkWebRouteHostnamesEffect = Effect.fn("webHostnames.check")(
         })
       }
     }
-  }
+    const claimed: Array<WebHostname> = []
+    for (const hostname of fresh) {
+      const row = yield* claimHostnameEffect(
+        resource,
+        hostname,
+        ownerId,
+        actor,
+        held
+      ).pipe(Effect.tapError(() => releaseWebHostnameClaimsEffect(claimed)))
+      if (row) {
+        claimed.push(row)
+        held.set(row.hostname, row)
+      }
+    }
+    return claimed
+  },
+  (effect, input) => withResourceLock(input.resource, effect)
 )
 
-const reserveHostnameEffect = Effect.fnUntraced(function* (
+/** Forgets claims whose routes never saved; none has a record yet. */
+export const releaseWebHostnameClaimsEffect = Effect.fn(
+  "webHostnames.releaseClaims"
+)(function* (rows: ReadonlyArray<WebHostname>) {
+  for (const row of rows) yield* deleteWebHostnameEffect(row.id)
+})
+
+/**
+ * Hostnames not yet held, lowercased, each once, names before their `www`
+ * counterparts so a counterpart can follow its name.
+ */
+function freshHostnames(
+  hostnames: ReadonlyArray<string>,
+  held: ReadonlyMap<string, WebHostname>
+): Array<string> {
+  return [...new Set(hostnames.map((name) => name.toLowerCase()))]
+    .filter((name) => !held.has(name))
+    .sort(
+      (left, right) =>
+        Number(left.startsWith("www.")) - Number(right.startsWith("www."))
+    )
+}
+
+function sameResource(
+  left: WebHostnameResource,
+  right: WebHostnameResource
+): boolean {
+  return (
+    left.relayId === right.relayId &&
+    left.resourceId === right.resourceId &&
+    left.resourceType === right.resourceType
+  )
+}
+
+/**
+ * The vanity domain a hostname is a name under, with that name's label: a
+ * single label under it, or the `www` counterpart of one.
+ */
+const vanityNameEffect = Effect.fnUntraced(function* (hostname: string) {
+  const base = hostname.startsWith("www.") ? hostname.slice(4) : null
+  for (const name of base ? [hostname, base] : [hostname]) {
+    const dot = name.indexOf(".")
+    if (dot <= 0) continue
+    const domain = yield* loadManagedDomainEffect(name.slice(dot + 1))
+    if (domain) return { domain, label: name.slice(0, dot) }
+  }
+  return null
+})
+
+/**
+ * Holds a hostname for a resource, in the zone Kiln may make its record in,
+ * or returns null when there's none or something already holds it. A `www`
+ * counterpart of a vanity name the resource holds goes in that name's zone.
+ */
+const claimHostnameEffect = Effect.fnUntraced(function* (
   resource: WebHostnameResource,
   hostname: string,
   ownerId: string | null,
-  actor: DomainActor
+  actor: DomainActor,
+  held: ReadonlyMap<string, WebHostname>
 ) {
-  const zone = yield* resolveHostnameZoneEffect(hostname, ownerId, actor)
+  // Another resource's, or this game server's own address, which has DNS.
+  if (yield* loadHostnameHolderEffect(hostname)) return null
+  const base = hostname.startsWith("www.")
+    ? held.get(hostname.slice(4))
+    : undefined
+  const zone: HostnameZone | null = base?.vanityDomain
+    ? {
+        connectionId: base.connectionId,
+        vanityDomain: null,
+        zoneId: base.zoneId,
+      }
+    : yield* resolveHostnameZoneEffect(hostname, ownerId, actor)
   if (!zone) return null
   const id = randomUUID()
   yield* insertWebHostnameEffect({
@@ -341,7 +421,19 @@ const reserveHostnameEffect = Effect.fnUntraced(function* (
     id,
     vanityDomain: zone.vanityDomain,
     zoneId: zone.zoneId,
-  })
+  }).pipe(
+    Effect.catchTag("DomainConfigurationError", () =>
+      loadHostnameHolderEffect(hostname).pipe(
+        Effect.flatMap((holder) =>
+          HostnameInUseError.make({
+            holder,
+            hostname,
+            message: `${hostname} is already in use`,
+          })
+        )
+      )
+    )
+  )
   return yield* loadWebHostnameEffect(id)
 })
 
@@ -425,29 +517,25 @@ const reconcileWebHostnameEffect = Effect.fn("webHostnames.reconcile")(
       )
       if (row.recordId) {
         const recordId = row.recordId
-        const updated = yield* (
-          row.recordType === record.type
-            ? updateCloudflareWebRecordEffect(
-                apiToken,
-                row.zoneId,
-                recordId,
-                record,
-                comment
-              )
-            : replaceCloudflareWebRecordEffect(
-                apiToken,
-                row.zoneId,
-                recordId,
-                record,
-                comment
-              )
-        ).pipe(
-          // Deleted in Cloudflare meanwhile: make it again below.
-          Effect.catch(() =>
-            clearWebHostnameRecordEffect(row.id).pipe(Effect.as(null))
-          )
-        )
-        if (updated) {
+        const updated = yield* row.recordType === record.type
+          ? updateCloudflareWebRecordEffect(
+              apiToken,
+              row.zoneId,
+              recordId,
+              record,
+              comment
+            )
+          : replaceCloudflareWebRecordEffect(
+              apiToken,
+              row.zoneId,
+              recordId,
+              record,
+              comment
+            )
+        // Deleted in Cloudflare meanwhile: make it again below. Any other
+        // failure keeps the record Kiln made, to retry.
+        if (!updated) yield* clearWebHostnameRecordEffect(row.id)
+        else {
           return yield* activateWebHostnameEffect({
             id: row.id,
             recordId: updated.id,
@@ -601,9 +689,19 @@ export const resyncWebHostnamesEffect = Effect.fn("webHostnames.resync")(
           target = yield* relayPublicHostEffect(row.relayId)
           targets.set(row.relayId, target)
         }
-        yield* withResourceLock(row, reconcileWebHostnameEffect(row, target))
-        const after = yield* loadWebHostnameEffect(row.id)
-        return after?.status === "error" ? after.lastError : null
+        const relayTarget = target
+        return yield* withResourceLock(
+          row,
+          Effect.gen(function* () {
+            // Read again under the lock: a save or delete may have released
+            // or moved it since the list was read.
+            const current = yield* loadWebHostnameEffect(row.id)
+            if (!current || !sameResource(current, row)) return null
+            yield* reconcileWebHostnameEffect(current, relayTarget)
+            const after = yield* loadWebHostnameEffect(row.id)
+            return after?.status === "error" ? after.lastError : null
+          })
+        )
       }).pipe(Effect.catch((error) => Effect.succeed(error.message)))
       failure ??= outcome
     }
