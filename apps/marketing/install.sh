@@ -975,9 +975,10 @@ refresh_relay() {
 
 # Replaces the Relay here with one from the downloaded image, keeping its
 # settings and data: the image does it as Kiln updates a Relay, and puts
-# the old one back if the new one doesn't become healthy.
+# the old one back if the new one doesn't become healthy. Ctrl-C stops
+# waiting for it, not the replacement.
 replace_relay() {
-  dk run --rm --network none --volumes-from "$container" \
+  dk run --rm --sig-proxy=false --network none --volumes-from "$container" \
     "$image" dist/src/replace-relay.mjs "$container" "$image"
 }
 

@@ -11,6 +11,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { it as effectIt } from "@effect/vitest"
 import { Effect, Exit, Fiber } from "effect"
+import { TestClock } from "effect/testing"
 import { beforeEach, describe, expect } from "vite-plus/test"
 
 import { relaySnapshotSchema } from "@workspace/contracts"
@@ -594,6 +595,28 @@ describe("update operation lifecycle", () => {
       )
   )
 
+  effectIt.effect(
+    "finds an update another process recorded later, and fails it once its helper is long gone",
+    () =>
+      withTemporaryDataDirectory((dataDirectory) =>
+        Effect.gen(function* () {
+          const manager = yield* Effect.promise(() =>
+            docker.manager({ dataDirectory })
+          )
+          expect(yield* manager.updates()).toEqual([])
+          // The installer's, interrupted before it launched its helper.
+          const abandoned = staleOperation()
+          yield* holdLock(dataDirectory, abandoned)
+
+          yield* TestClock.adjust("61 seconds")
+          expect(yield* manager.updates()).toMatchObject([
+            { id: abandoned.id, status: "failed" },
+          ])
+          expect(yield* lockHolder(dataDirectory)).toBeNull()
+        })
+      )
+  )
+
   effectIt.effect("recovers an orphaned target lock", () =>
     withTemporaryDataDirectory((dataDirectory) =>
       Effect.gen(function* () {
@@ -663,10 +686,14 @@ describe("replacing a Relay from the installer", () => {
             running: true,
             volumesFrom: docker.relay.id,
           })
+          expect(fakeDocker.container(helper)?.image).toBe(
+            `sha256:${installerImage}`
+          )
           const [operation] = yield* recordedOperations(dataDirectory)
           expect(operation).toMatchObject({
             previousImage: "ghcr.io/kiln-site/relay:latest",
-            requestedImage: installerImage,
+            // By its ID, which a rollback doesn't move as it does the tag.
+            requestedImage: `sha256:${installerImage}`,
             status: "running",
             targetContainer: "kiln-relay",
             targetReference: installerImage,
@@ -759,6 +786,56 @@ describe("replacing a Relay from the installer", () => {
         expect(yield* lockHolder(dataDirectory)).toBe(running.id)
       })
     )
+  )
+
+  // It waits for the helper on the real clock.
+  effectIt.live(
+    "takes the lock of an update long abandoned without a helper",
+    () =>
+      withTemporaryDataDirectory((dataDirectory) =>
+        Effect.gen(function* () {
+          const engine = yield* installed("0.1.0-nightly.18")
+          const abandoned = staleOperation()
+          yield* holdLock(dataDirectory, abandoned)
+
+          const replacing = yield* replaceRelayEffect(engine, {
+            dataDirectory,
+            image: installerImage,
+            targetContainer: "kiln-relay",
+          }).pipe(Effect.forkChild)
+          docker.stopHelper(yield* helperStarted)
+          yield* Fiber.join(replacing)
+
+          const recorded = yield* recordedOperations(dataDirectory)
+          expect(recorded.find(({ id }) => id === abandoned.id)?.status).toBe(
+            "failed"
+          )
+          expect(recorded).toHaveLength(2)
+        })
+      )
+  )
+
+  effectIt.effect(
+    "leaves the lock of an update that may still be starting",
+    () =>
+      withTemporaryDataDirectory((dataDirectory) =>
+        Effect.gen(function* () {
+          const engine = yield* installed("0.1.0-nightly.18")
+          const starting = {
+            ...staleOperation(),
+            startedAt: new Date(Date.now() - 15 * 60_000).toISOString(),
+          }
+          yield* holdLock(dataDirectory, starting)
+
+          const refused = yield* replaceRelayEffect(engine, {
+            dataDirectory,
+            image: installerImage,
+            targetContainer: "kiln-relay",
+          }).pipe(Effect.flip)
+          expect(refused.message).toContain("already running")
+          expect(yield* lockHolder(dataDirectory)).toBe(starting.id)
+        })
+      )
   )
 
   effectIt.effect("refuses a Relay whose data isn't on a volume", () =>
@@ -949,4 +1026,15 @@ function lockHolder(dataDirectory: string) {
       () => null
     )
   )
+}
+
+// An update recorded as running, holding the Relay's lock.
+function holdLock(dataDirectory: string, operation: UpdateOperation) {
+  return Effect.promise(async () => {
+    await mkdir(join(dataDirectory, "updates"), { recursive: true })
+    await writeFile(
+      join(dataDirectory, "updates", "kiln-relay.lock"),
+      `${operation.id}\n`
+    )
+  }).pipe(Effect.andThen(recordOutcome(dataDirectory, operation)))
 }

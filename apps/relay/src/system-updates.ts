@@ -23,7 +23,7 @@ import {
   relaySystemUpdateSchema,
   type RelaySystemUpdate,
 } from "@workspace/contracts"
-import { Effect, Schedule, Semaphore } from "effect"
+import { Clock, Effect, Schedule, Semaphore } from "effect"
 
 import { runContainer } from "./docker-container-spec.js"
 import { DockerEngine, isDockerNotFound } from "./docker-engine.js"
@@ -39,6 +39,9 @@ const STALE_UPDATE_MS = 10 * 60_000
 const ORPHAN_LOCK_MS = 30_000
 // How long the installer waits for a replacement before leaving it to run.
 const REPLACEMENT_WAIT_MS = 20 * 60_000
+// How often the Relay reads the records on disk again, for updates another
+// process started: the installer's.
+const RECORDS_REREAD_MS = 60_000
 
 interface ContainerInspect {
   Config: {
@@ -56,6 +59,7 @@ interface ImageInspect {
   Config?: {
     Labels?: Record<string, string | undefined> | null
   }
+  Id?: string
 }
 
 interface HelperInspect {
@@ -111,9 +115,9 @@ export class SystemUpdateManager {
   readonly #engine: DockerEngine
   #activeBatch: { id: string } | null = null
   // The latest update of each component. Records on disk are merged in on
-  // the first read.
+  // the first read, and again each RECORDS_REREAD_MS.
   readonly #latest = new Map<KilnComponent, UpdateOperation>()
-  #latestLoaded = false
+  #latestLoadedAt: number | null = null
   // Updates this process is still starting. Their helper isn't launched yet,
   // so `status` doesn't take its absence for a helper that stopped.
   readonly #starting = new Set<string>()
@@ -424,13 +428,17 @@ export class SystemUpdateManager {
    */
   updates(): Effect.Effect<Array<RelaySystemUpdate>> {
     return Effect.gen({ self: this }, function* () {
-      if (!this.#latestLoaded) {
+      const now = yield* Clock.currentTimeMillis
+      if (
+        this.#latestLoadedAt === null ||
+        now - this.#latestLoadedAt >= RECORDS_REREAD_MS
+      ) {
         const recorded = yield* recordedOperationsEffect(
           this.#operationsDirectory
         ).pipe(
           Effect.tap(() =>
             Effect.sync(() => {
-              this.#latestLoaded = true
+              this.#latestLoadedAt = now
             })
           ),
           Effect.catch((cause) =>
@@ -601,7 +609,14 @@ export const replaceRelayEffect = Effect.fn("relay.systemUpdates.replaceRelay")(
     )
     const labels = isImageInspect(image) ? (image.Config?.Labels ?? {}) : {}
     const version = labels["org.opencontainers.image.version"]?.trim() ?? ""
-    if (labels["io.kiln.component"] !== "relay" || !isKilnReleaseVersion(version)) {
+    // The image itself, as its tag can move: a rollback points the tag back
+    // at the Relay's old image, and a retry must still put in this one.
+    const imageId = isImageInspect(image) ? (image.Id ?? "") : ""
+    if (
+      labels["io.kiln.component"] !== "relay" ||
+      !isKilnReleaseVersion(version) ||
+      !imageId.startsWith("sha256:")
+    ) {
       return yield* systemUpdateFailure(
         "replace.validate",
         `${input.image} isn't a Kiln Relay release`
@@ -629,6 +644,7 @@ export const replaceRelayEffect = Effect.fn("relay.systemUpdates.replaceRelay")(
     yield* systemUpdateOperation("replace.createDirectory", () =>
       mkdir(directory, { recursive: true, mode: 0o700 })
     )
+    yield* failAbandonedLockHolderEffect(engine, directory, name)
     const batchId = randomUUID()
     const operation: UpdateOperation = {
       batchId,
@@ -638,7 +654,7 @@ export const replaceRelayEffect = Effect.fn("relay.systemUpdates.replaceRelay")(
       id: randomUUID(),
       phase: "Preparing",
       previousImage: container.Config.Image,
-      requestedImage: input.image,
+      requestedImage: imageId,
       startedAt: new Date().toISOString(),
       status: "running",
       targetContainer: name,
@@ -654,7 +670,7 @@ export const replaceRelayEffect = Effect.fn("relay.systemUpdates.replaceRelay")(
       })
       yield* launchBatchHelperEffect(engine, {
         batchId,
-        helperImage: input.image,
+        helperImage: imageId,
         operationsDirectory: directory,
         volumesFrom: container.Id,
       })
@@ -724,6 +740,47 @@ const awaitReplacementEffect = Effect.fnUntraced(function* (
       )
     }
   }
+})
+
+// An update that holds `container`'s lock but stopped long ago without an
+// outcome, as when the installer was killed before launching its helper,
+// failed, as `status` would find. A Relay that isn't paired never asks
+// `status`, so nothing else would free its lock. Twice as long as `status`
+// waits: the Relay may still be pulling for an update it's starting, and
+// only it knows that.
+const failAbandonedLockHolderEffect = Effect.fnUntraced(function* (
+  engine: DockerEngine,
+  directory: string,
+  container: string
+) {
+  const holder = yield* systemUpdateOperation("replace.readLock", () =>
+    readFile(targetLockPath(directory, container), "utf8")
+  ).pipe(
+    Effect.map((text) => text.trim()),
+    Effect.catch(() => Effect.succeed(""))
+  )
+  if (!holder) return
+  const operation = yield* readOperationEffect(directory, holder).pipe(
+    Effect.catch(() => Effect.succeed(null))
+  )
+  const startedAt = Date.parse(operation?.startedAt ?? "")
+  if (
+    operation?.status !== "running" ||
+    !Number.isFinite(startedAt) ||
+    Date.now() - startedAt <= 2 * STALE_UPDATE_MS ||
+    (yield* helperStateEffect(engine, operation.batchId ?? operation.id)) !==
+      "stopped"
+  ) {
+    return
+  }
+  yield* writeOperationEffect(directory, {
+    ...operation,
+    error:
+      "The update helper stopped without reporting an outcome. Inspect its Docker logs before trying again.",
+    finishedAt: new Date().toISOString(),
+    status: "failed",
+  })
+  yield* releaseTargetLockEffect(directory, container, operation.id)
 })
 
 // Where the Relay keeps its data, which has to be on a volume this
@@ -1653,7 +1710,7 @@ function isContainerInspect(value: unknown): value is ContainerInspect {
 }
 
 function isImageInspect(value: unknown): value is ImageInspect {
-  if (!isRecord(value)) return false
+  if (!isRecord(value) || !optionalString(value.Id)) return false
   if (value.Config === undefined) return true
   return isRecord(value.Config) && stringRecordOrNull(value.Config.Labels)
 }
