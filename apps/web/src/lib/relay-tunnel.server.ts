@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto"
+import { isIP } from "node:net"
 import type { Duplex } from "node:stream"
-import { connect as tlsConnect } from "node:tls"
+import { checkServerIdentity, connect as tlsConnect } from "node:tls"
 
 import { RelayTunnelOpenedSchema } from "@workspace/contracts"
 import { Effect, Schema } from "effect"
@@ -85,23 +86,33 @@ const openRelayTunnelEffect = Effect.fn("RelayTunnel.open")(function* (
       })
     )
     const stream = createWebSocketStream(socket)
-    used = true
-    if (!opened.tls) return stream as Duplex
+    if (!opened.tls) {
+      used = true
+      return stream as Duplex
+    }
     const { caCertificatePem } = yield* Effect.tryPromise(() =>
       loadRelayCredentials(relay.id)
     )
-    return yield* Effect.callback<Duplex, Error>((resume) => {
+    const secure = yield* Effect.callback<Duplex, Error>((resume) => {
       const secure = tlsConnect({
-        ca: caCertificatePem ?? undefined,
-        // The tunnel reaches the Relay's own listener, whatever name it's
-        // published under; its certificate must still chain to the CA
-        // Hearth pinned for it.
-        checkServerIdentity: () => undefined,
-        rejectUnauthorized: caCertificatePem !== null,
+        ...(caCertificatePem
+          ? {
+              ca: caCertificatePem,
+              // The tunnel reaches the Relay's own listener, whatever name
+              // it's published under; its certificate must still chain to
+              // the CA Hearth pinned for it.
+              checkServerIdentity: () => undefined,
+            }
+          : // A publicly trusted certificate, for the name Hearth knows.
+            {
+              checkServerIdentity: (_, certificate) =>
+                checkServerIdentity(relay.hostname, certificate),
+              ...(isIP(relay.hostname) ? {} : { servername: relay.hostname }),
+            }),
         socket: stream,
       })
       const failed = (cause: Error) => {
-        stream.destroy()
+        secure.destroy()
         resume(Effect.fail(cause))
       }
       secure.once("error", failed)
@@ -109,7 +120,16 @@ const openRelayTunnelEffect = Effect.fn("RelayTunnel.open")(function* (
         secure.off("error", failed)
         resume(Effect.succeed(secure))
       })
-    })
+      return Effect.sync(() => secure.destroy())
+    }).pipe(
+      Effect.timeoutOrElse({
+        duration: ARRIVAL_TIMEOUT_MS,
+        orElse: () =>
+          Effect.fail(new Error("The Relay's tunnel didn't secure in time")),
+      })
+    )
+    used = true
+    return secure
   }).pipe(
     Effect.ensuring(
       Effect.sync(() => {

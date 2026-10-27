@@ -1,7 +1,7 @@
 import { request as httpRequest } from "node:http"
 import type { IncomingHttpHeaders } from "node:http"
 import { request as httpsRequest } from "node:https"
-import { Readable } from "node:stream"
+import { pipeline, Readable } from "node:stream"
 
 import { relayControlEndpoint } from "@/lib/relay-control-endpoint"
 import { kilnPublicUrl } from "@/lib/environment"
@@ -17,9 +17,11 @@ import {
 // unchanged, to the same `/v1/browser` routes. The Relay checks each
 // request's capability and proof for itself, as it would one sent straight
 // to it, so Hearth only carries bytes: it forwards no cookies, and only
-// these routes.
+// these routes. What it carries is served under Hearth's origin, so it's
+// never run as a page there, whatever the Relay says it is.
 
-const ROUTE = /^(?:files|backups)\/[^/]+$/u
+// `route` is decoded: its name is encoded again for the Relay.
+const ROUTE = /^(files|backups)\/([^/]+)$/u
 const REQUEST_HEADERS = [
   "authorization",
   "content-length",
@@ -41,8 +43,11 @@ const RESPONSE_HEADERS = [
   "content-type",
   "etag",
   "last-modified",
-  "x-content-type-options",
 ]
+const SANDBOX_HEADERS = {
+  "content-security-policy": "default-src 'none'; sandbox",
+  "x-content-type-options": "nosniff",
+}
 
 /**
  * Passes a browser's request for `/v1/browser/<route>` on to the Relay and
@@ -54,7 +59,8 @@ export async function passRelayBrowserRequest(
   route: string,
   request: Request
 ): Promise<Response> {
-  if (!ROUTE.test(route)) {
+  const [, kind, name] = ROUTE.exec(route) ?? []
+  if (!kind || !name || name === "." || name === "..") {
     return Response.json({ error: "Not a Relay transfer" }, { status: 404 })
   }
   const relay = await loadPersistedRelay(relayId)
@@ -89,7 +95,7 @@ export async function passRelayBrowserRequest(
             }),
         headers,
         method: request.method,
-        path: `/v1/browser/${route}${url.search}`,
+        path: `/v1/browser/${kind}/${encodeURIComponent(name)}${url.search}`,
         signal: request.signal,
       },
       (incoming) => {
@@ -107,19 +113,26 @@ export async function passRelayBrowserRequest(
         )
       }
     )
-    outgoing.once("error", reject)
     if (request.body && request.method !== "GET" && request.method !== "HEAD") {
-      Readable.fromWeb(
-        request.body as import("node:stream/web").ReadableStream
-      ).pipe(outgoing)
+      // An upload that breaks off ends the request to the Relay too.
+      pipeline(
+        Readable.fromWeb(
+          request.body as import("node:stream/web").ReadableStream
+        ),
+        outgoing,
+        (cause) => {
+          if (cause) reject(cause)
+        }
+      )
     } else {
+      outgoing.once("error", reject)
       outgoing.end()
     }
   })
 }
 
 function responseHeaders(incoming: IncomingHttpHeaders): Headers {
-  const headers = new Headers()
+  const headers = new Headers(SANDBOX_HEADERS)
   for (const name of RESPONSE_HEADERS) {
     const value = incoming[name]
     if (typeof value === "string") headers.set(name, value)
