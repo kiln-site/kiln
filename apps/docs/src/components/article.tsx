@@ -1,5 +1,8 @@
 import * as React from "react"
+import { createPortal } from "react-dom"
 import { useRouter } from "@tanstack/react-router"
+
+import { WalkthroughNamed } from "~/components/walkthroughs"
 
 import { basePath } from "~/lib/base"
 
@@ -8,6 +11,14 @@ import { basePath } from "~/lib/base"
 export function Article({ html }: { html: string }) {
   const router = useRouter()
   const ref = React.useRef<HTMLDivElement>(null)
+  // The page's walkthrough placeholders, which play once the page is here.
+  const [walkthroughs, setWalkthroughs] = React.useState<Array<HTMLElement>>([])
+  React.useLayoutEffect(() => {
+    setWalkthroughs([
+      ...(ref.current?.querySelectorAll<HTMLElement>("[data-walkthrough]") ??
+        []),
+    ])
+  }, [html])
 
   React.useEffect(() => {
     const element = ref.current
@@ -65,10 +76,19 @@ export function Article({ html }: { html: string }) {
   }, [router])
 
   return (
-    <div
-      ref={ref}
-      className="docs-prose"
-      dangerouslySetInnerHTML={{ __html: html }}
-    />
+    <>
+      <div
+        ref={ref}
+        className="docs-prose"
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
+      {walkthroughs.map((element) =>
+        createPortal(
+          <WalkthroughNamed name={element.dataset.walkthrough ?? ""} />,
+          element,
+          element.dataset.walkthrough
+        )
+      )}
+    </>
   )
 }

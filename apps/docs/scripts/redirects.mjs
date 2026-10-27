@@ -7,6 +7,36 @@
 // Old docs paths and where they moved, without the base path.
 const moved = {
   "/get-started/introduction": "/",
+  "/get-started/install": "/#install",
+  "/get-started/concepts": "/#how-kiln-fits-together",
+  "/get-started/first-game-server": "/game-servers",
+  "/get-started/first-app": "/apps",
+  "/game-servers/create": "/game-servers",
+  "/game-servers/startup": "/game-servers#startup-settings",
+  "/game-servers/power": "/game-servers#power-controls",
+  "/game-servers/console": "/game-servers/console-and-files",
+  "/game-servers/files": "/game-servers/console-and-files",
+  "/apps/github": "/apps",
+  "/apps/images-and-compose": "/apps",
+  "/apps/updates": "/apps/settings",
+  "/databases/create": "/databases",
+  "/databases/connect": "/databases",
+  "/networking/ports": "/networking#ports",
+  "/networking/cloudflare": "/networking#cloudflare",
+  "/networking/tailscale": "/networking#tailscale",
+  "/relays/add": "/relays",
+  "/relays/runtime": "/relays/host",
+  "/relays/transfers": "/game-servers/move",
+  "/backups/destinations": "/backups",
+  "/backups/platform": "/backups/restore",
+  "/access/permissions": "/access",
+  "/access/activity": "/access",
+  "/access/notifications": "/access",
+  "/self-hosting/configuration": "/self-hosting#configuration",
+  "/self-hosting/recovery": "/self-hosting/updates",
+  "/cli/authentication": "/cli",
+  "/help/troubleshooting": "/help",
+  "/help/faq": "/help",
 }
 
 /**
@@ -19,7 +49,8 @@ export function docsRedirect(url, basePath) {
   if (basePath && pathname === basePath) return `${basePath}/${search}`
   const page = pathname.slice(basePath.length).replace(/\/+$/, "")
   if (pathname.startsWith(`${basePath}/`) && Object.hasOwn(moved, page)) {
-    return `${basePath}${moved[page]}${search}`
+    const [target, anchor] = moved[page].split("#")
+    return `${basePath}${target}${search}${anchor ? `#${anchor}` : ""}`
   }
   if (
     pathname.startsWith(`${basePath}/`) &&

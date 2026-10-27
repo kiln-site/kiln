@@ -1,107 +1,93 @@
 ---
 title: Apps
-description: Run websites, APIs, and other containers on a Relay, built from GitHub or pulled as a Docker image, with zero-downtime deployments.
+description: Run websites, APIs, and other containers on a Relay, built from GitHub or a Dockerfile, or pulled as an image, with zero-downtime deployments.
 ---
 
 An app is anything you run in Docker that isn't a game server or a database: a
-website, an API, a bot, a dashboard. Each app runs on one Relay, in containers
-of its own, on a private network of its own.
+website, an API, a bot. Each app runs on one Relay, on a private network of its
+own, from one source: a **GitHub** branch, a Docker **Image**, or a
+**Dockerfile** or **Compose** file you write in Hearth. Switch sources later
+with **Configure** in the app's **Brick** section; each keeps its settings.
 
-## Ways to deploy
+## Deploy from GitHub
 
-An app deploys from one of four sources. You choose one when you create the
-app, and you can switch later from **Configure** in the app's **Brick** section.
+First connect GitHub. Kiln reads repositories through a **source**, a private
+GitHub App it creates for your account or organization.
 
-| Source         | What Kiln runs                                                         |
-| -------------- | ---------------------------------------------------------------------- |
-| **GitHub**     | A repository branch, built from its Dockerfile or run from its Compose file |
-| **Image**      | A Docker image pulled from Docker Hub or another registry               |
-| **Dockerfile** | A Dockerfile you paste into Hearth, built on the Relay                   |
-| **Compose**    | A Compose file you paste into Hearth, with every service it lists       |
+1. Open **Sources**, under Infrastructure, and choose **Add source**.
+2. Choose **Personal account** or **Organization**, and enter an **App name**
+   that's unique on GitHub. An organization needs one of its owners.
+3. Choose **Continue to GitHub**, confirm the app, and install it on the
+   repositories Kiln may read.
 
-An app keeps each source's settings when you switch, so switching back loses
-nothing. Only the selected one deploys.
+Then create the app:
 
-- [Deploy from GitHub](/apps/github)
-- [Deploy an image, Dockerfile, or Compose file](/apps/images-and-compose)
+1. Open **Apps** and choose **Add App**. Keep **GitHub**.
+2. Enter a **Name** and choose the **Relay**.
+3. Choose the **Source**, **Repository**, and **Branch**. If a repository is
+   missing, choose **Give the app access on GitHub**.
+4. Under **Build**, choose **Dockerfile** to build one container from the whole
+   repository, or **Docker Compose** to run every service in a Compose file.
+   Change the path if it isn't `Dockerfile` or `compose.yaml` at the root.
+5. Choose **Create and deploy**.
 
-## Create an app
+With **Deploy on push** on, each new commit deploys; pushes during a deployment
+wait, and only the newest deploys. Without a public HTTPS address for Hearth,
+Kiln checks the branch every minute instead.
 
-1. Open **Apps** and choose **Add App**.
-2. Under **Type**, choose **GitHub** or **Docker**.
-3. Enter a **Name** and choose the **Relay** to run it on.
-4. For **GitHub**, choose the repository and build, then **Create and deploy**.
-   For **Docker**, choose **Create app**, then pick what it runs on its
-   **Info** page.
+> [!CAUTION]
+> Deploy on push lets anyone who can push to the branch run code on your
+> Relay, including a Compose file that mounts paths on the machine. Protect the
+> branch, or turn it off, for repositories others can write to.
 
-Hearth creates the app with its own network and data folder on the Relay, then
-opens the app.
+## Deploy an image, Dockerfile, or Compose file
 
-## How a deployment runs
+1. Open **Apps**, choose **Add App**, and choose **Docker**.
+2. Enter a **Name**, choose the **Relay**, and choose **Create app**.
+3. On the app's **Info** page, choose **Configure** in the **Brick** section.
+4. Choose a source:
+   - **Image**: enter the **Image and tag**, such as `nginx:latest`. For a
+     private registry, see [Private registries](/relays/host#private-registries).
+   - **Dockerfile** or **Compose**: choose **Save**, then write the file from
+     its button under **Build Strategy**.
+5. Choose **Save and deploy**.
 
-Choose **Deploy** at the top of an app's page, or on its row in **Apps**, to
-deploy what the app's settings say now. Most changes to an app apply on its
-next deployment, and the dialogs that make them offer **Save and deploy**.
+A Dockerfile builds with the app's **Files** page as its context. In a Compose
+file, services reach each other by name, `${KEY}` reads the app's
+[environment variables](/apps/settings#environment-variables), and listed ports
+are published on the Relay.
 
-When the app is already running, a deployment starts the new containers beside
-the old ones. Each new container must stay up for a short settle and pass its
-Docker health check, within ten minutes. Only then does traffic move to it and
-the old containers stop. If the new containers fail, Kiln removes them and the
-old ones keep serving.
+## Deployments
 
-A container without a health check counts as ready once it settles. Give your
-image a `HEALTHCHECK`, or a Compose service a `healthcheck`, so traffic only
-moves to a copy that works.
+Choose **Deploy** at the top of an app's page to deploy its current settings.
+Hearth opens the app's **Logs** page on **Deployment** so you can follow it.
 
-A Compose project switches over as a whole: every service must be healthy, or
-have exited cleanly, before any traffic moves.
+A running app switches over without downtime: new containers start beside the
+old ones, and traffic moves once they pass their Docker health check. If they
+fail, the old ones keep serving. Give your image a `HEALTHCHECK`; without one,
+a container counts as ready once it settles.
 
-### When the old containers stop first
-
-Two copies of an app can't always run at once. The old containers stop before
-the new ones start when:
-
-- the app publishes ports on the Relay, or has a Tailscale address;
-- the app mounts a volume or a path on the node read-write;
-- a Compose service keeps data in a volume, or uses another network mode;
-- the node doesn't have the memory to hold both copies.
-
-The deployment log says which. The app is down while the new containers start.
+The old containers stop first, and the app is briefly down, when the app
+publishes ports, has a Tailscale address, mounts a volume or node path
+read-write, or the node lacks memory for two copies. The deployment log says
+which.
 
 > [!WARNING]
-> Containers keep nothing from one deployment to the next. Keep data an app
-> needs in a volume from its **Volumes** section. See
+> Containers keep nothing between deployments. Keep data in
 > [Volumes](/apps/settings#volumes).
 
-## Deployment history
+## History and rollback
 
-**Deployments**, under Infrastructure, lists every app's deployments, newest
-first, across the Relays you can see. To see one app's, choose **History** on
-the **Deployment** card of its **Info** page.
+**Deployments**, under Infrastructure, lists every app's deployments; for one
+app, choose **History** on its **Deployment** card. Each has a **Log**, kept for
+the app's 20 latest deployments.
 
-Each row shows the app, the commit or image, what started it, when, and how
-long it took. A deployment's status is **Deploying**, **Deployed**, **Failed**,
-or **Unknown** when its Relay restarted partway through.
+To roll back, open **More actions** on an older deployment and choose **Deploy
+this commit again**, or **Redeploy** for an image. A GitHub app stays on that
+commit until a new one lands.
 
-- Choose **Log** to read the deployment's log. The Relay keeps the logs of each
-  app's 20 latest deployments.
-- From **More actions**, choose **Deploy this commit again** on a GitHub
-  deployment to roll back to that commit. On an image deployment, **Redeploy**
-  deploys the exact image it ran.
+**Start**, **Stop**, and **Restart** act on the current containers without
+deploying. **Delete app** is at the bottom of the **Info** page.
 
-To follow a deployment live, open the app's **Logs** page and choose
-**Deployment**. Hearth takes you there when you deploy.
-
-## Start, stop, and delete
-
-**Start**, **Stop**, and **Restart** act on the app's current containers
-without deploying. They appear once the app has been deployed.
-
-To delete an app, choose **Delete app** at the bottom of its **Info** page.
-
-## Next steps
-
-- [Domains and HTTPS](/apps/domains)
-- [App settings](/apps/settings): environment, ports, volumes, and a terminal
-- [Image updates](/apps/updates)
-- [Connect a database](/databases/connect)
+Next: [Domains and HTTPS](/apps/domains), [App settings](/apps/settings), and
+[connecting a database](/databases#connect-an-app).

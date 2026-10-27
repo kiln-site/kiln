@@ -1,104 +1,122 @@
 ---
-title: Updates
-description: Update Hearth and every Relay from Hearth, choose between stable and nightly releases, and see why an update is unavailable.
+title: Updates and recovery
+description: Update Hearth and Relays from Hearth, keep the recovery kit, restore Kiln on a new machine, and fix an install that won't come up.
 ---
-
-You update Kiln from Hearth. Hearth and the Relays update the same way: the
-Relay on the machine pulls the new image, replaces the container, and puts the
-old one back if the new one doesn't come up healthy. Game servers keep
-running.
 
 ## Update from Hearth
 
-1. Open any Infrastructure page, such as **Relays**, and choose **Updates** at
-   the top.
-2. The dialog checks for updates and lists the panel and each Relay, with
-   "Update available", "Up to date", or why it can't update. **Check for
-   updates** checks again.
-3. Choose **Update** on one, or **Update all** for everything that has an
-   update.
-4. Choose **Confirm**. The dialog follows each update until it's done.
+1. On any Infrastructure page, such as **Relays**, choose **Updates**.
+2. Choose **Update** on the panel or a Relay, or **Update all**.
+3. Choose **Confirm**. The dialog follows each update until it's done.
 
-**Changelog** in the dialog lists what changed in each release.
+Each Relay swaps in the new container and puts the old one back if the new one
+isn't healthy in time. Game servers keep running. Update the `kiln` command
+with `kiln update`.
 
-Platform administrators can update everything. People who can update a Relay
-see the **Updates** button for that Relay too.
+The install script and `compose.yaml` follow the `latest` tag, the newest
+stable [release](https://github.com/kiln-site/kiln/releases). `--nightly`, or
+`KILN_IMAGE_TAG=latest-nightly`, follows a nightly built from every change to
+`main`.
 
-> [!NOTE]
-> An update that fails is rolled back: "The update failed. The previous
-> container was restored." The same happens when the new container doesn't
-> pass its health check in time.
+Hearth can't update a container that runs an exact version, a pinned digest,
+or a local build; pin one to stay on it. Hearth's own updates need a Relay on
+Hearth's machine.
 
-A Relay finishes an update it started even if Hearth goes away partway. When
-Hearth comes back, the Relays tell it how each update went.
+## Export the recovery kit
 
-## Stable and nightly
+Kiln [backs up Hearth's database](/backups) every day, encrypted. The recovery
+kit holds the installation ID and every secret, including the backup key.
+Export it after installing and keep it offline, apart from the backups:
 
-Kiln publishes Hearth and the Relay together, as images on GitHub's container
-registry, from the [kiln-site/kiln](https://github.com/kiln-site/kiln)
-repository. Each release is a
-[GitHub release](https://github.com/kiln-site/kiln/releases).
+```sh title="On the machine that runs Hearth"
+docker exec kiln-relay kiln-relay platform export-kit > kiln-recovery.json
+```
 
-| Tag | Follows |
-| --- | --- |
-| `latest` | The newest stable release |
-| `latest-nightly` | The newest nightly, built from every change to Kiln's main branch |
-| `0.1.0` | One stable release |
-| `0.1.0-nightly.20260726.155759` | One nightly |
+> [!CAUTION]
+> Anyone with the recovery kit can read Kiln's database and sign Hearth's
+> sessions.
 
-Your installation follows the tag it runs. The install script and
-`compose.yaml` use `latest`; `--nightly`, or `KILN_IMAGE_TAG=latest-nightly`
-with Compose, installs the nightly channel instead. A stable release is a
-nightly promoted as it is, without rebuilding it.
+## Restore Kiln
 
-Before the first stable release, `latest` follows the newest nightly, so a new
-installation has a release to start from.
-
-## When an update is unavailable
-
-Hearth updates a container only when all of these are true:
-
-- It's a Hearth or Relay image from Kiln, or from the distribution you
-  installed.
-- It runs the `latest` or `latest-nightly` tag. An exact version, a pinned
-  digest, or a local build is managed outside Kiln, and the dialog says why it
-  can't update.
-- A Relay can reach the container's Docker. For Hearth, that's the Relay on the
-  same machine. Without one, the dialog says "Pair a Relay running on Hearth's
-  Docker host to enable updates."
-- The release has a valid release manifest.
-- The container belongs to this installation.
-
-The dialog also marks a Relay that's **Offline**, a **Custom build**, and a
-version **Newer than the latest release**.
-
-> [!TIP]
-> To stay on an older version, pin it where you run Kiln, such as an exact
-> `KILN_IMAGE_TAG` in Compose. A downgrade made only from Hearth can be
-> replaced by your next deployment.
-
-## How an update runs
-
-The Relay pulls the release's exact image and checks its labels, then starts a
-short-lived helper that:
-
-1. Stops the container and keeps it as a rollback copy.
-2. Creates the new one with the same settings, volumes, ports, and networks.
-3. Waits for it to report healthy.
-4. Removes the rollback copy, or restores it if the new one failed.
-
-Each release includes a `release-manifest.json` that ties its version and
-source commit to the exact Hearth and Relay images. Kiln updates only to
-images the manifest names, and only from the distribution it came from.
-
-A platform Relay updates the Hearth it installed the same way, and never
-undoes the update in its own checks.
-
-## The kiln command
-
-The `kiln` command updates itself, staying on the stable or nightly channel it
-was installed from:
+**Restore** on a Kiln backup shows the commands, and on the platform Relay
+opens its terminal with them typed:
 
 ```sh
-kiln update
+docker exec kiln-relay kiln-relay platform stop-hearth
+docker exec kiln-relay kiln-relay platform-backup restore /data/backups/<backup-id>.zip \
+  --confirm <installation-id>
+docker exec kiln-relay kiln-relay platform start-hearth
 ```
+
+The restore refuses a backup from another installation.
+
+### On a new machine
+
+1. Import the recovery kit before the Relay's first start, so it doesn't
+   install an empty Kiln:
+
+   ```sh title="On the new machine"
+   docker volume create kiln-relay-data
+   docker run --rm --entrypoint kiln-relay \
+     --volume /var/run/docker.sock:/var/run/docker.sock \
+     --volume kiln-relay-data:/data \
+     --volume "$PWD/kiln-recovery.json:/kit.json:ro" \
+     ghcr.io/kiln-site/relay:latest platform import-kit /kit.json
+   ```
+
+2. [Install Kiln](/#install) with the same `KILN_URL`. It holds Hearth stopped.
+3. `docker cp backup.zip kiln-relay:/data/restore.zip`, restore
+   `/data/restore.zip` as above, and run `start-hearth`.
+4. In **Relays**, remove the old Relay. Choose **Add Relay** and paste what
+   `docker exec kiln-relay kiln-relay platform pair` prints into **Pairing
+   link**.
+
+### Lost database volume
+
+If `kiln-hearth-mysql` is lost, the Relay stops rather than start an empty
+database. Run `platform recover --confirm <installation-id>`, restore a backup,
+and run `start-hearth`.
+
+## Troubleshooting
+
+- **Hearth won't load.** `docker exec kiln-relay kiln-relay platform status`
+  shows what's wrong; `platform repair` creates what's missing and starts what
+  stopped.
+- **The Relay won't start.** Run the same commands from a recovery container:
+
+  ```sh
+  docker run --rm -it --entrypoint kiln-relay \
+    --volume /var/run/docker.sock:/var/run/docker.sock \
+    --volume kiln-relay-data:/data \
+    ghcr.io/kiln-site/relay:latest platform status
+  ```
+
+- **The install script failed.** It names the step and logs to
+  `~/kiln-install.log`.
+- **HTTPS doesn't work.** Traefik needs ports 80 and 443; without them Hearth
+  stays at `http://<address>:3000`. A new certificate can take a few minutes.
+- **The setup link is lost.** Run `platform setup-url`.
+
+## Moving from the old compose.yaml
+
+The old `compose.yaml` ran Hearth, MySQL, and Valkey as their own services. The
+new one isn't an upgrade; its Relay stops on the old stack's ports. Run
+`docker rm -f kiln-relay`, then either keep the old stack:
+
+```sh
+git show 18b90d3:compose.yaml > compose.legacy.yaml
+docker compose -f compose.legacy.yaml up -d
+```
+
+Or move it under a platform Relay:
+
+1. Back up Kiln, and note `KILN_INSTALLATION_ID`, `BETTER_AUTH_SECRETS`, and
+   `KILN_PLATFORM_BACKUP_KEY`.
+2. Stop the old stack. Start a platform Relay on a fresh volume with those
+   three and `KILN_URL`. `KILN_RELAY_SFTP_PORT` becomes `KILN_SFTP_PORT`.
+3. [Restore the backup](#restore-kiln), then replace the old Relay as in step 4
+   above.
+
+A backup restores only into a database named `hearth`. For another name, such
+as Coolify's `default`, use **Export SQL** on the old **Info** page and import
+it in the new Hearth's **Data** section once both run the same version.

@@ -1,107 +1,71 @@
 ---
 title: Host access
-description: Open a root terminal on a Relay's machine, browse and edit its files, and read the Relay's own database from Hearth.
+description: Open a root terminal on a Relay's machine, browse its files, and set up private registries and health checks.
 ---
 
-A Relay can give Hearth access to the machine it runs on: a root terminal and
-the machine's files. Host access is on by default. Each part has its own
-permission, so you decide who gets it.
+A Relay can give Hearth a root terminal and the files of its machine. Host
+access is on by default, and each part has its own permission.
 
 > [!CAUTION]
-> Host access is root on the machine. Anyone with `relay.terminal` or
-> `relay.files.write` on a Relay can change anything on its host, including
-> other Relays' and other programs' data. Grant these only to people you'd give
-> SSH access.
+> Host access is root on the machine. Grant `relay.terminal` and
+> `relay.files.write` only to people you'd give SSH access.
 
 ## Terminal
 
-The Relay's **Terminal** page opens a root shell on its machine, as SSH would.
-It needs `relay.terminal`.
-
-- Your session stays open when you reload the page, and when Hearth reconnects.
-  Each person gets their own.
-- A session nobody has open ends after 15 minutes. Set
-  `KILN_DATABASE_TERMINAL_IDLE_TIMEOUT_MINUTES` on Hearth to change it, from 1
-  to 1440 minutes.
-- Restarting the Relay ends every session.
-
-The shell runs in a small helper container, `kiln-host-shell`, that the Relay
-creates the first time someone opens a terminal. It's privileged and shares the
-host's processes, so it can enter the host's namespaces. Between sessions it
-only sleeps.
-
-**Restart host** in the Relay's actions also uses host access: it reboots the
-machine with the host's own tools.
+The Relay's **Terminal** page opens a root shell on the machine. It needs
+`relay.terminal`. Your session survives reloads; one nobody has open ends after
+15 minutes (set `KILN_DATABASE_TERMINAL_IDLE_TIMEOUT_MINUTES` on Hearth, 1 to
+1440). Restarting the Relay ends every session.
 
 ## Files
 
-The Relay's **Files** page browses and edits the machine's files with the same
-file browser and editor as game server and app files. It needs
-`relay.files.read` to browse and download, and `relay.files.write` to change
-files.
+The Relay's **Files** page browses and edits the machine's files. It needs
+`relay.files.read`, and `relay.files.write` to change them.
 
-### Mount the host's files
-
-The Relay can only see the machine's files when its filesystem is mounted into
-the Relay at `/host`. Until it is, the Files page says **Host files aren't
-mounted**.
-
-To mount them from Hearth:
-
-1. Open the Relay's **Files** page and choose **Mount host files**.
-2. Choose **Mount and restart**.
-
-The Relay restarts with the mount and is offline for a few seconds. Game servers
-keep running. If it doesn't work, the Relay is put back as it was, and the page
-shows why. Mounting needs `relay.files.mount`, which Relay owners and Kiln
-Admins have by default.
-
-If you run the Relay with Docker Compose, start it with the host files override
-instead:
+If it says **Host files aren't mounted**, choose **Mount host files**, then
+**Mount and restart**. The Relay is offline a few seconds; game servers keep
+running. This needs `relay.files.mount`. With Docker Compose, start the Relay
+with the override instead:
 
 ```sh title="On the Relay's machine"
 docker compose -f compose.yaml -f compose.host-files.yaml up -d
 ```
 
-Recreating the Relay from a Compose file without the override removes the
-mount.
+When the Relay can't open some files, the page says why. For SELinux, add
+`security_opt: [label=disable]` to the Relay's service.
 
-### Editing host files
-
-Saving a host file overwrites it in place, as editors do, so its hard links and
-containers that bind-mount it see the change.
-
-Links with absolute targets point inside the Relay's container rather than the
-host, so the Files page refuses to open them.
-
-### Files the Relay can't reach
-
-On some hosts the Relay can't open every file, and the Files page says why:
-
-| The page says                                   | What to do                                                                           |
-| ----------------------------------------------- | ------------------------------------------------------------------------------------ |
-| Docker runs rootless on this host               | The Relay can only open files its Docker user can.                                   |
-| Docker remaps container users on this host      | The Relay can only open files its remapped user can.                                 |
-| The Relay isn't running as root                 | The Relay can only open files its user can.                                          |
-| SELinux confines the Relay                      | Add `security_opt: [label=disable]` to the Relay's service to lift it.               |
-| The host's filesystem is mounted read-only      | Files can be read but not changed.                                                   |
-
-## The Relay's database
-
-The Relay keeps its own state in a SQLite file, `/data/network/relay.sqlite`.
-When host files are mounted and you have `relay.files.read`, the Relay's
-**Info** page shows a **Database** button. It opens that file in Files, where you
-can browse its tables and query them.
+With host files mounted, the **Database** button on the **Info** page opens the
+Relay's own SQLite database in Files.
 
 > [!WARNING]
 > The Relay's database holds sensitive configuration. Anyone with
-> `relay.files.read` on a Relay can read it.
+> `relay.files.read` can read it.
 
 ## Turn host access off
 
 Set `KILN_RELAY_HOST_ACCESS=false` in the Relay's environment and restart it.
-The Terminal page then says **Host terminal unavailable**, the Files page says
-**Host access is off**, and **Restart host** is unavailable. The Relay removes
-its shell helper container.
+The terminal, host files, and **Restart host** become unavailable.
 
-Set it back to `true` to turn host access on again.
+## Private registries
+
+The Relay doesn't see `docker login` on the host. To pull private images:
+
+1. Write a Docker config file with credentials inline under `auths`. Credential
+   helpers aren't supported.
+2. Mount it into the Relay's container and set `DOCKER_CONFIG` to its directory.
+
+One login covers images, Compose services, and Dockerfile `FROM` lines.
+
+## Data, health, and memory
+
+The Relay keeps its state, local backups, and game server files in the
+`kiln-relay-data` volume.
+
+Docker checks the Relay on `127.0.0.1` port 4101. Relays sharing a host network
+each need their own `KILN_RELAY_HEALTH_PORT`; it must also differ from
+`KILN_RELAY_PORT` and `KILN_RELAY_SFTP_PORT`. Outside monitors can use `/health`
+on the Relay's main port.
+
+The **Memory** column on the Relays page shows the Relay's own process; hover it
+for the container's. Container memory counts file cache the kernel frees when
+needed, so it overstates what the Relay holds.

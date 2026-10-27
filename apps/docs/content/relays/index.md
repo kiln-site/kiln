@@ -1,68 +1,105 @@
 ---
 title: Relays
-description: A Relay runs on each machine with Docker, runs its game servers, apps, and databases, and keeps working when Hearth is away.
+description: Add a Relay to each machine that runs game servers, apps, and databases, and fix pairing errors.
 ---
 
-A Relay is Kiln's agent on a machine. Every machine that runs game servers,
-apps, or databases runs one Relay, in a Docker container beside them. Hearth,
-the web panel, tells each Relay what to do; the Relay does it with Docker on
-its own machine.
+A Relay is Kiln's agent on a machine. It runs that machine's game servers, apps,
+and databases in Docker, and keeps them running while Hearth is away.
 
-## What a Relay does
+Open **Infrastructure → Relays** to see them. A Relay's pages show its **Info**,
+a root **Terminal** and the machine's **Files** (see [Host access](/relays/host)),
+its Docker **Volumes**, and its **Logs**.
 
-- **Runs your instances.** It creates, starts, stops, and deletes the
-  containers for its game servers, apps, and databases, and restarts a game
-  server that crashes.
-- **Keeps working without Hearth.** Crash recovery, backups already queued, and
-  running game servers carry on while Hearth is down or unreachable. When Hearth
-  connects again, it catches up on what happened.
-- **Serves consoles and files.** Your browser streams consoles, uploads, and
-  downloads straight from the Relay, so that traffic doesn't pass through Hearth.
-  When your browser can't reach the Relay, as when it sits behind a home router,
-  that traffic goes through Hearth instead. See
-  [Connections](/relays/connections).
-- **Runs your backups.** A Relay archives its instances' data and stores it on
-  its own disk or uploads it to S3. See [Backups](/backups).
-- **Gives you its host.** With host access on, Hearth can open a root terminal
-  on the machine and browse its files. See [Host access](/relays/host).
+**Pause** stops all changes, such as power actions, files, and backups, until
+**Resume**. **Restart Relay** restarts only the Relay. Both leave game servers
+running. **Restart host** reboots the machine and everything on it.
 
-Hearth itself also runs beside a Relay: the install command starts one Relay
-that installs Hearth, its database, and its cache, and keeps them running.
+## Add a Relay
 
-## The Relays page
+You need the **Kiln Admin** or **Relay Creator** platform role.
 
-Open **Infrastructure → Relays** to see every Relay you can manage. Each row
-shows the Relay's status, name, memory use, address (**Host / IP**), and owner.
-Choose a Relay to open its pages:
+1. Open **Infrastructure → Relays** and choose **Add Relay**.
+2. On the **Install** tab, choose **Copy**.
+3. Run the command on the new machine:
 
-| Page         | What it shows                                                                                  |
-| ------------ | ---------------------------------------------------------------------------------------------- |
-| **Info**     | Its name, Kiln ID, version, connection, TLS, and proxy settings, and what runs on the machine. |
-| **Terminal** | A root shell on the machine. See [Host access](/relays/host#terminal).                         |
-| **Volumes**  | The Relay's Docker volumes.                                                                    |
-| **Files**    | The machine's own files. See [Host access](/relays/host#files).                                |
-| **Logs**     | The Relay's own log.                                                                           |
+   ```sh title="On the new machine"
+   curl -fsSL https://kiln.site/install | sh -s -- --join 'https://kiln.example.com/#kj1.<code>'
+   ```
 
-You see only the pages your permissions allow.
+4. When the dialog shows the Relay, check its fingerprint matches the one the
+   installer printed.
+5. Enter a **Name** if you want one, and choose **Add Relay**.
 
-## Pause, restart, and remove
+The installer adds Docker if it's missing. The machine must reach Hearth, not
+the other way round. The command works for 30 minutes; **New command** makes a
+fresh one.
 
-The Relay's actions sit at the top of its pages and in each row of the Relays
-page:
+On a machine that already has a Relay, the command joins that Relay. If Hearth
+already has it, choose **Reconnect** to keep its instances.
 
-- **Pause** freezes the Relay. Its game servers keep running, but nothing on it
-  changes until you choose **Resume**: no power actions, file changes, console
-  input, schedules, backups, or new instances.
-- **Restart Relay** restarts the Relay's own container. Game servers keep
-  running, and the Relay reconnects in a few seconds.
-- **Restart host** reboots the machine, and with it every game server, app, and
-  database on it. It needs host access.
-- **Remove Relay**, on the Info page under the danger zone, removes the Relay
-  from Hearth.
+## Installer options
 
-## Next steps
+By default the installer picks how the Relay is reached:
 
-- [Add a Relay](/relays/add) to put another machine in Kiln.
-- [Choose which side connects](/relays/connections) when Hearth can't reach a
-  machine.
-- [See what the Relay needs](/relays/runtime) from Docker and the machine.
+- **Ports 80 and 443 free:** the Relay runs Traefik there with a Let's Encrypt
+  certificate, which apps on the machine also use.
+- **80 or 443 taken:** the Relay serves HTTPS on port 4100.
+- **Let's Encrypt can't reach port 80,** as behind a home router: the Relay
+  opens no ports and connects to Hearth. See [Connections](/relays/connections).
+
+To choose yourself, add an option:
+
+| Option                   | What it does                                                   |
+| ------------------------ | -------------------------------------------------------------- |
+| `--proxy traefik`        | Traefik on ports 80 and 443, with a Let's Encrypt certificate. |
+| `--proxy none`           | The Relay's own HTTPS on port 4100.                            |
+| `--proxy hearth`         | No ports opened; the Relay connects to Hearth.                 |
+| `--relay-host <address>` | The address Hearth reaches the Relay at, such as a domain.     |
+| `--sftp-port <port>`     | The host port for SFTP, when 2022 is taken.                    |
+
+If a port it needs is taken, the installer names what has it and stops. Its log
+is `~/kiln-install.log`.
+
+## Pair with a link
+
+For a running Relay that Hearth can reach:
+
+1. On its machine, run `docker exec kiln-relay kiln-relay pair create`.
+2. In **Add Relay**, open **Pairing link**, paste the link, and choose **Review
+   pairing**.
+3. Check the **Relay fingerprint** and **Control endpoint**, and choose
+   **Confirm and pair**.
+
+The link lasts 15 minutes. For a Relay Hearth already knows, choose **Repair
+connection**; its game servers and access stay attached.
+
+A Relay from another Kiln installation asks whether to **Keep** its installation
+ID or **Use this Kiln's**. The ID decides whose backups it finds.
+
+## Pairing errors
+
+- **Hearth can't reach the Relay:** use the **Install** tab, or forward the port.
+- **Hearth can't find** the address: fix its DNS record.
+- **Another Relay uses this address:** remove the old Relay in Hearth.
+- **`join expired`:** choose **New command**.
+- **Relay too old to join:** update it, or pair with a link.
+
+### Hostname TLS is untrusted
+
+The certificate is self-signed, expired, or for another name. Point DNS at the
+Relay, or fix the certificate on the proxy in front of it.
+
+### TLS handshake failed
+
+A proxy in front of the Relay has no certificate for this name. Check its TLS
+settings for the Relay's hostname.
+
+### Cloudflare errors 525 and 526
+
+Cloudflare couldn't make a trusted TLS connection to the Relay. Set the record to
+DNS only, or give the Relay a certificate your Cloudflare SSL mode accepts.
+
+### Relay URL redirected
+
+A proxy answered with a redirect, such as HTTP to HTTPS. Fix its SSL settings so
+the address reaches the Relay over HTTPS.

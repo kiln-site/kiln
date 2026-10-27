@@ -62,6 +62,20 @@ can be lost or exposed).
 **Steps** are a numbered list. Name buttons and fields in **bold**, exactly as
 Hearth labels them.
 
+## Keep it short
+
+People skim docs to do one thing. Write the least that gets them there.
+
+- One page per task or topic people look for. Merge small pages; don't split
+  a topic across several.
+- Aim for under 500 words a page. Steps, tables, and short lists beat
+  paragraphs.
+- Say each thing once. Link to the page that covers it instead of repeating
+  it.
+- Leave out how Kiln works inside unless the reader has to act on it. Leave out
+  rare edge cases unless they cause real trouble.
+- Lead with the common path. Options and exceptions go after, briefly.
+
 ## Voice
 
 - Write to the reader ("you"), in short, plain sentences. Say what to do and

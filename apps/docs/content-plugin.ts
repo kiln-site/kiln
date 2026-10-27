@@ -383,6 +383,11 @@ function compile({
       code({ text, lang }) {
         const info = lang ?? ""
         const name = (/^\S*/.exec(info)?.[0] ?? "").toLowerCase()
+        // ```walkthrough <name>``` marks where an animated walkthrough
+        // plays. The page's own steps say the same in words.
+        if (name === "walkthrough") {
+          return `<figure class="walkthrough" data-walkthrough="${escapeAttribute(text.trim())}"></figure>\n`
+        }
         const titleMatch = /title="([^"]*)"/.exec(info)
         const language = languageAliases[name] ?? name
         const highlighted = highlighter.getLoadedLanguages().includes(language)
@@ -460,7 +465,7 @@ function searchEntries({
 function tokenText(token: Token): string {
   switch (token.type) {
     case "code":
-      return token.text
+      return /^walkthrough\b/.test(token.lang ?? "") ? "" : token.text
     case "space":
     case "hr":
     case "html":

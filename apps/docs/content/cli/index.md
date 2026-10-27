@@ -1,74 +1,69 @@
 ---
 title: The kiln CLI
-description: Install the kiln command to manage your Relays, game servers, backups, and files from a terminal.
+description: Install the kiln command, sign it in to your Kiln, and manage Relays, game servers, backups, and files from a terminal.
 ---
 
-The `kiln` command manages Kiln from your own computer. Use it to script
-routine work or to reach a game server without opening Hearth:
-
-- List your Relays and game servers, and read their details.
-- Create, reconfigure, and delete game servers.
-- Start, stop, restart, and kill game servers.
-- Send console commands and read or follow logs.
-- List, read, write, upload, and download game server files.
-- Create, download, restore, and delete backups.
-- Read the activity history.
-
-It acts as your account, with the same permissions you have in Hearth. See
-[Authentication](/cli/authentication).
+The `kiln` command manages game servers, files, logs, backups, and activity
+from your own computer, with your account's permissions. See
+[CLI commands](/cli/commands).
 
 ## Install
 
-On Linux or macOS, run:
-
-```sh title="On your computer"
+```sh title="On Linux or macOS"
 curl -fsSL https://kiln.site/install | sh -s -- --cli
 ```
 
-The installer downloads the newest stable CLI, checks it against the
-release's SHA-256 digest, and puts it in `/usr/local/bin` when run as root,
-otherwise `~/.local/bin`. It doesn't need Docker. Add `--nightly` for the
-newest nightly build.
+The installer checks the CLI's SHA-256 digest and puts it in `/usr/local/bin`
+as root, otherwise `~/.local/bin`. It doesn't need Docker. Add `--nightly` for
+the nightly build. `kiln update` updates the CLI later.
 
-On Windows, download `kiln.exe` from the
-[GitHub releases](https://github.com/kiln-site/kiln/releases) and put it on
-your `PATH`. Releases also have standalone archives for Linux and macOS, on
-x64 and ARM64.
+On Windows, put `kiln.exe` from
+[GitHub releases](https://github.com/kiln-site/kiln/releases) on your `PATH`.
 
 > [!NOTE]
-> macOS builds aren't notarized. If you download one in a browser instead of
-> with the installer, clear the quarantine flag before running it:
-> `xattr -d com.apple.quarantine kiln`.
-
-Check it's installed:
-
-```sh
-kiln --version
-```
+> macOS builds aren't notarized. If you download one in a browser, run
+> `xattr -d com.apple.quarantine kiln` first.
 
 ## Sign in
-
-Sign in with your Kiln's address:
 
 ```sh
 kiln login https://kiln.example.com
 ```
 
-Your browser opens to approve the CLI. See
-[Authentication](/cli/authentication) for profiles, read-only access, and
-tokens.
+1. The CLI opens your browser with a code. Check it matches.
+2. Choose the CLI's access:
+   - **Read-only access** lets it read and download, but change nothing.
+   - **Access duration** is **1 hour**, **1 day**, **1 week**, or 30 days by
+     default. A read-only CLI can also be **Indefinite**.
+3. Click **Authorize CLI**.
 
-## Update
+Over SSH, add `--no-open` and open the printed URL on any device. Run
+`kiln login` again when the credential expires, and `kiln whoami` to check
+which account and Kiln you're using.
+
+## Profiles
+
+A profile is one saved sign-in. Add one per Kiln:
 
 ```sh
-kiln update
+kiln login https://staging.example.com --profile staging
+kiln servers list --profile staging
 ```
 
-This replaces the CLI with the newest build on the same channel, stable or
-nightly, after checking its digest, size, and version. It updates only the
-CLI, not Hearth or your Relays, and doesn't need you to be signed in.
+Signing in makes that profile active. Profiles are saved in
+`~/.config/kiln/config.json`. The credential goes in the macOS Keychain or
+Windows Credential Manager; on Linux it stays in the config file, readable
+only by you.
 
-## Get help
+`kiln logout` revokes the credential and removes the profile. You can also
+**Unlink** a CLI in Hearth's **Settings → Account**.
 
-`kiln help` lists every command and option. See
-[CLI commands](/cli/commands) for each one in detail.
+## Scripts and CI
+
+`KILN_URL`, `KILN_TOKEN`, and `KILN_CONFIG` override the saved profile's
+address, credential, and config file. `--url` and `--token` do the same for
+one command.
+
+> [!CAUTION]
+> A token acts as your account. Keep it out of logs, shell history, and
+> committed files. Use a read-only CLI for anything that only reads.

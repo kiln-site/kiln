@@ -1,5 +1,5 @@
 // Each pairing error has a section in the docs saying how to fix it.
-const RELAY_PAIRING_DOCS_HREF = "https://kiln.site/docs/relays/add"
+const RELAY_PAIRING_DOCS_HREF = "https://kiln.site/docs/relays"
 
 export const PAIRING_EDGE_MESSAGES = {
   untrustedTls:

@@ -244,6 +244,23 @@
     tab-size: 2;
   }
 
+  /*
+   * A walkthrough's place, held before it loads: a 16 by 10 stage, its
+   * 3rem step bar, and a border, so nothing moves when it appears.
+   */
+  .docs-prose .walkthrough {
+    margin-top: 1.5rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .docs-prose .walkthrough:empty {
+    box-sizing: content-box;
+    aspect-ratio: 16 / 10;
+    padding-bottom: calc(3rem + 1px);
+    border: 1px solid var(--border);
+    background: var(--card);
+  }
+
   /* Tables scroll on their own on narrow screens. */
   .docs-prose .table-wrap {
     overflow-x: auto;

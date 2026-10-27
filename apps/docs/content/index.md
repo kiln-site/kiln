@@ -1,52 +1,60 @@
 ---
-title: Introduction
-description: Kiln runs game servers, apps, and databases on machines you own, managed from one web panel.
+title: Get started
+description: Install Kiln on one machine, then add your other machines as Relays.
 ---
 
-Kiln is a free, open-source panel for game servers, apps, and databases. It
-runs them in Docker on machines you own, and you manage all of them from one
-web panel with the same console, files, backups, and access controls.
+Kiln runs game servers, apps, and databases on machines you own, all from one
+web panel. It's free and open source, and in early development.
 
-Kiln is in early development.
+## Install
 
-## Hearth and Relays
+Run this on the Linux machine that will run Kiln:
 
-Kiln has two parts:
+```sh title="On the machine that will run Kiln"
+curl -fsSL https://kiln.site/install | sh
+```
 
-- **Hearth** is the web panel. You open it in a browser to create and manage
-  everything.
-- A **Relay** runs on each machine you own. It runs the containers, and Hearth
-  tells it what to do.
+It installs Docker if it's missing, asks where people will open Kiln (press
+<kbd>Enter</kbd> for the machine's IP address, or type a domain that points at
+it), and starts everything. When it's done, it prints a link. Open it and
+create your administrator account.
 
-The machine you install Kiln on runs Hearth and a Relay, so it can host
-everything itself. To use more machines, add a Relay to each one from Hearth.
-See [How Kiln fits together](/get-started/concepts) for the details.
+Kiln needs ports 80 and 443 for HTTPS, and gives game servers ports from 30000
+to 39999. To run it with Docker Compose instead, see
+[Self-hosting](/self-hosting).
 
-## What it runs
+## Add a Relay
 
-- **Game servers**, started from **Bricks**, such as Minecraft and Palworld.
-  Kiln sets up ports and the right Java version. You can write your own Bricks
-  or add community catalogs.
-- **Apps**, deployed from a GitHub repository, a Docker image, a Dockerfile, or
-  a Compose file. Kiln builds each push and switches over once the new
-  containers are healthy.
-- **Databases**: MySQL, MariaDB, PostgreSQL, Redis, and Valkey, next to the
-  app or game server that uses them.
+The machine you installed on can already run everything. To use another
+machine, add a **Relay** to it:
 
-Around them, Kiln has a live console with search, a file editor in the
-browser, backups to S3-compatible storage, schedules, per-instance access
-control, an activity history, Cloudflare DNS for game server addresses, HTTPS
-for app domains, Tailscale, a command-line tool, and updates from the panel.
+```walkthrough
+add-relay
+```
 
-Kiln runs on Linux with Docker. It doesn't run on Windows hosts, and it
-doesn't orchestrate Docker Swarm or Kubernetes.
+1. In Kiln, open **Infrastructure → Relays** and choose **Add Relay**.
+2. Choose **Copy** to copy the install command.
+3. Run it on the new machine. It installs the Relay and connects it to Kiln.
+4. Back in Kiln, check that the fingerprint matches the one in the terminal,
+   and choose **Add Relay**.
 
-## Where to go next
+The command works for 30 minutes. For installer options and pairing errors, see
+[Relays](/relays).
 
-1. [Install Kiln](/get-started/install) on the machine that will run Hearth.
-2. Read [How Kiln fits together](/get-started/concepts).
-3. [Create your first game server](/get-started/first-game-server) or
-   [deploy your first app](/get-started/first-app).
+## How Kiln fits together
 
-Kiln is open source under AGPL-3.0, with a commercial license available. The
-code is at [github.com/kiln-site/kiln](https://github.com/kiln-site/kiln).
+- **Hearth** is the web panel. It holds accounts, permissions, and settings,
+  and tells each Relay what to run.
+- A **Relay** runs on each machine. It runs your game servers, apps, and
+  databases in Docker. A machine behind a home router can still join; its
+  Relay connects out to Hearth.
+- Game servers start from **Bricks**, recipes that set up the right image,
+  settings, and ports. Kiln has official Bricks, such as Minecraft and
+  Palworld, and you can add your own.
+
+## Next
+
+- [Create a game server](/game-servers)
+- [Deploy an app](/apps)
+- [Add a database](/databases)
+- [Invite people](/access)

@@ -1,85 +1,108 @@
 ---
 title: Game servers
-description: Each game server runs in its own container on a Relay, with a live console, files, startup settings, backups, and schedules.
+description: Create a game server from a Brick, connect to it, control its power, and change its limits and settings.
 ---
 
-A game server in Kiln is one container on one Relay, built from a
-[Brick](/game-servers/bricks). The Brick says which image to run, which
-settings you can change, and which ports the game needs. The Relay creates the
-container, keeps it running, and restarts it if it crashes.
+Each game server is one container on one Relay, built from a
+[Brick](/game-servers/bricks).
 
-Open **Game Servers** in Hearth's sidebar to see every game server you can
-reach, then select one to manage it.
+## Create a game server
 
-## What each game server gets
+You need a connected Relay. See [Get started](/#add-a-relay).
 
-- **Its own container.** Each game server has its own container and its own
-  data folder on the Relay, with its own memory, CPU, and disk limits. Every
-  container runs with a read-only root filesystem, dropped capabilities, a
-  process limit, and its own network, whatever its Brick asks for.
-- **A live console.** Read the server's output as it happens, search it, and
-  send commands. See [Console](/game-servers/console).
-- **Files.** Browse, edit, upload, and download the server's files in the
-  browser, including Minecraft's NBT files and SQLite databases. See
-  [Files](/game-servers/files).
-- **Startup settings.** Change the version, Java version, memory, and the
-  Brick's other settings, or swap to a different Brick. See
-  [Startup](/game-servers/startup).
-- **Power controls and crash recovery.** Start, stop, restart, or kill it.
-  When it exits on its own, the Relay starts it again. See
-  [Power and crash recovery](/game-servers/power).
-- **Backups.** Back it up to the Relay's disk or to S3, by hand or on a
-  schedule. See [Backups](/backups).
-- **Schedules.** Restart it, back it up, or run a console command on a
-  timetable. See [Schedules](/game-servers/schedules).
-- **Access.** Invite people to one game server and choose what they can do.
-  See [Access](/access).
+1. Open **Game Servers** in the sidebar and select **Add Game Server**.
+2. Pick a Brick, such as **Paper** under **Minecraft**.
+3. Under **Server details**, give it a **Server name**.
+4. Choose the **Relay** it runs on.
+5. Select **Provision**.
 
-## Official Bricks
+Kiln opens the **Startup** tab while it provisions. When it's done, check the
+[settings](#startup-settings) and select **Apply & Start**. The first start
+downloads the game, so it's slower.
 
-Kiln's own catalog has these Bricks. Hearth marks them **Verified**.
+Kiln's own Bricks, marked **Verified**, are Paper, Folia, Fabric, and Velocity
+for Minecraft, and Palworld, which needs an amd64 Relay. A Relay that doesn't
+fit shows **incompatible**. For other Bricks, see
+[Bricks](/game-servers/bricks).
 
-| Brick    | Game      | What it runs                                                   | Relay architecture |
-| -------- | --------- | -------------------------------------------------------------- | ------------------ |
-| Paper    | Minecraft | Fast, plugin-compatible Minecraft server for most projects.    | amd64, arm64       |
-| Folia    | Minecraft | Paper's regionized multithreaded server for busy worlds.       | amd64, arm64       |
-| Fabric   | Minecraft | The Fabric mod loader.                                         | amd64, arm64       |
-| Velocity | Minecraft | A Minecraft proxy that joins several servers into one network. | amd64, arm64       |
-| Palworld | Palworld  | The Palworld dedicated server, installed through SteamCMD.     | amd64 only         |
+The Relay reserves a public port and sets a 5 GiB disk limit and the Brick's
+default memory, such as 2 GiB for Paper. For Minecraft, Kiln picks the Java
+version the game version needs.
 
-You can also add other people's catalogs, or point Kiln at a Brick you wrote
-yourself. See [Bricks](/game-servers/bricks).
+> [!NOTE]
+> A Minecraft server's Ember writes `eula=true` to `eula.txt`. Running one
+> means you accept the [Minecraft EULA](https://www.minecraft.net/en-us/eula).
 
-## A game server's pages
+## Connect to it
 
-Each game server has these tabs. You see only the ones your access allows.
+Select the address in the game server's page header to copy it. It includes
+the port Kiln picked, such as `203.0.113.10:31234`, so paste the whole thing.
+If players can't connect, see [Ports](/networking#ports).
 
-| Tab         | What it's for                                                                              |
-| ----------- | ------------------------------------------------------------------------------------------ |
-| **Console** | The live console, and power controls. See [Console](/game-servers/console).                |
-| **Files**   | The file manager and editor. See [Files](/game-servers/files).                             |
-| **Startup** | Resource limits, the Brick, and its settings. See [Startup](/game-servers/startup).        |
-| **Network** | Its ports and public address. See [Ports](/networking/ports).                              |
-| **Info**    | Its name, icon, Brick, and connect address, moving it, and deleting it.                    |
+## Power controls
+
+The power button sits at the top right of every tab, with **Power Options**
+beside it:
+
+- **Stop** asks the server to shut down cleanly, and forces it after 60
+  seconds.
+- **Restart** stops it cleanly and starts it again.
+- **Kill** ends it at once, after **Kill now**. The server can't save, so
+  recent world changes can be lost.
+
+A started server shows as starting until its ready line appears in the
+console, such as Minecraft's `Done (…)!`, for up to two minutes.
+
+## Crash recovery
+
+When a server you left running exits on its own, from an error, running out of
+memory, or stopping itself, the Relay starts it again. The console says why,
+such as **Server ran out of memory. Automatic restart scheduled — attempt 1 of
+2.** **Stop**, **Kill**, or its stop command typed in Hearth's console leave it
+stopped. Recovery runs on the Relay, so it works while Hearth is down.
+
+The Relay tries twice, waiting 5 seconds, then three times longer each try, up
+to a minute. After 5 minutes up, the count resets. If every try fails, it
+leaves the server stopped. Read the console from before the crash, raise
+**Memory** or remove the failing plugin, then start it.
+
+Each Relay's environment can change this for all its game servers:
+
+| Variable                               | Default | Range      |
+| -------------------------------------- | ------- | ---------- |
+| `KILN_RELAY_CRASH_RETRY_LIMIT`         | `2`     | 0 (off) to 10 |
+| `KILN_RELAY_CRASH_RETRY_DELAY_SECONDS` | `5`     | 0 to 300   |
+| `KILN_RELAY_CRASH_STABILITY_SECONDS`   | `300`   | 15 to 3600 |
+
+## Disk limit
+
+When a running server's files grow past its **Disk** limit, the Relay stops it
+and won't start it until they fit. Raise the limit or delete files.
+
+## Startup settings
+
+The **Startup** tab holds the limits, the Brick, and its settings. Change
+them, then select **Apply & Restart**, **Apply & Start**, or **Apply**. That
+rebuilds the container; files stay.
+
+- **Memory**, **CPU**, and **Disk**. **No limit** leaves one unlimited. For
+  Minecraft, Java's heap uses up to 75% of **Memory**.
+- **Brick Configuration**: for Minecraft, **Minecraft version**, **Java**,
+  **Server Jar File**, and **Java arguments**. Kiln runs Java 11, 17, 21, and
+  25. **Java arguments** can't set heap or start flags such as `-Xmx` or
+  `-jar`; raise **Memory** instead.
+- **Swap Brick** changes the Brick, such as Paper to Fabric. Files stay, but
+  the new software may not read them, so [back up](/backups) first.
+- **Reinstall** rebuilds from the latest Ember with your last applied
+  settings.
 
 ## Delete a game server
 
-1. Open the game server's **Info** tab.
-2. Under **Danger zone**, select **Delete server**.
-3. Copy the server ID shown in the dialog and paste it back to confirm. Hearth
-   may also ask for your account password.
-4. To keep a copy, check **Back up server before deleting** and choose where
-   the backup goes.
-5. Select **Delete server**.
+1. On the **Info** tab, under **Danger zone**, select **Delete server**.
+2. Paste the server ID to confirm. Hearth may ask for your password.
+3. To keep a copy, check **Back up server before deleting**.
+4. Select **Delete server**.
 
 > [!CAUTION]
-> Deleting a game server removes its container and all of its files from the
-> Relay. Without a final backup, they can't be recovered.
-
-The game server's Relay must be connected to delete it.
-
-## Next steps
-
-- [Create a game server](/game-servers/create)
-- [Bricks](/game-servers/bricks)
-- [Move or duplicate a game server](/game-servers/move)
+> This removes the container and all its files from the Relay. Without a
+> backup, they can't be recovered.

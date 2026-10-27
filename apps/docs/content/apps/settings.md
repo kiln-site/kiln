@@ -1,117 +1,80 @@
 ---
 title: App settings
-description: Set an app's environment variables, published ports, and volumes, and open its logs, files, and a shell in its containers.
+description: Set an app's environment, ports, and volumes, keep its image up to date, and open its logs, files, and a shell.
 ---
 
-An app's settings live on its pages: **Info**, **Network**, **Files**,
-**Logs**, and **Terminal**. Most changes apply on the app's next deployment,
-and the dialogs that make them offer **Save and deploy**.
+Most changes apply on the app's next deployment. The dialogs that make them
+offer **Save and deploy**, or **Save** to wait for the next one.
 
 ## Environment variables
 
-1. On the app's **Info** page, choose **Environment** in the side panel. It
-   shows how many variables the app has.
-2. Write one `KEY=VALUE` per line. Lines starting with `#` are comments.
-3. Choose **Save and deploy**, or **Save** to apply them on the next
-   deployment.
+On the app's **Info** page, choose **Environment**. Write one `KEY=VALUE` per
+line; lines starting with `#` are comments. Only people who can manage the app
+see the values.
 
 ```ini title=".env"
 DATABASE_URL=postgres://…
 NODE_ENV=production
 ```
 
-Kiln passes the variables to the app's containers. A Compose file can also use
-them as `${KEY}`.
-
-Only people who can manage the app see its environment. Everyone else sees
-**Hidden**.
-
-## Start command
-
-For an image, Dockerfile, or GitHub Dockerfile app, **Start command** in the
-**Brick** section's **Configure** dialog replaces the image's command. Leave it
-empty to use the image's default. A Compose app sets each service's command in
-its file.
+**Start command**, in the **Brick** section's **Configure** dialog, replaces
+the image's command. A Compose app sets commands in its file.
 
 ## Published ports
 
-By default an app is reachable only on its own network, and through its
-[web routes](/apps/domains). To expose a port on the Relay's machine directly:
-
-1. Open the app's **Network** page. Under **Published ports**, choose **Add
-   port**.
-2. Enter the **Host port** on the machine, the **Container port** the app
-   listens on, and the protocol, **TCP** or **UDP**.
-3. Choose **Save ports**, then deploy the app to publish them.
-
-**Live** below the list shows what's published right now. A Compose app
-publishes the ports its Compose file lists instead.
-
-> [!NOTE]
-> An app that publishes ports can't run two copies at once, so its
-> deployments stop the old container first. For websites, use a web route
-> instead. See [How a deployment runs](/apps#how-a-deployment-runs).
+An app is reachable only on its own network and through its
+[web routes](/apps/domains) unless you publish a port. On its **Network** page,
+under **Published ports**, choose **Add port**, enter the **Host port**,
+**Container port**, and protocol, choose **Save ports**, and deploy. A Compose
+app publishes the ports its file lists instead.
 
 ## Volumes
 
-Containers keep nothing from one deployment to the next. Whatever an app needs
-to keep, mount it from the **Volumes** section of its **Info** page:
+Containers keep nothing between deployments. Choose **Configure** in the
+**Info** page's **Volumes** section and add:
 
-1. Choose **Configure** in **Volumes**.
-2. Add a **Volume**, a **Path on the node**, or a **File**:
-   - **Volume** is one of the Relay's Docker volumes. Choose one, or **New** to
-     make one. A volume another app or database already mounts shares its data.
-   - **Path on the node** mounts a folder on the Relay's machine. Mounting a new
-     path needs permission to edit the node's files.
-   - **File** is a file Hearth keeps with the app, such as a config file. Write
-     its contents from the **Volumes** section once it's saved.
-3. Enter where it's **Mounted at** in the container, and whether it's
-   **Read-only**. For a Compose app, choose the **Service** to mount it in, or
-   **Every service**.
-4. Choose **Save and deploy**.
+- a **Volume**, one of the Relay's Docker volumes, or **New**. A volume another
+  app or database mounts shares its data;
+- a **Path on the node**, a folder on the Relay's machine. A new path needs
+  permission to edit the node's files;
+- a **File** Hearth keeps with the app, such as a config file.
 
-The section also lists the volumes, configs, and secrets the app's Compose
-file declares. Changes to those are made in the Compose file.
+Set where it's **Mounted at**, whether it's **Read-only**, and for Compose, the
+**Service**. Choose **Save and deploy**.
 
-> [!WARNING]
-> A volume or path mounted read-write means the old container stops before
-> the new one starts on each deployment, since two copies would write to the
-> same data.
+> [!NOTE]
+> Published ports and read-write mounts make each deployment stop the old
+> container first. See [Deployments](/apps#deployments).
 
-## Containers
+## Image updates
 
-The **Container** section of the **Info** page shows one container at a time.
-A Compose app has one per service; page through them with the arrows. Each
-shows its service, image, address on the app's network, ports, and uptime, and
-its CPU and memory limits beside the machine's disk use.
+For an app whose source is **Image**, Kiln checks every hour whether its tag
+names a newer image. The **Updates** row on the **Deployment** card shows the
+result, such as **Up to date**, **Update available**, or **Check failed**
+(hover for why). Choose it to open **Image updates**:
 
-Choose **Labels** to see the container's Docker labels, or **Logs** to open its
-output.
+- **Notify**, the default, tells everyone who can deploy the app, once per new
+  image.
+- **Automatic** also deploys the new image once Kiln has seen it for the
+  **Wait**, three days by default. If the tag moves again, the wait starts
+  over.
+- **Off** stops checking.
 
-## Logs
+When an update is available, **Update now** deploys it at once, and **Skip**
+passes over that image. An image pinned to a digest, such as
+`nginx@sha256:…`, never updates. To roll back, choose **Redeploy** on the older
+deployment in **History**; automatic updates won't redeploy the image you left.
 
-The app's **Logs** page follows output live. Under **Log source**, choose
-**Deployment** for the latest deployment's log, or **Containers** and a service
-for that container's output.
+## Logs, files, and terminal
 
-## Files
+- **Logs** follows output live. Choose **Deployment** or **Containers** under
+  **Log source**.
+- **Files** is the app's folder on the Relay: a Dockerfile's build context and
+  a Compose file's project folder. Containers don't mount it; use
+  [volumes](#volumes).
+- **Terminal** opens `sh` in a running container. Images without a shell, such
+  as distroless, can't open one.
 
-The app's **Files** page is the app's folder on the Relay. It's a Dockerfile
-app's build context and a pasted Compose file's project folder. The app's
-containers don't mount it; use [Volumes](#volumes) to give them files.
-
-## Terminal
-
-The app's **Terminal** page opens a shell in one of its running containers.
-For a Compose app, choose the **Service** first. The app must be deployed and
-running.
-
-The terminal runs `sh`. Minimal images, such as distroless or `scratch`
-images, have no shell, and the terminal says it couldn't start one.
-
-## Rename, icon, and owner
-
-- Choose **Rename** beside the app's name on its **Info** page to rename it,
-  or its icon to change the icon.
-- **Transfer** on the owner card hands the app to someone else.
-- **Delete app** at the bottom of the **Info** page deletes it.
+The **Container** section of the **Info** page shows each container's image,
+address, ports, uptime, and limits. **Rename**, **Transfer** on the owner card,
+and **Delete app** are on the **Info** page too.
