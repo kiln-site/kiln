@@ -209,7 +209,7 @@ function LevelMark({
           level === "partly" &&
             "border border-primary bg-[linear-gradient(90deg,var(--primary)_50%,transparent_50%)]",
           level === "weak" &&
-            "border border-primary bg-[conic-gradient(var(--primary)_0_25%,transparent_0)]",
+            "border border-primary bg-[conic-gradient(from_270deg,var(--primary)_0_25%,transparent_0)]",
           level === "no" && "border border-muted-foreground/40"
         )}
       />
