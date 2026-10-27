@@ -8,6 +8,7 @@ import {
   relayControlDialV1Feature,
   relayJoinHeldHeader,
   relayJoinHoldHeader,
+  relayJoinSavedHeader,
   relayJoinPairingV1Feature,
   type RelayJoinPairingResponseSchema,
   type RelayJoinEnvelope,
@@ -175,7 +176,11 @@ export const runRelayJoin = Effect.fnUntraced(function* (
       return yield* finish(input, saved, "expired", report)
     }
     const answered:
-      | { readonly held: boolean; readonly response: RelayJoinResponse }
+      | {
+          readonly held: boolean
+          readonly response: RelayJoinResponse
+          readonly saved: boolean
+        }
       | { readonly reason: string } = yield* announce(
       link,
       saved.joinId,
@@ -195,10 +200,16 @@ export const runRelayJoin = Effect.fnUntraced(function* (
         Effect.succeed({ reason: error.reason })
       )
     )
-    // Hearth took the Relay's reply, and a Hearth that holds announcements
-    // answers only once it saved the Relay, so the Relay can dial it now.
-    // Its dialer would find Hearth on its next pass anyway.
-    if (paired && !woken && !("reason" in answered)) {
+    // Hearth has the Relay, so it can dial Hearth now: Hearth says so, or,
+    // when it answers at once as Hearths that predate holding do, it has at
+    // least taken the reply. Its dialer would find Hearth on its next pass
+    // anyway.
+    if (
+      paired &&
+      !woken &&
+      !("reason" in answered) &&
+      (answered.saved || !answered.held)
+    ) {
       woken = true
       if (input.wakeDials) {
         yield* input.wakeDials.pipe(Effect.withSpan("RelayJoin.wakeDials"))
@@ -429,6 +440,7 @@ function announce(
       return {
         held: response.headers.get(relayJoinHeldHeader) === "1",
         ok: response.ok,
+        saved: response.headers.get(relayJoinSavedHeader) === "1",
         status: response.status,
         text,
       }
@@ -438,7 +450,7 @@ function announce(
         reason: `Hearth didn't answer: ${cause instanceof Error ? cause.message : String(cause)}`,
       }),
   }).pipe(
-    Effect.flatMap(({ held, ok, status, text }) => {
+    Effect.flatMap(({ held, ok, saved, status, text }) => {
       const answer = Schema.decodeUnknownOption(
         Schema.fromJsonString(RelayJoinResponseSchema)
       )(text)
@@ -458,7 +470,7 @@ function announce(
       const actual = Buffer.from(mac, "base64url")
       return expected.length === actual.length &&
         timingSafeEqual(expected, actual)
-        ? Effect.succeed({ held, response: answer.value })
+        ? Effect.succeed({ held, response: answer.value, saved })
         : Effect.fail(
             new RelayJoinError({
               reason: "Hearth's answer didn't prove it holds the join",

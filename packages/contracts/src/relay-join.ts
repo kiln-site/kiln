@@ -111,6 +111,9 @@ export const relayJoinPairingV1Feature = "join-pairing-v1"
 // its usual pause. Hearths that predate it answer at once, as before.
 export const relayJoinHoldHeader = "kiln-join-hold"
 export const relayJoinHeldHeader = "kiln-join-held"
+// On an answer once Hearth saved the Relay: the Relay dials Hearth then, and
+// Hearth knows it. A hold that ran out first answers without it.
+export const relayJoinSavedHeader = "kiln-join-saved"
 // The longest Hearth holds an announcement, well inside any proxy's deadline
 // between them. The Relay waits that much longer than usual for an answer.
 export const RELAY_JOIN_HOLD_MAX_MS = 10_000

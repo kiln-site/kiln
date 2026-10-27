@@ -22,6 +22,7 @@ import {
   relayJoinHeldHeader,
   relayJoinHoldHeader,
   relayJoinResponseTranscript,
+  relayJoinSavedHeader,
   relayPairingResponseTranscript,
 } from "@workspace/contracts"
 
@@ -153,6 +154,7 @@ function announce(
     Effect.flatMap((response) =>
       Effect.promise(async () => ({
         held: response.headers.get(relayJoinHeldHeader) === "1",
+        saved: response.headers.get(relayJoinSavedHeader) === "1",
         body: (await response.json()) as {
           clientId?: string | null
           expiresAt?: number | null
@@ -578,6 +580,7 @@ describeMysql("Relay joins", () => {
           )
           const asked = yield* answered(waiting)
           assert.isTrue(asked.held && asked.proven)
+          assert.isFalse(asked.saved)
           const request = asked.body.pairing?.request
           if (!request) throw new Error("No pairing request")
           // Asked again before it replies, as when someone confirmed it
@@ -587,6 +590,7 @@ describeMysql("Relay joins", () => {
             repeated.body.pairing?.request.nonce,
             request.nonce
           )
+          assert.isFalse(repeated.saved)
 
           // The Relay's reply is answered once Hearth saved the Relay, so
           // the Relay can dial it straight away.
@@ -612,7 +616,8 @@ describeMysql("Relay joins", () => {
               ).toString("base64url"),
             })
           )
-          assert.isTrue(replied.held)
+          // It says so, since a hold can also run out before the save.
+          assert.isTrue(replied.held && replied.saved)
           assert.strictEqual(replied.body.status, "pending")
           const saved = yield* Effect.promise(() =>
             loadPersistedRelay(envelope.relayFingerprint)

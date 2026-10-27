@@ -20,6 +20,7 @@ import {
   relayControlDialV1Feature,
   relayJoinHeldHeader,
   relayJoinHoldHeader,
+  relayJoinSavedHeader,
   relayJoinPairingV1Feature,
   type RelayJoinEnvelope,
   RelayJoinAnnouncementSchema,
@@ -581,8 +582,13 @@ export const answerRelayJoinAnnouncement = Effect.fn("relayJoin.answer")(
       Number(request.headers.get(relayJoinHoldHeader)) || 0,
       RELAY_JOIN_HOLD_MAX_MS
     )
+    const saved = (current: typeof answer) =>
+      "saved" in current && current.saved ? { [relayJoinSavedHeader]: "1" } : {}
     if (answer.key === null || holdMs <= 0) {
-      return Response.json(answer.body, { status: answer.status })
+      return Response.json(answer.body, {
+        headers: saved(answer),
+        status: answer.status,
+      })
     }
     // Held until there's something new to tell the Relay, so it hears the
     // moment someone confirms it, and hears its reply was taken only once
@@ -611,7 +617,7 @@ export const answerRelayJoinAnnouncement = Effect.fn("relayJoin.answer")(
       ? yield* acceptAnnouncement(announcement.value)
       : answer
     return Response.json(final.body, {
-      headers: { [relayJoinHeldHeader]: "1" },
+      headers: { [relayJoinHeldHeader]: "1", ...saved(final) },
       status: final.status,
     })
   }
@@ -705,6 +711,9 @@ const acceptAnnouncement = Effect.fn("relayJoin.announce")(function* (
           // Only a pending answer can be held for a newer one, and not one
           // carrying Hearth's pairing request, which the Relay acts on.
           key: status === "pending" && !pairingRequest ? joinKey(row) : null,
+          saved:
+            row.state === "paired" ||
+            (row.progress !== null && row.progress !== "pairing"),
           status: 200,
         }
       }
@@ -1688,9 +1697,14 @@ const joinReach = Effect.fn("relayJoin.reach")(function* (
   envelope: RelayJoinEnvelope
 ) {
   const check = reachChecks.get(joinId)
-  const now = yield* Clock.currentTimeMillis
+  const age = (yield* Clock.currentTimeMillis) - (check?.checkedAt ?? 0)
+  // That Hearth can't reach it holds for a while, and acting on it when it
+  // no longer does only sends browsers through Hearth needlessly. That it
+  // can holds only while fresh: acting on it when it no longer does leaves
+  // browsers no way in. A check under way is quick when it can.
   const cached =
-    check?.problem !== undefined && now - check.checkedAt <= REACH_FORGET_MS
+    check?.problem !== undefined &&
+    age <= (check.problem === null ? REACH_RECHECK_MS : REACH_FORGET_MS)
   const problem =
     cached && check.problem !== undefined
       ? check.problem

@@ -18,6 +18,7 @@ import {
   relayJoinHeldHeader,
   relayJoinHoldHeader,
   relayJoinResponseTranscript,
+  relayJoinSavedHeader,
   relayPairingRequestTranscript,
 } from "@workspace/contracts"
 
@@ -127,8 +128,17 @@ describe("Relay joining", () => {
             ]
             const hearth = yield* fakeHearth(answers)
             const events: Array<string> = []
+            // A Hearth that predates holding announcements answers at once,
+            // so the Relay dials once Hearth took its reply.
+            let dialed = false
             const joining = yield* runRelayJoin(
-              { ...relay, link: { hearthOrigin: hearth.origin, secret } },
+              {
+                ...relay,
+                link: { hearthOrigin: hearth.origin, secret },
+                wakeDials: Effect.sync(() => {
+                  dialed = true
+                }),
+              },
               (event) => events.push(event.kind)
             ).pipe(Effect.forkChild)
 
@@ -154,6 +164,7 @@ describe("Relay joining", () => {
             answers.push({ clientId: null, expiresAt: null, status: "paired" })
             yield* advanceUntil(() => events.includes("finished"))
             assert.strictEqual(yield* Fiber.join(joining), "paired")
+            assert.isTrue(dialed)
           })
         )
       )
@@ -178,11 +189,13 @@ describe("Relay joining", () => {
                   pairing: { dialUrl: "https://hearth.test/x", request },
                   status: "pending",
                 },
-                // Its reply, answered once Hearth saved the Relay.
+                // Its reply, held until the hold ran out before Hearth
+                // saved the Relay, then once it had.
+                { clientId, expiresAt, status: "pending" },
                 { clientId, expiresAt, status: "pending" },
                 { clientId: null, expiresAt: null, status: "paired" },
               ],
-              { held: true }
+              { held: true, savedFrom: 3 }
             )
             // Whether Hearth had the Relay each time its dialer was woken.
             const hearthHadIt: Array<boolean> = []
@@ -194,7 +207,7 @@ describe("Relay joining", () => {
                 ...relay,
                 link: { hearthOrigin: hearth.origin, secret },
                 wakeDials: Effect.sync(() => {
-                  hearthHadIt.push(hearth.answeredReply())
+                  hearthHadIt.push(hearth.saidSaved())
                 }),
               },
               (event) => events.push(event.kind)
@@ -209,11 +222,13 @@ describe("Relay joining", () => {
               String(RELAY_JOIN_HOLD_MAX_MS),
               String(RELAY_JOIN_HOLD_MAX_MS),
               String(RELAY_JOIN_HOLD_MAX_MS),
+              String(RELAY_JOIN_HOLD_MAX_MS),
             ])
             assert.deepStrictEqual(hearthHadIt, [true])
             // Held answers are asked for again at once, not after the usual
-            // pause between announcements.
-            assert.isBelow((yield* Clock.currentTimeMillis) - started, 5_000)
+            // five-second pause between announcements (the clock moves a
+            // second at a time here).
+            assert.isBelow((yield* Clock.currentTimeMillis) - started, 10_000)
           })
         )
       )
@@ -577,15 +592,20 @@ function withJoiningRelay<A, E>(
 function fakeHearth(
   answers: ReadonlyArray<Omit<RelayJoinResponse, "mac">>,
   // `held`: says it held each announcement, as a Hearth that holds them
-  // does once it has news.
-  options: { readonly forge?: boolean; readonly held?: boolean } = {}
+  // does once it has news. `savedFrom`: from that answer on, says it saved
+  // the Relay.
+  options: {
+    readonly forge?: boolean
+    readonly held?: boolean
+    readonly savedFrom?: number
+  } = {}
 ) {
   const announcements: Array<RelayJoinAnnouncement> = []
   // How long each announcement asked Hearth to hold it, if at all.
   const holds: Array<string | null> = []
   let asked = 0
-  // Whether Hearth answered the Relay's pairing reply.
-  let answeredReply = false
+  // Whether Hearth said it saved the Relay.
+  let saidSaved = false
   return Effect.acquireRelease(
     Effect.promise(async () => {
       const server: Server = createServer((request, response) => {
@@ -606,7 +626,10 @@ function fakeHearth(
           if (!answer) throw new Error("The fake Hearth has no answers")
           response.setHeader("content-type", "application/json")
           if (options.held) response.setHeader(relayJoinHeldHeader, "1")
-          if (announcement.pairing) answeredReply = true
+          if (options.savedFrom !== undefined && asked > options.savedFrom) {
+            response.setHeader(relayJoinSavedHeader, "1")
+            saidSaved = true
+          }
           response.end(
             JSON.stringify({
               ...answer,
@@ -634,7 +657,7 @@ function fakeHearth(
   ).pipe(
     Effect.map((server) => ({
       announcements,
-      answeredReply: () => answeredReply,
+      saidSaved: () => saidSaved,
       holds,
       // How many announcements Hearth has answered.
       asked: () => asked,
