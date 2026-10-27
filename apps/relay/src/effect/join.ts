@@ -188,7 +188,8 @@ export const runRelayJoin = Effect.fnUntraced(function* (
       paired,
       // Once the Relay has its invitation, Hearth may hold the next
       // announcement until it has news.
-      waiting ? RELAY_JOIN_HOLD_MAX_MS : 0
+      waiting ? RELAY_JOIN_HOLD_MAX_MS : 0,
+      woken
     ).pipe(
       Effect.withSpan("RelayJoin.announce", {
         attributes: {
@@ -202,13 +203,13 @@ export const runRelayJoin = Effect.fnUntraced(function* (
     )
     // Hearth has the Relay, so it can dial Hearth now: Hearth says so, or,
     // when it answers at once as Hearths that predate holding do, it has at
-    // least taken the reply. Its dialer would find Hearth on its next pass
-    // anyway.
+    // least taken the reply rather than asked for it again. Its dialer would
+    // find Hearth on its next pass anyway.
     if (
       paired &&
       !woken &&
       !("reason" in answered) &&
-      (answered.saved || !answered.held)
+      (answered.saved || (!answered.held && !answered.response.pairing))
     ) {
       woken = true
       if (input.wakeDials) {
@@ -401,7 +402,9 @@ function announce(
   envelope: RelayJoinEnvelope,
   paired: typeof RelayJoinPairingResponseSchema.Type | null,
   // How long Hearth may hold it for news; 0 for an answer at once.
-  holdMs: number
+  holdMs: number,
+  // Whether the Relay heard that Hearth saved it.
+  heardSaved: boolean
 ) {
   const nonce = randomBytes(32).toString("base64url")
   const unsigned = { envelope, joinId, nonce, version: 1 as const }
@@ -422,6 +425,7 @@ function announce(
           headers: {
             "content-type": "application/json",
             ...(holdMs > 0 ? { [relayJoinHoldHeader]: String(holdMs) } : {}),
+            ...(heardSaved ? { [relayJoinSavedHeader]: "1" } : {}),
           },
           method: "POST",
           // Never somewhere else, and never down to plain HTTP.

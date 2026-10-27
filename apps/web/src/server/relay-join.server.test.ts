@@ -130,10 +130,12 @@ function announce(
     readonly features?: ReadonlyArray<string>
     // How long Hearth may hold it for news.
     readonly hold?: number
+    // Whether the Relay heard Hearth saved it.
+    readonly heardSaved?: boolean
     readonly pairing?: RelayPairingResponseContract
   } = {}
 ) {
-  const { hold, ...fields } = extra
+  const { heardSaved, hold, ...fields } = extra
   const nonce = randomBytes(32).toString("base64url")
   const unsigned = { envelope, joinId, nonce, version: 1 as const }
   const request = new Request("https://hearth.test/api/relays/join", {
@@ -147,6 +149,7 @@ function announce(
     headers: {
       "content-type": "application/json",
       ...(hold === undefined ? {} : { [relayJoinHoldHeader]: String(hold) }),
+      ...(heardSaved ? { [relayJoinSavedHeader]: "1" } : {}),
     },
     method: "POST",
   })
@@ -527,10 +530,12 @@ describeMysql("Relay joins", () => {
           })
           const relayAnnounces = (
             hold: number,
-            pairing?: RelayPairingResponseContract
+            pairing?: RelayPairingResponseContract,
+            heardSaved = false
           ) =>
             announce(join.id, join.secret ?? "", envelope, "203.0.113.10", {
               features: ["join-pairing-v1", "control-dial-v1"],
+              heardSaved,
               hold,
               ...(pairing ? { pairing } : {}),
             }).pipe(Effect.forkChild)
@@ -623,6 +628,18 @@ describeMysql("Relay joins", () => {
             loadPersistedRelay(envelope.relayFingerprint)
           )
           assert.strictEqual(saved?.controlDial, "relay")
+
+          // Asked again by a Relay that hasn't heard, as when Hearth saved it
+          // between two announcements, it hears at once; one that has heard
+          // is held until there's more news.
+          const unheard = yield* answered(
+            yield* relayAnnounces(10_000, undefined)
+          )
+          assert.isTrue(unheard.saved)
+          const heard = yield* relayAnnounces(10_000, undefined, true)
+          yield* TestClock.withLive(Effect.sleep("300 millis"))
+          assert.isUndefined(heard.pollUnsafe())
+          yield* Fiber.interrupt(heard)
         }),
       30_000
     )

@@ -584,7 +584,14 @@ export const answerRelayJoinAnnouncement = Effect.fn("relayJoin.answer")(
     )
     const saved = (current: typeof answer) =>
       "saved" in current && current.saved ? { [relayJoinSavedHeader]: "1" } : {}
-    if (answer.key === null || holdMs <= 0) {
+    // Not news the Relay hasn't heard: that Hearth saved it, as when that
+    // happened between two announcements.
+    const heardSaved = request.headers.get(relayJoinSavedHeader) === "1"
+    if (
+      answer.key === null ||
+      holdMs <= 0 ||
+      ("saved" in answer && answer.saved && !heardSaved)
+    ) {
       return Response.json(answer.body, {
         headers: saved(answer),
         status: answer.status,

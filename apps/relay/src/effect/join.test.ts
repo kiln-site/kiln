@@ -125,6 +125,8 @@ describe("Relay joining", () => {
                 pairing: { dialUrl, request },
                 status: "pending",
               },
+              // It took the reply.
+              { clientId, expiresAt: Date.now() + 60_000, status: "pending" },
             ]
             const hearth = yield* fakeHearth(answers)
             const events: Array<string> = []
