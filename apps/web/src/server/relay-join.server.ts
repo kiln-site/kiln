@@ -1061,6 +1061,12 @@ const pairJoinedRelay = Effect.fnUntraced(function* (
   const response = throughAnnouncements
     ? pairingResponseSchema.parse(reply)
     : yield* postJoinPairingRequest(envelope, request)
+  // One kept past its expiry, as across a restart, is asked for again: the
+  // next answer carries the request once more, and the Relay signs anew.
+  if (throughAnnouncements && response.expiresAt <= Date.now()) {
+    yield* claimWrite(row.id, generation, "pairing_response = NULL", [])
+    return
+  }
   verifyPairingResponse(envelope, nonce, response)
   if (response.clientId !== publicKeyFingerprint(row.client_public_key)) {
     return yield* Effect.fail(

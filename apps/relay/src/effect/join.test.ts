@@ -157,6 +157,54 @@ describe("Relay joining", () => {
   )
 
   it.effect(
+    "signs its pairing reply again when it nears expiry before Hearth keeps it",
+    () =>
+      withJoiningRelay((relay) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const hearthKeys = ed25519Keys()
+            const clientId = fingerprint(hearthKeys.publicKey)
+            // Hearth keeps asking: the reply never arrived in time.
+            const hearth = yield* fakeHearth([
+              {
+                clientId,
+                expiresAt: Date.now() + 10 * 60_000,
+                pairing: {
+                  dialUrl: "https://hearth.test/api/relays/control",
+                  request: joinPairingRequest(hearthKeys),
+                },
+                status: "pending",
+              },
+            ])
+            yield* runRelayJoin(
+              { ...relay, link: { hearthOrigin: hearth.origin, secret } },
+              () => {}
+            ).pipe(Effect.forkChild)
+            const replies = () =>
+              hearth.announcements.flatMap((announcement) =>
+                announcement.pairing ? [announcement.pairing] : []
+              )
+            yield* advanceUntil(() => replies().length > 0)
+            const first = replies()[0]!
+
+            const realNow = Date.now
+            const later = realNow() + 50_000
+            Date.now = () => later
+            yield* Effect.addFinalizer(() =>
+              Effect.sync(() => {
+                Date.now = realNow
+              })
+            )
+            yield* advanceUntil(
+              () => (replies().at(-1)?.expiresAt ?? 0) > first.expiresAt
+            )
+            assert.isAbove(replies().at(-1)!.expiresAt, later)
+          })
+        )
+      )
+  )
+
+  it.effect(
     "keeps waiting after pairing until Hearth says it saved the Relay",
     () =>
       withJoiningRelay((relay) =>

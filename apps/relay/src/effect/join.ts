@@ -44,6 +44,9 @@ import type { RelayTlsMaterial } from "./tls.js"
 const JOIN_METADATA_PREFIX = "relay_join:"
 const ANNOUNCE_INTERVAL_MS = 5_000
 const MAX_RETRY_DELAY_MS = 60_000
+// A pairing reply this close to expiring is signed again before it's sent,
+// so one that didn't arrive in time doesn't keep being refused.
+const PAIRED_RENEW_MS = 20_000
 const REQUEST_TIMEOUT_MS = 15_000
 // Room for the pairing request a join's answer can carry.
 const MAX_RESPONSE_BYTES = 16_384
@@ -187,7 +190,10 @@ export const runRelayJoin = Effect.fnUntraced(function* (
       delay = ANNOUNCE_INTERVAL_MS
       // Someone confirmed it, and Hearth pairs through the announcements.
       const pairing: RelayJoinResponse["pairing"] = answered.response.pairing
-      if (pairing && !paired) {
+      if (
+        pairing &&
+        (!paired || paired.expiresAt - Date.now() < PAIRED_RENEW_MS)
+      ) {
         paired = yield* pairThroughAnnouncements(input, pairing)
         // Answer at once rather than at the next announcement.
         continue

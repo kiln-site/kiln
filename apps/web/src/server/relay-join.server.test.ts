@@ -8,6 +8,8 @@ import {
 import { sign } from "node:crypto"
 import { createServer, type Socket } from "node:net"
 
+import type { RowDataPacket } from "mysql2"
+
 import { assert, layer } from "@effect/vitest"
 import { Effect, Schedule } from "effect"
 import { TestClock } from "effect/testing"
@@ -28,6 +30,8 @@ import {
   refreshRelayJoinEffect,
   relayJoinViewEffect,
 } from "@/server/relay-join.server"
+import { Database } from "@/effect/database"
+import { databaseTable } from "@/lib/database-config"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import {
   deletePersistedRelayEffect,
@@ -426,28 +430,56 @@ describeMysql("Relay joins", () => {
             const request = answered.body.pairing?.request
             if (!request) throw new Error("No pairing request")
 
+            const reply = (expiresAt: number) => {
+              const unsigned = {
+                actions: ["*"],
+                clientId: publicKeyFingerprint(request.publicKeyPem),
+                expiresAt,
+                nonce: request.nonce,
+                relayFingerprint: envelope.relayFingerprint,
+                relayName: "Relay",
+                relayPublicKeyPem: keys.publicKey,
+                role: "full_access" as const,
+                signature: "",
+                version: 1 as const,
+              }
+              return {
+                ...unsigned,
+                signature: sign(
+                  null,
+                  Buffer.from(relayPairingResponseTranscript(unsigned)),
+                  keys.privateKey
+                ).toString("base64url"),
+              }
+            }
+
+            // A reply Hearth kept past its expiry, as across a restart, is
+            // let go, so the Relay is asked again.
+            const database = yield* Database
+            yield* database.execute(
+              "test_expired_pairing_reply",
+              `UPDATE ${databaseTable("relay_join")}
+                  SET pairing_response = ? WHERE id = ?`,
+              [JSON.stringify(reply(Date.now() - 1)), join.id]
+            )
+            yield* database
+              .queryRows<RowDataPacket & { pairing_response: unknown }>(
+                "test_expired_pairing_reply",
+                `SELECT pairing_response FROM ${databaseTable("relay_join")}
+                  WHERE id = ?`,
+                [join.id]
+              )
+              .pipe(
+                Effect.repeat({
+                  schedule: Schedule.spaced("200 millis"),
+                  until: ([row]) => row?.pairing_response === null,
+                }),
+                Effect.timeout("10 seconds")
+              )
+
             // The Relay replies, signed with its key; Hearth saves it,
             // preferring that it dials Hearth.
-            const unsigned = {
-              actions: ["*"],
-              clientId: publicKeyFingerprint(request.publicKeyPem),
-              expiresAt: Date.now() + 60_000,
-              nonce: request.nonce,
-              relayFingerprint: envelope.relayFingerprint,
-              relayName: "Relay",
-              relayPublicKeyPem: keys.publicKey,
-              role: "full_access" as const,
-              signature: "",
-              version: 1 as const,
-            }
-            yield* relayAnnounces({
-              ...unsigned,
-              signature: sign(
-                null,
-                Buffer.from(relayPairingResponseTranscript(unsigned)),
-                keys.privateKey
-              ).toString("base64url"),
-            })
+            yield* relayAnnounces(reply(Date.now() + 60_000))
             const saved = yield* Effect.promise(() =>
               loadPersistedRelay(envelope.relayFingerprint)
             ).pipe(
