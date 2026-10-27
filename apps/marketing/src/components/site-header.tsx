@@ -30,11 +30,7 @@ export function SiteHeader() {
         <nav aria-label="Main" className="hidden items-center gap-1 md:flex">
           <HeaderLink to="/pricing">Pricing</HeaderLink>
           <HeaderLink to="/compare">Compare</HeaderLink>
-          <ComingSoon soon={comingSoon.docs} label="Docs">
-            <HeaderAnchor href={docsUrl} {...newTab}>
-              Docs
-            </HeaderAnchor>
-          </ComingSoon>
+          <HeaderAnchor href={docsUrl}>Docs</HeaderAnchor>
           <HeaderAnchor href={socialLinks.github.href} {...newTab}>
             GitHub
           </HeaderAnchor>

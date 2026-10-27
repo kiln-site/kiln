@@ -32,7 +32,7 @@ const socials = [
 // The site's menu on a phone. It opens over the page from the bottom, so the
 // page never moves.
 export function MobileMenu() {
-  const { hearthUrl } = useSiteConfig()
+  const { docsUrl, hearthUrl } = useSiteConfig()
   const [open, setOpen] = React.useState(false)
   const close = React.useCallback(() => setOpen(false), [])
 
@@ -51,13 +51,16 @@ export function MobileMenu() {
       <DrawerContent className="px-6 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
         <DrawerTitle className="sr-only">Menu</DrawerTitle>
 
-        <nav aria-label="Main" className="grid grid-cols-2 gap-3 pt-5">
+        <nav aria-label="Main" className="grid grid-cols-3 gap-3 pt-5">
           <PageLink to="/pricing" onNavigate={close}>
             Pricing
           </PageLink>
           <PageLink to="/compare" onNavigate={close}>
             Compare
           </PageLink>
+          <a href={docsUrl} className={pageLinkClassName}>
+            Docs
+          </a>
         </nav>
 
         <div className="mt-8 grid grid-cols-2 gap-3">

@@ -27,8 +27,12 @@
 
 /* Sections reached by a link clear the sticky header. */
 @layer base {
-  html {
-    scroll-padding-top: 5rem;
+  /*
+   * Set on the targets rather than as scroll-padding on <html>: with that,
+   * Chrome jumps the page when a drawer or dialog locks its scrolling.
+   */
+  main [id] {
+    scroll-margin-top: 5rem;
   }
 }
 

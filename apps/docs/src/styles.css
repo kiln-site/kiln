@@ -1,0 +1,324 @@
+@import "@workspace/ui/globals.css";
+/*
+ * Builds without a git checkout, like the Docker image, don't read
+ * .gitignore, so the server build would scan the client build's output and
+ * name its stylesheet differently from the one the client ships.
+ */
+@source not "../dist";
+
+@layer base {
+  /*
+   * Headings reached by a link clear the sticky header. Set on the targets
+   * rather than as scroll-padding on <html>: with that, Chrome jumps the page
+   * when a drawer or dialog locks its scrolling.
+   */
+  main [id] {
+    scroll-margin-top: 5rem;
+  }
+}
+
+/*
+ * Code blocks take their colours from these, through Shiki's CSS-variables
+ * theme, so code reads in Kiln's palette.
+ */
+:root {
+  --code-foreground: hsl(var(--accent-hue) 10% 86%);
+  --code-background: transparent;
+  --code-token-constant: hsl(195 60% 72%);
+  --code-token-string: hsl(95 38% 66%);
+  --code-token-string-expression: hsl(95 38% 66%);
+  --code-token-comment: hsl(var(--accent-hue) 8% 50%);
+  --code-token-keyword: hsl(var(--accent-hue) var(--accent-saturation) 66%);
+  --code-token-parameter: hsl(var(--accent-hue) 30% 80%);
+  --code-token-function: hsl(40 75% 70%);
+  --code-token-punctuation: hsl(var(--accent-hue) 8% 62%);
+  --code-token-link: var(--primary-ink);
+  --code-ansi-green: hsl(95 38% 66%);
+  --code-ansi-red: hsl(0 70% 70%);
+  --code-ansi-yellow: hsl(40 75% 70%);
+  --code-ansi-blue: hsl(210 60% 72%);
+}
+
+@layer components {
+  .docs-prose {
+    color: color-mix(in oklab, var(--foreground) 88%, transparent);
+    font-size: 1rem;
+    line-height: 1.75;
+  }
+
+  .docs-prose > :first-child {
+    margin-top: 0;
+  }
+
+  .docs-prose :where(p, ul, ol, .table-wrap, figure, aside, blockquote) {
+    margin-top: 1.25rem;
+  }
+
+  .docs-prose :where(h2, h3, h4) {
+    color: var(--foreground);
+    font-family: var(--font-heading);
+    font-weight: 600;
+    text-wrap: balance;
+  }
+
+  .docs-prose h2 {
+    margin-top: 3rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+    font-size: 1.5rem;
+    letter-spacing: -0.035em;
+    line-height: 1.25;
+  }
+
+  .docs-prose h3 {
+    margin-top: 2.25rem;
+    font-size: 1.1875rem;
+    letter-spacing: -0.025em;
+    line-height: 1.35;
+  }
+
+  .docs-prose h4 {
+    margin-top: 1.75rem;
+    font-size: 1rem;
+  }
+
+  .docs-prose :where(h2, h3, h4) + * {
+    margin-top: 0.75rem;
+  }
+
+  .docs-prose .heading-anchor {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .docs-prose .heading-anchor::after {
+    content: "#";
+    margin-left: 0.5rem;
+    color: var(--muted-foreground);
+    opacity: 0;
+    transition: opacity 120ms;
+  }
+
+  .docs-prose :where(h2, h3, h4):hover .heading-anchor::after,
+  .docs-prose .heading-anchor:focus-visible::after {
+    opacity: 1;
+  }
+
+  .docs-prose a:not(.heading-anchor) {
+    color: var(--primary-ink);
+    text-decoration: underline;
+    text-decoration-color: color-mix(
+      in oklab,
+      var(--primary-ink) 40%,
+      transparent
+    );
+    text-underline-offset: 0.2em;
+    transition: text-decoration-color 120ms;
+  }
+
+  .docs-prose a:not(.heading-anchor):hover {
+    text-decoration-color: currentColor;
+  }
+
+  .docs-prose a.external::after {
+    content: "↗";
+    margin-left: 0.15em;
+    font-size: 0.8em;
+  }
+
+  .docs-prose strong {
+    color: var(--foreground);
+    font-weight: 600;
+  }
+
+  .docs-prose :where(ul, ol) {
+    padding-left: 1.4rem;
+  }
+
+  .docs-prose ul {
+    list-style: disc;
+  }
+
+  .docs-prose ol {
+    list-style: decimal;
+  }
+
+  .docs-prose li {
+    margin-top: 0.4rem;
+    padding-left: 0.25rem;
+  }
+
+  .docs-prose li::marker {
+    color: var(--muted-foreground);
+  }
+
+  .docs-prose li > :where(ul, ol, p) {
+    margin-top: 0.4rem;
+  }
+
+  .docs-prose input[type="checkbox"] {
+    margin-right: 0.5rem;
+    accent-color: var(--primary);
+  }
+
+  .docs-prose hr {
+    margin: 2.5rem 0;
+    border-color: var(--border);
+  }
+
+  .docs-prose :not(pre) > code {
+    padding: 0.125rem 0.375rem;
+    border: 1px solid color-mix(in oklab, var(--border) 80%, transparent);
+    background: var(--card);
+    color: var(--foreground);
+    font-family: var(--font-mono);
+    font-size: 0.85em;
+    overflow-wrap: break-word;
+  }
+
+  .docs-prose kbd {
+    display: inline-flex;
+    min-width: 1.5rem;
+    justify-content: center;
+    padding: 0 0.375rem;
+    border: 1px solid var(--border);
+    border-bottom-width: 2px;
+    background: var(--card);
+    color: var(--foreground);
+    font-family: var(--font-mono);
+    font-size: 0.8em;
+    line-height: 1.6;
+  }
+
+  .docs-prose blockquote {
+    padding-left: 1rem;
+    border-left: 2px solid var(--border);
+    color: var(--muted-foreground);
+  }
+
+  /* Code blocks: a label and a copy button over the code. */
+  .docs-prose .code-block {
+    border: 1px solid var(--border);
+    background: var(--card);
+  }
+
+  .docs-prose .code-block figcaption {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.375rem 0.5rem 0.375rem 1rem;
+    border-bottom: 1px solid var(--border);
+    color: var(--muted-foreground);
+    font-size: 0.75rem;
+  }
+
+  .docs-prose .code-copy {
+    padding: 0.125rem 0.5rem;
+    border: 1px solid transparent;
+    color: var(--muted-foreground);
+    font-size: 0.75rem;
+    transition:
+      color 120ms,
+      border-color 120ms;
+  }
+
+  .docs-prose .code-copy:hover,
+  .docs-prose .code-copy:focus-visible {
+    border-color: var(--border);
+    color: var(--foreground);
+    outline: none;
+  }
+
+  .docs-prose .code-copy[data-copied] {
+    color: oklch(0.78 0.15 155);
+  }
+
+  .docs-prose pre {
+    margin: 0;
+    padding: 1rem;
+    overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+    line-height: 1.7;
+    tab-size: 2;
+  }
+
+  /* Tables scroll on their own on narrow screens. */
+  .docs-prose .table-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--border);
+  }
+
+  .docs-prose table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+    line-height: 1.55;
+  }
+
+  .docs-prose th {
+    background: var(--card);
+    color: var(--foreground);
+    font-weight: 600;
+    text-align: left;
+    white-space: nowrap;
+  }
+
+  .docs-prose :where(th, td) {
+    padding: 0.625rem 0.875rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+
+  .docs-prose tr:last-child td {
+    border-bottom: 0;
+  }
+
+  .docs-prose td > code {
+    white-space: nowrap;
+  }
+
+  /* Callouts: > [!NOTE], [!TIP], [!WARNING], [!CAUTION]. */
+  .docs-prose .callout {
+    --callout: var(--primary);
+    padding: 0.875rem 1rem;
+    border: 1px solid color-mix(in oklab, var(--callout) 30%, var(--border));
+    border-left: 3px solid var(--callout);
+    background: color-mix(in oklab, var(--callout) 7%, var(--background));
+  }
+
+  .docs-prose .callout[data-callout="note"],
+  .docs-prose .callout[data-callout="important"] {
+    --callout: oklch(0.7 0.11 245);
+  }
+
+  .docs-prose .callout[data-callout="tip"] {
+    --callout: oklch(0.72 0.14 155);
+  }
+
+  .docs-prose .callout[data-callout="warning"] {
+    --callout: oklch(0.78 0.14 80);
+  }
+
+  .docs-prose .callout[data-callout="caution"] {
+    --callout: oklch(0.66 0.2 27);
+  }
+
+  .docs-prose .callout-label {
+    margin: 0;
+    color: var(--callout);
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .docs-prose .callout > .callout-label + * {
+    margin-top: 0.25rem;
+  }
+
+  .docs-prose .callout > :last-child {
+    margin-bottom: 0;
+  }
+}
