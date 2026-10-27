@@ -129,3 +129,23 @@ it("answers for a Relay whose status no response can carry", async () => {
   )
   expect(invalid.status).toBe(502)
 })
+
+it("keeps what a download will weigh, which browsers ask before one", async () => {
+  const sizes = {
+    "x-kiln-compressed-size-estimate": "10",
+    "x-kiln-download-max-size": "30",
+    "x-kiln-gzip-size-estimate": "10",
+    "x-kiln-zip-size-estimate": "20",
+  }
+  await relayListener((_request, response) => {
+    response.writeHead(200, sizes).end()
+  })
+  const response = await passRelayBrowserRequest(
+    relayId,
+    "files/root",
+    new Request("https://kiln.example/api", { method: "HEAD" })
+  )
+  for (const [name, value] of Object.entries(sizes)) {
+    expect(response.headers.get(name)).toBe(value)
+  }
+})

@@ -141,9 +141,9 @@ const openRelayTunnelEffect = Effect.fn("RelayTunnel.open")(function* (
   )
 })
 
-/** How many tunnels Hearth asked for that haven't arrived. */
-export function relayTunnelsAwaited(): number {
-  return waiting.size
+/** Whether Hearth asked for a tunnel with this token that hasn't arrived. */
+export function relayTunnelAwaited(token: string): boolean {
+  return waiting.has(token)
 }
 
 /**

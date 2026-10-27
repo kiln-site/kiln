@@ -1,9 +1,14 @@
 import { once } from "node:events"
 import { createServer as createHttpServer } from "node:http"
+import type { IncomingMessage } from "node:http"
 import { createServer } from "node:net"
 import type { AddressInfo } from "node:net"
 
-import { relayTunnelPath, relayTunnelProtocol } from "@workspace/contracts"
+import {
+  relayTunnelPath,
+  relayTunnelProtocol,
+  relayTunnelTokenHeader,
+} from "@workspace/contracts"
 import { createWebSocketStream, WebSocketServer } from "ws"
 import type { WebSocket } from "ws"
 import { expect, it, onTestFinished } from "vite-plus/test"
@@ -23,7 +28,9 @@ it("opens a tunnel named by its token that carries a connection to the Relay's l
     path: relayTunnelPath,
     server: hearth,
   })
-  const arrived = once(tunnels, "connection") as Promise<[WebSocket]>
+  const arrived = once(tunnels, "connection") as Promise<
+    [WebSocket, IncomingMessage]
+  >
   hearth.listen(0, "127.0.0.1")
   await once(hearth, "listening")
   onTestFinished(async () => {
@@ -44,13 +51,8 @@ it("opens a tunnel named by its token that carries a connection to the Relay's l
     },
     token,
   })
-  const [socket] = await arrived
-  const [hello] = (await once(socket, "message")) as [Buffer]
-  expect(JSON.parse(hello.toString())).toEqual({
-    token,
-    type: "tunnel.hello",
-    v: 1,
-  })
+  const [socket, upgrade] = await arrived
+  expect(upgrade.headers[relayTunnelTokenHeader]).toBe(token)
 
   const stream = createWebSocketStream(socket)
   stream.write("to the listener and back")

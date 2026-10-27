@@ -43,6 +43,11 @@ const RESPONSE_HEADERS = [
   "content-type",
   "etag",
   "last-modified",
+  // What a download will weigh, which the browser asks before starting one.
+  "x-kiln-compressed-size-estimate",
+  "x-kiln-download-max-size",
+  "x-kiln-gzip-size-estimate",
+  "x-kiln-zip-size-estimate",
 ]
 const NULL_BODY_STATUSES = new Set([204, 205, 304])
 const SANDBOX_HEADERS = {

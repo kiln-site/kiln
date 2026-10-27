@@ -105,10 +105,12 @@ export const relayControlDialPath = "/api/relays/control"
 // (`relay.tunnel.open`), so Hearth can reach a Relay that dials it.
 export const relayTunnelV1Feature = "tunnel-v1"
 // Where on Hearth a Relay opens those tunnels, and their subprotocol. The
-// Relay's first frame names the tunnel (`RelayTunnelHelloSchema`); every
-// frame after it is bytes to or from the Relay's listener.
+// upgrade names the tunnel with the token Hearth asked for it with
+// (`relayTunnelTokenHeader`), so Hearth turns away any other before taking
+// it; every frame is bytes to or from the Relay's listener.
 export const relayTunnelPath = "/api/relays/tunnel"
 export const relayTunnelProtocol = "kiln-relay-tunnel.v1" as const
+export const relayTunnelTokenHeader = "x-kiln-tunnel-token"
 // How Hearth closes a connection a Relay opened: it already has one to that
 // Relay it keeps, or it doesn't know the Relay.
 export const relayDialCloseCodes = {
@@ -666,13 +668,6 @@ export const RelayDialHelloSchema = Schema.Struct({
 })
 
 export type RelayDialHello = typeof RelayDialHelloSchema.Type
-
-// A tunnel's first frame: the token Hearth asked for it with.
-export const RelayTunnelHelloSchema = Schema.Struct({
-  token: Schema.String.check(Schema.isPattern(/^[A-Za-z\d_-]{43}$/u)),
-  type: Schema.Literal("tunnel.hello"),
-  v: Schema.Literal(1),
-})
 
 // What `relay.tunnel.open` asks and answers: the tunnel's token, and
 // whether the listener it reaches speaks TLS.

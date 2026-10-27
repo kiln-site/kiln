@@ -4,7 +4,6 @@ import type { Duplex } from "node:stream"
 
 import {
   RelayAuthChallengeSchema,
-  RelayTunnelHelloSchema,
   relayAuthenticationWindowMs,
   relayControlDialPath,
   relayControlMaxFrameBytes,
@@ -12,6 +11,7 @@ import {
   relayDialCloseCodes,
   relayTunnelPath,
   relayTunnelProtocol,
+  relayTunnelTokenHeader,
 } from "@workspace/contracts"
 import { Option, Result, Schema } from "effect"
 import { WebSocketServer } from "ws"
@@ -23,7 +23,7 @@ import { adoptRelayControlSocket } from "@/lib/relay-connection"
 import { loadPersistedRelay } from "@/lib/relay-registry"
 import {
   acceptRelayTunnel,
-  relayTunnelsAwaited,
+  relayTunnelAwaited,
 } from "@/lib/relay-tunnel.server"
 import { assertRequestRateLimit } from "@/lib/request-rate-limit"
 
@@ -36,7 +36,7 @@ import { assertRequestRateLimit } from "@/lib/request-rate-limit"
 // challenge checks out, and sockets still waiting for one are capped.
 //
 // Relays open tunnels here too (`relayTunnelPath`, relay-tunnel.server.ts):
-// each names, in its first frame, the token Hearth asked for it with.
+// each upgrade names the token Hearth asked for it with.
 
 const MAX_WAITING = 256
 // Per minute, by the address the connection came from.
@@ -45,12 +45,8 @@ const CONNECTIONS_PER_ADDRESS = 120
 const decodeChallenge = Schema.decodeUnknownOption(
   Schema.fromJsonString(RelayAuthChallengeSchema)
 )
-const decodeTunnelHello = Schema.decodeUnknownOption(
-  Schema.fromJsonString(RelayTunnelHelloSchema)
-)
 
 let waiting = 0
-let waitingTunnels = 0
 
 const server = new WebSocketServer({
   clientTracking: false,
@@ -85,13 +81,16 @@ export function handleRelayControlUpgrade(
     return false
   }
   // Tunnels come as often as transfers through Hearth do, so they don't
-  // count against control connections: as many may wait to be named as
-  // Hearth waits for.
+  // count against control connections; only one named for a tunnel Hearth
+  // waits for is taken at all.
   if (pathname === relayTunnelPath) {
-    if (waitingTunnels >= relayTunnelsAwaited()) {
-      socket.end("HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\n\r\n")
+    const token = request.headers[relayTunnelTokenHeader]
+    if (typeof token === "string" && relayTunnelAwaited(token)) {
+      tunnels.handleUpgrade(request, socket, head, (tunnel) =>
+        receiveTunnel(tunnel, token)
+      )
     } else {
-      tunnels.handleUpgrade(request, socket, head, receiveTunnel)
+      socket.end("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n")
     }
     return true
   }
@@ -130,33 +129,14 @@ function refuseUpgrade(socket: Duplex, status: string): void {
   )
 }
 
-// Waits for a tunnel's token and hands it to whoever asked for it.
-function receiveTunnel(socket: WebSocket): void {
+// Hands a tunnel to whoever asked for it with its token.
+function receiveTunnel(socket: WebSocket, token: string): void {
+  socket.on("error", () => undefined)
   if (socket.protocol !== relayTunnelProtocol) {
     socket.close(4400, "Expected the Relay tunnel protocol")
-    return
+  } else if (!acceptRelayTunnel(socket, token)) {
+    socket.close(4401, "Hearth didn't ask for this tunnel")
   }
-  waitingTunnels += 1
-  let counted = true
-  const settle = () => {
-    if (!counted) return
-    counted = false
-    waitingTunnels -= 1
-    clearTimeout(timer)
-  }
-  const timer = setTimeout(() => {
-    socket.close(4401, "The tunnel wasn't named in time")
-  }, relayAuthenticationWindowMs)
-  timer.unref()
-  socket.once("close", settle)
-  socket.on("error", () => undefined)
-  socket.once("message", (data, binary) => {
-    settle()
-    const hello = binary ? Option.none() : decodeTunnelHello(data.toString())
-    if (Option.isNone(hello) || !acceptRelayTunnel(socket, hello.value.token)) {
-      socket.close(4401, "Hearth didn't ask for this tunnel")
-    }
-  })
 }
 
 // Says hello and waits for the Relay's challenge, which names the Relay.

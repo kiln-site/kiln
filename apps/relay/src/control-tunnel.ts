@@ -1,7 +1,11 @@
 import { connect } from "node:net"
 import { pipeline } from "node:stream"
 
-import { relayTunnelPath, relayTunnelProtocol } from "@workspace/contracts"
+import {
+  relayTunnelPath,
+  relayTunnelProtocol,
+  relayTunnelTokenHeader,
+} from "@workspace/contracts"
 import { createWebSocketStream, WebSocket } from "ws"
 
 // Tunnels: Hearth reaches a Relay that dials it through tunnels the Relay
@@ -44,6 +48,7 @@ export function openControlTunnel(input: {
       relayTunnelProtocol,
       {
         handshakeTimeout: OPEN_TIMEOUT_MS,
+        headers: { [relayTunnelTokenHeader]: input.token },
         maxPayload: MAX_FRAME_BYTES,
         perMessageDeflate: false,
       }
@@ -56,15 +61,16 @@ export function openControlTunnel(input: {
     socket.once("error", fail)
     socket.once("close", release)
     socket.once("open", () => {
+      // Held until the listener connects, so nothing Hearth sends is lost.
+      const remote = createWebSocketStream(socket)
+      remote.pause()
+      // Its socket's errors end the tunnel through `fail`.
+      remote.on("error", () => undefined)
       const local = connect(input.listener.port, loopback(input.listener.host))
       local.once("error", fail)
       local.once("connect", () => {
         socket.off("error", fail)
         local.off("error", fail)
-        socket.send(
-          JSON.stringify({ token: input.token, type: "tunnel.hello", v: 1 })
-        )
-        const remote = createWebSocketStream(socket)
         // Either end closing closes the other; errors only end the tunnel.
         pipeline(remote, local, remote, () => {
           local.destroy()
