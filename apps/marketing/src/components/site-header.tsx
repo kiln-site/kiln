@@ -1,6 +1,5 @@
 import * as React from "react"
 import { Link } from "@tanstack/react-router"
-import { Menu, X } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 
@@ -8,6 +7,7 @@ import { socialLinks } from "@/lib/social-links"
 
 import { ComingSoon } from "~/components/coming-soon"
 import { KilnMark } from "~/components/kiln-mark"
+import { MobileMenu } from "~/components/mobile-menu"
 import { comingSoon } from "~/lib/coming-soon"
 import { signInUrl, signUpUrl } from "~/lib/plans"
 import { newTab } from "~/lib/new-tab"
@@ -15,8 +15,6 @@ import { useSiteConfig } from "~/lib/use-site-config"
 
 export function SiteHeader() {
   const { docsUrl, hearthUrl } = useSiteConfig()
-  const [menuOpen, setMenuOpen] = React.useState(false)
-  const menuId = React.useId()
 
   return (
     <header className="sticky top-0 z-40 border-b border-border/70 bg-background/85 backdrop-blur-md">
@@ -24,7 +22,6 @@ export function SiteHeader() {
         <Link
           to="/"
           className="-ml-1 flex items-center gap-2.5 px-1 py-1 outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-          onClick={() => setMenuOpen(false)}
         >
           <KilnMark />
           <span className="text-lg font-semibold tracking-[-0.04em]">Kiln</span>
@@ -56,45 +53,9 @@ export function SiteHeader() {
               <a href={signUpUrl(hearthUrl)}>Sign up</a>
             </Button>
           </ComingSoon>
-          <Button
-            variant="ghost"
-            size="icon-lg"
-            className="md:hidden"
-            aria-expanded={menuOpen}
-            aria-controls={menuId}
-            aria-label={menuOpen ? "Close menu" : "Open menu"}
-            onClick={() => setMenuOpen((open) => !open)}
-          >
-            {menuOpen ? <X /> : <Menu />}
-          </Button>
+          <MobileMenu />
         </div>
       </div>
-
-      {menuOpen ? (
-        <nav
-          id={menuId}
-          aria-label="Main"
-          className="border-t border-border/70 md:hidden"
-        >
-          <div className="site-container flex flex-col py-2">
-            <MobileLink to="/pricing" onNavigate={() => setMenuOpen(false)}>
-              Pricing
-            </MobileLink>
-            <MobileLink to="/compare" onNavigate={() => setMenuOpen(false)}>
-              Compare
-            </MobileLink>
-            <ComingSoon soon={comingSoon.docs} label="Docs" className="flex">
-              <MobileAnchor href={docsUrl} {...newTab}>
-                Docs
-              </MobileAnchor>
-            </ComingSoon>
-            <MobileAnchor href={socialLinks.github.href} {...newTab}>
-              GitHub
-            </MobileAnchor>
-            <MobileAnchor href={signInUrl(hearthUrl)}>Log in</MobileAnchor>
-          </div>
-        </nav>
-      ) : null}
     </header>
   )
 }
@@ -122,27 +83,4 @@ function HeaderLink({
 
 function HeaderAnchor(props: React.ComponentProps<"a">) {
   return <a {...props} className={headerLinkClassName} />
-}
-
-const mobileLinkClassName =
-  "flex h-12 items-center border-b border-border/50 text-base last:border-b-0 outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-
-function MobileLink({
-  to,
-  onNavigate,
-  children,
-}: {
-  to: "/pricing" | "/compare"
-  onNavigate: () => void
-  children: React.ReactNode
-}) {
-  return (
-    <Link to={to} className={mobileLinkClassName} onClick={onNavigate}>
-      {children}
-    </Link>
-  )
-}
-
-function MobileAnchor(props: React.ComponentProps<"a">) {
-  return <a {...props} className={mobileLinkClassName} />
 }
