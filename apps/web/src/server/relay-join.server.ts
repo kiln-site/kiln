@@ -41,6 +41,7 @@ import {
   Fiber,
   Option,
   Result,
+  Schedule,
   Schema,
 } from "effect"
 import type { Tracer } from "effect"
@@ -103,12 +104,15 @@ const LEASE_RENEW_MS = 30_000
 // A finished join keeps its secret this long, to tell its Relay how it went.
 const TERMINAL_RETENTION_MS = 24 * 60 * 60_000
 const ANNOUNCEMENT_BYTES = 16 * 1024
-// How long the worker keeps trying to reach a Relay it just saved, and how
-// long it waits between tries. A Relay that dials Hearth usually arrives
-// during a try, which takes its connection at once; one older than waking
-// its dialer arrives within its next pass, up to 17 s later.
-const CONNECT_WAIT_MS = 60_000
-const CONNECT_DELAY_MS = 1_000
+// How the worker keeps trying to reach a Relay it just saved: soon at
+// first, since a try can fail as the Relay's own connection takes its place,
+// then at most every 2 s, for a minute. A Relay that dials Hearth usually
+// arrives during a try; one older than waking its dialer arrives within its
+// next pass, up to 17 s later.
+const connectSchedule = Schedule.min([
+  Schedule.exponential("250 millis"),
+  Schedule.spaced("2 seconds"),
+]).pipe(Schedule.upTo({ duration: "1 minute" }))
 // How often the worker, and an announcement Hearth holds, look at a join
 // again when nothing in this process said it changed: the change may come
 // from another Hearth process.
@@ -1526,26 +1530,23 @@ const replaceInstallation = Effect.fnUntraced(function* (
 const readInstallation = Effect.fn("relayJoin.readInstallation")(function* (
   relayId: string
 ) {
-  const start = yield* Clock.currentTimeMillis
-  let attempt = 0
-  while (true) {
-    attempt += 1
-    const read = yield* relayCall(relayId, "relay.installation.read", {}).pipe(
-      Effect.map((value) => relayInstallationSchema.parse(value)),
-      Effect.result
+  let attempts = 0
+  const read = yield* Effect.suspend(() => {
+    attempts += 1
+    return relayCall(relayId, "relay.installation.read", {})
+  }).pipe(
+    Effect.map((value) => relayInstallationSchema.parse(value)),
+    Effect.retry(connectSchedule),
+    Effect.ensuring(
+      Effect.suspend(() =>
+        Effect.annotateCurrentSpan("relay_join.attempts", attempts)
+      )
     )
-    yield* Effect.annotateCurrentSpan("relay_join.attempts", attempt)
-    if (Result.isSuccess(read)) {
-      return {
-        fixed: read.success.fixed,
-        id: read.success.installationId,
-      } satisfies ObservedInstallation
-    }
-    if ((yield* Clock.currentTimeMillis) - start >= CONNECT_WAIT_MS) {
-      return yield* Effect.fail(read.failure)
-    }
-    yield* Effect.sleep(CONNECT_DELAY_MS)
-  }
+  )
+  return {
+    fixed: read.fixed,
+    id: read.installationId,
+  } satisfies ObservedInstallation
 })
 
 const relayCall = Effect.fnUntraced(function* (
