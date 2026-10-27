@@ -1021,6 +1021,15 @@ update_relay() {
   # Stopped explicitly: a step under `if` runs without set -e in bash.
   previous=$(dk inspect --format '{{.Config.Image}}' "$container") ||
     stop "The Relay couldn't be read."
+  # Its update lock is in its data directory, which these scripts take to
+  # be /data, where the installer puts it.
+  data=$(dk inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$container" |
+    sed -n 's/^KILN_RELAY_DATA_DIR=//p' | tail -n 1) ||
+    stop "The Relay couldn't be read."
+  case "$data" in
+    "" | /data | /data/) ;;
+    *) stop "This Relay keeps its data in $data, so update it from Kiln instead." ;;
+  esac
   operation=$(dk run --rm --network none --volumes-from "$container" \
     --env KILN_IMAGE="$image" --env KILN_PREVIOUS="$previous" \
     --env KILN_TARGET="$container" --env KILN_VERSION="$1" \
