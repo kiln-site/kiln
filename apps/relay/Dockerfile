@@ -115,13 +115,15 @@ ARG SOURCE_COMMIT
 # Keep the legacy source label until older Relays have received the
 # repository-rename compatibility check. io.kiln.relay.features names what
 # the installer can ask of this Relay: ip-certificates, a Let's Encrypt
-# certificate for an IP address behind its Traefik.
+# certificate for an IP address behind its Traefik; control-dial, a Relay
+# that connects to Kiln itself; replace, dist/src/replace-relay.mjs, which
+# replaces a Relay already installed with this image.
 ARG KILN_IMAGE_SOURCE=https://github.com/kiln-site/hearth
 LABEL org.opencontainers.image.source="${KILN_IMAGE_SOURCE}" \
   org.opencontainers.image.version="${KILN_VERSION}" \
   org.opencontainers.image.revision="${SOURCE_COMMIT}" \
   io.kiln.component="relay" \
-  io.kiln.relay.features="ip-certificates,control-dial"
+  io.kiln.relay.features="ip-certificates,control-dial,replace"
 
 EXPOSE 4100 2022
 # The checker probes the loopback-only plain-HTTP listener on
