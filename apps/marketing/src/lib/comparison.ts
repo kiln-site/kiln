@@ -154,17 +154,18 @@ export const alternatives: Array<Alternative> = [
     summary:
       "The game server panel most hosts already know. It has been around for years, is widely adopted, and has a big community behind it.",
     pickThem:
-      "You want the most proven option, with years of community answers and a large catalog of extensions and plugins.",
+      "You want the most proven option, with years of community answers and a large catalog of extensions, plugins, and eggs.",
     pickKiln:
-      "You also run the website, bot, or database next to the server, and want them in the same panel.",
+      "You want a modern panel built for speed, with the website, bot, or database next to your server in the same place.",
   },
   {
     id: "amp",
     summary:
       "CubeCoders’ commercial game server panel, paid for once by how many instances you run.",
-    pickThem: "Your servers run on Windows.",
+    pickThem:
+      "Your servers run on Windows, and you want a simple, easy solution that works out of the box.",
     pickKiln:
-      "You’re on Linux and want it free and open source, with no cap on instances.",
+      "You’re on Linux and want a fast, modern panel that’s free and open source, with no cap on instances.",
   },
   {
     id: "dokploy",
@@ -172,7 +173,7 @@ export const alternatives: Array<Alternative> = [
       "An app platform built on Docker Swarm, for spreading apps across a cluster.",
     pickThem: "You want to shard apps across a Docker Swarm cluster.",
     pickKiln:
-      "Each instance runs on a machine you choose, and you want game servers next to your apps.",
+      "You want a fast, modern panel that runs each instance on a machine you choose, with game servers next to your apps.",
   },
   {
     id: "portainer",
@@ -181,6 +182,6 @@ export const alternatives: Array<Alternative> = [
     pickThem:
       "You run Kubernetes or Docker Swarm and want to manage it directly.",
     pickKiln:
-      "You think in game servers, apps, and databases, and want Kiln to handle the containers, ports, and domains.",
+      "You think in game servers, apps, and databases, and want a fast, modern panel that handles the containers, ports, and domains.",
   },
 ]

@@ -38,8 +38,8 @@ function ComparePage() {
         </h1>
         <p className="site-copy mt-3 max-w-2xl text-muted-foreground">
           Most panels pick a side: game servers, or apps, or containers. Kiln
-          runs all three on your machines, from one panel. Here’s how it lines
-          up, and when another tool fits better.
+          runs all three on your machines, from one modern panel built for
+          speed. Here’s how it lines up, and when another tool fits better.
         </p>
       </section>
 
@@ -178,11 +178,6 @@ function Alternatives() {
     <section className="border-t border-border">
       <div className="site-container py-20 sm:py-28">
         <h2 className="site-title max-w-2xl">When another tool fits better</h2>
-        <p className="site-lede mt-4 max-w-2xl text-muted-foreground">
-          Coolify or Openship? Kiln does what they do for apps, and runs your
-          game servers too. For these four, here’s when we’d point you
-          elsewhere.
-        </p>
         <ul className="mt-12 grid gap-px border border-border bg-border md:grid-cols-2">
           {alternatives.map((alternative) => {
             const product = productsById.get(alternative.id)
