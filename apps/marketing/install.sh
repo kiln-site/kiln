@@ -958,39 +958,52 @@ release_of() {
     "$1" 2>/dev/null || true
 }
 
-# Takes the Relay's update lock and records the update as Kiln does, run with
-# the downloaded release on the Relay's volumes: the Relay then reports it,
-# and an update Kiln starts meanwhile waits for it. Prints its ID.
+# Takes the Relay's update lock, then records the update, as Kiln does: run
+# with the downloaded release on the Relay's volumes, so the Relay reports
+# it, and an update Kiln starts meanwhile waits for it. Prints its ID.
 # shellcheck disable=SC2016 # JavaScript's ${…}, not the shell's
 update_take_script='
 import { randomUUID } from "node:crypto"
+import { rmSync } from "node:fs"
 import { link, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 const { KILN_IMAGE: image, KILN_PREVIOUS: previous, KILN_TARGET: target, KILN_VERSION: version } = process.env
 const directory = "/data/updates"
 const lock = `${directory}/${target}.lock`
 const read = (path) => readFile(path, "utf8").then((text) => text.trim(), () => "")
 await mkdir(directory, { mode: 0o700, recursive: true })
-const held = await read(lock)
-if (held) {
-  const recorded = await read(`${directory}/${held}.json`)
-  const status = recorded ? JSON.parse(recorded).status : null
-  const age = await stat(lock).then((found) => Date.now() - found.mtimeMs, () => Infinity)
-  if (status === "running" || (status === null && age < 30_000)) {
-    console.log("kiln: Kiln is updating this Relay already. Run this again once it is done.")
-    process.exit(1)
-  }
-  await rm(lock, { force: true })
-}
 const id = randomUUID()
 const operation = {
   component: "relay", error: null, finishedAt: null, id, previousImage: previous,
   requestedImage: image, startedAt: new Date().toISOString(), status: "running",
   targetContainer: target, targetReference: image, version,
 }
-await writeFile(`${directory}/${id}.json`, `${JSON.stringify(operation, null, 2)}\n`, { mode: 0o600 })
 const candidate = `${lock}.${id}.tmp`
 await writeFile(candidate, `${id}\n`, { flag: "wx", mode: 0o600 })
-await link(candidate, lock).finally(() => rm(candidate, { force: true }))
+const busy = () => {
+  rmSync(candidate, { force: true })
+  console.log("kiln: Kiln is updating this Relay already. Run this again once it is done.")
+  process.exit(1)
+}
+// As the Relay takes it: a lock whose update finished, or that names none
+// and is old, is given back only while it still names that one.
+for (let attempt = 0; ; attempt++) {
+  const taken = await link(candidate, lock).then(() => true, (cause) => {
+    if (cause.code !== "EEXIST") throw cause
+    return false
+  })
+  if (taken) break
+  if (attempt === 3) busy()
+  const held = await read(lock)
+  if (!held) continue
+  const status = await readFile(`${directory}/${held}.json`, "utf8")
+    .then((text) => JSON.parse(text).status)
+    .catch(() => null)
+  const age = await stat(lock).then((found) => Date.now() - found.mtimeMs, () => Infinity)
+  if (status === "running" || (status === null && age < 30_000)) busy()
+  if ((await read(lock)) === held) await rm(lock, { force: true })
+}
+await rm(candidate, { force: true })
+await writeFile(`${directory}/${id}.json`, `${JSON.stringify(operation, null, 2)}\n`, { mode: 0o600 })
 console.log(id)
 '
 
@@ -1011,11 +1024,19 @@ if (recorded?.status === "failed") console.log(`kiln: ${recorded.error}`)
 # it: the release's own updater keeps the Relay's settings and data, and
 # puts it back as it was if the new one doesn't become healthy.
 update_relay() {
-  previous=$(dk inspect --format '{{.Config.Image}}' "$container")
+  # Stopped explicitly: a step under `if` runs without set -e in bash.
+  previous=$(dk inspect --format '{{.Config.Image}}' "$container") ||
+    stop "The Relay couldn't be read."
   operation=$(dk run --rm --network none --volumes-from "$container" \
     --env KILN_IMAGE="$image" --env KILN_PREVIOUS="$previous" \
     --env KILN_TARGET="$container" --env KILN_VERSION="$1" \
-    "$image" --input-type=module -e "$update_take_script")
+    "$image" --input-type=module -e "$update_take_script") || {
+    printf '%s\n' "$operation"
+    return 1
+  }
+  case "$operation" in
+    *[!0-9a-f-]* | "") stop "The Relay's update lock couldn't be taken." ;;
+  esac
   status=0
   dk run --rm --name "kiln-updater-$operation" --label io.kiln.update-helper=true \
     --volumes-from "$container" \
@@ -1410,10 +1431,12 @@ if docker_reachable && dk container inspect "$container" >/dev/null 2>&1; then
     say ""
     # An older Relay can't join, or connect to Kiln itself when Kiln can't
     # reach it, so it's updated first, as Kiln would.
+    # Without the download, the Relay joins as it is.
     step_progress=pull_progress
-    step "Downloading Kiln" pull_relay
+    step_soft=1
     current=$(release_of "$container")
-    release=$(release_of "$image")
+    release=""
+    if step "Downloading Kiln" pull_relay; then release=$(release_of "$image"); fi
     if [ -n "$current" ] && [ -n "$release" ] && newer_version "$release" "$current"; then
       step_soft=1
       if ! step "Updating the Relay" update_relay "$release"; then
