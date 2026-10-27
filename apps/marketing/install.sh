@@ -1039,10 +1039,14 @@ update_relay() {
     --env KILN_UPDATE_TARGET_REFERENCE="$image" \
     "$image" dist/src/updater.mjs || status=$?
   # `docker run` can return while its container runs on, as when its output
-  # is cut off, so the helper is waited for, and its lock kept while it runs.
+  # is cut off, so the helper is waited for, and its lock kept unless it's
+  # known to have stopped: gone, as --rm removes it, or not running.
   dk wait "kiln-updater-$operation" >/dev/null 2>&1 || true
-  [ "$(dk inspect --format '{{.State.Running}}' "kiln-updater-$operation" 2>/dev/null)" != "true" ] ||
-    stop "The Relay's update is still running, as kiln-updater-$operation."
+  helper=$(dk container inspect --format '{{.State.Running}}' "kiln-updater-$operation" 2>&1 || true)
+  case "$helper" in
+    false | *"No such container"*) ;;
+    *) stop "The Relay's update may still be running, as kiln-updater-$operation." ;;
+  esac
   dk run --rm --network none --volumes-from "$container" \
     --env KILN_OPERATION="$operation" --env KILN_TARGET="$container" \
     "$image" --input-type=module -e "$update_release_script" || true
