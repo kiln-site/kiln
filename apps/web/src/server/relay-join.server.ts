@@ -582,7 +582,7 @@ export const answerRelayJoinAnnouncement = Effect.fn("relayJoin.answer")(
       Number(request.headers.get(relayJoinHoldHeader)) || 0,
       RELAY_JOIN_HOLD_MAX_MS
     )
-    const saved = (current: typeof answer) =>
+    const saved = (current: typeof answer): Record<string, string> =>
       "saved" in current && current.saved ? { [relayJoinSavedHeader]: "1" } : {}
     // Not news the Relay hasn't heard: that Hearth saved it, as when that
     // happened between two announcements.
