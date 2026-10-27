@@ -102,7 +102,7 @@ export interface PassthroughSlot {
    */
   readonly meter: (
     direction: "fromRelay" | "toRelay",
-    source: AsyncIterable<Buffer>
+    source: Readable
   ) => Readable
   /** Called when the transfer stalls, to end it. */
   readonly onStall: (end: () => void) => void
@@ -188,7 +188,11 @@ export async function acquirePassthroughSlot(
               pacing -= 1
             }
           )
-          if (readable.destroyed) return
+          if (readable.destroyed) {
+            // Ended after its turn came, before it was passed on.
+            refundRate(size)
+            return
+          }
           stall.refresh()
           const piece = pending.subarray(0, size)
           pending = pending.subarray(size)
@@ -212,8 +216,9 @@ export async function acquirePassthroughSlot(
         },
         destroy(cause, callback) {
           // A piece still waiting leaves its turn, uncharged, and the source
-          // is let go.
+          // ends, even while a read of it is pending.
           ended.abort()
+          source.destroy()
           forkPromise(async () => iterator.return?.())
           callback(cause)
         },
@@ -283,6 +288,11 @@ function awaitRate(bytes: number, signal: AbortSignal): Promise<void> {
     state.rateQueue.push(waiter)
     pace()
   })
+}
+
+// Gives back what was charged for bytes that never passed on.
+function refundRate(bytes: number): void {
+  if (passthroughRate() !== null) state.budget += bytes
 }
 
 // How long the pacer waits at most before looking again, so a rate changed

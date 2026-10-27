@@ -668,3 +668,47 @@ it("lets waiting transfers go once the rate is lifted", async () => {
   expect(await read).toBe(1024)
   expect(Date.now() - started).toBeLessThan(3_000)
 })
+
+it("lets go of the Relay's answer when the browser stops, even while it's idle", async () => {
+  const idle = "relay-passthrough-idle"
+  let hungUp: () => void = () => undefined
+  const hangUp = new Promise<void>((resolve) => {
+    hungUp = resolve
+  })
+  await relayListener((_request, response) => {
+    response.writeHead(200)
+    response.write("first")
+    // Then sends nothing more, until Hearth hangs up.
+    response.once("close", hungUp)
+  }, idle)
+  const response = await passRelayBrowserRequest(
+    idle,
+    "files/root",
+    fileRequest("root", {}, signed({ audience: idle, instanceId: "root" }))
+  )
+  const reader = response.body!.getReader()
+  await reader.read()
+  await reader.cancel()
+  await hangUp
+  expect(relayPassthroughUsage(idle).open).toBe(0)
+})
+
+it("takes no body a Relay sends with an answer that has none", async () => {
+  const bodyless = "relay-passthrough-bodyless"
+  let finished: boolean | null = null
+  await relayListener((_request, response) => {
+    response.writeHead(205, { "content-length": String(64 * 1024 * 1024) })
+    response.once("close", () => {
+      finished = response.writableFinished
+    })
+    response.end(Buffer.alloc(64 * 1024 * 1024))
+  }, bodyless)
+  const response = await passRelayBrowserRequest(
+    bodyless,
+    "files/root",
+    fileRequest("root", {}, signed({ audience: bodyless, instanceId: "root" }))
+  )
+  expect(response.status).toBe(205)
+  await vi.waitFor(() => expect(finished).toBe(false))
+  expect(relayPassthroughUsage(bodyless).bytesFromRelay).toBe(0)
+})

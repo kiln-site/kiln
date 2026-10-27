@@ -125,107 +125,118 @@ export async function passRelayBrowserRequest(
     if (value !== null) headers[name] = value
   }
   const send = tunnel || !control.useTls ? httpRequest : httpsRequest
-  return new Promise<Response>((resolve, reject) => {
-    // The slot is held until both ways are done: sending the request, with
-    // any upload, and passing the answer on.
-    const pending = new Set(["sending", "answering"])
-    const done = (part: "answering" | "sending") => {
-      if (pending.delete(part) && pending.size === 0) slot.release()
-    }
-    let responded = false
-    const fail = (cause: Error) => {
-      if (!responded) reject(cause)
-    }
-    const parts: Array<{ destroy: () => unknown }> = []
-    slot.onStall(() => {
-      for (const part of parts) part.destroy()
-    })
-    const outgoing = send(
-      {
-        ...(tunnel
-          ? { createConnection: () => tunnel }
-          : {
-              ca,
-              host: control.hostname,
-              port: control.port,
-              rejectUnauthorized: control.useTls,
-            }),
-        headers,
-        method: request.method,
-        path: `/v1/browser/${kind}/${encodeURIComponent(name)}${url.search}`,
-        signal: request.signal,
-      },
-      (incoming) => {
-        responded = true
-        parts.push(incoming)
-        const status = incoming.statusCode ?? 0
-        // Only answers a Response can carry, so a Relay can't throw here.
-        if (status < 200 || status > 599) {
-          incoming.once("close", () => done("answering"))
-          incoming.destroy()
-          resolve(
-            Response.json(
-              { error: "The Relay answered with an invalid status" },
-              { status: 502 }
+  // Whatever fails before an answer, even in setting the request up, lets
+  // go of the slot.
+  return tapPromiseError(
+    () =>
+      new Promise<Response>((resolve, reject) => {
+        // The slot is held until both ways are done: sending the request, with
+        // any upload, and passing the answer on.
+        const pending = new Set(["sending", "answering"])
+        const done = (part: "answering" | "sending") => {
+          if (pending.delete(part) && pending.size === 0) slot.release()
+        }
+        let responded = false
+        const fail = (cause: Error) => {
+          if (!responded) reject(cause)
+        }
+        const parts: Array<{ destroy: () => unknown }> = []
+        slot.onStall(() => {
+          for (const part of parts) part.destroy()
+        })
+        const outgoing = send(
+          {
+            ...(tunnel
+              ? { createConnection: () => tunnel }
+              : {
+                  ca,
+                  host: control.hostname,
+                  port: control.port,
+                  rejectUnauthorized: control.useTls,
+                }),
+            headers,
+            method: request.method,
+            path: `/v1/browser/${kind}/${encodeURIComponent(name)}${url.search}`,
+            signal: request.signal,
+          },
+          (incoming) => {
+            responded = true
+            parts.push(incoming)
+            const status = incoming.statusCode ?? 0
+            // Only answers a Response can carry, so a Relay can't throw here.
+            if (status < 200 || status > 599) {
+              incoming.once("close", () => done("answering"))
+              incoming.destroy()
+              resolve(
+                Response.json(
+                  { error: "The Relay answered with an invalid status" },
+                  { status: 502 }
+                )
+              )
+              return
+            }
+            const bodyless =
+              request.method === "HEAD" || NULL_BODY_STATUSES.has(status)
+            if (bodyless) {
+              // Nothing's passed on, and nothing more's read: a Relay sending a
+              // body anyway can't have Hearth take it unmetered.
+              incoming.once("close", () => done("answering"))
+              incoming.destroy()
+              resolve(
+                new Response(null, {
+                  headers: responseHeaders(incoming.headers),
+                  status,
+                })
+              )
+              return
+            }
+            // Done once the browser has it all, or stops: bytes can still be
+            // on their way through Hearth after the Relay finished sending.
+            const body = slot.meter("fromRelay", incoming)
+            parts.push(body)
+            body.once("close", () => done("answering"))
+            resolve(
+              new Response(Readable.toWeb(body) as ReadableStream<Uint8Array>, {
+                headers: responseHeaders(incoming.headers),
+                status,
+              })
             )
-          )
-          return
-        }
-        const bodyless =
-          request.method === "HEAD" || NULL_BODY_STATUSES.has(status)
-        if (bodyless) {
-          incoming.once("close", () => done("answering"))
-          incoming.resume()
-          resolve(
-            new Response(null, {
-              headers: responseHeaders(incoming.headers),
-              status,
-            })
-          )
-          return
-        }
-        // Done once the browser has it all, or stops: bytes can still be
-        // on their way through Hearth after the Relay finished sending.
-        const body = slot.meter("fromRelay", incoming)
-        parts.push(body)
-        body.once("close", () => done("answering"))
-        resolve(
-          new Response(Readable.toWeb(body) as ReadableStream<Uint8Array>, {
-            headers: responseHeaders(incoming.headers),
-            status,
-          })
+          }
         )
-      }
-    )
-    parts.push(outgoing)
-    // Without an answer, nothing's left to pass on once the request ends.
-    outgoing.once("close", () => {
-      done("sending")
-      if (!responded) done("answering")
-    })
-    const upload =
-      ticket.body ??
-      (request.body && request.method !== "GET" && request.method !== "HEAD"
-        ? request.body
-        : null)
-    if (upload) {
-      const sent = slot.meter(
-        "toRelay",
-        Buffer.isBuffer(upload)
-          ? Readable.from([upload])
-          : Readable.fromWeb(upload as import("node:stream/web").ReadableStream)
-      )
-      parts.push(sent)
-      // An upload that breaks off ends the request to the Relay too.
-      pipeline(sent, outgoing, (cause) => {
-        done("sending")
-        if (cause) fail(cause)
-      })
-    } else {
-      outgoing.once("error", fail)
-      outgoing.end()
-    }
-  })
+        parts.push(outgoing)
+        // Every error the request has, however late, ends here.
+        outgoing.on("error", fail)
+        // Without an answer, nothing's left to pass on once the request ends.
+        outgoing.once("close", () => {
+          done("sending")
+          if (!responded) done("answering")
+        })
+        const upload =
+          ticket.body ??
+          (request.body && request.method !== "GET" && request.method !== "HEAD"
+            ? request.body
+            : null)
+        if (upload) {
+          const sent = slot.meter(
+            "toRelay",
+            Buffer.isBuffer(upload)
+              ? Readable.from([upload])
+              : Readable.fromWeb(
+                  upload as import("node:stream/web").ReadableStream
+                )
+          )
+          parts.push(sent)
+          // An upload that breaks off ends the request to the Relay too.
+          pipeline(sent, outgoing, (cause) => {
+            done("sending")
+            if (cause) fail(cause)
+          })
+        } else {
+          outgoing.end()
+        }
+      }),
+    slot.release
+  )
 }
 
 function responseHeaders(incoming: IncomingHttpHeaders): Headers {
