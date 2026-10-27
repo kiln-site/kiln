@@ -152,6 +152,14 @@ export function replaceContainerEffect(
       delete preservedConfig.Cmd
       delete preservedConfig.Entrypoint
       delete preservedConfig.Healthcheck
+      // The join link a Relay was installed with is spent once it joined,
+      // and holds a secret: a replacement starts without it.
+      if (Array.isArray(current.Config.Env)) {
+        preservedConfig.Env = current.Config.Env.filter(
+          (entry: unknown) =>
+            typeof entry !== "string" || !entry.startsWith("KILN_RELAY_JOIN=")
+        )
+      }
       // Docker's default hostname is the old container ID. Let Docker
       // regenerate it after the old container becomes the backup.
       if (isDockerGeneratedHostname(current.Config.Hostname, current.Id)) {

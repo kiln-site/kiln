@@ -201,6 +201,19 @@ describe("container replacement", () => {
     })
   )
 
+  effectIt.effect(
+    "keeps the environment, without the join link a Relay was installed with",
+    () =>
+      Effect.gen(function* () {
+        const { current, docker } = yield* runningHearth()
+        current.env.KILN_RELAY_JOIN = "https://kiln.example/#kj1.spent"
+
+        yield* replaceContainerEffect(replacement, docker, ignorePhase)
+
+        expect(hearth()?.env).toEqual({ EXAMPLE: "true" })
+      })
+  )
+
   effectIt.effect("preserves an explicitly configured hostname", () =>
     Effect.gen(function* () {
       const { docker } = yield* runningHearth({ hostname: "hearth.internal" })
