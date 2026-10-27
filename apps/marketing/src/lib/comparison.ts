@@ -102,10 +102,11 @@ export const rows: Array<Row> = [
     },
   },
   {
-    label: "1-click apps and servers",
+    // How big the catalog is, not whether there is one.
+    label: "1-click catalog",
     notes: {
-      kiln: "Game servers start from a Brick in one click. Apps start from your own repository, image, or Compose file, with no catalog of ready-made apps yet.",
-      portainer: "Has app templates, but a short list of them.",
+      kiln: "Only a few so far.",
+      portainer: "A short list of templates.",
     },
     best: ["pterodactyl", "coolify"],
     cells: {
