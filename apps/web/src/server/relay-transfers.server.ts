@@ -521,45 +521,49 @@ const signGrant = Effect.fn("RelayTransfers.signGrant")(function* (
 // advertised, then its public origin, and last through Hearth, which every
 // Relay reaches, for a source the destination can't, such as one behind a
 // home router.
-const sourceEndpoints = Effect.fn("RelayTransfers.sourceEndpoints")(function* (
-  source: PersistedRelay
-) {
-  const [{ loadRelayCredentials }, { hearthDialUrl, relayControlEndpoint }] =
-    yield* Effect.all(
-      [
-        Effect.promise(() => import("@/lib/relay-registry")),
-        Effect.promise(() => import("@/lib/relay-control-endpoint")),
-      ],
-      { concurrency: 2 }
+export const sourceEndpoints = Effect.fn("RelayTransfers.sourceEndpoints")(
+  function* (source: PersistedRelay) {
+    const [{ loadRelayCredentials }, { hearthDialUrl, relayControlEndpoint }] =
+      yield* Effect.all(
+        [
+          Effect.promise(() => import("@/lib/relay-registry")),
+          Effect.promise(() => import("@/lib/relay-control-endpoint")),
+        ],
+        { concurrency: 2 }
+      )
+    const credentials = yield* Effect.tryPromise(() =>
+      loadRelayCredentials(source.id)
     )
-  const credentials = yield* Effect.tryPromise(() =>
-    loadRelayCredentials(source.id)
-  )
-  const endpoint = (relay: {
-    hostname: string
-    port: number
-    useTls: boolean
-  }): RelayPeerEndpoint => ({
-    caCertificatePem: relay.useTls ? credentials.caCertificatePem : null,
-    url: `${relay.useTls ? "https" : "http"}://${
-      relay.hostname.includes(":") ? `[${relay.hostname}]` : relay.hostname
-    }:${relay.port}`,
-  })
-  const candidates = [
-    endpoint(relayControlEndpoint(source)),
-    endpoint(source),
-    ...(source.browserOrigin
-      ? [{ caCertificatePem: null, url: source.browserOrigin }]
-      : []),
-    ...throughHearth(hearthDialUrl(), source.id),
-  ]
-  return candidates.filter(
-    (candidate, index) =>
-      candidates.findIndex(
-        (other) => new URL(other.url).origin === new URL(candidate.url).origin
-      ) === index
-  )
-})
+    const endpoint = (relay: {
+      hostname: string
+      port: number
+      useTls: boolean
+    }): RelayPeerEndpoint => ({
+      caCertificatePem: relay.useTls ? credentials.caCertificatePem : null,
+      url: `${relay.useTls ? "https" : "http"}://${
+        relay.hostname.includes(":") ? `[${relay.hostname}]` : relay.hostname
+      }:${relay.port}`,
+    })
+    const candidates = [
+      endpoint(relayControlEndpoint(source)),
+      endpoint(source),
+      ...(source.browserOrigin
+        ? [{ caCertificatePem: null, url: source.browserOrigin }]
+        : []),
+      ...throughHearth(hearthDialUrl(), source.id),
+    ]
+    // The same address once, as a destination would reach it: Hearth's
+    // pass-through can share an origin with the source, as behind one router.
+    const reached = (candidate: RelayPeerEndpoint) =>
+      `${new URL(candidate.url).href}\n${candidate.caCertificatePem ?? ""}`
+    return candidates.filter(
+      (candidate, index) =>
+        candidates.findIndex(
+          (other) => reached(other) === reached(candidate)
+        ) === index
+    )
+  }
+)
 
 function throughHearth(
   hearth: string | null,
