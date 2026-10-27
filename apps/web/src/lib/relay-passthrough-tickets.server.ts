@@ -2,6 +2,8 @@ import { verify } from "node:crypto"
 
 import { Option, Schema } from "effect"
 
+import { ensuringPromise, forkPromise, recoverPromise } from "@/effect/promise"
+
 // Tickets: what lets a request through Hearth's pass-through as far as the
 // Relay. Every one already carries a credential Hearth signed for that
 // Relay with its own key for it: a browser capability, or a backup link's
@@ -10,8 +12,11 @@ import { Option, Schema } from "effect"
 // the request, such as a tunnel. The Relay still checks all it does today:
 // the browser's proof, nonces, revocation and paths.
 
-// As the Relay bounds a download's form.
+// As the Relay bounds a download's form. Forms are read before anyone is
+// known, so only a few at once, each for a short while.
 const MAX_FORM_BYTES = 2 * 1024 * 1024
+const MAX_FORM_READS = 16
+const FORM_READ_MS = 10_000
 const MAX_CREDENTIAL_BYTES = 16 * 1024
 
 const decodePayload = Schema.decodeUnknownOption(
@@ -35,7 +40,10 @@ export interface PassthroughSigner {
 export type PassthroughTicket =
   // Allowed, with the body as read when finding the credential needed it.
   | { readonly allowed: true; readonly body: Buffer | null }
-  | { readonly allowed: false }
+  // Refused, or, when busy, not looked at for now.
+  | { readonly allowed: false; readonly busy?: true }
+
+let formReads = 0
 
 /**
  * Whether a browser's request for `<kind>/<name>` on the Relay carries a
@@ -66,7 +74,14 @@ export async function checkBrowserTicket(input: {
       .get("content-type")
       ?.startsWith("application/x-www-form-urlencoded")
   ) {
-    body = await readBounded(request, MAX_FORM_BYTES)
+    if (formReads >= MAX_FORM_READS) return { allowed: false, busy: true }
+    formReads += 1
+    body = await ensuringPromise(
+      () => readBounded(request, MAX_FORM_BYTES, FORM_READ_MS),
+      () => {
+        formReads -= 1
+      }
+    )
     if (!body) return { allowed: false }
     authorization = new URLSearchParams(body.toString("utf8")).get(
       "authorization"
@@ -111,24 +126,43 @@ export function signedFor(
   )
 }
 
-// The request's body, or null once it's longer than `limit`.
+// The request's body, or null once it's longer than `limit` or takes
+// longer than `deadlineMs` to arrive.
 async function readBounded(
   request: Request,
-  limit: number
+  limit: number,
+  deadlineMs: number
 ): Promise<Buffer | null> {
   if (!request.body) return Buffer.alloc(0)
   const chunks: Array<Uint8Array> = []
   let size = 0
+  let late = false
   const reader = request.body.getReader()
+  const deadline = setTimeout(() => {
+    late = true
+    forkPromise(() => reader.cancel())
+  }, deadlineMs)
+  deadline.unref()
   for (;;) {
     // oxlint-disable-next-line react-doctor/async-await-in-loop -- a stream is read in order
-    const { done, value } = await reader.read()
-    if (done) return Buffer.concat(chunks)
-    size += value.byteLength
-    if (size > limit) {
-      await reader.cancel()
+    const read = await recoverPromise(
+      () => reader.read(),
+      () => null
+    )
+    if (late || read === null) {
+      clearTimeout(deadline)
       return null
     }
-    chunks.push(value)
+    if (read.done) {
+      clearTimeout(deadline)
+      return Buffer.concat(chunks)
+    }
+    size += read.value.byteLength
+    if (size > limit) {
+      clearTimeout(deadline)
+      forkPromise(() => reader.cancel())
+      return null
+    }
+    chunks.push(read.value)
   }
 }

@@ -133,17 +133,41 @@ export async function acquirePassthroughSlot(
   const stall = setTimeout(() => stalled(), STALL_MS)
   stall.unref()
   return {
-    meter: (direction) =>
-      new Transform({
+    meter: (direction) => {
+      let paced: ReturnType<typeof setTimeout> | undefined
+      return new Transform({
+        // Passed on in pieces small enough to keep to the shared rate, each
+        // counted and charged only as it goes. Waiting on the rate isn't a
+        // stall; a reader that stops reading is.
         transform(chunk: Buffer, _encoding, callback) {
-          stall.refresh()
-          if (direction === "toRelay") usage.bytesToRelay += chunk.length
-          else usage.bytesFromRelay += chunk.length
-          const wait = rateDelay(chunk.length)
-          if (wait > 0) setTimeout(() => callback(null, chunk), wait)
-          else callback(null, chunk)
+          let offset = 0
+          const next = () => {
+            paced = undefined
+            while (offset < chunk.length) {
+              const size = Math.min(chunk.length - offset, pieceBytes())
+              const wait = rateWait(size)
+              stall.refresh()
+              if (wait > 0) {
+                paced = setTimeout(next, wait)
+                return
+              }
+              const piece = chunk.subarray(offset, offset + size)
+              offset += size
+              if (direction === "toRelay") usage.bytesToRelay += size
+              else usage.bytesFromRelay += size
+              this.push(piece)
+            }
+            callback()
+          }
+          next()
         },
-      }),
+        destroy(cause, callback) {
+          // What wasn't passed on isn't charged.
+          clearTimeout(paced)
+          callback(cause)
+        },
+      })
+    },
     onStall: (end) => {
       stalled = end
     },
@@ -160,16 +184,31 @@ export async function acquirePassthroughSlot(
   }
 }
 
-// How long to hold `bytes` back to keep to the shared rate, if one is set.
-function rateDelay(bytes: number): number {
+// The most passed on at once: all of it without a rate, else no more than
+// a second's worth, and small enough to share the rate between transfers.
+function pieceBytes(): number {
+  const rate = passthroughRate()
+  return rate === null
+    ? Number.POSITIVE_INFINITY
+    : Math.max(1, Math.min(16 * 1024, Math.floor(rate)))
+}
+
+// How long until `bytes` fit the shared rate, if one is set; 0 when they do
+// now, in which case they're charged.
+function rateWait(bytes: number): number {
   const rate = passthroughRate()
   if (rate === null) return 0
   const now = Date.now()
+  // A clock that steps back refills nothing, rather than taking budget away.
+  const elapsed = Math.max(0, now - state.refilledAt)
   state.budget = Math.min(
-    rate,
-    state.budget + ((now - state.refilledAt) / 1000) * rate
+    Math.max(rate, bytes),
+    state.budget + (elapsed / 1000) * rate
   )
   state.refilledAt = now
-  state.budget -= bytes
-  return state.budget >= 0 ? 0 : Math.ceil((-state.budget / rate) * 1000)
+  if (state.budget >= bytes) {
+    state.budget -= bytes
+    return 0
+  }
+  return Math.ceil(((bytes - state.budget) / rate) * 1000)
 }

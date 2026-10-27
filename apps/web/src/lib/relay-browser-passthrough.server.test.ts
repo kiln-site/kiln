@@ -335,3 +335,148 @@ it("ends a transfer through Hearth that stalls", async () => {
   await expect(reader.read()).rejects.toThrow()
   expect(relayPassthroughUsage(stalling).open).toBe(0)
 })
+
+// Lets virtual time pass, with real I/O between, until `promise` settles.
+async function advanceUntil<T>(promise: Promise<T>): Promise<T> {
+  let settled = false
+  const settle = () => {
+    settled = true
+  }
+  promise.then(settle, settle)
+  while (!settled) {
+    // oxlint-disable-next-line react-doctor/async-await-in-loop -- each step must observe the I/O of the previous one
+    await vi.advanceTimersByTimeAsync(100)
+    // oxlint-disable-next-line react-doctor/async-await-in-loop -- see above
+    await new Promise<void>((resolve) => setImmediate(resolve))
+  }
+  return promise
+}
+
+async function readAll(response: Response): Promise<number> {
+  let size = 0
+  const reader = response.body!.getReader()
+  for (;;) {
+    // oxlint-disable-next-line react-doctor/async-await-in-loop -- a stream is read in order
+    const { done, value } = await advanceUntil(reader.read())
+    if (done) return size
+    size += value.byteLength
+  }
+}
+
+it("holds a transfer's slot until the browser has its bytes, and keeps to a rate without stalling", async () => {
+  // The rate is kept by the clock as well as by timers.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] })
+  vi.stubEnv("KILN_RELAY_PASSTHROUGH_BYTES_PER_SECOND", "1024")
+  onTestFinished(() => {
+    vi.useRealTimers()
+  })
+  const paced = "relay-passthrough-paced"
+  const ticket = signed({ audience: paced, instanceId: "root" })
+  let uploaded = 0
+  await relayListener((request, response) => {
+    request.on("data", (chunk: Buffer) => {
+      uploaded += chunk.length
+    })
+    request.on("end", () => response.end("b".repeat(4 * 1024)))
+  }, paced)
+
+  // The Relay sent it all at once; Hearth passes it on at the rate.
+  const response = await advanceUntil(
+    passRelayBrowserRequest(
+      paced,
+      "files/root",
+      fileRequest("root", {}, ticket)
+    )
+  )
+  expect(relayPassthroughUsage(paced).open).toBe(1)
+  expect(await readAll(response)).toBe(4 * 1024)
+  await advanceUntil(Promise.resolve())
+  expect(relayPassthroughUsage(paced).open).toBe(0)
+
+  // An upload slower than the stall timeout, only because of the rate.
+  const upload = await advanceUntil(
+    passRelayBrowserRequest(
+      paced,
+      "files/root",
+      fileRequest(
+        "root",
+        { body: "u".repeat(80 * 1024), method: "PUT" },
+        ticket
+      )
+    )
+  )
+  expect(upload.status).toBe(200)
+  expect(uploaded).toBe(80 * 1024)
+  await readAll(upload)
+})
+
+it("charges the rate only for what it passed on", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] })
+  vi.stubEnv("KILN_RELAY_PASSTHROUGH_BYTES_PER_SECOND", "1024")
+  onTestFinished(() => {
+    vi.useRealTimers()
+  })
+  const sharing = "relay-passthrough-sharing"
+  const ticket = signed({ audience: sharing, instanceId: "root" })
+  let size = 64 * 1024
+  await relayListener((_request, response) => {
+    response.end("c".repeat(size))
+  }, sharing)
+  const abandoned = await advanceUntil(
+    passRelayBrowserRequest(
+      sharing,
+      "files/root",
+      fileRequest("root", {}, ticket)
+    )
+  )
+  await abandoned.body!.cancel()
+
+  // What the abandoned one never passed on doesn't hold the next back.
+  size = 1024
+  const next = await advanceUntil(
+    passRelayBrowserRequest(
+      sharing,
+      "files/root",
+      fileRequest("root", {}, ticket)
+    )
+  )
+  const started = Date.now()
+  expect(await readAll(next)).toBe(1024)
+  expect(Date.now() - started).toBeLessThan(5_000)
+})
+
+it("reads only a few forms at once, each for a short while", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+  onTestFinished(() => {
+    vi.useRealTimers()
+  })
+  await relayListener((_request, response) => {
+    response.end()
+  })
+  const unfinished = () =>
+    new Request("https://kiln.example/api", {
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("path=world&"))
+        },
+      }),
+      duplex: "half",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      method: "POST",
+    } as RequestInit)
+  const waiting = Array.from({ length: 16 }, () =>
+    passRelayBrowserRequest(relayId, "files/root", unfinished())
+  )
+  await vi.advanceTimersByTimeAsync(0)
+  const busy = await passRelayBrowserRequest(
+    relayId,
+    "files/root",
+    unfinished()
+  )
+  expect(busy.status).toBe(503)
+  // Each gives up on its form after a while.
+  await vi.advanceTimersByTimeAsync(10_000)
+  for (const response of await Promise.all(waiting)) {
+    expect(response.status).toBe(401)
+  }
+})

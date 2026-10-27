@@ -88,10 +88,15 @@ export async function passRelayBrowserRequest(
     signer: credentials,
   })
   if (!ticket.allowed) {
-    return Response.json(
-      { error: "Not a transfer Hearth allowed" },
-      { status: 401 }
-    )
+    return ticket.busy
+      ? Response.json(
+          { error: "Hearth is busy. Try again." },
+          { headers: { "retry-after": "5" }, status: 503 }
+        )
+      : Response.json(
+          { error: "Not a transfer Hearth allowed" },
+          { status: 401 }
+        )
   }
   const slot = await acquirePassthroughSlot(relay.id)
   if (!slot) {
@@ -143,7 +148,6 @@ export async function passRelayBrowserRequest(
       },
       (incoming) => {
         responded = true
-        incoming.once("close", slot.release)
         slot.onStall(() => {
           incoming.destroy()
           outgoing.destroy()
@@ -151,6 +155,7 @@ export async function passRelayBrowserRequest(
         const status = incoming.statusCode ?? 0
         // Only answers a Response can carry, so a Relay can't throw here.
         if (status < 200 || status > 599) {
+          incoming.once("close", slot.release)
           incoming.destroy()
           resolve(
             Response.json(
@@ -163,6 +168,7 @@ export async function passRelayBrowserRequest(
         const bodyless =
           request.method === "HEAD" || NULL_BODY_STATUSES.has(status)
         if (bodyless) {
+          incoming.once("close", slot.release)
           incoming.resume()
           resolve(
             new Response(null, {
@@ -172,7 +178,15 @@ export async function passRelayBrowserRequest(
           )
           return
         }
+        // Held until the browser has it all, or stops: bytes can still be
+        // on their way through Hearth after the Relay finished sending.
         const body = slot.meter("fromRelay")
+        body.once("close", slot.release)
+        slot.onStall(() => {
+          body.destroy()
+          incoming.destroy()
+          outgoing.destroy()
+        })
         pipeline(incoming, body, () => undefined)
         resolve(
           new Response(Readable.toWeb(body) as ReadableStream<Uint8Array>, {
