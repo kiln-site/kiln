@@ -1,13 +1,12 @@
 import { Link, createFileRoute } from "@tanstack/react-router"
-import { ArrowUpRight, Check, Minus } from "lucide-react"
+import { ArrowUpRight } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { InstallCommand, useInstallCommand } from "~/components/install-command"
 import {
-  type Cell,
-  type Product,
+  type Level,
   alternatives,
   checkedOn,
   products,
@@ -20,7 +19,7 @@ export const Route = createFileRoute("/compare")({
   head: ({ matches }) =>
     pageHead({
       description:
-        "How Kiln compares with Pterodactyl, AMP, Coolify, Dokploy, Openship, and Portainer, and when to pick each one.",
+        "How Kiln compares with Pterodactyl, AMP, Coolify, Dokploy, Openship, and Portainer, and when another tool fits better.",
       matches,
       path: "/compare",
       title: "Kiln compared with Pterodactyl, Coolify, and more | Kiln",
@@ -40,7 +39,7 @@ function ComparePage() {
         <p className="site-copy mt-3 max-w-2xl text-muted-foreground">
           Most panels pick a side: game servers, or apps, or containers. Kiln
           runs all three on your machines, from one panel. Here’s how it lines
-          up, and when another project is the better fit.
+          up, and when another tool fits better.
         </p>
       </section>
 
@@ -67,126 +66,110 @@ function ComparePage() {
 
 function ComparisonTable() {
   return (
-    // Wider than a phone, so it scrolls sideways with the labels pinned.
-    <div className="overflow-x-auto">
-      <table className="w-full min-w-[60rem] table-fixed border-separate border-spacing-0 border-t border-l border-border text-left">
-        <caption className="sr-only">
-          Kiln compared with other panels, feature by feature
-        </caption>
-        <thead>
-          <tr>
-            <th
-              scope="col"
-              className="sticky left-0 z-10 w-32 border-r border-b border-border bg-background p-3 align-bottom sm:w-44 sm:p-4"
-            >
-              <span className="sr-only">Feature</span>
-            </th>
-            {products.map((product) => (
-              <ProductHeading key={product.id} product={product} />
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => (
-            <tr key={row.label}>
+    <>
+      {/* Wider than a phone, so it scrolls sideways with the labels pinned. */}
+      <div className="relative overflow-x-auto">
+        <table className="w-full min-w-[46rem] table-fixed border-separate border-spacing-0 text-sm">
+          <caption className="sr-only">
+            Kiln compared with other panels, feature by feature
+          </caption>
+          <thead>
+            <tr>
               <th
-                scope="row"
-                className="sticky left-0 z-10 border-r border-b border-border bg-background p-3 align-top text-sm font-medium text-foreground sm:p-4"
+                scope="col"
+                className="sticky left-0 z-10 w-36 border-b border-border bg-background sm:w-48"
               >
-                {row.label}
+                <span className="sr-only">Feature</span>
               </th>
               {products.map((product) => (
-                <CellView
+                <th
                   key={product.id}
-                  cell={row.cells[product.id]}
-                  highlight={product.id === "kiln"}
-                />
+                  scope="col"
+                  className={cn(
+                    "relative border-b border-border px-2 pt-4 pb-3 text-center align-bottom font-semibold tracking-[-0.02em]",
+                    product.id === "kiln"
+                      ? "bg-card text-primary-ink"
+                      : "text-foreground"
+                  )}
+                >
+                  {product.id === "kiln" ? (
+                    <span
+                      aria-hidden="true"
+                      className="absolute inset-x-0 top-0 h-0.5 bg-primary"
+                    />
+                  ) : null}
+                  {product.name}
+                </th>
               ))}
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.label}>
+                <th
+                  scope="row"
+                  className="sticky left-0 z-10 border-b border-border bg-background py-3.5 pr-3 text-left font-normal text-muted-foreground"
+                >
+                  {row.label}
+                </th>
+                {products.map((product) => (
+                  <td
+                    key={product.id}
+                    className={cn(
+                      "border-b border-border px-2 py-3.5",
+                      product.id === "kiln" && "bg-card"
+                    )}
+                  >
+                    <LevelMark level={row.cells[product.id]} />
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <ul className="type-meta mt-4 flex flex-wrap gap-x-6 gap-y-2 text-muted-foreground">
+        {(["yes", "partly", "no"] as const).map((level) => (
+          <li key={level} className="flex items-center gap-2">
+            <LevelMark level={level} decorative />
+            {levelLabels[level]}
+          </li>
+        ))}
+      </ul>
+    </>
   )
 }
 
-function ProductHeading({ product }: { product: Product }) {
-  const kiln = product.id === "kiln"
-  return (
-    <th
-      scope="col"
-      className={cn(
-        "relative border-r border-b border-border p-4 align-bottom font-normal",
-        kiln ? "bg-card" : "bg-background"
-      )}
-    >
-      {kiln ? (
-        <span
-          aria-hidden="true"
-          className="absolute inset-x-0 -top-px h-0.5 bg-primary"
-        />
-      ) : null}
-      <span className="block text-base font-semibold tracking-[-0.02em] text-foreground">
-        {product.id === "kiln" ? (
-          product.name
-        ) : (
-          <a
-            href={`#${product.id}`}
-            className="underline-offset-4 outline-none hover:underline focus-visible:underline"
-          >
-            {product.name}
-          </a>
-        )}
-      </span>
-      <span className="type-meta mt-1 block text-muted-foreground">
-        {product.kind}
-      </span>
-    </th>
-  )
-}
-
-const levelLabels: Record<Cell["level"], string> = {
-  yes: "Yes",
-  partly: "Partly",
+const levelLabels: Record<Level, string> = {
+  yes: "Built in",
+  partly: "Partly, or with extra work",
   no: "No",
 }
 
-function CellView({ cell, highlight }: { cell: Cell; highlight: boolean }) {
+// A filled, half-filled, or empty dot, so a row reads at a glance.
+function LevelMark({
+  decorative = false,
+  level,
+}: {
+  decorative?: boolean
+  level: Level
+}) {
   return (
-    <td
-      className={cn(
-        "border-r border-b border-border p-4 align-top",
-        highlight ? "bg-card" : "bg-background"
-      )}
-    >
-      <span className="flex items-center gap-1.5 text-sm">
-        {cell.level === "no" ? (
-          <Minus aria-hidden="true" className="size-4 text-muted-foreground" />
-        ) : (
-          <Check
-            aria-hidden="true"
-            className={cn(
-              "size-4",
-              cell.level === "yes"
-                ? "text-primary-ink"
-                : "text-muted-foreground"
-            )}
-          />
+    <span className="flex justify-center">
+      <span
+        aria-hidden="true"
+        className={cn(
+          "size-3 rounded-full",
+          level === "yes" && "bg-primary",
+          level === "partly" &&
+            "border border-primary bg-[linear-gradient(90deg,var(--primary)_50%,transparent_50%)]",
+          level === "no" && "border border-muted-foreground/40"
         )}
-        <span
-          className={
-            cell.level === "yes" ? "text-foreground" : "text-muted-foreground"
-          }
-        >
-          {levelLabels[cell.level]}
-        </span>
-      </span>
-      {cell.note ? (
-        <span className="type-meta mt-1.5 block text-muted-foreground">
-          {cell.note}
-        </span>
-      ) : null}
-    </td>
+      />
+      {decorative ? null : (
+        <span className="sr-only">{levelLabels[level]}</span>
+      )}
+    </span>
   )
 }
 
@@ -194,7 +177,12 @@ function Alternatives() {
   return (
     <section className="border-t border-border">
       <div className="site-container py-20 sm:py-28">
-        <h2 className="site-title max-w-2xl">When to pick which</h2>
+        <h2 className="site-title max-w-2xl">When another tool fits better</h2>
+        <p className="site-lede mt-4 max-w-2xl text-muted-foreground">
+          Coolify or Openship? Kiln does what they do for apps, and runs your
+          game servers too. For these four, here’s when we’d point you
+          elsewhere.
+        </p>
         <ul className="mt-12 grid gap-px border border-border bg-border md:grid-cols-2">
           {alternatives.map((alternative) => {
             const product = productsById.get(alternative.id)
