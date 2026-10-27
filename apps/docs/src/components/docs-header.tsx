@@ -42,7 +42,8 @@ export function DocsHeader() {
           </a>
           <span aria-hidden="true" className="h-5 w-px bg-border" />
           <Link
-            to="/"
+            to="/$"
+            params={{ _splat: "" }}
             className="text-[1.0625rem] font-medium tracking-[-0.03em] text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:text-foreground"
           >
             Docs

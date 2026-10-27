@@ -8,7 +8,9 @@ docs site at `kiln.site/docs` builds them into pages, the sidebar, search, and
 
 A page at `content/<section>/<page>.md` is served at `/docs/<section>/<page>`.
 `content/<section>/index.md`, if there is one, is the section's own page at
-`/docs/<section>`. The sidebar's sections and their order come from
+`/docs/<section>`. `content/index.md` is the docs' home at `/docs/`, the
+introduction. When a page moves, add its old path to `moved` in
+`scripts/redirects.mjs` so links to it still work. The sidebar's sections and their order come from
 `src/content/navigation.ts`; add a page there when you add its file.
 
 Every page starts with frontmatter:

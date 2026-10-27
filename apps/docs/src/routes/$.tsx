@@ -7,7 +7,7 @@ import { cn } from "@workspace/ui/lib/utils"
 import { Article } from "~/components/article"
 import { DocsNav } from "~/components/docs-nav"
 import { TableOfContents } from "~/components/table-of-contents"
-import { withBase } from "~/lib/base"
+import { markdownPath, withBase } from "~/lib/base"
 import { links } from "~/lib/links"
 import {
   loadPage,
@@ -30,7 +30,11 @@ export const Route = createFileRoute("/$")({
           description: loaderData.description,
           matches,
           path: loaderData.path,
-          title: `${loaderData.title} | Kiln Docs`,
+          // The docs' home is the introduction, under the docs' own name.
+          title:
+            loaderData.path === "/"
+              ? "Kiln Docs"
+              : `${loaderData.title} | Kiln Docs`,
         })
       : {},
   component: DocsPage,
@@ -180,7 +184,7 @@ function CopyPageButton({ path }: { path: string }) {
       type="button"
       onClick={() => {
         const copy = async () => {
-          const response = await fetch(withBase(`/markdown${path}`))
+          const response = await fetch(withBase(markdownPath(path)))
           if (!response.ok) throw new Error(`Status ${response.status}`)
           await navigator.clipboard.writeText(await response.text())
         }

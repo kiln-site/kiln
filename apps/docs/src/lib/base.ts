@@ -5,3 +5,8 @@ export const basePath = import.meta.env.BASE_URL.replace(/\/$/, "")
 export function withBase(path: string): string {
   return `${basePath}${path}` || "/"
 }
+
+// Where a page's Markdown is served. The docs' home, "/", is "/markdown/index".
+export function markdownPath(path: string): string {
+  return `/markdown${path === "/" ? "/index" : path}`
+}

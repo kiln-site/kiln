@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router"
 
 import { getSiteConfig } from "~/lib/site-config"
 import { pageUrl, pagesInOrder, textHeaders } from "~/lib/markdown-pages"
+import { markdownPath } from "~/lib/base"
 import { sections } from "~/lib/pages"
 
 // An index of the docs for AI assistants (llmstxt.org): every page with a
@@ -25,7 +26,7 @@ export const Route = createFileRoute("/llms.txt")({
             const page = pages.get(entry.path)
             if (!page) continue
             lines.push(
-              `- [${page.title}](${pageUrl(siteUrl, `/markdown${page.path}`)}): ${page.description}`
+              `- [${page.title}](${pageUrl(siteUrl, markdownPath(page.path))}): ${page.description}`
             )
           }
         }

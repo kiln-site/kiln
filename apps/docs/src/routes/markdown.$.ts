@@ -7,9 +7,8 @@ export const Route = createFileRoute("/markdown/$")({
   server: {
     handlers: {
       GET: ({ params }) => {
-        const markdown = markdownFor(
-          `/${params._splat ?? ""}`.replace(/\/+$/, "") || "/"
-        )
+        const splat = (params._splat ?? "").replace(/\/+$/, "")
+        const markdown = markdownFor(splat === "index" ? "/" : `/${splat}`)
         return markdown
           ? new Response(markdown, {
               headers: {

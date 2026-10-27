@@ -22,7 +22,9 @@ export function NotFound() {
           Search the docs
         </Button>
         <Button asChild variant="outline" className="h-10 px-4">
-          <Link to="/">Docs home</Link>
+          <Link to="/$" params={{ _splat: "" }}>
+            Docs home
+          </Link>
         </Button>
       </div>
     </div>

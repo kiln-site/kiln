@@ -34,7 +34,7 @@ export const navigation: Array<NavigationSection> = [
       "Install Kiln, learn how it fits together, and run your first game server and app.",
     icon: Rocket,
     pages: [
-      "/get-started/introduction",
+      "/",
       "/get-started/install",
       "/get-started/concepts",
       "/get-started/first-game-server",
