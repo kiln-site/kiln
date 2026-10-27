@@ -2,7 +2,7 @@
 // Claims come from each project's own site, docs, and repository; update
 // `checkedOn` whenever a row is rechecked.
 
-export const checkedOn = "October 2026"
+export const checkedOn = { label: "October 2026", iso: "2026-10-27" }
 
 export type ProductId =
   | "kiln"
@@ -224,3 +224,123 @@ export const alternatives: Array<Alternative> = [
       "You run Kubernetes or Docker Swarm and want to manage it directly.",
   },
 ]
+
+export interface Reason {
+  id: "fast" | "one-panel" | "your-machines" | "open-source"
+  title: string
+  description: string
+}
+
+// Why to pick Kiln, said once rather than on every card.
+export const reasons: Array<Reason> = [
+  {
+    id: "fast",
+    title: "Fast and modern",
+    description:
+      "Built for speed and a smooth experience, from the console to the file editor.",
+  },
+  {
+    id: "one-panel",
+    title: "One panel for everything",
+    description:
+      "Game servers, apps, and databases, with the same console, files, backups, and access.",
+  },
+  {
+    id: "your-machines",
+    title: "Your machines",
+    description:
+      "Each instance runs on the machine you choose, even one behind NAT with no ports forwarded.",
+  },
+  {
+    id: "open-source",
+    title: "Free and open source",
+    description:
+      "AGPL-3.0, with no cap on instances or machines when you host it yourself.",
+  },
+]
+
+const levelSuffix: Record<Level, string | null> = {
+  yes: "",
+  partly: " (partly)",
+  no: null,
+}
+
+// The page's chart and cards as schema.org data, so search engines and AI
+// assistants read the same comparison people see.
+export function comparisonStructuredData({
+  description,
+  siteUrl,
+  title,
+}: {
+  description: string
+  siteUrl: string
+  title: string
+}) {
+  const url = `${siteUrl}/compare`
+  const productsById = new Map(products.map((product) => [product.id, product]))
+  const questions = alternatives.flatMap((alternative) => {
+    const name = productsById.get(alternative.id)?.name
+    if (!name) return []
+    return [
+      {
+        "@type": "Question",
+        name: `When should I pick ${name} instead of Kiln?`,
+        acceptedAnswer: {
+          "@type": "Answer",
+          text: `${alternative.summary} Pick ${name} if: ${alternative.pickThem}`,
+        },
+      },
+    ]
+  })
+  questions.push({
+    "@type": "Question",
+    name: "When should I pick Kiln?",
+    acceptedAnswer: {
+      "@type": "Answer",
+      text: reasons
+        .map((reason) => `${reason.title}: ${reason.description}`)
+        .join(" "),
+    },
+  })
+
+  return JSON.stringify({
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "WebPage",
+        "@id": url,
+        about: { "@type": "SoftwareApplication", name: "Kiln", url: siteUrl },
+        dateModified: checkedOn.iso,
+        description,
+        isPartOf: { "@id": `${siteUrl}/#website` },
+        mainEntity: { "@id": `${url}#features` },
+        name: title,
+        url,
+      },
+      {
+        "@type": "ItemList",
+        "@id": `${url}#features`,
+        name: "Features of Kiln and the panels it's compared with",
+        itemListElement: products.map((product, index) => ({
+          "@type": "ListItem",
+          position: index + 1,
+          item: {
+            "@type": "SoftwareApplication",
+            applicationCategory: "DeveloperApplication",
+            featureList: rows.flatMap((row) => {
+              const suffix = levelSuffix[row.cells[product.id]]
+              return suffix === null ? [] : [`${row.label}${suffix}`]
+            }),
+            name: product.name,
+            url: product.url ?? siteUrl,
+          },
+        })),
+      },
+      {
+        "@type": "FAQPage",
+        "@id": `${url}#questions`,
+        mainEntity: questions,
+      },
+    ],
+  })
+}

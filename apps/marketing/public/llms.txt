@@ -16,6 +16,15 @@ Kiln has two parts. Hearth is the web panel. A Relay runs on each machine you ow
 - Backups to S3-compatible storage, schedules, per-instance access control, and an activity history.
 - Cloudflare DNS for game server addresses, automatic HTTPS for app domains, Tailscale, a command-line tool, and updates from the panel.
 
+## Compared with other panels
+
+Checked October 2026; the full chart is at https://kiln.site/compare.
+
+- Pterodactyl and AMP are game server panels. Kiln also runs apps from Git and databases in the same panel. Pick Pterodactyl for the most proven option, with a large catalog of extensions, plugins, and eggs. Pick AMP if your servers run on Windows and you want something that works out of the box.
+- Coolify, Dokploy, and Openship are app platforms. Kiln covers the same ground for apps and adds game servers. Pick Dokploy to shard apps across a Docker Swarm cluster.
+- Portainer manages Docker, Swarm, and Kubernetes at the level of containers. Pick it to manage Kubernetes or Swarm directly.
+- Kiln has per-instance permissions, automatic Cloudflare DNS, updates from the panel, and vulnerability scanning of hosts and images. It runs on Linux with Docker, not Windows, and doesn't orchestrate Swarm or Kubernetes.
+
 ## Pricing and license
 
 - Self-hosting is free, with no limits. Hosted plans, where Kiln runs Hearth while your machines run everything else, are coming soon.
@@ -25,7 +34,7 @@ Kiln has two parts. Hearth is the web panel. A Relay runs on each machine you ow
 
 - [Website](https://kiln.site/)
 - [Pricing](https://kiln.site/pricing)
-- [Compared with Pterodactyl, AMP, Coolify, Dokploy, Openship, and Portainer](https://kiln.site/compare)
+- [Kiln vs Pterodactyl, AMP, Coolify, Dokploy, Openship, and Portainer](https://kiln.site/compare)
 - [Terms of Use](https://kiln.site/terms)
 - [Privacy Policy](https://kiln.site/privacy)
 - [Source code](https://github.com/kiln-site/kiln)

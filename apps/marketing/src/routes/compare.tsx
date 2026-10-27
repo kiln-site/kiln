@@ -8,23 +8,35 @@ import { cn } from "@workspace/ui/lib/utils"
 import { InstallCommand, useInstallCommand } from "~/components/install-command"
 import {
   type Level,
+  type Reason,
   alternatives,
   checkedOn,
+  comparisonStructuredData,
   products,
+  reasons,
   rows,
 } from "~/lib/comparison"
 import { newTab } from "~/lib/new-tab"
-import { pageHead } from "~/lib/seo"
+import { pageHead, siteUrlOf } from "~/lib/seo"
+
+const title = "Kiln vs Pterodactyl, Coolify, Dokploy, and more"
+const description =
+  "Compare Kiln with Pterodactyl, AMP, Coolify, Dokploy, Openship, and Portainer: game servers, apps, databases, permissions, and backups, and when each fits best."
 
 export const Route = createFileRoute("/compare")({
-  head: ({ matches }) =>
-    pageHead({
-      description:
-        "How Kiln compares with Pterodactyl, AMP, Coolify, Dokploy, Openship, and Portainer, and when another tool fits better.",
-      matches,
-      path: "/compare",
-      title: "Kiln compared with Pterodactyl, Coolify, and more | Kiln",
-    }),
+  head: ({ matches }) => ({
+    ...pageHead({ description, matches, path: "/compare", title }),
+    scripts: [
+      {
+        type: "application/ld+json",
+        children: comparisonStructuredData({
+          description,
+          siteUrl: siteUrlOf(matches),
+          title,
+        }),
+      },
+    ],
+  }),
   component: ComparePage,
 })
 
@@ -44,11 +56,18 @@ function ComparePage() {
         </p>
       </section>
 
-      <section className="site-container pb-20 sm:pb-28">
+      <section
+        aria-labelledby="features-heading"
+        className="site-container pb-20 sm:pb-28"
+      >
+        <h2 id="features-heading" className="sr-only">
+          Feature comparison
+        </h2>
         <ComparisonTable />
         <p className="type-support mt-6 text-muted-foreground">
-          Checked against each project’s own site and docs in {checkedOn}.
-          Projects change quickly; if something here is out of date, email{" "}
+          Checked against each project’s own site and docs in{" "}
+          <time dateTime={checkedOn.iso}>{checkedOn.label}</time>. Projects
+          change quickly; if something here is out of date, email{" "}
           <a
             href="mailto:contact@kiln.site"
             className="text-foreground underline underline-offset-4 hover:text-primary-ink"
@@ -73,7 +92,8 @@ function ComparisonTable() {
       <div className="relative overflow-x-auto">
         <table className="w-full min-w-[46rem] table-fixed border-separate border-spacing-0 text-sm">
           <caption className="sr-only">
-            Kiln compared with other panels, feature by feature
+            Features of Kiln, Pterodactyl, AMP, Coolify, Dokploy, Openship, and
+            Portainer
           </caption>
           <thead>
             <tr>
@@ -177,9 +197,15 @@ function LevelMark({
 
 function Alternatives() {
   return (
-    <section className="border-t border-border">
+    <section
+      id="alternatives"
+      aria-labelledby="alternatives-heading"
+      className="border-t border-border"
+    >
       <div className="site-container py-20 sm:py-28">
-        <h2 className="site-title max-w-2xl">When another tool fits better</h2>
+        <h2 id="alternatives-heading" className="site-title max-w-2xl">
+          When another tool fits better
+        </h2>
         <ul className="mt-12 grid gap-px border border-border bg-border md:grid-cols-2">
           {alternatives.map((alternative) => {
             const product = productsById.get(alternative.id)
@@ -225,51 +251,32 @@ function Alternatives() {
   )
 }
 
-// What every card would otherwise repeat, said once.
-const reasons: Array<{
-  description: string
-  icon: React.ReactNode
-  title: string
-}> = [
-  {
-    icon: <Gauge />,
-    title: "Fast and modern",
-    description:
-      "Built for speed and a smooth experience, from the console to the file editor.",
-  },
-  {
-    icon: <Layers />,
-    title: "One panel for everything",
-    description:
-      "Game servers, apps, and databases, with the same console, files, backups, and access.",
-  },
-  {
-    icon: <Server />,
-    title: "Your machines",
-    description:
-      "Each instance runs on the machine you choose, even one behind NAT with no ports forwarded.",
-  },
-  {
-    icon: <LockOpen />,
-    title: "Free and open source",
-    description:
-      "AGPL-3.0, with no cap on instances or machines when you host it yourself.",
-  },
-]
+const reasonIcons: Record<Reason["id"], React.ReactNode> = {
+  fast: <Gauge />,
+  "one-panel": <Layers />,
+  "your-machines": <Server />,
+  "open-source": <LockOpen />,
+}
 
 function WhyKiln() {
   return (
-    <section className="border-t border-border">
+    <section
+      id="why-kiln"
+      aria-labelledby="why-kiln-heading"
+      className="border-t border-border"
+    >
       <div className="site-container py-20 sm:py-28">
-        <h2 className="site-title max-w-2xl">For everything else, pick Kiln</h2>
+        <h2 id="why-kiln-heading" className="site-title max-w-2xl">
+          For everything else, pick Kiln
+        </h2>
         <ul className="mt-12 grid gap-px border border-border bg-border sm:grid-cols-2 lg:grid-cols-4">
           {reasons.map((reason) => (
             <li
-              key={reason.title}
+              key={reason.id}
               className="flex flex-col gap-5 bg-background p-6"
             >
               <span className="grid size-10 place-items-center border border-primary/25 bg-primary/10 text-primary-ink [&_svg]:size-5">
-                {reason.icon}
+                {reasonIcons[reason.id]}
               </span>
               <div>
                 <h3 className="font-semibold tracking-[-0.01em] text-foreground">
