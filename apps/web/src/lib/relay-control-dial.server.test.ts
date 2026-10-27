@@ -7,7 +7,6 @@ import {
 } from "node:crypto"
 import { once } from "node:events"
 import { createServer } from "node:http"
-import { connect } from "node:net"
 import type { AddressInfo } from "node:net"
 
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test"
@@ -276,6 +275,36 @@ it("opens its own connection when a Relay it prefers to be dialed by doesn't", a
   ).resolves.toEqual({ mode: "none" })
   expect(relayConnectionOpener(relayId)).toBe("hearth")
   expect(listening.connections()).toBe(1)
+})
+
+it("lets go of a tunnel it refuses even while the other end holds on", async () => {
+  const raw = connect({
+    allowHalfOpen: true,
+    host: "127.0.0.1",
+    port: Number(new URL(hearthOrigin).port),
+  })
+  await once(raw, "connect")
+  raw.on("error", () => undefined)
+  raw.resume()
+  raw.write(
+    [
+      `GET ${relayTunnelPath} HTTP/1.1`,
+      "Host: hearth",
+      "Upgrade: websocket",
+      "Connection: Upgrade",
+      `Sec-WebSocket-Key: ${randomBytes(16).toString("base64")}`,
+      "Sec-WebSocket-Version: 13",
+      `Sec-WebSocket-Protocol: ${relayTunnelProtocol}`,
+      "",
+      "",
+    ].join("\r\n")
+  )
+  await advanceUntil(once(raw, "end"))
+  // Writing on is refused once Hearth let go of its end.
+  const closed = new Promise((resolve) => raw.once("close", resolve))
+  const writes = setInterval(() => raw.write("still here"), 10)
+  onCleanup(async () => clearInterval(writes))
+  await advanceUntil(closed)
 })
 
 it("takes a tunnel only for a token it asked for, and carries bytes through it", async () => {

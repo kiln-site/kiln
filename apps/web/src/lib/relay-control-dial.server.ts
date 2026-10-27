@@ -90,7 +90,7 @@ export function handleRelayControlUpgrade(
         receiveTunnel(tunnel, token)
       )
     } else {
-      socket.end("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n")
+      refuseUpgrade(socket, "401 Unauthorized")
     }
     return true
   }
@@ -133,7 +133,7 @@ function refuseUpgrade(socket: Duplex, status: string): void {
 function receiveTunnel(socket: WebSocket, token: string): void {
   socket.on("error", () => undefined)
   if (socket.protocol !== relayTunnelProtocol) {
-    socket.close(4400, "Expected the Relay tunnel protocol")
+    socket.terminate()
   } else if (!acceptRelayTunnel(socket, token)) {
     socket.close(4401, "Hearth didn't ask for this tunnel")
   }
