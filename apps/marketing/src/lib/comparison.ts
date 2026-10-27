@@ -102,6 +102,23 @@ export const rows: Array<Row> = [
     },
   },
   {
+    label: "Manage your VPS",
+    notes: {
+      coolify: "A terminal on each server, but no host files.",
+      dokploy: "A terminal on each server, but no host files.",
+      portainer: "Host details, but no terminal on the host itself.",
+    },
+    cells: {
+      kiln: "yes",
+      pterodactyl: "no",
+      amp: "no",
+      coolify: "partly",
+      dokploy: "partly",
+      openship: "no",
+      portainer: "partly",
+    },
+  },
+  {
     // How big the catalog is, not whether there is one.
     label: "1-click catalog",
     notes: {
