@@ -1023,9 +1023,9 @@ update_relay() {
     stop "The Relay couldn't be read."
   # Its update lock is in its data directory, which these scripts take to
   # be /data, where the installer puts it.
-  data=$(dk inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$container" |
-    sed -n 's/^KILN_RELAY_DATA_DIR=//p' | tail -n 1) ||
+  environment=$(dk inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$container") ||
     stop "The Relay couldn't be read."
+  data=$(printf '%s\n' "$environment" | sed -n 's/^KILN_RELAY_DATA_DIR=//p' | tail -n 1)
   case "$data" in
     "" | /data | /data/) ;;
     *) stop "This Relay keeps its data in $data, so update it from Kiln instead." ;;
