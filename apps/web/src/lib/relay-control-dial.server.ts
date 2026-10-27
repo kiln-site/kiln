@@ -109,25 +109,29 @@ function greet(socket: WebSocket): void {
   const nonce = randomBytes(32).toString("base64url")
   socket.send(JSON.stringify({ nonce, type: "dial.hello", v: 1 }))
   socket.once("message", (data, binary) => {
-    settle()
     const challenge = binary ? Option.none() : decodeChallenge(data.toString())
     if (Option.isNone(challenge) || !challenge.value.dial) {
+      settle()
       socket.close(4400, "Expected the Relay's challenge")
       return
     }
+    // It still waits, and counts, until its challenge is checked.
     forkPromise(
       async () => {
         const relay = await loadPersistedRelay(challenge.value.relayId)
         if (!relay) {
+          settle()
           socket.close(
             relayDialCloseCodes.unknownRelay,
             "Hearth doesn't know this Relay"
           )
           return
         }
-        adoptRelayControlSocket(relay, socket, challenge.value, nonce)
+        await adoptRelayControlSocket(relay, socket, challenge.value, nonce)
+        settle()
       },
       (cause) => {
+        settle()
         reportAppError(cause, { operation: "relay.control.dial" })
         socket.close(1011, "Hearth couldn't take this connection")
       }

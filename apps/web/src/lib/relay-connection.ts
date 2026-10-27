@@ -273,8 +273,8 @@ export function adoptRelayControlSocket(
   socket: WebSocket,
   challenge: RelayAuthChallenge,
   nonce: string
-): void {
-  connectionFor(relay).adopt(socket, challenge, nonce)
+): Promise<void> {
+  return connectionFor(relay).adopt(socket, challenge, nonce)
 }
 
 /**
@@ -617,16 +617,21 @@ class RelayConnection {
    * Takes a socket the Relay opened, whose challenge is for Hearth's
    * `nonce`, in place of the one Hearth has. It's refused (and the Relay
    * tries again later) while Hearth keeps its own: one it prefers, one
-   * that's busy, or one it's still opening for the first time.
+   * that's busy, or one it's still opening for the first time. Settles once
+   * its challenge is checked.
    */
-  adopt(socket: WebSocket, challenge: RelayAuthChallenge, nonce: string): void {
+  adopt(
+    socket: WebSocket,
+    challenge: RelayAuthChallenge,
+    nonce: string
+  ): Promise<void> {
     if (this.#closed) {
       socket.close(1001, "Hearth connection closed")
-      return
+      return Promise.resolve()
     }
     // Anyone can say they're this Relay, so nothing changes until its
     // signed challenge checks out.
-    forkAppEffect(
+    return runAppEffect(
       "relay.connection.check-dialed",
       this.#credentialsEffect().pipe(
         Effect.flatMap((credentials) =>

@@ -170,6 +170,14 @@ it("refuses a challenge it didn't ask for, and a Relay it doesn't know", async (
   )
 })
 
+it("still closes a connection in time while its challenge waits to be checked", async () => {
+  relayAt(await closedPort(), "relay")
+  // As when the database is slow to answer.
+  vi.mocked(loadPersistedRelay).mockReturnValueOnce(new Promise(() => {}))
+  const waiting = await dialHearth()
+  await expect(advanceUntil(waiting.closed)).resolves.toBe(4401)
+})
+
 it("keeps the Relay's connection when someone else says they're that Relay", async () => {
   const relay = relayAt(await closedPort(), "relay")
   const dialing = await dialHearth()
