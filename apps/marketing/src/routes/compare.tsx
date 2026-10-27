@@ -1,5 +1,6 @@
+import type * as React from "react"
 import { Link, createFileRoute } from "@tanstack/react-router"
-import { ArrowUpRight } from "lucide-react"
+import { ArrowUpRight, Gauge, Layers, LockOpen, Server } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
@@ -59,6 +60,7 @@ function ComparePage() {
       </section>
 
       <Alternatives />
+      <WhyKiln />
       <TryKiln />
     </>
   )
@@ -190,7 +192,7 @@ function Alternatives() {
               >
                 <div className="flex items-baseline justify-between gap-4">
                   <h3 className="text-xl font-semibold tracking-[-0.03em]">
-                    Kiln and {product.name}
+                    {product.name}
                   </h3>
                   {product.url ? (
                     <a
@@ -206,27 +208,79 @@ function Alternatives() {
                 <p className="type-support mt-2 text-muted-foreground">
                   {alternative.summary}
                 </p>
-                <dl className="type-support mt-5 space-y-3 border-t border-border pt-5">
-                  <div>
-                    <dt className="type-label text-muted-foreground">
-                      Pick {product.name} if
-                    </dt>
-                    <dd className="mt-1 text-foreground">
-                      {alternative.pickThem}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="type-label text-primary-ink">
-                      Pick Kiln if
-                    </dt>
-                    <dd className="mt-1 text-foreground">
-                      {alternative.pickKiln}
-                    </dd>
-                  </div>
-                </dl>
+                <p className="type-support mt-5 border-t border-border pt-5">
+                  <span className="type-label block text-muted-foreground">
+                    Pick {product.name} if
+                  </span>
+                  <span className="mt-1 block text-foreground">
+                    {alternative.pickThem}
+                  </span>
+                </p>
               </li>
             )
           })}
+        </ul>
+      </div>
+    </section>
+  )
+}
+
+// What every card would otherwise repeat, said once.
+const reasons: Array<{
+  description: string
+  icon: React.ReactNode
+  title: string
+}> = [
+  {
+    icon: <Gauge />,
+    title: "Fast and modern",
+    description:
+      "Built for speed and a smooth experience, from the console to the file editor.",
+  },
+  {
+    icon: <Layers />,
+    title: "One panel for everything",
+    description:
+      "Game servers, apps, and databases, with the same console, files, backups, and access.",
+  },
+  {
+    icon: <Server />,
+    title: "Your machines",
+    description:
+      "Each instance runs on the machine you choose, even one behind NAT with no ports forwarded.",
+  },
+  {
+    icon: <LockOpen />,
+    title: "Free and open source",
+    description:
+      "AGPL-3.0, with no cap on instances or machines when you host it yourself.",
+  },
+]
+
+function WhyKiln() {
+  return (
+    <section className="border-t border-border">
+      <div className="site-container py-20 sm:py-28">
+        <h2 className="site-title max-w-2xl">For everything else, pick Kiln</h2>
+        <ul className="mt-12 grid gap-px border border-border bg-border sm:grid-cols-2 lg:grid-cols-4">
+          {reasons.map((reason) => (
+            <li
+              key={reason.title}
+              className="flex flex-col gap-5 bg-background p-6"
+            >
+              <span className="grid size-10 place-items-center border border-primary/25 bg-primary/10 text-primary-ink [&_svg]:size-5">
+                {reason.icon}
+              </span>
+              <div>
+                <h3 className="font-semibold tracking-[-0.01em] text-foreground">
+                  {reason.title}
+                </h3>
+                <p className="type-support mt-1.5 text-muted-foreground">
+                  {reason.description}
+                </p>
+              </div>
+            </li>
+          ))}
         </ul>
       </div>
     </section>
@@ -241,8 +295,7 @@ function TryKiln() {
         <div className="lg:col-span-5">
           <h2 className="site-title">Try it on your own machine</h2>
           <p className="site-lede mt-4 text-muted-foreground">
-            Kiln is free, open source, and in early development. It needs only
-            Docker.
+            It needs only Docker. Kiln is in early development.
           </p>
           <div className="mt-8 flex flex-wrap gap-3">
             <Button

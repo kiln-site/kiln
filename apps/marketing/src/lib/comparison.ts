@@ -143,7 +143,6 @@ export interface Alternative {
   summary: string
   // When the other project is the better choice. Say it plainly.
   pickThem: string
-  pickKiln: string
 }
 
 // Only the projects there's a real reason to choose over Kiln. Coolify and
@@ -155,8 +154,6 @@ export const alternatives: Array<Alternative> = [
       "The game server panel most hosts already know. It has been around for years, is widely adopted, and has a big community behind it.",
     pickThem:
       "You want the most proven option, with years of community answers and a large catalog of extensions, plugins, and eggs.",
-    pickKiln:
-      "You want a modern panel built for speed, with the website, bot, or database next to your server in the same place.",
   },
   {
     id: "amp",
@@ -164,16 +161,12 @@ export const alternatives: Array<Alternative> = [
       "CubeCoders’ commercial game server panel, paid for once by how many instances you run.",
     pickThem:
       "Your servers run on Windows, and you want a simple, easy solution that works out of the box.",
-    pickKiln:
-      "You’re on Linux and want a fast, modern panel that’s free and open source, with no cap on instances.",
   },
   {
     id: "dokploy",
     summary:
       "An app platform built on Docker Swarm, for spreading apps across a cluster.",
     pickThem: "You want to shard apps across a Docker Swarm cluster.",
-    pickKiln:
-      "You want a fast, modern panel that runs each instance on a machine you choose, with game servers next to your apps.",
   },
   {
     id: "portainer",
@@ -181,7 +174,5 @@ export const alternatives: Array<Alternative> = [
       "A general-purpose interface for Docker, Swarm, and Kubernetes, at the level of containers, images, and volumes.",
     pickThem:
       "You run Kubernetes or Docker Swarm and want to manage it directly.",
-    pickKiln:
-      "You think in game servers, apps, and databases, and want a fast, modern panel that handles the containers, ports, and domains.",
   },
 ]
