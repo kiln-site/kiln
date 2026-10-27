@@ -1,18 +1,18 @@
 import * as React from "react"
 
-import { Walkthrough } from "~/components/walkthroughs/walkthrough"
-
-// Each walkthrough a page can show with ```walkthrough <name>```. Its code
-// loads only on the pages that use it.
+// Each walkthrough a page can show with ```walkthrough <name>```. The player
+// and the scene load only on the pages that use them.
 const walkthroughs: Record<
   string,
   React.LazyExoticComponent<() => React.ReactNode>
 > = {
-  "add-relay": React.lazy(() =>
-    import("~/components/walkthroughs/add-relay").then((module) => ({
-      default: () => <Walkthrough scene={module.addRelay} />,
-    }))
-  ),
+  "add-relay": React.lazy(async () => {
+    const [{ Walkthrough }, { addRelay }] = await Promise.all([
+      import("~/components/walkthroughs/walkthrough"),
+      import("~/components/walkthroughs/add-relay"),
+    ])
+    return { default: () => <Walkthrough scene={addRelay} /> }
+  }),
 }
 
 export function WalkthroughNamed({ name }: { name: string }) {

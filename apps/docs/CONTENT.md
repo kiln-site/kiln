@@ -57,6 +57,18 @@ curl -fsSL https://kiln.site/install | sh
 `NOTE`, `TIP`, `WARNING` (something can go wrong), and `CAUTION` (something
 can be lost or exposed).
 
+**Walkthroughs** play an animated scene of Kiln where a fence names one:
+
+````md
+```walkthrough
+add-relay
+```
+````
+
+Scenes live in `src/components/walkthroughs`, drawn with Hearth's own
+components and made-up values, so they look like Hearth and change with it.
+Follow a walkthrough with the same steps in words.
+
 **Keys** use `<kbd>`: `<kbd>Ctrl</kbd> <kbd>C</kbd>`.
 
 **Steps** are a numbered list. Name buttons and fields in **bold**, exactly as

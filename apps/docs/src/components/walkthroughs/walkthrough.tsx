@@ -3,14 +3,11 @@ import { Pause, Play } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 
-// Plays a walkthrough: a scene drawn at 960 × 600 that a camera pans and
+// Plays a walkthrough: a scene drawn at a fixed size that a camera pans and
 // zooms over, with an oversized cursor that moves and clicks. Each frame names
 // what the cursor and camera aim at, by `data-target` in the scene, so they
 // follow the UI if it moves. Only this component renders as it plays, and only
 // while it's on screen.
-
-const width = 960
-const height = 600
 
 export interface Point {
   x: number
@@ -35,6 +32,9 @@ export interface Frame<State> {
 }
 
 export interface Scene<State> {
+  // The scene's own size, which it's drawn at and scaled from.
+  width: number
+  height: number
   label: string
   steps: Array<string>
   frames: Array<Frame<State>>
@@ -58,7 +58,7 @@ export function Walkthrough<State>({ scene }: { scene: Scene<State> }) {
   const stageRef = React.useRef<HTMLDivElement>(null)
   const cameraRef = React.useRef<HTMLDivElement>(null)
   const visible = useOnScreen(stageRef)
-  const fit = useFit(stageRef)
+  const fit = useFit(stageRef, scene.width)
 
   // Advance while playing and on screen; loop at the end.
   React.useEffect(() => {
@@ -83,7 +83,7 @@ export function Walkthrough<State>({ scene }: { scene: Scene<State> }) {
 
   if (!frame) return null
   const step = frame.step
-  const camera = cameraTransform(frame.camera.scale, aims.focus)
+  const camera = cameraTransform(scene, frame.camera.scale, aims.focus)
   const jump = (to: number) => {
     const first = scene.frames.findIndex((candidate) => candidate.step === to)
     if (first !== -1) setIndex(first)
@@ -95,11 +95,16 @@ export function Walkthrough<State>({ scene }: { scene: Scene<State> }) {
         ref={stageRef}
         role="img"
         aria-label={`${scene.label}: ${scene.steps[step] ?? ""}`}
-        className="relative aspect-[16/10] overflow-hidden"
+        className="relative overflow-hidden"
+        style={{ aspectRatio: `${scene.width} / ${scene.height}` }}
       >
         <div
           className="absolute top-0 left-0 origin-top-left"
-          style={{ width, height, transform: `scale(${fit})` }}
+          style={{
+            width: scene.width,
+            height: scene.height,
+            transform: `scale(${fit})`,
+          }}
         >
           <div
             ref={cameraRef}
@@ -211,7 +216,11 @@ function Cursor({
 
 // The camera moves so the focus sits in the middle, without showing past the
 // scene's edges.
-function cameraTransform(scale: number, focus: Point | undefined): string {
+function cameraTransform(
+  { height, width }: { height: number; width: number },
+  scale: number,
+  focus: Point | undefined
+): string {
   if (scale === 1 || !focus) return "translate(0px, 0px) scale(1)"
   const x = clamp(width / 2 - focus.x * scale, width - width * scale, 0)
   const y = clamp(height / 2 - focus.y * scale, height - height * scale, 0)
@@ -223,12 +232,23 @@ function clamp(value: number, min: number, max: number) {
 }
 
 // An aim's centre in the scene's own coordinates. Offsets ignore the
-// camera's transform, so the answer is the same at any zoom.
+// camera's transform, so the answer is the same at any zoom. A target may sit
+// in a Hearth frame, which fills the scene from its corner.
 function resolve(root: HTMLElement, aim: Aim): Point | undefined {
   if ("x" in aim) return aim
-  const element = [
-    ...root.querySelectorAll<HTMLElement>(`[data-target="${aim.target}"]`),
-  ].find((candidate) => candidate.offsetParent !== null)
+  const selector = `[data-target="${aim.target}"]`
+  for (const frame of root.querySelectorAll("iframe")) {
+    const visible = frame.closest<HTMLElement>("[data-view]")
+    if (visible && getComputedStyle(visible).opacity === "0") continue
+    const inFrame = frame.contentDocument?.querySelector(selector)
+    if (inFrame) {
+      const box = inFrame.getBoundingClientRect()
+      return { x: box.left + box.width / 2, y: box.top + box.height / 2 }
+    }
+  }
+  const element = [...root.querySelectorAll<HTMLElement>(selector)].find(
+    (candidate) => candidate.offsetParent !== null
+  )
   if (!element) return undefined
   let x = element.offsetWidth / 2
   let y = element.offsetHeight / 2
@@ -241,7 +261,10 @@ function resolve(root: HTMLElement, aim: Aim): Point | undefined {
   return { x, y }
 }
 
-function useFit(ref: React.RefObject<HTMLDivElement | null>): number {
+function useFit(
+  ref: React.RefObject<HTMLDivElement | null>,
+  width: number
+): number {
   const [fit, setFit] = React.useState(1)
   React.useLayoutEffect(() => {
     const element = ref.current
@@ -251,7 +274,7 @@ function useFit(ref: React.RefObject<HTMLDivElement | null>): number {
     })
     observer.observe(element)
     return () => observer.disconnect()
-  }, [ref])
+  }, [ref, width])
   return fit
 }
 

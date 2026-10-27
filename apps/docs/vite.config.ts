@@ -1,3 +1,5 @@
+import { resolve } from "node:path"
+
 import { defineConfig, lazyPlugins } from "vite-plus"
 import { tanstackStart } from "@tanstack/react-start/plugin/vite"
 import viteReact from "@vitejs/plugin-react"
@@ -30,7 +32,24 @@ const config = defineConfig(({ command }) => ({
     },
   },
   envDir: "../..",
-  resolve: { tsconfigPaths: true },
+  resolve: {
+    // Walkthroughs draw with Hearth's own components from apps/web/src
+    // (`@/`), as the marketing site's demos do. Keep one copy of React.
+    alias:
+      command === "serve"
+        ? [
+            {
+              find: /^@workspace\/contracts$/,
+              replacement: resolve(
+                import.meta.dirname,
+                "../../packages/contracts/src/index.ts"
+              ),
+            },
+          ]
+        : [],
+    dedupe: ["react", "react-dom"],
+    tsconfigPaths: true,
+  },
   ssr: command === "serve" ? {} : { noExternal: true },
   server: {
     // Lets a phone on the same tailnet open the dev server by MagicDNS name.

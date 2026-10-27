@@ -8,6 +8,9 @@
     "types": ["vite/client"],
     "paths": {
       "~/*": ["./src/*"],
+      "@/*": ["../web/src/*"],
+      "@workspace/contracts": ["../../packages/contracts/src/index.ts"],
+      "@workspace/telemetry": ["../../packages/telemetry/src/index.ts"],
       "@workspace/ui/*": ["../../packages/ui/src/*"]
     },
 

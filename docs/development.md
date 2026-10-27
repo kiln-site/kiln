@@ -203,6 +203,13 @@ kiln.site does. In production the marketing image does the same when
 `KILN_DOCS_ORIGIN` names the docs container, or whatever is in front of both
 can route `/docs` to the docs image instead.
 
+Walkthroughs (`src/components/walkthroughs`) draw Hearth with its own
+components from `apps/web/src`, through the `@/` alias as the marketing site's
+demos do, with made-up values and nothing fetched. They render in a desktop-
+sized iframe so Hearth's breakpoints see a laptop on any screen, and load only
+on the pages that use them. A component they import has to be listed with
+`@source` in `apps/docs/src/styles.css`.
+
 The **Docs image** workflow builds `ghcr.io/kiln-site/docs` on PRs that touch
 the docs or the shared UI, and publishes `latest` and `sha-<commit>` from
 `main`, like the marketing image. It listens on port 3000 and serves `/docs`:

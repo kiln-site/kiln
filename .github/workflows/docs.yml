@@ -9,7 +9,8 @@ on:
     branches: [main]
     paths:
       - "apps/docs/**"
-      - "packages/ui/**"
+      - "apps/web/**"
+      - "packages/**"
       - "patches/**"
       - "pnpm-lock.yaml"
       - ".github/workflows/docs.yml"
@@ -17,7 +18,8 @@ on:
   pull_request:
     paths:
       - "apps/docs/**"
-      - "packages/ui/**"
+      - "apps/web/**"
+      - "packages/**"
       - "patches/**"
       - "pnpm-lock.yaml"
       - ".github/workflows/docs.yml"

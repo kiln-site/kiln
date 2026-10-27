@@ -5,6 +5,14 @@
  * name its stylesheet differently from the one the client ships.
  */
 @source not "../dist";
+/* Walkthroughs draw with these Hearth components, so their classes must exist. */
+@source "../../web/src/components/backup-icon.tsx";
+@source "../../web/src/components/data-table-workspace.tsx";
+@source "../../web/src/components/hearth-mark.tsx";
+@source "../../web/src/components/instance-kind-icon.tsx";
+@source "../../web/src/components/panel-footer.tsx";
+@source "../../web/src/components/section-navigation.tsx";
+@source "../../web/src/components/workspace-frame.tsx";
 
 @layer base {
   /*

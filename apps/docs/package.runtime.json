@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "effect": "4.0.1",
     "srvx": "1.0.5"
   }
 }

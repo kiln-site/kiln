@@ -6,16 +6,24 @@ FROM ghcr.io/voidzero-dev/vite-plus:${VITE_PLUS_VERSION} AS build
 
 WORKDIR /source
 
-# Install from manifests only, so ordinary content changes reuse this layer.
+# Walkthroughs draw with Hearth's components from apps/web/src, which resolve
+# their packages from apps/web, so Hearth's dependencies install too. Install
+# from manifests only, so ordinary content changes reuse this layer.
 COPY --chown=vp:vp package.json pnpm-lock.yaml pnpm-workspace.yaml .node-version ./
 COPY --chown=vp:vp apps/docs/package.json ./apps/docs/package.json
+COPY --chown=vp:vp apps/web/package.json ./apps/web/package.json
+COPY --chown=vp:vp packages/contracts/package.json ./packages/contracts/package.json
+COPY --chown=vp:vp packages/telemetry/package.json ./packages/telemetry/package.json
 COPY --chown=vp:vp packages/ui/package.json ./packages/ui/package.json
 COPY --chown=vp:vp patches ./patches
 RUN --mount=type=cache,target=/home/vp/.local/share/pnpm/store,uid=1000,gid=1000,sharing=locked \
-  vp install --frozen-lockfile --ignore-scripts --filter docs...
+  vp install --frozen-lockfile --ignore-scripts --filter docs... --filter web...
 
-COPY --chown=vp:vp tsconfig.json vite.config.ts ./
+COPY --chown=vp:vp tsconfig.json vite.config.ts release.json ./
 COPY --chown=vp:vp apps/docs ./apps/docs
+COPY --chown=vp:vp apps/web ./apps/web
+COPY --chown=vp:vp packages/contracts ./packages/contracts
+COPY --chown=vp:vp packages/telemetry ./packages/telemetry
 COPY --chown=vp:vp packages/ui ./packages/ui
 
 # The path the docs live under on the site. Every route and asset is built
