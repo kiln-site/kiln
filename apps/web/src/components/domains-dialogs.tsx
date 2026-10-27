@@ -1,14 +1,13 @@
-// The Domains page's dialogs. They load after the page: when the browser
+// The Domains page's dialogs, also opened from a game server's network page. They load after the page: when the browser
 // is idle, or when one first opens.
 import * as React from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { Effect, Fiber, Result } from "effect"
 import {
   ArrowLeft,
   Check,
   ChevronDown,
   ChevronRight,
-  ChevronsUpDown,
   CircleAlert,
   CircleHelp,
   ExternalLink,
@@ -49,23 +48,9 @@ import {
 import {
   domainHostname,
   errorMessage,
-  serverKey,
-  strategyOptions,
-  type DirectoryServer,
   type DomainConnectionOverview,
   type VanityDomainChoice,
 } from "@/components/domains-shared"
-import { InstanceCard } from "@/components/instance-card"
-import {
-  DrawerPopover,
-  DrawerPopoverContent,
-  DrawerPopoverTrigger,
-} from "@/components/drawer-popover"
-import {
-  InstancePickerContent,
-  type InstancePickerItem,
-} from "@/components/instance-picker"
-import type { DomainAssignmentStrategy, VanitySettings } from "@/effect/domains"
 import {
   defaultDomainBlacklistPatterns,
   domainInZone,
@@ -73,7 +58,7 @@ import {
   validateBlacklistPatterns,
   vanityLabelSchema,
 } from "@/lib/domain-schemas"
-import { queryKeys, serverDirectoryQueryOptions } from "@/lib/query-options"
+import { queryKeys } from "@/lib/query-options"
 import {
   createInstanceDomain,
   deleteDomainConnection,
@@ -81,7 +66,6 @@ import {
   releaseWebHostname,
   removeInstanceDomain,
   saveDomainConnection,
-  saveVanitySettings,
   updateInstanceDomain,
   type DiscoveredCloudflareZone,
   type ManagedDomainOverview,
@@ -89,47 +73,31 @@ import {
 } from "@/server/domains"
 
 export function CreateDomainDialog({
+  domainCount,
   domains,
-  initialServerKey,
-  managedDomains,
   onOpenChange,
+  server,
 }: {
+  /** How many domains already point at the game server. */
+  domainCount: number
   domains: ReadonlyArray<VanityDomainChoice>
-  /** The game server the table is filtered to. */
-  initialServerKey: string | null
-  managedDomains: Array<ManagedDomainOverview>
   onOpenChange: (open: boolean) => void
+  server: { id: string; name: string; relayId: string }
 }) {
   const queryClient = useQueryClient()
-  const { data: servers = emptyServers } = useQuery(
-    serverDirectoryQueryOptions()
-  )
-  const domainCounts = React.useMemo(() => {
-    const counts = new Map<string, number>()
-    for (const domain of managedDomains) {
-      const key = serverKey(domain.relayId, domain.instanceId)
-      counts.set(key, (counts.get(key) ?? 0) + 1)
-    }
-    return counts
-  }, [managedDomains])
-  const [selectedKey, setSelectedKey] = React.useState(initialServerKey)
   const [domain, setDomain] = React.useState(domains[0]?.domain ?? "")
   const [vanityLabel, setVanityLabel] = React.useState("")
   const [primary, setPrimary] = React.useState(false)
-  const server = selectedKey
-    ? servers.find((item) => serverKey(item.relayId, item.id) === selectedKey)
-    : undefined
-  const existingCount = selectedKey ? (domainCounts.get(selectedKey) ?? 0) : 0
   const label = vanityLabel.trim()
   const parsed = label ? vanityLabelSchema.safeParse(label) : null
   const create = useMutation({
-    mutationFn: (target: DirectoryServer) =>
+    mutationFn: () =>
       createInstanceDomain({
         data: {
           domain,
-          instanceId: target.id,
+          instanceId: server.id,
           primary,
-          relayId: target.relayId,
+          relayId: server.relayId,
           vanityLabel: parsed?.success ? parsed.data : undefined,
         },
       }),
@@ -146,28 +114,18 @@ export function CreateDomainDialog({
     <Dialog open onOpenChange={create.isPending ? undefined : onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>New domain</DialogTitle>
+          <DialogTitle>Add domain</DialogTitle>
           <DialogDescription>
-            Point a vanity address at a game server.
+            An address players can join {server.name} with.
           </DialogDescription>
         </DialogHeader>
         <form
           className="space-y-4"
           onSubmit={(event) => {
             event.preventDefault()
-            if (server && parsed?.success !== false) create.mutate(server)
+            if (parsed?.success !== false) create.mutate()
           }}
         >
-          <div className="type-label space-y-1.5">
-            <span id="new-domain-server">Game server</span>
-            <GameServerPicker
-              domainCounts={domainCounts}
-              selectedKey={selectedKey}
-              servers={servers}
-              onSelect={setSelectedKey}
-            />
-          </div>
-
           <VanityNameField
             domain={domain}
             domains={domains}
@@ -176,23 +134,19 @@ export function CreateDomainDialog({
                 ? (parsed.error.issues[0]?.message ?? "Enter a vanity name")
                 : null
             }
-            hint="Leave blank and Kiln picks an available name."
+            hint="Leave blank for a random name."
             placeholder="generated"
             value={vanityLabel}
             onDomainChange={setDomain}
             onValueChange={setVanityLabel}
           />
 
-          {server && existingCount > 0 ? (
+          {domainCount > 0 ? (
             <PrimaryDomainSwitch
               checked={primary}
               serverName={server.name}
               onCheckedChange={setPrimary}
             />
-          ) : server ? (
-            <p className="type-meta text-muted-foreground">
-              This becomes {server.name}&apos;s connect address.
-            </p>
           ) : null}
 
           {create.error ? <ConfigurationError error={create.error} /> : null}
@@ -207,9 +161,7 @@ export function CreateDomainDialog({
               Cancel
             </Button>
             <Button
-              disabled={
-                create.isPending || !server || parsed?.success === false
-              }
+              disabled={create.isPending || parsed?.success === false}
               type="submit"
             >
               {create.isPending ? (
@@ -217,7 +169,7 @@ export function CreateDomainDialog({
               ) : (
                 <Plus />
               )}
-              Create domain
+              Add domain
             </Button>
           </DialogFooter>
         </form>
@@ -225,110 +177,6 @@ export function CreateDomainDialog({
     </Dialog>
   )
 }
-
-const emptyServers: Array<DirectoryServer> = []
-
-const GameServerPicker = React.memo(function GameServerPicker({
-  domainCounts,
-  onSelect,
-  selectedKey,
-  servers,
-}: {
-  domainCounts: ReadonlyMap<string, number>
-  onSelect: (key: string) => void
-  selectedKey: string | null
-  servers: ReadonlyArray<DirectoryServer>
-}) {
-  const [open, setOpen] = React.useState(false)
-  const items = React.useMemo(
-    () =>
-      servers.map((server): InstancePickerItem => {
-        const key = serverKey(server.relayId, server.id)
-        const count = domainCounts.get(key) ?? 0
-        return {
-          identity: {
-            brickId: server.brickId,
-            id: server.id,
-            implementation: server.implementation,
-            kind: "server",
-            relayId: server.relayId,
-          },
-          key,
-          meta: [
-            server.relayName,
-            server.shortId,
-            count > 0 ? `${count} ${count === 1 ? "domain" : "domains"}` : "",
-          ]
-            .filter(Boolean)
-            .join(" · "),
-          name: server.name,
-          searchText: `${server.id} ${server.relayName} ${server.game}`,
-        }
-      }),
-    [domainCounts, servers]
-  )
-  const selectedItem = selectedKey
-    ? items.find((item) => item.key === selectedKey)
-    : undefined
-  const selectedKeys = React.useMemo(
-    () => new Set(selectedKey ? [selectedKey] : []),
-    [selectedKey]
-  )
-  const selectItem = React.useCallback(
-    (item: InstancePickerItem) => {
-      onSelect(item.key)
-      setOpen(false)
-    },
-    [onSelect]
-  )
-
-  return (
-    <DrawerPopover open={open} onOpenChange={setOpen}>
-      <DrawerPopoverTrigger asChild>
-        <Button
-          aria-expanded={open}
-          aria-labelledby="new-domain-server"
-          className="h-auto min-h-10 w-full justify-between gap-3 px-2 py-1.5 font-normal"
-          role="combobox"
-          type="button"
-          variant="outline"
-        >
-          {selectedItem ? (
-            <InstanceCard
-              className="min-w-0 flex-1 gap-2 text-left"
-              iconClassName="size-7 border-0 bg-muted/55"
-              instance={selectedItem.identity}
-              meta={selectedItem.meta}
-              metaClassName="font-mono"
-              name={selectedItem.name}
-              nameClassName="type-control-sm"
-              showFavorite={false}
-              statusClassName="ring-background"
-            />
-          ) : (
-            <span className="px-1 text-muted-foreground">
-              Choose a game server
-            </span>
-          )}
-          <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
-        </Button>
-      </DrawerPopoverTrigger>
-      <DrawerPopoverContent
-        title="Game servers"
-        align="start"
-        className="z-[70] w-(--radix-popover-trigger-width) min-w-72 overflow-hidden p-0"
-      >
-        <InstancePickerContent
-          ariaLabel="Game servers"
-          emptyMessage="No game servers"
-          items={items}
-          selectedKeys={selectedKeys}
-          onSelect={selectItem}
-        />
-      </DrawerPopoverContent>
-    </DrawerPopover>
-  )
-})
 
 function VanityNameField({
   autoFocus = false,
@@ -345,7 +193,7 @@ function VanityNameField({
   domain: string
   domains: ReadonlyArray<VanityDomainChoice>
   error: string | null
-  hint: string
+  hint: string | null
   onDomainChange: (domain: string) => void
   onValueChange: (value: string) => void
   placeholder?: string
@@ -396,15 +244,17 @@ function VanityNameField({
           </span>
         )}
       </div>
-      <span
-        className={
-          error
-            ? "type-meta block text-destructive"
-            : "type-meta block text-muted-foreground"
-        }
-      >
-        {error ?? hint}
-      </span>
+      {error || hint ? (
+        <span
+          className={
+            error
+              ? "type-meta block text-destructive"
+              : "type-meta block text-muted-foreground"
+          }
+        >
+          {error ?? hint}
+        </span>
+      ) : null}
     </div>
   )
 }
@@ -421,14 +271,13 @@ function PrimaryDomainSwitch({
   return (
     <div className="flex items-center justify-between gap-4 border border-border/75 bg-background/35 p-3">
       <div>
-        <p className="text-xs font-medium">Use as connect address</p>
+        <p className="text-xs font-medium">Main address</p>
         <p className="type-meta mt-0.5 text-muted-foreground">
-          Show this domain on {serverName}&apos;s pages instead of its current
-          one.
+          Shown on {serverName}&apos;s pages.
         </p>
       </div>
       <Switch
-        aria-label="Use as connect address"
+        aria-label="Main address"
         checked={checked}
         onCheckedChange={onCheckedChange}
       />
@@ -485,9 +334,7 @@ export function EditDomainDialog({
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Edit domain</DialogTitle>
-          <DialogDescription>
-            Choose the vanity address players use to join {domain.server.name}.
-          </DialogDescription>
+          <DialogDescription>{domain.server.name}</DialogDescription>
         </DialogHeader>
         <form
           className="space-y-4"
@@ -505,7 +352,7 @@ export function EditDomainDialog({
                 ? null
                 : (parsed.error.issues[0]?.message ?? "Enter a vanity name")
             }
-            hint="Kiln updates the DNS records in Cloudflare."
+            hint={null}
             value={vanityLabel}
             onDomainChange={setSuffix}
             onValueChange={setVanityLabel}
@@ -514,8 +361,7 @@ export function EditDomainDialog({
           {domain.primary ? (
             domain.domainCount > 1 ? (
               <p className="type-meta text-muted-foreground">
-                This is {domain.server.name}&apos;s connect address. Make
-                another of its domains primary to change it.
+                This is {domain.server.name}&apos;s main address.
               </p>
             ) : null
           ) : (
@@ -586,13 +432,11 @@ export function DeleteDomainDialog({
         <DialogHeader>
           <DialogTitle>Delete domain</DialogTitle>
           <DialogDescription>
-            Kiln deletes <span className="font-mono">{hostname}</span> from
-            Cloudflare.{" "}
+            Deletes <span className="font-mono">{hostname}</span> from
+            Cloudflare.
             {domain.domainCount > 1
-              ? domain.primary
-                ? `Another of ${domain.server.name}'s domains becomes its connect address.`
-                : `${domain.server.name} keeps its other domains.`
-              : `Players join ${domain.server.name} by its Relay address instead, and Kiln won't give it a new vanity domain when it starts or syncs.`}
+              ? ""
+              : ` Players join ${domain.server.name} by its Relay address instead.`}
           </DialogDescription>
         </DialogHeader>
 
@@ -652,14 +496,12 @@ type TokenCheck =
 export function DomainConnectionDialog({
   canManagePlatform,
   connection,
-  domainUsage,
   hearthDomain,
   onOpenChange,
 }: {
   canManagePlatform: boolean
   /** Null to connect a new token. */
   connection: DomainConnectionOverview | null
-  domainUsage: ReadonlyMap<string, number>
   hearthDomain: string
   onOpenChange: (open: boolean) => void
 }) {
@@ -669,6 +511,9 @@ export function DomainConnectionDialog({
   const [name, setName] = React.useState(connection?.name ?? "Cloudflare")
   const [platform, setPlatform] = React.useState(connection?.platform ?? false)
   const [apiToken, setApiToken] = React.useState("")
+  const [blacklistPatterns, setBlacklistPatterns] = React.useState(() =>
+    (connection?.blacklistPatterns ?? defaultDomainBlacklistPatterns).join("\n")
+  )
   const [choices, setChoices] = React.useState<Array<DomainChoice>>(() => {
     const vanity = new Map(
       connection?.domains.map((domain) => [domain.zoneId, domain]) ?? []
@@ -760,7 +605,7 @@ export function DomainConnectionDialog({
   const remove = useMutation({
     mutationFn: () =>
       deleteDomainConnection({ data: { id: connection?.id ?? "" } }),
-    onSuccess: () => settle(`Removed ${connection?.name ?? "connection"}`),
+    onSuccess: () => settle(`Disconnected ${connection?.name ?? "Cloudflare"}`),
   })
   const pending = save.isPending || remove.isPending
 
@@ -790,10 +635,23 @@ export function DomainConnectionDialog({
     const defaultDomain = effectiveDefault
       ? domains[selected.indexOf(effectiveDefault)]?.domain
       : undefined
+    const reserved = Result.try(() =>
+      validateBlacklistPatterns(
+        blacklistPatterns
+          .split(/\r?\n/u)
+          .map((pattern) => pattern.trim())
+          .filter(Boolean)
+      )
+    )
+    if (Result.isFailure(reserved)) {
+      showToast({ message: errorMessage(reserved.failure), type: "error" })
+      return
+    }
     const token = apiToken.trim()
     save.mutate({
       data: {
         apiToken: token || undefined,
+        blacklistPatterns: reserved.success,
         defaultDomain,
         domains,
         id: connection?.id,
@@ -814,13 +672,16 @@ export function DomainConnectionDialog({
         <DialogHeader>
           {mode === "settings" ? (
             <>
-              <DialogTitle>
-                {saved ? `Edit ${connection.name}` : "Connect Cloudflare"}
+              <DialogTitle className="flex items-center gap-2">
+                {saved ? connection.name : "Connect Cloudflare"}
+                {connection?.platform ? (
+                  <span className="type-technical-label border border-border/70 px-1 font-normal text-muted-foreground">
+                    Kiln
+                  </span>
+                ) : null}
               </DialogTitle>
-              <DialogDescription>
-                Kiln creates DNS records for web routes in every zone this
-                token reaches. Zones marked vanity also give new game servers
-                and apps addresses.
+              <DialogDescription className="sr-only">
+                A Cloudflare API token and the domains Kiln may use.
               </DialogDescription>
             </>
           ) : (
@@ -845,18 +706,23 @@ export function DomainConnectionDialog({
         {mode === "settings" ? (
           <div className="space-y-4">
             <div className="grid gap-3 sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
-              <label className="type-control-sm block space-y-1.5">
-                Name
+              <div className="space-y-1.5">
+                <div className="flex h-5 items-center">
+                  <label className="type-control-sm" htmlFor="connection-name">
+                    Name
+                  </label>
+                </div>
                 <Input
                   autoComplete="off"
+                  id="connection-name"
                   maxLength={64}
                   name="name"
                   value={name}
                   onChange={(event) => setName(event.currentTarget.value)}
                 />
-              </label>
+              </div>
               <div className="space-y-1.5">
-                <div className="flex items-center justify-between gap-3">
+                <div className="flex h-5 items-center justify-between gap-3">
                   <label
                     className="type-control-sm"
                     htmlFor="cloudflare-api-token"
@@ -889,7 +755,7 @@ export function DomainConnectionDialog({
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <Button
-                        aria-label="Preview required Cloudflare permissions"
+                        aria-label="Required permissions"
                         size="icon"
                         type="button"
                         variant="outline"
@@ -899,7 +765,7 @@ export function DomainConnectionDialog({
                       </Button>
                     </TooltipTrigger>
                     <TooltipContent side="left">
-                      Preview required permissions
+                      Required permissions
                     </TooltipContent>
                   </Tooltip>
                 </div>
@@ -907,25 +773,21 @@ export function DomainConnectionDialog({
             </div>
 
             <div className="space-y-1.5">
-              <div className="flex items-center justify-between gap-3">
+              <div className="flex h-6 items-center justify-between gap-3">
                 <p className="type-control-sm" id="connection-zones">
-                  Zones
+                  Domains
                 </p>
-                <div className="flex items-center gap-2">
+                <div className="flex min-w-0 items-center gap-2">
                   {tokenCheck.status === "error" && choices.length > 0 ? (
                     <span className="type-meta flex min-w-0 items-center gap-1 text-destructive">
                       <CircleAlert className="size-3 shrink-0" />
                       <span className="truncate">{tokenCheck.message}</span>
                     </span>
-                  ) : choices.length > 0 ? (
-                    <span className="type-meta text-muted-foreground tabular-nums">
-                      {selected.length} of {choices.length} vanity
-                    </span>
                   ) : null}
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <Button
-                        aria-label="Refresh zones from Cloudflare"
+                        aria-label="Refresh from Cloudflare"
                         disabled={
                           tokenCheck.status === "checking" ||
                           (tokenLength === 0 ? !saved : tokenLength < 20)
@@ -957,13 +819,24 @@ export function DomainConnectionDialog({
                 >
                   <thead className="sticky top-0 z-10 bg-[color-mix(in_oklab,var(--surface-overlay)_92%,transparent)] backdrop-blur">
                     <tr className="type-technical-label text-left text-muted-foreground">
-                      <th className="w-16 px-3 py-2 font-normal">Vanity</th>
-                      <th className="px-1 py-2 font-normal">Domain</th>
-                      <th className="w-20 px-2 py-2 text-right font-normal">
-                        In use
+                      <th className="px-3 py-2 font-normal">Domain</th>
+                      <th
+                        className={`${platform ? "w-36" : "w-24"} px-2 py-2 font-normal whitespace-nowrap`}
+                      >
+                        {platform ? (
+                          <ColumnHint hint="Anyone can get an address here">
+                            Kiln provided
+                          </ColumnHint>
+                        ) : (
+                          <ColumnHint hint="New game servers and apps get an address here, like amber-forge.example.com.">
+                            Vanity
+                          </ColumnHint>
+                        )}
                       </th>
-                      <th className="w-20 px-3 py-2 text-center font-normal">
-                        Default
+                      <th className="w-24 px-3 py-2 font-normal">
+                        <ColumnHint hint="The vanity domain new addresses use first.">
+                          Default
+                        </ColumnHint>
                       </th>
                     </tr>
                   </thead>
@@ -974,7 +847,6 @@ export function DomainConnectionDialog({
                           key={choice.zoneId}
                           choice={choice}
                           isDefault={choice === effectiveDefault}
-                          usage={domainUsage.get(choice.domain) ?? 0}
                           onChange={updateChoice}
                           onMakeDefault={setDefaultZoneId}
                         />
@@ -983,16 +855,16 @@ export function DomainConnectionDialog({
                       <tr>
                         <td
                           className="type-meta px-3 py-6 text-center text-muted-foreground"
-                          colSpan={4}
+                          colSpan={3}
                         >
                           {tokenCheck.status === "checking" ? (
-                            "Listing the token's zones…"
+                            "Loading domains…"
                           ) : tokenCheck.status === "error" ? (
                             <span className="text-destructive">
                               {tokenCheck.message}
                             </span>
                           ) : (
-                            "Paste a token to list the zones it can manage."
+                            "Paste a token to see its domains."
                           )}
                         </td>
                       </tr>
@@ -1003,22 +875,45 @@ export function DomainConnectionDialog({
             </div>
 
             {canManagePlatform && !saved ? (
-              <div className="flex items-center justify-between gap-4 border border-border/75 bg-background/35 p-3">
-                <div>
-                  <p className="type-control-sm" id="platform-connection">
-                    Kiln-provided
-                  </p>
-                  <p className="type-meta mt-0.5 text-muted-foreground">
-                    Everyone&apos;s new game servers and apps get addresses
-                    under its vanity domains, unless they add their own.
-                  </p>
+              <div className="flex items-center justify-between gap-4">
+                <p className="type-control-sm" id="connection-owner">
+                  Owner
+                </p>
+                <div
+                  aria-labelledby="connection-owner"
+                  className="flex h-8 shrink-0 items-center border border-border/75 bg-background/35 p-0.5"
+                  role="radiogroup"
+                >
+                  {ownerOptions.map((option) => (
+                    <button
+                      key={option.label}
+                      aria-checked={platform === option.platform}
+                      className="type-control-sm h-full px-3 text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 aria-checked:bg-muted aria-checked:text-foreground"
+                      role="radio"
+                      type="button"
+                      onClick={() => setPlatform(option.platform)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
                 </div>
-                <Switch
-                  aria-labelledby="platform-connection"
-                  checked={platform}
-                  onCheckedChange={setPlatform}
-                />
               </div>
+            ) : null}
+
+            {/* Vanity domains, a person's or Kiln's, keep names from others. */}
+            {selected.length > 0 ? (
+              <label className="type-control-sm block space-y-1.5">
+                Reserved names
+                <Textarea
+                  aria-label="Reserved name patterns"
+                  className="min-h-20 font-mono text-xs"
+                  placeholder={"{{bad-words}}\n^(admin|api|www)$"}
+                  value={blacklistPatterns}
+                  onChange={(event) =>
+                    setBlacklistPatterns(event.currentTarget.value)
+                  }
+                />
+              </label>
             ) : null}
 
             {save.error ? <ConfigurationError error={save.error} /> : null}
@@ -1040,7 +935,7 @@ export function DomainConnectionDialog({
                   ) : (
                     <Trash2 />
                   )}
-                  {confirmDelete ? "Remove and delete its records" : "Remove"}
+                  {confirmDelete ? "Confirm disconnect" : "Disconnect"}
                 </Button>
               ) : (
                 <span />
@@ -1064,7 +959,7 @@ export function DomainConnectionDialog({
                   ) : (
                     <Check />
                   )}
-                  {tokenLength ? "Verify & save" : "Save"}
+                  {saved ? "Save" : "Connect"}
                 </Button>
               </div>
             </DialogFooter>
@@ -1079,82 +974,84 @@ export function DomainConnectionDialog({
   )
 }
 
+const ownerOptions = [
+  { label: "Me", platform: false },
+  { label: "Kiln", platform: true },
+] as const
+
+/** A column header whose meaning shows on hover. */
+function ColumnHint({
+  children,
+  hint,
+}: {
+  children: React.ReactNode
+  hint: string
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          className="inline-flex cursor-help items-center gap-1"
+          tabIndex={0}
+        >
+          {children}
+          <CircleHelp aria-hidden className="size-3 opacity-60" />
+        </span>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-60" side="top">
+        {hint}
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
 const DomainZoneRow = React.memo(function DomainZoneRow({
   choice,
   isDefault,
   onChange,
   onMakeDefault,
-  usage,
 }: {
   choice: DomainChoice
   isDefault: boolean
   onChange: (zoneId: string, change: Partial<DomainChoice>) => void
   onMakeDefault: (zoneId: string) => void
-  usage: number
 }) {
+  // Fixed-height rows with block-level controls, so toggling one never
+  // shifts the baseline and the dialog's height.
   return (
-    <tr className={choice.selected ? undefined : "text-muted-foreground"}>
-      <td className="px-3 py-1.5 align-middle">
-        <label className="flex cursor-pointer items-center">
-          <input
-            aria-label={`Use ${choice.zoneName} as a vanity domain`}
-            checked={choice.selected}
-            className="peer sr-only"
-            type="checkbox"
-            onChange={(event) =>
-              onChange(choice.zoneId, { selected: event.currentTarget.checked })
-            }
-          />
-          <span
-            className={`grid size-4 place-items-center rounded-sm border peer-focus-visible:ring-2 peer-focus-visible:ring-ring/40 ${
-              choice.selected
-                ? "border-primary bg-primary text-primary-foreground"
-                : "border-input"
-            }`}
-          >
-            {choice.selected ? <Check className="size-3" /> : null}
-          </span>
-        </label>
-      </td>
-      <td className="px-1 py-1.5">
+    <tr className="h-10">
+      <td className="px-3">
         <div className="flex min-w-0 items-center gap-1.5">
           <span className="type-code min-w-0 truncate">{choice.domain}</span>
-          {!choice.selected && usage > 0 ? (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="type-meta shrink-0 text-muted-foreground">
-                  Existing only
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="top">
-                Its {usage} game server{" "}
-                {usage === 1 ? "domain keeps" : "domains keep"} working. New
-                game servers won&apos;t get it.
-              </TooltipContent>
-            </Tooltip>
-          ) : null}
-          <span className="flex-1" />
           {choice.missing ? (
             <Tooltip>
               <TooltipTrigger asChild>
                 <CircleAlert
-                  aria-label="This token can't manage this zone"
+                  aria-label="This token can't reach this domain"
                   className="size-3.5 shrink-0 text-amber-600 dark:text-amber-300"
                 />
               </TooltipTrigger>
               <TooltipContent side="left">
-                This token can&apos;t manage {choice.zoneName}
+                This token can&apos;t reach {choice.zoneName}
               </TooltipContent>
             </Tooltip>
           ) : null}
         </div>
       </td>
-      <td className="type-meta px-2 py-1.5 text-right text-muted-foreground tabular-nums">
-        {usage > 0 ? usage : "–"}
+      <td className="px-2">
+        <div className="flex items-center">
+          <Switch
+            aria-label={`Use ${choice.domain} for vanity addresses`}
+            checked={choice.selected}
+            onCheckedChange={(selected) =>
+              onChange(choice.zoneId, { selected })
+            }
+          />
+        </div>
       </td>
-      <td className="px-3 py-1.5 text-center">
+      <td className="px-3">
         <label
-          className={`inline-flex ${choice.selected ? "cursor-pointer" : "cursor-not-allowed opacity-40"}`}
+          className={`flex size-6 items-center justify-center ${choice.selected ? "cursor-pointer" : "cursor-not-allowed opacity-30"}`}
         >
           <input
             aria-label={`Make ${choice.domain} the default`}
@@ -1166,13 +1063,13 @@ const DomainZoneRow = React.memo(function DomainZoneRow({
             onChange={() => onMakeDefault(choice.zoneId)}
           />
           <span
-            className={`grid size-4 place-items-center rounded-full border peer-focus-visible:ring-2 peer-focus-visible:ring-ring/40 ${
+            className={`flex size-4 items-center justify-center rounded-full border peer-focus-visible:ring-2 peer-focus-visible:ring-ring/40 ${
               isDefault ? "border-primary" : "border-input"
             }`}
           >
-            {isDefault ? (
-              <span className="size-2 rounded-full bg-primary" />
-            ) : null}
+            <span
+              className={`size-2 rounded-full ${isDefault ? "bg-primary" : "bg-transparent"}`}
+            />
           </span>
         </label>
       </td>
@@ -1209,196 +1106,6 @@ function mergeDiscoveredZones(
   ]
 }
 
-/**
- * Whether new game servers and apps get addresses under the person's vanity
- * domains, and how one is picked. Administrators also set Kiln's, which
- * everyone without vanity domains of their own gets.
- */
-export function VanitySettingsDialog({
-  onOpenChange,
-  personalSettings,
-  platformSettings,
-}: {
-  onOpenChange: (open: boolean) => void
-  personalSettings: VanitySettings
-  platformSettings: VanitySettings | null
-}) {
-  const queryClient = useQueryClient()
-  const [personal, setPersonal] = React.useState(personalSettings)
-  const [platform, setPlatform] = React.useState(platformSettings)
-  const [blacklistPatterns, setBlacklistPatterns] = React.useState(() =>
-    (platformSettings && platformSettings.blacklistPatterns.length > 0
-      ? platformSettings.blacklistPatterns
-      : [...defaultDomainBlacklistPatterns]
-    ).join("\n")
-  )
-  const save = useMutation({
-    mutationFn: async () => {
-      await saveVanitySettings({
-        data: { ...personal, blacklistPatterns: [], platform: false },
-      })
-      if (!platform) return
-      const patterns = Result.try(() =>
-        validateBlacklistPatterns(
-          blacklistPatterns
-            .split(/\r?\n/u)
-            .map((pattern) => pattern.trim())
-            .filter(Boolean)
-        )
-      )
-      if (Result.isFailure(patterns)) throw patterns.failure
-      await saveVanitySettings({
-        data: {
-          ...platform,
-          blacklistPatterns: patterns.success,
-          platform: true,
-        },
-      })
-    },
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({
-        queryKey: queryKeys.domains.settings,
-      })
-      showToast({ message: "Vanity settings saved", type: "success" })
-      onOpenChange(false)
-    },
-  })
-
-  return (
-    <Dialog open onOpenChange={save.isPending ? undefined : onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Vanity addresses</DialogTitle>
-          <DialogDescription>
-            New game servers and apps get an address under a vanity domain:
-            yours when you have any, otherwise Kiln&apos;s.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-4">
-          <AutomaticAddresses
-            description="Under the vanity domains on your connections."
-            id="personal-addresses"
-            settings={personal}
-            title="Your domains"
-            onChange={setPersonal}
-          />
-          {platform ? (
-            <>
-              <AutomaticAddresses
-                description="Under Kiln-provided vanity domains, for everyone without their own."
-                id="platform-addresses"
-                settings={platform}
-                title="Kiln-provided domains"
-                onChange={setPlatform}
-              />
-              <label className="type-label block space-y-1.5">
-                Reserved names on Kiln-provided domains
-                <Textarea
-                  aria-label="Reserved vanity name patterns"
-                  className="min-h-24 font-mono text-xs"
-                  placeholder={"^(admin|api|www)$\n^staff-"}
-                  value={blacklistPatterns}
-                  onChange={(event) =>
-                    setBlacklistPatterns(event.currentTarget.value)
-                  }
-                />
-                <span className="type-meta block text-muted-foreground">
-                  One case-insensitive regular expression per line.
-                </span>
-              </label>
-            </>
-          ) : null}
-
-          {save.error ? <ConfigurationError error={save.error} /> : null}
-
-          <DialogFooter>
-            <Button
-              disabled={save.isPending}
-              type="button"
-              variant="outline"
-              onClick={() => onOpenChange(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              disabled={save.isPending}
-              type="button"
-              onClick={() => save.mutate()}
-            >
-              {save.isPending ? (
-                <LoaderCircle className="animate-spin" />
-              ) : (
-                <Check />
-              )}
-              Save
-            </Button>
-          </DialogFooter>
-        </div>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-function AutomaticAddresses({
-  description,
-  id,
-  onChange,
-  settings,
-  title,
-}: {
-  description: string
-  id: string
-  onChange: (settings: VanitySettings) => void
-  settings: VanitySettings
-  title: string
-}) {
-  return (
-    <div className="flex flex-col gap-3 border border-border/75 bg-background/35 p-3 sm:flex-row sm:items-center">
-      <div className="min-w-0 flex-1">
-        <p className="type-control-sm" id={id}>
-          {title}
-        </p>
-        <p className="type-meta mt-0.5 text-muted-foreground">{description}</p>
-      </div>
-      <div className="flex shrink-0 items-center gap-3">
-        <Select
-          disabled={!settings.autoAssign}
-          value={settings.strategy}
-          onValueChange={(value) =>
-            onChange({
-              ...settings,
-              strategy: value as DomainAssignmentStrategy,
-            })
-          }
-        >
-          <SelectTrigger
-            aria-label={`${title}: domain for new addresses`}
-            className="w-36 text-xs"
-          >
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent className="z-[70]">
-            {strategyOptions.map((option) => (
-              <SelectItem
-                key={option.value}
-                className="text-xs"
-                value={option.value}
-              >
-                {option.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Switch
-          aria-labelledby={id}
-          checked={settings.autoAssign}
-          onCheckedChange={(autoAssign) => onChange({ ...settings, autoAssign })}
-        />
-      </div>
-    </div>
-  )
-}
-
 /** Releases an app's generated address, deleting its record. */
 export function ReleaseHostnameDialog({
   hostname,
@@ -1410,10 +1117,9 @@ export function ReleaseHostnameDialog({
   const queryClient = useQueryClient()
   const release = useMutation({
     mutationFn: () => releaseWebHostname({ data: { id: hostname.id } }),
-    onSettled: () =>
-      queryClient.invalidateQueries({ queryKey: ["domains"] }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["domains"] }),
     onSuccess: () => {
-      showToast({ message: `Released ${hostname.hostname}`, type: "success" })
+      showToast({ message: `Deleted ${hostname.hostname}`, type: "success" })
       onOpenChange(false)
     },
   })
@@ -1421,11 +1127,10 @@ export function ReleaseHostnameDialog({
     <Dialog open onOpenChange={release.isPending ? undefined : onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Release address</DialogTitle>
+          <DialogTitle>Delete address</DialogTitle>
           <DialogDescription>
-            Kiln deletes <span className="font-mono">{hostname.hostname}</span>{" "}
-            from Cloudflare. Routes on {hostname.resource.name} that use it
-            stop resolving.
+            Deletes <span className="font-mono">{hostname.hostname}</span> from
+            Cloudflare.
           </DialogDescription>
         </DialogHeader>
         {release.error ? <ConfigurationError error={release.error} /> : null}
@@ -1449,7 +1154,7 @@ export function ReleaseHostnameDialog({
             ) : (
               <Trash2 />
             )}
-            Release
+            Delete
           </Button>
         </DialogFooter>
       </DialogContent>

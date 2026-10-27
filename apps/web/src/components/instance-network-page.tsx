@@ -63,6 +63,7 @@ import {
   useInstancePermissions,
   useInstanceRelayConnected,
 } from "@/components/instance-workspace-context"
+import { ServerDomainsSection } from "@/components/server-domains-section"
 import { TailscaleMembershipSection } from "@/components/tailscale-network-membership"
 import type { IdentityStatusPresentation } from "@/components/identity-name"
 import {
@@ -210,6 +211,7 @@ function WebRoutesNetworkPage({
       <div className="mx-auto max-w-4xl space-y-4">
         <DatabaseConnectionWarnings />
         <SavedDatabaseConnections />
+        <ServerDomainsSection />
         <ConfiguredRoutesSection
           key={editGamePort ? "edit-game-port" : "network"}
           canPublicPortWrite={permissions.networkPublicPortWrite}

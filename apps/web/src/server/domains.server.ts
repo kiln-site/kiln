@@ -31,7 +31,6 @@ import {
   loadManagedDomainEffect,
   loadRelayInstanceDomainAssignmentsEffect,
   loadUsedVanityLabelsEffect,
-  loadVanitySettingsEffect,
   markInstanceDomainRemovingEffect,
   reassignInstanceDomainsEffect,
   recordInstanceDomainErrorEffect,
@@ -46,8 +45,13 @@ import {
   type ManagedDomain,
 } from "@/effect/domains"
 import { Database } from "@/effect/database"
-import { ExternalServiceError } from "@/effect/errors"
+import {
+  DomainConfigurationError,
+  ExternalServiceError,
+  HostnameInUseError,
+} from "@/effect/errors"
 import { runAppEffect } from "@/effect/runtime"
+import { loadHostnameHolderEffect } from "@/effect/web-hostnames"
 import { requireRelayPermission } from "@/lib/access-control"
 import {
   invalidateCached,
@@ -60,17 +64,19 @@ import {
   managedDomainConnectAddress,
   managedDomainEndpointMatches,
 } from "@/lib/domain-address"
-import { vanityLabelAllowed } from "@/lib/domain-schemas"
+import { vanityLabelAllowed } from "@/server/reserved-names"
 import { publishDomainChange } from "@/lib/domain-realtime.server"
 import type { FleetRelayInstance } from "@/lib/relay-fleet"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { activeRelay } from "@/lib/relay-registry"
 import { relayJsonEffect } from "@/lib/relay-client"
 import { requireEligibleResourceUser } from "@/server/auth"
+import { explainHostnameInUseEffect } from "@/server/domain-resource-access.server"
 import {
   chooseVanityDomainEffect,
   domainActor,
   loadResourceOwnerIdEffect,
+  ownsVanityDomain,
   vanityDomainUsable,
   type DomainActor,
 } from "@/server/domain-access.server"
@@ -153,7 +159,7 @@ export async function getInstanceDomainHandler(data: InstanceDomainInput) {
   const primary = assignments[0]
   return {
     assignment: primary ? assignmentOverview(primary) : null,
-    managedDomain: choice?.domain.domain ?? null,
+    managedDomain: choice?.domain ?? null,
   }
 }
 
@@ -191,6 +197,10 @@ export async function createInstanceDomainHandler(
                 false
               )
             )
+          )
+        ).pipe(
+          Effect.catchTag("HostnameInUseError", (error) =>
+            explainHostnameInUseEffect(user, error)
           )
         )
       ),
@@ -232,6 +242,10 @@ export async function updateInstanceDomainHandler(
             { ...instance, relayId: scope.relayId },
             data,
             domainActor(user)
+          )
+        ).pipe(
+          Effect.catchTag("HostnameInUseError", (error) =>
+            explainHostnameInUseEffect(user, error)
           )
         )
       ),
@@ -582,16 +596,14 @@ export const provisionInstanceDomainEffect = Effect.fn(
         resourceId: instance.id,
         resourceType: "instance",
       })
-      const choice = yield* chooseVanityDomainEffect(ownerId)
-      if (!choice) return false
-      const { domain, settings } = choice
-      const { apiToken } = yield* loadDomainConnectionCredentialEffect(
-        domain.connectionId
-      )
+      const domain = yield* chooseVanityDomainEffect(ownerId)
+      if (!domain) return false
+      const { apiToken, blacklistPatterns } =
+        yield* loadDomainConnectionCredentialEffect(domain.connectionId)
       const vanityLabel = yield* availableVanityLabelEffect(
-        { apiToken, blacklistPatterns: settings.blacklistPatterns },
+        { apiToken, blacklistPatterns },
         domain,
-        generateVanityCandidates(settings.blacklistPatterns)
+        generateVanityCandidates(blacklistPatterns)
       )
       yield* provisionVanityRecordsEffect(apiToken, instance, domain, {
         id: randomUUID(),
@@ -624,8 +636,8 @@ export const provisionInstanceDomainEffect = Effect.fn(
       const apiToken = yield* assignmentApiTokenEffect(assignment)
       yield* releaseRecordsEffect(assignment, apiToken)
       const domain = yield* configuredDomainEffect(assignment.domain, true)
-      const { blacklistPatterns } = yield* loadVanitySettingsEffect(
-        domain.ownerId
+      const { blacklistPatterns } = yield* loadDomainConnectionCredentialEffect(
+        domain.connectionId
       )
       // The primary was likely named by Kiln, so it may take a new name;
       // other domains were named by hand and keep theirs.
@@ -700,7 +712,10 @@ export const provisionInstanceDomainEffect = Effect.fn(
 const createInstanceDomainEffect = Effect.fn("domains.instance.create")(
   function* (
     instance: DomainInstance,
-    input: Pick<CreateInstanceDomainInput, "domain" | "primary" | "vanityLabel">,
+    input: Pick<
+      CreateInstanceDomainInput,
+      "domain" | "primary" | "vanityLabel"
+    >,
     actor: DomainActor
   ) {
     if (!instance.publicHost || !instance.publicPort) {
@@ -710,32 +725,35 @@ const createInstanceDomainEffect = Effect.fn("domains.instance.create")(
     }
     const domain = yield* configuredDomainEffect(input.domain)
     yield* requireUsableDomainEffect(instance, domain, actor)
-    const [{ apiToken }, { blacklistPatterns }] = yield* Effect.all(
-      [
-        loadDomainConnectionCredentialEffect(domain.connectionId),
-        loadVanitySettingsEffect(domain.ownerId),
-      ],
-      { concurrency: 2 }
-    )
+    const { apiToken, blacklistPatterns } =
+      yield* loadDomainConnectionCredentialEffect(domain.connectionId)
+    // The domain's owner may choose a reserved name; Kiln never generates one.
+    const chosenPatterns = ownsVanityDomain(domain, actor)
+      ? []
+      : blacklistPatterns
     if (
       input.vanityLabel !== undefined &&
-      !vanityLabelAllowed(input.vanityLabel, blacklistPatterns)
+      !vanityLabelAllowed(input.vanityLabel, chosenPatterns)
     ) {
-      return yield* domainFailure(
-        "That server address is reserved by the platform administrator"
-      )
+      return yield* DomainConfigurationError.make({
+        message: `${input.vanityLabel}.${domain.domain} is reserved`,
+      })
     }
     const existing = yield* loadInstanceDomainAssignmentsForInstanceEffect(
       instance.relayId,
       instance.id
     )
-    const vanityLabel = yield* availableVanityLabelEffect(
-      { apiToken, blacklistPatterns },
-      domain,
-      input.vanityLabel === undefined
-        ? generateVanityCandidates(blacklistPatterns)
-        : [input.vanityLabel]
-    )
+    const vanityLabel = yield* input.vanityLabel === undefined
+      ? availableVanityLabelEffect(
+          { apiToken, blacklistPatterns },
+          domain,
+          generateVanityCandidates(blacklistPatterns)
+        )
+      : availableVanityLabelEffect(
+          { apiToken, blacklistPatterns: chosenPatterns },
+          domain,
+          [input.vanityLabel]
+        )
     const id = randomUUID()
     // Promoted only once its records exist, so a failed create leaves the
     // current connect address alone.
@@ -791,20 +809,24 @@ const updateInstanceDomainEffect = Effect.fn("domains.instance.update")(
     if (input.domain !== assignment.domain) {
       yield* requireUsableDomainEffect(instance, domain, actor)
     }
-    const [{ apiToken }, { blacklistPatterns }, currentToken] =
-      yield* Effect.all(
-        [
-          loadDomainConnectionCredentialEffect(domain.connectionId),
-          loadVanitySettingsEffect(domain.ownerId),
-          assignmentApiTokenEffect(assignment),
-        ],
-        { concurrency: 3 }
-      )
-    const credential = { apiToken, blacklistPatterns }
-    if (!vanityLabelAllowed(input.vanityLabel, blacklistPatterns)) {
-      return yield* domainFailure(
-        "That server address is reserved by the platform administrator"
-      )
+    const [{ apiToken, blacklistPatterns }, currentToken] = yield* Effect.all(
+      [
+        loadDomainConnectionCredentialEffect(domain.connectionId),
+        assignmentApiTokenEffect(assignment),
+      ],
+      { concurrency: 2 }
+    )
+    // The domain's owner may choose a reserved name.
+    const credential = {
+      apiToken,
+      blacklistPatterns: ownsVanityDomain(domain, actor)
+        ? []
+        : blacklistPatterns,
+    }
+    if (!vanityLabelAllowed(input.vanityLabel, credential.blacklistPatterns)) {
+      return yield* DomainConfigurationError.make({
+        message: `${input.vanityLabel}.${domain.domain} is reserved`,
+      })
     }
     const update = Effect.gen(function* () {
       const renamed =
@@ -818,17 +840,12 @@ const updateInstanceDomainEffect = Effect.fn("domains.instance.update")(
           [input.vanityLabel],
           assignment.id
         )
-        return yield* provisionVanityRecordsEffect(
-          apiToken,
-          instance,
-          domain,
-          {
-            id: assignment.id,
-            insert: false,
-            primary: assignment.primary,
-            vanityLabel: input.vanityLabel,
-          }
-        )
+        return yield* provisionVanityRecordsEffect(apiToken, instance, domain, {
+          id: assignment.id,
+          insert: false,
+          primary: assignment.primary,
+          vanityLabel: input.vanityLabel,
+        })
       }
       const current = managedDomainEndpointMatches(assignment, instance)
         ? assignment
@@ -1220,6 +1237,37 @@ const availableVanityLabelEffect = Effect.fn("domains.instance.availableLabel")(
     excludeId?: string
   ) {
     const used = yield* loadUsedVanityLabelsEffect(domain.domain, excludeId)
+    // A name the person chose says why it can't be had.
+    const [chosen] = candidates
+    if (candidates.length === 1 && chosen !== undefined) {
+      const hostname = `${chosen}.${domain.domain}`
+      if (!vanityLabelAllowed(chosen, credential.blacklistPatterns)) {
+        return yield* DomainConfigurationError.make({
+          message: `${hostname} is reserved`,
+        })
+      }
+      if (used.has(chosen)) {
+        return yield* HostnameInUseError.make({
+          holder: yield* loadHostnameHolderEffect(hostname),
+          hostname,
+          message: `${hostname} is already in use`,
+        })
+      }
+      if (
+        !(yield* cloudflareHostnameAvailableEffect(
+          credential.apiToken,
+          domain.zoneId,
+          hostname
+        ))
+      ) {
+        return yield* HostnameInUseError.make({
+          holder: null,
+          hostname,
+          message: `${hostname} is already in use`,
+        })
+      }
+      return chosen
+    }
     for (const candidate of candidates) {
       if (
         used.has(candidate) ||
@@ -1235,9 +1283,7 @@ const availableVanityLabelEffect = Effect.fn("domains.instance.availableLabel")(
       if (available) return candidate
     }
     return yield* domainFailure(
-      candidates.length === 1
-        ? "That server address is already in use"
-        : "Kiln could not find an available vanity address"
+      "Kiln could not find an available vanity address"
     )
   }
 )
@@ -1271,7 +1317,9 @@ const requireUsableDomainEffect = Effect.fnUntraced(function* (
     resourceType: "instance",
   })
   if (!vanityDomainUsable(domain, ownerId, actor)) {
-    return yield* domainFailure(`${domain.domain} is not a configured vanity domain`)
+    return yield* domainFailure(
+      `${domain.domain} is not a configured vanity domain`
+    )
   }
 })
 

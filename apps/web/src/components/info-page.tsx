@@ -721,7 +721,8 @@ export function InfoRailCard({
   sections?: React.ReactNode
   // Shown above the facts, such as usage bars.
   summary?: React.ReactNode
-  title: string
+  // Text, or text with a hint icon beside it.
+  title: React.ReactNode
 }) {
   return (
     <section

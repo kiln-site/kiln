@@ -1,6 +1,6 @@
 import type { RelayInstance } from "@workspace/contracts"
 
-import { vanityLabelAllowed } from "@/lib/domain-schemas"
+import { vanityLabelAllowed } from "@/server/reserved-names"
 
 const adjectives = [
   "amber",

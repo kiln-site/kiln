@@ -44,6 +44,7 @@ import {
 import {
   getDomainSettings,
   getInstanceDomain,
+  getManualWebHostnames,
   getResourceWebHostnames,
 } from "@/server/domains"
 import { getHearthEdge } from "@/server/hearth-edge"
@@ -1039,6 +1040,19 @@ export function domainSettingsQueryOptions() {
   return queryOptions({
     queryKey: queryKeys.domains.settings,
     queryFn: () => getDomainSettings(),
+  })
+}
+
+/**
+ * Web route hostnames on no connected domain, read from the Relays. Under
+ * the settings key, so whatever refreshes the page refreshes these too.
+ */
+export function manualWebHostnamesQueryOptions() {
+  return queryOptions({
+    queryKey: [...queryKeys.domains.settings, "manual"] as const,
+    queryFn: () => getManualWebHostnames(),
+    retry: false,
+    staleTime: 30_000,
   })
 }
 

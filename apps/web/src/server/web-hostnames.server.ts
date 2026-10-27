@@ -16,11 +16,10 @@ import {
   loadDomainConnectionCredentialEffect,
   loadManagedDomainEffect,
   loadUsedVanityLabelsEffect,
-  loadVanitySettingsEffect,
   updateDomainConnectionZonesEffect,
   type DomainConnection,
 } from "@/effect/domains"
-import { DomainConfigurationError } from "@/effect/errors"
+import { DomainConfigurationError, HostnameInUseError } from "@/effect/errors"
 import {
   activateWebHostnameEffect,
   clearWebHostnameRecordEffect,
@@ -28,6 +27,7 @@ import {
   insertWebHostnameEffect,
   listResourceWebHostnamesEffect,
   listWebHostnamesEffect,
+  loadHostnameHolderEffect,
   loadWebHostnameEffect,
   reassignWebHostnamesEffect,
   setWebHostnameStatusEffect,
@@ -35,13 +35,15 @@ import {
   type WebHostnameResource,
 } from "@/effect/web-hostnames"
 import { promiseEffect } from "@/effect/promise"
-import { domainInZone, vanityLabelAllowed } from "@/lib/domain-schemas"
+import { domainInZone } from "@/lib/domain-schemas"
+import { vanityLabelAllowed } from "@/server/reserved-names"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { relayConnectionSnapshot } from "@/lib/relay-connection"
 import { activeRelay } from "@/lib/relay-registry"
 import {
   chooseVanityDomainEffect,
   loadResourceOwnerIdEffect,
+  ownsVanityDomain,
   vanityDomainUsable,
   type DomainActor,
 } from "@/server/domain-access.server"
@@ -119,10 +121,13 @@ export const resolveHostnameZoneEffect = Effect.fn("webHostnames.resolve")(
           message: `${vanity.domain} isn't taking new addresses`,
         })
       }
-      const { blacklistPatterns } = yield* loadVanitySettingsEffect(
-        vanity.ownerId
+      const { blacklistPatterns } = yield* loadDomainConnectionCredentialEffect(
+        vanity.connectionId
       )
-      if (!vanityLabelAllowed(label, blacklistPatterns)) {
+      if (
+        !ownsVanityDomain(vanity, actor) &&
+        !vanityLabelAllowed(label, blacklistPatterns)
+      ) {
         return yield* DomainConfigurationError.make({
           message: `${hostname} is reserved by the domain's owner`,
         })
@@ -182,7 +187,11 @@ function zoneFor(
       if (best && best.name.length >= zone.name.length) continue
       best = {
         name: zone.name,
-        zone: { connectionId: connection.id, vanityDomain: null, zoneId: zone.id },
+        zone: {
+          connectionId: connection.id,
+          vanityDomain: null,
+          zoneId: zone.id,
+        },
       }
     }
   }
@@ -236,6 +245,85 @@ export const syncResourceWebHostnamesEffect = Effect.fn("webHostnames.sync")(
   (effect, input) => withResourceLock(input.resource, effect)
 )
 
+/**
+ * Refuses web route hostnames a resource may not take, before its routes
+ * save: one another game server or app holds, and, under a vanity domain
+ * someone else owns (such as one Kiln provides), a reserved name or one
+ * Cloudflare already has a record for. Names the resource already holds
+ * pass.
+ */
+export const checkWebRouteHostnamesEffect = Effect.fn("webHostnames.check")(
+  function* (input: {
+    actor: DomainActor
+    hostnames: ReadonlyArray<string>
+    resource: WebHostnameResource
+  }) {
+    const { actor, resource } = input
+    const held = new Set(
+      (yield* listResourceWebHostnamesEffect(resource)).map(
+        (row) => row.hostname
+      )
+    )
+    const fresh = [
+      ...new Set(input.hostnames.map((name) => name.toLowerCase())),
+    ].filter((name) => !held.has(name))
+    if (fresh.length === 0) return
+    const ownerId = yield* loadResourceOwnerIdEffect(resource)
+    for (const hostname of fresh) {
+      const holder = yield* loadHostnameHolderEffect(hostname)
+      if (
+        holder &&
+        !(
+          holder.relayId === resource.relayId &&
+          holder.resourceId === resource.resourceId &&
+          holder.resourceType === resource.resourceType
+        )
+      ) {
+        return yield* HostnameInUseError.make({
+          holder,
+          hostname,
+          message: `${hostname} is already in use`,
+        })
+      }
+      const dot = hostname.indexOf(".")
+      const vanity =
+        dot > 0 ? yield* loadManagedDomainEffect(hostname.slice(dot + 1)) : null
+      if (
+        !vanity ||
+        !vanityDomainUsable(vanity, ownerId, actor) ||
+        ownsVanityDomain(vanity, actor)
+      ) {
+        continue
+      }
+      if (!vanity.enabled) {
+        return yield* DomainConfigurationError.make({
+          message: `${vanity.domain} isn't taking new addresses`,
+        })
+      }
+      const { apiToken, blacklistPatterns } =
+        yield* loadDomainConnectionCredentialEffect(vanity.connectionId)
+      if (!vanityLabelAllowed(hostname.slice(0, dot), blacklistPatterns)) {
+        return yield* DomainConfigurationError.make({
+          message: `${hostname} is reserved`,
+        })
+      }
+      if (
+        !(yield* cloudflareHostnameAvailableEffect(
+          apiToken,
+          vanity.zoneId,
+          hostname
+        ))
+      ) {
+        return yield* HostnameInUseError.make({
+          holder: null,
+          hostname,
+          message: `${hostname} is already in use`,
+        })
+      }
+    }
+  }
+)
+
 const reserveHostnameEffect = Effect.fnUntraced(function* (
   resource: WebHostnameResource,
   hostname: string,
@@ -260,15 +348,14 @@ const reserveHostnameEffect = Effect.fnUntraced(function* (
 /**
  * Gives a new app an address under a vanity domain it may use, as game
  * servers get one, and points it at its Relay. Null when no vanity domain
- * applies or automatic addresses are off.
+ * applies.
  */
 export const generateAppHostnameEffect = Effect.fn("webHostnames.generate")(
   function* (resource: WebHostnameResource) {
     const ownerId = yield* loadResourceOwnerIdEffect(resource)
-    const choice = yield* chooseVanityDomainEffect(ownerId)
-    if (!choice) return null
-    const { domain, settings } = choice
-    const [{ apiToken }, used, target] = yield* Effect.all(
+    const domain = yield* chooseVanityDomainEffect(ownerId)
+    if (!domain) return null
+    const [{ apiToken, blacklistPatterns }, used, target] = yield* Effect.all(
       [
         loadDomainConnectionCredentialEffect(domain.connectionId),
         loadUsedVanityLabelsEffect(domain.domain),
@@ -276,7 +363,7 @@ export const generateAppHostnameEffect = Effect.fn("webHostnames.generate")(
       ],
       { concurrency: 3 }
     )
-    for (const label of generateVanityCandidates(settings.blacklistPatterns)) {
+    for (const label of generateVanityCandidates(blacklistPatterns)) {
       if (used.has(label)) continue
       const hostname = `${label}.${domain.domain}`
       const available = yield* cloudflareHostnameAvailableEffect(
@@ -479,7 +566,9 @@ export const removeRelayWebHostnamesEffect = Effect.fn(
   const rows = yield* listWebHostnamesEffect({ relayId })
   for (const row of rows) {
     yield* (
-      removeRecords ? removeWebHostnameEffect(row) : deleteWebHostnameEffect(row.id)
+      removeRecords
+        ? removeWebHostnameEffect(row)
+        : deleteWebHostnameEffect(row.id)
     ).pipe(Effect.ignore)
   }
   return rows.length

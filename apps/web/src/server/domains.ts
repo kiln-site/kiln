@@ -3,7 +3,6 @@ import { appIdSchema, relayIdSchema } from "@workspace/contracts"
 import { z } from "zod"
 
 import {
-  domainAssignmentStrategySchema,
   domainBlacklistPatternsSchema,
   domainNameSchema,
   vanityLabelSchema,
@@ -18,9 +17,9 @@ import {
   deleteDomainConnectionHandler,
   discoverCloudflareDomainsHandler,
   getDomainSettingsHandler,
+  getManualWebHostnamesHandler,
   resyncDomainAssignmentsHandler,
   saveDomainConnectionHandler,
-  saveVanitySettingsHandler,
 } from "@/server/domain-settings.server"
 import {
   getResourceWebHostnamesHandler,
@@ -34,6 +33,8 @@ const connectionIdSchema = z.string().regex(/^[a-z0-9]{1,32}$/u)
 
 const saveDomainConnectionInputSchema = z.object({
   apiToken: apiTokenSchema.optional(),
+  /** A shared connection's reserved names; omitted to keep them. */
+  blacklistPatterns: domainBlacklistPatternsSchema.optional(),
   /** Omitted when none of this connection's domains is the default. */
   defaultDomain: domainNameSchema.optional(),
   /** Its vanity domains; empty to only manage web route records. */
@@ -43,18 +44,11 @@ const saveDomainConnectionInputSchema = z.object({
   /** Omitted for a new connection. */
   id: connectionIdSchema.optional(),
   name: z.string().trim().min(1, "Name this connection").max(64),
-  /** A new connection for everyone, by a platform administrator. */
+  /** A new shared connection, by a platform administrator. */
   platform: z.boolean().default(false),
 })
 
 const deleteDomainConnectionInputSchema = z.object({ id: connectionIdSchema })
-
-const saveVanitySettingsInputSchema = z.object({
-  autoAssign: z.boolean(),
-  blacklistPatterns: domainBlacklistPatternsSchema,
-  platform: z.boolean(),
-  strategy: domainAssignmentStrategySchema,
-})
 
 const discoverDomainsInputSchema = z.object({
   apiToken: apiTokenSchema.optional(),
@@ -103,9 +97,6 @@ export type SaveDomainConnectionInput = z.infer<
 >
 export type DeleteDomainConnectionInput = z.infer<
   typeof deleteDomainConnectionInputSchema
->
-export type SaveVanitySettingsInput = z.infer<
-  typeof saveVanitySettingsInputSchema
 >
 export type DiscoverDomainsInput = z.infer<typeof discoverDomainsInputSchema>
 export type InstanceDomainInput = z.infer<typeof instanceDomainInputSchema>
@@ -167,7 +158,7 @@ export interface ManagedDomainOverview {
   zoneName: string | null
 }
 
-/** A web hostname whose DNS record Kiln keeps. */
+/** A web route hostname, and the DNS record Kiln keeps for it, if any. */
 export interface WebHostnameOverview {
   /** Whether the person may release it. */
   canManage: boolean
@@ -197,7 +188,8 @@ export interface WebHostnameOverview {
         /** The `/server/$serverId` param. */
         routeId: string
       }
-  status: "active" | "error" | "external" | "pending" | "removing"
+  /** `manual`: on no connected domain, so its owner points it by hand. */
+  status: "active" | "error" | "external" | "manual" | "pending" | "removing"
   /** The Relay address its record points at. */
   target: string | null
   /** Named under a vanity domain. */
@@ -213,7 +205,7 @@ export interface ResourceWebHostname {
   hostname: string
   id: string
   lastError: string | null
-  status: WebHostnameOverview["status"]
+  status: Exclude<WebHostnameOverview["status"], "manual">
 }
 
 export interface DiscoveredCloudflareZone {
@@ -223,6 +215,10 @@ export interface DiscoveredCloudflareZone {
 
 export const getDomainSettings = createServerFn({ method: "GET" }).handler(() =>
   getDomainSettingsHandler()
+)
+
+export const getManualWebHostnames = createServerFn({ method: "GET" }).handler(
+  () => getManualWebHostnamesHandler()
 )
 
 // POST, so a pasted token travels in the body rather than a URL.
@@ -237,10 +233,6 @@ export const saveDomainConnection = createServerFn({ method: "POST" })
 export const deleteDomainConnection = createServerFn({ method: "POST" })
   .validator(deleteDomainConnectionInputSchema)
   .handler(({ data }) => deleteDomainConnectionHandler(data))
-
-export const saveVanitySettings = createServerFn({ method: "POST" })
-  .validator(saveVanitySettingsInputSchema)
-  .handler(({ data }) => saveVanitySettingsHandler(data))
 
 export const resyncDomainAssignments = createServerFn({
   method: "POST",

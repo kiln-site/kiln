@@ -133,6 +133,41 @@ export const listWebHostnamesEffect = Effect.fn("webHostnames.list")(
 )
 
 /**
+ * The game server or app holding a hostname: by a web hostname Kiln keeps,
+ * or a game server's vanity address. Null when neither does.
+ */
+export const loadHostnameHolderEffect = Effect.fn("webHostnames.holder")(
+  function* (hostname: string) {
+    const database = yield* Database
+    const [row] = yield* database.queryRows<
+      RowDataPacket & {
+        relay_id: string
+        resource_id: string
+        resource_type: WebHostnameResourceType
+      }
+    >(
+      "webHostnames.holder",
+      `SELECT resource_type, relay_id, resource_id
+         FROM ${databaseTable("web_hostname")}
+        WHERE hostname = ?
+       UNION ALL
+       SELECT 'instance', relay_id, instance_id
+         FROM ${databaseTable("instance_domain")}
+        WHERE CONCAT(vanity_label, '.', domain) = ?
+       LIMIT 1`,
+      [hostname, hostname]
+    )
+    return row
+      ? {
+          relayId: row.relay_id,
+          resourceId: row.resource_id,
+          resourceType: row.resource_type,
+        }
+      : null
+  }
+)
+
+/**
  * Holds a hostname for a resource before its record exists. A hostname
  * another resource holds fails rather than being taken over.
  */

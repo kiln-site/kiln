@@ -1,13 +1,10 @@
 import type { RowDataPacket } from "mysql2/promise"
-import { Effect, Random } from "effect"
+import { Effect } from "effect"
 
 import { Database } from "@/effect/database"
 import {
-  countInstanceDomainsByDomainEffect,
   listUsableVanityDomainsEffect,
-  loadVanitySettingsEffect,
   type ManagedDomain,
-  type VanitySettings,
 } from "@/effect/domains"
 import { isPlatformAdmin } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
@@ -62,48 +59,29 @@ export function vanityDomainUsable(
 }
 
 /**
- * The vanity domain a new game server's or app's address goes under, with
- * the settings it was picked by. An owner with vanity domains of their own
- * uses those, and only those; everyone else gets the platform's. Null when
- * the settings that apply turn automatic addresses off.
+ * Whether a vanity domain is the person's to arrange, its reserved names and
+ * existing records included: their own, or Kiln's for administrators.
+ */
+export function ownsVanityDomain(
+  domain: { ownerId: string | null },
+  actor: DomainActor
+): boolean {
+  return domain.ownerId === null ? actor.admin : domain.ownerId === actor.id
+}
+
+/**
+ * The vanity domain a new game server's or app's address goes under: the
+ * owner's default when they have vanity domains of their own, otherwise the
+ * shared default. Null when neither has any.
  */
 export const chooseVanityDomainEffect = Effect.fn("domains.chooseDomain")(
   function* (ownerId: string | null) {
     const usable = yield* listUsableVanityDomainsEffect(ownerId)
-    const own = usable.filter(
+    const offered = usable.filter((domain) => domain.enabled)
+    const own = offered.filter(
       (domain) => ownerId !== null && domain.ownerId === ownerId
     )
-    const pool = own.length > 0 ? own : usable.filter((d) => !d.ownerId)
-    const settings = yield* loadVanitySettingsEffect(
-      own.length > 0 ? ownerId : null
-    )
-    // Loaded default first, so it wins ties.
-    const domains = pool.filter((domain) => domain.enabled)
-    const [fallback] = domains
-    if (!fallback || !settings.autoAssign) return null
-    const domain = yield* pickDomain(domains, fallback, settings)
-    return { domain, settings }
+    const pool = own.length > 0 ? own : offered.filter((d) => !d.ownerId)
+    return pool.find((domain) => domain.isDefault) ?? pool[0] ?? null
   }
 )
-
-const pickDomain = Effect.fnUntraced(function* (
-  domains: ReadonlyArray<ManagedDomain>,
-  fallback: ManagedDomain,
-  settings: VanitySettings
-) {
-  if (settings.strategy === "random") {
-    const index = yield* Random.nextIntBetween(0, domains.length, {
-      halfOpen: true,
-    })
-    return domains[index] ?? fallback
-  }
-  if (settings.strategy === "balanced") {
-    const usage = yield* countInstanceDomainsByDomainEffect()
-    return domains.reduce((least, domain) =>
-      (usage.get(domain.domain) ?? 0) < (usage.get(least.domain) ?? 0)
-        ? domain
-        : least
-    )
-  }
-  return domains.find((domain) => domain.isDefault) ?? fallback
-})

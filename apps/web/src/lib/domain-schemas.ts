@@ -31,12 +31,6 @@ export const vanityLabelSchema = z
       )
   )
 
-export const domainAssignmentStrategySchema = z.enum([
-  "default",
-  "random",
-  "balanced",
-])
-
 /** Whether `domain` is `zoneName` or a name inside it. */
 export function domainInZone(domain: string, zoneName: string): boolean {
   return domain === zoneName || domain.endsWith(`.${zoneName}`)
@@ -46,7 +40,14 @@ export const domainBlacklistPatternsSchema = z
   .array(z.string().trim().min(1).max(128))
   .max(32)
 
+/**
+ * A reserved-names line that stands for profanity, spelled out or disguised,
+ * from the list Kiln ships rather than a regular expression.
+ */
+export const badWordsPattern = "{{bad-words}}"
+
 export const defaultDomainBlacklistPatterns = [
+  badWordsPattern,
   "^(admin|api|ftp|mail|status|support|www)$",
 ] as const
 
@@ -54,21 +55,17 @@ export function validateBlacklistPatterns(
   patterns: ReadonlyArray<string>
 ): Array<string> {
   return patterns.map((pattern, index) =>
-    Result.getOrThrow(
-      Result.try({
-        try: () => {
-          new RegExp(pattern, "iu")
-          return pattern
-        },
-        catch: () => new Error(`Blacklist pattern ${index + 1} is not valid`),
-      })
-    )
+    pattern === badWordsPattern
+      ? pattern
+      : Result.getOrThrow(
+          Result.try({
+            try: () => {
+              new RegExp(pattern, "iu")
+              return pattern
+            },
+            catch: () =>
+              new Error(`Blacklist pattern ${index + 1} is not valid`),
+          })
+        )
   )
-}
-
-export function vanityLabelAllowed(
-  label: string,
-  patterns: ReadonlyArray<string>
-): boolean {
-  return !patterns.some((pattern) => new RegExp(pattern, "iu").test(label))
 }

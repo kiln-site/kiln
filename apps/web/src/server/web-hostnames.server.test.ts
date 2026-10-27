@@ -5,12 +5,18 @@ import { afterAll, afterEach, vi } from "vite-plus/test"
 import { disposeAppRuntime } from "@/effect/runtime"
 import { betterAuthSecrets } from "@/lib/environment"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
-import { insertInstance, insertRelay, insertRows, selectRows } from "@/test/seed"
+import {
+  insertInstance,
+  insertRelay,
+  insertRows,
+  selectRows,
+} from "@/test/seed"
 
 import { encryptWithKeyring } from "../../keyring.mjs"
 
 import type { DomainActor } from "./domain-access.server"
 import {
+  checkWebRouteHostnamesEffect,
   generateAppHostnameEffect,
   moveResourceWebHostnamesEffect,
   syncResourceWebHostnamesEffect,
@@ -71,7 +77,8 @@ function fakeCloudflare(zones: Array<{ id: string; name: string }>) {
         for (const { id } of batch.deletes) records.delete(id)
         return success({ posts: batch.posts.map(create) })
       }
-      if (method === "POST") return success(create(JSON.parse(String(init?.body))))
+      if (method === "POST")
+        return success(create(JSON.parse(String(init?.body))))
       if (method === "DELETE") {
         records.delete(recordId ?? "")
         return success({ id: recordId })
@@ -95,6 +102,7 @@ function fakeCloudflare(zones: Array<{ id: string; name: string }>) {
 }
 
 const insertConnection = (connection: {
+  blacklistPatterns?: Array<string>
   id: string
   ownerId: string | null
   vanity?: Array<{ domain: string; zoneId: string; zoneName: string }>
@@ -111,6 +119,7 @@ const insertConnection = (connection: {
         betterAuthSecrets(),
         "kiln-cloudflare-api-token"
       ),
+      blacklist_patterns: JSON.stringify(connection.blacklistPatterns ?? []),
       zones: JSON.stringify(connection.zones),
       // Fresh, so a hostname outside its zones doesn't list them again.
       last_verified_at: Date.now(),
@@ -149,8 +158,13 @@ const seed = Effect.gen(function* () {
     updated_at: 0,
   })
   yield* insertInstance(relayId, instanceId, { owner_id: owner.id })
-  yield* insertConnection({ id: "owner1", ownerId: owner.id, zones: [ownerZone] })
   yield* insertConnection({
+    id: "owner1",
+    ownerId: owner.id,
+    zones: [ownerZone],
+  })
+  yield* insertConnection({
+    blacklistPatterns: ["^admin$"],
     id: "cloudflare",
     ownerId: null,
     vanity: [
@@ -161,14 +175,6 @@ const seed = Effect.gen(function* () {
       },
     ],
     zones: [platformZone],
-  })
-  yield* insertRows("domain_owner_settings", {
-    owner_key: "",
-    auto_assign: true,
-    assignment_strategy: "default",
-    blacklist_patterns: JSON.stringify(["^admin$"]),
-    created_at: 0,
-    updated_at: 0,
   })
 })
 
@@ -242,38 +248,141 @@ describeMysql("web route hostnames", () => {
       })
     )
 
+    it.effect("uses an owner's Cloudflare connection only for its owner", () =>
+      Effect.gen(function* () {
+        yield* seed
+        const cloudflare = fakeCloudflare([ownerZone, platformZone])
+
+        // Someone the owner shares the app with can't publish names in
+        // the owner's zones, nor in the platform's beyond its vanity
+        // domains, and a name nobody's connection reaches is theirs to
+        // point.
+        yield* sync(collaborator, [
+          "login.owner.example",
+          "status.kiln.site",
+          "deep.name.play.kiln.site",
+          "shop.elsewhere.example",
+        ])
+        assert.deepEqual(cloudflare.dns(), {})
+        assert.deepEqual(yield* hostnameRows, {})
+
+        // A name under the platform's vanity domain is anyone's to take,
+        // unless the platform reserved it.
+        yield* sync(collaborator, [
+          "shop.play.kiln.site",
+          "admin.play.kiln.site",
+        ])
+        assert.deepEqual(cloudflare.dns(), {
+          "shop.play.kiln.site": "relay-one.relay.test",
+        })
+
+        // A platform administrator may use the platform's whole zone.
+        yield* sync(admin, ["shop.play.kiln.site", "status.kiln.site"])
+        assert.deepEqual(cloudflare.dns(), {
+          "shop.play.kiln.site": "relay-one.relay.test",
+          "status.kiln.site": "relay-one.relay.test",
+        })
+      })
+    )
+
     it.effect(
-      "uses an owner's Cloudflare connection only for its owner",
+      "refuses names another resource holds, and reserved or taken ones on others' vanity domains",
       () =>
         Effect.gen(function* () {
           yield* seed
-          const cloudflare = fakeCloudflare([ownerZone, platformZone])
-
-          // Someone the owner shares the app with can't publish names in
-          // the owner's zones, nor in the platform's beyond its vanity
-          // domains, and a name nobody's connection reaches is theirs to
-          // point.
-          yield* sync(collaborator, [
-            "login.owner.example",
-            "status.kiln.site",
-            "deep.name.play.kiln.site",
-            "shop.elsewhere.example",
+          const gamesZone = { id: "z".repeat(31) + "3", name: "games.example" }
+          yield* insertConnection({
+            blacklistPatterns: ["^www$"],
+            id: "owner2",
+            ownerId: owner.id,
+            vanity: [
+              {
+                domain: gamesZone.name,
+                zoneId: gamesZone.id,
+                zoneName: gamesZone.name,
+              },
+            ],
+            zones: [gamesZone],
+          })
+          const cloudflare = fakeCloudflare([
+            ownerZone,
+            platformZone,
+            gamesZone,
           ])
-          assert.deepEqual(cloudflare.dns(), {})
-          assert.deepEqual(yield* hostnameRows, {})
+          cloudflare.seed({
+            content: "198.51.100.7",
+            name: "taken.play.kiln.site",
+            type: "A",
+            zoneId: platformZone.id,
+          })
+          yield* sync(collaborator, ["shop.play.kiln.site"])
+          const server = {
+            relayId,
+            resourceId: instanceId,
+            resourceType: "instance",
+          } as const
+          const refusal = (actor: DomainActor, hostname: string) =>
+            checkWebRouteHostnamesEffect({
+              actor,
+              hostnames: [hostname],
+              resource: server,
+            }).pipe(
+              Effect.flip,
+              Effect.map((error) => ({
+                holder:
+                  error._tag === "HostnameInUseError" ? error.holder : null,
+                message: error.message,
+              }))
+            )
 
-          // A name under the platform's vanity domain is anyone's to take,
-          // unless the platform reserved it.
-          yield* sync(collaborator, ["shop.play.kiln.site", "admin.play.kiln.site"])
-          assert.deepEqual(cloudflare.dns(), {
-            "shop.play.kiln.site": "relay-one.relay.test",
+          // Whatever its case, the app's name stays the app's.
+          assert.deepEqual(yield* refusal(owner, "SHOP.play.kiln.site"), {
+            holder: app,
+            message: "shop.play.kiln.site is already in use",
+          })
+          assert.deepEqual(
+            yield* refusal(collaborator, "admin.play.kiln.site"),
+            {
+              holder: null,
+              message: "admin.play.kiln.site is reserved",
+            }
+          )
+          // Kiln never takes over a record it didn't make.
+          assert.deepEqual(
+            yield* refusal(collaborator, "taken.play.kiln.site"),
+            {
+              holder: null,
+              message: "taken.play.kiln.site is already in use",
+            }
+          )
+
+          // A person's own vanity domain reserves names from others too.
+          assert.deepEqual(yield* refusal(collaborator, "www.games.example"), {
+            holder: null,
+            message: "www.games.example is reserved",
           })
 
-          // A platform administrator may use the platform's whole zone.
-          yield* sync(admin, ["shop.play.kiln.site", "status.kiln.site"])
-          assert.deepEqual(cloudflare.dns(), {
-            "shop.play.kiln.site": "relay-one.relay.test",
-            "status.kiln.site": "relay-one.relay.test",
+          // A free name passes, as do the app's own and reserved ones for
+          // the domain's owner: the person, or Kiln's administrators.
+          yield* checkWebRouteHostnamesEffect({
+            actor: owner,
+            hostnames: ["www.games.example"],
+            resource: server,
+          })
+          yield* checkWebRouteHostnamesEffect({
+            actor: collaborator,
+            hostnames: ["free.play.kiln.site"],
+            resource: server,
+          })
+          yield* checkWebRouteHostnamesEffect({
+            actor: collaborator,
+            hostnames: ["shop.play.kiln.site"],
+            resource: app,
+          })
+          yield* checkWebRouteHostnamesEffect({
+            actor: admin,
+            hostnames: ["admin.play.kiln.site"],
+            resource: server,
           })
         })
     )

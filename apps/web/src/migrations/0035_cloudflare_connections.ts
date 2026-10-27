@@ -1,22 +1,24 @@
-import { Clock, Effect } from "effect"
+import { Effect } from "effect"
 import { SqlClient } from "effect/sql"
 
 import type { Migration } from "@/effect/migrations"
 import { databaseTableName } from "@/lib/database-config"
 
 // Anyone can connect Cloudflare, more than once. `domain_integration` rows
-// become connections with an owner, a person or the platform (NULL), and
-// remember the zones their token reached. Vanity settings move to the owner
-// in `domain_owner_settings` ('' is the platform), so one person's
-// connections share them. `web_hostname` holds the records Kiln keeps for
-// web route hostnames and the URLs it generates for apps.
+// become connections with an owner, a person or the platform (NULL, shared
+// with everyone), and remember the zones their token reached. Addresses
+// always go under the owner's default vanity domain, so the assignment
+// strategy and on/off switch go; the switch, if off, leaves the connection's
+// domains unmarked instead. `blacklist_patterns` stays, as a shared
+// connection's reserved names. `web_hostname` holds the records Kiln keeps
+// for web route hostnames and the URLs it generates for apps.
 export const cloudflareConnections: Migration = {
   id: 35,
   name: "cloudflare_connections",
   run: Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient
     const integration = databaseTableName("domain_integration")
-    const settings = databaseTableName("domain_owner_settings")
+    const zone = databaseTableName("domain_zone")
     const hostname = databaseTableName("web_hostname")
     // DDL is not transactional; each step checks the schema so a retry after
     // a crash picks up where it stopped.
@@ -34,34 +36,23 @@ export const cloudflareConnections: Migration = {
   ADD KEY \`${integration}_owner_idx\` (\`owner_id\`)`)
     }
 
-    yield* sql.unsafe(`CREATE TABLE IF NOT EXISTS \`${settings}\` (
-  \`owner_key\` varchar(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-  \`auto_assign\` tinyint(1) NOT NULL DEFAULT '1',
-  \`assignment_strategy\` enum('default','random','balanced') NOT NULL DEFAULT 'default',
-  \`blacklist_patterns\` json NOT NULL,
-  \`created_at\` bigint unsigned NOT NULL,
-  \`updated_at\` bigint unsigned NOT NULL,
-  PRIMARY KEY (\`owner_key\`)
-)`)
-
-    if (columns.has("assignment_strategy")) {
-      // The one connection there was is the platform's.
-      const now = yield* Clock.currentTimeMillis
+    if (columns.has("enabled")) {
+      // With automatic addresses off, its domains took no new ones.
       yield* sql`
-        INSERT IGNORE INTO ${sql(settings)}
-          (owner_key, auto_assign, assignment_strategy, blacklist_patterns,
-           created_at, updated_at)
-        SELECT '', enabled, assignment_strategy, blacklist_patterns,
-               ${now}, ${now}
-        FROM ${sql(integration)}
-        WHERE owner_id IS NULL
-        LIMIT 1
+        UPDATE ${sql(zone)} zone
+          JOIN ${sql(integration)} connection
+            ON connection.id = zone.integration_id
+           SET zone.enabled = 0
+         WHERE connection.enabled = 0
       `
-      // Last, so a retry can still copy them above.
+    }
+    const dropped = ["enabled", "assignment_strategy"].filter((column) =>
+      columns.has(column)
+    )
+    if (dropped.length > 0) {
+      // Last, so a retry can still read the switch above.
       yield* sql.unsafe(`ALTER TABLE \`${integration}\`
-  DROP COLUMN \`enabled\`,
-  DROP COLUMN \`assignment_strategy\`,
-  DROP COLUMN \`blacklist_patterns\``)
+  ${dropped.map((column) => `DROP COLUMN \`${column}\``).join(",\n  ")}`)
     }
 
     yield* sql.unsafe(`CREATE TABLE IF NOT EXISTS \`${hostname}\` (

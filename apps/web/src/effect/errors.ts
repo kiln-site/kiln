@@ -159,6 +159,25 @@ export class DomainConfigurationError extends Schema.TaggedError<DomainConfigura
   { message: Schema.String }
 ) {}
 
+/**
+ * A hostname that's taken: by another game server or app (its `holder`), or
+ * by a DNS record Kiln didn't make.
+ */
+export class HostnameInUseError extends Schema.TaggedError<HostnameInUseError>()(
+  "HostnameInUseError",
+  {
+    holder: Schema.NullOr(
+      Schema.Struct({
+        relayId: Schema.String,
+        resourceId: Schema.String,
+        resourceType: Schema.Literals(["app", "instance"]),
+      })
+    ),
+    hostname: Schema.String,
+    message: Schema.String,
+  }
+) {}
+
 export class ExternalServiceError extends Schema.TaggedError<ExternalServiceError>()(
   "ExternalServiceError",
   {

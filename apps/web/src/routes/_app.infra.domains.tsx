@@ -13,6 +13,7 @@ import { requireInfrastructureDestinationAccess } from "@/lib/route-access"
 
 export const Route = createFileRoute("/_app/infra/domains")({
   validateSearch: z.object({
+    app: z.string().max(64).optional(),
     relay: z.string().max(64).optional(),
     search: z.string().max(DATA_TABLE_SEARCH_MAX_LENGTH).optional(),
     server: z.string().max(64).optional(),
@@ -30,11 +31,15 @@ export const Route = createFileRoute("/_app/infra/domains")({
 })
 
 function InfraDomainsRoute() {
-  const { relay, search = "", server } = Route.useSearch()
+  const { app, relay, search = "", server } = Route.useSearch()
   const searchStore = useDataTableSearchStore(search)
   // Read once: the page keeps the filter and writes the URL itself.
   const [initialScope] = React.useState(() =>
-    server ? { instanceId: server, relayId: relay } : null
+    server
+      ? { instanceId: server, kind: "server" as const, relayId: relay }
+      : app
+        ? { instanceId: app, kind: "app" as const, relayId: relay }
+        : null
   )
 
   return <DomainsPage initialScope={initialScope} searchStore={searchStore} />

@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto"
 
 import {
   builtinTailscaleBrickId,
+  relayProxyConfigurationSchema,
+  relayProxyConfigurationV1Feature,
   relaySnapshotSchema,
 } from "@workspace/contracts"
 import { Effect } from "effect"
@@ -14,16 +16,15 @@ import {
   loadDomainConnectionCredentialEffect,
   loadDomainConnectionEffect,
   loadInstanceDomainAssignmentsEffect,
-  loadVanitySettingsEffect,
   saveDomainConnectionEffect,
-  saveVanitySettingsEffect,
   type DomainConnection,
   type ManagedDomain,
 } from "@/effect/domains"
 import { listAppRecordsEffect } from "@/effect/managed-apps"
+import { recoverPromise } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
 import { listWebHostnamesEffect } from "@/effect/web-hostnames"
-import { isPlatformAdmin, listUserGrants } from "@/lib/access-control"
+import { isPlatformAdmin } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import {
   domainHasActiveSrvRecord,
@@ -34,12 +35,12 @@ import { domainInZone, validateBlacklistPatterns } from "@/lib/domain-schemas"
 import { kilnRootDomain } from "@/lib/environment"
 import { listInstanceDirectoryEffect } from "@/lib/instance-directory"
 import { relayInstanceRouteId } from "@/lib/relay-fleet"
-import { listPersistedRelays } from "@/lib/relay-registry"
+import { relayConnectionFeatures, relayRpc } from "@/lib/relay-connection"
+import { activeRelay, listPersistedRelays } from "@/lib/relay-registry"
 import { relayJsonEffect } from "@/lib/relay-client"
-import { effectiveScopePermissions } from "@/lib/resource-permissions"
 import { shortIdRouteIdentifier } from "@/lib/short-id-route"
-import { hasAppPermission } from "@/server/app-access"
 import { requireEligibleResourceUser } from "@/server/auth"
+import { resourceAccess } from "@/server/domain-resource-access.server"
 import {
   invalidateManagedDomainAddressesEffect,
   provisionInstanceDomainEffect,
@@ -53,7 +54,6 @@ import type {
   DiscoverDomainsInput,
   ManagedDomainOverview,
   SaveDomainConnectionInput,
-  SaveVanitySettingsInput,
   WebHostnameOverview,
 } from "@/server/domains"
 
@@ -65,33 +65,6 @@ function canManageConnection(
   return connection.ownerId === null
     ? isPlatformAdmin(user)
     : connection.ownerId === user.id
-}
-
-/** What a person can do on the game servers and apps they reach. */
-async function resourceAccess(user: AuthenticatedUser) {
-  if (isPlatformAdmin(user)) {
-    return {
-      app: (_relayId: string, _appId: string, _manage: boolean) => true,
-      instance: (_relayId: string, _instanceId: string, _write: boolean) =>
-        true,
-    }
-  }
-  const grants = await listUserGrants(user.id)
-  return {
-    app: (relayId: string, appId: string, manage: boolean) =>
-      hasAppPermission(
-        user,
-        grants,
-        { appId, relayId },
-        manage ? "app.manage" : "app.read"
-      ),
-    instance: (relayId: string, instanceId: string, write: boolean) =>
-      effectiveScopePermissions(grants, {
-        relayId,
-        resourceId: instanceId,
-        resourceType: "instance",
-      }).has(write ? "instance.network.write" : "instance.network.read"),
-  }
 }
 
 /**
@@ -106,8 +79,6 @@ export async function getDomainSettingsHandler() {
   const [
     connections,
     usable,
-    personalSettings,
-    platformSettings,
     assignments,
     hostnames,
     relays,
@@ -123,10 +94,6 @@ export async function getDomainSettingsHandler() {
       "domains.domains.usable",
       listUsableVanityDomainsEffect(user.id)
     ),
-    runAppEffect("domains.settings.load", loadVanitySettingsEffect(user.id)),
-    admin
-      ? runAppEffect("domains.settings.load", loadVanitySettingsEffect(null))
-      : null,
     runAppEffect(
       "domains.assignments.all",
       loadInstanceDomainAssignmentsEffect()
@@ -137,7 +104,7 @@ export async function getDomainSettingsHandler() {
     runAppEffect("apps.list", listAppRecordsEffect()),
     resourceAccess(user),
   ])
-  const relayNames = new Map(relays.map((relay) => [relay.id, relay.name]))
+  const resources = resourceDirectory(relays, directory, apps)
   const zoneNames = new Map<string, string>()
   const connectionNames = new Map<string, string>()
   for (const domain of usable) zoneNames.set(domain.domain, domain.zoneName)
@@ -147,35 +114,6 @@ export async function getDomainSettingsHandler() {
       zoneNames.set(domain.domain, domain.zoneName)
     }
   }
-  const servers = new Map(
-    directory.map((record) => [
-      serverKey(record.relayId, record.id),
-      record,
-    ])
-  )
-  // Match the Game Servers table: a short ID routes on its own unless another
-  // game server shares it.
-  const shortIdCounts = new Map<string, number>()
-  for (const record of directory) {
-    if (record.brickId === builtinTailscaleBrickId) continue
-    const shortId = record.id.slice(0, 8)
-    shortIdCounts.set(shortId, (shortIdCounts.get(shortId) ?? 0) + 1)
-  }
-  const serverRoute = (relayId: string, instanceId: string) => {
-    const shortId = instanceId.slice(0, 8)
-    // Otherwise the Relay-qualified full ID, which names exactly one server
-    // even where short IDs collide or the server is missing from the
-    // directory.
-    return servers.has(serverKey(relayId, instanceId)) &&
-      shortIdCounts.get(shortId) === 1
-      ? shortId
-      : relayInstanceRouteId(relayId, instanceId)
-  }
-  const appIds = apps.map((app) => ({ id: app.appId }))
-  const appsByKey = new Map(
-    apps.map((app) => [serverKey(app.relayId, app.appId), app])
-  )
-
   const visibleAssignments = assignments.filter((assignment) =>
     access.instance(assignment.relayId, assignment.instanceId, false)
   )
@@ -187,7 +125,7 @@ export async function getDomainSettingsHandler() {
   const managedDomains = visibleAssignments.map(
     (assignment): ManagedDomainOverview => {
       const key = serverKey(assignment.relayId, assignment.instanceId)
-      const server = servers.get(key)
+      const server = resources.server(assignment.relayId, assignment.instanceId)
       return {
         address: managedDomainConnectAddress(assignment),
         canManage: access.instance(
@@ -203,13 +141,16 @@ export async function getDomainSettingsHandler() {
         port: assignment.publicPort,
         primary: assignment.primary,
         relayId: assignment.relayId,
-        relayName: relayNames.get(assignment.relayId) ?? "Unknown Relay",
+        relayName: resources.relayName(assignment.relayId),
         server: {
           brickId: server?.brickId,
           game: server?.game,
           implementation: server?.implementation,
           name: server?.name ?? assignment.instanceId.slice(0, 8),
-          routeId: serverRoute(assignment.relayId, assignment.instanceId),
+          routeId: resources.serverRoute(
+            assignment.relayId,
+            assignment.instanceId
+          ),
         },
         srvActive: domainHasActiveSrvRecord(assignment),
         status: assignment.status,
@@ -226,9 +167,6 @@ export async function getDomainSettingsHandler() {
       ? access.app(row.relayId, row.resourceId, false)
       : access.instance(row.relayId, row.resourceId, false)
     if (!readable) return []
-    const key = serverKey(row.relayId, row.resourceId)
-    const app = isApp ? appsByKey.get(key) : undefined
-    const server = isApp ? undefined : servers.get(key)
     return [
       {
         canManage: isApp
@@ -240,22 +178,12 @@ export async function getDomainSettingsHandler() {
         id: row.id,
         lastError: row.lastError,
         relayId: row.relayId,
-        relayName: relayNames.get(row.relayId) ?? "Unknown Relay",
-        resource: isApp
-          ? {
-              id: row.resourceId,
-              kind: "app",
-              name: app?.name ?? row.resourceId.slice(0, 8),
-              routeId: shortIdRouteIdentifier(appIds, { id: row.resourceId }),
-            }
-          : {
-              brickId: server?.brickId,
-              id: row.resourceId,
-              implementation: server?.implementation,
-              kind: "server",
-              name: server?.name ?? row.resourceId.slice(0, 8),
-              routeId: serverRoute(row.relayId, row.resourceId),
-            },
+        relayName: resources.relayName(row.relayId),
+        resource: resources.webResource(
+          row.resourceType,
+          row.relayId,
+          row.resourceId
+        ),
         status: row.status,
         target: row.target,
         vanity: row.vanityDomain !== null,
@@ -276,15 +204,164 @@ export async function getDomainSettingsHandler() {
     hearthDomain: kilnRootDomain(),
     managedDomains,
     platformDomains,
-    settings: { personal: personalSettings, platform: platformSettings },
     userId: user.id,
     webHostnames,
+  }
+}
+
+/**
+ * Web route hostnames Kiln keeps no record for, as each Relay's proxy serves
+ * them: names outside every connected zone, which their owners point at the
+ * Relay by hand. A separate read from the page's, so a slow or offline Relay
+ * only delays its own rows.
+ */
+export async function getManualWebHostnamesHandler(): Promise<
+  Array<WebHostnameOverview>
+> {
+  const user = await requireEligibleResourceUser()
+  const [hostnames, relays, directory, apps, access] = await Promise.all([
+    runAppEffect("webHostnames.list", listWebHostnamesEffect()),
+    listPersistedRelays(),
+    runAppEffect("instances.directory.list", listInstanceDirectoryEffect()),
+    runAppEffect("apps.list", listAppRecordsEffect()),
+    resourceAccess(user),
+  ])
+  const resources = resourceDirectory(relays, directory, apps)
+  const kept = new Set(hostnames.map((row) => row.hostname))
+  const perRelay = await Promise.all(
+    relays
+      .filter((relay) =>
+        relayConnectionFeatures(relay.id).has(relayProxyConfigurationV1Feature)
+      )
+      .map((relay) =>
+        recoverPromise(
+          async () => {
+            const { routes } = relayProxyConfigurationSchema.parse(
+              await relayRpc(
+                await activeRelay(relay.id),
+                "relay.proxy.config.read",
+                {},
+                5_000
+              )
+            )
+            return routes.map((route) => ({ ...route, relayId: relay.id }))
+          },
+          // An unreachable Relay's rows wait for the next refresh.
+          () => []
+        )
+      )
+  )
+  const seen = new Set<string>()
+  return perRelay.flat().flatMap((route): Array<WebHostnameOverview> => {
+    const hostname = route.hostname.toLowerCase()
+    const { id, kind } = route.owner
+    const key = `${route.relayId}:${kind}:${id}:${hostname}`
+    // One row per name, however many paths route it.
+    if (kept.has(hostname) || seen.has(key)) return []
+    seen.add(key)
+    const isApp = kind === "app"
+    const readable = isApp
+      ? access.app(route.relayId, id, false)
+      : access.instance(route.relayId, id, false)
+    if (!readable) return []
+    return [
+      {
+        canManage: isApp
+          ? access.app(route.relayId, id, true)
+          : access.instance(route.relayId, id, true),
+        connectionName: null,
+        generated: false,
+        hostname,
+        id: key,
+        lastError: null,
+        relayId: route.relayId,
+        relayName: resources.relayName(route.relayId),
+        resource: resources.webResource(
+          isApp ? "app" : "instance",
+          route.relayId,
+          id
+        ),
+        status: "manual",
+        target: null,
+        vanity: false,
+        zoneName: null,
+      },
+    ]
+  })
+}
+
+type InstanceDirectoryRecord = Effect.Success<
+  ReturnType<typeof listInstanceDirectoryEffect>
+>[number]
+
+/** Names and links for the game servers and apps the page's rows point at. */
+function resourceDirectory(
+  relays: ReadonlyArray<{ id: string; name: string }>,
+  directory: ReadonlyArray<InstanceDirectoryRecord>,
+  apps: ReadonlyArray<{ appId: string; name: string; relayId: string }>
+) {
+  const relayNames = new Map(relays.map((relay) => [relay.id, relay.name]))
+  const servers = new Map(
+    directory.map((record) => [serverKey(record.relayId, record.id), record])
+  )
+  // Match the Game Servers table: a short ID routes on its own unless another
+  // game server shares it.
+  const shortIdCounts = new Map<string, number>()
+  for (const record of directory) {
+    if (record.brickId === builtinTailscaleBrickId) continue
+    const shortId = record.id.slice(0, 8)
+    shortIdCounts.set(shortId, (shortIdCounts.get(shortId) ?? 0) + 1)
+  }
+  const appIds = apps.map((app) => ({ id: app.appId }))
+  const appsByKey = new Map(
+    apps.map((app) => [serverKey(app.relayId, app.appId), app])
+  )
+  const server = (relayId: string, instanceId: string) =>
+    servers.get(serverKey(relayId, instanceId))
+  const serverRoute = (relayId: string, instanceId: string) => {
+    const shortId = instanceId.slice(0, 8)
+    // Otherwise the Relay-qualified full ID, which names exactly one server
+    // even where short IDs collide or the server is missing from the
+    // directory.
+    return server(relayId, instanceId) && shortIdCounts.get(shortId) === 1
+      ? shortId
+      : relayInstanceRouteId(relayId, instanceId)
+  }
+  return {
+    relayName: (relayId: string) => relayNames.get(relayId) ?? "Unknown Relay",
+    server,
+    serverRoute,
+    webResource(
+      resourceType: "app" | "instance",
+      relayId: string,
+      resourceId: string
+    ): WebHostnameOverview["resource"] {
+      if (resourceType === "app") {
+        const app = appsByKey.get(serverKey(relayId, resourceId))
+        return {
+          id: resourceId,
+          kind: "app",
+          name: app?.name ?? resourceId.slice(0, 8),
+          routeId: shortIdRouteIdentifier(appIds, { id: resourceId }),
+        }
+      }
+      const record = server(relayId, resourceId)
+      return {
+        brickId: record?.brickId,
+        id: resourceId,
+        implementation: record?.implementation,
+        kind: "server",
+        name: record?.name ?? resourceId.slice(0, 8),
+        routeId: serverRoute(relayId, resourceId),
+      }
+    },
   }
 }
 
 /** Hides nothing secret; the token never leaves Hearth. */
 function publicConnection(connection: DomainConnection) {
   return {
+    blacklistPatterns: connection.blacklistPatterns,
     domains: connection.domains,
     id: connection.id,
     lastError: connection.lastError,
@@ -303,7 +380,10 @@ function zoneNameFor(
   const connection = connections.find((item) => item.id === connectionId)
   let best: string | null = null
   for (const zone of connection?.zones ?? []) {
-    if (domainInZone(hostname, zone.name) && zone.name.length > (best?.length ?? 0)) {
+    if (
+      domainInZone(hostname, zone.name) &&
+      zone.name.length > (best?.length ?? 0)
+    ) {
       best = zone.name
     }
   }
@@ -348,7 +428,10 @@ export async function saveDomainConnectionHandler(
         loadDomainConnectionEffect(data.id)
       )
     : null
-  if (data.id && (!existing || !canManageConnection(user, existing.connection))) {
+  if (
+    data.id &&
+    (!existing || !canManageConnection(user, existing.connection))
+  ) {
     throw new Error("That Cloudflare connection was removed")
   }
   const ownerId = existing
@@ -374,8 +457,7 @@ export async function saveDomainConnectionHandler(
     throw new Error("Choose one domain per Cloudflare zone")
   }
   const apiToken =
-    data.apiToken ??
-    (data.id ? await savedApiToken(user, data.id) : undefined)
+    data.apiToken ?? (data.id ? await savedApiToken(user, data.id) : undefined)
   if (!apiToken) throw new Error("Enter a Cloudflare API token")
   const zones = await runAppEffect(
     "cloudflare.zones.list",
@@ -407,6 +489,9 @@ export async function saveDomainConnectionHandler(
     "domains.connection.save",
     saveDomainConnectionEffect({
       apiToken: data.apiToken,
+      blacklistPatterns: validateBlacklistPatterns(
+        data.blacklistPatterns ?? existing?.connection.blacklistPatterns ?? []
+      ),
       domains,
       id,
       insert: !existing,
@@ -438,26 +523,6 @@ export async function deleteDomainConnectionHandler(
       Effect.andThen(deleteDomainConnectionEffect(data.id)),
       Effect.andThen(invalidateManagedDomainAddressesEffect)
     )
-  )
-  publishDomainChange()
-}
-
-/** How a person's vanity domains, or the platform's, are handed out. */
-export async function saveVanitySettingsHandler(data: SaveVanitySettingsInput) {
-  const user = await requireEligibleResourceUser()
-  if (data.platform && !isPlatformAdmin(user)) {
-    throw new Error("Platform administrator access required")
-  }
-  await runAppEffect(
-    "domains.settings.save",
-    saveVanitySettingsEffect(data.platform ? null : user.id, {
-      autoAssign: data.autoAssign,
-      // Names under a person's own domains are theirs to pick.
-      blacklistPatterns: data.platform
-        ? validateBlacklistPatterns(data.blacklistPatterns)
-        : [],
-      strategy: data.strategy,
-    })
   )
   publishDomainChange()
 }

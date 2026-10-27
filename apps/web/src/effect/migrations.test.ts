@@ -78,9 +78,8 @@ describeMysql("database migrations", () => {
           // events, apps' GitHub sources and deployments, image apps'
           // updates, push subscriptions, Relay joins, and the security
           // checks' targets, inventories, findings, vulnerabilities, and
-          // alerts, game server migrations, icons, vanity owners' settings,
-          // and web hostnames.
-          expect(count).toBe(baselineTables.length + 27)
+          // alerts, game server migrations, icons, and web hostnames.
+          expect(count).toBe(baselineTables.length + 26)
           expect(yield* ledger).toEqual(migrationIds)
           // Only better-auth keeps dates, as DATETIME.
           expect((yield* columnTypes).map((row) => row.dataType)).toEqual([
@@ -582,7 +581,7 @@ describeMysql("database migrations", () => {
     )
 
     it.effect(
-      "makes the one Cloudflare connection the platform's and keeps its vanity settings",
+      "makes the one Cloudflare connection the shared one, keeping its reserved names",
       () =>
         Effect.gen(function* () {
           yield* dropAllTables
@@ -614,32 +613,28 @@ describeMysql("database migrations", () => {
 
           yield* applyMigrations(migrations)
 
-          expect(yield* selectRows("domain_integration")).toMatchObject([
-            {
-              api_token_ciphertext: "ciphertext",
-              id: "cloudflare",
-              owner_id: null,
-            },
-          ])
-          const [settings] = yield* selectRows<{
-            assignment_strategy: string
-            auto_assign: number
+          const [connection] = yield* selectRows<{
             blacklist_patterns: unknown
-            owner_key: string
-          }>("domain_owner_settings")
-          expect(settings).toMatchObject({
-            assignment_strategy: "balanced",
-            auto_assign: 0,
-            owner_key: "",
+          }>("domain_integration")
+          expect(connection).toMatchObject({
+            api_token_ciphertext: "ciphertext",
+            id: "cloudflare",
+            owner_id: null,
           })
-          const patterns = settings?.blacklist_patterns
+          const patterns = connection?.blacklist_patterns
           expect(
             typeof patterns === "string" ? JSON.parse(patterns) : patterns
           ).toEqual(["^staff-"])
+          // Automatic addresses were off, so its domain stops taking new ones
+          // but keeps the addresses on it.
           expect(
             yield* selectRows<{ domain: string }>("domain_zone")
           ).toMatchObject([
-            { domain: "play.kiln.site", integration_id: "cloudflare" },
+            {
+              domain: "play.kiln.site",
+              enabled: 0,
+              integration_id: "cloudflare",
+            },
           ])
           expect(yield* ledger).toEqual(migrationIds)
         }),

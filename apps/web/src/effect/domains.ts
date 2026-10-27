@@ -23,8 +23,6 @@ const ZonesSchema = Schema.Array(
   Schema.Struct({ id: Schema.String, name: Schema.String })
 )
 
-export type DomainAssignmentStrategy = "balanced" | "default" | "random"
-
 /**
  * A vanity domain: Kiln creates `<name>.<domain>` addresses under it for game
  * servers and apps.
@@ -53,6 +51,11 @@ export interface DomainZone {
 
 /** A Cloudflare API token someone, or the platform, connected. */
 export interface DomainConnection {
+  /**
+   * Names nobody may take under its vanity domains, as case-insensitive
+   * patterns. Only a shared (platform) connection has any.
+   */
+  blacklistPatterns: Array<string>
   /** Its vanity domains, the default first, then enabled ones by name. */
   domains: Array<ManagedDomain>
   id: string
@@ -68,15 +71,6 @@ export interface DomainConnection {
 
 export interface DomainConnectionCredential extends DomainConnection {
   apiToken: string
-}
-
-/** How an owner's vanity domains are handed out. */
-export interface VanitySettings {
-  /** Whether new game servers and apps get an address on their own. */
-  autoAssign: boolean
-  /** Names nobody may take under these domains. */
-  blacklistPatterns: Array<string>
-  strategy: DomainAssignmentStrategy
 }
 
 export interface InstanceDomainAssignment {
@@ -104,6 +98,7 @@ export interface InstanceDomainAssignment {
 
 interface DomainConnectionRow extends RowDataPacket {
   api_token_ciphertext: string
+  blacklist_patterns: unknown
   id: string
   last_error: string | null
   last_verified_at: number | null
@@ -121,13 +116,6 @@ interface DomainZoneRow extends RowDataPacket {
   owner_id: string | null
   zone_id: string
   zone_name: string
-}
-
-interface VanitySettingsRow extends RowDataPacket {
-  assignment_strategy: DomainAssignmentStrategy
-  auto_assign: boolean | number
-  blacklist_patterns: unknown
-  owner_key: string
 }
 
 interface InstanceDomainRow extends RowDataPacket {
@@ -152,17 +140,12 @@ interface InstanceDomainRow extends RowDataPacket {
 }
 
 const connectionColumns = `id, provider, owner_id, name, api_token_ciphertext,
-       zones, last_verified_at, last_error`
+       blacklist_patterns, zones, last_verified_at, last_error`
 const domainZoneSelect = `SELECT zone.domain, zone.integration_id, zone.zone_id,
        zone.zone_name, zone.is_default, zone.enabled, connection.owner_id
   FROM ${databaseTable("domain_zone")} zone
   JOIN ${databaseTable("domain_integration")} connection
     ON connection.id = zone.integration_id`
-
-/** The platform's settings key; people use their user ID. */
-function ownerKey(ownerId: string | null): string {
-  return ownerId ?? ""
-}
 
 /**
  * Connections, each with its vanity domains: the platform's (`null`) and
@@ -291,6 +274,8 @@ export const saveDomainConnectionEffect = Effect.fn("domains.connection.save")(
   function* (input: {
     /** Omitted to keep the saved token. */
     apiToken: string | undefined
+    /** Empty for a person's connection: names under it are theirs. */
+    blacklistPatterns: ReadonlyArray<string>
     /** The enabled domains, in zones the token reaches. */
     domains: ReadonlyArray<Omit<ManagedDomain, "connectionId" | "ownerId">>
     id: string
@@ -318,14 +303,16 @@ export const saveDomainConnectionEffect = Effect.fn("domains.connection.save")(
           }
           yield* transaction.execute(
             `INSERT INTO ${databaseTable("domain_integration")}
-               (id, provider, owner_id, name, api_token_ciphertext, zones,
-                last_verified_at, last_error, created_at, updated_at)
-             VALUES (?, 'cloudflare', ?, ?, ?, ?, ?, NULL, ?, ?)`,
+               (id, provider, owner_id, name, api_token_ciphertext,
+                blacklist_patterns, zones, last_verified_at, last_error,
+                created_at, updated_at)
+             VALUES (?, 'cloudflare', ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
             [
               input.id,
               input.ownerId,
               input.name,
               ciphertext,
+              JSON.stringify(input.blacklistPatterns),
               JSON.stringify(input.zones),
               now,
               now,
@@ -337,6 +324,7 @@ export const saveDomainConnectionEffect = Effect.fn("domains.connection.save")(
             `UPDATE ${databaseTable("domain_integration")}
                 SET name = ?,
                     api_token_ciphertext = COALESCE(?, api_token_ciphertext),
+                    blacklist_patterns = ?,
                     zones = ?,
                     last_verified_at = ?,
                     last_error = NULL,
@@ -345,6 +333,7 @@ export const saveDomainConnectionEffect = Effect.fn("domains.connection.save")(
             [
               input.name,
               ciphertext,
+              JSON.stringify(input.blacklistPatterns),
               JSON.stringify(input.zones),
               now,
               now,
@@ -543,50 +532,6 @@ export const deleteDomainConnectionEffect = Effect.fn(
     })
   )
 })
-
-/** An owner's vanity settings, or the defaults if they never saved any. */
-export const loadVanitySettingsEffect = Effect.fn("domains.settings.load")(
-  function* (ownerId: string | null) {
-    const database = yield* Database
-    const rows = yield* database.queryRows<VanitySettingsRow>(
-      "domains.settings.load",
-      `SELECT owner_key, auto_assign, assignment_strategy, blacklist_patterns
-         FROM ${databaseTable("domain_owner_settings")}
-        WHERE owner_key = ?
-        LIMIT 1`,
-      [ownerKey(ownerId)]
-    )
-    const row = rows[0]
-    return row ? vanitySettings(row) : defaultVanitySettings()
-  }
-)
-
-export const saveVanitySettingsEffect = Effect.fn("domains.settings.save")(
-  function* (ownerId: string | null, settings: VanitySettings) {
-    const database = yield* Database
-    const now = yield* Clock.currentTimeMillis
-    yield* database.execute(
-      "domains.settings.save",
-      `INSERT INTO ${databaseTable("domain_owner_settings")}
-         (owner_key, auto_assign, assignment_strategy, blacklist_patterns,
-          created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE
-         auto_assign = VALUES(auto_assign),
-         assignment_strategy = VALUES(assignment_strategy),
-         blacklist_patterns = VALUES(blacklist_patterns),
-         updated_at = VALUES(updated_at)`,
-      [
-        ownerKey(ownerId),
-        settings.autoAssign,
-        settings.strategy,
-        JSON.stringify(settings.blacklistPatterns),
-        now,
-        now,
-      ]
-    )
-  }
-)
 
 /** A vanity domain by name, with its owner. */
 export const loadManagedDomainEffect = Effect.fn("domains.domain.load")(
@@ -787,22 +732,6 @@ export const loadInstanceDomainAssignmentsEffect = Effect.fn(
       ORDER BY assignment.domain, assignment.vanity_label`
   )
   return rows.map(domainAssignment)
-})
-
-/** How many game server domains each domain holds. */
-export const countInstanceDomainsByDomainEffect = Effect.fn(
-  "domains.assignments.countByDomain"
-)(function* () {
-  const database = yield* Database
-  const rows = yield* database.queryRows<
-    RowDataPacket & { domain: string; total: number }
-  >(
-    "domains.assignments.countByDomain",
-    `SELECT domain, COUNT(*) AS total
-       FROM ${databaseTable("instance_domain")}
-      GROUP BY domain`
-  )
-  return new Map(rows.map((row) => [row.domain, Number(row.total)]))
 })
 
 /**
@@ -1160,6 +1089,7 @@ function publicConnection(
   zones: ReadonlyArray<DomainZoneRow>
 ): DomainConnection {
   return {
+    blacklistPatterns: parseBlacklistPatterns(row.blacklist_patterns),
     domains: zones
       .filter((zone) => zone.integration_id === row.id)
       .map(managedDomain),
@@ -1183,18 +1113,6 @@ function managedDomain(zone: DomainZoneRow): ManagedDomain {
     zoneId: zone.zone_id,
     zoneName: zone.zone_name,
   }
-}
-
-function vanitySettings(row: VanitySettingsRow): VanitySettings {
-  return {
-    autoAssign: Boolean(row.auto_assign),
-    blacklistPatterns: parseBlacklistPatterns(row.blacklist_patterns),
-    strategy: row.assignment_strategy,
-  }
-}
-
-export function defaultVanitySettings(): VanitySettings {
-  return { autoAssign: true, blacklistPatterns: [], strategy: "default" }
 }
 
 function parseZones(value: unknown): Array<DomainZone> {

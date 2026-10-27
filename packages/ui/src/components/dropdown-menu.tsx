@@ -45,10 +45,12 @@ function DropdownMenuContent({
         data-slot="dropdown-menu-content"
         sideOffset={sideOffset}
         align={align}
+        // As wide as its widest item, so labels stay on one line, and never
+        // narrower than its trigger.
         className={cn(
           floatingSurfaceClassName,
           floatingMotionClassName,
-          "z-50 max-h-(--radix-dropdown-menu-content-available-height) w-(--radix-dropdown-menu-trigger-width) min-w-32 origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto rounded-lg p-1 ring-1 ring-accent-border/22 data-[state=closed]:overflow-hidden",
+          "z-50 max-h-(--radix-dropdown-menu-content-available-height) w-max max-w-(--radix-dropdown-menu-content-available-width) min-w-[max(8rem,var(--radix-dropdown-menu-trigger-width))] origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto rounded-lg p-1 ring-1 ring-accent-border/22 data-[state=closed]:overflow-hidden",
           className
         )}
         {...props}

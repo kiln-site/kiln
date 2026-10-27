@@ -428,6 +428,18 @@ export const updateAppWebRoutes = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const { relay, user } = await authorizedApp(data, "app.manage")
+    const resource = {
+      relayId: relay.id,
+      resourceId: data.appId,
+      resourceType: "app" as const,
+    }
+    const { checkWebRouteHostnames, syncWebRouteHostnames } =
+      await import("@/server/web-hostname-access.server")
+    await checkWebRouteHostnames(
+      user,
+      resource,
+      data.routes.flatMap(webRouteHostnames)
+    )
     const state = relayAppWebRouteStateSchema.parse(
       await databaseRpc(
         relay,
@@ -442,12 +454,9 @@ export const updateAppWebRoutes = createServerFn({ method: "POST" })
     )
     publishAppChange(relay.id, false)
     // Kiln keeps the DNS records of hostnames in zones it manages.
-    const { syncWebRouteHostnames } = await import(
-      "@/server/web-hostname-access.server"
-    )
     await syncWebRouteHostnames(
       user,
-      { relayId: relay.id, resourceId: data.appId, resourceType: "app" },
+      resource,
       state.routes.flatMap(webRouteHostnames)
     )
     return state
@@ -480,9 +489,8 @@ export const deleteApp = createServerFn({ method: "POST" })
       "apps.record.delete",
       deleteAppRecordEffect(relay.id, data.appId)
     )
-    const { deleteResourceWebHostnamesBestEffort } = await import(
-      "@/server/web-hostname-access.server"
-    )
+    const { deleteResourceWebHostnamesBestEffort } =
+      await import("@/server/web-hostname-access.server")
     await deleteResourceWebHostnamesBestEffort({
       relayId: relay.id,
       resourceId: data.appId,

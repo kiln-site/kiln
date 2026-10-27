@@ -11,12 +11,14 @@ import { requireRelayPermission } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { requireEligibleResourceUser } from "@/server/auth"
 import { domainActor } from "@/server/domain-access.server"
+import { explainHostnameInUseEffect } from "@/server/domain-resource-access.server"
 import type {
   ReleaseWebHostnameInput,
   ResourceWebHostname,
   ResourceWebHostnamesInput,
 } from "@/server/domains"
 import {
+  checkWebRouteHostnamesEffect,
   deleteResourceWebHostnamesEffect,
   generateAppHostnameEffect,
   publishWebHostnameChange,
@@ -88,6 +90,30 @@ export async function releaseWebHostnameHandler(data: ReleaseWebHostnameInput) {
   await requireResourcePermission(user, row, true)
   await runAppEffect("webHostnames.release", releaseWebHostnameEffect(row))
   publishWebHostnameChange([row.relayId])
+}
+
+/**
+ * Refuses web route hostnames the resource may not take, before its routes
+ * save, naming the game server or app that holds one when the person can
+ * see it.
+ */
+export async function checkWebRouteHostnames(
+  user: AuthenticatedUser,
+  resource: WebHostnameResource,
+  hostnames: ReadonlyArray<string>
+): Promise<void> {
+  await runAppEffect(
+    "webHostnames.check",
+    checkWebRouteHostnamesEffect({
+      actor: domainActor(user),
+      hostnames,
+      resource,
+    }).pipe(
+      Effect.catchTag("HostnameInUseError", (error) =>
+        explainHostnameInUseEffect(user, error)
+      )
+    )
+  )
 }
 
 /**

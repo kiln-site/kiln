@@ -682,6 +682,25 @@ export const getRelayInstanceResources = createServerFn({ method: "GET" })
 export const updateInstanceWebRoutes = createServerFn({ method: "POST" })
   .validator(webRoutesInputSchema)
   .handler(async ({ data }) => {
+    const user = await requireEligibleResourceUser()
+    await requireRelayPermission({
+      instanceId: data.instanceId,
+      permission: "instance.network.write",
+      relayId: data.relayId,
+      user,
+    })
+    const resource = {
+      relayId: data.relayId,
+      resourceId: data.instanceId,
+      resourceType: "instance" as const,
+    }
+    const { checkWebRouteHostnames, syncWebRouteHostnames } =
+      await import("@/server/web-hostname-access.server")
+    await checkWebRouteHostnames(
+      user,
+      resource,
+      data.routes.flatMap(webRouteHostnames)
+    )
     const value = await relayRequest(
       `/v1/instances/${encodeURIComponent(data.instanceId)}/web-routes`,
       {
@@ -704,16 +723,9 @@ export const updateInstanceWebRoutes = createServerFn({ method: "POST" })
       type: "hearth.invalidate",
     })
     // Kiln keeps the DNS records of hostnames in zones it manages.
-    const { syncWebRouteHostnames } = await import(
-      "@/server/web-hostname-access.server"
-    )
     await syncWebRouteHostnames(
-      await requireEligibleResourceUser(),
-      {
-        relayId: data.relayId,
-        resourceId: data.instanceId,
-        resourceType: "instance",
-      },
+      user,
+      resource,
       routes.routes.flatMap(webRouteHostnames)
     )
     return routes
