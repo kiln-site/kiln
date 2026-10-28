@@ -457,13 +457,17 @@ rule in the code.
   what it replaced. Operations otherwise run in admission order. A
   reconciler holds its locks for one attempt only, never through a
   provider's backoff.
-- **Who owns work.** Each Hearth process heartbeats every 10 seconds. Work
-  is taken from another Hearth only once its heartbeat has been silent for
-  30 seconds, so one that's slow or cut off from MySQL keeps its work;
-  when it comes back, what it holds has ended, and it can neither end nor
-  grant anything. A Hearth that stops says so, and the next takes over at
-  once. Ending an operation is retried until MySQL answers, so a failed
-  write never leaves its locks held.
+- **Who owns work.** A change belongs to the Hearth that admitted it, which
+  registers itself as it admits and heartbeats every 10 seconds. Another
+  Hearth takes its waiting work once that heartbeat has been silent for 30
+  seconds, and its running work after 2 minutes, past any request's own
+  timeouts: silence can't prove a change under way has stopped, as one
+  whose Hearth lost MySQL mid-request, and nothing short of stopping that
+  process fences it. Taken-over work can't start or end anything after.
+  A Hearth that stops says so, and the next takes over at once. An
+  operation is named before it's admitted and ending it is retried until
+  MySQL answers, so a lost reply or a failed write never leaves its locks
+  held.
 - **Effect upgrades.** Workflow history outlives a release. Before
   upgrading Effect, a drill resumes workflows the previous version left
   mid-step, with history written by it, not only the new version's tests.
