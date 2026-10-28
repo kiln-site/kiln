@@ -29,7 +29,6 @@ import {
 
 import { Database, type DatabaseTransaction } from "@/effect/database"
 import { operationsTablePrefix } from "@/operations/engine"
-import type { OperationsEngineService } from "@/operations/engine-service"
 import { databaseTable } from "@/lib/database-config"
 
 // A development reload loads this module again in the same process, whose
@@ -122,7 +121,7 @@ const holdDuration = Metric.histogram("hearth.operations.hold.duration", {
 const waiters = new Map<string, Deferred.Deferred<void>>()
 type GrantedHandler = (
   ids: ReadonlyArray<string>
-) => Effect.Effect<void, never, Database | OperationsEngineService>
+) => Effect.Effect<void, never, Database>
 
 // Called with operations a decision granted, such as to start a durable
 // operation's workflow. Set once by the durable side.

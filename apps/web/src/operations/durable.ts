@@ -1,5 +1,14 @@
 import type { LaneLock } from "@workspace/operations"
-import { Cause, Effect, Exit, Layer, Schedule, Schema, Tracer } from "effect"
+import {
+  Cause,
+  Effect,
+  Exit,
+  Layer,
+  Option,
+  Schedule,
+  Schema,
+  Tracer,
+} from "effect"
 import { Activity, Workflow, WorkflowEngine } from "effect/workflow"
 
 import { Database } from "@/effect/database"
@@ -211,9 +220,20 @@ const dispatch = Effect.fnUntraced(
 )
 
 // A decision anywhere that grants a durable operation starts its workflow,
-// off the decision's own fiber.
+// off the decision's own fiber, where the engine runs: all of Hearth, though
+// not every test. Otherwise startup's sweep starts it.
 setGrantedHandler((ids) =>
-  dispatchDurableOperations(ids).pipe(Effect.forkDetach, Effect.asVoid)
+  Effect.serviceOption(OperationsEngineService).pipe(
+    Effect.flatMap((engine) =>
+      Option.isNone(engine)
+        ? Effect.void
+        : dispatchDurableOperations(ids).pipe(
+            Effect.provideService(OperationsEngineService, engine.value),
+            Effect.forkDetach,
+            Effect.asVoid
+          )
+    )
+  )
 )
 
 // A step's own reads and writes of the operation are tried again until
