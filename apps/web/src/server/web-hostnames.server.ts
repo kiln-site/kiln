@@ -53,7 +53,7 @@ import { domainInZone } from "@/lib/domain-schemas"
 import { vanityLabelAllowed } from "@/server/reserved-names"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { relayConnectionSnapshot } from "@/lib/relay-connection"
-import { withResourceLock } from "@/lib/resource-locks"
+import { withDnsChange } from "@/lib/dns-operations"
 import { activeRelay } from "@/lib/relay-registry"
 import {
   chooseVanityDomainEffect,
@@ -237,7 +237,8 @@ export const reconcileResourceWebHostnamesEffect = Effect.fn(
     }
     return changed
   },
-  (effect, resource) => withResourceLock(resource, effect)
+  (effect, resource) =>
+    withDnsChange("dns.webRoutes.reconcile", resource, effect)
 )
 
 /**
@@ -368,7 +369,8 @@ export function saveWebRouteHostnamesEffect<A, E, R>(
   input: ClaimInput,
   save: Effect.Effect<A, E, R>
 ) {
-  return withResourceLock(
+  return withDnsChange(
+    "dns.webRoutes.save",
     input.resource,
     Effect.gen(function* () {
       // A failed save keeps its claims: the Relay may have taken the
@@ -574,7 +576,8 @@ export const generateAppHostnameEffect = Effect.fn("webHostnames.generate")(
       message: "Kiln could not find an available address",
     })
   },
-  (effect, resource) => withResourceLock(resource, effect)
+  (effect, resource) =>
+    withDnsChange("dns.appAddress.generate", resource, effect)
 )
 
 /**
@@ -742,7 +745,7 @@ const removeWebHostnameEffect = Effect.fn("webHostnames.remove")(function* (
  */
 export const releaseWebHostnameEffect = Effect.fn("webHostnames.release")(
   function* (row: WebHostname) {
-    yield* withCurrentRow(row, (current) =>
+    yield* withCurrentRow("dns.webRoutes.release", row, (current) =>
       Effect.gen(function* () {
         // A route's hostname follows its route; deleting it alone would let
         // another resource take a name the route still serves.
@@ -784,7 +787,7 @@ export const deleteResourceWebHostnamesEffect = Effect.fn(
     if (failure !== null) return yield* Effect.fail(failure)
     return rows.length
   },
-  (effect, resource) => withResourceLock(resource, effect)
+  (effect, resource) => withDnsChange("dns.webRoutes.delete", resource, effect)
 )
 
 /**
@@ -794,9 +797,10 @@ export const deleteResourceWebHostnamesEffect = Effect.fn(
  */
 export const moveResourceWebHostnamesEffect = Effect.fn("webHostnames.move")(
   function* (from: WebHostnameResource, to: WebHostnameResource) {
-    const moved = yield* withResourceLock(
-      from,
-      withResourceLock(to, reassignWebHostnamesEffect(from, to))
+    const moved = yield* withDnsChange(
+      "dns.webRoutes.move",
+      [from, to],
+      reassignWebHostnamesEffect(from, to)
     )
     // Also when a run cut short before this moved them and this run moved
     // none: their records still point at the old Relay until now.
@@ -820,7 +824,11 @@ export const removeRelayWebHostnamesEffect = Effect.fn(
     // on this Relay, whatever a route save under way did to its mark.
     yield* markRelayWebHostnamesRemovingEffect(relayId)
     for (const row of rows) {
-      yield* withCurrentRow(row, removeWebHostnameEffect).pipe(Effect.ignore)
+      yield* withCurrentRow(
+        "dns.webRoutes.removeRelay",
+        row,
+        removeWebHostnameEffect
+      ).pipe(Effect.ignore)
     }
   } else {
     yield* deleteRelayWebHostnamesEffect(relayId)
@@ -834,10 +842,12 @@ export const removeRelayWebHostnamesEffect = Effect.fn(
  * Skips it once it's gone, or moved to another resource.
  */
 function withCurrentRow<E, R>(
+  kind: string,
   row: WebHostname,
   effect: (current: WebHostname) => Effect.Effect<unknown, E, R>
 ) {
-  return withResourceLock(
+  return withDnsChange(
+    kind,
     row,
     Effect.gen(function* () {
       const current = yield* loadWebHostnameEffect(row.id)
@@ -859,7 +869,11 @@ export const resyncWebHostnamesEffect = Effect.fn("webHostnames.resync")(
       const outcome = yield* Effect.gen(function* () {
         // A delete needs no Relay, as one left by removing its Relay.
         if (row.status === "removing") {
-          yield* withCurrentRow(row, removeWebHostnameEffect)
+          yield* withCurrentRow(
+            "dns.webRoutes.resync",
+            row,
+            removeWebHostnameEffect
+          )
           return null
         }
         let target = targets.get(row.relayId)
@@ -868,7 +882,8 @@ export const resyncWebHostnamesEffect = Effect.fn("webHostnames.resync")(
           targets.set(row.relayId, target)
         }
         const relayTarget = target
-        return yield* withResourceLock(
+        return yield* withDnsChange(
+          "dns.webRoutes.resync",
           row,
           Effect.gen(function* () {
             // Read again under the lock: a save or delete may have released

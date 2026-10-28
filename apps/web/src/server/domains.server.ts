@@ -75,7 +75,7 @@ import { vanityLabelAllowed } from "@/server/reserved-names"
 import { publishDomainChange } from "@/lib/domain-realtime.server"
 import type { FleetRelayInstance } from "@/lib/relay-fleet"
 import { relayConnectionSnapshot } from "@/lib/relay-connection"
-import { withResourceLock } from "@/lib/resource-locks"
+import { withDnsChange } from "@/lib/dns-operations"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { activeRelay } from "@/lib/relay-registry"
 import { relayJsonEffect } from "@/lib/relay-client"
@@ -124,12 +124,20 @@ export const invalidateManagedDomainAddressesEffect = invalidateCached(
 // assignments and then change Cloudflare records, under the lock its web
 // routes' DNS changes take too.
 function withInstanceDomainLock<A, E, R>(
-  relayId: string,
-  instanceId: string,
+  kind: string,
+  servers: ReadonlyArray<{
+    readonly instanceId: string
+    readonly relayId: string
+  }>,
   effect: Effect.Effect<A, E, R>
-): Effect.Effect<A, E, R> {
-  return withResourceLock(
-    { relayId, resourceId: instanceId, resourceType: "instance" },
+) {
+  return withDnsChange(
+    kind,
+    servers.map(({ instanceId, relayId }) => ({
+      relayId,
+      resourceId: instanceId,
+      resourceType: "instance" as const,
+    })),
     effect
   )
 }
@@ -215,8 +223,8 @@ export async function createInstanceDomainHandler(
       runAppEffect(
         "domains.instance.create",
         withInstanceDomainLock(
-          data.relayId,
-          data.instanceId,
+          "dns.domain.create",
+          [data],
           createInstanceDomainEffect(
             { ...instance, relayId: data.relayId },
             data,
@@ -269,8 +277,8 @@ export async function updateInstanceDomainHandler(
       runAppEffect(
         "domains.instance.update",
         withInstanceDomainLock(
-          scope.relayId,
-          scope.instanceId,
+          "dns.domain.rename",
+          [scope],
           updateInstanceDomainEffect(
             { ...instance, relayId: scope.relayId },
             data,
@@ -404,41 +412,33 @@ export const moveInstanceDomainsEffect = Effect.fn("domains.instance.move")(
     to: DomainInstance
   ) {
     const moved = yield* withInstanceDomainLock(
-      from.relayId,
-      from.instanceId,
-      withInstanceDomainLock(
-        to.relayId,
-        to.id,
-        Effect.flatMap(Database, (database) =>
-          // All at once, so a move cut short and run again finds either
-          // nothing done or everything done.
-          database.transaction("domains.instance.move", () =>
-            Effect.gen(function* () {
-              const optedOut = yield* loadInstanceDomainOptOutEffect(
-                from.relayId,
-                from.instanceId
-              )
-              const count = yield* reassignInstanceDomainsEffect(from, {
-                instanceId: to.id,
-                relayId: to.relayId,
-              })
-              yield* setInstanceDomainOptOutEffect(
-                from.relayId,
-                from.instanceId,
-                true
-              )
-              // Run again, the old server is opted out and has nothing
-              // left to move; the new one keeps what the first run gave it.
-              if (count > 0 || !optedOut) {
-                yield* setInstanceDomainOptOutEffect(
-                  to.relayId,
-                  to.id,
-                  optedOut
-                )
-              }
-              return count
+      "dns.domain.move",
+      [from, { instanceId: to.id, relayId: to.relayId }],
+      Effect.flatMap(Database, (database) =>
+        // All at once, so a move cut short and run again finds either
+        // nothing done or everything done.
+        database.transaction("domains.instance.move", () =>
+          Effect.gen(function* () {
+            const optedOut = yield* loadInstanceDomainOptOutEffect(
+              from.relayId,
+              from.instanceId
+            )
+            const count = yield* reassignInstanceDomainsEffect(from, {
+              instanceId: to.id,
+              relayId: to.relayId,
             })
-          )
+            yield* setInstanceDomainOptOutEffect(
+              from.relayId,
+              from.instanceId,
+              true
+            )
+            // Run again, the old server is opted out and has nothing
+            // left to move; the new one keeps what the first run gave it.
+            if (count > 0 || !optedOut) {
+              yield* setInstanceDomainOptOutEffect(to.relayId, to.id, optedOut)
+            }
+            return count
+          })
         )
       )
     )
@@ -484,7 +484,11 @@ export const deleteInstanceDomainEffect = Effect.fn("domains.instance.delete")(
     }
   },
   (effect, relayId, instanceId) =>
-    withInstanceDomainLock(relayId, instanceId, effect)
+    withInstanceDomainLock(
+      "dns.domain.delete",
+      [{ instanceId, relayId }],
+      effect
+    )
 )
 
 export const removeInstanceDomainEffect = Effect.fn("domains.instance.remove")(
@@ -527,7 +531,11 @@ export const removeInstanceDomainEffect = Effect.fn("domains.instance.remove")(
     )
   },
   (effect, relayId, instanceId) =>
-    withInstanceDomainLock(relayId, instanceId, effect)
+    withInstanceDomainLock(
+      "dns.domain.remove",
+      [{ instanceId, relayId }],
+      effect
+    )
 )
 
 // A failed provision or removal can leave records behind an assignment that
@@ -601,8 +609,8 @@ export const removeRelayManagedDomainsEffect = Effect.fn(
     assignments,
     (listed) =>
       withInstanceDomainLock(
-        listed.relayId,
-        listed.instanceId,
+        "dns.domain.removeRelay",
+        [listed],
         Effect.gen(function* () {
           // As it is now: a move may have taken it off this Relay first.
           const assignment = yield* loadInstanceDomainAssignmentEffect(
@@ -781,7 +789,11 @@ export const provisionInstanceDomainEffect = Effect.fn(
     return changed
   },
   (effect, instance) =>
-    withInstanceDomainLock(instance.relayId, instance.id, effect)
+    withInstanceDomainLock(
+      "dns.domain.provision",
+      [{ instanceId: instance.id, relayId: instance.relayId }],
+      effect
+    )
 )
 
 const createInstanceDomainEffect = Effect.fn("domains.instance.create")(
@@ -1439,8 +1451,8 @@ const reconcileInstanceDomainWorkEffect = Effect.fnUntraced(function* (server: {
   const instance = reported ? { ...reported, relayId: server.relayId } : null
   // Deletes, and renames within a zone, need only what Kiln recorded.
   yield* withInstanceDomainLock(
-    server.relayId,
-    server.instanceId,
+    "dns.domain.reconcile",
+    [server],
     Effect.gen(function* () {
       const assignments = yield* loadInstanceDomainAssignmentsForInstanceEffect(
         server.relayId,

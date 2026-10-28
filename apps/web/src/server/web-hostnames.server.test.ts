@@ -1,4 +1,5 @@
 import { assert, layer } from "@effect/vitest"
+import { exclusive } from "@workspace/operations"
 import { Deferred, Effect, Fiber, Layer } from "effect"
 import { TestClock } from "effect/testing"
 import { afterAll, afterEach, vi } from "vite-plus/test"
@@ -29,6 +30,7 @@ import {
   type WebHostnameResource,
 } from "@/effect/web-hostnames"
 import { reconcileDueDnsEffect } from "@/lib/dns-worker.server"
+import { quickOperation, runOperation } from "@/operations/run"
 
 import type { DomainActor } from "./domain-access.server"
 import {
@@ -52,6 +54,17 @@ const owner: DomainActor = { admin: false, id: "owner" }
 const collaborator: DomainActor = { admin: false, id: "collaborator" }
 const admin: DomainActor = { admin: true, id: "admin" }
 const app = { relayId, resourceId: appId, resourceType: "app" } as const
+
+// Work on a whole resource, as moving or deleting it is.
+const wholeResource = quickOperation<WebHostnameResource>({
+  kind: "test.move",
+  locks: (resource) => [
+    exclusive(
+      `${resource.resourceType}:${resource.relayId}/${resource.resourceId}`
+    ),
+  ],
+  version: 1,
+})
 
 interface FakeRecord {
   comment?: string
@@ -691,6 +704,48 @@ describeMysql("web route hostnames", () => {
         })
         assert.deepEqual(yield* claimedNames, ["two.owner.example"])
       })
+    )
+
+    it.effect(
+      "waits to change a resource's DNS while the whole resource is held, as a move holds it",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          const cloudflare = fakeCloudflare([ownerZone])
+          yield* claim(owner, ["shop.owner.example"])
+          const started = yield* Deferred.make<void>()
+          const release = yield* Deferred.make<void>()
+          const moving = yield* runOperation(
+            wholeResource,
+            app,
+            Deferred.succeed(started, undefined).pipe(
+              Effect.andThen(Deferred.await(release))
+            )
+          ).pipe(Effect.forkChild)
+          yield* Deferred.await(started)
+
+          const syncing = yield* Effect.forkChild(
+            reconcileResourceWebHostnamesEffect(app)
+          )
+          yield* selectRows<{ kind: string; state: string }>("operation").pipe(
+            Effect.repeat({
+              until: (rows) =>
+                rows.some(
+                  (row) =>
+                    row.kind === "dns.webRoutes.reconcile" &&
+                    row.state === "waiting"
+                ),
+            })
+          )
+          assert.deepEqual(cloudflare.dns(), {})
+
+          yield* Deferred.succeed(release, undefined)
+          yield* Fiber.join(moving)
+          yield* Fiber.join(syncing)
+          assert.deepEqual(cloudflare.dns(), {
+            "shop.owner.example": "relay-one.relay.test",
+          })
+        })
     )
 
     it.effect("deletes a record made while its Relay was removed", () =>

@@ -550,13 +550,13 @@ Each item moves when its phase comes. Links point at where it lives today.
 
 ### Phase 3: DNS ([`domains.ts`](../apps/web/src/server/domains.ts), [`web-hostnames.server.ts`](../apps/web/src/server/web-hostnames.server.ts))
 
-- [ ] A DNS admission boundary every caller goes through: route saves, post-provision, deletion, moves, Relay removal
-- [ ] DNS worker → reconciler on the lanes ([`dns-worker.server.ts`](../apps/web/src/lib/dns-worker.server.ts)); then remove [`resource-locks.ts`](../apps/web/src/lib/resource-locks.ts)
-- [ ] `saveDomainConnection`, `deleteDomainConnection`, `discoverCloudflareDomains`
-- [ ] `createInstanceDomain`, `updateInstanceDomain`, `removeInstanceDomain`
-- [ ] `releaseWebHostname`, app address generation
-- [ ] Web route saves, Relay write included: `updateInstanceWebRoutes` ([`relay.ts`](../apps/web/src/server/relay.ts)), `updateAppWebRoutes` ([`apps.ts`](../apps/web/src/server/apps.ts))
-- [ ] Sync (`resyncDomainAssignments`)
+- [x] A DNS admission boundary every caller goes through: route saves, post-provision, deletion, moves, Relay removal ([`dns-operations.ts`](../apps/web/src/lib/dns-operations.ts): each change holds `<resource>/dns` exclusive and the resource shared; a move takes both resources at once)
+- [x] DNS worker → reconciler on the lanes ([`dns-worker.server.ts`](../apps/web/src/lib/dns-worker.server.ts)): the worker stays as its schedule, and each attempt is a DNS change on the lanes; `resource-locks.ts` is gone
+- [x] `saveDomainConnection`, `deleteDomainConnection` hold `connection:<id>`; `discoverCloudflareDomains` only reads
+- [x] `createInstanceDomain`, `updateInstanceDomain`, `removeInstanceDomain`
+- [x] `releaseWebHostname`, app address generation
+- [x] Web route saves, Relay write included: `updateInstanceWebRoutes` ([`relay.ts`](../apps/web/src/server/relay.ts)), `updateAppWebRoutes` ([`apps.ts`](../apps/web/src/server/apps.ts))
+- [x] Sync (`resyncDomainAssignments`), one resource at a time
 
 ### Phase 4: the Relay link
 

@@ -8,10 +8,12 @@ import { reconcileDueInstanceDomainsEffect } from "@/server/domains.server"
 import { reconcileDueWebHostnamesEffect } from "@/server/web-hostnames.server"
 
 /**
- * Finishes DNS work requests left undone: records Cloudflare refused or that
- * a restart cut short, renames under way, and deletes, from what MySQL
- * holds. Requests do the work themselves first; this is how it's finished
- * whatever happened to them.
+ * The DNS reconciler's schedule. It finishes DNS work requests left undone:
+ * records Cloudflare refused or that a restart cut short, renames under
+ * way, and deletes, from what MySQL holds. Requests do the work themselves
+ * first; this is how it's finished whatever happened to them. Each
+ * resource's attempt is a DNS change in Hearth's operation lanes, like a
+ * request's, so the two never interleave (`dns-operations.ts`).
  */
 export function startDnsWorker(): void {
   startPollingWorker("Domains.dns", passDnsWorker)

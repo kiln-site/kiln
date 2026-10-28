@@ -6,6 +6,7 @@ import {
   relayProxyConfigurationV1Feature,
   relaySnapshotSchema,
 } from "@workspace/contracts"
+import { exclusive } from "@workspace/operations"
 import { Effect } from "effect"
 
 import { listCloudflareZonesEffect } from "@/effect/cloudflare-api"
@@ -44,6 +45,7 @@ import { relayJsonEffect } from "@/lib/relay-client"
 import { shortIdRouteIdentifier } from "@/lib/short-id-route"
 import { requireEligibleResourceUser } from "@/server/auth"
 import { resourceAccess } from "@/server/domain-resource-access.server"
+import { quickOperation, runOperation } from "@/operations/run"
 import { requireFastReservedPatterns } from "@/server/reserved-names"
 import {
   invalidateManagedDomainAddressesEffect,
@@ -393,6 +395,23 @@ function zoneNameFor(
   return best
 }
 
+// Saving or removing a Cloudflare connection holds it, so two changes to
+// one connection, its token and domains, don't interleave. Reading its
+// zones needs no lock.
+const connectionLocks = ({ connectionId }: { connectionId: string }) => [
+  exclusive(`connection:${connectionId}`),
+]
+const saveConnection = quickOperation({
+  kind: "dns.connection.save",
+  locks: connectionLocks,
+  version: 1,
+})
+const deleteConnection = quickOperation({
+  kind: "dns.connection.delete",
+  locks: connectionLocks,
+  version: 1,
+})
+
 /** The zones a pasted token, or a saved connection's, can manage. */
 export async function discoverCloudflareDomainsHandler(
   data: DiscoverDomainsInput
@@ -494,16 +513,21 @@ export async function saveDomainConnectionHandler(
   requireFastReservedPatterns(blacklistPatterns)
   await runAppEffect(
     "domains.connection.save",
-    saveDomainConnectionEffect({
-      apiToken: data.apiToken,
-      blacklistPatterns,
-      domains,
-      id,
-      insert: !existing,
-      name: data.name,
-      ownerId,
-      zones,
-    }).pipe(Effect.andThen(invalidateManagedDomainAddressesEffect))
+    runOperation(
+      saveConnection,
+      { connectionId: id },
+      saveDomainConnectionEffect({
+        apiToken: data.apiToken,
+        blacklistPatterns,
+        domains,
+        id,
+        insert: !existing,
+        name: data.name,
+        ownerId,
+        zones,
+      }).pipe(Effect.andThen(invalidateManagedDomainAddressesEffect)),
+      { actorId: user.id }
+    )
   )
   publishDomainChange()
   return { id }
@@ -525,9 +549,14 @@ export async function deleteDomainConnectionHandler(
   if (!existing || !canManageConnection(user, existing.connection)) return
   await runAppEffect(
     "domains.connection.delete",
-    requireConnectionUnusedEffect(data.id).pipe(
-      Effect.andThen(deleteDomainConnectionEffect(data.id)),
-      Effect.andThen(invalidateManagedDomainAddressesEffect)
+    runOperation(
+      deleteConnection,
+      { connectionId: data.id },
+      requireConnectionUnusedEffect(data.id).pipe(
+        Effect.andThen(deleteDomainConnectionEffect(data.id)),
+        Effect.andThen(invalidateManagedDomainAddressesEffect)
+      ),
+      { actorId: user.id }
     )
   )
   publishDomainChange()
