@@ -1,5 +1,5 @@
 import * as Telemetry from "@workspace/telemetry"
-import { Effect, Layer, ManagedRuntime } from "effect"
+import { Cause, Effect, Exit, Layer, ManagedRuntime } from "effect"
 import type { Fiber, Tracer } from "effect"
 
 import type { AppCache } from "./cache"
@@ -57,15 +57,23 @@ export function forkAppWorker(effect: Effect.Effect<void, never, AppServices>) {
   return runtime.runFork(effect)
 }
 
-export function runAppEffect<TResult, TError>(
+export async function runAppEffect<TResult, TError>(
   name: string,
   effect: Effect.Effect<TResult, TError, AppServices>,
   options?: { signal?: AbortSignal }
 ): Promise<TResult> {
-  return runtime.runPromise(
+  const exit = await runtime.runPromiseExit(
     Telemetry.withActiveParent(Effect.withSpan(effect, name)),
     options
   )
+  if (Exit.isSuccess(exit)) return exit.value
+  // Stopped only because whoever asked gave up, as a browser does when it
+  // leaves the page: an abort, which isn't reported, rather than a failure.
+  // Anything that went wrong as well is still thrown and reported.
+  if (options?.signal?.aborted && Cause.hasInterruptsOnly(exit.cause)) {
+    throw new DOMException("The request was aborted", "AbortError")
+  }
+  throw Cause.squash(exit.cause)
 }
 
 /** Runs a background check, such as a worker's idle poll, without tracing it. */
