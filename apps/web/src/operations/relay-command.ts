@@ -79,9 +79,18 @@ export const relayCommand = <A = unknown, R = never>(options: {
       error: RelayCommandError,
       execute: Effect.gen(function* () {
         const relay = yield* promiseEffect(() => activeRelay(options.relayId))
+        const journal = yield* promiseEffect(() => relayJournal(relay))
+        // Without one, a lost reply couldn't be told from a forgotten change.
+        if (!journal) {
+          return yield* new RelayCommandError({
+            code: "journal_unnamed",
+            message: "The Relay didn't name its journal of changes",
+            retryable: false,
+          })
+        }
         return {
           id: randomUUID(),
-          journal: yield* promiseEffect(() => relayJournal(relay)),
+          journal,
           sentAt: yield* Clock.currentTimeMillis,
         }
       }).pipe(retryWhileAway, asCommandError),
@@ -104,10 +113,7 @@ export const relayCommand = <A = unknown, R = never>(options: {
 
 const CommandSchema = Schema.Struct({
   id: Schema.String,
-  // Null from a Relay that doesn't name its journal.
-  journal: Schema.NullOr(
-    Schema.Struct({ clientId: Schema.String, journalId: Schema.String })
-  ),
+  journal: Schema.Struct({ clientId: Schema.String, journalId: Schema.String }),
   sentAt: Schema.Number,
 })
 
@@ -171,7 +177,7 @@ const settle = <A, R>(
         options.timeoutMs,
         undefined,
         undefined,
-        { journal: command.journal ?? undefined, operationId: command.id }
+        { journal: command.journal, operationId: command.id }
       )
     )
     const lookup = promiseEffect(() =>
@@ -182,7 +188,7 @@ const settle = <A, R>(
         undefined,
         undefined,
         undefined,
-        { journal: command.journal ?? undefined }
+        { journal: command.journal }
       )
     ).pipe(
       Effect.flatMap(Schema.decodeUnknownEffect(RelayOperationLookupSchema))
