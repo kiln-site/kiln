@@ -346,9 +346,11 @@ resource so nothing writes to it but its final backup:
   so Docker doesn't start them again.
 - A database keeps running, since its final backup is a dump of it.
   Everyone's terminal sessions on it end, and the freeze waits until every
-  terminal client in its container has stopped; attaching takes the
-  database's lane, so one under way finishes first and later ones are
-  refused. Game
+  terminal client in its container has stopped, finding them by the PID
+  files they write and keeping each file until its client is gone, so a
+  retried freeze finds a survivor again. Attaching takes the database's
+  lane until its client has written that file, so one under way is found
+  and later ones are refused. A stopped container runs no clients. Game
   servers and Apps connected to it can still write to it until it's
   deleted, so what they write after its dump isn't in its final backup.
 

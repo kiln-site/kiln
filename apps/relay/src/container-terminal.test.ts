@@ -441,6 +441,17 @@ describe("database terminal sessions", () => {
     )
   })
 
+  it("counts a stopped database as having no clients to stop", async () => {
+    const harness = await relayHarness()
+    const database = await runningDatabase(harness)
+    const terminals = new ContainerTerminals(harness.config)
+    fakeDocker.container(database.containerId!)!.state.running = false
+
+    await expect(
+      terminals.endTarget(databaseId, database.containerId)
+    ).resolves.toBeUndefined()
+  })
+
   it("shows a slow page every resize, even ones with no output between them", async () => {
     const harness = await relayHarness()
     const database = await runningDatabase(harness)

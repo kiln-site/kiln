@@ -52,11 +52,13 @@ const MAX_REMEMBERED_ENDINGS = 1_000
 const PID_FILE_PREFIX = "/tmp/.kiln-terminal-"
 // Hang up first so the client can restore its terminal; psql's readline
 // catches SIGHUP and SIGTERM and may stay, so it is killed after a second.
+// Hangs up a client by its PID file, killing it if it lingers, and removes
+// the file only once it's gone, so a client that survives is found again.
 const HANG_UP_FUNCTION =
-  'hang_up() { pid=$(cat "$1") && kill -HUP "$pid" 2>/dev/null && sleep 1 && kill -KILL "$pid" 2>/dev/null; rm -f "$1"; }'
+  'hang_up() { pid=$(cat "$1") || return 0; if kill -HUP "$pid" 2>/dev/null; then sleep 1; kill -KILL "$pid" 2>/dev/null; for _ in 1 2 3 4 5; do kill -0 "$pid" 2>/dev/null || break; sleep 1; done; fi; kill -0 "$pid" 2>/dev/null || rm -f "$1"; }'
 // Hangs up every client in the container and exits non-zero if one is
 // still alive afterwards.
-const STOP_ALL_CLIENTS = `${HANG_UP_FUNCTION}; for file in "$0"*; do [ -f "$file" ] || continue; pid=$(cat "$file"); hang_up "$file"; if kill -0 "$pid" 2>/dev/null; then exit 1; fi; done`
+const STOP_ALL_CLIENTS = `${HANG_UP_FUNCTION}; for file in "$0"*; do [ -f "$file" ] || continue; hang_up "$file"; [ -f "$file" ] && exit 1; done; exit 0`
 // Both packages ship UMD bundles that ESM loaders don't all unwrap the same
 // way, so they load through Node's own CommonJS loader.
 const require = createRequire(import.meta.url)
@@ -223,27 +225,21 @@ export class ContainerTerminals {
         )
     )
     if (containerId === null) return
-    const docker = this.#docker
-    const exitCode = await Effect.runPromise(
-      docker
-        .createExec(containerId, {
-          AttachStderr: false,
-          AttachStdout: false,
-          Cmd: ["sh", "-c", STOP_ALL_CLIENTS, PID_FILE_PREFIX],
-        })
-        .pipe(
-          Effect.tap((created) => docker.startDetachedExec(created.Id)),
-          Effect.flatMap((created) =>
-            docker.inspectExec(created.Id).pipe(
-              Effect.repeat({
-                schedule: Schedule.spaced("200 millis"),
-                until: (exec) => !exec.Running,
-              }),
-              Effect.timeout("60 seconds")
-            )
-          ),
-          Effect.map((exec) => exec.ExitCode)
-        )
+    // A stopped container runs no clients; one stopping meanwhile is quiet
+    // too, whatever the exec says.
+    if (!(await this.#runningForCertain(containerId))) return
+    const exitCode = await recoverPromise(
+      () =>
+        this.#runToExit(containerId, [
+          "sh",
+          "-c",
+          STOP_ALL_CLIENTS,
+          PID_FILE_PREFIX,
+        ]),
+      async (cause) => {
+        if (!(await this.#runningForCertain(containerId))) return 0
+        throw cause
+      }
     )
     if (exitCode !== 0) {
       throw new Error("A terminal client may still be running")
@@ -450,6 +446,23 @@ export class ContainerTerminals {
         Tty: true,
       })
     )
+    // The client has written its PID file before attaching returns, so a
+    // database being frozen can find every client started before it.
+    const ready = await recoverPromise(
+      async () => {
+        for (let attempt = 0; attempt < 50; attempt += 1) {
+          if ((await this.#runToExit(containerId, ["test", "-s", pidFile])) === 0)
+            return true
+          await new Promise((resolve) => setTimeout(resolve, 100))
+        }
+        return false
+      },
+      () => false
+    )
+    if (!ready) {
+      socket.destroy()
+      throw new Error("The terminal didn't start")
+    }
     const screen = new HeadlessTerminal({
       allowProposedApi: true,
       // Reported to clients that ask, as Hearth shows it.
@@ -714,6 +727,51 @@ export class ContainerTerminals {
           () => undefined
         )
       )
+    )
+  }
+
+  // Whether a container is running, failing when Docker can't say: only
+  // one that's gone or stopped counts as running nothing.
+  async #runningForCertain(containerId: string): Promise<boolean> {
+    const state = await Effect.runPromise(
+      this.#docker
+        .inspectContainer(containerId, { timeout: 10_000 })
+        .pipe(
+          Effect.catchIf(
+            (error) => error.status === 404,
+            () => Effect.succeed(null)
+          )
+        )
+    )
+    return state?.State.Running === true
+  }
+
+  // Runs a command in the container and waits for its exit code.
+  async #runToExit(
+    containerId: string,
+    command: Array<string>
+  ): Promise<number | null> {
+    const docker = this.#docker
+    return Effect.runPromise(
+      docker
+        .createExec(containerId, {
+          AttachStderr: false,
+          AttachStdout: false,
+          Cmd: command,
+        })
+        .pipe(
+          Effect.tap((created) => docker.startDetachedExec(created.Id)),
+          Effect.flatMap((created) =>
+            docker.inspectExec(created.Id).pipe(
+              Effect.repeat({
+                schedule: Schedule.spaced("100 millis"),
+                until: (exec) => !exec.Running,
+              }),
+              Effect.timeout("60 seconds")
+            )
+          ),
+          Effect.map((exec) => exec.ExitCode)
+        )
     )
   }
 
