@@ -29,7 +29,12 @@ const tracingMiddleware = createMiddleware().server(
       async (span) => {
         const result = await tapPromiseError(
           async () => next(),
-          (cause) => reportRequestError(cause, name)
+          (cause) => {
+            // The browser hung up, as when it leaves a page mid-stream:
+            // Node ends the request with a connection reset.
+            if (request.signal.aborted && isConnectionReset(cause)) return
+            reportRequestError(cause, name)
+          }
         )
         span.attribute("http.response.status_code", result.response.status)
         return result
@@ -77,6 +82,14 @@ function reportRequestError(cause: unknown, operation: string): void {
     return
   }
   reportAppError(cause, { operation })
+}
+
+function isConnectionReset(cause: unknown): boolean {
+  return (
+    cause instanceof Error &&
+    "code" in cause &&
+    cause.code === "ECONNRESET"
+  )
 }
 
 export const startInstance = createStart(() => ({
