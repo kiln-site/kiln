@@ -294,7 +294,8 @@ holds resources on a Relay for one phase of a Hearth operation:
   it needs instead, which the Relay's lanes already order.
 - **Owned**: tied to the paired Hearth, the operation, and the phase.
   Only that operation's commands, and the Relay jobs they start, run under
-  it; everything else waits.
+  it; nothing else runs on what it holds (see the next points for who
+  waits and who's refused).
 - **Short and narrow**: it holds only the resource's own keys, never
   Relay-wide ones such as `routes` or `hostFiles`, which its commands still
   take briefly as they run, as any command does. A move copies while the
@@ -509,9 +510,10 @@ rule in the code.
 - **Effect upgrades.** Workflow history outlives a release. Before
   upgrading Effect, a drill resumes workflows the previous version left
   mid-step, with history written by it, not only the new version's tests.
-- **During a move.** From handover until the move finishes, changes to
-  either server wait their turn behind it; before handover, they run as
-  usual and the move re-checks after it gets its handover locks.
+- **During a move.** From handover until the move finishes, neither
+  server changes outside it: a change someone asks for is refused at once,
+  and schedules and recovery wait their turn. Before handover, changes run
+  as usual and the move re-checks after it gets its handover locks.
 - **Power and files are separate.** Stopping or starting a game server and
   writing its files take different parts of its lock (`instance:<id>`
   shared, with `/lifecycle` or `/files` exclusive), as on the Relay, so
