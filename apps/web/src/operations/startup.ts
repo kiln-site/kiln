@@ -31,40 +31,43 @@ const SWEEP = "15 seconds"
  * retention. Stopping, it says so, so the next Hearth needn't wait.
  */
 export function startOperationsEngine(): void {
-  forkAppWorker(
-    Effect.gen(function* () {
-      const { engine } = yield* OperationsEngineService
-      yield* engine
-      yield* heartbeatDriver()
-    }).pipe(
-      Effect.tapError((error) =>
-        Effect.logWarning("Operations engine not started yet", error)
-      ),
-      Effect.retry(Schedule.spaced("5 seconds")),
-      Effect.andThen(
-        Effect.all(
-          [
-            heartbeatDriver().pipe(
-              Effect.ignore,
-              Effect.repeat(Schedule.spaced(DRIVER_HEARTBEAT))
-            ),
-            recoverOperations().pipe(
-              Effect.ignore,
-              Effect.andThen(undispatchedOperations()),
-              Effect.flatMap(dispatchDurableOperations),
-              Effect.ignore,
-              Effect.repeat(Schedule.spaced(SWEEP))
-            ),
-            forgetFinishedOperations(RETENTION).pipe(
-              Effect.ignore,
-              Effect.repeat(Schedule.spaced("1 hour"))
-            ),
-          ],
-          { concurrency: "unbounded", discard: true }
-        )
-      ),
-      Effect.ensuring(retireDriver().pipe(Effect.ignore)),
-      Effect.ignore
+  // The heartbeat needs only MySQL: requests' quick operations run before
+  // the engine is up, and must stay this Hearth's meanwhile.
+  const heartbeat = heartbeatDriver().pipe(
+    Effect.ignore,
+    Effect.repeat(Schedule.spaced(DRIVER_HEARTBEAT))
+  )
+  const engine = Effect.gen(function* () {
+    const { engine } = yield* OperationsEngineService
+    yield* engine
+  }).pipe(
+    Effect.tapError((error) =>
+      Effect.logWarning("Operations engine not started yet", error)
+    ),
+    Effect.retry(Schedule.spaced("5 seconds")),
+    Effect.andThen(
+      Effect.all(
+        [
+          recoverOperations().pipe(
+            Effect.ignore,
+            Effect.andThen(undispatchedOperations()),
+            Effect.flatMap(dispatchDurableOperations),
+            Effect.ignore,
+            Effect.repeat(Schedule.spaced(SWEEP))
+          ),
+          forgetFinishedOperations(RETENTION).pipe(
+            Effect.ignore,
+            Effect.repeat(Schedule.spaced("1 hour"))
+          ),
+        ],
+        { concurrency: "unbounded", discard: true }
+      )
     )
+  )
+  forkAppWorker(
+    Effect.all([heartbeat, engine], {
+      concurrency: "unbounded",
+      discard: true,
+    }).pipe(Effect.ensuring(retireDriver().pipe(Effect.ignore)), Effect.ignore)
   )
 }

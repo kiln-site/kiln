@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto"
+
 import type { LaneLock } from "@workspace/operations"
 import { Cause, Clock, Effect, Exit, Schedule } from "effect"
 
@@ -38,14 +40,23 @@ export const runOperation = <Input, A, E, R>(
 ) =>
   Effect.uninterruptibleMask((restore) =>
     Effect.gen(function* () {
-      const { id } = yield* admitOperation({
+      // Named first: an admission that committed though its answer was
+      // lost is ended by that name, and ending one that didn't changes
+      // nothing.
+      const id = randomUUID()
+      yield* admitOperation({
         actorId: options.actorId,
         durable: false,
+        id,
         input,
         kind: operation.kind,
         locks: operation.locks(input),
         version: operation.version,
-      })
+      }).pipe(
+        Effect.tapError(() =>
+          finishReliably(id, "cancelled", "Its admission went unanswered")
+        )
+      )
       let started = false
       const exit = yield* Effect.gen(function* () {
         const queuedAt = yield* Clock.currentTimeMillis

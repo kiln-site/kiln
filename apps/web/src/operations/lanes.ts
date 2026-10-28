@@ -65,6 +65,11 @@ export interface Admission {
   /** One accepted intent: admitting it again returns the same operation. */
   readonly idempotencyKey?: string | undefined
   readonly actorId?: string | null | undefined
+  /**
+   * The operation's ID, chosen before it's admitted, so a caller whose
+   * admission might have committed without its answer can still end it.
+   */
+  readonly id?: string | undefined
 }
 
 export interface Admitted {
@@ -164,6 +169,13 @@ export const admitOperation = Effect.fn("Operations.enqueue")(function* (
     (transaction) =>
       Effect.gen(function* () {
         const sequence = yield* takeSchedulerTurn(transaction)
+        // This Hearth is known to be running before it holds anything, so
+        // another doesn't take its work for want of a heartbeat.
+        yield* transaction.execute(
+          `INSERT IGNORE INTO ${driverTable} (id, started_at, heartbeat_at)
+           VALUES (?, ?, ?)`,
+          [hearthDriverId, now, now]
+        )
         if (admission.idempotencyKey !== undefined) {
           const [found] = yield* transaction.queryRows<
             RowDataPacket & { id: string; input_hash: string }
@@ -181,7 +193,7 @@ export const admitOperation = Effect.fn("Operations.enqueue")(function* (
             return { admitted: { existing: true, id: found.id }, granted: [] }
           }
         }
-        const id = randomUUID()
+        const id = admission.id ?? randomUUID()
         yield* transaction.execute(
           `INSERT INTO ${operationTable}
              (id, kind, version, durable, sequence, idempotency_key,
@@ -263,7 +275,7 @@ export const startOperation = Effect.fnUntraced(function* (
 ) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
-  yield* database.execute(
+  const started = yield* database.execute(
     "operations.start",
     `UPDATE ${operationTable}
         SET state = 'running', started_at = COALESCE(started_at, ?),
@@ -271,6 +283,17 @@ export const startOperation = Effect.fnUntraced(function* (
       WHERE id = ? AND state IN ('granted', 'running')`,
     [now, executionId ?? null, now, id]
   )
+  // Taken over since its grant, as from a Hearth thought stopped: it holds
+  // nothing now, so it mustn't run.
+  if (started.affectedRows === 0) {
+    const state = yield* loadState(id)
+    if (state !== "running") {
+      return yield* new OperationEndedError({
+        message: `The operation ended before it started (${state})`,
+        state,
+      })
+    }
+  }
 })
 
 /**
@@ -341,7 +364,11 @@ export const finishOperation = Effect.fn("Operations.finish")(function* (
 
 // How long a Hearth's heartbeat may be silent before its work is taken
 // from it, well past a slow query or a pause; and how often it beats.
+// Silence can't prove a change already under way has stopped, as one whose
+// Hearth lost MySQL mid-request; a running change is given longer, past
+// any request's own timeouts, before what waits behind it goes ahead.
 const DRIVER_LEASE_MS = 30_000
+const RUNNING_LEASE_MS = 120_000
 export const DRIVER_HEARTBEAT = Duration.seconds(10)
 
 // The work of a Hearth whose heartbeat stopped: none in its table, or none
@@ -386,6 +413,7 @@ export const recoverOperations = Effect.fn("Operations.recover")(function* () {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
   const liveSince = now - DRIVER_LEASE_MS
+  const runningLiveSince = now - RUNNING_LEASE_MS
   const decision = yield* database.transaction(
     "operations.recover",
     (transaction) =>
@@ -395,10 +423,11 @@ export const recoverOperations = Effect.fn("Operations.recover")(function* () {
           RowDataPacket & { id: string; state: OperationState }
         >(
           `SELECT id, state FROM ${operationTable}
-            WHERE durable = 0 AND state IN ('waiting', 'granted', 'running')
-              AND (driver IS NULL OR driver <> ?) AND ${lapsedDriver}
+            WHERE durable = 0 AND (driver IS NULL OR driver <> ?)
+              AND ((state IN ('waiting', 'granted') AND ${lapsedDriver})
+                OR (state = 'running' AND ${lapsedDriver}))
             FOR UPDATE`,
-          [hearthDriverId, liveSince]
+          [hearthDriverId, liveSince, runningLiveSince]
         )
         for (const orphan of orphans) {
           const ran = orphan.state !== "waiting"
@@ -693,10 +722,13 @@ const grantWaiting = Effect.fnUntraced(function* (
   const ids = granted.map((entry) => entry.id)
   const placeholders = ids.map(() => "?").join(", ")
   yield* transaction.execute(
+    // A quick operation stays its admitting Hearth's, which runs it; the
+    // granting Hearth drives a durable one's workflow.
     `UPDATE ${operationTable}
-        SET state = 'granted', granted_at = ?, driver = ?, updated_at = ?
+        SET state = 'granted', granted_at = ?, updated_at = ?,
+            driver = IF(durable = 1, ?, driver)
       WHERE id IN (${placeholders})`,
-    [now, hearthDriverId, now, ...ids]
+    [now, now, hearthDriverId, ...ids]
   )
   yield* transaction.execute(
     `UPDATE ${lockTable} SET held = 1 WHERE operation_id IN (${placeholders})`,

@@ -16,6 +16,7 @@ import { durableOperation, startDurableOperation } from "./durable"
 import { operationsTablePrefix } from "./engine"
 import {
   OperationConflictError,
+  OperationEndedError,
   forgetFinishedOperations,
   hearthDriverId,
   loadOperation,
@@ -191,6 +192,132 @@ describeMysql("Hearth operation lanes", () => {
     )
 
     it.effect(
+      "ends a change whose admission went through though its answer was lost",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          const database = yield* Database
+          const lossy = Database.of({
+            ...database,
+            transaction: (operation, run) =>
+              operation === "operations.admit"
+                ? database
+                    .transaction(operation, run)
+                    .pipe(
+                      Effect.andThen(
+                        Effect.fail(
+                          new DatabaseError({ cause: "lost", operation })
+                        )
+                      )
+                    )
+                : database.transaction(operation, run),
+          })
+          const ran = yield* runOperation(
+            write,
+            { key: "server-a", name: "lost" },
+            Effect.void
+          ).pipe(Effect.provideService(Database, lossy), Effect.flip)
+
+          assert.instanceOf(ran, DatabaseError)
+          assert.deepStrictEqual(yield* states, ["test.write:cancelled"])
+          assert.deepStrictEqual(yield* selectRows("operation_lock"), [])
+        }).pipe(TestClock.withLive)
+    )
+
+    it.effect(
+      "doesn't run a change taken from it between its grant and its start",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          const database = yield* Database
+          // Another Hearth takes it over just as it starts.
+          const takenOver = Database.of({
+            ...database,
+            execute: (operation, statement, values) =>
+              operation === "operations.start"
+                ? database
+                    .execute(
+                      "test.takeOver",
+                      `UPDATE ${databaseTable("operation")}
+                          SET state = 'interrupted'`
+                    )
+                    .pipe(
+                      Effect.andThen(
+                        database.execute(operation, statement, values)
+                      )
+                    )
+                : database.execute(operation, statement, values),
+          })
+          const log: Array<string> = []
+          const refused = yield* runOperation(
+            write,
+            { key: "server-a", name: "late" },
+            Effect.sync(() => log.push("late"))
+          ).pipe(Effect.provideService(Database, takenOver), Effect.flip)
+
+          assert.instanceOf(refused, OperationEndedError)
+          assert.deepStrictEqual(log, [])
+        }).pipe(TestClock.withLive)
+    )
+
+    it.effect(
+      "keeps a waiting change its own Hearth's when another Hearth's grants it",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          const other = "00000000-0000-4000-8000-0000000000ee"
+          const now = Date.now()
+          yield* insertRows("operation_driver", {
+            heartbeat_at: now,
+            id: other,
+            started_at: now,
+          })
+          // This Hearth holds server-a; the other Hearth's change waits.
+          const release = yield* Deferred.make<void>()
+          const started = yield* Deferred.make<void>()
+          const holding = yield* runOperation(
+            write,
+            { key: "server-a", name: "holder" },
+            Deferred.succeed(started, undefined).pipe(
+              Effect.andThen(Deferred.await(release))
+            )
+          ).pipe(Effect.forkChild)
+          yield* Deferred.await(started)
+          yield* insertRows("operation", {
+            admitted_at: now,
+            driver: other,
+            durable: false,
+            id: "00000000-0000-4000-8000-000000000003",
+            input_hash: "0".repeat(64),
+            kind: "test.write",
+            sequence: 99,
+            state: "waiting",
+            updated_at: now,
+            version: 1,
+          })
+          yield* insertRows("operation_lock", {
+            held: false,
+            lock_key: "server-a",
+            mode: "exclusive",
+            operation_id: "00000000-0000-4000-8000-000000000003",
+          })
+
+          yield* Deferred.succeed(release, undefined)
+          yield* Fiber.join(holding)
+
+          const waiting = (yield* selectRows<{
+            driver: string
+            id: string
+            state: string
+          }>("operation")).find(
+            (row) => row.id === "00000000-0000-4000-8000-000000000003"
+          )
+          assert.strictEqual(waiting?.state, "granted")
+          assert.strictEqual(waiting?.driver, other)
+        }).pipe(TestClock.withLive)
+    )
+
+    it.effect(
       "leaves the work of a Hearth whose heartbeat goes on, and takes it once it stops",
       () =>
         Effect.gen(function* () {
@@ -225,13 +352,13 @@ describeMysql("Hearth operation lanes", () => {
           yield* recoverOperations()
           assert.deepStrictEqual(yield* states, ["test.write:running"])
 
-          // Its heartbeat stops.
+          // Its heartbeat stops, longer ago than a running change is given.
           yield* SqlClient.SqlClient.pipe(
             Effect.flatMap((sql) =>
               sql.unsafe(
                 `UPDATE ${databaseTable("operation_driver")}
                     SET heartbeat_at = ? WHERE id = ?`,
-                [now - 60_000, other]
+                [now - 180_000, other]
               )
             )
           )

@@ -197,7 +197,11 @@ const dispatch = Effect.fnUntraced(
       { discard: true }
     ) as Effect.Effect<string, never, WorkflowEngine.WorkflowEngine>
     const executionId = yield* withOperationsEngine(execute).pipe(Effect.orDie)
-    yield* startOperation(id, executionId).pipe(Effect.orDie)
+    // A workflow quick enough to end before this is already recorded.
+    yield* startOperation(id, executionId).pipe(
+      Effect.catchTag("OperationEndedError", () => Effect.void),
+      Effect.orDie
+    )
   },
   (effect, id) =>
     effect.pipe(
