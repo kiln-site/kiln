@@ -534,6 +534,15 @@ export const requireConnectionUnusedEffect = Effect.fn(
     [id, id, id]
   )
   yield* connectionInUseFailure(Number(used?.total ?? 0))
+  const [hostnames] = yield* database.queryRows<
+    RowDataPacket & { total: number }
+  >(
+    "domains.connection.requireUnused",
+    `SELECT COUNT(*) AS total FROM ${databaseTable("web_hostname")}
+      WHERE integration_id = ?`,
+    [id]
+  )
+  yield* connectionHostnamesFailure(Number(hostnames?.total ?? 0))
 })
 
 // Game server domains a connection manages, or on its vanity domains, or
@@ -542,6 +551,19 @@ const connectionDomainsMatch = `integration_id = ? OR domain IN (
   SELECT domain FROM ${databaseTable("domain_zone")} WHERE integration_id = ?)
   OR next_domain IN (
   SELECT domain FROM ${databaseTable("domain_zone")} WHERE integration_id = ?)`
+
+// Web routes and app addresses whose DNS it keeps hold their names until
+// they're removed, which disconnecting would let go of while they serve.
+function connectionHostnamesFailure(total: number) {
+  return total > 0
+    ? DomainConfigurationError.make({
+        message:
+          total === 1
+            ? "A web route or app address uses this connection. Remove it first"
+            : `${total} web routes and app addresses use this connection. Remove them first`,
+      })
+    : Effect.void
+}
 
 function connectionInUseFailure(total: number) {
   return total > 0
@@ -572,48 +594,21 @@ export const deleteDomainConnectionEffect = Effect.fn(
         [id, id, id]
       )
       yield* connectionInUseFailure(Number(used?.total ?? 0))
-      // Its web hostnames were deleted first. One added since may have a
-      // record Kiln hasn't heard back about yet, so the token stays.
-      const added = yield* transaction.queryRows<RowDataPacket>(
-        `SELECT 1 FROM ${databaseTable("web_hostname")}
+      // Checked again under lock: a hostname added since holds its name, and
+      // may have a record only this token can delete.
+      const [hostnames] = yield* transaction.queryRows<
+        RowDataPacket & { total: number }
+      >(
+        `SELECT COUNT(*) AS total FROM ${databaseTable("web_hostname")}
           WHERE integration_id = ?
-          LIMIT 1
           FOR UPDATE`,
         [id]
       )
-      if (added.length > 0) {
-        return yield* DomainConfigurationError.make({
-          message:
-            "A web route on this connection got a hostname meanwhile. Try again.",
-        })
-      }
+      yield* connectionHostnamesFailure(Number(hostnames?.total ?? 0))
       yield* transaction.execute(
         `DELETE FROM ${databaseTable("domain_zone")} WHERE integration_id = ?`,
         [id]
       )
-      const owners = yield* transaction.queryRows<
-        RowDataPacket & {
-          relay_id: string
-          resource_id: string
-          resource_type: "app" | "instance"
-        }
-      >(
-        `SELECT DISTINCT relay_id, resource_type, resource_id
-           FROM ${databaseTable("web_hostname")}
-          WHERE integration_id = ?`,
-        [id]
-      )
-      yield* transaction.execute(
-        `DELETE FROM ${databaseTable("web_hostname")} WHERE integration_id = ?`,
-        [id]
-      )
-      for (const owner of owners) {
-        yield* releaseUnusedHostnamesEffect({
-          relayId: owner.relay_id,
-          resourceId: owner.resource_id,
-          resourceType: owner.resource_type,
-        })
-      }
       yield* transaction.execute(
         `DELETE FROM ${databaseTable("domain_integration")} WHERE id = ?`,
         [id]

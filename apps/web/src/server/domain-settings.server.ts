@@ -49,10 +49,7 @@ import {
   invalidateManagedDomainAddressesEffect,
   provisionInstanceDomainEffect,
 } from "@/server/domains.server"
-import {
-  removeConnectionWebHostnamesEffect,
-  resyncWebHostnamesEffect,
-} from "@/server/web-hostnames.server"
+import { resyncWebHostnamesEffect } from "@/server/web-hostnames.server"
 import type {
   DeleteDomainConnectionInput,
   DiscoverDomainsInput,
@@ -513,8 +510,9 @@ export async function saveDomainConnectionHandler(
 }
 
 /**
- * Removes a connection after deleting the records it made for web
- * hostnames. Refused while game server domains use its vanity domains.
+ * Removes a connection. Refused while game server domains use its vanity
+ * domains, or web routes or app addresses use it: their names stay theirs
+ * until they're removed.
  */
 export async function deleteDomainConnectionHandler(
   data: DeleteDomainConnectionInput
@@ -528,7 +526,6 @@ export async function deleteDomainConnectionHandler(
   await runAppEffect(
     "domains.connection.delete",
     requireConnectionUnusedEffect(data.id).pipe(
-      Effect.andThen(removeConnectionWebHostnamesEffect(data.id)),
       Effect.andThen(deleteDomainConnectionEffect(data.id)),
       Effect.andThen(invalidateManagedDomainAddressesEffect)
     )

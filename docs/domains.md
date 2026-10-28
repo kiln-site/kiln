@@ -88,8 +88,9 @@ web route can never share one, whichever comes first. A game server's own
 web route on its domain's name holds the name too, with no record of its
 own while the domain keeps one, and makes one when the domain is renamed or
 removed. Moving a game server moves its claims with it; a name both its
-domains and its web routes use moves with the domains. Removing a connection
-waits until none of its hostnames remain; removing a Relay marks everything
+domains and its web routes use moves with the domains. A connection can't be
+removed while game server domains, web routes, or app addresses use it, so
+none lets go of a name it still serves; removing a Relay marks everything
 on it for deletion first, so the DNS worker finishes any delete Cloudflare
 refuses.
 

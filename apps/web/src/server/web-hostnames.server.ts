@@ -847,23 +847,6 @@ function withCurrentRow<E, R>(
 }
 
 /**
- * Deletes the records a connection made, before it goes. Fails if any
- * can't be deleted, so its token isn't forgotten while records remain.
- */
-export const removeConnectionWebHostnamesEffect = Effect.fn(
-  "webHostnames.removeConnection"
-)(function* (connectionId: string) {
-  const rows = yield* listWebHostnamesEffect({ connectionId })
-  for (const row of rows) {
-    yield* withCurrentRow(row, (current) =>
-      current.connectionId === connectionId
-        ? removeWebHostnameEffect(current)
-        : Effect.void
-    )
-  }
-})
-
-/**
  * Points hostnames at their Relays again and retries failed ones. Reports
  * how many it checked and the first failure's message.
  */

@@ -20,6 +20,7 @@ import {
   beginInstanceDomainRenameEffect,
   deleteDomainConnectionEffect,
   reassignInstanceDomainsEffect,
+  requireConnectionUnusedEffect,
 } from "@/effect/domains"
 import {
   insertWebHostnameEffect,
@@ -965,26 +966,30 @@ describeMysql("web route hostnames", () => {
       })
     )
 
-    it.effect(
-      "keeps a connection while a hostname added during its removal is on it",
-      () =>
-        Effect.gen(function* () {
-          yield* seed
-          fakeCloudflare([ownerZone])
-          // Added after the removal deleted the connection's hostnames; its
-          // record may be in Cloudflare already.
-          yield* claim(owner, ["shop.owner.example"])
+    it.effect("keeps a connection while a web route's hostname uses it", () =>
+      Effect.gen(function* () {
+        yield* seed
+        const cloudflare = fakeCloudflare([ownerZone])
+        yield* save(owner, ["shop.owner.example"])
+        const refusal =
+          "A web route or app address uses this connection. Remove it first"
 
-          const refused = yield* deleteDomainConnectionEffect("owner1").pipe(
-            Effect.flip
-          )
+        // Disconnecting would let go of a name its route still serves.
+        assert.strictEqual(
+          (yield* Effect.flip(requireConnectionUnusedEffect("owner1"))).message,
+          refusal
+        )
+        // Also when it's added after that check.
+        assert.strictEqual(
+          (yield* Effect.flip(deleteDomainConnectionEffect("owner1"))).message,
+          refusal
+        )
+        assert.deepEqual(Object.keys(cloudflare.dns()), ["shop.owner.example"])
+        assert.deepEqual(yield* claimedNames, ["shop.owner.example"])
 
-          assert.strictEqual(
-            refused.message,
-            "A web route on this connection got a hostname meanwhile. Try again."
-          )
-          assert.deepEqual(yield* claimedNames, ["shop.owner.example"])
-        })
+        yield* save(owner, [])
+        yield* deleteDomainConnectionEffect("owner1")
+      })
     )
 
     it.effect("makes a record deleted in Cloudflare again on Sync", () =>
