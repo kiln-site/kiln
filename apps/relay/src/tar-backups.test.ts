@@ -403,9 +403,14 @@ it("leaves a volume as it was when a restore fails before swapping, and finishes
   })
   expect(volume.files.has("stray")).toBe(false)
 
-  await backups(harness, volumes)
+  const restarted = await backups(harness, volumes)
 
   expect(snapshot(volume)).toEqual(before)
+  expect(await Effect.runPromise(restarted.get(cut.taskId))).toMatchObject({
+    error: null,
+    result: { warnings: ["Finished after the Relay restarted"] },
+    status: "succeeded",
+  })
   expect(
     await readdir(join(harness.config.dataDirectory, "restores", "tar"))
   ).toEqual([])

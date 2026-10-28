@@ -625,6 +625,15 @@ export class RelayStateStore extends Context.Service<
      * Records a task's result. A `prune` is queued with it, in the same
      * transaction, unless one for the same repository is already waiting.
      */
+    /**
+     * Marks a restore that startup recovery finished as succeeded: one a
+     * stop cut off while running, or one that failed while swapping its
+     * files in, which recovery finished, saying so.
+     */
+    readonly completeRecoveredRestore: (
+      taskId: string,
+      now: number
+    ) => Effect.Effect<boolean, RelayStateError>
     readonly completeBackupTask: (
       taskId: string,
       result: BackupTaskResult,
@@ -2782,6 +2791,46 @@ const makeRelayStateStore = Effect.gen(function* () {
             `
             yield* pruneSupersededExportTasks()
             if (prune) yield* insertBackupPrune(prune, now)
+            return true
+          })
+        )
+      ),
+    completeRecoveredRestore: (taskId, now) =>
+      run(
+        "complete_recovered_restore",
+        sql.withTransaction(
+          Effect.gen(function* () {
+            const rows = yield* sql<{ inputJson: string; status: string }>`
+              SELECT input_json AS inputJson, status
+              FROM relay_backup_tasks
+              WHERE task_id = ${taskId} AND kind = 'restore'
+                AND status IN ('running', 'failed')
+              LIMIT 1
+            `
+            const row = rows[0]
+            if (!row) return false
+            const result = {
+              warnings: [
+                row.status === "failed"
+                  ? "Finished after the Relay restarted"
+                  : "Restore completed during Relay recovery",
+              ],
+            }
+            yield* sql`
+              UPDATE relay_backup_tasks
+              SET status = 'succeeded',
+                  input_json = ${scrubBackupTaskInputJson(row.inputJson)},
+                  result_json = ${JSON.stringify(result)},
+                  error = NULL,
+                  error_code = NULL,
+                  phase = NULL,
+                  current_artifact_id = NULL,
+                  current_path = NULL,
+                  finished_at = ${now},
+                  updated_at = ${now}
+              WHERE task_id = ${taskId} AND kind = 'restore'
+                AND status IN ('running', 'failed')
+            `
             return true
           })
         )

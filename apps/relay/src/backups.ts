@@ -277,11 +277,7 @@ export class BackupManager {
         )
       }
       for (const taskId of Result.isSuccess(settled) ? settled.success : []) {
-        yield* state.completeBackupTask(
-          taskId,
-          { warnings: ["Restore completed during Relay recovery"] },
-          Date.now()
-        )
+        yield* state.completeRecoveredRestore(taskId, Date.now())
       }
       yield* manager.#restartStoppedApps()
       yield* state.requeueInterruptedBackupTasks(Date.now())
@@ -669,7 +665,7 @@ export class BackupManager {
     beginInstall: RestoreInstallGate
   ) {
     return Effect.gen({ self: this }, function* () {
-      const { source } = yield* this.#tarSource(input.target, false)
+      const { source } = yield* this.#tarSource(input.target, false, true)
       if (input.target.kind === "app") {
         const running = yield* promiseEffect(() =>
           this.#apps!.isRunning(input.target.id)
@@ -682,7 +678,7 @@ export class BackupManager {
           )
         }
       } else {
-        const volume = yield* this.#requiredVolume(input.target.id)
+        const volume = yield* this.#requiredVolume(input.target.id, true)
         const running = volume.mounts.filter((mount) => mount.running)
         if (running.length > 0) {
           return yield* backupFailure(
@@ -741,7 +737,7 @@ export class BackupManager {
   // backup stops, and the volume as its manifest records it. A stopped
   // backup of a volume a container other than an App's runs from is
   // refused: Kiln can't stop and start it as its owner would.
-  #tarSource(target: BackupTarget, stopping: boolean) {
+  #tarSource(target: BackupTarget, stopping: boolean, restoring = false) {
     return Effect.gen({ self: this }, function* () {
       if (target.kind === "app") {
         if (!this.#apps) {
@@ -767,7 +763,7 @@ export class BackupManager {
           source: { kind: "bind", path: folder } satisfies TarSource,
         }
       }
-      const volume = yield* this.#requiredVolume(target.id)
+      const volume = yield* this.#requiredVolume(target.id, restoring)
       const others = volume.mounts.filter(
         (mount) => mount.running && mount.kind !== "app"
       )
@@ -796,7 +792,7 @@ export class BackupManager {
     })
   }
 
-  #requiredVolume(id: string) {
+  #requiredVolume(id: string, restoring = false) {
     return Effect.gen({ self: this }, function* () {
       const volume = this.#volumes
         ? yield* this.#volumes.find(id).pipe(
@@ -816,7 +812,9 @@ export class BackupManager {
         return yield* backupFailure(
           "volume_not_found",
           "lookup",
-          "The volume no longer exists on this Relay"
+          restoring
+            ? "The volume no longer exists on this Relay; a backup restores only into the volume it was taken from"
+            : "The volume no longer exists on this Relay"
         )
       }
       return volume
