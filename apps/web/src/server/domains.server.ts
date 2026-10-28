@@ -36,6 +36,7 @@ import {
   loadInstanceDomainAssignmentsForInstanceEffect,
   loadInstanceDomainOptOutEffect,
   loadManagedDomainEffect,
+  listUsableVanityDomainsEffect,
   loadRelayInstanceDomainAssignmentsEffect,
   markInstanceDomainRemovingEffect,
   markRelayInstanceDomainsRemovingEffect,
@@ -141,7 +142,8 @@ export async function getInstanceDomainHandler(data: InstanceDomainInput) {
     relayId: data.relayId,
     user,
   })
-  const [assignments, choice] = await Promise.all([
+  const actor = domainActor(user)
+  const [assignments, { choice, vanityDomains }] = await Promise.all([
     runAppEffect(
       "domains.assignments.instance",
       loadInstanceDomainAssignmentsForInstanceEffect(
@@ -150,18 +152,47 @@ export async function getInstanceDomainHandler(data: InstanceDomainInput) {
       )
     ),
     runAppEffect(
-      "domains.instance.nextDomain",
-      loadResourceOwnerIdEffect({
-        relayId: data.relayId,
-        resourceId: data.instanceId,
-        resourceType: "instance",
-      }).pipe(Effect.flatMap(chooseVanityDomainEffect))
+      "domains.instance.vanityDomains",
+      Effect.gen(function* () {
+        const ownerId = yield* loadResourceOwnerIdEffect({
+          relayId: data.relayId,
+          resourceId: data.instanceId,
+          resourceType: "instance",
+        })
+        // Its owner's, the person's own, and Kiln's: the ones it may use.
+        const [owners, own] = yield* Effect.all(
+          [
+            listUsableVanityDomainsEffect(ownerId),
+            listUsableVanityDomainsEffect(actor.id),
+          ],
+          { concurrency: 2 }
+        )
+        const usable = new Map<string, { domain: string; platform: boolean }>()
+        for (const domain of [...owners, ...own]) {
+          if (domain.enabled && vanityDomainUsable(domain, ownerId, actor)) {
+            usable.set(domain.domain, {
+              domain: domain.domain,
+              platform: domain.ownerId === null,
+            })
+          }
+        }
+        return {
+          choice: yield* chooseVanityDomainEffect(ownerId),
+          vanityDomains: [...usable.values()].sort(
+            (left, right) =>
+              Number(left.platform) - Number(right.platform) ||
+              left.domain.localeCompare(right.domain)
+          ),
+        }
+      })
     ),
   ])
   const primary = assignments[0]
   return {
     assignment: primary ? assignmentOverview(primary) : null,
     managedDomain: choice?.domain ?? null,
+    /** The vanity domains the person may give it an address under. */
+    vanityDomains,
   }
 }
 

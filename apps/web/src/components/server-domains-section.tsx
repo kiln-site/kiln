@@ -13,7 +13,6 @@ import {
 import {
   domainHostname,
   domainStatusPresentation,
-  vanityDomainChoices,
   type DomainSettings,
 } from "@/components/domains-shared"
 import {
@@ -22,7 +21,10 @@ import {
 } from "@/components/instance-workspace-context"
 import { StatusIndicator } from "@/components/status-indicator"
 import { WorkspaceCopyValueButton } from "@/components/workspace-header"
-import { domainSettingsQueryOptions } from "@/lib/query-options"
+import {
+  domainSettingsQueryOptions,
+  instanceDomainQueryOptions,
+} from "@/lib/query-options"
 import type { ManagedDomainOverview } from "@/server/domains"
 
 const CreateDomainDialog = React.lazy(async () => ({
@@ -34,6 +36,12 @@ const EditDomainDialog = React.lazy(async () => ({
 const DeleteDomainDialog = React.lazy(async () => ({
   default: (await import("@/components/domains-dialogs")).DeleteDomainDialog,
 }))
+
+function selectVanityDomains(data: {
+  vanityDomains: ReadonlyArray<{ domain: string; platform: boolean }>
+}) {
+  return data.vanityDomains
+}
 
 type DomainDialog =
   | { kind: "create" }
@@ -48,23 +56,29 @@ export const ServerDomainsSection = React.memo(function ServerDomainsSection() {
   const instance = useInstanceIdentity()
   const permissions = useInstancePermissions()
   const select = React.useCallback(
-    (data: DomainSettings) => ({
-      choices: vanityDomainChoices(data),
-      domains: data.managedDomains.filter(
+    (data: DomainSettings) =>
+      data.managedDomains.filter(
         (domain) =>
           domain.instanceId === instance.id &&
           domain.relayId === instance.relayId
       ),
-    }),
     [instance.id, instance.relayId]
   )
-  const { data } = useQuery({ ...domainSettingsQueryOptions(), select })
+  const { data: domains } = useQuery({
+    ...domainSettingsQueryOptions(),
+    select,
+  })
+  // Its owner's vanity domains too, which the Domains page's list leaves out
+  // for anyone else.
+  const { data: choices } = useQuery({
+    ...instanceDomainQueryOptions(instance.relayId, instance.id),
+    select: selectVanityDomains,
+  })
   const [dialog, setDialog] = React.useState<DomainDialog>(null)
   const closeDialog = React.useCallback((open: boolean) => {
     if (!open) setDialog(null)
   }, [])
-  if (!data) return null
-  const { choices, domains } = data
+  if (!domains || !choices) return null
   const canAdd = permissions.networkWrite && choices.length > 0
 
   return (

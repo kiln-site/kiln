@@ -545,19 +545,26 @@ export async function resyncDomainAssignmentsHandler() {
   const user = await requireEligibleResourceUser()
   const access = await resourceAccess(user)
   const relays = (await listPersistedRelays()).filter((relay) => relay.enabled)
+  // A Relay that can't be reached skips its game servers, not the rest.
   const snapshots = await Promise.all(
-    relays.map(async (relay) => ({
-      relay,
-      snapshot: relaySnapshotSchema.parse(
-        await runAppEffect(
-          "relay.snapshot.domains.resync",
-          relayJsonEffect(relay, "/v1/snapshot", (input) => input)
-        )
-      ),
-    }))
+    relays.map((relay) =>
+      recoverPromise(
+        async () => ({
+          relay,
+          snapshot: relaySnapshotSchema.parse(
+            await runAppEffect(
+              "relay.snapshot.domains.resync",
+              relayJsonEffect(relay, "/v1/snapshot", (input) => input)
+            )
+          ),
+        }),
+        () => ({ relay, snapshot: null })
+      )
+    )
   )
+  const unreachable = snapshots.filter(({ snapshot }) => !snapshot)
   const instances = snapshots.flatMap(({ relay, snapshot }) =>
-    snapshot.instances
+    (snapshot?.instances ?? [])
       .filter((instance) => access.instance(relay.id, instance.id, true))
       .map((instance) => ({ ...instance, relayId: relay.id }))
   )
@@ -592,6 +599,14 @@ export async function resyncDomainAssignmentsHandler() {
   }
   if (hostnames.failure) {
     throw new Error(`Could not sync every web hostname: ${hostnames.failure}`)
+  }
+  const [offline] = unreachable
+  if (offline) {
+    throw new Error(
+      unreachable.length === 1
+        ? `Synced everything except ${offline.relay.name}'s game servers, which Kiln couldn't reach`
+        : `Synced everything except the game servers on ${unreachable.length} Relays Kiln couldn't reach`
+    )
   }
   return {
     syncedHostnameCount: hostnames.checked,
