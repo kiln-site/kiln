@@ -71,11 +71,13 @@ engine, a volume is archived through Docker.
   so each step is safe to repeat; a finished step doesn't run again.
 - Freezing marks the resource as being deleted in the Relay's own state and
   quiets it: a game server or App is stopped (an App's restart policies set
-  to `no`), and a database stays running for its final dump but is cut off
-  from everything connected to it. From then on the Relay refuses every
-  other change to it (power, console, files, SFTP, schedules, deploys), and
-  quiets it again after a restart, so nothing writes between the final
-  backup and the deletion. Cancelling a deletion before the Relay deletes
+  to `no`), and a database stays running for its final dump with its
+  terminals closed. From then on the Relay refuses every other change to it
+  (power, console, files, SFTP, schedules, deploys, terminals), and quiets
+  it again after a restart, so nothing Kiln runs writes between the final
+  backup and the deletion. Game servers and Apps connected to a database
+  can still write to it until it's deleted; what they write after its dump
+  isn't in its final backup, and the deletion dialog says so. Cancelling a deletion before the Relay deletes
   anything unfreezes it and puts back what quieting changed.
 - Access is checked when the deletion is asked for and before the freeze.
   Once the Relay has deleted, cleanup always finishes, even if the person
