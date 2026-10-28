@@ -4,7 +4,8 @@
  * destination fetch that one artifact, asks the destination to pull it, and
  * discards the artifact once the destination is done. The Relays' own
  * records are the truth about a transfer, so any Hearth process can report
- * one; the process that started it drives it between steps.
+ * one. A durable operation drives it between steps, so it carries on after
+ * a restart, in whichever Hearth takes it over.
  */
 import { randomUUID, sign } from "node:crypto"
 
@@ -21,12 +22,21 @@ import {
   type RelayTransferPull,
   type RelayTransferSource,
 } from "@workspace/contracts"
+import { shared, type LaneLock } from "@workspace/operations"
 import { Duration, Effect, Schedule, Schema } from "effect"
+import { Activity } from "effect/workflow"
 
-import { forkAppEffect } from "@/effect/runtime"
 import { requireRelayPermissionEffect } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import type { PersistedRelay } from "@/lib/relay-registry"
+import { currentActingUser } from "@/operations/acting-user"
+import {
+  CurrentOperation,
+  durableOperation,
+  startDurableOperation,
+} from "@/operations/durable"
+import { findOperation, reportProgress } from "@/operations/lanes"
+import { relayIsAway } from "@/operations/relay-command"
 
 // A grant outlives the slowest pull it's meant for, resumes included.
 const GRANT_LIFETIME = Duration.days(2)
@@ -92,13 +102,6 @@ export class RelayTransferError extends Schema.TaggedError<RelayTransferError>()
     cause: Schema.optional(Schema.Defect()),
   }
 ) {}
-
-// Failures of the steps between Relays in this process, which no Relay
-// records, kept for a day for anyone asking about the transfer.
-const orchestrationFailures = new Map<
-  string,
-  { error: string; expiresAt: number }
->()
 
 /**
  * What would keep the transfer from starting, checked after the person's
@@ -194,28 +197,174 @@ export const relayTransferProblemsEffect = Effect.fn("RelayTransfers.problems")(
 export const startRelayTransferEffect = Effect.fn("RelayTransfers.start")(
   function* (user: AuthenticatedUser, request: RelayTransferRequest) {
     const transferId = randomUUID().replaceAll("-", "")
+    // Begun here too, so the person hears at once what keeps it from
+    // starting; the operation begins it again under the same ID.
     const handle = yield* beginRelayTransferEffect(user, request, transferId)
-    forkAppEffect(
-      "RelayTransfers.drive",
-      advanceRelayTransferEffect(user, request, transferId).pipe(
-        Effect.repeat({
-          schedule: PULL_POLL,
-          until: (status) => finishedPhases.has(status.phase),
-        }),
-        Effect.catch((cause) =>
-          Effect.sync(() => {
-            orchestrationFailures.set(transferId, {
-              error: errorMessage(cause),
-              expiresAt: Date.now() + 24 * 60 * 60_000,
-            })
-          })
-        ),
-        Effect.annotateLogs({ "kiln.transfer.id": transferId })
-      )
+    yield* startDurableOperation(
+      relayTransfer,
+      { actor: user, request, transferId },
+      { actorId: user.id, idempotencyKey: transferId }
     )
     return handle
   }
 )
+
+const RelayTransferStatusSchema = Schema.Struct({
+  error: Schema.NullOr(Schema.String),
+  phase: Schema.Literals([
+    "packing",
+    "pulling",
+    "verifying",
+    "installing",
+    "completed",
+    "failed",
+    "cancelled",
+  ]),
+  receivedBytes: Schema.Number,
+  size: Schema.NullOr(Schema.Number),
+  transferId: Schema.String,
+})
+
+/**
+ * A transfer as steps of a durable operation, named `name`: begun under
+ * `transferId`, which the caller keeps, then followed through the Relays'
+ * records until it ends, however it ends. Both steps are safe to repeat, so
+ * a Hearth that restarts partway carries on where the Relays are.
+ */
+export const followRelayTransfer = (
+  name: string,
+  actor: AuthenticatedUser,
+  request: RelayTransferRequest,
+  transferId: string
+) =>
+  Effect.gen(function* () {
+    yield* Activity.make({
+      name: `${name}/begin`,
+      error: RelayTransferError,
+      execute: beginRelayTransferEffect(actor, request, transferId).pipe(
+        whileRelaysAreAway
+      ),
+    })
+    const operation = yield* CurrentOperation
+    return yield* Activity.make({
+      name: `${name}/follow`,
+      success: RelayTransferStatusSchema,
+      error: RelayTransferError,
+      execute: advanceRelayTransferEffect(actor, request, transferId).pipe(
+        whileRelaysAreAway,
+        Effect.tap((status) =>
+          operation
+            ? reportProgress(operation.id, {
+                message: progressMessage[status.phase],
+                ...(status.size === null
+                  ? {}
+                  : { done: status.receivedBytes, total: status.size }),
+              }).pipe(Effect.ignore)
+            : Effect.void
+        ),
+        Effect.repeat({
+          schedule: PULL_POLL,
+          until: (status) => finishedPhases.has(status.phase),
+        })
+      ),
+    })
+  })
+
+const progressMessage: Record<RelayTransferStatus["phase"], string> = {
+  cancelled: "Cancelled",
+  completed: "Copied",
+  failed: "Failed",
+  installing: "Putting the files in place",
+  packing: "Packing the files",
+  pulling: "Copying the files",
+  verifying: "Checking the copy",
+}
+
+// A Relay that's unreachable, paused, or restarting is asked again; its
+// answers, and anything else that fails, such as the person losing access,
+// are final.
+const whileRelaysAreAway = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  effect.pipe(
+    Effect.mapError((error) =>
+      error instanceof RelayTransferError
+        ? error
+        : new RelayTransferError({ message: errorMessage(error), cause: error })
+    ),
+    Effect.retry({
+      schedule: Schedule.min([
+        Schedule.exponential("1 second"),
+        Schedule.spaced("30 seconds"),
+      ]),
+      while: (error) => relayIsAway(error.cause),
+    })
+  )
+
+/**
+ * Copying files from one Relay to another for someone, as its own
+ * operation. It reads the source and writes the destination, so work that
+ * replaces either, such as deleting it, waits for it to end.
+ */
+export const relayTransfer = durableOperation({
+  error: RelayTransferError,
+  input: Schema.Struct({
+    // Who asked, as they were then; their account is checked again.
+    actor: Schema.Unknown,
+    request: Schema.Struct({
+      destination: Schema.Struct({
+        path: Schema.String,
+        relayId: Schema.String,
+        rootId: Schema.String,
+      }),
+      source: Schema.Struct({
+        paths: Schema.Array(Schema.String),
+        relayId: Schema.String,
+        rootId: Schema.String,
+      }),
+    }),
+    transferId: Schema.String,
+  }),
+  kind: "relay.transfer",
+  locks: ({ request }) => [
+    rootLock(request.source),
+    rootLock(request.destination),
+  ],
+  run: ({ actor, request, transferId }) =>
+    Effect.gen(function* () {
+      const user = yield* currentActingUser(actor as AuthenticatedUser).pipe(
+        Effect.mapError(
+          (cause) =>
+            new RelayTransferError({ message: errorMessage(cause), cause })
+        )
+      )
+      const status = yield* followRelayTransfer(
+        "transfer",
+        user,
+        request,
+        transferId
+      )
+      // One cancelled was stopped on purpose, so it ends as done.
+      if (status.phase === "failed") {
+        return yield* new RelayTransferError({
+          message: status.error ?? "The copy failed",
+        })
+      }
+      return status
+    }),
+  success: RelayTransferStatusSchema,
+  version: 1,
+})
+
+// What a transfer reads or writes, by its file root, as Hearth's lanes name
+// it.
+function rootLock(side: RelayTransferSide): LaneLock {
+  if (isRelayFileRoot(side.rootId)) return shared(`relay:${side.relayId}`)
+  const appId = appIdFromFileRoot(side.rootId)
+  return shared(
+    appId
+      ? `app:${side.relayId}/${appId}`
+      : `instance:${side.relayId}/${side.rootId}`
+  )
+}
 
 /**
  * Has the source start packing a transfer under `transferId`, once the
@@ -354,14 +503,16 @@ export const relayTransferStatusEffect = Effect.fn("RelayTransfers.status")(
       ],
       { concurrency: 2 }
     )
-    for (const [id, failure] of orchestrationFailures) {
-      if (failure.expiresAt <= Date.now()) orchestrationFailures.delete(id)
-    }
+    // A step between the Relays that failed is the operation's error.
+    const operation = yield* findOperation(
+      relayTransfer.kind,
+      handle.transferId
+    ).pipe(Effect.orElseSucceed(() => null))
     return transferStatus(
       handle.transferId,
       pull,
       packed,
-      orchestrationFailures.get(handle.transferId)?.error ?? null
+      operation?.state === "failed" && !pull ? operation.error : null
     )
   }
 )

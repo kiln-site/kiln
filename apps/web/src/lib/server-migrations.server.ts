@@ -38,15 +38,11 @@ import {
 } from "@/effect/notifications"
 import { forkAppWorker, runAppEffect } from "@/effect/runtime"
 import {
-  accountPolicyFromRow,
-  isAccountEnabled,
-  isAccountVerified,
-} from "@/lib/account-policy"
-import {
   copyInstanceAccessEffect,
   publishResourceAccessChange,
 } from "@/lib/access-policy-mutations"
 import type { AuthenticatedUser } from "@/lib/auth-session"
+import { currentActingUser } from "@/operations/acting-user"
 import { advanceAuthorizationRevisionEffect } from "@/lib/authorization-revision"
 import { publishBackupChange } from "@/lib/backup-realtime.server"
 import { databaseTable } from "@/lib/database-config"
@@ -1206,51 +1202,14 @@ const loadMigration = Effect.fnUntraced(function* (id: string) {
   return rows[0] ?? null
 })
 
-interface ActorRow extends RowDataPacket {
-  emailVerifiedAt: Date | null
-  legacyVerificationRecordedAt: Date | null
-  manuallyVerifiedAt: Date | null
-  role: string | null
-  status: string | null
-  statusExpiresAt: Date | null
-}
-
 // The person the migration acts for, as their account is now: one that's
 // been disabled since stops it.
-const currentActor = Effect.fnUntraced(function* (row: MigrationRow) {
+const currentActor = (row: MigrationRow) => {
   const saved = (
     typeof row.actor === "string" ? JSON.parse(row.actor) : row.actor
   ) as AuthenticatedUser
-  if (saved.isDevelopmentBypass) return saved
-  const database = yield* Database
-  const rows = yield* database.queryRows<ActorRow>(
-    "serverMigrations.actor",
-    `SELECT role, status, statusExpiresAt, emailVerifiedAt,
-            manuallyVerifiedAt, legacyVerificationRecordedAt
-       FROM ${databaseTable("user")} WHERE id = ? LIMIT 1`,
-    [row.requested_by]
-  )
-  const current = rows[0]
-  if (!current) {
-    return yield* Effect.fail(
-      new Error("The account that started this is gone")
-    )
-  }
-  const actor: AuthenticatedUser = {
-    ...saved,
-    ...accountPolicyFromRow(current),
-    role:
-      current.role === "admin" || current.role === "relay_creator"
-        ? current.role
-        : "user",
-  }
-  if (!isAccountEnabled(actor) || !isAccountVerified(actor)) {
-    return yield* Effect.fail(
-      new Error("The account that started this can no longer act")
-    )
-  }
-  return actor
-})
+  return currentActingUser({ ...saved, id: row.requested_by })
+}
 
 const instanceOwner = Effect.fnUntraced(function* (
   relayId: string,

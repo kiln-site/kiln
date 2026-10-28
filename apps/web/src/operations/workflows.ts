@@ -2,6 +2,7 @@ import { Layer } from "effect"
 
 import { deliverInvitation } from "@/lib/access-invitation-delivery"
 import { deleteTailscaleNetwork } from "@/lib/tailscale-cleanup.server"
+import { relayTransfer } from "@/server/relay-transfers.server"
 
 /**
  * Every workflow Hearth runs, registered with the engine when it starts. An
@@ -10,5 +11,6 @@ import { deleteTailscaleNetwork } from "@/lib/tailscale-cleanup.server"
  */
 export const HearthWorkflows = Layer.mergeAll(
   deliverInvitation.layer,
-  deleteTailscaleNetwork.layer
+  deleteTailscaleNetwork.layer,
+  relayTransfer.layer
 )

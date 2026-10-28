@@ -111,8 +111,12 @@ root's upload action, for the person on Hearth and for Hearth's pairing on
 each Relay; no other Relay action is involved. Game servers, Apps' data,
 and host files can be copied. Databases move through their dumps. Each
 Relay's records are the truth about a transfer, so any Hearth process can
-report one. The process that started a transfer drives it between steps;
-if it stops, the transfer stays where it was until it's started again.
+report one. `startRelayTransfer` drives a transfer between steps as a
+durable operation (`relay.transfer`, holding both roots shared in Hearth's
+lanes), so after a restart whichever Hearth takes it over carries on from
+the Relays' records; a cancelled one ends as done. Server moves drive their
+copy the same way, through `beginRelayTransferEffect` and
+`advanceRelayTransferEffect`, from the move's own record.
 
 `preflightRelayTransfer` lists what would stop a copy and what fixes it:
 an offline or outdated Relay, a database root, or a pairing that can't

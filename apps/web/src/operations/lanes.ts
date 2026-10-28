@@ -658,6 +658,21 @@ export interface OperationRecord {
   readonly version: number
 }
 
+/** The operation of `kind` started under `idempotencyKey`, if any. */
+export const findOperation = Effect.fnUntraced(function* (
+  kind: string,
+  idempotencyKey: string
+) {
+  const database = yield* Database
+  const [row] = yield* database.queryRows<RowDataPacket & { id: string }>(
+    "operations.find",
+    `SELECT id FROM ${operationTable}
+      WHERE kind = ? AND idempotency_key = ?`,
+    [kind, idempotencyKey]
+  )
+  return row ? yield* loadOperation(row.id) : null
+})
+
 export const loadOperation = Effect.fnUntraced(function* (id: string) {
   const database = yield* Database
   const [row] = yield* database.queryRows<
