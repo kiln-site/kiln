@@ -47,6 +47,7 @@ export default defineConfig({
       alwaysBundle: [
         "@workspace/contracts",
         "@workspace/contracts/schedules",
+        "@workspace/operations",
         "@workspace/telemetry",
       ],
       onlyBundle: ["cron-parser", "luxon"],
