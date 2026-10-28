@@ -15,6 +15,7 @@ import {
   databaseTableName,
 } from "@/lib/database-config"
 import { operationsTablePrefix } from "@/operations/engine"
+import { operationTables } from "@/operations/lanes"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertBackup, insertUser } from "@/test/seed"
 
@@ -154,6 +155,9 @@ describeMysql("Kiln database export", () => {
           )).join("")
           assert.include(dump, "CREATE TABLE `dump_values`")
           assert.notInclude(dump, operationsTable)
+          for (const table of operationTables) {
+            assert.notInclude(dump, `CREATE TABLE \`${table}\``)
+          }
 
           // Whatever changed since, importing the dump puts it back.
           yield* sql.unsafe("DELETE FROM dump_values WHERE id = 1")

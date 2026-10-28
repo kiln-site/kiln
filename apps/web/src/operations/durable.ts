@@ -1,7 +1,6 @@
 import type { LaneLock } from "@workspace/operations"
-import { Effect, Layer, Schema, Tracer } from "effect"
-import type { WorkflowEngine } from "effect/workflow"
-import { Activity, Workflow } from "effect/workflow"
+import { Cause, Effect, Exit, Layer, Schedule, Schema, Tracer } from "effect"
+import { Activity, Workflow, WorkflowEngine } from "effect/workflow"
 
 import { Database } from "@/effect/database"
 
@@ -75,29 +74,43 @@ export const durableOperation = <
   )
   const layer = workflow.toLayer(
     Effect.fnUntraced(function* ({ operationId }) {
-      const input = yield* Activity.make({
-        name: "Operations.load",
-        success: options.input,
-        execute: loadInput(options.input, operationId),
-      })
-      const record = yield* loadOperation(operationId).pipe(Effect.orDie)
-      const exit = yield* options.run(input, { id: operationId }).pipe(
-        Effect.withSpan("Operations.run", {
-          attributes: {
-            "operation.id": operationId,
-            "operation.kind": options.kind,
-          },
-          links: record?.trace ? [linkTo(record.trace)] : [],
-        }),
-        Effect.exit
-      )
+      const instance = yield* WorkflowEngine.WorkflowInstance
+      const exit = yield* Effect.gen(function* () {
+        const input = yield* Activity.make({
+          name: "Operations.load",
+          success: options.input,
+          execute: loadInput(options.input, operationId),
+        })
+        // Only to link the run to the request that started it.
+        const record = yield* loadOperation(operationId).pipe(
+          Effect.catch(() => Effect.succeed(null))
+        )
+        return yield* options.run(input, { id: operationId }).pipe(
+          Effect.withSpan("Operations.run", {
+            attributes: {
+              "operation.id": operationId,
+              "operation.kind": options.kind,
+            },
+            links: record?.trace ? [linkTo(record.trace)] : [],
+          })
+        )
+      }).pipe(Effect.exit)
+      // Waiting to resume, or stopped with Hearth: the workflow runs again
+      // later and keeps its locks until it ends.
+      if (
+        Exit.isFailure(exit) &&
+        Cause.hasInterruptsOnly(exit.cause) &&
+        !instance.interrupted
+      ) {
+        return yield* exit
+      }
       yield* Activity.make({
         name: "Operations.finish",
         execute: finishOperation(
           operationId,
           outcomeOf(exit),
           errorOf(exit)
-        ).pipe(Effect.orDie),
+        ).pipe(Effect.retry({ schedule: whileMySqlIsAway }), Effect.orDie),
       })
       return yield* exit
     })
@@ -203,9 +216,20 @@ setGrantedHandler((ids) =>
   dispatchDurableOperations(ids).pipe(Effect.forkDetach, Effect.asVoid)
 )
 
+// A step's own reads and writes of the operation are tried again until
+// MySQL answers: a step that failed for it would end the workflow for good
+// with the operation's locks still held.
+const whileMySqlIsAway = Schedule.min([
+  Schedule.exponential("1 second"),
+  Schedule.spaced("30 seconds"),
+])
+
 const loadInput = <Input extends Schema.Top>(schema: Input, id: string) =>
   Effect.gen(function* () {
-    const record = yield* loadOperation(id).pipe(Effect.orDie)
+    const record = yield* loadOperation(id).pipe(
+      Effect.retry({ schedule: whileMySqlIsAway }),
+      Effect.orDie
+    )
     if (!record) return yield* Effect.die(`Operation ${id} is gone`)
     return yield* Schema.decodeUnknownEffect(Schema.toCodecJson(schema))(
       record.input

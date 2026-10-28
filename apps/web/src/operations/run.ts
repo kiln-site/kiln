@@ -56,7 +56,9 @@ export const runOperation = <Input, A, E, R>(
       )
       const waitedMs = (yield* Clock.currentTimeMillis) - queuedAt
       yield* startOperation(id)
-      const exit = yield* restore(effect).pipe(
+      // Once it runs it isn't cut off: a caller that gives up now gets its
+      // answer late instead of a change half made.
+      const exit = yield* effect.pipe(
         Effect.withSpan("Operations.run", {
           attributes: {
             "operation.id": id,

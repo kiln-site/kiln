@@ -1,6 +1,7 @@
 import { assert, layer } from "@effect/vitest"
 import { exclusive } from "@workspace/operations"
 import { Deferred, Effect, Fiber, Layer, Schedule, Schema } from "effect"
+import { SqlClient } from "effect/sql"
 import { TestClock } from "effect/testing"
 import { afterAll } from "vite-plus/test"
 
@@ -9,8 +10,10 @@ import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRows, selectRows } from "@/test/seed"
 
 import { durableOperation, startDurableOperation } from "./durable"
+import { operationsTablePrefix } from "./engine"
 import {
   OperationConflictError,
+  forgetFinishedOperations,
   hearthDriverId,
   loadOperation,
   recoverOperations,
@@ -125,7 +128,14 @@ describeMysql("Hearth operation lanes", () => {
           })
           yield* insertRows("operation_scheduler", { id: 1, next_sequence: 2 })
           const log: Array<string> = []
+          // Admitted by this Hearth as it starts, before it recovers.
           const waiting = yield* hold(log, "server-a", "after restart")
+          yield* states.pipe(
+            Effect.repeat({
+              schedule: Schedule.spaced("20 millis"),
+              until: (found) => found.includes("test.write:waiting"),
+            })
+          )
 
           yield* recoverOperations()
           yield* until(() => log.includes("after restart"))
@@ -134,6 +144,34 @@ describeMysql("Hearth operation lanes", () => {
 
           assert.deepStrictEqual(yield* states, [
             "test.write:interrupted",
+            "test.write:succeeded",
+          ])
+        }).pipe(TestClock.withLive)
+    )
+
+    it.effect(
+      "finishes a running change whose caller gave up, before freeing its locks",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          const log: Array<string> = []
+          const change = yield* hold(log, "server-a", "change")
+          yield* until(() => log.includes("change"))
+
+          const givingUp = yield* Fiber.interrupt(change.fiber).pipe(
+            Effect.forkChild
+          )
+          const next = yield* hold(log, "server-a", "next")
+          yield* Effect.sleep("100 millis")
+          assert.deepStrictEqual(log, ["change"], "the change still holds")
+          yield* Deferred.succeed(change.release, undefined)
+          yield* Fiber.join(givingUp)
+          yield* until(() => log.includes("next"))
+          yield* Deferred.succeed(next.release, undefined)
+          yield* Fiber.join(next.fiber)
+
+          assert.deepStrictEqual(yield* states, [
+            "test.write:succeeded",
             "test.write:succeeded",
           ])
         }).pipe(TestClock.withLive)
@@ -195,6 +233,17 @@ describeMysql("Hearth operation lanes", () => {
             ),
             undefined
           )
+
+          // Past its retention it's forgotten, with its workflow's history.
+          const sql = yield* SqlClient.SqlClient
+          const history = sql<{ count: number }>`
+            SELECT COUNT(*) AS count FROM ${sql(`${operationsTablePrefix()}_messages`)}
+             WHERE entity_id = ${done?.executionId ?? ""}`
+          assert.isAbove((yield* history)[0].count, 0)
+          yield* Effect.sleep("5 millis")
+          assert.isAbove(yield* forgetFinishedOperations("0 millis"), 0)
+          assert.strictEqual(yield* loadOperation(id), null)
+          assert.strictEqual((yield* history)[0].count, 0)
         }).pipe(TestClock.withLive)
     )
   })

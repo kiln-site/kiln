@@ -15,6 +15,7 @@ import { KilnDatabaseError } from "@/effect/errors"
 import { forkPromise } from "@/effect/promise"
 import { databaseConnectionConfig, databaseTable } from "@/lib/database-config"
 import { operationsTablePrefix } from "@/operations/engine"
+import { operationTables } from "@/operations/lanes"
 
 // Hearth's own database as a SQL file, read and written through Hearth's own
 // login. The file recreates every table from one consistent snapshot, so the
@@ -435,11 +436,15 @@ const listTables = Effect.fnUntraced(function* (connection: Connection) {
     if (row.column !== null) columns.push(row.column)
     tables.set(row.name, columns)
   }
-  // The operations engine's tables hold work in flight against Relays and
-  // Cloudflare; rewinding them to an old export would replay or lose it.
+  // Operations and the engine's tables hold work in flight against Relays
+  // and Cloudflare, and the locks it holds; rewinding them to an old export
+  // would replay or lose it.
   const operations = `${operationsTablePrefix()}_`
   return [...tables]
-    .filter(([name]) => !name.startsWith(operations))
+    .filter(
+      ([name]) =>
+        !name.startsWith(operations) && !operationTables.includes(name)
+    )
     .map(([name, columns]): DumpTable => ({ columns, name }))
 })
 

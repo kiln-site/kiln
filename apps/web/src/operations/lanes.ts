@@ -28,11 +28,18 @@ import {
 } from "effect"
 
 import { Database, type DatabaseTransaction } from "@/effect/database"
+import { operationsTablePrefix } from "@/operations/engine"
 import type { OperationsEngineService } from "@/operations/engine-service"
 import { databaseTable } from "@/lib/database-config"
 
-/** This Hearth process, as the driver of the operations it grants. */
-export const hearthDriverId = randomUUID()
+// A development reload loads this module again in the same process, whose
+// operations are still running; the process keeps one ID.
+const processIds = globalThis as typeof globalThis & {
+  kilnHearthDriverId?: string
+}
+
+/** This Hearth process, as the driver of the operations it admits. */
+export const hearthDriverId = (processIds.kilnHearthDriverId ??= randomUUID())
 
 export type OperationState =
   | "cancelled"
@@ -178,9 +185,9 @@ export const admitOperation = Effect.fn("Operations.enqueue")(function* (
         yield* transaction.execute(
           `INSERT INTO ${operationTable}
              (id, kind, version, durable, sequence, idempotency_key,
-              input_hash, input, state, actor_id, trace_id, span_id,
+              input_hash, input, state, actor_id, driver, trace_id, span_id,
               trace_sampled, admitted_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'waiting', ?, ?, ?, ?, ?, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'waiting', ?, ?, ?, ?, ?, ?, ?)`,
           [
             id,
             admission.kind,
@@ -191,6 +198,7 @@ export const admitOperation = Effect.fn("Operations.enqueue")(function* (
             inputHash,
             inputJson,
             admission.actorId ?? null,
+            hearthDriverId,
             Option.isSome(span) ? span.value.traceId : null,
             Option.isSome(span) ? span.value.spanId : null,
             Option.isSome(span) ? span.value.sampled : false,
@@ -335,8 +343,7 @@ export const finishOperation = Effect.fn("Operations.finish")(function* (
  * Takes over after a restart: an operation that ended with the request
  * running it, as any but a durable one does, is withdrawn if it was still
  * waiting and marked interrupted if it ran, freeing its locks. Durable
- * operations the previous Hearth was driving become this one's. Returns the
- * durable operations granted but not yet started, to start.
+ * operations the previous Hearth was driving become this one's.
  */
 export const recoverOperations = Effect.fn("Operations.recover")(function* () {
   const database = yield* Database
@@ -381,18 +388,9 @@ export const recoverOperations = Effect.fn("Operations.recover")(function* () {
             WHERE durable = 1 AND state IN ('granted', 'running')`,
           [hearthDriverId, now]
         )
-        const granted = yield* grantWaiting(transaction, now)
-        const [pending] = yield* transaction.queryRows<
-          RowDataPacket & { ids: string | null }
-        >(
-          `SELECT GROUP_CONCAT(id ORDER BY sequence) AS ids
-             FROM ${operationTable}
-            WHERE durable = 1 AND state = 'granted'`
-        )
         return {
-          granted,
+          granted: yield* grantWaiting(transaction, now),
           recovered: orphans.length,
-          undispatched: pending?.ids ? pending.ids.split(",") : [],
         }
       })
   )
@@ -400,24 +398,93 @@ export const recoverOperations = Effect.fn("Operations.recover")(function* () {
     "operations.recovered": decision.recovered,
   })
   yield* announce(decision.granted)
-  return decision.undispatched
 })
 
-/** Forgets operations that ended more than `age` ago. */
+/** Durable operations granted whose workflow hasn't started, oldest first. */
+export const undispatchedOperations = Effect.fnUntraced(function* () {
+  const database = yield* Database
+  const rows = yield* database.queryRows<RowDataPacket & { id: string }>(
+    "operations.undispatched",
+    `SELECT id FROM ${operationTable}
+      WHERE durable = 1 AND state = 'granted'
+      ORDER BY sequence`
+  )
+  return rows.map((row) => row.id)
+})
+
+const RETENTION_BATCH = 500
+
+/**
+ * Forgets operations that ended more than `age` ago, with their workflow
+ * history: the engine's messages and replies for the workflow, its clock,
+ * and its steps, all addressed by its execution ID. History goes first, so
+ * one cut off is found again next time.
+ */
 export const forgetFinishedOperations = Effect.fn("Operations.retention")(
   function* (age: Duration.Input) {
     const database = yield* Database
-    const now = yield* Clock.currentTimeMillis
-    const result = yield* database.execute(
-      "operations.retention",
-      `DELETE FROM ${operationTable}
-        WHERE finished_at IS NOT NULL AND finished_at < ?
-        LIMIT 1000`,
-      [now - Duration.toMillis(Duration.fromInputUnsafe(age))]
-    )
-    return result.affectedRows
+    const cutoff =
+      (yield* Clock.currentTimeMillis) -
+      Duration.toMillis(Duration.fromInputUnsafe(age))
+    const messages = `${operationsTablePrefix()}_messages`
+    const replies = `${operationsTablePrefix()}_replies`
+    let forgotten = 0
+    while (true) {
+      const rows = yield* database.queryRows<
+        RowDataPacket & { execution_id: string | null; id: string }
+      >(
+        "operations.retention",
+        `SELECT id, execution_id FROM ${operationTable}
+          WHERE finished_at IS NOT NULL AND finished_at < ?
+          ORDER BY finished_at
+          LIMIT ${RETENTION_BATCH}`,
+        [cutoff]
+      )
+      if (rows.length === 0) break
+      const executions = rows.flatMap((row) =>
+        row.execution_id ? [row.execution_id] : []
+      )
+      if (executions.length > 0) {
+        yield* database.transaction("operations.retention", (transaction) =>
+          Effect.gen(function* () {
+            yield* transaction.execute(
+              `DELETE FROM ${replies} WHERE request_id IN (
+                 SELECT id FROM ${messages}
+                  WHERE entity_id IN (${placeholders(executions)})
+               )`,
+              executions
+            )
+            yield* transaction.execute(
+              `DELETE FROM ${messages}
+                WHERE entity_id IN (${placeholders(executions)})`,
+              executions
+            )
+          })
+        )
+      }
+      const ids = rows.map((row) => row.id)
+      yield* database.execute(
+        "operations.retention",
+        `DELETE FROM ${operationTable} WHERE id IN (${placeholders(ids)})`,
+        ids
+      )
+      forgotten += rows.length
+      if (rows.length < RETENTION_BATCH) break
+    }
+    yield* Effect.annotateCurrentSpan("operations.forgotten", forgotten)
+    return forgotten
   }
 )
+
+const placeholders = (values: ReadonlyArray<unknown>) =>
+  values.map(() => "?").join(", ")
+
+/** Kiln's tables of operations, for what copies the database to leave out. */
+export const operationTables: ReadonlyArray<string> = [
+  operationTable,
+  lockTable,
+  schedulerTable,
+]
 
 export interface OperationRecord {
   readonly actorId: string | null
