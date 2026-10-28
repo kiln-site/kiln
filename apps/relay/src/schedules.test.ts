@@ -1762,18 +1762,21 @@ describe("Relay schedule commands in containers", () => {
       {
         command: "./migrate",
         id: "5d8f43a2-6a0e-4d36-9c11-3b1f4f5e2a10",
+        authorizedTargets: 2,
         targetKeys: [databaseKey],
         type: "console_command",
       },
       {
         command: "./vacuum",
         id: "a4c1e6b9-2f7d-4c0a-8e35-7b9d2c6f1e44",
+        authorizedTargets: 2,
         targetKeys: [databaseKey],
         type: "console_command",
       },
       {
         command: "./report",
         id: "e2b7d9c4-1a3f-4e8b-9c62-5d0f7a8b3c19",
+        authorizedTargets: 2,
         targetKeys: [databaseKey],
         type: "console_command",
       },
@@ -1834,6 +1837,56 @@ describe("Relay schedule commands in containers", () => {
       status: "noop",
       target: { kind: "database" },
     })
+  })
+
+  it("runs a step naming a database there only once Hearth has checked it", async () => {
+    const containerCommands: Array<string> = []
+    const power: Array<string> = []
+    const { schedules } = await manager({
+      listDatabaseIds: async () => new Set([databaseId]),
+      runContainerCommand: async (_target, command) => {
+        containerCommands.push(command)
+        return { exitCode: 0, output: "", truncated: false, unknown: null }
+      },
+      runPower: async (kind, id, action) => {
+        power.push(`${kind}:${id}:${action}`)
+      },
+    })
+    // Saved before commands and kills reached databases: the old schema
+    // took the database's key, and nothing checked it because it was
+    // skipped.
+    const legacy = [
+      {
+        command: "./legacy",
+        id: "5d8f43a2-6a0e-4d36-9c11-3b1f4f5e2a10",
+        targetKeys: [databaseKey],
+        type: "console_command" as const,
+      },
+      {
+        action: "kill" as const,
+        id: "0e9a7f5c-77e8-4b39-8c1a-6d5bb9c0b3a1",
+        targetKeys: [databaseKey],
+        type: "power" as const,
+      },
+    ]
+    await schedules.apply({ ...databaseCommands, actions: legacy })
+    await runNow(schedules)
+    await advanceUntil(async () =>
+      expect((await latestRun(schedules))?.status).toBe("noop")
+    )
+    expect(containerCommands).toEqual([])
+    expect(power).toEqual([])
+
+    // The same steps, saved by Hearth now.
+    await schedules.apply({
+      ...databaseCommands,
+      actions: legacy.map((action) => ({ ...action, authorizedTargets: 2 })),
+      revision: 2,
+    })
+    await schedules.runNow({ revision: 2, scheduleId: projection.id })
+    await advanceUntil(() => expect(power).toHaveLength(1))
+    expect(containerCommands).toEqual(["./legacy"])
+    expect(power).toEqual([`database:${databaseId}:kill`])
   })
 
   it("records each command's exit code and output, and stops at one whose outcome is unknown", async () => {

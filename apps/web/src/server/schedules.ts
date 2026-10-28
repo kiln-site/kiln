@@ -11,6 +11,7 @@ import {
   scheduleActionSchema,
   relayScheduleOverviewSchema,
   scheduleDefinitionSchema,
+  scheduleActionsForSave,
   scheduleInputSchema,
   scheduleRunSchema,
   scheduleTargetSchema,
@@ -193,6 +194,8 @@ export const createSchedule = createServerFn({ method: "POST" })
     const grants = isPlatformAdmin(user) ? [] : await listUserGrants(user.id)
     const definition = scheduleDefinitionSchema.parse({
       ...data,
+      // Checked below, for every target they reach.
+      actions: scheduleActionsForSave(data.actions),
       cron: normalizeScheduleCron(data.cron),
       id: randomUUID(),
       revision: 1,
@@ -257,6 +260,8 @@ export const updateSchedule = createServerFn({ method: "POST" })
     })
     const definition = scheduleDefinitionSchema.parse({
       ...data,
+      // Checked below, for every target they reach.
+      actions: scheduleActionsForSave(data.actions),
       cron: normalizeScheduleCron(data.cron),
       revision: data.revision + 1,
       targets: await canonicalTargets(data.targets),

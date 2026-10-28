@@ -50,6 +50,7 @@ import {
   normalizeScheduleCron,
   scheduleActionAppliesToTarget,
   scheduleActionNeedsNamedTarget,
+  scheduleActionsForSave,
   scheduleActionSupportsTarget,
   scheduleCronAliases,
   validateScheduleCron,
@@ -2312,7 +2313,8 @@ function ScheduleEditorDialog({
             }
       )
     }
-    return complete
+    // Marked as Hearth saves them, so what's checked here is what runs.
+    return scheduleActionsForSave(complete)
   }, [actions, selectedOptions])
   const actionSelectionValid = completeActions.every((action) =>
     scheduleActionPermitted(action, selectedOptions, permissionKey)

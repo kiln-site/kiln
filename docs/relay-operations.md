@@ -214,8 +214,10 @@ A Command step sends a game server's command to its console. For a
 database, it runs `sh -c <command>` as a Docker exec in its current
 container (`apps/relay/src/container-commands.ts`), in the database's
 lifecycle lane. Commands and kills reach a database only when the step's
-`targetKeys` names it: a stored step without them was saved, and
-authorized, when it skipped databases, so it still does.
+`targetKeys` names it and it carries `authorizedTargets`, which Hearth sets
+on the steps it saves once it has checked them for every target they reach.
+A step stored before was saved, and authorized, when it skipped databases,
+even one that named a database, so it still does.
 
 - It has 10 minutes to exit. The step records its exit code and the last
   4 KiB of what it printed, stdout and stderr together; a non-zero code

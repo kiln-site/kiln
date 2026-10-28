@@ -20,6 +20,14 @@ export const scheduleActionTypeSchema = z.enum([
 export type ScheduleActionType = z.infer<typeof scheduleActionTypeSchema>
 
 const scheduleActionIdSchema = z.uuid()
+/**
+ * Set by Hearth on the command and power steps it saves, once it has checked
+ * the authority each database the step names needs. Steps stored before
+ * commands and kills reached databases lack it, whatever their
+ * `targetKeys`, because they were never checked for it; they keep running
+ * only where they ran before.
+ */
+export const scheduleActionAuthorizedTargetsSchema = z.literal(2).optional()
 const scheduleActionTargetKeysSchema = z
   .array(z.string().trim().min(1).max(512))
   .max(2_000)
@@ -27,6 +35,7 @@ const scheduleActionTargetKeysSchema = z
 
 export const scheduleConsoleCommandActionSchema = z
   .object({
+    authorizedTargets: scheduleActionAuthorizedTargetsSchema,
     command: z.string().trim().min(1).max(4_096),
     id: scheduleActionIdSchema,
     targetKeys: scheduleActionTargetKeysSchema,
@@ -63,6 +72,7 @@ export const scheduleBackupActionSchema = z
 export const schedulePowerActionSchema = z
   .object({
     action: z.enum(["start", "stop", "restart", "kill"]),
+    authorizedTargets: scheduleActionAuthorizedTargetsSchema,
     id: scheduleActionIdSchema,
     targetKeys: scheduleActionTargetKeysSchema,
     type: z.literal("power"),
@@ -494,11 +504,12 @@ export function scheduleTargetKey(
 }
 
 /**
- * Whether a step runs on a target only when its `targetKeys` names it.
- * Commands and kills reach databases now, but stored steps without
- * `targetKeys` were saved, and authorized, when they skipped databases, so
- * such a step still means every target it ran on before. A step reaches a
- * database only once someone names it, which Hearth authorizes then.
+ * Whether a step runs on a target only when Hearth checked it there: its
+ * `targetKeys` names the target and it carries `authorizedTargets`.
+ * Commands and kills reach databases now, but stored steps were saved, and
+ * authorized, when they skipped databases, even ones whose `targetKeys`
+ * named one, so they still skip them. A step reaches a database only once
+ * someone names it and Hearth saves it, authorizing it then.
  */
 export function scheduleActionNeedsNamedTarget(
   action: {
@@ -516,6 +527,7 @@ export function scheduleActionNeedsNamedTarget(
 
 export function scheduleActionAppliesToTarget(
   action: {
+    authorizedTargets?: 2
     targetKeys?: ReadonlyArray<string>
     action?: "kill" | "restart" | "start" | "stop"
     mode?: "full" | "incremental"
@@ -525,7 +537,28 @@ export function scheduleActionAppliesToTarget(
 ) {
   if (action.type === "wait") return true
   if (!scheduleActionSupportsTarget(action, target)) return false
-  return action.targetKeys === undefined
-    ? !scheduleActionNeedsNamedTarget(action, target)
-    : action.targetKeys.includes(scheduleTargetKey(target))
+  if (scheduleActionNeedsNamedTarget(action, target)) {
+    return (
+      action.authorizedTargets === 2 &&
+      action.targetKeys?.includes(scheduleTargetKey(target)) === true
+    )
+  }
+  return (
+    action.targetKeys === undefined ||
+    action.targetKeys.includes(scheduleTargetKey(target))
+  )
+}
+
+/**
+ * Marks the command and power steps Hearth is saving as checked, before it
+ * authorizes them, so the check covers every target they reach.
+ */
+export function scheduleActionsForSave<
+  Action extends { readonly type: ScheduleActionType },
+>(actions: ReadonlyArray<Action>): Array<Action> {
+  return actions.map((action) =>
+    action.type === "console_command" || action.type === "power"
+      ? { ...action, authorizedTargets: 2 as const }
+      : action
+  )
 }

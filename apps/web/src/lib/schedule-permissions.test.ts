@@ -130,6 +130,7 @@ describe("schedule authorization", () => {
     }
     const named: ScheduleAction = {
       ...consoleAction,
+      authorizedTargets: 2,
       targetKeys: ["relay-a:database:database-a"],
     }
     const input = {
@@ -145,12 +146,13 @@ describe("schedule authorization", () => {
     expect(
       scheduleAuthorizationFailure({ ...input, grants: [relayGrant] })
     ).toBeNull()
-    // A stored step that doesn't name the database never runs there, so it
-    // needs no shell.
+    // A stored step that doesn't name the database, or named it before
+    // Hearth checked database commands, never runs there, so it needs no
+    // shell.
     expect(
       scheduleAuthorizationFailure({
         ...input,
-        actions: [consoleAction],
+        actions: [consoleAction, { ...named, authorizedTargets: undefined }],
         grants: [databaseGrant],
       })
     ).toBeNull()
