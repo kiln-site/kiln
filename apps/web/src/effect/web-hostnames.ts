@@ -523,6 +523,22 @@ export const setWebHostnamesRoutedEffect = Effect.fn("webHostnames.routed")(
   }
 )
 
+/** Marks every hostname of a deleted game server or app for deletion. */
+export const markResourceWebHostnamesRemovingEffect = Effect.fn(
+  "webHostnames.markResourceRemoving"
+)(function* (resource: WebHostnameResource) {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  yield* database.execute(
+    "webHostnames.markResourceRemoving",
+    `UPDATE ${databaseTable("web_hostname")}
+        SET status = 'removing', last_error = NULL, attempts = 0,
+            next_attempt_at = NULL, updated_at = ?
+      WHERE relay_id = ? AND resource_type = ? AND resource_id = ?`,
+    [now, resource.relayId, resource.resourceType, resource.resourceId]
+  )
+})
+
 /** Marks every hostname on a removed Relay for deletion. */
 export const markRelayWebHostnamesRemovingEffect = Effect.fn(
   "webHostnames.markRelayRemoving"

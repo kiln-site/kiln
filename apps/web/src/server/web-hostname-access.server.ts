@@ -6,6 +6,7 @@ import { runAppEffect } from "@/effect/runtime"
 import {
   listResourceWebHostnamesEffect,
   loadWebHostnameEffect,
+  markResourceWebHostnamesRemovingEffect,
   type WebHostnameResource,
 } from "@/effect/web-hostnames"
 import { requireRelayPermission } from "@/lib/access-control"
@@ -173,6 +174,12 @@ export async function generateAppHostnameBestEffort(
 export async function deleteResourceWebHostnamesBestEffort(
   resource: WebHostnameResource
 ): Promise<void> {
+  // Marked for certain first: a delete that fails after is the DNS
+  // worker's to finish, not lost with the resource.
+  await runAppEffect(
+    "webHostnames.markResourceRemoving",
+    markResourceWebHostnamesRemovingEffect(resource)
+  )
   const removed = await runAppEffect(
     "webHostnames.deleteResource",
     deleteResourceWebHostnamesEffect(resource).pipe(

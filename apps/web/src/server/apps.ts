@@ -482,10 +482,9 @@ export const deleteApp = createServerFn({ method: "POST" })
     ) {
       throw removed.failure
     }
-    await runAppEffect(
-      "apps.record.delete",
-      deleteAppRecordEffect(relay.id, data.appId)
-    )
+    // Its hostnames are marked for deletion before its record goes, so a
+    // Hearth that stops in between leaves them to the DNS worker, or to
+    // deleting it again, rather than to nothing.
     const { deleteResourceWebHostnamesBestEffort } =
       await import("@/server/web-hostname-access.server")
     await deleteResourceWebHostnamesBestEffort({
@@ -493,6 +492,10 @@ export const deleteApp = createServerFn({ method: "POST" })
       resourceId: data.appId,
       resourceType: "app",
     })
+    await runAppEffect(
+      "apps.record.delete",
+      deleteAppRecordEffect(relay.id, data.appId)
+    )
     publishAppChange(relay.id, true)
     return { deleted: true }
   })
