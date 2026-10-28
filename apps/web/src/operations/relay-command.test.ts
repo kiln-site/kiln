@@ -23,7 +23,7 @@ const relay = vi.hoisted(() => ({
     | { status: "succeeded"; result: unknown }
     | { code: string; message: string; retryable: boolean; status: "failed" }
   >(),
-  next: null as null | "loses-reply" | "withdraws",
+  next: null as null | "loses-reply" | "refuses" | "withdraws",
   sent: [] as Array<string>,
 }))
 
@@ -47,6 +47,16 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
     relay.sent.push(id)
     const next = relay.next
     relay.next = null
+    if (next === "refuses") {
+      // Refused before it runs, so the journal never has it: as the
+      // connection reports it, with its code.
+      relay.sent.pop()
+      throw RelayUnavailableError.make({
+        code: "forbidden",
+        message: "Relay permission denied",
+        retryable: false,
+      })
+    }
     if (next === "withdraws") {
       relay.journal.set(id, {
         code: "operation_withdrawn",
@@ -123,6 +133,24 @@ describeMysql("Relay commands from durable operations", () => {
 
           assert.strictEqual(done?.state, "succeeded")
           assert.strictEqual(relay.sent.length, 1)
+        }).pipe(TestClock.withLive),
+      30_000
+    )
+
+    it.effect(
+      "stops at a change the Relay refuses, rather than asking forever",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* insertRelay("relay-one")
+          relay.journal.clear()
+          relay.sent.length = 0
+          relay.next = "refuses"
+
+          const done = yield* runToEnd("survival")
+
+          assert.strictEqual(done?.state, "failed")
+          assert.include(done?.error ?? "", "permission denied")
         }).pipe(TestClock.withLive),
       30_000
     )

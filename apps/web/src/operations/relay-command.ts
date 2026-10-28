@@ -30,6 +30,20 @@ export class RelayCommandError extends Schema.TaggedError<RelayCommandError>()(
 const RESEND_WITHIN = Duration.days(6)
 
 /**
+ * Whether a Relay error means trying again later: the connection failed,
+ * the Relay is paused, or it said to. Its refusals, which arrive as the same
+ * error with a code, are final.
+ */
+export function relayIsAway(error: unknown): boolean {
+  return (
+    error instanceof RelayUnavailableError &&
+    (error.code === undefined ||
+      error.code === "relay_paused" ||
+      error.retryable === true)
+  )
+}
+
+/**
  * One change sent to a Relay as a step of a durable operation, at most once.
  * Its command ID and when it was first sent are stored before it's sent, so
  * a step cut off and run again, as after a restart, asks the Relay how the
@@ -162,14 +176,14 @@ const settle = <A, R>(
       }
     }
   }).pipe(
-    // A connection that dropped, or a Relay that isn't connected, is asked
-    // again; an answer is final.
+    // A connection that dropped, or a Relay that isn't connected or is
+    // paused, is asked again; an answer is final.
     Effect.retry({
       schedule: Schedule.min([
         Schedule.exponential("1 second"),
         Schedule.spaced("30 seconds"),
       ]),
-      while: (error) => error instanceof RelayUnavailableError,
+      while: relayIsAway,
     }),
     Effect.catch((error) =>
       error instanceof RelayCommandError
