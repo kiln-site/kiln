@@ -2211,7 +2211,11 @@ async function executeControlRequest(
       const input = relayAppVolumesImportSchema.parse(request.payload)
       await runRelayEffect(
         "relay.volumes.references.import",
-        volumes.importAppReferences(input.apps)
+        volumes.importAppReferences(
+          client.id,
+          input.apps,
+          input.unresolvedAppIds
+        )
       )
       return { apps: input.apps.length }
     }
@@ -2683,7 +2687,7 @@ async function executeControlRequest(
       const input = relayAppVolumesWriteSchema.parse(request.payload)
       await runRelayEffect(
         "relay.apps.volumes.write",
-        volumes.writeAppReferences(input.appId, input.volumeIds)
+        volumes.writeAppReferences(client.id, input.appId, input.volumeIds)
       )
       return { appId: input.appId, volumeIds: input.volumeIds }
     }

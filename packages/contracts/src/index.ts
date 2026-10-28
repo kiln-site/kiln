@@ -682,9 +682,13 @@ export const relayUncoveredMountSchema = z.object({
 export const relayVolumesSchema = z.object({
   // Whether Docker is measuring the volumes, so sizes are on their way.
   measuring: z.boolean(),
-  // Whether Hearth has told the Relay which volumes Apps' configurations
-  // name. Until it has, `users` leaves those out and deletion is refused.
-  referencesImported: z.boolean(),
+  // Whether every paired Hearth that can configure Apps has told the Relay
+  // which volumes its Apps' configurations name. Until they have, `users`
+  // may leave some out and deletion is refused, for `reason`.
+  protection: z.object({
+    ready: z.boolean(),
+    reason: z.string().nullable(),
+  }),
   uncovered: z.array(relayUncoveredMountSchema),
   volumes: z.array(relayVolumeSchema),
 })
@@ -709,18 +713,22 @@ export const relayVolumeRenameSchema = relayVolumeCreateSchema
 export const relayVolumeDeleteSchema = z.strictObject({
   id: relayVolumeIdSchema,
 })
-// The Kiln volumes an App's configuration mounts, replacing those it named
-// before. Hearth sends it whenever a saved configuration changes them.
+// Every Kiln volume an App's configuration mounts, replacing those the same
+// Hearth sent for it before. Hearth sends the configuration's and the
+// saved one's together before saving one that adds a volume, so up to
+// twice a configuration's 32 mounts, and the saved one's after each save.
 export const relayAppVolumesWriteSchema = z.strictObject({
   appId: volumeAppIdSchema,
-  volumeIds: z.array(relayVolumeIdSchema).max(32),
+  volumeIds: z.array(relayVolumeIdSchema).max(64),
 })
-// Every App's configured volumes at once, which Hearth sends a Relay that
-// hasn't had them yet. Apps left out keep what the Relay has for them.
+// Every App configuration's volumes one Hearth keeps for the Relay,
+// replacing all it sent before, and the Apps whose configurations it
+// couldn't read, which keep deletion waiting until it can.
 export const relayAppVolumesImportSchema = z.strictObject({
   apps: z.array(relayAppVolumesWriteSchema).max(10_000),
+  unresolvedAppIds: z.array(volumeAppIdSchema).max(10_000),
 })
-// The Relay's refusal while it waits for that import.
+// The Relay's refusal while it waits for that import, followed by why.
 export const RELAY_VOLUME_REFERENCES_PENDING =
   "The Relay doesn't know yet which Apps use its volumes"
 export type RelayVolume = z.infer<typeof relayVolumeSchema>

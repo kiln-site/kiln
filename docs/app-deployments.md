@@ -159,13 +159,23 @@ and the old one stays listed as the app's, without an ID, until the app is
 deleted.
 
 An app **uses** a volume when its configuration mounts it, deployed or not,
-or one of its containers mounts it now. The Relay keeps which Kiln volumes
-each app's configuration names: Hearth tells it before saving a
-configuration that mounts a new one, after saving one that drops one, and
-sends every app's at once to a Relay that has none, such as one updated from
-before. Until then that Relay refuses to delete any volume. A Kiln volume
-can't be deleted while any app's configuration names it or any container
-mounts it.
+or one of its containers mounts it now. Configurations live in Hearth, so
+the Relay keeps which Kiln volumes each app's configuration names, as each
+paired Hearth says. Each message replaces an app's whole set: before saving
+a configuration that mounts a new volume, Hearth sends the old and new
+configurations' volumes together, and a Relay that can't take them keeps
+the configuration from saving; after every save it sends the saved one's.
+Whenever Hearth connects to the Relay it sends every app's again, so a
+message a save couldn't deliver arrives. An app whose configuration Hearth
+can't read, as when the secret it was saved with is gone, is sent as
+unresolved.
+
+A Kiln volume can't be deleted while any container mounts it or any app's
+configuration names it, nor while the Relay can't tell: until every paired
+Hearth that may configure apps there (`app.manage`) has sent its apps'
+configurations, with none unresolved. A Hearth paired since owes them before
+deletion works again; a revoked one no longer counts, nor does what it sent.
+The volumes page says what the Relay waits for.
 
 Deleting an app with its data removes only the volumes its own Compose
 projects made, never a Kiln volume, and never one of its volumes another

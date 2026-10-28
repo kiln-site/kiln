@@ -1,5 +1,5 @@
 import type { RowDataPacket } from "mysql2/promise"
-import { Cause, Clock, Effect } from "effect"
+import { Cause, Clock, Effect, Predicate } from "effect"
 
 import type { AppConfig } from "@workspace/contracts"
 import {
@@ -13,7 +13,6 @@ import { decryptWithKeyring, encryptWithKeyring } from "../../keyring.mjs"
 import { Database } from "@/effect/database"
 import { CredentialError } from "@/effect/errors"
 import { removeIconsEffect } from "@/effect/icons"
-import { reportAppError } from "@/effect/runtime"
 import {
   configuredVolumeIds,
   importAppVolumeReferencesEffect,
@@ -156,10 +155,13 @@ export const listRelayAppConfigsEffect = Effect.fn("apps.configs")(function* (
  * row while it does, so an edit saved meanwhile isn't overwritten.
  *
  * The Relay keeps which Kiln volumes the config mounts, so it can refuse to
- * delete them. A volume the config takes up reaches the Relay before the
- * config is saved, and a Relay that can't take it keeps the config from
- * saving; one it drops reaches the Relay after, so the Relay never knows of
- * fewer than the saved config names.
+ * delete them, and each message replaces the whole set. Before saving a
+ * config that takes up a volume, the Relay gets the old and new configs'
+ * volumes together, and a Relay that can't take them keeps the config from
+ * saving; after every save it gets the saved config's. So the Relay never
+ * knows of fewer than the saved config names, and a message lost after a
+ * save is made good by the next save, or by the import when Hearth next
+ * connects to the Relay.
  */
 export const updateAppConfigEffect = Effect.fn("apps.updateConfig")(function* (
   relayId: string,
@@ -168,7 +170,7 @@ export const updateAppConfigEffect = Effect.fn("apps.updateConfig")(function* (
 ) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
-  const { config, dropped } = yield* database.transaction(
+  const config = yield* database.transaction(
     "app_config_update",
     (transaction) =>
       Effect.gen(function* () {
@@ -204,25 +206,19 @@ export const updateAppConfigEffect = Effect.fn("apps.updateConfig")(function* (
             appId,
           ]
         )
-        return {
-          config,
-          dropped: before.some((id) => !after.includes(id)),
-        }
+        return config
       })
   )
   // Saved either way: until the Relay hears, it only keeps a volume too
-  // many, and the next change to the config tells it again.
-  if (dropped) {
-    yield* sendSavedAppVolumeReferencesEffect(relayId, appId).pipe(
-      Effect.catchCause((cause) =>
-        Effect.sync(() =>
-          reportAppError(Cause.squash(cause), {
-            operation: "apps.volumeReferences.send",
-          })
-        )
+  // many, as when it's offline, and the next save or import tells it.
+  yield* sendSavedAppVolumeReferencesEffect(relayId, appId).pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning(
+        "The Relay didn't take the volumes an App's saved configuration mounts",
+        Cause.squash(cause)
       )
     )
-  }
+  )
   return config
 })
 
@@ -256,31 +252,41 @@ const sendSavedAppVolumeReferencesEffect = Effect.fn(
 /**
  * Sends a Relay the volumes every App's config on it names, holding their
  * rows so no save reaches the Relay in between. A config that can't be read
- * is left out; the Relay keeps what it had for that App.
+ * is sent as unresolved, so the Relay keeps refusing deletions until it
+ * can be; answers how many there were.
  */
 export const importRelayAppVolumeReferencesEffect = Effect.fn(
   "apps.volumeReferences.importRelay"
 )(function* (relayId: string) {
   const database = yield* Database
-  yield* database.transaction("app_volume_references_import", (transaction) =>
-    Effect.gen(function* () {
-      const rows = yield* transaction.queryRows<AppConfigRow>(
-        `SELECT app_id, relay_id, name, config_ciphertext, created_by, created_at
+  return yield* database.transaction(
+    "app_volume_references_import",
+    (transaction) =>
+      Effect.gen(function* () {
+        const rows = yield* transaction.queryRows<AppConfigRow>(
+          `SELECT app_id, relay_id, name, config_ciphertext, created_by, created_at
            FROM ${databaseTable("app")}
           WHERE relay_id = ?
             FOR UPDATE`,
-        [relayId]
-      )
-      const apps = yield* Effect.forEach(rows, (row) =>
-        decryptConfig(row).pipe(
-          Effect.map((config) => [
-            { appId: row.app_id, volumeIds: configuredVolumeIds(config) },
-          ]),
-          Effect.catchCause(() => Effect.succeed([]))
+          [relayId]
         )
-      )
-      yield* importAppVolumeReferencesEffect(relayId, apps.flat())
-    })
+        const read = yield* Effect.forEach(rows, (row) =>
+          decryptConfig(row).pipe(
+            Effect.map((config) => ({
+              appId: row.app_id,
+              volumeIds: configuredVolumeIds(config),
+            })),
+            Effect.catchCause(() => Effect.succeed(row.app_id))
+          )
+        )
+        const unresolved = read.filter(Predicate.isString)
+        yield* importAppVolumeReferencesEffect(
+          relayId,
+          read.flatMap((entry) => (Predicate.isString(entry) ? [] : [entry])),
+          unresolved
+        )
+        return { unresolved: unresolved.length }
+      })
   )
 })
 

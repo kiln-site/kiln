@@ -33,6 +33,7 @@ import {
   relayControlRequestTimeoutMs,
   relayControlProtocol,
   relayControlDialV1Feature,
+  relayVolumesV1Feature,
   relayDialCloseCodes,
   relaySnapshotControlDelta,
   relaySnapshotDeltaFeature,
@@ -604,6 +605,8 @@ class RelayConnection {
   #pushedSnapshot: RelaySnapshot | null = null
   #eventSequence = 0
   #features = new Set<string>()
+  // What this Hearth's client may ask of the Relay (`auth.ready`).
+  #actions = new Set<string>()
   // The journal the Relay keeps this Hearth's changes in (`auth.ready`).
   #journalId: string | null = null
   // Whether the Relay said it can dial Hearth.
@@ -683,7 +686,12 @@ class RelayConnection {
         Effect.flatMap((credentials) =>
           Effect.try({
             try: () =>
-              checkRelayChallenge(this.#relay.id, credentials, challenge, nonce),
+              checkRelayChallenge(
+                this.#relay.id,
+                credentials,
+                challenge,
+                nonce
+              ),
             catch: asError,
           })
         ),
@@ -1414,6 +1422,7 @@ class RelayConnection {
           }
           this.#attempt = 0
           this.#features = new Set(message.features ?? [])
+          this.#actions = new Set(message.actions)
           this.#journalId = message.journalId ?? null
           // A Relay that can dial Hearth stands by to, should Hearth's own
           // connection fail.
@@ -2005,9 +2014,16 @@ class RelayConnection {
         | { readonly status: "forgotten" }
       > = await runAppEffect(
         "relay.operation.lookup",
-        this.request("operation.get", { operationId }, 10_000, undefined, undefined, {
-          journal: change.journal,
-        }).pipe(
+        this.request(
+          "operation.get",
+          { operationId },
+          10_000,
+          undefined,
+          undefined,
+          {
+            journal: change.journal,
+          }
+        ).pipe(
           Effect.flatMap(
             Schema.decodeUnknownEffect(RelayOperationLookupSchema)
           ),
@@ -2147,6 +2163,32 @@ class RelayConnection {
           )
         )
       )
+      // The Relay keeps which volumes this Hearth's Apps' configurations
+      // name, to refuse deleting them; on every connect it gets them all
+      // again, so one a save couldn't tell it arrives. Only a Hearth that
+      // may configure Apps there keeps any to send.
+      if (
+        this.#actions.has("app.manage") &&
+        this.#features.has(relayVolumesV1Feature)
+      ) {
+        forkAppEffect(
+          "apps.volumeReferences.reconcileOnConnect",
+          Effect.tryPromise({
+            try: () => import("@/effect/managed-apps"),
+            catch: (cause) => cause,
+          }).pipe(
+            Effect.flatMap(({ importRelayAppVolumeReferencesEffect }) =>
+              importRelayAppVolumeReferencesEffect(this.#relay.id)
+            ),
+            Effect.catch((cause) =>
+              Effect.logWarning(
+                "Sending the Relay Apps' configured volumes after connect failed",
+                { cause, relayId: this.#relay.id }
+              )
+            )
+          )
+        )
+      }
       forkAppEffect(
         "backups.reconcileOnConnect",
         Effect.tryPromise({

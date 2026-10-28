@@ -339,6 +339,11 @@ function VolumesTable({
 }) {
   const volumes = useQuery(relayVolumesQueryOptions(relayId))
   const canBrowse = useVolumeBrowsing(relayId)
+  // Why the Relay can't tell yet which Apps' configurations use a volume.
+  const protectionPending =
+    volumes.data?.protection.ready === false
+      ? (volumes.data.protection.reason ?? "")
+      : null
   const source = React.useMemo<DataTableSource<RelayVolume>>(
     () =>
       volumes.isError
@@ -406,6 +411,7 @@ function VolumesTable({
           <VolumeActions
             canBrowse={canBrowse}
             canManage={canManage}
+            protectionPending={protectionPending}
             relayId={relayId}
             routeId={routeId}
             volume={row.original}
@@ -424,7 +430,15 @@ function VolumesTable({
       getRowId: (volume) => volume.dockerName,
       search: { fields: volumeSearchFields },
     })
-  }, [canBrowse, canManage, onDialog, relayId, relayName, routeId])
+  }, [
+    canBrowse,
+    canManage,
+    onDialog,
+    protectionPending,
+    relayId,
+    relayName,
+    routeId,
+  ])
 
   const supported = volumes.data?.supported !== false
   const emptyState = React.useCallback(
@@ -798,6 +812,7 @@ function mountHref(identity: InstancePickerItem["identity"]): string {
 const VolumeActions = React.memo(function VolumeActions({
   canBrowse,
   canManage,
+  protectionPending,
   relayId,
   routeId,
   volume,
@@ -805,6 +820,7 @@ const VolumeActions = React.memo(function VolumeActions({
 }: {
   canBrowse: boolean
   canManage: boolean
+  protectionPending: string | null
   relayId: string
   routeId: string
   volume: RelayVolume
@@ -816,11 +832,13 @@ const VolumeActions = React.memo(function VolumeActions({
     ? "The Relay keeps its data here"
     : !kiln
       ? "Its App's Compose file declares it; deleting the App deletes it"
-      : volume.users.some((user) => user.configured)
-        ? "An App's configuration mounts it; remove it there first"
-        : volume.mounts.length > 0
-          ? "Remove what mounts it first"
-          : null
+      : protectionPending !== null
+        ? `The Relay doesn't know yet which Apps use it${protectionPending ? `: ${protectionPending}` : ""}`
+        : volume.users.some((user) => user.configured)
+          ? "An App's configuration mounts it; remove it there first"
+          : volume.mounts.length > 0
+            ? "Remove what mounts it first"
+            : null
   return (
     <DataTableActionGroup>
       <Tooltip>

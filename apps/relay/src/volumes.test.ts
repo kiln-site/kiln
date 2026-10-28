@@ -32,6 +32,38 @@ function run<A, E>(effect: Effect.Effect<A, E>): Promise<A> {
   return Effect.runPromise(effect)
 }
 
+// A Hearth paired with the Relay, as the control socket pairs one.
+async function pairHearth(
+  harness: RelayHarness,
+  id: string,
+  role: "full_access" | "read_only" = "full_access"
+) {
+  const now = Date.now()
+  await run(
+    harness.state.createInvitation({
+      actions: [],
+      createdAt: now,
+      expiresAt: now + 60_000,
+      id: `invitation-${id}`,
+      role,
+      tokenHash: `hash-${id}`,
+    })
+  )
+  await run(
+    harness.state.pairClient({
+      actions: [],
+      id,
+      invitationId: `invitation-${id}`,
+      name: id,
+      origins: [],
+      pairedAt: now,
+      publicKey: `key-${id}`,
+      role,
+      sourceCidrs: [],
+    })
+  )
+}
+
 async function listed(volumes: RelayVolumes) {
   return (await run(volumes.list())).volumes
 }
@@ -219,7 +251,6 @@ describe("Relay volumes", () => {
   it("refuses to delete a volume a container mounts, then deletes it once none does", async () => {
     const volumes = await relayVolumes()
     const created = await run(volumes.create(volumeId, "data"))
-    await run(volumes.importAppReferences([]))
     const container = fakeDocker.addContainer({
       mounts: [
         { destination: "/data", source: created.dockerName, type: "volume" },
@@ -268,32 +299,105 @@ describe("Relay volumes", () => {
   it("refuses to delete a volume an App's configuration names, though the App isn't deployed", async () => {
     const harness = await relayHarness()
     const volumes = await relayVolumes(harness)
+    await pairHearth(harness, "hearth-a")
     await harness.apps.create({ id: appId, name: "Website" })
     const created = await run(volumes.create(volumeId, "media"))
 
-    // Until Hearth has said which configurations name which volumes, none
-    // can be deleted.
+    // Until the Hearth has said which configurations name which volumes,
+    // none can be deleted.
     await expect(run(volumes.delete(volumeId))).rejects.toThrow(
       RELAY_VOLUME_REFERENCES_PENDING
     )
-    await run(volumes.importAppReferences([{ appId, volumeIds: [volumeId] }]))
+    await run(
+      volumes.importAppReferences(
+        "hearth-a",
+        [{ appId, volumeIds: [volumeId] }],
+        []
+      )
+    )
     await expect(run(volumes.delete(volumeId))).rejects.toThrow(
       "An App's configuration mounts this volume"
     )
     expect(fakeDocker.volumes.has(created.dockerName)).toBe(true)
 
-    await run(volumes.writeAppReferences(appId, []))
+    await run(volumes.writeAppReferences("hearth-a", appId, []))
     await run(volumes.delete(volumeId))
 
+    expect(fakeDocker.volumes.has(created.dockerName)).toBe(false)
+  })
+
+  it("waits for every Hearth that configures Apps here, and forgets a revoked one", async () => {
+    const harness = await relayHarness()
+    const volumes = await relayVolumes(harness)
+    await pairHearth(harness, "hearth-a")
+    await pairHearth(harness, "hearth-b")
+    // One that can't configure Apps here has no configurations to send.
+    await pairHearth(harness, "hearth-viewer", "read_only")
+    await harness.apps.create({ id: appId, name: "Website" })
+    const created = await run(volumes.create(volumeId, "media"))
+
+    // Hearth A's import says nothing about Hearth B's Apps.
+    await run(volumes.importAppReferences("hearth-a", [], []))
+    await expect(run(volumes.delete(volumeId))).rejects.toThrow(
+      "waiting for hearth-b"
+    )
+    // Hearth B's undeployed App names the volume.
+    await run(
+      volumes.importAppReferences(
+        "hearth-b",
+        [{ appId, volumeIds: [volumeId] }],
+        []
+      )
+    )
+    await expect(run(volumes.delete(volumeId))).rejects.toThrow(
+      "An App's configuration mounts this volume"
+    )
+
+    // A Hearth paired since owes its configurations before anything goes.
+    await pairHearth(harness, "hearth-c")
+    await run(harness.state.revokeClient("hearth-b", Date.now()))
+    await expect(run(volumes.delete(volumeId))).rejects.toThrow(
+      "waiting for hearth-c"
+    )
+    await run(volumes.importAppReferences("hearth-c", [], []))
+
+    // What revoked Hearth B said no longer keeps the volume.
+    await run(volumes.delete(volumeId))
+    expect(fakeDocker.volumes.has(created.dockerName)).toBe(false)
+  })
+
+  it("keeps waiting for a configuration its Hearth couldn't read until it can", async () => {
+    const harness = await relayHarness()
+    const volumes = await relayVolumes(harness)
+    await pairHearth(harness, "hearth-a")
+    await harness.apps.create({ id: appId, name: "Website" })
+    const created = await run(volumes.create(volumeId, "media"))
+
+    await run(volumes.importAppReferences("hearth-a", [], [appId]))
+    await expect(run(volumes.delete(volumeId))).rejects.toThrow(
+      "hearth-a couldn't read an App's configuration"
+    )
+    expect((await run(volumes.list())).protection.ready).toBe(false)
+
+    // Read since, it names no volume.
+    await run(volumes.writeAppReferences("hearth-a", appId, []))
+    await run(volumes.delete(volumeId))
     expect(fakeDocker.volumes.has(created.dockerName)).toBe(false)
   })
 
   it("lets a deleted App's configuration no longer keep a volume", async () => {
     const harness = await relayHarness()
     const volumes = await relayVolumes(harness)
+    await pairHearth(harness, "hearth-a")
     await harness.apps.create({ id: appId, name: "Website" })
     const created = await run(volumes.create(volumeId, "media"))
-    await run(volumes.importAppReferences([{ appId, volumeIds: [volumeId] }]))
+    await run(
+      volumes.importAppReferences(
+        "hearth-a",
+        [{ appId, volumeIds: [volumeId] }],
+        []
+      )
+    )
 
     await harness.apps.delete({ appId, deleteData: true })
     await run(volumes.delete(volumeId))
@@ -307,7 +411,7 @@ describe("Relay volumes", () => {
     await harness.apps.create({ id: appId, name: "Website" })
 
     await expect(
-      run(volumes.writeAppReferences(appId, [volumeId]))
+      run(volumes.writeAppReferences("hearth-a", appId, [volumeId]))
     ).rejects.toThrow("no longer exists")
   })
 
@@ -319,10 +423,13 @@ describe("Relay volumes", () => {
     await harness.apps.create({ id: configuring, name: "Configures it" })
     await harness.apps.create({ id: mounting, name: "Mounts it" })
     const shared = await run(volumes.create(volumeId, "shared"))
+    await pairHearth(harness, "hearth-a")
     await run(
-      volumes.importAppReferences([
-        { appId: configuring, volumeIds: [volumeId] },
-      ])
+      volumes.importAppReferences(
+        "hearth-a",
+        [{ appId: configuring, volumeIds: [volumeId] }],
+        []
+      )
     )
     const project = `${TEST_NAMESPACE}-kiln-app-${mounting}`
     fakeDocker.addVolume({
@@ -362,7 +469,7 @@ describe("Relay volumes", () => {
 
     const listing = await run(volumes.list())
 
-    expect(listing.referencesImported).toBe(true)
+    expect(listing.protection).toEqual({ ready: true, reason: null })
     expect(
       listing.volumes.map(({ dockerName, id, kind, owner, users }) => ({
         dockerName,

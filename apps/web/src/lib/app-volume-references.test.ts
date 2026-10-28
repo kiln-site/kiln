@@ -9,7 +9,9 @@ import {
   loadAppConfigEffect,
   updateAppConfigEffect,
 } from "@/effect/managed-apps"
+import { Database } from "@/effect/database"
 import { disposeAppRuntime } from "@/effect/runtime"
+import { databaseTable } from "@/lib/database-config"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRelay, insertUser } from "@/test/seed"
 
@@ -20,8 +22,11 @@ afterAll(() => disposeAppRuntime())
 // names, and the volumes it has.
 const relay = vi.hoisted(() => ({
   existing: new Set<string>(),
+  // Writes that fail, as when the Relay is offline, in order.
+  failingWrites: 0,
   imported: [] as Array<{ appId: string; volumeIds: Array<string> }>,
   references: new Map<string, Array<string>>(),
+  unresolved: [] as Array<string>,
 }))
 
 vi.mock("@/lib/relay-connection", async (importOriginal) => ({
@@ -32,18 +37,24 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
     payload: {
       apps?: Array<{ appId: string; volumeIds: Array<string> }>
       appId?: string
+      unresolvedAppIds?: Array<string>
       volumeIds?: Array<string>
     }
   ) => {
     if (operation === "relay.volumes.references.import") {
-      for (const app of payload.apps!) {
-        relay.references.set(app.appId, app.volumeIds)
-      }
+      relay.references = new Map(
+        payload.apps!.map((app) => [app.appId, app.volumeIds])
+      )
       relay.imported = payload.apps!
+      relay.unresolved = payload.unresolvedAppIds!
       return { apps: payload.apps!.length }
     }
     if (operation !== "app.volumes.write") {
       throw new Error(`Unexpected Relay operation ${operation}`)
+    }
+    if (relay.failingWrites > 0) {
+      relay.failingWrites -= 1
+      throw new Error("Relay control socket is not connected")
     }
     const before = relay.references.get(payload.appId!) ?? []
     if (
@@ -76,8 +87,10 @@ const volumeMount = (id: string, volumeId: string): AppMount => ({
 const seed = Effect.gen(function* () {
   yield* resetDatabase
   relay.existing = new Set([media, uploads])
+  relay.failingWrites = 0
   relay.imported = []
   relay.references = new Map()
+  relay.unresolved = []
   yield* insertUser("owner")
   yield* insertRelay(relayId, { created_by: "owner" })
   for (const id of [appId, otherAppId]) {
@@ -130,6 +143,53 @@ describeMysql("App volume references", () => {
 
           yield* mountVolumes(appId, [])
           assert.deepStrictEqual(relay.references.get(appId), [])
+        })
+    )
+
+    it.effect(
+      "tells the Relay a dropped volume on the next save after it missed it",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          yield* mountVolumes(appId, [volumeMount("media0001", media)])
+
+          // Saved, but the Relay doesn't hear: it keeps the volume protected.
+          relay.failingWrites = 1
+          yield* mountVolumes(appId, [])
+          assert.deepStrictEqual(yield* savedVolumes(appId), [])
+          assert.deepStrictEqual(relay.references.get(appId), [media])
+
+          // Any later save sends the whole set again.
+          yield* updateAppConfigEffect(relayId, appId, (config) => ({
+            ...config,
+            environment: "MODE=production",
+          }))
+          assert.deepStrictEqual(relay.references.get(appId), [])
+        })
+    )
+
+    it.effect(
+      "tells the Relay which Apps' configurations it couldn't read, instead of leaving them out",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          yield* mountVolumes(appId, [volumeMount("media0001", media)])
+          yield* mountVolumes(otherAppId, [volumeMount("uploads01", uploads)])
+          // As when the secret it was saved with is gone.
+          const database = yield* Database
+          yield* database.execute(
+            "corrupt_app_config",
+            `UPDATE ${databaseTable("app")} SET config_ciphertext = ? WHERE app_id = ?`,
+            ["unreadable", otherAppId]
+          )
+
+          const imported = yield* importRelayAppVolumeReferencesEffect(relayId)
+
+          assert.deepStrictEqual(imported, { unresolved: 1 })
+          assert.deepStrictEqual(relay.imported, [
+            { appId, volumeIds: [media] },
+          ])
+          assert.deepStrictEqual(relay.unresolved, [otherAppId])
         })
     )
 

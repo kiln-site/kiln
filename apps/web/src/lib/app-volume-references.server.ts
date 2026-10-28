@@ -4,10 +4,10 @@ import { Effect } from "effect"
 import { promiseEffect } from "@/effect/promise"
 
 // A Relay refuses to delete a Kiln volume an App's configuration mounts,
-// deployed or not, so it keeps which volumes each configuration names.
-// Hearth saves configurations, so it tells the Relay: of a volume a
-// configuration takes up before saving it, of one it drops after, and of
-// all of them once, for a Relay that has none yet.
+// deployed or not, so it keeps which volumes each configuration names, as
+// each paired Hearth says. Hearth saves configurations, so it tells the
+// Relay each App's whole set around every save, and every App's whenever
+// it connects (see `importRelayAppVolumeReferencesEffect`).
 
 const RELAY_TIMEOUT_MS = 30_000
 
@@ -30,15 +30,26 @@ export const sendAppVolumeReferencesEffect = Effect.fn(
   yield* relayRequest(relayId, "app.volumes.write", { appId, volumeIds })
 })
 
-/** Sends every App's configured volumes to a Relay that has none yet. */
+/**
+ * Sends every App's configured volumes Hearth keeps for a Relay, in place
+ * of all it sent before, with the Apps whose configurations it couldn't
+ * read.
+ */
 export const importAppVolumeReferencesEffect = Effect.fn(
   "apps.volumeReferences.import"
 )(function* (
   relayId: string,
-  apps: ReadonlyArray<{ appId: string; volumeIds: ReadonlyArray<string> }>
+  apps: ReadonlyArray<{ appId: string; volumeIds: ReadonlyArray<string> }>,
+  unresolvedAppIds: ReadonlyArray<string>
 ) {
-  yield* Effect.annotateCurrentSpan({ "kiln.app_count": apps.length })
-  yield* relayRequest(relayId, "relay.volumes.references.import", { apps })
+  yield* Effect.annotateCurrentSpan({
+    "kiln.app_count": apps.length,
+    "kiln.app_unresolved_count": unresolvedAppIds.length,
+  })
+  yield* relayRequest(relayId, "relay.volumes.references.import", {
+    apps,
+    unresolvedAppIds,
+  })
 })
 
 function relayRequest(

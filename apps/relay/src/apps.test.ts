@@ -500,7 +500,6 @@ describe("apps", () => {
       name: volume,
     })
     const volumes = relayVolumes(harness)
-    await Effect.runPromise(volumes.importAppReferences([]))
     const pull = fakeDocker.hold({ command: "pull" })
     const deploying = deploy(harness, {
       mounts: [

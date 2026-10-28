@@ -19,10 +19,8 @@ import type {
   DockerEngineError,
   DockerVolume,
 } from "./docker-engine.js"
-import {
-  APP_VOLUME_REFERENCES_IMPORTED_KEY,
-  type RelayStateStore,
-} from "./effect/state.js"
+import type { RelayStateStore } from "./effect/state.js"
+import { actionsForRole } from "./permissions.js"
 import { traceRelayEffect } from "./effect/runtime.js"
 import {
   relayOwnerLabels,
@@ -122,7 +120,7 @@ export class RelayVolumes {
    */
   list() {
     return Effect.gen({ self: this }, function* () {
-      const [kiln, composed, own, containers, names, uses, imported, host] =
+      const [kiln, composed, own, containers, names, uses, protection, host] =
         yield* Effect.all(
           [
             this.#volumes(),
@@ -133,7 +131,7 @@ export class RelayVolumes {
             this.#engine.listContainers({ all: true }),
             this.#state.listVolumeNames(),
             this.#configuredUses(),
-            this.#referencesImported(),
+            this.protection(),
             Effect.promise(() => this.#hostDataDirectory()),
           ],
           { concurrency: "unbounded" }
@@ -179,7 +177,7 @@ export class RelayVolumes {
       ])
       return {
         measuring,
-        referencesImported: imported,
+        protection,
         uncovered: uncoveredMounts(this.#config, containers, managed, host),
         volumes: [
           ...(own
@@ -289,20 +287,23 @@ export class RelayVolumes {
     return Effect.gen({ self: this }, function* () {
       yield* Effect.annotateCurrentSpan({ "kiln.volume_id": id })
       const volume = yield* this.#required(id)
-      if (!(yield* this.#referencesImported())) {
+      const protection = yield* this.protection()
+      if (!protection.ready) {
         return yield* new RelayVolumeError({
-          message: RELAY_VOLUME_REFERENCES_PENDING,
+          message: `${RELAY_VOLUME_REFERENCES_PENDING}: ${protection.reason}`,
         })
       }
-      const configured = (yield* this.#configuredUses()).filter(
-        (use) => use.volumeId === id
+      const configured = new Set(
+        (yield* this.#configuredUses()).flatMap((use) =>
+          use.volumeId === id ? [use.appId] : []
+        )
       )
-      if (configured.length > 0) {
+      if (configured.size > 0) {
         return yield* new RelayVolumeError({
           message:
-            configured.length === 1
+            configured.size === 1
               ? "An App's configuration mounts this volume; remove it there first"
-              : `${configured.length} Apps' configurations mount this volume; remove it there first`,
+              : `${configured.size} Apps' configurations mount this volume; remove it there first`,
         })
       }
       const containers = yield* this.#engine.listContainers({ all: true })
@@ -321,16 +322,59 @@ export class RelayVolumes {
   }
 
   /**
-   * Records the Kiln volumes an App's configuration mounts, in place of
-   * those it named before. A volume it didn't name before must exist, so a
-   * configuration can't take up one just deleted.
+   * Whether every Hearth that can configure Apps here has said which Kiln
+   * volumes its Apps' configurations name, so deletion knows what they use;
+   * if not, who it waits for. A Hearth newly paired owes them too, and
+   * deletion waits for it; one revoked no longer counts, nor do the
+   * references it sent.
    */
-  writeAppReferences(appId: string, volumeIds: ReadonlyArray<string>) {
+  protection() {
+    return Effect.all(
+      [this.#configuringClients(), this.#state.listVolumeReferenceImports()],
+      { concurrency: "unbounded" }
+    ).pipe(
+      Effect.map(([clients, imports]) => {
+        const imported = new Map(
+          imports.map((entry) => [entry.clientId, entry])
+        )
+        const reasons = clients.flatMap((client) => {
+          const entry = imported.get(client.id)
+          if (!entry) {
+            return [
+              `waiting for ${client.name} to send its Apps' configurations`,
+            ]
+          }
+          const unresolved = entry.unresolvedAppIds.length
+          return unresolved > 0
+            ? [
+                `${client.name} couldn't read ${unresolved === 1 ? "an App's configuration" : `${unresolved} Apps' configurations`}`,
+              ]
+            : []
+        })
+        return {
+          ready: reasons.length === 0,
+          reason: reasons.length > 0 ? reasons.join("; ") : null,
+        }
+      })
+    )
+  }
+
+  /**
+   * Records the Kiln volumes an App's configuration mounts, as the Hearth
+   * that keeps it says, in place of those it named before. A volume it
+   * didn't name before must exist, so a configuration can't take up one
+   * just deleted.
+   */
+  writeAppReferences(
+    clientId: string,
+    appId: string,
+    volumeIds: ReadonlyArray<string>
+  ) {
     return Effect.gen({ self: this }, function* () {
       yield* Effect.annotateCurrentSpan({ "relay.app_id": appId })
       const before = new Set(
         (yield* this.#state.listAppVolumeReferences()).flatMap((use) =>
-          use.appId === appId ? [use.volumeId] : []
+          use.clientId === clientId && use.appId === appId ? [use.volumeId] : []
         )
       )
       const added = volumeIds.filter((id) => !before.has(id))
@@ -344,29 +388,33 @@ export class RelayVolumes {
           })
         }
       }
-      yield* this.#state.replaceAppVolumeReferences(appId, volumeIds)
+      yield* this.#state.replaceAppVolumeReferences(clientId, appId, volumeIds)
     }).pipe(Effect.withSpan("RelayVolumes.writeAppReferences"))
   }
 
   /**
-   * Records every App's configured volumes from Hearth at once. Volumes
-   * that no longer exist are kept as named: they protect nothing, and the
-   * App's next deployment says they're gone.
+   * Records every App configuration's volumes one Hearth keeps, in place of
+   * all it sent before, and those it couldn't read, which keep deletion
+   * waiting until it reads them. Volumes that no longer exist are kept as
+   * named: they protect nothing, and the App's next deployment says
+   * they're gone.
    */
   importAppReferences(
+    clientId: string,
     apps: ReadonlyArray<{
       readonly appId: string
       readonly volumeIds: ReadonlyArray<string>
-    }>
+    }>,
+    unresolvedAppIds: ReadonlyArray<string>
   ) {
     return this.#state
-      .importAppVolumeReferences(apps)
+      .importAppVolumeReferences(clientId, apps, unresolvedAppIds)
       .pipe(Effect.withSpan("RelayVolumes.importAppReferences"))
   }
 
   /** Forgets what a deleted App's configuration named. */
   forgetApp(appId: string) {
-    return this.#state.replaceAppVolumeReferences(appId, [])
+    return this.#state.deleteAppVolumeReferences(appId)
   }
 
   /**
@@ -489,20 +537,38 @@ export class RelayVolumes {
     })
   }
 
-  // The Kiln volumes Apps' configurations name, of Apps still on the
-  // Relay: every App has its network from when it's made until it's
-  // deleted, so a deleted App's leftover record protects nothing.
+  // Paired Hearths that may configure Apps here; one that can't can neither
+  // save nor deploy a configuration on this Relay.
+  #configuringClients() {
+    return this.#state
+      .listClients()
+      .pipe(
+        Effect.map((clients) =>
+          clients.filter((client) =>
+            actionsForRole(client.role, client.actions).includes("app.manage")
+          )
+        )
+      )
+  }
+
+  // The Kiln volumes Apps' configurations name, as paired Hearths sent
+  // them, of Apps still on the Relay: every App has its network from when
+  // it's made until it's deleted, so a deleted App's leftover record
+  // protects nothing, nor does what a revoked Hearth sent.
   #configuredUses() {
     return Effect.all(
       [
         this.#state.listAppVolumeReferences(),
+        this.#state.listClients(),
         this.#engine.listNetworks({
           filters: { label: [`${KIND_LABEL}=app`] },
         }),
       ],
       { concurrency: "unbounded" }
     ).pipe(
-      Effect.map(([uses, networks]) => {
+      Effect.map(([allUses, clients, networks]) => {
+        const paired = new Set(clients.map((client) => client.id))
+        const uses = allUses.filter((use) => paired.has(use.clientId))
         const apps = new Set(
           networks.flatMap((network) =>
             relayOwnsLabels(this.#config, network.Labels) &&
@@ -514,12 +580,6 @@ export class RelayVolumes {
         return uses.filter((use) => apps.has(use.appId))
       })
     )
-  }
-
-  #referencesImported() {
-    return this.#state
-      .getMetadata(APP_VOLUME_REFERENCES_IMPORTED_KEY)
-      .pipe(Effect.map((value) => value !== null))
   }
 
   #required(id: string) {
