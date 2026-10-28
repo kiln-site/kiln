@@ -30,7 +30,11 @@ export function scheduleActionPermission(
 ): AccessPermission | null {
   if (action.type === "wait") return null
   if (action.type === "console_command") {
-    return target.kind === "instance" ? "instance.console.write" : null
+    if (target.kind === "instance") return "instance.console.write"
+    // A shell in a database's container reaches past what the database
+    // grants, so it takes a terminal on its Relay.
+    if (target.kind === "database") return "relay.terminal"
+    return null
   }
   if (action.type === "power") {
     if (target.kind === "instance") return `instance.power.${action.action}`

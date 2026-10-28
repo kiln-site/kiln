@@ -15,6 +15,7 @@ import {
   CirclePause,
   CirclePlay,
   CircleCheck,
+  CircleHelp,
   CircleX,
   Code2,
   Copy,
@@ -1027,7 +1028,7 @@ function latestRunResult(run: ScheduleRunWithRelay) {
   ]
   const passed = attempts.filter((attempt) => attempt.status === "succeeded")
   const failed = attempts.filter((attempt) =>
-    ["failed", "interrupted", "not_run", "skipped_missing"].includes(
+    ["failed", "interrupted", "not_run", "skipped_missing", "unknown"].includes(
       attempt.status
     )
   )
@@ -2184,6 +2185,9 @@ function ActionAttemptAudit({
                   {attempt.error}
                 </p>
               ) : null}
+              {attempt.result ? (
+                <CommandResult result={attempt.result} />
+              ) : null}
             </div>
           </li>
         )
@@ -2199,19 +2203,48 @@ function AttemptStatus({
 }) {
   const succeeded = status === "succeeded"
   const failed = status === "failed" || status === "interrupted"
+  // It may have run; nothing runs it again.
+  const unknown = status === "unknown"
   return (
     <span
-      className={`type-label inline-flex items-center gap-1 capitalize ${succeeded ? "text-emerald-400" : failed ? "text-destructive" : "text-muted-foreground"}`}
+      className={`type-label inline-flex items-center gap-1 capitalize ${succeeded ? "text-emerald-400" : failed ? "text-destructive" : unknown ? "text-amber-300" : "text-muted-foreground"}`}
     >
       {succeeded ? (
         <Check className="size-3" />
       ) : failed ? (
         <X className="size-3" />
+      ) : unknown ? (
+        <CircleHelp className="size-3" />
       ) : (
         <CirclePause className="size-3" />
       )}
       {status.replaceAll("_", " ")}
     </span>
+  )
+}
+
+// What a command run in a container printed, and how it exited.
+function CommandResult({
+  result,
+}: {
+  result: NonNullable<
+    ScheduleHistoryRun["targetRuns"][number]["attempts"][number]["result"]
+  >
+}) {
+  return (
+    <div className="mt-2 min-w-0">
+      <p className="type-meta text-muted-foreground">
+        {result.exitCode === null
+          ? "Exit code unknown"
+          : `Exit code ${result.exitCode}`}
+        {result.truncated ? " · showing the end of its output" : ""}
+      </p>
+      {result.output ? (
+        <pre className="type-meta mt-1 max-h-48 overflow-auto rounded-md border bg-muted/40 px-2.5 py-2 font-mono break-all whitespace-pre-wrap">
+          {result.output}
+        </pre>
+      ) : null}
+    </div>
   )
 }
 

@@ -31,9 +31,10 @@ it exclusive, which waits for every part.
 | `instance:<id>/lifecycle`                          | Exclusive to power actions, console input, crash recovery, the disk-quota stop, and container recreation for ports, routes, and database connections                                                                                             |
 | `instance:<id>/files`                              | Exclusive to Hearth file writes                                                                                                                                                                                                                  |
 | `instance:<id>/metadata`                           | Exclusive to renames                                                                                                                                                                                                                             |
-| `app:<id>`, `app:<id>/lifecycle`, `app:<id>/files` | The same shape for Apps; a deployment's build and connecting the App to a database hold the lifecycle lock                                                                                                                                       |
+| `app:<id>`, `app:<id>/lifecycle`, `app:<id>/files` | The same shape for Apps; a deployment's build, connecting the App to a database, and a scheduled command hold the lifecycle lock                                                                                                                  |
 | `app:<id>/volumes`                                 | Exclusive to recording which Kiln volumes an App's configuration mounts, apart from its lifecycle so saving a configuration never waits behind a deployment                                                                                      |
-| `database:<id>`                                    | Exclusive to database changes, connecting a member to it, and connecting it to another; shared by dumps, backups, and Hearth's handover of Apps' connections                                                                                     |
+| `database:<id>`                                    | Exclusive to database changes, connecting a member to it, and connecting it to another; shared by power, commands, dumps, backups, and Hearth's handover of Apps' connections                                                                    |
+| `database:<id>/lifecycle`                          | Exclusive to power actions and scheduled commands; shared by dumps and backups, so neither stops or runs in a database mid-dump                                                                                                                 |
 | `relay:routes`                                     | Shared by starts; exclusive to route, port, proxy, and networking writes                                                                                                                                                                         |
 | `relay:tailscale`                                  | Exclusive to the Relay's Tailscale settings; shared by stack changes                                                                                                                                                                             |
 | `relay:allocations`                                | Exclusive to anything that reserves the node's memory, CPU, or disk: limit changes, a deployment's container start, and a game server's check before it's created or replaced, whose reservation stands in for it until its new container exists |
@@ -185,16 +186,46 @@ server to stopped, it doesn't start it. The snapshot loop only notes recovery
 candidates; it never waits for a lane, so a power change that samples the
 server can't deadlock against recovery.
 
+### Power
+
+Game servers, Apps, and databases change power through one path
+(`apps/relay/src/resource-power.ts`). Each starts, stops, restarts, and
+kills its containers with the same Docker calls, and keeps what's its own
+around them: a game server's stop command and container recreation, a
+database's wait until its engine answers, and an App's every container (a
+kill reaches those still running). A power action takes the resource shared
+and its lifecycle exclusive, and a game server's start the routes shared too
+(`resourcePowerLocks`).
+
 ### Schedules
 
-A schedule's steps are ordinary operations. A schedule notes each game
-server's power intent when an occurrence begins: how many power changes
-someone else has asked for (a power action, or a stop typed into the
-console), and how many times the server has been replaced. A later power step
-runs only if neither has moved, checked at the moment the step's turn comes.
-So a person who stops a server during a schedule's Wait isn't overruled by
-the schedule's Start, and the step is recorded as not run. A schedule's own
-steps don't move the intent.
+A schedule's steps are ordinary operations. A schedule notes each target's
+power intent when an occurrence begins: how many power changes someone else
+has asked for (a power action, or a stop typed into a game server's
+console), and how many times the target has been replaced, which is every
+operation that took it whole and exclusively. A later power step runs only
+if neither has moved, checked at the moment the step's turn comes. So a
+person who stops a game server, App, or database during a schedule's Wait
+isn't overruled by the schedule's Start, and the step is recorded as not
+run. A schedule's own steps don't move the intent.
+
+A Command step sends a game server's command to its console. For a
+database, it runs `sh -c <command>` as a Docker exec in its container
+(`apps/relay/src/container-commands.ts`), in the database's lifecycle lane:
+
+- It has 10 minutes to exit. The step records its exit code and the last
+  4 KiB of what it printed, stdout and stderr together; a non-zero code
+  fails the step.
+- A container that's missing, stopped, replaced before Docker started the
+  command, or without `sh` fails the step, and the command didn't run.
+- Once Docker may have started it, a command Kiln loses track of is
+  recorded as unknown, never failed or retried: one that outlives its
+  timeout (Docker can't stop an exec, so it may still be running), one whose
+  stream breaks, and one whose exit Docker doesn't report. An unknown step
+  stops its target's later steps, as a failure does.
+- The step is written to the run as unknown before it's sent, so a Relay
+  restart mid-command leaves it unknown in the interrupted run, which is
+  never run again.
 
 ### Files over SFTP and uploads
 

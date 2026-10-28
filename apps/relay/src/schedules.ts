@@ -32,18 +32,29 @@ import {
   relayTimezone,
   type RelayScheduleState,
 } from "./effect/schedule-state.js"
+import type {
+  ContainerCommandResult,
+  ContainerCommandTarget,
+} from "./container-commands.js"
 import { ensuringPromise, promiseEffect } from "./effect/promise.js"
 import { LaneRejectedError } from "./operation-lanes.js"
+import type { PowerResourceKind } from "./operation-plans.js"
+import type { PowerAction } from "./resource-power.js"
 
 type TargetScheduleAction = Exclude<RelayScheduleAction, { type: "wait" }>
 
 interface TargetExecutionState {
   readonly activeKey: string | null
   readonly attempts: Array<ScheduleActionAttempt>
-  /** The game server's power intent when the occurrence began. */
+  /** The target's power intent when the occurrence began. */
   readonly powerIntent: string
   error: string | null
   failure: string | null
+  /**
+   * A command that may be running, recorded as unknown until it ends, so a
+   * restart that interrupts it reports it that way.
+   */
+  inFlight: ScheduleActionAttempt | null
   missing: boolean
   readonly startedAt: number
   readonly target: ScheduleTarget
@@ -77,25 +88,30 @@ export interface ScheduleManagerOptions {
   readonly platformTargetId: () => string
   readonly reportError?: (message: string, cause: unknown) => void
   readonly relayId: string
-  readonly runDatabasePower: (
-    databaseId: string,
-    action: "restart" | "start" | "stop"
-  ) => Promise<void>
   /**
-   * Runs a power step unless someone changed the server's power since
+   * Runs a command in a database's container. It rejects when the command
+   * didn't run, and otherwise answers with how it went, which may be unknown.
+   */
+  readonly runContainerCommand: (
+    target: ContainerCommandTarget,
+    command: string
+  ) => Promise<ContainerCommandResult>
+  /**
+   * Runs a power step unless someone changed the target's power since
    * `powerIntent` was read, in which case it rejects with a superseded
    * LaneRejectedError.
    */
-  readonly runInstancePower: (
-    instanceId: string,
-    action: "kill" | "restart" | "start" | "stop",
+  readonly runPower: (
+    kind: PowerResourceKind,
+    id: string,
+    action: PowerAction,
     powerIntent: string
   ) => Promise<void>
   /**
-   * A token that changes whenever someone changes a game server's power or
-   * replaces it, read when an occurrence begins.
+   * A token that changes whenever someone changes a game server's, App's,
+   * or database's power or replaces it, read when an occurrence begins.
    */
-  readonly instancePowerIntent: (instanceId: string) => string
+  readonly powerIntent: (kind: PowerResourceKind, id: string) => string
   /** A paused Relay runs no schedule actions; they're recorded as not run. */
   readonly isPaused: () => boolean
   readonly sendConsoleCommand: (
@@ -307,11 +323,12 @@ export class ScheduleManager {
           activeKey: overlapping ? null : activeKey,
           attempts: [],
           powerIntent:
-            target.kind === "instance"
-              ? this.#options.instancePowerIntent(target.id)
-              : "",
+            target.kind === "relay"
+              ? ""
+              : this.#options.powerIntent(target.kind, target.id),
           error: null,
           failure: null,
+          inFlight: null,
           missing: false,
           startedAt: Date.now(),
           target,
@@ -320,6 +337,45 @@ export class ScheduleManager {
     )
     const sequenceAttempts: Array<ScheduleActionAttempt> = []
     let sequenceFailure: string | null = null
+    const runId = scheduleStableId(
+      schedule.id,
+      scheduledAt,
+      this.#options.relayId
+    )
+    // Progress is written whole and in order, so the last write is the
+    // latest state of every target.
+    const progressPermit = Semaphore.makeUnsafe(1)
+    const recordProgress = () =>
+      Effect.runPromise(
+        progressPermit.withPermit(
+          Effect.suspend(() =>
+            this.#options.state.recordProgress(
+              scheduleRunSchema.parse({
+                finishedAt: Date.now(),
+                id: runId,
+                revision: schedule.revision,
+                scheduleId: schedule.id,
+                scheduledAt,
+                sequenceAttempts,
+                startedAt,
+                status: "running",
+                targetRuns: targetStates.map((state) =>
+                  targetRun(schedule.id, scheduledAt, state)
+                ),
+              })
+            )
+          )
+        ).pipe(
+          Effect.catch((cause) =>
+            Effect.sync(() =>
+              this.#options.reportError?.(
+                "Relay schedule progress write failed",
+                cause
+              )
+            )
+          )
+        )
+      )
     const targetRuns = await ensuringPromise(
       async () => {
         await Effect.runPromise(
@@ -420,6 +476,7 @@ export class ScheduleManager {
                     state,
                     scheduledAt,
                     sequenceFailure,
+                    recordProgress,
                     signal
                   )
                 ),
@@ -450,7 +507,7 @@ export class ScheduleManager {
     )
     const run = scheduleRunSchema.parse({
       finishedAt: Date.now(),
-      id: scheduleStableId(schedule.id, scheduledAt, this.#options.relayId),
+      id: runId,
       revision: schedule.revision,
       scheduleId: schedule.id,
       scheduledAt,
@@ -496,6 +553,7 @@ export class ScheduleManager {
     state: TargetExecutionState,
     scheduledAt: number,
     sequenceFailure: string | null,
+    recordProgress: () => Promise<void>,
     signal?: AbortSignal
   ) {
     if (state.activeKey === null) return
@@ -605,28 +663,54 @@ export class ScheduleManager {
       )
       return
     }
-    const executed = await Effect.runPromise(
-      Effect.result(
-        promiseEffect(() =>
-          this.#executeAction(
-            schedule,
-            action,
-            state.target,
-            scheduledAt,
-            state.powerIntent,
-            signal
+    // A command may run from the moment it's sent, so it's recorded as
+    // unknown first: a restart before it ends leaves it that way, and the
+    // interrupted occurrence never runs again.
+    const inContainer =
+      action.type === "console_command" && state.target.kind !== "instance"
+    if (inContainer) {
+      state.inFlight = attempt({
+        action,
+        error:
+          "The Relay stopped before this command finished, so it may have run",
+        scheduledAt,
+        scheduleId: schedule.id,
+        startedAt: actionStartedAt,
+        status: "unknown",
+        target: state.target,
+      })
+      await recordProgress()
+    }
+    const executed = await ensuringPromise(
+      () =>
+        Effect.runPromise(
+          Effect.result(
+            promiseEffect(() =>
+              this.#executeAction(
+                schedule,
+                action,
+                state.target,
+                scheduledAt,
+                state.powerIntent,
+                signal
+              )
+            )
           )
-        )
-      )
+        ),
+      () => {
+        state.inFlight = null
+      }
     )
-    // Someone changed the server's power while the schedule ran, so its
+    // Someone changed the target's power while the schedule ran, so its
     // later power steps give way rather than undo that. Or the Relay was
-    // paused while the step waited its turn.
+    // paused while the step waited its turn, or the target is being
+    // deleted, which refuses every change to it.
     if (
       Result.isFailure(executed) &&
       executed.failure instanceof LaneRejectedError &&
       (executed.failure.reason === "superseded" ||
-        executed.failure.reason === "paused")
+        executed.failure.reason === "paused" ||
+        executed.failure.reason === "refused")
     ) {
       state.attempts.push(
         attempt({
@@ -634,7 +718,9 @@ export class ScheduleManager {
           error:
             executed.failure.reason === "paused"
               ? "Not run: the Relay is paused"
-              : "Not run: the server's power was changed during the schedule",
+              : executed.failure.reason === "refused"
+                ? `Not run: ${executed.failure.message}`
+                : `Not run: ${powerOwner(state.target)} power was changed during the schedule`,
           scheduledAt,
           scheduleId: schedule.id,
           startedAt: actionStartedAt,
@@ -642,27 +728,42 @@ export class ScheduleManager {
           target: state.target,
         })
       )
+      if (inContainer) await recordProgress()
       return
     }
+    const result = Result.isSuccess(executed) ? executed.success : undefined
     const failure = Result.isFailure(executed)
       ? errorMessage(executed.failure)
-      : null
+      : result?.unknown
+        ? result.unknown
+        : result && result.exitCode !== 0
+          ? `The command exited with code ${result.exitCode}`
+          : null
     // The first failure stays the target's error when later actions continue.
     if (failure && !state.failure) {
       state.failure = failure
       state.error = failure
     }
-    state.attempts.push(
-      attempt({
+    state.attempts.push({
+      ...attempt({
         action,
         error: failure,
         scheduledAt,
         scheduleId: schedule.id,
         startedAt: actionStartedAt,
-        status: failure ? "failed" : "succeeded",
+        status: result?.unknown ? "unknown" : failure ? "failed" : "succeeded",
         target: state.target,
-      })
-    )
+      }),
+      ...(result && {
+        result: {
+          exitCode: result.exitCode,
+          output: result.output,
+          truncated: result.truncated,
+        },
+      }),
+    })
+    // A restart later in the occurrence keeps how the command went.
+    if (inContainer) await recordProgress()
   }
 
   async #targetExists(target: ScheduleTarget) {
@@ -680,27 +781,27 @@ export class ScheduleManager {
     scheduledAt: number,
     powerIntent: string,
     signal?: AbortSignal
-  ) {
-    if (action.type === "console_command" && target.kind === "instance") {
-      await this.#options.sendConsoleCommand(target.id, action.command)
-      return
-    }
-    if (action.type === "power") {
+  ): Promise<ContainerCommandResult | undefined> {
+    if (action.type === "console_command") {
       if (target.kind === "instance") {
-        await this.#options.runInstancePower(
-          target.id,
-          action.action,
-          powerIntent
-        )
+        await this.#options.sendConsoleCommand(target.id, action.command)
         return
       }
       if (target.kind === "database") {
-        if (action.action === "kill") {
-          throw new Error("Kill is not supported for databases")
-        }
-        await this.#options.runDatabasePower(target.id, action.action)
-        return
+        return this.#options.runContainerCommand(
+          { id: target.id, kind: "database" },
+          action.command
+        )
       }
+    }
+    if (action.type === "power" && target.kind !== "relay") {
+      await this.#options.runPower(
+        target.kind,
+        target.id,
+        action.action,
+        powerIntent
+      )
+      return
     }
     if (action.type === "backup") {
       const execution = backupExecution(action, target)
@@ -886,8 +987,9 @@ function attempt(input: {
     | "skipped_policy"
     | "skipped_unsupported"
     | "succeeded"
+    | "unknown"
   target: ScheduleTarget
-}) {
+}): ScheduleActionAttempt {
   return {
     actionId: input.action.id,
     actionType: input.action.type as ScheduleActionType,
@@ -942,7 +1044,9 @@ function targetRun(
 ): ScheduleRun["targetRuns"][number] {
   const succeeded = state.attempts.some((entry) => entry.status === "succeeded")
   return {
-    attempts: state.attempts,
+    attempts: state.inFlight
+      ? [...state.attempts, state.inFlight]
+      : state.attempts,
     error: state.error,
     finishedAt: Date.now(),
     id: scheduleStableId(
@@ -955,7 +1059,9 @@ function targetRun(
     status:
       state.activeKey === null
         ? "skipped_overlap"
-        : state.failure || state.missing
+        : state.inFlight
+          ? "interrupted"
+          : state.failure || state.missing
           ? "failed"
           : succeeded
             ? "succeeded"
@@ -1001,6 +1107,10 @@ function readScheduleState(path: string) {
 
 function hasErrorCode(cause: unknown, code: string) {
   return cause instanceof Error && "code" in cause && cause.code === code
+}
+
+function powerOwner(target: ScheduleTarget) {
+  return target.kind === "database" ? "the database's" : "the server's"
 }
 
 function errorMessage(cause: unknown) {

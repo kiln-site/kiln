@@ -65,6 +65,7 @@ import {
   relayOwnsLabels,
   relayResourceNames,
 } from "./relay-resources.js"
+import { containerPower } from "./resource-power.js"
 import {
   assertResourceLimitsFit,
   containerLimitSpec,
@@ -781,27 +782,25 @@ export class DatabaseDriver {
         [{ container }],
         { repairNames }
       )
-    if (input.action === "stop") {
+    // A restart is a stop and a start, with its names put right while it's
+    // down.
+    if (input.action !== "start") {
       await Effect.runPromise(
-        this.#engine.stopContainer(container, { seconds: 30, timeout: 45_000 })
+        containerPower(
+          this.#engine,
+          container,
+          input.action === "restart" ? "stop" : input.action
+        )
       )
-    } else if (input.action === "start") {
-      await connect(!database.observedState.match(/^(?:running|starting)$/u))
+    }
+    if (input.action === "start" || input.action === "restart") {
+      await connect(
+        input.action === "restart" ||
+          !database.observedState.match(/^(?:running|starting)$/u)
+      )
       await this.#takeTailscaleAddresses(database.id)
-      await Effect.runPromise(
-        this.#engine.startContainer(container, { timeout: 120_000 })
-      )
-      await waitUntilReady(this.#engine, container)
-    } else {
-      // As Docker restarts it, with its names put right while it's down.
-      await Effect.runPromise(
-        this.#engine.stopContainer(container, { seconds: 30, timeout: 45_000 })
-      )
-      await connect(true)
-      await this.#takeTailscaleAddresses(database.id)
-      await Effect.runPromise(
-        this.#engine.startContainer(container, { timeout: 120_000 })
-      )
+      await Effect.runPromise(containerPower(this.#engine, container, "start"))
+      // Started once its engine answers, not when Docker starts the process.
       await waitUntilReady(this.#engine, container)
     }
     return this.#required(input.databaseId)

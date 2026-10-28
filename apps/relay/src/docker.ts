@@ -87,6 +87,7 @@ import {
 } from "./console-parsing.js"
 import { procNetTcpHasListener } from "./docker-port-parsing.js"
 import { legacyDiskLimitAssignments } from "./resource-quotas.js"
+import { containerPower } from "./resource-power.js"
 import {
   containerResourceLimits,
   DISK_LIMIT_LABEL,
@@ -985,12 +986,6 @@ export class DockerDriver {
 
     await runEffect(
       promiseEffect(async () => {
-        const timeout =
-          action === "start"
-            ? 120_000
-            : action === "restart"
-              ? (INSTANCE_STOP_TIMEOUT_SECONDS + 60) * 1_000
-              : (INSTANCE_STOP_TIMEOUT_SECONDS + 15) * 1_000
         const engine = this.#engine
         const tailscaleAddresses = this.#runtimeRecovery.takeTailscaleAddresses(
           instance.id
@@ -1005,29 +1000,26 @@ export class DockerDriver {
             if (instance.managedByRelay) {
               yield* engine.setRestartPolicy(container, "no")
             }
-            const options = {
-              seconds: INSTANCE_STOP_TIMEOUT_SECONDS,
-              timeout,
-            }
+            const power = (step: InstancePowerAction) =>
+              containerPower(
+                engine,
+                container,
+                step,
+                INSTANCE_STOP_TIMEOUT_SECONDS
+              )
             if (action === "restart" && instance.managedByRelay) {
               // As Docker restarts it, with its database names put right
               // while it's down.
-              yield* engine.stopContainer(container, options)
+              yield* power("stop")
               yield* connectDatabases(true)
               yield* tailscaleAddresses
-              yield* engine.startContainer(container, { timeout })
+              yield* power("start")
               return
             }
             if (action === "start" || action === "restart") {
               yield* tailscaleAddresses
             }
-            yield* action === "start"
-              ? engine.startContainer(container, { timeout })
-              : action === "stop"
-                ? engine.stopContainer(container, options)
-                : action === "restart"
-                  ? engine.restartContainer(container, options)
-                  : engine.killContainer(container, { timeout })
+            yield* power(action)
           })
         )
       }).pipe(

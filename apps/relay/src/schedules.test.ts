@@ -77,9 +77,11 @@ async function manager(
     getBackup: (taskId: string) => Promise<RelayBackupTask | null>
     reportError: (message: string, cause: unknown) => void
     sendConsoleCommand: (instanceId: string, command: string) => Promise<void>
-    instancePowerIntent: (instanceId: string) => string
+    powerIntent: ScheduleManagerOptions["powerIntent"]
     isPaused: () => boolean
-    runInstancePower: ScheduleManagerOptions["runInstancePower"]
+    listDatabaseIds: ScheduleManagerOptions["listDatabaseIds"]
+    runContainerCommand: ScheduleManagerOptions["runContainerCommand"]
+    runPower: ScheduleManagerOptions["runPower"]
   }> = {}
 ) {
   const directory =
@@ -93,14 +95,18 @@ async function manager(
       }),
     findInstance: overrides.findInstance ?? (async () => null),
     getBackup: overrides.getBackup ?? (async () => null),
-    listDatabaseIds: async () => new Set(),
+    listDatabaseIds: overrides.listDatabaseIds ?? (async () => new Set()),
     platformTargetId: () => "platform",
     relayId: "relay-a",
     reportError: overrides.reportError,
-    instancePowerIntent: overrides.instancePowerIntent ?? (() => "0"),
+    powerIntent: overrides.powerIntent ?? (() => "0"),
     isPaused: overrides.isPaused ?? (() => false),
-    runDatabasePower: async () => undefined,
-    runInstancePower: overrides.runInstancePower ?? (async () => undefined),
+    runContainerCommand:
+      overrides.runContainerCommand ??
+      (async () => {
+        throw new Error("not used")
+      }),
+    runPower: overrides.runPower ?? (async () => undefined),
     sendConsoleCommand: overrides.sendConsoleCommand ?? (async () => undefined),
     stateDirectory: directory,
   }
@@ -1145,7 +1151,7 @@ describe("Relay schedule persistence", () => {
     const { schedules } = await manager({
       findInstance: async () => ({}),
       // Paused after the step checked, while it waited for its lane.
-      runInstancePower: async () => {
+      runPower: async () => {
         throw new LaneRejectedError({
           message: "paused",
           reason: "paused",
@@ -1180,10 +1186,10 @@ describe("Relay schedule persistence", () => {
     const ran: Array<string> = []
     const { schedules } = await manager({
       findInstance: async () => ({}),
-      instancePowerIntent: () => intent,
+      powerIntent: () => intent,
       // As the Relay does: a step runs only while the intent it was given
       // is still current.
-      runInstancePower: async (_instanceId, action, powerIntent) => {
+      runPower: async (_kind, _id, action, powerIntent) => {
         if (powerIntent !== intent) {
           throw new LaneRejectedError({
             message: "superseded",
@@ -1739,5 +1745,129 @@ describe("Relay schedule persistence", () => {
     expect(
       (await latestRun(schedules))?.targetRuns[0]?.attempts[0]?.status
     ).toBe("failed")
+  })
+})
+
+describe("Relay schedule commands in containers", () => {
+  const databaseId = "d".repeat(40)
+  const databaseCommands: RelayScheduleProjection = {
+    ...projection,
+    actions: [
+      {
+        command: "./migrate",
+        id: "5d8f43a2-6a0e-4d36-9c11-3b1f4f5e2a10",
+        type: "console_command",
+      },
+      {
+        command: "./vacuum",
+        id: "a4c1e6b9-2f7d-4c0a-8e35-7b9d2c6f1e44",
+        type: "console_command",
+      },
+      {
+        command: "./report",
+        id: "e2b7d9c4-1a3f-4e8b-9c62-5d0f7a8b3c19",
+        type: "console_command",
+      },
+    ],
+    targets: [
+      {
+        id: databaseId,
+        kind: "database",
+        name: "Main database",
+        relayId: "relay-a",
+      },
+    ],
+  }
+
+  it("records each command's exit code and output, and stops at one whose outcome is unknown", async () => {
+    const commands: Array<string> = []
+    const { schedules } = await manager({
+      listDatabaseIds: async () => new Set([databaseId]),
+      runContainerCommand: async (target, command) => {
+        expect(target).toEqual({ id: databaseId, kind: "database" })
+        commands.push(command)
+        return command === "./migrate"
+          ? { exitCode: 0, output: "migrated\n", truncated: false, unknown: null }
+          : {
+              exitCode: null,
+              output: "vacuuming",
+              truncated: false,
+              unknown: "The command didn't finish within 10 minutes",
+            }
+      },
+    })
+    await schedules.apply(databaseCommands)
+
+    await runNow(schedules)
+
+    await advanceUntil(async () =>
+      expect((await latestRun(schedules))?.status).toBe("failed")
+    )
+    expect(commands).toEqual(["./migrate", "./vacuum"])
+    expect((await latestRun(schedules))?.targetRuns[0]).toMatchObject({
+      attempts: [
+        {
+          result: { exitCode: 0, output: "migrated\n", truncated: false },
+          status: "succeeded",
+        },
+        {
+          error: "The command didn't finish within 10 minutes",
+          result: { exitCode: null, output: "vacuuming" },
+          status: "unknown",
+        },
+        { error: "A previous action failed", status: "not_run" },
+      ],
+      status: "failed",
+    })
+  })
+
+  it("reports a command the Relay stopped during as unknown and never runs it again", async () => {
+    const commands: Array<string> = []
+    const { restart, schedules } = await manager({
+      listDatabaseIds: async () => new Set([databaseId]),
+      // The Relay stops while the second command runs, so it never answers.
+      runContainerCommand: async (_target, command) => {
+        commands.push(command)
+        if (command === "./migrate") {
+          return { exitCode: 0, output: "", truncated: false, unknown: null }
+        }
+        return new Promise(() => undefined)
+      },
+    })
+    await schedules.apply({ ...databaseCommands, cron: "hourly" })
+    await runNow(schedules)
+    await advanceUntil(() =>
+      expect(commands).toEqual(["./migrate", "./vacuum"])
+    )
+    schedules.close()
+
+    const recovered = await restart()
+    const run = await latestRun(recovered)
+    expect(run).toMatchObject({
+      status: "interrupted",
+      targetRuns: [
+        {
+          attempts: [
+            { result: { exitCode: 0 }, status: "succeeded" },
+            {
+              error:
+                "The Relay stopped before this command finished, so it may have run",
+              status: "unknown",
+            },
+          ],
+          status: "interrupted",
+        },
+      ],
+    })
+    // The worker carries on with later occurrences, never this one again.
+    const worker = Effect.runFork(recovered.run())
+    try {
+      await vi.advanceTimersByTimeAsync(30 * minuteMs)
+      await yieldToEventLoop()
+      expect(commands).toEqual(["./migrate", "./vacuum"])
+      expect((await recovered.overview([projection.id])).runs).toHaveLength(1)
+    } finally {
+      await Effect.runPromise(Fiber.interrupt(worker))
+    }
   })
 })

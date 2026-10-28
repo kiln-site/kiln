@@ -846,17 +846,36 @@ export class DockerEngine {
         Tty: false,
         ...(options.user && { User: options.user }),
       })
-      const socket = yield* this.hijack(`/exec/${segment(created.Id)}/start`, {
-        Detach: false,
-        Tty: false,
+      return yield* this.startExecProcess(created.Id, {
+        program: command[0] ?? "exec",
+        stdin: options.stdin ?? false,
       })
-      return new DockerExecProcess(
-        socket,
-        options.stdin ?? false,
-        this.#execExitCode(created.Id),
-        command[0] ?? "exec"
-      )
     })
+  }
+
+  /**
+   * Starts a process `createExec` made without a TTY and streams its stdio,
+   * as `execProcess` does. A failure carrying the daemon's `status` means
+   * Docker refused to start it; one without may have started it.
+   */
+  startExecProcess(
+    id: string,
+    options: { readonly program: string; readonly stdin: boolean }
+  ): Effect.Effect<DockerExecProcess, DockerEngineError> {
+    return this.hijack(`/exec/${segment(id)}/start`, {
+      Detach: false,
+      Tty: false,
+    }).pipe(
+      Effect.map(
+        (socket) =>
+          new DockerExecProcess(
+            socket,
+            options.stdin,
+            this.#execExitCode(id),
+            options.program
+          )
+      )
+    )
   }
 
   /**

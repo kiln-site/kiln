@@ -255,7 +255,7 @@ export const relayProvisionDatabaseSchema = z
 
 export const relayDatabaseActionSchema = z
   .object({
-    action: z.enum(["start", "stop", "restart"]),
+    action: z.enum(["start", "stop", "restart", "kill"]),
     databaseId: databaseIdSchema,
   })
   .strict()
@@ -1094,7 +1094,7 @@ export const relayAppLimitsSchema = z
 
 export const relayAppActionSchema = z
   .object({
-    action: z.enum(["start", "stop", "restart"]),
+    action: z.enum(["start", "stop", "restart", "kill"]),
     appId: appIdSchema,
   })
   .strict()

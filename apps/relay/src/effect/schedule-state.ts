@@ -408,6 +408,18 @@ export function makeRelayScheduleState(sql: SqlClient) {
           Effect.asVoid
         )
       ),
+    /**
+     * Records how far a running occurrence has got, so a restart that
+     * interrupts it keeps what it had done and what may have run.
+     */
+    recordProgress: (record: ScheduleRun) =>
+      run(
+        "record_progress",
+        sql`UPDATE relay_schedule_runs
+      SET sequence_attempts_json = ${JSON.stringify(record.sequenceAttempts)},
+        target_runs_json = ${JSON.stringify(record.targetRuns)}
+      WHERE run_id = ${record.id} AND status = 'running'`.pipe(Effect.asVoid)
+      ),
     completeRun: (record: ScheduleRun) =>
       run(
         "complete_run",

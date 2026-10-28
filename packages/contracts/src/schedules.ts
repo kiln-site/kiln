@@ -316,7 +316,24 @@ export const scheduleAttemptStatusSchema = z.enum([
   "skipped_policy",
   "interrupted",
   "not_run",
+  // A command Kiln lost track of after it may have started. It is never run
+  // again on its own.
+  "unknown",
 ])
+
+/**
+ * How a command run in a container went: its exit code, null when Kiln lost
+ * track of it, and the end of what it printed.
+ */
+export const scheduleCommandResultSchema = z
+  .object({
+    exitCode: z.number().int().nullable(),
+    output: z.string().max(4_096),
+    truncated: z.boolean(),
+  })
+  .strict()
+
+export type ScheduleCommandResult = z.infer<typeof scheduleCommandResultSchema>
 
 export const scheduleTargetRunStatusSchema = z.enum([
   "succeeded",
@@ -343,6 +360,8 @@ export const scheduleActionAttemptSchema = z
     error: z.string().max(2_000).nullable(),
     finishedAt: z.number().int().nonnegative(),
     id: z.string().min(1).max(128),
+    // Commands run in an App's or database's container.
+    result: scheduleCommandResultSchema.optional(),
     startedAt: z.number().int().nonnegative(),
     status: scheduleAttemptStatusSchema,
   })
@@ -460,13 +479,10 @@ export function scheduleActionSupportsTarget(
   target: Pick<ScheduleTarget, "kind">
 ): boolean {
   if (action.type === "wait") return true
-  if (action.type === "console_command") return target.kind === "instance"
-  if (action.type === "power") {
-    return (
-      target.kind !== "relay" &&
-      !(target.kind === "database" && action.action === "kill")
-    )
-  }
+  // A game server's goes to its console; a database's runs in its
+  // container's shell.
+  if (action.type === "console_command") return target.kind !== "relay"
+  if (action.type === "power") return target.kind !== "relay"
   if (action.mode === "incremental") return target.kind === "instance"
   return true
 }

@@ -36,6 +36,8 @@ export const laneKeys = {
   /** The Kiln volumes an App's configuration mounts, as Hearth last sent. */
   appVolumes: (id: string) => `app:${id}/volumes`,
   database: (id: string) => `database:${id}`,
+  /** Power and commands: anything that changes the running process. */
+  databaseLifecycle: (id: string) => `database:${id}/lifecycle`,
   /** The Relay host's own files, under the host file root. */
   hostFiles: "relay:host-files",
   instance: (id: string) => `instance:${id}`,

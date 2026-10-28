@@ -20,7 +20,9 @@ import {
   instanceTailscaleMemberId,
   relayCreateInstanceSchema,
   type BrickRecipe,
+  type RelayApp,
   type RelayInstance,
+  type RelayManagedDatabase,
   type ResourceLimitsInput,
 } from "@workspace/contracts"
 import { Effect, Fiber, ManagedRuntime } from "effect"
@@ -32,10 +34,12 @@ import { RelayVolumes } from "../volumes.js"
 import { AppDriver } from "../apps.js"
 import { BrickCatalog } from "../bricks.js"
 import { loadConfig, type RelayConfig } from "../config.js"
+import { ContainerCommands } from "../container-commands.js"
 import { DatabaseConnections } from "../database-connections.js"
 import { databaseProvisioning } from "../database-provisioning.js"
 import { DatabaseDriver } from "../databases.js"
 import { DockerDriver } from "../docker.js"
+import { DockerEngine } from "../docker-engine.js"
 import { makeRelayStateLayer, RelayStateStore } from "../effect/state.js"
 import { LifecycleDriver } from "../lifecycle.js"
 import { OperationLanes } from "../operation-lanes.js"
@@ -45,6 +49,7 @@ import {
   ProvisioningManager,
 } from "../provisioning.js"
 import { appRouteOwner, relayResourceNames } from "../relay-resources.js"
+import { ResourcePower } from "../resource-power.js"
 import { RuntimeRecoveryManager } from "../runtime-recovery.js"
 import { serverProvisioning } from "../server-provisioning.js"
 import { type ContainerSeed, type FakeContainer, fakeDocker } from "./docker.js"
@@ -54,12 +59,18 @@ export const TEST_NAMESPACE = "kiln-test"
 export interface RelayDrivers {
   readonly apps: AppDriver
   readonly bricks: BrickCatalog
+  readonly commands: ContainerCommands
   readonly databaseConnections: DatabaseConnections
   readonly databases: DatabaseDriver
   readonly docker: DockerDriver
   readonly freezes: ResourceFreezes
   readonly lanes: OperationLanes
   readonly lifecycle: LifecycleDriver
+  readonly power: ResourcePower<{
+    app: RelayApp
+    database: RelayManagedDatabase
+    instance: RelayInstance
+  }>
   readonly runtimeRecovery: RuntimeRecoveryManager
 }
 
@@ -192,12 +203,42 @@ export async function relayHarness(
     return {
       apps,
       bricks,
+      commands: new ContainerCommands({
+        apps,
+        databases,
+        engine: new DockerEngine(config.dockerSocket),
+        lanes,
+      }),
       databaseConnections,
       databases,
       docker,
       freezes,
       lanes,
       lifecycle,
+      power: new ResourcePower({
+        adapters: {
+          app: (appId, action) => apps.action({ action, appId }),
+          database: (databaseId, action) =>
+            databases.action({ action, databaseId }),
+          instance: async (instanceId, action) => {
+            const instance = await docker.findInstance(instanceId)
+            if (!instance) throw new Error("Instance not found")
+            const [routes, pendingPrimaryPort] = await Effect.runPromise(
+              Effect.all([
+                state.listInstanceRoutes(instanceId),
+                state.getPendingPrimaryPort(instanceId),
+              ])
+            )
+            return lifecycle.runInstanceAction(
+              instance,
+              action,
+              routes,
+              pendingPrimaryPort
+            )
+          },
+        },
+        lanes,
+      }),
       runtimeRecovery,
     }
   }

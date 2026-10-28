@@ -151,6 +151,14 @@ export interface FakeExec {
   pid: number
 }
 
+/** What `sh -c <script>` does in any container, by script. */
+export interface FakeShellScript {
+  readonly exitCode?: number
+  readonly output?: string
+  /** Keeps running until `exitExec` ends it or its container stops. */
+  readonly hang?: boolean
+}
+
 export interface FakeNetwork {
   readonly id: string
   readonly name: string
@@ -254,6 +262,8 @@ export class FakeDocker {
    * can't start an interactive exec of one.
    */
   readonly missingPrograms = new Set<string>()
+  /** Scripts a non-interactive `sh -c` runs; others succeed silently. */
+  readonly shellScripts = new Map<string, FakeShellScript>()
   /**
    * Programs whose exec stream Docker breaks with an error frame (as it does
    * for an error it hits after answering) instead of their output; for a
@@ -369,6 +379,7 @@ export class FakeDocker {
     this.execs.clear()
     this.execGreeting = ""
     this.missingPrograms.clear()
+    this.shellScripts.clear()
     this.networks.clear()
     this.volumes.clear()
     this.images.clear()
@@ -2071,6 +2082,9 @@ export class FakeDocker {
     ) {
       const target = this.#requiredContainer(parameters[0] ?? "")
       await this.#checkpoint("exec", target.name)
+      if (!this.containers.has(target.id)) {
+        throw new DockerFailure(`No such container: ${parameters[0]}`, 404)
+      }
       if (!target.state.running) {
         throw new DockerFailure(`Container ${target.id} is not running`, 409)
       }
@@ -2671,12 +2685,51 @@ export class FakeDocker {
     socket: Duplex,
     head: Buffer
   ) {
+    const upgraded =
+      "HTTP/1.1 101 UPGRADED\r\nContent-Type: application/vnd.docker.multiplexed-stream\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n"
+    const program = exec.cmd[0] ?? ""
+    if (this.missingPrograms.has(program)) {
+      // Docker never starts it, and says so in the stream it upgraded.
+      exec.exitCode = 127
+      socket.end(
+        Buffer.concat([
+          Buffer.from(upgraded),
+          frame(
+            1,
+            Buffer.from(
+              `OCI runtime exec failed: exec failed: unable to start container process: exec: "${program}": executable file not found in $PATH\r\n`
+            )
+          ),
+        ])
+      )
+      return
+    }
     exec.running = true
     exec.pid = this.#nextPid++
     this.#execSockets.set(exec.id, socket)
-    socket.write(
-      "HTTP/1.1 101 UPGRADED\r\nContent-Type: application/vnd.docker.multiplexed-stream\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n"
-    )
+    socket.write(upgraded)
+    const script =
+      program === "sh" && exec.cmd[1] === "-c"
+        ? this.shellScripts.get(exec.cmd[2] ?? "")
+        : undefined
+    if (script) {
+      this.containers.get(exec.containerId)?.processes.push({
+        argv: exec.cmd,
+        env: exec.env,
+        ...(exec.user ? { user: exec.user } : {}),
+      })
+      socket.on("close", () => {
+        exec.running = false
+        this.#execSockets.delete(exec.id)
+      })
+      socket.on("error", () => undefined)
+      if (script.hang) return
+      exec.exitCode = script.exitCode ?? 0
+      exec.running = false
+      if (script.output) socket.write(frame(1, Buffer.from(script.output)))
+      socket.end()
+      return
+    }
     let bodyLeft = Number(request.headers["content-length"] ?? 0)
     const input: Array<Buffer> = []
     let finished = false
@@ -2762,11 +2815,12 @@ export class FakeDocker {
     }
   }
 
-  /** Ends a running exec the way its process exiting would. */
-  exitExec(execId: string) {
+  /** Ends a running exec the way its process exiting with `exitCode` would. */
+  exitExec(execId: string, exitCode: number | null = null) {
     const exec = this.execs.get(execId)
     if (!exec) throw new Error(`No such exec ${execId}`)
     exec.running = false
+    exec.exitCode ??= exitCode
     this.#execSockets.get(execId)?.end()
   }
 

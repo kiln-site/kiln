@@ -80,6 +80,7 @@ import {
 } from "./operation-lanes.js"
 import { appLifecycleLocks } from "./operation-plans.js"
 import { provisioningStatus } from "./provisioning.js"
+import { containerPower } from "./resource-power.js"
 import {
   checkOutRepository,
   checkoutDirectory,
@@ -610,16 +611,11 @@ export class AppDriver {
     const engine = this.#engine
     await docker(
       Effect.forEach(
-        containers,
-        ({ id }) =>
-          input.action === "stop"
-            ? engine.stopContainer(id, { seconds: 30, timeout: 90_000 })
-            : input.action === "start"
-              ? engine.startContainer(id, { timeout: 120_000 })
-              : engine.restartContainer(id, {
-                  seconds: 30,
-                  timeout: 150_000,
-                }),
+        // Docker refuses to kill a stopped container; it's already down.
+        input.action === "kill"
+          ? containers.filter((container) => container.running)
+          : containers,
+        ({ id }) => containerPower(engine, id, input.action),
         { concurrency: "unbounded", discard: true }
       )
     )

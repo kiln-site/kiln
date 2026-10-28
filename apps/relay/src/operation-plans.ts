@@ -90,13 +90,64 @@ export function appStartLocks(
   return [...appLifecycleLocks(appId), ...volumeReferenceLocks(volumeIds)]
 }
 
+/** Changing a database itself: its settings, data, or container. */
 export function databaseLocks(databaseId: string): Array<LaneLock> {
   return [exclusive(laneKeys.database(databaseId))]
 }
 
-/** Reading a database whole, as a dump or backup does. */
+/** Changing a database's running process: power and commands. */
+export function databaseLifecycleLocks(databaseId: string): Array<LaneLock> {
+  return [
+    shared(laneKeys.database(databaseId)),
+    exclusive(laneKeys.databaseLifecycle(databaseId)),
+  ]
+}
+
+/**
+ * Reading a database whole, as a dump or backup does. Its engine must keep
+ * running, so power changes and commands wait for it.
+ */
 export function databaseReadLocks(databaseId: string): Array<LaneLock> {
-  return [shared(laneKeys.database(databaseId))]
+  return [
+    shared(laneKeys.database(databaseId)),
+    shared(laneKeys.databaseLifecycle(databaseId)),
+  ]
+}
+
+/** The kinds of resource whose power the Relay changes. */
+export type PowerResourceKind = "app" | "database" | "instance"
+
+/**
+ * A power action on any kind: the resource shared and its lifecycle
+ * exclusive, and the routes too when a game server starts.
+ */
+export function resourcePowerLocks(
+  kind: PowerResourceKind,
+  id: string,
+  action: string
+): Array<LaneLock> {
+  if (kind === "instance") return instancePowerLocks(id, action)
+  if (kind === "app") return appLifecycleLocks(id)
+  return databaseLifecycleLocks(id)
+}
+
+/**
+ * A one-off command in an App's service or a database's container. It
+ * changes the running process as console input does, so it waits for power
+ * changes and deployments and they wait for it.
+ */
+export function containerCommandLocks(
+  kind: "app" | "database",
+  id: string
+): Array<LaneLock> {
+  return kind === "app" ? appLifecycleLocks(id) : databaseLifecycleLocks(id)
+}
+
+/** The lane key a resource is replaced under, for its power intent. */
+export function resourceLaneKey(kind: PowerResourceKind, id: string): string {
+  if (kind === "instance") return laneKeys.instance(id)
+  if (kind === "app") return laneKeys.app(id)
+  return laneKeys.database(id)
 }
 
 /** Writes under a file root, which is a game server, an App, or the host. */
@@ -588,9 +639,12 @@ export function controlRequestLocks(
         ...databaseLocks(id),
         exclusive(laneKeys.allocations),
       ])
+    case "database.action":
+      return database((id) =>
+        resourcePowerLocks("database", id, stringField(payload, "action") ?? "")
+      )
     case "database.wipe":
     case "database.delete":
-    case "database.action":
     case "database.credentials.rotate":
     case "database.dump.import":
     case "database.data.write":
@@ -656,7 +710,8 @@ export function controlRequestLocks(
     case "app.limits.write":
     case "app.deploy":
       return app(appLifecycleLocks)
-    // Starting it reads what it mounts (see appStartLocks).
+    // Starting it reads what it mounts (see appStartLocks), as scheduled
+    // App power does.
     case "app.action":
       return appWithVolumes(appLifecycleLocks)
     case "app.network.routes.write":
@@ -685,7 +740,7 @@ export function controlRequestLocks(
       ])
     case "instance.action": {
       const action = stringField(payload, "action") ?? ""
-      return instance((id) => instancePowerLocks(id, action))
+      return instance((id) => resourcePowerLocks("instance", id, action))
     }
     case "instance.console.write":
     case "instance.console.complete":
