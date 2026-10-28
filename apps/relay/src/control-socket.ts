@@ -821,9 +821,15 @@ function authenticateSocket(
           }
           const issuerInternal =
             request.operation === "browser.authorization.revise"
+          const memberActions = memberActionsForRequest(request)
           if (
             !issuerInternal &&
-            (!action || !isActionAllowed(actions, action))
+            (!action ||
+              !isActionAllowed(actions, action) ||
+              memberActions === null ||
+              !memberActions.every((member) =>
+                isActionAllowed(actions, member)
+              ))
           ) {
             yield* Effect.sync(() => {
               sendError(
@@ -1544,6 +1550,39 @@ function appFileAction(operation: RelayControlOperation): RelayAction {
       return "app.files.read"
     default:
       return "app.files.write"
+  }
+}
+
+/**
+ * What a request needs besides its action, of the other resource it
+ * changes: a database connection changes its member as well as the
+ * database. Null refuses a request that doesn't say what it changes.
+ */
+function memberActionsForRequest(
+  request: RelayControlRequest
+): ReadonlyArray<RelayAction> | null {
+  switch (request.operation) {
+    case "database.network.write": {
+      const member =
+        request.payload && typeof request.payload === "object"
+          ? (request.payload as Record<string, unknown>).member
+          : undefined
+      switch (objectString(member, "kind")) {
+        case "instance":
+          return ["instance.network.write"]
+        case "app":
+          return ["app.manage"]
+        case "database":
+          return ["database.network.write"]
+        default:
+          return null
+      }
+    }
+    // It connects Apps.
+    case "database.network.import":
+      return ["app.manage"]
+    default:
+      return []
   }
 }
 

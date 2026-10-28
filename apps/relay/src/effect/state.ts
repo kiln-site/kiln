@@ -456,7 +456,10 @@ export class RelayStateStore extends Context.Service<
     readonly recoverDatabaseConnections: (
       connections: ReadonlyArray<RelayStoredDatabaseConnection>
     ) => Effect.Effect<void, RelayStateError>
-    /** Adds the connections not saved yet, keeping those that are. */
+    /**
+     * Adds the connections not saved yet, keeping those that are, and none
+     * someone has connected or disconnected (`setDatabaseConnection`) since.
+     */
     readonly importDatabaseConnections: (
       connections: ReadonlyArray<RelayStoredDatabaseConnection>
     ) => Effect.Effect<number, RelayStateError>
@@ -1390,9 +1393,20 @@ const migrations = SqliteMigrator.fromRecord({
     `
   }),
   // Connections name their member by kind: game servers, whose connections
-  // these all were, Apps, and databases.
+  // these all were, Apps, and databases. Choices remember every pair someone
+  // connected or disconnected, so a handover of Apps' old connections from
+  // a Hearth never overrules one.
   "28_database_connection_members": Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient
+    yield* sql`
+      CREATE TABLE IF NOT EXISTS relay_database_connection_choices (
+        member_kind TEXT NOT NULL
+          CHECK (member_kind IN ('instance', 'app', 'database')),
+        member_id TEXT NOT NULL,
+        database_id TEXT NOT NULL,
+        PRIMARY KEY (member_kind, member_id, database_id)
+      ) STRICT
+    `
     const columns = yield* sql<{
       name: string
     }>`PRAGMA table_info(relay_database_connections)`
@@ -2068,24 +2082,37 @@ const makeRelayStateStore = Effect.gen(function* () {
     setDatabaseConnection: (connection, connected) =>
       run(
         "set_database_connection",
-        connected
-          ? sql`
-              INSERT INTO relay_database_connections (
-                member_kind, member_id, database_id, relay_id
+        sql.withTransaction(
+          Effect.gen(function* () {
+            yield* connected
+              ? sql`
+                  INSERT INTO relay_database_connections (
+                    member_kind, member_id, database_id, relay_id
+                  ) VALUES (
+                    ${connection.memberKind}, ${connection.memberId},
+                    ${connection.databaseId}, ${connection.relayId}
+                  )
+                  ON CONFLICT (member_kind, member_id, database_id)
+                  DO UPDATE SET relay_id = excluded.relay_id
+                `
+              : sql`
+                  DELETE FROM relay_database_connections
+                  WHERE member_kind = ${connection.memberKind}
+                    AND member_id = ${connection.memberId}
+                    AND database_id = ${connection.databaseId}
+                    AND relay_id = ${connection.relayId}
+                `
+            yield* sql`
+              INSERT INTO relay_database_connection_choices (
+                member_kind, member_id, database_id
               ) VALUES (
                 ${connection.memberKind}, ${connection.memberId},
-                ${connection.databaseId}, ${connection.relayId}
+                ${connection.databaseId}
               )
-              ON CONFLICT (member_kind, member_id, database_id)
-              DO UPDATE SET relay_id = excluded.relay_id
-            `.pipe(Effect.asVoid)
-          : sql`
-              DELETE FROM relay_database_connections
-              WHERE member_kind = ${connection.memberKind}
-                AND member_id = ${connection.memberId}
-                AND database_id = ${connection.databaseId}
-                AND relay_id = ${connection.relayId}
-            `.pipe(Effect.asVoid)
+              ON CONFLICT DO NOTHING
+            `
+          })
+        )
       ),
     recoverDatabaseConnections: (connections) =>
       run(
@@ -2122,12 +2149,18 @@ const makeRelayStateStore = Effect.gen(function* () {
           Effect.gen(function* () {
             let imported = 0
             for (const connection of connections) {
+              // A pair someone chose since stays as they left it.
               const rows = yield* sql<{ memberId: string }>`
                 INSERT INTO relay_database_connections (
                   member_kind, member_id, database_id, relay_id
-                ) VALUES (
-                  ${connection.memberKind}, ${connection.memberId},
-                  ${connection.databaseId}, ${connection.relayId}
+                )
+                SELECT ${connection.memberKind}, ${connection.memberId},
+                       ${connection.databaseId}, ${connection.relayId}
+                WHERE NOT EXISTS (
+                  SELECT 1 FROM relay_database_connection_choices
+                  WHERE member_kind = ${connection.memberKind}
+                    AND member_id = ${connection.memberId}
+                    AND database_id = ${connection.databaseId}
                 )
                 ON CONFLICT (member_kind, member_id, database_id) DO NOTHING
                 RETURNING member_id AS memberId
@@ -2141,19 +2174,37 @@ const makeRelayStateStore = Effect.gen(function* () {
     deleteMemberDatabaseConnections: (member) =>
       run(
         "delete_member_database_connections",
-        sql`
-          DELETE FROM relay_database_connections
-          WHERE member_kind = ${member.kind} AND member_id = ${member.id}
-        `.pipe(Effect.asVoid)
+        sql.withTransaction(
+          Effect.gen(function* () {
+            for (const table of [
+              "relay_database_connections",
+              "relay_database_connection_choices",
+            ]) {
+              yield* sql`
+                DELETE FROM ${sql(table)}
+                WHERE member_kind = ${member.kind} AND member_id = ${member.id}
+              `
+            }
+          })
+        )
       ),
     deleteDatabaseConnections: (relayId, databaseId) =>
       run(
         "delete_database_connections",
-        sql`
-          DELETE FROM relay_database_connections
-          WHERE (relay_id = ${relayId} AND database_id = ${databaseId})
-             OR (member_kind = 'database' AND member_id = ${databaseId})
-        `.pipe(Effect.asVoid)
+        sql.withTransaction(
+          Effect.gen(function* () {
+            yield* sql`
+              DELETE FROM relay_database_connections
+              WHERE (relay_id = ${relayId} AND database_id = ${databaseId})
+                 OR (member_kind = 'database' AND member_id = ${databaseId})
+            `
+            yield* sql`
+              DELETE FROM relay_database_connection_choices
+              WHERE database_id = ${databaseId}
+                 OR (member_kind = 'database' AND member_id = ${databaseId})
+            `
+          })
+        )
       ),
     startOperation: (input) =>
       run(

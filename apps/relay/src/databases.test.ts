@@ -1076,6 +1076,65 @@ describe("connections of every member kind", () => {
     expect((await harness.apps.get(appId)).savedDatabaseIds).toEqual([other])
   })
 
+  it("joins a member database's replacement to its connections when a restart came first", async () => {
+    const harness = await relayHarness()
+    const [target, member] = ["d", "e"].map((c) => c.repeat(40))
+    for (const id of [target!, member!]) await createDatabase(harness, id)
+    await harness.databases.updateNetwork({
+      connected: true,
+      databaseId: target!,
+      member: { id: member!, kind: "database" },
+    })
+    await harness.databases.setLimits({
+      databaseId: member!,
+      limits: { memoryBytes: 512 * 1024 ** 2 },
+    })
+    const original = databaseContainer(member!).id
+    // The Relay stops after creating the replacement, before joining it.
+    const joining = fakeDocker.hold({
+      command: "network connect",
+      target: networkOf(target!),
+    })
+    void harness.databases.setLimits({
+      databaseId: member!,
+      limits: { memoryBytes: null },
+    })
+    await joining.reached
+    const restarted = await harness.restart()
+
+    await restarted.databases.recoverReplacements()
+
+    const replacement = databaseContainer(member!)
+    expect(replacement.id).not.toBe(original)
+    expect(replacement.state.running).toBe(true)
+    expect(replacement.networks.has(networkOf(target!))).toBe(true)
+  })
+
+  it("joins a member database to its connections again when it starts", async () => {
+    const harness = await relayHarness()
+    const [target, member] = ["d", "e"].map((c) => c.repeat(40))
+    for (const id of [target!, member!]) await createDatabase(harness, id)
+    await harness.databases.updateNetwork({
+      connected: true,
+      databaseId: target!,
+      member: { id: member!, kind: "database" },
+    })
+    await harness.databases.action({ action: "stop", databaseId: member! })
+    // Taken off outside Kiln while it was stopped.
+    await Effect.runPromise(
+      new DockerEngine(harness.config.dockerSocket).disconnectNetwork(
+        networkOf(target!),
+        databaseContainer(member!).id
+      )
+    )
+
+    await harness.databases.action({ action: "start", databaseId: member! })
+
+    expect(databaseContainer(member!).networks.has(networkOf(target!))).toBe(
+      true
+    )
+  })
+
   it("runs an App's connect queued behind the database's deletion after it, without saving an orphan", async () => {
     const harness = await relayHarness()
     const id = "d".repeat(40)

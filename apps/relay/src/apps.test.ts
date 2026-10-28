@@ -1290,6 +1290,24 @@ describe("database connections", () => {
     expect(second.connectedDatabaseIds.sort()).toEqual([ready, away])
   })
 
+  it("never lets another Hearth's handover bring back a connection someone removed", async () => {
+    const harness = await withDatabases()
+    const handover = [{ appId, databaseIds: [ready] }]
+    // One Hearth hands it over, and someone disconnects it.
+    expect(await harness.databaseConnections.importApps(handover)).toBe(1)
+    await harness.databases.updateNetwork({
+      connected: false,
+      databaseId: ready,
+      member: { id: appId, kind: "app" },
+    })
+
+    // Another Hearth paired with the Relay hands over its own old copy.
+    expect(await harness.databaseConnections.importApps(handover)).toBe(0)
+    const app = await deploy(harness, {})
+    expect(app.savedDatabaseIds).toEqual([])
+    expect(app.connectedDatabaseIds).toEqual([])
+  })
+
   it("imports an app's connections once, and a repeat brings back none a deletion removed", async () => {
     const harness = await withDatabases()
     const gone = "d".repeat(40)

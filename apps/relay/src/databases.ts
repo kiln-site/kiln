@@ -654,6 +654,14 @@ export class DatabaseDriver {
   async recoverReplacements(): Promise<void> {
     const engine = this.#engine
     const config = this.#config
+    // A restart can come between creating the replacement and joining it to
+    // the databases this one is connected to.
+    const reconnect = (databaseId: string, container: string) =>
+      Effect.promise(() =>
+        this.connections.reconcile({ id: databaseId, kind: "database" }, [
+          { container },
+        ])
+      )
     const ready = (reference: string) =>
       Effect.tryPromise({
         try: () => waitUntilReady(engine, reference),
@@ -689,6 +697,8 @@ export class DatabaseDriver {
             yield* restore
             continue
           }
+          const databaseId = replacement.Labels?.["kiln.database.id"]
+          if (databaseId) yield* reconnect(databaseId, replacement.Id)
           // As an uninterrupted change would: the replacement of a running
           // database must be ready, started if the restart caught it first.
           if (wasRunning) {
@@ -723,6 +733,12 @@ export class DatabaseDriver {
   async action(input: RelayDatabaseAction): Promise<RelayManagedDatabase> {
     const database = await this.#required(input.databaseId)
     const container = requiredContainerId(database)
+    if (input.action !== "stop") {
+      // The databases it's connected to, whatever changed while it was down.
+      await this.connections.reconcile({ id: database.id, kind: "database" }, [
+        { container },
+      ])
+    }
     if (input.action === "stop") {
       await Effect.runPromise(
         this.#engine.stopContainer(container, { seconds: 30, timeout: 45_000 })

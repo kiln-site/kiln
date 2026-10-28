@@ -3,7 +3,11 @@ import { defaultAppConfig } from "@workspace/contracts"
 import { Effect } from "effect"
 import { afterEach, vi } from "vite-plus/test"
 
-import { decryptWithKeyring, encryptWithKeyring } from "../../keyring.mjs"
+import {
+  decryptWithKeyring,
+  encryptWithKeyring,
+  parseSecretKeyring,
+} from "../../keyring.mjs"
 import {
   loadAppConfigEffect,
   updateAppConfigEffect,
@@ -12,8 +16,6 @@ import { betterAuthSecrets } from "@/lib/environment"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRelay, insertRows, selectRows } from "@/test/seed"
-
-vi.stubEnv("BETTER_AUTH_SECRETS", `1:${"x".repeat(32)}`)
 
 // The Relay control channel is the only external boundary here.
 const relay = vi.hoisted(() => ({ rpc: vi.fn() }))
@@ -27,11 +29,17 @@ const docs = "b".repeat(40)
 const postgres = "d".repeat(40)
 const redis = "e".repeat(40)
 
+const KEYRING = `1:${"x".repeat(32)}`
+vi.stubEnv("BETTER_AUTH_SECRETS", KEYRING)
+// A secret Hearth's keyring lost, then got back.
+const RETIRED_KEY = `2:${"y".repeat(32)}`
+
 // An App saved by a Hearth that kept its database connections in its config.
 const insertLegacyApp = (
   relayId: string,
   appId: string,
-  databaseIds: ReadonlyArray<string>
+  databaseIds: ReadonlyArray<string>,
+  keyring = betterAuthSecrets()
 ) =>
   insertRows("app", {
     app_id: appId,
@@ -39,7 +47,7 @@ const insertLegacyApp = (
     name: appId.slice(0, 8),
     config_ciphertext: encryptWithKeyring(
       JSON.stringify({ ...defaultAppConfig, databaseIds }),
-      betterAuthSecrets(),
+      keyring,
       PURPOSE
     ),
     created_by: "user-one",
@@ -78,6 +86,7 @@ const persistedRelay = (id: string) => ({ enabled: true, id }) as PersistedRelay
 afterEach(() => {
   relay.rpc.mockReset()
   restartHearth()
+  vi.stubEnv("BETTER_AUTH_SECRETS", KEYRING)
 })
 
 describeMysql("handing Apps' database connections to their Relay", () => {
@@ -146,7 +155,7 @@ describeMysql("handing Apps' database connections to their Relay", () => {
     )
 
     it.effect(
-      "clears the configs a crash left behind after the Relay acknowledged, without asking it again",
+      "clears the configs a crash left behind after the Relay acknowledged, sending them again for the Relay to keep as they are",
       () =>
         Effect.gen(function* () {
           yield* resetDatabase
@@ -159,13 +168,62 @@ describeMysql("handing Apps' database connections to their Relay", () => {
             configs_cleared_at: null,
           })
 
+          // The Relay already has them, and adds nothing.
+          relay.rpc.mockResolvedValue({ imported: 0 })
+
           yield* ensureAppDatabaseConnectionsImportedEffect(
             persistedRelay(relayId)
           )
 
-          assert.strictEqual(relay.rpc.mock.calls.length, 0)
+          assert.strictEqual(relay.rpc.mock.calls.length, 1)
           assert.notProperty((yield* storedConfigs)[website], "databaseIds")
           assert.isNotNull((yield* imports)[0]?.configs_cleared_at)
+        })
+    )
+
+    it.effect(
+      "hands over an App whose config couldn't be read once its secret is back, and only then completes",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          const relayId = "u".repeat(43)
+          yield* insertRelay(relayId)
+          yield* insertLegacyApp(relayId, website, [postgres])
+          yield* insertLegacyApp(
+            relayId,
+            docs,
+            [redis],
+            parseSecretKeyring(RETIRED_KEY)
+          )
+          relay.rpc.mockResolvedValue({ imported: 1 })
+
+          // The secret `docs` was saved with is gone.
+          yield* ensureAppDatabaseConnectionsImportedEffect(
+            persistedRelay(relayId)
+          )
+          assert.deepStrictEqual(
+            relay.rpc.mock.calls.map((call) => call[2]),
+            [{ apps: [{ appId: website, databaseIds: [postgres] }] }]
+          )
+          assert.isNull((yield* imports)[0]?.configs_cleared_at)
+          // Asked again, as a deploy would, it still can't, and sends
+          // nothing it has sent.
+          yield* ensureAppDatabaseConnectionsImportedEffect(
+            persistedRelay(relayId)
+          )
+          assert.strictEqual(relay.rpc.mock.calls.length, 1)
+
+          // Restored, and Hearth restarted with it.
+          vi.stubEnv("BETTER_AUTH_SECRETS", `${KEYRING},${RETIRED_KEY}`)
+          restartHearth()
+          yield* ensureAppDatabaseConnectionsImportedEffect(
+            persistedRelay(relayId)
+          )
+          assert.deepStrictEqual(relay.rpc.mock.calls[1]?.[2], {
+            apps: [{ appId: docs, databaseIds: [redis] }],
+          })
+          assert.isNotNull((yield* imports)[0]?.configs_cleared_at)
+          assert.notProperty((yield* storedConfigs)[docs], "databaseIds")
         })
     )
 

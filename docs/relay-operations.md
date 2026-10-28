@@ -47,9 +47,18 @@ with deleting either. The Relay keeps connections in SQLite whether or not
 the network or the member's containers exist now, and applies them whenever
 the member's containers are created, deployed, or recreated. Deleting a
 database forgets every connection to it and its own; deleting a game server
-or an App forgets its own. Hearth hands over the connections it used to keep
-in Apps' configs once per Relay (`database.network.import`; see
+or an App forgets its own. A client needs the database's
+`database.network.write` and the member's own permission
+(`instance.network.write`, `app.manage`, or the member database's
+`database.network.write`).
+
+Hearth hands over the connections it used to keep in Apps' configs
+(`database.network.import`, which needs `app.manage` too; see
 [`app-database-connections.server.ts`](../apps/web/src/lib/app-database-connections.server.ts)).
+The Relay adds only pairs it doesn't have, of Apps and databases it still
+has, and never one someone connected or disconnected on it: every such
+change leaves a record (`relay_database_connection_choices`), so a handover
+repeated, or sent by another Hearth, overrules nobody.
 
 `apps/relay/src/operation-plans.ts` maps each control operation to its keys.
 Its switch is exhaustive, so a new operation can't compile until it declares

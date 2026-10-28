@@ -5,10 +5,10 @@ import type { Migration } from "@/effect/migrations"
 import { databaseTableName } from "@/lib/database-config"
 
 // Relays keep every database connection, Apps' included. Apps' used to live
-// in their configs as `databaseIds`; Hearth hands those to each Relay once
+// in their configs as `databaseIds`; Hearth hands those to each Relay
 // (lib/app-database-connections.server.ts) and records here when the Relay
-// acknowledged them, and when it then removed them from the configs. Until
-// a Relay acknowledges, its Apps' configs keep them.
+// first acknowledged them, and when every App's config on it had been read
+// and cleared. Until a Relay acknowledges, its Apps' configs keep them.
 export const relayDatabaseConnectionImport: Migration = {
   id: 38,
   name: "relay_database_connection_import",

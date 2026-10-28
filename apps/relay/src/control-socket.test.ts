@@ -343,6 +343,86 @@ describe("Relay control socket", () => {
     })
   })
 
+  it("connects a database's member only for a client that may change both", async () => {
+    const relay = await startRelay()
+    const databaseId = "d".repeat(40)
+    const connection = (kind: string) => ({
+      connected: true,
+      databaseId,
+      member: { id: "a".repeat(40), kind },
+    })
+    const send = async (
+      client: Awaited<ReturnType<typeof relay.connect>>,
+      operation: "database.network.write" | "database.network.import",
+      payload: unknown
+    ) => {
+      const id = sendRequest(client.socket, operation, payload)
+      const reply = (await client.inbox.next()) as Record<string, unknown>
+      expect(reply.replyTo).toBe(id)
+      return reply.type === "error" ? reply.code : "allowed"
+    }
+    const handover = {
+      apps: [{ appId: "a".repeat(40), databaseIds: [databaseId] }],
+    }
+
+    const databasesOnly = await relay.connect(
+      await relay.pair({ actions: ["database.network.write"], role: "custom" })
+    )
+    expect(
+      await send(databasesOnly, "database.network.write", connection("app"))
+    ).toBe("forbidden")
+    expect(
+      await send(
+        databasesOnly,
+        "database.network.write",
+        connection("instance")
+      )
+    ).toBe("forbidden")
+    expect(
+      await send(databasesOnly, "database.network.write", connection("relay"))
+    ).toBe("forbidden")
+    expect(await send(databasesOnly, "database.network.import", handover)).toBe(
+      "forbidden"
+    )
+    expect(
+      await send(
+        databasesOnly,
+        "database.network.write",
+        connection("database")
+      )
+    ).toBe("allowed")
+
+    const appsOnly = await relay.connect(
+      await relay.pair({ actions: ["app.manage"], role: "custom" })
+    )
+    expect(
+      await send(appsOnly, "database.network.write", connection("app"))
+    ).toBe("forbidden")
+    expect(await send(appsOnly, "database.network.import", handover)).toBe(
+      "forbidden"
+    )
+
+    const both = await relay.connect(
+      await relay.pair({
+        actions: [
+          "database.network.write",
+          "app.manage",
+          "instance.network.write",
+        ],
+        role: "custom",
+      })
+    )
+    expect(await send(both, "database.network.write", connection("app"))).toBe(
+      "allowed"
+    )
+    expect(
+      await send(both, "database.network.write", connection("instance"))
+    ).toBe("allowed")
+    expect(await send(both, "database.network.import", handover)).toBe(
+      "allowed"
+    )
+  })
+
   it("refuses Relay state to a client granted ordinary database access", async () => {
     const relay = await startRelay()
     const connection = await relay.connect(

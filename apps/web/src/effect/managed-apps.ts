@@ -189,8 +189,9 @@ export const updateAppConfigEffect = Effect.fn("apps.updateConfig")(function* (
 })
 
 /**
- * The database connections configs on a Relay still keep, for Apps that
- * have any. One that can't be read is left out, as it is everywhere.
+ * The Apps on a Relay whose configs still keep database connections, with
+ * them, and those whose configs can't be read now, as when the secret they
+ * were saved with is gone, so whether they keep any is unknown.
  */
 export const listLegacyAppDatabaseIdsEffect = Effect.fn(
   "apps.legacyDatabaseIds"
@@ -204,34 +205,35 @@ export const listLegacyAppDatabaseIdsEffect = Effect.fn(
       ORDER BY app_id`,
     [relayId]
   )
-  const apps = yield* Effect.forEach(rows, (row) =>
+  const read = yield* Effect.forEach(rows, (row) =>
     decryptStoredConfig(row).pipe(
-      Effect.map(({ databaseIds }) =>
-        databaseIds && databaseIds.length > 0
-          ? [{ appId: row.app_id, databaseIds }]
-          : []
-      ),
-      Effect.catchCause(() => Effect.succeed([]))
+      Effect.map(({ databaseIds }) => ({
+        appId: row.app_id,
+        databaseIds: databaseIds ?? null,
+      })),
+      Effect.orElseSucceed(() => ({ appId: row.app_id, unreadable: true }))
     )
   )
-  return apps.flat()
+  return {
+    apps: read.flatMap((app) =>
+      "databaseIds" in app && app.databaseIds !== null
+        ? [{ appId: app.appId, databaseIds: app.databaseIds }]
+        : []
+    ),
+    unreadable: read.flatMap((app) => ("unreadable" in app ? [app.appId] : [])),
+  }
 })
 
 /**
- * Removes `databaseIds` from every config on a Relay that still has it,
- * one App at a time, each holding its row as an edit does. Safe to repeat:
- * a config without it is left as it is.
+ * Removes `databaseIds` from these Apps' configs, one App at a time, each
+ * holding its row as an edit does. Safe to repeat: a config without it, or
+ * one that can't be read, is left as it is.
  */
 export const clearLegacyAppDatabaseIdsEffect = Effect.fn(
   "apps.clearLegacyDatabaseIds"
-)(function* (relayId: string) {
+)(function* (relayId: string, appIds: ReadonlyArray<string>) {
   const database = yield* Database
-  const rows = yield* database.queryRows<AppRow>(
-    "app_ids_for_relay",
-    `SELECT app_id FROM ${databaseTable("app")} WHERE relay_id = ?`,
-    [relayId]
-  )
-  for (const { app_id: appId } of rows) {
+  for (const appId of appIds) {
     yield* database.transaction(
       "app_config_clear_database_ids",
       (transaction) =>

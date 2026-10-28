@@ -302,8 +302,10 @@ export class DatabaseConnections {
   /**
    * Adds Apps' connections to databases on this Relay, keeping any already
    * saved, and says how many were new. Apps and databases deleted since
-   * Hearth saved them are left out, so repeating an import never brings back
-   * a connection deletion removed. Applies nothing: the Apps' running
+   * Hearth saved them are left out, and so is any pair someone connected or
+   * disconnected on this Relay, so no handover, repeated or from another
+   * Hearth, brings back a connection a person or a deletion removed. Applies
+   * nothing: the Apps' running
    * containers joined these when they were saved, and the rest join on
    * their next deploy.
    */
