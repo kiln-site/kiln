@@ -2624,7 +2624,8 @@ async function executeControlRequest(
     case "database.terminal.attach": {
       const input = relayDatabaseTerminalAttachSchema.parse(request.payload)
       // In the database's lane until the session is open, so freezing it
-      // for its deletion waits for this attach and refuses any after it.
+      // for its deletion waits for an attach under way and refuses later
+      // ones.
       return inLane(
         {
           label: "database.terminal.attach",
@@ -4256,10 +4257,10 @@ async function requiredFileRoot(instanceId: string) {
   return root
 }
 
-// Quiets a resource frozen for its deletion, so nothing Kiln runs writes to
-// it but its final backup: a game server or App stopped, an App kept from
-// starting with Docker, a database's terminals closed (it keeps running for
-// its dump). Runs inside the freeze, which holds the resource whole, and
+// Quiets a resource frozen for its deletion: a game server or App stopped,
+// an App kept from starting with Docker, a database's terminal sessions
+// ended (it keeps running for its dump, and work a client already sent may
+// finish). Runs inside the freeze, which holds the resource whole, and
 // again as the Relay starts. What it changes goes to `record` first.
 async function quietFrozenResource(
   freeze: RelayResourceFreeze,
@@ -4286,14 +4287,9 @@ async function quietFrozenResource(
         record({ restartPolicies })
       )
     case "database": {
-      // Only a database that's certainly gone has no clients to stop.
       const database = await recoverPromise(
         () => databases.target(freeze.id),
-        (cause) => {
-          if (cause instanceof Error && cause.message === "Database not found")
-            return null
-          throw cause
-        }
+        () => null
       )
       await terminals.endTarget(freeze.id, database?.containerId ?? null)
       return

@@ -16,7 +16,7 @@ import {
   terminalCursor,
 } from "@workspace/contracts"
 import type { ITerminalAddon, Terminal } from "@xterm/headless"
-import { Effect, Schedule } from "effect"
+import { Effect } from "effect"
 
 import type { RelayConfig } from "./config.js"
 import { DockerEngine } from "./docker-engine.js"
@@ -56,9 +56,6 @@ const PID_FILE_PREFIX = "/tmp/.kiln-terminal-"
 // the file only once it's gone, so a client that survives is found again.
 const HANG_UP_FUNCTION =
   'hang_up() { pid=$(cat "$1") || return 0; if kill -HUP "$pid" 2>/dev/null; then sleep 1; kill -KILL "$pid" 2>/dev/null; for _ in 1 2 3 4 5; do kill -0 "$pid" 2>/dev/null || break; sleep 1; done; fi; kill -0 "$pid" 2>/dev/null || rm -f "$1"; }'
-// Hangs up every client in the container and exits non-zero if one is
-// still alive afterwards.
-const STOP_ALL_CLIENTS = `${HANG_UP_FUNCTION}; for file in "$0"*; do [ -f "$file" ] || continue; hang_up "$file"; [ -f "$file" ] && exit 1; done; exit 0`
 // Both packages ship UMD bundles that ESM loaders don't all unwrap the same
 // way, so they load through Node's own CommonJS loader.
 const require = createRequire(import.meta.url)
@@ -210,11 +207,9 @@ export class ContainerTerminals {
   }
 
   /**
-   * Ends everyone's sessions on a target and stops every terminal client in
-   * its container, as freezing a database for its deletion does. Waits
-   * until they've stopped, and throws if one may still be running, so a
-   * client can't keep writing after the final dump; running it again tries
-   * again.
+   * Ends everyone's sessions on a target and hangs up every terminal client
+   * left in its container, as freezing a database for its deletion does.
+   * Best effort: work a client already sent may still finish.
    */
   async endTarget(targetKey: string, containerId: string | null): Promise<void> {
     await Promise.all(
@@ -224,26 +219,7 @@ export class ContainerTerminals {
           this.#exclusive(key, () => this.#end(session, "deleting"))
         )
     )
-    if (containerId === null) return
-    // A stopped container runs no clients; one stopping meanwhile is quiet
-    // too, whatever the exec says.
-    if (!(await this.#runningForCertain(containerId))) return
-    const exitCode = await recoverPromise(
-      () =>
-        this.#runToExit(containerId, [
-          "sh",
-          "-c",
-          STOP_ALL_CLIENTS,
-          PID_FILE_PREFIX,
-        ]),
-      async (cause) => {
-        if (!(await this.#runningForCertain(containerId))) return 0
-        throw cause
-      }
-    )
-    if (exitCode !== 0) {
-      throw new Error("A terminal client may still be running")
-    }
+    if (containerId !== null) await this.sweep([containerId])
   }
 
   #exclusive<T>(key: string, task: () => Promise<T>): Promise<T> {
@@ -446,31 +422,6 @@ export class ContainerTerminals {
         Tty: true,
       })
     )
-    // The client has written its PID file before attaching returns, so a
-    // database being frozen can find every client started before it.
-    const ready = await recoverPromise(
-      async () => {
-        for (let attempt = 0; attempt < 50; attempt += 1) {
-          const written = await this.#runToExit(containerId, [
-            "sh",
-            "-c",
-            'test -s "$0"',
-            pidFile,
-          ])
-          if (written === 0) return true
-          await new Promise((resolve) => setTimeout(resolve, 100))
-        }
-        return false
-      },
-      () => false
-    )
-    if (!ready) {
-      // Still in the lane: its client must be gone before anyone can freeze
-      // the database, or it could start after the freeze looked for it.
-      socket.destroy()
-      await this.#stopUnready(containerId, created.Id, pidFile)
-      throw new Error("The terminal didn't start")
-    }
     const screen = new HeadlessTerminal({
       allowProposedApi: true,
       // Reported to clients that ask, as Hearth shows it.
@@ -735,79 +686,6 @@ export class ContainerTerminals {
           () => undefined
         )
       )
-    )
-  }
-
-  // Waits for a client that never confirmed it started to stop, hanging it
-  // up if it wrote its PID file late; throws if it may still be running.
-  async #stopUnready(containerId: string, execId: string, pidFile: string) {
-    const docker = this.#docker
-    const stopped = () =>
-      Effect.runPromise(
-        docker.inspectExec(execId).pipe(
-          Effect.repeat({
-            schedule: Schedule.spaced("100 millis"),
-            until: (exec) => !exec.Running,
-          }),
-          Effect.timeout("5 seconds"),
-          Effect.as(true),
-          Effect.catch(() => Effect.succeed(false))
-        )
-      )
-    if (await stopped()) return
-    await this.#runToExit(containerId, [
-      "sh",
-      "-c",
-      `${HANG_UP_FUNCTION}; [ -f "$0" ] && hang_up "$0"; exit 0`,
-      pidFile,
-    ])
-    if (!(await stopped()) && (await this.#runningForCertain(containerId))) {
-      throw new Error("A terminal client that didn't start may still be running")
-    }
-  }
-
-  // Whether a container is running, failing when Docker can't say: only
-  // one that's gone or stopped counts as running nothing.
-  async #runningForCertain(containerId: string): Promise<boolean> {
-    const state = await Effect.runPromise(
-      this.#docker
-        .inspectContainer(containerId, { timeout: 10_000 })
-        .pipe(
-          Effect.catchIf(
-            (error) => error.status === 404,
-            () => Effect.succeed(null)
-          )
-        )
-    )
-    return state?.State.Running === true
-  }
-
-  // Runs a command in the container and waits for its exit code.
-  async #runToExit(
-    containerId: string,
-    command: Array<string>
-  ): Promise<number | null> {
-    const docker = this.#docker
-    return Effect.runPromise(
-      docker
-        .createExec(containerId, {
-          AttachStderr: false,
-          AttachStdout: false,
-          Cmd: command,
-        })
-        .pipe(
-          Effect.tap((created) => docker.startDetachedExec(created.Id)),
-          Effect.flatMap((created) =>
-            docker.inspectExec(created.Id).pipe(
-              Effect.repeat({
-                schedule: Schedule.spaced("100 millis"),
-                until: (exec) => !exec.Running,
-              }),
-              Effect.timeout("60 seconds")
-            )
-          ),
-          Effect.map((exec) => exec.ExitCode)
-        )
     )
   }
 

@@ -344,15 +344,13 @@ resource so nothing writes to it but its final backup:
 - A game server is stopped.
 - An App is stopped, and its containers' restart policies are set to `no`
   so Docker doesn't start them again.
-- A database keeps running, since its final backup is a dump of it.
-  Everyone's terminal sessions on it end, and the freeze waits until every
-  terminal client in its container has stopped, finding them by the PID
-  files they write and keeping each file until its client is gone, so a
-  retried freeze finds a survivor again. Attaching takes the database's
-  lane until its client has written that file, so one under way is found
-  and later ones are refused. A stopped container runs no clients. Game
-  servers and Apps connected to it can still write to it until it's
-  deleted, so what they write after its dump isn't in its final backup.
+- A database keeps running, since its final backup is a live dump of it.
+  Everyone's terminal sessions on it end, its terminal clients are hung up,
+  and new sessions and input are refused; attaching takes the database's
+  lane, so one under way finishes before the freeze. Work a client already
+  sent may still finish, and game servers and Apps connected to it can
+  still write to it until it's deleted, so what's written during or after
+  its dump may not be in its final backup.
 
 What quieting changes is recorded with the freeze before it's made. From then on the lanes
 refuse any operation that touches the resource when its turn comes,
