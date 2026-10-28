@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto"
 import { createServerFn } from "@tanstack/react-start"
 import {
+  RELAY_VOLUME_REFERENCES_PENDING,
   relayIdSchema,
   relayVolumeIdSchema,
   relayVolumeNameSchema,
@@ -8,8 +9,13 @@ import {
   relayVolumesSchema,
   relayVolumesV1Feature,
 } from "@workspace/contracts"
+import { Effect } from "effect"
 import { z } from "zod"
 
+import { importRelayAppVolumeReferencesEffect } from "@/effect/managed-apps"
+import { promiseEffect } from "@/effect/promise"
+import { runAppEffect } from "@/effect/runtime"
+import type { PersistedRelay } from "@/lib/relay-registry"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { databaseRpc } from "@/server/managed-database-access"
 import { authorizedRelay } from "@/server/relay-access"
@@ -17,19 +23,25 @@ import { authorizedRelay } from "@/server/relay-access"
 const targetSchema = z.object({ relayId: relayIdSchema })
 const volumeSchema = targetSchema.extend({ volumeId: relayVolumeIdSchema })
 
-// A Relay's Docker named volumes, with what mounts each. Docker measures
-// every volume for their sizes, so this can take a while.
+// A Relay's Docker named volumes, with what mounts and uses each, and what
+// Apps mount that no volume Kiln manages holds. Docker measures every volume
+// for their sizes, so this can take a while.
 export const getRelayVolumes = createServerFn({ method: "GET" })
   .validator(targetSchema)
   .handler(async ({ data }) => {
     const { relay } = await authorizedRelay(data.relayId, "relay.read")
     if (!(await relayHasVolumes(relay.id))) {
-      return { measuring: false, supported: false, volumes: [] }
+      return { measuring: false, supported: false, uncovered: [], volumes: [] }
     }
-    const { measuring, volumes } = relayVolumesSchema.parse(
-      await databaseRpc(relay, "relay.volumes.read", {}, 30_000)
-    )
-    return { measuring, supported: true, volumes }
+    let listing = await readRelayVolumes(relay)
+    // A Relay that hasn't had Apps' configured volumes yet gets them once,
+    // so it can show who uses each and refuse to delete those in use.
+    if (!listing.referencesImported) {
+      await importVolumeReferences(relay.id)
+      listing = await readRelayVolumes(relay)
+    }
+    const { measuring, uncovered, volumes } = listing
+    return { measuring, supported: true, uncovered, volumes }
   })
 
 export const createRelayVolume = createServerFn({ method: "POST" })
@@ -80,16 +92,46 @@ export const deleteRelayVolume = createServerFn({ method: "POST" })
       "relay.configure"
     )
     await requireRelayVolumes(relay.id)
-    await databaseRpc(
-      relay,
-      "relay.volumes.delete",
-      { id: data.volumeId },
-      30_000,
-      user.id
+    const remove = () =>
+      databaseRpc(
+        relay,
+        "relay.volumes.delete",
+        { id: data.volumeId },
+        30_000,
+        user.id
+      )
+    // A Relay that hasn't had Apps' configured volumes refuses until it
+    // does.
+    await Effect.runPromise(
+      promiseEffect(remove).pipe(
+        Effect.catchIf(
+          (error) =>
+            error instanceof Error &&
+            error.message.includes(RELAY_VOLUME_REFERENCES_PENDING),
+          () =>
+            promiseEffect(async () => {
+              await importVolumeReferences(relay.id)
+              await remove()
+            })
+        )
+      )
     )
     publishRelayVolumesChange(relay.id)
     return { deleted: true }
   })
+
+async function readRelayVolumes(relay: PersistedRelay) {
+  return relayVolumesSchema.parse(
+    await databaseRpc(relay, "relay.volumes.read", {}, 30_000)
+  )
+}
+
+function importVolumeReferences(relayId: string): Promise<void> {
+  return runAppEffect(
+    "relay.volumes.references.import",
+    importRelayAppVolumeReferencesEffect(relayId)
+  )
+}
 
 // An offline Relay has no features yet; asking it says why it can't answer.
 async function relayHasVolumes(relayId: string): Promise<boolean> {

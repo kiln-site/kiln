@@ -683,7 +683,7 @@ export class FakeDocker {
     const project = arguments_[arguments_.indexOf("-p") + 1] ?? ""
     const definition = JSON.parse(input) as {
       networks?: Record<string, { external?: boolean; name?: string } | null>
-      volumes?: Record<string, { name?: string } | null>
+      volumes?: Record<string, { external?: boolean; name?: string } | null>
       services: Record<
         string,
         {
@@ -717,6 +717,24 @@ export class FakeDocker {
         | { Healthcheck?: unknown; Volumes?: Record<string, object> }
         | undefined
       for (const volume of settings.volumes ?? []) {
+        // A volume the project declares is made on first use, labelled
+        // with the project and its key; an external one must exist.
+        const declared =
+          volume.type === "volume" && volume.source
+            ? definition.volumes?.[volume.source]
+            : undefined
+        if (volume.source && declared !== undefined && !declared?.external) {
+          const dockerName = declared?.name ?? `${project}_${volume.source}`
+          if (!this.volumes.has(dockerName)) {
+            this.addVolume({
+              labels: {
+                "com.docker.compose.project": project,
+                "com.docker.compose.volume": volume.source,
+              },
+              name: dockerName,
+            })
+          }
+        }
         if (
           volume.type === "volume" &&
           volume.source &&

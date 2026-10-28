@@ -592,10 +592,36 @@ export const relayHostAccessSchema = z.object({
   dataDirectory: z.string().min(1).optional(),
 })
 
-// A Docker named volume on a Relay: one Kiln made, named
-// `kiln-<short ID>-<slug>` after its ID and the name it was made with, or the
-// Relay's own data volume, which it keeps.
+// A Docker named volume on a Relay. Kiln manages two kinds, each with a
+// stable ID that names it to backups and deletion:
+//
+// - `kiln`: one Kiln made for Apps to share, named `kiln-<short ID>-<slug>`
+//   after its ID and the name it was made with. No App owns it; any App's
+//   configuration may mount it.
+// - `app`: one an App's Compose project declares, owned by that App. Its ID
+//   is `<App ID>/<name in the Compose file>`, which redeploys keep.
+//
+// The Relay's own data volume, kind `relay`, is the platform backup's and
+// has no ID.
 export const relayVolumeIdSchema = z.string().regex(/^[a-f0-9]{40}$/u)
+// The key a Compose file declares a volume under.
+export const composeVolumeNameSchema = z
+  .string()
+  .regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/u)
+  .max(128)
+const volumeAppIdSchema = z.string().regex(/^[a-f0-9]{40}$/u)
+export const appVolumeIdSchema = z
+  .string()
+  .regex(/^[a-f0-9]{40}\/[a-zA-Z0-9][a-zA-Z0-9_.-]*$/u)
+  .max(169)
+export const relayManagedVolumeIdSchema = z.union([
+  relayVolumeIdSchema,
+  appVolumeIdSchema,
+])
+/** The ID of the volume an App's Compose project declares under `name`. */
+export function appVolumeId(appId: string, name: string): string {
+  return `${appId}/${name}`
+}
 export const RELAY_VOLUME_NAME_MAX_LENGTH = 64
 export const relayVolumeNameSchema = z
   .string()
@@ -613,22 +639,53 @@ export const relayVolumeMountSchema = z.object({
   resourceId: z.string().nullable(),
   running: z.boolean(),
 })
+// An App that uses a volume: its configuration names it, deployed or not,
+// or one of its containers mounts it now.
+export const relayVolumeUserSchema = z.object({
+  appId: volumeAppIdSchema,
+  configured: z.boolean(),
+  mounted: z.boolean(),
+})
 export const relayVolumeSchema = z.object({
   createdAt: z.string().nullable(),
   dockerName: z.string().min(1),
-  // Null for the Relay's own data volume, which Kiln didn't make.
-  id: relayVolumeIdSchema.nullable(),
-  kind: z.enum(["relay", "volume"]),
+  // Null for the Relay's own data volume, and for a volume an App's project
+  // made under a name another of its volumes now holds, such as after the
+  // Compose file renamed it.
+  id: relayManagedVolumeIdSchema.nullable(),
+  kind: z.enum(["app", "kiln", "relay"]),
   // Where its files are on the host.
   mountpoint: z.string().nullable(),
   mounts: z.array(relayVolumeMountSchema),
   name: z.string(),
+  // The App whose Compose project made it, and the name it has there.
+  owner: z
+    .object({ appId: volumeAppIdSchema, volume: composeVolumeNameSchema })
+    .nullable(),
   // Null until Docker has measured it.
   sizeBytes: z.number().int().nonnegative().nullable(),
+  users: z.array(relayVolumeUserSchema),
+})
+// What an App's containers mount that no managed volume or the App's folder
+// holds, so backups can't cover it: a volume Docker named itself, a named
+// volume Kiln doesn't manage, or a path on the node outside the App's
+// folder.
+export const relayUncoveredMountSchema = z.object({
+  appId: volumeAppIdSchema,
+  container: z.string(),
+  destination: z.string(),
+  kind: z.enum(["anonymous", "bind", "volume"]),
+  service: z.string(),
+  // The volume's Docker name, or the path on the node.
+  source: z.string(),
 })
 export const relayVolumesSchema = z.object({
   // Whether Docker is measuring the volumes, so sizes are on their way.
   measuring: z.boolean(),
+  // Whether Hearth has told the Relay which volumes Apps' configurations
+  // name. Until it has, `users` leaves those out and deletion is refused.
+  referencesImported: z.boolean(),
+  uncovered: z.array(relayUncoveredMountSchema),
   volumes: z.array(relayVolumeSchema),
 })
 // The part of a volume's Docker name its name gives: lowercase letters,
@@ -652,8 +709,24 @@ export const relayVolumeRenameSchema = relayVolumeCreateSchema
 export const relayVolumeDeleteSchema = z.strictObject({
   id: relayVolumeIdSchema,
 })
+// The Kiln volumes an App's configuration mounts, replacing those it named
+// before. Hearth sends it whenever a saved configuration changes them.
+export const relayAppVolumesWriteSchema = z.strictObject({
+  appId: volumeAppIdSchema,
+  volumeIds: z.array(relayVolumeIdSchema).max(32),
+})
+// Every App's configured volumes at once, which Hearth sends a Relay that
+// hasn't had them yet. Apps left out keep what the Relay has for them.
+export const relayAppVolumesImportSchema = z.strictObject({
+  apps: z.array(relayAppVolumesWriteSchema).max(10_000),
+})
+// The Relay's refusal while it waits for that import.
+export const RELAY_VOLUME_REFERENCES_PENDING =
+  "The Relay doesn't know yet which Apps use its volumes"
 export type RelayVolume = z.infer<typeof relayVolumeSchema>
 export type RelayVolumeMount = z.infer<typeof relayVolumeMountSchema>
+export type RelayVolumeUser = z.infer<typeof relayVolumeUserSchema>
+export type RelayUncoveredMount = z.infer<typeof relayUncoveredMountSchema>
 
 // Relay to Hearth: output for one attachment, in order. `ended` arrives with
 // the session's last output. Not strict: a Relay newer than its Hearth may

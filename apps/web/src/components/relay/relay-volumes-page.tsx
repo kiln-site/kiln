@@ -11,6 +11,7 @@ import {
   Lock,
   Pencil,
   Plus,
+  SlidersHorizontal,
   Trash2,
 } from "lucide-react"
 
@@ -19,6 +20,9 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
@@ -102,13 +106,16 @@ const volumeSearchFields = [
   (volume: RelayVolume) => volume.dockerName,
 ] as const
 
-// The Relay's Docker named volumes: those Kiln made for apps to share, and
-// the Relay's own data volume, which can't be renamed or deleted.
+// The Relay's Docker named volumes: those Kiln made for Apps to share,
+// those Apps' Compose files declare, and the Relay's own data volume. Only
+// those Kiln made can be renamed or deleted here.
 export function RelayVolumesPage() {
   const { relay, routeId } = useRelayWorkspace()
   const canManage = useRelayPermission(relay.id, "relay.configure")
   const [searchStore] = React.useState(() => createDataTableSearchStore())
   const [dialog, setDialog] = React.useState<VolumeDialog>(null)
+  // The App whose volumes are shown, those it owns or uses, or null for all.
+  const [appFilter, setAppFilter] = React.useState<string | null>(null)
   const closeDialog = React.useCallback(() => setDialog(null), [])
   const openCreate = React.useCallback(() => setDialog({ kind: "create" }), [])
 
@@ -117,14 +124,17 @@ export function RelayVolumesPage() {
       <DataTableWorkspace
         toolbar={
           <VolumesToolbar
+            appFilter={appFilter}
             canManage={canManage}
             relayId={relay.id}
             searchStore={searchStore}
+            onAppFilterChange={setAppFilter}
             onCreate={openCreate}
           />
         }
       >
         <VolumesTable
+          appFilter={appFilter}
           canManage={canManage}
           relayId={relay.id}
           relayName={relay.name}
@@ -158,14 +168,18 @@ export function RelayVolumesPage() {
 }
 
 const VolumesToolbar = React.memo(function VolumesToolbar({
+  appFilter,
   canManage,
   relayId,
   searchStore,
+  onAppFilterChange,
   onCreate,
 }: {
+  appFilter: string | null
   canManage: boolean
   relayId: string
   searchStore: DataTableSearchStore
+  onAppFilterChange: (appId: string | null) => void
   onCreate: () => void
 }) {
   const queryClient = useQueryClient()
@@ -183,6 +197,13 @@ const VolumesToolbar = React.memo(function VolumesToolbar({
             <span className="hidden sm:inline">New volume</span>
           </Button>
         ) : null
+      }
+      controls={
+        <VolumeAppFilter
+          relayId={relayId}
+          value={appFilter}
+          onChange={onAppFilterChange}
+        />
       }
       leading={
         <InfraSyncButton
@@ -209,7 +230,96 @@ function selectSupported(data: { supported: boolean }): boolean {
   return data.supported
 }
 
+const noApps: ReadonlyArray<string> = []
+
+// The Apps that own or use any volume, to filter the table by.
+function selectVolumeApps(data: {
+  volumes: ReadonlyArray<RelayVolume>
+}): ReadonlyArray<string> {
+  const apps = new Set<string>()
+  for (const volume of data.volumes) {
+    if (volume.owner) apps.add(volume.owner.appId)
+    for (const user of volume.users) apps.add(user.appId)
+  }
+  return apps.size ? [...apps].sort() : noApps
+}
+
+function volumeBelongsTo(volume: RelayVolume, appId: string): boolean {
+  return (
+    volume.owner?.appId === appId ||
+    volume.users.some((user) => user.appId === appId)
+  )
+}
+
+const VolumeAppFilter = React.memo(function VolumeAppFilter({
+  relayId,
+  value,
+  onChange,
+}: {
+  relayId: string
+  value: string | null
+  onChange: (appId: string | null) => void
+}) {
+  const { data: apps = noApps } = useQuery({
+    ...relayVolumesQueryOptions(relayId),
+    select: selectVolumeApps,
+  })
+  const { data: appNames } = useQuery({
+    ...appDirectoryQueryOptions(),
+    select: selectAppNames,
+  })
+  if (apps.length === 0 && value === null) return null
+  const filtered = value !== null
+  return (
+    <DropdownMenu>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <DropdownMenuTrigger asChild>
+            <Button
+              aria-label="Filter volumes by App"
+              className="relative shrink-0"
+              type="button"
+              variant={filtered ? "secondary" : "outline"}
+            >
+              <SlidersHorizontal />
+              {filtered ? (
+                <span
+                  aria-hidden
+                  className="absolute top-1 right-1 size-1.5 rounded-full bg-primary"
+                />
+              ) : null}
+            </Button>
+          </DropdownMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">Filter</TooltipContent>
+      </Tooltip>
+      <DropdownMenuContent align="end" className="max-w-72">
+        <DropdownMenuLabel>Show</DropdownMenuLabel>
+        <DropdownMenuRadioGroup
+          value={value ?? ""}
+          onValueChange={(appId) => onChange(appId || null)}
+        >
+          <DropdownMenuRadioItem value="">All volumes</DropdownMenuRadioItem>
+          {apps.map((appId) => (
+            <DropdownMenuRadioItem key={appId} value={appId}>
+              <span className="truncate">{appName(appNames, appId)}</span>
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+})
+
+function appName(
+  appNames: ReadonlyMap<string, string> | undefined,
+  appId: string
+): string {
+  return appNames?.get(appId) ?? `App ${appId.slice(0, 8)}`
+}
+
 function VolumesTable({
+  appFilter,
   canManage,
   relayId,
   relayName,
@@ -218,6 +328,7 @@ function VolumesTable({
   onCreate,
   onDialog,
 }: {
+  appFilter: string | null
   canManage: boolean
   relayId: string
   relayName: string
@@ -244,14 +355,19 @@ function VolumesTable({
           ? {
               body: { kind: "ready" },
               refreshing: volumes.isFetching,
-              rows: volumes.data.volumes,
+              rows:
+                appFilter === null
+                  ? volumes.data.volumes
+                  : volumes.data.volumes.filter((volume) =>
+                      volumeBelongsTo(volume, appFilter)
+                    ),
             }
           : {
               body: { kind: "loading", rowCount: 2 },
               refreshing: false,
               rows: [],
             },
-    [volumes]
+    [appFilter, volumes]
   )
   const definition = React.useMemo(() => {
     const columns = volumeColumnHelper.columns([
@@ -269,9 +385,9 @@ function VolumesTable({
         cell: ({ row }) => <VolumeSize volume={row.original} />,
         meta: dataTableColumnMeta({ hideBelow: "sm", width: "7rem" }),
       }),
-      volumeColumnHelper.accessor((volume) => volume.mounts.length, {
+      volumeColumnHelper.accessor((volume) => volume.users.length, {
         id: "mounts",
-        header: "Mounts",
+        header: "Used by",
         sortFn: sortFn_basic,
         cell: ({ row }) => (
           <VolumeMounts
@@ -312,35 +428,42 @@ function VolumesTable({
 
   const supported = volumes.data?.supported !== false
   const emptyState = React.useCallback(
-    ({ searchActive }: { searchActive: boolean }) => (
-      <DataTableEmptyState
-        action={
-          searchActive || !canManage || !supported ? undefined : (
-            <Button size="sm" onClick={onCreate}>
-              <Plus /> New volume
-            </Button>
-          )
-        }
-        description={
-          searchActive
-            ? "Try a different name."
-            : supported
-              ? "Volumes keep data across deployments, and apps on this Relay can share them."
-              : "Update this Relay to manage its volumes from Hearth."
-        }
-        icon={
-          <HardDrive className="size-6 text-muted-foreground/45 light:text-muted-foreground/72" />
-        }
-        title={
-          searchActive
-            ? "No volumes match your search"
-            : supported
-              ? "No volumes yet"
-              : "Volumes need a newer Relay"
-        }
-      />
-    ),
-    [canManage, onCreate, supported]
+    ({ searchActive: searching }: { searchActive: boolean }) => {
+      const searchActive = searching || appFilter !== null
+      return (
+        <DataTableEmptyState
+          action={
+            searchActive || !canManage || !supported ? undefined : (
+              <Button size="sm" onClick={onCreate}>
+                <Plus /> New volume
+              </Button>
+            )
+          }
+          description={
+            searchActive
+              ? searching
+                ? "Try a different name."
+                : "This App neither owns nor uses any volume."
+              : supported
+                ? "Volumes keep data across deployments, and Apps on this Relay can share them."
+                : "Update this Relay to manage its volumes from Hearth."
+          }
+          icon={
+            <HardDrive className="size-6 text-muted-foreground/45 light:text-muted-foreground/72" />
+          }
+          title={
+            searchActive
+              ? searching
+                ? "No volumes match your search"
+                : "No volumes for this App"
+              : supported
+                ? "No volumes yet"
+                : "Volumes need a newer Relay"
+          }
+        />
+      )
+    },
+    [appFilter, canManage, onCreate, supported]
   )
 
   return (
@@ -402,11 +525,44 @@ const VolumeIdentity = React.memo(function VolumeIdentity({
               The Relay keeps its data here, so it can't be renamed or deleted
             </TooltipContent>
           </Tooltip>
+        ) : volume.owner ? (
+          <VolumeOwner
+            appId={volume.owner.appId}
+            volume={volume.owner.volume}
+          />
         ) : null
       }
     />
   )
 })
+
+// The App whose Compose file declares a volume, which removes it when the
+// App is deleted.
+function VolumeOwner({ appId, volume }: { appId: string; volume: string }) {
+  const selectName = React.useCallback(
+    (apps: ReadonlyArray<{ id: string; name: string }>) =>
+      apps.find((app) => app.id === appId)?.name,
+    [appId]
+  )
+  const { data: name } = useQuery({
+    ...appDirectoryQueryOptions(),
+    select: selectName,
+  })
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="flex min-w-0 shrink items-center gap-1 border bg-muted/30 px-1.5 py-0.5 text-[11px] text-muted-foreground">
+          <AppKindIcon className="size-3 shrink-0" aria-hidden="true" />
+          <span className="truncate">{name ?? `App ${appId.slice(0, 8)}`}</span>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">
+        Its Compose file declares this volume as {volume}, and deleting the App
+        deletes it
+      </TooltipContent>
+    </Tooltip>
+  )
+}
 
 function VolumeSize({ volume }: { volume: RelayVolume }) {
   return volume.sizeBytes === null ? (
@@ -436,21 +592,17 @@ const VolumeMounts = React.memo(function VolumeMounts({
 }) {
   const [open, setOpen] = React.useState(false)
   const close = React.useCallback(() => setOpen(false), [])
-  const apps = new Set(
-    volume.mounts.flatMap((mount) =>
-      mount.kind === "app" && mount.resourceId ? [mount.resourceId] : []
-    )
-  ).size
+  const apps = volume.users.length
   const containers = volume.mounts.length
   return (
     <DrawerPopover open={open} onOpenChange={setOpen}>
       <DrawerPopoverTrigger asChild>
         <button
           type="button"
-          aria-label={`${apps} ${apps === 1 ? "app" : "apps"}, ${containers} ${containers === 1 ? "container" : "containers"} mount ${volume.name}`}
+          aria-label={`${apps} ${apps === 1 ? "App uses" : "Apps use"} ${volume.name}, and ${containers} ${containers === 1 ? "container mounts" : "containers mount"} it`}
           className="type-meta relative z-10 -mx-1.5 flex h-8 min-w-0 items-center gap-3 rounded-md px-1.5 text-muted-foreground transition-colors outline-none hover:bg-muted/55 focus-visible:ring-2 focus-visible:ring-ring/40 data-[state=open]:bg-muted/55"
         >
-          <MountCount count={apps} icon={AppKindIcon} one="app" other="apps" />
+          <MountCount count={apps} icon={AppKindIcon} one="App" other="Apps" />
           <MountCount
             count={containers}
             icon={Container}
@@ -460,8 +612,8 @@ const VolumeMounts = React.memo(function VolumeMounts({
         </button>
       </DrawerPopoverTrigger>
       <DrawerPopoverContent
-        title="Mounts"
-        aria-label="Mounts"
+        title="Used by"
+        aria-label="Used by"
         align="start"
         sideOffset={6}
         className="w-72 max-w-[calc(100vw-1rem)] overflow-hidden p-0"
@@ -535,8 +687,8 @@ const VolumeMountPicker = React.memo(function VolumeMountPicker({
   )
   return (
     <InstancePickerContent
-      ariaLabel="Mounts"
-      emptyMessage="Nothing mounts this volume"
+      ariaLabel="Used by"
+      emptyMessage="Nothing uses this volume"
       favoritesFilter={false}
       includeKindGroups={false}
       items={items}
@@ -582,7 +734,7 @@ function volumeMountItems(
           ? {
               identity: { id, kind: "app", relayId } as const,
               key: `app:${id}`,
-              name: appNames?.get(id) ?? `App ${id.slice(0, 8)}`,
+              name: appName(appNames, id),
             }
           : mount.kind === "database" && id
             ? {
@@ -603,13 +755,25 @@ function volumeMountItems(
     if (group) group.mounts.push(mount)
     else groups.set(target.key, { ...target, mounts: [mount] })
   }
+  // Apps whose configuration names it but that have no container now.
+  for (const user of volume.users) {
+    const key = `app:${user.appId}`
+    if (groups.has(key)) continue
+    groups.set(key, {
+      identity: { id: user.appId, kind: "app", relayId },
+      mounts: [],
+      name: appName(appNames, user.appId),
+    })
+  }
   return [...groups].map(([key, group]) => {
     const containers = group.mounts.length
     const paths = [...new Set(group.mounts.map((mount) => mount.destination))]
     return {
       identity: group.identity,
       key,
-      meta: `${containers} ${containers === 1 ? "container" : "containers"} · ${paths.join(", ")}`,
+      meta: containers
+        ? `${containers} ${containers === 1 ? "container" : "containers"} · ${paths.join(", ")}`
+        : "Its configuration mounts it",
       name: group.name,
       searchText: [
         ...group.mounts.map((mount) => mount.container),
@@ -647,11 +811,16 @@ const VolumeActions = React.memo(function VolumeActions({
   onDialog: (dialog: VolumeDialog) => void
 }) {
   const own = volume.kind === "relay"
+  const kiln = volume.kind === "kiln"
   const deleteBlocked = own
     ? "The Relay keeps its data here"
-    : volume.mounts.length > 0
-      ? "Remove what mounts it first"
-      : null
+    : !kiln
+      ? "Its App's Compose file declares it; deleting the App deletes it"
+      : volume.users.some((user) => user.configured)
+        ? "An App's configuration mounts it; remove it there first"
+        : volume.mounts.length > 0
+          ? "Remove what mounts it first"
+          : null
   return (
     <DataTableActionGroup>
       <Tooltip>
@@ -736,7 +905,7 @@ const VolumeActions = React.memo(function VolumeActions({
           <TooltipContent side="bottom">More actions</TooltipContent>
         </Tooltip>
         <DropdownMenuContent align="end" className="min-w-44">
-          {canManage && !own ? (
+          {canManage && kiln ? (
             <>
               <DropdownMenuItem
                 onSelect={() => onDialog({ kind: "rename", volume })}

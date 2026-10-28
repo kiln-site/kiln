@@ -1,9 +1,14 @@
+import { RELAY_VOLUME_REFERENCES_PENDING } from "@workspace/contracts"
 import { Effect } from "effect"
 import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 
 import { DockerEngine } from "./docker-engine.js"
 import { fakeDocker } from "./test/docker.js"
-import { relayHarness, TEST_NAMESPACE } from "./test/relay.js"
+import {
+  relayHarness,
+  TEST_NAMESPACE,
+  type RelayHarness,
+} from "./test/relay.js"
 import { RelayVolumes } from "./volumes.js"
 
 const volumeId = "3f9a21c4".padEnd(40, "0")
@@ -13,12 +18,13 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-async function relayVolumes() {
-  const harness = await relayHarness()
+async function relayVolumes(harness?: RelayHarness) {
+  const relay = harness ?? (await relayHarness())
   return new RelayVolumes(
-    harness.config,
-    new DockerEngine(harness.config.dockerSocket),
-    harness.state
+    relay.config,
+    new DockerEngine(relay.config.dockerSocket),
+    relay.state,
+    () => relay.lifecycle.hostDataDirectory()
   )
 }
 
@@ -57,7 +63,7 @@ describe("Relay volumes", () => {
       expect.objectContaining({
         dockerName,
         id: volumeId,
-        kind: "volume",
+        kind: "kiln",
         mountpoint: `/var/lib/docker/volumes/${dockerName}/_data`,
         mounts: [],
         name: "Postgres Data!",
@@ -213,6 +219,7 @@ describe("Relay volumes", () => {
   it("refuses to delete a volume a container mounts, then deletes it once none does", async () => {
     const volumes = await relayVolumes()
     const created = await run(volumes.create(volumeId, "data"))
+    await run(volumes.importAppReferences([]))
     const container = fakeDocker.addContainer({
       mounts: [
         { destination: "/data", source: created.dockerName, type: "volume" },
@@ -234,11 +241,7 @@ describe("Relay volumes", () => {
 
   it("lists the Relay's own data volume, which no request can name to delete", async () => {
     const harness = await relayHarness()
-    const volumes = new RelayVolumes(
-      harness.config,
-      new DockerEngine(harness.config.dockerSocket),
-      harness.state
-    )
+    const volumes = await relayVolumes(harness)
     fakeDocker.addVolume({ name: "kiln_relay-data" })
     const relay = fakeDocker.addContainer({
       mounts: [
@@ -259,6 +262,146 @@ describe("Relay volumes", () => {
         id: null,
         kind: "relay",
         mounts: [expect.objectContaining({ kind: "relay" })],
+      }),
+    ])
+  })
+  it("refuses to delete a volume an App's configuration names, though the App isn't deployed", async () => {
+    const harness = await relayHarness()
+    const volumes = await relayVolumes(harness)
+    await harness.apps.create({ id: appId, name: "Website" })
+    const created = await run(volumes.create(volumeId, "media"))
+
+    // Until Hearth has said which configurations name which volumes, none
+    // can be deleted.
+    await expect(run(volumes.delete(volumeId))).rejects.toThrow(
+      RELAY_VOLUME_REFERENCES_PENDING
+    )
+    await run(volumes.importAppReferences([{ appId, volumeIds: [volumeId] }]))
+    await expect(run(volumes.delete(volumeId))).rejects.toThrow(
+      "An App's configuration mounts this volume"
+    )
+    expect(fakeDocker.volumes.has(created.dockerName)).toBe(true)
+
+    await run(volumes.writeAppReferences(appId, []))
+    await run(volumes.delete(volumeId))
+
+    expect(fakeDocker.volumes.has(created.dockerName)).toBe(false)
+  })
+
+  it("lets a deleted App's configuration no longer keep a volume", async () => {
+    const harness = await relayHarness()
+    const volumes = await relayVolumes(harness)
+    await harness.apps.create({ id: appId, name: "Website" })
+    const created = await run(volumes.create(volumeId, "media"))
+    await run(volumes.importAppReferences([{ appId, volumeIds: [volumeId] }]))
+
+    await harness.apps.delete({ appId, deleteData: true })
+    await run(volumes.delete(volumeId))
+
+    expect(fakeDocker.volumes.has(created.dockerName)).toBe(false)
+  })
+
+  it("refuses to record a configuration naming a volume that's gone", async () => {
+    const harness = await relayHarness()
+    const volumes = await relayVolumes(harness)
+    await harness.apps.create({ id: appId, name: "Website" })
+
+    await expect(
+      run(volumes.writeAppReferences(appId, [volumeId]))
+    ).rejects.toThrow("no longer exists")
+  })
+
+  it("lists who owns and uses each volume, and what Apps mount that no volume covers", async () => {
+    const harness = await relayHarness()
+    const volumes = await relayVolumes(harness)
+    const configuring = "a".repeat(40)
+    const mounting = "b".repeat(40)
+    await harness.apps.create({ id: configuring, name: "Configures it" })
+    await harness.apps.create({ id: mounting, name: "Mounts it" })
+    const shared = await run(volumes.create(volumeId, "shared"))
+    await run(
+      volumes.importAppReferences([
+        { appId: configuring, volumeIds: [volumeId] },
+      ])
+    )
+    const project = `${TEST_NAMESPACE}-kiln-app-${mounting}`
+    fakeDocker.addVolume({
+      labels: {
+        "com.docker.compose.project": project,
+        "com.docker.compose.volume": "db",
+      },
+      name: `${project}_db`,
+    })
+    // Another Relay's App, sharing the daemon.
+    fakeDocker.addVolume({
+      labels: {
+        "com.docker.compose.project": `elsewhere-kiln-app-${mounting}`,
+        "com.docker.compose.volume": "db",
+      },
+      name: `elsewhere-kiln-app-${mounting}_db`,
+    })
+    const anonymous = "e".repeat(64)
+    fakeDocker.addVolume({ name: anonymous })
+    fakeDocker.addContainer({
+      labels: {
+        "com.docker.compose.project": project,
+        "kiln.app.id": mounting,
+        "kiln.app.service": "web",
+        "kiln.relay.owner": TEST_NAMESPACE,
+        "kiln.resource.kind": "app",
+      },
+      mounts: [
+        { destination: "/shared", source: shared.dockerName, type: "volume" },
+        { destination: "/db", source: `${project}_db`, type: "volume" },
+        { destination: "/cache", source: anonymous, type: "volume" },
+        { destination: "/media", source: "/srv/media", type: "bind" },
+      ],
+      name: "web",
+      running: true,
+    })
+
+    const listing = await run(volumes.list())
+
+    expect(listing.referencesImported).toBe(true)
+    expect(
+      listing.volumes.map(({ dockerName, id, kind, owner, users }) => ({
+        dockerName,
+        id,
+        kind,
+        owner,
+        users,
+      }))
+    ).toEqual([
+      {
+        dockerName: `${project}_db`,
+        id: `${mounting}/db`,
+        kind: "app",
+        owner: { appId: mounting, volume: "db" },
+        users: [{ appId: mounting, configured: false, mounted: true }],
+      },
+      {
+        dockerName: shared.dockerName,
+        id: volumeId,
+        kind: "kiln",
+        owner: null,
+        users: [
+          { appId: configuring, configured: true, mounted: false },
+          { appId: mounting, configured: false, mounted: true },
+        ],
+      },
+    ])
+    expect(listing.uncovered).toEqual([
+      expect.objectContaining({
+        appId: mounting,
+        destination: "/cache",
+        kind: "anonymous",
+        service: "web",
+      }),
+      expect.objectContaining({
+        appId: mounting,
+        destination: "/media",
+        kind: "bind",
+        source: "/srv/media",
       }),
     ])
   })

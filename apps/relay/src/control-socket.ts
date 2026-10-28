@@ -1686,6 +1686,9 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "relay.volumes.rename":
     case "relay.volumes.delete":
       return "relay.configure"
+    // What Apps' configurations mount, which only configuring them changes.
+    case "relay.volumes.references.import":
+      return "app.manage"
     case "relay.pairing.create":
       return "relay.pairing.create"
     case "relay.pairing.list":
@@ -1775,6 +1778,7 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "app.deploy":
     case "app.action":
     case "app.limits.write":
+    case "app.volumes.write":
     case "app.network.routes.write":
       return "app.manage"
     case "app.terminal.attach":

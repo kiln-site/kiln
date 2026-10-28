@@ -159,6 +159,16 @@ export interface RelayStoredVolumeName {
   readonly volumeId: string
 }
 
+/** A Kiln volume an App's configuration mounts, deployed or not. */
+export interface RelayAppVolumeReference {
+  readonly appId: string
+  readonly volumeId: string
+}
+
+/** Set once Hearth has sent every App's configured volumes. */
+export const APP_VOLUME_REFERENCES_IMPORTED_KEY =
+  "app_volume_references_imported"
+
 /** Kinds of instance whose disk limit the Relay keeps here, not on Docker. */
 export type RelayDiskLimitKind = "app" | "database"
 
@@ -783,6 +793,25 @@ export class RelayStateStore extends Context.Service<
     ) => Effect.Effect<void, RelayStateError>
     readonly deleteVolumeName: (
       volumeId: string
+    ) => Effect.Effect<void, RelayStateError>
+    readonly listAppVolumeReferences: () => Effect.Effect<
+      ReadonlyArray<RelayAppVolumeReference>,
+      RelayStateError
+    >
+    /** Replaces the volumes one App's configuration names; none forgets it. */
+    readonly replaceAppVolumeReferences: (
+      appId: string,
+      volumeIds: ReadonlyArray<string>
+    ) => Effect.Effect<void, RelayStateError>
+    /**
+     * Replaces each of these Apps' configured volumes and records that Hearth
+     * sent them, together.
+     */
+    readonly importAppVolumeReferences: (
+      apps: ReadonlyArray<{
+        readonly appId: string
+        readonly volumeIds: ReadonlyArray<string>
+      }>
     ) => Effect.Effect<void, RelayStateError>
     readonly deletePendingPrimaryPort: (
       instanceId: string
@@ -1437,6 +1466,22 @@ const migrations = SqliteMigrator.fromRecord({
     yield* sql`
       CREATE INDEX relay_database_connections_target
       ON relay_database_connections (relay_id, database_id)
+      `
+    }),
+  // The Kiln volumes each App's configuration mounts, which Hearth keeps,
+  // so the Relay can refuse to delete one an App would mount when it next
+  // deploys. Relays from before start empty and wait for Hearth to send
+  // them all (`APP_VOLUME_REFERENCES_IMPORTED_KEY`).
+  "29_app_volume_references": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    yield* sql`CREATE TABLE IF NOT EXISTS relay_app_volume_references (
+      app_id TEXT NOT NULL,
+      volume_id TEXT NOT NULL,
+      PRIMARY KEY (app_id, volume_id)
+    ) STRICT`
+    yield* sql`
+      CREATE INDEX IF NOT EXISTS relay_app_volume_references_volume
+      ON relay_app_volume_references (volume_id)
     `
   }),
 })
@@ -1480,6 +1525,22 @@ const makeRelayStateStore = Effect.gen(function* () {
         rows[0] ? { ...rows[0], retryable: rows[0].retryable === 1 } : null
       )
     )
+
+  const replaceAppVolumeReferences = (
+    appId: string,
+    volumeIds: ReadonlyArray<string>
+  ) =>
+    Effect.gen(function* () {
+      yield* sql`
+        DELETE FROM relay_app_volume_references WHERE app_id = ${appId}
+      `
+      for (const volumeId of new Set(volumeIds)) {
+        yield* sql`
+          INSERT INTO relay_app_volume_references (app_id, volume_id)
+          VALUES (${appId}, ${volumeId})
+        `
+      }
+    })
 
   const decodeClientRows = Schema.decodeUnknownEffect(
     Schema.Array(RelayClientRowSchema)
@@ -3642,6 +3703,36 @@ const makeRelayStateStore = Effect.gen(function* () {
         sql`
           DELETE FROM relay_volume_names WHERE volume_id = ${volumeId}
         `.pipe(Effect.asVoid)
+      ),
+    listAppVolumeReferences: () =>
+      run(
+        "list_app_volume_references",
+        sql<RelayAppVolumeReference>`
+          SELECT app_id AS appId, volume_id AS volumeId
+          FROM relay_app_volume_references
+          ORDER BY app_id ASC, volume_id ASC
+        `
+      ),
+    replaceAppVolumeReferences: (appId, volumeIds) =>
+      run(
+        "replace_app_volume_references",
+        sql.withTransaction(replaceAppVolumeReferences(appId, volumeIds))
+      ),
+    importAppVolumeReferences: (apps) =>
+      run(
+        "import_app_volume_references",
+        sql.withTransaction(
+          Effect.gen(function* () {
+            for (const app of apps) {
+              yield* replaceAppVolumeReferences(app.appId, app.volumeIds)
+            }
+            yield* sql`
+              INSERT INTO relay_metadata (key, value)
+              VALUES (${APP_VOLUME_REFERENCES_IMPORTED_KEY}, '1')
+              ON CONFLICT (key) DO UPDATE SET value = excluded.value
+            `
+          })
+        )
       ),
     deleteRuntimeRecovery: (instanceId) =>
       run(

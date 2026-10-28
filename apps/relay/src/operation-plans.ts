@@ -457,6 +457,17 @@ export function controlRequestLocks(
       const id = stringField(payload, "id")
       return id ? [exclusive(laneKeys.volume(id))] : null
     }
+    // Recording that configurations name volumes waits for a deletion of
+    // one to finish, and a deletion waits for the record, so neither misses
+    // the other.
+    case "relay.volumes.references.import": {
+      const apps = Array.isArray(payload.apps) ? payload.apps : []
+      return volumeReferenceLocks(
+        apps.flatMap((app: unknown) =>
+          Predicate.isObject(app) ? stringArray(app.volumeIds) : []
+        )
+      )
+    }
     case "relay.tailscale.install":
     case "relay.tailscale.write":
       return [exclusive(laneKeys.tailscale)]
@@ -565,6 +576,14 @@ export function controlRequestLocks(
       return app(appLifecycleLocks)
     case "app.network.routes.write":
       return app((id) => [...appLifecycleLocks(id), exclusive(laneKeys.routes)])
+    // Apart from the App's lifecycle, so saving its configuration never
+    // waits behind a deployment.
+    case "app.volumes.write":
+      return app((id) => [
+        shared(laneKeys.app(id)),
+        exclusive(laneKeys.appVolumes(id)),
+        ...volumeReferenceLocks(stringArray(payload.volumeIds)),
+      ])
 
     // These replace the server's container or files, so they wait for
     // everything else on it, live backups included.
@@ -609,6 +628,16 @@ function withInstance(
   return typeof resolved === "string"
     ? locks(resolved)
     : resolved.then((id) => locks(id))
+}
+
+function volumeReferenceLocks(
+  volumeIds: ReadonlyArray<string>
+): Array<LaneLock> {
+  return [...new Set(volumeIds)].map((id) => shared(laneKeys.volume(id)))
+}
+
+function stringArray(value: unknown): Array<string> {
+  return Array.isArray(value) ? value.filter(Predicate.isString) : []
 }
 
 function stringField(

@@ -278,6 +278,8 @@ export const updateAppConfig = createServerFn({ method: "POST" })
       data
     )
     publishAppChange(data.relayId, false)
+    // Which volumes the app uses shows on the Relay's Volumes page.
+    if (data.config.mounts) publishRelayVolumesChange(data.relayId)
     return { config }
   })
 
@@ -478,6 +480,8 @@ export const deleteApp = createServerFn({ method: "POST" })
       deleteAppRecordEffect(relay.id, data.appId)
     )
     publishAppChange(relay.id, true)
+    // Its own volumes went with it.
+    publishRelayVolumesChange(relay.id)
     return { deleted: true }
   })
 
@@ -543,6 +547,15 @@ function publishAppChange(relayId: string, directoryChanged: boolean): void {
     audience: { kind: "relays", relayIds: [relayId] },
     scope: { relayId },
     topics: directoryChanged ? ["apps", "app-directory"] : ["apps"],
+    type: "hearth.invalidate",
+  })
+}
+
+function publishRelayVolumesChange(relayId: string): void {
+  publishRealtimeChange({
+    audience: { kind: "relays", relayIds: [relayId] },
+    scope: { relayId },
+    topics: ["relay-volumes"],
     type: "hearth.invalidate",
   })
 }

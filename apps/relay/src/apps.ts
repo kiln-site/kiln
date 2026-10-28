@@ -97,7 +97,7 @@ import {
   relayResourceNames,
   type RelayResourceNames,
 } from "./relay-resources.js"
-import { relayVolumeDockerName } from "./volumes.js"
+import { appVolumeOwner, relayVolumeDockerName } from "./volumes.js"
 
 // Apps are found by their labels, like databases: the Relay keeps nothing
 // about them besides their data directory and the logs of their recent
@@ -766,15 +766,32 @@ export class AppDriver {
         { concurrency: "unbounded", discard: true }
       )
     )
-    const project = [
-      `com.docker.compose.project=${this.#composeProject(input.appId)}`,
-    ]
     // Rolled deployments' projects too.
     await this.#removeComposeNetworks(input.appId, null)
     if (input.deleteData) {
-      for (const volume of await docker(
-        engine.listVolumes({ filters: { label: project } })
-      )) {
+      // Only the volumes the App's own Compose projects made, never a Kiln
+      // volume it mounted. One another App's containers mount, as a file
+      // that names it can, stays: it's that App's data now too.
+      const [volumes, remaining] = await docker(
+        Effect.all([
+          engine.listVolumes({ filters: { label: [COMPOSE_PROJECT_LABEL] } }),
+          engine.listContainers({ all: true }),
+        ])
+      )
+      const mounted = new Set(
+        remaining.flatMap((container) =>
+          (container.Mounts ?? []).flatMap((mount) =>
+            mount.Type === "volume" && mount.Name ? [mount.Name] : []
+          )
+        )
+      )
+      for (const volume of volumes) {
+        if (
+          appVolumeOwner(this.#config, volume.Labels)?.appId !== input.appId ||
+          mounted.has(volume.Name)
+        ) {
+          continue
+        }
         await docker(engine.removeVolume(volume.Name).pipe(Effect.ignore))
       }
     }
@@ -2712,7 +2729,7 @@ export class AppDriver {
   }
 
   #composeProject(appId: string): string {
-    return `${this.#prefix()}kiln-app-${appId}`
+    return this.#resources.appComposeProject(appId)
   }
 
   #hostname(appId: string): string {

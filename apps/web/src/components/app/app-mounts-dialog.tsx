@@ -158,8 +158,8 @@ export function AppMountsDialog({
         <DialogHeader>
           <DialogTitle>Volumes</DialogTitle>
           <DialogDescription>
-            All the app keeps across deploys; anything else in its containers
-            is lost. Changes apply on the next deploy.
+            All the app keeps across deploys; anything else in its containers is
+            lost. Changes apply on the next deploy.
           </DialogDescription>
         </DialogHeader>
         <form
@@ -633,18 +633,19 @@ function VolumeField({
   volumes: VolumesQuery
 }) {
   const choices =
-    volumes.data?.volumes.filter((volume) => volume.kind === "volume") ?? []
+    volumes.data?.volumes.filter((volume) => volume.kind === "kiln") ?? []
   const chosen = choices.find((volume) => volume.id === volumeId)
-  const shared = chosen?.mounts.some(
-    (mount) => mount.kind !== "app" || mount.resourceId !== appId
-  )
+  const shared =
+    chosen?.mounts.some(
+      (mount) => mount.kind !== "app" || mount.resourceId !== appId
+    ) || chosen?.users.some((user) => user.appId !== appId)
   return (
     <Field
       hint={
         volumes.isError
           ? volumes.error.message
           : shared
-            ? "Already mounted elsewhere; they’ll share its data."
+            ? "Another App or container uses it; they’ll share its data."
             : undefined
       }
       label="Volume"

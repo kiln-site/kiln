@@ -133,6 +133,51 @@ A Compose project replaced this way deploys as before, under the app's own
 project name, so Compose keeps its volumes. While both copies run, the node
 reserves both copies' memory.
 
+## Volumes
+
+The Relay manages two kinds of Docker named volume, each with an ID that
+backups and deletion name it by:
+
+- **Kiln volumes**, made on the Relay's Volumes page and mounted from an
+  app's Volumes section. A Kiln volume's ID is the one it was made with. No
+  app owns one: any app's configuration may mount it.
+- **An app's Compose volumes**, those its Compose file declares. The app
+  owns them, and their ID is the app's ID and the volume's key in the file,
+  `<app ID>/<key>`. Compose labels each volume with its project and key, and
+  the Relay reads the owner from those labels, so the ID holds whatever
+  Docker name the file gives the volume.
+
+A redeploy keeps an app's Compose volumes: Compose runs under the app's own
+project name and finds them again. A rolled deployment runs as a project of
+its own, `<project>-<deployment>`, which would make new volumes, so a
+Compose file that keeps data in a volume never rolls; it deploys under the
+app's own project, as above. A rolled deployment therefore makes no volume
+an app's services use, and the app's volumes keep their data and IDs
+across deployments of either kind. If a file renames a volume's Docker name
+(its `name:`), the key's ID goes to the volume the app's containers mount,
+and the old one stays listed as the app's, without an ID, until the app is
+deleted.
+
+An app **uses** a volume when its configuration mounts it, deployed or not,
+or one of its containers mounts it now. The Relay keeps which Kiln volumes
+each app's configuration names: Hearth tells it before saving a
+configuration that mounts a new one, after saving one that drops one, and
+sends every app's at once to a Relay that has none, such as one updated from
+before. Until then that Relay refuses to delete any volume. A Kiln volume
+can't be deleted while any app's configuration names it or any container
+mounts it.
+
+Deleting an app with its data removes only the volumes its own Compose
+projects made, never a Kiln volume, and never one of its volumes another
+container mounts, as another app's file can by naming it `external`.
+
+What an app's containers mount that no managed volume or the app's folder
+holds isn't covered by its backups, and the Relay's volume listing reports
+it per app: volumes Docker named itself, such as those an image declares,
+named volumes Kiln doesn't manage, and paths on the node outside the app's
+folder. Files an app's configuration mounts and a repository checkout don't
+count; each deployment writes them again.
+
 ## Recording
 
 Hearth records a deployment once its Relay accepts it, and follows it there

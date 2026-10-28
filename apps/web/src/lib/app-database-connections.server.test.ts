@@ -81,6 +81,11 @@ const imports = selectRows<{
 // What a Hearth that restarted knows: only what MySQL kept.
 const restartHearth = () => globalThis.kilnDatabaseConnectionImports?.clear()
 
+// Saving an App's config also sends its volume references; only the
+// handover matters here.
+const handovers = () =>
+  relay.rpc.mock.calls.filter((call) => call[1] === "database.network.import")
+
 const persistedRelay = (id: string) => ({ enabled: true, id }) as PersistedRelay
 
 afterEach(() => {
@@ -128,7 +133,7 @@ describeMysql("handing Apps' database connections to their Relay", () => {
             apps: [{ appId: website, databaseIds: [postgres, redis] }],
           }
           assert.deepStrictEqual(
-            relay.rpc.mock.calls.map((call) => [call[1], call[2]]),
+            handovers().map((call) => [call[1], call[2]]),
             [
               ["database.network.import", handover],
               ["database.network.import", handover],
@@ -150,7 +155,7 @@ describeMysql("handing Apps' database connections to their Relay", () => {
           yield* ensureAppDatabaseConnectionsImportedEffect(
             persistedRelay(relayId)
           )
-          assert.strictEqual(relay.rpc.mock.calls.length, 2)
+          assert.strictEqual(handovers().length, 2)
         })
     )
 

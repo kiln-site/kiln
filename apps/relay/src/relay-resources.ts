@@ -7,6 +7,9 @@ export const RELAY_OWNER_LABEL = "kiln.relay.owner"
 export interface RelayResourceNames {
   // The name an app's service answers to on its network.
   appAlias(appId: string, service: string): string
+  // The Compose project an App's Compose deployments run as. A rolled
+  // deployment runs as `<project>-<deployment>` until it takes over.
+  appComposeProject(appId: string): string
   appNetwork(appId: string): string
   coreDnsContainer: string
   edgeNetwork: string
@@ -35,6 +38,7 @@ export function relayResourceNames(
       service === APP_SERVICE
         ? `app-${appId.slice(0, 8)}`
         : `${service}.app-${appId.slice(0, 8)}`,
+    appComposeProject: (appId) => name(`kiln-app-${appId}`),
     appNetwork: (appId) => name(`kiln-app-${appId}-network`),
     coreDnsContainer: name("kiln-coredns"),
     edgeNetwork: name("kiln-edge"),
