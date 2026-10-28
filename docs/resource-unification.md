@@ -135,7 +135,7 @@ engine, a volume is archived through Docker.
   backup says so. It can instead stop the resource for the backup and start
   it again after, for data a live copy can't capture safely, such as a
   database's files in a volume. A final backup is taken of the frozen
-  resource, which nothing else can write to.
+  resource; a database's is a live dump (see Deletion).
 - Restoring a volume needs every container mounting it stopped, checked on
   the Relay; restoring an App's folder needs the App stopped.
 - Permissions: backup contents are the resource's data, so backing up or
