@@ -89,6 +89,7 @@ const hearthRealtimeQueryScopes = {
   ],
   "instance-web-routes": [prefix(["web-routes"])],
   notifications: [exact(queryKeys.notifications)],
+  operations: [prefix(["operations"])],
   preferences: [exact(queryKeys.uiPreferences)],
   "relay-health": [
     exact(queryKeys.relays),

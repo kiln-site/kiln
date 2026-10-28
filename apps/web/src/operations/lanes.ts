@@ -29,6 +29,7 @@ import {
 
 import { Database, type DatabaseTransaction } from "@/effect/database"
 import { operationsTablePrefix } from "@/operations/engine"
+import { publishOperationsChange } from "@/operations/realtime"
 import { databaseTable } from "@/lib/database-config"
 
 // A development reload loads this module again in the same process, whose
@@ -140,6 +141,7 @@ export function setGrantedHandler(handler: GrantedHandler): void {
 
 const announce = (granted: ReadonlyArray<string>) =>
   Effect.gen(function* () {
+    publishOperationsChange()
     for (const id of granted) {
       const waiter = waiters.get(id)
       if (waiter) yield* Deferred.succeed(waiter, undefined)
@@ -294,6 +296,34 @@ export const startOperation = Effect.fnUntraced(function* (
       })
     }
   }
+  publishOperationsChange()
+})
+
+export interface OperationProgress {
+  /** What it's doing now, in a few words. */
+  readonly message: string
+  /** How far along it is, when it can count: `done` of `total`. */
+  readonly done?: number
+  readonly total?: number
+}
+
+/**
+ * Says what a running operation is doing now, for whoever watches it. Only
+ * the latest is kept; an operation that ended keeps what it last said.
+ */
+export const reportProgress = Effect.fnUntraced(function* (
+  id: string,
+  progress: OperationProgress
+) {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  yield* database.execute(
+    "operations.progress",
+    `UPDATE ${operationTable} SET progress = ?, updated_at = ?
+      WHERE id = ? AND state = 'running'`,
+    [JSON.stringify(progress), now, id]
+  )
+  publishOperationsChange()
 })
 
 /**

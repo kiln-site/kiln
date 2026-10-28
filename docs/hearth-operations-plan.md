@@ -534,14 +534,14 @@ Each item moves when its phase comes. Links point at where it lives today.
 
 ### Phase 0–1: foundation
 
-- [ ] Prototype Workflow + `SingleRunner` on MySQL; kill-and-recover tests; benchmarks
-- [ ] Extract `packages/operations` from `apps/relay/src/operation-lanes.ts`; Relay unchanged; add normalization and diagnostics
-- [ ] Share the SQL client between `Database` and the workflow layers
-- [ ] Hearth lane broker on MySQL: durable intake, grants with dispatch, driver generations, single engine
+- [x] Prototype Workflow + `SingleRunner` on MySQL; kill-and-recover tests; benchmarks
+- [x] Extract `packages/operations` from `apps/relay/src/operation-lanes.ts`; Relay unchanged; add normalization and diagnostics
+- [x] Share the SQL client between `Database` and the workflow layers
+- [x] Hearth lane broker on MySQL: durable intake, grants with dispatch, driver generations, single engine
 - [ ] Relay step adapter: stored command identity, `operation.get` recovery, recipes per command kind
-- [ ] `Operations.*` spans, links, stored timings, metrics
-- [ ] Operation progress over realtime
-- [ ] Operator view (admin): running, waiting, waiting-on, needs attention
+- [x] `Operations.*` spans, links, stored timings, metrics
+- [x] Operation progress over realtime
+- [x] Operator view (admin): running, waiting, waiting-on, needs attention
 
 ### Phase 2: pilots
 

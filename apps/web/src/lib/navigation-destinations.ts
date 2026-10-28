@@ -22,6 +22,7 @@ import {
   Table2,
   TerminalSquare,
   Waypoints,
+  Workflow,
 } from "lucide-react"
 import {
   accessPermissionSupported,
@@ -616,6 +617,7 @@ export const relayDestinations = [
 export type KilnDestinationId =
   | "info"
   | "logs"
+  | "operations"
   | "security"
   | "terminal"
   | "viewer"
@@ -661,6 +663,23 @@ export const kilnDestinations = [
     ],
     label: "Security",
     to: "/kiln/security",
+  },
+  {
+    icon: Workflow,
+    id: "operations",
+    keywords: [
+      "kiln",
+      "hearth",
+      "operations",
+      "lanes",
+      "locks",
+      "queue",
+      "waiting",
+      "running",
+      "stuck",
+    ],
+    label: "Operations",
+    to: "/kiln/operations",
   },
   {
     icon: Table2,

@@ -20,6 +20,7 @@ export const hearthRealtimeTopics = [
   "instance-directory",
   "instance-web-routes",
   "notifications",
+  "operations",
   "preferences",
   "relay-health",
   "relay-proxy",

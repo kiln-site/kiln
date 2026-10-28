@@ -36,6 +36,7 @@ import { relayControlDial } from "./0033_relay_control_dial"
 import { relayJoinPairing } from "./0034_relay_join_pairing"
 import { cloudflareConnections } from "./0035_cloudflare_connections"
 import { operations } from "./0036_operations"
+import { operationProgress } from "./0037_operation_progress"
 
 // Append new migrations with the next id. Never edit or reorder applied ones.
 export const migrations: ReadonlyArray<Migration> = [
@@ -75,4 +76,5 @@ export const migrations: ReadonlyArray<Migration> = [
   relayJoinPairing,
   cloudflareConnections,
   operations,
+  operationProgress,
 ]

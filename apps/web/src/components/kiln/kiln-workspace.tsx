@@ -47,7 +47,11 @@ export const KilnWorkspaceShell = React.memo(function KilnWorkspaceShell({
 
 function KilnWorkspaceBoundary({ children }: { children: React.ReactNode }) {
   const host = useKilnHost()
-  if (host) return children
+  // Operations are Hearth's own, whichever Relay reports its services.
+  const hostless = useRouterState({
+    select: (state) => state.location.pathname === "/kiln/operations",
+  })
+  if (host || hostless) return children
   return (
     <section className="grid min-h-0 flex-1 place-items-center bg-card px-6 text-center">
       <div className="max-w-md">
