@@ -116,6 +116,24 @@ function fakeCloudflare(zones: Array<{ id: string; name: string }>) {
             .map(([id, record]) => ({ id, ...record }))
         )
       }
+      // Cloudflare refuses a record whose comment is over 100 characters.
+      const refusesComment = (
+        writes: ReadonlyArray<Pick<FakeRecord, "comment">>
+      ) =>
+        writes.some((write) => (write.comment?.length ?? 0) > 100)
+          ? Response.json(
+              {
+                errors: [
+                  {
+                    code: 9_100,
+                    message:
+                      "DNS record comment exceeds the maximum length of 100 characters.",
+                  },
+                ],
+              },
+              { status: 400 }
+            )
+          : null
       const create = (body: Omit<FakeRecord, "zoneId">) => {
         nextId += 1
         const id = `record-${nextId}`
@@ -127,16 +145,22 @@ function fakeCloudflare(zones: Array<{ id: string; name: string }>) {
           deletes: Array<{ id: string }>
           posts: Array<FakeRecord>
         }
+        const refused = refusesComment(batch.posts)
+        if (refused) return refused
         for (const { id } of batch.deletes) records.delete(id)
         return success({ posts: batch.posts.map(create) })
       }
-      if (method === "POST")
-        return success(create(JSON.parse(String(init?.body))))
+      if (method === "POST") {
+        const body = JSON.parse(String(init?.body)) as FakeRecord
+        return refusesComment([body]) ?? success(create(body))
+      }
       if (method === "DELETE") {
         records.delete(recordId ?? "")
         return success({ id: recordId })
       }
       const body = JSON.parse(String(init?.body)) as FakeRecord
+      const refused = refusesComment([body])
+      if (refused) return refused
       records.set(recordId ?? "", { ...body, zoneId: zoneId ?? "" })
       return success({ id: recordId, name: body.name, type: body.type })
     })

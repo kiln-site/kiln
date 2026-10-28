@@ -309,6 +309,19 @@ export const deleteCloudflareRecordEffect = Effect.fn("cloudflare.dns.delete")(
   }
 )
 
+// The longest comment Cloudflare takes on a DNS record.
+const COMMENT_LIMIT = 100
+
+/**
+ * The note on a record Kiln makes: what it's for, and its marker, by which
+ * Kiln finds the record again. Cloudflare refuses a comment over 100
+ * characters, so a note that doesn't fit is only the marker.
+ */
+export function kilnRecordComment(owner: string, marker: string): string {
+  const comment = `Kiln ${owner} (${marker})`
+  return comment.length <= COMMENT_LIMIT ? comment : `Kiln (${marker})`
+}
+
 /**
  * A web hostname's record, pointing at its Relay. `comment` says what it's
  * for, as Cloudflare's dashboard shows it.

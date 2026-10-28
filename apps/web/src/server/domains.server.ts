@@ -11,6 +11,7 @@ import {
   createCloudflareAddressRecordEffect,
   createCloudflareSrvRecordEffect,
   deleteCloudflareRecordEffect,
+  kilnRecordComment,
   listCloudflareRecordsEffect,
   replaceCloudflareAddressRecordEffect,
   updateCloudflareAddressRecordEffect,
@@ -1639,7 +1640,10 @@ async function requiredRelay(id: string): Promise<PersistedRelay> {
  * record Kiln never heard back about is found again either way.
  */
 function domainRecordComment(instanceId: string, assignmentId: string) {
-  return `Managed by Kiln for server ${instanceId} (${domainRecordMarker(assignmentId)})`
+  return kilnRecordComment(
+    `server ${instanceId}`,
+    domainRecordMarker(assignmentId)
+  )
 }
 
 function domainRecordMarker(assignmentId: string) {

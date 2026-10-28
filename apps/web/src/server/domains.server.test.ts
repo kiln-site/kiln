@@ -213,6 +213,10 @@ function fakeCloudflare(
             }))
         )
       }
+      // Cloudflare refuses a record whose comment is over 100 characters.
+      const commentTooLong = (
+        writes: ReadonlyArray<{ readonly comment?: string }>
+      ) => writes.some((write) => (write.comment?.length ?? 0) > 100)
       const create = (record: {
         comment?: string
         name: string
@@ -227,13 +231,20 @@ function fakeCloudflare(
       if (method === "POST" && url.pathname.endsWith("/batch")) {
         const batch = JSON.parse(String(init?.body)) as {
           deletes: Array<{ id: string }>
-          posts: Array<{ name: string; type: string }>
+          posts: Array<{ comment?: string; name: string; type: string }>
         }
+        if (commentTooLong(batch.posts)) return failure(400, 9_100)
         for (const { id } of batch.deletes) records.delete(id)
         return success({ posts: batch.posts.map(create) })
       }
       if (method === "POST") {
-        return success(create(JSON.parse(String(init?.body))))
+        const record = JSON.parse(String(init?.body)) as {
+          comment?: string
+          name: string
+          type: string
+        }
+        if (commentTooLong([record])) return failure(400, 9_100)
+        return success(create(record))
       }
       const id = url.pathname.split("/").at(-1) ?? ""
       if (method === "DELETE") {
@@ -242,10 +253,12 @@ function fakeCloudflare(
         return success({ id })
       }
       const record = JSON.parse(String(init?.body)) as {
+        comment?: string
         name: string
         type: string
       }
       if (!records.has(id)) return failure(404, 81_044)
+      if (commentTooLong([record])) return failure(400, 9_100)
       if (refuseUpdate.has(id)) return failure(503)
       records.set(id, record.name)
       return success({ id, name: record.name, type: record.type })

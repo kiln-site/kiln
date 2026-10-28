@@ -7,6 +7,7 @@ import {
   cloudflareHostnameAvailableEffect,
   createCloudflareWebRecordEffect,
   deleteCloudflareRecordEffect,
+  kilnRecordComment,
   listCloudflareRecordsEffect,
   listCloudflareZonesEffect,
   replaceCloudflareWebRecordEffect,
@@ -908,11 +909,10 @@ export const resyncWebHostnamesEffect = Effect.fn("webHostnames.resync")(
  * server moves.
  */
 function webRecordComment(row: WebHostname): string {
-  const owner =
-    row.resourceType === "app"
-      ? `app ${row.resourceId}`
-      : `a web route of server ${row.resourceId}`
-  return `Managed by Kiln for ${owner} (${webRecordMarker(row)})`
+  return kilnRecordComment(
+    `${row.resourceType === "app" ? "app" : "server"} ${row.resourceId}`,
+    webRecordMarker(row)
+  )
 }
 
 function webRecordMarker(row: WebHostname): string {
