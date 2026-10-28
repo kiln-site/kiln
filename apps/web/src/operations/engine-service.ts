@@ -67,6 +67,9 @@ export const OperationsEngineLive = Layer.effect(OperationsEngineService)(
   Effect.gen(function* () {
     const { client } = yield* DatabaseClient
     const services = yield* Effect.context<AppCache | Database>()
+    // Workflows end operations through the lanes, which start the next
+    // granted ones with this same engine.
+    let service: OperationsEngineService["Service"] | undefined
     const engines = yield* ScopedCache.makeWith({
       capacity: 1,
       lookup: () =>
@@ -86,7 +89,8 @@ export const OperationsEngineLive = Layer.effect(OperationsEngineService)(
             HearthWorkflows.pipe(
               Layer.provideMerge(OperationsEngine),
               Layer.provide(Layer.succeed(SqlClient.SqlClient)(sql)),
-              Layer.provide(Layer.succeedContext(services))
+              Layer.provide(Layer.succeedContext(services)),
+              Layer.provide(Layer.sync(OperationsEngineService)(() => service!))
             ),
             scope
           )
@@ -94,7 +98,7 @@ export const OperationsEngineLive = Layer.effect(OperationsEngineService)(
       timeToLive: (exit) =>
         Exit.isSuccess(exit) ? Duration.infinity : Duration.seconds(1),
     })
-    return {
+    service = OperationsEngineService.of({
       engine: ScopedCache.get(engines, "engine").pipe(
         Effect.mapError(
           (cause) =>
@@ -104,7 +108,8 @@ export const OperationsEngineLive = Layer.effect(OperationsEngineService)(
             })
         )
       ),
-    }
+    })
+    return service
   })
 )
 

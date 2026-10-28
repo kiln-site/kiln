@@ -1,0 +1,600 @@
+/**
+ * Hearth's operation lanes, kept in MySQL (docs/hearth-operations-plan.md).
+ *
+ * An operation is admitted with the locks it needs and takes its place in
+ * line; the lane rule shared with the Relays (`selectGrants`) decides when
+ * it may start. Every decision to grant or release locks runs in one short
+ * transaction that locks the scheduler row, so decisions are serial and
+ * survive a restart: who waits, who holds what, and in what order.
+ */
+import { createHash, randomUUID } from "node:crypto"
+
+import {
+  LockTable,
+  normalizeLocks,
+  selectGrants,
+  type LaneLock,
+  type LaneMode,
+} from "@workspace/operations"
+import type { RowDataPacket } from "mysql2/promise"
+import {
+  Clock,
+  Deferred,
+  Duration,
+  Effect,
+  Metric,
+  Option,
+  Schema,
+} from "effect"
+
+import { Database, type DatabaseTransaction } from "@/effect/database"
+import type { OperationsEngineService } from "@/operations/engine-service"
+import { databaseTable } from "@/lib/database-config"
+
+/** This Hearth process, as the driver of the operations it grants. */
+export const hearthDriverId = randomUUID()
+
+export type OperationState =
+  | "cancelled"
+  | "failed"
+  | "granted"
+  | "interrupted"
+  | "running"
+  | "succeeded"
+  | "waiting"
+
+export type OperationOutcome = Extract<
+  OperationState,
+  "cancelled" | "failed" | "interrupted" | "succeeded"
+>
+
+export interface Admission {
+  readonly kind: string
+  readonly version: number
+  /** Runs as a workflow that survives a restart. */
+  readonly durable: boolean
+  readonly locks: ReadonlyArray<LaneLock>
+  /** The encoded input, stored with the operation. */
+  readonly input: unknown
+  /** One accepted intent: admitting it again returns the same operation. */
+  readonly idempotencyKey?: string | undefined
+  readonly actorId?: string | null | undefined
+}
+
+export interface Admitted {
+  readonly id: string
+  /** Whether this admission found the operation already admitted. */
+  readonly existing: boolean
+}
+
+export class OperationConflictError extends Schema.TaggedError<OperationConflictError>()(
+  "OperationConflictError",
+  { message: Schema.String }
+) {}
+
+export class OperationEndedError extends Schema.TaggedError<OperationEndedError>()(
+  "OperationEndedError",
+  { message: Schema.String, state: Schema.String }
+) {}
+
+const operationTable = databaseTable("operation")
+const lockTable = databaseTable("operation_lock")
+const schedulerTable = databaseTable("operation_scheduler")
+
+const admitted = Metric.counter("hearth.operations.admitted", {
+  description: "Operations admitted to Hearth's lanes",
+  attributes: { unit: "{operation}" },
+  incremental: true,
+})
+
+const finished = Metric.counter("hearth.operations.finished", {
+  description: "Operations that ended, by how they ended",
+  attributes: { unit: "{operation}" },
+  incremental: true,
+})
+
+const durationBoundaries = [
+  0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 300, 1800,
+  3600,
+]
+
+const waitDuration = Metric.histogram("hearth.operations.wait.duration", {
+  description: "Time from admitting an operation until its locks were granted",
+  attributes: { unit: "s" },
+  boundaries: durationBoundaries,
+})
+
+const holdDuration = Metric.histogram("hearth.operations.hold.duration", {
+  description: "Time an operation held its locks, from grant to release",
+  attributes: { unit: "s" },
+  boundaries: durationBoundaries,
+})
+
+// Operations of this process waiting for their grant; a decision that
+// grants one wakes it.
+const waiters = new Map<string, Deferred.Deferred<void>>()
+type GrantedHandler = (
+  ids: ReadonlyArray<string>
+) => Effect.Effect<void, never, Database | OperationsEngineService>
+
+// Called with operations a decision granted, such as to start a durable
+// operation's workflow. Set once by the durable side.
+let onGranted: GrantedHandler = () => Effect.void
+
+/** Has granted durable operations started, wherever a decision grants them. */
+export function setGrantedHandler(handler: GrantedHandler): void {
+  onGranted = handler
+}
+
+const announce = (granted: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    for (const id of granted) {
+      const waiter = waiters.get(id)
+      if (waiter) yield* Deferred.succeed(waiter, undefined)
+    }
+    if (granted.length > 0) yield* onGranted(granted)
+  })
+
+/**
+ * Admits an operation: stores it, its input, and its locks in line, and
+ * grants whatever the lane rule allows now. With an idempotency key, an
+ * operation already admitted under it is returned instead, unless its input
+ * differs.
+ */
+export const admitOperation = Effect.fn("Operations.enqueue")(function* (
+  admission: Admission
+) {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  const locks = normalizeLocks(admission.locks)
+  const inputJson = JSON.stringify(admission.input ?? null)
+  const inputHash = createHash("sha256")
+    .update(`${admission.kind}@${admission.version}\n${inputJson}`)
+    .digest("hex")
+  const span = yield* Effect.option(Effect.currentSpan)
+  const decision = yield* database.transaction(
+    "operations.admit",
+    (transaction) =>
+      Effect.gen(function* () {
+        const sequence = yield* takeSchedulerTurn(transaction)
+        if (admission.idempotencyKey !== undefined) {
+          const [found] = yield* transaction.queryRows<
+            RowDataPacket & { id: string; input_hash: string }
+          >(
+            `SELECT id, input_hash FROM ${operationTable}
+              WHERE kind = ? AND idempotency_key = ?`,
+            [admission.kind, admission.idempotencyKey]
+          )
+          if (found) {
+            if (found.input_hash !== inputHash) {
+              return yield* new OperationConflictError({
+                message: `${admission.kind} was already started with other input under this key`,
+              })
+            }
+            return { admitted: { existing: true, id: found.id }, granted: [] }
+          }
+        }
+        const id = randomUUID()
+        yield* transaction.execute(
+          `INSERT INTO ${operationTable}
+             (id, kind, version, durable, sequence, idempotency_key,
+              input_hash, input, state, actor_id, trace_id, span_id,
+              trace_sampled, admitted_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'waiting', ?, ?, ?, ?, ?, ?)`,
+          [
+            id,
+            admission.kind,
+            admission.version,
+            admission.durable,
+            sequence,
+            admission.idempotencyKey ?? null,
+            inputHash,
+            inputJson,
+            admission.actorId ?? null,
+            Option.isSome(span) ? span.value.traceId : null,
+            Option.isSome(span) ? span.value.spanId : null,
+            Option.isSome(span) ? span.value.sampled : false,
+            now,
+            now,
+          ]
+        )
+        for (const lock of locks) {
+          yield* transaction.execute(
+            `INSERT INTO ${lockTable} (operation_id, lock_key, mode, held)
+             VALUES (?, ?, ?, 0)`,
+            [id, lock.key, lock.mode]
+          )
+        }
+        const granted = yield* grantWaiting(transaction, now)
+        return { admitted: { existing: false, id }, granted }
+      })
+  )
+  yield* Effect.annotateCurrentSpan({
+    "operation.id": decision.admitted.id,
+    "operation.kind": admission.kind,
+    "operation.locks": locks.length,
+  })
+  if (!decision.admitted.existing) {
+    yield* Metric.update(
+      Metric.withAttributes(admitted, { "operation.kind": admission.kind }),
+      1
+    )
+  }
+  yield* announce(decision.granted)
+  return decision.admitted as Admitted
+})
+
+/**
+ * Waits until an operation of this process is granted its locks. Fails if
+ * it ended first, as one withdrawn or interrupted does.
+ */
+export const awaitGrant = Effect.fnUntraced(function* (id: string) {
+  const waiter = yield* Deferred.make<void>()
+  waiters.set(id, waiter)
+  yield* Effect.gen(function* () {
+    while (true) {
+      const state = yield* loadState(id)
+      if (state === "granted" || state === "running") return
+      if (state !== "waiting") {
+        return yield* new OperationEndedError({
+          message: `The operation ended before it started (${state})`,
+          state,
+        })
+      }
+      // A wake answers at once; the check again covers a decision this
+      // process didn't make.
+      yield* Deferred.await(waiter).pipe(Effect.timeoutOption("2 seconds"))
+    }
+  }).pipe(Effect.ensuring(Effect.sync(() => waiters.delete(id))))
+})
+
+/** Marks a granted operation as running. */
+export const startOperation = Effect.fnUntraced(function* (
+  id: string,
+  executionId?: string
+) {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  yield* database.execute(
+    "operations.start",
+    `UPDATE ${operationTable}
+        SET state = 'running', started_at = COALESCE(started_at, ?),
+            execution_id = COALESCE(?, execution_id), updated_at = ?
+      WHERE id = ? AND state IN ('granted', 'running')`,
+    [now, executionId ?? null, now, id]
+  )
+})
+
+/**
+ * Ends an operation and releases its locks, then grants what that frees.
+ * Ending one already ended changes nothing.
+ */
+export const finishOperation = Effect.fn("Operations.finish")(function* (
+  id: string,
+  outcome: OperationOutcome,
+  error?: string
+) {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  const decision = yield* database.transaction(
+    "operations.finish",
+    (transaction) =>
+      Effect.gen(function* () {
+        yield* takeSchedulerTurn(transaction)
+        const [row] = yield* transaction.queryRows<
+          RowDataPacket & {
+            admitted_at: number
+            granted_at: number | null
+            kind: string
+            state: OperationState
+          }
+        >(
+          `SELECT kind, state, admitted_at, granted_at FROM ${operationTable}
+            WHERE id = ? FOR UPDATE`,
+          [id]
+        )
+        if (!row || !isOpen(row.state)) {
+          return { ended: null, granted: [] as ReadonlyArray<string> }
+        }
+        yield* transaction.execute(
+          `UPDATE ${operationTable}
+              SET state = ?, error = ?, finished_at = ?, updated_at = ?
+            WHERE id = ?`,
+          [outcome, error?.slice(0, 1024) ?? null, now, now, id]
+        )
+        yield* transaction.execute(
+          `DELETE FROM ${lockTable} WHERE operation_id = ?`,
+          [id]
+        )
+        return {
+          ended: row,
+          granted: yield* grantWaiting(transaction, now),
+        }
+      })
+  )
+  if (decision.ended) {
+    const kind = { "operation.kind": decision.ended.kind }
+    yield* Metric.update(
+      Metric.withAttributes(finished, {
+        ...kind,
+        "operation.outcome": outcome,
+      }),
+      1
+    )
+    if (decision.ended.granted_at !== null) {
+      yield* Metric.update(
+        Metric.withAttributes(holdDuration, kind),
+        (now - Number(decision.ended.granted_at)) / 1000
+      )
+    }
+  }
+  yield* announce(decision.granted)
+})
+
+/**
+ * Takes over after a restart: an operation that ended with the request
+ * running it, as any but a durable one does, is withdrawn if it was still
+ * waiting and marked interrupted if it ran, freeing its locks. Durable
+ * operations the previous Hearth was driving become this one's. Returns the
+ * durable operations granted but not yet started, to start.
+ */
+export const recoverOperations = Effect.fn("Operations.recover")(function* () {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  const decision = yield* database.transaction(
+    "operations.recover",
+    (transaction) =>
+      Effect.gen(function* () {
+        yield* takeSchedulerTurn(transaction)
+        const orphans = yield* transaction.queryRows<
+          RowDataPacket & { id: string; state: OperationState }
+        >(
+          `SELECT id, state FROM ${operationTable}
+            WHERE durable = 0 AND state IN ('waiting', 'granted', 'running')
+              AND (driver IS NULL OR driver <> ?)
+            FOR UPDATE`,
+          [hearthDriverId]
+        )
+        for (const orphan of orphans) {
+          const ran = orphan.state !== "waiting"
+          yield* transaction.execute(
+            `UPDATE ${operationTable}
+                SET state = ?, error = ?, finished_at = ?, updated_at = ?
+              WHERE id = ?`,
+            [
+              ran ? "interrupted" : "cancelled",
+              ran
+                ? "Hearth restarted while it ran"
+                : "Hearth restarted before it started",
+              now,
+              now,
+              orphan.id,
+            ]
+          )
+          yield* transaction.execute(
+            `DELETE FROM ${lockTable} WHERE operation_id = ?`,
+            [orphan.id]
+          )
+        }
+        yield* transaction.execute(
+          `UPDATE ${operationTable} SET driver = ?, updated_at = ?
+            WHERE durable = 1 AND state IN ('granted', 'running')`,
+          [hearthDriverId, now]
+        )
+        const granted = yield* grantWaiting(transaction, now)
+        const [pending] = yield* transaction.queryRows<
+          RowDataPacket & { ids: string | null }
+        >(
+          `SELECT GROUP_CONCAT(id ORDER BY sequence) AS ids
+             FROM ${operationTable}
+            WHERE durable = 1 AND state = 'granted'`
+        )
+        return {
+          granted,
+          recovered: orphans.length,
+          undispatched: pending?.ids ? pending.ids.split(",") : [],
+        }
+      })
+  )
+  yield* Effect.annotateCurrentSpan({
+    "operations.recovered": decision.recovered,
+  })
+  yield* announce(decision.granted)
+  return decision.undispatched
+})
+
+/** Forgets operations that ended more than `age` ago. */
+export const forgetFinishedOperations = Effect.fn("Operations.retention")(
+  function* (age: Duration.Input) {
+    const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
+    const result = yield* database.execute(
+      "operations.retention",
+      `DELETE FROM ${operationTable}
+        WHERE finished_at IS NOT NULL AND finished_at < ?
+        LIMIT 1000`,
+      [now - Duration.toMillis(Duration.fromInputUnsafe(age))]
+    )
+    return result.affectedRows
+  }
+)
+
+export interface OperationRecord {
+  readonly actorId: string | null
+  readonly durable: boolean
+  readonly error: string | null
+  readonly executionId: string | null
+  readonly id: string
+  readonly input: unknown
+  readonly kind: string
+  readonly state: OperationState
+  /** The span that admitted it, for a run to link to. */
+  readonly trace: {
+    readonly sampled: boolean
+    readonly spanId: string
+    readonly traceId: string
+  } | null
+  readonly version: number
+}
+
+export const loadOperation = Effect.fnUntraced(function* (id: string) {
+  const database = yield* Database
+  const [row] = yield* database.queryRows<
+    RowDataPacket & {
+      actor_id: string | null
+      durable: number
+      error: string | null
+      execution_id: string | null
+      id: string
+      input: unknown
+      kind: string
+      span_id: string | null
+      state: OperationState
+      trace_id: string | null
+      trace_sampled: number
+      version: number
+    }
+  >(
+    "operations.load",
+    `SELECT id, kind, version, durable, input, state, actor_id,
+            execution_id, error, trace_id, span_id, trace_sampled
+       FROM ${operationTable} WHERE id = ?`,
+    [id]
+  )
+  if (!row) return null
+  return {
+    actorId: row.actor_id,
+    durable: Boolean(row.durable),
+    error: row.error,
+    executionId: row.execution_id,
+    id: row.id,
+    input: typeof row.input === "string" ? JSON.parse(row.input) : row.input,
+    kind: row.kind,
+    state: row.state,
+    trace:
+      row.trace_id && row.span_id
+        ? {
+            sampled: Boolean(row.trace_sampled),
+            spanId: row.span_id,
+            traceId: row.trace_id,
+          }
+        : null,
+    version: Number(row.version),
+  } satisfies OperationRecord
+})
+
+const loadState = Effect.fnUntraced(function* (id: string) {
+  const database = yield* Database
+  const [row] = yield* database.queryRows<
+    RowDataPacket & { state: OperationState }
+  >("operations.state", `SELECT state FROM ${operationTable} WHERE id = ?`, [
+    id,
+  ])
+  return row?.state ?? "cancelled"
+})
+
+function isOpen(state: OperationState): boolean {
+  return state === "waiting" || state === "granted" || state === "running"
+}
+
+/**
+ * Locks the scheduler row for this transaction, so decisions are made one at
+ * a time, and returns the next place in line. The row is put back if a
+ * database reset removed it.
+ */
+const takeSchedulerTurn = Effect.fnUntraced(function* (
+  transaction: DatabaseTransaction
+) {
+  const read = () =>
+    transaction.queryRows<RowDataPacket & { next_sequence: number }>(
+      `SELECT next_sequence FROM ${schedulerTable} WHERE id = 1 FOR UPDATE`
+    )
+  let [row] = yield* read()
+  if (!row) {
+    yield* transaction.execute(
+      `INSERT IGNORE INTO ${schedulerTable} (id, next_sequence) VALUES (1, 1)`
+    )
+    ;[row] = yield* read()
+  }
+  const sequence = Number(row?.next_sequence ?? 1)
+  yield* transaction.execute(
+    `UPDATE ${schedulerTable} SET next_sequence = ? WHERE id = 1`,
+    [sequence + 1]
+  )
+  return sequence
+})
+
+/**
+ * Grants, in admission order, every waiting operation the lane rule allows,
+ * inside the scheduler's transaction. Returns their IDs.
+ */
+const grantWaiting = Effect.fnUntraced(function* (
+  transaction: DatabaseTransaction,
+  now: number
+) {
+  const heldRows = yield* transaction.queryRows<
+    RowDataPacket & { lock_key: string; mode: LaneMode }
+  >(`SELECT lock_key, mode FROM ${lockTable} WHERE held = 1`)
+  const held = new LockTable()
+  held.take(heldRows.map((row) => ({ key: row.lock_key, mode: row.mode })))
+  const waitingRows = yield* transaction.queryRows<
+    RowDataPacket & {
+      admitted_at: number
+      id: string
+      kind: string
+      lock_key: string | null
+      mode: LaneMode | null
+    }
+  >(
+    `SELECT operation.id, operation.kind, operation.admitted_at,
+            lock_row.lock_key, lock_row.mode
+       FROM ${operationTable} operation
+       LEFT JOIN ${lockTable} lock_row ON lock_row.operation_id = operation.id
+      WHERE operation.state = 'waiting'
+      ORDER BY operation.sequence, lock_row.lock_key`
+  )
+  const waiting: Array<{
+    admittedAt: number
+    id: string
+    kind: string
+    locks: Array<LaneLock>
+  }> = []
+  for (const row of waitingRows) {
+    let entry = waiting.at(-1)
+    if (entry?.id !== row.id) {
+      entry = {
+        admittedAt: Number(row.admitted_at),
+        id: row.id,
+        kind: row.kind,
+        locks: [],
+      }
+      waiting.push(entry)
+    }
+    if (row.lock_key && row.mode) {
+      entry.locks.push({ key: row.lock_key, mode: row.mode })
+    }
+  }
+  const { granted } = selectGrants(held, waiting, {
+    locksOf: (entry) => entry.locks,
+  })
+  if (granted.length === 0) return []
+  const ids = granted.map((entry) => entry.id)
+  const placeholders = ids.map(() => "?").join(", ")
+  yield* transaction.execute(
+    `UPDATE ${operationTable}
+        SET state = 'granted', granted_at = ?, driver = ?, updated_at = ?
+      WHERE id IN (${placeholders})`,
+    [now, hearthDriverId, now, ...ids]
+  )
+  yield* transaction.execute(
+    `UPDATE ${lockTable} SET held = 1 WHERE operation_id IN (${placeholders})`,
+    ids
+  )
+  for (const entry of granted) {
+    yield* Metric.update(
+      Metric.withAttributes(waitDuration, { "operation.kind": entry.kind }),
+      (now - entry.admittedAt) / 1000
+    )
+  }
+  return ids
+})
