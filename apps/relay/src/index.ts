@@ -778,9 +778,31 @@ const provisioningFiber = forkRelayEffect(
 const backupManager = await runRelayEffect(
   "relay.startup.backups",
   BackupManager.make({
+    apps: {
+      hostFolder: async (appId) => {
+        const found = await recoverPromise(
+          async () => (await apps.get(appId)).id,
+          () => null
+        )
+        return found
+          ? join(await lifecycle.hostDataDirectory(), "apps", found)
+          : null
+      },
+      isRunning: async (appId) =>
+        (await apps.get(appId)).containers.some(
+          (container) => container.running
+        ),
+      start: async (appId) => {
+        await apps.action({ action: "start", appId })
+      },
+      stop: async (appId) => {
+        await apps.action({ action: "stop", appId })
+      },
+    },
     config,
     databases,
     lanes,
+    volumes,
     findInstance: (instanceId) => docker.findInstance(instanceId),
     isInstanceStopped: async (instanceId) => {
       const instance = (await docker.inspectInstances()).find(

@@ -2,7 +2,9 @@ import { createServerFn } from "@tanstack/react-start"
 import { getRequest } from "@tanstack/react-start/server"
 import { z } from "zod"
 
-import { backupTargetSchema, relayIdSchema } from "@workspace/contracts"
+import { hearthBackupTargetSchema } from "@/lib/backup-targets"
+
+import { relayIdSchema } from "@workspace/contracts"
 
 import {
   backupRunsQuerySchema,
@@ -129,7 +131,7 @@ const backupLimitsInputSchema = z
       .positive()
       .max(Number.MAX_SAFE_INTEGER)
       .nullable(),
-    target: backupTargetSchema,
+    target: hearthBackupTargetSchema,
   })
   .refine((input) => input.scope === "platform" || input.quantityLimit !== 0, {
     message: "Keep at least one backup",
@@ -139,12 +141,12 @@ const backupLimitsInputSchema = z
 const backupExcludesInputSchema = z.strictObject({
   exclude: z.array(z.string().trim().min(1).max(1_024)).max(1_000),
   relayId: relayIdSchema,
-  target: backupTargetSchema,
+  target: hearthBackupTargetSchema,
 })
 
 const backupPolicyInputSchema = z.strictObject({
   relayId: relayIdSchema,
-  target: backupTargetSchema,
+  target: hearthBackupTargetSchema,
 })
 
 export type InstanceBackupInput = z.infer<typeof instanceBackupInputSchema>

@@ -10,6 +10,7 @@ import {
   mkdir,
   open,
   opendir,
+  readdir,
   readFile,
   realpath,
   rename,
@@ -21,8 +22,7 @@ import {
 import { basename, dirname, relative, resolve, sep } from "node:path"
 import { constants as zlibConstants } from "node:zlib"
 import { logException } from "@workspace/telemetry"
-import { Effect, Fiber, Queue, Result } from "effect"
-import { minimatch } from "minimatch"
+import { Effect, Fiber, Predicate, Queue, Result } from "effect"
 import ZipStream from "zip-stream"
 
 import {
@@ -35,11 +35,14 @@ import {
   type BackupExportTaskResult,
   type BackupFailureCode,
   type BackupResticCreateTaskResult,
+  type BackupRestoreTaskInput,
+  type BackupTarget,
   type BackupTaskInput,
   type BackupTaskPhase,
   type BackupTaskResult,
   type RelayBackupTask,
   type RelayInstanceWebRoute,
+  type RelayVolume,
   type ResticRepositoryLocation,
 } from "@workspace/contracts"
 
@@ -56,7 +59,16 @@ import { promiseEffect, recoverPromise } from "./effect/promise.js"
 import { RelayStateStore, type ScheduledBackupPrune } from "./effect/state.js"
 import { LaneRejectedError } from "./operation-lanes.js"
 import type { OperationLanes } from "./operation-lanes.js"
-import { backupTaskLocks } from "./operation-plans.js"
+import { appLifecycleLocks, backupTaskLocks } from "./operation-plans.js"
+import { backupPathIsExcluded } from "./backups/exclude.js"
+import {
+  createTarBackup,
+  recoverInterruptedTarRestores,
+  restoreTarBackup,
+  type TarSource,
+} from "./backups/tar-archives.js"
+import { DockerEngine } from "./docker-engine.js"
+import { writeFileAtomic } from "./effect/atomic-file.js"
 import { backupFailureCode } from "./backups/failure.js"
 import {
   backupTaskAttributes,
@@ -139,6 +151,28 @@ type BackupTaskEnd = {
   failure: BackupFailureCode | null
 }
 
+/** What backups of Apps' folders and their power need of the App driver. */
+export interface BackupApps {
+  /** The App's folder on the Docker host, or null when it isn't here. */
+  hostFolder(appId: string): Promise<string | null>
+  isRunning(appId: string): Promise<boolean>
+  start(appId: string): Promise<void>
+  stop(appId: string): Promise<void>
+}
+
+/** A managed volume as backups find it, by its ID. */
+export interface BackupVolumes {
+  find(
+    id: string
+  ): Effect.Effect<
+    Pick<
+      RelayVolume,
+      "dockerName" | "kind" | "mounts" | "name" | "owner" | "users"
+    > | null,
+    unknown
+  >
+}
+
 export class BackupManager {
   readonly #config: RelayConfig
   readonly #findInstance: (
@@ -146,6 +180,9 @@ export class BackupManager {
   ) => Promise<RelayInstanceConfig | null>
   readonly #isInstanceStopped: (instanceId: string) => Promise<boolean>
   readonly #databases: DatabaseDriver | null
+  readonly #apps: BackupApps | null
+  readonly #volumes: BackupVolumes | null
+  readonly #engine: DockerEngine
   readonly #lanes: OperationLanes
   readonly #restic: ResticDriver
   readonly #state: RelayStateStore["Service"]
@@ -157,6 +194,8 @@ export class BackupManager {
     findInstance: (instanceId: string) => Promise<RelayInstanceConfig | null>
     isInstanceStopped: (instanceId: string) => Promise<boolean>
     databases: DatabaseDriver | null
+    apps: BackupApps | null
+    volumes: BackupVolumes | null
     lanes: OperationLanes
     restic: ResticDriver
     state: RelayStateStore["Service"]
@@ -167,6 +206,9 @@ export class BackupManager {
     this.#findInstance = options.findInstance
     this.#isInstanceStopped = options.isInstanceStopped
     this.#databases = options.databases
+    this.#apps = options.apps
+    this.#volumes = options.volumes
+    this.#engine = new DockerEngine(options.config.dockerSocket)
     this.#restic = options.restic
     this.#state = options.state
     this.#wake = options.wake
@@ -177,6 +219,8 @@ export class BackupManager {
     findInstance: (instanceId: string) => Promise<RelayInstanceConfig | null>
     isInstanceStopped: (instanceId: string) => Promise<boolean>
     databases?: DatabaseDriver
+    apps?: BackupApps
+    volumes?: BackupVolumes
     /**
      * Each task holds its target's lane while it runs: a backup alongside
      * other work, a restore alone. While the lanes are paused, queued tasks
@@ -192,6 +236,8 @@ export class BackupManager {
         findInstance: options.findInstance,
         isInstanceStopped: options.isInstanceStopped,
         databases: options.databases ?? null,
+        apps: options.apps ?? null,
+        volumes: options.volumes ?? null,
         lanes: options.lanes,
         restic: createResticDriver({
           cacheDirectory: resolve(
@@ -213,6 +259,31 @@ export class BackupManager {
           Date.now()
         )
       }
+      // Restores of Apps' folders and volumes a stop cut off, finished or
+      // undone, and Apps a stopped backup left stopped, started again.
+      // Neither keeps the Relay from starting when Docker can't answer.
+      const settled = yield* Effect.result(
+        Effect.tryPromise(() =>
+          recoverInterruptedTarRestores(
+            options.config,
+            new DockerEngine(options.config.dockerSocket)
+          )
+        )
+      )
+      if (Result.isFailure(settled)) {
+        yield* Effect.logWarning(
+          "Couldn't settle interrupted volume and App folder restores",
+          settled.failure
+        )
+      }
+      for (const taskId of Result.isSuccess(settled) ? settled.success : []) {
+        yield* state.completeBackupTask(
+          taskId,
+          { warnings: ["Restore completed during Relay recovery"] },
+          Date.now()
+        )
+      }
+      yield* manager.#restartStoppedApps()
       yield* state.requeueInterruptedBackupTasks(Date.now())
       yield* promiseEffect(() => sweepExpiredBackupExports(options.config))
       yield* Effect.forkChild(
@@ -344,14 +415,18 @@ export class BackupManager {
               // mustn't start, a restore least of all.
               precondition: () => !controller.signal.aborted,
               // A task may name its game server by short ID or name.
-              locks: backupTaskLocks(task.input, (reference) =>
-                /^[a-f0-9]{40}$/u.test(reference)
-                  ? reference
-                  : recoverPromise(
-                      async () =>
-                        (await this.#findInstance(reference))?.id ?? reference,
-                      () => reference
-                    )
+              locks: backupTaskLocks(
+                task.input,
+                (reference) =>
+                  /^[a-f0-9]{40}$/u.test(reference)
+                    ? reference
+                    : recoverPromise(
+                        async () =>
+                          (await this.#findInstance(reference))?.id ??
+                          reference,
+                        () => reference
+                      ),
+                (volumeId) => this.#volumeApps(volumeId)
               ),
             },
             this.#execute(task, controller.signal, beginInstall)
@@ -439,6 +514,464 @@ export class BackupManager {
     })
   }
 
+  /**
+   * Backs up an App's folder or a volume through Docker. Stopped, it stops
+   * each App that uses it first, recording which in a journal so a Relay
+   * that stops midway starts them again, and starts them again after,
+   * unless it's a final backup. An App that won't start again is a warning
+   * on the backup, which succeeded.
+   */
+  #createTar(
+    taskId: string,
+    input: BackupCreateTaskInput,
+    signal: AbortSignal
+  ) {
+    return Effect.gen({ self: this }, function* () {
+      const final = input.reason === "final_delete"
+      const consistency =
+        input.consistency === "stopped" || final ? "stopped" : "live"
+      const { consumers, manifestVolume, source } = yield* this.#tarSource(
+        input.target,
+        consistency === "stopped"
+      )
+      const progress: BackupProgress = {
+        completed: 0,
+        currentArtifactId: null,
+        currentPath: null,
+        phase: "preparing",
+        total: 0,
+      }
+      const progressFiber = yield* Effect.forkChild(
+        Effect.sleep("500 millis").pipe(
+          Effect.andThen(
+            Effect.suspend(() =>
+              this.#state
+                .updateBackupTaskProgress(
+                  taskId,
+                  progress.completed,
+                  progress.total || null,
+                  progress.phase,
+                  progress.currentPath,
+                  progress.currentArtifactId,
+                  Date.now()
+                )
+                .pipe(Effect.asVoid)
+            )
+          ),
+          Effect.forever
+        )
+      )
+      const destination = backupArchivePath(this.#config, input.backupId)
+      const archive = Effect.tryPromise({
+        try: async () => {
+          const directory = backupDirectoryPath(this.#config)
+          await mkdir(directory, { recursive: true, mode: 0o700 })
+          await cleanupBackupPartials(directory, input.backupId)
+          await rm(destination, { force: true })
+          const maximumBytes = archiveMaximumBytes(input)
+          await requireBackupSpace(directory, 0, maximumBytes)
+          const partial = resolve(
+            directory,
+            `.${input.backupId}.${randomUUID()}.partial`
+          )
+          progress.phase = "archiving"
+          return Effect.runPromise(
+            promiseEffect(() =>
+              createTarBackup({
+                config: this.#config,
+                engine: this.#engine,
+                exclude: input.exclude,
+                manifest: {
+                  artifactKind: "tar_archive",
+                  backupId: input.backupId,
+                  consistency,
+                  createdAt: new Date().toISOString(),
+                  formatVersion: 1,
+                  mode: "full",
+                  target: input.target,
+                  volume: manifestVolume,
+                },
+                maxBytes: maximumBytes,
+                partial,
+                progress,
+                signal,
+                source,
+              })
+            ).pipe(
+              Effect.tap(() =>
+                promiseEffect(() => rename(partial, destination))
+              ),
+              Effect.ensuring(
+                promiseEffect(() => rm(partial, { force: true })).pipe(
+                  Effect.ignore
+                )
+              )
+            )
+          )
+        },
+        catch: (cause) =>
+          cause instanceof RelayBackupError
+            ? cause
+            : RelayBackupError.make({
+                code: "archive_failed",
+                operation: "create.archive",
+                reason: backupErrorMessage(cause),
+                cause,
+              }),
+      })
+      // The Apps it stopped start again however the archive went, before
+      // the upload, which can take a while.
+      const stopped =
+        consistency === "stopped"
+          ? yield* this.#stopApps(taskId, consumers, !final)
+          : []
+      const archived = yield* Effect.result(archive)
+      const restarted =
+        stopped.length > 0 && !final
+          ? yield* this.#startApps(taskId, stopped)
+          : []
+      if (Result.isFailure(archived))
+        return yield* Effect.fail(archived.failure)
+      progress.phase = "finalizing"
+      return yield* storeCreatedBackup(
+        this.#config,
+        input,
+        {
+          bytes: archived.success.bytes,
+          checksumSha256: archived.success.checksumSha256,
+          consistency,
+          filename: backupArtifactFilename(input.backupId, "tar_archive"),
+          warnings: [...archived.success.warnings, ...restarted].slice(
+            0,
+            1_000
+          ),
+        },
+        progress,
+        signal
+      ).pipe(Effect.ensuring(Fiber.interrupt(progressFiber)))
+    }).pipe(
+      Effect.onError(() =>
+        promiseEffect(() =>
+          rm(backupArchivePath(this.#config, input.backupId), { force: true })
+        ).pipe(Effect.ignore)
+      )
+    )
+  }
+
+  /**
+   * Restores an App's folder or a volume through Docker. Nothing that uses
+   * it may run: an App's folder needs the App stopped, and a volume every
+   * container that mounts it.
+   */
+  #restoreTar(
+    input: BackupRestoreTaskInput & { kind: "restore" },
+    signal: AbortSignal,
+    beginInstall: RestoreInstallGate
+  ) {
+    return Effect.gen({ self: this }, function* () {
+      const { source } = yield* this.#tarSource(input.target, false)
+      if (input.target.kind === "app") {
+        const running = yield* promiseEffect(() =>
+          this.#apps!.isRunning(input.target.id)
+        )
+        if (running) {
+          return yield* backupFailure(
+            "app_running",
+            "restore.preflight",
+            "Stop the App before restoring its folder"
+          )
+        }
+      } else {
+        const volume = yield* this.#requiredVolume(input.target.id)
+        const running = volume.mounts.filter((mount) => mount.running)
+        if (running.length > 0) {
+          return yield* backupFailure(
+            "volume_in_use",
+            "restore.preflight",
+            running.length === 1
+              ? `Stop ${running[0]!.container}, which mounts this volume, before restoring it`
+              : `Stop the ${running.length} containers that mount this volume before restoring it`
+          )
+        }
+      }
+      const temporary = resolve(
+        this.#config.dataDirectory,
+        "restores",
+        `${input.taskId}.tar.gz`
+      )
+      return yield* Effect.tryPromise({
+        try: async () => {
+          const archive = await materializeBackupArtifact(
+            this.#config,
+            input,
+            temporary
+          )
+          return restoreTarBackup({
+            archive,
+            backupId: input.archive?.backupId ?? input.backupId,
+            beginInstall,
+            config: this.#config,
+            engine: this.#engine,
+            signal,
+            source,
+            target: input.target,
+            taskId: input.taskId,
+          })
+        },
+        catch: (cause) =>
+          cause instanceof RelayBackupError
+            ? cause
+            : RelayBackupError.make({
+                code: "restore_failed",
+                operation: "restore",
+                reason: backupErrorMessage(cause),
+                cause,
+              }),
+      }).pipe(
+        Effect.ensuring(
+          promiseEffect(() => rm(temporary, { force: true })).pipe(
+            Effect.ignore
+          )
+        )
+      )
+    })
+  }
+
+  // What Docker mounts for an App's folder or a volume, the Apps a stopped
+  // backup stops, and the volume as its manifest records it. A stopped
+  // backup of a volume a container other than an App's runs from is
+  // refused: Kiln can't stop and start it as its owner would.
+  #tarSource(target: BackupTarget, stopping: boolean) {
+    return Effect.gen({ self: this }, function* () {
+      if (target.kind === "app") {
+        if (!this.#apps) {
+          return yield* backupFailure(
+            "app_driver_unavailable",
+            "lookup",
+            "The App backup driver is unavailable"
+          )
+        }
+        const folder = yield* promiseEffect(() =>
+          this.#apps!.hostFolder(target.id)
+        )
+        if (!folder) {
+          return yield* backupFailure(
+            "app_not_found",
+            "lookup",
+            "The App no longer exists on this Relay"
+          )
+        }
+        return {
+          consumers: [target.id],
+          manifestVolume: null,
+          source: { kind: "bind", path: folder } satisfies TarSource,
+        }
+      }
+      const volume = yield* this.#requiredVolume(target.id)
+      const others = volume.mounts.filter(
+        (mount) => mount.running && mount.kind !== "app"
+      )
+      if (stopping && others.length > 0) {
+        return yield* backupFailure(
+          "volume_in_use",
+          "lookup",
+          `${others[0]!.container} mounts this volume and isn't an App's; stop it before a stopped backup`
+        )
+      }
+      return {
+        consumers: [
+          ...new Set(
+            volume.mounts.flatMap((mount) =>
+              mount.kind === "app" && mount.resourceId ? [mount.resourceId] : []
+            )
+          ),
+        ],
+        manifestVolume: {
+          dockerName: volume.dockerName,
+          kind: volume.kind === "app" ? ("app" as const) : ("kiln" as const),
+          name: volume.name,
+        },
+        source: { kind: "volume", name: volume.dockerName } satisfies TarSource,
+      }
+    })
+  }
+
+  #requiredVolume(id: string) {
+    return Effect.gen({ self: this }, function* () {
+      const volume = this.#volumes
+        ? yield* this.#volumes.find(id).pipe(
+            Effect.mapError((cause) =>
+              RelayBackupError.make({
+                code: "volume_lookup_failed",
+                operation: "lookup",
+                reason: backupErrorMessage(cause),
+                cause,
+              })
+            )
+          )
+        : null
+      // Only volumes Kiln manages have IDs to back up by; the Relay's own
+      // data volume is the platform backup's.
+      if (!volume || volume.kind === "relay") {
+        return yield* backupFailure(
+          "volume_not_found",
+          "lookup",
+          "The volume no longer exists on this Relay"
+        )
+      }
+      return volume
+    })
+  }
+
+  // The Apps whose lifecycles a volume's stopped backup or restore holds:
+  // its owner, and every App that uses it.
+  #volumeApps(volumeId: string): Promise<ReadonlyArray<string>> {
+    const owner = /^([a-f0-9]{40})\//u.exec(volumeId)?.[1]
+    return recoverPromise(
+      async () => {
+        const volume = this.#volumes
+          ? await Effect.runPromise(this.#volumes.find(volumeId))
+          : null
+        return [
+          ...(owner ? [owner] : []),
+          ...(volume?.users.map((user) => user.appId) ?? []),
+        ]
+      },
+      () => (owner ? [owner] : [])
+    )
+  }
+
+  // Stops each running App, journaling them first when they start again
+  // after. One that won't stop fails the backup, and those stopped before
+  // it start again.
+  #stopApps(taskId: string, apps: ReadonlyArray<string>, restart: boolean) {
+    return Effect.gen({ self: this }, function* () {
+      const running: Array<string> = []
+      for (const appId of apps) {
+        if (yield* promiseEffect(() => this.#apps!.isRunning(appId))) {
+          running.push(appId)
+        }
+      }
+      if (running.length === 0) return running
+      if (restart) yield* this.#journalStoppedApps(taskId, running)
+      const stopped: Array<string> = []
+      for (const appId of running) {
+        const result = yield* Effect.result(
+          promiseEffect(() => this.#apps!.stop(appId))
+        )
+        if (Result.isSuccess(result)) {
+          stopped.push(appId)
+          continue
+        }
+        if (restart) yield* this.#startApps(taskId, stopped)
+        return yield* Effect.fail(
+          RelayBackupError.make({
+            code: "app_stop_failed",
+            operation: "create.stop",
+            reason: `An App couldn't be stopped for the backup: ${backupErrorMessage(result.failure)}`,
+            cause: result.failure,
+          })
+        )
+      }
+      return stopped
+    })
+  }
+
+  // Starts Apps a backup stopped again, answering a warning for each that
+  // won't, then forgets them.
+  #startApps(taskId: string, apps: ReadonlyArray<string>) {
+    return Effect.gen({ self: this }, function* () {
+      const warnings: Array<string> = []
+      for (const appId of apps) {
+        const started = yield* Effect.result(
+          promiseEffect(() => this.#apps!.start(appId))
+        )
+        if (Result.isFailure(started)) {
+          warnings.push(
+            backupWarning(
+              `App ${appId.slice(0, 8)} couldn't be started again after the backup: ${backupErrorMessage(started.failure)}`
+            )
+          )
+        }
+      }
+      yield* this.#forgetStoppedApps(taskId)
+      return warnings
+    })
+  }
+
+  /**
+   * Starts Apps a stopped backup left stopped, those of one task or, at
+   * startup, of every task a stop cut off, each in its lifecycle lane.
+   */
+  #restartStoppedApps(taskId?: string) {
+    return Effect.gen({ self: this }, function* () {
+      if (!this.#apps) return
+      const directory = stoppedAppsDirectory(this.#config)
+      const names = yield* promiseEffect(async () => {
+        await mkdir(directory, { mode: 0o700, recursive: true })
+        return readdir(directory)
+      })
+      for (const name of names) {
+        if (!name.endsWith(".json")) continue
+        const id = name.slice(0, -".json".length)
+        if (taskId !== undefined && id !== taskId) continue
+        const apps = yield* promiseEffect(() =>
+          readFile(resolve(directory, name), "utf8")
+        ).pipe(
+          Effect.map((text) =>
+            Result.getOrElse(
+              Result.try(() => {
+                const parsed = JSON.parse(text) as unknown
+                return Array.isArray(parsed)
+                  ? parsed.filter(Predicate.isString)
+                  : []
+              }),
+              () => []
+            )
+          )
+        )
+        for (const appId of apps) {
+          yield* this.#lanes
+            .run(
+              { label: "backup.app.restart", locks: appLifecycleLocks(appId) },
+              promiseEffect(() => this.#apps!.start(appId))
+            )
+            .pipe(
+              Effect.catch((cause) =>
+                Effect.logWarning(
+                  "An App a stopped backup stopped couldn't be started again",
+                  { appId, cause }
+                )
+              )
+            )
+        }
+        yield* this.#forgetStoppedApps(id)
+      }
+    }).pipe(Effect.ignore)
+  }
+
+  #journalStoppedApps(taskId: string, apps: ReadonlyArray<string>) {
+    const directory = stoppedAppsDirectory(this.#config)
+    return promiseEffect(async () => {
+      await mkdir(directory, { mode: 0o700, recursive: true })
+      await Effect.runPromise(
+        writeFileAtomic(
+          resolve(directory, `${taskId}.json`),
+          `${JSON.stringify(apps)}\n`,
+          0o600
+        )
+      )
+    })
+  }
+
+  #forgetStoppedApps(taskId: string) {
+    return promiseEffect(() =>
+      rm(resolve(stoppedAppsDirectory(this.#config), `${taskId}.json`), {
+        force: true,
+      })
+    ).pipe(Effect.ignore)
+  }
+
   #execute(
     task: RelayBackupTask,
     signal: AbortSignal,
@@ -512,6 +1045,22 @@ export class BackupManager {
       }
       if (task.input.kind === "restore") {
         const input = task.input
+        if (input.target.kind === "app" || input.target.kind === "volume") {
+          const result = yield* this.#restoreTar(input, signal, beginInstall)
+          const completed = yield* this.#state.completeBackupTask(
+            task.taskId,
+            result,
+            Date.now()
+          )
+          if (!completed) {
+            return yield* backupFailure(
+              "task_state_changed",
+              "restore.complete",
+              "The backup task was no longer running when restore completed"
+            )
+          }
+          return
+        }
         if (input.target.kind === "database") {
           if (!this.#databases) {
             return yield* backupFailure(
@@ -701,6 +1250,25 @@ export class BackupManager {
         return
       }
       const input = task.input
+      if (input.artifactKind === "tar_archive" && input.mode === "full") {
+        const result = yield* this.#createTar(task.taskId, input, signal)
+        const completed = yield* this.#state.completeBackupTask(
+          task.taskId,
+          result,
+          Date.now()
+        )
+        if (!completed) {
+          yield* promiseEffect(() =>
+            rm(backupArchivePath(this.#config, input.backupId), { force: true })
+          ).pipe(Effect.ignore)
+          return yield* backupFailure(
+            "task_state_changed",
+            "create.complete",
+            "The backup task was no longer running when the archive completed"
+          )
+        }
+        return
+      }
       if (
         input.target.kind === "platform" &&
         input.artifactKind === "platform_bundle" &&
@@ -1087,6 +1655,27 @@ export class BackupManager {
   }
 }
 
+// Where a stopped backup records the Apps it stopped, by task.
+function stoppedAppsDirectory(config: RelayConfig): string {
+  return resolve(config.dataDirectory, "backup-state", "stopped")
+}
+
+// The most a full archive may take: the task's own limit, and each
+// destination's.
+function archiveMaximumBytes(input: BackupCreateTaskInput): number | null {
+  return [input.destination, ...(input.replicas ?? [])].reduce<number | null>(
+    (limit, destination) => {
+      if (destination.kind === "restic") return limit
+      const destinationLimit = backupDestinationFor(
+        destination.kind
+      ).maximumFullBackupBytes
+      if (destinationLimit === null) return limit
+      return Math.min(limit ?? destinationLimit, destinationLimit)
+    },
+    input.maxBytes
+  )
+}
+
 async function createPortableInstanceBackup(
   config: RelayConfig,
   input: BackupCreateTaskInput,
@@ -1104,16 +1693,7 @@ async function createPortableInstanceBackup(
   const backupDirectory = backupDirectoryPath(config)
   await mkdir(backupDirectory, { recursive: true, mode: 0o700 })
   const destination = backupArchivePath(config, input.backupId)
-  const maximumBytes = [input.destination, ...(input.replicas ?? [])].reduce<
-    number | null
-  >((limit, destination) => {
-    if (destination.kind === "restic") return limit
-    const destinationLimit = backupDestinationFor(
-      destination.kind
-    ).maximumFullBackupBytes
-    if (destinationLimit === null) return limit
-    return Math.min(limit ?? destinationLimit, destinationLimit)
-  }, input.maxBytes)
+  const maximumBytes = archiveMaximumBytes(input)
   const patterns = [...DEFAULT_EXCLUDES, ...input.exclude]
   let warnings: Array<string> = []
 
@@ -2761,29 +3341,6 @@ function writeBackupArchive(
     }
     append(0)
   })
-}
-
-function backupPathIsExcluded(
-  path: string,
-  directory: boolean,
-  patterns: ReadonlyArray<string>
-): boolean {
-  let excluded = false
-  for (const rawPattern of patterns) {
-    const trimmed = rawPattern.trim()
-    if (!trimmed || trimmed.startsWith("#")) continue
-    const negated = trimmed.startsWith("!")
-    const pattern = negated ? trimmed.slice(1) : trimmed
-    if (!pattern) continue
-    const candidate = directory ? `${path}/` : path
-    const matched = minimatch(candidate, pattern, {
-      dot: true,
-      matchBase: !pattern.includes("/"),
-      nocase: false,
-    })
-    if (matched) excluded = !negated
-  }
-  return excluded
 }
 
 function requireContained(root: string, candidate: string): void {

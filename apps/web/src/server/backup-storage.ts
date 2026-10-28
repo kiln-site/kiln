@@ -4,11 +4,14 @@ import { createServerFn } from "@tanstack/react-start"
 import { z } from "zod"
 
 import {
-  backupTargetSchema,
+  type HearthBackupTarget,
+  hearthBackupTargetSchema,
+} from "@/lib/backup-targets"
+
+import {
   relayIdSchema,
   resticS3BucketSchema,
   resticS3RegionSchema,
-  type BackupTarget,
 } from "@workspace/contracts"
 
 import {
@@ -58,7 +61,7 @@ export const backupStorageInputSchema = z.strictObject({
 const preferredStorageInputSchema = z.strictObject({
   relayId: relayIdSchema,
   storageId: backupStorageIdSchema.nullable(),
-  target: backupTargetSchema,
+  target: hearthBackupTargetSchema,
 })
 
 export const getBackupStorage = createServerFn({ method: "GET" }).handler(
@@ -226,9 +229,9 @@ export const setPreferredBackupStorage = createServerFn({ method: "POST" })
   })
 
 async function requireBackupPolicyTarget(
-  input: { relayId: string; target: BackupTarget },
+  input: { relayId: string; target: HearthBackupTarget },
   user: Awaited<ReturnType<typeof requireEligibleResourceUser>>
-): Promise<BackupTarget> {
+): Promise<HearthBackupTarget> {
   if (input.target.kind === "platform") {
     if (!isPlatformAdmin(user)) {
       throw new Error("Platform backup settings require administrator access")

@@ -5,13 +5,13 @@ import {
 } from "@tanstack/react-query"
 import type { QueryClient } from "@tanstack/react-query"
 import type {
-  BackupTarget,
   RelayPlatformTarget,
   RelayConsoleResource,
   RelayFileEntry,
   RelayInstance,
 } from "@workspace/contracts"
 
+import type { HearthBackupTarget } from "@/lib/backup-targets"
 import { getAccessCapabilities, getInvitationPreview } from "@/server/access"
 import { getActivity } from "@/server/activity"
 import {
@@ -153,10 +153,10 @@ export const queryKeys = {
   activity: (from?: string, to?: string) => ["activity", { from, to }] as const,
   backups: {
     runs: backupRunsQueryKey,
-    policy: (relayId: string, target: BackupTarget) =>
+    policy: (relayId: string, target: HearthBackupTarget) =>
       ["backups", "policy", relayId, target.kind, target.id] as const,
     storage: ["backups", "storage"] as const,
-    usage: (relayId: string, target: BackupTarget) =>
+    usage: (relayId: string, target: HearthBackupTarget) =>
       ["backups", "usage", relayId, target.kind, target.id] as const,
   },
   bricks: ["bricks", "catalog"] as const,
@@ -445,7 +445,10 @@ export function resourceOwnerQueryOptions(scope: {
 
 // How many backups a target keeps, against its quantity limit. Backup and
 // limit changes refresh it.
-export function backupUsageQueryOptions(relayId: string, target: BackupTarget) {
+export function backupUsageQueryOptions(
+  relayId: string,
+  target: HearthBackupTarget
+) {
   return queryOptions({
     queryKey: queryKeys.backups.usage(relayId, target),
     queryFn: () => getBackupUsage({ data: { relayId, target } }),
@@ -456,7 +459,7 @@ export function backupUsageQueryOptions(relayId: string, target: BackupTarget) {
 
 export function backupPolicyQueryOptions(
   relayId: string,
-  target: BackupTarget
+  target: HearthBackupTarget
 ) {
   return queryOptions({
     queryKey: queryKeys.backups.policy(relayId, target),

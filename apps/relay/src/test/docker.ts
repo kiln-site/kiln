@@ -16,6 +16,17 @@
 import { createHash, randomBytes } from "node:crypto"
 import { rmSync } from "node:fs"
 import {
+  chmod,
+  copyFile,
+  lstat,
+  mkdir,
+  readdir,
+  readFile,
+  readlink,
+  symlink,
+  writeFile,
+} from "node:fs/promises"
+import {
   createServer,
   type IncomingMessage,
   type ServerResponse,
@@ -25,6 +36,7 @@ import { tmpdir } from "node:os"
 import { join, posix } from "node:path"
 
 import { Effect, Result } from "effect"
+import { extract as tarExtract, pack as tarPack } from "tar-stream"
 
 import type { CommandOptions, CommandResult } from "../command.js"
 import {
@@ -32,6 +44,10 @@ import {
   parseImageReference,
   repositoryName,
 } from "../docker-reference.js"
+import {
+  runTarRestoreStep,
+  type TarRestoreStep,
+} from "../backups/tar-restore-steps.js"
 import { CommandError } from "../effect/errors.js"
 
 export type PortBindings = Record<
@@ -144,6 +160,15 @@ export interface FakeNetwork {
 export interface FakeVolume {
   readonly name: string
   readonly labels: Record<string, string>
+  /** Symbolic links in the volume, by path, to where each points. */
+  readonly symlinks: Map<string, string>
+  /** Folders in it besides those its files' paths imply. */
+  readonly directories: Set<string>
+  /**
+   * Owners and modes that aren't Docker's defaults (root, 0755 for folders,
+   * 0644 for files), by path; "" is the volume's root.
+   */
+  readonly owners: Map<string, { gid: number; mode: number; uid: number }>
   /**
    * `local` unless set. Docker's disk usage leaves out volumes of other
    * drivers, as it does local ones with mount options.
@@ -472,9 +497,12 @@ export class FakeDocker {
     labels?: Record<string, string>
   }): FakeVolume {
     const volume: FakeVolume = {
-      name: input.name,
-      labels: { ...input.labels },
+      directories: new Set(),
       files: new Map(),
+      labels: { ...input.labels },
+      name: input.name,
+      owners: new Map(),
+      symlinks: new Map(),
     }
     this.volumes.set(volume.name, volume)
     return volume
@@ -1236,6 +1264,13 @@ export class FakeDocker {
   }
 
   #start(container: FakeContainer): void {
+    if (container.cmd.some((argument) => TAR_HELPER.test(argument))) {
+      container.state.running = true
+      container.state.startedAt = this.#timestamp()
+      container.starts += 1
+      setImmediate(() => void this.#runTarHelper(container))
+      return
+    }
     if (container.runOnce) {
       container.state.running = true
       container.state.startedAt = this.#timestamp()
@@ -1266,6 +1301,212 @@ export class FakeDocker {
         })
       }
     }
+  }
+
+  /**
+   * The restore helper (`tar-restore-helper`): a step of swapping a staged
+   * restore in, on the volume or folder mounted at /volume. A bind's folder
+   * is real, so the Relay's own steps run on it; a volume is modelled.
+   */
+  async #runTarHelper(container: FakeContainer): Promise<void> {
+    const index = container.cmd.findIndex((argument) =>
+      TAR_HELPER.test(argument)
+    )
+    const [step = "", staging = "", uid, gid, mode] = container.cmd.slice(
+      index + 1
+    )
+    const owner =
+      uid && gid && mode
+        ? { gid: Number(gid), mode: Number(mode), uid: Number(uid) }
+        : null
+    const mount = container.mounts.find(
+      (entry) => entry.destination === "/volume"
+    )
+    const ran = await Effect.runPromise(
+      Effect.result(
+        Effect.tryPromise(async () => {
+          await this.#checkpoint(`restore ${step}`, container.name)
+          if (!mount) throw new Error("Nothing is mounted at /volume")
+          if (mount.type === "bind") {
+            await runTarRestoreStep(
+              mount.source,
+              step as TarRestoreStep,
+              staging,
+              // Tests can't change a file's owner, only its mode.
+              owner && {
+                ...owner,
+                gid: process.getgid?.() ?? 0,
+                uid: process.getuid?.() ?? 0,
+              }
+            )
+            return
+          }
+          const volume = this.volumes.get(mount.source)
+          if (!volume) throw new Error(`no such volume: ${mount.source}`)
+          fakeTarRestoreStep(volume, step, staging, owner)
+        })
+      )
+    )
+    if (Result.isFailure(ran)) {
+      container.logs.push({
+        text: String(
+          ran.failure instanceof Error ? ran.failure.message : ran.failure
+        ),
+        time: this.#timestamp(),
+      })
+    }
+    this.#stop(container, Result.isFailure(ran) ? 1 : 0)
+  }
+
+  // A mount's files as Docker archives them: a tar under the mount's base
+  // name, with owners, modes, and links.
+  async #archiveMount(mount: FakeMount): Promise<Buffer> {
+    const pack = tarPack()
+    const done = new Promise<Buffer>((resolve, reject) => {
+      const chunks: Array<Buffer> = []
+      pack.on("data", (chunk) => chunks.push(chunk as Buffer))
+      pack.on("end", () => resolve(Buffer.concat(chunks)))
+      pack.on("error", reject)
+    })
+    const base = posix.basename(mount.destination)
+    const entry = (header: Parameters<typeof pack.entry>[0], body?: Buffer) =>
+      new Promise<void>((resolve, reject) => {
+        const callback = (cause?: Error | null) =>
+          cause ? reject(cause) : resolve()
+        if (body) pack.entry(header, body, callback)
+        else pack.entry(header, callback)
+      })
+    if (mount.type === "bind") {
+      const walk = async (relative: string): Promise<void> => {
+        const absolute = relative ? join(mount.source, relative) : mount.source
+        const metadata = await lstat(absolute)
+        const name = relative ? `${base}/${relative}` : base
+        const common = {
+          gid: metadata.gid,
+          mode: metadata.mode & 0o7777,
+          mtime: metadata.mtime,
+          uid: metadata.uid,
+        }
+        if (metadata.isSymbolicLink()) {
+          await entry({
+            ...common,
+            linkname: await readlink(absolute),
+            name,
+            type: "symlink",
+          })
+        } else if (metadata.isDirectory()) {
+          await entry({ ...common, name: `${name}/`, type: "directory" })
+          for (const child of (await readdir(absolute)).sort()) {
+            await walk(relative ? `${relative}/${child}` : child)
+          }
+        } else if (metadata.isFile()) {
+          await entry(
+            { ...common, name, type: "file" },
+            await readFile(absolute)
+          )
+        }
+      }
+      await walk("")
+      pack.finalize()
+      return done
+    }
+    const volume = this.volumes.get(mount.source)
+    if (!volume) throw new DockerFailure(`no such volume: ${mount.source}`, 404)
+    const owner = (path: string, mode: number) => ({
+      gid: 0,
+      mode,
+      uid: 0,
+      ...volume.owners.get(path),
+    })
+    const directories = new Set<string>(volume.directories)
+    for (const path of [...volume.files.keys(), ...volume.symlinks.keys()]) {
+      const parts = path.split("/")
+      for (let index = 1; index < parts.length; index += 1) {
+        directories.add(parts.slice(0, index).join("/"))
+      }
+    }
+    await entry({ ...owner("", 0o755), name: `${base}/`, type: "directory" })
+    for (const path of [
+      ...directories,
+      ...volume.files.keys(),
+      ...volume.symlinks.keys(),
+    ].sort()) {
+      if (directories.has(path)) {
+        await entry({
+          ...owner(path, 0o755),
+          name: `${base}/${path}/`,
+          type: "directory",
+        })
+      } else if (volume.symlinks.has(path)) {
+        await entry({
+          ...owner(path, 0o777),
+          linkname: volume.symlinks.get(path)!,
+          name: `${base}/${path}`,
+          type: "symlink",
+        })
+      } else {
+        await entry(
+          { ...owner(path, 0o644), name: `${base}/${path}`, type: "file" },
+          Buffer.from(volume.files.get(path) ?? "")
+        )
+      }
+    }
+    pack.finalize()
+    return done
+  }
+
+  // Extracts a tar into a mount, as Docker does, relative to its root.
+  async #extractIntoMount(mount: FakeMount, archive: Buffer): Promise<void> {
+    const extract = tarExtract()
+    const feeding = new Promise<void>((resolve, reject) => {
+      extract.on("error", reject)
+      extract.on("finish", () => resolve())
+      extract.end(archive)
+    })
+    const volume =
+      mount.type === "volume" ? this.volumes.get(mount.source) : undefined
+    if (mount.type === "volume" && !volume) {
+      throw new DockerFailure(`no such volume: ${mount.source}`, 404)
+    }
+    for await (const entry of extract) {
+      const header = entry.header
+      const path = header.name.replace(/\/+$/u, "")
+      const chunks: Array<Buffer> = []
+      for await (const chunk of entry) chunks.push(chunk as Buffer)
+      const content = Buffer.concat(chunks)
+      if (path.split("/").includes("..") || path.startsWith("/")) {
+        throw new DockerFailure(`invalid archive path ${path}`, 400)
+      }
+      if (mount.type === "bind") {
+        const absolute = join(mount.source, path)
+        if (header.type === "directory") {
+          await mkdir(absolute, { recursive: true })
+        } else if (header.type === "symlink") {
+          await symlink(header.linkname ?? "", absolute)
+        } else if (header.type === "link") {
+          await copyFile(join(mount.source, header.linkname ?? ""), absolute)
+        } else {
+          await writeFile(absolute, content)
+        }
+        if (header.type !== "symlink") {
+          await chmod(absolute, (header.mode ?? 0o644) & 0o7777)
+        }
+        continue
+      }
+      const owner = {
+        gid: header.gid ?? 0,
+        mode: (header.mode ?? 0o644) & 0o7777,
+        uid: header.uid ?? 0,
+      }
+      if (header.type === "directory") volume!.directories.add(path)
+      else if (header.type === "symlink") {
+        volume!.symlinks.set(path, header.linkname ?? "")
+      } else if (header.type === "link") {
+        volume!.files.set(path, volume!.files.get(header.linkname ?? "") ?? "")
+      } else volume!.files.set(path, content.toString("utf8"))
+      volume!.owners.set(path, owner)
+    }
+    await feeding
   }
 
   #stop(container: FakeContainer, exitCode: number): void {
@@ -1505,12 +1746,13 @@ export class FakeDocker {
     this.#begin()
     try {
       const url = new URL(request.url ?? "/", "http://docker")
-      const body = await readBody(request)
+      const raw = await readBody(request)
       const answer = await this.#route(
         request.method ?? "GET",
         url,
-        body,
-        request.headers
+        raw.toString("utf8"),
+        request.headers,
+        raw
       )
       if (answer.kind === "stream") answer.write(response)
       else if (answer.status === 204 || answer.status === 304) {
@@ -1538,7 +1780,8 @@ export class FakeDocker {
     method: string,
     url: URL,
     body: string,
-    headers: IncomingMessage["headers"]
+    headers: IncomingMessage["headers"],
+    raw: Buffer
   ): Promise<ApiAnswer> {
     const path = url.pathname
     const json = (status: number, payload: unknown = {}): ApiAnswer => ({
@@ -1629,6 +1872,32 @@ export class FakeDocker {
         Labels: volume.labels,
         Name: volume.name,
       })
+    }
+    if (
+      (method === "GET" || method === "PUT") &&
+      (parameters = route(/^\/containers\/([^/]+)\/archive$/u))
+    ) {
+      const target = this.#requiredContainer(parameters[0] ?? "")
+      const path = url.searchParams.get("path") ?? ""
+      const mount = target.mounts.find((entry) => entry.destination === path)
+      if (!mount) return this.#unsupported(`${method} archive ${path}`)
+      if (method === "GET") {
+        await this.#checkpoint("archive get", target.name)
+        const archive = await this.#archiveMount(mount)
+        return {
+          kind: "stream",
+          write: (response) => {
+            response.writeHead(200, { "Content-Type": "application/x-tar" })
+            response.end(archive)
+          },
+        }
+      }
+      await this.#checkpoint("archive put", target.name)
+      if (mount.readOnly) {
+        throw new DockerFailure("container rootfs is marked read-only", 403)
+      }
+      await this.#extractIntoMount(mount, raw)
+      return json(200)
     }
     if (
       method === "GET" &&
@@ -2736,11 +3005,64 @@ function unixMilliseconds(value: string): number {
   return Number(seconds) * 1_000 + Number(fraction.padEnd(9, "0").slice(0, 3))
 }
 
-function readBody(request: IncomingMessage): Promise<string> {
+const TAR_HELPER = /(?:^|\/)tar-restore-helper\.(?:mjs|js|ts)$/u
+
+// The restore helper's steps, on a modelled volume; see
+// `../backups/tar-restore-steps.ts`, which they follow.
+function fakeTarRestoreStep(
+  volume: FakeVolume,
+  step: string,
+  staging: string,
+  owner: { gid: number; mode: number; uid: number } | null
+): void {
+  const inStaging = (path: string) =>
+    path === staging || path.startsWith(`${staging}/`)
+  const maps = [volume.files, volume.symlinks, volume.owners] as const
+  const each = (visit: (path: string) => void) => {
+    for (const map of maps)
+      for (const path of Array.from(map.keys())) visit(path)
+    for (const path of Array.from(volume.directories)) visit(path)
+  }
+  const remove = (path: string) => {
+    for (const map of maps) map.delete(path)
+    volume.directories.delete(path)
+  }
+  if (step === "discard") {
+    each((path) => inStaging(path) && remove(path))
+    return
+  }
+  if (step === "clear") {
+    if (!volume.directories.has(staging))
+      throw new Error("The restore isn't staged")
+    each((path) => path !== "" && !inStaging(path) && remove(path))
+    return
+  }
+  if (step !== "install") throw new Error(`Unknown step ${step}`)
+  const prefix = `${staging}/`
+  const move = <V>(map: Map<string, V>) => {
+    for (const [path, value] of Array.from(map)) {
+      if (!path.startsWith(prefix)) continue
+      map.delete(path)
+      map.set(path.slice(prefix.length), value)
+    }
+  }
+  move(volume.files)
+  move(volume.symlinks)
+  move(volume.owners)
+  for (const path of Array.from(volume.directories)) {
+    if (!path.startsWith(prefix)) continue
+    volume.directories.delete(path)
+    volume.directories.add(path.slice(prefix.length))
+  }
+  remove(staging)
+  if (owner) volume.owners.set("", owner)
+}
+
+function readBody(request: IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Array<Buffer> = []
     request.on("data", (chunk: Buffer) => chunks.push(chunk))
-    request.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")))
+    request.on("end", () => resolve(Buffer.concat(chunks)))
     request.on("error", reject)
   })
 }

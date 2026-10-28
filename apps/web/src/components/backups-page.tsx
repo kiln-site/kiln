@@ -23,10 +23,7 @@ import {
   SlidersHorizontal,
   Trash2,
 } from "lucide-react"
-import {
-  backupStorageProviderName,
-  type BackupTarget,
-} from "@workspace/contracts"
+import { backupStorageProviderName } from "@workspace/contracts"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import {
@@ -47,6 +44,7 @@ import {
 } from "@workspace/ui/components/select"
 import { showToast } from "@workspace/ui/components/sonner"
 import { Switch } from "@workspace/ui/components/switch"
+import type { HearthBackupTarget } from "@/lib/backup-targets"
 import { KilnRestoreDialog } from "@/components/backups/kiln-restore-dialog"
 import { BackupTargetSettings } from "@/components/backups/target-settings"
 import {
@@ -2153,7 +2151,7 @@ function kilnScopeOption(kiln: KilnBackupHost): ServerPickerOption {
   }
 }
 
-function backupPolicyTarget(target: ServerPickerOption): BackupTarget {
+function backupPolicyTarget(target: ServerPickerOption): HearthBackupTarget {
   const kind = target.kind ?? "server"
   return {
     id: target.id,

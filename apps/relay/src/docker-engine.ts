@@ -21,7 +21,7 @@
  * and `docker-compose` binaries instead (see `./apps.js`).
  */
 import { Agent, type IncomingHttpHeaders, request } from "node:http"
-import { type Duplex, PassThrough, Writable } from "node:stream"
+import { type Duplex, PassThrough, type Readable, Writable } from "node:stream"
 import { StringDecoder } from "node:string_decoder"
 import { extract as createTarExtractor } from "tar-stream"
 import { Effect, Predicate, Result } from "effect"
@@ -547,6 +547,145 @@ export class DockerEngine {
       }),
       Effect.catchIf(isDockerNotFound, () => Effect.succeed(null))
     )
+  }
+
+  /**
+   * A path in the container's filesystem as Docker archives it, a tar
+   * stream read as it arrives (`GET /containers/{id}/archive`). It answers
+   * for a container that was only created, setting up its mounts for the
+   * read. The stream ends with the archive; destroy it to stop early.
+   */
+  containerArchive(
+    reference: string,
+    path: string
+  ): Effect.Effect<Readable, DockerEngineError> {
+    const operation = "GET /containers/{id}/archive"
+    const socketPath = this.socketPath
+    return Effect.callback<Readable, DockerEngineError>((resume) => {
+      const call = request({
+        agent,
+        method: "GET",
+        path: `/containers/${segment(reference)}/archive${query({ path })}`,
+        socketPath,
+      })
+      let settled = false
+      const fail = (
+        reason: string,
+        details: { cause?: unknown; status?: number } = {}
+      ) => {
+        if (settled) return
+        settled = true
+        call.destroy()
+        resume(
+          Effect.fail(new DockerEngineError({ operation, reason, ...details }))
+        )
+      }
+      call.on("response", (response) => {
+        const status = response.statusCode ?? 500
+        if (status < 400) {
+          settled = true
+          resume(Effect.succeed(response))
+          return
+        }
+        Effect.runFork(
+          Effect.tryPromise(() => readErrorBody(response)).pipe(
+            Effect.match({
+              onFailure: (cause) =>
+                fail(`Docker closed ${operation} early`, { cause }),
+              onSuccess: (body) =>
+                fail(
+                  `Error response from daemon: ${daemonMessage(body, status)}`,
+                  { status }
+                ),
+            })
+          )
+        )
+      })
+      call.on("error", (cause) =>
+        fail(transportFailure(cause, socketPath, operation), { cause })
+      )
+      call.end()
+      return Effect.sync(() => {
+        if (!settled) {
+          settled = true
+          call.destroy()
+        }
+      })
+    })
+  }
+
+  /**
+   * Extracts a tar stream at a path in the container's filesystem, as Docker
+   * does, with each entry's owner, mode, and extended attributes
+   * (`PUT /containers/{id}/archive`). The path must exist. It works on a
+   * container that was only created.
+   */
+  putContainerArchive(
+    reference: string,
+    path: string,
+    archive: Readable
+  ): Effect.Effect<void, DockerEngineError> {
+    const operation = "PUT /containers/{id}/archive"
+    const socketPath = this.socketPath
+    return Effect.callback<void, DockerEngineError>((resume) => {
+      const call = request({
+        agent,
+        headers: { "Content-Type": "application/x-tar" },
+        method: "PUT",
+        path: `/containers/${segment(reference)}/archive${query({
+          noOverwriteDirNonDir: true,
+          path,
+        })}`,
+        socketPath,
+      })
+      let settled = false
+      const settle = (result: Effect.Effect<void, DockerEngineError>) => {
+        if (settled) return
+        settled = true
+        resume(result)
+      }
+      const fail = (
+        reason: string,
+        details: { cause?: unknown; status?: number } = {}
+      ) => {
+        archive.unpipe(call)
+        call.destroy()
+        settle(
+          Effect.fail(new DockerEngineError({ operation, reason, ...details }))
+        )
+      }
+      call.on("response", (response) => {
+        const status = response.statusCode ?? 500
+        Effect.runFork(
+          Effect.tryPromise(() => readErrorBody(response)).pipe(
+            Effect.match({
+              onFailure: (cause) =>
+                fail(`Docker closed ${operation} early`, { cause }),
+              onSuccess: (body) =>
+                status < 400
+                  ? settle(Effect.void)
+                  : fail(
+                      `Error response from daemon: ${daemonMessage(body, status)}`,
+                      { status }
+                    ),
+            })
+          )
+        )
+      })
+      call.on("error", (cause) =>
+        fail(transportFailure(cause, socketPath, operation), { cause })
+      )
+      archive.once("error", (cause) =>
+        fail(`The archive for ${operation} failed: ${cause.message}`, { cause })
+      )
+      archive.pipe(call)
+      return Effect.sync(() => {
+        if (settled) return
+        settled = true
+        archive.unpipe(call)
+        call.destroy()
+      })
+    })
   }
 
   /** `docker logs --timestamps`, read whole into stdout and stderr. */
@@ -1742,6 +1881,18 @@ function lineReader(onLine: (line: string) => void) {
 
 function operationName(exchange: Exchange): string {
   return `${exchange.method} ${exchange.path.split("?")[0] ?? exchange.path}`
+}
+
+// The body Docker answered with, at most an error's worth.
+async function readErrorBody(response: Readable): Promise<Buffer> {
+  const chunks: Array<Buffer> = []
+  let size = 0
+  for await (const chunk of response) {
+    const buffer = Buffer.from(chunk as Uint8Array)
+    size += buffer.length
+    if (size <= MAX_ERROR_BYTES) chunks.push(buffer)
+  }
+  return Buffer.concat(chunks)
 }
 
 function daemonMessage(body: Buffer, status: number): string {

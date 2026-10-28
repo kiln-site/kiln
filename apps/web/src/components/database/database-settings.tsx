@@ -1,6 +1,6 @@
 import * as React from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import type { BackupTarget, ResourceLimits } from "@workspace/contracts"
+import type { ResourceLimits } from "@workspace/contracts"
 import {
   ArrowRight,
   Cable,
@@ -31,6 +31,7 @@ import {
   engineProductLabel,
   type ManagedDatabase,
 } from "@/components/database/database-presentation"
+import type { HearthBackupTarget } from "@/lib/backup-targets"
 import { EditableIcon } from "@/components/icon-editor-dialog"
 import {
   InfoCopyValue,
@@ -353,7 +354,7 @@ export function RestoreBackupLink({
   emptyMessage: string
   relayId: string
   search: { kind: "database" | "relay"; relay: string; server: string }
-  target: BackupTarget
+  target: HearthBackupTarget
 }) {
   const { data } = useQuery(backupUsageQueryOptions(relayId, target))
   if (data && data.quantityAvailable > 0) {

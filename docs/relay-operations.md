@@ -132,6 +132,11 @@ worker locks the work when it runs it:
 - **Backups** run alongside other work on their target (shared lock). A
   **restore** runs alone (exclusive), so it waits for file writes and power
   changes and nothing starts the server mid-restore.
+  An App's folder or a volume backed up **stopped** also holds the
+  lifecycle of each App it stops (for a volume, its owner and every App
+  that uses it), so nothing starts them meanwhile. A volume's restore holds
+  the volume exclusively with every such App's lifecycle; an App folder's
+  restore replaces the App.
 - **Provisioning** holds the new server exclusively while it's created.
   Jobs for different instances run at once, up to half the host's cores
   (two to four), so a slow image download or install doesn't hold up the

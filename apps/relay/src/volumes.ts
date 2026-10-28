@@ -184,31 +184,89 @@ export class RelayVolumes {
    */
   list() {
     return Effect.gen({ self: this }, function* () {
-      const [kiln, composed, own, containers, names, uses, protection, host] =
-        yield* Effect.all(
-          [
-            this.#volumes(),
-            this.#engine.listVolumes({
-              filters: { label: [COMPOSE_PROJECT_LABEL] },
-            }),
-            this.#ownVolume(),
-            this.#engine.listContainers({ all: true }),
-            this.#state.listVolumeNames(),
-            this.#configuredUses(),
-            this.protection(),
-            Effect.promise(() => this.#hostDataDirectory()),
-          ],
-          { concurrency: "unbounded" }
-        )
-      const ownContainer = ownContainerId()
-      const mounts = volumeMounts(containers, ownContainer)
-      const owned = this.#ownedVolumes(composed, mounts)
+      const [inventory, own, protection, host] = yield* Effect.all(
+        [
+          this.#inventory(),
+          this.#ownVolume(),
+          this.protection(),
+          Effect.promise(() => this.#hostDataDirectory()),
+        ],
+        { concurrency: "unbounded" }
+      )
       const measuring = this.#measureSizes([
         ...(own ? [own.Name] : []),
-        ...kiln.map((volume) => volume.Name),
-        ...owned.map(({ volume }) => volume.Name),
+        ...inventory.volumes.map((volume) => volume.dockerName),
       ])
       const sizes = this.#sizes.values
+      const sized = (volume: Omit<RelayVolume, "sizeBytes">): RelayVolume => ({
+        ...volume,
+        sizeBytes: sizes.get(volume.dockerName) ?? null,
+      })
+      const managed = new Set(
+        inventory.volumes.map((volume) => volume.dockerName)
+      )
+      return {
+        measuring,
+        protection,
+        uncovered: uncoveredMounts(
+          this.#config,
+          inventory.containers,
+          managed,
+          host
+        ),
+        volumes: [
+          ...(own
+            ? [
+                sized(
+                  volumeView(own, inventory.mounts, {
+                    id: null,
+                    kind: "relay",
+                    name: "Relay data",
+                    owner: null,
+                  })
+                ),
+              ]
+            : []),
+          ...inventory.volumes
+            .map(sized)
+            .sort((left, right) => left.name.localeCompare(right.name)),
+        ],
+      }
+    }).pipe(Effect.withSpan("RelayVolumes.list"))
+  }
+
+  /**
+   * The managed volume with an ID, with what mounts and uses it now, or
+   * null when there's none. Sizes are left out.
+   */
+  find(id: string) {
+    return this.#inventory().pipe(
+      Effect.map(
+        ({ volumes }) => volumes.find((volume) => volume.id === id) ?? null
+      ),
+      Effect.withSpan("RelayVolumes.find", {
+        attributes: { "kiln.volume_id": id },
+      })
+    )
+  }
+
+  // Every managed volume without its size, with the containers on the
+  // daemon and what each mounts.
+  #inventory() {
+    return Effect.gen({ self: this }, function* () {
+      const [kiln, composed, containers, names, uses] = yield* Effect.all(
+        [
+          this.#volumes(),
+          this.#engine.listVolumes({
+            filters: { label: [COMPOSE_PROJECT_LABEL] },
+          }),
+          this.#engine.listContainers({ all: true }),
+          this.#state.listVolumeNames(),
+          this.#configuredUses(),
+        ],
+        { concurrency: "unbounded" }
+      )
+      const mounts = volumeMounts(containers, ownContainerId())
       const named = new Map(names.map((entry) => [entry.volumeId, entry.name]))
       const configured = new Map<string, Array<string>>()
       for (const use of uses) {
@@ -217,72 +275,35 @@ export class RelayVolumes {
           use.appId,
         ])
       }
-      const view = (
-        volume: DockerVolume,
-        fields: Pick<RelayVolume, "id" | "kind" | "name" | "owner">,
-        configuredBy: ReadonlyArray<string> = []
-      ): RelayVolume => {
-        const mounted = mounts.get(volume.Name) ?? []
-        return {
-          ...fields,
-          createdAt: volume.CreatedAt ?? null,
-          dockerName: volume.Name,
-          mountpoint: volume.Mountpoint ?? null,
-          mounts: mounted,
-          sizeBytes: sizes.get(volume.Name) ?? null,
-          users: volumeUsers(configuredBy, mounted),
-        }
-      }
-      const byName = (left: RelayVolume, right: RelayVolume) =>
-        left.name.localeCompare(right.name)
-      const managed = new Set([
-        ...kiln.map((volume) => volume.Name),
-        ...owned.map(({ volume }) => volume.Name),
-      ])
-      return {
-        measuring,
-        protection,
-        uncovered: uncoveredMounts(this.#config, containers, managed, host),
-        volumes: [
-          ...(own
-            ? [
-                view(own, {
-                  id: null,
-                  kind: "relay",
-                  name: "Relay data",
-                  owner: null,
-                }),
-              ]
-            : []),
-          ...[
-            ...kiln.map((volume) => {
-              const id = volume.Labels?.[ID_LABEL] ?? null
-              return view(
-                volume,
-                {
-                  id,
-                  kind: "kiln",
-                  name:
-                    (id ? named.get(id) : undefined) ??
-                    volume.Labels?.[NAME_LABEL] ??
-                    volume.Name,
-                  owner: null,
-                },
-                id ? configured.get(id) : []
-              )
-            }),
-            ...owned.map(({ id, owner, volume }) =>
-              view(volume, {
-                id,
-                kind: "app",
-                name: owner.volume,
-                owner: { appId: owner.appId, volume: owner.volume },
-              })
-            ),
-          ].sort(byName),
-        ],
-      }
-    }).pipe(Effect.withSpan("RelayVolumes.list"))
+      const volumes = [
+        ...kiln.map((volume) => {
+          const id = volume.Labels?.[ID_LABEL] ?? null
+          return volumeView(
+            volume,
+            mounts,
+            {
+              id,
+              kind: "kiln",
+              name:
+                (id ? named.get(id) : undefined) ??
+                volume.Labels?.[NAME_LABEL] ??
+                volume.Name,
+              owner: null,
+            },
+            id ? configured.get(id) : []
+          )
+        }),
+        ...this.#ownedVolumes(composed, mounts).map(({ id, owner, volume }) =>
+          volumeView(volume, mounts, {
+            id,
+            kind: "app",
+            name: owner.volume,
+            owner: { appId: owner.appId, volume: owner.volume },
+          })
+        ),
+      ]
+      return { containers, mounts, volumes }
+    })
   }
 
   /**
@@ -742,6 +763,23 @@ export function relayVolumeDockerName(
 // Docker names a container's host after its ID.
 function ownContainerId(): string | null {
   return process.env.HOSTNAME?.trim() || null
+}
+
+function volumeView(
+  volume: DockerVolume,
+  mounts: ReadonlyMap<string, ReadonlyArray<RelayVolumeMount>>,
+  fields: Pick<RelayVolume, "id" | "kind" | "name" | "owner">,
+  configuredBy: ReadonlyArray<string> = []
+): Omit<RelayVolume, "sizeBytes"> {
+  const mounted = mounts.get(volume.Name) ?? []
+  return {
+    ...fields,
+    createdAt: volume.CreatedAt ?? null,
+    dockerName: volume.Name,
+    mountpoint: volume.Mountpoint ?? null,
+    mounts: [...mounted],
+    users: volumeUsers(configuredBy, mounted),
+  }
 }
 
 // The Apps that use a volume: those whose configuration names it, and those

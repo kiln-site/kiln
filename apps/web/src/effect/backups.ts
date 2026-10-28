@@ -424,7 +424,7 @@ const reserveBackupCreateEffect = Effect.fn("backups.reserveCreate")(
     storageId?: string | null
     storageIds?: ReadonlyArray<string | null>
     targetId: string
-    targetKind: BackupCreateTaskInput["target"]["kind"]
+    targetKind: BackupRow["target_kind"]
     taskId: string
   }) {
     const database = yield* Database

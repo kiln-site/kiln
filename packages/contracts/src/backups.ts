@@ -50,18 +50,32 @@ export const backupFilenameSchema = z
     { message: "Backup filenames must be a single safe path segment" }
   )
 
+// `app` is an App's folder; `volume` is a volume Kiln manages, named by its
+// ID: a Kiln volume's, or `<App ID>/<key>` for one an App's Compose project
+// declares.
 export const backupTargetKindSchema = z.enum([
   "instance",
   "database",
   "platform",
+  "app",
+  "volume",
 ])
 
+// `tar_archive` is an App's folder or a volume as Docker reads it, gzipped,
+// with each file's owner, mode, and extended attributes, and its symlinks.
 export const backupArtifactKindSchema = z.enum([
   "archive",
   "database_dump",
   "platform_bundle",
   "restic_snapshot",
+  "tar_archive",
 ])
+
+// A live backup copies the resource while it runs, as a crash would leave
+// it. A stopped one stops what uses it first and starts again what was
+// running, for data a live copy can't capture safely, such as a database's
+// files. A final backup is always stopped, and nothing starts again.
+export const backupConsistencySchema = z.enum(["live", "stopped"])
 
 export const backupModeSchema = z.enum(["full", "incremental"])
 
@@ -185,7 +199,8 @@ const backupFailureCodeWireSchema = z.string().min(1).max(64)
 
 export const backupTargetSchema = z
   .object({
-    id: z.string().min(1).max(120),
+    // Long enough for an App's Compose volume, `<App ID>/<key>`.
+    id: z.string().min(1).max(200),
     kind: backupTargetKindSchema,
   })
   .strict()
@@ -337,6 +352,8 @@ const backupCreateTaskInputObjectSchema = z
       })
       .strict()
       .optional(),
+    // Absent is live.
+    consistency: backupConsistencySchema.optional(),
     destination: z.union([
       backupLocalDestinationSchema,
       backupS3UploadDestinationSchema,
@@ -356,6 +373,21 @@ function refineResticCreateInput(
   input: z.infer<typeof backupCreateTaskInputObjectSchema>,
   context: z.RefinementCtx
 ) {
+  const resource = input.target.kind === "app" || input.target.kind === "volume"
+  if (resource !== (input.artifactKind === "tar_archive")) {
+    context.addIssue({
+      code: "custom",
+      message: "Apps and volumes, and only they, are backed up as tar archives",
+      path: ["artifactKind"],
+    })
+  }
+  if (input.consistency === "stopped" && !resource) {
+    context.addIssue({
+      code: "custom",
+      message: "Only Apps and volumes can be stopped for a backup",
+      path: ["consistency"],
+    })
+  }
   const restic = input.destination.kind === "restic"
   if (restic) {
     if ((input.replicas?.length ?? 0) > 0) {
@@ -573,6 +605,8 @@ export const backupArchiveCreateTaskResultSchema = z
     artifacts: z.array(backupArtifactOutcomeSchema).max(16).optional(),
     bytes: z.number().int().nonnegative(),
     checksumSha256: backupChecksumSha256Schema,
+    // How an App's or volume's backup was taken.
+    consistency: backupConsistencySchema.optional(),
     filename: backupFilenameSchema,
     warnings: z.array(z.string().max(1_024)).max(1_000),
   })
@@ -745,6 +779,34 @@ export const backupArchiveManifestSchema = z.discriminatedUnion(
   ]
 )
 
+/**
+ * The manifest a tar archive of an App's folder or a volume begins with, at
+ * `.kiln-backup/manifest.json`. Its data follows under `data/`.
+ */
+export const backupTarManifestSchema = z
+  .object({
+    artifactKind: z.literal("tar_archive"),
+    backupId: backupIdSchema,
+    consistency: backupConsistencySchema,
+    createdAt: z.string().datetime(),
+    formatVersion: z.literal(1),
+    mode: z.literal("full"),
+    target: backupTargetSchema.refine(
+      (target) => target.kind === "app" || target.kind === "volume",
+      { message: "Tar archive manifests require an App or volume target" }
+    ),
+    // The volume as it was when backed up; null for an App's folder.
+    volume: z
+      .object({
+        dockerName: z.string().min(1).max(255),
+        kind: z.enum(["app", "kiln"]),
+        name: z.string().max(255),
+      })
+      .strict()
+      .nullable(),
+  })
+  .strict()
+
 export const backupDownloadCapabilityPayloadSchema = z
   .object({
     action: z.literal("backup.download"),
@@ -864,6 +926,8 @@ export const relayBackupTaskSchema = z
   })
 
 export type BackupArtifactKind = z.infer<typeof backupArtifactKindSchema>
+export type BackupConsistency = z.infer<typeof backupConsistencySchema>
+export type BackupTarManifest = z.infer<typeof backupTarManifestSchema>
 export type BackupArchiveManifest = z.infer<typeof backupArchiveManifestSchema>
 export type BackupCreateTaskInput = z.infer<typeof backupCreateTaskInputSchema>
 export type BackupArchiveCreateTaskResult = z.infer<
@@ -907,6 +971,7 @@ const BACKUP_ARTIFACT_EXTENSIONS = {
   database_dump: "dmp.gz",
   platform_bundle: "kiln",
   restic_snapshot: "zip",
+  tar_archive: "tar.gz",
 } as const satisfies Record<BackupArtifactKind, string>
 
 export function backupArtifactFilename(

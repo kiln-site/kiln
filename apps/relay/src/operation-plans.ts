@@ -100,14 +100,39 @@ export function fileRootWriteLocks(
 /**
  * A backup reads its target as it runs and a restore replaces it. Exports,
  * prunes, and deletes touch only stored artifacts.
+ *
+ * An App's folder or a volume backed up live is read beside other work. One
+ * backed up stopped, as a final backup always is, also holds the lifecycle
+ * of each App it stops, so nothing starts them meanwhile; a volume's are
+ * the Apps that own or use it. A restore replaces the App, or holds the
+ * volume alone with every App that uses it, so none deploys or starts until
+ * it's done.
  */
 export function backupTaskLocks(
   input: BackupTaskInput,
-  resolveInstance: InstanceResolver
+  resolveInstance: InstanceResolver,
+  resolveVolumeApps: VolumeAppsResolver
 ): ReadonlyArray<LaneLock> | Promise<ReadonlyArray<LaneLock>> {
   if (input.kind !== "create" && input.kind !== "restore") return []
   const { id, kind } = input.target
   const restore = input.kind === "restore"
+  const stopped =
+    input.kind === "create" &&
+    (input.consistency === "stopped" || input.reason === "final_delete")
+  if (kind === "app") {
+    if (restore) return appReplaceLocks(id)
+    return stopped ? appLifecycleLocks(id) : [shared(laneKeys.app(id))]
+  }
+  if (kind === "volume") {
+    const locks = (apps: ReadonlyArray<string>) => [
+      restore ? exclusive(laneKeys.volume(id)) : shared(laneKeys.volume(id)),
+      ...(restore || stopped
+        ? [...new Set(apps)].flatMap((appId) => appLifecycleLocks(appId))
+        : []),
+    ]
+    if (!restore && !stopped) return locks([])
+    return Promise.resolve(resolveVolumeApps(id)).then(locks)
+  }
   if (kind === "instance") {
     return withInstance(
       resolveInstance(id),
@@ -256,6 +281,11 @@ export function controlRequestContinues(
  * the full ID, which needs no lookup; a short ID or name is looked up.
  */
 export type InstanceResolver = (reference: string) => string | Promise<string>
+
+/** The Apps that own or use a volume, by its ID. */
+export type VolumeAppsResolver = (
+  volumeId: string
+) => ReadonlyArray<string> | Promise<ReadonlyArray<string>>
 
 /**
  * The locks a control request takes for its whole run, or null for requests

@@ -60,6 +60,7 @@ export default defineConfig({
       "src/replace-relay": "src/replace-relay.ts",
       "src/host-files-helper": "src/host-files-helper.ts",
       "src/security-inventory-helper": "src/security-inventory-helper.ts",
+      "src/tar-restore-helper": "src/tar-restore-helper.ts",
       "src/database-browser-worker": "src/database-browser-worker.ts",
     },
     format: "esm",
