@@ -513,11 +513,14 @@ rule in the code.
   either server wait their turn behind it; before handover, they run as
   usual and the move re-checks after it gets its handover locks.
 - **Power and files are separate.** Stopping or starting a game server and
-  writing its files take different parts of its lock (`instance:<id>` shared,
-  with `/lifecycle` or `/files` exclusive), as on the Relay, so people can
-  edit config while a slow server stops. File writes replace a file whole,
-  so a start never reads half of one. Work that replaces the whole server
-  (restore, reinstall, deletion) takes it exclusively and waits for both.
+  writing its files take different parts of its lock (`instance:<id>`
+  shared, with `/lifecycle` or `/files` exclusive), as on the Relay, so
+  people can edit config while a slow server stops. Editor saves and
+  browser uploads replace a file whole, so a start reads the old file or
+  the new one; SFTP writes and archive extraction write in place, so a
+  start during one can read a partial file. Work that replaces the whole
+  server (restore, reinstall, deletion) takes it exclusively and waits for
+  both.
 
 ## Measured in phase 0
 
