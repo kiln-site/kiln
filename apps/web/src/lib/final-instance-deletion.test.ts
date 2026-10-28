@@ -230,6 +230,32 @@ describeMysql("final instance deletion", () => {
             deletionStatus: "deleting",
           })
           const before = bucketObjects()
+          // A web route of the server's, whose name nothing else may take
+          // while the server lives.
+          yield* insertRows("web_hostname", {
+            id: "00000000-0000-4000-8000-0000000000aa",
+            hostname: "map.example.test",
+            relay_id: relayId,
+            resource_type: "instance",
+            resource_id: instanceId,
+            integration_id: "gone",
+            zone_id: "zone",
+            is_generated: false,
+            routed: true,
+            status: "active",
+            created_at: at,
+            updated_at: at,
+          })
+          yield* insertRows("hostname_claim", {
+            hostname: "map.example.test",
+            relay_id: relayId,
+            resource_type: "instance",
+            resource_id: instanceId,
+            created_at: at,
+          })
+          const hostnames = selectRows<{ status: string }>("web_hostname").pipe(
+            Effect.map((rows) => rows.map((row) => row.status))
+          )
           fake.relayDeleteFailure = "refuses"
 
           const pending = yield* Effect.promise(() =>
@@ -238,6 +264,7 @@ describeMysql("final instance deletion", () => {
 
           assert.isTrue(pending)
           assert.isTrue(fake.relayServers.has(instanceId))
+          assert.deepStrictEqual(yield* hostnames, ["active"])
           assert.deepStrictEqual(bucketObjects(), before)
           assert.deepStrictEqual(yield* repositoryIds, ["repository-one"])
           assert.strictEqual(
@@ -260,6 +287,8 @@ describeMysql("final instance deletion", () => {
           )
 
           assert.isFalse(stillPending)
+          // Gone now, so its DNS cleanup begins, kept until it finishes.
+          assert.deepStrictEqual(yield* hostnames, ["removing"])
           assert.deepStrictEqual(bucketObjects(), [
             archiveObject,
             otherServerObject,

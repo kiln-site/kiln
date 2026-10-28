@@ -330,6 +330,7 @@ export const DomainsPage = React.memo(function DomainsPage({
             key={dialog.connection?.id ?? "new"}
             canManagePlatform={data.canManagePlatform}
             connection={dialog.connection}
+            connections={data.connections}
             hearthDomain={data.hearthDomain}
             onOpenChange={closeDialog}
           />

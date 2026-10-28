@@ -253,18 +253,6 @@ async function deleteInstanceResources(input: {
   relay: PersistedRelay
   requestedBy: string
 }): Promise<void> {
-  await runAppEffect(
-    "domains.instance.finalDelete",
-    deleteInstanceDomainEffect(input.relay.id, input.instanceId).pipe(
-      Effect.andThen(
-        deleteResourceWebHostnamesEffect({
-          relayId: input.relay.id,
-          resourceId: input.instanceId,
-          resourceType: "instance",
-        })
-      )
-    )
-  )
   const relayDeletion = await Effect.runPromise(
     Effect.result(
       Effect.tryPromise({
@@ -298,6 +286,20 @@ async function deleteInstanceResources(input: {
       throw relayDeletion.failure
     }
   }
+  // Only once the server is gone: its names stay held while it might
+  // survive. Deletes Cloudflare refuses are left to the DNS worker.
+  await runAppEffect(
+    "domains.instance.finalDelete",
+    deleteInstanceDomainEffect(input.relay.id, input.instanceId).pipe(
+      Effect.andThen(
+        deleteResourceWebHostnamesEffect({
+          relayId: input.relay.id,
+          resourceId: input.instanceId,
+          resourceType: "instance",
+        }).pipe(Effect.ignore)
+      )
+    )
+  )
   await runAppEffect(
     "backups.finalDelete.purgeRepositories",
     purgeInstanceBackupRepositoriesEffect(input.relay.id, input.instanceId)

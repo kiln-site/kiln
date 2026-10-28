@@ -496,12 +496,15 @@ type TokenCheck =
 export function DomainConnectionDialog({
   canManagePlatform,
   connection,
+  connections,
   hearthDomain,
   onOpenChange,
 }: {
   canManagePlatform: boolean
   /** Null to connect a new token. */
   connection: DomainConnectionOverview | null
+  /** Every connection the person sees, to know where defaults already are. */
+  connections: ReadonlyArray<DomainConnectionOverview>
   hearthDomain: string
   onOpenChange: (open: boolean) => void
 }) {
@@ -586,9 +589,17 @@ export function DomainConnectionDialog({
   }, [apiToken, connection?.id, saved, scan])
 
   const selected = choices.filter((choice) => choice.selected)
-  // The first chosen domain stands in until one is picked.
+  // The first chosen domain stands in until one is picked, unless the owner
+  // already has a default on another connection, which saving would move.
+  const defaultElsewhere = connections.some(
+    (other) =>
+      other.id !== connection?.id &&
+      other.platform === platform &&
+      other.domains.some((domain) => domain.isDefault)
+  )
   const effectiveDefault =
-    selected.find((choice) => choice.zoneId === defaultZoneId) ?? selected[0]
+    selected.find((choice) => choice.zoneId === defaultZoneId) ??
+    (defaultElsewhere ? undefined : selected[0])
   const settle = async (message: string) => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: queryKeys.domains.settings }),

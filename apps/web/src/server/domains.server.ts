@@ -427,8 +427,9 @@ export const moveInstanceDomainsEffect = Effect.fn("domains.instance.move")(
   }
 )
 
-// A removal stays recorded here: the game server may survive a failed
-// deletion. Post-delete cleanup clears it once the Relay has removed it.
+// Once the Relay has deleted the game server, so its names stay held while
+// it might survive. Every domain is marked first, so one whose records
+// Cloudflare refuses to delete is finished by the DNS worker.
 export const deleteInstanceDomainEffect = Effect.fn("domains.instance.delete")(
   function* (relayId: string, instanceId: string) {
     const assignments = yield* loadInstanceDomainAssignmentsForInstanceEffect(
@@ -436,7 +437,19 @@ export const deleteInstanceDomainEffect = Effect.fn("domains.instance.delete")(
       instanceId
     )
     for (const assignment of assignments) {
-      yield* deleteAssignmentRecordsEffect(assignment)
+      yield* markInstanceDomainRemovingEffect(assignment.id)
+    }
+    yield* invalidateManagedDomainAddressesEffect
+    for (const assignment of assignments) {
+      yield* deleteAssignmentRecordsEffect(assignment).pipe(
+        Effect.tapError((error) =>
+          recordInstanceDomainSyncErrorEffect(
+            assignment.id,
+            `Delete failed: ${error.message}`
+          )
+        ),
+        Effect.ignore
+      )
     }
   },
   (effect, relayId, instanceId) =>
