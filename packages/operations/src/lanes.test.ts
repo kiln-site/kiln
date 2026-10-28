@@ -1,13 +1,8 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Deferred, Effect, Exit, Fiber } from "effect"
 
-import {
-  exclusive,
-  LaneRejectedError,
-  OperationLanes,
-  shared,
-  type LaneLock,
-} from "./operation-lanes.js"
+import { LaneRejectedError, OperationLanes } from "./lanes.js"
+import { exclusive, shared, type LaneLock } from "./locks.js"
 
 /**
  * Starts an operation that records when it begins and holds its locks until
@@ -313,6 +308,31 @@ describe("operation lanes", () => {
         lanes.run({ label: "refused", locks: [exclusive("b")] }, Effect.void)
       )
       assert.strictEqual((refused as LaneRejectedError).reason, "busy")
+    })
+  )
+
+  it.effect("says what each waiting operation waits on", () =>
+    Effect.gen(function* () {
+      const lanes = new OperationLanes()
+      const log: Array<string> = []
+      yield* start(lanes, log, "backup", [shared("server")])
+      yield* start(lanes, log, "restore", [exclusive("server")])
+      yield* start(lanes, log, "start", [shared("server"), exclusive("power")])
+
+      const { waiting } = lanes.describe()
+      assert.deepStrictEqual(
+        waiting.map(({ label, waitingOn }) => ({ label, waitingOn })),
+        [
+          {
+            label: "restore",
+            waitingOn: [{ holds: true, id: "backup", key: "server" }],
+          },
+          {
+            label: "start",
+            waitingOn: [{ holds: false, id: "restore", key: "server" }],
+          },
+        ]
+      )
     })
   )
 })

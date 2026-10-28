@@ -5,6 +5,7 @@
     "moduleResolution": "bundler",
     "paths": {
       "@workspace/contracts": ["./packages/contracts/src/index.ts"],
+      "@workspace/operations": ["./packages/operations/src/index.ts"],
       "@workspace/telemetry": ["./packages/telemetry/src/index.ts"]
     },
     "skipLibCheck": true,

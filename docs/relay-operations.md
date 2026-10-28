@@ -1,7 +1,8 @@
 # Relay operations
 
 Every change to a game server, App, or database on a Relay waits its turn in
-one place: the Relay's operation lanes (`apps/relay/src/operation-lanes.ts`).
+one place: the Relay's operation lanes (`apps/relay/src/operation-lanes.ts`,
+built on the lane rules in `packages/operations` that Hearth shares).
 Hearth's requests, the browser's direct console and uploads, SFTP, schedules,
 crash recovery, and the Relay's own workers all go through them, so a feature
 gets ordering and exclusion by naming the resources it touches instead of

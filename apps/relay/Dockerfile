@@ -20,6 +20,7 @@ WORKDIR /source
 COPY --chown=vp:vp package.json pnpm-lock.yaml pnpm-workspace.yaml .node-version ./
 COPY --chown=vp:vp apps/relay/package.json ./apps/relay/package.json
 COPY --chown=vp:vp packages/contracts/package.json ./packages/contracts/package.json
+COPY --chown=vp:vp packages/operations/package.json ./packages/operations/package.json
 COPY --chown=vp:vp packages/telemetry/package.json ./packages/telemetry/package.json
 COPY --chown=vp:vp patches ./patches
 RUN --mount=type=cache,target=/home/vp/.local/share/pnpm/store,uid=1000,gid=1000,sharing=locked \
@@ -28,6 +29,7 @@ RUN --mount=type=cache,target=/home/vp/.local/share/pnpm/store,uid=1000,gid=1000
 COPY --chown=vp:vp tsconfig.json vite.config.ts release.json ./
 COPY --chown=vp:vp apps/relay ./apps/relay
 COPY --chown=vp:vp packages/contracts ./packages/contracts
+COPY --chown=vp:vp packages/operations ./packages/operations
 COPY --chown=vp:vp packages/telemetry ./packages/telemetry
 
 ARG SOURCE_COMMIT
