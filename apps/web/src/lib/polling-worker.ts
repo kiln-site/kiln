@@ -12,6 +12,7 @@ const passes = Metric.counter("hearth.worker.passes", {
 
 /** Hearth's workers that poll MySQL for due jobs. */
 export type PollingWorkerName =
+  | "Domains.dns"
   | "Instances.postProvision"
   | "Notifications.push"
   | "ServerMigrations"

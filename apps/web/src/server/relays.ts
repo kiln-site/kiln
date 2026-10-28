@@ -258,21 +258,23 @@ export const removeRelay = createServerFn({ method: "POST" })
           )
         },
         removeManagedDomains: async () => {
-          const [{ removeRelayManagedDomainsEffect }, { removeRelayWebHostnamesEffect }] =
-            await Promise.all([
-              import("@/server/domains.server"),
-              import("@/server/web-hostnames.server"),
-            ])
-          const [domains, hostnames] = await Promise.all([
-            runAppEffect(
-              "domains.relay.removeAssignments",
-              removeRelayManagedDomainsEffect(data.id, data.removeVanityDomains)
-            ),
-            runAppEffect(
-              "webHostnames.removeRelay",
-              removeRelayWebHostnamesEffect(data.id, data.removeVanityDomains)
-            ),
+          const [
+            { removeRelayManagedDomainsEffect },
+            { removeRelayWebHostnamesEffect },
+          ] = await Promise.all([
+            import("@/server/domains.server"),
+            import("@/server/web-hostnames.server"),
           ])
+          // One after the other: each lets go of the Relay's names the
+          // other no longer uses.
+          const domains = await runAppEffect(
+            "domains.relay.removeAssignments",
+            removeRelayManagedDomainsEffect(data.id, data.removeVanityDomains)
+          )
+          const hostnames = await runAppEffect(
+            "webHostnames.removeRelay",
+            removeRelayWebHostnamesEffect(data.id, data.removeVanityDomains)
+          )
           return domains + hostnames
         },
       }

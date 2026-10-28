@@ -12,6 +12,10 @@ import { databaseTableName } from "@/lib/database-config"
 // domains unmarked instead. `blacklist_patterns` stays, as a shared
 // connection's reserved names. `web_hostname` holds the records Kiln keeps
 // for web route hostnames and the URLs it generates for apps.
+// `hostname_claim` gives every hostname Kiln keeps one game server or app,
+// whichever table uses it; existing game server domains claim theirs. A game
+// server domain being renamed holds its old and new names until Cloudflare
+// has the new one, and unfinished DNS work waits for its next attempt.
 export const cloudflareConnections: Migration = {
   id: 35,
   name: "cloudflare_connections",
@@ -20,6 +24,8 @@ export const cloudflareConnections: Migration = {
     const integration = databaseTableName("domain_integration")
     const zone = databaseTableName("domain_zone")
     const hostname = databaseTableName("web_hostname")
+    const claim = databaseTableName("hostname_claim")
+    const assignment = databaseTableName("instance_domain")
     // DDL is not transactional; each step checks the schema so a retry after
     // a crash picks up where it stopped.
     const columns = yield* sql<{ columnName: string }>`
@@ -70,6 +76,8 @@ export const cloudflareConnections: Migration = {
   \`target\` varchar(253) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,
   \`status\` enum('pending','active','external','error','removing') NOT NULL DEFAULT 'pending',
   \`last_error\` varchar(512) DEFAULT NULL,
+  \`attempts\` smallint unsigned NOT NULL DEFAULT '0',
+  \`next_attempt_at\` bigint unsigned DEFAULT NULL,
   \`created_at\` bigint unsigned NOT NULL,
   \`updated_at\` bigint unsigned NOT NULL,
   PRIMARY KEY (\`id\`),
@@ -77,5 +85,34 @@ export const cloudflareConnections: Migration = {
   KEY \`${hostname}_resource_idx\` (\`relay_id\`,\`resource_type\`,\`resource_id\`),
   KEY \`${hostname}_integration_idx\` (\`integration_id\`)
 )`)
+
+    const assignmentColumns = yield* sql<{ columnName: string }>`
+      SELECT column_name AS columnName
+      FROM information_schema.columns
+      WHERE table_schema = DATABASE() AND table_name = ${assignment}
+    `.pipe(Effect.map((rows) => new Set(rows.map((row) => row.columnName))))
+    if (!assignmentColumns.has("next_vanity_label")) {
+      yield* sql.unsafe(`ALTER TABLE \`${assignment}\`
+  ADD COLUMN \`next_vanity_label\` varchar(63) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL AFTER \`domain\`,
+  ADD COLUMN \`next_domain\` varchar(253) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL AFTER \`next_vanity_label\`,
+  ADD COLUMN \`attempts\` smallint unsigned NOT NULL DEFAULT '0' AFTER \`last_error\`,
+  ADD COLUMN \`next_attempt_at\` bigint unsigned DEFAULT NULL AFTER \`attempts\``)
+    }
+
+    yield* sql.unsafe(`CREATE TABLE IF NOT EXISTS \`${claim}\` (
+  \`hostname\` varchar(253) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  \`relay_id\` char(43) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  \`resource_type\` enum('app','instance') NOT NULL,
+  \`resource_id\` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  \`created_at\` bigint unsigned NOT NULL,
+  PRIMARY KEY (\`hostname\`),
+  KEY \`${claim}_resource_idx\` (\`relay_id\`,\`resource_type\`,\`resource_id\`)
+)`)
+    // Hostnames are kept lowercase, so one key covers every spelling.
+    yield* sql.unsafe(`INSERT IGNORE INTO \`${claim}\`
+  (hostname, relay_id, resource_type, resource_id, created_at)
+SELECT LOWER(CONCAT(vanity_label, '.', domain)), relay_id, 'instance',
+       instance_id, created_at
+  FROM \`${assignment}\``)
   }),
 }

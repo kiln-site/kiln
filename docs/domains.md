@@ -40,10 +40,11 @@ Which connections a hostname may use is a security boundary:
 
 A save claims its new hostnames before anything reaches the Relay, and lets
 them go if the save fails, so two saves can't both take one. It's refused
-when a hostname is already held by another game server or app ("already in use by" names it
-when the person can see it). Under a vanity domain someone else owns, such
-as a Kiln provided one, it's also refused when the name is reserved or
-Cloudflare already has a record for it. Names are compared case-insensitively.
+when a hostname is already held by another game server or app ("already in
+use by" names it when the person can see it). Under a vanity domain someone
+else owns, such as a Kiln provided one, it's also refused when the name is
+reserved or Cloudflare already has a record for it. Names are compared
+case-insensitively.
 
 The Relay reports where web traffic reaches it as `publicHost` in its
 snapshot, the same address game servers advertise (`KILN_RELAY_GAME_HOST`).
@@ -72,8 +73,37 @@ generates one. New connections start with both.
 People with a game server's network permission can add, rename, and remove
 its vanity addresses on its Network page, under domains its owner or they
 themselves provide, or Kiln provides. A name they choose is refused the same
-way as a web route's. An app's generated address stays
-until it is deleted or the app is.
+way as a web route's. An app's generated address stays until it is deleted
+or the app is.
+
+## Who holds a hostname
+
+Every hostname Kiln keeps belongs to exactly one game server or app, in
+`hostname_claim`, whether a vanity address or a web route uses it. A name is
+claimed in the same transaction as the row that uses it, and let go in the
+one that stops using it, so a game server's address and another resource's
+web route can never share one, whichever comes first. Moving a game server
+moves its claims with it.
+
+A name stays claimed until its DNS records are gone. Removing a route or a
+domain marks it for deletion; renaming a game server's domain claims the new
+name beside the old one, moves Cloudflare's records, and only then lets go
+of the old name. Nothing is rolled back: a rename or delete Cloudflare
+refuses is finished later.
+
+## Finishing DNS work
+
+Requests change Cloudflare themselves, and record what they're doing in
+MySQL first. Hearth's DNS worker (`Domains.dns`) finishes whatever they
+left: records Cloudflare refused, renames and deletes cut short by an outage
+or a restart. A row still waiting is retried after 30 seconds, then twice as
+long each time, up to an hour; saving it again or Sync tries it at once.
+
+Kiln can't make MySQL, the Relays, and Cloudflare change together. MySQL
+decides who holds a name; Cloudflare allows several records under one name,
+so it can't. A record Kiln made but never heard back about, as when Hearth
+stopped mid-request, still carries Kiln's comment naming its game server or
+app; the worker takes it up again instead of treating it as someone else's.
 
 ## Storage
 
@@ -81,6 +111,9 @@ until it is deleted or the app is.
   Kiln's), its encrypted token, its reserved names in
   `blacklist_patterns`, and the zones it reached when last checked.
 - `domain_zone`: vanity domains, unique across connections.
-- `instance_domain`: game servers' vanity addresses.
-- `web_hostname`: web route hostnames and generated app addresses, unique by
-  hostname, with the record Kiln made for each.
+- `hostname_claim`: the game server or app each hostname belongs to,
+  lowercase, one row per name.
+- `instance_domain`: game servers' vanity addresses, with the name a rename
+  is moving one to.
+- `web_hostname`: web route hostnames and generated app addresses, with the
+  record Kiln made for each.

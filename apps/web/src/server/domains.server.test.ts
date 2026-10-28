@@ -10,11 +10,12 @@ import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRows, selectRows } from "@/test/seed"
 import { betterAuthSecrets } from "@/lib/environment"
 import {
-  claimInstanceDomainLabelEffect,
+  beginInstanceDomainRenameEffect,
   insertInstanceDomainAssignmentEffect,
   reserveInstanceDomainAssignmentEffect,
   saveDomainConnectionEffect,
 } from "@/effect/domains"
+import { insertWebHostnameEffect } from "@/effect/web-hostnames"
 import { finalizeInstanceDeletionEffect } from "@/server/instance-deletion-cleanup"
 
 import { encryptWithKeyring } from "../../keyring.mjs"
@@ -25,6 +26,7 @@ import {
   deleteManagedDomainAssignmentEffect,
   loadManagedDomainAddressesEffect,
   provisionInstanceDomain,
+  reconcileDueInstanceDomainsEffect,
   removeInstanceDomainEffect,
   removeRelayManagedDomainsEffect,
 } from "./domains.server"
@@ -58,7 +60,20 @@ function memoryCache() {
   })
 }
 
+// A domain, and the name it holds.
 const insertAssignment = (assignment: InstanceDomainAssignment) =>
+  Effect.all([
+    insertRows("hostname_claim", {
+      hostname: `${assignment.vanityLabel}.${assignment.domain}`,
+      relay_id: assignment.relayId,
+      resource_type: "instance",
+      resource_id: assignment.instanceId,
+      created_at: 0,
+    }),
+    insertDomainRow(assignment),
+  ])
+
+const insertDomainRow = (assignment: InstanceDomainAssignment) =>
   insertRows("instance_domain", {
     id: assignment.id,
     is_primary: assignment.primary,
@@ -133,6 +148,11 @@ const assignmentRows = selectRows<{
   vanity_label: string
 }>("instance_domain")
 
+const claimedNames = Effect.map(
+  selectRows<{ hostname: string }>("hostname_claim"),
+  (rows) => rows.map((row) => row.hostname).sort()
+)
+
 const assignmentStatuses = Effect.map(
   selectRows<{ status: string }>("instance_domain"),
   (rows) => rows.map((row) => row.status)
@@ -159,6 +179,7 @@ function fakeCloudflare(
     (options.records ?? []).map((id) => [id, `${id}.kiln.site`])
   )
   const refuseDelete = new Set<string>()
+  const refuseUpdate = new Set<string>()
   let nextId = 0
   const failure = (status: number, code?: number) =>
     Response.json(
@@ -212,6 +233,7 @@ function fakeCloudflare(
         type: string
       }
       if (!records.has(id)) return failure(404, 81_044)
+      if (refuseUpdate.has(id)) return failure(503)
       records.set(id, record.name)
       return success({ id, name: record.name, type: record.type })
     })
@@ -220,6 +242,7 @@ function fakeCloudflare(
     names: () => [...records.values()].sort(),
     records: () => [...records.keys()].sort(),
     refuseDelete,
+    refuseUpdate,
   }
 }
 
@@ -346,6 +369,76 @@ describeMysql("managed domain deletion", () => {
   })
 })
 
+describeMysql("renaming a game server's domain", () => {
+  layer(TestDatabase)((it) => {
+    it.effect(
+      "holds its old name until Cloudflare has the new one, and finishes a rename cut short",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          const dns = fakeCloudflare({
+            records: ["address-record", "srv-record"],
+          })
+          yield* insertCredential()
+          yield* insertAssignment(testAssignment())
+          const takeOldName = insertWebHostnameEffect({
+            connectionId: "cloudflare",
+            generated: false,
+            hostname: "play.kiln.site",
+            id: "00000000-0000-4000-8000-0000000000ac",
+            relayId,
+            resourceId: "a".repeat(40),
+            resourceType: "app",
+            vanityDomain: "kiln.site",
+            zoneId: "zone-id",
+          })
+
+          // Cloudflare refuses to move the records.
+          dns.refuseUpdate.add("address-record")
+          yield* beginInstanceDomainRenameEffect({
+            domain: "kiln.site",
+            id: testAssignment().id,
+            vanityLabel: "creative",
+          })
+          yield* reconcileDueInstanceDomainsEffect(0)
+
+          assert.deepEqual(
+            (yield* assignmentRows).map((row) => row.vanity_label),
+            ["play"]
+          )
+          assert.deepEqual(yield* claimedNames, [
+            "creative.kiln.site",
+            "play.kiln.site",
+          ])
+          assert.strictEqual(
+            (yield* Effect.flip(takeOldName)).message,
+            "play.kiln.site is already in use"
+          )
+
+          // Retried once its wait is up, with Cloudflare back.
+          dns.refuseUpdate.clear()
+          yield* reconcileDueInstanceDomainsEffect(0)
+          assert.deepEqual(yield* claimedNames, [
+            "creative.kiln.site",
+            "play.kiln.site",
+          ])
+          yield* reconcileDueInstanceDomainsEffect(31_000)
+
+          assert.deepEqual(dns.names(), [
+            "_minecraft._tcp.creative.kiln.site",
+            "creative.kiln.site",
+          ])
+          assert.deepEqual(
+            (yield* assignmentRows).map((row) => row.vanity_label),
+            ["creative"]
+          )
+          assert.deepEqual(yield* claimedNames, ["creative.kiln.site"])
+          yield* takeOldName
+        }).pipe(Effect.provide(disabledCache))
+    )
+  })
+})
+
 describeMysql("removing a game server's domain", () => {
   layer(TestDatabase)((it) => {
     it.effect("keeps it removed when the game server starts again", () =>
@@ -368,46 +461,43 @@ describeMysql("removing a game server's domain", () => {
       }).pipe(Effect.provide(disabledCache))
     )
 
-    it.effect(
-      "lets a half-finished removal be completed by deleting again",
-      () =>
-        Effect.gen(function* () {
-          yield* resetDatabase
-          const dns = fakeCloudflare({
-            records: ["address-record", "srv-record"],
-          })
-          dns.refuseDelete.add("srv-record")
-          yield* insertCredential()
-          yield* insertAssignment(testAssignment())
+    it.effect("lets a half-finished removal be completed later", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        const dns = fakeCloudflare({
+          records: ["address-record", "srv-record"],
+        })
+        dns.refuseDelete.add("srv-record")
+        yield* insertCredential()
+        yield* insertAssignment(testAssignment())
 
-          const failure = yield* removeInstanceDomainEffect(
-            relayId,
-            instanceId,
-            testAssignment().id
-          ).pipe(Effect.flip)
+        const failure = yield* removeInstanceDomainEffect(
+          relayId,
+          instanceId,
+          testAssignment().id
+        ).pipe(Effect.flip)
 
-          assert.strictEqual(failure._tag, "ExternalServiceError")
-          assert.deepEqual(dns.records(), ["srv-record"])
-          assert.deepEqual(yield* assignmentStatuses, ["removing"])
-          assert.deepEqual(yield* optOutKeys, [`${relayId}:${instanceId}`])
+        assert.strictEqual(failure._tag, "ExternalServiceError")
+        assert.deepEqual(dns.records(), ["srv-record"])
+        assert.deepEqual(yield* assignmentStatuses, ["removing"])
+        assert.deepEqual(yield* optOutKeys, [`${relayId}:${instanceId}`])
 
-          // A start or Sync before the retry doesn't bring the address back.
-          yield* Effect.promise(() =>
-            provisionInstanceDomain(testInstance(), relayId)
-          )
-          assert.deepEqual(dns.records(), ["srv-record"])
-          assert.deepEqual(yield* assignmentStatuses, ["removing"])
+        // A start or Sync before the retry doesn't bring the address back.
+        yield* Effect.promise(() =>
+          provisionInstanceDomain(testInstance(), relayId)
+        )
+        assert.deepEqual(dns.records(), ["srv-record"])
+        assert.deepEqual(yield* assignmentStatuses, ["removing"])
 
-          dns.refuseDelete.clear()
-          yield* removeInstanceDomainEffect(
-            relayId,
-            instanceId,
-            testAssignment().id
-          )
+        // Its name stays held until the delete finishes.
+        assert.deepEqual(yield* claimedNames, ["play.kiln.site"])
+        dns.refuseDelete.clear()
+        yield* reconcileDueInstanceDomainsEffect(0)
 
-          assert.deepEqual(dns.records(), [])
-          assert.deepEqual(yield* assignmentKeys, [])
-        }).pipe(Effect.provide(disabledCache))
+        assert.deepEqual(dns.records(), [])
+        assert.deepEqual(yield* assignmentKeys, [])
+        assert.deepEqual(yield* claimedNames, [])
+      }).pipe(Effect.provide(disabledCache))
     )
 
     it.effect(
@@ -835,6 +925,7 @@ describeMysql("saving vanity domains", () => {
 
           assert.strictEqual(refused._tag, "DomainConfigurationError")
           assert.deepEqual(yield* assignmentKeys, [])
+          assert.deepEqual(yield* claimedNames, [])
         })
     )
 
@@ -920,27 +1011,29 @@ describeMysql("saving vanity domains", () => {
         yield* resetDatabase
         yield* insertCredential()
         yield* insertAssignment(testAssignment())
-        yield* insertRows("web_hostname", {
-          id: "00000000-0000-4000-8000-0000000000ab",
+        yield* insertWebHostnameEffect({
+          connectionId: "cloudflare",
+          generated: false,
           hostname: "shop.kiln.site",
-          relay_id: relayId,
-          resource_type: "app",
-          resource_id: "a".repeat(40),
-          integration_id: "cloudflare",
-          zone_id: "zone-id",
-          is_generated: false,
-          status: "active",
-          created_at: 0,
-          updated_at: 0,
+          id: "00000000-0000-4000-8000-0000000000ab",
+          relayId,
+          resourceId: "a".repeat(40),
+          resourceType: "app",
+          vanityDomain: "kiln.site",
+          zoneId: "zone-id",
         })
 
-        const refused = yield* claimInstanceDomainLabelEffect({
+        const refused = yield* beginInstanceDomainRenameEffect({
           domain: "kiln.site",
           id: testAssignment().id,
-          vanityLabel: "shop",
+          vanityLabel: "SHOP",
         }).pipe(Effect.flip)
 
         assert.strictEqual(refused.message, "shop.kiln.site is already in use")
+        assert.deepEqual(yield* claimedNames, [
+          "play.kiln.site",
+          "shop.kiln.site",
+        ])
       })
     )
 
@@ -998,6 +1091,7 @@ function testAssignment(): InstanceDomainAssignment {
     instanceId,
     integrationId: "cloudflare",
     lastError: null,
+    next: null,
     primary: true,
     publicHost: "203.0.113.10",
     publicPort: 25_565,

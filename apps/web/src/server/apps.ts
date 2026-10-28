@@ -455,11 +455,7 @@ export const updateAppWebRoutes = createServerFn({ method: "POST" })
     )
     publishAppChange(relay.id, false)
     // Kiln keeps the DNS records of hostnames in zones it manages.
-    await syncWebRouteHostnames(
-      user,
-      resource,
-      state.routes.flatMap(webRouteHostnames)
-    )
+    await syncWebRouteHostnames(resource)
     return state
   })
 

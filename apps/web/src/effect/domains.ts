@@ -7,6 +7,11 @@ import {
   DomainConfigurationError,
   ResourceNotFoundError,
 } from "@/effect/errors"
+import {
+  claimHostnamesEffect,
+  moveHostnameClaimsEffect,
+  releaseUnusedHostnamesEffect,
+} from "@/effect/hostname-claims"
 import { databaseTable } from "@/lib/database-config"
 import { domainBlacklistPatternsSchema } from "@/lib/domain-schemas"
 import { betterAuthSecrets } from "@/lib/environment"
@@ -81,6 +86,11 @@ export interface InstanceDomainAssignment {
   instanceId: string
   integrationId: string
   lastError: string | null
+  /**
+   * The name a rename is moving it to, held alongside its current one until
+   * Cloudflare has it; null when no rename is under way.
+   */
+  next: { domain: string; vanityLabel: string } | null
   /** The domain Hearth advertises as the game server's connect address. */
   primary: boolean
   publicHost: string
@@ -127,6 +137,8 @@ interface InstanceDomainRow extends RowDataPacket {
   integration_id: string
   is_primary: boolean | number
   last_error: string | null
+  next_domain: string | null
+  next_vanity_label: string | null
   public_host: string
   public_port: number
   relay_id: string
@@ -572,10 +584,29 @@ export const deleteDomainConnectionEffect = Effect.fn(
         `DELETE FROM ${databaseTable("domain_zone")} WHERE integration_id = ?`,
         [id]
       )
+      const owners = yield* transaction.queryRows<
+        RowDataPacket & {
+          relay_id: string
+          resource_id: string
+          resource_type: "app" | "instance"
+        }
+      >(
+        `SELECT DISTINCT relay_id, resource_type, resource_id
+           FROM ${databaseTable("web_hostname")}
+          WHERE integration_id = ?`,
+        [id]
+      )
       yield* transaction.execute(
         `DELETE FROM ${databaseTable("web_hostname")} WHERE integration_id = ?`,
         [id]
       )
+      for (const owner of owners) {
+        yield* releaseUnusedHostnamesEffect({
+          relayId: owner.relay_id,
+          resourceId: owner.resource_id,
+          resourceType: owner.resource_type,
+        })
+      }
       yield* transaction.execute(
         `DELETE FROM ${databaseTable("domain_integration")} WHERE id = ?`,
         [id]
@@ -660,14 +691,23 @@ export const loadInstanceDomainAssignmentsForInstanceEffect = Effect.fn(
   return rows.map(domainAssignment)
 })
 
+/** Forgets a domain, letting go of its names. */
 export const deleteInstanceDomainAssignmentEffect = Effect.fn(
   "domains.assignment.delete"
-)(function* (id: string) {
+)(function* (assignment: InstanceDomainAssignment) {
   const database = yield* Database
-  yield* database.execute(
-    "domains.assignment.delete",
-    `DELETE FROM ${databaseTable("instance_domain")} WHERE id = ?`,
-    [id]
+  yield* database.transaction("domains.assignment.delete", () =>
+    Effect.gen(function* () {
+      yield* database.execute(
+        "domains.assignment.delete",
+        `DELETE FROM ${databaseTable("instance_domain")} WHERE id = ?`,
+        [assignment.id]
+      )
+      yield* releaseUnusedHostnamesEffect(
+        assignmentOwner(assignment),
+        assignmentHostnames(assignment)
+      )
+    })
   )
 })
 
@@ -675,10 +715,15 @@ export const deleteRelayInstanceDomainAssignmentsEffect = Effect.fn(
   "domains.assignments.deleteRelay"
 )(function* (relayId: string) {
   const database = yield* Database
-  yield* database.execute(
-    "domains.assignments.deleteRelay",
-    `DELETE FROM ${databaseTable("instance_domain")} WHERE relay_id = ?`,
-    [relayId]
+  yield* database.transaction("domains.assignments.deleteRelay", () =>
+    Effect.gen(function* () {
+      yield* database.execute(
+        "domains.assignments.deleteRelay",
+        `DELETE FROM ${databaseTable("instance_domain")} WHERE relay_id = ?`,
+        [relayId]
+      )
+      yield* releaseUnusedHostnamesEffect({ relayId })
+    })
   )
   yield* database.execute(
     "domains.optOuts.deleteRelay",
@@ -688,9 +733,9 @@ export const deleteRelayInstanceDomainAssignmentsEffect = Effect.fn(
 })
 
 /**
- * Gives a game server's domains to another server, as a move to a new
- * server does. Domains being removed stay with their removal. Reports how
- * many moved.
+ * Gives a game server's domains, and their names, to another server, as a
+ * move to a new server does. Domains being removed stay with their removal.
+ * Reports how many moved.
  */
 export const reassignInstanceDomainsEffect = Effect.fn(
   "domains.assignments.reassign"
@@ -699,14 +744,41 @@ export const reassignInstanceDomainsEffect = Effect.fn(
   to: { readonly instanceId: string; readonly relayId: string }
 ) {
   const database = yield* Database
-  const result = yield* database.execute(
-    "domains.assignments.reassign",
-    `UPDATE ${databaseTable("instance_domain")}
-        SET relay_id = ?, instance_id = ?
-      WHERE relay_id = ? AND instance_id = ? AND status <> 'removing'`,
-    [to.relayId, to.instanceId, from.relayId, from.instanceId]
+  return yield* database.transaction("domains.assignments.reassign", () =>
+    Effect.gen(function* () {
+      const moving = yield* database.queryRows<InstanceDomainRow>(
+        "domains.assignments.reassign",
+        `SELECT assignment.*, NULL AS zone_id
+           FROM ${databaseTable("instance_domain")} assignment
+          WHERE relay_id = ? AND instance_id = ? AND status <> 'removing'
+          FOR UPDATE`,
+        [from.relayId, from.instanceId]
+      )
+      if (moving.length === 0) return 0
+      yield* database.execute(
+        "domains.assignments.reassign",
+        `UPDATE ${databaseTable("instance_domain")}
+            SET relay_id = ?, instance_id = ?, attempts = 0,
+                next_attempt_at = NULL
+          WHERE relay_id = ? AND instance_id = ? AND status <> 'removing'`,
+        [to.relayId, to.instanceId, from.relayId, from.instanceId]
+      )
+      yield* moveHostnameClaimsEffect(
+        {
+          relayId: from.relayId,
+          resourceId: from.instanceId,
+          resourceType: "instance",
+        },
+        {
+          relayId: to.relayId,
+          resourceId: to.instanceId,
+          resourceType: "instance",
+        },
+        moving.flatMap((row) => assignmentHostnames(domainAssignment(row)))
+      )
+      return moving.length
+    })
   )
-  return result.affectedRows
 })
 
 export const loadInstanceDomainOptOutEffect = Effect.fn("domains.optOut.load")(
@@ -785,30 +857,6 @@ export const loadInstanceDomainAssignmentsEffect = Effect.fn(
   return rows.map(domainAssignment)
 })
 
-/**
- * Names taken under a vanity domain, by game server domains and web
- * hostnames. `excludeId` is the one being renamed, whose own name isn't.
- */
-export const loadUsedVanityLabelsEffect = Effect.fn(
-  "domains.assignments.usedLabels"
-)(function* (domain: string, excludeId?: string) {
-  const database = yield* Database
-  const rows = yield* database.queryRows<
-    RowDataPacket & { vanity_label: string }
-  >(
-    "domains.assignments.usedLabels",
-    `SELECT vanity_label
-       FROM ${databaseTable("instance_domain")}
-      WHERE domain = ?${excludeId ? " AND id <> ?" : ""}
-     UNION
-     SELECT SUBSTRING_INDEX(hostname, '.', 1)
-       FROM ${databaseTable("web_hostname")}
-      WHERE vanity_domain = ?${excludeId ? " AND id <> ?" : ""}`,
-    excludeId ? [domain, excludeId, domain, excludeId] : [domain, domain]
-  )
-  return new Set(rows.map((row) => row.vanity_label))
-})
-
 interface DomainReservation {
   /** The connection whose token manages the domain's zone. */
   connectionId: string
@@ -828,83 +876,75 @@ interface DomainReservation {
 }
 
 /**
- * Holds a name for a new domain before its records exist. A name another row
- * holds fails on the unique key rather than taking that row over.
+ * Holds a name for a new domain before its records exist, claiming it in the
+ * same transaction, so a name another game server or app holds fails rather
+ * than being taken over.
  */
 export const insertInstanceDomainAssignmentEffect = Effect.fn(
   "domains.assignment.insert"
 )(function* (input: DomainReservation) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
-  // Only into an enabled domain still in the zone its records will go in: a
-  // save that removes or moves it either waits for this row or this insert
-  // finds nothing.
-  const result = yield* database.execute(
-    "domains.assignment.insert",
-    `INSERT INTO ${databaseTable("instance_domain")}
-       (id, relay_id, instance_id, is_primary, integration_id, vanity_label,
-        domain, public_host, public_port, supports_srv, srv_service,
-        srv_protocol, status, last_error, created_at, updated_at)
-     SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, ?, ?
-       FROM ${databaseTable("domain_zone")}
-      WHERE domain = ? AND zone_id = ? AND integration_id = ? AND enabled = 1
-        AND NOT EXISTS (${webHostnameTaken})`,
-    [
-      input.id,
-      input.relayId,
-      input.instanceId,
-      input.primary,
-      input.connectionId,
-      input.vanityLabel,
-      input.domain,
-      input.publicHost,
-      input.publicPort,
-      input.supportsSrv,
-      input.srvService,
-      input.srvProtocol,
-      now,
-      now,
-      input.domain,
-      input.zoneId,
-      input.connectionId,
-      `${input.vanityLabel}.${input.domain}`,
-    ]
-  )
-  if (result.affectedRows === 0) {
-    return yield* (yield* webHostnameHeldEffect(
-      `${input.vanityLabel}.${input.domain}`
-    ))
-      ? DomainConfigurationError.make({
-          message: `${input.vanityLabel}.${input.domain} is already in use`,
-        })
-      : DomainConfigurationError.make({
+  yield* database.transaction("domains.assignment.insert", () =>
+    Effect.gen(function* () {
+      yield* claimHostnamesEffect(
+        {
+          relayId: input.relayId,
+          resourceId: input.instanceId,
+          resourceType: "instance",
+        },
+        [`${input.vanityLabel}.${input.domain}`]
+      )
+      // Only into an enabled domain still in the zone its records will go
+      // in: a save that removes or moves it either waits for this row or
+      // this insert finds nothing.
+      const result = yield* database.execute(
+        "domains.assignment.insert",
+        `INSERT INTO ${databaseTable("instance_domain")}
+           (id, relay_id, instance_id, is_primary, integration_id,
+            vanity_label, domain, public_host, public_port, supports_srv,
+            srv_service, srv_protocol, status, last_error, created_at,
+            updated_at)
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, ?, ?
+           FROM ${databaseTable("domain_zone")}
+          WHERE domain = ? AND zone_id = ? AND integration_id = ?
+            AND enabled = 1`,
+        [
+          input.id,
+          input.relayId,
+          input.instanceId,
+          input.primary,
+          input.connectionId,
+          input.vanityLabel,
+          input.domain,
+          input.publicHost,
+          input.publicPort,
+          input.supportsSrv,
+          input.srvService,
+          input.srvProtocol,
+          now,
+          now,
+          input.domain,
+          input.zoneId,
+          input.connectionId,
+        ]
+      )
+      if (result.affectedRows === 0) {
+        return yield* DomainConfigurationError.make({
           message: `${input.domain} isn't taking new game server domains`,
         })
-  }
-})
-
-// A web route's hostname, or an app's address, holds the name; checked in
-// the same statement that takes it, as the web hostname insert checks
-// game server domains.
-const webHostnameTaken = `SELECT 1 FROM ${databaseTable("web_hostname")}
-  WHERE hostname = ?`
-
-const webHostnameHeldEffect = Effect.fnUntraced(function* (hostname: string) {
-  const database = yield* Database
-  const rows = yield* database.queryRows<RowDataPacket>(
-    "domains.webHostnameHeld",
-    webHostnameTaken,
-    [hostname]
+      }
+    })
   )
-  return rows.length > 0
 })
 
 /**
- * Holds a new name for a domain whose records were released. Locks its
- * domain's row before the assignment's, the order a save takes them in, and
- * only while the domain is still in the zone, and on the connection, its
- * records will go in. The connection moves with it, so later syncs and the
- * delete use the token that made them.
+ * Gives a domain whose records were released a new name, claiming it and
+ * letting go of the old ones in the same transaction, which also finishes
+ * any rename it was in. Locks its domain's row before the assignment's, the
+ * order a save takes them in, and only while the domain is still in the
+ * zone, and on the connection, its records will go in. The connection moves
+ * with it, so later syncs and the delete use the token that made them.
  */
 export const reserveInstanceDomainAssignmentEffect = Effect.fn(
   "domains.assignment.reserve"
@@ -926,20 +966,16 @@ export const reserveInstanceDomainAssignmentEffect = Effect.fn(
           message: `${input.domain} is no longer a configured vanity domain`,
         })
       }
-      const hostname = `${input.vanityLabel}.${input.domain}`
-      const taken = yield* transaction.queryRows<RowDataPacket>(
-        `${webHostnameTaken} FOR SHARE`,
-        [hostname]
-      )
-      if (taken.length > 0) {
-        return yield* DomainConfigurationError.make({
-          message: `${hostname} is already in use`,
-        })
-      }
+      const current = yield* lockAssignmentEffect(input.id)
+      yield* claimHostnamesEffect(assignmentOwner(current), [
+        `${input.vanityLabel}.${input.domain}`,
+      ])
       yield* transaction.execute(
         `UPDATE ${databaseTable("instance_domain")}
             SET vanity_label = ?,
                 domain = ?,
+                next_vanity_label = NULL,
+                next_domain = NULL,
                 integration_id = ?,
                 public_host = ?,
                 public_port = ?,
@@ -966,8 +1002,95 @@ export const reserveInstanceDomainAssignmentEffect = Effect.fn(
           input.id,
         ]
       )
+      yield* releaseUnusedHostnamesEffect(
+        assignmentOwner(current),
+        assignmentHostnames(current)
+      )
     })
   )
+})
+
+/**
+ * Starts renaming a domain: claims the new name and records it beside the
+ * current one, which stays held until Cloudflare has the new name, so a
+ * rename cut short by a failure or a restart can always be finished. Lets
+ * go of the name an unfinished earlier rename was moving to.
+ */
+export const beginInstanceDomainRenameEffect = Effect.fn(
+  "domains.assignment.beginRename"
+)(function* (input: { domain: string; id: string; vanityLabel: string }) {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  yield* database.transaction("domains.assignment.beginRename", () =>
+    Effect.gen(function* () {
+      const current = yield* lockAssignmentEffect(input.id)
+      yield* claimHostnamesEffect(assignmentOwner(current), [
+        `${input.vanityLabel}.${input.domain}`,
+      ])
+      yield* database.execute(
+        "domains.assignment.beginRename",
+        `UPDATE ${databaseTable("instance_domain")}
+            SET next_vanity_label = ?, next_domain = ?, attempts = 0,
+                next_attempt_at = NULL, updated_at = ?
+          WHERE id = ?`,
+        [input.vanityLabel, input.domain, now, input.id]
+      )
+      if (current.next) {
+        yield* releaseUnusedHostnamesEffect(assignmentOwner(current), [
+          `${current.next.vanityLabel}.${current.next.domain}`,
+        ])
+      }
+    })
+  )
+})
+
+/**
+ * Takes a renamed domain's new name as its own once Cloudflare's records
+ * have it, letting go of the old one.
+ */
+export const finishInstanceDomainRenameEffect = Effect.fn(
+  "domains.assignment.finishRename"
+)(function* (id: string) {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  yield* database.transaction("domains.assignment.finishRename", () =>
+    Effect.gen(function* () {
+      const current = yield* lockAssignmentEffect(id)
+      if (!current.next) return
+      yield* database.execute(
+        "domains.assignment.finishRename",
+        `UPDATE ${databaseTable("instance_domain")}
+            SET vanity_label = next_vanity_label, domain = next_domain,
+                next_vanity_label = NULL, next_domain = NULL,
+                last_error = NULL, attempts = 0, next_attempt_at = NULL,
+                updated_at = ?
+          WHERE id = ?`,
+        [now, id]
+      )
+      yield* releaseUnusedHostnamesEffect(
+        assignmentOwner(current),
+        assignmentHostnames(current)
+      )
+    })
+  )
+})
+
+const lockAssignmentEffect = Effect.fnUntraced(function* (id: string) {
+  const database = yield* Database
+  const [row] = yield* database.queryRows<InstanceDomainRow>(
+    "domains.assignment.lock",
+    `SELECT assignment.*, NULL AS zone_id
+       FROM ${databaseTable("instance_domain")} assignment
+      WHERE id = ?
+      FOR UPDATE`,
+    [id]
+  )
+  if (!row) {
+    return yield* DomainConfigurationError.make({
+      message: "The domain was removed",
+    })
+  }
+  return domainAssignment(row)
 })
 
 /**
@@ -982,7 +1105,8 @@ export const markInstanceDomainRemovingEffect = Effect.fn(
   yield* database.execute(
     "domains.assignment.markRemoving",
     `UPDATE ${databaseTable("instance_domain")}
-        SET status = 'removing', is_primary = 0, updated_at = ?
+        SET status = 'removing', is_primary = 0, attempts = 0,
+            next_attempt_at = NULL, updated_at = ?
       WHERE id = ?`,
     [now, id]
   )
@@ -1025,6 +1149,8 @@ export const activateInstanceDomainAssignmentEffect = Effect.fn(
             srv_record_id = ?,
             status = 'active',
             last_error = NULL,
+            attempts = 0,
+            next_attempt_at = NULL,
             updated_at = ?
       WHERE id = ?`,
     [
@@ -1049,45 +1175,6 @@ export const setInstanceDomainPrimaryEffect = Effect.fn(
         SET is_primary = (id = ?), updated_at = ?
       WHERE relay_id = ? AND instance_id = ?`,
     [input.id, now, input.relayId, input.instanceId]
-  )
-})
-
-/**
- * Renames a domain, unless a web hostname holds the new name: checked in the
- * same statement, as taking a new one is.
- */
-export const claimInstanceDomainLabelEffect = Effect.fn(
-  "domains.assignment.claimLabel"
-)(function* (input: { domain: string; id: string; vanityLabel: string }) {
-  const database = yield* Database
-  const now = yield* Clock.currentTimeMillis
-  const hostname = `${input.vanityLabel}.${input.domain}`
-  const result = yield* database.execute(
-    "domains.assignment.claimLabel",
-    `UPDATE ${databaseTable("instance_domain")}
-        SET vanity_label = ?, domain = ?, last_error = NULL, updated_at = ?
-      WHERE id = ? AND NOT EXISTS (${webHostnameTaken})`,
-    [input.vanityLabel, input.domain, now, input.id, hostname]
-  )
-  if (result.affectedRows === 0) {
-    return yield* DomainConfigurationError.make({
-      message: `${hostname} is already in use`,
-    })
-  }
-})
-
-/** Puts back the name a rename that failed in Cloudflare took. */
-export const restoreInstanceDomainLabelEffect = Effect.fn(
-  "domains.assignment.restoreLabel"
-)(function* (input: { domain: string; id: string; vanityLabel: string }) {
-  const database = yield* Database
-  const now = yield* Clock.currentTimeMillis
-  yield* database.execute(
-    "domains.assignment.restoreLabel",
-    `UPDATE ${databaseTable("instance_domain")}
-        SET vanity_label = ?, domain = ?, updated_at = ?
-      WHERE id = ?`,
-    [input.vanityLabel, input.domain, now, input.id]
   )
 })
 
@@ -1117,6 +1204,8 @@ export const updateInstanceDomainEndpointEffect = Effect.fn(
             srv_record_id = ?,
             status = 'active',
             last_error = NULL,
+            attempts = 0,
+            next_attempt_at = NULL,
             updated_at = ?
       WHERE id = ?`,
     [
@@ -1185,6 +1274,7 @@ export const recordInstanceDomainErrorEffect = Effect.fn(
 const instanceDomainSelect = `SELECT assignment.id, assignment.relay_id,
        assignment.instance_id, assignment.is_primary,
        assignment.integration_id, assignment.vanity_label, assignment.domain,
+       assignment.next_vanity_label, assignment.next_domain,
        assignment.public_host, assignment.public_port, assignment.supports_srv,
        assignment.srv_service, assignment.srv_protocol,
        assignment.address_record_id, assignment.address_record_type,
@@ -1193,6 +1283,92 @@ const instanceDomainSelect = `SELECT assignment.id, assignment.relay_id,
   FROM ${databaseTable("instance_domain")} assignment
   LEFT JOIN ${databaseTable("domain_zone")} zone
     ON zone.domain = assignment.domain`
+
+/** The game server a domain's names belong to. */
+export function assignmentOwner(assignment: {
+  readonly instanceId: string
+  readonly relayId: string
+}) {
+  return {
+    relayId: assignment.relayId,
+    resourceId: assignment.instanceId,
+    resourceType: "instance" as const,
+  }
+}
+
+/** A domain's name, and the one a rename is moving it to. */
+export function assignmentHostnames(
+  assignment: Pick<InstanceDomainAssignment, "domain" | "next" | "vanityLabel">
+): Array<string> {
+  return [
+    `${assignment.vanityLabel}.${assignment.domain}`,
+    ...(assignment.next
+      ? [`${assignment.next.vanityLabel}.${assignment.next.domain}`]
+      : []),
+  ]
+}
+
+/**
+ * Game servers with domain work due: domains to make records for, finish
+ * renaming, or delete, or ones that failed, once their retry is due.
+ */
+export const listDueInstanceDomainsEffect = Effect.fn(
+  "domains.assignments.due"
+)(function* (now: number) {
+  const database = yield* Database
+  const rows = yield* database.queryRows<
+    RowDataPacket & { instance_id: string; relay_id: string }
+  >(
+    "domains.assignments.due",
+    `SELECT DISTINCT relay_id, instance_id
+       FROM ${databaseTable("instance_domain")}
+      WHERE ${assignmentNeedsWork}
+        AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+      LIMIT 25`,
+    [now]
+  )
+  return rows.map((row) => ({
+    instanceId: row.instance_id,
+    relayId: row.relay_id.trim(),
+  }))
+})
+
+/** When the next domain still waiting on work is due, if any is. */
+export const nextInstanceDomainAttemptEffect = Effect.fn(
+  "domains.assignments.next"
+)(function* () {
+  const database = yield* Database
+  const [row] = yield* database.queryRows<
+    RowDataPacket & { next: number | null }
+  >(
+    "domains.assignments.next",
+    `SELECT MIN(COALESCE(next_attempt_at, 0)) AS next
+       FROM ${databaseTable("instance_domain")}
+      WHERE ${assignmentNeedsWork}`
+  )
+  return row?.next === null || row?.next === undefined ? null : Number(row.next)
+})
+
+/**
+ * Puts off a game server's domains that still need work after an attempt,
+ * each time twice as long, up to an hour.
+ */
+export const deferInstanceDomainsEffect = Effect.fn(
+  "domains.assignments.defer"
+)(function* (relayId: string, instanceId: string, now: number) {
+  const database = yield* Database
+  yield* database.execute(
+    "domains.assignments.defer",
+    `UPDATE ${databaseTable("instance_domain")}
+          SET next_attempt_at = ? + LEAST(3600000, 30000 * POW(2, attempts)),
+              attempts = LEAST(attempts + 1, 60)
+        WHERE relay_id = ? AND instance_id = ? AND ${assignmentNeedsWork}`,
+    [now, relayId, instanceId]
+  )
+})
+
+const assignmentNeedsWork = `(status IN ('pending', 'error', 'removing')
+  OR next_domain IS NOT NULL)`
 
 function publicConnection(
   row: DomainConnectionRow,
@@ -1241,6 +1417,10 @@ function domainAssignment(row: InstanceDomainRow): InstanceDomainAssignment {
     instanceId: row.instance_id,
     integrationId: row.integration_id,
     lastError: row.last_error,
+    next:
+      row.next_domain && row.next_vanity_label
+        ? { domain: row.next_domain, vanityLabel: row.next_vanity_label }
+        : null,
     primary: Boolean(row.is_primary),
     publicHost: row.public_host,
     publicPort: row.public_port,

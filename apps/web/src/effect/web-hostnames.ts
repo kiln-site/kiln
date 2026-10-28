@@ -2,10 +2,15 @@ import type { RowDataPacket } from "mysql2/promise"
 import { Clock, Effect } from "effect"
 
 import { Database } from "@/effect/database"
-import { DomainConfigurationError } from "@/effect/errors"
+import {
+  claimHostnamesEffect,
+  moveHostnameClaimsEffect,
+  releaseUnusedHostnamesEffect,
+  type HostnameOwner,
+} from "@/effect/hostname-claims"
 import { databaseTable } from "@/lib/database-config"
 
-export type WebHostnameResourceType = "app" | "instance"
+export type WebHostnameResourceType = HostnameOwner["resourceType"]
 
 /**
  * A web hostname whose DNS record Kiln keeps in Cloudflare, pointing at the
@@ -37,11 +42,7 @@ export interface WebHostname {
   zoneId: string
 }
 
-export interface WebHostnameResource {
-  readonly relayId: string
-  readonly resourceId: string
-  readonly resourceType: WebHostnameResourceType
-}
+export type WebHostnameResource = HostnameOwner
 
 interface WebHostnameRow extends RowDataPacket {
   created_at: number
@@ -133,43 +134,9 @@ export const listWebHostnamesEffect = Effect.fn("webHostnames.list")(
 )
 
 /**
- * The game server or app holding a hostname: by a web hostname Kiln keeps,
- * or a game server's vanity address. Null when neither does.
- */
-export const loadHostnameHolderEffect = Effect.fn("webHostnames.holder")(
-  function* (hostname: string) {
-    const database = yield* Database
-    const [row] = yield* database.queryRows<
-      RowDataPacket & {
-        relay_id: string
-        resource_id: string
-        resource_type: WebHostnameResourceType
-      }
-    >(
-      "webHostnames.holder",
-      `SELECT resource_type, relay_id, resource_id
-         FROM ${databaseTable("web_hostname")}
-        WHERE hostname = ?
-       UNION ALL
-       SELECT 'instance', relay_id, instance_id
-         FROM ${databaseTable("instance_domain")}
-        WHERE CONCAT(vanity_label, '.', domain) = ?
-       LIMIT 1`,
-      [hostname, hostname]
-    )
-    return row
-      ? {
-          relayId: row.relay_id,
-          resourceId: row.resource_id,
-          resourceType: row.resource_type,
-        }
-      : null
-  }
-)
-
-/**
- * Holds a hostname for a resource before its record exists. A hostname
- * another resource holds fails rather than being taken over.
+ * Holds a hostname for a resource before its record exists, claiming it in
+ * the same transaction. A hostname another resource holds fails rather than
+ * being taken over.
  */
 export const insertWebHostnameEffect = Effect.fn("webHostnames.insert")(
   function* (
@@ -184,38 +151,32 @@ export const insertWebHostnameEffect = Effect.fn("webHostnames.insert")(
   ) {
     const database = yield* Database
     const now = yield* Clock.currentTimeMillis
-    const result = yield* database.execute(
-      "webHostnames.insert",
-      // Nor one a game server's address has; that insert checks this
-      // table the same way.
-      `INSERT IGNORE INTO ${databaseTable("web_hostname")}
-         (id, hostname, relay_id, resource_type, resource_id, integration_id,
-          zone_id, vanity_domain, is_generated, status, created_at, updated_at)
-       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?
-         FROM DUAL
-        WHERE NOT EXISTS (
-          SELECT 1 FROM ${databaseTable("instance_domain")}
-           WHERE CONCAT(vanity_label, '.', domain) = ?)`,
-      [
-        input.id,
-        input.hostname,
-        input.relayId,
-        input.resourceType,
-        input.resourceId,
-        input.connectionId,
-        input.zoneId,
-        input.vanityDomain,
-        input.generated,
-        now,
-        now,
-        input.hostname,
-      ]
-    )
-    if (result.affectedRows === 0) {
-      return yield* DomainConfigurationError.make({
-        message: `${input.hostname} is already in use`,
+    yield* database.transaction("webHostnames.insert", () =>
+      Effect.gen(function* () {
+        yield* claimHostnamesEffect(input, [input.hostname])
+        yield* database.execute(
+          "webHostnames.insert",
+          `INSERT INTO ${databaseTable("web_hostname")}
+             (id, hostname, relay_id, resource_type, resource_id,
+              integration_id, zone_id, vanity_domain, is_generated, status,
+              created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+          [
+            input.id,
+            input.hostname.toLowerCase(),
+            input.relayId,
+            input.resourceType,
+            input.resourceId,
+            input.connectionId,
+            input.zoneId,
+            input.vanityDomain,
+            input.generated,
+            now,
+            now,
+          ]
+        )
       })
-    }
+    )
   }
 )
 
@@ -236,7 +197,8 @@ export const activateWebHostnameEffect = Effect.fn("webHostnames.activate")(
       "webHostnames.activate",
       `UPDATE ${databaseTable("web_hostname")}
           SET record_id = ?, record_type = ?, target = ?, status = 'active',
-              last_error = NULL, updated_at = ?
+              last_error = NULL, attempts = 0, next_attempt_at = NULL,
+              updated_at = ?
         WHERE id = ?`,
       [input.recordId, input.recordType, input.target, now, input.id]
     )
@@ -262,6 +224,27 @@ export const setWebHostnameStatusEffect = Effect.fn("webHostnames.setStatus")(
   }
 )
 
+/**
+ * Marks hostnames a resource's routes no longer use for deletion. Each keeps
+ * its claim until its record is gone; the DNS worker finishes any a request
+ * doesn't.
+ */
+export const markWebHostnamesRemovingEffect = Effect.fn(
+  "webHostnames.markRemoving"
+)(function* (ids: ReadonlyArray<string>) {
+  if (ids.length === 0) return
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  yield* database.execute(
+    "webHostnames.markRemoving",
+    `UPDATE ${databaseTable("web_hostname")}
+        SET status = 'removing', last_error = NULL, attempts = 0,
+            next_attempt_at = NULL, updated_at = ?
+      WHERE id IN (${ids.map(() => "?").join(", ")})`,
+    [now, ...ids]
+  )
+})
+
 /** Forgets a record Kiln deleted or found gone, so a sync makes it again. */
 export const clearWebHostnameRecordEffect = Effect.fn(
   "webHostnames.clearRecord"
@@ -278,45 +261,162 @@ export const clearWebHostnameRecordEffect = Effect.fn(
   )
 })
 
+/** Forgets a hostname, letting go of its claim. */
 export const deleteWebHostnameEffect = Effect.fn("webHostnames.delete")(
-  function* (id: string) {
+  function* (row: WebHostname) {
     const database = yield* Database
-    yield* database.execute(
-      "webHostnames.delete",
-      `DELETE FROM ${databaseTable("web_hostname")} WHERE id = ?`,
-      [id]
+    yield* database.transaction("webHostnames.delete", () =>
+      Effect.gen(function* () {
+        yield* database.execute(
+          "webHostnames.delete",
+          `DELETE FROM ${databaseTable("web_hostname")} WHERE id = ?`,
+          [row.id]
+        )
+        yield* releaseUnusedHostnamesEffect(row, [row.hostname])
+      })
     )
   }
 )
 
 /**
- * Gives a resource's hostnames to the one taking its place, as moving a game
- * server to another Relay does. Ones being deleted stay with their delete.
- * Reports how many moved.
+ * Forgets every hostname on a Relay, as removing it does, and lets go of the
+ * names nothing on it uses any more.
+ */
+export const deleteRelayWebHostnamesEffect = Effect.fn(
+  "webHostnames.deleteRelay"
+)(function* (relayId: string) {
+  const database = yield* Database
+  yield* database.transaction("webHostnames.deleteRelay", () =>
+    Effect.gen(function* () {
+      yield* database.execute(
+        "webHostnames.deleteRelay",
+        `DELETE FROM ${databaseTable("web_hostname")} WHERE relay_id = ?`,
+        [relayId]
+      )
+      yield* releaseUnusedHostnamesEffect({ relayId })
+    })
+  )
+})
+
+/**
+ * Gives a resource's hostnames, and their claims, to the one taking its
+ * place, as moving a game server to another Relay does. Ones being deleted
+ * stay with their delete. Reports how many moved.
  */
 export const reassignWebHostnamesEffect = Effect.fn("webHostnames.reassign")(
   function* (from: WebHostnameResource, to: WebHostnameResource) {
     const database = yield* Database
     const now = yield* Clock.currentTimeMillis
-    const result = yield* database.execute(
-      "webHostnames.reassign",
-      `UPDATE ${databaseTable("web_hostname")}
-          SET relay_id = ?, resource_type = ?, resource_id = ?, updated_at = ?
-        WHERE relay_id = ? AND resource_type = ? AND resource_id = ?
-          AND status <> 'removing'`,
-      [
-        to.relayId,
-        to.resourceType,
-        to.resourceId,
-        now,
-        from.relayId,
-        from.resourceType,
-        from.resourceId,
-      ]
+    return yield* database.transaction("webHostnames.reassign", () =>
+      Effect.gen(function* () {
+        const rows = yield* database.queryRows<
+          RowDataPacket & { hostname: string }
+        >(
+          "webHostnames.reassign",
+          `SELECT hostname FROM ${databaseTable("web_hostname")}
+            WHERE relay_id = ? AND resource_type = ? AND resource_id = ?
+              AND status <> 'removing'
+            FOR UPDATE`,
+          [from.relayId, from.resourceType, from.resourceId]
+        )
+        if (rows.length === 0) return 0
+        yield* database.execute(
+          "webHostnames.reassign",
+          `UPDATE ${databaseTable("web_hostname")}
+              SET relay_id = ?, resource_type = ?, resource_id = ?,
+                  attempts = 0, next_attempt_at = NULL, updated_at = ?
+            WHERE relay_id = ? AND resource_type = ? AND resource_id = ?
+              AND status <> 'removing'`,
+          [
+            to.relayId,
+            to.resourceType,
+            to.resourceId,
+            now,
+            from.relayId,
+            from.resourceType,
+            from.resourceId,
+          ]
+        )
+        yield* moveHostnameClaimsEffect(
+          from,
+          to,
+          rows.map((row) => row.hostname)
+        )
+        return rows.length
+      })
     )
-    return result.affectedRows
   }
 )
+
+/**
+ * Game servers and apps with DNS work due: hostnames to make records for or
+ * delete, or ones that failed, once their retry is due. `external` ones wait
+ * for Sync.
+ */
+export const listDueWebHostnameResourcesEffect = Effect.fn("webHostnames.due")(
+  function* (now: number) {
+    const database = yield* Database
+    const rows = yield* database.queryRows<
+      RowDataPacket & {
+        relay_id: string
+        resource_id: string
+        resource_type: WebHostnameResourceType
+      }
+    >(
+      "webHostnames.due",
+      `SELECT DISTINCT relay_id, resource_type, resource_id
+       FROM ${databaseTable("web_hostname")}
+      WHERE ${webHostnameNeedsWork}
+        AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+      LIMIT 25`,
+      [now]
+    )
+    return rows.map((row): WebHostnameResource => ({
+      relayId: row.relay_id.trim(),
+      resourceId: row.resource_id,
+      resourceType: row.resource_type,
+    }))
+  }
+)
+
+/** When the next hostname still waiting on DNS work is due, if any is. */
+export const nextWebHostnameAttemptEffect = Effect.fn("webHostnames.next")(
+  function* () {
+    const database = yield* Database
+    const [row] = yield* database.queryRows<
+      RowDataPacket & { next: number | null }
+    >(
+      "webHostnames.next",
+      `SELECT MIN(COALESCE(next_attempt_at, 0)) AS next
+         FROM ${databaseTable("web_hostname")}
+        WHERE ${webHostnameNeedsWork}`
+    )
+    return row?.next === null || row?.next === undefined
+      ? null
+      : Number(row.next)
+  }
+)
+
+/**
+ * Puts off a resource's hostnames that still need work after an attempt,
+ * each time twice as long, up to an hour.
+ */
+export const deferWebHostnamesEffect = Effect.fn("webHostnames.defer")(
+  function* (resource: WebHostnameResource, now: number) {
+    const database = yield* Database
+    yield* database.execute(
+      "webHostnames.defer",
+      `UPDATE ${databaseTable("web_hostname")}
+          SET next_attempt_at = ? + LEAST(3600000, 30000 * POW(2, attempts)),
+              attempts = LEAST(attempts + 1, 60)
+        WHERE relay_id = ? AND resource_type = ? AND resource_id = ?
+          AND ${webHostnameNeedsWork}`,
+      [now, resource.relayId, resource.resourceType, resource.resourceId]
+    )
+  }
+)
+
+const webHostnameNeedsWork = "status IN ('pending', 'removing', 'error')"
 
 function webHostname(row: WebHostnameRow): WebHostname {
   return {

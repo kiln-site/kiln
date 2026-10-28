@@ -21,6 +21,13 @@ const CloudflareDnsRecordSchema = Schema.Struct({
   type: Schema.String,
 })
 
+const CloudflareListedRecordSchema = Schema.Struct({
+  comment: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  id: Schema.String,
+  name: Schema.String,
+  type: Schema.String,
+})
+
 const CloudflareDnsRecordBatchSchema = Schema.Struct({
   posts: Schema.Array(CloudflareDnsRecordSchema),
 })
@@ -150,6 +157,22 @@ export const cloudflareHostnameAvailableEffect = Effect.fn(
   )
   return records.length === 0
 })
+
+/** The records Cloudflare has under a name, with what Kiln noted on them. */
+export const listCloudflareRecordsEffect = Effect.fn("cloudflare.dns.list")(
+  function* (apiToken: string, zoneId: string, hostname: string) {
+    const query = new URLSearchParams({
+      name: hostname,
+      page: "1",
+      per_page: "100",
+    })
+    return yield* requestCloudflareResult(
+      apiToken,
+      `/zones/${encodeURIComponent(zoneId)}/dns_records?${query}`,
+      Schema.Array(CloudflareListedRecordSchema)
+    )
+  }
+)
 
 export const createCloudflareAddressRecordEffect = Effect.fn(
   "cloudflare.dns.createAddress"

@@ -40,6 +40,7 @@ import {
 } from "./lib/icon-detection.server"
 import { startDiskLimitWarnings } from "./lib/disk-limit-warnings.server"
 import { startNotificationPushes } from "./lib/notification-pushes.server"
+import { startDnsWorker } from "./lib/dns-worker.server"
 import { startServerMigrationResumption } from "./lib/server-migrations.server"
 import {
   startBackupMaintenance,
@@ -136,6 +137,7 @@ startDiskLimitWarnings()
 startNotificationPushes()
 startBackupMaintenance()
 startServerMigrationResumption()
+startDnsWorker()
 forkPromise(wakePendingAuthorizationDelivery, (cause) => {
   reportAppError(cause, { operation: "authorization.delivery.recover" })
 })

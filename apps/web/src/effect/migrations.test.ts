@@ -79,7 +79,7 @@ describeMysql("database migrations", () => {
           // updates, push subscriptions, Relay joins, and the security
           // checks' targets, inventories, findings, vulnerabilities, and
           // alerts, game server migrations, icons, and web hostnames.
-          expect(count).toBe(baselineTables.length + 26)
+          expect(count).toBe(baselineTables.length + 27)
           expect(yield* ledger).toEqual(migrationIds)
           // Only better-auth keeps dates, as DATETIME.
           expect((yield* columnTypes).map((row) => row.dataType)).toEqual([
@@ -610,9 +610,31 @@ describeMysql("database migrations", () => {
             created_at: 0,
             updated_at: 0,
           })
+          yield* insertRows("instance_domain", {
+            id: "00000000-0000-4000-8000-000000000001",
+            relay_id: "relay-one",
+            instance_id: "b".repeat(40),
+            is_primary: true,
+            integration_id: "cloudflare",
+            vanity_label: "survival",
+            domain: "play.kiln.site",
+            public_host: "relay-one.example",
+            public_port: 25_565,
+            status: "active",
+            created_at: 0,
+            updated_at: 0,
+          })
 
           yield* applyMigrations(migrations)
 
+          // The game server keeps its address, which no web route can take.
+          expect(yield* selectRows("hostname_claim")).toMatchObject([
+            {
+              hostname: "survival.play.kiln.site",
+              resource_id: "b".repeat(40),
+              resource_type: "instance",
+            },
+          ])
           const [connection] = yield* selectRows<{
             blacklist_patterns: unknown
           }>("domain_integration")

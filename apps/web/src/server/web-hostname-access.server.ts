@@ -19,12 +19,12 @@ import type {
   ResourceWebHostnamesInput,
 } from "@/server/domains"
 import {
-  saveClaimingWebRouteHostnamesEffect,
   deleteResourceWebHostnamesEffect,
   generateAppHostnameEffect,
   publishWebHostnameChange,
+  reconcileResourceWebHostnamesEffect,
   releaseWebHostnameEffect,
-  syncResourceWebHostnamesEffect,
+  saveWebRouteHostnamesEffect,
 } from "@/server/web-hostnames.server"
 
 function permissionFor(
@@ -98,7 +98,7 @@ export async function releaseWebHostnameHandler(data: ReleaseWebHostnameInput) {
  * first so no other game server or app takes them meanwhile. Refuses
  * hostnames the resource may not take, naming the game server or app that
  * holds one when the person can see it, and lets go of its claims if the
- * save fails.
+ * save fails. Hostnames the routes stop using are marked for removal.
  */
 export async function saveClaimingWebRouteHostnames<T>(
   user: AuthenticatedUser,
@@ -108,7 +108,7 @@ export async function saveClaimingWebRouteHostnames<T>(
 ): Promise<T> {
   return runAppEffect(
     "webHostnames.claimAndSave",
-    saveClaimingWebRouteHostnamesEffect(
+    saveWebRouteHostnamesEffect(
       { actor: domainActor(user), hostnames, resource },
       promiseEffect(save)
     ).pipe(
@@ -124,24 +124,19 @@ export async function saveClaimingWebRouteHostnames<T>(
 
 /**
  * Brings a resource's DNS records in line with the web routes just saved.
- * Never fails the save: a hostname Kiln can't manage shows why on its row.
+ * Never fails the save: a hostname Kiln can't manage shows why on its row,
+ * and the DNS worker retries it.
  */
 export async function syncWebRouteHostnames(
-  user: AuthenticatedUser,
-  resource: WebHostnameResource,
-  hostnames: ReadonlyArray<string>
+  resource: WebHostnameResource
 ): Promise<void> {
   const changed = await runAppEffect(
     "webHostnames.sync",
-    syncResourceWebHostnamesEffect({
-      actor: domainActor(user),
-      hostnames,
-      resource,
-    }).pipe(
+    reconcileResourceWebHostnamesEffect(resource).pipe(
       Effect.catch((cause) =>
         Effect.sync(() => {
           console.warn(
-            `[Kiln Domains] Web routes for ${resource.resourceType} ${resource.resourceId} were saved, but their DNS records could not be synced:`,
+            `[Kiln Domains] Web routes for ${resource.resourceType} ${resource.resourceId} were saved, but their DNS records could not be synced yet:`,
             cause
           )
           return true

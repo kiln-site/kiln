@@ -259,6 +259,13 @@ describeMysql("Server migration deleting its old server", () => {
             created_at: at,
             updated_at: at,
           })
+          yield* insertRows("hostname_claim", {
+            hostname: "map.example.test",
+            relay_id: sourceRelayId,
+            resource_type: "instance",
+            resource_id: sourceId,
+            created_at: at,
+          })
 
           const row = yield* resumeUntilEnded(id)
 
@@ -266,6 +273,13 @@ describeMysql("Server migration deleting its old server", () => {
           assert.deepEqual(
             (yield* selectRows<{ relay_id: string; resource_id: string }>(
               "web_hostname"
+            )).map((item) => `${item.relay_id.trim()}:${item.resource_id}`),
+            [`${destinationRelayId}:${copyId}`]
+          )
+          // The name goes with it, so nothing else can take it.
+          assert.deepEqual(
+            (yield* selectRows<{ relay_id: string; resource_id: string }>(
+              "hostname_claim"
             )).map((item) => `${item.relay_id.trim()}:${item.resource_id}`),
             [`${destinationRelayId}:${copyId}`]
           )
