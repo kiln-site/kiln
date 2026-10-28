@@ -80,6 +80,8 @@ export interface FakeContainer {
   tty: boolean
   openStdin: boolean
   restartPolicy: string
+  /** For `on-failure`: how many times Docker restarts it. */
+  restartMaximumRetryCount?: number
   memoryBytes: number
   nanoCpus: number
   mounts: Array<FakeMount>
@@ -990,7 +992,10 @@ export class FakeDocker {
         VolumesFrom: container.volumesFrom.length
           ? container.volumesFrom
           : null,
-        RestartPolicy: { MaximumRetryCount: 0, Name: container.restartPolicy },
+        RestartPolicy: {
+          MaximumRetryCount: container.restartMaximumRetryCount ?? 0,
+          Name: container.restartPolicy,
+        },
       },
       Id: container.id,
       Image: `sha256:${container.image}`,
@@ -1614,9 +1619,15 @@ export class FakeDocker {
     this.#appliedCheckpoint("rename", from)
   }
 
-  async #setRestartPolicy(reference: string, policy: string): Promise<void> {
+  async #setRestartPolicy(
+    reference: string,
+    policy: string,
+    maximumRetryCount = 0
+  ): Promise<void> {
     await this.#checkpoint("update", reference)
-    this.#requiredContainer(reference).restartPolicy = policy
+    const container = this.#requiredContainer(reference)
+    container.restartPolicy = policy
+    container.restartMaximumRetryCount = maximumRetryCount
   }
 
   // ---------------------------------------------------------- logs and exec
@@ -2004,11 +2015,15 @@ export class FakeDocker {
         Memory?: number
         MemorySwap?: number
         NanoCpus?: number
-        RestartPolicy?: { Name?: string }
+        RestartPolicy?: { MaximumRetryCount?: number; Name?: string }
       }
       const policy = update.RestartPolicy?.Name
       if (policy !== undefined) {
-        await this.#setRestartPolicy(parameters[0] ?? "", policy)
+        await this.#setRestartPolicy(
+          parameters[0] ?? "",
+          policy,
+          update.RestartPolicy?.MaximumRetryCount
+        )
         return json(200, { Warnings: [] })
       }
       if (update.Memory === undefined && update.NanoCpus === undefined) {
@@ -2730,6 +2745,9 @@ export class FakeDocker {
   // the PID files those clients wrote; model their effect, not the shell.
   #runDetachedExec(exec: FakeExec) {
     const [shell, , script = "", pidFile = ""] = exec.cmd
+    // Done at once, and succeeded: every client it hung up has stopped.
+    exec.running = false
+    exec.exitCode = 0
     if (shell !== "sh" || !script.includes("kill -HUP")) return
     const sweep = script.includes("for file in")
     for (const candidate of this.execs.values()) {

@@ -432,7 +432,7 @@ describe("database terminal sessions", () => {
     await attach(terminals, alice, database, first)
     await attach(terminals, "bob", database, second)
 
-    await terminals.endTarget(databaseId)
+    await terminals.endTarget(databaseId, database.containerId)
 
     await vi.waitFor(() => expect(first.ended?.reason).toBe("deleting"))
     await vi.waitFor(() => expect(second.ended?.reason).toBe("deleting"))

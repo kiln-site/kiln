@@ -96,7 +96,10 @@ export interface DockerContainerInspect {
     readonly PortBindings?: Readonly<
       Record<string, ReadonlyArray<DockerPortBinding> | null>
     > | null
-    readonly RestartPolicy?: { readonly Name?: string }
+    readonly RestartPolicy?: {
+      readonly MaximumRetryCount?: number
+      readonly Name?: string
+    }
   }
   readonly Id: string
   readonly Mounts?: ReadonlyArray<DockerMount>
@@ -391,13 +394,21 @@ export class DockerEngine {
     })
   }
 
-  /** `docker update --restart=<policy>`. */
+  /** `docker update --restart=<policy>[:<maximum retries>]`. */
   setRestartPolicy(
     reference: string,
-    policy: string
+    policy: string,
+    maximumRetryCount?: number
   ): Effect.Effect<void, DockerEngineError> {
     return this.#empty({
-      body: { RestartPolicy: { Name: policy } },
+      body: {
+        RestartPolicy: {
+          Name: policy,
+          ...(maximumRetryCount !== undefined && {
+            MaximumRetryCount: maximumRetryCount,
+          }),
+        },
+      },
       method: "POST",
       path: `/containers/${segment(reference)}/update`,
     })

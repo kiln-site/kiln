@@ -160,7 +160,12 @@ export interface RelayResourceFreezeRecord {
  * of an App's containers, by container.
  */
 export interface RelayResourceFreezeUndo {
-  readonly restartPolicies?: Readonly<Record<string, string>>
+  readonly restartPolicies?: Readonly<
+    Record<
+      string,
+      { readonly maximumRetryCount: number; readonly name: string }
+    >
+  >
 }
 
 const OPERATION_JOURNAL_METADATA_KEY = "operation_journal_id"

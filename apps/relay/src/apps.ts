@@ -539,7 +539,9 @@ export class AppDriver {
    */
   async quietForDeletion(
     appId: string,
-    record: (policies: Record<string, string>) => Promise<void>
+    record: (
+      policies: Record<string, { maximumRetryCount: number; name: string }>
+    ) => Promise<void>
   ): Promise<void> {
     // Freezing is a power decision too. Persist it before stopping anything,
     // so a stopped backup from before the deletion cannot restart this App
@@ -550,9 +552,14 @@ export class AppDriver {
     const containers = await this.#appContainers(appId)
     for (const { id } of containers) {
       const inspected = await docker(this.#engine.inspectContainer(id))
-      const policy = inspected.HostConfig?.RestartPolicy?.Name
-      if (!policy || policy === "no") continue
-      await record({ [id]: policy })
+      const policy = inspected.HostConfig?.RestartPolicy
+      if (!policy?.Name || policy.Name === "no") continue
+      await record({
+        [id]: {
+          maximumRetryCount: policy.MaximumRetryCount ?? 0,
+          name: policy.Name,
+        },
+      })
       await docker(this.#engine.setRestartPolicy(id, "no"))
     }
     if (containers.some((container) => container.running)) {
@@ -566,12 +573,18 @@ export class AppDriver {
    * thrown, so the freeze stays for letting it go again.
    */
   async restoreRestartPolicies(
-    policies: Readonly<Record<string, string>>
+    policies: Readonly<
+      Record<string, { readonly maximumRetryCount: number; readonly name: string }>
+    >
   ): Promise<void> {
     for (const [container, policy] of Object.entries(policies)) {
       await docker(
         this.#engine
-          .setRestartPolicy(container, policy)
+          .setRestartPolicy(
+            container,
+            policy.name,
+            policy.name === "on-failure" ? policy.maximumRetryCount : undefined
+          )
           .pipe(
             Effect.catchIf(
               (error) => error.status === 404,

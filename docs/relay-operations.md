@@ -344,8 +344,11 @@ resource so nothing writes to it but its final backup:
 - A game server is stopped.
 - An App is stopped, and its containers' restart policies are set to `no`
   so Docker doesn't start them again.
-- A database keeps running, since its final backup is a dump of it, and
-  everyone's terminal sessions on it end; new ones are refused. Game
+- A database keeps running, since its final backup is a dump of it.
+  Everyone's terminal sessions on it end, and the freeze waits until every
+  terminal client in its container has stopped; attaching takes the
+  database's lane, so one under way finishes first and later ones are
+  refused. Game
   servers and Apps connected to it can still write to it until it's
   deleted, so what they write after its dump isn't in its final backup.
 

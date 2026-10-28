@@ -259,7 +259,8 @@ describe("resources frozen for deletion", () => {
     const [container] = [...fakeDocker.containers.values()].filter(
       (candidate) => candidate.labels["kiln.app.id"] === appId
     )
-    container!.restartPolicy = "always"
+    container!.restartPolicy = "on-failure"
+    container!.restartMaximumRetryCount = 5
     const frozen = { deletionId: deletion, id: appId, kind: "app" } as const
 
     await harness.freezes.freeze(frozen, (record) =>
@@ -272,12 +273,17 @@ describe("resources frozen for deletion", () => {
     // Recorded with the freeze, so a Relay that stops can still put it back.
     expect(
       (await Effect.runPromise(harness.state.listResourceFreezes()))[0]?.undo
-    ).toEqual({ restartPolicies: { [container!.id]: "always" } })
+    ).toEqual({
+      restartPolicies: {
+        [container!.id]: { maximumRetryCount: 5, name: "on-failure" },
+      },
+    })
 
     await harness.freezes.unfreeze(frozen, async (undo) => {
       await harness.apps.restoreRestartPolicies(undo.restartPolicies ?? {})
     })
-    expect(container!.restartPolicy).toBe("always")
+    expect(container!.restartPolicy).toBe("on-failure")
+    expect(container!.restartMaximumRetryCount).toBe(5)
     // It stays stopped: starting it again is someone's choice.
     expect(container!.state.running).toBe(false)
   })

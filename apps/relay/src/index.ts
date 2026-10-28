@@ -271,6 +271,7 @@ import {
   controlRequestContinues,
   controlRequestLocks,
   databaseLocks,
+  databaseReadLocks,
   instanceLifecycleLocks,
   instancePowerLocks,
   transferInstallLocks,
@@ -2622,18 +2623,30 @@ async function executeControlRequest(
     }
     case "database.terminal.attach": {
       const input = relayDatabaseTerminalAttachSchema.parse(request.payload)
-      refuseIfFrozenDatabase(input.databaseId)
-      return terminals.attach(
-        terminalOwner(client, request),
-        databaseTerminalTarget(
-          await databases.target(input.databaseId),
-          input.username,
-          input.password
-        ),
-        input,
-        // Output goes back to the Hearth connection that attached.
-        (output, timeoutMs) =>
-          requestHearth("hearth.database.terminal.output", output, timeoutMs)
+      // In the database's lane until the session is open, so freezing it
+      // for its deletion waits for this attach and refuses any after it.
+      return inLane(
+        {
+          label: "database.terminal.attach",
+          locks: databaseReadLocks(input.databaseId),
+        },
+        async () =>
+          terminals.attach(
+            terminalOwner(client, request),
+            databaseTerminalTarget(
+              await databases.target(input.databaseId),
+              input.username,
+              input.password
+            ),
+            input,
+            // Output goes back to the Hearth connection that attached.
+            (output, timeoutMs) =>
+              requestHearth(
+                "hearth.database.terminal.output",
+                output,
+                timeoutMs
+              )
+          )
       )
     }
     case "database.terminal.heartbeat": {
@@ -4272,9 +4285,14 @@ async function quietFrozenResource(
       return apps.quietForDeletion(freeze.id, (restartPolicies) =>
         record({ restartPolicies })
       )
-    case "database":
-      await terminals.endTarget(freeze.id)
+    case "database": {
+      const database = await recoverPromise(
+        () => databases.target(freeze.id),
+        () => null
+      )
+      await terminals.endTarget(freeze.id, database?.containerId ?? null)
       return
+    }
   }
 }
 
