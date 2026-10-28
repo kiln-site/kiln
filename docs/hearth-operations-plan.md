@@ -7,8 +7,11 @@ changes at most once, fenced to the Relay journal they were first sent to,
 and name the operation and step they belong to. Authorization reaches
 each Relay through a lane of its own. Relay reservations, durable copies
 between Relays, and stored cancellation moved to phase 5, to be built and
-tested with the first game server move, their real consumer. Phase 5 is
-next; the [checklist](#migration-checklist) tracks the rest.
+tested with the first game server move, their real consumer. Before phase
+5, [one lifecycle for every resource](resource-unification.md) brings
+database networks, Tailscale, deletion, backups, and automations to every
+kind, and moves deletion onto the lanes; the
+[checklist](#migration-checklist) tracks the rest.
 
 ## Summary
 
