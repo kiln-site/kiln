@@ -642,6 +642,8 @@ export const operationTables: ReadonlyArray<string> = [
 
 export interface OperationRecord {
   readonly actorId: string | null
+  /** Someone asked it to stop (`requestCancel`). */
+  readonly cancelRequested: boolean
   readonly durable: boolean
   readonly error: string | null
   readonly executionId: string | null
@@ -748,6 +750,7 @@ export const loadOperation = Effect.fnUntraced(function* (id: string) {
   const [row] = yield* database.queryRows<
     RowDataPacket & {
       actor_id: string | null
+      cancel_requested_at: number | null
       durable: number
       error: string | null
       execution_id: string | null
@@ -763,13 +766,15 @@ export const loadOperation = Effect.fnUntraced(function* (id: string) {
   >(
     "operations.load",
     `SELECT id, kind, version, durable, input, state, actor_id,
-            execution_id, error, trace_id, span_id, trace_sampled
+            execution_id, error, trace_id, span_id, trace_sampled,
+            cancel_requested_at
        FROM ${operationTable} WHERE id = ?`,
     [id]
   )
   if (!row) return null
   return {
     actorId: row.actor_id,
+    cancelRequested: row.cancel_requested_at !== null,
     durable: Boolean(row.durable),
     error: row.error,
     executionId: row.execution_id,

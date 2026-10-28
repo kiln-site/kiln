@@ -42,6 +42,7 @@ import {
   requestCancel,
 } from "@/operations/lanes"
 import { relayIsAway } from "@/operations/relay-command"
+import { whileMySqlIsAway } from "@/operations/run"
 
 // A grant outlives the slowest pull it's meant for, resumes included.
 const GRANT_LIFETIME = Duration.days(2)
@@ -143,9 +144,7 @@ export const relayTransferProblemsEffect = Effect.fn("RelayTransfers.problems")(
       [input.source, input.sourceRootId, "download"],
       [input.destination, input.destinationRootId, "upload"],
     ] as const
-    const { relayConnectionFeatures } = yield* Effect.promise(
-      () => import("@/lib/relay-connection")
-    )
+    const { relayConnectionFeatures } = yield* Effect.promise(relayConnection)
     for (const [relay, rootId, direction] of sides) {
       if (databaseIdFromFileRoot(rootId) !== null) {
         problems.push({
@@ -234,51 +233,70 @@ const RelayTransferStatusSchema = Schema.Struct({
  * A transfer as steps of a durable operation, named `name`: begun under
  * `transferId`, which the caller keeps, then followed through the Relays'
  * records until it ends, however it ends. Both steps are safe to repeat, so
- * a Hearth that restarts partway carries on where the Relays are. Asked to
- * stop (`requestCancel` on its operation), it begins and starts nothing
- * more, has both Relays let go of it, and ends cancelled.
+ * a Hearth that restarts partway carries on where the Relays are. `actor`
+ * gives the person it acts for as they are now, checked before anything it
+ * starts. Asked to stop (`requestCancel` on its operation), it begins and
+ * starts nothing more and has both Relays let go of it; a pull already
+ * installing can't stop, so it's followed to its end, its locks still held.
  */
-export const followRelayTransfer = (
+export const followRelayTransfer = <R>(
   name: string,
-  actor: AuthenticatedUser,
+  actor: Effect.Effect<AuthenticatedUser, RelayTransferError, R>,
   request: RelayTransferRequest,
   transferId: string
 ) =>
   Effect.gen(function* () {
     const operation = yield* CurrentOperation
-    // Checked before every step that could start something on a Relay.
-    const stopped = Effect.gen(function* () {
-      if (!operation) return false
-      const asked = yield* cancelRequested(operation.id).pipe(
-        Effect.orElseSucceed(() => false)
+    // Whether someone asked it to stop, asked again until MySQL answers.
+    const asked = operation
+      ? cancelRequested(operation.id).pipe(
+          Effect.retry({ schedule: whileMySqlIsAway })
+        )
+      : Effect.succeed(false)
+    // Stopped for good, as when the person lost access, it lets go of what
+    // it holds on the Relays.
+    const letGoOnFailure = <A, R2>(
+      step: Effect.Effect<A, RelayTransferError, R2>
+    ) =>
+      Effect.tapError(step, () =>
+        stopOnRelays(request, transferId).pipe(Effect.ignore)
       )
-      if (asked) yield* stopOnRelays(actor, request, transferId)
-      return asked
-    })
-    const cancelled: RelayTransferStatus = {
-      error: null,
-      phase: "cancelled",
-      receivedBytes: 0,
-      size: null,
-      transferId,
-    }
     yield* Activity.make({
       name: `${name}/begin`,
       error: RelayTransferError,
       execute: Effect.gen(function* () {
-        if (yield* stopped) return
-        yield* beginRelayTransferEffect(actor, request, transferId)
-      }).pipe(whileRelaysAreAway),
+        if (yield* asked) return
+        yield* beginRelayTransferEffect(yield* actor, request, transferId)
+      }).pipe(whileRelaysAreAway, letGoOnFailure),
     })
     return yield* Activity.make({
       name: `${name}/follow`,
       success: RelayTransferStatusSchema,
       error: RelayTransferError,
       execute: Effect.gen(function* () {
-        if (yield* stopped) return cancelled
-        return yield* advanceRelayTransferEffect(actor, request, transferId)
+        if (yield* asked) {
+          return yield* stopOnRelays(request, transferId).pipe(
+            Effect.map((pull): RelayTransferStatus =>
+              pull
+                ? transferStatus(transferId, pull, null, null)
+                : {
+                    error: null,
+                    phase: "cancelled",
+                    receivedBytes: 0,
+                    size: null,
+                    transferId,
+                  }
+            )
+          )
+        }
+        return yield* advanceRelayTransferEffect(
+          yield* actor,
+          request,
+          transferId
+        )
       }).pipe(
         whileRelaysAreAway,
+        letGoOnFailure,
         Effect.tap((status) =>
           operation
             ? reportProgress(operation.id, {
@@ -377,7 +395,7 @@ export const relayTransfer = durableOperation({
   ],
   run: ({ actor, request, transferId }) =>
     Effect.gen(function* () {
-      const user = yield* currentActingUser(actor as AuthenticatedUser).pipe(
+      const user = currentActingUser(actor as AuthenticatedUser).pipe(
         Effect.mapError(
           (cause) =>
             new RelayTransferError({ message: errorMessage(cause), cause })
@@ -550,11 +568,21 @@ export const relayTransferStatusEffect = Effect.fn("RelayTransfers.status")(
       ],
       { concurrency: 2 }
     )
-    // A step between the Relays that failed is the operation's error.
+    // Without either Relay's record, the operation says how it ended: a
+    // step between the Relays that failed, or a cancellation.
     const operation = yield* findOperation(
       relayTransfer.kind,
       handle.transferId
     ).pipe(Effect.orElseSucceed(() => null))
+    if (!pull && !packed && operation?.cancelRequested) {
+      return {
+        error: null,
+        phase: "cancelled",
+        receivedBytes: 0,
+        size: null,
+        transferId: handle.transferId,
+      } satisfies RelayTransferStatus
+    }
     return transferStatus(
       handle.transferId,
       pull,
@@ -566,8 +594,10 @@ export const relayTransferStatusEffect = Effect.fn("RelayTransfers.status")(
 
 /**
  * Stops a transfer and deletes what either Relay holds for it. The
- * operation driving it is asked to stop first, so it begins and starts
- * nothing more; one still waiting is withdrawn.
+ * operation driving it is asked to stop first, whether or not its Relays
+ * are reachable now, so it begins and starts nothing more and lets go of
+ * them when it can; one still waiting is withdrawn. A pull already
+ * installing finishes.
  */
 export const cancelRelayTransferEffect = Effect.fn("RelayTransfers.cancel")(
   function* (user: AuthenticatedUser, handle: RelayTransferHandle) {
@@ -575,42 +605,70 @@ export const cancelRelayTransferEffect = Effect.fn("RelayTransfers.cancel")(
       destination: { ...handle.destination, path: "" },
       source: { ...handle.source, paths: [] },
     }
-    const { source, destination } = yield* authorizeTransferEffect(
-      user,
-      request
+    // The person's own access, which a paused or offline Relay doesn't
+    // change.
+    yield* Effect.all(
+      [
+        requireRootPermission(
+          user,
+          request.source.relayId,
+          request.source.rootId,
+          "read"
+        ),
+        requireRootPermission(
+          user,
+          request.destination.relayId,
+          request.destination.rootId,
+          "write"
+        ),
+      ],
+      { concurrency: 2, discard: true }
     )
     const operation = yield* findOperation(
       relayTransfer.kind,
       handle.transferId
     )
     if (operation) yield* requestCancel(operation.id)
-    yield* stopOnRelays(user, request, handle.transferId, {
-      destination,
-      source,
-    })
+    yield* stopOnRelays(request, handle.transferId).pipe(
+      // Its operation lets go of them once they're back.
+      Effect.catchIf(
+        (error) => operation !== null && relaysAreAway(error),
+        () => Effect.succeed(null)
+      )
+    )
   }
 )
 
-// Has the destination stop pulling and the source discard what it packed.
+/**
+ * Has the destination stop pulling and the source discard what it packed,
+ * as Hearth, whoever asked, so it can be cleaned up after someone loses
+ * access. Gives the pull as the destination left it: one already
+ * installing carries on.
+ */
 const stopOnRelays = Effect.fnUntraced(function* (
-  user: AuthenticatedUser,
   request: RelayTransferRequest,
-  transferId: string,
-  authorized?: {
-    readonly destination: PersistedRelay
-    readonly source: PersistedRelay
-  }
+  transferId: string
 ) {
-  const { source, destination } =
-    authorized ?? (yield* authorizeTransferEffect(user, request))
-  yield* rpc(destination, "transfer.pull.cancel", user, {
+  const { activeRelay } = yield* Effect.promise(
+    () => import("@/lib/relay-registry")
+  )
+  const relayOf = (relayId: string) =>
+    Effect.tryPromise({
+      try: () => activeRelay(relayId),
+      catch: (cause) =>
+        new RelayTransferError({ message: errorMessage(cause), cause }),
+    })
+  const destination = yield* relayOf(request.destination.relayId)
+  const source = yield* relayOf(request.source.relayId)
+  const pull = yield* rpc(destination, "transfer.pull.cancel", null, {
     rootId: request.destination.rootId,
     transferId,
-  })
-  yield* rpc(source, "transfer.source.discard", user, {
+  }).pipe(Effect.flatMap(decodeOptional(RelayTransferPullSchema)))
+  yield* rpc(source, "transfer.source.discard", null, {
     rootId: request.source.rootId,
     transferId,
   })
+  return pull
 })
 
 // The person may read files under the source root and write under the
@@ -690,8 +748,7 @@ function requireRootPermission(
 // each Hearth process opens its Relay connections when it first needs them.
 function relayReachable(relay: PersistedRelay) {
   return Effect.tryPromise(async () => {
-    const { relayConnectionState, relayRpc } =
-      await import("@/lib/relay-connection")
+    const { relayConnectionState, relayRpc } = await relayConnection()
     if (relayConnectionState(relay.id).status === "authenticated") return
     await relayRpc(relay, "operation.get", { operationId: randomUUID() }, 5_000)
   }).pipe(
@@ -811,6 +868,12 @@ function throughHearth(
     : []
 }
 
+// Loaded when first needed: the connection module reaches Hearth's runtime,
+// which reaches this one.
+let relayConnectionModule: Promise<typeof import("@/lib/relay-connection")>
+const relayConnection = () =>
+  (relayConnectionModule ??= import("@/lib/relay-connection"))
+
 function rpc(
   relay: PersistedRelay,
   operation:
@@ -820,13 +883,13 @@ function rpc(
     | "transfer.source.discard"
     | "transfer.source.get"
     | "transfer.source.prepare",
-  user: AuthenticatedUser,
+  user: AuthenticatedUser | null,
   payload: unknown
 ): Effect.Effect<unknown, RelayTransferError> {
   return Effect.tryPromise({
     try: async () => {
-      const { relayRpc } = await import("@/lib/relay-connection")
-      return relayRpc(relay, operation, payload, undefined, user.id)
+      const { relayRpc } = await relayConnection()
+      return relayRpc(relay, operation, payload, undefined, user?.id)
     },
     catch: (cause) =>
       new RelayTransferError({

@@ -4,30 +4,35 @@ import { assert, layer } from "@effect/vitest"
 import { relayPeerTransfersV1Feature } from "@workspace/contracts"
 import { exclusive } from "@workspace/operations"
 import { Deferred, Effect, Fiber, Layer, Schedule } from "effect"
+import { SqlClient } from "effect/sql"
 import { TestClock } from "effect/testing"
 import { afterAll, vi } from "vite-plus/test"
 
 import { RelayUnavailableError } from "@/effect/errors"
 import { disposeAppRuntime } from "@/effect/runtime"
 import type { AuthenticatedUser } from "@/lib/auth-session"
+import { databaseTable } from "@/lib/database-config"
 import { findOperation } from "@/operations/lanes"
 import { quickOperation, runOperation } from "@/operations/run"
 import { testOperationsEngine } from "@/operations/test/engine"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
-import { insertRelay } from "@/test/seed"
+import { insertRelay, insertUser } from "@/test/seed"
 
 import {
   cancelRelayTransferEffect,
   relayTransfer,
+  relayTransferStatusEffect,
   startRelayTransferEffect,
 } from "./relay-transfers.server"
 
 // The Relays are the only fake: what each holds of a transfer, as their
 // transfer workers keep it. Packing and a pull each move on a step when
 // they're asked about, unless they're held; a pull ends failed when told
-// to. The destination can be offline.
+// to, and can be held while it installs, when it can't be cancelled. The
+// destination can be offline.
 const relays = vi.hoisted(() => ({
   failPull: false,
+  holdInstall: false,
   holdPacking: false,
   holdPull: false,
   offline: false,
@@ -35,8 +40,8 @@ const relays = vi.hoisted(() => ({
   sources: new Map<string, Record<string, unknown>>(),
 }))
 
-vi.mock("@/lib/relay-connection", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/relay-connection")>()),
+vi.mock("@/lib/relay-connection", () => ({
+  relayJournal: async () => null,
   relayConnectionFeatures: () => new Set([relayPeerTransfersV1Feature]),
   relayConnectionState: () => ({
     status: relays.offline ? "unreachable" : "authenticated",
@@ -94,25 +99,42 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
       case "transfer.pull.get": {
         const pull = relays.pulls.get(transferId)
         if (!pull) return null
-        if (pull.state === "pulling" && !relays.holdPull) {
-          relays.pulls.set(
-            transferId,
-            relays.failPull
-              ? { ...pull, error: "The source went away", state: "failed" }
-              : { ...pull, receivedBytes: 300, state: "completed" }
-          )
-        }
+        advancePull(transferId)
         return pull
       }
       case "transfer.pull.cancel": {
         const pull = relays.pulls.get(transferId)
-        if (pull) relays.pulls.set(transferId, { ...pull, state: "cancelled" })
-        return null
+        if (!pull) return null
+        // One installing finishes; stopping it would leave part behind.
+        if (pull.state !== "pulling" && pull.state !== "failed") {
+          advancePull(transferId)
+          return pull
+        }
+        const cancelled = { ...pull, state: "cancelled" }
+        relays.pulls.set(transferId, cancelled)
+        return cancelled
       }
     }
     throw new Error(`Unexpected Relay call ${operation}`)
   },
 }))
+
+// A pull moves on a step whenever the Relay is asked about it, as the real
+// one moves on by itself.
+function advancePull(transferId: string) {
+  const pull = relays.pulls.get(transferId)
+  if (!pull) return
+  relays.pulls.set(
+    transferId,
+    pull.state === "pulling" && !relays.holdPull
+      ? relays.failPull
+        ? { ...pull, error: "The source went away", state: "failed" }
+        : { ...pull, receivedBytes: 300, state: "installing" }
+      : pull.state === "installing" && !relays.holdInstall
+        ? { ...pull, state: "completed" }
+        : pull
+  )
+}
 
 // The key Hearth signs grants with, as its pairing with the source keeps.
 const signingKey = vi.hoisted(() => ({ pem: "" }))
@@ -156,6 +178,7 @@ const request = {
 const seed = Effect.gen(function* () {
   yield* resetDatabase
   relays.failPull = false
+  relays.holdInstall = false
   relays.holdPacking = false
   relays.holdPull = false
   relays.offline = false
@@ -259,6 +282,10 @@ describeMysql("Copying files between Relays as an operation", () => {
           assert.strictEqual(done?.state, "succeeded")
           assert.isFalse(relays.pulls.has(handle.transferId))
           assert.isFalse(relays.sources.has(handle.transferId))
+          assert.strictEqual(
+            (yield* relayTransferStatusEffect(admin, handle)).phase,
+            "cancelled"
+          )
         }).pipe(TestClock.withLive),
       30_000
     )
@@ -281,6 +308,10 @@ describeMysql("Copying files between Relays as an operation", () => {
           assert.strictEqual(ended?.state, "cancelled")
           assert.isFalse(relays.pulls.has(handle.transferId))
           assert.isFalse(relays.sources.has(handle.transferId))
+          assert.strictEqual(
+            (yield* relayTransferStatusEffect(admin, handle)).phase,
+            "cancelled"
+          )
         }).pipe(TestClock.withLive),
       30_000
     )
@@ -306,6 +337,113 @@ describeMysql("Copying files between Relays as an operation", () => {
             relays.pulls.get(handle.transferId)?.state,
             "completed"
           )
+        }).pipe(TestClock.withLive),
+      30_000
+    )
+
+    it.effect(
+      "keeps the destination held while a cancelled pull finishes installing",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          relays.holdInstall = true
+          const handle = yield* startRelayTransferEffect(admin, request)
+          yield* Effect.repeat(
+            Effect.sync(() => relays.pulls.get(handle.transferId)?.state),
+            {
+              schedule: Schedule.spaced("50 millis"),
+              until: (state) => state === "installing",
+            }
+          )
+
+          yield* cancelRelayTransferEffect(admin, handle)
+          yield* Effect.sleep("2500 millis")
+          // Still writing the destination, so work replacing it waits.
+          const replace = yield* Effect.forkDetach(
+            runOperation(replacing, null, Effect.void)
+          )
+          yield* Effect.sleep("300 millis")
+          assert.strictEqual(
+            (yield* findOperation(relayTransfer.kind, handle.transferId))
+              ?.state,
+            "running"
+          )
+          assert.isUndefined(replace.pollUnsafe())
+
+          relays.holdInstall = false
+          const done = yield* operationOf(handle.transferId, true)
+          yield* Fiber.join(replace)
+
+          assert.strictEqual(done?.state, "succeeded")
+          assert.strictEqual(
+            relays.pulls.get(handle.transferId)?.state,
+            "completed"
+          )
+        }).pipe(TestClock.withLive),
+      30_000
+    )
+
+    it.effect(
+      "stops, starting nothing, when the person loses access while a Relay is away",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          yield* insertUser("member", {
+            emailVerifiedAt: new Date(0),
+            role: "admin",
+            status: "enabled",
+          })
+          const member: AuthenticatedUser = {
+            ...admin,
+            id: "member",
+            isDevelopmentBypass: false,
+          }
+          const release = yield* holdDestination
+          const handle = yield* startRelayTransferEffect(member, request)
+          relays.offline = true
+          yield* release
+          yield* operationOf(handle.transferId, false)
+
+          const sql = yield* SqlClient.SqlClient
+          yield* sql.unsafe(
+            `UPDATE ${databaseTable("user")} SET status = 'disabled' WHERE id = ?`,
+            ["member"]
+          )
+          relays.offline = false
+          const done = yield* operationOf(handle.transferId, true)
+
+          assert.strictEqual(done?.state, "failed")
+          assert.include(done?.error ?? "", "can no longer act")
+          assert.isFalse(relays.pulls.has(handle.transferId))
+          assert.isFalse(relays.sources.has(handle.transferId))
+        }).pipe(TestClock.withLive),
+      30_000
+    )
+
+    it.effect(
+      "takes a cancellation while a Relay is paused, and ends it once it's back",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          const release = yield* holdDestination
+          const handle = yield* startRelayTransferEffect(admin, request)
+          const sql = yield* SqlClient.SqlClient
+          const pause = (enabled: boolean) =>
+            sql.unsafe(
+              `UPDATE ${databaseTable("relay")} SET enabled = ? WHERE id = ?`,
+              [enabled ? 1 : 0, "relay-two"]
+            )
+          yield* pause(false)
+          yield* release
+          yield* operationOf(handle.transferId, false)
+
+          yield* cancelRelayTransferEffect(admin, handle)
+          yield* pause(true)
+          const done = yield* operationOf(handle.transferId, true)
+
+          assert.strictEqual(done?.state, "succeeded")
+          assert.isFalse(relays.pulls.has(handle.transferId))
+          assert.isFalse(relays.sources.has(handle.transferId))
         }).pipe(TestClock.withLive),
       30_000
     )
