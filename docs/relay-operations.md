@@ -31,14 +31,25 @@ it exclusive, which waits for every part.
 | `instance:<id>/lifecycle`                          | Exclusive to power actions, console input, crash recovery, the disk-quota stop, and container recreation for ports, routes, and database connections                                                                                             |
 | `instance:<id>/files`                              | Exclusive to Hearth file writes                                                                                                                                                                                                                  |
 | `instance:<id>/metadata`                           | Exclusive to renames                                                                                                                                                                                                                             |
-| `app:<id>`, `app:<id>/lifecycle`, `app:<id>/files` | The same shape for Apps; a deployment's build holds the lifecycle lock                                                                                                                                                                           |
-| `database:<id>`                                    | Exclusive to database changes; shared by dumps and backups                                                                                                                                                                                       |
+| `app:<id>`, `app:<id>/lifecycle`, `app:<id>/files` | The same shape for Apps; a deployment's build and connecting the App to a database hold the lifecycle lock                                                                                                                                       |
+| `database:<id>`                                    | Exclusive to database changes, connecting a member to it, and connecting it to another; shared by dumps, backups, and Hearth's handover of Apps' connections                                                                                     |
 | `relay:routes`                                     | Shared by starts; exclusive to route, port, proxy, and networking writes                                                                                                                                                                         |
 | `relay:tailscale`                                  | Exclusive to the Relay's Tailscale settings; shared by stack changes                                                                                                                                                                             |
 | `relay:allocations`                                | Exclusive to anything that reserves the node's memory, CPU, or disk: limit changes, a deployment's container start, and a game server's check before it's created or replaced, whose reservation stands in for it until its new container exists |
 | `relay:host-files`                                 | The host file root                                                                                                                                                                                                                               |
 | `volume:<id>`                                      | Exclusive to creating, renaming, and deleting one of the Relay's named volumes                                                                                                                                                                   |
 | `relay:platform`                                   | Exclusive to each pass over Kiln's own services and to restarting or repairing them, when the Relay hosts them ([Self-hosting](self-hosting.md))                                                                                                 |
+
+A database connection (`database.network.write`) names its member by kind:
+a game server, an App (every service of it), or another database. It locks
+the database and the member as their other changes do, so it runs in order
+with deleting either. The Relay keeps connections in SQLite whether or not
+the network or the member's containers exist now, and applies them whenever
+the member's containers are created, deployed, or recreated. Deleting a
+database forgets every connection to it and its own; deleting a game server
+or an App forgets its own. Hearth hands over the connections it used to keep
+in Apps' configs once per Relay (`database.network.import`; see
+[`app-database-connections.server.ts`](../apps/web/src/lib/app-database-connections.server.ts)).
 
 `apps/relay/src/operation-plans.ts` maps each control operation to its keys.
 Its switch is exhaustive, so a new operation can't compile until it declares

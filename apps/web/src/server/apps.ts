@@ -17,6 +17,7 @@ import {
   relayAppWebRoutesWriteSchema,
   relayAppWebRouteStateSchema,
   relayIdSchema,
+  relayManagedDatabaseSchema,
   webRouteHostnames,
 } from "@workspace/contracts"
 import type { RelayApp } from "@workspace/contracts"
@@ -77,7 +78,8 @@ const appLimitsInputSchema = appInputSchema.extend({
 })
 const appRenameInputSchema = appInputSchema.extend({ name: appNameSchema })
 const appNetworkInputSchema = appInputSchema.extend({
-  databaseIds: z.array(databaseIdSchema).max(32),
+  connected: z.boolean(),
+  databaseId: databaseIdSchema,
 })
 
 const appPermissions = accessPermissions.filter((permission) =>
@@ -366,41 +368,42 @@ export const runAppAction = createServerFn({ method: "POST" })
     return app
   })
 
-// Connects the app to exactly these databases, now and on later deployments.
-// Each database connected or disconnected needs its own network permission.
+// Connects the app to a database or disconnects it, now and on later
+// deployments. The Relay keeps the connection; connecting or disconnecting
+// a database also needs that database's network permission.
 export const updateAppNetwork = createServerFn({ method: "POST" })
   .validator(appNetworkInputSchema)
   .handler(async ({ data }) => {
-    const { app, relay, user } = await authorizedApp(data, "app.manage")
-    const before = new Set(app.config.databaseIds)
-    const after = new Set(data.databaseIds)
-    for (const databaseId of new Set([...before, ...after])) {
-      if (before.has(databaseId) === after.has(databaseId)) continue
-      await requireRelayPermission({
-        databaseId,
-        permission: "database.network.write",
-        relayId: relay.id,
-        user,
-      })
-    }
-    const config = await runAppEffect(
-      "apps.network.save",
-      updateAppConfigEffect(relay.id, data.appId, (current) => ({
-        ...current,
-        databaseIds: [...after],
-      }))
-    )
-    const updated = relayAppSchema.parse(
+    const { relay, user } = await authorizedApp(data, "app.manage")
+    await requireRelayPermission({
+      databaseId: data.databaseId,
+      permission: "database.network.write",
+      relayId: relay.id,
+      user,
+    })
+    const { ensureAppDatabaseConnectionsImported } =
+      await import("@/lib/app-database-connections.server")
+    await ensureAppDatabaseConnectionsImported(relay)
+    const database = relayManagedDatabaseSchema.parse(
       await databaseRpc(
         relay,
-        "app.network.write",
-        { appId: data.appId, databaseIds: config.databaseIds },
+        "database.network.write",
+        {
+          connected: data.connected,
+          databaseId: data.databaseId,
+          member: { id: data.appId, kind: "app" },
+        },
         30_000,
         user.id
       )
     )
-    publishAppChange(relay.id, false)
-    return updated
+    publishRealtimeChange({
+      audience: { kind: "relays", relayIds: [relay.id] },
+      scope: { relayId: relay.id },
+      topics: ["apps", "databases"],
+      type: "hearth.invalidate",
+    })
+    return database
   })
 
 export const getAppWebRoutes = createServerFn({ method: "GET" })

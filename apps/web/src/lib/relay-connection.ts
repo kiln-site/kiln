@@ -622,6 +622,9 @@ class RelayConnection {
   #wantsPaused: boolean | null = null
   #toldPaused: boolean | null = null
   #pauseFiber: Fiber.Fiber<void, unknown> | null = null
+  // Hands the Relay its Apps' database connections, once (see
+  // lib/app-database-connections.server.ts).
+  #connectionsFiber: Fiber.Fiber<void, unknown> | null = null
   // One pause write at a time, so an older one can't land after a newer.
   readonly #pauseWrites = Semaphore.makeUnsafe(1)
   #socket: WebSocket | null = null
@@ -1125,6 +1128,8 @@ class RelayConnection {
     this.#livenessFiber = null
     this.#pauseFiber?.interruptUnsafe()
     this.#pauseFiber = null
+    this.#connectionsFiber?.interruptUnsafe()
+    this.#connectionsFiber = null
     this.#socket?.close(1000, "Hearth connection closed")
     this.#socket = null
     this.#features.clear()
@@ -1609,6 +1614,8 @@ class RelayConnection {
         this.#livenessFiber = null
         this.#pauseFiber?.interruptUnsafe()
         this.#pauseFiber = null
+        this.#connectionsFiber?.interruptUnsafe()
+        this.#connectionsFiber = null
         this.#rejectBrowserAuthorizationReadiness(error)
         this.#abortReverseRequests()
         this.#rejectPending(error)
@@ -2157,6 +2164,33 @@ class RelayConnection {
             )
           )
         )
+      )
+      // Until the Relay has its Apps' database connections: tried now, and
+      // again while it fails or the Relay is paused.
+      this.#connectionsFiber?.interruptUnsafe()
+      this.#connectionsFiber = forkAppEffect(
+        "apps.databaseConnections.importOnConnect",
+        Effect.gen({ self: this }, function* () {
+          while (this.#state.status === "authenticated") {
+            const imported = yield* Effect.result(
+              promiseEffect(async () => {
+                const { importAppDatabaseConnectionsOnConnect } =
+                  await import("@/lib/app-database-connections.server")
+                return importAppDatabaseConnectionsOnConnect(this.#relay.id)
+              })
+            )
+            if (Result.isSuccess(imported) && imported.success === "done") {
+              return
+            }
+            if (Result.isFailure(imported)) {
+              yield* Effect.logWarning(
+                "Handing Apps' database connections to the Relay failed",
+                { cause: imported.failure, relayId: this.#relay.id }
+              )
+            }
+            yield* Effect.sleep(PAUSE_RECHECK_MS)
+          }
+        })
       )
       // Settles audited changes a Hearth restart left pending: now, once
       // more after the longest change this process could still be awaiting,

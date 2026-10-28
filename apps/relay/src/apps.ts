@@ -21,7 +21,6 @@ import type {
   RelayAppContainer,
   RelayAppDeployment,
   RelayAppLimits,
-  RelayAppNetwork,
   RelayConsoleLevel,
   RelayConsoleLine,
   ProvisioningWorkPhase,
@@ -51,6 +50,7 @@ import {
 import type { RelayConfig } from "./config.js"
 import { consoleLineCharacters } from "./console-frames.js"
 import { parseConsoleLine } from "./console-parsing.js"
+import type { DatabaseConnections } from "./database-connections.js"
 import { databaseNetworkName } from "./databases.js"
 import {
   MAX_CONSOLE_HISTORY_CHARACTERS,
@@ -239,6 +239,7 @@ export class AppDriver {
   readonly #waiters = new Map<string, Set<() => void>>()
   readonly #lanes: OperationLanes
   readonly #limits: AppLimitStores
+  readonly #connections: DatabaseConnections
 
   /**
    * Callers hold the App's lane locks for each change; a deployment's build
@@ -249,7 +250,8 @@ export class AppDriver {
     hostDataDirectory: () => Promise<string>,
     networking: AppNetworking,
     lanes: OperationLanes,
-    limits: AppLimitStores
+    limits: AppLimitStores,
+    connections: DatabaseConnections
   ) {
     this.#config = config
     this.#engine = new DockerEngine(config.dockerSocket)
@@ -258,6 +260,18 @@ export class AppDriver {
     this.#lanes = lanes
     this.#limits = limits
     this.#networking = networking
+    this.#connections = connections
+    // Every service of a connected app joins the database's network, under
+    // its name on the app's own.
+    connections.useMembers("app", async (appId) => {
+      const containers = await this.#appContainers(appId)
+      if (containers.length === 0 && !(await this.#networks()).includes(appId))
+        return null
+      return containers.filter(joinsNetworks).map((container) => ({
+        alias: this.#serviceAlias(appId, container.service),
+        container: container.id,
+      }))
+    })
     // Every container counts its memory and CPU.
     limits.allocations.register(APP_KIND, async () =>
       (await this.#existing()).flatMap((app) =>
@@ -306,6 +320,7 @@ export class AppDriver {
     return relayAppSchema.parse({
       connectedDatabaseIds: [],
       containers: [],
+      savedDatabaseIds: [],
       dataDirectory: this.#appDirectory(input.id),
       deployment: null,
       hostname: this.#hostname(input.id),
@@ -716,6 +731,7 @@ export class AppDriver {
       await this.delete({ appId, deleteData: true })
       return
     }
+    await this.#connections.forgetMember({ id: appId, kind: "app" })
     await rm(this.#appDirectory(appId), { force: true, recursive: true })
   }
 
@@ -754,6 +770,7 @@ export class AppDriver {
       }
     }
     await this.#removeNetwork(this.#networkName(input.appId))
+    await this.#connections.forgetMember({ id: input.appId, kind: "app" })
     // Built images are only cleanup; failing to remove them doesn't stop
     // the app's removal.
     await docker(
@@ -792,40 +809,6 @@ export class AppDriver {
     this.#deployments.delete(input.appId)
     this.#wake(input.appId)
     return { appId: input.appId, deleted: true }
-  }
-
-  async updateNetwork(input: RelayAppNetwork): Promise<RelayApp> {
-    await this.get(input.appId)
-    const desired = await this.#databaseNetworks(input.databaseIds)
-    const missing = input.databaseIds.filter((id) => !desired.has(id))
-    if (missing.length > 0) {
-      throw new Error(`Database ${missing[0]!.slice(0, 8)} was not found`)
-    }
-    const wanted = new Set(desired.values())
-    for (const container of await this.#appContainers(input.appId)) {
-      if (!joinsNetworks(container)) continue
-      const attached = container.networks.filter((network) =>
-        this.#isDatabaseNetwork(network)
-      )
-      for (const network of wanted) {
-        if (attached.includes(network)) continue
-        await docker(
-          this.#engine.connectNetwork(network, container.id, {
-            aliases: [this.#serviceAlias(input.appId, container.service)],
-          })
-        )
-      }
-      for (const network of attached) {
-        if (wanted.has(network)) continue
-        await docker(
-          this.#engine
-            .disconnectNetwork(network, container.id)
-            .pipe(Effect.ignore)
-        )
-      }
-    }
-    this.#wake(input.appId)
-    return this.get(input.appId)
   }
 
   // The newest container of one of an app's services, for its terminal.
@@ -1509,11 +1492,7 @@ export class AppDriver {
     const name = this.#containerName(input.appId, null, deployment.id)
     const hostname = this.#hostname(input.appId)
     const environment = this.#environment(input.appId, deployment, config)
-    const databases = await this.#connectableDatabases(
-      input.appId,
-      deployment,
-      config.databaseIds
-    )
+    const databases = await this.#connectableDatabases(input.appId, deployment)
     const routes = await this.#networking.routes(input.appId)
     const tailscale = (await this.#networking.tailscale(input.appId)).filter(
       (membership) => membership.service === APP_SERVICE
@@ -1903,11 +1882,7 @@ export class AppDriver {
       )
     log("Reading Compose file")
     const normalized = await readConfig(base)
-    const databases = await this.#connectableDatabases(
-      input.appId,
-      deployment,
-      input.config.databaseIds
-    )
+    const databases = await this.#connectableDatabases(input.appId, deployment)
     const routes = await this.#networking.routes(input.appId)
     const tailscale = await this.#networking.tailscale(input.appId)
     const options = {
@@ -2373,12 +2348,15 @@ export class AppDriver {
     }
   }
 
-  // The networks of the app's databases that exist, logging any that don't.
+  // The networks of the databases the app is connected to that exist,
+  // logging any that don't. Those stay connected, and join once they do.
   async #connectableDatabases(
     appId: string,
-    deployment: Deployment,
-    databaseIds: ReadonlyArray<string>
+    deployment: Deployment
   ): Promise<Array<string>> {
+    const databaseIds = (
+      await this.#connections.list({ id: appId, kind: "app" })
+    ).map((connection) => connection.databaseId)
     const networks = await this.#databaseNetworks(databaseIds)
     for (const id of databaseIds) {
       if (networks.has(id)) {
@@ -2387,7 +2365,7 @@ export class AppDriver {
         this.#log(
           appId,
           deployment,
-          `Database ${id.slice(0, 8)} was not found; skipping it`,
+          `Database ${id.slice(0, 8)} has no network now; it joins on a later deploy`,
           "warn"
         )
       }
@@ -2558,6 +2536,9 @@ export class AppDriver {
     ]
     return relayAppSchema.parse({
       connectedDatabaseIds,
+      savedDatabaseIds: this.#connections
+        .saved({ id, kind: "app" })
+        .map((connection) => connection.databaseId),
       containers: [...containers]
         .sort(
           (left, right) =>

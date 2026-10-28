@@ -17,6 +17,7 @@ import { gzipSync } from "node:zlib"
 import {
   appTailscaleMemberId,
   defaultAppConfig,
+  relayCreateDatabaseSchema,
   relayTailscaleStackConfigSchema,
   relayDeployAppSchema,
   type AppConfig,
@@ -1230,6 +1231,93 @@ describe("apps", () => {
     ).toBe(false)
     await expect(access(data)).rejects.toThrow()
     await expect(harness.apps.get(appId)).rejects.toThrow("App not found")
+  })
+})
+
+describe("database connections", () => {
+  const ready = "a".repeat(40)
+  const away = "b".repeat(40)
+  const networkOf = (id: string) => `${TEST_NAMESPACE}-kiln-db-${id}-network`
+
+  async function withDatabases() {
+    const harness = await createdApp()
+    for (const id of [ready, away]) {
+      await harness.databases.create(
+        relayCreateDatabaseSchema.parse({
+          databaseName: "kiln_app",
+          engine: "postgres",
+          id,
+          name: "Main database",
+          password: "correct-horse-battery-staple-1",
+          username: "kiln_user",
+        })
+      )
+    }
+    return harness
+  }
+
+  it("joins a deploy to the databases the Relay keeps for the app, and one whose network was missing once it's back", async () => {
+    const harness = await withDatabases()
+    const member = { id: appId, kind: "app" } as const
+    await harness.databases.updateNetwork({
+      connected: true,
+      databaseId: ready,
+      member,
+    })
+    // Hearth hands over a connection while the database's network is gone.
+    const network = fakeDocker.networks.get(networkOf(away))!
+    fakeDocker.networks.delete(networkOf(away))
+    expect(
+      await harness.databaseConnections.importApps([
+        { appId, databaseIds: [away] },
+      ])
+    ).toBe(1)
+
+    const first = await deploy(harness, {})
+    expect(first.savedDatabaseIds).toEqual([ready, away])
+    expect(first.connectedDatabaseIds).toEqual([ready])
+    // Under the name it answers to on the app's own network.
+    expect(
+      appContainers()[0]!.networks.get(networkOf(ready))?.aliases
+    ).toContain(`app-${appId.slice(0, 8)}`)
+
+    fakeDocker.addNetwork({
+      internal: network.internal,
+      labels: network.labels,
+      name: network.name,
+    })
+    const second = await deploy(harness, {})
+    expect(second.connectedDatabaseIds.sort()).toEqual([ready, away])
+  })
+
+  it("imports an app's connections once, and a repeat brings back none a deletion removed", async () => {
+    const harness = await withDatabases()
+    const gone = "d".repeat(40)
+    const handover = [
+      { appId, databaseIds: [ready, away] },
+      { appId: gone, databaseIds: [ready] },
+    ]
+    expect(await harness.databaseConnections.importApps(handover)).toBe(2)
+    await harness.databases.delete({ databaseId: away, deleteData: true })
+
+    // As after a Hearth crash before it recorded the Relay's answer.
+    expect(await harness.databaseConnections.importApps(handover)).toBe(0)
+    expect(
+      await Effect.runPromise(harness.state.listDatabaseConnections())
+    ).toEqual([
+      {
+        databaseId: ready,
+        memberId: appId,
+        memberKind: "app",
+        relayId: harness.config.nodeId,
+      },
+    ])
+    expect((await harness.apps.get(appId)).savedDatabaseIds).toEqual([ready])
+
+    await harness.apps.delete({ appId, deleteData: true })
+    expect(
+      await Effect.runPromise(harness.state.listDatabaseConnections())
+    ).toEqual([])
   })
 })
 

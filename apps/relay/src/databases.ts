@@ -213,6 +213,12 @@ export class DatabaseDriver {
     docker.allocations.register(DATABASE_KIND, async () =>
       (await this.#existing()).map(({ id, limits }) => ({ id, limits }))
     )
+    // A database connected to another joins that one's network with its
+    // own container.
+    connections.useMembers("database", async (id) => {
+      const [container] = await this.#discover([id])
+      return container ? [{ container: container.Id }] : null
+    })
   }
 
   /** Every database, with the placeholders of those still provisioning. */
@@ -604,6 +610,10 @@ export class DatabaseDriver {
         })
       )
       created = true
+      // The databases it's connected to, which it reached on the old one.
+      await this.connections.reconcile({ id, kind: "database" }, [
+        { container: name },
+      ])
       if (running) {
         await Effect.runPromise(
           docker.startContainer(name, { timeout: 120_000 })
@@ -853,36 +863,27 @@ export class DatabaseDriver {
     return this.#required(input.databaseId)
   }
 
-  // The caller holds the database's lock across lookup, saving intent, and
-  // attachment, so a queued connect can't recreate a row after deletion has
-  // cleared it.
-  updateNetwork(input: RelayDatabaseNetwork): Promise<RelayManagedDatabase> {
-    return this.#updateNetwork(input)
-  }
-
-  async #updateNetwork(
+  // The caller holds the database's lock and the member's across lookup,
+  // saving intent, and attachment, so a queued connect can't recreate a row
+  // after deletion has cleared it. A member without containers, as an App
+  // before its first deploy, joins once it has them.
+  async updateNetwork(
     input: RelayDatabaseNetwork
   ): Promise<RelayManagedDatabase> {
     const database = await this.#required(input.databaseId)
-    const instance = await this.#docker.findInstance(input.instanceId)
-    if (!instance) throw new Error("Server not found on this Relay")
-    await this.connections.set(instance.id, database.id, input.connected)
-    const issues = await this.connections.reconcile(
-      instance.id,
-      instance.service
-    )
-    const updated = await this.#required(input.databaseId)
-    if (
-      updated.connectedInstanceIds.includes(instance.id) !== input.connected
-    ) {
-      const failure =
-        issues.find((issue) => issue.databaseId === database.id) ??
-        issues.find((issue) => issue.databaseId === null)
+    const targets = await this.connections.resolve(input.member)
+    if (!targets) throw new Error(memberNotFound[input.member.kind])
+    await this.connections.set(input.member, database.id, input.connected)
+    const issues = await this.connections.reconcile(input.member, targets)
+    const failure =
+      issues.find((issue) => issue.databaseId === database.id) ??
+      issues.find((issue) => issue.databaseId === null)
+    if (failure) {
       throw new Error(
-        `${failure?.message ?? "Database connection could not be updated"}. Your server was not stopped. Retry the connection from the database page.`
+        `${failure.message}. ${memberStillRunning[input.member.kind]} Retry the connection from the database page.`
       )
     }
-    return updated
+    return this.#required(input.databaseId)
   }
 
   // Where databases' dump files live, a folder per database, for browsers to
@@ -1655,3 +1656,15 @@ function withProvisioning(
   })
   return [...listed, ...pending.values()]
 }
+
+const memberNotFound = {
+  app: "App not found on this Relay",
+  database: "Database not found on this Relay",
+  instance: "Server not found on this Relay",
+} as const
+
+const memberStillRunning = {
+  app: "Your app was not stopped.",
+  database: "Your database was not stopped.",
+  instance: "Your server was not stopped.",
+} as const

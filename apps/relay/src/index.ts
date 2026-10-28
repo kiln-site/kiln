@@ -27,7 +27,6 @@ import {
   relayProvisionDatabaseSchema,
   relayAppActionSchema,
   relayAppLimitsSchema,
-  relayAppNetworkSchema,
   relayStateDatabaseReadSchema,
   relayHostTerminalAttachSchema,
   relayHostTerminalWriteSchema,
@@ -71,6 +70,7 @@ import {
   relayDatabaseImportSchema,
   relayDatabaseInspectRequestSchema,
   relayDatabaseWipeSchema,
+  relayDatabaseNetworkImportSchema,
   relayDatabaseNetworkSchema,
   relayDeleteDatabaseSchema,
   relayAuditQuerySchema,
@@ -505,7 +505,8 @@ const apps = new AppDriver(
       })),
   },
   lanes,
-  { allocations: docker.allocations, state: startupCore.state }
+  { allocations: docker.allocations, state: startupCore.state },
+  databaseConnections
 )
 lifecycle.useAppServiceContainers(async (appId, service) => {
   await apps.get(appId)
@@ -579,7 +580,10 @@ for (const snapshot of databaseConnectionSnapshots) {
   await runRelayEffect(
     "relay.startup.databaseConnections",
     Effect.tryPromise(() =>
-      databaseConnections.reconcile(snapshot.instanceId, snapshot.service)
+      databaseConnections.reconcile(
+        { id: snapshot.instanceId, kind: "instance" },
+        [{ container: snapshot.service }]
+      )
     ).pipe(
       Effect.catch((error) =>
         Effect.sync(() => {
@@ -2393,6 +2397,12 @@ async function executeControlRequest(
         )
       )
     }
+    case "database.network.import":
+      return {
+        imported: await databaseConnections.importApps(
+          relayDatabaseNetworkImportSchema.parse(request.payload).apps
+        ),
+      }
     case "database.dump.export":
       return databases.exportDump(
         relayDatabaseExportSchema.parse(request.payload)
@@ -2561,8 +2571,6 @@ async function executeControlRequest(
       return apps.action(relayAppActionSchema.parse(request.payload))
     case "app.limits.write":
       return apps.setLimits(relayAppLimitsSchema.parse(request.payload))
-    case "app.network.write":
-      return apps.updateNetwork(relayAppNetworkSchema.parse(request.payload))
     case "app.network.routes.read": {
       const appId = appIdSchema.parse(payload.appId)
       return webRouteStateForHearth(
@@ -3343,13 +3351,16 @@ async function executeControlRequest(
     case "instance.network.databases.remove": {
       const input = relayRemoveDatabaseConnectionSchema.parse(payload)
       const instance = await requiredInstance(payload)
+      const member = { id: instance.id, kind: "instance" } as const
       await databaseConnections.set(
-        instance.id,
+        member,
         input.databaseId,
         false,
         input.databaseRelayId
       )
-      await databaseConnections.reconcile(instance.id, instance.service)
+      await databaseConnections.reconcile(member, [
+        { container: instance.service },
+      ])
       const snapshot = await snapshotHub.refresh()
       return snapshot.instances.find(
         (candidate) => candidate.id === instance.id

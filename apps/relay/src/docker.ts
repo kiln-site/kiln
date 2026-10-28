@@ -494,6 +494,10 @@ export class DockerDriver {
     this.#resources = relayResourceNames(config)
     this.#runtimeRecovery = runtimeRecovery
     this.#state = state
+    databaseConnections.useMembers("instance", async (id) => {
+      const instance = await this.findInstance(id)
+      return instance ? [{ container: instance.service }] : null
+    })
     this.allocations.register("server", async () =>
       (await this.#discover()).map(({ config }) => ({
         id: config.id,
@@ -724,11 +728,11 @@ export class DockerDriver {
           recoveryState?.recovery,
           desiredState
         ),
-        savedDatabaseConnections: [
-          ...this.databaseConnections.saved(config.id),
-        ],
+        savedDatabaseConnections: this.databaseConnections
+          .saved({ id: config.id, kind: "instance" })
+          .map(({ databaseId, relayId }) => ({ databaseId, relayId })),
         databaseConnectionWarnings: this.databaseConnections
-          .issues(config.id)
+          .issues({ id: config.id, kind: "instance" })
           .map(
             (issue) =>
               `${issue.databaseId ?? "Database connections"}: ${issue.message}`
@@ -892,7 +896,10 @@ export class DockerDriver {
     await Promise.all([
       runEffect(this.#runtimeRecovery.forget(instanceId)),
       this.#deleteLifecycleSession(instanceId),
-      this.databaseConnections.forgetInstance(instanceId),
+      this.databaseConnections.forgetMember({
+        id: instanceId,
+        kind: "instance",
+      }),
     ])
   }
 
@@ -925,7 +932,10 @@ export class DockerDriver {
       instance.managedByRelay &&
       (action === "start" || action === "restart")
     ) {
-      await this.databaseConnections.reconcile(instance.id, instance.service)
+      await this.databaseConnections.reconcile(
+        { id: instance.id, kind: "instance" },
+        [{ container: instance.service }]
+      )
     }
     const discovered = await this.#findDiscovered(instance.id)
     await this.#initializeLifecycleSessions()
@@ -1185,7 +1195,10 @@ export class DockerDriver {
             })
           )
         }
-        await this.databaseConnections.reconcile(instance.id, instance.service)
+        await this.databaseConnections.reconcile(
+          { id: instance.id, kind: "instance" },
+          [{ container: instance.service }]
+        )
         if (action !== "stop") {
           await runEffect(
             engine.startContainer(instance.service, { timeout: 120_000 })

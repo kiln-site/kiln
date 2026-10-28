@@ -1582,3 +1582,78 @@ describe("web route options migration", () => {
     )
   )
 })
+
+describe("database connection members migration", () => {
+  it.effect(
+    "keeps game servers' connections, as connections of game servers",
+    () =>
+      withTemporaryDirectory((directory) =>
+        Effect.gen(function* () {
+          const filename = join(directory, "relay.sqlite")
+          const layer = makeRelayStateLayer(filename)
+          yield* Effect.provide(Effect.asVoid(RelayStateStore), layer)
+          const server = "a".repeat(40)
+          const local = "b".repeat(40)
+          const remote = "c".repeat(40)
+          const relay = "r".repeat(43)
+          const otherRelay = "o".repeat(43)
+          yield* Effect.sync(() => {
+            const database = new DatabaseSync(filename)
+            try {
+              database.exec(
+                `DROP TABLE relay_database_connections;
+               CREATE TABLE relay_database_connections (
+                 instance_id TEXT NOT NULL,
+                 database_id TEXT NOT NULL,
+                 relay_id TEXT NOT NULL,
+                 PRIMARY KEY (instance_id, database_id)
+               ) STRICT;
+               CREATE INDEX relay_database_connections_target
+               ON relay_database_connections (relay_id, database_id);
+               INSERT INTO relay_database_connections
+                 (instance_id, database_id, relay_id)
+               VALUES
+                 ('${server}', '${local}', '${relay}'),
+                 ('${server}', '${remote}', '${otherRelay}');
+               DELETE FROM effect_sql_migrations WHERE migration_id >= 28`
+              )
+            } finally {
+              database.close()
+            }
+          })
+          const migrated = yield* Effect.provide(
+            Effect.flatMap(RelayStateStore, (state) =>
+              Effect.gen(function* () {
+                const before = yield* state.listMemberDatabaseConnections({
+                  id: server,
+                  kind: "instance",
+                })
+                // Deleting the local database still finds its connections.
+                yield* state.deleteDatabaseConnections(relay, local)
+                return {
+                  after: yield* state.listDatabaseConnections(),
+                  before,
+                }
+              })
+            ),
+            layer
+          )
+          assert.deepStrictEqual(migrated.before, [
+            {
+              databaseId: local,
+              memberId: server,
+              memberKind: "instance",
+              relayId: relay,
+            },
+            {
+              databaseId: remote,
+              memberId: server,
+              memberKind: "instance",
+              relayId: otherRelay,
+            },
+          ])
+          assert.deepStrictEqual(migrated.after, [migrated.before[1]])
+        })
+      )
+  )
+})

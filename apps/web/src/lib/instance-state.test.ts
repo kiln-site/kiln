@@ -76,6 +76,7 @@ describe("instance status queries", () => {
               dataDirectory: "/apps/first",
               deployment: null,
               observedState: "running",
+              savedDatabaseIds: [],
               status: "Running",
             },
             observation: observation(ref),

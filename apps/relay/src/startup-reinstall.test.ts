@@ -240,7 +240,11 @@ describe("startup database connections", () => {
           })
         )
       }
-      await harness.databaseConnections.set(id, databaseId, true)
+      await harness.databaseConnections.set(
+        { id, kind: "instance" },
+        databaseId,
+        true
+      )
 
       const replaced = await reconfigure(
         harness,

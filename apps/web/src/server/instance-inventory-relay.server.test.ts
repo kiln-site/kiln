@@ -33,6 +33,7 @@ const app = (id: string) => ({
   id,
   network: `app-${id}`,
   observedState: "running",
+  savedDatabaseIds: [],
   shortId: id.slice(0, 8),
   status: "Running",
 })

@@ -902,7 +902,7 @@ describe("explicit database connections", () => {
     const updated = await harness.databases.updateNetwork({
       connected: true,
       databaseId: id,
-      instanceId: serverId,
+      member: { id: serverId, kind: "instance" },
     })
 
     expect(updated.connectedInstanceIds).toEqual([serverId])
@@ -923,7 +923,7 @@ describe("explicit database connections", () => {
       harness.databases.updateNetwork({
         connected: true,
         databaseId: id,
-        instanceId: serverId,
+        member: { id: serverId, kind: "instance" },
       })
     ).rejects.toThrow("Retry the connection")
     expect(server.state.running).toBe(true)
@@ -937,12 +937,15 @@ describe("explicit database connections", () => {
       harness.databases.updateNetwork({
         connected: true,
         databaseId: "b".repeat(40),
-        instanceId: serverId,
+        member: { id: serverId, kind: "instance" },
       })
     ).rejects.toThrow("Database not found")
     expect(
       await Effect.runPromise(
-        harness.state.listInstanceDatabaseConnections(serverId)
+        harness.state.listMemberDatabaseConnections({
+          id: serverId,
+          kind: "instance",
+        })
       )
     ).toEqual([])
   })
@@ -981,7 +984,7 @@ describe("database mutation serialization", () => {
     const connect = {
       connected: true,
       databaseId: id,
-      instanceId: serverId,
+      member: { id: serverId, kind: "instance" },
     } as const
     const connecting = inLane("database.network.write", connect, () =>
       harness.databases.updateNetwork(connect)
@@ -995,7 +998,10 @@ describe("database mutation serialization", () => {
     expect(await connecting).toMatchObject({ message: "Database not found" })
     expect(
       await Effect.runPromise(
-        harness.state.listInstanceDatabaseConnections(serverId)
+        harness.state.listMemberDatabaseConnections({
+          id: serverId,
+          kind: "instance",
+        })
       )
     ).toEqual([])
     expect([...server.networks.keys()]).toEqual([harness.resources.gameNetwork])
@@ -1005,5 +1011,120 @@ describe("database mutation serialization", () => {
         harness.databases.updateNetwork(connect)
       )
     ).rejects.toThrow("Database not found")
+  })
+})
+
+describe("connections of every member kind", () => {
+  const appId = "c".repeat(40)
+
+  // An App with one running service, as a deploy leaves it.
+  async function runningApp(harness: RelayHarness) {
+    await harness.apps.create({ id: appId, name: "Website" })
+    return fakeDocker.addContainer({
+      labels: {
+        "kiln.app.id": appId,
+        "kiln.app.service": "web",
+        "kiln.relay.owner": TEST_NAMESPACE,
+        "kiln.resource.kind": "app",
+      },
+      name: `${TEST_NAMESPACE}-kiln-${appId.slice(0, 8)}-web`,
+      networks: [harness.resources.appNetwork(appId)],
+      running: true,
+    })
+  }
+
+  it("removes every member's connections to a deleted database, and its own", async () => {
+    const harness = await relayHarness()
+    const [deleted, member, other] = ["d", "e", "f"].map((c) => c.repeat(40))
+    for (const id of [deleted!, member!, other!])
+      await createDatabase(harness, id)
+    const app = await runningApp(harness)
+    const connect = (
+      databaseId: string,
+      to: { id: string; kind: "app" | "database" }
+    ) =>
+      harness.databases.updateNetwork({
+        connected: true,
+        databaseId,
+        member: to,
+      })
+    await connect(deleted!, { id: appId, kind: "app" })
+    await connect(deleted!, { id: member!, kind: "database" })
+    await connect(other!, { id: deleted!, kind: "database" })
+    await connect(other!, { id: appId, kind: "app" })
+    expect(app.networks.has(networkOf(deleted!))).toBe(true)
+    expect(databaseContainer(member!).networks.has(networkOf(deleted!))).toBe(
+      true
+    )
+
+    await harness.databases.delete({ databaseId: deleted!, deleteData: true })
+
+    expect(
+      await Effect.runPromise(harness.state.listDatabaseConnections())
+    ).toEqual([
+      {
+        databaseId: other,
+        memberId: appId,
+        memberKind: "app",
+        relayId: harness.config.nodeId,
+      },
+    ])
+    expect(app.networks.has(networkOf(deleted!))).toBe(false)
+    expect([...databaseContainer(member!).networks.keys()]).toEqual([
+      networkOf(member!),
+    ])
+    expect((await harness.apps.get(appId)).savedDatabaseIds).toEqual([other])
+  })
+
+  it("runs an App's connect queued behind the database's deletion after it, without saving an orphan", async () => {
+    const harness = await relayHarness()
+    const id = "d".repeat(40)
+    await createDatabase(harness, id)
+    const app = await runningApp(harness)
+    const removal = fakeDocker.hold({
+      command: "rm",
+      target: databaseContainer(id).id,
+    })
+    const inLane = <T>(
+      operation: "database.delete" | "database.network.write",
+      payload: Record<string, unknown>,
+      run: () => Promise<T>
+    ) =>
+      Effect.runPromise(
+        harness.lanes.run(
+          {
+            label: operation,
+            locks: controlRequestLocks(operation, payload, (ref) => ref)!,
+          },
+          Effect.promise(run)
+        )
+      )
+    const deleting = inLane("database.delete", { databaseId: id }, () =>
+      harness.databases.delete({ databaseId: id, deleteData: true })
+    )
+    await removal.reached
+    const connect = {
+      connected: true,
+      databaseId: id,
+      member: { id: appId, kind: "app" },
+    } as const
+    const connecting = inLane("database.network.write", connect, () =>
+      harness.databases.updateNetwork(connect)
+    ).then(
+      () => null,
+      (error: unknown) => error
+    )
+    // It waits its turn rather than joining a network on its way out.
+    await vi.waitFor(() => expect(harness.lanes.pending.waiting).toBe(1))
+    removal.release()
+
+    await expect(deleting).resolves.toMatchObject({ deleted: true })
+    expect(await connecting).toMatchObject({ message: "Database not found" })
+    expect(
+      await Effect.runPromise(harness.state.listDatabaseConnections())
+    ).toEqual([])
+    expect([...app.networks.keys()]).toEqual([
+      harness.resources.appNetwork(appId),
+    ])
   })
 })

@@ -2741,7 +2741,9 @@ export class LifecycleDriver {
                 )
               )
             }
-            await this.databaseConnections.reconcile(id, containerName)
+            await this.databaseConnections.reconcile({ id, kind: "instance" }, [
+              { container: containerName },
+            ])
             if (input.start) {
               await runLifecycle(
                 this.#engine.startContainer(containerName, { timeout: 120_000 })

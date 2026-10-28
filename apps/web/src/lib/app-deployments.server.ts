@@ -41,6 +41,7 @@ import {
   publishNotificationChange,
 } from "@/effect/notifications"
 import { forkAppWorker } from "@/effect/runtime"
+import { ensureAppDatabaseConnectionsImportedEffect } from "@/lib/app-database-connections.server"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { relayConnectionFeatures, relayRpc } from "@/lib/relay-connection"
 import {
@@ -187,6 +188,9 @@ export const startAppDeploymentEffect = Effect.fn("Apps.deploy")(function* (
           token: yield* github.token,
         }
       : null
+    // The Relay joins the deployment to the databases it keeps for the
+    // App, so it must have them first.
+    yield* ensureAppDatabaseConnectionsImportedEffect(relay)
     const response = yield* Effect.tryPromise({
       try: () =>
         relayRpc(

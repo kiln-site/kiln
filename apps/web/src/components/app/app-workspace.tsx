@@ -182,6 +182,7 @@ function useAppWorkspaceQuery(
           hostname: `app-${directory.shortId}`,
           network: "",
           observedState: "failed" as const,
+          savedDatabaseIds: [],
           status: "Unavailable",
         }),
         ...directory,

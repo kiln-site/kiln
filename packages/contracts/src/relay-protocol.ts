@@ -191,6 +191,7 @@ export const relayControlOperations = [
   "database.limits.write",
   "database.credentials.rotate",
   "database.network.write",
+  "database.network.import",
   "database.dump.export",
   "database.dump.import",
   "database.data.read",
@@ -210,7 +211,6 @@ export const relayControlOperations = [
   "app.deploy",
   "app.action",
   "app.limits.write",
-  "app.network.write",
   "app.network.routes.read",
   "app.deployment.read",
   "app.image.check",
@@ -332,6 +332,7 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "database.limits.write",
   "database.credentials.rotate",
   "database.network.write",
+  "database.network.import",
   "database.dump.export",
   "database.dump.import",
   "database.data.write",
@@ -345,7 +346,6 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "app.deploy",
   "app.action",
   "app.limits.write",
-  "app.network.write",
   "app.network.routes.write",
   "app.terminal.attach",
   "app.terminal.restart",
@@ -488,6 +488,7 @@ export function relayControlOperationChanges(
     case "database.limits.write":
     case "database.credentials.rotate":
     case "database.network.write":
+    case "database.network.import":
     case "database.dump.import":
     case "database.data.write":
     case "app.create":
@@ -498,7 +499,6 @@ export function relayControlOperationChanges(
     case "app.deploy":
     case "app.action":
     case "app.limits.write":
-    case "app.network.write":
     case "app.network.routes.write":
     case "backup.task.enqueue":
     case "backup.task.cancel":
@@ -614,6 +614,8 @@ export function relayControlDeadlineMs(
   // Removing a limit recreates the container and waits for it to be ready.
   if (operation === "database.limits.write") return 240_000
   if (operation === "database.credentials.rotate") return 180_000
+  // Waits its turn behind changes to every App and database it names.
+  if (operation === "database.network.import") return 120_000
   // Dumps take as long as the database's data does.
   if (operation === "database.dump.export") return 60 * 60_000
   // Docker walks every volume to measure them.

@@ -38,7 +38,7 @@ import { deployApp, updateAppConfig } from "@/server/apps"
 // Dialogs that change what an app runs. Each saves only its own fields, then
 // deploys when asked; changes otherwise apply on the next deploy.
 
-export type EditableAppConfig = Omit<AppConfig, "databaseIds">
+export type EditableAppConfig = AppConfig
 type SaveNext = "deploy" | "stay"
 
 export function useAppConfigSave(

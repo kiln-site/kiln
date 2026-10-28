@@ -241,12 +241,58 @@ export const relayRotateDatabaseCredentialsSchema = z
   })
   .strict()
 
+// What joins a database's network, by its kind's code name: a game server,
+// an App (every service of it), or another database.
+export const databaseConnectionMemberKindSchema = z.enum([
+  "instance",
+  "app",
+  "database",
+])
+
+export const databaseConnectionMemberSchema = z
+  .object({
+    // Game servers, Apps, and databases all have 40-character IDs.
+    id: z.string().regex(/^[a-f0-9]{40}$/u),
+    kind: databaseConnectionMemberKindSchema,
+  })
+  .strict()
+
+// Connects one member to a database, or disconnects it. The Relay keeps the
+// connection, and joins the member to it whenever its containers change.
 export const relayDatabaseNetworkSchema = z
   .object({
     connected: z.boolean(),
     databaseId: databaseIdSchema,
-    instanceId: z.string().regex(/^[a-f0-9]{40}$/u),
+    member: databaseConnectionMemberSchema,
   })
+  .strict()
+  .refine(
+    (input) =>
+      input.member.kind !== "database" || input.member.id !== input.databaseId,
+    "A database can't connect to itself"
+  )
+
+// Hands the Relay the database connections Hearth kept in Apps' configs,
+// once per Relay. Repeating it changes nothing more: the Relay adds what it
+// doesn't have, for Apps and databases it still has.
+export const relayDatabaseNetworkImportSchema = z
+  .object({
+    apps: z
+      .array(
+        z
+          .object({
+            appId: z.string().regex(/^[a-f0-9]{40}$/u),
+            databaseIds: z.array(databaseIdSchema).min(1).max(32),
+          })
+          .strict()
+      )
+      .min(1)
+      .max(100),
+  })
+  .strict()
+
+export const relayDatabaseNetworkImportResultSchema = z
+  .object({ imported: z.number().int().nonnegative() })
   .strict()
 
 // A database's login, for the Relay to act on the database as its own user.
@@ -733,7 +779,6 @@ export const appConfigSchema = z
     // Replaces the image's command, for images and Dockerfiles.
     command: z.string().max(4_000),
     compose: z.string().max(400_000),
-    databaseIds: z.array(databaseIdSchema).max(32),
     dockerfile: z.string().max(200_000),
     // KEY=VALUE lines, as in an env file.
     environment: z.string().max(65_536),
@@ -749,7 +794,6 @@ export const appConfigSchema = z
 export const defaultAppConfig: z.infer<typeof appConfigSchema> = {
   command: "",
   compose: "",
-  databaseIds: [],
   dockerfile: "",
   environment: "",
   image: "",
@@ -811,6 +855,7 @@ export const relayAppDeploymentSchema = z.object({
 })
 
 export const relayAppSchema = z.object({
+  // Databases whose networks its containers are on now.
   connectedDatabaseIds: z.array(databaseIdSchema),
   containers: z.array(relayAppContainerSchema),
   // The app's folder on the Relay's host: a pasted Compose file's project
@@ -830,6 +875,8 @@ export const relayAppSchema = z.object({
   ]),
   /** Where its provisioning is, until the app exists. */
   provisioning: provisioningStateSchema.optional(),
+  // Databases the Relay keeps it connected to, joined on every deploy.
+  savedDatabaseIds: z.array(databaseIdSchema),
   shortId: z.string().regex(/^[a-f0-9]{8}$/u),
   status: z.string().min(1).max(280),
 })
@@ -927,14 +974,6 @@ export const relayAppActionSchema = z
 
 export const relayDeleteAppSchema = z
   .object({ appId: appIdSchema, deleteData: z.boolean().default(true) })
-  .strict()
-
-// Connects the app's running containers to exactly these databases.
-export const relayAppNetworkSchema = z
-  .object({
-    appId: appIdSchema,
-    databaseIds: z.array(databaseIdSchema).max(32),
-  })
   .strict()
 
 // App terminals are full shells in one of the app's services, sessions kept
@@ -2857,7 +2896,16 @@ export type RelayDeleteDatabase = z.infer<typeof relayDeleteDatabaseSchema>
 export type RelayRotateDatabaseCredentials = z.infer<
   typeof relayRotateDatabaseCredentialsSchema
 >
+export type DatabaseConnectionMember = z.infer<
+  typeof databaseConnectionMemberSchema
+>
+export type DatabaseConnectionMemberKind = z.infer<
+  typeof databaseConnectionMemberKindSchema
+>
 export type RelayDatabaseNetwork = z.infer<typeof relayDatabaseNetworkSchema>
+export type RelayDatabaseNetworkImport = z.infer<
+  typeof relayDatabaseNetworkImportSchema
+>
 export type RelayDatabaseExport = z.infer<typeof relayDatabaseExportSchema>
 export type RelayDatabaseImport = z.infer<typeof relayDatabaseImportSchema>
 export type RelayDatabaseContainer = z.infer<
@@ -2910,7 +2958,6 @@ export type RelayAppImageCheckResult = z.infer<
 >
 export type RelayAppAction = z.infer<typeof relayAppActionSchema>
 export type RelayDeleteApp = z.infer<typeof relayDeleteAppSchema>
-export type RelayAppNetwork = z.infer<typeof relayAppNetworkSchema>
 export type RelayAppWebRoute = z.infer<typeof relayAppWebRouteSchema>
 export type RelayAppWebRouteInput = z.infer<typeof relayAppWebRouteInputSchema>
 export type RelayAppWebRouteState = z.infer<typeof relayAppWebRouteStateSchema>

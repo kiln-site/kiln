@@ -115,7 +115,7 @@ export function AppNetworkPage() {
             <ConnectedDatabases
               app={app}
               canManage={canManage}
-              databaseIds={config.data.config.databaseIds}
+              databaseIds={app.savedDatabaseIds}
             />
             <AppTailscale app={app} compose={compose} />
           </>
@@ -544,15 +544,19 @@ function ConnectedDatabases({
   })
   const [adding, setAdding] = React.useState("")
   const network = useMutation({
-    mutationFn: (next: Array<string>) =>
+    mutationFn: (change: { connected: boolean; databaseId: string }) =>
       updateAppNetwork({
-        data: { appId: app.id, databaseIds: next, relayId: app.relayId },
+        data: { appId: app.id, relayId: app.relayId, ...change },
       }),
-    onSuccess: async () => {
+    onSuccess: async (_database, change) => {
       setAdding("")
       await Promise.all([
         queryClient.invalidateQueries({
-          queryKey: queryKeys.apps.config(app.relayId, app.id),
+          queryKey: instanceInventoryScope({
+            kind: "database",
+            relayId: app.relayId,
+            id: change.databaseId,
+          }),
         }),
         queryClient.invalidateQueries({
           queryKey: instanceInventoryScope({
@@ -602,7 +606,9 @@ function ConnectedDatabases({
                 disabled={!adding || network.isPending}
                 size="sm"
                 type="button"
-                onClick={() => network.mutate([...databaseIds, adding])}
+                onClick={() =>
+                  network.mutate({ connected: true, databaseId: adding })
+                }
               >
                 {network.isPending ? (
                   <LoaderCircle className="animate-spin" />
@@ -661,9 +667,7 @@ function ConnectedDatabases({
                     type="button"
                     variant="ghost"
                     onClick={() =>
-                      network.mutate(
-                        databaseIds.filter((candidate) => candidate !== id)
-                      )
+                      network.mutate({ connected: false, databaseId: id })
                     }
                   >
                     <Unplug />

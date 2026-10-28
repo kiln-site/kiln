@@ -55,13 +55,12 @@ async function authorizedAppFor(
   return { app, relay, user }
 }
 
-// What an edit may change. Databases change through the network, which also
-// connects running containers, and limits through their own update, which
-// applies them to running ones; everything else waits for the next
-// deployment. Mounts have no default, so an edit that leaves them out keeps
-// them.
+// What an edit may change. Limits change through their own update, which
+// applies them to running containers, and databases through the network,
+// which the Relay keeps; everything else waits for the next deployment.
+// Mounts have no default, so an edit that leaves them out keeps them.
 export const appConfigPatchSchema = appConfigSchema
-  .omit({ databaseIds: true, serviceLimits: true })
+  .omit({ serviceLimits: true })
   .partial()
   .extend({ mounts: appMountsSchema.optional() })
 

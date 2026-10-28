@@ -1,4 +1,9 @@
-import { databaseIdSchema, relayIdSchema } from "@workspace/contracts"
+import {
+  databaseIdSchema,
+  relayIdSchema,
+  type DatabaseConnectionMember,
+  type DatabaseConnectionMemberKind,
+} from "@workspace/contracts"
 import { Effect } from "effect"
 
 import type { RelayConfig } from "./config.js"
@@ -78,17 +83,68 @@ export interface DatabaseConnectionIssue {
   message: string
 }
 
+/**
+ * A container of a member that joins its databases' networks, under the
+ * alias it answers to there, if any.
+ */
+export interface DatabaseConnectionTarget {
+  readonly alias?: string
+  readonly container: string
+}
+
+/**
+ * A member's containers, or null when the member doesn't exist on this
+ * Relay. A member that exists but has no containers yet, as an App before
+ * its first deploy, has none.
+ */
+export type DatabaseConnectionMemberResolver = (
+  id: string
+) => Promise<ReadonlyArray<DatabaseConnectionTarget> | null>
+
+const memberKey = (member: DatabaseConnectionMember) =>
+  `${member.kind}:${member.id}`
+
+/**
+ * The Relay's database connections, for every member kind: game servers,
+ * Apps, and databases. The Relay is their one authority. A connection is
+ * kept whether or not its network or member's containers exist now, and
+ * applied whenever the member's containers change.
+ */
 export class DatabaseConnections {
   readonly #saved = new Map<string, ReadonlyArray<DatabaseReference>>()
 
-  saved(instanceId: string): ReadonlyArray<DatabaseReference> {
-    return this.#saved.get(instanceId) ?? []
+  saved(member: DatabaseConnectionMember): ReadonlyArray<DatabaseReference> {
+    return this.#saved.get(memberKey(member)) ?? []
   }
 
   readonly #issues = new Map<string, Array<DatabaseConnectionIssue>>()
 
-  issues(instanceId: string): ReadonlyArray<DatabaseConnectionIssue> {
-    return this.#issues.get(instanceId) ?? []
+  issues(
+    member: DatabaseConnectionMember
+  ): ReadonlyArray<DatabaseConnectionIssue> {
+    return this.#issues.get(memberKey(member)) ?? []
+  }
+
+  readonly #members = new Map<
+    DatabaseConnectionMemberKind,
+    DatabaseConnectionMemberResolver
+  >()
+
+  /** How members of one kind are found, registered by the kind's driver. */
+  useMembers(
+    kind: DatabaseConnectionMemberKind,
+    resolve: DatabaseConnectionMemberResolver
+  ): void {
+    this.#members.set(kind, resolve)
+  }
+
+  /** The member's containers, or null when it doesn't exist. */
+  async resolve(
+    member: DatabaseConnectionMember
+  ): Promise<ReadonlyArray<DatabaseConnectionTarget> | null> {
+    const resolve = this.#members.get(member.kind)
+    if (!resolve) throw new Error(`No ${member.kind} members on this Relay`)
+    return resolve(member.id)
   }
 
   // Names are retained in Docker's old container snapshot even after a network
@@ -120,13 +176,20 @@ export class DatabaseConnections {
     snapshots: ReadonlyArray<DatabaseConnectionSnapshot>
   ): Promise<void> {
     await this.#recover(snapshots)
-    for (const snapshot of snapshots)
-      this.#saved.set(
-        snapshot.instanceId,
-        await Effect.runPromise(
-          this.state.listInstanceDatabaseConnections(snapshot.instanceId)
-        )
-      )
+    const connections = await Effect.runPromise(
+      this.state.listDatabaseConnections()
+    )
+    this.#saved.clear()
+    for (const connection of connections) {
+      const key = memberKey({
+        id: connection.memberId,
+        kind: connection.memberKind,
+      })
+      this.#saved.set(key, [
+        ...(this.#saved.get(key) ?? []),
+        { databaseId: connection.databaseId, relayId: connection.relayId },
+      ])
+    }
   }
 
   async #recover(
@@ -185,23 +248,30 @@ export class DatabaseConnections {
       recovered.push(
         ...connections.map((connection) => ({
           ...connection,
-          instanceId: snapshot.instanceId,
+          memberId: snapshot.instanceId,
+          memberKind: "instance" as const,
         }))
       )
     }
     await Effect.runPromise(this.state.recoverDatabaseConnections(recovered))
   }
 
+  /** A game server's connections, as the labels its container carries. */
   async labels(instanceId: string): Promise<Record<string, string>> {
     return databaseConnectionLabels(
-      await Effect.runPromise(
-        this.state.listInstanceDatabaseConnections(instanceId)
-      )
+      await this.list({ id: instanceId, kind: "instance" })
     )
   }
 
+  /** A member's saved connections, as SQLite has them now. */
+  async list(
+    member: DatabaseConnectionMember
+  ): Promise<ReadonlyArray<DatabaseReference>> {
+    return Effect.runPromise(this.state.listMemberDatabaseConnections(member))
+  }
+
   async set(
-    instanceId: string,
+    member: DatabaseConnectionMember,
     databaseId: string,
     connected: boolean,
     relayId = this.config.nodeId
@@ -209,61 +279,123 @@ export class DatabaseConnections {
     // Persist intent first so a failed Docker operation can be retried safely.
     await Effect.runPromise(
       this.state.setDatabaseConnection(
-        { instanceId, databaseId, relayId },
+        {
+          databaseId,
+          memberId: member.id,
+          memberKind: member.kind,
+          relayId,
+        },
         connected
       )
     )
-    const remaining = this.saved(instanceId).filter(
+    const remaining = this.saved(member).filter(
       (connection) =>
         connection.databaseId !== databaseId ||
         (!connected && connection.relayId !== relayId)
     )
     this.#saved.set(
-      instanceId,
+      memberKey(member),
       connected ? [...remaining, { databaseId, relayId }] : remaining
     )
   }
 
-  async forgetInstance(instanceId: string): Promise<void> {
-    await Effect.runPromise(
-      this.state.deleteInstanceDatabaseConnections(instanceId)
+  /**
+   * Adds Apps' connections to databases on this Relay, keeping any already
+   * saved, and says how many were new. Apps and databases deleted since
+   * Hearth saved them are left out, so repeating an import never brings back
+   * a connection deletion removed. Applies nothing: the Apps' running
+   * containers joined these when they were saved, and the rest join on
+   * their next deploy.
+   */
+  async importApps(
+    apps: ReadonlyArray<{ appId: string; databaseIds: ReadonlyArray<string> }>
+  ): Promise<number> {
+    const databases = new Map<string, Promise<boolean>>()
+    const exists = (member: DatabaseConnectionMember) =>
+      this.resolve(member).then((targets) => targets !== null)
+    const connections: Array<RelayStoredDatabaseConnection> = []
+    const imported: Array<string> = []
+    for (const { appId, databaseIds } of apps) {
+      if (!(await exists({ id: appId, kind: "app" }))) continue
+      imported.push(appId)
+      for (const databaseId of new Set(databaseIds)) {
+        let found = databases.get(databaseId)
+        if (!found) {
+          found = exists({ id: databaseId, kind: "database" })
+          databases.set(databaseId, found)
+        }
+        if (!(await found)) continue
+        connections.push({
+          databaseId,
+          memberId: appId,
+          memberKind: "app",
+          relayId: this.config.nodeId,
+        })
+      }
+    }
+    const added = await Effect.runPromise(
+      this.state.importDatabaseConnections(connections)
     )
-    this.#issues.delete(instanceId)
-    this.#saved.delete(instanceId)
+    for (const appId of imported) {
+      const member = { id: appId, kind: "app" as const }
+      this.#saved.set(memberKey(member), await this.list(member))
+    }
+    return added
+  }
+
+  async forgetMember(member: DatabaseConnectionMember): Promise<void> {
+    await Effect.runPromise(this.state.deleteMemberDatabaseConnections(member))
+    this.#issues.delete(memberKey(member))
+    this.#saved.delete(memberKey(member))
   }
 
   async forgetDatabase(databaseId: string): Promise<void> {
     await Effect.runPromise(
       this.state.deleteDatabaseConnections(this.config.nodeId, databaseId)
     )
-    for (const [instanceId, connections] of this.#saved)
+    // As a member, too.
+    const own = { id: databaseId, kind: "database" as const }
+    this.#issues.delete(memberKey(own))
+    this.#saved.delete(memberKey(own))
+    for (const [key, connections] of this.#saved)
       this.#saved.set(
-        instanceId,
+        key,
         connections.filter(
           (connection) =>
             connection.databaseId !== databaseId ||
             connection.relayId !== this.config.nodeId
         )
       )
-    for (const [instanceId, issues] of this.#issues)
+    for (const [key, issues] of this.#issues)
       this.#issues.set(
-        instanceId,
+        key,
         issues.filter((issue) => issue.databaseId !== databaseId)
       )
   }
 
+  /** Applies a member's saved connections to its containers as they are. */
+  async reconcileMember(
+    member: DatabaseConnectionMember
+  ): Promise<Array<DatabaseConnectionIssue>> {
+    const targets = await this.resolve(member)
+    return targets ? this.reconcile(member, targets) : []
+  }
+
+  /**
+   * Joins each of the member's containers to the networks of the databases
+   * it's connected to on this Relay, and takes it off any other database's.
+   * A database member never leaves its own network.
+   */
   async reconcile(
-    instanceId: string,
-    service: string
+    member: DatabaseConnectionMember,
+    targets: ReadonlyArray<DatabaseConnectionTarget>
   ): Promise<Array<DatabaseConnectionIssue>> {
     const issues: Array<DatabaseConnectionIssue> = []
     // Database attachments are optional to the container lifecycle. Report
     // discovery/inspection failures too, without discarding the saved intent.
     await recoverPromise(
       async () => {
-        const connections = await Effect.runPromise(
-          this.state.listInstanceDatabaseConnections(instanceId)
-        )
+        const connections = await this.list(member)
         const networks = await this.#networks(issues)
         const desired = new Set<string>()
         for (const connection of connections) {
@@ -279,27 +411,32 @@ export class DatabaseConnections {
           desired.add(network)
         }
         if (networks.size === 0) return
-        const container = await Effect.runPromise(
-          this.#docker.inspectContainer(service)
-        )
-        const attached = container.NetworkSettings?.Networks ?? {}
-        for (const [databaseId, network] of networks) {
-          const connect = desired.has(network)
-          if (connect === Object.hasOwn(attached, network)) continue
-          await recoverPromise(
-            () =>
-              Effect.runPromise(
-                connect
-                  ? this.#docker.connectNetwork(network, service)
-                  : this.#docker.disconnectNetwork(network, service)
-              ),
-            (cause) => {
-              issues.push({
-                databaseId,
-                message: `Could not ${connect ? "connect" : "disconnect"} database: ${cause instanceof Error ? cause.message : String(cause)}`,
-              })
-            }
+        for (const target of targets) {
+          const container = await Effect.runPromise(
+            this.#docker.inspectContainer(target.container)
           )
+          const attached = container.NetworkSettings?.Networks ?? {}
+          for (const [databaseId, network] of networks) {
+            if (member.kind === "database" && databaseId === member.id) continue
+            const connect = desired.has(network)
+            if (connect === Object.hasOwn(attached, network)) continue
+            await recoverPromise(
+              () =>
+                Effect.runPromise(
+                  connect
+                    ? this.#docker.connectNetwork(network, target.container, {
+                        aliases: target.alias ? [target.alias] : [],
+                      })
+                    : this.#docker.disconnectNetwork(network, target.container)
+                ),
+              (cause) => {
+                issues.push({
+                  databaseId,
+                  message: `Could not ${connect ? "connect" : "disconnect"} database: ${cause instanceof Error ? cause.message : String(cause)}`,
+                })
+              }
+            )
+          }
         }
       },
       (cause) => {
@@ -309,10 +446,10 @@ export class DatabaseConnections {
         })
       }
     )
-    this.#issues.set(instanceId, issues)
+    this.#issues.set(memberKey(member), issues)
     for (const issue of issues)
       console.warn(
-        `${service}: ${issue.databaseId ?? "databases"}: ${issue.message}`
+        `${member.kind} ${member.id.slice(0, 8)}: ${issue.databaseId ?? "databases"}: ${issue.message}`
       )
     return issues
   }

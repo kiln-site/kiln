@@ -1691,6 +1691,8 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "database.credentials.rotate":
       return "database.credentials.rotate"
     case "database.network.write":
+    // Hearth hands over the connections it kept for Apps.
+    case "database.network.import":
       return "database.network.write"
     case "database.dump.export":
       return "database.dump.export"
@@ -1725,7 +1727,6 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "app.deploy":
     case "app.action":
     case "app.limits.write":
-    case "app.network.write":
     case "app.network.routes.write":
       return "app.manage"
     case "app.terminal.attach":

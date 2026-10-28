@@ -153,17 +153,19 @@ export async function relayHarness(
           })),
       },
       lanes,
-      { allocations: docker.allocations, state }
+      { allocations: docker.allocations, state },
+      databaseConnections
     )
     lifecycle.useAppServiceContainers(async (appId, service) => {
       await apps.get(appId)
       return (await apps.serviceContainer(appId, service))?.name ?? null
     })
+    const databases = new DatabaseDriver(config, docker, databaseConnections)
     return {
       apps,
       bricks,
       databaseConnections,
-      databases: new DatabaseDriver(config, docker, databaseConnections),
+      databases,
       docker,
       lanes,
       lifecycle,

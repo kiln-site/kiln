@@ -514,7 +514,7 @@ export const updateManagedDatabaseNetwork = createServerFn({ method: "POST" })
         {
           connected: data.connected,
           databaseId: data.databaseId,
-          instanceId: data.instanceId,
+          member: { id: data.instanceId, kind: "instance" },
         },
         30_000,
         user.id

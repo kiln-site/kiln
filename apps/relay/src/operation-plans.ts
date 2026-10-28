@@ -10,6 +10,7 @@ import {
   type BackupTaskInput,
   type RelayControlOperation,
 } from "@workspace/contracts"
+import { Predicate } from "effect"
 
 import {
   exclusive,
@@ -387,14 +388,50 @@ export function controlRequestLocks(
       return database(databaseLocks)
     case "database.dump.export":
       return database(databaseReadLocks)
+    // A connection changes the database and what joins it: a game server's
+    // or App's running containers, or another database's.
     case "database.network.write": {
       const databaseId = stringField(payload, "databaseId")
-      const instanceReference = stringField(payload, "instanceId")
-      if (databaseId === null || instanceReference === null) return null
-      return withInstance(resolveInstance(instanceReference), (id) => [
-        ...databaseLocks(databaseId),
-        ...instanceLifecycleLocks(id),
-      ])
+      const member = Predicate.isObject(payload.member)
+        ? (payload.member as Readonly<Record<string, unknown>>)
+        : null
+      const memberId = member && stringField(member, "id")
+      if (databaseId === null || !member || memberId === null) return null
+      switch (member.kind) {
+        case "instance":
+          return withInstance(resolveInstance(memberId), (id) => [
+            ...databaseLocks(databaseId),
+            ...instanceLifecycleLocks(id),
+          ])
+        case "app":
+          return [...databaseLocks(databaseId), ...appLifecycleLocks(memberId)]
+        case "database":
+          return [...databaseLocks(databaseId), ...databaseLocks(memberId)]
+        default:
+          return null
+      }
+    }
+    // Only records connections, beside other work on the Apps and databases
+    // it names, so it waits for none of it; deleting any of them waits for
+    // it, and it for them.
+    case "database.network.import": {
+      const apps = Array.isArray(payload.apps) ? payload.apps : []
+      const appIds = new Set<string>()
+      const databaseIds = new Set<string>()
+      for (const app of apps) {
+        if (!Predicate.isObject(app)) continue
+        const entry = app as Readonly<Record<string, unknown>>
+        const appId = stringField(entry, "appId")
+        if (appId) appIds.add(appId)
+        if (!Array.isArray(entry.databaseIds)) continue
+        for (const id of entry.databaseIds) {
+          if (typeof id === "string" && id.length > 0) databaseIds.add(id)
+        }
+      }
+      return [
+        ...[...appIds].map((id) => shared(laneKeys.app(id))),
+        ...[...databaseIds].map((id) => shared(laneKeys.database(id))),
+      ]
     }
 
     case "app.create":
@@ -409,7 +446,6 @@ export function controlRequestLocks(
     case "app.limits.write":
     case "app.deploy":
     case "app.action":
-    case "app.network.write":
       return app(appLifecycleLocks)
     case "app.network.routes.write":
       return app((id) => [...appLifecycleLocks(id), exclusive(laneKeys.routes)])
