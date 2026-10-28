@@ -1,7 +1,12 @@
 # Hearth operation lanes (plan)
 
-Status: proposal. Nothing here is built yet. Estimates hold only once
-phase 0 has measured the pieces they depend on.
+Status: phases 0–3 are built: the shared lane kernel, Hearth's lanes and
+durable engine in MySQL, the operator view, invitation delivery, Tailscale
+network deletion, and DNS. Durable steps send Relay changes at most once,
+fenced to the Relay journal they were first sent to. Following a Relay
+job, the rest of the step adapter, arrives with its first caller in
+phase 4. Phase 4 is next; the [checklist](#migration-checklist) tracks the
+rest.
 
 ## Summary
 
@@ -234,9 +239,12 @@ What exists:
 - `traceparent` carries the trace into `relay.control.request` and its
   execution span.
 
-What the step adapter adds: it stores the Relay, the paired client, the
-command ID, the payload, and when it was first sent, **before** sending.
-After a lost reply it asks instead of guessing:
+What the step adapter adds
+([`relay-command.ts`](../apps/web/src/operations/relay-command.ts)): it
+stores the command ID, when it was first sent, and the journal it's meant
+for (the pairing and the Relay's journal ID) **before** sending, and the
+step's own input names the Relay and payload. After a lost reply it asks
+instead of guessing:
 
 | Relay says    | Hearth does                                                                             |
 | ------------- | --------------------------------------------------------------------------------------- |
@@ -254,15 +262,25 @@ Limits the adapter respects:
 - **Replies** are kept in memory for up to 20 minutes, at most 500 of them,
   and none over 64 KiB, and a Relay restart loses them all. A step must be
   able to rebuild its result some other way, or stop and ask for help.
-- **Re-pairing** a Relay under a new client doesn't turn an old command's
-  `unknown` into permission to send it again.
+- **Re-pairing** a Relay under a new client, or **rebuilding** its state,
+  starts a journal that never saw the old command, so its `unknown` means
+  nothing. Every send and lookup carries the journal it was first sent
+  to; another journal refuses it (`journal_changed`), and the step stops
+  for someone to check.
 - **A command isn't its job.** For backups, transfers, provisioning, and
   deployments, the command only hands work to a Relay worker. Success means
   the job was queued; the step then follows the job by its ID until it
   finishes.
 
-Each Relay command kind gets a written recovery recipe: how to find its
-job, how to rebuild its result, and when to stop and ask for help.
+Recovery differs by kind of command, so it's written per kind as each
+gets its first durable caller, not ahead of one:
+
+| Kind                                                                                                      | After a lost reply the Relay no longer has                                                                                                                                                                     | Interrupted                                                                                               | Status                      |
+| --------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | --------------------------- |
+| Changes whose reply is the result (renames, limits, network and route writes)                             | The caller's `recover` reads the resource back; without one, the step stops                                                                                                                                    | Stops for a person                                                                                        | Built                       |
+| Jobs under an ID Hearth chooses (`backup.task.enqueue`, `transfer.source.prepare`, `transfer.pull.start`) | Hearth stores the job's ID before queuing it and follows the job by that ID (`backup.task.get`, `transfer.*.get`). Queuing one again finds the same job, except a failed or cancelled pull, which starts again | Per job: packing fails; a pull resumes fetching; an install fails, since the target may be partly written | Phase 4, with transfers     |
+| Provisioning, deployments, deletions                                                                      | Read back what exists; a deletion whose resource is gone is done                                                                                                                                               | Stops for a person                                                                                        | Phase 5, with their callers |
+| Pairing, Kiln's services, Relay updates and restarts                                                      | Not sent from durable steps                                                                                                                                                                                    | —                                                                                                         | —                           |
 
 ### Relay reservations (phase 4)
 
@@ -270,9 +288,28 @@ Today each Relay call in a long operation takes its own turn, so a browser
 upload or a schedule can slip in between a move's steps. A reservation
 holds resources on a Relay for one phase of a Hearth operation:
 
+- **Only across Relays**: moving a game server, App, or database. Work of
+  several steps on one Relay, such as changing Bricks and reinstalling, or
+  wiping a world and starting, becomes one Relay operation with the locks
+  it needs instead, which the Relay's lanes already order.
 - **Owned**: tied to the paired Hearth, the operation, and the phase.
   Only that operation's commands, and the Relay jobs they start, run under
   it; everything else waits.
+- **Short and narrow**: it holds only the resource's own keys, never
+  Relay-wide ones such as `routes` or `hostFiles`, which its commands still
+  take briefly as they run, as any command does. A move copies while the
+  source keeps running, unreserved, and reserves only for the final sync
+  and handover.
+- **Refused, not queued, for people**: a change someone asks for on a
+  reserved resource (power, console input, a file write, an upload, SFTP)
+  is refused at once, saying it's being moved, and its page shows that.
+  Schedules and crash recovery wait their turn.
+- **Released only once its work is fenced**: letting go, by its operation
+  or by an operator, first refuses its commands from then on, then stops
+  and waits for those running and the jobs they started, and only then
+  lets others have its locks. Nothing releases a reservation on time
+  alone: a Hearth gone silent is taken over as its operations are, and
+  silence never proves its work stopped.
 - **Across Relays**: taken one Relay at a time, failing fast instead of
   waiting while holding another; a partial set is released before retrying.
   Nothing critical runs until all are held.
@@ -475,6 +512,12 @@ rule in the code.
 - **During a move.** From handover until the move finishes, changes to
   either server wait their turn behind it; before handover, they run as
   usual and the move re-checks after it gets its handover locks.
+- **Power and files are separate.** Stopping or starting a game server and
+  writing its files take different parts of its lock (`instance:<id>` shared,
+  with `/lifecycle` or `/files` exclusive), as on the Relay, so people can
+  edit config while a slow server stops. File writes replace a file whole,
+  so a start never reads half of one. Work that replaces the whole server
+  (restore, reinstall, deletion) takes it exclusively and waits for both.
 
 ## Measured in phase 0
 
@@ -540,7 +583,7 @@ Each item moves when its phase comes. Links point at where it lives today.
 - [x] Extract `packages/operations` from `apps/relay/src/operation-lanes.ts`; Relay unchanged; add normalization and diagnostics
 - [x] Share the SQL client between `Database` and the workflow layers
 - [x] Hearth lane broker on MySQL: durable intake, grants with dispatch, driver generations, single engine
-- [ ] Relay step adapter: stored command identity, `operation.get` recovery, recipes per command kind
+- [x] Relay step adapter: stored command identity and journal, `operation.get` recovery ([`relay-command.ts`](../apps/web/src/operations/relay-command.ts)); job recipes come with their first callers (phase 4 transfers, phase 5)
 - [x] `Operations.*` spans, links, stored timings, metrics
 - [x] Operation progress over realtime
 - [x] Operator view (admin): running, waiting, waiting-on, needs attention
