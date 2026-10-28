@@ -28,8 +28,8 @@ repository variables of the same name: `OTEL_EXPORTER_OTLP_ENDPOINT`,
 `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_TRACES_EXPORTER`, `OTEL_LOGS_EXPORTER`,
 `OTEL_METRICS_EXPORTER`, `OTEL_TRACES_SAMPLER_ARG`, and
 `OTEL_RESOURCE_ATTRIBUTES`. Any OTLP/HTTP backend works. Only the endpoint is
-required: traces and logs are then exported unless their `*_EXPORTER` variable
-is `none`, and metrics only when `OTEL_METRICS_EXPORTER` is `otlp`. Leave the
+required: traces, logs, and metrics are then exported unless their
+`*_EXPORTER` variable is `none`. Leave the
 endpoint unset to publish images without telemetry. No upstream telemetry
 destination is a fallback.
 

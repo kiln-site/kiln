@@ -427,8 +427,8 @@ holding locks.
 **Metrics**, with bounded labels (kind, outcome, step, provider; never IDs):
 operations admitted, completed, failed, cancelled; retries; recoveries;
 uncertain outcomes; queue depth; wait, run, and lock-hold histograms.
-Traces and logs export by default; metrics need `OTEL_METRICS_EXPORTER=otlp`
-and an endpoint.
+Published images export metrics with traces and logs; other builds need
+`OTEL_METRICS_EXPORTER=otlp` and an endpoint.
 
 **Logs** for each state change, retry decision, and uncertain outcome,
 with the operation ID; failures through the existing `error.fingerprint`.
