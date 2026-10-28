@@ -18,9 +18,7 @@ import {
   type FinalInstanceDeletion,
 } from "@/effect/backups"
 import { runAppEffect } from "@/effect/runtime"
-import { deleteInstanceDomainEffect } from "@/server/domains.server"
-import { deleteResourceWebHostnamesEffect } from "@/server/web-hostnames.server"
-import { finalizeInstanceDeletionEffect } from "@/server/instance-deletion-cleanup"
+import { cleanUpDeletedResourceEffect } from "@/server/resource-deletion-cleanup"
 import { timestampedBackupName } from "@/lib/backup-name"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { resolveAuthorizedBackupStorageSelection } from "@/lib/backup-storage-selection.server"
@@ -288,27 +286,16 @@ async function deleteInstanceResources(input: {
       throw relayDeletion.failure
     }
   }
-  // Only once the server is gone: its names stay held while it might
-  // survive. Deletes Cloudflare refuses are left to the DNS worker.
-  await runAppEffect(
-    "domains.instance.finalDelete",
-    deleteInstanceDomainEffect(input.relay.id, input.instanceId).pipe(
-      Effect.andThen(
-        deleteResourceWebHostnamesEffect({
-          relayId: input.relay.id,
-          resourceId: input.instanceId,
-          resourceType: "instance",
-        }).pipe(Effect.ignore)
-      )
-    )
-  )
   await runAppEffect(
     "backups.finalDelete.purgeRepositories",
     purgeInstanceBackupRepositoriesEffect(input.relay.id, input.instanceId)
   )
   await runAppEffect(
-    "instances.finalDelete.finalize",
-    finalizeInstanceDeletionEffect(input.relay.id, input.instanceId)
+    "instances.finalDelete.cleanUp",
+    cleanUpDeletedResourceEffect(
+      { id: input.instanceId, kind: "instance", relayId: input.relay.id },
+      input.requestedBy
+    )
   )
 }
 

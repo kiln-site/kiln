@@ -234,42 +234,17 @@ export const renameManagedDatabaseRecordEffect = Effect.fn(
   }
 })
 
+// Only the record. What else points at a deleted database goes with
+// cleanUpDeletedResourceEffect.
 export const deleteManagedDatabaseRecordEffect = Effect.fn(
   "managedDatabases.delete"
 )(function* (relayId: string, databaseId: string) {
   const database = yield* Database
-  const now = yield* Clock.currentTimeMillis
-  yield* database.transaction("managed_database_delete", (transaction) =>
-    Effect.gen(function* () {
-      yield* transaction.execute(
-        `DELETE FROM ${databaseTable("invitation")}
-          WHERE relay_id = ? AND database_id = ?
-            AND accepted_at IS NULL
-            AND revoked_at IS NULL
-            AND expires_at > ?`,
-        [relayId, databaseId, now]
-      )
-      yield* transaction.execute(
-        `DELETE FROM ${databaseTable("database")}
-          WHERE relay_id = ? AND database_id = ?`,
-        [relayId, databaseId]
-      )
-      yield* transaction.execute(
-        `DELETE FROM ${databaseTable("icon")}
-          WHERE subject_kind = 'database' AND relay_id = ? AND subject_id = ?`,
-        [relayId, databaseId]
-      )
-      yield* transaction.execute(
-        `DELETE FROM ${databaseTable("access_grant")}
-          WHERE relay_id = ? AND resource_type = 'database' AND resource_id = ?`,
-        [relayId, databaseId]
-      )
-      yield* transaction.execute(
-        `DELETE FROM ${databaseTable("permission_preset")}
-          WHERE relay_id = ? AND resource_type = 'database' AND resource_id = ?`,
-        [relayId, databaseId]
-      )
-    })
+  yield* database.execute(
+    "managed_database_delete",
+    `DELETE FROM ${databaseTable("database")}
+      WHERE relay_id = ? AND database_id = ?`,
+    [relayId, databaseId]
   )
 })
 

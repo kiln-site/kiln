@@ -17,7 +17,7 @@ import {
   saveDomainConnectionEffect,
 } from "@/effect/domains"
 import { insertWebHostnameEffect } from "@/effect/web-hostnames"
-import { finalizeInstanceDeletionEffect } from "@/server/instance-deletion-cleanup"
+import { cleanUpDeletedResourceEffect } from "@/server/resource-deletion-cleanup"
 
 import { encryptWithKeyring } from "../../keyring.mjs"
 
@@ -699,7 +699,10 @@ describeMysql("removing a game server's domain", () => {
         yield* deleteInstanceDomainEffect(relayId, instanceId)
         assert.deepEqual(yield* optOutKeys, [`${relayId}:${instanceId}`])
 
-        yield* finalizeInstanceDeletionEffect(relayId, instanceId)
+        yield* cleanUpDeletedResourceEffect(
+          { id: instanceId, kind: "instance", relayId },
+          "owner"
+        )
         assert.deepEqual(yield* optOutKeys, [])
       }).pipe(Effect.provide(disabledCache))
     )

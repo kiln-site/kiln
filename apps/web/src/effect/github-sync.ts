@@ -500,6 +500,19 @@ export const deleteGitHubSyncEffect = Effect.fn("github.sync.delete")(
   }
 )
 
+/** Removes the syncs into a deleted game server or App, with their runs. */
+export const deleteResourceGitHubSyncsEffect = Effect.fn(
+  "github.sync.deleteResource"
+)(function* (relayId: string, kind: "app" | "instance", resourceId: string) {
+  const database = yield* Database
+  yield* database.execute(
+    "github.sync.deleteResource",
+    `DELETE FROM ${databaseTable("github_sync")}
+      WHERE relay_id = ? AND resource_kind = ? AND resource_id = ?`,
+    [relayId, kind, resourceId]
+  )
+})
+
 export const setGitHubSyncStatusEffect = Effect.fn("github.sync.status")(
   function* (id: string, status: GitHubSyncStatus) {
     const database = yield* Database

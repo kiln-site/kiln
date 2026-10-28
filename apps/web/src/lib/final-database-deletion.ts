@@ -11,7 +11,6 @@ import {
   updateFinalDatabaseDeletionEffect,
   type FinalDatabaseDeletion,
 } from "@/effect/backups"
-import { deleteManagedDatabaseRecordEffect } from "@/effect/managed-databases"
 import { runAppEffect } from "@/effect/runtime"
 import { timestampedBackupName } from "@/lib/backup-name"
 import { requireRelayPermission } from "@/lib/access-control"
@@ -20,6 +19,7 @@ import { resolveAuthorizedBackupStorageSelection } from "@/lib/backup-storage-se
 import { publishBackupChange } from "@/lib/backup-realtime.server"
 import { relayRpc } from "@/lib/relay-connection"
 import type { PersistedRelay } from "@/lib/relay-registry"
+import { cleanUpDeletedResourceEffect } from "@/server/resource-deletion-cleanup"
 
 const deleteResultSchema = z.object({
   databaseId: z.string(),
@@ -68,7 +68,10 @@ export async function deleteDatabaseWithoutFinalBackup(input: {
   )
   await runAppEffect(
     "managedDatabases.directDelete",
-    deleteManagedDatabaseRecordEffect(input.relay.id, input.databaseId)
+    cleanUpDeletedResourceEffect(
+      { id: input.databaseId, kind: "database", relayId: input.relay.id },
+      input.requestedBy
+    )
   )
 }
 
@@ -214,7 +217,10 @@ async function deleteFinalizedDatabase(
   await deleteDatabaseOnRelay(relay, deletion.targetId, deletion.requestedBy)
   await runAppEffect(
     "managedDatabases.finalDelete",
-    deleteManagedDatabaseRecordEffect(relay.id, deletion.targetId)
+    cleanUpDeletedResourceEffect(
+      { id: deletion.targetId, kind: "database", relayId: relay.id },
+      deletion.requestedBy
+    )
   )
   await updateFinalDeletion(deletion, "completed", ["deleting"], null)
 }

@@ -56,6 +56,7 @@ import {
   updateAppConfigHandler,
 } from "@/server/app-access"
 import { requireEligibleResourceUser } from "@/server/auth"
+import { cleanUpDeletedResourceEffect } from "@/server/resource-deletion-cleanup"
 import { databaseRpc, requiredRelay } from "@/server/managed-database-access"
 
 const appInputSchema = z.strictObject({
@@ -468,16 +469,12 @@ export const deleteApp = createServerFn({ method: "POST" })
     // Its hostnames are marked for deletion before its record goes, so a
     // Hearth that stops in between leaves them to the DNS worker, or to
     // deleting it again, rather than to nothing.
-    const { deleteResourceWebHostnamesBestEffort } =
-      await import("@/server/web-hostname-access.server")
-    await deleteResourceWebHostnamesBestEffort({
-      relayId: relay.id,
-      resourceId: data.appId,
-      resourceType: "app",
-    })
     await runAppEffect(
-      "apps.record.delete",
-      deleteAppRecordEffect(relay.id, data.appId)
+      "apps.delete.cleanUp",
+      cleanUpDeletedResourceEffect(
+        { id: data.appId, kind: "app", relayId: relay.id },
+        user.id
+      )
     )
     publishAppChange(relay.id, true)
     // Its own volumes went with it.

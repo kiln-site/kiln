@@ -329,6 +329,87 @@ export const deleteSchedule = createServerFn({ method: "POST" })
     return { deleted: true, id: schedule.id }
   })
 
+/**
+ * Takes a deleted resource out of every schedule that targets it. A schedule
+ * left with no targets is deleted, since it can't run anything; the rest are
+ * saved at a new revision and sent to their Relays again.
+ */
+export async function removeDeletedResourceFromSchedules(
+  resource: Pick<ScheduleTarget, "id" | "kind" | "relayId">,
+  subject: string
+) {
+  const matches = (target: ScheduleTarget) =>
+    target.relayId === resource.relayId &&
+    target.kind === resource.kind &&
+    target.id === resource.id
+  // Someone saving the same schedule at once moves its revision; take the
+  // fresh one and try again.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const affected = (await loadSchedules()).filter((schedule) =>
+      schedule.targets.some(matches)
+    )
+    if (affected.length === 0) return
+    let conflicted = false
+    for (const schedule of affected) {
+      const relayIds = [
+        ...new Set(schedule.targets.map((target) => target.relayId)),
+      ]
+      const targets = schedule.targets.filter((target) => !matches(target))
+      const revision = schedule.revision + 1
+      if (targets.length === 0) {
+        const now = Date.now()
+        const [deleted] = await databasePool.execute<ResultSetHeader>(
+          `UPDATE ${databaseTable("schedule")}
+              SET enabled = FALSE, revision = ?, deleted_at = ?, updated_at = ?
+            WHERE id = ? AND revision = ? AND deleted_at IS NULL`,
+          [revision, now, now, schedule.id, schedule.revision]
+        )
+        if (deleted.affectedRows !== 1) {
+          conflicted = true
+          continue
+        }
+        await removeRelayProjections(schedule.id, revision, relayIds, subject)
+        publishScheduleCollectionChange(relayIds)
+        continue
+      }
+      const definition = scheduleDefinitionSchema.parse({
+        actions: schedule.actions,
+        continueOnFailure: schedule.continueOnFailure,
+        cron: schedule.cron,
+        enabled: schedule.enabled,
+        id: schedule.id,
+        name: schedule.name,
+        revision,
+        targets,
+        timezone: schedule.timezone,
+      })
+      const saved = await Effect.runPromise(
+        Effect.result(
+          promiseEffect(() => replaceSchedule(definition, schedule.revision))
+        )
+      )
+      if (Result.isFailure(saved)) {
+        if (!(saved.failure instanceof ScheduleRevisionConflictError)) {
+          throw saved.failure
+        }
+        conflicted = true
+        continue
+      }
+      await deploySchedule(definition, subject)
+      const remaining = new Set(targets.map((target) => target.relayId))
+      await removeRelayProjections(
+        definition.id,
+        revision,
+        relayIds.filter((relayId) => !remaining.has(relayId)),
+        subject
+      )
+      publishScheduleCollectionChange(relayIds)
+    }
+    if (!conflicted) return
+  }
+  throw new Error("Schedules kept changing while removing a deleted target")
+}
+
 export const runScheduleNow = createServerFn({ method: "POST" })
   .validator(scheduleIdSchema)
   .handler(async ({ data }) => {

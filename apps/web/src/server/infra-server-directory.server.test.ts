@@ -7,7 +7,7 @@ import type { DirectoryInstance } from "@/lib/instance-directory"
 import { registerPreparedInstanceEffect } from "@/lib/instance-registry"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { readInfraServerDirectory } from "@/server/infra-directory.server"
-import { finalizeInstanceDeletionEffect } from "@/server/instance-deletion-cleanup"
+import { cleanUpDeletedResourceEffect } from "@/server/resource-deletion-cleanup"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import {
   insertGrant,
@@ -142,7 +142,10 @@ describeMysql("Game Server directory", () => {
           "owner"
         )
         const admin = { ...user, isDevelopmentBypass: true }
-        yield* finalizeInstanceDeletionEffect(relayId, id).pipe(
+        yield* cleanUpDeletedResourceEffect(
+          { id, kind: "instance", relayId },
+          "owner"
+        ).pipe(
           Effect.provide(disabledCache)
         )
         const rows = yield* readInfraServerDirectory(admin).pipe(

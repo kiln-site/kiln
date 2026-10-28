@@ -22,7 +22,7 @@ import {
   grantHasPermission,
 } from "@/lib/permissions"
 
-interface DeletedInstanceGrantRow extends RowDataPacket {
+interface DeletedResourceGrantRow extends RowDataPacket {
   user_id: string
 }
 
@@ -355,45 +355,57 @@ export function allowedInstanceIdsForUser(
   )
 }
 
-export const deleteInstanceAccessEffect = Effect.fn("access.deleteInstance")(
-  function* (relayId: string, instanceId: string) {
+// Access to a deleted game server or database: its grants, presets, and
+// pending invitations, each grantee's authorization advanced so Relays drop
+// what they cached for it.
+export const deleteResourceAccessEffect = Effect.fn("access.deleteResource")(
+  function* (
+    relayId: string,
+    resourceType: "database" | "instance",
+    resourceId: string
+  ) {
     const database = yield* Database
+    const invitationColumn =
+      resourceType === "instance" ? "instance_id" : "database_id"
     const changed = yield* database.transaction(
-      "access.deleteInstance",
+      "access.deleteResource",
       (transaction) =>
         Effect.gen(function* () {
           const now = yield* Clock.currentTimeMillis
-          const grants = yield* transaction.queryRows<DeletedInstanceGrantRow>(
+          const grants = yield* transaction.queryRows<DeletedResourceGrantRow>(
             `SELECT user_id
              FROM ${databaseTable("access_grant")}
-            WHERE relay_id = ? AND resource_type = 'instance' AND resource_id = ?
+            WHERE relay_id = ? AND resource_type = ? AND resource_id = ?
             FOR UPDATE`,
-            [relayId, instanceId]
+            [relayId, resourceType, resourceId]
           )
           yield* transaction.execute(
             `DELETE FROM ${databaseTable("access_grant")}
-        WHERE relay_id = ? AND resource_type = 'instance' AND resource_id = ?`,
-            [relayId, instanceId]
+        WHERE relay_id = ? AND resource_type = ? AND resource_id = ?`,
+            [relayId, resourceType, resourceId]
           )
           yield* transaction.execute(
             `DELETE FROM ${databaseTable("invitation")}
-        WHERE relay_id = ? AND instance_id = ?
+        WHERE relay_id = ? AND ${invitationColumn} = ?
           AND accepted_at IS NULL
           AND revoked_at IS NULL
           AND expires_at > ?`,
-            [relayId, instanceId, now]
+            [relayId, resourceId, now]
           )
           yield* transaction.execute(
             `DELETE FROM ${databaseTable("permission_preset")}
-              WHERE relay_id = ? AND resource_type = 'instance' AND resource_id = ?`,
-            [relayId, instanceId]
+              WHERE relay_id = ? AND resource_type = ? AND resource_id = ?`,
+            [relayId, resourceType, resourceId]
           )
           for (const grant of grants) {
             yield* advanceAuthorizationRevisionEffect(transaction, {
               targets: [
                 {
                   relayId,
-                  scope: { instanceId, kind: "instance" },
+                  scope:
+                    resourceType === "instance"
+                      ? { instanceId: resourceId, kind: "instance" }
+                      : { kind: "subject_relay" },
                 },
               ],
               userId: grant.user_id,

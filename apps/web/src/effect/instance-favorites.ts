@@ -58,6 +58,19 @@ export const setInstanceFavoriteEffect = Effect.fn("instanceFavorites.set")(
   }
 )
 
+/** Unstars a deleted resource for everyone who starred it. */
+export const removeResourceFavoritesEffect = Effect.fn(
+  "instanceFavorites.removeResource"
+)(function* (favorite: InstanceFavorite) {
+  const database = yield* Database
+  yield* database.execute(
+    "instanceFavorites.removeResource",
+    `DELETE FROM ${databaseTable("instance_favorite")}
+      WHERE relay_id = ? AND resource_kind = ? AND resource_id = ?`,
+    [favorite.relayId, favorite.kind, favorite.id]
+  )
+})
+
 /**
  * Stars Kiln for someone becoming a platform administrator, in the
  * transaction that makes them one. They can unstar it like any favorite.
