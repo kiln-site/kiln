@@ -14,10 +14,13 @@ import {
   databaseConnectionConfig,
   databaseTableName,
 } from "@/lib/database-config"
+import { operationsTablePrefix } from "@/operations/engine"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertBackup, insertUser } from "@/test/seed"
 
 const kiln = { installationId: "installation-one", now: Date.now() }
+
+const operationsTable = `${operationsTablePrefix()}_dump_test`
 
 // More rows than the connection buffers, so an export is still reading
 // them when it's stopped.
@@ -139,12 +142,18 @@ describeMysql("Kiln database export", () => {
           (1, NULL, NULL, NULL, NULL, NULL, '2002-03-04 05:06:07.008')`)
           yield* insertUser("user-one", { name: "O'Brien\nSecond line" })
           yield* insertRecentKilnBackup
+          // Work the operations engine has in flight.
+          yield* sql.unsafe(
+            `CREATE TABLE ${operationsTable} (id INT PRIMARY KEY)`
+          )
+          yield* sql.unsafe(`INSERT INTO ${operationsTable} (id) VALUES (1)`)
           const exported = yield* rows
 
           const dump = (yield* Stream.runCollect(
             kilnDatabaseDump(new Date(Date.UTC(2026, 5, 1)))
           )).join("")
           assert.include(dump, "CREATE TABLE `dump_values`")
+          assert.notInclude(dump, operationsTable)
 
           // Whatever changed since, importing the dump puts it back.
           yield* sql.unsafe("DELETE FROM dump_values WHERE id = 1")
@@ -154,9 +163,18 @@ describeMysql("Kiln database export", () => {
           yield* sql.unsafe("INSERT INTO dump_values (id) VALUES (7)")
           yield* sql`UPDATE ${sql(databaseTableName("user"))}
           SET name = 'changed' WHERE id = 'user-one'`
+          yield* sql.unsafe(`INSERT INTO ${operationsTable} (id) VALUES (2)`)
           yield* importKilnDatabaseSql(dump, kiln)
 
           assert.deepStrictEqual(yield* rows, exported)
+          // The engine's work is left as it is now, not as it was.
+          assert.deepStrictEqual(
+            (yield* sql<{ id: number }>`
+              SELECT id FROM ${sql(operationsTable)} ORDER BY id`).map(
+              (row) => row.id
+            ),
+            [1, 2]
+          )
           const users = yield* sql<{ name: string }>`
           SELECT name FROM ${sql(databaseTableName("user"))}
           WHERE id = 'user-one'`
@@ -164,7 +182,13 @@ describeMysql("Kiln database export", () => {
         }).pipe(
           Effect.ensuring(
             Effect.flatMap(SqlClient.SqlClient, (sql) =>
-              sql.unsafe("DROP TABLE IF EXISTS dump_values")
+              sql
+                .unsafe("DROP TABLE IF EXISTS dump_values")
+                .pipe(
+                  Effect.andThen(
+                    sql.unsafe(`DROP TABLE IF EXISTS ${operationsTable}`)
+                  )
+                )
             ).pipe(Effect.orDie)
           )
         ),

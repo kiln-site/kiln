@@ -78,6 +78,7 @@
     "auth": "^1.7.7",
     "react-scan": "^0.5.7",
     "tailwindcss": "^4.3.3",
+    "tsx": "^4.23.15",
     "typescript": "^6",
     "vite": "catalog:",
     "vite-plus": "catalog:",
