@@ -339,7 +339,7 @@ Deleting a game server, App, or database first freezes it on its Relay
 with `resource.freeze`, naming the deletion and the resource's full ID. The
 freeze takes the resource whole, as replacing it does, so it waits for
 everything running on it. It records the freeze in SQLite, then quiets the
-resource so nothing writes to it but its final backup:
+resource so nothing Kiln starts writes to it but its final backup:
 
 - A game server is stopped.
 - An App is stopped, and its containers' restart policies are set to `no`

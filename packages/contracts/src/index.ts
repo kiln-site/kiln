@@ -276,8 +276,8 @@ export const relayDeleteDatabaseSchema = z
 
 /**
  * A game server, App, or database being deleted, by its full ID. Frozen,
- * nothing can write to it but its final backup, and the Relay refuses every
- * change to it but that backup and its deletion; unfrozen, it is a resource
+ * it's quiet (a database keeps running for its live dump), and the Relay
+ * refuses every change to it but its final backup and its deletion; unfrozen, it is a resource
  * like any other again.
  */
 export const relayResourceFreezeSchema = z

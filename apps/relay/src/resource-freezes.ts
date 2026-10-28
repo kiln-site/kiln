@@ -37,9 +37,10 @@ interface Frozen {
  * The resources frozen for their deletion, as the lanes see them. Read from
  * the Relay's state before any work is admitted, and kept in step with it.
  *
- * Freezing makes sure nothing writes to a resource but its final backup:
- * the lanes refuse every other change to it, and `apply` quiets what could
- * write on its own. What `apply` changes is recorded first, so letting it go
+ * Freezing makes sure nothing Kiln starts writes to a resource but its
+ * final backup: the lanes refuse every other change to it, and `apply`
+ * quiets what could write on its own. A database keeps running for its live
+ * dump, so what's connected to it can still write. What `apply` changes is recorded first, so letting it go
  * puts that back.
  */
 export class ResourceFreezes implements FrozenResources {
