@@ -8,6 +8,8 @@ import { Activity } from "effect/workflow"
 import { RelayUnavailableError } from "@/effect/errors"
 import { promiseEffect } from "@/effect/promise"
 import { relayJournal, relayRpc } from "@/lib/relay-connection"
+
+import { CurrentOperation } from "./durable"
 import { activeRelay } from "@/lib/relay-registry"
 
 /**
@@ -169,6 +171,10 @@ const settle = <A, R>(
 ): Effect.Effect<A, RelayCommandError, R> =>
   Effect.gen(function* () {
     const relay = yield* promiseEffect(() => activeRelay(options.relayId))
+    const operation = yield* CurrentOperation
+    const parent = operation
+      ? { operationId: operation.id, step: options.name }
+      : undefined
     const send = promiseEffect(() =>
       relayRpc(
         relay,
@@ -177,7 +183,7 @@ const settle = <A, R>(
         options.timeoutMs,
         undefined,
         undefined,
-        { journal: command.journal, operationId: command.id }
+        { journal: command.journal, operationId: command.id, parent }
       )
     )
     const lookup = promiseEffect(() =>

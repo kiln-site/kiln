@@ -1,5 +1,14 @@
 import type { LaneLock } from "@workspace/operations"
-import { Cause, Effect, Exit, Layer, Option, Schema, Tracer } from "effect"
+import {
+  Cause,
+  Context,
+  Effect,
+  Exit,
+  Layer,
+  Option,
+  Schema,
+  Tracer,
+} from "effect"
 import { Activity, Workflow, WorkflowEngine } from "effect/workflow"
 
 import { Database } from "@/effect/database"
@@ -46,6 +55,12 @@ export interface DurableOperation<
   >
 }
 
+/** The durable operation an effect runs as a step of, if any. */
+export const CurrentOperation = Context.Reference<{
+  readonly id: string
+  readonly kind: string
+} | null>("Operations/CurrentOperation", { defaultValue: () => null })
+
 // Every durable kind by `kind@version`, to start the workflow of one granted.
 const durableKinds = new Map<string, DurableOperation>()
 
@@ -89,6 +104,10 @@ export const durableOperation = <
           Effect.catch(() => Effect.succeed(null))
         )
         return yield* options.run(input, { id: operationId }).pipe(
+          Effect.provideService(CurrentOperation, {
+            id: operationId,
+            kind: options.kind,
+          }),
           Effect.withSpan("Operations.run", {
             attributes: {
               "operation.id": operationId,

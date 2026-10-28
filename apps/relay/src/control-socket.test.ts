@@ -1475,6 +1475,31 @@ describe("Relay control socket", () => {
     )
   })
 
+  it("audits the Hearth operation a change is a step of", async () => {
+    const relay = await startRelay()
+    const hearth = await relay.pair()
+    const { inbox, socket } = await relay.connect(hearth)
+    const parent = { operationId: randomUUID(), step: "stop-source" }
+
+    const stopId = sendRequest(
+      socket,
+      "instance.action",
+      { action: "stop", instanceId: "a".repeat(40) },
+      { operationId: randomUUID(), parent }
+    )
+    expect(await inbox.next()).toMatchObject({ replyTo: stopId })
+
+    await expect.poll(async () => (await relay.audits()).length).toBe(1)
+    expect((await relay.audits())[0]).toMatchObject({
+      details: {
+        hearthOperationId: parent.operationId,
+        hearthOperationStep: "stop-source",
+        operation: "instance.action",
+      },
+      requestId: stopId,
+    })
+  })
+
   it("reports operation failures without leaking overlong command output", async () => {
     const command = `docker network create ${"hearth-feature-".repeat(16)}`
     const failures: Record<string, string> = {
@@ -2199,6 +2224,7 @@ function sendRequest(
     readonly id?: string
     readonly journalId?: string
     readonly operationId?: string
+    readonly parent?: { readonly operationId: string; readonly step: string }
     readonly subject?: string
     readonly timeoutMs?: number
     readonly traceparent?: string

@@ -866,6 +866,14 @@ export const RelayControlRequestSchema = Schema.Struct({
   // its state was rebuilt isn't taken as one it never saw.
   journalId: Schema.optionalKey(Schema.String),
   operation: RelayControlOperationSchema,
+  // The Hearth operation a change is a step of, and which step, for the
+  // Relay's traces and audit. It names the work; it grants nothing.
+  parent: Schema.optionalKey(
+    Schema.Struct({
+      operationId: Schema.String.check(Schema.isMaxLength(128)),
+      step: Schema.String.check(Schema.isMaxLength(256)),
+    })
+  ),
   payload: Schema.Unknown,
   // Names a change across reconnects; `id` names only this one frame. The
   // Relay records each change it runs under its operation ID and answers

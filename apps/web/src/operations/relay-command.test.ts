@@ -20,6 +20,8 @@ import { testOperationsEngine } from "./test/engine"
 // Relay's state to be rebuilt, which starts a new journal.
 const relay = vi.hoisted(() => ({
   applied: [] as Array<string>,
+  // The Hearth operation and step each applied change named.
+  parents: [] as Array<unknown>,
   journalId: "journal-one" as string | null,
   journal: new Map<
     string,
@@ -48,7 +50,11 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
     _timeout?: number,
     _subject?: string,
     _signal?: AbortSignal,
-    frame: { operationId?: string; journal?: { journalId: string } } = {}
+    frame: {
+      operationId?: string
+      journal?: { journalId: string }
+      parent?: unknown
+    } = {}
   ) => {
     if (frame.journal && frame.journal.journalId !== relay.journalId) {
       throw RelayUnavailableError.make({
@@ -90,6 +96,7 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
     }
     const result = { started: payload.action }
     relay.applied.push(payload.instanceId ?? "")
+    relay.parents.push(frame.parent)
     relay.journal.set(id, { result, status: "succeeded" })
     if (next === "loses-reply-and-rebuilds") {
       relay.journal.clear()
@@ -109,6 +116,7 @@ afterAll(() => disposeAppRuntime())
 
 const resetRelay = () => {
   relay.applied.length = 0
+  relay.parents.length = 0
   relay.journal.clear()
   relay.journalId = "journal-one"
   relay.next = null
@@ -164,6 +172,10 @@ describeMysql("Relay commands from durable operations", () => {
           const done = yield* runToEnd("survival")
 
           assert.strictEqual(done?.state, "succeeded")
+          // The Relay knows which operation and step it ran it for.
+          assert.deepStrictEqual(relay.parents, [
+            { operationId: done?.id, step: "start" },
+          ])
           assert.strictEqual(relay.sent.length, 1)
         }).pipe(TestClock.withLive),
       30_000

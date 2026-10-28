@@ -737,6 +737,52 @@ effectIt.effect(
     )
 )
 
+effectIt.effect(
+  "reports a change unknown when the Relay that may have run it forgot it",
+  () =>
+    withRelayServer(
+      ({ disconnect, endpoint, journal, reconnected, requests }) =>
+        Effect.gen(function* () {
+          const lost = relayRpc(
+            endpoint,
+            "instance.action",
+            { action: "stop", instanceId: "e".repeat(40) },
+            30_000
+          )
+          yield* Effect.promise(() =>
+            advanceTimersUntil(
+              new Promise<void>((resolve) => {
+                const check = () =>
+                  requests.some(
+                    (r) =>
+                      r.type === "request" && r.operation === "instance.action"
+                  )
+                    ? resolve()
+                    : setImmediate(check)
+                check()
+              })
+            )
+          )
+          // The Relay's state is rebuilt before it answers: it would say it
+          // never saw the change, though it may have run it.
+          journal.id = "journal-b"
+          disconnect()
+          yield* Effect.promise(() => advanceTimersUntil(reconnected))
+
+          const forgotten = yield* promiseEffect(() =>
+            advanceTimersUntil(lost)
+          ).pipe(Effect.flip)
+          expect(forgotten).toMatchObject({ outcome: "unknown" })
+          expect(forgotten.message).not.toContain("It didn't run")
+        }),
+      (message) => {
+        if (message.operation === "instance.action") return noAnswer
+        if (message.operation === "operation.get") return { status: "unknown" }
+        return { eligible: true }
+      }
+    )
+)
+
 function nextRelayState(status: "connected" | "unreachable"): Promise<void> {
   return new Promise<void>((resolve) => {
     const unsubscribe = subscribeRealtimeChanges((event) => {
@@ -768,6 +814,8 @@ interface RelayServerFixture {
     port: number
     useTls: false
   }
+  /** The Relay's journal, which a rebuilt state replaces. */
+  journal: { id: string }
   /** Reports updates in later snapshots, and on the current connection. */
   reportUpdates: (updates: ReadonlyArray<RelaySystemUpdate>) => void
   requests: Array<RelayControlClientMessage>
@@ -839,6 +887,7 @@ async function setupRelayServer(
     resolveCancelled = resolve
   })
   const requests: Array<RelayControlClientMessage> = []
+  const journal = { id: "journal-a" }
   let activeSocket: WebSocket | null = null
   let connections = 0
   let updates: ReadonlyArray<RelaySystemUpdate> | undefined
@@ -870,6 +919,7 @@ async function setupRelayServer(
     authenticateRelaySocket(
       socket,
       relayKeys.privateKey,
+      journal,
       requests,
       snapshot,
       () => {
@@ -890,6 +940,7 @@ async function setupRelayServer(
       port: (server.address() as AddressInfo).port,
       useTls: false,
     },
+    journal,
     reportUpdates: (next) => {
       updates = next
       sequence += 1
@@ -917,6 +968,7 @@ async function setupRelayServer(
 function authenticateRelaySocket(
   socket: WebSocket,
   relayPrivateKey: ReturnType<typeof generateKeyPairSync>["privateKey"],
+  journal: { readonly id: string },
   requests: Array<RelayControlClientMessage>,
   snapshot: () => RelaySnapshot,
   onCancel: () => void,
@@ -949,7 +1001,7 @@ function authenticateRelaySocket(
           browserIssuerGeneration: 3,
           clientId: "hearth-client",
           features: [relayBrowserCapabilityV2Feature],
-          journalId: "journal-a",
+          journalId: journal.id,
           protocol: relayControlProtocol,
           relayBuild: "test",
           role: "full_access",
@@ -975,6 +1027,20 @@ function authenticateRelaySocket(
     }
     if (message.type !== "request") return
     requests.push(message)
+    if (message.journalId !== undefined && message.journalId !== journal.id) {
+      socket.send(
+        JSON.stringify({
+          code: "journal_changed",
+          id: randomUUID(),
+          message: "This Relay's state was rebuilt since that change was sent",
+          replyTo: message.id,
+          retryable: false,
+          type: "error",
+          v: 1,
+        })
+      )
+      return
+    }
     // Never answered, so requests can time out.
     if (message.operation === "relay.update.status") return
     const payload = answer ? answer(message) : { eligible: true }

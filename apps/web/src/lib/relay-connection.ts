@@ -162,6 +162,13 @@ export interface RelayRequestFrame {
    * `journal_changed` instead.
    */
   readonly journal?: RelayJournal | undefined
+  /**
+   * The Hearth operation it's a step of, and which step, for the Relay's
+   * traces and audit.
+   */
+  readonly parent?:
+    | { readonly operationId: string; readonly step: string }
+    | undefined
 }
 
 /**
@@ -350,7 +357,7 @@ async function relaySend(
       timeoutMs,
       subject,
       frame.operationId,
-      frame.journal
+      frame
     ),
     { signal }
   )
@@ -787,6 +794,13 @@ class RelayConnection {
    * Sets whether this Hearth holds the Relay paused, and tells it now. If it
    * can't be reached, connecting tells it.
    */
+  #currentJournal(): RelayJournal | undefined {
+    const clientId = this.#credentials?.clientId
+    return clientId && this.#journalId
+      ? { clientId, journalId: this.#journalId }
+      : undefined
+  }
+
   journal(): Effect.Effect<RelayJournal | null, RelayUnavailableError> {
     return this.#connectEffect().pipe(
       Effect.map(() => {
@@ -981,7 +995,7 @@ class RelayConnection {
     operationId: string | undefined = relayControlOperationChanges(operation)
       ? randomUUID()
       : undefined,
-    journal?: RelayJournal
+    { journal, parent }: Omit<RelayRequestFrame, "operationId"> = {}
   ) {
     return this.#connectEffect().pipe(
       Effect.andThen(relayTraceparent),
@@ -1028,6 +1042,7 @@ class RelayConnection {
           ...(journal ? { journalId: journal.journalId } : {}),
           operation,
           ...(operationId ? { operationId } : {}),
+          ...(parent ? { parent } : {}),
           payload,
           ...(subject ? { subject } : {}),
           timeoutMs: duration,
@@ -1037,7 +1052,13 @@ class RelayConnection {
         }
         const sentAt = Date.now()
         return Effect.callback<unknown, RelayUnavailableError>((resume) => {
-          this.#pending.set(id, { deadline, operationId, resume, sentAt })
+          this.#pending.set(id, {
+            deadline,
+            journal: journal ?? this.#currentJournal(),
+            operationId,
+            resume,
+            sentAt,
+          })
           socket.send(JSON.stringify(request), (cause) => {
             if (!cause) return
             this.#pending.delete(id)
@@ -1913,6 +1934,7 @@ class RelayConnection {
       if (pending.operationId && !this.#closed) {
         this.#unsettled.set(pending.operationId, {
           deadline: pending.deadline,
+          journal: pending.journal,
           resume: pending.resume,
         })
         continue
@@ -1971,13 +1993,26 @@ class RelayConnection {
         continue
       }
       if (this.#state.status !== "authenticated") continue
-      const lookup = await runAppEffect(
+      const lookup: Option.Option<
+        | typeof RelayOperationLookupSchema.Type
+        | { readonly status: "forgotten" }
+      > = await runAppEffect(
         "relay.operation.lookup",
-        this.request("operation.get", { operationId }, 10_000).pipe(
+        this.request("operation.get", { operationId }, 10_000, undefined, undefined, {
+          journal: change.journal,
+        }).pipe(
           Effect.flatMap(
             Schema.decodeUnknownEffect(RelayOperationLookupSchema)
           ),
-          Effect.option
+          Effect.map((outcome) => Option.some(outcome)),
+          // The Relay that ran it, or might have, has forgotten it.
+          Effect.catchIf(
+            (error) =>
+              error instanceof RelayUnavailableError &&
+              error.code === "journal_changed",
+            () => Effect.succeed(Option.some({ status: "forgotten" as const }))
+          ),
+          Effect.catch(() => Effect.succeed(Option.none<never>()))
         )
       )
       if (Option.isNone(lookup)) continue
@@ -2013,9 +2048,13 @@ class RelayConnection {
                 ? relayConnectionFailure(
                     "The connection to this Relay dropped before the change reached it. It didn't run."
                   )
-                : unknownOutcome(
-                    "This Relay restarted while running the change. Check the result before trying again."
-                  )
+                : outcome.status === "forgotten"
+                  ? unknownOutcome(
+                      "This Relay was paired again or its state rebuilt before it reported how the change went. Check the result before trying again."
+                    )
+                  : unknownOutcome(
+                      "This Relay restarted while running the change. Check the result before trying again."
+                    )
       )
     }
   }
@@ -2338,6 +2377,8 @@ function auditFailure(error: unknown): {
 interface PendingRequest {
   readonly deadline: number
   readonly operationId: string | undefined
+  // The journal a change went to, which a lookup of it must ask.
+  readonly journal: RelayJournal | undefined
   readonly resume: (
     effect: Effect.Effect<unknown, RelayUnavailableError>
   ) => void
@@ -2346,6 +2387,7 @@ interface PendingRequest {
 
 interface UnsettledChange {
   readonly deadline: number
+  readonly journal: RelayJournal | undefined
   readonly resume: PendingRequest["resume"]
 }
 

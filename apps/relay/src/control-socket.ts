@@ -928,6 +928,12 @@ function authenticateSocket(
         ...(request.operationId
           ? { "relay.operation_id": request.operationId }
           : {}),
+        ...(request.parent
+          ? {
+              "kiln.operation.id": request.parent.operationId,
+              "kiln.operation.step": request.parent.step,
+            }
+          : {}),
       },
       traceParentSpan(request.traceparent)
     )
@@ -1408,6 +1414,10 @@ function auditDetailsForRequest(
   result: unknown
 ): Readonly<Record<string, unknown>> {
   const details: Record<string, unknown> = { operation: request.operation }
+  if (request.parent) {
+    details.hearthOperationId = request.parent.operationId
+    details.hearthOperationStep = request.parent.step
+  }
   const permission = actionForRequest(request)
   if (permission) {
     details.permission = permission
