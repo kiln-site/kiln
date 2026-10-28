@@ -3,6 +3,7 @@ import {
   Duration,
   Effect,
   Exit,
+  Fiber,
   Layer,
   Schema,
   Scope,
@@ -49,12 +50,16 @@ const previous = globalThis as typeof globalThis & {
 }
 
 // An operation step in flight finishes rather than being cut off; shutdown
-// waits for it this long before leaving it to the next Hearth.
+// waits for it this long before leaving it to the next Hearth. Closing can't
+// be cut short, so it runs on its own fiber and is waited on.
 const SHUTDOWN_GRACE = Duration.seconds(5)
 
 const closeEngine = (scope: Scope.Closeable) =>
   Scope.close(scope, Exit.void).pipe(
-    Effect.timeoutOption(SHUTDOWN_GRACE),
+    Effect.forkDetach,
+    Effect.flatMap((closing) =>
+      Fiber.await(closing).pipe(Effect.timeoutOption(SHUTDOWN_GRACE))
+    ),
     Effect.asVoid
   )
 
