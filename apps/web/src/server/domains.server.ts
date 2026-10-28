@@ -22,6 +22,7 @@ import {
   anyDomainConnectionEffect,
   assignmentHostnames,
   beginInstanceDomainRenameEffect,
+  clearInstanceDomainErrorEffect,
   clearInstanceDomainRecordsEffect,
   deferInstanceDomainsEffect,
   finishInstanceDomainRenameEffect,
@@ -485,10 +486,12 @@ export const removeInstanceDomainEffect = Effect.fn("domains.instance.remove")(
 )
 
 // A failed provision or removal can leave records behind an assignment that
-// isn't active. Delete them before choosing a name again, so the new records
-// don't orphan them and they don't make the domain's own name look taken.
+// isn't active, some whose IDs Kiln never heard back. Delete them before
+// choosing a name again, so the new records don't orphan them and they don't
+// make the domain's own name look taken.
 const releaseRecordsEffect = Effect.fn("domains.instance.releaseRecords")(
   function* (assignment: InstanceDomainAssignment, apiToken: string) {
+    yield* deleteLostRecordsEffect(apiToken, assignment)
     const recordIds = assignmentRecordIds(assignment)
     if (recordIds.length === 0) return
     const zoneId = yield* assignmentZoneIdEffect(assignment)
@@ -505,11 +508,10 @@ const releaseRecordsEffect = Effect.fn("domains.instance.releaseRecords")(
 const deleteAssignmentRecordsEffect = Effect.fn(
   "domains.instance.deleteRecords"
 )(function* (assignment: InstanceDomainAssignment) {
-  const apiToken =
-    assignmentRecordIds(assignment).length > 0 || assignment.status !== "active"
-      ? yield* assignmentApiTokenEffect(assignment)
-      : null
-  yield* deleteManagedDomainAssignmentEffect(assignment, apiToken)
+  yield* deleteManagedDomainAssignmentEffect(
+    assignment,
+    yield* assignmentApiTokenEffect(assignment)
+  )
 })
 
 export const deleteManagedDomainAssignmentEffect = Effect.fn(
@@ -530,11 +532,9 @@ export const deleteManagedDomainAssignmentEffect = Effect.fn(
       { concurrency: "unbounded" }
     )
   }
-  // Ones an attempt made but never heard back about, while it wasn't
-  // active, carry Kiln's note instead of an ID.
-  if (apiToken && assignment.status !== "active") {
-    yield* deleteLostRecordsEffect(apiToken, assignment)
-  }
+  // Ones an attempt made but never heard back about carry the domain's
+  // marker instead of an ID.
+  if (apiToken) yield* deleteLostRecordsEffect(apiToken, assignment)
   yield* deleteInstanceDomainAssignmentEffect(assignment)
   yield* invalidateManagedDomainAddressesEffect
 })
@@ -543,27 +543,18 @@ export const removeRelayManagedDomainsEffect = Effect.fn(
   "domains.relay.removeAssignments"
 )(function* (relayId: string, removeCloudflareRecords: boolean) {
   const assignments = yield* loadRelayInstanceDomainAssignmentsEffect(relayId)
-  const withRecords = assignments.filter(
-    (assignment) => assignmentRecordIds(assignment).length > 0
-  )
-  if (removeCloudflareRecords && withRecords.length > 0) {
-    yield* Effect.all(
-      withRecords.map((assignment) =>
-        Effect.all([
-          assignmentApiTokenEffect(assignment),
-          assignmentZoneIdEffect(assignment),
-        ]).pipe(
-          Effect.flatMap(([apiToken, zoneId]) =>
-            Effect.all(
-              assignmentRecordIds(assignment).map((recordId) =>
-                deleteCloudflareRecordEffect(apiToken, zoneId, recordId)
-              ),
-              { concurrency: "unbounded" }
-            )
-          )
-        )
-      ),
-      { concurrency: "unbounded" }
+  if (removeCloudflareRecords) {
+    // Each as deleting it alone would, records Kiln never heard back about
+    // included, so none is forgotten while Cloudflare still has it.
+    yield* Effect.forEach(
+      assignments,
+      (assignment) =>
+        withInstanceDomainLock(
+          assignment.relayId,
+          assignment.instanceId,
+          deleteAssignmentRecordsEffect(assignment)
+        ),
+      { concurrency: 4, discard: true }
     )
   }
   yield* deleteRelayInstanceDomainAssignmentsEffect(relayId)
@@ -641,7 +632,9 @@ export const provisionInstanceDomainEffect = Effect.fn(
           managedDomainEndpointMatches(assignment, instance) &&
           domainSrvConfigurationMatches(assignment, srvConfiguration)
         ) {
-          return assignment !== listed
+          if (!assignment.lastError) return assignment !== listed
+          yield* clearInstanceDomainErrorEffect(assignment.id)
+          return true
         }
         const apiToken = yield* assignmentApiTokenEffect(assignment)
         yield* syncVanityEndpointEffect(apiToken, assignment, instance)
@@ -649,7 +642,6 @@ export const provisionInstanceDomainEffect = Effect.fn(
       }
       const apiToken = yield* assignmentApiTokenEffect(assignment)
       yield* releaseRecordsEffect(assignment, apiToken)
-      yield* deleteLostRecordsEffect(apiToken, assignment)
       const domain = yield* configuredDomainEffect(assignment.domain, true)
       const { blacklistPatterns } = yield* loadDomainConnectionCredentialEffect(
         domain.connectionId
@@ -963,7 +955,7 @@ const provisionVanityRecordsEffect = Effect.fn(
     apiToken,
     domain.zoneId,
     address,
-    instance.id
+    domainRecordComment(instance.id, id)
   ).pipe(
     Effect.tapError((error) =>
       recordInstanceDomainErrorEffect(id, error.message)
@@ -981,7 +973,7 @@ const provisionVanityRecordsEffect = Effect.fn(
             srvProtocol,
             address.type === "CNAME" ? publicHost : hostname
           ),
-          instance.id
+          domainRecordComment(instance.id, id)
         ).pipe(
           Effect.catch((error) =>
             deleteCloudflareRecordEffect(
@@ -1059,7 +1051,7 @@ const syncVanityEndpointEffect = Effect.fn("domains.instance.syncEndpoint")(
           zoneId,
           addressRecordId,
           address,
-          assignment.instanceId
+          domainRecordComment(assignment.instanceId, assignment.id)
         )
       } else {
         const replacement = yield* replaceCloudflareAddressRecordEffect(
@@ -1067,7 +1059,7 @@ const syncVanityEndpointEffect = Effect.fn("domains.instance.syncEndpoint")(
           zoneId,
           addressRecordId,
           address,
-          assignment.instanceId
+          domainRecordComment(assignment.instanceId, assignment.id)
         )
         yield* updateInstanceDomainAddressRecordEffect({
           addressRecordId: replacement.id,
@@ -1089,7 +1081,7 @@ const syncVanityEndpointEffect = Effect.fn("domains.instance.syncEndpoint")(
                 srvConfiguration.protocol,
                 srvTarget
               ),
-              assignment.instanceId
+              domainRecordComment(assignment.instanceId, assignment.id)
             )).id
           : (yield* createCloudflareSrvRecordEffect(
               apiToken,
@@ -1101,7 +1093,7 @@ const syncVanityEndpointEffect = Effect.fn("domains.instance.syncEndpoint")(
                 srvConfiguration.protocol,
                 srvTarget
               ),
-              assignment.instanceId
+              domainRecordComment(assignment.instanceId, assignment.id)
             )).id
         : null
       if (!srvConfiguration && assignment.srvRecordId) {
@@ -1219,7 +1211,7 @@ const renameVanityRecordsEffect = Effect.fn("domains.instance.renameRecords")(
       zoneId,
       addressRecordId,
       cloudflareAddressRecord(hostname, assignment.publicHost),
-      assignment.instanceId
+      domainRecordComment(assignment.instanceId, assignment.id)
     )
     if (
       assignment.supportsSrv &&
@@ -1240,7 +1232,7 @@ const renameVanityRecordsEffect = Effect.fn("domains.instance.renameRecords")(
             ? assignment.publicHost
             : hostname
         ),
-        assignment.instanceId
+        domainRecordComment(assignment.instanceId, assignment.id)
       )
     }
   }
@@ -1262,11 +1254,11 @@ const deleteLostRecordsEffect = Effect.fn("domains.instance.deleteLost")(
         ? [`_${assignment.srvService}._${assignment.srvProtocol}.${hostname}`]
         : []),
     ]
-    const comment = `Managed by Kiln for server ${assignment.instanceId}`
+    const marker = domainRecordMarker(assignment.id)
     for (const name of names) {
       const records = yield* listCloudflareRecordsEffect(apiToken, zoneId, name)
       for (const record of records) {
-        if (record.comment === comment) {
+        if (record.comment?.includes(marker)) {
           yield* deleteCloudflareRecordEffect(apiToken, zoneId, record.id)
         }
       }
@@ -1559,6 +1551,19 @@ async function loadWritableInstance(relayId: string, instanceId: string) {
 
 async function requiredRelay(id: string): Promise<PersistedRelay> {
   return activeRelay(id)
+}
+
+/**
+ * The note on a record Kiln makes for a game server domain. Its marker is the
+ * domain's own ID, which stays the same when the game server moves, so a
+ * record Kiln never heard back about is found again either way.
+ */
+function domainRecordComment(instanceId: string, assignmentId: string) {
+  return `Managed by Kiln for server ${instanceId} (${domainRecordMarker(assignmentId)})`
+}
+
+function domainRecordMarker(assignmentId: string) {
+  return `kiln:${assignmentId}`
 }
 
 function domainFailure(

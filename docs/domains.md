@@ -74,7 +74,7 @@ People with a game server's network permission can add, rename, and remove
 its vanity addresses on its Network page, under domains its owner or they
 themselves provide, or Kiln provides. A name they choose is refused the same
 way as a web route's. An app's generated address stays until it is deleted
-or the app is.
+or the app is; while a web route uses it, it goes with the route instead.
 
 ## Who holds a hostname
 
@@ -82,8 +82,12 @@ Every hostname Kiln keeps belongs to exactly one game server or app, in
 `hostname_claim`, whether a vanity address or a web route uses it. A name is
 claimed in the same transaction as the row that uses it, and let go in the
 one that stops using it, so a game server's address and another resource's
-web route can never share one, whichever comes first. Moving a game server
-moves its claims with it.
+web route can never share one, whichever comes first. A game server's own
+web route on its domain's name holds the name too, with no record of its
+own while the domain keeps one, and makes one when the domain is renamed or
+removed. Moving a game server moves its claims with it; a name both its
+domains and its web routes use moves with the domains, so a move has to take
+both or neither.
 
 A name stays claimed until its DNS records are gone. Removing a route or a
 domain marks it for deletion; renaming a game server's domain claims the new
@@ -101,9 +105,12 @@ long each time, up to an hour; saving it again or Sync tries it at once.
 
 Kiln can't make MySQL, the Relays, and Cloudflare change together. MySQL
 decides who holds a name; Cloudflare allows several records under one name,
-so it can't. A record Kiln made but never heard back about, as when Hearth
-stopped mid-request, still carries Kiln's comment naming its game server or
-app; the worker takes it up again instead of treating it as someone else's.
+so it can't. Every record Kiln makes carries a comment naming its game
+server or app, with a marker for the domain or hostname it belongs to that
+stays the same when the game server moves. A record Kiln made but never heard
+back about, as when Hearth stopped mid-request, is found by that marker: taken
+up again instead of treated as someone else's, and deleted with its
+hostname.
 
 ## Storage
 

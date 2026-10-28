@@ -169,6 +169,8 @@ export interface WebHostnameOverview {
   hostname: string
   id: string
   lastError: string | null
+  /** Used by a web route, so it goes with the route. */
+  routed: boolean
   relayId: string
   relayName: string
   resource:

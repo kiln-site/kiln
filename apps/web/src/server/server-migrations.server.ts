@@ -306,6 +306,19 @@ export async function startServerMigrationHandler(
   if (options.moveDomain || options.moveWebRoutes) {
     authorization.require("instance.network.write")
   }
+  // A name both its domains and its web routes use has one owner.
+  if (options.moveDomain !== options.moveWebRoutes) {
+    const { loadSharedHostnamesEffect } = await import("@/effect/web-hostnames")
+    const [shared] = await runAppEffect(
+      "serverMigrations.start.sharedHostnames",
+      loadSharedHostnamesEffect(relay.id, instance.id)
+    )
+    if (shared) {
+      throw new Error(
+        `A web route uses ${shared}, one of this server's domains. Move its domains and web routes together.`
+      )
+    }
+  }
   const problems = await runAppEffect(
     "serverMigrations.start.problems",
     relayTransferProblemsEffect({

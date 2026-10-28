@@ -12,6 +12,7 @@ import { betterAuthSecrets } from "@/lib/environment"
 import {
   beginInstanceDomainRenameEffect,
   insertInstanceDomainAssignmentEffect,
+  listDueInstanceDomainsEffect,
   reserveInstanceDomainAssignmentEffect,
   saveDomainConnectionEffect,
 } from "@/effect/domains"
@@ -178,6 +179,8 @@ function fakeCloudflare(
   const records = new Map<string, string>(
     (options.records ?? []).map((id) => [id, `${id}.kiln.site`])
   )
+  // What Kiln noted on each record, by ID.
+  const comments = new Map<string, string>()
   const refuseDelete = new Set<string>()
   const refuseUpdate = new Set<string>()
   let nextId = 0
@@ -202,13 +205,23 @@ function fakeCloudflare(
         return success(
           [...records]
             .filter(([, recordName]) => recordName === name)
-            .map(([id, recordName]) => ({ id, name: recordName, type: "A" }))
+            .map(([id, recordName]) => ({
+              comment: comments.get(id) ?? null,
+              id,
+              name: recordName,
+              type: "A",
+            }))
         )
       }
-      const create = (record: { name: string; type: string }) => {
+      const create = (record: {
+        comment?: string
+        name: string
+        type: string
+      }) => {
         nextId += 1
         const id = `record-${nextId}`
         records.set(id, record.name)
+        if (record.comment) comments.set(id, record.comment)
         return { id, name: record.name, type: record.type }
       }
       if (method === "POST" && url.pathname.endsWith("/batch")) {
@@ -240,6 +253,11 @@ function fakeCloudflare(
   )
   return {
     names: () => [...records.values()].sort(),
+    /** A record Kiln made but never heard back about. */
+    lost: (id: string, name: string, comment: string) => {
+      records.set(id, name)
+      comments.set(id, comment)
+    },
     records: () => [...records.keys()].sort(),
     refuseDelete,
     refuseUpdate,
@@ -468,6 +486,44 @@ describeMysql("renaming a game server's domain", () => {
 
 describeMysql("removing a game server's domain", () => {
   layer(TestDatabase)((it) => {
+    it.effect(
+      "deletes records a failed attempt never heard back about, whatever removes it",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          const dns = fakeCloudflare()
+          yield* insertCredential()
+          const failed = {
+            ...testAssignment(),
+            addressRecordId: null,
+            srvRecordId: null,
+            status: "error" as const,
+          }
+          const lose = (assignmentId: string, name: string) => {
+            const comment = `Managed by Kiln for server ${instanceId} (kiln:${assignmentId})`
+            dns.lost(`${assignmentId}-address`, `${name}.kiln.site`, comment)
+            dns.lost(
+              `${assignmentId}-srv`,
+              `_minecraft._tcp.${name}.kiln.site`,
+              comment
+            )
+          }
+          yield* insertAssignment(failed)
+          lose(failed.id, "play")
+
+          yield* removeInstanceDomainEffect(relayId, instanceId, failed.id)
+          assert.deepEqual(dns.names(), [])
+          assert.deepEqual(yield* claimedNames, [])
+
+          // Removing its Relay with its records too.
+          yield* insertAssignment(failed)
+          lose(failed.id, "play")
+          yield* removeRelayManagedDomainsEffect(relayId, true)
+          assert.deepEqual(dns.names(), [])
+          assert.deepEqual(yield* claimedNames, [])
+        }).pipe(Effect.provide(disabledCache))
+    )
+
     it.effect("keeps it removed when the game server starts again", () =>
       Effect.gen(function* () {
         yield* resetDatabase
@@ -714,6 +770,33 @@ describeMysql("a game server with several domains", () => {
           rows.map((row) => row.public_host),
           ["new-relay.example.com", "new-relay.example.com"]
         )
+      }).pipe(Effect.provide(disabledCache))
+    )
+
+    it.effect("retries a domain whose records didn't follow its endpoint", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        const dns = fakeCloudflare({
+          records: ["address-record", "srv-record"],
+        })
+        yield* insertCredential()
+        yield* insertAssignment(testAssignment())
+        const due = Effect.map(
+          listDueInstanceDomainsEffect(0),
+          (servers) => servers.length
+        )
+
+        dns.refuseDelete.add("srv-record")
+        yield* Effect.tryPromise(() =>
+          provisionInstanceDomain(testInstance(), relayId)
+        ).pipe(Effect.ignore)
+        assert.strictEqual(yield* due, 1)
+
+        dns.refuseDelete.clear()
+        yield* Effect.promise(() =>
+          provisionInstanceDomain(testInstance(), relayId)
+        )
+        assert.strictEqual(yield* due, 0)
       }).pipe(Effect.provide(disabledCache))
     )
 

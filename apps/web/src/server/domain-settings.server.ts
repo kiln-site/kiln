@@ -180,6 +180,7 @@ export async function getDomainSettingsHandler() {
         id: row.id,
         lastError: row.lastError,
         relayId: row.relayId,
+        routed: row.routed,
         relayName: resources.relayName(row.relayId),
         resource: resources.webResource(
           row.resourceType,
@@ -277,6 +278,7 @@ export async function getManualWebHostnamesHandler(): Promise<
         id: key,
         lastError: null,
         relayId: route.relayId,
+        routed: true,
         relayName: resources.relayName(route.relayId),
         resource: resources.webResource(
           isApp ? "app" : "instance",

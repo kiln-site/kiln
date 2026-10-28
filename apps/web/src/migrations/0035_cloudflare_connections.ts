@@ -71,6 +71,7 @@ export const cloudflareConnections: Migration = {
   \`zone_id\` char(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   \`vanity_domain\` varchar(253) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,
   \`is_generated\` tinyint(1) NOT NULL DEFAULT '0',
+  \`routed\` tinyint(1) NOT NULL DEFAULT '0',
   \`record_id\` char(32) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,
   \`record_type\` enum('A','AAAA','CNAME') DEFAULT NULL,
   \`target\` varchar(253) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,

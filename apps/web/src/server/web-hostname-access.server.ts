@@ -70,7 +70,8 @@ export async function getResourceWebHostnamesHandler(
     listResourceWebHostnamesEffect(data)
   )
   return rows.map((row) => ({
-    canRelease,
+    // Only an app's generated address no route uses.
+    canRelease: canRelease && row.generated && !row.routed,
     generated: row.generated,
     hostname: row.hostname,
     id: row.id,

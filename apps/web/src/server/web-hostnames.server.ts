@@ -41,6 +41,7 @@ import {
   markWebHostnamesRemovingEffect,
   reassignWebHostnamesEffect,
   reviveWebHostnamesEffect,
+  setWebHostnamesRoutedEffect,
   setWebHostnameStatusEffect,
   webHostnameCoveredEffect,
   type WebHostname,
@@ -394,6 +395,8 @@ export function saveWebRouteHostnamesEffect<A, E, R>(
           )
           .map((row) => row.id)
       )
+      // So an app's generated address isn't deleted while a route uses it.
+      yield* setWebHostnamesRoutedEffect(input.resource, [...wanted])
       return saved
     })
   )
@@ -646,7 +649,8 @@ const reconcileWebHostnameEffect = Effect.fn("webHostnames.reconcile")(
         row.hostname
       )
       // Made by an attempt that stopped before it saved the record's ID.
-      const lost = existing.find((found) => found.comment === comment)
+      const marker = webRecordMarker(row)
+      const lost = existing.find((found) => found.comment?.includes(marker))
       if (lost) {
         const adopted = yield* pointAt(lost.id, lost.type)
         if (adopted) {
@@ -695,34 +699,28 @@ const reconcileWebHostnameEffect = Effect.fn("webHostnames.reconcile")(
 )
 
 /**
- * Deletes a hostname's record and forgets it. One Cloudflare refuses stays
- * `removing`, with why, until a sync finishes it.
+ * Deletes a hostname's records and forgets it, letting go of its name. Also
+ * any record Kiln made for it but never heard back about, as when a create
+ * or a replacement lost its answer: those carry the hostname's marker. One
+ * Cloudflare refuses stays `removing`, with why, for the DNS worker. A
+ * game server's own address keeps its domain's record.
  */
 const removeWebHostnameEffect = Effect.fn("webHostnames.remove")(function* (
   row: WebHostname
 ) {
-  if (!row.recordId) {
-    // A record made by an attempt that never heard back still carries
-    // Kiln's note; one under a game server's own address is its domain's.
-    if (!(yield* webHostnameCoveredEffect(row))) {
-      yield* setWebHostnameStatusEffect(row.id, "removing", null)
-      yield* deleteLostWebRecordsEffect(row).pipe(
-        Effect.tapError((error) =>
-          setWebHostnameStatusEffect(
-            row.id,
-            "removing",
-            `Delete failed: ${error.message}`
-          ).pipe(Effect.ignore)
-        )
-      )
-    }
+  if (!row.recordId && (yield* webHostnameCoveredEffect(row))) {
     return yield* deleteWebHostnameEffect(row)
   }
   const recordId = row.recordId
   yield* setWebHostnameStatusEffect(row.id, "removing", null)
   yield* loadDomainConnectionCredentialEffect(row.connectionId).pipe(
     Effect.flatMap(({ apiToken }) =>
-      deleteCloudflareRecordEffect(apiToken, row.zoneId, recordId)
+      Effect.gen(function* () {
+        if (recordId) {
+          yield* deleteCloudflareRecordEffect(apiToken, row.zoneId, recordId)
+        }
+        yield* deleteLostWebRecordsEffect(apiToken, row)
+      })
     ),
     Effect.andThen(deleteWebHostnameEffect(row)),
     Effect.tapError((error) =>
@@ -741,7 +739,23 @@ const removeWebHostnameEffect = Effect.fn("webHostnames.remove")(function* (
  */
 export const releaseWebHostnameEffect = Effect.fn("webHostnames.release")(
   function* (row: WebHostname) {
-    yield* withCurrentRow(row, removeWebHostnameEffect)
+    yield* withCurrentRow(row, (current) =>
+      Effect.gen(function* () {
+        // A route's hostname follows its route; deleting it alone would let
+        // another resource take a name the route still serves.
+        if (!current.generated) {
+          return yield* DomainConfigurationError.make({
+            message: `Remove the web route to delete ${current.hostname}`,
+          })
+        }
+        if (current.routed) {
+          return yield* DomainConfigurationError.make({
+            message: `A web route uses ${current.hostname}. Remove it from the routes first.`,
+          })
+        }
+        yield* removeWebHostnameEffect(current)
+      })
+    )
   }
 )
 
@@ -879,28 +893,36 @@ export const resyncWebHostnamesEffect = Effect.fn("webHostnames.resync")(
   }
 )
 
-/** The note on a record Kiln makes for a web hostname, naming its owner. */
+/**
+ * The note on a record Kiln makes for a web hostname, naming its owner. Its
+ * marker is the hostname's own ID, which stays the same when its game
+ * server moves.
+ */
 function webRecordComment(row: WebHostname): string {
-  return row.resourceType === "app"
-    ? `Managed by Kiln for app ${row.resourceId}`
-    : `Managed by Kiln for a web route of server ${row.resourceId}`
+  const owner =
+    row.resourceType === "app"
+      ? `app ${row.resourceId}`
+      : `a web route of server ${row.resourceId}`
+  return `Managed by Kiln for ${owner} (${webRecordMarker(row)})`
+}
+
+function webRecordMarker(row: WebHostname): string {
+  return `kiln:${row.id}`
 }
 
 /** Deletes the records Kiln made for a hostname but never heard back about. */
 const deleteLostWebRecordsEffect = Effect.fnUntraced(function* (
+  apiToken: string,
   row: WebHostname
 ) {
-  const { apiToken } = yield* loadDomainConnectionCredentialEffect(
-    row.connectionId
-  )
-  const comment = webRecordComment(row)
+  const marker = webRecordMarker(row)
   const records = yield* listCloudflareRecordsEffect(
     apiToken,
     row.zoneId,
     row.hostname
   )
   for (const record of records) {
-    if (record.comment === comment) {
+    if (record.comment?.includes(marker)) {
       yield* deleteCloudflareRecordEffect(apiToken, row.zoneId, record.id)
     }
   }

@@ -16,7 +16,10 @@ import {
 
 import { encryptWithKeyring } from "../../keyring.mjs"
 
-import { beginInstanceDomainRenameEffect } from "@/effect/domains"
+import {
+  beginInstanceDomainRenameEffect,
+  reassignInstanceDomainsEffect,
+} from "@/effect/domains"
 import {
   insertWebHostnameEffect,
   listWebHostnamesEffect,
@@ -31,6 +34,7 @@ import {
   moveResourceWebHostnamesEffect,
   reconcileResourceWebHostnamesEffect,
   releaseWebHostnameEffect,
+  removeRelayWebHostnamesEffect,
   resyncWebHostnamesEffect,
   saveWebRouteHostnamesEffect,
 } from "./web-hostnames.server"
@@ -677,26 +681,22 @@ describeMysql("web route hostnames", () => {
       })
     )
 
-    it.effect("deletes a record made while its hostname was released", () =>
+    it.effect("deletes a record made while its Relay was removed", () =>
       Effect.gen(function* () {
         yield* seed
         const cloudflare = fakeCloudflare([ownerZone])
         yield* claim(owner, ["shop.owner.example"])
-        const [claimed] = yield* listWebHostnamesEffect()
-        assert.isDefined(claimed)
 
-        // Released while the sync is making its record.
+        // Its Relay is removed, keeping records, while the sync is making
+        // the record: nothing would delete it later.
         const creating = cloudflare.hold("POST")
         const syncing = yield* Effect.forkChild(
           reconcileResourceWebHostnamesEffect(app)
         )
         yield* creating.reached
-        const releasing = yield* Effect.forkChild(
-          releaseWebHostnameEffect(claimed!)
-        )
+        yield* removeRelayWebHostnamesEffect(relayId, false)
         creating.release()
         yield* Fiber.join(syncing)
-        yield* Fiber.join(releasing)
 
         assert.deepEqual(cloudflare.dns(), {})
         assert.deepEqual(yield* hostnameRows, {})
@@ -729,25 +729,150 @@ describeMysql("web route hostnames", () => {
     )
 
     it.effect(
-      "deletes a record whose answer was lost when its hostname goes",
+      "finds records whose answers were lost, also once their game server moved",
       () =>
         Effect.gen(function* () {
           yield* seed
           const cloudflare = fakeCloudflare([ownerZone])
-          // Made by an attempt that never heard back.
-          yield* claim(owner, ["shop.owner.example"])
-          cloudflare.seed({
-            comment: `Managed by Kiln for app ${appId}`,
-            content: "relay-one.relay.test",
-            name: "shop.owner.example",
-            type: "CNAME",
-            zoneId: ownerZone.id,
+          const lostRecord = (name: string, id: string, owner: string) =>
+            cloudflare.seed({
+              comment: `Managed by Kiln for ${owner} (kiln:${id})`,
+              content: "relay-one.relay.test",
+              name,
+              type: "CNAME",
+              zoneId: ownerZone.id,
+            })
+          // A create that never heard back, and then the game server moved.
+          yield* claim(owner, ["lost.owner.example"], server)
+          const [lost] = yield* listWebHostnamesEffect()
+          lostRecord(
+            "lost.owner.example",
+            lost!.id,
+            `a web route of server ${instanceId}`
+          )
+          const moved = {
+            relayId: otherRelayId,
+            resourceId: "c".repeat(40),
+            resourceType: "instance",
+          } as const
+          yield* moveResourceWebHostnamesEffect(server, moved)
+          assert.deepEqual(cloudflare.dns(), {
+            "lost.owner.example": "relay-two.relay.test",
           })
 
+          // A replacement that never heard back: the row still names the
+          // record it replaced.
+          yield* save(owner, ["swap.owner.example"])
+          const swap = (yield* listWebHostnamesEffect()).find(
+            (row) => row.hostname === "swap.owner.example"
+          )
+          cloudflare.remove("swap.owner.example")
+          lostRecord("swap.owner.example", swap!.id, `app ${appId}`)
+
           yield* save(owner, [])
+          yield* save(owner, [], moved)
 
           assert.deepEqual(cloudflare.dns(), {})
           assert.deepEqual(yield* claimedNames, [])
+        })
+    )
+
+    it.effect(
+      "only deletes an app's generated address while no route uses it",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          const cloudflare = fakeCloudflare([ownerZone, platformZone])
+          const address = yield* generateAppHostnameEffect(app)
+          yield* save(collaborator, ["shop.play.kiln.site", address!])
+          const rows = yield* listWebHostnamesEffect()
+          const release = (hostname: string) =>
+            releaseWebHostnameEffect(
+              rows.find((row) => row.hostname === hostname)!
+            )
+
+          assert.strictEqual(
+            (yield* Effect.flip(release(address!))).message,
+            `A web route uses ${address}. Remove it from the routes first.`
+          )
+          assert.strictEqual(
+            (yield* Effect.flip(release("shop.play.kiln.site"))).message,
+            "Remove the web route to delete shop.play.kiln.site"
+          )
+
+          yield* save(collaborator, ["shop.play.kiln.site"])
+          yield* release(address!)
+          assert.deepEqual(Object.keys(cloudflare.dns()), [
+            "shop.play.kiln.site",
+          ])
+        })
+    )
+
+    it.effect(
+      "moves a name a game server's domain and route share with whichever takes the domain",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          fakeCloudflare([platformZone])
+          yield* insertRows("instance_domain", {
+            id: "00000000-0000-4000-8000-000000000009",
+            relay_id: relayId,
+            instance_id: instanceId,
+            is_primary: true,
+            integration_id: "cloudflare",
+            vanity_label: "survival",
+            domain: "play.kiln.site",
+            public_host: "relay-one.relay.test",
+            public_port: 25_565,
+            supports_srv: false,
+            status: "active",
+            created_at: 0,
+            updated_at: 0,
+          })
+          yield* insertRows("hostname_claim", {
+            hostname: "survival.play.kiln.site",
+            relay_id: relayId,
+            resource_type: "instance",
+            resource_id: instanceId,
+            created_at: 0,
+          })
+          yield* save(
+            collaborator,
+            ["survival.play.kiln.site", "map.play.kiln.site"],
+            server
+          )
+          const moved = {
+            relayId: otherRelayId,
+            resourceId: "c".repeat(40),
+            resourceType: "instance",
+          } as const
+
+          // Routes alone leave the shared name with the domain.
+          yield* moveResourceWebHostnamesEffect(server, moved)
+          assert.deepEqual(yield* hostnameRows, {
+            "map.play.kiln.site": "active@relay-two",
+            "survival.play.kiln.site": "active@relay-one",
+          })
+          // The domain takes it along.
+          yield* reassignInstanceDomainsEffect(
+            { instanceId, relayId },
+            { instanceId: moved.resourceId, relayId: otherRelayId }
+          )
+          assert.deepEqual(
+            (yield* selectRows<{ hostname: string; relay_id: string }>(
+              "hostname_claim"
+            ))
+              .map((row) => `${row.hostname}@${row.relay_id.trim()}`)
+              .sort(),
+            [
+              "map.play.kiln.site@relay-two",
+              "survival.play.kiln.site@relay-two",
+            ]
+          )
+          assert.deepEqual(yield* hostnameRows, {
+            "map.play.kiln.site": "active@relay-two",
+            "survival.play.kiln.site": "active@relay-two",
+          })
         })
     )
 
@@ -795,8 +920,11 @@ describeMysql("web route hostnames", () => {
           // Hearth stopped after Cloudflare made a record but before it
           // heard back, and a delete failed in an outage.
           yield* claim(owner, ["new.owner.example"])
+          const lost = (yield* listWebHostnamesEffect()).find(
+            (row) => row.hostname === "new.owner.example"
+          )
           cloudflare.seed({
-            comment: `Managed by Kiln for app ${appId}`,
+            comment: `Managed by Kiln for app ${appId} (kiln:${lost!.id})`,
             content: "relay-one.relay.test",
             name: "new.owner.example",
             type: "CNAME",

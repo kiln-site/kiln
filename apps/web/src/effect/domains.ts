@@ -770,6 +770,21 @@ export const reassignInstanceDomainsEffect = Effect.fn(
           WHERE relay_id = ? AND instance_id = ? AND status <> 'removing'`,
         [to.relayId, to.instanceId, from.relayId, from.instanceId]
       )
+      const names = moving.flatMap((row) =>
+        assignmentHostnames(domainAssignment(row))
+      )
+      // A web route on one of these names holds it too; a name has one
+      // owner, so it moves along.
+      yield* database.execute(
+        "domains.assignments.reassign",
+        `UPDATE ${databaseTable("web_hostname")}
+            SET relay_id = ?, resource_id = ?, attempts = 0,
+                next_attempt_at = NULL
+          WHERE relay_id = ? AND resource_type = 'instance'
+            AND resource_id = ? AND status <> 'removing'
+            AND hostname IN (${names.map(() => "?").join(", ")})`,
+        [to.relayId, to.instanceId, from.relayId, from.instanceId, ...names]
+      )
       yield* moveHostnameClaimsEffect(
         {
           relayId: from.relayId,
@@ -781,7 +796,7 @@ export const reassignInstanceDomainsEffect = Effect.fn(
           resourceId: to.instanceId,
           resourceType: "instance",
         },
-        moving.flatMap((row) => assignmentHostnames(domainAssignment(row)))
+        names
       )
       return moving.length
     })
@@ -1282,6 +1297,22 @@ export const recordInstanceDomainSyncErrorEffect = Effect.fn(
   )
 })
 
+/** Clears the error of a domain found in step again. */
+export const clearInstanceDomainErrorEffect = Effect.fn(
+  "domains.assignment.clearError"
+)(function* (id: string) {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  yield* database.execute(
+    "domains.assignment.clearError",
+    `UPDATE ${databaseTable("instance_domain")}
+        SET last_error = NULL, attempts = 0, next_attempt_at = NULL,
+            updated_at = ?
+      WHERE id = ? AND status = 'active' AND next_domain IS NULL`,
+    [now, id]
+  )
+})
+
 export const recordInstanceDomainErrorEffect = Effect.fn(
   "domains.assignment.recordError"
 )(function* (id: string, message: string) {
@@ -1392,8 +1423,10 @@ export const deferInstanceDomainsEffect = Effect.fn(
   )
 })
 
+// An active domain with an error is one whose records didn't follow its
+// game server's endpoint.
 const assignmentNeedsWork = `(status IN ('pending', 'error', 'removing')
-  OR next_domain IS NOT NULL)`
+  OR next_domain IS NOT NULL OR last_error IS NOT NULL)`
 
 function publicConnection(
   row: DomainConnectionRow,

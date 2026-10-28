@@ -1192,7 +1192,9 @@ function deleteDisabledReason(row: DomainRow): string | null {
       : "Needs network access to this game server"
   }
   // A route's record follows the route; deleting it alone would come back.
-  if (!row.hostname.generated) return "Remove its web route to delete it"
+  if (!row.hostname.generated || row.hostname.routed) {
+    return "Remove its web route to delete it"
+  }
   return row.hostname.canManage ? null : "Needs access to manage this app"
 }
 

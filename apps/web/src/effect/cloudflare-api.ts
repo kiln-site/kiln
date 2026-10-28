@@ -180,13 +180,13 @@ export const createCloudflareAddressRecordEffect = Effect.fn(
   apiToken: string,
   zoneId: string,
   record: CloudflareAddressRecord,
-  instanceId: string
+  comment: string
 ) {
   return yield* mutateCloudflareRecord(
     apiToken,
     zoneId,
     undefined,
-    cloudflareAddressRecordBody(record, instanceId),
+    webAddressRecordBody(record, comment),
     "POST"
   )
 })
@@ -197,14 +197,14 @@ export const createCloudflareSrvRecordEffect = Effect.fn(
   apiToken: string,
   zoneId: string,
   record: CloudflareSrvRecord,
-  instanceId: string
+  comment: string
 ) {
   return yield* mutateCloudflareRecord(
     apiToken,
     zoneId,
     undefined,
     {
-      comment: `Managed by Kiln for server ${instanceId}`,
+      comment,
       data: {
         port: record.port,
         priority: record.priority,
@@ -226,13 +226,13 @@ export const updateCloudflareAddressRecordEffect = Effect.fn(
   zoneId: string,
   recordId: string,
   record: CloudflareAddressRecord,
-  instanceId: string
+  comment: string
 ) {
   return yield* mutateCloudflareRecord(
     apiToken,
     zoneId,
     recordId,
-    cloudflareAddressRecordBody(record, instanceId),
+    webAddressRecordBody(record, comment),
     "PATCH"
   )
 })
@@ -244,7 +244,7 @@ export const replaceCloudflareAddressRecordEffect = Effect.fn(
   zoneId: string,
   recordId: string,
   record: CloudflareAddressRecord,
-  instanceId: string
+  comment: string
 ) {
   const result = yield* requestCloudflareResult(
     apiToken,
@@ -253,7 +253,7 @@ export const replaceCloudflareAddressRecordEffect = Effect.fn(
     {
       body: JSON.stringify({
         deletes: [{ id: recordId }],
-        posts: [cloudflareAddressRecordBody(record, instanceId)],
+        posts: [webAddressRecordBody(record, comment)],
       }),
       headers: { "Content-Type": "application/json" },
       method: "POST",
@@ -275,14 +275,14 @@ export const updateCloudflareSrvRecordEffect = Effect.fn(
   zoneId: string,
   recordId: string,
   record: CloudflareSrvRecord,
-  instanceId: string
+  comment: string
 ) {
   return yield* mutateCloudflareRecord(
     apiToken,
     zoneId,
     recordId,
     {
-      comment: `Managed by Kiln for server ${instanceId}`,
+      comment,
       data: {
         port: record.port,
         priority: record.priority,
@@ -411,16 +411,6 @@ function mutateCloudflareRecord(
       headers: { "Content-Type": "application/json" },
       method,
     }
-  )
-}
-
-function cloudflareAddressRecordBody(
-  record: CloudflareAddressRecord,
-  instanceId: string
-) {
-  return webAddressRecordBody(
-    record,
-    `Managed by Kiln for server ${instanceId}`
   )
 }
 
