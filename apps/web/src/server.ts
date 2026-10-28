@@ -8,9 +8,13 @@ import { Effect, Schedule } from "effect"
 import { hearthStreamHandler } from "./app-server-handler"
 import { loadInstallationId } from "./effect/installation"
 import { migrateDatabase } from "./effect/migrations"
-import { disposeAppRuntime, reportAppError } from "./effect/runtime"
+import {
+  disposeAppRuntime,
+  forkAppEffect,
+  reportAppError,
+} from "./effect/runtime"
 import { forkPromise } from "./effect/promise"
-import { startAccessInvitationDelivery } from "./lib/access-invitation-delivery"
+import { resumeInvitationDelivery } from "./lib/access-invitation-delivery"
 import { scheduleBackupCopyProcessing } from "./lib/backup-copy"
 import { stopWarmCacheRefreshes } from "./lib/cache"
 import { wakePendingAuthorizationDelivery } from "./lib/authorization-delivery"
@@ -129,7 +133,14 @@ await Effect.runPromise(
   )
 )
 
-startAccessInvitationDelivery()
+// Invitations the old delivery worker hadn't sent go through the lanes.
+forkAppEffect(
+  "invitations.resumeDelivery",
+  resumeInvitationDelivery().pipe(
+    Effect.retry(Schedule.spaced("30 seconds")),
+    Effect.ignore
+  )
+)
 scheduleBackupCopyProcessing()
 scheduleInstancePostProvisionProcessing()
 scheduleTailscaleCleanupProcessing()

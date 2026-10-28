@@ -545,7 +545,7 @@ Each item moves when its phase comes. Links point at where it lives today.
 
 ### Phase 2: pilots
 
-- [ ] Invitation delivery ([`access-invitation-delivery.ts`](../apps/web/src/lib/access-invitation-delivery.ts))
+- [x] Invitation delivery ([`access-invitation-delivery.ts`](../apps/web/src/lib/access-invitation-delivery.ts)): `invitation.deliver` per scoped invitation; the minute sweep is gone. Exempt: platform invitations, whose link carries a token Hearth keeps only hashed, are sent once as they're made ([`access.ts`](../apps/web/src/server/access.ts))
 - [ ] Tailscale cleanup ([`tailscale-cleanup.ts`](../apps/web/src/effect/tailscale-cleanup.ts)), fanned out per deployment
 
 ### Phase 3: DNS ([`domains.ts`](../apps/web/src/server/domains.ts), [`web-hostnames.server.ts`](../apps/web/src/server/web-hostnames.server.ts))

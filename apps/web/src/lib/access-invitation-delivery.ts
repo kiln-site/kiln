@@ -1,117 +1,214 @@
 import { Resend } from "resend"
 import type { RowDataPacket } from "mysql2/promise"
-import { Effect, Schedule } from "effect"
+import { exclusive } from "@workspace/operations"
+import { Clock, Duration, Effect, Schema } from "effect"
+import { Activity, DurableClock } from "effect/workflow"
+
 import { AccessInvitationEmail } from "@/emails/access-invitation-email"
 import { kilnEmailAttachments } from "@/emails/kiln-email"
-import { databasePool } from "@/lib/database"
+import { Database } from "@/effect/database"
 import { databaseTable } from "@/lib/database-config"
 import { emailDeliveryConfig, kilnPublicUrl } from "@/lib/environment"
-import { forkAppEffect } from "@/effect/runtime"
+import { durableOperation, startDurableOperation } from "@/operations/durable"
 
-interface InvitationDelivery {
-  id: string
-  email: string
-  inviteUrl: string
-  inviterName: string
-  resourceName: string
-  scope: "relay" | "instance" | "database"
-}
+// Emails an invitation to a game server, database, or Relay, as an operation
+// on the invitation: sent once, tried again while it fails, and dropped once
+// the invitation is answered, revoked, or expired. Its link names the
+// invitation, never its token, so trying again later needs no secret.
+// Platform invitations link by token, which Hearth keeps only hashed, so
+// they're sent once as they're made (`server/access.ts`).
 
-/** Delivery links identify an invitation; they never establish identity or verification. */
-export async function deliverAccessInvitations(
-  invitations: Array<InvitationDelivery>
-) {
-  const delivery = emailDeliveryConfig()
-  for (const invitation of invitations) {
-    if (!delivery) {
-      await databasePool.execute(
-        `UPDATE ${databaseTable("invitation")} SET delivery_status = 'not_required' WHERE id = ?`,
-        [invitation.id]
-      )
-      continue
-    }
-    await Effect.runPromise(
-      Effect.tryPromise(async () => {
-        const resend = new Resend(delivery.apiKey)
-        const inviteUrl = new URL("/invite", kilnPublicUrl())
-        inviteUrl.searchParams.set("id", invitation.id)
-        const { error } = await resend.emails.send(
-          {
-            from: delivery.from,
-            to: [invitation.email],
-            subject: `You've been invited to ${invitation.resourceName}`,
-            react: AccessInvitationEmail({
-              ...invitation,
-              hearthUrl: kilnPublicUrl().toString(),
-              inviteUrl: inviteUrl.toString(),
-              role: "a member",
-            }),
-            attachments: kilnEmailAttachments,
-          },
-          { idempotencyKey: `access-invitation/${invitation.id}` }
-        )
-        if (error)
-          throw new Error(error.message || "Invitation delivery failed")
-        await databasePool.execute(
-          `UPDATE ${databaseTable("invitation")} SET delivery_status = 'sent', sent_at = ?, delivery_attempts = delivery_attempts + 1, delivery_last_error = NULL, delivery_next_attempt_at = NULL WHERE id = ?`,
-          [Date.now(), invitation.id]
-        )
-      }).pipe(
-        Effect.catch(() =>
-          Effect.tryPromise(async () => {
-            // A failed email cannot undo access or identity. Persist retry state without tokens/provider payloads.
-            await databasePool.execute(
-              `UPDATE ${databaseTable("invitation")} SET delivery_status = 'failed', delivery_attempts = delivery_attempts + 1, delivery_last_error = 'Email delivery failed', delivery_next_attempt_at = ? WHERE id = ?`,
-              [Date.now() + 5 * 60_000, invitation.id]
-            )
-          })
-        )
-      )
+const SendOutcome = Schema.Literals(["failed", "sent", "skipped"])
+type SendOutcome = typeof SendOutcome.Type
+
+// The wait after each failed attempt, then this last one until the
+// invitation expires, a week after it was made.
+const RETRY_AFTER: ReadonlyArray<Duration.Input> = [
+  "2 minutes",
+  "10 minutes",
+  "30 minutes",
+  "2 hours",
+]
+const RETRY_AFTER_LAST: Duration.Input = "6 hours"
+
+export const deliverInvitation = durableOperation({
+  input: Schema.Struct({ invitationId: Schema.String }),
+  kind: "invitation.deliver",
+  locks: ({ invitationId }) => [exclusive(`invitation:${invitationId}`)],
+  run: ({ invitationId }) =>
+    Effect.gen(function* () {
+      for (let attempt = 1; ; attempt++) {
+        const outcome = yield* Activity.make({
+          name: `send/${attempt}`,
+          success: SendOutcome,
+          execute: sendInvitation(invitationId),
+        })
+        if (outcome !== "failed") return outcome
+        yield* DurableClock.sleep({
+          duration: RETRY_AFTER[attempt - 1] ?? RETRY_AFTER_LAST,
+          name: `retry/${attempt}`,
+        })
+      }
+    }),
+  success: Schema.Literals(["sent", "skipped"]),
+  version: 1,
+})
+
+/** Starts delivering invitations just made, each once. */
+export const startInvitationDelivery = (
+  invitationIds: ReadonlyArray<string>,
+  actorId: string | null
+) =>
+  Effect.forEach(
+    invitationIds,
+    (invitationId) =>
+      startDurableOperation(
+        deliverInvitation,
+        { invitationId },
+        { actorId, idempotencyKey: invitationId }
+      ),
+    { discard: true }
+  )
+
+/**
+ * Starts delivering every invitation still waiting for its email, as after
+ * an upgrade from Hearth's old delivery worker. One already being delivered
+ * is the same operation.
+ */
+export const resumeInvitationDelivery = Effect.fn("Invitations.resumeDelivery")(
+  function* () {
+    const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
+    const rows = yield* database.queryRows<RowDataPacket & { id: string }>(
+      "invitations.pendingDelivery",
+      `SELECT id FROM ${databaseTable("invitation")}
+        WHERE access_type = 'scoped'
+          AND delivery_status IN ('pending', 'failed')
+          AND accepted_at IS NULL AND declined_at IS NULL
+          AND revoked_at IS NULL AND expires_at > ?
+        ORDER BY created_at`,
+      [now]
+    )
+    yield* startInvitationDelivery(
+      rows.map((row) => row.id),
+      null
     )
   }
+)
+
+interface InvitationRow extends RowDataPacket {
+  accepted_at: number | null
+  declined_at: number | null
+  delivery_status: string
+  email: string
+  expires_at: number
+  inviter_name: string | null
+  resource_name: string | null
+  resource_type: "database" | "instance" | "relay" | null
+  revoked_at: number | null
 }
 
-let started = false
-export function startAccessInvitationDelivery() {
-  if (started) return
-  started = true
-  forkAppEffect(
-    "access.invitation.delivery",
-    Effect.tryPromise(async () => {
-      if (!emailDeliveryConfig()) return
-      interface PendingRow extends RowDataPacket {
-        id: string
-        email: string
-        inviter_name: string
-        resource_name: string
-        resource_type: InvitationDelivery["scope"]
-      }
-      const now = Date.now()
-      const [rows] = await databasePool.query<Array<PendingRow>>(
-        `SELECT i.id, i.email, u.name AS inviter_name, COALESCE(s.display_name, s.source_name, d.name, r.name) AS resource_name, g.resource_type
-      FROM ${databaseTable("invitation")} i JOIN ${databaseTable("access_grant")} g ON g.id = i.access_id
-      JOIN ${databaseTable("relay")} r ON r.id = i.relay_id
-      LEFT JOIN ${databaseTable("user")} u ON u.id = i.invited_by
-      LEFT JOIN ${databaseTable("instance")} s ON s.relay_id = i.relay_id AND s.instance_id = i.instance_id
-      LEFT JOIN ${databaseTable("database")} d ON d.database_id = i.database_id
-      WHERE i.delivery_status IN ('pending', 'failed') AND (i.delivery_next_attempt_at IS NULL OR i.delivery_next_attempt_at <= ?)
-      AND i.accepted_at IS NULL AND i.declined_at IS NULL AND i.revoked_at IS NULL AND i.expires_at > ?
-      ORDER BY i.created_at LIMIT 25`,
-        [now, now]
-      )
-      await deliverAccessInvitations(
-        rows.map((row) => ({
-          id: row.id,
-          email: row.email,
-          inviterName: row.inviter_name ?? "Kiln",
-          resourceName: row.resource_name ?? "your resource",
-          scope: row.resource_type,
-          inviteUrl: "",
-        }))
-      )
-    }).pipe(
-      Effect.catch(() => Effect.void),
-      Effect.repeat(Schedule.spaced("1 minute"))
+// One attempt: what it should send is read again each time, so an
+// invitation answered or revoked meanwhile isn't sent.
+const sendInvitation = (
+  id: string
+): Effect.Effect<SendOutcome, never, Database> =>
+  Effect.gen(function* () {
+    const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
+    const [invitation] = yield* database.queryRows<InvitationRow>(
+      "invitations.delivery",
+      `SELECT i.email, i.delivery_status, i.accepted_at, i.declined_at,
+              i.revoked_at, i.expires_at, u.name AS inviter_name,
+              COALESCE(s.display_name, s.source_name, d.name, r.name) AS resource_name,
+              g.resource_type
+         FROM ${databaseTable("invitation")} i
+         JOIN ${databaseTable("access_grant")} g ON g.id = i.access_id
+         JOIN ${databaseTable("relay")} r ON r.id = i.relay_id
+         LEFT JOIN ${databaseTable("user")} u ON u.id = i.invited_by
+         LEFT JOIN ${databaseTable("instance")} s
+           ON s.relay_id = i.relay_id AND s.instance_id = i.instance_id
+         LEFT JOIN ${databaseTable("database")} d ON d.database_id = i.database_id
+        WHERE i.id = ?`,
+      [id]
     )
+    if (
+      !invitation?.resource_type ||
+      invitation.delivery_status === "sent" ||
+      invitation.accepted_at !== null ||
+      invitation.declined_at !== null ||
+      invitation.revoked_at !== null ||
+      Number(invitation.expires_at) <= now
+    ) {
+      return "skipped" as const
+    }
+    const delivery = emailDeliveryConfig()
+    if (!delivery) {
+      yield* database.execute(
+        "invitations.delivery",
+        `UPDATE ${databaseTable("invitation")}
+            SET delivery_status = 'not_required' WHERE id = ?`,
+        [id]
+      )
+      return "skipped" as const
+    }
+    const inviteUrl = new URL("/invite", kilnPublicUrl())
+    inviteUrl.searchParams.set("id", id)
+    const sent = yield* Effect.tryPromise(async () => {
+      const { error } = await new Resend(delivery.apiKey).emails.send(
+        {
+          attachments: kilnEmailAttachments,
+          from: delivery.from,
+          react: AccessInvitationEmail({
+            hearthUrl: kilnPublicUrl().toString(),
+            inviteUrl: inviteUrl.toString(),
+            inviterName: invitation.inviter_name ?? "Kiln",
+            resourceName: invitation.resource_name ?? "your resource",
+            role: "a member",
+            scope: invitation.resource_type!,
+          }),
+          subject: `You've been invited to ${invitation.resource_name ?? "your resource"}`,
+          to: [invitation.email],
+        },
+        // Resend sends one email per key, should an attempt whose answer
+        // was lost be tried again.
+        { idempotencyKey: `access-invitation/${id}` }
+      )
+      if (error) throw new Error(error.message || "Invitation delivery failed")
+    }).pipe(
+      Effect.as(true),
+      Effect.catch(() => Effect.succeed(false))
+    )
+    // A failed email cannot undo access or identity. Only whether it went is
+    // kept, not the provider's answer.
+    if (sent) {
+      yield* database.execute(
+        "invitations.delivery",
+        `UPDATE ${databaseTable("invitation")}
+            SET delivery_status = 'sent', sent_at = ?,
+                delivery_attempts = delivery_attempts + 1,
+                delivery_last_error = NULL, delivery_next_attempt_at = NULL
+          WHERE id = ?`,
+        [now, id]
+      )
+      return "sent" as const
+    }
+    yield* database.execute(
+      "invitations.delivery",
+      `UPDATE ${databaseTable("invitation")}
+          SET delivery_status = 'failed',
+              delivery_attempts = delivery_attempts + 1,
+              delivery_last_error = 'Email delivery failed',
+              delivery_next_attempt_at = NULL
+        WHERE id = ?`,
+      [id]
+    )
+    return "failed" as const
+  }).pipe(
+    // Reading or recording the attempt failed: it's tried again later,
+    // and Resend's key keeps a sent email from going twice.
+    Effect.catch(() => Effect.succeed("failed" as const)),
+    Effect.withSpan("Invitations.deliver", {
+      attributes: { "invitation.id": id },
+    })
   )
-}

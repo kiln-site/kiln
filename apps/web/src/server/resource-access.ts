@@ -364,22 +364,13 @@ export const inviteResourceAccess = createServerFn({ method: "POST" })
     )
     if (result.invitations.some((item) => !item.existing))
       publishNotificationChange([result.userId])
-    const { deliverAccessInvitations } =
+    const { startInvitationDelivery } =
       await import("@/lib/access-invitation-delivery")
-    await deliverAccessInvitations(
-      result.invitations.flatMap((item) =>
-        item.existing
-          ? []
-          : [
-              {
-                id: item.id,
-                email: data.email,
-                inviteUrl: item.inviteUrl,
-                resourceName: item.resourceName,
-                scope: item.scope.resourceType,
-                inviterName: user.name,
-              },
-            ]
+    await runAppEffect(
+      "access.invitation.deliver",
+      startInvitationDelivery(
+        result.invitations.flatMap((item) => (item.existing ? [] : [item.id])),
+        user.id
       )
     )
     return result
