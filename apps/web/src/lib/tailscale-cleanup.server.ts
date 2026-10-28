@@ -39,7 +39,7 @@ import { durableOperation, startDurableOperation } from "@/operations/durable"
 export const deleteTailscaleNetwork = durableOperation({
   input: Schema.Struct({ networkId: Schema.String }),
   kind: "tailscale.network.delete",
-  locks: ({ networkId }) => [exclusive(`tailscale-network:${networkId}`)],
+  locks: ({ networkId }) => [exclusive(`network:${networkId}`)],
   run: ({ networkId }) =>
     Effect.gen(function* () {
       for (let round = 1; ; round++) {
