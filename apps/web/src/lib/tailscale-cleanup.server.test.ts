@@ -190,7 +190,9 @@ describeMysql("Tailscale network deletion", () => {
           yield* deleteNetwork
 
           yield* assertFullyRemoved
-        })
+        }),
+      // The first to need the engine starts it.
+      30_000
     )
 
     for (const failing of ["Tailscale", "the Relay"] as const) {
