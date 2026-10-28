@@ -23,7 +23,16 @@ import {
   type RelayTransferSource,
 } from "@workspace/contracts"
 import { shared, type LaneLock } from "@workspace/operations"
-import { Duration, Effect, Schedule, Schema } from "effect"
+import {
+  Cause,
+  Duration,
+  Effect,
+  Exit,
+  Option,
+  Predicate,
+  Schedule,
+  Schema,
+} from "effect"
 import { Activity } from "effect/workflow"
 
 import { requireRelayPermissionEffect } from "@/lib/access-control"
@@ -253,21 +262,28 @@ export const followRelayTransfer = <R>(
           Effect.retry({ schedule: whileMySqlIsAway })
         )
       : Effect.succeed(false)
-    // Stopped for good, as when the person lost access, it has the Relays
-    // let go before it fails, waiting out one that's away, and follows a
-    // pull already installing to its end, so its locks outlast the writes.
-    const letGoOnFailure = <A, R2>(
-      step: Effect.Effect<A, RelayTransferError, R2>
-    ) =>
-      Effect.catch(step, (error) =>
-        stopOnRelays(request, transferId).pipe(
-          whileRelaysAreAway,
-          Effect.repeat({
-            schedule: PULL_POLL,
-            until: (pull) => !pull || finishedPhases.has(pull.state),
-          }),
-          Effect.ignore,
-          Effect.andThen(Effect.fail(error))
+    // Stopped for good, as when the person lost access, it fails as that
+    // step failed, which is kept; then, as a step of its own that a restart
+    // resumes, it has the Relays let go, waiting out one that's away and
+    // following a pull already installing to its end, so its locks outlast
+    // the writes.
+    const letGoOnFailure = <A, E, R2>(step: Effect.Effect<A, E, R2>) =>
+      step.pipe(
+        Effect.exit,
+        Effect.flatMap((exit) =>
+          Exit.isSuccess(exit) || Cause.hasInterruptsOnly(exit.cause)
+            ? exit
+            : Activity.make({
+                name: `${name}/let-go`,
+                execute: stopOnRelays(request, transferId).pipe(
+                  whileRelaysAreAway,
+                  Effect.repeat({
+                    schedule: PULL_POLL,
+                    until: (pull) => !pull || finishedPhases.has(pull.state),
+                  }),
+                  Effect.ignore
+                ),
+              }).pipe(Effect.andThen(exit))
         )
       )
     yield* Activity.make({
@@ -276,8 +292,8 @@ export const followRelayTransfer = <R>(
       execute: Effect.gen(function* () {
         if (yield* asked) return
         yield* beginRelayTransferEffect(yield* actor, request, transferId)
-      }).pipe(whileRelaysAreAway, letGoOnFailure),
-    })
+      }).pipe(whileRelaysAreAway),
+    }).pipe(letGoOnFailure)
     return yield* Activity.make({
       name: `${name}/follow`,
       success: RelayTransferStatusSchema,
@@ -305,7 +321,6 @@ export const followRelayTransfer = <R>(
         )
       }).pipe(
         whileRelaysAreAway,
-        letGoOnFailure,
         Effect.tap((status) =>
           operation
             ? reportProgress(operation.id, {
@@ -321,7 +336,7 @@ export const followRelayTransfer = <R>(
           until: (status) => finishedPhases.has(status.phase),
         })
       ),
-    })
+    }).pipe(letGoOnFailure)
   })
 
 const progressMessage: Record<RelayTransferStatus["phase"], string> = {
@@ -675,22 +690,36 @@ const stopOnRelays = Effect.fnUntraced(function* (
   const { activeRelay } = yield* Effect.promise(
     () => import("@/lib/relay-registry")
   )
+  // A Relay that's been removed has nothing left to stop; one that's away
+  // fails, to be asked again.
   const relayOf = (relayId: string) =>
     Effect.tryPromise({
       try: () => activeRelay(relayId),
       catch: (cause) =>
         new RelayTransferError({ message: errorMessage(cause), cause }),
-    })
+    }).pipe(
+      Effect.map(Option.some),
+      Effect.catchIf(
+        (error) => Predicate.isTagged(error.cause, "ResourceNotFoundError"),
+        () => Effect.succeed(Option.none<PersistedRelay>())
+      )
+    )
+  // Each side on its own: a source that's gone doesn't keep the
+  // destination from being followed.
   const destination = yield* relayOf(request.destination.relayId)
+  const pull = Option.isSome(destination)
+    ? yield* rpc(destination.value, "transfer.pull.cancel", null, {
+        rootId: request.destination.rootId,
+        transferId,
+      }).pipe(Effect.flatMap(decodeOptional(RelayTransferPullSchema)))
+    : null
   const source = yield* relayOf(request.source.relayId)
-  const pull = yield* rpc(destination, "transfer.pull.cancel", null, {
-    rootId: request.destination.rootId,
-    transferId,
-  }).pipe(Effect.flatMap(decodeOptional(RelayTransferPullSchema)))
-  yield* rpc(source, "transfer.source.discard", null, {
-    rootId: request.source.rootId,
-    transferId,
-  })
+  if (Option.isSome(source)) {
+    yield* rpc(source.value, "transfer.source.discard", null, {
+      rootId: request.source.rootId,
+      transferId,
+    })
+  }
   return pull
 })
 
