@@ -1,14 +1,5 @@
 import type { LaneLock } from "@workspace/operations"
-import {
-  Cause,
-  Effect,
-  Exit,
-  Layer,
-  Option,
-  Schedule,
-  Schema,
-  Tracer,
-} from "effect"
+import { Cause, Effect, Exit, Layer, Option, Schema, Tracer } from "effect"
 import { Activity, Workflow, WorkflowEngine } from "effect/workflow"
 
 import { Database } from "@/effect/database"
@@ -21,7 +12,7 @@ import {
   setGrantedHandler,
   startOperation,
 } from "./lanes"
-import { errorOf, outcomeOf } from "./run"
+import { errorOf, outcomeOf, whileMySqlIsAway } from "./run"
 
 /**
  * A kind of long change that survives a restart: admitted in line, then run
@@ -237,12 +228,8 @@ setGrantedHandler((ids) =>
 )
 
 // A step's own reads and writes of the operation are tried again until
-// MySQL answers: a step that failed for it would end the workflow for good
-// with the operation's locks still held.
-const whileMySqlIsAway = Schedule.min([
-  Schedule.exponential("1 second"),
-  Schedule.spaced("30 seconds"),
-])
+// MySQL answers (`whileMySqlIsAway`): a step that failed for it would end
+// the workflow for good with the operation's locks still held.
 
 const loadInput = <Input extends Schema.Top>(schema: Input, id: string) =>
   Effect.gen(function* () {

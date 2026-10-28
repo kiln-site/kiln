@@ -5,8 +5,11 @@ import { forkAppWorker } from "@/effect/runtime"
 import { dispatchDurableOperations } from "./durable"
 import { OperationsEngineService } from "./engine-service"
 import {
+  DRIVER_HEARTBEAT,
   forgetFinishedOperations,
+  heartbeatDriver,
   recoverOperations,
+  retireDriver,
   undispatchedOperations,
 } from "./lanes"
 
@@ -14,24 +17,25 @@ import {
 // commands whose outcomes might still be checked against them.
 const RETENTION = "30 days"
 
-// A durable operation is started when it's granted; one whose start failed,
-// as while MySQL or the engine was away, is started by this sweep.
-const DISPATCH_SWEEP = "15 seconds"
+// Every so often, the work of a Hearth whose heartbeat stopped is taken
+// over, and a durable operation granted but not started, as one whose start
+// failed while MySQL or the engine was away, is started.
+const SWEEP = "15 seconds"
 
 /**
  * Starts the operations engine with Hearth, so work a previous Hearth left
- * unfinished resumes without waiting for a request to need the engine:
- * operations that ended with the old Hearth free their locks, and durable
- * ones granted but never started start. Tries again while MySQL isn't
- * reachable yet, then keeps starting granted work and forgetting finished
- * operations past their retention.
+ * unfinished resumes without waiting for a request to need the engine. Tries
+ * again while MySQL isn't reachable yet. Then it keeps this Hearth's
+ * heartbeat, takes over the work of one whose heartbeat stopped, starts
+ * granted durable work, and forgets finished operations past their
+ * retention. Stopping, it says so, so the next Hearth needn't wait.
  */
 export function startOperationsEngine(): void {
   forkAppWorker(
     Effect.gen(function* () {
       const { engine } = yield* OperationsEngineService
       yield* engine
-      yield* recoverOperations()
+      yield* heartbeatDriver()
     }).pipe(
       Effect.tapError((error) =>
         Effect.logWarning("Operations engine not started yet", error)
@@ -40,10 +44,16 @@ export function startOperationsEngine(): void {
       Effect.andThen(
         Effect.all(
           [
-            undispatchedOperations().pipe(
+            heartbeatDriver().pipe(
+              Effect.ignore,
+              Effect.repeat(Schedule.spaced(DRIVER_HEARTBEAT))
+            ),
+            recoverOperations().pipe(
+              Effect.ignore,
+              Effect.andThen(undispatchedOperations()),
               Effect.flatMap(dispatchDurableOperations),
               Effect.ignore,
-              Effect.repeat(Schedule.spaced(DISPATCH_SWEEP))
+              Effect.repeat(Schedule.spaced(SWEEP))
             ),
             forgetFinishedOperations(RETENTION).pipe(
               Effect.ignore,
@@ -53,6 +63,7 @@ export function startOperationsEngine(): void {
           { concurrency: "unbounded", discard: true }
         )
       ),
+      Effect.ensuring(retireDriver().pipe(Effect.ignore)),
       Effect.ignore
     )
   )

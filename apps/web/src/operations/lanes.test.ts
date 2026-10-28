@@ -5,7 +5,10 @@ import { SqlClient } from "effect/sql"
 import { TestClock } from "effect/testing"
 import { afterAll } from "vite-plus/test"
 
+import { Database } from "@/effect/database"
+import { DatabaseError } from "@/effect/errors"
 import { disposeAppRuntime } from "@/effect/runtime"
+import { databaseTable } from "@/lib/database-config"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRows, selectRows } from "@/test/seed"
 
@@ -146,6 +149,95 @@ describeMysql("Hearth operation lanes", () => {
             "test.write:interrupted",
             "test.write:succeeded",
           ])
+        }).pipe(TestClock.withLive)
+    )
+
+    it.effect(
+      "frees a change's locks once MySQL answers, when it couldn't as the change ended",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          const database = yield* Database
+          // MySQL refuses the first try to end it, then is back.
+          let refusals = 1
+          const flaky = Database.of({
+            ...database,
+            transaction: (operation, run) =>
+              operation === "operations.finish" && refusals-- > 0
+                ? Effect.fail(new DatabaseError({ cause: "gone", operation }))
+                : database.transaction(operation, run),
+          })
+          const log: Array<string> = []
+          yield* runOperation(
+            write,
+            { key: "server-a", name: "first" },
+            Effect.sync(() => log.push("first"))
+          ).pipe(Effect.provideService(Database, flaky))
+
+          // What waits behind it runs, without a restart.
+          yield* runOperation(
+            write,
+            { key: "server-a", name: "second" },
+            Effect.sync(() => log.push("second"))
+          ).pipe(Effect.timeout("20 seconds"))
+
+          assert.deepStrictEqual(log, ["first", "second"])
+          assert.deepStrictEqual(yield* states, [
+            "test.write:succeeded",
+            "test.write:succeeded",
+          ])
+        }).pipe(TestClock.withLive),
+      30_000
+    )
+
+    it.effect(
+      "leaves the work of a Hearth whose heartbeat goes on, and takes it once it stops",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          const other = "00000000-0000-4000-8000-0000000000ee"
+          const now = Date.now()
+          yield* insertRows("operation_driver", {
+            heartbeat_at: now,
+            id: other,
+            started_at: now,
+          })
+          yield* insertRows("operation", {
+            admitted_at: now,
+            driver: other,
+            durable: false,
+            id: "00000000-0000-4000-8000-000000000002",
+            input_hash: "0".repeat(64),
+            kind: "test.write",
+            sequence: 1,
+            state: "running",
+            updated_at: now,
+            version: 1,
+          })
+          yield* insertRows("operation_lock", {
+            held: true,
+            lock_key: "server-a",
+            mode: "exclusive",
+            operation_id: "00000000-0000-4000-8000-000000000002",
+          })
+          yield* insertRows("operation_scheduler", { id: 1, next_sequence: 2 })
+
+          yield* recoverOperations()
+          assert.deepStrictEqual(yield* states, ["test.write:running"])
+
+          // Its heartbeat stops.
+          yield* SqlClient.SqlClient.pipe(
+            Effect.flatMap((sql) =>
+              sql.unsafe(
+                `UPDATE ${databaseTable("operation_driver")}
+                    SET heartbeat_at = ? WHERE id = ?`,
+                [now - 60_000, other]
+              )
+            )
+          )
+          yield* recoverOperations()
+          assert.deepStrictEqual(yield* states, ["test.write:interrupted"])
+          assert.deepStrictEqual(yield* selectRows("operation_lock"), [])
         }).pipe(TestClock.withLive)
     )
 

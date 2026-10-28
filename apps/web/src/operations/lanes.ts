@@ -86,6 +86,7 @@ export class OperationEndedError extends Schema.TaggedError<OperationEndedError>
 const operationTable = databaseTable("operation")
 const lockTable = databaseTable("operation_lock")
 const schedulerTable = databaseTable("operation_scheduler")
+const driverTable = databaseTable("operation_driver")
 
 const admitted = Metric.counter("hearth.operations.admitted", {
   description: "Operations admitted to Hearth's lanes",
@@ -338,15 +339,53 @@ export const finishOperation = Effect.fn("Operations.finish")(function* (
   yield* announce(decision.granted)
 })
 
+// How long a Hearth's heartbeat may be silent before its work is taken
+// from it, well past a slow query or a pause; and how often it beats.
+const DRIVER_LEASE_MS = 30_000
+export const DRIVER_HEARTBEAT = Duration.seconds(10)
+
+// The work of a Hearth whose heartbeat stopped: none in its table, or none
+// within the lease.
+const lapsedDriver = `(driver IS NULL OR NOT EXISTS (
+  SELECT 1 FROM ${driverTable} live
+   WHERE live.id = ${operationTable}.driver AND live.heartbeat_at >= ?))`
+
+/** Says this Hearth is running, so the work it drives stays its own. */
+export const heartbeatDriver = Effect.fnUntraced(function* () {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  yield* database.execute(
+    "operations.heartbeat",
+    `INSERT INTO ${driverTable} (id, started_at, heartbeat_at)
+     VALUES (?, ?, ?)
+     ON DUPLICATE KEY UPDATE heartbeat_at = VALUES(heartbeat_at)`,
+    [hearthDriverId, now, now]
+  )
+})
+
+/** Says this Hearth has stopped, so the next one need not wait out its lease. */
+export const retireDriver = Effect.fnUntraced(function* () {
+  const database = yield* Database
+  yield* database.execute(
+    "operations.retire",
+    `DELETE FROM ${driverTable} WHERE id = ?`,
+    [hearthDriverId]
+  )
+})
+
 /**
- * Takes over after a restart: an operation that ended with the request
- * running it, as any but a durable one does, is withdrawn if it was still
- * waiting and marked interrupted if it ran, freeing its locks. Durable
- * operations the previous Hearth was driving become this one's.
+ * Takes over the work of a Hearth whose heartbeat stopped, as one that
+ * crashed or was stopped: an operation that ended with the request running
+ * it, as any but a durable one does, is withdrawn if it was still waiting
+ * and marked interrupted if it ran, freeing its locks. Durable operations it
+ * was driving become this one's. A Hearth that is slow or cut off from MySQL
+ * but still beating keeps its work; once its lease lapses, what it does
+ * after can no longer end or grant anything.
  */
 export const recoverOperations = Effect.fn("Operations.recover")(function* () {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
+  const liveSince = now - DRIVER_LEASE_MS
   const decision = yield* database.transaction(
     "operations.recover",
     (transaction) =>
@@ -357,9 +396,9 @@ export const recoverOperations = Effect.fn("Operations.recover")(function* () {
         >(
           `SELECT id, state FROM ${operationTable}
             WHERE durable = 0 AND state IN ('waiting', 'granted', 'running')
-              AND (driver IS NULL OR driver <> ?)
+              AND (driver IS NULL OR driver <> ?) AND ${lapsedDriver}
             FOR UPDATE`,
-          [hearthDriverId]
+          [hearthDriverId, liveSince]
         )
         for (const orphan of orphans) {
           const ran = orphan.state !== "waiting"
@@ -370,8 +409,8 @@ export const recoverOperations = Effect.fn("Operations.recover")(function* () {
             [
               ran ? "interrupted" : "cancelled",
               ran
-                ? "Hearth restarted while it ran"
-                : "Hearth restarted before it started",
+                ? "The Hearth running it stopped"
+                : "The Hearth it waited in stopped",
               now,
               now,
               orphan.id,
@@ -384,8 +423,14 @@ export const recoverOperations = Effect.fn("Operations.recover")(function* () {
         }
         yield* transaction.execute(
           `UPDATE ${operationTable} SET driver = ?, updated_at = ?
-            WHERE durable = 1 AND state IN ('granted', 'running')`,
-          [hearthDriverId, now]
+            WHERE durable = 1 AND state IN ('granted', 'running')
+              AND (driver IS NULL OR driver <> ?) AND ${lapsedDriver}`,
+          [hearthDriverId, now, hearthDriverId, liveSince]
+        )
+        // Hearths long gone.
+        yield* transaction.execute(
+          `DELETE FROM ${driverTable} WHERE heartbeat_at < ?`,
+          [now - Duration.toMillis(Duration.days(1))]
         )
         return {
           granted: yield* grantWaiting(transaction, now),
@@ -483,6 +528,7 @@ export const operationTables: ReadonlyArray<string> = [
   operationTable,
   lockTable,
   schedulerTable,
+  driverTable,
 ]
 
 export interface OperationRecord {

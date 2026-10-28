@@ -1,5 +1,5 @@
 import type { LaneLock } from "@workspace/operations"
-import { Cause, Clock, Effect, Exit } from "effect"
+import { Cause, Clock, Effect, Exit, Schedule } from "effect"
 
 import {
   admitOperation,
@@ -46,33 +46,64 @@ export const runOperation = <Input, A, E, R>(
         locks: operation.locks(input),
         version: operation.version,
       })
-      const queuedAt = yield* Clock.currentTimeMillis
-      yield* restore(awaitGrant(id)).pipe(
-        Effect.onInterrupt(() =>
-          finishOperation(id, "cancelled", "Withdrawn before it started").pipe(
-            Effect.ignore
-          )
+      let started = false
+      const exit = yield* Effect.gen(function* () {
+        const queuedAt = yield* Clock.currentTimeMillis
+        yield* restore(awaitGrant(id))
+        const waitedMs = (yield* Clock.currentTimeMillis) - queuedAt
+        yield* startOperation(id)
+        started = true
+        // Once it runs it isn't cut off: a caller that gives up now gets
+        // its answer late instead of a change half made.
+        return yield* effect.pipe(
+          Effect.withSpan("Operations.run", {
+            attributes: {
+              "operation.id": id,
+              "operation.kind": operation.kind,
+              "operation.wait_ms": waitedMs,
+            },
+          })
         )
-      )
-      const waitedMs = (yield* Clock.currentTimeMillis) - queuedAt
-      yield* startOperation(id)
-      // Once it runs it isn't cut off: a caller that gives up now gets its
-      // answer late instead of a change half made.
-      const exit = yield* effect.pipe(
-        Effect.withSpan("Operations.run", {
-          attributes: {
-            "operation.id": id,
-            "operation.kind": operation.kind,
-            "operation.wait_ms": waitedMs,
-          },
-        }),
-        Effect.exit
-      )
-      yield* finishOperation(id, outcomeOf(exit), errorOf(exit)).pipe(
-        Effect.ignore
-      )
+      }).pipe(Effect.exit)
+      yield* started
+        ? finishReliably(id, outcomeOf(exit), errorOf(exit))
+        : finishReliably(
+            id,
+            "cancelled",
+            Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)
+              ? errorOf(exit)
+              : "Withdrawn before it started"
+          )
       return yield* exit
     })
+  )
+
+/**
+ * Tries a write of the lanes' own again until MySQL answers, backing off to
+ * every 30 seconds.
+ */
+export const whileMySqlIsAway = Schedule.min([
+  Schedule.exponential("1 second"),
+  Schedule.spaced("30 seconds"),
+])
+
+// Ends an operation and releases its locks. Should MySQL refuse, the caller
+// isn't kept waiting: it's tried again in the background until it answers,
+// so a failed write can't leave the locks held while this Hearth runs.
+const finishReliably = (
+  id: string,
+  outcome: OperationOutcome,
+  error?: string
+) =>
+  finishOperation(id, outcome, error).pipe(
+    Effect.catch(() =>
+      finishOperation(id, outcome, error).pipe(
+        Effect.retry({ schedule: whileMySqlIsAway }),
+        Effect.ignore,
+        Effect.forkDetach,
+        Effect.asVoid
+      )
+    )
   )
 
 export function outcomeOf(exit: Exit.Exit<unknown, unknown>): OperationOutcome {

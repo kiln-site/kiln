@@ -19,6 +19,7 @@ export const operations: Migration = {
     const operation = databaseTableName("operation")
     const lock = databaseTableName("operation_lock")
     const scheduler = databaseTableName("operation_scheduler")
+    const driver = databaseTableName("operation_driver")
     yield* sql.unsafe(`CREATE TABLE IF NOT EXISTS \`${operation}\` (
   \`id\` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   \`kind\` varchar(100) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -64,5 +65,13 @@ export const operations: Migration = {
     yield* sql.unsafe(
       `INSERT IGNORE INTO \`${scheduler}\` (id, next_sequence) VALUES (1, 1)`
     )
+    // Each running Hearth's heartbeat: work is taken from one only once its
+    // heartbeat has stopped.
+    yield* sql.unsafe(`CREATE TABLE IF NOT EXISTS \`${driver}\` (
+  \`id\` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  \`started_at\` bigint unsigned NOT NULL,
+  \`heartbeat_at\` bigint unsigned NOT NULL,
+  PRIMARY KEY (\`id\`)
+)`)
   }),
 }
