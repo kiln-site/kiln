@@ -2,6 +2,7 @@ import type { RowDataPacket } from "mysql2/promise"
 import { Clock, Effect } from "effect"
 
 import { Database } from "@/effect/database"
+import { DomainConfigurationError } from "@/effect/errors"
 import {
   claimHostnamesEffect,
   moveHostnameClaimsEffect,
@@ -153,6 +154,20 @@ export const insertWebHostnameEffect = Effect.fn("webHostnames.insert")(
     const now = yield* Clock.currentTimeMillis
     yield* database.transaction("webHostnames.insert", () =>
       Effect.gen(function* () {
+        // A connection removed since its zone was resolved takes no new
+        // hostnames; removing one waits for this insert, then deletes it.
+        const connections = yield* database.queryRows<RowDataPacket>(
+          "webHostnames.insert",
+          `SELECT 1 FROM ${databaseTable("domain_integration")}
+            WHERE id = ?
+            FOR SHARE`,
+          [input.connectionId]
+        )
+        if (connections.length === 0) {
+          return yield* DomainConfigurationError.make({
+            message: "The Cloudflare connection for this hostname was removed",
+          })
+        }
         yield* claimHostnamesEffect(input, [input.hostname])
         yield* database.execute(
           "webHostnames.insert",
@@ -244,6 +259,67 @@ export const markWebHostnamesRemovingEffect = Effect.fn(
     [now, ...ids]
   )
 })
+
+/**
+ * Whether a game server domain of the hostname's own game server names it,
+ * now or as the name a rename is moving to. Its record is that domain's, so
+ * the web hostname keeps none of its own meanwhile.
+ */
+export const webHostnameCoveredEffect = Effect.fn("webHostnames.covered")(
+  function* (row: WebHostname) {
+    if (row.resourceType !== "instance") return false
+    const database = yield* Database
+    const rows = yield* database.queryRows<RowDataPacket>(
+      "webHostnames.covered",
+      `SELECT 1 FROM ${databaseTable("instance_domain")}
+        WHERE relay_id = ? AND instance_id = ?
+          AND (CONCAT(vanity_label, '.', domain) = ?
+            OR CONCAT(next_vanity_label, '.', next_domain) = ?)
+        LIMIT 1`,
+      [row.relayId, row.resourceId, row.hostname, row.hostname]
+    )
+    return rows.length > 0
+  }
+)
+
+/** Marks a hostname whose game server domain keeps its record as in step. */
+export const markWebHostnameCoveredEffect = Effect.fn(
+  "webHostnames.markCovered"
+)(function* (id: string) {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  yield* database.execute(
+    "webHostnames.markCovered",
+    `UPDATE ${databaseTable("web_hostname")}
+          SET status = 'active', record_id = NULL, record_type = NULL,
+              target = NULL, last_error = NULL, attempts = 0,
+              next_attempt_at = NULL, updated_at = ?
+        WHERE id = ?`,
+    [now, id]
+  )
+})
+
+/**
+ * Hands names a game server domain stopped using to the web routes that
+ * still use them, which now need records of their own. Run it in the
+ * transaction that stopped using them; the DNS worker makes the records.
+ */
+export const handOverWebHostnamesEffect = Effect.fn("webHostnames.handOver")(
+  function* (hostnames: ReadonlyArray<string>) {
+    if (hostnames.length === 0) return
+    const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
+    yield* database.execute(
+      "webHostnames.handOver",
+      `UPDATE ${databaseTable("web_hostname")}
+          SET status = 'pending', attempts = 0, next_attempt_at = NULL,
+              updated_at = ?
+        WHERE record_id IS NULL AND status = 'active'
+          AND hostname IN (${hostnames.map(() => "?").join(", ")})`,
+      [now, ...hostnames.map((hostname) => hostname.toLowerCase())]
+    )
+  }
+)
 
 /** Forgets a record Kiln deleted or found gone, so a sync makes it again. */
 export const clearWebHostnameRecordEffect = Effect.fn(
@@ -412,6 +488,27 @@ export const deferWebHostnamesEffect = Effect.fn("webHostnames.defer")(
         WHERE relay_id = ? AND resource_type = ? AND resource_id = ?
           AND ${webHostnameNeedsWork}`,
       [now, resource.relayId, resource.resourceType, resource.resourceId]
+    )
+  }
+)
+
+/**
+ * Takes back hostnames marked for removal that a resource's routes use
+ * again; a sync points their records at the Relay instead of deleting them.
+ */
+export const reviveWebHostnamesEffect = Effect.fn("webHostnames.revive")(
+  function* (ids: ReadonlyArray<string>) {
+    if (ids.length === 0) return
+    const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
+    yield* database.execute(
+      "webHostnames.revive",
+      `UPDATE ${databaseTable("web_hostname")}
+          SET status = 'pending', last_error = NULL, attempts = 0,
+              next_attempt_at = NULL, updated_at = ?
+        WHERE id IN (${ids.map(() => "?").join(", ")})
+          AND status = 'removing'`,
+      [now, ...ids]
     )
   }
 )

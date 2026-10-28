@@ -436,6 +436,33 @@ describeMysql("renaming a game server's domain", () => {
           yield* takeOldName
         }).pipe(Effect.provide(disabledCache))
     )
+
+    it.effect("starts no rename while another is unfinished", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        yield* insertCredential()
+        yield* insertAssignment(testAssignment())
+        const rename = (vanityLabel: string) =>
+          beginInstanceDomainRenameEffect({
+            domain: "kiln.site",
+            id: testAssignment().id,
+            vanityLabel,
+          })
+
+        yield* rename("creative")
+        const refused = yield* rename("play").pipe(Effect.flip)
+
+        // Its records may already be under the new name, so it stays held.
+        assert.strictEqual(
+          refused.message,
+          "Finish renaming to creative.kiln.site first"
+        )
+        assert.deepEqual(yield* claimedNames, [
+          "creative.kiln.site",
+          "play.kiln.site",
+        ])
+      })
+    )
   })
 })
 

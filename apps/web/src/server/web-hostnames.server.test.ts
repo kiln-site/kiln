@@ -16,6 +16,7 @@ import {
 
 import { encryptWithKeyring } from "../../keyring.mjs"
 
+import { beginInstanceDomainRenameEffect } from "@/effect/domains"
 import {
   insertWebHostnameEffect,
   listWebHostnamesEffect,
@@ -25,6 +26,7 @@ import { reconcileDueDnsEffect } from "@/lib/dns-worker.server"
 
 import type { DomainActor } from "./domain-access.server"
 import {
+  deleteResourceWebHostnamesEffect,
   generateAppHostnameEffect,
   moveResourceWebHostnamesEffect,
   reconcileResourceWebHostnamesEffect,
@@ -535,11 +537,14 @@ describeMysql("web route hostnames", () => {
             "www.map.play.kiln.site": "relay-one.relay.test",
             "www.survival.play.kiln.site": "relay-one.relay.test",
           })
-          assert.deepEqual(Object.keys(yield* hostnameRows).sort(), [
-            "map.play.kiln.site",
-            "www.map.play.kiln.site",
-            "www.survival.play.kiln.site",
-          ])
+          // Its own address is held for the route too, with no record of
+          // its own while the domain keeps one.
+          assert.deepEqual(yield* hostnameRows, {
+            "map.play.kiln.site": "active@relay-one",
+            "survival.play.kiln.site": "active@relay-one",
+            "www.map.play.kiln.site": "active@relay-one",
+            "www.survival.play.kiln.site": "active@relay-one",
+          })
           // A web hostname can't take a game server's address, however
           // it's spelled.
           const taken = yield* insertWebHostnameEffect({
@@ -560,6 +565,72 @@ describeMysql("web route hostnames", () => {
           assert.strictEqual(
             cloudflare.dns()["www.shop.play.kiln.site"],
             undefined
+          )
+        })
+    )
+
+    it.effect(
+      "keeps a route on a game server's address once the address is renamed",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          const cloudflare = fakeCloudflare([platformZone])
+          cloudflare.seed({
+            comment: `Managed by Kiln for server ${instanceId}`,
+            content: "relay-one.relay.test",
+            name: "survival.play.kiln.site",
+            type: "CNAME",
+            zoneId: platformZone.id,
+          })
+          yield* insertRows("instance_domain", {
+            id: "00000000-0000-4000-8000-000000000009",
+            relay_id: relayId,
+            instance_id: instanceId,
+            is_primary: true,
+            integration_id: "cloudflare",
+            vanity_label: "survival",
+            domain: "play.kiln.site",
+            public_host: "relay-one.relay.test",
+            public_port: 25_565,
+            supports_srv: false,
+            address_record_id: "manual-1",
+            address_record_type: "CNAME",
+            status: "active",
+            created_at: 0,
+            updated_at: 0,
+          })
+          yield* insertRows("hostname_claim", {
+            hostname: "survival.play.kiln.site",
+            relay_id: relayId,
+            resource_type: "instance",
+            resource_id: instanceId,
+            created_at: 0,
+          })
+          yield* save(collaborator, ["survival.play.kiln.site"], server)
+
+          yield* beginInstanceDomainRenameEffect({
+            domain: "play.kiln.site",
+            id: "00000000-0000-4000-8000-000000000009",
+            vanityLabel: "creative",
+          })
+          yield* dnsPass
+          yield* dnsPass
+
+          // The route keeps its name, now with a record of its own.
+          assert.deepEqual(cloudflare.dns(), {
+            "creative.play.kiln.site": "relay-one.relay.test",
+            "survival.play.kiln.site": "relay-one.relay.test",
+          })
+          assert.deepEqual(yield* claimedNames, [
+            "creative.play.kiln.site",
+            "survival.play.kiln.site",
+          ])
+          assert.deepEqual(
+            yield* refusal(collaborator, ["survival.play.kiln.site"], app),
+            {
+              holder: server,
+              message: "survival.play.kiln.site is already in use",
+            }
           )
         })
     )
@@ -589,6 +660,10 @@ describeMysql("web route hostnames", () => {
         // A save whose sync hasn't run when the next save replaces its
         // routes: the late sync does what the latest save asked.
         yield* claim(owner, ["one.owner.example"])
+        yield* claim(owner, ["two.owner.example"])
+        yield* reconcileResourceWebHostnamesEffect(app)
+        // Dropped and added back before its record was deleted.
+        yield* claim(owner, [])
         yield* claim(owner, ["two.owner.example"])
         yield* reconcileResourceWebHostnamesEffect(app)
 
@@ -651,6 +726,47 @@ describeMysql("web route hostnames", () => {
             "race.play.kiln.site": "pending@relay-one",
           })
         })
+    )
+
+    it.effect(
+      "deletes a record whose answer was lost when its hostname goes",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          const cloudflare = fakeCloudflare([ownerZone])
+          // Made by an attempt that never heard back.
+          yield* claim(owner, ["shop.owner.example"])
+          cloudflare.seed({
+            comment: `Managed by Kiln for app ${appId}`,
+            content: "relay-one.relay.test",
+            name: "shop.owner.example",
+            type: "CNAME",
+            zoneId: ownerZone.id,
+          })
+
+          yield* save(owner, [])
+
+          assert.deepEqual(cloudflare.dns(), {})
+          assert.deepEqual(yield* claimedNames, [])
+        })
+    )
+
+    it.effect("finishes deleting an app's records when one delete fails", () =>
+      Effect.gen(function* () {
+        yield* seed
+        const cloudflare = fakeCloudflare([ownerZone])
+        yield* save(owner, ["one.owner.example", "two.owner.example"])
+
+        cloudflare.failNext("DELETE")
+        yield* deleteResourceWebHostnamesEffect(app).pipe(Effect.flip)
+        assert.strictEqual(Object.keys(cloudflare.dns()).length, 1)
+
+        yield* TestClock.adjust("31 seconds")
+        yield* dnsPass
+        assert.deepEqual(cloudflare.dns(), {})
+        assert.deepEqual(yield* hostnameRows, {})
+        assert.deepEqual(yield* claimedNames, [])
+      })
     )
 
     it.effect("makes a record deleted in Cloudflare again on Sync", () =>

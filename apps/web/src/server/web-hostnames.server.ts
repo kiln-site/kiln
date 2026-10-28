@@ -37,9 +37,12 @@ import {
   listResourceWebHostnamesEffect,
   listWebHostnamesEffect,
   loadWebHostnameEffect,
+  markWebHostnameCoveredEffect,
   markWebHostnamesRemovingEffect,
   reassignWebHostnamesEffect,
+  reviveWebHostnamesEffect,
   setWebHostnameStatusEffect,
+  webHostnameCoveredEffect,
   type WebHostname,
   type WebHostnameResource,
 } from "@/effect/web-hostnames"
@@ -374,6 +377,13 @@ export function saveWebRouteHostnamesEffect<A, E, R>(
       )
       const wanted = new Set(input.hostnames.map(canonicalHostname))
       const rows = yield* listResourceWebHostnamesEffect(input.resource)
+      yield* reviveWebHostnamesEffect(
+        rows
+          .filter(
+            (row) => row.status === "removing" && wanted.has(row.hostname)
+          )
+          .map((row) => row.id)
+      )
       yield* markWebHostnamesRemovingEffect(
         rows
           .filter(
@@ -468,9 +478,10 @@ const counterpartZoneEffect = Effect.fnUntraced(function* (
 
 /**
  * Holds a hostname for a resource, in the zone Kiln may make its record in.
- * Null when there's none, or when it's the game server's own address; fails
- * when another resource holds it. A `www` counterpart of a vanity name the
- * resource holds goes in that name's zone.
+ * Null when there's none; fails when another resource holds it. A `www`
+ * counterpart of a vanity name the resource holds goes in that name's zone.
+ * A game server's own address is held too, in its domain's zone, so a route
+ * on it keeps the name once the domain moves off it.
  */
 const claimHostnameEffect = Effect.fnUntraced(function* (
   resource: WebHostnameResource,
@@ -480,18 +491,22 @@ const claimHostnameEffect = Effect.fnUntraced(function* (
   held: ReadonlyMap<string, WebHostname>
 ) {
   const holder = yield* loadHostnameHolderEffect(hostname)
-  // This game server's own address already has its record.
-  if (holder && sameOwner(holder, resource)) return null
-  if (holder) {
+  if (holder && !sameOwner(holder, resource)) {
     return yield* HostnameInUseError.make({
       holder,
       hostname,
       message: `${hostname} is already in use`,
     })
   }
-  const zone =
-    (yield* counterpartZoneEffect(resource, hostname, held)) ??
-    (yield* resolveHostnameZoneEffect(hostname, ownerId, actor))
+  const own = holder ? yield* vanityNameEffect(hostname) : null
+  const zone = holder
+    ? own && {
+        connectionId: own.domain.connectionId,
+        vanityDomain: own.domain.domain,
+        zoneId: own.domain.zoneId,
+      }
+    : ((yield* counterpartZoneEffect(resource, hostname, held)) ??
+      (yield* resolveHostnameZoneEffect(hostname, ownerId, actor)))
   if (!zone) return null
   const id = randomUUID()
   yield* insertWebHostnameEffect({
@@ -583,9 +598,13 @@ const reconcileWebHostnameEffect = Effect.fn("webHostnames.reconcile")(
     ) {
       return false
     }
-    const comment = `Managed by Kiln for ${
-      row.resourceType === "app" ? "app" : "server"
-    } ${row.resourceId}`
+    // The game server's own address: its domain keeps the record.
+    if (!row.recordId && (yield* webHostnameCoveredEffect(row))) {
+      if (row.status === "active") return false
+      yield* markWebHostnameCoveredEffect(row.id)
+      return true
+    }
+    const comment = webRecordComment(row)
     const sync = Effect.gen(function* () {
       const { apiToken } = yield* loadDomainConnectionCredentialEffect(
         row.connectionId
@@ -682,7 +701,23 @@ const reconcileWebHostnameEffect = Effect.fn("webHostnames.reconcile")(
 const removeWebHostnameEffect = Effect.fn("webHostnames.remove")(function* (
   row: WebHostname
 ) {
-  if (!row.recordId) return yield* deleteWebHostnameEffect(row)
+  if (!row.recordId) {
+    // A record made by an attempt that never heard back still carries
+    // Kiln's note; one under a game server's own address is its domain's.
+    if (!(yield* webHostnameCoveredEffect(row))) {
+      yield* setWebHostnameStatusEffect(row.id, "removing", null)
+      yield* deleteLostWebRecordsEffect(row).pipe(
+        Effect.tapError((error) =>
+          setWebHostnameStatusEffect(
+            row.id,
+            "removing",
+            `Delete failed: ${error.message}`
+          ).pipe(Effect.ignore)
+        )
+      )
+    }
+    return yield* deleteWebHostnameEffect(row)
+  }
   const recordId = row.recordId
   yield* setWebHostnameStatusEffect(row.id, "removing", null)
   yield* loadDomainConnectionCredentialEffect(row.connectionId).pipe(
@@ -716,7 +751,20 @@ export const deleteResourceWebHostnamesEffect = Effect.fn(
 )(
   function* (resource: WebHostnameResource) {
     const rows = yield* listResourceWebHostnamesEffect(resource)
-    for (const row of rows) yield* removeWebHostnameEffect(row)
+    // All marked first, so any delete that fails is finished by the DNS
+    // worker, whichever it was.
+    yield* markWebHostnamesRemovingEffect(rows.map((row) => row.id))
+    let failure: unknown = null
+    for (const row of rows) {
+      yield* removeWebHostnameEffect(row).pipe(
+        Effect.catch((error) =>
+          Effect.sync(() => {
+            failure ??= error
+          })
+        )
+      )
+    }
+    if (failure !== null) return yield* Effect.fail(failure)
     return rows.length
   },
   (effect, resource) => withResourceLock(resource, effect)
@@ -830,6 +878,33 @@ export const resyncWebHostnamesEffect = Effect.fn("webHostnames.resync")(
     return { checked: rows.length, failure }
   }
 )
+
+/** The note on a record Kiln makes for a web hostname, naming its owner. */
+function webRecordComment(row: WebHostname): string {
+  return row.resourceType === "app"
+    ? `Managed by Kiln for app ${row.resourceId}`
+    : `Managed by Kiln for a web route of server ${row.resourceId}`
+}
+
+/** Deletes the records Kiln made for a hostname but never heard back about. */
+const deleteLostWebRecordsEffect = Effect.fnUntraced(function* (
+  row: WebHostname
+) {
+  const { apiToken } = yield* loadDomainConnectionCredentialEffect(
+    row.connectionId
+  )
+  const comment = webRecordComment(row)
+  const records = yield* listCloudflareRecordsEffect(
+    apiToken,
+    row.zoneId,
+    row.hostname
+  )
+  for (const record of records) {
+    if (record.comment === comment) {
+      yield* deleteCloudflareRecordEffect(apiToken, row.zoneId, record.id)
+    }
+  }
+})
 
 export function publishWebHostnameChange(relayIds: ReadonlyArray<string>) {
   publishRealtimeChange({

@@ -506,7 +506,7 @@ const deleteAssignmentRecordsEffect = Effect.fn(
   "domains.instance.deleteRecords"
 )(function* (assignment: InstanceDomainAssignment) {
   const apiToken =
-    assignmentRecordIds(assignment).length > 0
+    assignmentRecordIds(assignment).length > 0 || assignment.status !== "active"
       ? yield* assignmentApiTokenEffect(assignment)
       : null
   yield* deleteManagedDomainAssignmentEffect(assignment, apiToken)
@@ -529,6 +529,11 @@ export const deleteManagedDomainAssignmentEffect = Effect.fn(
       ),
       { concurrency: "unbounded" }
     )
+  }
+  // Ones an attempt made but never heard back about, while it wasn't
+  // active, carry Kiln's note instead of an ID.
+  if (apiToken && assignment.status !== "active") {
+    yield* deleteLostRecordsEffect(apiToken, assignment)
   }
   yield* deleteInstanceDomainAssignmentEffect(assignment)
   yield* invalidateManagedDomainAddressesEffect
@@ -618,20 +623,25 @@ export const provisionInstanceDomainEffect = Effect.fn(
     let changed = false
     // Brings one domain in line with the endpoint. Reports whether it changed.
     const reconcileOne = Effect.fnUntraced(function* (
-      assignment: InstanceDomainAssignment
+      listed: InstanceDomainAssignment
     ) {
       // Left to its delete, which the DNS worker finishes.
-      if (assignment.status === "removing") return false
-      if (assignment.next) {
-        yield* applyInstanceDomainRenameEffect(assignment, instance)
-        return true
+      if (listed.status === "removing") return false
+      let assignment = listed
+      // A rename under way finishes first, then its records follow the
+      // endpoint like any other's.
+      if (listed.next) {
+        yield* applyInstanceDomainRenameEffect(listed, instance)
+        const renamed = yield* loadInstanceDomainAssignmentEffect(listed.id)
+        if (!renamed) return true
+        assignment = renamed
       }
       if (assignment.status === "active") {
         if (
           managedDomainEndpointMatches(assignment, instance) &&
           domainSrvConfigurationMatches(assignment, srvConfiguration)
         ) {
-          return false
+          return assignment !== listed
         }
         const apiToken = yield* assignmentApiTokenEffect(assignment)
         yield* syncVanityEndpointEffect(apiToken, assignment, instance)
@@ -833,12 +843,12 @@ const updateInstanceDomainEffect = Effect.fn("domains.instance.update")(
         message: `${input.vanityLabel}.${domain.domain} is reserved`,
       })
     }
-    // Choosing its current name again settles a rename still under way.
-    const renamed =
-      assignment.next !== null ||
-      assignment.domain !== domain.domain ||
-      assignment.vanityLabel !== input.vanityLabel
-    const update = Effect.gen(function* () {
+    const renameEffect = Effect.fnUntraced(function* (
+      assignment: InstanceDomainAssignment
+    ) {
+      const renamed =
+        assignment.domain !== domain.domain ||
+        assignment.vanityLabel !== input.vanityLabel
       if (!renamed) {
         if (assignment.status === "active") {
           return managedDomainEndpointMatches(assignment, instance)
@@ -876,6 +886,15 @@ const updateInstanceDomainEffect = Effect.fn("domains.instance.update")(
         ? renaming
         : yield* syncVanityEndpointEffect(currentToken, renaming, instance)
       return yield* applyInstanceDomainRenameEffect(current, instance)
+    })
+    const update = Effect.gen(function* () {
+      if (!assignment.next) return yield* renameEffect(assignment)
+      // A rename still under way finishes before another starts, so no
+      // name its records may be under is let go early.
+      yield* applyInstanceDomainRenameEffect(assignment, instance)
+      const finished = yield* loadInstanceDomainAssignmentEffect(assignment.id)
+      if (!finished) return yield* domainFailure("Domain not found")
+      return yield* renameEffect(finished)
     })
     const overview = yield* update.pipe(
       Effect.ensuring(invalidateManagedDomainAddressesEffect)

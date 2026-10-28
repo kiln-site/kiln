@@ -12,6 +12,7 @@ import {
   moveHostnameClaimsEffect,
   releaseUnusedHostnamesEffect,
 } from "@/effect/hostname-claims"
+import { handOverWebHostnamesEffect } from "@/effect/web-hostnames"
 import { databaseTable } from "@/lib/database-config"
 import { domainBlacklistPatternsSchema } from "@/lib/domain-schemas"
 import { betterAuthSecrets } from "@/lib/environment"
@@ -394,10 +395,12 @@ export const saveDomainConnectionEffect = Effect.fn("domains.connection.save")(
         const assigned = yield* transaction.queryRows<
           RowDataPacket & { domain: string }
         >(
-          `SELECT assignment.domain
+          // A domain a rename is moving onto counts as used too.
+          `SELECT zone.domain
              FROM ${databaseTable("instance_domain")} assignment
              JOIN ${databaseTable("domain_zone")} zone
                ON zone.domain = assignment.domain
+               OR zone.domain = assignment.next_domain
             WHERE zone.integration_id = ?
             FOR SHARE`,
           [input.id]
@@ -528,13 +531,16 @@ export const requireConnectionUnusedEffect = Effect.fn(
     "domains.connection.requireUnused",
     `SELECT COUNT(*) AS total FROM ${databaseTable("instance_domain")}
       WHERE ${connectionDomainsMatch}`,
-    [id, id]
+    [id, id, id]
   )
   yield* connectionInUseFailure(Number(used?.total ?? 0))
 })
 
-// Game server domains a connection manages, or on its vanity domains.
+// Game server domains a connection manages, or on its vanity domains, or
+// being renamed onto them.
 const connectionDomainsMatch = `integration_id = ? OR domain IN (
+  SELECT domain FROM ${databaseTable("domain_zone")} WHERE integration_id = ?)
+  OR next_domain IN (
   SELECT domain FROM ${databaseTable("domain_zone")} WHERE integration_id = ?)`
 
 function connectionInUseFailure(total: number) {
@@ -563,7 +569,7 @@ export const deleteDomainConnectionEffect = Effect.fn(
         `SELECT COUNT(*) AS total FROM ${databaseTable("instance_domain")}
           WHERE ${connectionDomainsMatch}
           FOR SHARE`,
-        [id, id]
+        [id, id, id]
       )
       yield* connectionInUseFailure(Number(used?.total ?? 0))
       // Its web records were deleted first; one made since keeps the token.
@@ -707,6 +713,7 @@ export const deleteInstanceDomainAssignmentEffect = Effect.fn(
         assignmentOwner(assignment),
         assignmentHostnames(assignment)
       )
+      yield* handOverWebHostnamesEffect(assignmentHostnames(assignment))
     })
   )
 })
@@ -1002,10 +1009,11 @@ export const reserveInstanceDomainAssignmentEffect = Effect.fn(
           input.id,
         ]
       )
-      yield* releaseUnusedHostnamesEffect(
-        assignmentOwner(current),
-        assignmentHostnames(current)
+      const previous = assignmentHostnames(current).filter(
+        (hostname) => hostname !== `${input.vanityLabel}.${input.domain}`
       )
+      yield* releaseUnusedHostnamesEffect(assignmentOwner(current), previous)
+      yield* handOverWebHostnamesEffect(previous)
     })
   )
 })
@@ -1013,8 +1021,10 @@ export const reserveInstanceDomainAssignmentEffect = Effect.fn(
 /**
  * Starts renaming a domain: claims the new name and records it beside the
  * current one, which stays held until Cloudflare has the new name, so a
- * rename cut short by a failure or a restart can always be finished. Lets
- * go of the name an unfinished earlier rename was moving to.
+ * rename cut short by a failure or a restart can always be finished. One
+ * rename at a time: an unfinished one must finish first, so no name its
+ * records may be under is let go early. Only onto a domain still
+ * configured; removing it waits for this, then sees the rename.
  */
 export const beginInstanceDomainRenameEffect = Effect.fn(
   "domains.assignment.beginRename"
@@ -1023,7 +1033,28 @@ export const beginInstanceDomainRenameEffect = Effect.fn(
   const now = yield* Clock.currentTimeMillis
   yield* database.transaction("domains.assignment.beginRename", () =>
     Effect.gen(function* () {
+      const zones = yield* database.queryRows<RowDataPacket>(
+        "domains.assignment.beginRename",
+        `SELECT 1 FROM ${databaseTable("domain_zone")}
+          WHERE domain = ?
+          FOR SHARE`,
+        [input.domain]
+      )
+      if (zones.length === 0) {
+        return yield* DomainConfigurationError.make({
+          message: `${input.domain} is no longer a configured vanity domain`,
+        })
+      }
       const current = yield* lockAssignmentEffect(input.id)
+      if (
+        current.next &&
+        (current.next.domain !== input.domain ||
+          current.next.vanityLabel !== input.vanityLabel)
+      ) {
+        return yield* DomainConfigurationError.make({
+          message: `Finish renaming to ${current.next.vanityLabel}.${current.next.domain} first`,
+        })
+      }
       yield* claimHostnamesEffect(assignmentOwner(current), [
         `${input.vanityLabel}.${input.domain}`,
       ])
@@ -1035,11 +1066,6 @@ export const beginInstanceDomainRenameEffect = Effect.fn(
           WHERE id = ?`,
         [input.vanityLabel, input.domain, now, input.id]
       )
-      if (current.next) {
-        yield* releaseUnusedHostnamesEffect(assignmentOwner(current), [
-          `${current.next.vanityLabel}.${current.next.domain}`,
-        ])
-      }
     })
   )
 })
@@ -1067,10 +1093,9 @@ export const finishInstanceDomainRenameEffect = Effect.fn(
           WHERE id = ?`,
         [now, id]
       )
-      yield* releaseUnusedHostnamesEffect(
-        assignmentOwner(current),
-        assignmentHostnames(current)
-      )
+      const previous = [`${current.vanityLabel}.${current.domain}`]
+      yield* releaseUnusedHostnamesEffect(assignmentOwner(current), previous)
+      yield* handOverWebHostnamesEffect(previous)
     })
   )
 })
