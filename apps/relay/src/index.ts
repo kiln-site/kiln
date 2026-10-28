@@ -4286,9 +4286,14 @@ async function quietFrozenResource(
         record({ restartPolicies })
       )
     case "database": {
+      // Only a database that's certainly gone has no clients to stop.
       const database = await recoverPromise(
         () => databases.target(freeze.id),
-        () => null
+        (cause) => {
+          if (cause instanceof Error && cause.message === "Database not found")
+            return null
+          throw cause
+        }
       )
       await terminals.endTarget(freeze.id, database?.containerId ?? null)
       return

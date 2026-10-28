@@ -451,8 +451,13 @@ export class ContainerTerminals {
     const ready = await recoverPromise(
       async () => {
         for (let attempt = 0; attempt < 50; attempt += 1) {
-          if ((await this.#runToExit(containerId, ["test", "-s", pidFile])) === 0)
-            return true
+          const written = await this.#runToExit(containerId, [
+            "sh",
+            "-c",
+            'test -s "$0"',
+            pidFile,
+          ])
+          if (written === 0) return true
           await new Promise((resolve) => setTimeout(resolve, 100))
         }
         return false
@@ -460,7 +465,10 @@ export class ContainerTerminals {
       () => false
     )
     if (!ready) {
+      // Still in the lane: its client must be gone before anyone can freeze
+      // the database, or it could start after the freeze looked for it.
       socket.destroy()
+      await this.#stopUnready(containerId, created.Id, pidFile)
       throw new Error("The terminal didn't start")
     }
     const screen = new HeadlessTerminal({
@@ -728,6 +736,34 @@ export class ContainerTerminals {
         )
       )
     )
+  }
+
+  // Waits for a client that never confirmed it started to stop, hanging it
+  // up if it wrote its PID file late; throws if it may still be running.
+  async #stopUnready(containerId: string, execId: string, pidFile: string) {
+    const docker = this.#docker
+    const stopped = () =>
+      Effect.runPromise(
+        docker.inspectExec(execId).pipe(
+          Effect.repeat({
+            schedule: Schedule.spaced("100 millis"),
+            until: (exec) => !exec.Running,
+          }),
+          Effect.timeout("5 seconds"),
+          Effect.as(true),
+          Effect.catch(() => Effect.succeed(false))
+        )
+      )
+    if (await stopped()) return
+    await this.#runToExit(containerId, [
+      "sh",
+      "-c",
+      `${HANG_UP_FUNCTION}; [ -f "$0" ] && hang_up "$0"; exit 0`,
+      pidFile,
+    ])
+    if (!(await stopped()) && (await this.#runningForCertain(containerId))) {
+      throw new Error("A terminal client that didn't start may still be running")
+    }
   }
 
   // Whether a container is running, failing when Docker can't say: only
