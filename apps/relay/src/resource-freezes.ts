@@ -1,8 +1,9 @@
 import { Effect } from "effect"
 
-import type { LaneLock } from "./operation-lanes.js"
+import type { FrozenResources, LaneLock } from "./operation-lanes.js"
 import type {
   RelayResourceFreezeRecord,
+  RelayResourceFreezeUndo,
   RelayStateStore,
 } from "./effect/state.js"
 
@@ -14,7 +15,6 @@ const allowed: Record<FrozenKind, ReadonlySet<string>> = {
   app: new Set(["app.delete"]),
   database: new Set(["database.delete"]),
   instance: new Set(["instance.delete"]),
-  volume: new Set(["relay.volumes.delete"]),
 }
 const allowedForEvery = new Set([
   "backup.create",
@@ -26,25 +26,38 @@ const refusals: Record<FrozenKind, string> = {
   app: "This App is being deleted",
   database: "This database is being deleted",
   instance: "This game server is being deleted",
-  volume: "This volume is being deleted",
+}
+
+interface Frozen {
+  readonly deletionId: string
+  undo: RelayResourceFreezeUndo
 }
 
 /**
  * The resources frozen for their deletion, as the lanes see them. Read from
  * the Relay's state before any work is admitted, and kept in step with it.
+ *
+ * Freezing makes sure nothing writes to a resource but its final backup:
+ * the lanes refuse every other change to it, and `apply` quiets what could
+ * write on its own. What `apply` changed is recorded, so letting it go puts
+ * that back.
  */
-export class ResourceFreezes {
-  readonly #frozen = new Map<string, string>()
-
+export class ResourceFreezes implements FrozenResources {
+  readonly #frozen = new Map<string, Frozen>()
   readonly #state: RelayStateStore["Service"]
 
   private constructor(
     state: RelayStateStore["Service"],
-    freezes: ReadonlyArray<RelayResourceFreezeRecord>
+    freezes: ReadonlyArray<
+      RelayResourceFreezeRecord & { readonly undo: RelayResourceFreezeUndo }
+    >
   ) {
     this.#state = state
     for (const freeze of freezes) {
-      this.#frozen.set(`${freeze.kind}:${freeze.id}`, freeze.deletionId)
+      this.#frozen.set(key(freeze.kind, freeze.id), {
+        deletionId: freeze.deletionId,
+        undo: freeze.undo,
+      })
     }
   }
 
@@ -57,13 +70,13 @@ export class ResourceFreezes {
   }
 
   /**
-   * Freezes a resource for a deletion, then stops it with `stop`, inside an
-   * operation holding the resource whole. Freezing again for the same
-   * deletion stops it again; another deletion's freeze is refused.
+   * Freezes a resource for a deletion, then quiets it with `apply`, inside
+   * an operation holding the resource whole. Freezing again for the same
+   * deletion applies it again; another deletion's freeze is refused.
    */
   async freeze(
     freeze: RelayResourceFreezeRecord,
-    stop: () => Promise<void>
+    apply: () => Promise<RelayResourceFreezeUndo>
   ): Promise<void> {
     const holder = await Effect.runPromise(
       this.#state.freezeResource(freeze, Date.now())
@@ -71,27 +84,56 @@ export class ResourceFreezes {
     if (holder !== freeze.deletionId) {
       throw new Error("Another deletion of it is already under way")
     }
-    this.#frozen.set(`${freeze.kind}:${freeze.id}`, freeze.deletionId)
-    // Stopped too, so nothing writes between its final backup and its
-    // deletion. Starting it again is refused while it's frozen.
-    await stop()
+    const frozen = this.#frozen.get(key(freeze.kind, freeze.id)) ?? {
+      deletionId: freeze.deletionId,
+      undo: {},
+    }
+    this.#frozen.set(key(freeze.kind, freeze.id), frozen)
+    await this.#apply(freeze, frozen, apply)
   }
 
-  /** Lets a resource go, if the deletion still holds it. */
-  async unfreeze(freeze: RelayResourceFreezeRecord): Promise<void> {
+  /**
+   * Quiets every frozen resource again as the Relay starts, before any work
+   * runs: Docker may have started one, or the Relay may have stopped
+   * between freezing one and quieting it.
+   */
+  async reapply(
+    apply: (
+      freeze: RelayResourceFreezeRecord
+    ) => Promise<RelayResourceFreezeUndo>
+  ): Promise<void> {
+    for (const [resource, frozen] of this.#frozen) {
+      const [kind, id] = resource.split(":") as [FrozenKind, string]
+      const freeze = { deletionId: frozen.deletionId, id, kind }
+      await this.#apply(freeze, frozen, () => apply(freeze))
+    }
+  }
+
+  /**
+   * Lets a resource go, if the deletion still holds it, once `restore` has
+   * put back what freezing changed. A restore that fails leaves it frozen,
+   * for letting it go again.
+   */
+  async unfreeze(
+    freeze: RelayResourceFreezeRecord,
+    restore: (undo: RelayResourceFreezeUndo) => Promise<void>
+  ): Promise<void> {
+    const resource = key(freeze.kind, freeze.id)
+    const frozen = this.#frozen.get(resource)
+    if (frozen?.deletionId !== freeze.deletionId) return
+    await restore(frozen.undo)
     await Effect.runPromise(this.#state.unfreezeResource(freeze))
-    const key = `${freeze.kind}:${freeze.id}`
-    if (this.#frozen.get(key) === freeze.deletionId) this.#frozen.delete(key)
+    this.#frozen.delete(resource)
   }
 
   /** Drops the freeze of a resource the Relay has deleted. */
   async forget(kind: FrozenKind, id: string): Promise<void> {
     await Effect.runPromise(this.#state.forgetResourceFreeze(kind, id))
-    this.#frozen.delete(`${kind}:${id}`)
+    this.#frozen.delete(key(kind, id))
   }
 
   has(kind: FrozenKind, id: string): boolean {
-    return this.#frozen.has(`${kind}:${id}`)
+    return this.#frozen.has(key(kind, id))
   }
 
   /**
@@ -109,4 +151,36 @@ export class ResourceFreezes {
     }
     return null
   }
+
+  // What was recorded first wins: an App's restart policy is the one it had
+  // before the first freeze set it to "no".
+  async #apply(
+    freeze: RelayResourceFreezeRecord,
+    frozen: Frozen,
+    apply: () => Promise<RelayResourceFreezeUndo>
+  ) {
+    const changed = await apply()
+    const known = new Set(
+      (frozen.undo.disconnected ?? []).map((entry) => entry.container)
+    )
+    frozen.undo = {
+      disconnected: [
+        ...(frozen.undo.disconnected ?? []),
+        ...(changed.disconnected ?? []).filter(
+          (entry) => !known.has(entry.container)
+        ),
+      ],
+      restartPolicies: {
+        ...changed.restartPolicies,
+        ...frozen.undo.restartPolicies,
+      },
+    }
+    await Effect.runPromise(
+      this.#state.setResourceFreezeUndo(freeze, frozen.undo)
+    )
+  }
+}
+
+function key(kind: FrozenKind, id: string) {
+  return `${kind}:${id}`
 }

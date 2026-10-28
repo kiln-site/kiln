@@ -39,6 +39,7 @@ import { DockerDriver } from "../docker.js"
 import { makeRelayStateLayer, RelayStateStore } from "../effect/state.js"
 import { LifecycleDriver } from "../lifecycle.js"
 import { OperationLanes } from "../operation-lanes.js"
+import { ResourceFreezes } from "../resource-freezes.js"
 import {
   hostProvisioningCapacity,
   ProvisioningManager,
@@ -56,6 +57,7 @@ export interface RelayDrivers {
   readonly databaseConnections: DatabaseConnections
   readonly databases: DatabaseDriver
   readonly docker: DockerDriver
+  readonly freezes: ResourceFreezes
   readonly lanes: OperationLanes
   readonly lifecycle: LifecycleDriver
   readonly runtimeRecovery: RuntimeRecoveryManager
@@ -116,10 +118,15 @@ export async function relayHarness(
 
   const drivers = async (): Promise<RelayDrivers> => {
     const bricks = new BrickCatalog(config.brickCatalogUrl, dataDirectory)
-    const lanes = new OperationLanes()
+    const freezes = await Effect.runPromise(ResourceFreezes.load(state))
+    const lanes = new OperationLanes({ frozen: freezes })
     const runtimeRecovery = new RuntimeRecoveryManager(config, state, lanes)
     await Effect.runPromise(runtimeRecovery.initialize())
-    const databaseConnections = new DatabaseConnections(config, state)
+    const databaseConnections = new DatabaseConnections(
+      config,
+      state,
+      (databaseId) => freezes.has("database", databaseId)
+    )
     const docker = new DockerDriver(
       config,
       runtimeRecovery,
@@ -192,6 +199,7 @@ export async function relayHarness(
       databaseConnections,
       databases,
       docker,
+      freezes,
       lanes,
       lifecycle,
       runtimeRecovery,

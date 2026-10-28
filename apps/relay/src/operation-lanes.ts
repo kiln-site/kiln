@@ -70,14 +70,29 @@ export type LaneRefusal = (
   locks: ReadonlyArray<LaneLock>
 ) => string | null
 
+/** What the lanes know of resources frozen for their deletion. */
+export interface FrozenResources {
+  has(kind: "app" | "database" | "instance", id: string): boolean
+  refusal(label: string, locks: ReadonlyArray<LaneLock>): string | null
+}
+
 /** The Relay's lanes, in its words and with its span attribute. */
 export class OperationLanes extends Lanes {
+  readonly #frozen: FrozenResources | undefined
   readonly #refusals: Array<LaneRefusal>
 
-  constructor(options: Pick<OperationLanesOptions, "maxWaiting"> = {}) {
-    const refusals: Array<LaneRefusal> = []
+  constructor(
+    options: Pick<OperationLanesOptions, "maxWaiting"> & {
+      /** Refuses every change to a resource being deleted but its own. */
+      readonly frozen?: FrozenResources
+    } = {}
+  ) {
+    const { frozen, ...rest } = options
+    const refusals: Array<LaneRefusal> = frozen
+      ? [(label, locks) => frozen.refusal(label, locks)]
+      : []
     super({
-      ...options,
+      ...rest,
       messages: {
         busy: "The Relay is busy; try again shortly",
         paused: (label) => `${label} didn't run: this Relay is paused`,
@@ -85,6 +100,7 @@ export class OperationLanes extends Lanes {
       refuse: (label, locks) => firstRefusal(refusals, label, locks),
       waitAttribute: "relay.lanes.wait_ms",
     })
+    this.#frozen = frozen
     this.#refusals = refusals
   }
 
@@ -99,6 +115,14 @@ export class OperationLanes extends Lanes {
    */
   refusalFor(label: string, locks: ReadonlyArray<LaneLock>): string | null {
     return firstRefusal(this.#refusals, label, locks)
+  }
+
+  /**
+   * Whether a resource is frozen for its deletion, for work that touches it
+   * from inside another operation, such as connecting an App to a database.
+   */
+  isFrozen(kind: "app" | "database" | "instance", id: string): boolean {
+    return this.#frozen?.has(kind, id) ?? false
   }
 }
 

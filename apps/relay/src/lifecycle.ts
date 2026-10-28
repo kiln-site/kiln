@@ -3936,6 +3936,15 @@ export class LifecycleDriver {
     )
   }
 
+  #frozenMember(memberId: string): boolean {
+    const app = appTailscaleMember(memberId)
+    if (app) return this.#lanes.isFrozen("app", app.appId)
+    const databaseId = databaseTailscaleMember(memberId)
+    if (databaseId) return this.#lanes.isFrozen("database", databaseId)
+    const instanceId = instanceTailscaleMember(memberId)
+    return instanceId !== null && this.#lanes.isFrozen("instance", instanceId)
+  }
+
   async #reconcileTailscaleStackBindings(
     stackId: string,
     previous: ReadonlyArray<RelayTailscaleStackConfig["bindings"][number]>,
@@ -3957,6 +3966,7 @@ export class LifecycleDriver {
     for (const binding of previousById.values()) {
       const replacement = desiredById.get(binding.memberId)
       if (replacement?.address === binding.address) continue
+      if (this.#frozenMember(binding.memberId)) continue
       const container = await this.#tailscaleMemberContainer(binding.memberId)
       if (!container) continue
       await runLifecycle(
@@ -3966,6 +3976,8 @@ export class LifecycleDriver {
       )
     }
     for (const binding of desiredById.values()) {
+      // A member being deleted keeps its network as it was until it's gone.
+      if (this.#frozenMember(binding.memberId)) continue
       const container = await this.#tailscaleMemberContainer(binding.memberId)
       if (!container) continue
       await attachTailscaleMember(

@@ -152,7 +152,20 @@ export const DATABASE_CONNECTION_RECOVERY_KEY = "database_connections_recovered"
 export interface RelayResourceFreezeRecord {
   readonly deletionId: string
   readonly id: string
-  readonly kind: "app" | "database" | "instance" | "volume"
+  readonly kind: "app" | "database" | "instance"
+}
+
+/**
+ * What freezing changed that letting it go puts back: the restart policies
+ * of an App's containers, and the containers cut off a database's network
+ * with the names they had on it.
+ */
+export interface RelayResourceFreezeUndo {
+  readonly restartPolicies?: Readonly<Record<string, string>>
+  readonly disconnected?: ReadonlyArray<{
+    readonly aliases: ReadonlyArray<string>
+    readonly container: string
+  }>
 }
 const OPERATION_JOURNAL_METADATA_KEY = "operation_journal_id"
 
@@ -556,9 +569,16 @@ export class RelayStateStore extends Context.Service<
     ) => Effect.Effect<void, RelayStateError>
     /** The resources frozen for their deletion. */
     readonly listResourceFreezes: () => Effect.Effect<
-      ReadonlyArray<RelayResourceFreezeRecord>,
+      ReadonlyArray<
+        RelayResourceFreezeRecord & { readonly undo: RelayResourceFreezeUndo }
+      >,
       RelayStateError
     >
+    /** Records what freezing a resource changed, for letting it go. */
+    readonly setResourceFreezeUndo: (
+      freeze: RelayResourceFreezeRecord,
+      undo: RelayResourceFreezeUndo
+    ) => Effect.Effect<void, RelayStateError>
     /**
      * Freezes a resource for a deletion, or confirms it already is. Returns
      * the deletion holding it, which is another one's when someone else
@@ -1606,11 +1626,11 @@ const migrations = SqliteMigrator.fromRecord({
   "31_resource_freezes": Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient
     yield* sql`CREATE TABLE IF NOT EXISTS relay_resource_freezes (
-      kind TEXT NOT NULL
-        CHECK (kind IN ('app', 'database', 'instance', 'volume')),
+      kind TEXT NOT NULL CHECK (kind IN ('app', 'database', 'instance')),
       resource_id TEXT NOT NULL,
       deletion_id TEXT NOT NULL,
       frozen_at INTEGER NOT NULL,
+      undo TEXT NOT NULL DEFAULT '{}',
       PRIMARY KEY (kind, resource_id)
     ) STRICT`
   }),
@@ -2534,10 +2554,26 @@ const makeRelayStateStore = Effect.gen(function* () {
     listResourceFreezes: () =>
       run(
         "list_resource_freezes",
-        sql<RelayResourceFreezeRecord>`
-          SELECT kind, resource_id AS id, deletion_id AS deletionId
+        sql<RelayResourceFreezeRecord & { readonly undo: string }>`
+          SELECT kind, resource_id AS id, deletion_id AS deletionId, undo
             FROM relay_resource_freezes
-        `
+        `.pipe(
+          Effect.map((rows) =>
+            rows.map((row) => ({
+              ...row,
+              undo: JSON.parse(row.undo) as RelayResourceFreezeUndo,
+            }))
+          )
+        )
+      ),
+    setResourceFreezeUndo: (freeze, undo) =>
+      run(
+        "set_resource_freeze_undo",
+        sql`
+          UPDATE relay_resource_freezes SET undo = ${JSON.stringify(undo)}
+           WHERE kind = ${freeze.kind} AND resource_id = ${freeze.id}
+             AND deletion_id = ${freeze.deletionId}
+        `.pipe(Effect.asVoid)
       ),
     freezeResource: (freeze, now) =>
       run(

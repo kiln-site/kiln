@@ -769,13 +769,54 @@ export class DatabaseDriver {
     )
   }
 
-  /** Stops a database being deleted, if it still has a container. */
-  async stopIfPresent(databaseId: string): Promise<void> {
-    const database = (await this.#existing()).find(
-      (candidate) => candidate.id === databaseId
+  /**
+   * Cuts a database being deleted off from everything connected to it, so
+   * nothing writes to it while it stays running for its final dump. Returns
+   * what it disconnected, with the names they had on its network.
+   */
+  async isolateForDeletion(
+    databaseId: string
+  ): Promise<Array<{ aliases: Array<string>; container: string }>> {
+    const network = databaseResourceName(this.#config, databaseId, "network")
+    const own = databaseResourceName(this.#config, databaseId, "database")
+    const inspected = await Effect.runPromise(
+      this.#engine
+        .inspectNetwork(network)
+        .pipe(Effect.catch(() => Effect.succeed(null)))
     )
-    if (!database?.containerId) return
-    await this.action({ action: "stop", databaseId })
+    const disconnected: Array<{ aliases: Array<string>; container: string }> =
+      []
+    for (const [id, endpoint] of Object.entries(inspected?.Containers ?? {})) {
+      if (endpoint.Name === own) continue
+      const container = await Effect.runPromise(this.#engine.inspectContainer(id))
+      const aliases = (
+        container.NetworkSettings?.Networks?.[network]?.Aliases ?? []
+      ).filter((alias) => !id.startsWith(alias))
+      await Effect.runPromise(
+        this.#engine.disconnectNetwork(network, id, { force: true })
+      )
+      disconnected.push({ aliases, container: endpoint.Name })
+    }
+    return disconnected
+  }
+
+  /** Connects again what isolating a database for its deletion cut off. */
+  async reconnectAfterDeletion(
+    databaseId: string,
+    disconnected: ReadonlyArray<{
+      readonly aliases: ReadonlyArray<string>
+      readonly container: string
+    }>
+  ): Promise<void> {
+    const network = databaseResourceName(this.#config, databaseId, "network")
+    for (const { aliases, container } of disconnected) {
+      // Gone, or connected again by its own recreation: nothing to put back.
+      await Effect.runPromise(
+        this.#engine
+          .connectNetwork(network, container, { aliases })
+          .pipe(Effect.ignore)
+      )
+    }
   }
 
   async action(input: RelayDatabaseAction): Promise<RelayManagedDatabase> {

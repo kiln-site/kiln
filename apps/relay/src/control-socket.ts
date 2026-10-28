@@ -2232,8 +2232,9 @@ function controlFailureFor(
   if (cause instanceof LaneRejectedError && cause.reason === "paused") {
     return { code: "relay_paused", message: cause.message, retryable: false }
   }
-  // Refused while something the Relay keeps, such as an unfinished restore,
-  // says it mustn't run: expected, not an error to report.
+  // Refused while something the Relay keeps says it mustn't run, such as an
+  // unfinished restore or the resource's deletion: expected, not an error to
+  // report.
   if (cause instanceof LaneRejectedError && cause.reason === "refused") {
     return {
       code: "operation_refused",

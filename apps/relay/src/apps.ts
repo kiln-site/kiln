@@ -532,10 +532,35 @@ export class AppDriver {
     this.#deployments.get(appId)?.abort.abort()
   }
 
-  /** Stops an App being deleted, if it still has containers. */
-  async stopIfPresent(appId: string): Promise<void> {
-    if ((await this.#appContainers(appId)).length === 0) return
-    await this.action({ action: "stop", appId })
+  /**
+   * Stops an App being deleted and keeps Docker from starting it again on
+   * its own. Returns the restart policies it replaced, by container.
+   */
+  async quietForDeletion(appId: string): Promise<Record<string, string>> {
+    const containers = await this.#appContainers(appId)
+    const policies: Record<string, string> = {}
+    for (const { id } of containers) {
+      const inspected = await docker(this.#engine.inspectContainer(id))
+      const policy = inspected.HostConfig?.RestartPolicy?.Name
+      if (!policy || policy === "no") continue
+      await docker(this.#engine.setRestartPolicy(id, "no"))
+      policies[id] = policy
+    }
+    if (containers.some((container) => container.running)) {
+      await this.action({ action: "stop", appId })
+    }
+    return policies
+  }
+
+  /** Gives an App's containers back the restart policies freezing took. */
+  async restoreRestartPolicies(
+    policies: Readonly<Record<string, string>>
+  ): Promise<void> {
+    for (const [container, policy] of Object.entries(policies)) {
+      await docker(
+        this.#engine.setRestartPolicy(container, policy).pipe(Effect.ignore)
+      )
+    }
   }
 
   async action(input: RelayAppAction): Promise<RelayApp> {
@@ -2481,6 +2506,8 @@ export class AppDriver {
   ): Promise<Map<string, string>> {
     const found = new Map<string, string>()
     for (const id of databaseIds) {
+      // One being deleted is cut off from everything until it's gone.
+      if (this.#lanes.isFrozen("database", id)) continue
       const network = databaseNetworkName(this.#config, id)
       const inspected = await Effect.runPromise(
         Effect.result(this.#engine.inspectNetwork(network))

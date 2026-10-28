@@ -186,7 +186,9 @@ export class DatabaseConnections {
 
   constructor(
     readonly config: RelayConfig,
-    readonly state: RelayStateStore["Service"]
+    readonly state: RelayStateStore["Service"],
+    // Databases being deleted, which nothing connects to until they're gone.
+    readonly frozen: (databaseId: string) => boolean = () => false
   ) {
     this.#docker = new DockerEngine(config.dockerSocket)
   }
@@ -449,6 +451,7 @@ export class DatabaseConnections {
         const desired = new Set<string>()
         for (const connection of connections) {
           if (connection.relayId !== this.config.nodeId) continue
+          if (this.frozen(connection.databaseId)) continue
           const network = networks.get(connection.databaseId)
           if (!network) {
             issues.push({
@@ -468,6 +471,9 @@ export class DatabaseConnections {
           const attached = container.NetworkSettings?.Networks ?? {}
           for (const [databaseId, network] of networks) {
             if (member.kind === "database" && databaseId === member.id) continue
+            // Cut off for its deletion: neither connected nor disconnected
+            // again, so letting it go can put back what it cut off.
+            if (this.frozen(databaseId)) continue
             const connect = desired.has(network)
             const joined = Object.hasOwn(attached, network)
             const unnamed =

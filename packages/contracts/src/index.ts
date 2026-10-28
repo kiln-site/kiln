@@ -275,15 +275,16 @@ export const relayDeleteDatabaseSchema = z
   .strict()
 
 /**
- * A game server, App, database, or volume being deleted. Frozen, it is
- * stopped and the Relay refuses every change to it but its final backup and
- * its deletion; unfrozen, it is a resource like any other again.
+ * A game server, App, or database being deleted, by its full ID. Frozen,
+ * nothing can write to it but its final backup, and the Relay refuses every
+ * change to it but that backup and its deletion; unfrozen, it is a resource
+ * like any other again.
  */
 export const relayResourceFreezeSchema = z
   .object({
     deletionId: z.uuid(),
-    id: z.string().min(1).max(120),
-    kind: z.enum(["app", "database", "instance", "volume"]),
+    id: z.string().regex(/^[a-f0-9]{40}$/u),
+    kind: z.enum(["app", "database", "instance"]),
   })
   .strict()
 

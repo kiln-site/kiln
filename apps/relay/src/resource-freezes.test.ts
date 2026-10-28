@@ -1,51 +1,49 @@
-import { join } from "node:path"
-
-import { Deferred, Effect, Fiber, ManagedRuntime } from "effect"
-import { describe, expect, it, vi } from "vite-plus/test"
+import {
+  defaultAppConfig,
+  relayCreateDatabaseSchema,
+  relayDeployAppSchema,
+} from "@workspace/contracts"
+import { Deferred, Effect, Fiber } from "effect"
+import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 
 vi.mock("./command.js", () => import("./test/docker.js"))
 
-import { makeRelayStateLayer, RelayStateStore } from "./effect/state.js"
-import {
-  LaneRejectedError,
-  OperationLanes,
-  type LaneLock,
-} from "./operation-lanes.js"
+import { LaneRejectedError, type LaneLock } from "./operation-lanes.js"
 import {
   backupTaskLocks,
   controlRequestLocks,
   resourceReplaceLocks,
 } from "./operation-plans.js"
-import { ResourceFreezes } from "./resource-freezes.js"
-import { relayHarness } from "./test/relay.js"
+import { fakeDocker } from "./test/docker.js"
+import { relayHarness, TEST_NAMESPACE, type RelayHarness } from "./test/relay.js"
 
 const serverId = "a".repeat(40)
 const otherServerId = "b".repeat(40)
+const databaseId = "d".repeat(40)
+const appId = "e".repeat(40)
 const deletion = "11111111-1111-4111-8111-111111111111"
 const otherDeletion = "22222222-2222-4222-8222-222222222222"
 const resolve = (reference: string) => reference
+const quiet = async () => ({})
 
-async function setup() {
-  const harness = await relayHarness()
-  const freezes = await Effect.runPromise(ResourceFreezes.load(harness.state))
-  const lanes = new OperationLanes({
-    refuse: (label, locks) => freezes.refusal(label, locks),
-  })
-  // Runs an operation the way the Relay admits it, reporting whether it ran.
-  const attempt = async (
-    label: string,
-    locks: Parameters<OperationLanes["run"]>[0]["locks"]
-  ) => {
-    const exit = await Effect.runPromise(
-      Effect.exit(lanes.run({ label, locks }, Effect.succeed("ran")))
-    )
-    if (exit._tag === "Success") return exit.value
-    const error = exit.cause.reasons[0]
-    return error?._tag === "Fail" && error.error instanceof LaneRejectedError
-      ? error.error.message
-      : "failed"
-  }
-  return { attempt, freezes, harness, lanes }
+afterEach(() => {
+  vi.useRealTimers()
+})
+
+// Runs an operation the way the Relay admits it, reporting whether it ran.
+async function attempt(
+  harness: RelayHarness,
+  label: string,
+  locks: ReadonlyArray<LaneLock> | Promise<ReadonlyArray<LaneLock>>
+) {
+  const exit = await Effect.runPromise(
+    Effect.exit(harness.lanes.run({ label, locks }, Effect.succeed("ran")))
+  )
+  if (exit._tag === "Success") return exit.value
+  const error = exit.cause.reasons[0]
+  return error?._tag === "Fail" && error.error instanceof LaneRejectedError
+    ? error.error.message
+    : "failed"
 }
 
 const control = (operation: string, payload: Record<string, unknown>) =>
@@ -55,45 +53,44 @@ const control = (operation: string, payload: Record<string, unknown>) =>
     resolve
   )!
 
+const backupOf = (kind: "create" | "restore") =>
+  backupTaskLocks(
+    { kind, target: { id: serverId, kind: "instance" } } as Parameters<
+      typeof backupTaskLocks
+    >[0],
+    resolve
+  )
+
+const networkOf = (id: string) => `${TEST_NAMESPACE}-kiln-db-${id}-network`
+
 describe("resources frozen for deletion", () => {
   it("refuses every change to a frozen game server but its final backup and deletion", async () => {
-    const { attempt, freezes, lanes } = await setup()
-    const stopped: Array<string> = []
+    const harness = await relayHarness()
     // A live backup is running when the deletion asks to freeze the server,
     // and someone's start arrives after that, so both wait their turn.
     const backupDone = Deferred.makeUnsafe<void>()
     const backup = Effect.runFork(
-      lanes.run(
-        {
-          label: "backup.create",
-          locks: backupTaskLocks(
-            {
-              kind: "create",
-              target: { id: serverId, kind: "instance" },
-            } as Parameters<typeof backupTaskLocks>[0],
-            resolve
-          ),
-        },
+      harness.lanes.run(
+        { label: "backup.create", locks: backupOf("create") },
         Deferred.await(backupDone)
       )
     )
     const freeze = Effect.runFork(
-      lanes.run(
+      harness.lanes.run(
         {
           label: "resource.freeze",
           locks: resourceReplaceLocks("instance", serverId, resolve)!,
         },
         Effect.promise(() =>
-          freezes.freeze(
+          harness.freezes.freeze(
             { deletionId: deletion, id: serverId, kind: "instance" },
-            async () => {
-              stopped.push(serverId)
-            }
+            quiet
           )
         )
       )
     )
     const start = attempt(
+      harness,
       "instance.action",
       control("instance.action", { action: "start", instanceId: serverId })
     )
@@ -101,48 +98,33 @@ describe("resources frozen for deletion", () => {
     await Effect.runPromise(Fiber.join(backup))
     await Effect.runPromise(Fiber.join(freeze))
 
-    expect(stopped).toEqual([serverId])
-    expect(await start).toBe("This game server is being deleted")
+    const refused = "This game server is being deleted"
+    expect(await start).toBe(refused)
     expect(
       await attempt(
+        harness,
         "instance.files.write",
         control("instance.files.write", { instanceId: serverId })
       )
-    ).toBe("This game server is being deleted")
+    ).toBe(refused)
     expect(
       await attempt(
+        harness,
         "browser.console",
         control("instance.console.write", { instanceId: serverId })
       )
-    ).toBe("This game server is being deleted")
+    ).toBe(refused)
     expect(
-      await attempt(
-        "backup.restore",
-        backupTaskLocks(
-          {
-            kind: "restore",
-            target: { id: serverId, kind: "instance" },
-          } as Parameters<typeof backupTaskLocks>[0],
-          resolve
-        )
-      )
-    ).toBe("This game server is being deleted")
+      await attempt(harness, "backup.restore", backupOf("restore"))
+    ).toBe(refused)
 
     // Its final backup and its deletion still run, and nothing else waits.
     expect(
-      await attempt(
-        "backup.create",
-        backupTaskLocks(
-          {
-            kind: "create",
-            target: { id: serverId, kind: "instance" },
-          } as Parameters<typeof backupTaskLocks>[0],
-          resolve
-        )
-      )
+      await attempt(harness, "backup.create", backupOf("create"))
     ).toBe("ran")
     expect(
       await attempt(
+        harness,
         "instance.action",
         control("instance.action", {
           action: "start",
@@ -152,65 +134,169 @@ describe("resources frozen for deletion", () => {
     ).toBe("ran")
     expect(
       await attempt(
+        harness,
         "instance.delete",
         control("instance.delete", { instanceId: serverId })
       )
     ).toBe("ran")
   })
 
-  it("keeps a freeze across a restart, and only its own deletion lets it go", async () => {
-    const { attempt, freezes, harness } = await setup()
-    const frozen = { deletionId: deletion, id: serverId, kind: "instance" } as const
-    await freezes.freeze(frozen, async () => {})
+  it("stops a frozen game server again when the Relay restarts, and only its own deletion lets it go", async () => {
+    const harness = await relayHarness()
+    const server = await harness.seedServer({ id: serverId, running: true })
+    const frozen = {
+      deletionId: deletion,
+      id: serverId,
+      kind: "instance",
+    } as const
+    const stop = async () => {
+      const instance = await harness.docker.findInstance(serverId)
+      if (instance) await harness.lifecycle.runInstanceAction(instance, "stop", [])
+      return {}
+    }
+    await harness.freezes.freeze(frozen, stop)
+    expect(server.state.running).toBe(false)
 
     // Another deletion can neither take it over nor let it go.
     await expect(
-      freezes.freeze({ ...frozen, deletionId: otherDeletion }, async () => {})
+      harness.freezes.freeze({ ...frozen, deletionId: otherDeletion }, quiet)
     ).rejects.toThrow("Another deletion of it is already under way")
-    await freezes.unfreeze({ ...frozen, deletionId: otherDeletion })
-
-    const reopened = ManagedRuntime.make(
-      makeRelayStateLayer(join(harness.config.dataDirectory, "relay.sqlite"))
+    await harness.freezes.unfreeze(
+      { ...frozen, deletionId: otherDeletion },
+      async () => {}
     )
-    try {
-      const restarted = await Effect.runPromise(
-        ResourceFreezes.load(await reopened.runPromise(RelayStateStore))
-      )
-      expect(restarted.has("instance", serverId)).toBe(true)
-      expect(
-        restarted.refusal(
-          "instance.action",
-          control("instance.action", {
-            action: "stop",
-            instanceId: serverId,
-          }) as ReadonlyArray<LaneLock>
-        )
-      ).toBe("This game server is being deleted")
-    } finally {
-      await reopened.dispose()
-    }
 
-    await freezes.unfreeze(frozen)
-    expect(
-      await attempt(
-        "instance.action",
-        control("instance.action", { action: "start", instanceId: serverId })
+    // Started behind the Relay's back, as Docker might, then the Relay
+    // restarts: still frozen, and stopped before anything runs.
+    server.state.running = true
+    const restarted = await harness.restart()
+    expect(restarted.freezes.has("instance", serverId)).toBe(true)
+    await restarted.freezes.reapply(async () => {
+      const instance = await restarted.docker.findInstance(serverId)
+      if (instance) {
+        await restarted.lifecycle.runInstanceAction(instance, "stop", [])
+      }
+      return {}
+    })
+    expect(server.state.running).toBe(false)
+    const start = await Effect.runPromise(
+      Effect.exit(
+        restarted.lanes.run(
+          {
+            label: "instance.action",
+            locks: control("instance.action", {
+              action: "start",
+              instanceId: serverId,
+            }),
+          },
+          Effect.void
+        )
       )
-    ).toBe("ran")
+    )
+    expect(start._tag).toBe("Failure")
+
+    await restarted.freezes.unfreeze(frozen, async () => {})
+    expect(restarted.freezes.has("instance", serverId)).toBe(false)
+  })
+
+  it("keeps a frozen database running for its dump, cut off from what connects to it, until it's let go", async () => {
+    const harness = await relayHarness()
+    await harness.databases.create(
+      relayCreateDatabaseSchema.parse({
+        databaseName: "kiln_app",
+        engine: "postgres",
+        id: databaseId,
+        name: "Main database",
+        password: "correct-horse-battery-staple-1",
+        username: "kiln_user",
+      })
+    )
+    const server = await harness.seedServer({ id: serverId, running: true })
+    await harness.databases.updateNetwork({
+      connected: true,
+      databaseId,
+      instanceId: serverId,
+    })
+    const aliases = server.networks.get(networkOf(databaseId))?.aliases ?? []
+    const frozen = { deletionId: deletion, id: databaseId, kind: "database" } as const
+
+    await harness.freezes.freeze(frozen, async () => ({
+      disconnected: await harness.databases.isolateForDeletion(databaseId),
+    }))
+
+    const database = fakeDocker.container(
+      `${TEST_NAMESPACE}-kiln-db-${databaseId}-database`
+    )!
+    expect(database.state.running).toBe(true)
+    expect(server.networks.has(networkOf(databaseId))).toBe(false)
+    // Restoring the server's saved connections doesn't reach it either.
+    await harness.databaseConnections.reconcile(serverId, server.name)
+    expect(server.networks.has(networkOf(databaseId))).toBe(false)
+
+    await harness.freezes.unfreeze(frozen, async (undo) => {
+      await harness.databases.reconnectAfterDeletion(
+        databaseId,
+        undo.disconnected ?? []
+      )
+    })
+    // By the names it had there.
+    expect(server.networks.get(networkOf(databaseId))?.aliases).toEqual(
+      expect.arrayContaining(aliases)
+    )
+  })
+
+  it("stops a frozen App and keeps Docker from starting it, then gives back its restart policy", async () => {
+    const harness = await relayHarness()
+    await harness.apps.create({ id: appId, name: "Website" })
+    fakeDocker.images.set("nginx:alpine", {})
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] })
+    await harness.apps.deploy(
+      relayDeployAppSchema.parse({
+        appId,
+        config: { ...defaultAppConfig, image: "nginx:alpine" },
+        name: "Website",
+      })
+    )
+    for (let step = 0; ; step += 1) {
+      if ((await harness.apps.get(appId)).deployment?.state !== "running") break
+      if (step > 10_000) throw new Error("The deployment never finished")
+      await new Promise((resolve) => setImmediate(resolve))
+      await vi.advanceTimersByTimeAsync(100)
+    }
+    vi.useRealTimers()
+    const [container] = [...fakeDocker.containers.values()].filter(
+      (candidate) => candidate.labels["kiln.app.id"] === appId
+    )
+    container!.restartPolicy = "always"
+    const frozen = { deletionId: deletion, id: appId, kind: "app" } as const
+
+    await harness.freezes.freeze(frozen, async () => ({
+      restartPolicies: await harness.apps.quietForDeletion(appId),
+    }))
+    expect(container!.state.running).toBe(false)
+    expect(container!.restartPolicy).toBe("no")
+
+    await harness.freezes.unfreeze(frozen, async (undo) => {
+      await harness.apps.restoreRestartPolicies(undo.restartPolicies ?? {})
+    })
+    expect(container!.restartPolicy).toBe("always")
+    // It stays stopped: starting it again is someone's choice.
+    expect(container!.state.running).toBe(false)
   })
 
   it("forgets the freeze of a resource the Relay deleted", async () => {
-    const { attempt, freezes, harness } = await setup()
-    await freezes.freeze(
-      { deletionId: deletion, id: "c".repeat(40), kind: "database" },
-      async () => {}
+    const harness = await relayHarness()
+    await harness.freezes.freeze(
+      { deletionId: deletion, id: databaseId, kind: "database" },
+      quiet
     )
-    await freezes.forget("database", "c".repeat(40))
+    await harness.freezes.forget("database", databaseId)
 
     expect(
       await attempt(
+        harness,
         "database.action",
-        control("database.action", { databaseId: "c".repeat(40) })
+        control("database.action", { databaseId })
       )
     ).toBe("ran")
     expect(

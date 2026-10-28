@@ -248,6 +248,7 @@ import { RelayStateStore } from "./effect/state.js"
 import type {
   RelayClientGrant,
   RelayClientRole,
+  RelayResourceFreezeUndo,
   RelayStoredPendingPrimaryPort,
 } from "./effect/state.js"
 import { loadRelayTls } from "./effect/tls.js"
@@ -389,8 +390,7 @@ const resourceFreezes = await runRelayEffect(
 )
 // Every change to a game server, App, or database waits its turn here,
 // whichever actor asks for it. See operation-plans.ts.
-const lanes = new OperationLanes()
-lanes.addRefusal((label, locks) => resourceFreezes.refusal(label, locks))
+const lanes = new OperationLanes({ frozen: resourceFreezes })
 // Restores of Apps' folders and volumes that began swapping and didn't
 // finish fence their targets: read before any work is admitted.
 const restoreFences = await TarRestoreFences.load(config)
@@ -444,7 +444,11 @@ const operationPruneFiber = forkRelayEffect(
     Effect.forever
   )
 )
-const databaseConnections = new DatabaseConnections(config, startupCore.state)
+const databaseConnections = new DatabaseConnections(
+  config,
+  startupCore.state,
+  (databaseId) => resourceFreezes.has("database", databaseId)
+)
 const docker = new DockerDriver(
   config,
   runtimeRecovery,
@@ -646,6 +650,19 @@ if (cliArguments.length === 0)
       ),
     ])
   })
+// Resources frozen for their deletion are quieted again before anything
+// else starts: Docker may have started one, or the Relay may have stopped
+// between freezing one and quieting it. One that can't be quieted now stays
+// frozen, and its deletion freezing it again tries once more.
+await resourceFreezes.reapply((freeze) =>
+  recoverPromise(
+    () => quietFrozenResource(freeze),
+    (error) => {
+      console.warn(`Could not quiet ${freeze.kind} ${freeze.id}:`, error)
+      return {}
+    }
+  )
+)
 const databaseConnectionSnapshots = await docker.databaseConnectionSnapshots()
 await databaseConnections.initialize(databaseConnectionSnapshots)
 for (const snapshot of databaseConnectionSnapshots) {
@@ -2264,7 +2281,6 @@ async function executeControlRequest(
     case "relay.volumes.delete": {
       const input = relayVolumeDeleteSchema.parse(request.payload)
       await runRelayEffect("relay.volumes.delete", volumes.delete(input.id))
-      await resourceFreezes.forget("volume", input.id)
       return { id: input.id }
     }
     case "relay.volumes.references.hold":
@@ -2387,12 +2403,14 @@ async function executeControlRequest(
     }
     case "resource.freeze": {
       const freeze = relayResourceFreezeSchema.parse(payload)
-      await resourceFreezes.freeze(freeze, () => stopFrozenResource(freeze))
+      await resourceFreezes.freeze(freeze, () => quietFrozenResource(freeze))
       return { frozen: true }
     }
     case "resource.unfreeze": {
       const freeze = relayResourceFreezeSchema.parse(payload)
-      await resourceFreezes.unfreeze(freeze)
+      await resourceFreezes.unfreeze(freeze, (undo) =>
+        restoreFrozenResource(freeze, undo)
+      )
       return { frozen: resourceFreezes.has(freeze.kind, freeze.id) }
     }
     case "relay.clients.revoke": {
@@ -4224,32 +4242,48 @@ async function requiredFileRoot(instanceId: string) {
   return root
 }
 
-// Stops a resource frozen for its deletion, if the Relay still has it. Runs
-// inside the freeze, which holds the resource whole.
-async function stopFrozenResource(freeze: RelayResourceFreeze): Promise<void> {
+// Quiets a resource frozen for its deletion, so nothing writes to it but
+// its final backup: a game server or App stopped, an App kept from starting
+// with Docker, a database cut off from everything connected to it while it
+// stays running for its dump. Runs inside the freeze, which holds the
+// resource whole, and again as the Relay starts. Returns what it changed.
+async function quietFrozenResource(
+  freeze: RelayResourceFreeze
+): Promise<RelayResourceFreezeUndo> {
   switch (freeze.kind) {
     case "instance": {
       const instance = await docker.findInstance(freeze.id)
-      if (!instance) return
+      if (!instance) return {}
+      // Only its full ID: a short one would freeze nothing work names.
+      if (instance.id !== freeze.id) {
+        throw new Error("Freezing a game server needs its full ID")
+      }
       powerIntents.advance(instance.id)
       const routes = await runRelayEffect(
         "relay.network.routes.forFreeze",
         startup.state.listInstanceRoutes(instance.id)
       )
       await lifecycle.runInstanceAction(instance, "stop", routes)
-      return
+      return {}
     }
-    case "database": {
-      await databases.stopIfPresent(freeze.id)
-      return
-    }
-    case "app": {
-      await apps.stopIfPresent(freeze.id)
-      return
-    }
-    case "volume":
-      // Deleting a volume is refused while anything mounts it.
-      return
+    case "app":
+      return { restartPolicies: await apps.quietForDeletion(freeze.id) }
+    case "database":
+      return { disconnected: await databases.isolateForDeletion(freeze.id) }
+  }
+}
+
+// Puts back what quieting a frozen resource changed, as letting it go
+// does. It stays stopped: starting it again is someone's choice.
+async function restoreFrozenResource(
+  freeze: RelayResourceFreeze,
+  undo: RelayResourceFreezeUndo
+): Promise<void> {
+  if (freeze.kind === "app" && undo.restartPolicies) {
+    await apps.restoreRestartPolicies(undo.restartPolicies)
+  }
+  if (freeze.kind === "database" && undo.disconnected) {
+    await databases.reconnectAfterDeletion(freeze.id, undo.disconnected)
   }
 }
 
