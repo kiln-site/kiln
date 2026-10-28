@@ -1,4 +1,4 @@
-import { Effect, Schedule } from "effect"
+import { Cause, Duration, Effect, Schedule } from "effect"
 
 import { forkAppWorker } from "@/effect/runtime"
 
@@ -22,52 +22,58 @@ const RETENTION = "30 days"
 // failed while MySQL or the engine was away, is started.
 const SWEEP = "15 seconds"
 
+// Runs `effect` every `interval` for as long as Hearth runs, whatever one
+// run does short of Hearth stopping, so one failure, even a defect such as
+// the engine failing to build, stops none of the others.
+const every = <E, R>(
+  interval: Duration.Input,
+  label: string,
+  effect: Effect.Effect<unknown, E, R>
+) =>
+  effect.pipe(
+    Effect.catchCause((cause) =>
+      Cause.hasInterruptsOnly(cause)
+        ? Effect.failCause(cause)
+        : Effect.logWarning(label, cause)
+    ),
+    Effect.repeat(Schedule.spaced(interval))
+  )
+
 /**
  * Starts the operations engine with Hearth, so work a previous Hearth left
- * unfinished resumes without waiting for a request to need the engine. Tries
- * again while MySQL isn't reachable yet. Then it keeps this Hearth's
- * heartbeat, takes over the work of one whose heartbeat stopped, starts
- * granted durable work, and forgets finished operations past their
- * retention. Stopping, it says so, so the next Hearth needn't wait.
+ * unfinished resumes without waiting for a request to need the engine. Each
+ * part runs on its own: this Hearth's heartbeat and taking over a stopped
+ * Hearth's work need only MySQL, so they go on while the engine can't start;
+ * starting granted durable work tries the engine again each time; finished
+ * operations are forgotten past their retention. Stopping, it says so, so
+ * the next Hearth needn't wait.
  */
 export function startOperationsEngine(): void {
-  // The heartbeat needs only MySQL: requests' quick operations run before
-  // the engine is up, and must stay this Hearth's meanwhile.
-  const heartbeat = heartbeatDriver().pipe(
-    Effect.ignore,
-    Effect.repeat(Schedule.spaced(DRIVER_HEARTBEAT))
-  )
-  const engine = Effect.gen(function* () {
-    const { engine } = yield* OperationsEngineService
-    yield* engine
-  }).pipe(
-    Effect.tapError((error) =>
-      Effect.logWarning("Operations engine not started yet", error)
-    ),
-    Effect.retry(Schedule.spaced("5 seconds")),
-    Effect.andThen(
-      Effect.all(
-        [
-          recoverOperations().pipe(
-            Effect.ignore,
-            Effect.andThen(undispatchedOperations()),
-            Effect.flatMap(dispatchDurableOperations),
-            Effect.ignore,
-            Effect.repeat(Schedule.spaced(SWEEP))
-          ),
-          forgetFinishedOperations(RETENTION).pipe(
-            Effect.ignore,
-            Effect.repeat(Schedule.spaced("1 hour"))
-          ),
-        ],
-        { concurrency: "unbounded", discard: true }
-      )
-    )
-  )
   forkAppWorker(
-    Effect.all([heartbeat, engine], {
-      concurrency: "unbounded",
-      discard: true,
-    }).pipe(Effect.ensuring(retireDriver().pipe(Effect.ignore)), Effect.ignore)
+    Effect.all(
+      [
+        every(
+          DRIVER_HEARTBEAT,
+          "Operations heartbeat failed",
+          heartbeatDriver()
+        ),
+        every(SWEEP, "Operations recovery failed", recoverOperations()),
+        every(
+          SWEEP,
+          "Operations engine not started yet",
+          Effect.gen(function* () {
+            const { engine } = yield* OperationsEngineService
+            yield* engine
+            yield* dispatchDurableOperations(yield* undispatchedOperations())
+          })
+        ),
+        every(
+          "1 hour",
+          "Operations retention failed",
+          forgetFinishedOperations(RETENTION)
+        ),
+      ],
+      { concurrency: "unbounded", discard: true }
+    ).pipe(Effect.ensuring(retireDriver().pipe(Effect.ignore)), Effect.ignore)
   )
 }

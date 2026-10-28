@@ -21,6 +21,7 @@ import {
   hearthDriverId,
   loadOperation,
   recoverOperations,
+  retireDriver,
 } from "./lanes"
 import { quickOperation, runOperation } from "./run"
 import { testOperationsEngine } from "./test/engine"
@@ -257,6 +258,37 @@ describeMysql("Hearth operation lanes", () => {
 
           assert.instanceOf(refused, OperationEndedError)
           assert.deepStrictEqual(log, [])
+        }).pipe(TestClock.withLive)
+    )
+
+    it.effect(
+      "stays known as running when it stops mid-change, until that change ends",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          const drivers = selectRows<{ id: string }>("operation_driver").pipe(
+            Effect.map((rows) => rows.map((row) => row.id))
+          )
+          const release = yield* Deferred.make<void>()
+          const started = yield* Deferred.make<void>()
+          const change = yield* runOperation(
+            write,
+            { key: "server-a", name: "mid-change" },
+            Deferred.succeed(started, undefined).pipe(
+              Effect.andThen(Deferred.await(release))
+            )
+          ).pipe(Effect.forkChild)
+          yield* Deferred.await(started)
+
+          // Hearth stops while the change runs: another Hearth must still
+          // see it as running, and leave the change its locks.
+          yield* retireDriver()
+          assert.deepStrictEqual(yield* drivers, [hearthDriverId])
+
+          yield* Deferred.succeed(release, undefined)
+          yield* Fiber.join(change)
+          yield* retireDriver()
+          assert.deepStrictEqual(yield* drivers, [])
         }).pipe(TestClock.withLive)
     )
 

@@ -393,10 +393,16 @@ export const heartbeatDriver = Effect.fnUntraced(function* () {
 /** Says this Hearth has stopped, so the next one need not wait out its lease. */
 export const retireDriver = Effect.fnUntraced(function* () {
   const database = yield* Database
+  // Not while a change of its own is still open: a request mid-change at
+  // shutdown keeps it, and its lease runs out instead.
   yield* database.execute(
     "operations.retire",
-    `DELETE FROM ${driverTable} WHERE id = ?`,
-    [hearthDriverId]
+    `DELETE FROM ${driverTable}
+      WHERE id = ? AND NOT EXISTS (
+        SELECT 1 FROM ${operationTable}
+         WHERE driver = ? AND durable = 0
+           AND state IN ('waiting', 'granted', 'running'))`,
+    [hearthDriverId, hearthDriverId]
   )
 })
 
