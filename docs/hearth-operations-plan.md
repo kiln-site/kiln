@@ -428,9 +428,13 @@ rule in the code.
   days. The Relay keeps a command's outcome a week from when it started, so
   Hearth resends an `unknown` command only within six days of first sending
   it; after that the step stops and asks for help.
-- **One engine.** The engine holds a MySQL named lock (`GET_LOCK`) for as
-  long as it runs; a second Hearth, or a dev reload's new code before the
-  old one is gone, waits for it instead of running beside it.
+- **One engine.** The engine holds its shards' locks, rows in its own
+  tables, for as long as it runs; a second Hearth waits for them instead of
+  running beside it, and a dev reload closes the old engine first. Not MySQL
+  named locks (`GET_LOCK`): those are shared by every database on the
+  server, so two installs on one MySQL server would block each other. A
+  Hearth that stops releases its locks; after a crash they expire within 15
+  seconds, and the next Hearth resumes the work then.
 - **Stuck locks.** A platform administrator may release the locks of an
   operation marked as needing attention, from the operator view, with a
   reason that's kept with the operation.
