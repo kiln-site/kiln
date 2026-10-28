@@ -39,7 +39,10 @@ export interface DurableOperation<
   readonly layer: Layer.Layer<
     never,
     never,
-    WorkflowEngine.WorkflowEngine | Database | OperationsEngineService | R
+    | WorkflowEngine.WorkflowEngine
+    | Database
+    | OperationsEngineService
+    | Exclude<R, WorkflowEngine.WorkflowInstance>
   >
 }
 
