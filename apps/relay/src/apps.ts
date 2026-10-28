@@ -245,6 +245,8 @@ export class AppDriver {
   readonly #restoring = new Map<string, Promise<void>>()
   // Wakes whatever follows an app when its deployment or containers change.
   readonly #waiters = new Map<string, Set<() => void>>()
+  // How many deployments began replacing each app's containers this run.
+  readonly #replacements = new Map<string, number>()
   readonly #lanes: OperationLanes
   readonly #limits: AppLimitStores
   readonly #connections: DatabaseConnections
@@ -528,6 +530,19 @@ export class AppDriver {
       )
     )
     return this.get(input.appId)
+  }
+
+  /**
+   * How many deployments have begun replacing an app's containers since the
+   * Relay started. A schedule's power steps give way once it moves, as they
+   * do when someone changes the app's power.
+   */
+  replacements(appId: string): number {
+    return this.#replacements.get(appId) ?? 0
+  }
+
+  #noteReplacement(appId: string): void {
+    this.#replacements.set(appId, this.replacements(appId) + 1)
   }
 
   /** Stops a running deployment, so a delete doesn't wait for its build. */
@@ -1618,6 +1633,7 @@ export class AppDriver {
     if (running && blocker) {
       log(`Stopping the running container first, since ${blocker}`)
     }
+    this.#noteReplacement(input.appId)
     await docker(
       createContainer(this.#engine, {
         command: shellWords(config.command),
@@ -1841,6 +1857,7 @@ export class AppDriver {
     created: ReadonlyArray<string>,
     start: () => Promise<void>
   ) {
+    this.#noteReplacement(appId)
     const running = previous.filter((container) => container.running)
     for (const container of running) {
       this.#log(appId, deployment, `Stopping ${container.name}`)
@@ -2202,6 +2219,7 @@ export class AppDriver {
     prepared: ComposeProject,
     previous: ReadonlyArray<AppContainer>
   ): Promise<boolean> {
+    this.#noteReplacement(input.appId)
     const run = (command: ReadonlyArray<string>) =>
       this.#stream(
         input.appId,

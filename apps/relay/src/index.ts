@@ -923,6 +923,7 @@ const power = new ResourcePower({
     instance: runInstancePower,
   },
   lanes,
+  replacements: { app: (appId) => apps.replacements(appId) },
 })
 // One-off commands in an App's service or a database's container.
 const containerCommands = new ContainerCommands({

@@ -16,6 +16,7 @@ import {
   scheduleStableId,
 } from "@workspace/contracts/schedules"
 
+import { RelayStateError } from "./effect/errors.js"
 import { makeRelayStateLayer, RelayStateStore } from "./effect/state.js"
 
 import { ScheduleManager, type ScheduleManagerOptions } from "./schedules.js"
@@ -82,6 +83,10 @@ async function manager(
     listDatabaseIds: ScheduleManagerOptions["listDatabaseIds"]
     runContainerCommand: ScheduleManagerOptions["runContainerCommand"]
     runPower: ScheduleManagerOptions["runPower"]
+    // Stands in for the Relay's storage, as a failing disk would.
+    state: (
+      state: ScheduleManagerOptions["state"]
+    ) => ScheduleManagerOptions["state"]
   }> = {}
 ) {
   const directory =
@@ -123,7 +128,7 @@ async function manager(
     overrides.beforeMake?.(filename)
     const schedules = await ScheduleManager.make({
       ...options,
-      state: store.schedules,
+      state: overrides.state?.(store.schedules) ?? store.schedules,
     })
     managers.push(schedules)
     return schedules
@@ -1750,22 +1755,26 @@ describe("Relay schedule persistence", () => {
 
 describe("Relay schedule commands in containers", () => {
   const databaseId = "d".repeat(40)
+  const databaseKey = `relay-a:database:${databaseId}`
   const databaseCommands: RelayScheduleProjection = {
     ...projection,
     actions: [
       {
         command: "./migrate",
         id: "5d8f43a2-6a0e-4d36-9c11-3b1f4f5e2a10",
+        targetKeys: [databaseKey],
         type: "console_command",
       },
       {
         command: "./vacuum",
         id: "a4c1e6b9-2f7d-4c0a-8e35-7b9d2c6f1e44",
+        targetKeys: [databaseKey],
         type: "console_command",
       },
       {
         command: "./report",
         id: "e2b7d9c4-1a3f-4e8b-9c62-5d0f7a8b3c19",
+        targetKeys: [databaseKey],
         type: "console_command",
       },
     ],
@@ -1778,6 +1787,54 @@ describe("Relay schedule commands in containers", () => {
       },
     ],
   }
+
+  it("never runs a stored command or kill on a database it doesn't name", async () => {
+    const consoleCommands: Array<string> = []
+    const containerCommands: Array<string> = []
+    const power: Array<string> = []
+    const { schedules } = await manager({
+      findInstance: async () => ({}),
+      listDatabaseIds: async () => new Set([databaseId]),
+      runContainerCommand: async (_target, command) => {
+        containerCommands.push(command)
+        return { exitCode: 0, output: "", truncated: false, unknown: null }
+      },
+      runPower: async (kind, id, action) => {
+        power.push(`${kind}:${id}:${action}`)
+      },
+      sendConsoleCommand: async (instanceId, command) => {
+        consoleCommands.push(`${instanceId}:${command}`)
+      },
+    })
+    // Saved before commands and kills reached databases: no step names its
+    // targets, so each meant the game server alone.
+    await schedules.apply({
+      ...projection,
+      actions: [
+        projection.actions[0]!,
+        {
+          action: "kill",
+          id: "0e9a7f5c-77e8-4b39-8c1a-6d5bb9c0b3a1",
+          type: "power",
+        },
+      ],
+      targets: [...projection.targets, ...databaseCommands.targets],
+    })
+
+    await runNow(schedules)
+
+    await advanceUntil(async () =>
+      expect((await latestRun(schedules))?.status).toBe("succeeded")
+    )
+    expect(consoleCommands).toEqual(["server-a:say hello"])
+    expect(power).toEqual(["instance:server-a:kill"])
+    expect(containerCommands).toEqual([])
+    expect((await latestRun(schedules))?.targetRuns[1]).toMatchObject({
+      attempts: [{ status: "skipped_policy" }, { status: "skipped_policy" }],
+      status: "noop",
+      target: { kind: "database" },
+    })
+  })
 
   it("records each command's exit code and output, and stops at one whose outcome is unknown", async () => {
     const commands: Array<string> = []
@@ -1819,6 +1876,49 @@ describe("Relay schedule commands in containers", () => {
       ],
       status: "failed",
     })
+  })
+
+  it("refuses to send a command it couldn't record first", async () => {
+    const commands: Array<string> = []
+    const reported: Array<string> = []
+    const { schedules } = await manager({
+      listDatabaseIds: async () => new Set([databaseId]),
+      reportError: (message) => reported.push(message),
+      runContainerCommand: async (_target, command) => {
+        commands.push(command)
+        return { exitCode: 0, output: "", truncated: false, unknown: null }
+      },
+      state: (state) => ({
+        ...state,
+        recordProgress: () =>
+          Effect.fail(
+            RelayStateError.make({
+              cause: new Error("disk I/O error"),
+              operation: "schedules.record_progress",
+            })
+          ),
+      }),
+    })
+    await schedules.apply(databaseCommands)
+
+    await runNow(schedules)
+
+    await advanceUntil(async () =>
+      expect((await latestRun(schedules))?.status).toBe("failed")
+    , 1_000)
+    expect(commands).toEqual([])
+    expect(reported).toContain("Relay schedule progress write failed")
+    expect((await latestRun(schedules))?.targetRuns[0]?.attempts).toMatchObject(
+      [
+        {
+          error:
+            "Not run: the Relay couldn't record the command before sending it",
+          status: "failed",
+        },
+        { status: "not_run" },
+        { status: "not_run" },
+      ]
+    )
   })
 
   it("reports a command the Relay stopped during as unknown and never runs it again", async () => {

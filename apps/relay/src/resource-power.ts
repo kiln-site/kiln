@@ -57,6 +57,11 @@ export function containerPower(
   }
 }
 
+/** How many times each kind's resources were replaced outside the lanes. */
+export type ResourceReplacements = Partial<
+  Record<PowerResourceKind, (id: string) => number>
+>
+
 /** What each kind does for a power action, and what it answers with. */
 export type PowerAdapters<Results extends Record<PowerResourceKind, unknown>> =
   {
@@ -72,13 +77,20 @@ export class ResourcePower<
   readonly #adapters: PowerAdapters<Results>
   readonly #intents = new PowerIntents()
   readonly #lanes: OperationLanes
+  readonly #replacements: ResourceReplacements
 
   constructor(options: {
     readonly adapters: PowerAdapters<Results>
     readonly lanes: OperationLanes
+    /**
+     * Replacements the lanes don't see, such as an App's deployment, which
+     * swaps its containers in its lifecycle lane.
+     */
+    readonly replacements?: ResourceReplacements
   }) {
     this.#adapters = options.adapters
     this.#lanes = options.lanes
+    this.#replacements = options.replacements ?? {}
   }
 
   /**
@@ -86,9 +98,11 @@ export class ResourcePower<
    * anything replaces it, read when a schedule's occurrence begins.
    */
   intent(kind: PowerResourceKind, id: string): string {
-    return `${this.#intents.current(kind, id)}:${this.#lanes.exclusiveGeneration(
-      resourceLaneKey(kind, id)
-    )}`
+    return [
+      this.#intents.current(kind, id),
+      this.#lanes.exclusiveGeneration(resourceLaneKey(kind, id)),
+      this.#replacements[kind]?.(id) ?? 0,
+    ].join(":")
   }
 
   /**

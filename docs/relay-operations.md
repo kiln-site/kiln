@@ -202,16 +202,20 @@ and its lifecycle exclusive, and a game server's start the routes shared too
 A schedule's steps are ordinary operations. A schedule notes each target's
 power intent when an occurrence begins: how many power changes someone else
 has asked for (a power action, or a stop typed into a game server's
-console), and how many times the target has been replaced, which is every
-operation that took it whole and exclusively. A later power step runs only
+console), and how many times the target has been replaced: every operation
+that took it whole and exclusively, and for an App every deployment that
+began replacing its containers. A later power step runs only
 if neither has moved, checked at the moment the step's turn comes. So a
 person who stops a game server, App, or database during a schedule's Wait
 isn't overruled by the schedule's Start, and the step is recorded as not
 run. A schedule's own steps don't move the intent.
 
 A Command step sends a game server's command to its console. For a
-database, it runs `sh -c <command>` as a Docker exec in its container
-(`apps/relay/src/container-commands.ts`), in the database's lifecycle lane:
+database, it runs `sh -c <command>` as a Docker exec in its current
+container (`apps/relay/src/container-commands.ts`), in the database's
+lifecycle lane. Commands and kills reach a database only when the step's
+`targetKeys` names it: a stored step without them was saved, and
+authorized, when it skipped databases, so it still does.
 
 - It has 10 minutes to exit. The step records its exit code and the last
   4 KiB of what it printed, stdout and stderr together; a non-zero code
@@ -225,7 +229,8 @@ database, it runs `sh -c <command>` as a Docker exec in its container
   stops its target's later steps, as a failure does.
 - The step is written to the run as unknown before it's sent, so a Relay
   restart mid-command leaves it unknown in the interrupted run, which is
-  never run again.
+  never run again. A command whose record can't be written, after a few
+  tries, fails without being sent.
 
 ### Files over SFTP and uploads
 

@@ -238,6 +238,7 @@ export async function relayHarness(
           },
         },
         lanes,
+        replacements: { app: (appId) => apps.replacements(appId) },
       }),
       runtimeRecovery,
     }

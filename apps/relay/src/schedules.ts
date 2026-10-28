@@ -65,6 +65,8 @@ const scheduledBackupPollIntervalMs = 500
 const scheduledBackupWaitTimeoutMs = 6 * 60 * 60 * 1_000
 const maximumTimerDurationMs = 2_147_483_647
 const targetExecutionConcurrency = 8
+// How many times a command's record is tried again before it's refused.
+const progressWriteRetries = 3
 const scheduleTickIntervalMs = 1_000
 
 class ScheduledBackupWaitError extends Data.TaggedError(
@@ -343,9 +345,11 @@ export class ScheduleManager {
       this.#options.relayId
     )
     // Progress is written whole and in order, so the last write is the
-    // latest state of every target.
+    // latest state of every target. A required write, which a command waits
+    // for before it's sent, is tried again briefly; it answers whether it
+    // landed.
     const progressPermit = Semaphore.makeUnsafe(1)
-    const recordProgress = () =>
+    const recordProgress = (required: boolean) =>
       Effect.runPromise(
         progressPermit.withPermit(
           Effect.suspend(() =>
@@ -366,13 +370,19 @@ export class ScheduleManager {
             )
           )
         ).pipe(
+          Effect.retry({
+            schedule: Schedule.exponential("200 millis"),
+            times: required ? progressWriteRetries : 0,
+          }),
+          Effect.as(true),
           Effect.catch((cause) =>
-            Effect.sync(() =>
+            Effect.sync(() => {
               this.#options.reportError?.(
                 "Relay schedule progress write failed",
                 cause
               )
-            )
+              return false
+            })
           )
         )
       )
@@ -553,7 +563,7 @@ export class ScheduleManager {
     state: TargetExecutionState,
     scheduledAt: number,
     sequenceFailure: string | null,
-    recordProgress: () => Promise<void>,
+    recordProgress: (required: boolean) => Promise<boolean>,
     signal?: AbortSignal
   ) {
     if (state.activeKey === null) return
@@ -679,7 +689,28 @@ export class ScheduleManager {
         status: "unknown",
         target: state.target,
       })
-      await recordProgress()
+      // Sent only once a restart would report it, so it can't run unseen.
+      if (!(await recordProgress(true))) {
+        state.inFlight = null
+        const failure =
+          "Not run: the Relay couldn't record the command before sending it"
+        if (!state.failure) {
+          state.failure = failure
+          state.error = failure
+        }
+        state.attempts.push(
+          attempt({
+            action,
+            error: failure,
+            scheduledAt,
+            scheduleId: schedule.id,
+            startedAt: actionStartedAt,
+            status: "failed",
+            target: state.target,
+          })
+        )
+        return
+      }
     }
     const executed = await ensuringPromise(
       () =>
@@ -728,7 +759,7 @@ export class ScheduleManager {
           target: state.target,
         })
       )
-      if (inContainer) await recordProgress()
+      if (inContainer) await recordProgress(false)
       return
     }
     const result = Result.isSuccess(executed) ? executed.success : undefined
@@ -763,7 +794,7 @@ export class ScheduleManager {
       }),
     })
     // A restart later in the occurrence keeps how the command went.
-    if (inContainer) await recordProgress()
+    if (inContainer) await recordProgress(false)
   }
 
   async #targetExists(target: ScheduleTarget) {

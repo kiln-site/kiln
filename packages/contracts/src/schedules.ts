@@ -493,6 +493,27 @@ export function scheduleTargetKey(
   return `${target.relayId}:${target.kind}:${target.id}`
 }
 
+/**
+ * Whether a step runs on a target only when its `targetKeys` names it.
+ * Commands and kills reach databases now, but stored steps without
+ * `targetKeys` were saved, and authorized, when they skipped databases, so
+ * such a step still means every target it ran on before. A step reaches a
+ * database only once someone names it, which Hearth authorizes then.
+ */
+export function scheduleActionNeedsNamedTarget(
+  action: {
+    action?: "kill" | "restart" | "start" | "stop"
+    type: ScheduleActionType
+  },
+  target: Pick<ScheduleTarget, "kind">
+): boolean {
+  return (
+    target.kind === "database" &&
+    (action.type === "console_command" ||
+      (action.type === "power" && action.action === "kill"))
+  )
+}
+
 export function scheduleActionAppliesToTarget(
   action: {
     targetKeys?: ReadonlyArray<string>
@@ -503,9 +524,8 @@ export function scheduleActionAppliesToTarget(
   target: ScheduleTarget
 ) {
   if (action.type === "wait") return true
-  return (
-    scheduleActionSupportsTarget(action, target) &&
-    (action.targetKeys === undefined ||
-      action.targetKeys.includes(scheduleTargetKey(target)))
-  )
+  if (!scheduleActionSupportsTarget(action, target)) return false
+  return action.targetKeys === undefined
+    ? !scheduleActionNeedsNamedTarget(action, target)
+    : action.targetKeys.includes(scheduleTargetKey(target))
 }

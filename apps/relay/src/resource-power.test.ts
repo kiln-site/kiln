@@ -174,24 +174,8 @@ describe("one power path", () => {
     const harness = await relayHarness()
     const appId = "a".repeat(40)
     await harness.apps.create({ id: appId, name: "Website" })
-    fakeDocker.images.set("nginx:alpine", {})
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] })
-    await harness.apps.deploy(
-      relayDeployAppSchema.parse({
-        appId,
-        config: { ...defaultAppConfig, image: "nginx:alpine" },
-        name: "Website",
-      })
-    )
-    await until(
-      async () => (await harness.apps.get(appId)).deployment?.state !== "running",
-      100
-    )
-    vi.useRealTimers()
-    const containers = () =>
-      [...fakeDocker.containers.values()].filter(
-        (container) => container.labels["kiln.app.id"] === appId
-      )
+    await deploy(harness, appId)
+    const containers = () => appContainers(appId)
     expect(containers().some((container) => container.state.running)).toBe(
       true
     )
@@ -222,4 +206,50 @@ describe("one power path", () => {
       true
     )
   })
+
+  it("lets a deployment during a schedule stand", async () => {
+    const harness = await relayHarness()
+    const appId = "a".repeat(40)
+    await harness.apps.create({ id: appId, name: "Website" })
+    await deploy(harness, appId)
+    const intent = harness.power.intent("app", appId)
+    // The schedule's own steps keep its later ones current.
+    await harness.power.scheduled("app", appId, "stop", intent)
+    await harness.power.scheduled("app", appId, "start", intent)
+
+    // Someone deploys during the schedule's wait.
+    await deploy(harness, appId)
+
+    await expect(
+      harness.power.scheduled("app", appId, "stop", intent)
+    ).rejects.toMatchObject({ reason: "superseded" })
+    expect(appContainers(appId).some(({ state }) => state.running)).toBe(true)
+  })
 })
+
+function appContainers(appId: string) {
+  return [...fakeDocker.containers.values()].filter(
+    (container) => container.labels["kiln.app.id"] === appId
+  )
+}
+
+// Deploys an image App and waits, under fake timers, for it to settle.
+async function deploy(harness: RelayHarness, appId: string) {
+  fakeDocker.images.set("nginx:alpine", {})
+  vi.useFakeTimers({
+    now: Date.now() + 60_000,
+    toFake: ["Date", "setTimeout", "clearTimeout"],
+  })
+  await harness.apps.deploy(
+    relayDeployAppSchema.parse({
+      appId,
+      config: { ...defaultAppConfig, image: "nginx:alpine" },
+      name: "Website",
+    })
+  )
+  await until(
+    async () => (await harness.apps.get(appId)).deployment?.state !== "running",
+    100
+  )
+  vi.useRealTimers()
+}

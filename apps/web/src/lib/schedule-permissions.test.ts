@@ -128,8 +128,12 @@ describe("schedule authorization", () => {
       resourceType: "relay",
       permissions: ["schedule.create", "relay.terminal"],
     }
+    const named: ScheduleAction = {
+      ...consoleAction,
+      targetKeys: ["relay-a:database:database-a"],
+    }
     const input = {
-      actions: [consoleAction],
+      actions: [named],
       schedulePermission: "schedule.create",
       targets: [database],
       user,
@@ -140,6 +144,15 @@ describe("schedule authorization", () => {
     ).toBe("You do not have relay.terminal permission for Main database")
     expect(
       scheduleAuthorizationFailure({ ...input, grants: [relayGrant] })
+    ).toBeNull()
+    // A stored step that doesn't name the database never runs there, so it
+    // needs no shell.
+    expect(
+      scheduleAuthorizationFailure({
+        ...input,
+        actions: [consoleAction],
+        grants: [databaseGrant],
+      })
     ).toBeNull()
   })
 

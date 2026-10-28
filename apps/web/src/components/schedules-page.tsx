@@ -49,6 +49,7 @@ import type {
 import {
   normalizeScheduleCron,
   scheduleActionAppliesToTarget,
+  scheduleActionNeedsNamedTarget,
   scheduleActionSupportsTarget,
   scheduleCronAliases,
   validateScheduleCron,
@@ -3030,13 +3031,26 @@ const ActionEditor = React.memo(function ActionEditor({
             target[permissionKey] &&
             target.permittedActions.includes(action.type)
         )
+  // Without its own list, a step runs where the Relay runs it: every
+  // target but those it must name.
   const actionTargetKeys =
     action.type === null || action.type === "wait"
       ? new Set<string>()
       : new Set<string>(
           action.targetKeys ??
-            eligibleTargets.map((target) => targetKey(target))
+            eligibleTargets
+              .filter(
+                (target) => !scheduleActionNeedsNamedTarget(action, target)
+              )
+              .map((target) => targetKey(target))
         )
+  const changeAction = React.useCallback(
+    (next: ScheduleActionDraft) =>
+      onChange(
+        namingNewTargets(action, next, selectedOptions, permissionKey)
+      ),
+    [action, onChange, permissionKey, selectedOptions]
+  )
   const selectedActionTargets = eligibleTargets.filter((target) =>
     actionTargetKeys.has(targetKey(target))
   )
@@ -3089,7 +3103,7 @@ const ActionEditor = React.memo(function ActionEditor({
           <ScheduleActionTypeSelect
             action={action}
             index={index}
-            onChange={onChange}
+            onChange={changeAction}
           />
         </div>
         <div
@@ -3118,7 +3132,10 @@ const ActionEditor = React.memo(function ActionEditor({
             <Select
               value={action.action}
               onValueChange={(value) =>
-                onChange({ ...action, action: value as typeof action.action })
+                changeAction({
+                  ...action,
+                  action: value as typeof action.action,
+                })
               }
             >
               <SelectTrigger className="h-8 w-20 min-w-0 font-medium sm:w-28 [&_[data-slot=select-value]]:truncate">
@@ -3838,6 +3855,36 @@ function canOperateSchedule(
         permittedActions.has(action.type)
     )
   })
+}
+
+/**
+ * Choosing a command or kill for targets that must be named, such as
+ * databases, names every target it can run on, so they're included and
+ * authorized as such.
+ */
+function namingNewTargets(
+  previous: ScheduleActionDraft,
+  next: ScheduleActionDraft,
+  targets: ReadonlyArray<ScheduleOption>,
+  permission: "canCreate" | "canUpdate"
+): ScheduleActionDraft {
+  if (next.type === null || next.type === "wait") return next
+  if (next.targetKeys !== undefined) return next
+  const chosen =
+    previous.type !== next.type ||
+    (previous.type === "power" &&
+      next.type === "power" &&
+      previous.action !== next.action)
+  if (!chosen) return next
+  const eligible = targets.filter(
+    (target) =>
+      scheduleActionSupportsTarget(next, target) &&
+      target[permission] &&
+      target.permittedActions.includes(next.type)
+  )
+  if (!eligible.some((target) => scheduleActionNeedsNamedTarget(next, target)))
+    return next
+  return { ...next, targetKeys: eligible.map((target) => targetKey(target)) }
 }
 
 function scheduleActionPermitted(
