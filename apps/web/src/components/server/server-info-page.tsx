@@ -26,6 +26,7 @@ import type {
   InstanceSettingsInstance,
   RelayNodeSummary,
 } from "@/lib/relay-selectors"
+import { ResourceDeletionAlert } from "@/components/resource-deletion-alert"
 import { ResourceSecurityAlert } from "@/components/resource-security-alert"
 import { ensuringPromise, recoverPromise } from "@/effect/promise"
 import { serverMigrationPreviewQueryOptions } from "@/lib/server-migration-queries"
@@ -58,6 +59,14 @@ export function ServerInfoPage({
   const provisioning = Boolean(instance.provisioning)
   return (
     <InfoPage rail={<ServerInfoRail instance={instance} node={node} />}>
+      <ResourceDeletionAlert
+        canDelete={permissions.deleteServer}
+        name={instance.name}
+        passwordRequired={passwordRequired}
+        kind="instance"
+        relayId={instance.relayId}
+        resourceId={instance.id}
+      />
       <ResourceSecurityAlert
         relayId={instance.relayId}
         resourceId={instance.id}

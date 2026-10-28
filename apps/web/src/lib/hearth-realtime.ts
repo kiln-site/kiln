@@ -119,6 +119,7 @@ const hearthRealtimeQueryScopes = {
     prefix(["relays", "proxy"]),
     exact(queryKeys.relayProxyModes),
   ],
+  "resource-deletions": [prefix(["resource-deletion"])],
   schedules: [exact(queryKeys.schedules.all)],
   security: [prefix(["security"])],
   tailscale: [

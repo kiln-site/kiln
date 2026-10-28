@@ -12,6 +12,7 @@ import { securityReports } from "@/migrations/0031_security_reports"
 import { cloudflareConnections } from "@/migrations/0035_cloudflare_connections"
 import { tailscaleMemberIds } from "@/migrations/0039_tailscale_member_ids"
 import { backupResourceTargets } from "@/migrations/0042_backup_resource_targets"
+import { resourceDeletions } from "@/migrations/0044_resource_deletions"
 import { baselineTables } from "@/migrations/baseline-schema"
 import { describeMysql, testDatabaseClient } from "@/test/database"
 import {
@@ -19,6 +20,7 @@ import {
   insertInstance,
   insertRelay,
   insertRows,
+  insertUser,
   selectRows,
 } from "@/test/seed"
 
@@ -81,8 +83,9 @@ describeMysql("database migrations", () => {
           // updates, push subscriptions, Relay joins, and the security
           // checks' targets, inventories, findings, vulnerabilities, and
           // alerts, game server migrations, icons, web hostnames, and
-          // Relays' handovers of Apps' database connections.
-          expect(count).toBe(baselineTables.length + 32)
+          // Relays' handovers of Apps' database connections. The two
+          // final-delete tables became one of resource deletions.
+          expect(count).toBe(baselineTables.length + 31)
           expect(yield* ledger).toEqual(migrationIds)
           // Only better-auth keeps dates, as DATETIME.
           expect((yield* columnTypes).map((row) => row.dataType)).toEqual([
@@ -833,6 +836,151 @@ describeMysql("database migrations", () => {
               (row) => row.target_id
             )
           ).toContain(volume)
+          expect(yield* ledger).toEqual(migrationIds)
+        }),
+      120_000
+    )
+
+    it.effect(
+      "carries final deletions over as resource deletions, reviving none that finished",
+      () =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          const finalDelete = (
+            table: string,
+            targetId: string,
+            status: string,
+            row: Record<string, unknown> = {}
+          ) =>
+            insertRows(table, {
+              relay_id: "relay-one",
+              target_id: targetId,
+              backup_id: `backup-${targetId.slice(0, 1)}`,
+              requested_by: "user-one",
+              status,
+              error: null,
+              created_at: 1_000,
+              updated_at: 2_000,
+              ...row,
+            })
+          yield* dropAllTables
+          yield* applyMigrations(
+            migrations.filter(
+              (migration) => migration.id < resourceDeletions.id
+            )
+          )
+          yield* insertRelay("relay-one")
+          yield* insertUser("user-one")
+          for (const id of ["a", "b", "c", "d", "e"]) {
+            yield* insertBackup(`backup-${id}`, { relay_id: "relay-one" })
+          }
+          yield* finalDelete(
+            "backup_final_delete",
+            "a".repeat(40),
+            "backing_up"
+          )
+          yield* finalDelete("backup_final_delete", "b".repeat(40), "completed")
+          yield* finalDelete(
+            "backup_final_database_delete",
+            "c".repeat(40),
+            "failed",
+            {
+              error: "Relay disk is full",
+            }
+          )
+          yield* finalDelete(
+            "backup_final_database_delete",
+            "d".repeat(40),
+            "deleting"
+          )
+          // Its Relay was removed since: nothing to delete it on.
+          yield* finalDelete(
+            "backup_final_delete",
+            "e".repeat(40),
+            "backing_up",
+            {
+              relay_id: "relay-gone",
+            }
+          )
+
+          yield* applyMigrations(migrations)
+          // Run again, as after a stop partway: nothing changes.
+          yield* resourceDeletions.run
+
+          const rows = yield* sql<{
+            attempt: number
+            backup_id: string
+            error: string | null
+            final_backup: number
+            relay_deleted_at: number | null
+            resource_id: string
+            resource_kind: string
+            status: string
+          }>`
+            SELECT resource_kind, resource_id, status, backup_id, error,
+                   final_backup, attempt, relay_deleted_at
+            FROM kiln_resource_deletion ORDER BY resource_id
+          `
+          expect(
+            rows.map((row) => ({
+              ...row,
+              attempt: Number(row.attempt),
+              final_backup: Number(row.final_backup),
+              relay_deleted_at:
+                row.relay_deleted_at === null
+                  ? null
+                  : Number(row.relay_deleted_at),
+            }))
+          ).toEqual([
+            {
+              attempt: 1,
+              backup_id: "backup-a",
+              error: null,
+              final_backup: 1,
+              relay_deleted_at: null,
+              resource_id: "a".repeat(40),
+              resource_kind: "instance",
+              status: "backing_up",
+            },
+            {
+              attempt: 1,
+              backup_id: "backup-b",
+              error: null,
+              final_backup: 1,
+              // Done: never deleted, or cleaned up, again.
+              relay_deleted_at: 2_000,
+              resource_id: "b".repeat(40),
+              resource_kind: "instance",
+              status: "completed",
+            },
+            {
+              attempt: 1,
+              backup_id: "backup-c",
+              error: "Relay disk is full",
+              final_backup: 1,
+              relay_deleted_at: null,
+              resource_id: "c".repeat(40),
+              resource_kind: "database",
+              status: "failed",
+            },
+            {
+              attempt: 1,
+              backup_id: "backup-d",
+              error: null,
+              final_backup: 1,
+              relay_deleted_at: null,
+              resource_id: "d".repeat(40),
+              resource_kind: "database",
+              status: "deleting",
+            },
+          ])
+          const [{ count }] = yield* sql<{ count: number }>`
+            SELECT COUNT(*) AS count FROM information_schema.tables
+            WHERE table_schema = DATABASE()
+              AND table_name IN ('kiln_backup_final_delete',
+                                 'kiln_backup_final_database_delete')
+          `
+          expect(Number(count)).toBe(0)
           expect(yield* ledger).toEqual(migrationIds)
         }),
       120_000

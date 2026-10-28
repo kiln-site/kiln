@@ -27,6 +27,7 @@ import {
   scheduledBackupAdmissionEffect,
 } from "@/effect/backups"
 import { Database, type DatabaseTransaction } from "@/effect/database"
+import { refuseResourcesBeingDeleted } from "@/effect/resource-deletions"
 import { kilnInstallationId } from "@/effect/installation"
 import { promiseEffect } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
@@ -205,12 +206,22 @@ function isPendingMarker(value: unknown): boolean {
   return parsed.success && parsed.data.state === "pending"
 }
 
+/**
+ * Writes a schedule's actions and targets. A target whose deletion was asked
+ * for is refused, so a schedule saved while one is deleted can't keep it
+ * after its cleanup looked. Only that cleanup, rewriting a schedule without
+ * the deleted resource, keeps targets of other deletions: theirs remove them.
+ */
 export function insertScheduleParts(
   transaction: DatabaseTransaction,
   schedule: ScheduleDefinition,
-  now: number
+  now: number,
+  options: { readonly keepTargetsBeingDeleted?: boolean } = {}
 ) {
   return Effect.gen(function* () {
+    if (!options.keepTargetsBeingDeleted) {
+      yield* refuseResourcesBeingDeleted(transaction, schedule.targets)
+    }
     for (const [position, action] of schedule.actions.entries()) {
       yield* transaction.execute(
         `INSERT INTO ${databaseTable("schedule_action")}

@@ -37,6 +37,7 @@ import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import {
   insertBackup,
   insertBackupStorage,
+  insertRelay,
   insertRows,
   selectRows,
 } from "@/test/seed"
@@ -303,6 +304,27 @@ const reserve = (
     ...input,
   })
 
+const deletionId = "00000000-0000-4000-8000-0000000000de"
+
+// A deletion of instance-one waiting for its final backup, or past it.
+const insertDeletion = (status: string, backupId: string | null = null) =>
+  Effect.gen(function* () {
+    yield* insertRelay("relay-one")
+    yield* insertRows("resource_deletion", {
+      id: deletionId,
+      relay_id: "relay-one",
+      resource_kind: "instance",
+      resource_id: "instance-one",
+      final_backup: true,
+      backup_id: backupId,
+      status,
+      requested_by: "user-one",
+      actor: JSON.stringify({ id: "user-one" }),
+      created_at: now,
+      updated_at: now,
+    })
+  })
+
 describeMysql("backup reservations", () => {
   layer(TestDatabase)((it) => {
     it.effect(
@@ -330,8 +352,9 @@ describeMysql("backup reservations", () => {
           yield* insertPolicy({ admin_quantity_limit: 0 })
 
           const manual = yield* Effect.flip(reserve({ backupId: "manual" }))
+          yield* insertDeletion("pending")
           const final = yield* Effect.flip(
-            reserve({ backupId: "final", reason: "final_delete" })
+            reserve({ backupId: "final", deletionId, reason: "final_delete" })
           )
 
           assert.instanceOf(manual, BackupLimitError)
@@ -350,21 +373,49 @@ describeMysql("backup reservations", () => {
             size_limit_bytes: 512,
             admin_size_limit_bytes: 2_048,
           })
+          yield* insertDeletion("pending")
 
           const final = yield* reserve({
             backupId: "final",
+            deletionId,
             reason: "final_delete",
           })
 
           assert.strictEqual(final.maxBytes, 2_048)
-          const finalDeletes = yield* selectRows<{
+          // Its deletion follows it by its ID from now on.
+          const deletions = yield* selectRows<{
             backup_id: string
             status: string
-          }>("backup_final_delete")
+          }>("resource_deletion")
           assert.deepStrictEqual(
-            finalDeletes.map((row) => [row.backup_id, row.status]),
+            deletions.map((row) => [row.backup_id, row.status]),
             [["final", "backing_up"]]
           )
+        })
+    )
+
+    it.effect(
+      "takes one final backup per deletion, and none for no deletion",
+      () =>
+        Effect.gen(function* () {
+          yield* fresh
+          yield* insertDeletion("pending")
+
+          yield* reserve({
+            backupId: "final",
+            deletionId,
+            reason: "final_delete",
+          })
+          const again = yield* Effect.flip(
+            reserve({ backupId: "again", deletionId, reason: "final_delete" })
+          )
+          const unowned = yield* Effect.flip(
+            reserve({ backupId: "unowned", reason: "final_delete" })
+          )
+
+          assert.instanceOf(again, BackupStorageError)
+          assert.instanceOf(unowned, BackupStorageError)
+          assert.deepStrictEqual([...(yield* backups).keys()], ["final"])
         })
     )
 
@@ -372,15 +423,7 @@ describeMysql("backup reservations", () => {
       Effect.gen(function* () {
         yield* fresh
         yield* insertBackup("final")
-        yield* insertRows("backup_final_delete", {
-          relay_id: "relay-one",
-          target_id: "instance-one",
-          backup_id: "final",
-          requested_by: "user-one",
-          status: "backing_up",
-          created_at: now,
-          updated_at: now,
-        })
+        yield* insertDeletion("backing_up", "final")
 
         const error = yield* Effect.flip(reserve({ backupId: "blocked" }))
 

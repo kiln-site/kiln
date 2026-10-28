@@ -51,9 +51,9 @@ import {
 import type { AccessGrant } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import {
-  deleteDatabaseWithoutFinalBackup,
-  deleteDatabaseWithFinalBackup,
-} from "@/lib/final-database-deletion"
+  awaitResourceDeletion,
+  requestResourceDeletion,
+} from "@/lib/resource-deletion.server"
 import { accessPermissions, grantHasPermission } from "@/lib/permissions"
 import type { AccessPermission } from "@/lib/permissions"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
@@ -376,8 +376,7 @@ export const createManagedDatabase = createServerFn({ method: "POST" })
             30_000,
             user.id
           ),
-        unconfirmed:
-          "If it stays waiting, delete it and create it again.",
+        unconfirmed: "If it stays waiting, delete it and create it again.",
         unregister,
       })
       publishDatabaseChange(relay.id, true)
@@ -730,28 +729,30 @@ export const deleteManagedDatabase = createServerFn({ method: "POST" })
         record.relayId === relay.id && record.databaseId === data.databaseId
     )
     if (!database) throw new Error("Database not found on this Relay")
-    const deletion = {
-      databaseId: data.databaseId,
-      relay,
-      requestedBy: user.id,
-    }
     const onRelay = await databaseOnRelay(relay, data.databaseId, user.id)
-    if (onRelay === "missing") {
-      // The Relay lists no container or job for it, as when an earlier
-      // delete stopped partway, so there's nothing to back up. The Relay
-      // removes what's left, keeping any data volume, which a database
-      // without a container can't be backed up from.
-      await deleteDatabaseWithoutFinalBackup({ ...deletion, deleteData: false })
-    } else if (
-      // One that never finished provisioning has no data to back up.
+    // Backed up first when it holds data a dump can reach: not one that
+    // never finished provisioning, nor one the Relay lists nothing of, as
+    // when an earlier delete stopped partway, whose leftover data volume
+    // the Relay keeps.
+    const finalBackup =
       onRelay === "running" &&
       databaseEngineSupportsLogicalBackups(database.engine)
-    ) {
-      await deleteDatabaseWithFinalBackup({ ...deletion, user })
-    } else {
-      await deleteDatabaseWithoutFinalBackup(deletion)
+    if (finalBackup) {
+      await requireRelayPermission({
+        databaseId: data.databaseId,
+        permission: "backup.create",
+        relayId: relay.id,
+        user,
+      })
     }
-    publishDatabaseChange(relay.id, true, data.databaseId)
+    const deletion = await requestResourceDeletion({
+      finalBackup,
+      kind: "database",
+      relayId: relay.id,
+      resourceId: data.databaseId,
+      user,
+    })
+    await awaitResourceDeletion(deletion)
     return { deleted: true }
   })
 
@@ -766,9 +767,7 @@ async function databaseOnRelay(
   // database that exists but failed, which share an observed state.
   const [item] = z
     .array(
-      z
-        .object({ database: relayManagedDatabaseSchema.optional() })
-        .loose()
+      z.object({ database: relayManagedDatabaseSchema.optional() }).loose()
     )
     .parse(
       await databaseRpc(
@@ -785,19 +784,14 @@ async function databaseOnRelay(
 
 function publishDatabaseChange(
   relayId: string,
-  directoryChanged: boolean,
-  deletedDatabaseId?: string
+  directoryChanged: boolean
 ): void {
   publishRealtimeChange({
     audience: { kind: "relays", relayIds: [relayId] },
-    scope: deletedDatabaseId
-      ? { databaseId: deletedDatabaseId, relayId }
-      : { relayId },
-    topics: deletedDatabaseId
-      ? ["databases", "database-directory", "database-credentials"]
-      : directoryChanged
-        ? ["databases", "database-directory"]
-        : ["databases"],
+    scope: { relayId },
+    topics: directoryChanged
+      ? ["databases", "database-directory"]
+      : ["databases"],
     type: "hearth.invalidate",
   })
 }

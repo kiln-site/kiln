@@ -430,12 +430,20 @@ while a labeled Hearth application container is running. Start Hearth
 afterward; normal Relay reconciliation repairs the restored catalog's queued
 snapshot of the backup task.
 
-Deleting a server or database becomes a durable compound operation: create a
-`final_delete` full backup, verify it, then delete the resource. If backup
-creation fails, deletion stops. A separately authorized force-delete escape
-hatch can be added later; it must never be the default. S3 final backups remain
-in the catalog after the resource row is gone. Relay-local final backups remain
-tied to Relay availability.
+Deleting a game server or database is the durable operation `resource.delete`
+(`apps/web/src/lib/resource-deletion.server.ts`), one row per resource in
+`resource_deletion`. It checks the person who asked may still delete it,
+freezes it on its Relay, takes a `final_delete` full backup if one was asked
+for, recording the backup's ID on the deletion in the reservation's
+transaction, and follows that backup to its end. A failed, cancelled, or
+missing backup stops the deletion with nothing deleted and the resource still
+frozen; its page offers to try again, to delete it without a final backup, or
+to keep it. A game server keeps a final backup that finished for its next
+attempt, since it stayed stopped; a frozen database keeps serving what's
+connected to it, so a retry takes a new one. Final backups stay in the catalog
+after the resource is gone, and retention never removes them. Relay-local
+final backups remain tied to Relay availability. No other backup, restore,
+copy, or export of a resource can start while its deletion runs.
 
 ## Linked backups
 

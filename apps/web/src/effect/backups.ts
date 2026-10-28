@@ -250,32 +250,6 @@ interface BackupTaskReconcileState {
   status: BackupTaskStatus
 }
 
-interface FinalInstanceDeletionRow extends RowDataPacket {
-  backup_id: string
-  backup_status: BackupRow["status"]
-  error: string | null
-  relay_id: string
-  requested_by: string
-  status: "backing_up" | "completed" | "deleting" | "failed"
-  target_id: string
-  task_error: string | null
-}
-
-type FinalDatabaseDeletionRow = FinalInstanceDeletionRow
-
-export interface FinalInstanceDeletion {
-  backupId: string
-  backupStatus: BackupRow["status"]
-  error: string | null
-  relayId: string
-  requestedBy: string
-  status: FinalInstanceDeletionRow["status"]
-  targetId: string
-  taskError: string | null
-}
-
-export type FinalDatabaseDeletion = FinalInstanceDeletion
-
 export interface BackupCatalogRecord {
   artifacts: Array<BackupArtifactRecord>
   artifactKind: BackupRow["artifact_kind"]
@@ -430,6 +404,8 @@ const reserveBackupCreateEffect = Effect.fn("backups.reserveCreate")(
     /** An App's folder or a volume's; absent is live. */
     consistency?: BackupConsistency
     createdBy: string
+    /** The deletion a final-delete backup is for, which records it. */
+    deletionId?: string
     exclude: ReadonlyArray<string>
     mode?: BackupCreateTaskInput["mode"]
     name: string
@@ -695,52 +671,33 @@ const reserveBackupCreateEffect = Effect.fn("backups.reserveCreate")(
             now,
           ]
         )
-        if (
-          input.reason === "final_delete" &&
-          input.targetKind === "instance"
-        ) {
-          yield* transaction.execute(
-            `INSERT INTO ${databaseTable("backup_final_delete")}
-              (relay_id, target_id, backup_id, requested_by, status,
-               created_at, updated_at)
-             VALUES (?, ?, ?, ?, 'backing_up', ?, ?)`,
-            [
-              input.relayId,
-              input.targetId,
-              input.backupId,
-              input.createdBy,
-              now,
-              now,
-            ]
-          )
-        }
-        if (
-          input.reason === "final_delete" &&
-          input.targetKind === "database"
-        ) {
-          yield* transaction.execute(
-            `INSERT INTO ${databaseTable("backup_final_database_delete")}
-              (relay_id, target_id, backup_id, requested_by, status,
-               created_at, updated_at)
-             VALUES (?, ?, ?, ?, 'backing_up', ?, ?)`,
-            [
-              input.relayId,
-              input.targetId,
-              input.backupId,
-              input.createdBy,
-              now,
-              now,
-            ]
-          )
-        }
-        // Its scheduled backups stop while it's being deleted. The seam with
-        // deletion: where it runs as `resource.delete`, its own transitions
-        // do this.
         if (input.reason === "final_delete") {
-          yield* invalidateScheduleDeploymentsEffect(transaction, {
-            relayId: input.relayId,
-            target: { id: input.targetId, kind: input.targetKind },
-          })
+          // Recorded on its deletion in the same transaction, so the
+          // deletion follows this backup by its ID and never takes two.
+          const recorded = input.deletionId
+            ? yield* transaction.execute(
+                `UPDATE ${databaseTable("resource_deletion")}
+                    SET backup_id = ?, status = 'backing_up', updated_at = ?
+                  WHERE id = ? AND relay_id = ? AND resource_kind = ?
+                    AND resource_id = ? AND backup_id IS NULL
+                    AND status = 'pending'`,
+                [
+                  input.backupId,
+                  now,
+                  input.deletionId,
+                  input.relayId,
+                  input.targetKind,
+                  input.targetId,
+                ]
+              )
+            : null
+          if (!recorded || recorded.affectedRows !== 1) {
+            return yield* BackupStorageError.make({
+              code: "reservation_failed",
+              operation: "backup.finalDelete",
+              reason: "This deletion isn't waiting for a final backup",
+            })
+          }
         }
         return {
           artifacts,
@@ -765,6 +722,8 @@ export const reserveInstanceBackupEffect = Effect.fn("backups.reserve")(
   (input: {
     backupId: string
     createdBy: string
+    /** The deletion a final-delete backup is for. */
+    deletionId?: string
     mode?: BackupCreateTaskInput["mode"]
     name: string
     reason?: BackupCreateTaskInput["reason"]
@@ -787,6 +746,8 @@ export const reserveDatabaseBackupEffect = Effect.fn("backups.reserveDatabase")(
   (input: {
     backupId: string
     createdBy: string
+    /** The deletion a final-delete backup is for. */
+    deletionId?: string
     name: string
     reason?: BackupCreateTaskInput["reason"]
     relayId: string
@@ -878,8 +839,6 @@ export const scheduledBackupAdmissionEffect = Effect.fn(
     "backup_scheduled_admission",
     (transaction) =>
       Effect.gen(function* () {
-        // The seam with deletion: on this base, the final-delete tables;
-        // where deletion runs as `resource.delete`, its own table.
         const deleting = yield* Effect.result(
           refuseIfFinalDeletionInProgress(transaction, {
             operation: "backup.scheduled",
@@ -2144,23 +2103,14 @@ export const reserveBackupRestoreEffect = Effect.fn("backups.reserveRestore")(
                 LIMIT 1`,
               [backup.relay_id, backup.target_kind, backup.target_id]
             )
-          // Apps and volumes have no final deletions of their own yet.
-          const finalDeletionTable =
-            backup.target_kind === "database"
-              ? "backup_final_database_delete"
-              : backup.target_kind === "instance"
-                ? "backup_final_delete"
-                : null
-          const finalDeletions = finalDeletionTable
-            ? yield* transaction.queryRows<RowDataPacket>(
-                `SELECT target_id
-                   FROM ${databaseTable(finalDeletionTable)}
-                  WHERE relay_id = ? AND target_id = ?
-                    AND status IN ('backing_up', 'deleting')
-                  LIMIT 1`,
-                [backup.relay_id, backup.target_id]
-              )
-            : []
+          const finalDeletions = yield* transaction.queryRows<RowDataPacket>(
+            `SELECT id
+                 FROM ${databaseTable("resource_deletion")}
+                WHERE relay_id = ? AND resource_kind = ? AND resource_id = ?
+                  AND status IN ('pending', 'backing_up', 'deleting')
+                LIMIT 1`,
+            [backup.relay_id, backup.target_kind, backup.target_id]
+          )
           if (conflictingTasks[0] || finalDeletions[0]) {
             return yield* BackupStorageError.make({
               code: "restore_in_progress",
@@ -2460,12 +2410,7 @@ export const forgetBackupEffect = Effect.fn("backups.forget")(function* (
         [backupId]
       )
       yield* transaction.execute(
-        `DELETE FROM ${databaseTable("backup_final_database_delete")}
-          WHERE backup_id = ?`,
-        [backupId]
-      )
-      yield* transaction.execute(
-        `DELETE FROM ${databaseTable("backup_final_delete")}
+        `DELETE FROM ${databaseTable("resource_deletion")}
           WHERE backup_id = ?`,
         [backupId]
       )
@@ -2518,12 +2463,7 @@ export const forgetRelayBackupsEffect = Effect.fn("backups.forgetRelay")(
           [relayId]
         )
         yield* transaction.execute(
-          `DELETE FROM ${databaseTable("backup_final_database_delete")}
-            WHERE relay_id = ?`,
-          [relayId]
-        )
-        yield* transaction.execute(
-          `DELETE FROM ${databaseTable("backup_final_delete")}
+          `DELETE FROM ${databaseTable("resource_deletion")}
             WHERE relay_id = ?`,
           [relayId]
         )
@@ -3355,219 +3295,6 @@ export const updateBackupExcludesEffect = Effect.fn("backups.updateExcludes")(
   }
 )
 
-export const getFinalInstanceDeletionEffect = Effect.fn(
-  "backups.finalDelete.get"
-)(function* (relayId: string, targetId: string) {
-  const database = yield* Database
-  const rows = yield* database.queryRows<FinalInstanceDeletionRow>(
-    "backup_final_delete_get",
-    `${finalInstanceDeletionSelect}
-      WHERE final_delete.relay_id = ? AND final_delete.target_id = ?
-      LIMIT 1`,
-    [relayId, targetId]
-  )
-  return rows[0] ? toFinalInstanceDeletion(rows[0]) : null
-})
-
-export const listPendingFinalInstanceDeletionsEffect = Effect.fn(
-  "backups.finalDelete.listPending"
-)(function* (relayId: string) {
-  const database = yield* Database
-  const rows = yield* database.queryRows<FinalInstanceDeletionRow>(
-    "backup_final_delete_list_pending",
-    `${finalInstanceDeletionSelect}
-      WHERE final_delete.relay_id = ?
-        AND final_delete.status IN ('backing_up', 'deleting')
-      ORDER BY final_delete.created_at ASC, final_delete.target_id ASC`,
-    [relayId]
-  )
-  return rows.map(toFinalInstanceDeletion)
-})
-
-export const clearFailedFinalInstanceDeletionEffect = Effect.fn(
-  "backups.finalDelete.clearFailed"
-)(function* (relayId: string, targetId: string) {
-  const database = yield* Database
-  const result = yield* database.execute(
-    "backup_final_delete_clear_failed",
-    `DELETE FROM ${databaseTable("backup_final_delete")}
-      WHERE relay_id = ? AND target_id = ? AND status = 'failed'`,
-    [relayId, targetId]
-  )
-  return result.affectedRows > 0
-})
-
-export const updateFinalInstanceDeletionEffect = Effect.fn(
-  "backups.finalDelete.update"
-)(function* (input: {
-  error: string | null
-  from: ReadonlyArray<FinalInstanceDeletion["status"]>
-  relayId: string
-  status: FinalInstanceDeletion["status"]
-  targetId: string
-}) {
-  const database = yield* Database
-  const now = yield* Clock.currentTimeMillis
-  const placeholders = input.from.map(() => "?").join(", ")
-  return yield* database.transaction(
-    "backup_final_delete_update",
-    (transaction) =>
-      Effect.gen(function* () {
-        const result = yield* transaction.execute(
-          `UPDATE ${databaseTable("backup_final_delete")}
-            SET status = ?, error = ?, updated_at = ?
-          WHERE relay_id = ? AND target_id = ?
-            AND status IN (${placeholders})`,
-          [
-            input.status,
-            input.error,
-            now,
-            input.relayId,
-            input.targetId,
-            ...input.from,
-          ]
-        )
-        // Stopped, it may be backed up on schedule again.
-        if (result.affectedRows > 0 && input.status === "failed") {
-          yield* invalidateScheduleDeploymentsEffect(transaction, {
-            relayId: input.relayId,
-            target: { id: input.targetId, kind: "instance" },
-          })
-        }
-        return result.affectedRows > 0
-      })
-  )
-})
-
-export const getFinalDatabaseDeletionEffect = Effect.fn(
-  "backups.finalDatabaseDelete.get"
-)(function* (relayId: string, targetId: string) {
-  const database = yield* Database
-  const rows = yield* database.queryRows<FinalDatabaseDeletionRow>(
-    "backup_final_database_delete_get",
-    `${finalDatabaseDeletionSelect}
-      WHERE final_delete.relay_id = ? AND final_delete.target_id = ?
-      LIMIT 1`,
-    [relayId, targetId]
-  )
-  return rows[0] ? toFinalInstanceDeletion(rows[0]) : null
-})
-
-export const listPendingFinalDatabaseDeletionsEffect = Effect.fn(
-  "backups.finalDatabaseDelete.listPending"
-)(function* (relayId: string) {
-  const database = yield* Database
-  const rows = yield* database.queryRows<FinalDatabaseDeletionRow>(
-    "backup_final_database_delete_list_pending",
-    `${finalDatabaseDeletionSelect}
-      WHERE final_delete.relay_id = ?
-        AND final_delete.status IN ('backing_up', 'deleting')
-      ORDER BY final_delete.created_at ASC, final_delete.target_id ASC`,
-    [relayId]
-  )
-  return rows.map(toFinalInstanceDeletion)
-})
-
-export const clearFailedFinalDatabaseDeletionEffect = Effect.fn(
-  "backups.finalDatabaseDelete.clearFailed"
-)(function* (relayId: string, targetId: string) {
-  const database = yield* Database
-  const result = yield* database.execute(
-    "backup_final_database_delete_clear_failed",
-    `DELETE FROM ${databaseTable("backup_final_database_delete")}
-      WHERE relay_id = ? AND target_id = ? AND status = 'failed'`,
-    [relayId, targetId]
-  )
-  return result.affectedRows > 0
-})
-
-export const updateFinalDatabaseDeletionEffect = Effect.fn(
-  "backups.finalDatabaseDelete.update"
-)(function* (input: {
-  error: string | null
-  from: ReadonlyArray<FinalDatabaseDeletion["status"]>
-  relayId: string
-  status: FinalDatabaseDeletion["status"]
-  targetId: string
-}) {
-  const database = yield* Database
-  const now = yield* Clock.currentTimeMillis
-  const placeholders = input.from.map(() => "?").join(", ")
-  return yield* database.transaction(
-    "backup_final_database_delete_update",
-    (transaction) =>
-      Effect.gen(function* () {
-        const result = yield* transaction.execute(
-          `UPDATE ${databaseTable("backup_final_database_delete")}
-            SET status = ?, error = ?, updated_at = ?
-          WHERE relay_id = ? AND target_id = ?
-            AND status IN (${placeholders})`,
-          [
-            input.status,
-            input.error,
-            now,
-            input.relayId,
-            input.targetId,
-            ...input.from,
-          ]
-        )
-        // Stopped, it may be backed up on schedule again.
-        if (result.affectedRows > 0 && input.status === "failed") {
-          yield* invalidateScheduleDeploymentsEffect(transaction, {
-            relayId: input.relayId,
-            target: { id: input.targetId, kind: "database" },
-          })
-        }
-        return result.affectedRows > 0
-      })
-  )
-})
-
-const finalInstanceDeletionSelect = `SELECT final_delete.relay_id,
-       final_delete.target_id, final_delete.backup_id,
-       final_delete.requested_by, final_delete.status, final_delete.error,
-       backup.status AS backup_status,
-       create_task.error AS task_error
-  FROM ${databaseTable("backup_final_delete")} final_delete
-  JOIN ${databaseTable("backup")} backup ON backup.id = final_delete.backup_id
-  JOIN ${databaseTable("backup_task")} create_task ON create_task.id = (
-    SELECT task.id
-      FROM ${databaseTable("backup_task")} task
-     WHERE task.backup_id = backup.id AND task.task_kind = 'create'
-     ORDER BY task.created_at DESC, task.id DESC
-     LIMIT 1
-  )`
-
-const finalDatabaseDeletionSelect = `SELECT final_delete.relay_id,
-       final_delete.target_id, final_delete.backup_id,
-       final_delete.requested_by, final_delete.status, final_delete.error,
-       backup.status AS backup_status,
-       create_task.error AS task_error
-  FROM ${databaseTable("backup_final_database_delete")} final_delete
-  JOIN ${databaseTable("backup")} backup ON backup.id = final_delete.backup_id
-  JOIN ${databaseTable("backup_task")} create_task ON create_task.id = (
-    SELECT task.id
-      FROM ${databaseTable("backup_task")} task
-     WHERE task.backup_id = backup.id AND task.task_kind = 'create'
-     ORDER BY task.created_at DESC, task.id DESC
-     LIMIT 1
-  )`
-
-function toFinalInstanceDeletion(
-  row: FinalInstanceDeletionRow
-): FinalInstanceDeletion {
-  return {
-    backupId: row.backup_id,
-    backupStatus: row.backup_status,
-    error: row.error,
-    relayId: row.relay_id,
-    requestedBy: row.requested_by,
-    status: row.status,
-    targetId: row.target_id,
-    taskError: row.task_error,
-  }
-}
-
 export function clampBackupExportTtlMs(ttlMs: number): number {
   if (!Number.isFinite(ttlMs)) return BACKUP_EXPORT_TTL_MIN_MS
   return Math.min(
@@ -3836,21 +3563,17 @@ const refuseIfFinalDeletionInProgress = Effect.fnUntraced(function* (
     targetKind: BackupTargetKind
   }
 ) {
-  if (input.targetKind !== "database" && input.targetKind !== "instance") return
-  const table =
-    input.targetKind === "database"
-      ? "backup_final_database_delete"
-      : "backup_final_delete"
+  if (input.targetKind === "platform") return
   const rows = yield* transaction.queryRows<RowDataPacket>(
-    `SELECT backup_id
-       FROM ${databaseTable(table)}
-      WHERE relay_id = ? AND target_id = ?
-        AND status IN ('backing_up', 'deleting')
+    `SELECT id
+       FROM ${databaseTable("resource_deletion")}
+      WHERE relay_id = ? AND resource_kind = ? AND resource_id = ?
+        AND status IN ('pending', 'backing_up', 'deleting')
       LIMIT 1
       FOR UPDATE`,
-    [input.relayId, input.targetId]
+    [input.relayId, input.targetKind, input.targetId]
   )
-  if (rows[0]?.backup_id) {
+  if (rows[0]) {
     return yield* BackupStorageError.make({
       code: "final_delete_in_progress",
       operation: input.operation,

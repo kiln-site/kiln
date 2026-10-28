@@ -671,7 +671,7 @@ Each item moves when its phase comes. Links point at where it lives today.
 - [ ] Relay reservations for the first game server move, with ownership, inheritance by jobs, fenced release, and a Relay-side release
 - [ ] Browser console, uploads, SFTP, schedules, and crash recovery respect reservations: people refused, schedules and recovery waiting
 - [ ] Deletion's Tailscale preparation as a step of the deletion operation
-- [ ] Deleting a game server, with and without a final backup: `deleteInstance` ([`relay.ts`](../apps/web/src/server/relay.ts), [`final-instance-deletion.ts`](../apps/web/src/lib/final-instance-deletion.ts))
+- [x] Deleting a game server or database, with and without a final backup: `deleteInstance` ([`relay.ts`](../apps/web/src/server/relay.ts)), `deleteManagedDatabase` ([`databases.ts`](../apps/web/src/server/databases.ts)), the CLI's deletion, and a move's old server, as `resource.delete` ([`resource-deletion.server.ts`](../apps/web/src/lib/resource-deletion.server.ts)): access checked again, the resource frozen on its Relay, its final backup followed by ID, deleted at most once, then cleaned up. The two final-delete tables are one, their rows carried over, and their worker is gone
 - [ ] Post-provision jobs ([`instance-post-provision.ts`](../apps/web/src/lib/instance-post-provision.ts))
 - [ ] Backup copies (`scheduleBackupCopyProcessing`), `copyBackupToDestination`
 - [ ] Backups: `createInstanceBackup`, `createDatabaseBackup`, `createPlatformBackup`, `cancelBackup`, `deleteBackup`, `restoreInstanceBackup`, `restoreDatabaseBackup`, `syncBackupRuns` ([`backups.ts`](../apps/web/src/server/backups.ts)); backup maintenance

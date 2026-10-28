@@ -12,7 +12,7 @@ import {
 import { BackupStorageError, CredentialError } from "@/effect/errors"
 import { databaseTableName } from "@/lib/database-config"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
-import { insertBackup, insertRows, selectRows } from "@/test/seed"
+import { insertBackup, insertRelay, insertRows, selectRows } from "@/test/seed"
 
 import { deleteS3BackupPrefix } from "./client"
 
@@ -146,12 +146,17 @@ describeMysql("backup storage deletion", () => {
           yield* seedStorage
           yield* insertRepository("repo-one")
           yield* insertBackup("final-backup")
-          yield* insertRows("backup_final_delete", {
+          yield* insertRelay("relay-one")
+          yield* insertRows("resource_deletion", {
+            id: "00000000-0000-4000-8000-0000000000de",
             relay_id: "relay-one",
-            target_id: "instance-one",
+            resource_kind: "instance",
+            resource_id: "instance-one",
+            final_backup: true,
             backup_id: "final-backup",
-            requested_by: "user-one",
             status: "deleting",
+            requested_by: "user-one",
+            actor: JSON.stringify({ id: "user-one" }),
             created_at: now,
             updated_at: now,
           })

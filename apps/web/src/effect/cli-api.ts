@@ -90,7 +90,10 @@ import {
   dispatchBackupTask,
   reconcileRelayBackups,
 } from "@/lib/backup-reconciliation"
-import { deleteInstanceWithFinalBackup } from "@/lib/final-instance-deletion"
+import {
+  awaitResourceDeletion,
+  requestResourceDeletion,
+} from "@/lib/resource-deletion.server"
 import { kilnInstallationId } from "@/effect/installation"
 import {
   listPersistedRelaysEffect,
@@ -994,13 +997,16 @@ export const deleteCliServerEffect = Effect.fn("cli.api.servers.delete")(
     const relay = yield* authorizeTarget(principal, input, "instance.delete")
     yield* authorizeTarget(principal, input, "backup.create")
     yield* Effect.tryPromise({
-      try: () =>
-        deleteInstanceWithFinalBackup({
-          instanceId: input.instanceId,
-          relay,
-          requestedBy: principal.user.id,
-          user: principal.user,
-        }),
+      try: async () =>
+        awaitResourceDeletion(
+          await requestResourceDeletion({
+            finalBackup: true,
+            kind: "instance",
+            relayId: relay.id,
+            resourceId: input.instanceId,
+            user: principal.user,
+          })
+        ),
       catch: (cause) => cause,
     })
     const deleted = { deleted: true as const, instanceId: input.instanceId }

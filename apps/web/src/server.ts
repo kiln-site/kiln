@@ -34,6 +34,7 @@ import {
   stopAppDeploymentPolling,
 } from "./lib/app-deployments.server"
 import { resumeTailscaleNetworkDeletion } from "./lib/tailscale-cleanup.server"
+import { resumeResourceDeletions } from "./lib/resource-deletion.server"
 import {
   startAppImageUpdateChecks,
   stopAppImageUpdateChecks,
@@ -144,6 +145,15 @@ forkAppEffect(
 )
 scheduleBackupCopyProcessing()
 scheduleInstancePostProvisionProcessing()
+// Deletions a previous Hearth, or the final-delete worker before it, left
+// running carry on, each as the operation it was.
+forkAppEffect(
+  "ResourceDeletions.resume",
+  resumeResourceDeletions().pipe(
+    Effect.retry(Schedule.spaced("30 seconds")),
+    Effect.ignore
+  )
+)
 forkAppEffect(
   "TailscaleCleanup.resume",
   resumeTailscaleNetworkDeletion().pipe(

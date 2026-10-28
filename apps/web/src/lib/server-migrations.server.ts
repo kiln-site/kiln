@@ -29,19 +29,15 @@ import type { AppCache } from "@/effect/cache"
 import { Database } from "@/effect/database"
 import {
   getBackupCatalogRecordEffect,
-  getFinalInstanceDeletionEffect,
   linkInstanceBackupsEffect,
 } from "@/effect/backups"
+import { findResourceDeletionEffect } from "@/effect/resource-deletions"
 import {
   notifyUsersEffect,
   publishNotificationChange,
 } from "@/effect/notifications"
 import { forkAppWorker, runAppEffect } from "@/effect/runtime"
-import {
-  accountPolicyFromRow,
-  isAccountEnabled,
-  isAccountVerified,
-} from "@/lib/account-policy"
+import { currentActingUser } from "@/operations/acting-user"
 import {
   copyInstanceAccessEffect,
   publishResourceAccessChange,
@@ -50,10 +46,7 @@ import type { AuthenticatedUser } from "@/lib/auth-session"
 import { advanceAuthorizationRevisionEffect } from "@/lib/authorization-revision"
 import { publishBackupChange } from "@/lib/backup-realtime.server"
 import { databaseTable } from "@/lib/database-config"
-import {
-  deleteInstanceWithoutFinalBackup,
-  ensureFinalInstanceDeletion,
-} from "@/lib/final-instance-deletion"
+import { requestResourceDeletion } from "@/lib/resource-deletion.server"
 import { startPollingWorker } from "@/lib/polling-worker"
 import { provisioningInstanceId } from "@/lib/provisioning.server"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
@@ -462,7 +455,7 @@ const migrationStep = Effect.fnUntraced(function* (
   row: MigrationRow,
   generation: number
 ) {
-  const actor = yield* currentActor(row)
+  const actor = yield* currentActingUser(row.requested_by, row.actor)
   const options = migrationOptions(row)
   switch (row.step) {
     case "backup":
@@ -885,10 +878,11 @@ const finishMigration = Effect.fnUntraced(function* (
     yield* finish(
       "delete",
       promise(() =>
-        ensureFinalInstanceDeletion({
-          instanceId: from.instanceId,
-          relay: source,
-          requestedBy: actor.id,
+        requestResourceDeletion({
+          finalBackup: true,
+          kind: "instance",
+          relayId: source.id,
+          resourceId: from.instanceId,
           user: actor,
           ...(deleteSource.storageId === undefined
             ? {}
@@ -992,10 +986,13 @@ const endMigration = Effect.fnUntraced(function* (
     row.mode === "migrate" &&
     row.step === "finish" &&
     migrationOptions(row).deleteSource !== null &&
-    ((yield* getFinalInstanceDeletionEffect(
-      row.source_relay_id,
-      row.source_instance_id
-    ))?.status ?? "failed") !== "failed"
+    sourceHandedToDeletion(
+      yield* findResourceDeletionEffect(
+        row.source_relay_id,
+        "instance",
+        row.source_instance_id
+      )
+    )
   const state = sourceDeleting ? "completed" : ending
   const error = sourceDeleting ? null : endingError
   // Recorded as ending before anything is undone, by a write that holds
@@ -1017,7 +1014,9 @@ const endMigration = Effect.fnUntraced(function* (
   }
   const cleanup: Array<string> = []
   if (state !== "completed") {
-    const actor = yield* currentActor(row).pipe(Effect.option)
+    const actor = yield* currentActingUser(row.requested_by, row.actor).pipe(
+      Effect.option
+    )
     if (actor._tag === "Some") {
       if (row.transfer_id) {
         yield* cancelRelayTransferEffect(actor.value, {
@@ -1026,16 +1025,17 @@ const endMigration = Effect.fnUntraced(function* (
         }).pipe(Effect.catch(() => Effect.void))
       }
       if (row.destination_created && row.step !== "finish") {
-        yield* relay(row.destination_relay_id).pipe(
-          Effect.flatMap((destination) =>
-            promise(() =>
-              deleteInstanceWithoutFinalBackup({
-                instanceId: row.destination_instance_id,
-                relay: destination,
-                requestedBy: actor.value.id,
-              })
-            )
-          ),
+        // Deleted in the background, as any deletion is; one that stops
+        // says so on the copy's page.
+        yield* promise(() =>
+          requestResourceDeletion({
+            finalBackup: false,
+            kind: "instance",
+            relayId: row.destination_relay_id,
+            resourceId: row.destination_instance_id,
+            user: actor.value,
+          })
+        ).pipe(
           Effect.catch((cause) =>
             Effect.sync(() => {
               cleanup.push(
@@ -1206,52 +1206,6 @@ const loadMigration = Effect.fnUntraced(function* (id: string) {
   return rows[0] ?? null
 })
 
-interface ActorRow extends RowDataPacket {
-  emailVerifiedAt: Date | null
-  legacyVerificationRecordedAt: Date | null
-  manuallyVerifiedAt: Date | null
-  role: string | null
-  status: string | null
-  statusExpiresAt: Date | null
-}
-
-// The person the migration acts for, as their account is now: one that's
-// been disabled since stops it.
-const currentActor = Effect.fnUntraced(function* (row: MigrationRow) {
-  const saved = (
-    typeof row.actor === "string" ? JSON.parse(row.actor) : row.actor
-  ) as AuthenticatedUser
-  if (saved.isDevelopmentBypass) return saved
-  const database = yield* Database
-  const rows = yield* database.queryRows<ActorRow>(
-    "serverMigrations.actor",
-    `SELECT role, status, statusExpiresAt, emailVerifiedAt,
-            manuallyVerifiedAt, legacyVerificationRecordedAt
-       FROM ${databaseTable("user")} WHERE id = ? LIMIT 1`,
-    [row.requested_by]
-  )
-  const current = rows[0]
-  if (!current) {
-    return yield* Effect.fail(
-      new Error("The account that started this is gone")
-    )
-  }
-  const actor: AuthenticatedUser = {
-    ...saved,
-    ...accountPolicyFromRow(current),
-    role:
-      current.role === "admin" || current.role === "relay_creator"
-        ? current.role
-        : "user",
-  }
-  if (!isAccountEnabled(actor) || !isAccountVerified(actor)) {
-    return yield* Effect.fail(
-      new Error("The account that started this can no longer act")
-    )
-  }
-  return actor
-})
-
 const instanceOwner = Effect.fnUntraced(function* (
   relayId: string,
   instanceId: string
@@ -1376,6 +1330,16 @@ function migrationView(row: MigrationRow): ServerMigrationView {
     step: row.step,
     totalBytes: row.total_bytes === null ? null : Number(row.total_bytes),
   }
+}
+
+// The old server's deletion was asked for and hasn't stopped: the move is
+// done, however its last part ended.
+function sourceHandedToDeletion(deletion: { status: string } | null): boolean {
+  return (
+    deletion !== null &&
+    deletion.status !== "failed" &&
+    deletion.status !== "cancelled"
+  )
 }
 
 function migrationCancellable(row: MigrationRow): boolean {

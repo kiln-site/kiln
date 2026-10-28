@@ -1,3 +1,4 @@
+import { resourceDeletionQueryOptions } from "@/lib/resource-deletion-queries"
 import { NO_RESOURCE_LIMITS } from "@workspace/contracts"
 import { DatabaseKindIcon } from "@/components/instance-kind-icon"
 import { instanceInventoryScope } from "@/lib/instance-inventory"
@@ -278,7 +279,12 @@ function DatabasePowerControls({
 }) {
   const { database } = workspace
   const queryClient = useQueryClient()
-  const canPower = database.permissions.includes("database.power")
+  const { data: deletion } = useQuery(resourceDeletionQueryOptions({
+    kind: "database",
+    relayId: database.relayId,
+    resourceId: database.id,
+  }))
+  const canPower = !deletion && database.permissions.includes("database.power")
   const powerPermissions = React.useMemo(
     () => ({ kill: false, restart: canPower, start: canPower, stop: canPower }),
     [canPower]

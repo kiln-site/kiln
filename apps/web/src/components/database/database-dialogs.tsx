@@ -24,7 +24,10 @@ import {
 import { Input } from "@workspace/ui/components/input"
 import { showToast } from "@workspace/ui/components/sonner"
 
-import { databaseFileRootId } from "@workspace/contracts"
+import {
+  databaseEngineSupportsLogicalBackups,
+  databaseFileRootId,
+} from "@workspace/contracts"
 
 import {
   showDatabaseOperationError,
@@ -565,12 +568,14 @@ export function DeleteDatabaseDialog({
           <DialogDescription>
             The container, isolated network, persistent data volume,
             credentials, and access grants will be permanently removed.
+            Schedules left with nothing else to run on are deleted too.
           </DialogDescription>
         </DialogHeader>
         <div className="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs light:bg-destructive/10">
           <CircleAlert className="mt-0.5 size-4 shrink-0 text-destructive" />
-          This action cannot be undone. Export a SQL dump first if you need a
-          recovery copy.
+          {databaseEngineSupportsLogicalBackups(database.engine)
+            ? "This action cannot be undone. While it's running, Kiln backs it up one last time first. Game servers and Apps connected to it can still write to it until it's deleted, and what they write after that backup starts isn't in it."
+            : "This action cannot be undone. Export a SQL dump first if you need a recovery copy."}
         </div>
         {remove.error ? (
           <p className="text-xs text-destructive">{remove.error.message}</p>

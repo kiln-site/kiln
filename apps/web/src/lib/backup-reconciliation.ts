@@ -75,17 +75,7 @@ export async function reconcileRelayBackups(
     if (relayTask && !relayTask.inputRefreshRequired) continue
     await dispatchBackupTask(relay, task, subject)
   }
-  const [instanceDeletion, databaseDeletion] = await Promise.all([
-    import("@/lib/final-instance-deletion"),
-    import("@/lib/final-database-deletion"),
-  ])
-  const [instancesPending, databasesPending] = await Promise.all([
-    instanceDeletion.processFinalInstanceDeletions(relay),
-    databaseDeletion.processFinalDatabaseDeletions(relay),
-  ])
   if (
-    instancesPending ||
-    databasesPending ||
     dispatchable.length > 0 ||
     tasks.some((task) => task.status === "queued" || task.status === "running")
   ) {

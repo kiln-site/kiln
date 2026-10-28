@@ -1,0 +1,741 @@
+import { randomUUID } from "node:crypto"
+
+import {
+  relayControlDeadlineMs,
+  relaySnapshotSchema,
+} from "@workspace/contracts"
+import { exclusive, shared } from "@workspace/operations"
+import { Cause, Duration, Effect, Schema } from "effect"
+import { Activity, DurableClock } from "effect/workflow"
+import { z } from "zod"
+
+import {
+  purgeInstanceBackupRepositoriesEffect,
+  reserveDatabaseBackupEffect,
+  reserveInstanceBackupEffect,
+} from "@/effect/backups"
+import { promiseEffect } from "@/effect/promise"
+import {
+  finalBackupStateEffect,
+  findResourceDeletionEffect,
+  listUnfinishedResourceDeletionsEffect,
+  loadResourceDeletionEffect,
+  recordRelayDeletedEffect,
+  recordResourceDeletionCancelledEffect,
+  recordResourceDeletionStatusEffect,
+  requestResourceDeletionRowEffect,
+  unfinishedDeletionStatuses,
+  type ResourceDeletion,
+  type ResourceDeletionKind,
+} from "@/effect/resource-deletions"
+import { runAppEffect } from "@/effect/runtime"
+import { requireRelayPermissionsEffect } from "@/lib/access-control"
+import type { AuthenticatedUser } from "@/lib/auth-session"
+import { timestampedBackupName } from "@/lib/backup-name"
+import { publishBackupChange } from "@/lib/backup-realtime.server"
+import { resolveAuthorizedBackupStorageSelection } from "@/lib/backup-storage-selection.server"
+import { publishRealtimeChange } from "@/lib/realtime-source.server"
+import { relayRpc } from "@/lib/relay-connection"
+import { activeRelay } from "@/lib/relay-registry"
+import { currentActingUser } from "@/operations/acting-user"
+import { durableOperation, startDurableOperation } from "@/operations/durable"
+import { RelayCommandError, relayCommand } from "@/operations/relay-command"
+import { quickOperation, runOperation } from "@/operations/run"
+import { cleanUpDeletedResourceEffect } from "@/server/resource-deletion-cleanup"
+
+// Deleting a game server or database, as one durable operation per attempt
+// (docs/resource-unification.md, Deletion): check the person who asked may
+// still delete it, freeze it on its Relay, take its final backup if one was
+// asked for, delete it on the Relay, then clean up after it in Hearth. Each
+// step is safe to run again after a restart, and a finished one doesn't run
+// again. Its row (`resource_deletion`) says how far it got; a failure stops
+// there with the resource still frozen, for its person to try again, delete
+// it without a final backup, or keep it. Once the Relay has deleted it,
+// cleanup always finishes, as system work, whoever asked.
+//
+// It holds the resource shared and its deletion exclusive, not the whole
+// resource: its cleanup changes the resource's DNS, which takes the
+// resource shared and its DNS exclusive, and would otherwise wait for it.
+// Its final backup takes no Hearth locks.
+
+/** A step of a deletion that stopped it, with what to tell its person. */
+export class ResourceDeletionError extends Schema.TaggedError<ResourceDeletionError>()(
+  "ResourceDeletionError",
+  { message: Schema.String }
+) {}
+
+const DeletionInput = Schema.Struct({
+  attempt: Schema.Number,
+  deletionId: Schema.String,
+  kind: Schema.Literals(["instance", "database"]),
+  relayId: Schema.String,
+  resourceId: Schema.String,
+})
+type DeletionInput = typeof DeletionInput.Type
+
+const deletionLocks = (resource: {
+  kind: ResourceDeletionKind
+  relayId: string
+  resourceId: string
+}) => {
+  const whole = `${resource.kind}:${resource.relayId}/${resource.resourceId}`
+  return [shared(whole), exclusive(`${whole}/delete`)]
+}
+
+// How long to wait before looking at the final backup again: soon at first,
+// then every half minute while it runs.
+const backupCheckDelay = (check: number) =>
+  Duration.millis(Math.min(30_000, Math.round(2_000 * 1.5 ** (check - 1))))
+
+// Cleanup that failed is tried again after each of these, then the deletion
+// stops for someone to look, with the Relay's part done.
+const CLEANUP_RETRY_AFTER: ReadonlyArray<Duration.Input> = [
+  "5 seconds",
+  "30 seconds",
+  "2 minutes",
+  "10 minutes",
+]
+
+const Start = Schema.Struct({
+  current: Schema.Boolean,
+  finalBackup: Schema.Boolean,
+  relayDeleted: Schema.Boolean,
+})
+
+const BackupCheck = Schema.Struct({
+  error: Schema.NullOr(Schema.String),
+  state: Schema.Literals(["available", "failed", "missing", "running"]),
+})
+
+export const deleteResource = durableOperation({
+  error: ResourceDeletionError,
+  input: DeletionInput,
+  kind: "resource.delete",
+  locks: deletionLocks,
+  run: (input) =>
+    deletionSteps(input).pipe(
+      // Recorded on the deletion, for its person to see and act on. A run
+      // waiting to resume isn't over.
+      Effect.onError((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.void
+          : Activity.make({
+              name: "failed",
+              execute: recordStatus(input, "failed", causeMessage(cause)),
+            })
+      )
+    ),
+  version: 1,
+})
+
+const deletionSteps = (input: DeletionInput) =>
+  Effect.gen(function* () {
+    const start = yield* Activity.make({
+      name: "start",
+      success: Start,
+      execute: loadResourceDeletionEffect(input.deletionId).pipe(
+        Effect.map((deletion) => ({
+          // Started again for an attempt that's been replaced or finished,
+          // as by a restart's carry-over: nothing to do.
+          current:
+            deletion !== null &&
+            deletion.attempt === input.attempt &&
+            unfinishedDeletionStatuses.some(
+              (status) => status === deletion.status
+            ),
+          finalBackup: deletion?.finalBackup ?? false,
+          relayDeleted: deletion?.relayDeletedAt != null,
+        })),
+        Effect.orDie
+      ),
+    })
+    if (!start.current) return
+    if (!start.relayDeleted) {
+      yield* Activity.make({
+        name: "access",
+        error: ResourceDeletionError,
+        execute: checkAccess(input),
+      })
+      yield* relayCommand({
+        name: "freeze",
+        operation: "resource.freeze",
+        payload: {
+          deletionId: input.deletionId,
+          id: input.resourceId,
+          kind: input.kind,
+        },
+        relayId: input.relayId,
+        // It went through: the resource is frozen for this deletion.
+        recover: Effect.succeed({ frozen: true }),
+        timeoutMs: relayControlDeadlineMs("resource.freeze"),
+      }).pipe(Effect.mapError(asDeletionError))
+      if (start.finalBackup) yield* finalBackup(input)
+      yield* Activity.make({
+        name: "deleting",
+        execute: recordStatus(input, "deleting", null),
+      })
+      yield* deleteOnRelay(input)
+      yield* Activity.make({
+        name: "relay-deleted",
+        execute: recordRelayDeletedEffect(input.deletionId).pipe(Effect.orDie),
+      })
+    }
+    for (let round = 1; ; round++) {
+      const failure = yield* Activity.make({
+        name: `cleanup/${round}`,
+        success: Schema.NullOr(Schema.String),
+        execute: cleanUp(input),
+      })
+      if (failure === null) break
+      const retryAfter = CLEANUP_RETRY_AFTER[round - 1]
+      if (!retryAfter) {
+        return yield* new ResourceDeletionError({
+          message: `The ${noun(input.kind)} was deleted, but cleaning up after it failed: ${failure}`,
+        })
+      }
+      yield* DurableClock.sleep({
+        duration: retryAfter,
+        name: `cleanup/retry/${round}`,
+      })
+    }
+    yield* Activity.make({
+      name: "completed",
+      execute: recordStatus(input, "completed", null).pipe(
+        Effect.tap(() => Effect.sync(() => publishDeleted(input)))
+      ),
+    })
+  })
+
+// The person who asked may still delete it, and back it up where they
+// chose, as their account and access are now.
+const checkAccess = (input: DeletionInput) =>
+  Effect.gen(function* () {
+    const deletion = yield* loadResourceDeletionEffect(input.deletionId)
+    if (!deletion) return yield* Effect.die("The deletion is gone")
+    const user = yield* currentActingUser(deletion.requestedBy, deletion.actor)
+    yield* requireRelayPermissionsEffect({
+      permissions: [
+        input.kind === "instance" ? "instance.delete" : "database.delete",
+        ...(deletion.finalBackup ? (["backup.create"] as const) : []),
+      ],
+      relayId: input.relayId,
+      user,
+      ...(input.kind === "instance"
+        ? { instanceId: input.resourceId }
+        : { databaseId: input.resourceId }),
+    })
+    if (deletion.finalBackup && deletion.storageId !== null) {
+      yield* promiseEffect(() =>
+        resolveAuthorizedBackupStorageSelection({
+          relayId: input.relayId,
+          storageId: deletion.storageId,
+          targetId: input.resourceId,
+          targetKind: input.kind,
+          user,
+        })
+      )
+    }
+  }).pipe(
+    Effect.mapError(
+      (cause) =>
+        new ResourceDeletionError({
+          message: `Nothing was deleted: ${messageOf(cause)}`,
+        })
+    )
+  )
+
+// Reserves the final backup once, recording it on the deletion, and follows
+// it to its end by its ID. One that fails, or goes, stops the deletion with
+// the resource frozen.
+const finalBackup = (input: DeletionInput) =>
+  Effect.gen(function* () {
+    const backupId = yield* Activity.make({
+      name: "backup/reserve",
+      success: Schema.String,
+      error: ResourceDeletionError,
+      execute: reserveFinalBackup(input),
+    })
+    for (let check = 1; ; check++) {
+      const state = yield* Activity.make({
+        name: `backup/check/${check}`,
+        success: BackupCheck,
+        execute: checkFinalBackup(input, backupId),
+      })
+      if (state.state === "available") return
+      if (state.state !== "running") {
+        return yield* new ResourceDeletionError({
+          message:
+            state.error ??
+            (state.state === "missing"
+              ? `The final backup is gone; the ${noun(input.kind)} was not deleted`
+              : `The final backup failed; the ${noun(input.kind)} was not deleted`),
+        })
+      }
+      yield* DurableClock.sleep({
+        duration: backupCheckDelay(check),
+        name: `backup/wait/${check}`,
+      })
+    }
+  })
+
+const reserveFinalBackup = (input: DeletionInput) =>
+  Effect.gen(function* () {
+    const deletion = yield* loadResourceDeletionEffect(input.deletionId).pipe(
+      Effect.orDie
+    )
+    if (!deletion) return yield* Effect.die("The deletion is gone")
+    // Reserved before, by this attempt or one before it while the resource
+    // stayed frozen: followed, not taken again.
+    if (deletion.backupId) return deletion.backupId
+    const reservation = {
+      backupId: randomUUID(),
+      createdBy: deletion.requestedBy,
+      deletionId: deletion.id,
+      name: timestampedBackupName("final"),
+      reason: "final_delete" as const,
+      relayId: input.relayId,
+      requestedMaxBytes: null,
+      storageIds: [deletion.storageId],
+      targetId: input.resourceId,
+      taskId: randomUUID(),
+    }
+    const dispatch = yield* promiseEffect(() =>
+      runAppEffect(
+        "resourceDeletions.reserveBackup",
+        input.kind === "instance"
+          ? reserveInstanceBackupEffect(reservation)
+          : reserveDatabaseBackupEffect(reservation)
+      )
+    ).pipe(
+      Effect.mapError(
+        (cause) =>
+          new ResourceDeletionError({
+            message: `The final backup couldn't start, so nothing was deleted: ${messageOf(cause)}`,
+          })
+      )
+    )
+    publishBackupChange(input.relayId, dispatch.backupId)
+    publishDeletionChange(input)
+    // Queued on the Relay now if it answers; otherwise reconciling the
+    // Relay's backups, as each check does, queues it.
+    yield* promiseEffect(async () => {
+      const relay = await activeRelay(input.relayId)
+      const { dispatchBackupTask } = await import("@/lib/backup-reconciliation")
+      await dispatchBackupTask(relay, dispatch, deletion.requestedBy)
+    }).pipe(Effect.ignore)
+    return dispatch.backupId
+  })
+
+const checkFinalBackup = (input: DeletionInput, backupId: string) =>
+  Effect.gen(function* () {
+    // The Relay's tasks are read in, and a backup not yet queued there is.
+    yield* promiseEffect(async () => {
+      const relay = await activeRelay(input.relayId)
+      const { reconcileRelayBackups } =
+        await import("@/lib/backup-reconciliation")
+      await reconcileRelayBackups(relay)
+    }).pipe(Effect.ignore)
+    return yield* finalBackupStateEffect(backupId)
+  }).pipe(
+    // Not read this time: looked at again on the next check.
+    Effect.catch(() =>
+      Effect.succeed({ error: null, state: "running" as const })
+    )
+  )
+
+// Deletes the resource on its Relay. A refusal where the Relay in fact no
+// longer has it, as when an earlier delete's reply was lost, counts as
+// deleted; anything else stops the deletion with the resource frozen.
+const deleteOnRelay = (input: DeletionInput) =>
+  Effect.gen(function* () {
+    // A database the Relay lists nothing of, as when an earlier delete
+    // stopped partway, keeps what's left of its data: nothing could back it
+    // up.
+    const deleteData =
+      input.kind === "instance" ||
+      (yield* Activity.make({
+        name: "delete/inspect",
+        success: Schema.Boolean,
+        error: ResourceDeletionError,
+        execute: resourceOnRelay(input).pipe(Effect.mapError(asDeletionError)),
+      }))
+    const gone = resourceOnRelay(input).pipe(
+      Effect.flatMap((present) =>
+        present
+          ? Effect.fail(
+              new RelayCommandError({
+                code: "still_present",
+                message: `The Relay still has this ${noun(input.kind)}`,
+                retryable: false,
+              })
+            )
+          : Effect.void
+      )
+    )
+    yield* relayCommand({
+      name: "delete",
+      relayId: input.relayId,
+      ...(input.kind === "instance"
+        ? {
+            operation: "instance.delete" as const,
+            payload: { deleteData: true, instanceId: input.resourceId },
+            timeoutMs: relayControlDeadlineMs("instance.delete"),
+          }
+        : {
+            operation: "database.delete" as const,
+            payload: { databaseId: input.resourceId, deleteData },
+            timeoutMs: relayControlDeadlineMs("database.delete"),
+          }),
+      recover: gone,
+    }).pipe(
+      Effect.catchTag("RelayCommandError", (refused) =>
+        Activity.make({
+          name: "delete/verify",
+          success: Schema.Boolean,
+          error: ResourceDeletionError,
+          execute: resourceOnRelay(input).pipe(
+            Effect.mapError(asDeletionError)
+          ),
+        }).pipe(
+          Effect.flatMap((present) =>
+            present ? Effect.fail(asDeletionError(refused)) : Effect.void
+          )
+        )
+      )
+    )
+  })
+
+// Whether the Relay still has anything of the resource. Asked again while
+// the Relay is away; an answer is final.
+const resourceOnRelay = (input: DeletionInput) =>
+  promiseEffect(async () => {
+    const relay = await activeRelay(input.relayId)
+    if (input.kind === "instance") {
+      const snapshot = relaySnapshotSchema.parse(
+        await relayRpc(relay, "relay.snapshot", {}, 15_000)
+      )
+      return snapshot.instances.some(
+        (instance) => instance.id === input.resourceId
+      )
+    }
+    const [item] = z
+      .array(z.unknown())
+      .parse(
+        await relayRpc(
+          relay,
+          "database.list",
+          { requests: [{ id: input.resourceId, view: "detail" }] },
+          30_000
+        )
+      )
+    return item !== undefined
+  }).pipe(
+    Effect.mapError(
+      (cause) =>
+        new RelayCommandError({
+          code: "unreadable",
+          message: messageOf(cause),
+          retryable: false,
+        })
+    )
+  )
+
+// Cleans up after the deleted resource in Hearth. Returns why it failed,
+// or null once it's done.
+const cleanUp = (input: DeletionInput) =>
+  Effect.gen(function* () {
+    const deletion = yield* loadResourceDeletionEffect(input.deletionId)
+    const subject = deletion?.requestedBy ?? "system"
+    if (input.kind === "instance") {
+      // Its incremental snapshots go with it; its archives, the final
+      // backup among them, stay until they're deleted as backups are.
+      yield* promiseEffect(() =>
+        runAppEffect(
+          "resourceDeletions.purgeRepositories",
+          purgeInstanceBackupRepositoriesEffect(input.relayId, input.resourceId)
+        )
+      )
+    }
+    yield* promiseEffect(() =>
+      runAppEffect(
+        "resourceDeletions.cleanUp",
+        cleanUpDeletedResourceEffect(
+          { id: input.resourceId, kind: input.kind, relayId: input.relayId },
+          subject
+        )
+      )
+    )
+    return null
+  }).pipe(Effect.catch((cause) => Effect.succeed(messageOf(cause))))
+
+const recordStatus = (
+  input: DeletionInput,
+  status: "completed" | "deleting" | "failed",
+  error: string | null
+) =>
+  recordResourceDeletionStatusEffect({
+    attempt: input.attempt,
+    error,
+    id: input.deletionId,
+    status,
+  }).pipe(
+    Effect.tap(() => Effect.sync(() => publishDeletionChange(input))),
+    Effect.orDie,
+    Effect.asVoid
+  )
+
+const startResourceDeletion = (deletion: ResourceDeletion) =>
+  startDurableOperation(
+    deleteResource,
+    {
+      attempt: deletion.attempt,
+      deletionId: deletion.id,
+      kind: deletion.kind,
+      relayId: deletion.relayId,
+      resourceId: deletion.resourceId,
+    },
+    {
+      actorId: deletion.requestedBy,
+      idempotencyKey: `${deletion.id}:${deletion.attempt}`,
+    }
+  )
+
+/**
+ * Starts every deletion still running, as after a restart or an upgrade
+ * from the final-delete worker. One already running is the same operation.
+ */
+export const resumeResourceDeletions = Effect.fn("ResourceDeletions.resume")(
+  function* () {
+    const deletions = yield* listUnfinishedResourceDeletionsEffect()
+    yield* Effect.forEach(deletions, startResourceDeletion, { discard: true })
+  }
+)
+
+/**
+ * Asks to delete a game server or database, for `user`, who the caller has
+ * checked may delete it. A new deletion, or one that failed or was
+ * cancelled, starts its next attempt; one already running is returned as
+ * it is. With a final backup, `storageId` names where it goes, null for the
+ * Relay's own disk, or the resource's usual destination when left out.
+ */
+export const requestResourceDeletionEffect = Effect.fn(
+  "ResourceDeletions.request"
+)(function* (input: {
+  finalBackup: boolean
+  kind: ResourceDeletionKind
+  relayId: string
+  resourceId: string
+  storageId?: string | null
+  user: AuthenticatedUser
+}) {
+  const [storageId = null] = input.finalBackup
+    ? yield* promiseEffect(() =>
+        resolveAuthorizedBackupStorageSelection({
+          relayId: input.relayId,
+          targetId: input.resourceId,
+          targetKind: input.kind,
+          user: input.user,
+          ...(input.storageId === undefined
+            ? {}
+            : { storageId: input.storageId }),
+        })
+      )
+    : []
+  const deletion = yield* requestResourceDeletionRowEffect({
+    finalBackup: input.finalBackup,
+    kind: input.kind,
+    relayId: input.relayId,
+    resourceId: input.resourceId,
+    storageId,
+    user: input.user,
+  })
+  if (unfinishedDeletionStatuses.some((status) => status === deletion.status)) {
+    yield* startResourceDeletion(deletion)
+  }
+  publishDeletionChange(deletion)
+  return deletion
+})
+
+export function requestResourceDeletion(
+  input: Parameters<typeof requestResourceDeletionEffect>[0]
+): Promise<ResourceDeletion> {
+  return runAppEffect(
+    "resourceDeletions.request",
+    requestResourceDeletionEffect(input)
+  )
+}
+
+/**
+ * Waits for a deletion's attempt to end, up to `timeoutMs`: returns once
+ * it's done, throws with why it stopped, or says it carries on in the
+ * background.
+ */
+export async function awaitResourceDeletion(
+  deletion: Pick<ResourceDeletion, "attempt" | "id" | "kind">,
+  timeoutMs = 10 * 60_000
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  let current: ResourceDeletion | null = null
+  while (Date.now() < deadline) {
+    current = await loadResourceDeletion(deletion.id)
+    if (!current) throw new Error("The deletion is gone")
+    if (current.status === "completed") return
+    if (current.attempt !== deletion.attempt) break
+    if (current.status === "failed") {
+      throw new Error(
+        current.error ?? `The ${noun(deletion.kind)} was not deleted`
+      )
+    }
+    if (current.status === "cancelled") {
+      throw new Error(`Deleting this ${noun(deletion.kind)} was cancelled`)
+    }
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 500))
+  }
+  throw new Error(
+    current?.status === "backing_up"
+      ? `The final backup is still running. Deleting this ${noun(deletion.kind)} continues in the background.`
+      : `Deleting this ${noun(deletion.kind)} continues in the background.`
+  )
+}
+
+/**
+ * Keeps a resource whose deletion failed before the Relay deleted it: lets
+ * it go on the Relay and marks the deletion cancelled. Waits for anything
+ * still running on the deletion, so it can't undo a freeze a retry made.
+ */
+export const cancelResourceDeletionEffect = (input: {
+  kind: ResourceDeletionKind
+  relayId: string
+  resourceId: string
+  user: AuthenticatedUser
+}) =>
+  runOperation(
+    cancelDeletion,
+    { kind: input.kind, relayId: input.relayId, resourceId: input.resourceId },
+    Effect.gen(function* () {
+      const deletion = yield* findResourceDeletionEffect(
+        input.relayId,
+        input.kind,
+        input.resourceId
+      )
+      if (
+        !deletion ||
+        deletion.status !== "failed" ||
+        deletion.relayDeletedAt !== null
+      ) {
+        return yield* Effect.fail(
+          new Error(
+            `Only a deletion that stopped before the Relay deleted the ${noun(input.kind)} can be cancelled`
+          )
+        )
+      }
+      yield* promiseEffect(async () => {
+        const relay = await activeRelay(input.relayId)
+        await relayRpc(
+          relay,
+          "resource.unfreeze",
+          {
+            deletionId: deletion.id,
+            id: input.resourceId,
+            kind: input.kind,
+          },
+          // Hearth's own change, as the freeze was: whether the person may
+          // delete it is checked here, and the Relay lets no one else
+          // freeze or unfreeze.
+          relayControlDeadlineMs("resource.unfreeze")
+        )
+      })
+      yield* recordResourceDeletionCancelledEffect(deletion.id)
+      publishDeletionChange(deletion)
+    }),
+    { actorId: input.user.id }
+  ).pipe(Effect.asVoid)
+
+export function cancelResourceDeletion(
+  input: Parameters<typeof cancelResourceDeletionEffect>[0]
+): Promise<void> {
+  return runAppEffect(
+    "resourceDeletions.cancel",
+    cancelResourceDeletionEffect(input)
+  )
+}
+
+const cancelDeletion = quickOperation<{
+  kind: ResourceDeletionKind
+  relayId: string
+  resourceId: string
+}>({
+  kind: "resource.delete.cancel",
+  locks: deletionLocks,
+  version: 1,
+})
+
+export function loadResourceDeletion(id: string) {
+  return runAppEffect("resourceDeletions.load", loadResourceDeletionEffect(id))
+}
+
+export function findResourceDeletion(
+  relayId: string,
+  kind: ResourceDeletionKind,
+  resourceId: string
+) {
+  return runAppEffect(
+    "resourceDeletions.find",
+    findResourceDeletionEffect(relayId, kind, resourceId)
+  )
+}
+
+function publishDeletionChange(resource: {
+  kind: ResourceDeletionKind
+  relayId: string
+  resourceId: string
+}): void {
+  publishRealtimeChange({
+    audience: { kind: "relays", relayIds: [resource.relayId] },
+    scope:
+      resource.kind === "instance"
+        ? { instanceId: resource.resourceId, relayId: resource.relayId }
+        : { databaseId: resource.resourceId, relayId: resource.relayId },
+    topics: ["resource-deletions"],
+    type: "hearth.invalidate",
+  })
+}
+
+// Whoever has the resource open sees it go, whether or not the request
+// that asked is still waiting.
+function publishDeleted(input: DeletionInput): void {
+  if (input.kind === "instance") {
+    publishRealtimeChange({
+      instanceId: input.resourceId,
+      relayId: input.relayId,
+      type: "instance.delete",
+    })
+    return
+  }
+  publishRealtimeChange({
+    audience: { kind: "relays", relayIds: [input.relayId] },
+    scope: { databaseId: input.resourceId, relayId: input.relayId },
+    topics: ["databases", "database-directory", "database-credentials"],
+    type: "hearth.invalidate",
+  })
+}
+
+function noun(kind: ResourceDeletionKind): string {
+  return kind === "instance" ? "game server" : "database"
+}
+
+function asDeletionError(error: { readonly message: string }) {
+  return new ResourceDeletionError({ message: error.message })
+}
+
+function causeMessage(cause: Cause.Cause<unknown>): string {
+  return messageOf(Cause.squash(cause))
+}
+
+function messageOf(cause: unknown): string {
+  return cause instanceof Error
+    ? cause.message
+    : Schema.is(ResourceDeletionError)(cause)
+      ? cause.message
+      : String(cause)
+}

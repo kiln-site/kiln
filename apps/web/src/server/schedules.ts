@@ -469,7 +469,9 @@ export const removeDeletedResourceFromSchedules = createServerOnlyFn(async (
                 `DELETE FROM ${databaseTable("schedule_target")} WHERE schedule_id = ?`,
                 [scheduleId]
               )
-              yield* insertScheduleParts(transaction, schedule, now)
+              yield* insertScheduleParts(transaction, schedule, now, {
+                keepTargetsBeingDeleted: true,
+              })
               changes.push({ relayIds, revision, schedule, scheduleId })
             }
             // Owed to every Relay it was on, so a Hearth that stops before

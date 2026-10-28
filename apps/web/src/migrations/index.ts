@@ -41,6 +41,7 @@ import { relayDatabaseConnectionImport } from "./0038_relay_database_connection_
 import { tailscaleMemberIds } from "./0039_tailscale_member_ids"
 import { backupResourceTargets } from "./0042_backup_resource_targets"
 import { scheduleProjectionGenerations } from "./0043_schedule_projection_generations"
+import { resourceDeletions } from "./0044_resource_deletions"
 
 // Append new migrations with the next id. Never edit or reorder applied ones.
 export const migrations: ReadonlyArray<Migration> = [
@@ -85,4 +86,5 @@ export const migrations: ReadonlyArray<Migration> = [
   tailscaleMemberIds,
   backupResourceTargets,
   scheduleProjectionGenerations,
+  resourceDeletions,
 ]

@@ -26,6 +26,7 @@ export const hearthRealtimeTopics = [
   "relay-proxy",
   "relay-volumes",
   "relays",
+  "resource-deletions",
   "schedules",
   "security",
   "server-migrations",

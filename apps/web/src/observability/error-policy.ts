@@ -2,6 +2,7 @@ const EXPECTED_ERROR_TAGS = new Set([
   "AuthenticationError",
   "DomainConfigurationError",
   "PermissionDeniedError",
+  "ResourceBeingDeletedError",
   "ResourceNotFoundError",
 ])
 
@@ -14,6 +15,14 @@ export function isExpectedAppError(value: unknown): boolean {
   if (!("_tag" in value)) return false
   if (typeof value._tag !== "string") return false
   if (EXPECTED_ERROR_TAGS.has(value._tag)) return true
+  // The Relay refused a change to a resource being deleted, as it should.
+  if (
+    value._tag === "RelayUnavailableError" &&
+    "code" in value &&
+    value.code === "resource_frozen"
+  ) {
+    return true
+  }
   if (value._tag !== "RelayResponseError" || !("status" in value)) return false
   return typeof value.status === "number" && value.status < 500
 }

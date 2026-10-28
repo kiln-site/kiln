@@ -214,7 +214,11 @@ kiln server delete <server> --confirm <server>
 ```
 
 The confirmation must exactly match `<relay-id>:<instance-id>`. Deletion
-requires full CLI access and `instance.delete` permission.
+requires full CLI access and the `instance.delete` and `backup.create`
+permissions: the server is frozen and backed up in full first, then deleted.
+A deletion that outlasts the request carries on in the background; one that
+stops, such as when the final backup fails, deletes nothing and shows on the
+server's page in Hearth, to try again or keep it.
 
 ## Backups
 

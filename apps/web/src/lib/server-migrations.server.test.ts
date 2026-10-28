@@ -2,7 +2,9 @@ import { randomUUID } from "node:crypto"
 
 import { assert, layer } from "@effect/vitest"
 import { Effect } from "effect"
-import { vi } from "vite-plus/test"
+import { afterAll, vi } from "vite-plus/test"
+
+import { disposeAppRuntime } from "@/effect/runtime"
 
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import {
@@ -43,6 +45,8 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
   },
 }))
 
+afterAll(() => disposeAppRuntime())
+
 const at = 1_767_225_600_000
 const sourceRelayId = "relay-old"
 const destinationRelayId = "relay-new"
@@ -66,6 +70,8 @@ const seedMove = (input: {
   deleteSource: boolean
   deletion: "backing_up" | "failed" | null
   ending: boolean
+  // Whether its worker stopped, so the next pass takes it over.
+  stopped?: boolean
   moveWebRoutes?: boolean
 }) =>
   Effect.gen(function* () {
@@ -89,12 +95,16 @@ const seedMove = (input: {
         created_at: at,
         updated_at: at,
       })
-      yield* insertRows("backup_final_delete", {
+      yield* insertRows("resource_deletion", {
+        id: randomUUID(),
         relay_id: sourceRelayId,
-        target_id: sourceId,
+        resource_kind: "instance",
+        resource_id: sourceId,
+        final_backup: true,
         backup_id: "final-backup",
-        requested_by: user.id,
         status: input.deletion,
+        requested_by: user.id,
+        actor: JSON.stringify(user),
         created_at: at,
         updated_at: at,
       })
@@ -112,7 +122,8 @@ const seedMove = (input: {
       error: input.ending ? "Relay connection closed" : null,
       finished_parts: JSON.stringify([]),
       id,
-      lease_until: input.ending || input.moveWebRoutes ? 0 : at * 2,
+      lease_until:
+        input.ending || input.moveWebRoutes || input.stopped ? 0 : at * 2,
       mode: "migrate",
       options: JSON.stringify({
         backup: null,
@@ -182,6 +193,61 @@ describeMysql("Server migration deleting its old server", () => {
           assert.strictEqual(row?.state, "completed")
           assert.strictEqual(row?.error, null)
           assert.notInclude(relayCalls, "instance.action:start")
+        })
+    )
+
+    it.effect(
+      "hands its old server to deletion, with a final backup, as its last part",
+      () =>
+        Effect.gen(function* () {
+          const id = yield* seedMove({
+            deleteSource: true,
+            deletion: null,
+            ending: false,
+            stopped: true,
+          })
+
+          const row = yield* resumeUntilEnded(id)
+
+          assert.strictEqual(row?.state, "completed")
+          const deletions = yield* selectRows<{
+            final_backup: number
+            requested_by: string
+            resource_id: string
+            resource_kind: string
+          }>("resource_deletion")
+          assert.deepStrictEqual(
+            deletions.map((deletion) => ({
+              final_backup: Number(deletion.final_backup),
+              requested_by: deletion.requested_by,
+              resource_id: deletion.resource_id,
+              resource_kind: deletion.resource_kind,
+            })),
+            [
+              {
+                final_backup: 1,
+                requested_by: user.id,
+                resource_id: sourceId,
+                resource_kind: "instance",
+              },
+            ]
+          )
+          // The mover holds no grant on it here, so its deletion stops
+          // before it touches the old server.
+          yield* Effect.promise(() =>
+            vi.waitFor(
+              async () => {
+                const [deletion] = await Effect.runPromise(
+                  selectRows<{ status: string }>("resource_deletion").pipe(
+                    Effect.provide(TestDatabase)
+                  )
+                )
+                if (deletion?.status !== "failed") throw new Error("Running")
+              },
+              { timeout: 30_000 }
+            )
+          )
+          assert.notInclude(relayCalls, "resource.freeze:")
         })
     )
 

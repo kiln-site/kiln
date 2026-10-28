@@ -32,6 +32,7 @@ import {
   type NavigationAccessCapabilities,
 } from "@/lib/navigation-destinations"
 import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
+import { ResourceDeletionAlert } from "@/components/resource-deletion-alert"
 import { ResourceSecurityAlert } from "@/components/resource-security-alert"
 
 // The database's details, each section with the actions that change it, and
@@ -46,11 +47,17 @@ export function DatabaseInfoPage() {
   const canRestore = useDatabaseBackupRestore(database)
   // As the Viewer tab is offered.
   const canView =
-    databaseEngineSupportsBrowsing(database.engine) &&
-    can("database.data.read")
+    databaseEngineSupportsBrowsing(database.engine) && can("database.data.read")
 
   return (
     <InfoPage rail={<DatabaseInfoRail database={database} />}>
+      <ResourceDeletionAlert
+        canDelete={can("database.delete")}
+        name={database.name}
+        kind="database"
+        relayId={database.relayId}
+        resourceId={database.id}
+      />
       <ResourceSecurityAlert
         relayId={database.relayId}
         resourceId={database.id}

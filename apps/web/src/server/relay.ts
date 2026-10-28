@@ -88,9 +88,9 @@ import {
 import { syncInstanceDomainAfterPortUpdateBestEffort } from "@/server/relay-port-update.server"
 import { webRoutesForRelay } from "@/server/web-route-compatibility.server"
 import {
-  deleteInstanceWithoutFinalBackup,
-  deleteInstanceWithFinalBackup,
-} from "@/lib/final-instance-deletion"
+  awaitResourceDeletion,
+  requestResourceDeletion,
+} from "@/lib/resource-deletion.server"
 import {
   cachedRelayFallbackJsonEffect,
   cachedRelayJsonEffect,
@@ -555,27 +555,20 @@ export const deleteInstance = createServerFn({ method: "POST" })
     const { requireAccountPassword } = await import("@/lib/auth-password")
     await requireAccountPassword(user, data.password)
 
-    if (data.createBackup) {
-      authorization.require("backup.create")
-      await deleteInstanceWithFinalBackup({
-        instanceId: data.instanceId,
-        relay,
-        requestedBy: user.id,
-        user,
-        ...(data.storageId === undefined ? {} : { storageId: data.storageId }),
-      })
-    } else {
-      await deleteInstanceWithoutFinalBackup({
-        instanceId: data.instanceId,
-        relay,
-        requestedBy: user.id,
-      })
-    }
-    publishRealtimeChange({
-      instanceId: data.instanceId,
+    if (data.createBackup) authorization.require("backup.create")
+    // Frozen, backed up if asked, then deleted, as one operation that goes
+    // on in the background if it outlasts this request.
+    const deletion = await requestResourceDeletion({
+      finalBackup: data.createBackup,
+      kind: "instance",
       relayId: relay.id,
-      type: "instance.delete",
+      resourceId: data.instanceId,
+      user,
+      ...(data.createBackup && data.storageId !== undefined
+        ? { storageId: data.storageId }
+        : {}),
     })
+    await awaitResourceDeletion(deletion)
     return {
       ...deleteInstanceResultSchema.parse({
         deleted: true,

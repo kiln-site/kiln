@@ -173,7 +173,8 @@ export const ServerDeleteDialog = React.memo(function ServerDeleteDialog({
           <DialogTitle>Delete {target.name}?</DialogTitle>
           <DialogDescription>
             This permanently removes the server, its container, and all data in
-            its managed server directory.
+            its managed server directory. Schedules left with nothing else to
+            run on are deleted too.
           </DialogDescription>
         </DialogHeader>
 

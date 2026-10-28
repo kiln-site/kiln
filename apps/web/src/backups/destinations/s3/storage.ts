@@ -381,25 +381,28 @@ export const deleteBackupStorageEffect = Effect.fn("backupStorage.delete")(
               FOR UPDATE`,
             [storageId]
           )
+          // A game server being deleted purges its snapshots here once the
+          // Relay has deleted it.
           const finalDeletions = yield* transaction.queryRows<RowDataPacket>(
-            `SELECT final_delete.backup_id
-                 FROM ${databaseTable("backup_final_delete")} final_delete
+            `SELECT deletion.id
+                 FROM ${databaseTable("resource_deletion")} deletion
                  JOIN ${databaseTable("backup_repository")} repository
-                   ON repository.relay_id = final_delete.relay_id
+                   ON repository.relay_id = deletion.relay_id
                   AND repository.target_kind = 'instance'
-                  AND repository.target_id = final_delete.target_id
+                  AND repository.target_id = deletion.resource_id
                 WHERE repository.storage_id = ?
-                  AND final_delete.status IN ('backing_up', 'deleting')
+                  AND deletion.resource_kind = 'instance'
+                  AND deletion.status IN ('pending', 'backing_up', 'deleting')
                 LIMIT 1
                 FOR UPDATE`,
             [storageId]
           )
-          if (finalDeletions[0]?.backup_id) {
+          if (finalDeletions[0]) {
             return yield* BackupStorageError.make({
               code: "storage_in_use",
               operation: "storage.delete",
               reason:
-                "A server using this destination is being permanently deleted",
+                "A game server using this destination is being permanently deleted",
             })
           }
           const rows = yield* transaction.queryRows<BackupStorageRow>(
