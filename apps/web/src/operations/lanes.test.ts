@@ -131,7 +131,14 @@ describeMysql("Hearth operation lanes", () => {
             mode: "exclusive",
             held: true,
           })
-          yield* insertRows("operation_scheduler", { id: 1, next_sequence: 2 })
+          yield* SqlClient.SqlClient.pipe(
+            Effect.flatMap((sql) =>
+              sql.unsafe(
+                `UPDATE ${databaseTable("operation_scheduler")}
+                      SET next_sequence = 2 WHERE id = 1`
+              )
+            )
+          )
           const log: Array<string> = []
           // Admitted by this Hearth as it starts, before it recovers.
           const waiting = yield* hold(log, "server-a", "after restart")
@@ -395,7 +402,14 @@ describeMysql("Hearth operation lanes", () => {
             mode: "exclusive",
             operation_id: "00000000-0000-4000-8000-000000000002",
           })
-          yield* insertRows("operation_scheduler", { id: 1, next_sequence: 2 })
+          yield* SqlClient.SqlClient.pipe(
+            Effect.flatMap((sql) =>
+              sql.unsafe(
+                `UPDATE ${databaseTable("operation_scheduler")}
+                      SET next_sequence = 2 WHERE id = 1`
+              )
+            )
+          )
 
           yield* recoverOperations()
           assert.deepStrictEqual(yield* states, ["test.write:running"])

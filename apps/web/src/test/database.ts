@@ -61,6 +61,11 @@ export const resetDatabase = Effect.gen(function* () {
         if (engineState.has(table.name)) continue
         yield* sql`DELETE FROM ${sql(table.name)}`
       }
+      // As migrated: the lanes' scheduler row, which every decision locks.
+      yield* sql`
+        INSERT INTO ${sql(databaseTableName("operation_scheduler"))}
+          (id, next_sequence) VALUES (1, 1)
+      `
       yield* sql`SET FOREIGN_KEY_CHECKS = 1`
     })
   )

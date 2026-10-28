@@ -449,6 +449,84 @@ describeMysql("Copying files between Relays as an operation", () => {
     )
 
     it.effect(
+      "refuses to cancel a transfer named with other roots than its own",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          relays.holdPull = true
+          const handle = yield* startRelayTransferEffect(admin, request)
+          yield* operationOf(handle.transferId, false)
+
+          const refused = yield* cancelRelayTransferEffect(admin, {
+            ...handle,
+            source: { relayId: "relay-one", rootId: "c".repeat(40) },
+          }).pipe(Effect.flip)
+          relays.holdPull = false
+          const done = yield* operationOf(handle.transferId, true)
+
+          assert.strictEqual(refused.message, "Transfer not found")
+          assert.isFalse(done?.cancelRequested)
+          assert.strictEqual(
+            relays.pulls.get(handle.transferId)?.state,
+            "completed"
+          )
+        }).pipe(TestClock.withLive),
+      30_000
+    )
+
+    it.effect(
+      "keeps the destination held until an install ends, after the person loses access",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          yield* insertUser("member", {
+            emailVerifiedAt: new Date(0),
+            role: "admin",
+            status: "enabled",
+          })
+          const member: AuthenticatedUser = {
+            ...admin,
+            id: "member",
+            isDevelopmentBypass: false,
+          }
+          relays.holdInstall = true
+          const handle = yield* startRelayTransferEffect(member, request)
+          yield* Effect.repeat(
+            Effect.sync(() => relays.pulls.get(handle.transferId)?.state),
+            {
+              schedule: Schedule.spaced("50 millis"),
+              until: (state) => state === "installing",
+            }
+          )
+
+          const sql = yield* SqlClient.SqlClient
+          yield* sql.unsafe(
+            `UPDATE ${databaseTable("user")} SET status = 'disabled' WHERE id = ?`,
+            ["member"]
+          )
+          yield* Effect.sleep("2500 millis")
+          const replace = yield* Effect.forkDetach(
+            runOperation(replacing, null, Effect.void)
+          )
+          yield* Effect.sleep("300 millis")
+          assert.strictEqual(
+            (yield* findOperation(relayTransfer.kind, handle.transferId))
+              ?.state,
+            "running"
+          )
+          assert.isUndefined(replace.pollUnsafe())
+
+          relays.holdInstall = false
+          const done = yield* operationOf(handle.transferId, true)
+          yield* Fiber.join(replace)
+
+          assert.strictEqual(done?.state, "failed")
+          assert.include(done?.error ?? "", "can no longer act")
+        }).pipe(TestClock.withLive),
+      30_000
+    )
+
+    it.effect(
       "fails with the Relay's reason",
       () =>
         Effect.gen(function* () {

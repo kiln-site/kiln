@@ -253,13 +253,22 @@ export const followRelayTransfer = <R>(
           Effect.retry({ schedule: whileMySqlIsAway })
         )
       : Effect.succeed(false)
-    // Stopped for good, as when the person lost access, it lets go of what
-    // it holds on the Relays.
+    // Stopped for good, as when the person lost access, it has the Relays
+    // let go before it fails, waiting out one that's away, and follows a
+    // pull already installing to its end, so its locks outlast the writes.
     const letGoOnFailure = <A, R2>(
       step: Effect.Effect<A, RelayTransferError, R2>
     ) =>
-      Effect.tapError(step, () =>
-        stopOnRelays(request, transferId).pipe(Effect.ignore)
+      Effect.catch(step, (error) =>
+        stopOnRelays(request, transferId).pipe(
+          whileRelaysAreAway,
+          Effect.repeat({
+            schedule: PULL_POLL,
+            until: (pull) => !pull || finishedPhases.has(pull.state),
+          }),
+          Effect.ignore,
+          Effect.andThen(Effect.fail(error))
+        )
       )
     yield* Activity.make({
       name: `${name}/begin`,
@@ -601,6 +610,24 @@ export const relayTransferStatusEffect = Effect.fn("RelayTransfers.status")(
  */
 export const cancelRelayTransferEffect = Effect.fn("RelayTransfers.cancel")(
   function* (user: AuthenticatedUser, handle: RelayTransferHandle) {
+    const operation = yield* findOperation(
+      relayTransfer.kind,
+      handle.transferId
+    )
+    // The operation's own roots, not whichever the caller named.
+    if (operation) {
+      const { request: started } = operation.input as {
+        readonly request: RelayTransferRequest
+      }
+      if (
+        started.source.relayId !== handle.source.relayId ||
+        started.source.rootId !== handle.source.rootId ||
+        started.destination.relayId !== handle.destination.relayId ||
+        started.destination.rootId !== handle.destination.rootId
+      ) {
+        return yield* new RelayTransferError({ message: "Transfer not found" })
+      }
+    }
     const request = {
       destination: { ...handle.destination, path: "" },
       source: { ...handle.source, paths: [] },
@@ -623,10 +650,6 @@ export const cancelRelayTransferEffect = Effect.fn("RelayTransfers.cancel")(
         ),
       ],
       { concurrency: 2, discard: true }
-    )
-    const operation = yield* findOperation(
-      relayTransfer.kind,
-      handle.transferId
     )
     if (operation) yield* requestCancel(operation.id)
     yield* stopOnRelays(request, handle.transferId).pipe(
