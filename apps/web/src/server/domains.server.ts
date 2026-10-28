@@ -610,8 +610,7 @@ export const removeRelayManagedDomainsEffect = Effect.fn(
           )
           if (
             assignment?.relayId !== relayId ||
-            assignment.instanceId !== listed.instanceId ||
-            assignment.status !== "removing"
+            assignment.instanceId !== listed.instanceId
           ) {
             return
           }

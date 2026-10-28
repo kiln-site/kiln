@@ -1,5 +1,5 @@
 import { assert, layer } from "@effect/vitest"
-import { Effect, Fiber, Layer } from "effect"
+import { Deferred, Effect, Fiber, Layer } from "effect"
 import { TestClock } from "effect/testing"
 import { afterAll, afterEach, vi } from "vite-plus/test"
 
@@ -740,6 +740,39 @@ describeMysql("web route hostnames", () => {
           assert.deepEqual(cloudflare.dns(), {})
           assert.deepEqual(yield* claimedNames, [])
         })
+    )
+
+    it.effect("deletes a removed Relay's records a route save revived", () =>
+      Effect.gen(function* () {
+        yield* seed
+        const cloudflare = fakeCloudflare([ownerZone])
+        yield* save(owner, ["shop.owner.example"])
+
+        // The Relay is removed while a save of the same routes is writing
+        // them; the save finishes after the removal marked its hostnames.
+        const writing = yield* Deferred.make<void>()
+        const saving = yield* Effect.forkChild(
+          saveWebRouteHostnamesEffect(
+            { actor: owner, hostnames: ["shop.owner.example"], resource: app },
+            Deferred.await(writing)
+          )
+        )
+        const removing = yield* Effect.forkChild(
+          removeRelayWebHostnamesEffect(relayId, true)
+        )
+        while (
+          (yield* hostnameRows)["shop.owner.example"] !== "removing@relay-one"
+        ) {
+          yield* Effect.yieldNow
+        }
+        yield* Deferred.succeed(writing, undefined)
+        yield* Fiber.join(saving)
+        yield* Fiber.join(removing)
+
+        assert.deepEqual(cloudflare.dns(), {})
+        assert.deepEqual(yield* hostnameRows, {})
+        assert.deepEqual(yield* claimedNames, [])
+      })
     )
 
     it.effect(

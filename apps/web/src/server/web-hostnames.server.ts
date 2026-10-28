@@ -816,14 +816,11 @@ export const removeRelayWebHostnamesEffect = Effect.fn(
   const rows = yield* listWebHostnamesEffect({ relayId })
   if (removeRecords) {
     // Marked first, so one whose delete fails, or is cut short, is
-    // finished by the DNS worker.
+    // finished by the DNS worker. Each goes as it is under its lock, still
+    // on this Relay, whatever a route save under way did to its mark.
     yield* markRelayWebHostnamesRemovingEffect(relayId)
     for (const row of rows) {
-      yield* withCurrentRow(row, (current) =>
-        current.status === "removing"
-          ? removeWebHostnameEffect(current)
-          : Effect.void
-      ).pipe(Effect.ignore)
+      yield* withCurrentRow(row, removeWebHostnameEffect).pipe(Effect.ignore)
     }
   } else {
     yield* deleteRelayWebHostnamesEffect(relayId)
