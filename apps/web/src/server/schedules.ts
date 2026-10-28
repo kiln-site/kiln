@@ -384,11 +384,14 @@ export async function removeDeletedResourceFromSchedules(
                 [scheduleId]
               )
               if (!row) continue
+              // Locking reads, like the row above: they see what's committed
+              // now, not the snapshot the first read of this transaction took.
               const actions = yield* transaction.queryRows<ScheduleActionRow>(
                 `SELECT id, schedule_id, position, action_type, action_config
                    FROM ${databaseTable("schedule_action")}
                   WHERE schedule_id = ?
-                  ORDER BY position`,
+                  ORDER BY position
+                  FOR UPDATE`,
                 [scheduleId]
               )
               const targets = (
@@ -397,7 +400,8 @@ export async function removeDeletedResourceFromSchedules(
                           target_name
                      FROM ${databaseTable("schedule_target")}
                     WHERE schedule_id = ?
-                    ORDER BY relay_id, target_kind, target_name`,
+                    ORDER BY relay_id, target_kind, target_name
+                    FOR UPDATE`,
                   [scheduleId]
                 )
               ).map(
