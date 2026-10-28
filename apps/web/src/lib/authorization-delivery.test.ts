@@ -119,13 +119,53 @@ describeMysql("authorization delivery", () => {
           const readDeliveries = Effect.runPromiseWith(
             yield* Effect.context<SqlClient.SqlClient>()
           )
-          yield* Effect.promise(() => vi.advanceTimersByTimeAsync(3_000))
+          // The retry is scheduled once the failed attempt has ended in
+          // the lanes, so time moves on until it has run.
           yield* Effect.promise(() =>
-            vi.waitFor(async () =>
+            vi.waitFor(async () => {
+              await vi.advanceTimersByTimeAsync(3_000)
               expect(await readDeliveries(deliveries)).toEqual({})
-            )
+            })
           )
         })
+    )
+
+    it.effect("sends a Relay one authorization change at a time", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        yield* relayWithGeneration("relay-busy", 9, 9)
+        yield* insertRows(
+          "authorization_delivery",
+          delivery("relay-busy", "instance-one", 2)
+        )
+        // The Relay answers each change a moment later, and notes how many
+        // it was handed at once.
+        let inFlight = 0
+        let most = 0
+        relay.rpc.mockImplementation(
+          async (_relay: unknown, _operation: string, payload: unknown) => {
+            inFlight += 1
+            most = Math.max(most, inFlight)
+            await new Promise((resolve) => setTimeout(resolve, 200))
+            inFlight -= 1
+            const { items } = payload as { items: Array<unknown> }
+            return { issuerGeneration: 9, items }
+          }
+        )
+
+        const readDeliveries = Effect.runPromiseWith(
+          yield* Effect.context<SqlClient.SqlClient>()
+        )
+        const revised = reviseRelayIssuerGenerationNow("relay-busy", 9)
+        wakeAuthorizationDelivery("relay-busy")
+        expect(yield* Effect.promise(() => revised)).toBe(true)
+        yield* Effect.promise(() =>
+          vi.waitFor(async () =>
+            expect(await readDeliveries(deliveries)).toEqual({})
+          )
+        )
+        expect(most).toBe(1)
+      })
     )
 
     it.effect("raises Hearth's issuer generation when Relay is ahead", () =>
