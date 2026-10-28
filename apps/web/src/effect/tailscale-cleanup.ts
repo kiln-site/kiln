@@ -126,34 +126,49 @@ interface NextAttemptRow extends RowDataPacket {
 }
 
 /**
- * When cleanup next has work: the earliest Relay removal due for a network
- * being deleted, or, for one with no Relays left, its finalization. Null when
- * no network is being deleted.
+ * When a network being deleted next has cleanup due: its earliest Relay
+ * removal, or, with no Relays left, its finalization. Null once it's gone.
  */
 export const nextTailscaleCleanupAttemptEffect = Effect.fn(
   "tailscaleCleanup.nextAttempt"
-)(function* () {
+)(function* (networkId: string) {
   const database = yield* Database
   // A network's own retry applies only once its Relays are cleaned up, as
-  // the worker finalizes it then.
+  // it's finalized then.
   const [row] = yield* database.queryRows<NextAttemptRow>(
     "tailscaleCleanup.nextAttempt",
-    `SELECT MIN(COALESCE(
+    `SELECT COALESCE(
               (SELECT MIN(deployment.cleanup_next_attempt_at)
                  FROM ${databaseTable("tailscale_network_deployment")} deployment
                 WHERE deployment.network_id = network.id),
               network.cleanup_next_attempt_at,
               0
-            )) AS next_attempt_at
+            ) AS next_attempt_at
        FROM ${databaseTable("tailscale_network")} network
-      WHERE network.deletion_requested_at IS NOT NULL`
+      WHERE network.id = ? AND network.deletion_requested_at IS NOT NULL`,
+    [networkId]
   )
   return row?.next_attempt_at == null ? null : Number(row.next_attempt_at)
 })
 
+/** Networks being deleted, as after an upgrade from the cleanup worker. */
+export const tailscaleNetworksBeingDeletedEffect = Effect.fn(
+  "tailscaleCleanup.networksBeingDeleted"
+)(function* () {
+  const database = yield* Database
+  const rows = yield* database.queryRows<RowDataPacket & { id: string }>(
+    "tailscaleCleanup.networksBeingDeleted",
+    `SELECT id FROM ${databaseTable("tailscale_network")}
+      WHERE deletion_requested_at IS NOT NULL
+      ORDER BY deletion_requested_at`
+  )
+  return rows.map((row) => row.id)
+})
+
+/** A network's Relay removals that are due. */
 export const loadPendingTailscaleCleanupsEffect = Effect.fn(
   "tailscaleCleanup.loadPending"
-)(function* (limit = 10) {
+)(function* (networkId: string) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
   const rows = yield* database.queryRows<DeploymentRow>(
@@ -165,11 +180,11 @@ export const loadPendingTailscaleCleanupsEffect = Effect.fn(
        FROM ${databaseTable("tailscale_network_deployment")} deployment
        JOIN ${databaseTable("tailscale_network")} network
          ON network.id = deployment.network_id
-      WHERE network.deletion_requested_at IS NOT NULL
+      WHERE network.id = ?
+        AND network.deletion_requested_at IS NOT NULL
         AND deployment.cleanup_next_attempt_at <= ?
-      ORDER BY deployment.cleanup_next_attempt_at, deployment.updated_at
-      LIMIT ?`,
-    [now, limit]
+      ORDER BY deployment.cleanup_next_attempt_at, deployment.updated_at`,
+    [networkId, now]
   )
   const cleanups = yield* Effect.forEach(rows, (row) =>
     Effect.try({

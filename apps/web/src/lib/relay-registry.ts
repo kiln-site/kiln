@@ -50,7 +50,6 @@ import {
   backfillInstanceSourceNames,
   syncInstanceRegistry,
 } from "@/lib/instance-registry"
-import { wakePollingWorker } from "@/lib/polling-worker"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 
 import { decryptWithKeyring, encryptWithKeyring } from "../../keyring.mjs"
@@ -1125,9 +1124,6 @@ export const deletePersistedRelayEffect = Effect.fn("relay.deletePersisted")(
   function* (id: string) {
     const database = yield* Database
     const now = yield* Clock.currentTimeMillis
-    // Whether a network being deleted had this as its last Relay, so is
-    // ready to finish deleting.
-    let finalizesNetwork = false
     yield* database.transaction("relay.deletePersisted", (transaction) =>
       Effect.gen(function* () {
         yield* transaction.execute(
@@ -1153,7 +1149,9 @@ export const deletePersistedRelayEffect = Effect.fn("relay.deletePersisted")(
               AND state IN ('confirming', 'needs_review')`,
           [now, id]
         )
-        const finalizable = yield* transaction.execute(
+        // A network being deleted that had this as its last Relay is ready
+        // to finish deleting, at its operation's next round.
+        yield* transaction.execute(
           `UPDATE ${databaseTable("tailscale_network")} network
              JOIN ${databaseTable("tailscale_network_deployment")} target
                ON target.network_id = network.id
@@ -1171,7 +1169,6 @@ export const deletePersistedRelayEffect = Effect.fn("relay.deletePersisted")(
               )`,
           [id, now, now, id]
         )
-        finalizesNetwork = finalizable.affectedRows > 0
         yield* transaction.execute(
           `DELETE FROM ${databaseTable("tailscale_network_deployment")}
             WHERE relay_id = ?`,
@@ -1186,9 +1183,6 @@ export const deletePersistedRelayEffect = Effect.fn("relay.deletePersisted")(
         }
       })
     )
-    if (finalizesNetwork) {
-      yield* Effect.sync(() => wakePollingWorker("TailscaleCleanup"))
-    }
   }
 )
 

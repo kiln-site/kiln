@@ -33,7 +33,7 @@ import {
   startAppDeploymentPolling,
   stopAppDeploymentPolling,
 } from "./lib/app-deployments.server"
-import { scheduleTailscaleCleanupProcessing } from "./lib/tailscale-cleanup.server"
+import { resumeTailscaleNetworkDeletion } from "./lib/tailscale-cleanup.server"
 import {
   startAppImageUpdateChecks,
   stopAppImageUpdateChecks,
@@ -143,7 +143,13 @@ forkAppEffect(
 )
 scheduleBackupCopyProcessing()
 scheduleInstancePostProvisionProcessing()
-scheduleTailscaleCleanupProcessing()
+forkAppEffect(
+  "TailscaleCleanup.resume",
+  resumeTailscaleNetworkDeletion().pipe(
+    Effect.retry(Schedule.spaced("30 seconds")),
+    Effect.ignore
+  )
+)
 startKilnUpdateNotifications()
 startDiskLimitWarnings()
 startNotificationPushes()

@@ -48,7 +48,7 @@ import { isPlatformAdmin } from "@/lib/access-control"
 import { invalidateRelayCache, relayCachePolicy } from "@/lib/relay-client"
 import { relayRpc } from "@/lib/relay-connection"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
-import { wakePollingWorker } from "@/lib/polling-worker"
+import { startTailscaleNetworkDeletion } from "@/lib/tailscale-cleanup.server"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { requireEligibleResourceUser } from "@/server/auth"
@@ -633,9 +633,10 @@ export const removeTailscaleStack = createServerFn({ method: "POST" })
     if (!definition) throw new Error("Tailscale network not found")
     await runAppEffect(
       "tailscale.cleanup.request",
-      requestTailscaleNetworkCleanupEffect(data.id, user.id, deployments)
+      requestTailscaleNetworkCleanupEffect(data.id, user.id, deployments).pipe(
+        Effect.andThen(startTailscaleNetworkDeletion(data.id, user.id))
+      )
     )
-    wakePollingWorker("TailscaleCleanup")
     publishTailscaleChange()
     return loadTailscaleStacks()
   })
@@ -674,9 +675,7 @@ async function loadTailscaleStacks(): Promise<TailscaleStacksResult> {
           observeTailscaleDeploymentsEffect(observed)
         )
       ).pipe(
-        Effect.map((added) => {
-          if (added > 0) wakePollingWorker("TailscaleCleanup")
-        }),
+        Effect.asVoid,
         Effect.catch((cause) =>
           Effect.sync(() =>
             console.warn(

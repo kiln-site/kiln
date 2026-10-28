@@ -93,7 +93,7 @@ describeMysql("Tailscale cleanup persistence", () => {
           )
           assert.isNull(requested?.cleanup_last_error)
 
-          const batch = yield* loadPendingTailscaleCleanupsEffect()
+          const batch = yield* loadPendingTailscaleCleanupsEffect(networkId)
           assert.deepStrictEqual(
             batch.cleanups.map((cleanup) => [
               cleanup.deployment.relayId,
@@ -136,7 +136,7 @@ describeMysql("Tailscale cleanup persistence", () => {
         })
         yield* insertDeployment(relayC)
 
-        const batch = yield* loadPendingTailscaleCleanupsEffect()
+        const batch = yield* loadPendingTailscaleCleanupsEffect(networkId)
 
         assert.deepStrictEqual(
           batch.cleanups.map((cleanup) => cleanup.deployment.relayId),
@@ -152,7 +152,7 @@ describeMysql("Tailscale cleanup persistence", () => {
         )
         assert.isNotNull(corrupt?.cleanup_last_error)
 
-        const retried = yield* loadPendingTailscaleCleanupsEffect()
+        const retried = yield* loadPendingTailscaleCleanupsEffect(networkId)
         assert.deepStrictEqual(
           retried.cleanups.map((cleanup) => cleanup.deployment.relayId),
           [relayC]

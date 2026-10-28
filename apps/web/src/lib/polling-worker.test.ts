@@ -55,11 +55,11 @@ describe("polling worker", () => {
 
   it("does a job right away when woken after queueing it", async () => {
     const jobs = jobQueue()
-    startPollingWorker("TailscaleCleanup", jobs.pass)
+    startPollingWorker("ServerMigrations", jobs.pass)
     await vi.advanceTimersByTimeAsync(5_000)
 
     jobs.queue("remove-network")
-    wakePollingWorker("TailscaleCleanup")
+    wakePollingWorker("ServerMigrations")
     await vi.advanceTimersByTimeAsync(10)
 
     expect(jobs.done).toEqual(["remove-network"])
@@ -68,7 +68,7 @@ describe("polling worker", () => {
   it("does a retry when it's due rather than at the next 30-second check", async () => {
     const jobs = jobQueue()
     jobs.queue("retry", 8_000)
-    startPollingWorker("TailscaleCleanup", jobs.pass)
+    startPollingWorker("ServerMigrations", jobs.pass)
 
     await vi.advanceTimersByTimeAsync(7_900)
     expect(jobs.done).toEqual([])
@@ -85,12 +85,12 @@ describe("polling worker", () => {
       })
     )
     jobs.queue("first")
-    startPollingWorker("TailscaleCleanup", jobs.pass)
+    startPollingWorker("ServerMigrations", jobs.pass)
     await vi.advanceTimersByTimeAsync(10)
 
     // Queued after the running pass looked for due jobs.
     jobs.queue("second")
-    wakePollingWorker("TailscaleCleanup")
+    wakePollingWorker("ServerMigrations")
     finishPass()
     await vi.advanceTimersByTimeAsync(10)
 
@@ -99,7 +99,7 @@ describe("polling worker", () => {
 
   it("still does a job queued without a wake within 30 seconds", async () => {
     const jobs = jobQueue()
-    startPollingWorker("TailscaleCleanup", jobs.pass)
+    startPollingWorker("ServerMigrations", jobs.pass)
     await vi.advanceTimersByTimeAsync(10)
 
     jobs.queue("left by an earlier Hearth")
@@ -128,13 +128,13 @@ describe("polling worker", () => {
       })
     )
     jobs.queue("first")
-    startPollingWorker("TailscaleCleanup", pass)
+    startPollingWorker("ServerMigrations", pass)
     await vi.advanceTimersByTimeAsync(10)
 
     // As dev reloads do, twice before the running pass ends.
-    startPollingWorker("TailscaleCleanup", pass)
+    startPollingWorker("ServerMigrations", pass)
     await vi.advanceTimersByTimeAsync(10)
-    startPollingWorker("TailscaleCleanup", pass)
+    startPollingWorker("ServerMigrations", pass)
     jobs.queue("second")
     await vi.advanceTimersByTimeAsync(10)
     finishPass()
@@ -153,10 +153,10 @@ describe("polling worker", () => {
       })
     )
     jobs.queue("in flight")
-    startPollingWorker("TailscaleCleanup", jobs.pass)
+    startPollingWorker("ServerMigrations", jobs.pass)
     await vi.advanceTimersByTimeAsync(10)
     // A restart still waiting for that pass.
-    startPollingWorker("TailscaleCleanup", jobs.pass)
+    startPollingWorker("ServerMigrations", jobs.pass)
     await vi.advanceTimersByTimeAsync(10)
 
     let stopped = false
@@ -174,7 +174,7 @@ describe("polling worker", () => {
   it("keeps working after a pass fails", async () => {
     const jobs = jobQueue()
     let failing = true
-    startPollingWorker("TailscaleCleanup", () =>
+    startPollingWorker("ServerMigrations", () =>
       failing ? Promise.reject(new Error("MySQL is down")) : jobs.pass()
     )
     await vi.advanceTimersByTimeAsync(10)

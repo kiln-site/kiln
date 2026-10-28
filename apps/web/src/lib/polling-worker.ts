@@ -16,7 +16,6 @@ export type PollingWorkerName =
   | "Instances.postProvision"
   | "Notifications.push"
   | "ServerMigrations"
-  | "TailscaleCleanup"
 
 /**
  * What a pass found: due jobs it worked through, or none, with when the next

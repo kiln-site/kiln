@@ -1,4 +1,6 @@
-import { Effect } from "effect"
+import { exclusive } from "@workspace/operations"
+import { Duration, Effect, Schema } from "effect"
+import { Activity, DurableClock } from "effect/workflow"
 
 import {
   completeTailscaleCleanupEffect,
@@ -7,6 +9,7 @@ import {
   nextTailscaleCleanupAttemptEffect,
   recordTailscaleCleanupFinalizationFailureEffect,
   tailscaleCleanupRetryDelaySeconds,
+  tailscaleNetworksBeingDeletedEffect,
   type PendingTailscaleCleanup,
 } from "@/effect/tailscale-cleanup"
 import {
@@ -20,38 +23,80 @@ import {
   type TailscaleNetworkDefinition,
   type TailscaleOAuthCredential,
 } from "@/effect/tailscale-networks"
-import {
-  runAppEffect,
-  runAppEffectUntraced,
-  traceAppPromise,
-} from "@/effect/runtime"
+import { runAppEffect } from "@/effect/runtime"
 import { invalidateRelayCache, relayCachePolicy } from "@/lib/relay-client"
 import { relayRpc } from "@/lib/relay-connection"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
-import { startPollingWorker, type WorkerPass } from "@/lib/polling-worker"
 import { listPersistedRelays, type PersistedRelay } from "@/lib/relay-registry"
+import { durableOperation, startDurableOperation } from "@/operations/durable"
 
-export function scheduleTailscaleCleanupProcessing(): void {
-  startPollingWorker("TailscaleCleanup", processTailscaleCleanupJobs)
-}
+// Deleting a Tailscale network, as one operation on it: each round removes
+// the network from the Relays it's due on, two-phase around the tailnet
+// device, then, with no Relays left, the network itself. A failure is kept
+// on its row with when to try again, and the operation pauses until the
+// earliest of those. A network can be deleted only once, so its ID names
+// the operation.
+export const deleteTailscaleNetwork = durableOperation({
+  input: Schema.Struct({ networkId: Schema.String }),
+  kind: "tailscale.network.delete",
+  locks: ({ networkId }) => [exclusive(`tailscale-network:${networkId}`)],
+  run: ({ networkId }) =>
+    Effect.gen(function* () {
+      for (let round = 1; ; round++) {
+        const retryInMs = yield* Activity.make({
+          name: `clean/${round}`,
+          success: Schema.NullOr(Schema.Number),
+          execute: Effect.tryPromise(() => cleanNetwork(networkId)).pipe(
+            // Reading what's due failed, not a removal: look again soon.
+            Effect.catch(() => Effect.succeed(UNREADABLE_RETRY_MS))
+          ),
+        })
+        if (retryInMs === null) return
+        yield* DurableClock.sleep({
+          duration: Duration.millis(retryInMs),
+          name: `retry/${round}`,
+        })
+      }
+    }),
+  version: 1,
+})
 
-/** Cleans up what's due for networks being deleted, if anything is. */
-export async function processTailscaleCleanupJobs(): Promise<WorkerPass> {
-  const nextAttemptAt = await runAppEffectUntraced(
-    nextTailscaleCleanupAttemptEffect()
+const UNREADABLE_RETRY_MS = 30_000
+
+/** Starts deleting a network whose deletion was just requested. */
+export const startTailscaleNetworkDeletion = (
+  networkId: string,
+  actorId: string | null
+) =>
+  startDurableOperation(
+    deleteTailscaleNetwork,
+    { networkId },
+    { actorId, idempotencyKey: networkId }
   )
-  if (nextAttemptAt === null || nextAttemptAt > Date.now()) {
-    return { outcome: "idle", nextAttemptAt }
-  }
-  await traceAppPromise("TailscaleCleanup.pass", processDueCleanups)
-  return { outcome: "worked" }
-}
 
-async function processDueCleanups(): Promise<void> {
+/**
+ * Starts deleting every network whose deletion was requested, as after an
+ * upgrade from the cleanup worker. One already being deleted is the same
+ * operation.
+ */
+export const resumeTailscaleNetworkDeletion = Effect.fn(
+  "TailscaleCleanup.resume"
+)(function* () {
+  const networks = yield* tailscaleNetworksBeingDeletedEffect()
+  yield* Effect.forEach(
+    networks,
+    (networkId) => startTailscaleNetworkDeletion(networkId, null),
+    { discard: true }
+  )
+})
+
+// One round for one network. Returns how long until its next attempt is
+// due, or null once it's gone.
+async function cleanNetwork(networkId: string): Promise<number | null> {
   const [pendingBatch, definitions, relays] = await Promise.all([
     runAppEffect(
       "tailscale.cleanup.pending",
-      loadPendingTailscaleCleanupsEffect()
+      loadPendingTailscaleCleanupsEffect(networkId)
     ),
     loadDefinitions(),
     listPersistedRelays(),
@@ -83,28 +128,32 @@ async function processDueCleanups(): Promise<void> {
     )
   )
 
-  const afterCleanup = await loadDefinitions()
-  const readyToFinalize = afterCleanup.filter((definition) => {
-    const cleanup = definition.cleanup
-    if (!cleanup || cleanup.pendingRelays > 0) return false
-    return (
-      !cleanup.nextAttemptAt ||
-      new Date(cleanup.nextAttemptAt).valueOf() <= Date.now()
-    )
-  })
-  changed ||= readyToFinalize.length > 0
-  await Promise.all(
-    readyToFinalize.map((definition) =>
-      Effect.runPromise(
-        promiseEffect(() => finalizeNetwork(definition)).pipe(
-          Effect.catch((cause) =>
-            promiseEffect(() => deferNetworkFinalization(definition, cause))
-          )
+  const definition = (await loadDefinitions()).find(
+    (candidate) => candidate.id === networkId
+  )
+  const cleanup = definition?.cleanup
+  if (
+    definition &&
+    cleanup &&
+    cleanup.pendingRelays === 0 &&
+    (!cleanup.nextAttemptAt ||
+      new Date(cleanup.nextAttemptAt).valueOf() <= Date.now())
+  ) {
+    changed = true
+    await Effect.runPromise(
+      promiseEffect(() => finalizeNetwork(definition)).pipe(
+        Effect.catch((cause) =>
+          promiseEffect(() => deferNetworkFinalization(definition, cause))
         )
       )
     )
-  )
+  }
   if (changed) publishChange()
+  const next = await runAppEffect(
+    "tailscale.cleanup.next",
+    nextTailscaleCleanupAttemptEffect(networkId)
+  )
+  return next === null ? null : Math.max(1_000, next - Date.now())
 }
 
 async function processDeploymentCleanup(
