@@ -475,6 +475,27 @@ rule in the code.
   either server wait their turn behind it; before handover, they run as
   usual and the move re-checks after it gets its handover locks.
 
+## Measured in phase 0
+
+On a development machine's MySQL 8, with the engine in Hearth's process
+(`apps/web/src/operations/test/bench.ts`):
+
+- A Hearth killed mid-step (`SIGKILL`) has its workflow finished by the
+  next one, which re-runs only the step that was cut off
+  (`apps/web/src/operations/engine.test.ts`). Shard locks are MySQL named
+  locks, freed when the dead process's connection closes, so the next
+  Hearth takes over at once.
+- A one-step workflow takes 39 ms at the median, 50 ms at p95, 74 ms at
+  p99; 200 at once finish in about 1.5 seconds. Fine for long work, too slow
+  for every rename: quick changes go through the lanes and answer in the
+  same request, without a workflow.
+- An idle engine adds under one MySQL query a second.
+- Each run leaves about 6.6 KB in eight rows, and nothing removes them:
+  retention clears a finished workflow's messages after 30 days
+  (`MessageStorage.clearAddress`).
+- A graceful shutdown lets a step in flight finish; Hearth waits five
+  seconds for it before leaving it to the next start.
+
 ## Appendix: the Effect pieces
 
 All in Effect 4.0.1, and all marked unstable. Kiln keeps them behind one

@@ -75,18 +75,31 @@ const globalDatabase = globalThis as typeof globalThis & {
   kilnDatabaseClient?: Effect.Effect<SqlClient.SqlClient, SqlError>
 }
 
-export const DatabaseLive = Layer.effect(Database)(
+/**
+ * The process's MySQL client, connecting on first use. `Database` runs on it,
+ * and so does the operations engine, so Hearth keeps one pool.
+ */
+export class DatabaseClient extends Context.Service<
+  DatabaseClient,
+  { readonly client: Effect.Effect<SqlClient.SqlClient, SqlError> }
+>()("kiln/DatabaseClient") {}
+
+const DatabaseClientLive = Layer.effect(DatabaseClient)(
   Effect.gen(function* () {
-    if (!import.meta.hot) return makeDatabase(yield* makeDatabaseClient)
+    if (!import.meta.hot) return { client: yield* makeDatabaseClient }
     // Vite program reloads rebuild the app runtime without disposing the old
     // one, so development keeps one pool for the process, like
     // `@/lib/database`.
     globalDatabase.kilnDatabaseClient ??= yield* makeDatabaseClient.pipe(
       Scope.provide(Scope.makeUnsafe())
     )
-    return makeDatabase(globalDatabase.kilnDatabaseClient)
+    return { client: globalDatabase.kilnDatabaseClient }
   })
 ).pipe(Layer.provide(Reactivity.layer))
+
+export const DatabaseLive = Layer.effect(Database)(
+  Effect.map(DatabaseClient, ({ client }) => makeDatabase(client))
+).pipe(Layer.provideMerge(DatabaseClientLive))
 
 // Connects on the first query, so effects that never touch MySQL don't wait
 // on it. A failed connection is retried after a second; MysqlClient doesn't
