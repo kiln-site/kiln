@@ -69,7 +69,6 @@ import {
   provisionInstanceDomainBestEffort,
 } from "@/server/domains.server"
 import { setInstanceDomainOptOutEffect } from "@/effect/domains"
-import { loadSharedHostnamesEffect } from "@/effect/web-hostnames"
 import { moveResourceWebHostnamesEffect } from "@/server/web-hostnames.server"
 import {
   advanceRelayTransferEffect,
@@ -371,26 +370,6 @@ function forkMigrationWorker(id: string, generation: number): void {
     )
   )
 }
-
-/** Refuses to move a game server's domains or routes apart from each other. */
-const requireNoSharedHostnamesEffect = Effect.fnUntraced(function* (from: {
-  instanceId: string
-  relayId: string
-}) {
-  const [shared] = yield* loadSharedHostnamesEffect(
-    from.relayId,
-    from.instanceId
-  )
-  if (shared) {
-    return yield* Effect.fail(
-      new Error(
-        `A web route uses ${shared.hostname}, one of this server's domains${
-          shared.removing ? " still being deleted" : ""
-        }. Move its domains and web routes together, once no domain is being deleted.`
-      )
-    )
-  }
-})
 
 // ---------------------------------------------------------- the worker
 
@@ -828,13 +807,7 @@ const finishMigration = Effect.fnUntraced(function* (
   if (row.mode === "migrate" && options.moveDomain) {
     yield* finish(
       "domains",
-      // Checked again here: a route may have been added on one of its
-      // domains since the move started.
-      (options.moveWebRoutes
-        ? Effect.void
-        : requireNoSharedHostnamesEffect(from)
-      ).pipe(
-        Effect.andThen(snapshotInstance(destination, to.instanceId, actor)),
+      snapshotInstance(destination, to.instanceId, actor).pipe(
         Effect.flatMap((instance) =>
           instance
             ? moveInstanceDomainsEffect(from, {
@@ -850,9 +823,6 @@ const finishMigration = Effect.fnUntraced(function* (
     yield* finish(
       "routes",
       Effect.gen(function* () {
-        // Before the routes move: a name one of its domains still holds,
-        // one staying behind or being deleted, can't go with them.
-        yield* requireNoSharedHostnamesEffect(from)
         const state = relayInstanceWebRouteStateSchema.parse(
           yield* rpc(source, "instance.network.routes.read", actor, {
             instanceId: from.instanceId,

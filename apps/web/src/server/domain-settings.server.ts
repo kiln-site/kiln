@@ -20,7 +20,9 @@ import {
   saveDomainConnectionEffect,
   type DomainConnection,
   type ManagedDomain,
+  retryInstanceDomainsNowEffect,
 } from "@/effect/domains"
+import { wakePollingWorker } from "@/lib/polling-worker"
 import { listAppRecordsEffect } from "@/effect/managed-apps"
 import { recoverPromise } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
@@ -575,6 +577,10 @@ export async function resyncDomainAssignmentsHandler() {
       )
     ),
   ])
+  // Domains still waiting on work, as deletes left by a removed Relay, are
+  // retried now rather than after their wait.
+  await runAppEffect("domains.retryNow", retryInstanceDomainsNowEffect())
+  wakePollingWorker("Domains.dns")
   publishDomainChange()
   if (failures.length > 0) {
     const reason = failures[0]

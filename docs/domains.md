@@ -38,8 +38,10 @@ Which connections a hostname may use is a security boundary:
 - anyone may take a single name under a vanity domain they may use (below),
   and its `www` counterpart with it.
 
-A save claims its new hostnames before anything reaches the Relay, and lets
-them go if the save fails, so two saves can't both take one. It's refused
+A save claims its new hostnames before anything reaches the Relay, so two
+saves can't both take one. If the Relay write fails, the Relay may have taken
+the routes anyway, so the names stay claimed, without records, until the
+next save of those routes uses them or lets them go. It's refused
 when a hostname is already held by another game server or app ("already in
 use by" names it when the person can see it). Under a vanity domain someone
 else owns, such as a Kiln provided one, it's also refused when the name is
@@ -86,11 +88,10 @@ web route can never share one, whichever comes first. A game server's own
 web route on its domain's name holds the name too, with no record of its
 own while the domain keeps one, and makes one when the domain is renamed or
 removed. Moving a game server moves its claims with it; a name both its
-domains and its web routes use moves with the domains, so a move has to take
-both or neither, and waits until no domain using it is being deleted.
-Removing a connection waits until none of its hostnames remain; removing a
-Relay marks everything on it for deletion first, so the DNS worker finishes
-any delete Cloudflare refuses.
+domains and its web routes use moves with the domains. Removing a connection
+waits until none of its hostnames remain; removing a Relay marks everything
+on it for deletion first, so the DNS worker finishes any delete Cloudflare
+refuses.
 
 A name stays claimed until its DNS records are gone. Removing a route or a
 domain marks it for deletion; renaming a game server's domain claims the new
@@ -104,7 +105,8 @@ Requests change Cloudflare themselves, and record what they're doing in
 MySQL first. Hearth's DNS worker (`Domains.dns`) finishes whatever they
 left: records Cloudflare refused, renames and deletes cut short by an outage
 or a restart. A row still waiting is retried after 30 seconds, then twice as
-long each time, up to an hour; saving it again or Sync tries it at once.
+long each time, up to an hour; saving it again or Sync tries it at once,
+including deletes left behind by a removed Relay.
 
 Kiln can't make MySQL, the Relays, and Cloudflare change together. MySQL
 decides who holds a name; Cloudflare allows several records under one name,

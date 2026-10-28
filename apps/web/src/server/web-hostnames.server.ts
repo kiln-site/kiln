@@ -359,10 +359,10 @@ interface ClaimInput {
 /**
  * Saves a resource's web routes with `save`, the write that changes them,
  * holding the resource's lock throughout. Claims the hostnames they newly
- * use first, so nothing else takes one before the save settles, and lets
- * them go if it fails. Once it saves, hostnames the routes no longer use
- * are marked for removal, keeping their names until their records are
- * gone. Their DNS records follow in `reconcileResourceWebHostnamesEffect`.
+ * use first, so nothing else takes one before the save settles. Once it
+ * saves, hostnames the routes no longer use are marked for removal, keeping
+ * their names until their records are gone. Their DNS records follow in
+ * `reconcileResourceWebHostnamesEffect`.
  */
 export function saveWebRouteHostnamesEffect<A, E, R>(
   input: ClaimInput,
@@ -371,12 +371,11 @@ export function saveWebRouteHostnamesEffect<A, E, R>(
   return withResourceLock(
     input.resource,
     Effect.gen(function* () {
-      const claimed = yield* claimHostnamesEffect(input)
-      const saved = yield* save.pipe(
-        Effect.tapError(() =>
-          releaseWebHostnameClaimsEffect(claimed).pipe(Effect.ignore)
-        )
-      )
+      // A failed save keeps its claims: the Relay may have taken the
+      // routes even so. They get no record until a save says the routes
+      // use them, and the next save that doesn't lets them go.
+      yield* claimHostnamesEffect(input)
+      const saved = yield* save
       const wanted = new Set(input.hostnames.map(canonicalHostname))
       const rows = yield* listResourceWebHostnamesEffect(input.resource)
       yield* reviveWebHostnamesEffect(
@@ -602,6 +601,9 @@ const reconcileWebHostnameEffect = Effect.fn("webHostnames.reconcile")(
     ) {
       return false
     }
+    // Claimed by a save that failed: held, without a record, until a save
+    // says the routes use it.
+    if (!row.routed && !row.generated && !row.recordId) return false
     // The game server's own address: its domain keeps the record.
     if (!row.recordId && (yield* webHostnameCoveredEffect(row))) {
       if (row.status === "active") return false
@@ -875,6 +877,11 @@ export const resyncWebHostnamesEffect = Effect.fn("webHostnames.resync")(
     let failure: string | null = null
     for (const row of rows) {
       const outcome = yield* Effect.gen(function* () {
+        // A delete needs no Relay, as one left by removing its Relay.
+        if (row.status === "removing") {
+          yield* withCurrentRow(row, removeWebHostnameEffect)
+          return null
+        }
         let target = targets.get(row.relayId)
         if (target === undefined) {
           target = yield* relayPublicHostEffect(row.relayId)

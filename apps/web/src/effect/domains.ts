@@ -587,6 +587,10 @@ export const deleteDomainConnectionEffect = Effect.fn(
             "A web route on this connection got a hostname meanwhile. Try again.",
         })
       }
+      yield* transaction.execute(
+        `DELETE FROM ${databaseTable("domain_zone")} WHERE integration_id = ?`,
+        [id]
+      )
       const owners = yield* transaction.queryRows<
         RowDataPacket & {
           relay_id: string
@@ -1011,6 +1015,11 @@ export const reserveInstanceDomainAssignmentEffect = Effect.fn(
         })
       }
       const current = yield* lockAssignmentEffect(input.id)
+      if (current.status === "removing") {
+        return yield* DomainConfigurationError.make({
+          message: "The domain is being deleted",
+        })
+      }
       yield* claimHostnamesEffect(assignmentOwner(current), [
         `${input.vanityLabel}.${input.domain}`,
       ])
@@ -1214,7 +1223,7 @@ export const activateInstanceDomainAssignmentEffect = Effect.fn(
             attempts = 0,
             next_attempt_at = NULL,
             updated_at = ?
-      WHERE id = ?`,
+      WHERE id = ? AND status <> 'removing'`,
     [
       input.addressRecordId,
       input.addressRecordType,
@@ -1269,7 +1278,7 @@ export const updateInstanceDomainEndpointEffect = Effect.fn(
             attempts = 0,
             next_attempt_at = NULL,
             updated_at = ?
-      WHERE id = ?`,
+      WHERE id = ? AND status <> 'removing'`,
     [
       input.publicHost,
       input.publicPort,
@@ -1344,7 +1353,7 @@ export const recordInstanceDomainErrorEffect = Effect.fn(
     "domains.assignment.recordError",
     `UPDATE ${databaseTable("instance_domain")}
         SET status = 'error', last_error = ?, updated_at = ?
-      WHERE id = ?`,
+      WHERE id = ? AND status <> 'removing'`,
     [message.slice(0, 512), now, id]
   )
 })
@@ -1425,6 +1434,19 @@ export const nextInstanceDomainAttemptEffect = Effect.fn(
       WHERE ${assignmentNeedsWork}`
   )
   return row?.next === null || row?.next === undefined ? null : Number(row.next)
+})
+
+/** Makes every domain still waiting on work due now, as Sync does. */
+export const retryInstanceDomainsNowEffect = Effect.fn(
+  "domains.assignments.retryNow"
+)(function* () {
+  const database = yield* Database
+  yield* database.execute(
+    "domains.assignments.retryNow",
+    `UPDATE ${databaseTable("instance_domain")}
+        SET next_attempt_at = NULL
+      WHERE ${assignmentNeedsWork}`
+  )
 })
 
 /**

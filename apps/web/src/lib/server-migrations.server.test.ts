@@ -237,7 +237,7 @@ describeMysql("Server migration deleting its old server", () => {
     )
 
     it.effect(
-      "won't move a web route away from the domain whose name it uses",
+      "leaves a name its domain uses with the domain when only routes move",
       () =>
         Effect.gen(function* () {
           const id = yield* seedMove({
@@ -277,8 +277,7 @@ describeMysql("Server migration deleting its old server", () => {
 
           const row = yield* resumeUntilEnded(id)
 
-          assert.strictEqual(row?.state, "failed")
-          assert.notInclude(relayCalls.join(" "), "routes")
+          assert.strictEqual(row?.state, "completed")
           assert.deepEqual(
             (yield* selectRows<{ relay_id: string }>("web_hostname")).map(
               (item) => item.relay_id.trim()

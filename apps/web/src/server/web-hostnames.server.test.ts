@@ -24,6 +24,7 @@ import {
 import {
   insertWebHostnameEffect,
   listWebHostnamesEffect,
+  markRelayWebHostnamesRemovingEffect,
   type WebHostnameResource,
 } from "@/effect/web-hostnames"
 import { reconcileDueDnsEffect } from "@/lib/dns-worker.server"
@@ -640,21 +641,30 @@ describeMysql("web route hostnames", () => {
         })
     )
 
-    it.effect("lets a failed save's claims go", () =>
-      Effect.gen(function* () {
-        yield* seed
-        fakeCloudflare([ownerZone])
-        const failed = yield* claim(
-          owner,
-          ["shop.owner.example"],
-          app,
-          Effect.fail("The Relay refused the routes")
-        ).pipe(Effect.flip)
+    it.effect(
+      "holds a failed save's names without records until a save settles them",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          const cloudflare = fakeCloudflare([ownerZone])
+          // The Relay may have taken the routes, whatever the error says.
+          const failed = yield* claim(
+            owner,
+            ["shop.owner.example"],
+            app,
+            Effect.fail("The Relay connection closed")
+          ).pipe(Effect.flip)
+          yield* reconcileResourceWebHostnamesEffect(app)
+          yield* dnsPass
 
-        assert.strictEqual(failed, "The Relay refused the routes")
-        assert.deepEqual(yield* hostnameRows, {})
-        assert.deepEqual(yield* claimedNames, [])
-      })
+          assert.strictEqual(failed, "The Relay connection closed")
+          assert.deepEqual(cloudflare.dns(), {})
+          assert.deepEqual(yield* claimedNames, ["shop.owner.example"])
+
+          yield* save(owner, [])
+          assert.deepEqual(yield* hostnameRows, {})
+          assert.deepEqual(yield* claimedNames, [])
+        })
     )
 
     it.effect("follows the latest save, however late its sync runs", () =>
@@ -703,6 +713,33 @@ describeMysql("web route hostnames", () => {
         assert.deepEqual(yield* hostnameRows, {})
         assert.deepEqual(yield* claimedNames, [])
       })
+    )
+
+    it.effect(
+      "keeps a removed Relay's deletes marked whatever a sync under way does",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          const cloudflare = fakeCloudflare([ownerZone])
+          yield* claim(owner, ["shop.owner.example"])
+
+          // Its Relay's removal marks it while a sync is making its record.
+          const creating = cloudflare.hold("POST")
+          const syncing = yield* Effect.forkChild(
+            reconcileResourceWebHostnamesEffect(app)
+          )
+          yield* creating.reached
+          yield* markRelayWebHostnamesRemovingEffect(relayId)
+          creating.release()
+          yield* Fiber.join(syncing)
+
+          assert.deepEqual(yield* hostnameRows, {
+            "shop.owner.example": "removing@relay-one",
+          })
+          yield* dnsPass
+          assert.deepEqual(cloudflare.dns(), {})
+          assert.deepEqual(yield* claimedNames, [])
+        })
     )
 
     it.effect(
@@ -810,7 +847,7 @@ describeMysql("web route hostnames", () => {
     )
 
     it.effect(
-      "moves a name a game server's domain and route share only with the domain",
+      "moves a name a game server's domain and route share with the domain",
       () =>
         Effect.gen(function* () {
           yield* seed
@@ -848,22 +885,17 @@ describeMysql("web route hostnames", () => {
             resourceType: "instance",
           } as const
 
-          // Routes alone can't take it from the domain.
-          assert.strictEqual(
-            (yield* Effect.flip(moveResourceWebHostnamesEffect(server, moved)))
-              .message,
-            "survival.play.kiln.site is also one of the server's domains, which isn't moving with its web routes"
-          )
+          // Routes alone leave it with the domain.
+          yield* moveResourceWebHostnamesEffect(server, moved)
           assert.deepEqual(yield* hostnameRows, {
-            "map.play.kiln.site": "active@relay-one",
+            "map.play.kiln.site": "active@relay-two",
             "survival.play.kiln.site": "active@relay-one",
           })
-          // The domain takes it along, and then the rest of the routes go.
+          // The domain takes it along.
           yield* reassignInstanceDomainsEffect(
             { instanceId, relayId },
             { instanceId: moved.resourceId, relayId: otherRelayId }
           )
-          yield* moveResourceWebHostnamesEffect(server, moved)
           assert.deepEqual(
             (yield* selectRows<{ hostname: string; relay_id: string }>(
               "hostname_claim"
