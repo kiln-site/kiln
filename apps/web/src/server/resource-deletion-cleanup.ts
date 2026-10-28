@@ -26,13 +26,14 @@ export interface DeletedResource {
 
 /**
  * Removes everything in Hearth that points at a resource the Relay has
- * deleted, the same way for every kind. Run only once the Relay no longer
- * has it, and safe to run again. Its backups stay; they go only as backups
- * are deleted.
+ * deleted, the same way for every kind, as system work whoever asked. Run
+ * only once the Relay no longer has it, and safe to run again. Its backups
+ * stay; they go only as backups are deleted.
  *
- * Names it held are released first and must succeed, so a failure leaves the
- * resource's record for the deletion to retry. The rest is best effort and
- * reported, and the record goes last.
+ * Every step that records something must succeed: one that fails fails the
+ * cleanup with the resource's record still there, for the deletion to run it
+ * again. What's sent elsewhere is owed, not awaited: DNS records the worker
+ * finishes, schedules the Relays are sent again. The record goes last.
  */
 export const cleanUpDeletedResourceEffect = Effect.fn(
   "resources.delete.cleanUp"
@@ -61,63 +62,33 @@ export const cleanUpDeletedResourceEffect = Effect.fn(
       invalidateRelayCache(relayCachePolicy.snapshot(relayId))
     )
     // A removed vanity domain stays removed until the server itself is gone.
-    yield* cleanupStep(
-      "domains.optOut.clear",
-      resource,
-      setInstanceDomainOptOutEffect(relayId, id, false)
-    )
+    yield* setInstanceDomainOptOutEffect(relayId, id, false)
     // A finished move stops offering to delete the server it left.
-    yield* cleanupStep(
-      "notifications.migrationSource.resolve",
-      resource,
-      resolveMigrationSourceNotificationsEffect(relayId, id).pipe(
-        Effect.tap((userIds) =>
-          Effect.sync(() => publishNotificationChange(userIds))
-        )
+    yield* resolveMigrationSourceNotificationsEffect(relayId, id).pipe(
+      Effect.tap((userIds) =>
+        Effect.sync(() => publishNotificationChange(userIds))
       )
     )
   }
   if (kind !== "app") {
-    // Apps can't be shared, so they have no grants.
-    yield* cleanupStep(
-      "access.deleteResource",
-      resource,
-      deleteResourceAccessEffect(relayId, kind, id)
-    )
-  }
-  if (kind !== "app") {
-    // Schedules don't target Apps yet.
-    yield* cleanupStep(
-      "schedules.removeTarget",
-      resource,
-      promiseEffect(async () => {
-        const { removeDeletedResourceFromSchedules } =
-          await import("@/server/schedules")
-        await removeDeletedResourceFromSchedules({ id, kind, relayId }, subject)
-      })
-    )
+    // Apps can't be shared, so they have no grants, and schedules don't
+    // target them yet.
+    yield* deleteResourceAccessEffect(relayId, kind, id)
+    yield* promiseEffect(async () => {
+      const { removeDeletedResourceFromSchedules } =
+        await import("@/server/schedules")
+      await removeDeletedResourceFromSchedules({ id, kind, relayId }, subject)
+    })
   }
   if (kind !== "database") {
-    yield* cleanupStep(
-      "github.syncs.delete",
-      resource,
-      deleteResourceGitHubSyncsEffect(relayId, kind, id)
-    )
+    yield* deleteResourceGitHubSyncsEffect(relayId, kind, id)
   }
-  yield* cleanupStep(
-    "favorites.remove",
-    resource,
-    removeResourceFavoritesEffect({
-      id,
-      kind: kind === "instance" ? "server" : kind,
-      relayId,
-    })
-  )
-  yield* cleanupStep(
-    "icons.remove",
-    resource,
-    removeIconsEffect({ kind: kind === "instance" ? "server" : kind, relayId, id })
-  )
+  yield* removeResourceFavoritesEffect({
+    id,
+    kind: kind === "instance" ? "server" : kind,
+    relayId,
+  })
+  yield* removeIconsEffect({ kind: kind === "instance" ? "server" : kind, relayId, id })
   // The Relay has removed it, so its directory record goes too. Live
   // snapshots never remove records on their own.
   yield* kind === "instance"
@@ -127,6 +98,7 @@ export const cleanUpDeletedResourceEffect = Effect.fn(
       : deleteManagedDatabaseRecordEffect(relayId, id)
 })
 
+// The one step only worth reporting: a stale cache refreshes on its own.
 function cleanupStep<TError, TRequirements>(
   operation: string,
   resource: DeletedResource,

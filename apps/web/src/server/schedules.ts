@@ -8,6 +8,7 @@ import { z } from "zod"
 import { relaySnapshotSchema } from "@workspace/contracts"
 import {
   normalizeScheduleCron,
+  scheduleActionSchema,
   relayScheduleOverviewSchema,
   scheduleDefinitionSchema,
   scheduleInputSchema,
@@ -48,10 +49,14 @@ import {
   groupRows,
   insertSchedule,
   insertScheduleParts,
+  jsonValue,
   loadSchedules,
   publishScheduleCollectionChange,
   scheduleReconciliationConcurrency,
   upsertDeployment,
+  type ScheduleActionRow,
+  type ScheduleRow,
+  type ScheduleTargetRow,
 } from "@/server/schedule-deployment.server"
 
 const scheduleWriteSchema = scheduleInputSchema
@@ -330,84 +335,190 @@ export const deleteSchedule = createServerFn({ method: "POST" })
   })
 
 /**
- * Takes a deleted resource out of every schedule that targets it. A schedule
- * left with no targets is deleted, since it can't run anything; the rest are
- * saved at a new revision and sent to their Relays again.
+ * Takes a deleted resource out of every schedule that targets it, as system
+ * work whoever asked for the deletion. Each schedule is read and rewritten
+ * holding its row, so an edit saved at the same time waits or is waited on;
+ * actions that named it stop naming it. A schedule left with no targets is
+ * deleted, since it can't run anything. Once committed, the changes are sent
+ * to the Relays; one that doesn't take it is sent again by
+ * `redeployUnacknowledgedSchedules`.
  */
 export async function removeDeletedResourceFromSchedules(
   resource: Pick<ScheduleTarget, "id" | "kind" | "relayId">,
   subject: string
 ) {
-  const matches = (target: ScheduleTarget) =>
-    target.relayId === resource.relayId &&
-    target.kind === resource.kind &&
-    target.id === resource.id
-  // Someone saving the same schedule at once moves its revision; take the
-  // fresh one and try again.
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const affected = (await loadSchedules()).filter((schedule) =>
-      schedule.targets.some(matches)
+  const deletedKey = targetKey({ ...resource, name: "" })
+  const changed = await runAppEffect(
+    "schedules.removeDeletedTarget",
+    Effect.gen(function* () {
+      const database = yield* Database
+      const now = yield* Clock.currentTimeMillis
+      return yield* database.transaction(
+        "schedules.removeDeletedTarget",
+        (transaction) =>
+          Effect.gen(function* () {
+            const affected = yield* transaction.queryRows<
+              { schedule_id: string } & RowDataPacket
+            >(
+              `SELECT DISTINCT target.schedule_id
+                 FROM ${databaseTable("schedule_target")} target
+                WHERE target.relay_id = ? AND target.target_kind = ?
+                  AND target.target_id = ?
+                ORDER BY target.schedule_id`,
+              [resource.relayId, resource.kind, resource.id]
+            )
+            const changes: Array<{
+              relayIds: ReadonlyArray<string>
+              schedule: ScheduleDefinition | null
+              scheduleId: string
+              revision: number
+            }> = []
+            for (const { schedule_id: scheduleId } of affected) {
+              const [row] = yield* transaction.queryRows<ScheduleRow>(
+                `SELECT id, name, cron_expression, timezone, enabled,
+                        continue_on_failure, revision, created_by, created_at,
+                        updated_at
+                   FROM ${databaseTable("schedule")}
+                  WHERE id = ? AND deleted_at IS NULL
+                  FOR UPDATE`,
+                [scheduleId]
+              )
+              if (!row) continue
+              const actions = yield* transaction.queryRows<ScheduleActionRow>(
+                `SELECT id, schedule_id, position, action_type, action_config
+                   FROM ${databaseTable("schedule_action")}
+                  WHERE schedule_id = ?
+                  ORDER BY position`,
+                [scheduleId]
+              )
+              const targets = (
+                yield* transaction.queryRows<ScheduleTargetRow>(
+                  `SELECT schedule_id, relay_id, target_kind, target_id,
+                          target_name
+                     FROM ${databaseTable("schedule_target")}
+                    WHERE schedule_id = ?
+                    ORDER BY relay_id, target_kind, target_name`,
+                  [scheduleId]
+                )
+              ).map(
+                (target): ScheduleTarget => ({
+                  id: target.target_id,
+                  kind: target.target_kind,
+                  name: target.target_name,
+                  relayId: target.relay_id,
+                })
+              )
+              const relayIds = [
+                ...new Set(targets.map((target) => target.relayId)),
+              ]
+              const remaining = targets.filter(
+                (target) => targetKey(target) !== deletedKey
+              )
+              const revision = row.revision + 1
+              if (remaining.length === 0) {
+                yield* transaction.execute(
+                  `UPDATE ${databaseTable("schedule")}
+                      SET enabled = FALSE, revision = ?, deleted_at = ?,
+                          updated_at = ?
+                    WHERE id = ?`,
+                  [revision, now, now, scheduleId]
+                )
+                changes.push({ relayIds, revision, schedule: null, scheduleId })
+                continue
+              }
+              const schedule = scheduleDefinitionSchema.parse({
+                // An action that named it names the rest; one that named
+                // only it keeps an empty list rather than running on all.
+                actions: actions.map((action) => {
+                  const parsed = scheduleActionSchema.parse(
+                    jsonValue(action.action_config)
+                  )
+                  return parsed.type === "wait" ||
+                    parsed.targetKeys === undefined
+                    ? parsed
+                    : {
+                        ...parsed,
+                        targetKeys: parsed.targetKeys.filter(
+                          (key) => key !== deletedKey
+                        ),
+                      }
+                }),
+                continueOnFailure: Boolean(row.continue_on_failure),
+                cron: row.cron_expression,
+                enabled: Boolean(row.enabled),
+                id: row.id,
+                name: row.name,
+                revision,
+                targets: remaining,
+                timezone: row.timezone,
+              })
+              yield* transaction.execute(
+                `UPDATE ${databaseTable("schedule")}
+                    SET revision = ?, updated_at = ?
+                  WHERE id = ?`,
+                [revision, now, scheduleId]
+              )
+              yield* transaction.execute(
+                `DELETE FROM ${databaseTable("schedule_action")} WHERE schedule_id = ?`,
+                [scheduleId]
+              )
+              yield* transaction.execute(
+                `DELETE FROM ${databaseTable("schedule_target")} WHERE schedule_id = ?`,
+                [scheduleId]
+              )
+              yield* insertScheduleParts(transaction, schedule, now)
+              changes.push({ relayIds, revision, schedule, scheduleId })
+            }
+            // Owed to every Relay it was on, so a Hearth that stops before
+            // sending leaves the sweep something to resend.
+            for (const change of changes) {
+              for (const relayId of change.relayIds) {
+                yield* transaction.execute(
+                  `INSERT INTO ${databaseTable("schedule_deployment")}
+                     (schedule_id, relay_id, desired_revision, status,
+                      created_at, updated_at)
+                   VALUES (?, ?, ?, 'pending', ?, ?)
+                   ON DUPLICATE KEY UPDATE
+                     status = IF(VALUES(desired_revision) >= desired_revision,
+                       'pending', status),
+                     last_error = IF(VALUES(desired_revision) >= desired_revision,
+                       NULL, last_error),
+                     desired_revision = GREATEST(desired_revision,
+                       VALUES(desired_revision)),
+                     updated_at = VALUES(updated_at)`,
+                  [change.scheduleId, relayId, change.revision, now, now]
+                )
+              }
+            }
+            return changes
+          })
+      )
+    })
+  )
+  // Delivery only: what each Relay should run is already saved.
+  for (const change of changed) {
+    const remaining = new Set(
+      change.schedule?.targets.map((target) => target.relayId) ?? []
     )
-    if (affected.length === 0) return
-    let conflicted = false
-    for (const schedule of affected) {
-      const relayIds = [
-        ...new Set(schedule.targets.map((target) => target.relayId)),
-      ]
-      const targets = schedule.targets.filter((target) => !matches(target))
-      const revision = schedule.revision + 1
-      if (targets.length === 0) {
-        const now = Date.now()
-        const [deleted] = await databasePool.execute<ResultSetHeader>(
-          `UPDATE ${databaseTable("schedule")}
-              SET enabled = FALSE, revision = ?, deleted_at = ?, updated_at = ?
-            WHERE id = ? AND revision = ? AND deleted_at IS NULL`,
-          [revision, now, now, schedule.id, schedule.revision]
+    await recoverPromise(
+        async () => {
+          if (change.schedule) await deploySchedule(change.schedule, subject)
+          await removeRelayProjections(
+            change.scheduleId,
+            change.revision,
+            change.relayIds.filter((relayId) => !remaining.has(relayId)),
+            subject
+          )
+        },
+      (cause) => {
+        console.warn(
+          `[Kiln Schedules] Couldn't send schedule ${change.scheduleId} after a deletion:`,
+          cause
         )
-        if (deleted.affectedRows !== 1) {
-          conflicted = true
-          continue
-        }
-        await removeRelayProjections(schedule.id, revision, relayIds, subject)
-        publishScheduleCollectionChange(relayIds)
-        continue
       }
-      const definition = scheduleDefinitionSchema.parse({
-        actions: schedule.actions,
-        continueOnFailure: schedule.continueOnFailure,
-        cron: schedule.cron,
-        enabled: schedule.enabled,
-        id: schedule.id,
-        name: schedule.name,
-        revision,
-        targets,
-        timezone: schedule.timezone,
-      })
-      const saved = await Effect.runPromise(
-        Effect.result(
-          promiseEffect(() => replaceSchedule(definition, schedule.revision))
-        )
-      )
-      if (Result.isFailure(saved)) {
-        if (!(saved.failure instanceof ScheduleRevisionConflictError)) {
-          throw saved.failure
-        }
-        conflicted = true
-        continue
-      }
-      await deploySchedule(definition, subject)
-      const remaining = new Set(targets.map((target) => target.relayId))
-      await removeRelayProjections(
-        definition.id,
-        revision,
-        relayIds.filter((relayId) => !remaining.has(relayId)),
-        subject
-      )
-      publishScheduleCollectionChange(relayIds)
-    }
-    if (!conflicted) return
+    )
+    publishScheduleCollectionChange(change.relayIds)
   }
-  throw new Error("Schedules kept changing while removing a deleted target")
 }
 
 export const runScheduleNow = createServerFn({ method: "POST" })
