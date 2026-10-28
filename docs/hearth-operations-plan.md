@@ -489,6 +489,11 @@ On a development machine's MySQL 8, with the engine in Hearth's process
   for every rename: quick changes go through the lanes and answer in the
   same request, without a workflow.
 - An idle engine adds under one MySQL query a second.
+- A quick operation costs about 22 ms of MySQL work at the median (admit,
+  start, end; 26 ms p95). Each decision reads what's held and what waits,
+  so a blocked backlog slows ordinary work linearly: with 1,000 operations
+  waiting behind one key, 37 ms (49 ms p95); with 5,000, 113 ms
+  (`apps/web/src/operations/test/lanes-bench.ts`). Real backlogs are tens.
 - Each run leaves about 6.6 KB in eight rows, kept until retention clears
   them with the operation after 30 days, by its execution ID. The engine's
   message table has no index on that, so each hourly pass scans it; at 30
