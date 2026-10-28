@@ -70,10 +70,13 @@ engine, a volume is archived through Docker.
   finish. As everywhere in the lanes, a step cut off by a restart runs again,
   so each step is safe to repeat; a finished step doesn't run again.
 - Freezing marks the resource as being deleted in the Relay's own state and
-  stops it. From then on the Relay refuses every other change to it (power,
-  console, files, SFTP, schedules, deploys), so nothing writes between the
-  final backup and the deletion. Cancelling a deletion before the Relay
-  deletes anything unfreezes it.
+  quiets it: a game server or App is stopped (an App's restart policies set
+  to `no`), and a database stays running for its final dump but is cut off
+  from everything connected to it. From then on the Relay refuses every
+  other change to it (power, console, files, SFTP, schedules, deploys), and
+  quiets it again after a restart, so nothing writes between the final
+  backup and the deletion. Cancelling a deletion before the Relay deletes
+  anything unfreezes it and puts back what quieting changed.
 - Access is checked when the deletion is asked for and before the freeze.
   Once the Relay has deleted, cleanup always finishes, even if the person
   has lost access since.
@@ -124,8 +127,8 @@ engine, a volume is archived through Docker.
 - A backup is taken live by default, as a game server's folder is, and the
   backup says so. It can instead stop the resource for the backup and start
   it again after, for data a live copy can't capture safely, such as a
-  database's files in a volume. A final backup always stops the resource
-  first, since it's deleted after.
+  database's files in a volume. A final backup is taken of the frozen
+  resource, which nothing else can write to.
 - Restoring a volume needs every container mounting it stopped, checked on
   the Relay; restoring an App's folder needs the App stopped.
 - Permissions: backup contents are the resource's data, so backing up or
@@ -145,8 +148,11 @@ engine, a volume is archived through Docker.
 - Commands run as a one-off `exec` in the container: `sh -c` in the chosen
   App service or the database's container, a timeout, bounded output, and
   the exit status in the run's result. An App's command names its service;
-  one with a single service preselects it. A container without `sh`, or one
-  replaced since the schedule was saved, fails that step. A command that may
+  one with a single service preselects it. It runs in the resource's
+  current container, which a limit change or redeploy may have replaced; a
+  container without `sh`, or a service that no longer exists, fails that
+  step. Commands and kill on databases and Apps run only on targets a step
+  names explicitly, so schedules saved before this don't gain them. A command that may
   have run when Kiln lost track of it is reported as unknown, never retried.
   Commands are scheduled only; running one by hand is what the terminal is
   for.
