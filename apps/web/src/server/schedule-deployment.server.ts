@@ -407,7 +407,9 @@ async function prepareRelayScheduleActions(
         return Effect.forEach(
           targets,
           (target) =>
-            !scheduleActionAppliesToTarget(action, target)
+            // Apps aren't backup targets yet, so no backup applies to one.
+            !scheduleActionAppliesToTarget(action, target) ||
+            !isBackupTarget(target)
               ? Effect.succeed(null)
               : promiseEffect(() =>
                   scheduledBackupExecution(action, target, owner)
@@ -429,7 +431,7 @@ async function prepareRelayScheduleActions(
 
 async function scheduledBackupExecution(
   action: Extract<ScheduleAction, { type: "backup" }>,
-  target: ScheduleTarget,
+  target: BackupScheduleTarget,
   owner: string | null
 ) {
   const targetKind = target.kind === "relay" ? "platform" : target.kind
@@ -493,9 +495,19 @@ async function scheduleOwner(scheduleId: string): Promise<string | null> {
   return rows[0]?.created_by ?? null
 }
 
+type BackupScheduleTarget = ScheduleTarget & {
+  kind: Exclude<ScheduleTarget["kind"], "app">
+}
+
+function isBackupTarget(
+  target: ScheduleTarget
+): target is BackupScheduleTarget {
+  return target.kind !== "app"
+}
+
 async function scheduledFullBackupDestination(
   action: Extract<ScheduleAction, { type: "backup" }>,
-  target: ScheduleTarget
+  target: BackupScheduleTarget
 ) {
   if (action.destination.kind === "local") {
     return { kind: "local" as const }
@@ -530,7 +542,7 @@ async function scheduledFullBackupDestination(
 
 async function scheduledResticDestination(
   action: Extract<ScheduleAction, { type: "backup" }>,
-  target: ScheduleTarget
+  target: BackupScheduleTarget
 ) {
   const storageId =
     action.destination.kind === "storage" ? action.destination.storageId : null

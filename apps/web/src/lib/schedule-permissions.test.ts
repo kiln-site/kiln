@@ -158,6 +158,77 @@ describe("schedule authorization", () => {
     ).toBeNull()
   })
 
+  it("schedules an App's commands and power only with the authority its terminal and power take", () => {
+    const app: ScheduleTarget = {
+      id: "a".repeat(40),
+      kind: "app",
+      name: "Website",
+      relayId: "relay-a",
+    }
+    const command: ScheduleAction = {
+      ...consoleAction,
+      authorizedTargets: 2,
+      services: { [`relay-a:app:${app.id}`]: "web" },
+      targetKeys: [`relay-a:app:${app.id}`],
+    }
+    const stop: ScheduleAction = {
+      action: "stop",
+      id: "6c04b8d6-873a-4206-a5d2-010bc0124a06",
+      type: "power",
+    }
+    const relayGrant = (
+      permissions: NonNullable<AccessGrant["permissions"]>
+    ): AccessGrant => ({
+      id: "relay-grant",
+      relayId: "relay-a",
+      resourceId: "relay-a",
+      resourceType: "relay",
+      permissions: ["schedule.create", ...permissions],
+    })
+    const failure = (
+      actions: ReadonlyArray<ScheduleAction>,
+      grants: ReadonlyArray<AccessGrant>
+    ) =>
+      scheduleAuthorizationFailure({
+        actions,
+        grants,
+        schedulePermission: "schedule.create",
+        targets: [app],
+        user,
+      })
+
+    expect(failure([command], [relayGrant(["app.manage"])])).toBe(
+      "You do not have app.terminal permission for Website"
+    )
+    expect(failure([stop], [relayGrant(["app.terminal"])])).toBe(
+      "You do not have app.manage permission for Website"
+    )
+    expect(
+      failure([command, stop], [relayGrant(["app.terminal", "app.manage"])])
+    ).toBeNull()
+    // Without Hearth's mark, a command step never reaches the App, so it
+    // takes nothing of it.
+    expect(
+      failure([{ ...command, authorizedTargets: undefined }], [relayGrant([])])
+    ).toBeNull()
+    // Owning an App grants neither its shell nor its power.
+    expect(
+      failure(
+        [stop],
+        [
+          relayGrant([]),
+          {
+            id: `owner:app:${app.id}`,
+            relayId: "relay-a",
+            resourceId: app.id,
+            resourceType: "app",
+            permissions: ["app.read", "app.logs.read", "app.delete"],
+          },
+        ]
+      )
+    ).toBe("You do not have app.manage permission for Website")
+  })
+
   it("keeps Kiln's backups to platform administrators, whatever a Relay grant allows", () => {
     const kiln: ScheduleTarget = {
       id: "relay-a",

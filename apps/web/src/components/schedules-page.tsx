@@ -3,6 +3,7 @@ import { useLiveSuspenseQuery } from "@tanstack/react-db"
 import {
   useMutation,
   useMutationState,
+  useQueries,
   useQuery,
   useQueryClient,
   useSuspenseQuery,
@@ -46,6 +47,7 @@ import type {
   ScheduleAction,
   ScheduleTarget,
 } from "@workspace/contracts/schedules"
+import type { InstanceInventory } from "@workspace/contracts"
 import {
   normalizeScheduleCron,
   scheduleActionAppliesToTarget,
@@ -91,6 +93,7 @@ import {
 } from "@workspace/ui/components/tooltip"
 import { cn } from "@workspace/ui/lib/utils"
 
+import { appServices } from "@/components/app/app-presentation"
 import { DataTable } from "@/components/data-table-view"
 import {
   DataTableActionGroup,
@@ -164,6 +167,7 @@ import {
   scheduleOptionsQueryOptions,
   schedulesQueryOptions,
 } from "@/lib/query-options"
+import { instanceInventoryQueryOptions } from "@/lib/instance-inventory"
 import { getBackupStorage } from "@/server/backup-storage"
 import type { GitHubSyncRunView } from "@/server/github-sync.server"
 import { getRelaySnapshot } from "@/server/relay"
@@ -2302,7 +2306,8 @@ function ScheduleEditorDialog({
     const complete: Array<ScheduleAction> = []
     for (const action of actions) {
       if (!isCompleteScheduleAction(action)) continue
-      complete.push(
+      // Marked as Hearth saves it, so what's checked here is what runs.
+      const [scoped] = scheduleActionsForSave([
         action.type === "wait" || action.targetKeys === undefined
           ? action
           : {
@@ -2310,11 +2315,16 @@ function ScheduleEditorDialog({
               targetKeys: action.targetKeys.filter((key) =>
                 selectedTargetKeys.has(key)
               ),
-            }
+            },
+      ])
+      if (!scoped) continue
+      complete.push(
+        scoped.type === "console_command"
+          ? { ...scoped, services: commandServices(scoped, selectedOptions) }
+          : scoped
       )
     }
-    // Marked as Hearth saves them, so what's checked here is what runs.
-    return scheduleActionsForSave(complete)
+    return complete
   }, [actions, selectedOptions])
   const actionSelectionValid = completeActions.every((action) =>
     scheduleActionPermitted(action, selectedOptions, permissionKey)
@@ -2328,6 +2338,9 @@ function ScheduleEditorDialog({
     actions.length > 0 &&
     actions.length === completeActions.length &&
     completeActions.every(scheduleActionIsConfigured) &&
+    completeActions.every((action) =>
+      commandServicesChosen(action, selectedOptions)
+    ) &&
     actionSelectionValid
 
   const mutation = useMutation({
@@ -2800,7 +2813,7 @@ const ScheduleTargetSelector = React.memo(function ScheduleTargetSelector({
           >
             <span className="min-w-0 truncate text-left">
               {selectedNames.length === 0
-                ? "Select game servers, databases, or Relays"
+                ? "Select game servers, Apps, databases, or Relays"
                 : selectedNames.slice(0, 3).join(", ")}
               {selectedNames.length > 3 ? ` +${selectedNames.length - 3}` : ""}
             </span>
@@ -3009,43 +3022,68 @@ const ActionEditor = React.memo(function ActionEditor({
   onRemove: (actionId: string) => void
 }) {
   const [backupConfigOpen, setBackupConfigOpen] = React.useState(false)
-  const unsupportedTargets =
-    action.type === null || action.type === "wait"
-      ? []
-      : selectedOptions.filter(
-          (target) => !scheduleActionSupportsTarget(action, target)
-        )
-  const restrictedTargets =
-    action.type === null || action.type === "wait"
-      ? []
-      : selectedOptions.filter(
-          (target) =>
-            scheduleActionSupportsTarget(action, target) &&
-            (!target[permissionKey] ||
-              !target.permittedActions.includes(action.type))
-        )
-  const eligibleTargets =
-    action.type === null || action.type === "wait"
-      ? []
-      : selectedOptions.filter(
-          (target) =>
-            scheduleActionSupportsTarget(action, target) &&
-            target[permissionKey] &&
-            target.permittedActions.includes(action.type)
-        )
-  // Without its own list, a step runs where the Relay runs it: every
-  // target but those it must name.
-  const actionTargetKeys =
-    action.type === null || action.type === "wait"
-      ? new Set<string>()
-      : new Set<string>(
-          action.targetKeys ??
-            eligibleTargets
-              .filter(
-                (target) => !scheduleActionNeedsNamedTarget(action, target)
-              )
-              .map((target) => targetKey(target))
-        )
+  const {
+    actionTargetKeys,
+    commandApps,
+    eligibleTargets,
+    namedRestrictedTargets,
+    restrictedTargets,
+    selectedActionTargets,
+    unsupportedTargets,
+  } = React.useMemo(() => {
+    if (action.type === null || action.type === "wait") {
+      return {
+        actionTargetKeys: new Set<string>(),
+        commandApps: [],
+        eligibleTargets: [],
+        namedRestrictedTargets: [],
+        restrictedTargets: [],
+        selectedActionTargets: [],
+        unsupportedTargets: [],
+      }
+    }
+    const eligible = selectedOptions.filter(
+      (target) =>
+        scheduleActionSupportsTarget(action, target) &&
+        target[permissionKey] &&
+        target.permittedActions.includes(action.type)
+    )
+    // Without its own list, a step runs where the Relay runs it: every
+    // target but those it must name.
+    const keys = new Set<string>(
+      action.targetKeys ??
+        eligible
+          .filter((target) => !scheduleActionNeedsNamedTarget(action, target))
+          .map((target) => targetKey(target))
+    )
+    const selected = eligible.filter((target) => keys.has(targetKey(target)))
+    const restricted = selectedOptions.filter(
+      (target) =>
+        scheduleActionSupportsTarget(action, target) &&
+        (!target[permissionKey] ||
+          !target.permittedActions.includes(action.type))
+    )
+    // Targets a saved step names that this person can't run it on, as when
+    // it was saved before commands reached databases. They show as chosen so
+    // they can be removed, and can't be chosen again.
+    const namedRestricted = restricted.filter(
+      (target) => action.targetKeys?.includes(targetKey(target)) === true
+    )
+    return {
+      actionTargetKeys: keys,
+      commandApps:
+        action.type === "console_command"
+          ? selected.filter((target) => target.kind === "app")
+          : [],
+      eligibleTargets: eligible,
+      namedRestrictedTargets: namedRestricted,
+      restrictedTargets: restricted,
+      selectedActionTargets: [...selected, ...namedRestricted],
+      unsupportedTargets: selectedOptions.filter(
+        (target) => !scheduleActionSupportsTarget(action, target)
+      ),
+    }
+  }, [action, permissionKey, selectedOptions])
   const changeAction = React.useCallback(
     (next: ScheduleActionDraft) =>
       onChange(
@@ -3053,21 +3091,22 @@ const ActionEditor = React.memo(function ActionEditor({
       ),
     [action, onChange, permissionKey, selectedOptions]
   )
-  // Targets a saved step names that this person can't run it on, as when it
-  // was saved before commands reached databases. They show as chosen so
-  // they can be removed, and can't be chosen again.
-  const namedRestrictedTargets =
-    action.type === null || action.type === "wait"
-      ? []
-      : restrictedTargets.filter(
-          (target) => action.targetKeys?.includes(targetKey(target)) === true
-        )
-  const selectedActionTargets = [
-    ...eligibleTargets.filter((target) =>
-      actionTargetKeys.has(targetKey(target))
-    ),
-    ...namedRestrictedTargets,
-  ]
+  const appServiceOptions = useAppServices(commandApps)
+  // An App with one service runs the command there unless someone picks
+  // otherwise.
+  React.useEffect(() => {
+    if (action.type !== "console_command") return
+    const defaults: Record<string, string> = {}
+    for (const target of commandApps) {
+      const key = targetKey(target)
+      const services = appServiceOptions.get(key)
+      if (!action.services?.[key] && services?.length === 1) {
+        defaults[key] = services[0]!
+      }
+    }
+    if (Object.keys(defaults).length === 0) return
+    onChange({ ...action, services: { ...action.services, ...defaults } })
+  }, [action, appServiceOptions, commandApps, onChange])
 
   return (
     <div
@@ -3125,8 +3164,14 @@ const ActionEditor = React.memo(function ActionEditor({
         >
           {action.type === "console_command" ? (
             <CommandEditorField
+              apps={commandApps}
+              appServices={appServiceOptions}
+              services={action.services}
+              targetKinds={selectedActionTargets.map((target) => target.kind)}
               value={action.command}
-              onChange={(command) => onChange({ ...action, command })}
+              onChange={(command, services) =>
+                onChange({ ...action, command, services })
+              }
             />
           ) : action.type === "backup" ? (
             <Button
@@ -3253,7 +3298,7 @@ const ActionEditor = React.memo(function ActionEditor({
           singleDestination
           storage={storage}
           submitLabel="Save backup"
-          targets={selectedOptions.map(scheduleBackupTarget)}
+          targets={selectedOptions.filter(isBackupOption).map(scheduleBackupTarget)}
           title="Configure Backup"
         />
       ) : null}
@@ -3277,13 +3322,20 @@ function NamedRestrictedTargetsNote({
   targets: ReadonlyArray<ScheduleOption>
 }) {
   const shell = (target: ScheduleOption) =>
-    action.type === "console_command" && target.kind === "database"
-  const databases = targets.filter(shell)
+    action.type === "console_command" &&
+    (target.kind === "database" || target.kind === "app")
+  const databases = targets.filter(
+    (target) => shell(target) && target.kind === "database"
+  )
+  const apps = targets.filter((target) => shell(target) && target.kind === "app")
   const others = targets.filter((target) => !shell(target))
   return (
     <p className="type-meta rounded-md border border-amber-400/30 bg-amber-400/5 px-2.5 py-2 text-pretty text-amber-300 light:text-amber-700">
       {databases.length > 0
         ? `Saving runs this command in ${targetList(databases)}'s shell, which needs Relay terminal permission. `
+        : null}
+      {apps.length > 0
+        ? `Saving runs this command in ${targetList(apps)}'s shell, which needs App terminal permission. `
         : null}
       {others.length > 0
         ? `You don't have permission to run this action on ${targetList(others)}. `
@@ -3378,13 +3430,15 @@ function scheduleTargetPickerItem(option: ScheduleOption): InstancePickerItem {
       ? "Game Server"
       : option.kind === "database"
         ? "Database"
-        : "Kiln"
+        : option.kind === "app"
+          ? "App"
+          : "Kiln"
   return {
     identity:
       option.kind === "instance"
         ? { id: option.id, kind: "server", relayId: option.relayId }
-        : option.kind === "database"
-          ? { id: option.id, kind: "database", relayId: option.relayId }
+        : option.kind === "database" || option.kind === "app"
+          ? { id: option.id, kind: option.kind, relayId: option.relayId }
           : {
               id: option.relayId,
               kind: "relay",
@@ -3403,8 +3457,15 @@ function scheduleTargetPickerItem(option: ScheduleOption): InstancePickerItem {
   }
 }
 
-function scheduleBackupTarget(
+// Apps aren't backup targets yet; schedules offer them none.
+function isBackupOption(
   target: ScheduleOption
+): target is ScheduleOption & { kind: Exclude<ScheduleOption["kind"], "app"> } {
+  return target.kind !== "app"
+}
+
+function scheduleBackupTarget(
+  target: ScheduleOption & { kind: Exclude<ScheduleOption["kind"], "app"> }
 ): BackupConfigurationTarget {
   return {
     id: target.id,
@@ -3548,48 +3609,97 @@ function ScheduleActionTypeOption({ type }: { type: ScheduleAction["type"] }) {
 }
 
 const CommandEditorField = React.memo(function CommandEditorField({
+  apps,
+  appServices,
+  services,
+  targetKinds,
   value,
   onChange,
 }: {
+  apps: ReadonlyArray<ScheduleOption>
+  appServices: ReadonlyMap<string, ReadonlyArray<string> | undefined>
+  services: Readonly<Record<string, string>> | undefined
+  targetKinds: ReadonlyArray<ScheduleTarget["kind"]>
   value: string
-  onChange: (value: string) => void
+  onChange: (value: string, services: Record<string, string> | undefined) => void
 }) {
   const [open, setOpen] = React.useState(false)
   const [draft, setDraft] = React.useState(value)
+  const [serviceDraft, setServiceDraft] = React.useState(services)
   const openEditor = React.useCallback(() => {
     setDraft(value)
+    setServiceDraft(services)
     setOpen(true)
-  }, [value])
+  }, [services, value])
+  const unchosen = apps.some((app) => !services?.[targetKey(app)])
+  const consoles = targetKinds.includes("instance")
+  const shells = targetKinds.some(
+    (kind) => kind === "app" || kind === "database"
+  )
   return (
     <>
       <Button
         aria-label="Configure Command"
         className="size-8 max-w-full min-w-0 justify-center truncate px-0 sm:w-fit sm:justify-start sm:px-2.5"
         type="button"
-        title={value || "Configure Command"}
+        title={
+          unchosen
+            ? "Choose the service each App runs the command in"
+            : value || "Configure Command"
+        }
         variant="outline"
         onClick={openEditor}
       >
-        <SlidersHorizontal className="size-4 shrink-0" />
+        {unchosen ? (
+          <TriangleAlert className="size-4 shrink-0 text-amber-400" />
+        ) : (
+          <SlidersHorizontal className="size-4 shrink-0" />
+        )}
         <span className="hidden truncate sm:inline">Configure Command</span>
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>Configure Command</DialogTitle>
-            <DialogDescription className="sr-only">
-              Enter the console command this action should run.
+            <DialogDescription className={shells ? undefined : "sr-only"}>
+              {shells
+                ? `${consoles ? "Game servers get it in their console. " : ""}Apps and databases run it with sh in their container, for up to 10 minutes; the run keeps its exit code and the end of its output.`
+                : "Enter the console command this action should run."}
             </DialogDescription>
           </DialogHeader>
           <Textarea
             autoFocus
-            aria-label="Console command editor"
+            aria-label="Command editor"
             className="min-h-40 resize-y font-mono text-xs"
             maxLength={4096}
-            placeholder="say Server backing up..."
+            placeholder={
+              consoles ? "say Server backing up..." : "php artisan migrate"
+            }
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
           />
+          {apps.length > 0 ? (
+            <div className="grid gap-2">
+              <p className="text-xs font-medium">Runs in</p>
+              {apps.map((app) => {
+                const key = targetKey(app)
+                return (
+                  <AppServiceSelect
+                    key={key}
+                    name={app.name}
+                    services={appServices.get(key)}
+                    value={serviceDraft?.[key]}
+                    onChange={(service) =>
+                      setServiceDraft((current) => ({
+                        ...current,
+                        [key]: service,
+                      }))
+                    }
+                  />
+                )
+              })}
+            </div>
+          ) : null}
           <DialogFooter>
             <Button
               type="button"
@@ -3601,7 +3711,7 @@ const CommandEditorField = React.memo(function CommandEditorField({
             <Button
               type="button"
               onClick={() => {
-                onChange(draft)
+                onChange(draft, serviceDraft)
                 setOpen(false)
               }}
             >
@@ -4006,6 +4116,121 @@ function createScheduleAction(
   }
   if (type === "wait") return { duration: 1, id, type, unit: "seconds" }
   return { action: "restart", id, type }
+}
+
+// The service each App target runs a command in, by target key. Undefined
+// until an App's Relay reports its services.
+function useAppServices(
+  apps: ReadonlyArray<ScheduleOption>
+): ReadonlyMap<string, ReadonlyArray<string> | undefined> {
+  return useQueries({
+    queries: apps.map((app) =>
+      instanceInventoryQueryOptions(
+        { id: app.id, kind: "app", relayId: app.relayId },
+        "detail"
+      )
+    ),
+    combine: React.useCallback(
+      (results: ReadonlyArray<{ data?: InstanceInventory }>) =>
+        new Map(
+          apps.map((app, index) => {
+            const value = results[index]?.data
+            return [
+              targetKey(app),
+              value?.kind === "app" && value.view === "detail" && value.data
+                ? appServices(value.data)
+                : undefined,
+            ] as const
+          })
+        ),
+      [apps]
+    ),
+  })
+}
+
+const AppServiceSelect = React.memo(function AppServiceSelect({
+  name,
+  services,
+  value,
+  onChange,
+}: {
+  name: string
+  services: ReadonlyArray<string> | undefined
+  value: string | undefined
+  onChange: (service: string) => void
+}) {
+  const choices =
+    value && services && !services.includes(value)
+      ? [...services, value]
+      : (services ?? (value ? [value] : []))
+  return (
+    <div className="flex min-w-0 items-center justify-between gap-3 rounded-md border px-2.5 py-1.5">
+      <span className="flex min-w-0 items-center gap-2 text-sm">
+        <TargetIcon kind="app" className="size-3.5 shrink-0" />
+        <span className="truncate">{name}</span>
+      </span>
+      <Select
+        disabled={choices.length === 0}
+        value={value ?? ""}
+        onValueChange={onChange}
+      >
+        <SelectTrigger
+          aria-label={`Service of ${name}`}
+          className="h-8 w-40 min-w-0 font-mono text-xs [&_[data-slot=select-value]]:truncate"
+        >
+          <SelectValue
+            placeholder={
+              services === undefined
+                ? "Loading services…"
+                : services.length === 0
+                  ? "Not deployed"
+                  : "Choose a service"
+            }
+          />
+        </SelectTrigger>
+        <SelectContent>
+          {choices.map((service) => (
+            <SelectItem key={service} value={service}>
+              {service}
+              {services && !services.includes(service) ? " (gone)" : ""}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  )
+})
+
+// Only the services of Apps the command still runs on.
+function commandServices(
+  action: Extract<ScheduleAction, { type: "console_command" }>,
+  targets: ReadonlyArray<ScheduleOption>
+): Record<string, string> | undefined {
+  const services = Object.fromEntries(
+    targets.flatMap((target) => {
+      const service = action.services?.[targetKey(target)]
+      return target.kind === "app" &&
+        service &&
+        scheduleActionAppliesToTarget(action, target)
+        ? [[targetKey(target), service]]
+        : []
+    })
+  )
+  return Object.keys(services).length > 0 ? services : undefined
+}
+
+// Every App a command runs on names the service it runs in.
+function commandServicesChosen(
+  action: ScheduleAction,
+  targets: ReadonlyArray<ScheduleOption>
+) {
+  if (action.type !== "console_command") return true
+  return targets.every(
+    (target) =>
+      target.kind !== "app" ||
+      !scheduleActionAppliesToTarget(action, target) ||
+      Boolean(action.services?.[targetKey(target)])
+  )
 }
 
 function isCompleteScheduleAction(

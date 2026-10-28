@@ -13,6 +13,7 @@ import { cloudflareConnections } from "@/migrations/0035_cloudflare_connections"
 import { tailscaleMemberIds } from "@/migrations/0039_tailscale_member_ids"
 import { backupResourceTargets } from "@/migrations/0042_backup_resource_targets"
 import { resourceDeletions } from "@/migrations/0044_resource_deletions"
+import { scheduleAppTargets } from "@/migrations/0046_schedule_app_targets"
 import { baselineTables } from "@/migrations/baseline-schema"
 import { describeMysql, testDatabaseClient } from "@/test/database"
 import {
@@ -582,6 +583,71 @@ describeMysql("database migrations", () => {
               userId: "user-b",
             },
           ])
+        }),
+      120_000
+    )
+
+    it.effect(
+      "keeps every schedule's targets when schedules learn to target Apps",
+      () =>
+        Effect.gen(function* () {
+          yield* dropAllTables
+          yield* applyMigrations(
+            migrations.filter(
+              (migration) => migration.id < scheduleAppTargets.id
+            )
+          )
+          yield* insertRelay("relay-a")
+          const scheduleId = "8d4b0a77-6a0e-4d36-9c11-3b1f4f5e2a10"
+          yield* insertRows("schedule", {
+            id: scheduleId,
+            name: "Nightly",
+            cron_expression: "0 0 * * *",
+            timezone: "UTC",
+            created_by: "user-a",
+            created_at: 1_000,
+            updated_at: 1_000,
+          })
+          const target = (kind: string, id: string) => ({
+            schedule_id: scheduleId,
+            relay_id: "relay-a",
+            target_kind: kind,
+            target_id: id,
+            target_name: `${kind} ${id}`,
+            created_at: 1_000,
+          })
+          const stored = [
+            target("instance", "server-a"),
+            target("database", "database-a"),
+            target("relay", "relay-a"),
+          ]
+          yield* insertRows("schedule_target", stored)
+
+          yield* applyMigrations(migrations)
+          yield* insertRows("schedule_target", target("app", "app-a"))
+
+          const rows = yield* selectRows<{
+            target_id: string
+            target_kind: string
+            target_name: string
+          }>("schedule_target")
+          expect(
+            rows
+              .map(({ target_id, target_kind, target_name }) => ({
+                target_id,
+                target_kind,
+                target_name,
+              }))
+              .sort((a, b) => a.target_id.localeCompare(b.target_id))
+          ).toEqual([
+            { target_id: "app-a", target_kind: "app", target_name: "app app-a" },
+            ...stored.map(({ target_id, target_kind, target_name }) => ({
+              target_id,
+              target_kind,
+              target_name,
+            })),
+          ].sort((a, b) => a.target_id.localeCompare(b.target_id)))
+          expect(yield* ledger).toEqual(migrationIds)
         }),
       120_000
     )

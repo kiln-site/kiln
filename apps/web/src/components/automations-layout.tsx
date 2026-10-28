@@ -83,7 +83,7 @@ export const AutomationsShell = React.memo(function AutomationsShell({
     [navigate]
   )
   const selectScope = React.useCallback(
-    (option: ServerPickerOption | null) => {
+    (option: ServerPickerOption<ScheduleScopeKind> | null) => {
       void navigate({
         replace: true,
         search: (previous) => ({
@@ -101,7 +101,7 @@ export const AutomationsShell = React.memo(function AutomationsShell({
     <ScheduleScopeContext.Provider value={scope}>
       <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
         <header className="mx-auto w-full max-w-[90rem] shrink-0 px-3 pt-3 sm:px-5">
-          <ServerScopePicker
+          <ServerScopePicker<ScheduleScopeKind>
             allLabel="All instances"
             ariaLabel="Accessible schedule targets"
             changeLabel="Change instance"
@@ -162,18 +162,18 @@ function scheduleScopeOptions(
     relayId: string
     relayName: string
   }>
-): Array<ServerPickerOption> {
+): Array<ServerPickerOption<ScheduleScopeKind>> {
   const instancesById = new Map(
     instances.map((instance) => [
       `${instance.relayId}:${instance.id}`,
       instance,
     ])
   )
-  const options: Array<ServerPickerOption> = []
+  const options: Array<ServerPickerOption<ScheduleScopeKind>> = []
   for (const target of targets) {
     if (!target.available) continue
     options.push({
-      description: `${target.kind === "instance" ? "Game Server" : target.kind === "database" ? "Database" : "Relay"} · ${target.relayName} · ${target.id}`,
+      description: `${scheduleTargetKindLabel(target.kind)} · ${target.relayName} · ${target.id}`,
       id: target.id,
       kind: target.kind === "instance" ? "server" : target.kind,
       name:
@@ -199,4 +199,11 @@ function selectScheduleScopeInstances(snapshot: RelaySnapshot) {
     relayId,
     relayName,
   }))
+}
+
+function scheduleTargetKindLabel(kind: ScheduleOption["kind"]) {
+  if (kind === "instance") return "Game Server"
+  if (kind === "database") return "Database"
+  if (kind === "app") return "App"
+  return "Relay"
 }

@@ -100,6 +100,7 @@ async function manager(
       }),
     findInstance: overrides.findInstance ?? (async () => null),
     getBackup: overrides.getBackup ?? (async () => null),
+    listAppIds: async () => new Set(),
     listDatabaseIds: overrides.listDatabaseIds ?? (async () => new Set()),
     platformTargetId: () => "platform",
     relayId: "relay-a",

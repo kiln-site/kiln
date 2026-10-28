@@ -24,6 +24,7 @@ import {
   databaseWriteRequestSchema,
 } from "./database-browser.js"
 import {
+  appServiceNameSchema,
   fileRootIdSchema,
   legacyTailscaleMemberId,
   tailscaleMemberIdSchema,
@@ -781,11 +782,6 @@ export const hearthDatabaseTerminalOutputSchema = z.object({
 export const appIdSchema = z.string().regex(/^[a-f0-9]{40}$/u)
 
 export const appNameSchema = relayDatabaseNameSchema
-
-// A Compose service's name; image and Dockerfile apps have one service, `app`.
-export const appServiceNameSchema = z
-  .string()
-  .regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/u)
 
 // GitHub builds a Dockerfile or runs a Compose file from a repository. Hearth
 // keeps which repository; the Relay gets the commit to deploy with each

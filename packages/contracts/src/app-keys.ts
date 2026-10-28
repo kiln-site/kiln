@@ -12,6 +12,11 @@ const APP_FILE_ROOT_PREFIX = "app:"
 const DATABASE_FILE_ROOT_PREFIX = "database:"
 const resourceIdPattern = /^[a-f0-9]{40}$/u
 
+// A Compose service's name; image and Dockerfile apps have one service, `app`.
+export const appServiceNameSchema = z
+  .string()
+  .regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/u)
+
 // A Relay's host files use its fingerprint, scoped by the Relay connection.
 export const fileRootIdSchema = z
   .string()

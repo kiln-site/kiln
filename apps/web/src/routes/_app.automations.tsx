@@ -9,7 +9,7 @@ import {
 import { requireGlobalDestinationAccess } from "@/lib/route-access"
 
 const scheduleSearchSchema = z.object({
-  kind: z.enum(["database", "relay", "server"]).optional(),
+  kind: z.enum(["app", "database", "relay", "server"]).optional(),
   relay: z.string().max(120).optional(),
   run: z.string().max(128).optional(),
   runRelay: z.string().max(120).optional(),

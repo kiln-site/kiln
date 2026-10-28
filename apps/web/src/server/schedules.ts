@@ -39,6 +39,7 @@ import {
 import { relayRpc } from "@/lib/relay-connection"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { requireScheduleBackupDestinations } from "@/lib/schedule-backup-destinations.server"
+import { requireScheduleAppServices } from "@/lib/schedule-app-services.server"
 import { scheduleTargetsWithAvailability } from "@/lib/schedule-target-options"
 import { promiseEffect, recoverPromise } from "@/effect/promise"
 import { requireEligibleResourceUser } from "@/server/auth"
@@ -216,6 +217,7 @@ export const createSchedule = createServerFn({ method: "POST" })
       user,
     })
     await requireContinueOnFailureSupport(definition)
+    await requireScheduleAppServices(definition)
     await saveNewSchedule(definition, user.id)
     await deploySchedule(definition, user.id)
     const created = (await loadSchedules()).find(
@@ -281,6 +283,7 @@ export const updateSchedule = createServerFn({ method: "POST" })
       user,
     })
     await requireContinueOnFailureSupport(definition, existing)
+    await requireScheduleAppServices({ ...definition, existing })
     const previousRelayIds = new Set(
       existing.targets.map((target) => target.relayId)
     )
@@ -649,6 +652,11 @@ async function loadTargetDirectory(): Promise<Array<ScheduleTarget>> {
             managed.relay_id
        FROM ${databaseTable("database")} managed
        JOIN ${databaseTable("relay")} relay ON relay.id = managed.relay_id
+      WHERE relay.enabled = TRUE
+      UNION ALL
+     SELECT app.app_id AS id, 'app' AS kind, app.name, app.relay_id
+       FROM ${databaseTable("app")} app
+       JOIN ${databaseTable("relay")} relay ON relay.id = app.relay_id
       WHERE relay.enabled = TRUE
       ORDER BY relay_id, kind, name`
   )

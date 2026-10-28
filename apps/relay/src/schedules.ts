@@ -19,6 +19,7 @@ import {
   scheduleDeterministicUuid,
   scheduleRunSchema,
   scheduleStableId,
+  scheduleTargetKey,
   type RelayScheduleAction,
   type RelayScheduleProjection,
   type ScheduleActionAttempt,
@@ -85,14 +86,16 @@ export interface ScheduleManagerOptions {
     effect: Effect.Effect<void, never>
   ) => Fiber.Fiber<void, unknown>
   readonly getBackup: (taskId: string) => Promise<RelayBackupTask | null>
+  readonly listAppIds: () => Promise<ReadonlySet<string>>
   readonly listDatabaseIds: () => Promise<ReadonlySet<string>>
   // Read per run: Hearth can give the Relay its installation ID at any time.
   readonly platformTargetId: () => string
   readonly reportError?: (message: string, cause: unknown) => void
   readonly relayId: string
   /**
-   * Runs a command in a database's container. It rejects when the command
-   * didn't run, and otherwise answers with how it went, which may be unknown.
+   * Runs a command in a database's container or an App's service. It
+   * rejects when the command didn't run, and otherwise answers with how it
+   * went, which may be unknown.
    */
   readonly runContainerCommand: (
     target: ContainerCommandTarget,
@@ -802,6 +805,9 @@ export class ScheduleManager {
     if (target.kind === "instance") {
       return (await this.#options.findInstance(target.id)) !== null
     }
+    if (target.kind === "app") {
+      return (await this.#options.listAppIds()).has(target.id)
+    }
     return (await this.#options.listDatabaseIds()).has(target.id)
   }
 
@@ -824,6 +830,16 @@ export class ScheduleManager {
           action.command
         )
       }
+      if (target.kind === "app") {
+        const service = action.services?.[scheduleTargetKey(target)]
+        if (!service) {
+          throw new Error("No service was chosen to run the command")
+        }
+        return this.#options.runContainerCommand(
+          { id: target.id, kind: "app", service },
+          action.command
+        )
+      }
     }
     if (action.type === "power" && target.kind !== "relay") {
       await this.#options.runPower(
@@ -835,6 +851,11 @@ export class ScheduleManager {
       return
     }
     if (action.type === "backup") {
+      // Skipped as unsupported before it gets here, until Apps are backup
+      // targets.
+      if (target.kind === "app") {
+        throw new Error("Apps can't be backed up by a schedule yet")
+      }
       const execution = backupExecution(action, target)
       const deployedDestination =
         execution?.destination ??
@@ -1141,7 +1162,11 @@ function hasErrorCode(cause: unknown, code: string) {
 }
 
 function powerOwner(target: ScheduleTarget) {
-  return target.kind === "database" ? "the database's" : "the server's"
+  return target.kind === "database"
+    ? "the database's"
+    : target.kind === "app"
+      ? "the App's"
+      : "the server's"
 }
 
 function errorMessage(cause: unknown) {

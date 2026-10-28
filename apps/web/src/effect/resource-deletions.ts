@@ -493,7 +493,7 @@ export const refuseResourcesBeingDeleted = Effect.fnUntraced(function* (
   }>
 ) {
   for (const resource of resources) {
-    if (resource.kind !== "instance" && resource.kind !== "database") continue
+    if (resource.kind !== "instance" && resource.kind !== "database" && resource.kind !== "app") continue
     const [deletion] = yield* transaction.queryRows<
       RowDataPacket & {
         relay_deleted_at: number | string | null

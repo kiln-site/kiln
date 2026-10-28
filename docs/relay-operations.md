@@ -216,12 +216,16 @@ deleted is refused as every change to it is, and recorded as not run.
 
 A Command step sends a game server's command to its console. For a
 database, it runs `sh -c <command>` as a Docker exec in its current
-container (`apps/relay/src/container-commands.ts`), in the database's
-lifecycle lane. Commands and kills reach a database only when the step's
-`targetKeys` names it and it carries `authorizedTargets`, which Hearth sets
-on the steps it saves once it has checked them for every target they reach.
-A step stored before was saved, and authorized, when it skipped databases,
-even one that named a database, so it still does.
+container, and for an App in the current container of the service the step
+names for it (`services`, by target key), in the resource's lifecycle lane
+(`apps/relay/src/container-commands.ts`). Hearth checks the service against
+the App's when the schedule is saved, and the step fails if a deployment
+has since renamed or removed it. Commands and kills reach a database or App
+only when the step's `targetKeys` names it and it carries
+`authorizedTargets`, which Hearth sets on the steps it saves once it has
+checked them for every target they reach. A step stored before was saved,
+and authorized, when it skipped them, even one that named a database, so it
+still does. Apps can't be backed up by a schedule yet.
 
 - It has 10 minutes to exit. The step records its exit code and the last
   4 KiB of what it printed, stdout and stderr together; a non-zero code

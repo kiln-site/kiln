@@ -32,6 +32,9 @@ export type ContainerCommandTarget =
 /** Where commands find their containers, when their turn comes. */
 export interface CommandContainers {
   readonly apps: {
+    get(appId: string): Promise<{
+      readonly containers: ReadonlyArray<{ readonly service: string }>
+    }>
     serviceContainer(
       appId: string,
       service: string
@@ -114,9 +117,9 @@ export class ContainerCommands {
       if (!container) {
         return yield* new ContainerCommandError({
           message:
-            target.kind === "app"
-              ? `${target.service} has no container; deploy the App first`
-              : "The database has no container",
+            target.kind === "database"
+              ? "The database has no container"
+              : yield* missingService(containers, target),
         })
       }
       if (!container.running) {
@@ -234,6 +237,24 @@ function execute(
     }
     return { exitCode, unknown: null, ...output.read() }
   })
+}
+
+// An App with containers but none for the service has no such service, as
+// when a deployment renamed or removed it since the schedule was saved.
+function missingService(
+  containers: CommandContainers,
+  target: Extract<ContainerCommandTarget, { kind: "app" }>
+): Effect.Effect<string> {
+  return Effect.tryPromise(() => containers.apps.get(target.id)).pipe(
+    Effect.map((app) =>
+      app.containers.length > 0
+        ? `The App has no service named ${target.service}`
+        : `${target.service} has no container; deploy the App first`
+    ),
+    Effect.orElseSucceed(
+      () => `${target.service} has no container; deploy the App first`
+    )
+  )
 }
 
 function lost(reason: string, output: Tail): ContainerCommandResult {

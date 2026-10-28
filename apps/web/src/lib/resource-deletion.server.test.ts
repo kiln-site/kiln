@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
 
 import { assert, layer } from "@effect/vitest"
-import { Effect, Layer } from "effect"
+import { Deferred, Effect, Layer } from "effect"
 import { TestClock } from "effect/testing"
 import { afterAll, vi } from "vite-plus/test"
 
@@ -768,6 +768,81 @@ describeMysql("Deleting a game server or database", () => {
 
           assert.strictEqual(underWay.message, "Survival is being deleted")
           assert.strictEqual(gone.message, "Survival was deleted")
+          assert.lengthOf(yield* selectRows("schedule"), 0)
+
+          // Kept, it's a target like any other again.
+          yield* setDeletion(`status = 'cancelled', relay_deleted_at = NULL`)
+          yield* save()
+          assert.lengthOf(yield* selectRows("schedule_target"), 1)
+        }).pipe(TestClock.withLive),
+      60_000
+    )
+
+    it.effect(
+      "refuses a schedule naming an App being deleted, or one its Relay deleted",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          yield* insertDeletion({ status: "backing_up" })
+          yield* (yield* Database).execute("test.appDeletion", "UPDATE kiln_resource_deletion SET resource_kind = 'app'")
+          const database = yield* Database
+          const setDeletion = (set: string) =>
+            database.execute(
+              "test.setDeletion",
+              `UPDATE kiln_resource_deletion SET ${set}`
+            )
+          const save = () =>
+            database.transaction("test.schedule", (transaction) =>
+              insertSchedule(
+                transaction,
+                {
+                  actions: [],
+                  continueOnFailure: false,
+                  cron: "0 0 * * *",
+                  enabled: true,
+                  id: randomUUID(),
+                  name: "Nightly",
+                  revision: 1,
+                  targets: [
+                    {
+                      id: serverId,
+                      kind: "app",
+                      name: "Survival",
+                      relayId,
+                    },
+                  ],
+                  timezone: "UTC",
+                },
+                owner.id,
+                at
+              )
+            )
+
+          const underWay = yield* Effect.flip(save())
+          // Stopped in cleanup, after the Relay deleted it.
+          yield* setDeletion(`status = 'failed', relay_deleted_at = ${at}`)
+          const gone = yield* Effect.flip(save())
+
+          assert.strictEqual(underWay.message, "Survival is being deleted")
+          assert.strictEqual(gone.message, "Survival was deleted")
+          assert.lengthOf(yield* selectRows("schedule"), 0)
+
+          // Cleanup holds the deletion row while a stale save starts.
+          const locked = yield* Deferred.make<void>()
+          const saving = yield* Deferred.make<void>()
+          const [, raced] = yield* Effect.all([
+            database.transaction("test.cleanup", (transaction) => Effect.gen(function* () {
+              yield* transaction.execute("UPDATE kiln_resource_deletion SET status = 'completed'")
+              yield* Deferred.succeed(locked, undefined)
+              yield* Deferred.await(saving)
+            })),
+            Effect.gen(function* () {
+              yield* Deferred.await(locked)
+              yield* Deferred.succeed(saving, undefined)
+              return yield* Effect.flip(save())
+            })
+          ], { concurrency: "unbounded" })
+          assert.strictEqual(raced.message, "Survival was deleted")
           assert.lengthOf(yield* selectRows("schedule"), 0)
 
           // Kept, it's a target like any other again.

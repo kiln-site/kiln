@@ -960,6 +960,7 @@ const scheduleManager = await ScheduleManager.make({
   forkEffect: (name, effect) => forkRelayEffect(name, effect),
   getBackup: (taskId) =>
     runRelayEffect("relay.schedules.backup.get", backupManager.get(taskId)),
+  listAppIds: async () => new Set((await apps.list()).map(({ id }) => id)),
   listDatabaseIds: async () =>
     new Set((await databases.list()).map((database) => database.id)),
   platformTargetId: () => config.installationId ?? relayIdentity.fingerprint,

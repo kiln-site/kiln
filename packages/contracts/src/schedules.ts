@@ -2,6 +2,7 @@ import { CronExpressionParser } from "cron-parser"
 import { Result } from "effect"
 import { z } from "zod"
 
+import { appServiceNameSchema } from "./app-keys.js"
 import {
   backupLocalDestinationSchema,
   backupModeSchema,
@@ -22,7 +23,7 @@ export type ScheduleActionType = z.infer<typeof scheduleActionTypeSchema>
 const scheduleActionIdSchema = z.uuid()
 /**
  * Set by Hearth on the command and power steps it saves, once it has checked
- * the authority each database the step names needs. Steps stored before
+ * the authority each database or App the step names needs. Steps stored before
  * commands and kills reached databases lack it, whatever their
  * `targetKeys`, because they were never checked for it; they keep running
  * only where they ran before.
@@ -38,6 +39,16 @@ export const scheduleConsoleCommandActionSchema = z
     authorizedTargets: scheduleActionAuthorizedTargetsSchema,
     command: z.string().trim().min(1).max(4_096),
     id: scheduleActionIdSchema,
+    // The service each App target runs the command in, by target key. A
+    // game server's command goes to its console, and a database's to its
+    // only container.
+    services: z
+      .record(z.string().trim().min(1).max(512), appServiceNameSchema)
+      .refine(
+        (services) => Object.keys(services).length <= 2_000,
+        "Too many App services"
+      )
+      .optional(),
     targetKeys: scheduleActionTargetKeysSchema,
     type: z.literal("console_command"),
   })
@@ -111,10 +122,17 @@ export const scheduleActionSchema = z.discriminatedUnion("type", [
 
 export type ScheduleAction = z.infer<typeof scheduleActionSchema>
 
+export const scheduleTargetKindSchema = z.enum([
+  "instance",
+  "database",
+  "app",
+  "relay",
+])
+
 export const scheduleTargetSchema = z
   .object({
     id: z.string().min(1).max(120),
-    kind: z.enum(["instance", "database", "relay"]),
+    kind: scheduleTargetKindSchema,
     name: z.string().trim().min(1).max(120),
     relayId: z.string().min(1).max(120),
   })
@@ -227,6 +245,32 @@ export const scheduleDefinitionSchema = scheduleInputSchema
       })
     }
     for (const [actionIndex, action] of schedule.actions.entries()) {
+      if (action.type === "console_command") {
+        const appTargets = schedule.targets.filter(
+          (target) =>
+            target.kind === "app" &&
+            scheduleActionAppliesToTarget(action, target)
+        )
+        const appKeys = new Set(appTargets.map(scheduleTargetKey))
+        for (const target of appTargets) {
+          if (!action.services?.[scheduleTargetKey(target)]) {
+            context.addIssue({
+              code: "custom",
+              message: `Choose the service of ${target.name} that runs the command`,
+              path: ["actions", actionIndex, "services"],
+            })
+          }
+        }
+        for (const key of Object.keys(action.services ?? {})) {
+          if (!appKeys.has(key)) {
+            context.addIssue({
+              code: "custom",
+              message: "Command services must name the App targets it runs on",
+              path: ["actions", actionIndex, "services"],
+            })
+          }
+        }
+      }
       if (action.type === "wait") continue
       if (action.targetKeys === undefined) continue
       const seenTargetKeys = new Set<string>()
@@ -490,9 +534,12 @@ export function scheduleActionSupportsTarget(
 ): boolean {
   if (action.type === "wait") return true
   // A game server's goes to its console; a database's runs in its
-  // container's shell.
+  // container's shell, and an App's in one of its services'.
   if (action.type === "console_command") return target.kind !== "relay"
   if (action.type === "power") return target.kind !== "relay"
+  // Apps can't be backed up yet; their backups arrive as backup targets of
+  // their own, and this is where schedules start offering them.
+  if (target.kind === "app") return false
   if (action.mode === "incremental") return target.kind === "instance"
   return true
 }
@@ -506,10 +553,11 @@ export function scheduleTargetKey(
 /**
  * Whether a step runs on a target only when Hearth checked it there: its
  * `targetKeys` names the target and it carries `authorizedTargets`.
- * Commands and kills reach databases now, but stored steps were saved, and
- * authorized, when they skipped databases, even ones whose `targetKeys`
- * named one, so they still skip them. A step reaches a database only once
- * someone names it and Hearth saves it, authorizing it then.
+ * Commands and kills reach databases and Apps now, but stored steps were
+ * saved, and authorized, when they skipped them, even ones whose
+ * `targetKeys` named a database, so they still skip them. A step reaches a
+ * database or App only once someone names it and Hearth saves it,
+ * authorizing it then.
  */
 export function scheduleActionNeedsNamedTarget(
   action: {
@@ -519,7 +567,7 @@ export function scheduleActionNeedsNamedTarget(
   target: Pick<ScheduleTarget, "kind">
 ): boolean {
   return (
-    target.kind === "database" &&
+    (target.kind === "database" || target.kind === "app") &&
     (action.type === "console_command" ||
       (action.type === "power" && action.action === "kill"))
   )
