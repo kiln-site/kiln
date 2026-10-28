@@ -380,8 +380,8 @@ export const deleteRelayWebHostnamesEffect = Effect.fn(
 /**
  * Gives a resource's hostnames, and their claims, to the one taking its
  * place, as moving a game server to another Relay does. Ones being deleted
- * stay with their delete, and so do names a game server domain that isn't
- * moving still uses: a name has one owner. Reports how many moved.
+ * stay with their delete. Refuses a name a domain staying behind still
+ * uses: a name has one owner. Reports how many moved.
  */
 export const reassignWebHostnamesEffect = Effect.fn("webHostnames.reassign")(
   function* (from: WebHostnameResource, to: WebHostnameResource) {
@@ -389,17 +389,26 @@ export const reassignWebHostnamesEffect = Effect.fn("webHostnames.reassign")(
     const now = yield* Clock.currentTimeMillis
     return yield* database.transaction("webHostnames.reassign", () =>
       Effect.gen(function* () {
-        const rows = yield* database.queryRows<
-          RowDataPacket & { hostname: string }
+        const listed = yield* database.queryRows<
+          RowDataPacket & { hostname: string; shared: number | string }
         >(
           "webHostnames.reassign",
-          `SELECT hostname FROM ${databaseTable("web_hostname")} used
+          `SELECT hostname, ${sharedWithDomain} AS shared
+             FROM ${databaseTable("web_hostname")} used
             WHERE relay_id = ? AND resource_type = ? AND resource_id = ?
               AND status <> 'removing'
-              AND NOT (${sharedWithDomain})
             FOR UPDATE`,
           [from.relayId, from.resourceType, from.resourceId]
         )
+        // A name has one owner: one a domain staying behind still uses
+        // can't go with the route.
+        const shared = listed.find((row) => Number(row.shared) === 1)
+        if (shared) {
+          return yield* DomainConfigurationError.make({
+            message: `${shared.hostname} is also one of the server's domains, which isn't moving with its web routes`,
+          })
+        }
+        const rows = listed
         if (rows.length === 0) return 0
         yield* database.execute(
           "webHostnames.reassign",
@@ -518,6 +527,22 @@ export const setWebHostnamesRoutedEffect = Effect.fn("webHostnames.routed")(
   }
 )
 
+/** Marks every hostname on a removed Relay for deletion. */
+export const markRelayWebHostnamesRemovingEffect = Effect.fn(
+  "webHostnames.markRelayRemoving"
+)(function* (relayId: string) {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  yield* database.execute(
+    "webHostnames.markRelayRemoving",
+    `UPDATE ${databaseTable("web_hostname")}
+        SET status = 'removing', last_error = NULL, attempts = 0,
+            next_attempt_at = NULL, updated_at = ?
+      WHERE relay_id = ?`,
+    [now, relayId]
+  )
+})
+
 /**
  * Takes back hostnames marked for removal that a resource's routes use
  * again; a sync points their records at the Relay instead of deleting them.
@@ -550,21 +575,32 @@ const sharedWithDomain = `used.resource_type = 'instance' AND EXISTS (
 
 /**
  * A game server's names both a domain and a web route use, which a move
- * must take together.
+ * must take together, and whether a domain being deleted holds one.
  */
 export const loadSharedHostnamesEffect = Effect.fn("webHostnames.shared")(
   function* (relayId: string, instanceId: string) {
     const database = yield* Database
     const rows = yield* database.queryRows<
-      RowDataPacket & { hostname: string }
+      RowDataPacket & { hostname: string; removing: number | string }
     >(
       "webHostnames.shared",
-      `SELECT hostname FROM ${databaseTable("web_hostname")} used
-        WHERE relay_id = ? AND resource_type = 'instance'
-          AND resource_id = ? AND ${sharedWithDomain}`,
+      `SELECT used.hostname, MAX(domain.status = 'removing') AS removing
+         FROM ${databaseTable("web_hostname")} used
+         JOIN ${databaseTable("instance_domain")} domain
+           ON domain.relay_id = used.relay_id
+          AND domain.instance_id = used.resource_id
+          AND (CONCAT(domain.vanity_label, '.', domain.domain) = used.hostname
+            OR CONCAT(domain.next_vanity_label, '.', domain.next_domain)
+               = used.hostname)
+        WHERE used.relay_id = ? AND used.resource_type = 'instance'
+          AND used.resource_id = ?
+        GROUP BY used.hostname`,
       [relayId, instanceId]
     )
-    return rows.map((row) => row.hostname)
+    return rows.map((row) => ({
+      hostname: row.hostname,
+      removing: Number(row.removing) === 1,
+    }))
   }
 )
 

@@ -486,6 +486,28 @@ describeMysql("renaming a game server's domain", () => {
 
 describeMysql("removing a game server's domain", () => {
   layer(TestDatabase)((it) => {
+    it.effect("finishes removing a Relay's domains Cloudflare refused", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        const dns = fakeCloudflare({
+          records: ["address-record", "srv-record"],
+        })
+        yield* insertCredential()
+        yield* insertAssignment(testAssignment())
+
+        dns.refuseDelete.add("srv-record")
+        yield* removeRelayManagedDomainsEffect(relayId, true)
+        assert.deepEqual(yield* assignmentStatuses, ["removing"])
+        assert.deepEqual(yield* claimedNames, ["play.kiln.site"])
+
+        dns.refuseDelete.clear()
+        yield* reconcileDueInstanceDomainsEffect(0)
+        assert.deepEqual(dns.records(), [])
+        assert.deepEqual(yield* assignmentKeys, [])
+        assert.deepEqual(yield* claimedNames, [])
+      }).pipe(Effect.provide(disabledCache))
+    )
+
     it.effect(
       "deletes records a failed attempt never heard back about, whatever removes it",
       () =>

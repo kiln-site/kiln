@@ -37,6 +37,7 @@ import {
   listResourceWebHostnamesEffect,
   listWebHostnamesEffect,
   loadWebHostnameEffect,
+  markRelayWebHostnamesRemovingEffect,
   markWebHostnameCoveredEffect,
   markWebHostnamesRemovingEffect,
   reassignWebHostnamesEffect,
@@ -812,9 +813,15 @@ export const removeRelayWebHostnamesEffect = Effect.fn(
 )(function* (relayId: string, removeRecords: boolean) {
   const rows = yield* listWebHostnamesEffect({ relayId })
   if (removeRecords) {
-    // One whose delete fails stays, for the DNS worker to finish.
+    // Marked first, so one whose delete fails, or is cut short, is
+    // finished by the DNS worker.
+    yield* markRelayWebHostnamesRemovingEffect(relayId)
     for (const row of rows) {
-      yield* withCurrentRow(row, removeWebHostnameEffect).pipe(Effect.ignore)
+      yield* withCurrentRow(row, (current) =>
+        current.status === "removing"
+          ? removeWebHostnameEffect(current)
+          : Effect.void
+      ).pipe(Effect.ignore)
     }
   } else {
     yield* deleteRelayWebHostnamesEffect(relayId)

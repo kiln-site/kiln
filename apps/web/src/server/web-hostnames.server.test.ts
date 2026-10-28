@@ -18,6 +18,7 @@ import { encryptWithKeyring } from "../../keyring.mjs"
 
 import {
   beginInstanceDomainRenameEffect,
+  deleteDomainConnectionEffect,
   reassignInstanceDomainsEffect,
 } from "@/effect/domains"
 import {
@@ -809,7 +810,7 @@ describeMysql("web route hostnames", () => {
     )
 
     it.effect(
-      "moves a name a game server's domain and route share with whichever takes the domain",
+      "moves a name a game server's domain and route share only with the domain",
       () =>
         Effect.gen(function* () {
           yield* seed
@@ -847,17 +848,22 @@ describeMysql("web route hostnames", () => {
             resourceType: "instance",
           } as const
 
-          // Routes alone leave the shared name with the domain.
-          yield* moveResourceWebHostnamesEffect(server, moved)
+          // Routes alone can't take it from the domain.
+          assert.strictEqual(
+            (yield* Effect.flip(moveResourceWebHostnamesEffect(server, moved)))
+              .message,
+            "survival.play.kiln.site is also one of the server's domains, which isn't moving with its web routes"
+          )
           assert.deepEqual(yield* hostnameRows, {
-            "map.play.kiln.site": "active@relay-two",
+            "map.play.kiln.site": "active@relay-one",
             "survival.play.kiln.site": "active@relay-one",
           })
-          // The domain takes it along.
+          // The domain takes it along, and then the rest of the routes go.
           yield* reassignInstanceDomainsEffect(
             { instanceId, relayId },
             { instanceId: moved.resourceId, relayId: otherRelayId }
           )
+          yield* moveResourceWebHostnamesEffect(server, moved)
           assert.deepEqual(
             (yield* selectRows<{ hostname: string; relay_id: string }>(
               "hostname_claim"
@@ -892,6 +898,28 @@ describeMysql("web route hostnames", () => {
         assert.deepEqual(yield* hostnameRows, {})
         assert.deepEqual(yield* claimedNames, [])
       })
+    )
+
+    it.effect(
+      "keeps a connection while a hostname added during its removal is on it",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          fakeCloudflare([ownerZone])
+          // Added after the removal deleted the connection's hostnames; its
+          // record may be in Cloudflare already.
+          yield* claim(owner, ["shop.owner.example"])
+
+          const refused = yield* deleteDomainConnectionEffect("owner1").pipe(
+            Effect.flip
+          )
+
+          assert.strictEqual(
+            refused.message,
+            "A web route on this connection got a hostname meanwhile. Try again."
+          )
+          assert.deepEqual(yield* claimedNames, ["shop.owner.example"])
+        })
     )
 
     it.effect("makes a record deleted in Cloudflare again on Sync", () =>

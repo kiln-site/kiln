@@ -237,6 +237,58 @@ describeMysql("Server migration deleting its old server", () => {
     )
 
     it.effect(
+      "won't move a web route away from the domain whose name it uses",
+      () =>
+        Effect.gen(function* () {
+          const id = yield* seedMove({
+            deleteSource: false,
+            deletion: null,
+            ending: false,
+            moveWebRoutes: true,
+          })
+          // Added on its domain's name after the move started.
+          yield* insertRows("instance_domain", {
+            id: randomUUID(),
+            relay_id: sourceRelayId,
+            instance_id: sourceId,
+            is_primary: true,
+            integration_id: "gone",
+            vanity_label: "map",
+            domain: "example.test",
+            public_host: "source.example.test",
+            public_port: 25_565,
+            status: "active",
+            created_at: at,
+            updated_at: at,
+          })
+          yield* insertRows("web_hostname", {
+            id: randomUUID(),
+            hostname: "map.example.test",
+            relay_id: sourceRelayId,
+            resource_type: "instance",
+            resource_id: sourceId,
+            integration_id: "gone",
+            zone_id: "zone",
+            is_generated: false,
+            status: "active",
+            created_at: at,
+            updated_at: at,
+          })
+
+          const row = yield* resumeUntilEnded(id)
+
+          assert.strictEqual(row?.state, "failed")
+          assert.notInclude(relayCalls.join(" "), "routes")
+          assert.deepEqual(
+            (yield* selectRows<{ relay_id: string }>("web_hostname")).map(
+              (item) => item.relay_id.trim()
+            ),
+            [sourceRelayId]
+          )
+        })
+    )
+
+    it.effect(
       "hands its hostnames over when a retry finds the routes already moved",
       () =>
         Effect.gen(function* () {

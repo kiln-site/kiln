@@ -306,19 +306,29 @@ export async function startServerMigrationHandler(
   if (options.moveDomain || options.moveWebRoutes) {
     authorization.require("instance.network.write")
   }
-  // A name both its domains and its web routes use has one owner.
-  if (options.moveDomain !== options.moveWebRoutes) {
+  // A name both its domains and its web routes use has one owner, so they
+  // move together, and only once none of its domains is still being
+  // deleted.
+  if (options.moveDomain || options.moveWebRoutes) {
     const { loadSharedHostnamesEffect } = await import("@/effect/web-hostnames")
-    const [shared] = await runAppEffect(
+    const shared = await runAppEffect(
       "serverMigrations.start.sharedHostnames",
       loadSharedHostnamesEffect(relay.id, instance.id)
     )
-    if (shared) {
+    const removing = shared.find((name) => name.removing)
+    if (removing) {
       throw new Error(
-        `A web route uses ${shared}, one of this server's domains. Move its domains and web routes together.`
+        `Finish deleting the domain ${removing.hostname} before moving this server; a web route uses it`
+      )
+    }
+    const [split] = options.moveDomain !== options.moveWebRoutes ? shared : []
+    if (split) {
+      throw new Error(
+        `A web route uses ${split.hostname}, one of this server's domains. Move its domains and web routes together.`
       )
     }
   }
+
   const problems = await runAppEffect(
     "serverMigrations.start.problems",
     relayTransferProblemsEffect({

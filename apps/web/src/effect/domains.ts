@@ -572,24 +572,21 @@ export const deleteDomainConnectionEffect = Effect.fn(
         [id, id, id]
       )
       yield* connectionInUseFailure(Number(used?.total ?? 0))
-      // Its web records were deleted first; one made since keeps the token.
-      const recorded = yield* transaction.queryRows<RowDataPacket>(
+      // Its web hostnames were deleted first. One added since may have a
+      // record Kiln hasn't heard back about yet, so the token stays.
+      const added = yield* transaction.queryRows<RowDataPacket>(
         `SELECT 1 FROM ${databaseTable("web_hostname")}
-          WHERE integration_id = ? AND record_id IS NOT NULL
+          WHERE integration_id = ?
           LIMIT 1
           FOR UPDATE`,
         [id]
       )
-      if (recorded.length > 0) {
+      if (added.length > 0) {
         return yield* DomainConfigurationError.make({
           message:
-            "A web route on this connection got a DNS record meanwhile. Try again.",
+            "A web route on this connection got a hostname meanwhile. Try again.",
         })
       }
-      yield* transaction.execute(
-        `DELETE FROM ${databaseTable("domain_zone")} WHERE integration_id = ?`,
-        [id]
-      )
       const owners = yield* transaction.queryRows<
         RowDataPacket & {
           relay_id: string
@@ -731,6 +728,31 @@ export const deleteRelayInstanceDomainAssignmentsEffect = Effect.fn(
       )
       yield* releaseUnusedHostnamesEffect({ relayId })
     })
+  )
+  yield* database.execute(
+    "domains.optOuts.deleteRelay",
+    `DELETE FROM ${databaseTable("instance_domain_opt_out")} WHERE relay_id = ?`,
+    [relayId]
+  )
+})
+
+/**
+ * Marks every domain on a removed Relay for deletion, before their records
+ * are deleted, so any delete that fails is finished by the DNS worker. Its
+ * opt-outs go with it.
+ */
+export const markRelayInstanceDomainsRemovingEffect = Effect.fn(
+  "domains.assignments.markRelayRemoving"
+)(function* (relayId: string) {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  yield* database.execute(
+    "domains.assignments.markRelayRemoving",
+    `UPDATE ${databaseTable("instance_domain")}
+        SET status = 'removing', is_primary = 0, attempts = 0,
+            next_attempt_at = NULL, updated_at = ?
+      WHERE relay_id = ?`,
+    [now, relayId]
   )
   yield* database.execute(
     "domains.optOuts.deleteRelay",

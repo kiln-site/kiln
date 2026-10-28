@@ -38,6 +38,7 @@ import {
   loadManagedDomainEffect,
   loadRelayInstanceDomainAssignmentsEffect,
   markInstanceDomainRemovingEffect,
+  markRelayInstanceDomainsRemovingEffect,
   reassignInstanceDomainsEffect,
   recordInstanceDomainErrorEffect,
   recordInstanceDomainSyncErrorEffect,
@@ -543,22 +544,46 @@ export const removeRelayManagedDomainsEffect = Effect.fn(
   "domains.relay.removeAssignments"
 )(function* (relayId: string, removeCloudflareRecords: boolean) {
   const assignments = yield* loadRelayInstanceDomainAssignmentsEffect(relayId)
-  if (removeCloudflareRecords) {
-    // Each as deleting it alone would, records Kiln never heard back about
-    // included, so none is forgotten while Cloudflare still has it.
-    yield* Effect.forEach(
-      assignments,
-      (assignment) =>
-        withInstanceDomainLock(
-          assignment.relayId,
-          assignment.instanceId,
-          deleteAssignmentRecordsEffect(assignment)
-        ),
-      { concurrency: 4, discard: true }
-    )
+  if (!removeCloudflareRecords) {
+    yield* deleteRelayInstanceDomainAssignmentsEffect(relayId)
+    yield* invalidateManagedDomainAddressesEffect
+    return assignments.length
   }
-  yield* deleteRelayInstanceDomainAssignmentsEffect(relayId)
+  // Marked first, so a delete that fails, or one cut short, is finished by
+  // the DNS worker; none is forgotten while Cloudflare still has it.
+  yield* markRelayInstanceDomainsRemovingEffect(relayId)
   yield* invalidateManagedDomainAddressesEffect
+  yield* Effect.forEach(
+    assignments,
+    (listed) =>
+      withInstanceDomainLock(
+        listed.relayId,
+        listed.instanceId,
+        Effect.gen(function* () {
+          // As it is now: a move may have taken it off this Relay first.
+          const assignment = yield* loadInstanceDomainAssignmentEffect(
+            listed.id
+          )
+          if (
+            assignment?.relayId !== relayId ||
+            assignment.instanceId !== listed.instanceId ||
+            assignment.status !== "removing"
+          ) {
+            return
+          }
+          yield* deleteAssignmentRecordsEffect(assignment).pipe(
+            Effect.tapError((error) =>
+              recordInstanceDomainSyncErrorEffect(
+                assignment.id,
+                `Delete failed: ${error.message}`
+              )
+            ),
+            Effect.ignore
+          )
+        })
+      ),
+    { concurrency: 4, discard: true }
+  )
   return assignments.length
 })
 

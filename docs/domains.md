@@ -87,7 +87,10 @@ web route on its domain's name holds the name too, with no record of its
 own while the domain keeps one, and makes one when the domain is renamed or
 removed. Moving a game server moves its claims with it; a name both its
 domains and its web routes use moves with the domains, so a move has to take
-both or neither.
+both or neither, and waits until no domain using it is being deleted.
+Removing a connection waits until none of its hostnames remain; removing a
+Relay marks everything on it for deletion first, so the DNS worker finishes
+any delete Cloudflare refuses.
 
 A name stays claimed until its DNS records are gone. Removing a route or a
 domain marks it for deletion; renaming a game server's domain claims the new
