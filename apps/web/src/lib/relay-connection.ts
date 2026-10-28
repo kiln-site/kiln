@@ -141,6 +141,29 @@ const connections = (globalThis.kilnRelayConnections ??= new Map())
 const relayUpdates = (globalThis.kilnRelayUpdates ??= new Map())
 const ABSENT_RELAY_UPDATE_MS = 15 * 60_000
 
+/** Which journal of a Relay's changes a command is meant for. */
+export interface RelayJournal {
+  /** The pairing the Relay journals Hearth's changes under. */
+  readonly clientId: string
+  /** The journal itself, made anew when the Relay's state is rebuilt. */
+  readonly journalId: string
+}
+
+/** What a command carries besides its operation and payload. */
+export interface RelayRequestFrame {
+  /**
+   * A change's operation ID, when the caller keeps it to ask how the change
+   * went (`operation.get`) after losing its answer.
+   */
+  readonly operationId?: string | undefined
+  /**
+   * The journal the caller first sent it to. Sent to any other, by another
+   * pairing or after the Relay's state was rebuilt, it's refused with
+   * `journal_changed` instead.
+   */
+  readonly journal?: RelayJournal | undefined
+}
+
 /**
  * Sends one request to a Relay. A change gets an operation ID, and one a
  * person or CLI credential asked for (`subject`) is recorded in Hearth's
@@ -156,10 +179,9 @@ export async function relayRpc(
     : 10_000,
   subject?: string,
   signal?: AbortSignal,
-  // A change's operation ID, when the caller keeps it to ask how the
-  // change went (`operation.get`) after losing its answer.
-  knownOperationId?: string
+  frame: RelayRequestFrame = {}
 ): Promise<unknown> {
+  const knownOperationId = frame.operationId
   const changes = relayControlOperationChanges(operation)
   if (
     relay.enabled === false &&
@@ -184,15 +206,10 @@ export async function relayRpc(
   const result = await Effect.runPromise(
     Effect.result(
       promiseEffect(() =>
-        relaySend(
-          relay,
-          operation,
-          payload,
-          timeoutMs,
-          subject,
-          signal,
-          operationId
-        )
+        relaySend(relay, operation, payload, timeoutMs, subject, signal, {
+          ...frame,
+          operationId,
+        })
       )
     )
   )
@@ -298,6 +315,16 @@ export function relayConnectionDials(relayId: string): boolean {
  * need be. The connection keeps telling it, on every connect and while the
  * Relay reports otherwise, so a pause or resume it missed still arrives.
  */
+/**
+ * The journal a Relay keeps this Hearth's changes in, once connected: what
+ * a change sent now is meant for (`RelayRequestFrame.journal`).
+ */
+export async function relayJournal(
+  relay: RelayEndpoint
+): Promise<RelayJournal | null> {
+  return runAppEffect("relay.journal", connectionFor(relay).journal())
+}
+
 export async function setRelayPause(
   relay: RelayEndpoint,
   paused: boolean
@@ -312,12 +339,19 @@ async function relaySend(
   timeoutMs: number,
   subject: string | undefined,
   signal: AbortSignal | undefined,
-  operationId: string | undefined
+  frame: RelayRequestFrame
 ): Promise<unknown> {
   const connection = connectionFor(relay)
   const result = await runAppEffect(
     `relay.rpc.${operation}`,
-    connection.request(operation, payload, timeoutMs, subject, operationId),
+    connection.request(
+      operation,
+      payload,
+      timeoutMs,
+      subject,
+      frame.operationId,
+      frame.journal
+    ),
     { signal }
   )
   if (subject && isAuditedRelayControlOperation(operation)) {
@@ -563,6 +597,8 @@ class RelayConnection {
   #pushedSnapshot: RelaySnapshot | null = null
   #eventSequence = 0
   #features = new Set<string>()
+  // The journal the Relay keeps this Hearth's changes in (`auth.ready`).
+  #journalId: string | null = null
   // Whether the Relay said it can dial Hearth.
   #relayDials = false
   #browserAuthorizationAdvance: Promise<number> | null = null
@@ -751,6 +787,17 @@ class RelayConnection {
    * Sets whether this Hearth holds the Relay paused, and tells it now. If it
    * can't be reached, connecting tells it.
    */
+  journal(): Effect.Effect<RelayJournal | null, RelayUnavailableError> {
+    return this.#connectEffect().pipe(
+      Effect.map(() => {
+        const clientId = this.#credentials?.clientId
+        return clientId && this.#journalId
+          ? { clientId, journalId: this.#journalId }
+          : null
+      })
+    )
+  }
+
   holdPaused(paused: boolean): Effect.Effect<void> {
     return Effect.suspend(() => {
       this.#wantsPaused = paused
@@ -933,7 +980,8 @@ class RelayConnection {
     // Given by relayRpc for changes, so Hearth's audit can name them too.
     operationId: string | undefined = relayControlOperationChanges(operation)
       ? randomUUID()
-      : undefined
+      : undefined,
+    journal?: RelayJournal
   ) {
     return this.#connectEffect().pipe(
       Effect.andThen(relayTraceparent),
@@ -946,6 +994,16 @@ class RelayConnection {
         const socket = this.#socket
         if (!socket || socket.readyState !== WebSocket.OPEN) {
           return relayConnectionFailure("Relay control socket is not connected")
+        }
+        // The Relay checks the journal; the pairing is this connection's.
+        if (journal && journal.clientId !== this.#credentials?.clientId) {
+          return Effect.fail(
+            RelayUnavailableError.make({
+              code: "journal_changed",
+              message: "This Relay was paired again since that change was sent",
+              retryable: false,
+            })
+          )
         }
         if (this.#pending.size >= 32) {
           return countHearthRefusal(this.#relay.id).pipe(
@@ -967,6 +1025,7 @@ class RelayConnection {
         const request: RelayControlRequest = {
           deadline,
           id,
+          ...(journal ? { journalId: journal.journalId } : {}),
           operation,
           ...(operationId ? { operationId } : {}),
           payload,
@@ -1048,6 +1107,7 @@ class RelayConnection {
     this.#socket?.close(1000, "Hearth connection closed")
     this.#socket = null
     this.#features.clear()
+    this.#journalId = null
     this.#browserAuthorizationAdvance = null
     this.#browserIssuerGeneration = 0
     this.#rejectBrowserAuthorizationReadiness(
@@ -1328,6 +1388,7 @@ class RelayConnection {
           }
           this.#attempt = 0
           this.#features = new Set(message.features ?? [])
+          this.#journalId = message.journalId ?? null
           // A Relay that can dial Hearth stands by to, should Hearth's own
           // connection fail.
           this.#relayDials = this.#features.has(relayControlDialV1Feature)

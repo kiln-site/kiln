@@ -1538,7 +1538,7 @@ const replaceInstallation = Effect.fnUntraced(function* (
       30_000,
       intent.createdBy,
       undefined,
-      intent.installationOperationId ?? undefined
+      { operationId: intent.installationOperationId ?? undefined }
     )
   )
 })

@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto"
+
 import { SqliteClient, SqliteMigrator } from "@effect/sql-sqlite-node"
 import type { z } from "zod"
 import { Context, Effect, Layer, Result, Schema } from "effect"
@@ -137,6 +139,7 @@ export interface RelayStoredDatabaseConnection {
 }
 
 export const DATABASE_CONNECTION_RECOVERY_KEY = "database_connections_recovered"
+const OPERATION_JOURNAL_METADATA_KEY = "operation_journal_id"
 
 export interface RelayStoredInstanceName {
   readonly instanceId: string
@@ -482,6 +485,12 @@ export class RelayStateStore extends Context.Service<
     readonly pruneOperations: (
       finishedBefore: number
     ) => Effect.Effect<void, RelayStateError>
+    /**
+     * Names this journal of changes, made once with the Relay's state. A
+     * rebuilt state starts a new journal under a new ID, even for the same
+     * Relay and Hearth, so Hearth can tell "never ran" from "forgotten".
+     */
+    readonly operationJournalId: () => Effect.Effect<string, RelayStateError>
     /** The paired Hearths holding this Relay paused. */
     readonly listPauseHolds: () => Effect.Effect<
       ReadonlyArray<string>,
@@ -2109,6 +2118,22 @@ const makeRelayStateStore = Effect.gen(function* () {
           DELETE FROM relay_operations
           WHERE status <> 'running' AND started_at < ${finishedBefore}
         `.pipe(Effect.asVoid)
+      ),
+    operationJournalId: () =>
+      run(
+        "operation_journal_id",
+        Effect.gen(function* () {
+          yield* sql`
+            INSERT INTO relay_metadata (key, value)
+            VALUES (${OPERATION_JOURNAL_METADATA_KEY}, ${randomUUID()})
+            ON CONFLICT (key) DO NOTHING
+          `
+          const rows = yield* sql<{ value: string }>`
+            SELECT value FROM relay_metadata
+            WHERE key = ${OPERATION_JOURNAL_METADATA_KEY}
+          `
+          return rows[0]!.value
+        })
       ),
     listPauseHolds: () =>
       run(

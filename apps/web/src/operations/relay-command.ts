@@ -7,7 +7,7 @@ import { Activity } from "effect/workflow"
 
 import { RelayUnavailableError } from "@/effect/errors"
 import { promiseEffect } from "@/effect/promise"
-import { relayRpc } from "@/lib/relay-connection"
+import { relayJournal, relayRpc } from "@/lib/relay-connection"
 import { activeRelay } from "@/lib/relay-registry"
 
 /**
@@ -45,16 +45,19 @@ export function relayIsAway(error: unknown): boolean {
 
 /**
  * One change sent to a Relay as a step of a durable operation, at most once.
- * Its command ID and when it was first sent are stored before it's sent, so
- * a step cut off and run again, as after a restart, asks the Relay how the
- * first send went (`operation.get`) instead of sending it twice:
+ * Its command ID, when it was first sent, and the Relay journal it's meant
+ * for are stored before it's sent, so a step cut off and run again, as after
+ * a restart, asks the Relay how the first send went (`operation.get`)
+ * instead of sending it twice:
  *
  * - never seen: sent, under the same ID;
  * - still running: waited on;
  * - done: its reply, while the Relay still has it, else `recover`, which
  *   reads back what the reply would have said;
  * - withdrawn before it ran: sent again, under the same ID;
- * - failed or interrupted: the step fails with why.
+ * - failed or interrupted: the step fails with why;
+ * - the journal is another, because the Relay was paired again or its state
+ *   rebuilt: nobody can say whether it ran, so the step fails.
  *
  * Its trace context goes with it, so the Relay's spans join the operation's.
  */
@@ -72,11 +75,16 @@ export const relayCommand = <A = unknown, R = never>(options: {
   Effect.gen(function* () {
     const command = yield* Activity.make({
       name: `${options.name}/command`,
-      success: Schema.Struct({ id: Schema.String, sentAt: Schema.Number }),
-      execute: Effect.map(Clock.currentTimeMillis, (sentAt) => ({
-        id: randomUUID(),
-        sentAt,
-      })),
+      success: CommandSchema,
+      error: RelayCommandError,
+      execute: Effect.gen(function* () {
+        const relay = yield* promiseEffect(() => activeRelay(options.relayId))
+        return {
+          id: randomUUID(),
+          journal: yield* promiseEffect(() => relayJournal(relay)),
+          sentAt: yield* Clock.currentTimeMillis,
+        }
+      }).pipe(retryWhileAway, asCommandError),
     })
     return yield* Activity.make({
       name: options.name,
@@ -94,6 +102,53 @@ export const relayCommand = <A = unknown, R = never>(options: {
     })
   )
 
+const CommandSchema = Schema.Struct({
+  id: Schema.String,
+  // Null from a Relay that doesn't name its journal.
+  journal: Schema.NullOr(
+    Schema.Struct({ clientId: Schema.String, journalId: Schema.String })
+  ),
+  sentAt: Schema.Number,
+})
+
+// A connection that dropped, or a Relay that isn't connected or is paused,
+// is asked again; an answer is final.
+const retryWhileAway = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  effect.pipe(
+    Effect.retry({
+      schedule: Schedule.min([
+        Schedule.exponential("1 second"),
+        Schedule.spaced("30 seconds"),
+      ]),
+      while: relayIsAway,
+    })
+  )
+
+const asCommandError = <A, E, R>(
+  effect: Effect.Effect<A, E, R>
+): Effect.Effect<A, RelayCommandError, R> =>
+  Effect.catch(effect, (error) =>
+    error instanceof RelayCommandError
+      ? Effect.fail(error)
+      : error instanceof RelayUnavailableError &&
+          error.code === "journal_changed"
+        ? Effect.fail(
+            new RelayCommandError({
+              code: "outcome_unknown",
+              message:
+                "The Relay was paired again or its state rebuilt since this change was sent, so nobody can say whether it ran. Check the result before trying again.",
+              retryable: false,
+            })
+          )
+        : Effect.fail(
+            new RelayCommandError({
+              code: "unexpected",
+              message: error instanceof Error ? error.message : String(error),
+              retryable: false,
+            })
+          )
+  )
+
 const settle = <A, R>(
   options: {
     readonly name: string
@@ -104,7 +159,7 @@ const settle = <A, R>(
     readonly success?: Schema.Codec<A, unknown>
     readonly recover?: Effect.Effect<A, RelayCommandError, R>
   },
-  command: { readonly id: string; readonly sentAt: number }
+  command: typeof CommandSchema.Type
 ): Effect.Effect<A, RelayCommandError, R> =>
   Effect.gen(function* () {
     const relay = yield* promiseEffect(() => activeRelay(options.relayId))
@@ -116,11 +171,19 @@ const settle = <A, R>(
         options.timeoutMs,
         undefined,
         undefined,
-        command.id
+        { journal: command.journal ?? undefined, operationId: command.id }
       )
     )
     const lookup = promiseEffect(() =>
-      relayRpc(relay, "operation.get", { operationId: command.id })
+      relayRpc(
+        relay,
+        "operation.get",
+        { operationId: command.id },
+        undefined,
+        undefined,
+        undefined,
+        { journal: command.journal ?? undefined }
+      )
     ).pipe(
       Effect.flatMap(Schema.decodeUnknownEffect(RelayOperationLookupSchema))
     )
@@ -175,25 +238,4 @@ const settle = <A, R>(
           })
       }
     }
-  }).pipe(
-    // A connection that dropped, or a Relay that isn't connected or is
-    // paused, is asked again; an answer is final.
-    Effect.retry({
-      schedule: Schedule.min([
-        Schedule.exponential("1 second"),
-        Schedule.spaced("30 seconds"),
-      ]),
-      while: relayIsAway,
-    }),
-    Effect.catch((error) =>
-      error instanceof RelayCommandError
-        ? Effect.fail(error)
-        : Effect.fail(
-            new RelayCommandError({
-              code: "unexpected",
-              message: error instanceof Error ? error.message : String(error),
-              retryable: false,
-            })
-          )
-    )
-  )
+  }).pipe(retryWhileAway, asCommandError)

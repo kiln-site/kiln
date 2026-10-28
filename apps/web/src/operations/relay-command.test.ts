@@ -15,20 +15,31 @@ import { RelayCommandError, relayCommand } from "./relay-command"
 import { testOperationsEngine } from "./test/engine"
 
 // The Relay is the only fake: an outcome journal by command ID, as its
-// control socket keeps, and a way for its next reply to go missing or for
-// a change to be withdrawn before it runs.
+// control socket keeps, and a way for its next reply to go missing, for a
+// change to be withdrawn before it runs, or for the Relay's state to be
+// rebuilt, which starts a new journal.
 const relay = vi.hoisted(() => ({
+  journalId: "journal-one",
   journal: new Map<
     string,
     | { status: "succeeded"; result: unknown }
     | { code: string; message: string; retryable: boolean; status: "failed" }
   >(),
-  next: null as null | "loses-reply" | "refuses" | "withdraws",
+  next: null as
+    | null
+    | "loses-reply"
+    | "loses-reply-and-rebuilds"
+    | "refuses"
+    | "withdraws",
   sent: [] as Array<string>,
 }))
 
 vi.mock("@/lib/relay-connection", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/relay-connection")>()),
+  relayJournal: async () => ({
+    clientId: "hearth-one",
+    journalId: relay.journalId,
+  }),
   relayRpc: async (
     _relay: unknown,
     operation: string,
@@ -36,8 +47,16 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
     _timeout?: number,
     _subject?: string,
     _signal?: AbortSignal,
-    operationId?: string
+    frame: { operationId?: string; journal?: { journalId: string } } = {}
   ) => {
+    if (frame.journal && frame.journal.journalId !== relay.journalId) {
+      throw RelayUnavailableError.make({
+        code: "journal_changed",
+        message: "This Relay's state was rebuilt since that change was sent",
+        retryable: false,
+      })
+    }
+    const operationId = frame.operationId
     if (operation === "operation.get") {
       return (
         relay.journal.get(payload.operationId ?? "") ?? { status: "unknown" }
@@ -70,7 +89,11 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
     }
     const result = { started: payload.action }
     relay.journal.set(id, { result, status: "succeeded" })
-    if (next === "loses-reply") {
+    if (next === "loses-reply-and-rebuilds") {
+      relay.journal.clear()
+      relay.journalId = "journal-two"
+    }
+    if (next === "loses-reply" || next === "loses-reply-and-rebuilds") {
       throw RelayUnavailableError.make({
         message: "The connection dropped before the Relay answered",
         outcome: "unknown",
@@ -126,12 +149,34 @@ describeMysql("Relay commands from durable operations", () => {
           yield* resetDatabase
           yield* insertRelay("relay-one")
           relay.journal.clear()
+          relay.journalId = "journal-one"
           relay.sent.length = 0
           relay.next = "loses-reply"
 
           const done = yield* runToEnd("survival")
 
           assert.strictEqual(done?.state, "succeeded")
+          assert.strictEqual(relay.sent.length, 1)
+        }).pipe(TestClock.withLive),
+      30_000
+    )
+
+    it.effect(
+      "stops instead of sending a change again to a Relay whose state was rebuilt",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* insertRelay("relay-one")
+          relay.journal.clear()
+          relay.journalId = "journal-one"
+          relay.sent.length = 0
+          relay.next = "loses-reply-and-rebuilds"
+
+          const done = yield* runToEnd("survival")
+
+          // The rebuilt Relay doesn't know the change, but it ran.
+          assert.strictEqual(done?.state, "failed")
+          assert.include(done?.error ?? "", "nobody can say")
           assert.strictEqual(relay.sent.length, 1)
         }).pipe(TestClock.withLive),
       30_000

@@ -342,7 +342,8 @@ const startupCore = await runRelayEffect(
     const state = yield* RelayStateStore
     const identity = yield* loadOrCreateRelayIdentity(config)
     yield* loadInstallationId(config, state)
-    return { identity, state }
+    const journalId = yield* state.operationJournalId()
+    return { identity, journalId, state }
   })
 )
 const cliArguments = process.argv.slice(2)
@@ -1240,6 +1241,7 @@ const controlSocket = attachControlSocket({
   },
   execute: executeControlRequest,
   identity: relayIdentity,
+  journalId: startup.journalId,
   initialSnapshot: () => snapshotHub.read(),
   lanes,
   requestLocks: (request) =>

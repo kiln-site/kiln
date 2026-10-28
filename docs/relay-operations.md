@@ -163,6 +163,18 @@ The Relay never runs one ID twice. A repeated request with the same ID and
 payload gets the first one's answer; one with a different payload fails with
 `operation_conflict`. A Hearth can only look up its own changes.
 
+`unknown` only means "never ran" for the journal that would have recorded
+it. A rebuilt Relay state starts a new journal, and a Relay paired again
+journals Hearth's changes under the new client, so both forget earlier
+changes while the Relay keeps its identity. The Relay names its journal in
+`auth.ready` (`journalId`, kept in `relay_metadata`). A request can carry the
+journal it was first sent to: the Relay refuses one for another journal with
+`journal_changed`, and Hearth refuses to send one first sent under another
+pairing. Hearth's durable steps send every change and lookup this way
+([`relay-command.ts`](../apps/web/src/operations/relay-command.ts)), so a
+change whose journal is gone stops for someone to check rather than running
+twice.
+
 A cancelled change answers too: `request_cancelled` if it was withdrawn
 before it ran, or its real outcome if it was already running.
 

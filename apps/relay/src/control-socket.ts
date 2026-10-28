@@ -163,6 +163,8 @@ export interface ControlSocketOptions {
   ) => Promise<unknown>
   readonly identity: RelayIdentity
   readonly initialSnapshot: () => Promise<unknown>
+  /** This Relay's journal of changes (`RelayStateStore.operationJournalId`). */
+  readonly journalId: string
   /** The lanes every Relay mutation waits in. */
   readonly lanes: OperationLanes
   /**
@@ -591,6 +593,20 @@ function authenticateSocket(
         message.id,
         "duplicate_request",
         "A request with this ID is already in flight"
+      )
+      return
+    }
+    // Sent for a journal this Relay no longer keeps: the change, or the
+    // outcome asked about, may be one it forgot when its state was rebuilt.
+    if (
+      message.journalId !== undefined &&
+      message.journalId !== options.journalId
+    ) {
+      sendError(
+        socket,
+        message.id,
+        "journal_changed",
+        "This Relay's state was rebuilt since that change was sent"
       )
       return
     }
@@ -1248,6 +1264,7 @@ function authenticateSocket(
           relayControlDialV1Feature,
           relayTunnelV1Feature,
         ],
+        journalId: options.journalId,
         protocol: relayControlProtocol,
         relayBuild: relayBuildLabel(),
         role: client.role,

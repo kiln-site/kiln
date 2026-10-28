@@ -65,6 +65,7 @@ import {
   relayConnectionFailing,
   relayConnectionState,
   relayConnectionNode,
+  relayJournal,
   relayRpc,
   relaySystemUpdates,
   relayUpdateReportState,
@@ -481,6 +482,48 @@ effectIt.effect(
       }
     )
   }
+)
+
+effectIt.effect(
+  "sends a change only to the journal it was meant for, under the pairing that sent it",
+  () =>
+    withRelayServer(({ endpoint, requests }) =>
+      Effect.gen(function* () {
+        const journal = yield* promiseEffect(() => relayJournal(endpoint))
+        expect(journal).toEqual({
+          clientId: "hearth-client",
+          journalId: "journal-a",
+        })
+        const change = (sentFor: typeof journal) =>
+          promiseEffect(() =>
+            relayRpc(
+              endpoint,
+              "instance.rename",
+              { instanceId: "a".repeat(40), name: "Lobby" },
+              1_000,
+              undefined,
+              undefined,
+              { journal: sentFor ?? undefined, operationId: randomUUID() }
+            )
+          )
+
+        yield* change(journal)
+        expect(requests.at(-1)).toMatchObject({ journalId: "journal-a" })
+
+        // First sent under a pairing this Hearth no longer has: the Relay
+        // would look for it among another client's changes.
+        const sent = requests.length
+        const refused = yield* change({
+          clientId: "earlier-pairing",
+          journalId: "journal-a",
+        }).pipe(Effect.flip)
+        expect(refused).toMatchObject({
+          code: "journal_changed",
+          retryable: false,
+        })
+        expect(requests.length).toBe(sent)
+      })
+    )
 )
 
 effectIt.effect(
@@ -906,6 +949,7 @@ function authenticateRelaySocket(
           browserIssuerGeneration: 3,
           clientId: "hearth-client",
           features: [relayBrowserCapabilityV2Feature],
+          journalId: "journal-a",
           protocol: relayControlProtocol,
           relayBuild: "test",
           role: "full_access",

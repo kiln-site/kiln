@@ -730,6 +730,9 @@ export const RelayAuthReadySchema = Schema.Struct({
   ),
   clientId: Schema.String,
   features: Schema.optionalKey(Schema.Array(Schema.String)),
+  // The Relay's journal of changes, which `operation.get` answers from. A
+  // rebuilt Relay state starts a new one, which forgets every change.
+  journalId: Schema.optionalKey(Schema.String),
   protocol: Schema.Literal(relayControlProtocol),
   relayBuild: Schema.String,
   role: Schema.Literals(["full_access", "read_only", "custom"]),
@@ -858,6 +861,10 @@ export const RelayControlRequestSchema = Schema.Struct({
   // peers use timeoutMs so request enforcement does not depend on host clocks.
   deadline: Schema.Number,
   id: Schema.String,
+  // The journal the sender expects (`auth.ready`). The Relay refuses a
+  // request for another with `journal_changed`, so a change it forgot when
+  // its state was rebuilt isn't taken as one it never saw.
+  journalId: Schema.optionalKey(Schema.String),
   operation: RelayControlOperationSchema,
   payload: Schema.Unknown,
   // Names a change across reconnects; `id` names only this one frame. The

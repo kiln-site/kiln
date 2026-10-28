@@ -640,6 +640,66 @@ describe("Relay control socket", () => {
       )
     })
 
+    it("refuses a change or lookup meant for a journal it doesn't keep", async () => {
+      let runs = 0
+      const relay = await startRelay({
+        execute: async () => {
+          runs += 1
+          return { runs }
+        },
+      })
+      const { inbox, socket } = await relay.connect(await relay.pair(), {
+        features,
+      })
+      const payload = { action: "restart", instanceId }
+
+      // Hearth sent it before this Relay's state was rebuilt: the Relay
+      // can't know whether it ran, so it neither runs it nor says "unknown".
+      for (const operation of ["instance.action", "operation.get"] as const) {
+        const refused = sendRequest(
+          socket,
+          operation,
+          operation === "operation.get" ? { operationId: randomUUID() } : payload,
+          { journalId: randomUUID(), operationId: randomUUID() }
+        )
+        expect(await inbox.next()).toMatchObject({
+          code: "journal_changed",
+          replyTo: refused,
+          retryable: false,
+          type: "error",
+        })
+      }
+      expect(runs).toBe(0)
+
+      sendRequest(socket, "instance.action", payload, {
+        journalId: relay.journalId,
+        operationId: randomUUID(),
+      })
+      expect(await inbox.next()).toMatchObject({ payload: { runs: 1 } })
+    })
+
+    it("keeps its journal's ID across restarts, and a rebuilt state gets a new one", async () => {
+      const directory = mkdtempSync(join(tmpdir(), "kiln-relay-journal-"))
+      onTestFinished(() => rmSync(directory, { force: true, recursive: true }))
+      const journalOf = async (file: string) => {
+        const runtime = ManagedRuntime.make(
+          makeRelayStateLayer(join(directory, file))
+        )
+        try {
+          return await runtime.runPromise(
+            Effect.flatMap(RelayStateStore, (state) =>
+              state.operationJournalId()
+            )
+          )
+        } finally {
+          await runtime.dispose()
+        }
+      }
+      const first = await journalOf("relay.sqlite")
+      expect(await journalOf("relay.sqlite")).toBe(first)
+      expect(await journalOf("rebuilt.sqlite")).not.toBe(first)
+    })
+
     it("doesn't run a change again when its ID is sent twice", async () => {
       let runs = 0
       const relay = await startRelay({
@@ -1878,6 +1938,7 @@ async function startRelay(
     makeRelayStateLayer(join(directory, "relay.sqlite"))
   )
   const state = await runtime.runPromise(RelayStateStore)
+  const journalId = await runtime.runPromise(state.operationJournalId())
   const relayKeys = hearthKeys()
   const listeners = new Set<(snapshot: unknown) => void>()
   const sockets = new Set<WebSocket>()
@@ -1917,6 +1978,7 @@ async function startRelay(
       publicKeyPem: relayKeys.public,
     },
     initialSnapshot: options.initialSnapshot ?? (async () => initialSnapshot),
+    journalId,
     runEffect: (effect) => runtime.runPromise(effect),
     saveDial: (clientId, url) => dials?.save(clientId, url),
     server,
@@ -2030,6 +2092,7 @@ async function startRelay(
     },
     control,
     databaseFile: join(directory, "relay.sqlite"),
+    journalId,
     lanes,
     loadInstallationId: (
       config: InstallationConfig & Pick<RelayConfig, "provenHearth">
@@ -2134,6 +2197,7 @@ function sendRequest(
   overrides: {
     readonly deadline?: number
     readonly id?: string
+    readonly journalId?: string
     readonly operationId?: string
     readonly subject?: string
     readonly timeoutMs?: number
