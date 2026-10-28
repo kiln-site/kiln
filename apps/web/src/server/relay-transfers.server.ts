@@ -35,7 +35,12 @@ import {
   durableOperation,
   startDurableOperation,
 } from "@/operations/durable"
-import { findOperation, reportProgress } from "@/operations/lanes"
+import {
+  cancelRequested,
+  findOperation,
+  reportProgress,
+  requestCancel,
+} from "@/operations/lanes"
 import { relayIsAway } from "@/operations/relay-command"
 
 // A grant outlives the slowest pull it's meant for, resumes included.
@@ -229,7 +234,9 @@ const RelayTransferStatusSchema = Schema.Struct({
  * A transfer as steps of a durable operation, named `name`: begun under
  * `transferId`, which the caller keeps, then followed through the Relays'
  * records until it ends, however it ends. Both steps are safe to repeat, so
- * a Hearth that restarts partway carries on where the Relays are.
+ * a Hearth that restarts partway carries on where the Relays are. Asked to
+ * stop (`requestCancel` on its operation), it begins and starts nothing
+ * more, has both Relays let go of it, and ends cancelled.
  */
 export const followRelayTransfer = (
   name: string,
@@ -238,19 +245,39 @@ export const followRelayTransfer = (
   transferId: string
 ) =>
   Effect.gen(function* () {
+    const operation = yield* CurrentOperation
+    // Checked before every step that could start something on a Relay.
+    const stopped = Effect.gen(function* () {
+      if (!operation) return false
+      const asked = yield* cancelRequested(operation.id).pipe(
+        Effect.orElseSucceed(() => false)
+      )
+      if (asked) yield* stopOnRelays(actor, request, transferId)
+      return asked
+    })
+    const cancelled: RelayTransferStatus = {
+      error: null,
+      phase: "cancelled",
+      receivedBytes: 0,
+      size: null,
+      transferId,
+    }
     yield* Activity.make({
       name: `${name}/begin`,
       error: RelayTransferError,
-      execute: beginRelayTransferEffect(actor, request, transferId).pipe(
-        whileRelaysAreAway
-      ),
+      execute: Effect.gen(function* () {
+        if (yield* stopped) return
+        yield* beginRelayTransferEffect(actor, request, transferId)
+      }).pipe(whileRelaysAreAway),
     })
-    const operation = yield* CurrentOperation
     return yield* Activity.make({
       name: `${name}/follow`,
       success: RelayTransferStatusSchema,
       error: RelayTransferError,
-      execute: advanceRelayTransferEffect(actor, request, transferId).pipe(
+      execute: Effect.gen(function* () {
+        if (yield* stopped) return cancelled
+        return yield* advanceRelayTransferEffect(actor, request, transferId)
+      }).pipe(
         whileRelaysAreAway,
         Effect.tap((status) =>
           operation
@@ -280,9 +307,9 @@ const progressMessage: Record<RelayTransferStatus["phase"], string> = {
   verifying: "Checking the copy",
 }
 
-// A Relay that's unreachable, paused, or restarting is asked again; its
-// answers, and anything else that fails, such as the person losing access,
-// are final.
+// A Relay that's offline, unreachable, paused, or restarting is asked
+// again; its answers, and anything else that fails, such as the person
+// losing access, are final.
 const whileRelaysAreAway = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(
     Effect.mapError((error) =>
@@ -295,9 +322,29 @@ const whileRelaysAreAway = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
         Schedule.exponential("1 second"),
         Schedule.spaced("30 seconds"),
       ]),
-      while: (error) => relayIsAway(error.cause),
+      while: relaysAreAway,
     })
   )
+
+function relaysAreAway(error: RelayTransferError): boolean {
+  const problems = (error.problems ?? []) as ReadonlyArray<RelayTransferProblem>
+  if (
+    problems.length > 0 &&
+    problems.every((problem) => problem.code === "relay_offline")
+  ) {
+    return true
+  }
+  // However deeply it's wrapped, as an unexpected rejection is.
+  for (
+    let cause: unknown = error.cause;
+    cause !== undefined && cause !== null;
+    cause = (cause as { cause?: unknown }).cause
+  ) {
+    if (relayIsAway(cause)) return true
+    if (typeof cause !== "object") break
+  }
+  return false
+}
 
 /**
  * Copying files from one Relay to another for someone, as its own
@@ -517,23 +564,54 @@ export const relayTransferStatusEffect = Effect.fn("RelayTransfers.status")(
   }
 )
 
-/** Stops a transfer and deletes what either Relay holds for it. */
+/**
+ * Stops a transfer and deletes what either Relay holds for it. The
+ * operation driving it is asked to stop first, so it begins and starts
+ * nothing more; one still waiting is withdrawn.
+ */
 export const cancelRelayTransferEffect = Effect.fn("RelayTransfers.cancel")(
   function* (user: AuthenticatedUser, handle: RelayTransferHandle) {
-    const { source, destination } = yield* authorizeTransferEffect(user, {
+    const request = {
       destination: { ...handle.destination, path: "" },
       source: { ...handle.source, paths: [] },
-    })
-    yield* rpc(destination, "transfer.pull.cancel", user, {
-      rootId: handle.destination.rootId,
-      transferId: handle.transferId,
-    })
-    yield* rpc(source, "transfer.source.discard", user, {
-      rootId: handle.source.rootId,
-      transferId: handle.transferId,
+    }
+    const { source, destination } = yield* authorizeTransferEffect(
+      user,
+      request
+    )
+    const operation = yield* findOperation(
+      relayTransfer.kind,
+      handle.transferId
+    )
+    if (operation) yield* requestCancel(operation.id)
+    yield* stopOnRelays(user, request, handle.transferId, {
+      destination,
+      source,
     })
   }
 )
+
+// Has the destination stop pulling and the source discard what it packed.
+const stopOnRelays = Effect.fnUntraced(function* (
+  user: AuthenticatedUser,
+  request: RelayTransferRequest,
+  transferId: string,
+  authorized?: {
+    readonly destination: PersistedRelay
+    readonly source: PersistedRelay
+  }
+) {
+  const { source, destination } =
+    authorized ?? (yield* authorizeTransferEffect(user, request))
+  yield* rpc(destination, "transfer.pull.cancel", user, {
+    rootId: request.destination.rootId,
+    transferId,
+  })
+  yield* rpc(source, "transfer.source.discard", user, {
+    rootId: request.source.rootId,
+    transferId,
+  })
+})
 
 // The person may read files under the source root and write under the
 // destination's, on Relays this Hearth has.

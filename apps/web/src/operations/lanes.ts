@@ -658,6 +658,76 @@ export interface OperationRecord {
   readonly version: number
 }
 
+/**
+ * Asks an operation to stop. One still waiting is withdrawn at once; one
+ * granted or running is marked, and stops at its next safe point
+ * (`cancelRequested`). Asking again, or after it ended, changes nothing.
+ * Says whether it was withdrawn.
+ */
+export const requestCancel = Effect.fn("Operations.requestCancel")(function* (
+  id: string
+) {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  const decision = yield* database.transaction(
+    "operations.requestCancel",
+    (transaction) =>
+      Effect.gen(function* () {
+        yield* takeSchedulerTurn(transaction)
+        const [row] = yield* transaction.queryRows<
+          RowDataPacket & { state: OperationState }
+        >(
+          `SELECT state FROM ${operationTable} WHERE id = ? FOR UPDATE`,
+          [id]
+        )
+        if (!row || !isOpen(row.state)) {
+          return { granted: [] as ReadonlyArray<Granted>, withdrawn: false }
+        }
+        if (row.state !== "waiting") {
+          yield* transaction.execute(
+            `UPDATE ${operationTable}
+                SET cancel_requested_at = COALESCE(cancel_requested_at, ?),
+                    updated_at = ?
+              WHERE id = ?`,
+            [now, now, id]
+          )
+          return { granted: [] as ReadonlyArray<Granted>, withdrawn: false }
+        }
+        yield* transaction.execute(
+          `UPDATE ${operationTable}
+              SET state = 'cancelled', error = ?, cancel_requested_at = ?,
+                  finished_at = ?, updated_at = ?
+            WHERE id = ?`,
+          ["Cancelled before it started", now, now, now, id]
+        )
+        yield* transaction.execute(
+          `DELETE FROM ${lockTable} WHERE operation_id = ?`,
+          [id]
+        )
+        return {
+          granted: yield* grantWaiting(transaction, now),
+          withdrawn: true,
+        }
+      })
+  )
+  yield* announce(decision.granted)
+  if (decision.withdrawn) publishOperationsChange()
+  return decision.withdrawn
+})
+
+/** Whether someone asked the operation to stop. */
+export const cancelRequested = Effect.fnUntraced(function* (id: string) {
+  const database = yield* Database
+  const [row] = yield* database.queryRows<
+    RowDataPacket & { cancel_requested_at: number | null }
+  >(
+    "operations.cancelRequested",
+    `SELECT cancel_requested_at FROM ${operationTable} WHERE id = ?`,
+    [id]
+  )
+  return row?.cancel_requested_at != null
+})
+
 /** The operation of `kind` started under `idempotencyKey`, if any. */
 export const findOperation = Effect.fnUntraced(function* (
   kind: string,
