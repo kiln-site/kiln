@@ -42,6 +42,17 @@ Lanes decide **what may run together**. Workflows remember **what must
 happen next**. Neither replaces the other, and neither replaces a database
 rule like DNS's one owner per hostname.
 
+The goal is one operation contract, not one mechanism for everything: every
+change states how it runs and how it recovers, in one of four modes, chosen
+by what a crash mid-way would leave behind, not by how long it takes:
+
+| Mode           | When                                                                                                                                        | A crash mid-way                                                           |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| **Plain**      | One MySQL transaction, nothing outside Kiln (favorites, preferences, read marks)                                                            | Rolls back; no operation is stored                                        |
+| **Quick**      | In the request, under lane locks; only MySQL, or outside work a reconciler or the next attempt converges                                    | Its locks are freed once its Hearth's heartbeat stops; nothing resumes it |
+| **Reconciler** | Desired state kept in MySQL; each attempt takes its locks, re-reads the latest intent, applies the difference, and lets go (DNS, Tailscale) | The next attempt converges; nothing is replayed                           |
+| **Durable**    | Several steps whose results later steps need, or waits that must survive a restart (moves, final deletion, restores)                        | The workflow resumes, re-running only the cut-off step                    |
+
 ## Words used here
 
 - **Operation**: one change someone or something asked for, like "move
@@ -443,7 +454,19 @@ rule in the code.
   the operation stops at that point. Cleanup an operation already began
   finishes regardless.
 - **Newer intent.** Reconcilers converge the latest desired state and skip
-  what it replaced. Operations otherwise run in admission order.
+  what it replaced. Operations otherwise run in admission order. A
+  reconciler holds its locks for one attempt only, never through a
+  provider's backoff.
+- **Who owns work.** Each Hearth process heartbeats every 10 seconds. Work
+  is taken from another Hearth only once its heartbeat has been silent for
+  30 seconds, so one that's slow or cut off from MySQL keeps its work;
+  when it comes back, what it holds has ended, and it can neither end nor
+  grant anything. A Hearth that stops says so, and the next takes over at
+  once. Ending an operation is retried until MySQL answers, so a failed
+  write never leaves its locks held.
+- **Effect upgrades.** Workflow history outlives a release. Before
+  upgrading Effect, a drill resumes workflows the previous version left
+  mid-step, with history written by it, not only the new version's tests.
 - **During a move.** From handover until the move finishes, changes to
   either server wait their turn behind it; before handover, they run as
   usual and the move re-checks after it gets its handover locks.
