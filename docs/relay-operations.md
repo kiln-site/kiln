@@ -333,6 +333,27 @@ same `relay_paused` error, and `activeRelay` in `lib/relay-registry.ts` is
 the one way server functions find the Relay for a person's change, failing
 the same way for a paused one and as not found for a missing one.
 
+## Resources being deleted
+
+Deleting a game server, App, database, or volume first freezes it on its
+Relay with `resource.freeze`, naming the deletion. The freeze takes the
+resource whole, as replacing it does, so it waits for everything running on
+it; it then records the freeze in SQLite and stops the resource. From then
+on the lanes refuse any operation that touches the resource when its turn
+comes, whoever asks, including one that was already waiting: power, console
+input, files, uploads, SFTP, restores, deploys, schedules, and crash
+recovery. Only its final backup (`backup.create`), its deletion, and
+`resource.unfreeze` still run. Nested work inside an operation already
+granted isn't checked. Terminals need a running container, so stopping the
+resource closes them too.
+
+A freeze belongs to the deletion that made it: another deletion of the same
+resource is refused, and only its own deletion can let it go. The Relay
+reads its freezes before admitting anything after a restart, and drops a
+freeze once it has deleted the resource. `ResourceFreezes`
+(`apps/relay/src/resource-freezes.ts`) holds them for the lanes, through
+their `refuse` option.
+
 ## Tracing a change
 
 A change is one trace from Hearth to the Relay, sampled once at its start:

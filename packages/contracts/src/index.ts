@@ -274,6 +274,21 @@ export const relayDeleteDatabaseSchema = z
   })
   .strict()
 
+/**
+ * A game server, App, database, or volume being deleted. Frozen, it is
+ * stopped and the Relay refuses every change to it but its final backup and
+ * its deletion; unfrozen, it is a resource like any other again.
+ */
+export const relayResourceFreezeSchema = z
+  .object({
+    deletionId: z.uuid(),
+    id: z.string().min(1).max(120),
+    kind: z.enum(["app", "database", "instance", "volume"]),
+  })
+  .strict()
+
+export type RelayResourceFreeze = z.infer<typeof relayResourceFreezeSchema>
+
 export const relayRotateDatabaseCredentialsSchema = z
   .object({
     currentPassword: z.string().min(24).max(256),

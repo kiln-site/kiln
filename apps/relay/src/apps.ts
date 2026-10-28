@@ -532,6 +532,12 @@ export class AppDriver {
     this.#deployments.get(appId)?.abort.abort()
   }
 
+  /** Stops an App being deleted, if it still has containers. */
+  async stopIfPresent(appId: string): Promise<void> {
+    if ((await this.#appContainers(appId)).length === 0) return
+    await this.action({ action: "stop", appId })
+  }
+
   async action(input: RelayAppAction): Promise<RelayApp> {
     const containers = await this.#appContainers(input.appId)
     if (containers.length === 0) throw new Error("Deploy the app first")

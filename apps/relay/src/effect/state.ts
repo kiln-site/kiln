@@ -147,6 +147,13 @@ export interface RelayStoredDatabaseConnection {
 }
 
 export const DATABASE_CONNECTION_RECOVERY_KEY = "database_connections_recovered"
+
+/** A resource frozen for its deletion, and the deletion that froze it. */
+export interface RelayResourceFreezeRecord {
+  readonly deletionId: string
+  readonly id: string
+  readonly kind: "app" | "database" | "instance" | "volume"
+}
 const OPERATION_JOURNAL_METADATA_KEY = "operation_journal_id"
 
 export interface RelayStoredInstanceName {
@@ -546,6 +553,29 @@ export class RelayStateStore extends Context.Service<
       clientId: string,
       paused: boolean,
       now: number
+    ) => Effect.Effect<void, RelayStateError>
+    /** The resources frozen for their deletion. */
+    readonly listResourceFreezes: () => Effect.Effect<
+      ReadonlyArray<RelayResourceFreezeRecord>,
+      RelayStateError
+    >
+    /**
+     * Freezes a resource for a deletion, or confirms it already is. Returns
+     * the deletion holding it, which is another one's when someone else
+     * froze it first.
+     */
+    readonly freezeResource: (
+      freeze: RelayResourceFreezeRecord,
+      now: number
+    ) => Effect.Effect<string, RelayStateError>
+    /** Lets a resource go, if the deletion still holds it. */
+    readonly unfreezeResource: (
+      freeze: RelayResourceFreezeRecord
+    ) => Effect.Effect<void, RelayStateError>
+    /** Drops a deleted resource's freeze, whichever deletion held it. */
+    readonly forgetResourceFreeze: (
+      kind: RelayResourceFreezeRecord["kind"],
+      id: string
     ) => Effect.Effect<void, RelayStateError>
     readonly createInvitation: (
       input: RelayInvitationInput
@@ -1572,6 +1602,18 @@ const migrations = SqliteMigrator.fromRecord({
       updated_at INTEGER NOT NULL
     ) STRICT`
   }),
+  // Resources being deleted, so a restart keeps refusing work on them.
+  "31_resource_freezes": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    yield* sql`CREATE TABLE IF NOT EXISTS relay_resource_freezes (
+      kind TEXT NOT NULL
+        CHECK (kind IN ('app', 'database', 'instance', 'volume')),
+      resource_id TEXT NOT NULL,
+      deletion_id TEXT NOT NULL,
+      frozen_at INTEGER NOT NULL,
+      PRIMARY KEY (kind, resource_id)
+    ) STRICT`
+  }),
 })
 
 // The App IDs a Hearth still owes, as stored; anything unreadable owes
@@ -2488,6 +2530,49 @@ const makeRelayStateStore = Effect.gen(function* () {
             `
           : sql`DELETE FROM relay_pause_holds WHERE client_id = ${clientId}`
         ).pipe(Effect.asVoid)
+      ),
+    listResourceFreezes: () =>
+      run(
+        "list_resource_freezes",
+        sql<RelayResourceFreezeRecord>`
+          SELECT kind, resource_id AS id, deletion_id AS deletionId
+            FROM relay_resource_freezes
+        `
+      ),
+    freezeResource: (freeze, now) =>
+      run(
+        "freeze_resource",
+        sql`
+          INSERT INTO relay_resource_freezes
+            (kind, resource_id, deletion_id, frozen_at)
+          VALUES (${freeze.kind}, ${freeze.id}, ${freeze.deletionId}, ${now})
+          ON CONFLICT (kind, resource_id) DO NOTHING
+        `.pipe(
+          Effect.andThen(
+            sql<{ deletionId: string }>`
+              SELECT deletion_id AS deletionId FROM relay_resource_freezes
+               WHERE kind = ${freeze.kind} AND resource_id = ${freeze.id}
+            `
+          ),
+          Effect.map((rows) => rows[0]?.deletionId ?? freeze.deletionId)
+        )
+      ),
+    unfreezeResource: (freeze) =>
+      run(
+        "unfreeze_resource",
+        sql`
+          DELETE FROM relay_resource_freezes
+           WHERE kind = ${freeze.kind} AND resource_id = ${freeze.id}
+             AND deletion_id = ${freeze.deletionId}
+        `.pipe(Effect.asVoid)
+      ),
+    forgetResourceFreeze: (kind, id) =>
+      run(
+        "forget_resource_freeze",
+        sql`
+          DELETE FROM relay_resource_freezes
+           WHERE kind = ${kind} AND resource_id = ${id}
+        `.pipe(Effect.asVoid)
       ),
     appendAudit: (input) =>
       run(

@@ -690,6 +690,36 @@ export function controlRequestLocks(
     case "instance.files.mutate.result":
     case "instance.files.database.write":
       return fileRoot()
+
+    // Freezing a resource for its deletion, or letting it go, waits for
+    // everything running on it, as replacing it does.
+    case "resource.freeze":
+    case "resource.unfreeze": {
+      const kind = stringField(payload, "kind")
+      const id = stringField(payload, "id")
+      if (kind === null || id === null) return null
+      return resourceReplaceLocks(kind, id, resolveInstance)
+    }
+  }
+}
+
+/** Replacing a whole resource of any kind: everything on it waits. */
+export function resourceReplaceLocks(
+  kind: string,
+  id: string,
+  resolveInstance: InstanceResolver
+): ReadonlyArray<LaneLock> | Promise<ReadonlyArray<LaneLock>> | null {
+  switch (kind) {
+    case "instance":
+      return withInstance(resolveInstance(id), instanceReplaceLocks)
+    case "app":
+      return appReplaceLocks(id)
+    case "database":
+      return databaseLocks(id)
+    case "volume":
+      return [exclusive(laneKeys.volume(id))]
+    default:
+      return null
   }
 }
 

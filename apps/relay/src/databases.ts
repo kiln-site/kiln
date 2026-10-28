@@ -769,6 +769,15 @@ export class DatabaseDriver {
     )
   }
 
+  /** Stops a database being deleted, if it still has a container. */
+  async stopIfPresent(databaseId: string): Promise<void> {
+    const database = (await this.#existing()).find(
+      (candidate) => candidate.id === databaseId
+    )
+    if (!database?.containerId) return
+    await this.action({ action: "stop", databaseId })
+  }
+
   async action(input: RelayDatabaseAction): Promise<RelayManagedDatabase> {
     const database = await this.#required(input.databaseId)
     const container = requiredContainerId(database)

@@ -279,6 +279,8 @@ export const relayControlOperations = [
   "sftp.authorization.resolve",
   "operation.get",
   "relay.pause.write",
+  "resource.freeze",
+  "resource.unfreeze",
 ] as const
 
 export type RelayControlOperation = (typeof relayControlOperations)[number]
@@ -366,6 +368,8 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "schedule.apply",
   "schedule.run",
   "schedule.remove",
+  "resource.freeze",
+  "resource.unfreeze",
 ])
 
 export function isAuditedRelayControlOperation(
@@ -543,6 +547,8 @@ export function relayControlOperationChanges(
     case "instance.network.ports.write":
     case "instance.network.routes.write":
     case "instance.network.databases.remove":
+    case "resource.freeze":
+    case "resource.unfreeze":
       return true
   }
 }
@@ -616,6 +622,8 @@ export function relayControlDeadlineMs(
   if (operation === "relay.security.inventory") return 15 * 60_000
   if (operation === "hearth.tailscale.member.detach") return 60_000
   if (operation === "instance.delete") return 360_000
+  // Freezing stops the resource first, as a stop does.
+  if (operation === "resource.freeze") return 240_000
   if (operation === "database.create") return 360_000
   if (operation === "database.delete") return 180_000
   if (operation === "app.delete") return 180_000

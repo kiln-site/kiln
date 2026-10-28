@@ -76,6 +76,8 @@ import {
   relayDatabaseNetworkImportSchema,
   relayDatabaseNetworkSchema,
   relayDeleteDatabaseSchema,
+  relayResourceFreezeSchema,
+  type RelayResourceFreeze,
   relayAuditQuerySchema,
   relayCreateInstanceSchema,
   relayPrepareInstanceSchema,
@@ -256,6 +258,7 @@ import { closeRelayServer } from "./shutdown.js"
 import { handleHealthRequest, listenRelayHealthServerEffect } from "./health.js"
 import { rejectMalformedUpgrades, requestUrl } from "./request-url.js"
 import { attachSftpServer } from "./sftp-server.js"
+import { ResourceFreezes } from "./resource-freezes.js"
 import {
   exclusive,
   laneKeys,
@@ -378,9 +381,16 @@ let relayIdentity = startupCore.identity
 config.nodeId = relayIdentity.fingerprint
 config.nodeName = relayIdentity.name
 const bricks = new BrickCatalog(config.brickCatalogUrl, config.dataDirectory)
+// Resources being deleted refuse every change but their final backup and
+// their deletion, from the first operation admitted.
+const resourceFreezes = await runRelayEffect(
+  "relay.startup.resourceFreezes",
+  ResourceFreezes.load(startupCore.state)
+)
 // Every change to a game server, App, or database waits its turn here,
 // whichever actor asks for it. See operation-plans.ts.
 const lanes = new OperationLanes()
+lanes.addRefusal((label, locks) => resourceFreezes.refusal(label, locks))
 // Restores of Apps' folders and volumes that began swapping and didn't
 // finish fence their targets: read before any work is admitted.
 const restoreFences = await TarRestoreFences.load(config)
@@ -2254,6 +2264,7 @@ async function executeControlRequest(
     case "relay.volumes.delete": {
       const input = relayVolumeDeleteSchema.parse(request.payload)
       await runRelayEffect("relay.volumes.delete", volumes.delete(input.id))
+      await resourceFreezes.forget("volume", input.id)
       return { id: input.id }
     }
     case "relay.volumes.references.hold":
@@ -2373,6 +2384,16 @@ async function executeControlRequest(
       )
       await applyPauseHolds()
       return { paused: lanes.paused }
+    }
+    case "resource.freeze": {
+      const freeze = relayResourceFreezeSchema.parse(payload)
+      await resourceFreezes.freeze(freeze, () => stopFrozenResource(freeze))
+      return { frozen: true }
+    }
+    case "resource.unfreeze": {
+      const freeze = relayResourceFreezeSchema.parse(payload)
+      await resourceFreezes.unfreeze(freeze)
+      return { frozen: resourceFreezes.has(freeze.kind, freeze.id) }
     }
     case "relay.clients.revoke": {
       const clientId = requiredString(payload, "clientId")
@@ -2511,7 +2532,10 @@ async function executeControlRequest(
           )
         )
       )
-      if (discarded) return { databaseId: input.databaseId, deleted: true }
+      if (discarded) {
+        await resourceFreezes.forget("database", input.databaseId)
+        return { databaseId: input.databaseId, deleted: true }
+      }
       // Hearth removes its DNS records from every node first.
       const member = databaseTailscaleMemberId(input.databaseId)
       await lifecycle.detachFromTailscale(
@@ -2526,7 +2550,9 @@ async function executeControlRequest(
           )
         }
       )
-      return databases.delete(input)
+      const deleted = await databases.delete(input)
+      await resourceFreezes.forget("database", input.databaseId)
+      return deleted
     }
     case "database.wipe":
       return databases.wipe(relayDatabaseWipeSchema.parse(request.payload))
@@ -2689,6 +2715,7 @@ async function executeControlRequest(
           "relay.apps.volumes.forget",
           volumes.forgetApp(client.id, input.appId)
         )
+        await resourceFreezes.forget("app", input.appId)
         return { appId: input.appId, deleted: true }
       }
       // Hearth removes its services' DNS records from every node first.
@@ -2723,6 +2750,7 @@ async function executeControlRequest(
           )
         )
       })
+      await resourceFreezes.forget("app", input.appId)
       return deleted
     }
     case "app.deploy": {
@@ -3148,6 +3176,7 @@ async function executeControlRequest(
           "relay.instance.deletePreparedName",
           startup.state.deleteInstanceName(instanceId)
         )
+        await resourceFreezes.forget("instance", instanceId)
         return { deleted: true, instanceId }
       }
       await lifecycle.deleteInstance(
@@ -3187,6 +3216,7 @@ async function executeControlRequest(
           )
         )
       })
+      await resourceFreezes.forget("instance", instanceId)
       return { deleted: true, instanceId }
     }
     case "instance.action": {
@@ -4192,6 +4222,35 @@ async function requiredFileRoot(instanceId: string) {
   const root = await docker.findFileRoot(instanceId)
   if (!root) throw new Error("Instance not found")
   return root
+}
+
+// Stops a resource frozen for its deletion, if the Relay still has it. Runs
+// inside the freeze, which holds the resource whole.
+async function stopFrozenResource(freeze: RelayResourceFreeze): Promise<void> {
+  switch (freeze.kind) {
+    case "instance": {
+      const instance = await docker.findInstance(freeze.id)
+      if (!instance) return
+      powerIntents.advance(instance.id)
+      const routes = await runRelayEffect(
+        "relay.network.routes.forFreeze",
+        startup.state.listInstanceRoutes(instance.id)
+      )
+      await lifecycle.runInstanceAction(instance, "stop", routes)
+      return
+    }
+    case "database": {
+      await databases.stopIfPresent(freeze.id)
+      return
+    }
+    case "app": {
+      await apps.stopIfPresent(freeze.id)
+      return
+    }
+    case "volume":
+      // Deleting a volume is refused while anything mounts it.
+      return
+  }
 }
 
 async function requiredInstance(payload: Readonly<Record<string, unknown>>) {
