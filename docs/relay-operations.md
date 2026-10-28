@@ -129,6 +129,10 @@ an idle SFTP session never blocks a restore.
 Hearth gives every change it sends an `operationId`, separate from the
 request's frame `id`. `relayControlOperationChanges` in the contracts says
 which operations are changes; reads and terminal traffic aren't.
+A change Hearth sends as a step of one of its own operations also names it
+in `parent` (`operationId` and `step`). The Relay puts it on the request's
+span (`kiln.operation.id`, `kiln.operation.step`) and in the change's audit
+details (`hearthOperationId`, `hearthOperationStep`); it grants nothing.
 
 The Relay claims a change as soon as it's authorized, so a repeat from any
 of the same Hearth's sessions waits for it. It records the change in its
