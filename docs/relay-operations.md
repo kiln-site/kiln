@@ -344,11 +344,12 @@ resource so nothing writes to it but its final backup:
 - A game server is stopped.
 - An App is stopped, and its containers' restart policies are set to `no`
   so Docker doesn't start them again.
-- A database keeps running, since its final backup is a dump of it, and is
-  cut off from every container connected to its network. Reconnecting a
-  member's saved connections and deploying an App skip a frozen database.
+- A database keeps running, since its final backup is a dump of it, and
+  everyone's terminal sessions on it end; new ones are refused. Game
+  servers and Apps connected to it can still write to it until it's
+  deleted, so what they write after its dump isn't in its final backup.
 
-What quieting changed is recorded with the freeze. From then on the lanes
+What quieting changes is recorded with the freeze before it's made. From then on the lanes
 refuse any operation that touches the resource when its turn comes,
 whoever asks, including one already waiting: power, console input, files,
 uploads, SFTP, restores, deploys, schedules, and crash recovery. They answer
@@ -356,13 +357,13 @@ uploads, SFTP, restores, deploys, schedules, and crash recovery. They answer
 and `resource.freeze` / `resource.unfreeze` still run. Nested work inside an
 operation already granted isn't checked, and Tailscale changes leave a
 frozen member's network as it was. Terminals need a running container, so a
-stopped resource has none; a frozen database's terminal opens its own
-client, which only reaches it.
+stopped resource has none.
 
 A freeze belongs to the deletion that made it: another deletion of the same
 resource is refused, and only its own deletion can let it go. Letting it go
-puts back what quieting changed (restart policies, cut-off connections,
-with their names) and leaves the resource stopped. The Relay reads its
+puts back what quieting changed (an App's restart policies) and leaves the
+resource stopped; one that can't be put back keeps the freeze, for letting
+it go again. The Relay reads its
 freezes before admitting anything after a restart and quiets each again,
 in case Docker started one or the Relay stopped before quieting it, and
 drops a freeze once it has deleted the resource. `ResourceFreezes`

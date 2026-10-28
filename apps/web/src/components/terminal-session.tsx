@@ -518,6 +518,8 @@ function endedDescription(ended: DatabaseTerminalEnd, noun: string) {
       return "The session ended after a while without an open page."
     case "restarted":
       return "The session was restarted."
+    case "deleting":
+      return `The ${noun} is being deleted, which ended the session.`
     case "failed":
       return "The client couldn't start."
   }
@@ -534,6 +536,8 @@ function endedLabel(ended: DatabaseTerminalEnd, noun: string) {
       return "THE LAST ONE TIMED OUT"
     case "restarted":
       return "RESTARTED FROM ANOTHER PAGE"
+    case "deleting":
+      return `THE ${noun.toUpperCase()} IS BEING DELETED`
     case "failed":
       return "THE LAST ONE COULDN'T START"
   }

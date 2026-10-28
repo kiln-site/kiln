@@ -534,31 +534,50 @@ export class AppDriver {
 
   /**
    * Stops an App being deleted and keeps Docker from starting it again on
-   * its own. Returns the restart policies it replaced, by container.
+   * its own. Each container's restart policy is passed to `record` before
+   * it's changed, so a Relay that stops partway can still put it back.
    */
-  async quietForDeletion(appId: string): Promise<Record<string, string>> {
+  async quietForDeletion(
+    appId: string,
+    record: (policies: Record<string, string>) => Promise<void>
+  ): Promise<void> {
+    // Freezing is a power decision too. Persist it before stopping anything,
+    // so a stopped backup from before the deletion cannot restart this App
+    // after the deletion is cancelled, even across a Relay restart.
+    await Effect.runPromise(
+      this.#limits.state.bumpAppPowerRevision(appId, Date.now())
+    )
     const containers = await this.#appContainers(appId)
-    const policies: Record<string, string> = {}
     for (const { id } of containers) {
       const inspected = await docker(this.#engine.inspectContainer(id))
       const policy = inspected.HostConfig?.RestartPolicy?.Name
       if (!policy || policy === "no") continue
+      await record({ [id]: policy })
       await docker(this.#engine.setRestartPolicy(id, "no"))
-      policies[id] = policy
     }
     if (containers.some((container) => container.running)) {
       await this.action({ action: "stop", appId })
     }
-    return policies
   }
 
-  /** Gives an App's containers back the restart policies freezing took. */
+  /**
+   * Gives an App's containers back the restart policies freezing took. A
+   * container that's gone has nothing to give back; any other failure is
+   * thrown, so the freeze stays for letting it go again.
+   */
   async restoreRestartPolicies(
     policies: Readonly<Record<string, string>>
   ): Promise<void> {
     for (const [container, policy] of Object.entries(policies)) {
       await docker(
-        this.#engine.setRestartPolicy(container, policy).pipe(Effect.ignore)
+        this.#engine
+          .setRestartPolicy(container, policy)
+          .pipe(
+            Effect.catchIf(
+              (error) => error.status === 404,
+              () => Effect.void
+            )
+          )
       )
     }
   }
@@ -2506,8 +2525,6 @@ export class AppDriver {
   ): Promise<Map<string, string>> {
     const found = new Map<string, string>()
     for (const id of databaseIds) {
-      // One being deleted is cut off from everything until it's gone.
-      if (this.#lanes.isFrozen("database", id)) continue
       const network = databaseNetworkName(this.#config, id)
       const inspected = await Effect.runPromise(
         Effect.result(this.#engine.inspectNetwork(network))

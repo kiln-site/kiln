@@ -39,8 +39,8 @@ interface Frozen {
  *
  * Freezing makes sure nothing writes to a resource but its final backup:
  * the lanes refuse every other change to it, and `apply` quiets what could
- * write on its own. What `apply` changed is recorded, so letting it go puts
- * that back.
+ * write on its own. What `apply` changes is recorded first, so letting it go
+ * puts that back.
  */
 export class ResourceFreezes implements FrozenResources {
   readonly #frozen = new Map<string, Frozen>()
@@ -76,7 +76,7 @@ export class ResourceFreezes implements FrozenResources {
    */
   async freeze(
     freeze: RelayResourceFreezeRecord,
-    apply: () => Promise<RelayResourceFreezeUndo>
+    apply: Quiet
   ): Promise<void> {
     const holder = await Effect.runPromise(
       this.#state.freezeResource(freeze, Date.now())
@@ -99,13 +99,14 @@ export class ResourceFreezes implements FrozenResources {
    */
   async reapply(
     apply: (
-      freeze: RelayResourceFreezeRecord
-    ) => Promise<RelayResourceFreezeUndo>
+      freeze: RelayResourceFreezeRecord,
+      record: (undo: RelayResourceFreezeUndo) => Promise<void>
+    ) => Promise<void>
   ): Promise<void> {
     for (const [resource, frozen] of this.#frozen) {
       const [kind, id] = resource.split(":") as [FrozenKind, string]
       const freeze = { deletionId: frozen.deletionId, id, kind }
-      await this.#apply(freeze, frozen, () => apply(freeze))
+      await this.#apply(freeze, frozen, (record) => apply(freeze, record))
     }
   }
 
@@ -152,34 +153,32 @@ export class ResourceFreezes implements FrozenResources {
     return null
   }
 
-  // What was recorded first wins: an App's restart policy is the one it had
-  // before the first freeze set it to "no".
+  // Each change is recorded before it's made, and what was recorded first
+  // wins: an App's restart policy is the one it had before the first freeze
+  // set it to "no", even if a freeze stopped partway and ran again.
   async #apply(
     freeze: RelayResourceFreezeRecord,
     frozen: Frozen,
-    apply: () => Promise<RelayResourceFreezeUndo>
+    apply: Quiet
   ) {
-    const changed = await apply()
-    const known = new Set(
-      (frozen.undo.disconnected ?? []).map((entry) => entry.container)
-    )
-    frozen.undo = {
-      disconnected: [
-        ...(frozen.undo.disconnected ?? []),
-        ...(changed.disconnected ?? []).filter(
-          (entry) => !known.has(entry.container)
-        ),
-      ],
-      restartPolicies: {
-        ...changed.restartPolicies,
-        ...frozen.undo.restartPolicies,
-      },
-    }
-    await Effect.runPromise(
-      this.#state.setResourceFreezeUndo(freeze, frozen.undo)
-    )
+    await apply(async (changed) => {
+      frozen.undo = {
+        restartPolicies: {
+          ...changed.restartPolicies,
+          ...frozen.undo.restartPolicies,
+        },
+      }
+      await Effect.runPromise(
+        this.#state.setResourceFreezeUndo(freeze, frozen.undo)
+      )
+    })
   }
 }
+
+/** Quiets a frozen resource, passing each change to `record` before it. */
+type Quiet = (
+  record: (undo: RelayResourceFreezeUndo) => Promise<void>
+) => Promise<void>
 
 function key(kind: FrozenKind, id: string) {
   return `${kind}:${id}`

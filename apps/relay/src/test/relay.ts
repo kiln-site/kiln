@@ -122,11 +122,7 @@ export async function relayHarness(
     const lanes = new OperationLanes({ frozen: freezes })
     const runtimeRecovery = new RuntimeRecoveryManager(config, state, lanes)
     await Effect.runPromise(runtimeRecovery.initialize())
-    const databaseConnections = new DatabaseConnections(
-      config,
-      state,
-      (databaseId) => freezes.has("database", databaseId)
-    )
+    const databaseConnections = new DatabaseConnections(config, state)
     const docker = new DockerDriver(
       config,
       runtimeRecovery,

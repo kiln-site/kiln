@@ -400,6 +400,8 @@ export const databaseTerminalEndReasonSchema = z.enum([
   "timed-out",
   // Someone asked for a fresh session.
   "restarted",
+  // The database is being deleted, which ends every session on it.
+  "deleting",
   // The client could not be started, as when the container has no shell, or
   // its connection failed.
   "failed",

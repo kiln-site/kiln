@@ -24,7 +24,7 @@ const appId = "e".repeat(40)
 const deletion = "11111111-1111-4111-8111-111111111111"
 const otherDeletion = "22222222-2222-4222-8222-222222222222"
 const resolve = (reference: string) => reference
-const quiet = async () => ({})
+const quiet = async () => {}
 
 afterEach(() => {
   vi.useRealTimers()
@@ -61,7 +61,6 @@ const backupOf = (kind: "create" | "restore") =>
     resolve
   )
 
-const networkOf = (id: string) => `${TEST_NAMESPACE}-kiln-db-${id}-network`
 
 describe("resources frozen for deletion", () => {
   it("refuses every change to a frozen game server but its final backup and deletion", async () => {
@@ -152,7 +151,6 @@ describe("resources frozen for deletion", () => {
     const stop = async () => {
       const instance = await harness.docker.findInstance(serverId)
       if (instance) await harness.lifecycle.runInstanceAction(instance, "stop", [])
-      return {}
     }
     await harness.freezes.freeze(frozen, stop)
     expect(server.state.running).toBe(false)
@@ -176,7 +174,6 @@ describe("resources frozen for deletion", () => {
       if (instance) {
         await restarted.lifecycle.runInstanceAction(instance, "stop", [])
       }
-      return {}
     })
     expect(server.state.running).toBe(false)
     const start = await Effect.runPromise(
@@ -199,7 +196,7 @@ describe("resources frozen for deletion", () => {
     expect(restarted.freezes.has("instance", serverId)).toBe(false)
   })
 
-  it("keeps a frozen database running for its dump, cut off from what connects to it, until it's let go", async () => {
+  it("keeps a frozen database running for its dump, refusing every change Kiln would make to it", async () => {
     const harness = await relayHarness()
     await harness.databases.create(
       relayCreateDatabaseSchema.parse({
@@ -211,38 +208,33 @@ describe("resources frozen for deletion", () => {
         username: "kiln_user",
       })
     )
-    const server = await harness.seedServer({ id: serverId, running: true })
-    await harness.databases.updateNetwork({
-      connected: true,
-      databaseId,
-      instanceId: serverId,
-    })
-    const aliases = server.networks.get(networkOf(databaseId))?.aliases ?? []
-    const frozen = { deletionId: deletion, id: databaseId, kind: "database" } as const
-
-    await harness.freezes.freeze(frozen, async () => ({
-      disconnected: await harness.databases.isolateForDeletion(databaseId),
-    }))
+    await harness.freezes.freeze(
+      { deletionId: deletion, id: databaseId, kind: "database" },
+      quiet
+    )
 
     const database = fakeDocker.container(
       `${TEST_NAMESPACE}-kiln-db-${databaseId}-database`
     )!
     expect(database.state.running).toBe(true)
-    expect(server.networks.has(networkOf(databaseId))).toBe(false)
-    // Restoring the server's saved connections doesn't reach it either.
-    await harness.databaseConnections.reconcile(serverId, server.name)
-    expect(server.networks.has(networkOf(databaseId))).toBe(false)
-
-    await harness.freezes.unfreeze(frozen, async (undo) => {
-      await harness.databases.reconnectAfterDeletion(
-        databaseId,
-        undo.disconnected ?? []
+    const refused = "This database is being deleted"
+    for (const operation of [
+      "database.action",
+      "database.data.write",
+      "database.dump.import",
+      "database.wipe",
+    ]) {
+      expect(
+        await attempt(harness, operation, control(operation, { databaseId }))
+      ).toBe(refused)
+    }
+    expect(
+      await attempt(
+        harness,
+        "backup.create",
+        controlRequestLocks("database.dump.export", { databaseId }, resolve)!
       )
-    })
-    // By the names it had there.
-    expect(server.networks.get(networkOf(databaseId))?.aliases).toEqual(
-      expect.arrayContaining(aliases)
-    )
+    ).toBe("ran")
   })
 
   it("stops a frozen App and keeps Docker from starting it, then gives back its restart policy", async () => {
@@ -270,11 +262,17 @@ describe("resources frozen for deletion", () => {
     container!.restartPolicy = "always"
     const frozen = { deletionId: deletion, id: appId, kind: "app" } as const
 
-    await harness.freezes.freeze(frozen, async () => ({
-      restartPolicies: await harness.apps.quietForDeletion(appId),
-    }))
+    await harness.freezes.freeze(frozen, (record) =>
+      harness.apps.quietForDeletion(appId, (restartPolicies) =>
+        record({ restartPolicies })
+      )
+    )
     expect(container!.state.running).toBe(false)
     expect(container!.restartPolicy).toBe("no")
+    // Recorded with the freeze, so a Relay that stops can still put it back.
+    expect(
+      (await Effect.runPromise(harness.state.listResourceFreezes()))[0]?.undo
+    ).toEqual({ restartPolicies: { [container!.id]: "always" } })
 
     await harness.freezes.unfreeze(frozen, async (undo) => {
       await harness.apps.restoreRestartPolicies(undo.restartPolicies ?? {})

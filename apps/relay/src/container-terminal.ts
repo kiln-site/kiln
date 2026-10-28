@@ -204,6 +204,17 @@ export class ContainerTerminals {
     })
   }
 
+  /** Ends everyone's sessions on a target, as freezing its database does. */
+  async endTarget(targetKey: string): Promise<void> {
+    await Promise.all(
+      [...this.#sessions.entries()]
+        .filter(([key]) => key.endsWith(`\u0000${targetKey}`))
+        .map(([key, session]) =>
+          this.#exclusive(key, () => this.#end(session, "deleting"))
+        )
+    )
+  }
+
   #exclusive<T>(key: string, task: () => Promise<T>): Promise<T> {
     const previous = this.#attaching.get(key) ?? Promise.resolve()
     const result = recoverPromise(

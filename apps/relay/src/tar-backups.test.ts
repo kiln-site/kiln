@@ -828,6 +828,51 @@ it("leaves stopped an App whose power a person changed after a stopped backup ow
   ).toEqual([])
 })
 
+it("keeps an App stopped after cancelling a deletion that superseded a backup restart", async () => {
+  const { harness, volumes } = await relay()
+  kilnVolume()
+  await harness.apps.create({ id: appId, name: "Website" })
+  const app = await deploy(harness, mountsVolume)
+  const container = app.containers[0]!.id
+  const manager = await backups(harness, volumes)
+  fakeDocker.failNext({ command: "start", target: container }, "busy")
+  await runTask(
+    manager,
+    createInput({ id: volumeId, kind: "volume" }, { consistency: "stopped" })
+  )
+  expect(fakeDocker.container(container)!.state.running).toBe(false)
+
+  const deletionId = randomUUID()
+  await Effect.runPromise(
+    harness.lanes.run(
+      { label: "resource.freeze", locks: [exclusive(laneKeys.app(appId))] },
+      Effect.promise(() =>
+        harness.freezes.freeze(
+          { deletionId, id: appId, kind: "app" },
+          (record) =>
+            harness.apps.quietForDeletion(appId, (restartPolicies) =>
+              record({ restartPolicies })
+            )
+        )
+      )
+    )
+  )
+  await harness.freezes.unfreeze(
+    { deletionId, id: appId, kind: "app" },
+    async (undo) => {
+      if (undo.restartPolicies)
+        await harness.apps.restoreRestartPolicies(undo.restartPolicies)
+    }
+  )
+  Object.assign(harness, await harness.restart())
+  await backups(harness, volumes)
+
+  expect(fakeDocker.container(container)!.state.running).toBe(false)
+  expect(
+    await readdir(join(harness.config.dataDirectory, "backup-state", "stopped"))
+  ).toEqual([])
+})
+
 // An archive as a tampered backup might hold, stored as the Relay keeps
 // its backups, and the restore that names it.
 async function writeArchive(

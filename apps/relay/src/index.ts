@@ -444,11 +444,7 @@ const operationPruneFiber = forkRelayEffect(
     Effect.forever
   )
 )
-const databaseConnections = new DatabaseConnections(
-  config,
-  startupCore.state,
-  (databaseId) => resourceFreezes.has("database", databaseId)
-)
+const databaseConnections = new DatabaseConnections(config, startupCore.state)
 const docker = new DockerDriver(
   config,
   runtimeRecovery,
@@ -654,12 +650,11 @@ if (cliArguments.length === 0)
 // else starts: Docker may have started one, or the Relay may have stopped
 // between freezing one and quieting it. One that can't be quieted now stays
 // frozen, and its deletion freezing it again tries once more.
-await resourceFreezes.reapply((freeze) =>
+await resourceFreezes.reapply((freeze, record) =>
   recoverPromise(
-    () => quietFrozenResource(freeze),
+    () => quietFrozenResource(freeze, record),
     (error) => {
       console.warn(`Could not quiet ${freeze.kind} ${freeze.id}:`, error)
-      return {}
     }
   )
 )
@@ -2403,7 +2398,9 @@ async function executeControlRequest(
     }
     case "resource.freeze": {
       const freeze = relayResourceFreezeSchema.parse(payload)
-      await resourceFreezes.freeze(freeze, () => quietFrozenResource(freeze))
+      await resourceFreezes.freeze(freeze, (record) =>
+        quietFrozenResource(freeze, record)
+      )
       return { frozen: true }
     }
     case "resource.unfreeze": {
@@ -2625,6 +2622,7 @@ async function executeControlRequest(
     }
     case "database.terminal.attach": {
       const input = relayDatabaseTerminalAttachSchema.parse(request.payload)
+      refuseIfFrozenDatabase(input.databaseId)
       return terminals.attach(
         terminalOwner(client, request),
         databaseTerminalTarget(
@@ -2647,6 +2645,7 @@ async function executeControlRequest(
     }
     case "database.terminal.restart": {
       const input = relayDatabaseTerminalRestartSchema.parse(request.payload)
+      refuseIfFrozenDatabase(input.databaseId)
       return terminals.restart(terminalOwner(client, request), input.databaseId)
     }
     case "database.terminal.detach": {
@@ -2658,6 +2657,7 @@ async function executeControlRequest(
     }
     case "database.terminal.write": {
       const input = relayDatabaseTerminalWriteSchema.parse(request.payload)
+      refuseIfFrozenDatabase(input.databaseId)
       return terminals.write(
         terminalOwner(client, request),
         input.databaseId,
@@ -2667,6 +2667,7 @@ async function executeControlRequest(
     }
     case "database.terminal.claim": {
       const input = relayDatabaseTerminalClaimSchema.parse(request.payload)
+      refuseIfFrozenDatabase(input.databaseId)
       return terminals.claim(
         terminalOwner(client, request),
         input.databaseId,
@@ -4242,18 +4243,19 @@ async function requiredFileRoot(instanceId: string) {
   return root
 }
 
-// Quiets a resource frozen for its deletion, so nothing writes to it but
-// its final backup: a game server or App stopped, an App kept from starting
-// with Docker, a database cut off from everything connected to it while it
-// stays running for its dump. Runs inside the freeze, which holds the
-// resource whole, and again as the Relay starts. Returns what it changed.
+// Quiets a resource frozen for its deletion, so nothing Kiln runs writes to
+// it but its final backup: a game server or App stopped, an App kept from
+// starting with Docker, a database's terminals closed (it keeps running for
+// its dump). Runs inside the freeze, which holds the resource whole, and
+// again as the Relay starts. What it changes goes to `record` first.
 async function quietFrozenResource(
-  freeze: RelayResourceFreeze
-): Promise<RelayResourceFreezeUndo> {
+  freeze: RelayResourceFreeze,
+  record: (undo: RelayResourceFreezeUndo) => Promise<void>
+): Promise<void> {
   switch (freeze.kind) {
     case "instance": {
       const instance = await docker.findInstance(freeze.id)
-      if (!instance) return {}
+      if (!instance) return
       // Only its full ID: a short one would freeze nothing work names.
       if (instance.id !== freeze.id) {
         throw new Error("Freezing a game server needs its full ID")
@@ -4264,12 +4266,15 @@ async function quietFrozenResource(
         startup.state.listInstanceRoutes(instance.id)
       )
       await lifecycle.runInstanceAction(instance, "stop", routes)
-      return {}
+      return
     }
     case "app":
-      return { restartPolicies: await apps.quietForDeletion(freeze.id) }
+      return apps.quietForDeletion(freeze.id, (restartPolicies) =>
+        record({ restartPolicies })
+      )
     case "database":
-      return { disconnected: await databases.isolateForDeletion(freeze.id) }
+      await terminals.endTarget(freeze.id)
+      return
   }
 }
 
@@ -4282,9 +4287,16 @@ async function restoreFrozenResource(
   if (freeze.kind === "app" && undo.restartPolicies) {
     await apps.restoreRestartPolicies(undo.restartPolicies)
   }
-  if (freeze.kind === "database" && undo.disconnected) {
-    await databases.reconnectAfterDeletion(freeze.id, undo.disconnected)
-  }
+}
+
+// A database being deleted takes no terminal input: its client could write
+// to it after its final dump.
+function refuseIfFrozenDatabase(databaseId: string): void {
+  if (!resourceFreezes.has("database", databaseId)) return
+  throw new LaneRejectedError({
+    message: "This database is being deleted",
+    reason: "refused",
+  })
 }
 
 async function requiredInstance(payload: Readonly<Record<string, unknown>>) {

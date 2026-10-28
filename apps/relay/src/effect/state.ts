@@ -157,16 +157,12 @@ export interface RelayResourceFreezeRecord {
 
 /**
  * What freezing changed that letting it go puts back: the restart policies
- * of an App's containers, and the containers cut off a database's network
- * with the names they had on it.
+ * of an App's containers, by container.
  */
 export interface RelayResourceFreezeUndo {
   readonly restartPolicies?: Readonly<Record<string, string>>
-  readonly disconnected?: ReadonlyArray<{
-    readonly aliases: ReadonlyArray<string>
-    readonly container: string
-  }>
 }
+
 const OPERATION_JOURNAL_METADATA_KEY = "operation_journal_id"
 
 export interface RelayStoredInstanceName {
