@@ -71,12 +71,27 @@ export interface Admission {
    * admission might have committed without its answer can still end it.
    */
   readonly id?: string | undefined
+  /**
+   * Starts it at once if it's granted as it's admitted, in the same
+   * transaction, as a quick operation that runs right away is.
+   */
+  readonly startIfGranted?: boolean | undefined
 }
 
 export interface Admitted {
   readonly id: string
   /** Whether this admission found the operation already admitted. */
   readonly existing: boolean
+  /** Whether it was granted its locks as it was admitted. */
+  readonly granted: boolean
+  /** Whether it was also started, as `startIfGranted` asks. */
+  readonly started: boolean
+}
+
+/** An operation a decision granted, and whether it runs as a workflow. */
+interface Granted {
+  readonly durable: boolean
+  readonly id: string
 }
 
 export class OperationConflictError extends Schema.TaggedError<OperationConflictError>()(
@@ -139,14 +154,19 @@ export function setGrantedHandler(handler: GrantedHandler): void {
   onGranted = handler
 }
 
-const announce = (granted: ReadonlyArray<string>) =>
+const announce = (granted: ReadonlyArray<Granted>) =>
   Effect.gen(function* () {
     publishOperationsChange()
-    for (const id of granted) {
+    for (const { id } of granted) {
       const waiter = waiters.get(id)
       if (waiter) yield* Deferred.succeed(waiter, undefined)
     }
-    if (granted.length > 0) yield* onGranted(granted)
+    // Only a durable one has a workflow to start; a quick one runs in the
+    // request that waits for it.
+    const durable = granted.flatMap((entry) =>
+      entry.durable ? [entry.id] : []
+    )
+    if (durable.length > 0) yield* onGranted(durable)
   })
 
 /**
@@ -192,7 +212,10 @@ export const admitOperation = Effect.fn("Operations.enqueue")(function* (
                 message: `${admission.kind} was already started with other input under this key`,
               })
             }
-            return { admitted: { existing: true, id: found.id }, granted: [] }
+            return {
+              admitted: { existing: true, id: found.id, started: false },
+              granted: [] as ReadonlyArray<Granted>,
+            }
           }
         }
         const id = admission.id ?? randomUUID()
@@ -220,15 +243,26 @@ export const admitOperation = Effect.fn("Operations.enqueue")(function* (
             now,
           ]
         )
-        for (const lock of locks) {
+        if (locks.length > 0) {
           yield* transaction.execute(
             `INSERT INTO ${lockTable} (operation_id, lock_key, mode, held)
-             VALUES (?, ?, ?, 0)`,
-            [id, lock.key, lock.mode]
+             VALUES ${locks.map(() => "(?, ?, ?, 0)").join(", ")}`,
+            locks.flatMap((lock) => [id, lock.key, lock.mode])
           )
         }
         const granted = yield* grantWaiting(transaction, now)
-        return { admitted: { existing: false, id }, granted }
+        const started =
+          admission.startIfGranted === true &&
+          granted.some((entry) => entry.id === id)
+        if (started) {
+          yield* transaction.execute(
+            `UPDATE ${operationTable}
+                SET state = 'running', started_at = ?, updated_at = ?
+              WHERE id = ?`,
+            [now, now, id]
+          )
+        }
+        return { admitted: { existing: false, id, started }, granted }
       })
   )
   yield* Effect.annotateCurrentSpan({
@@ -243,7 +277,12 @@ export const admitOperation = Effect.fn("Operations.enqueue")(function* (
     )
   }
   yield* announce(decision.granted)
-  return decision.admitted as Admitted
+  return {
+    ...decision.admitted,
+    granted: decision.granted.some(
+      (entry) => entry.id === decision.admitted.id
+    ),
+  } satisfies Admitted
 })
 
 /**
@@ -355,7 +394,7 @@ export const finishOperation = Effect.fn("Operations.finish")(function* (
           [id]
         )
         if (!row || !isOpen(row.state)) {
-          return { ended: null, granted: [] as ReadonlyArray<string> }
+          return { ended: null, granted: [] as ReadonlyArray<Granted> }
         }
         yield* transaction.execute(
           `UPDATE ${operationTable}
@@ -506,6 +545,11 @@ export const recoverOperations = Effect.fn("Operations.recover")(function* () {
   yield* Effect.annotateCurrentSpan({
     "operations.recovered": decision.recovered,
   })
+  if (decision.recovered > 0) {
+    yield* Effect.logInfo(
+      `Took over ${decision.recovered} operations a stopped Hearth left`
+    )
+  }
   yield* announce(decision.granted)
 })
 
@@ -717,14 +761,15 @@ const grantWaiting = Effect.fnUntraced(function* (
   const waitingRows = yield* transaction.queryRows<
     RowDataPacket & {
       admitted_at: number
+      durable: number
       id: string
       kind: string
       lock_key: string | null
       mode: LaneMode | null
     }
   >(
-    `SELECT operation.id, operation.kind, operation.admitted_at,
-            lock_row.lock_key, lock_row.mode
+    `SELECT operation.id, operation.kind, operation.durable,
+            operation.admitted_at, lock_row.lock_key, lock_row.mode
        FROM ${operationTable} operation
        LEFT JOIN ${lockTable} lock_row ON lock_row.operation_id = operation.id
       WHERE operation.state = 'waiting'
@@ -732,6 +777,7 @@ const grantWaiting = Effect.fnUntraced(function* (
   )
   const waiting: Array<{
     admittedAt: number
+    durable: boolean
     id: string
     kind: string
     locks: Array<LaneLock>
@@ -741,6 +787,7 @@ const grantWaiting = Effect.fnUntraced(function* (
     if (entry?.id !== row.id) {
       entry = {
         admittedAt: Number(row.admitted_at),
+        durable: Boolean(row.durable),
         id: row.id,
         kind: row.kind,
         locks: [],
@@ -754,7 +801,7 @@ const grantWaiting = Effect.fnUntraced(function* (
   const { granted } = selectGrants(held, waiting, {
     locksOf: (entry) => entry.locks,
   })
-  if (granted.length === 0) return []
+  if (granted.length === 0) return [] as ReadonlyArray<Granted>
   const ids = granted.map((entry) => entry.id)
   const placeholders = ids.map(() => "?").join(", ")
   yield* transaction.execute(
@@ -776,5 +823,8 @@ const grantWaiting = Effect.fnUntraced(function* (
       (now - entry.admittedAt) / 1000
     )
   }
-  return ids
+  return granted.map(({ durable, id }): Granted => ({
+    durable,
+    id,
+  })) as ReadonlyArray<Granted>
 })

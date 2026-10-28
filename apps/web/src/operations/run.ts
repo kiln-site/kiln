@@ -44,13 +44,14 @@ export const runOperation = <Input, A, E, R>(
       // lost is ended by that name, and ending one that didn't changes
       // nothing.
       const id = randomUUID()
-      yield* admitOperation({
+      const admitted = yield* admitOperation({
         actorId: options.actorId,
         durable: false,
         id,
         input,
         kind: operation.kind,
         locks: operation.locks(input),
+        startIfGranted: true,
         version: operation.version,
       }).pipe(
         Effect.tapError(() =>
@@ -60,9 +61,13 @@ export const runOperation = <Input, A, E, R>(
       let started = false
       const exit = yield* Effect.gen(function* () {
         const queuedAt = yield* Clock.currentTimeMillis
-        yield* restore(awaitGrant(id))
+        // Granted and started as it was admitted, as it usually is, it
+        // needn't ask or start again.
+        if (!admitted.started) {
+          yield* restore(awaitGrant(id))
+          yield* startOperation(id)
+        }
         const waitedMs = (yield* Clock.currentTimeMillis) - queuedAt
-        yield* startOperation(id)
         started = true
         // Once it runs it isn't cut off: a caller that gives up now gets
         // its answer late instead of a change half made.

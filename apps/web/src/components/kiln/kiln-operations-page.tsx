@@ -246,15 +246,16 @@ function Timing({ item }: { item: OperationView }) {
   )
 }
 
-// Only these spans tick, not the rows around them.
+// Only these spans tick, not the rows around them. The server's clock and
+// the browser's read differently, so their first text may too.
 function Since({ at }: { at: number }) {
   const now = useNow()
-  return <>{formatElapsed(now - at)}</>
+  return <span suppressHydrationWarning>{formatElapsed(now - at)}</span>
 }
 
 function Ago({ at }: { at: number }) {
   const now = useNow()
-  return <>{formatElapsed(now - at)} ago</>
+  return <span suppressHydrationWarning>{formatElapsed(now - at)} ago</span>
 }
 
 function useNow(): number {

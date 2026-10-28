@@ -23,11 +23,15 @@ const kinds = new Map<
   ReturnType<typeof quickOperation<ReadonlyArray<HostnameOwner>>>
 >()
 
-/** Runs `effect` as the DNS change `kind` on `owners`, in their lanes. */
+/**
+ * Runs `effect` as the DNS change `kind` on `owners`, in their lanes, for
+ * the person who asked, if anyone did.
+ */
 export function withDnsChange<A, E, R>(
   kind: string,
   owners: HostnameOwner | ReadonlyArray<HostnameOwner>,
-  effect: Effect.Effect<A, E, R>
+  effect: Effect.Effect<A, E, R>,
+  actorId: string | null = null
 ) {
   let operation = kinds.get(kind)
   if (!operation) {
@@ -49,6 +53,7 @@ export function withDnsChange<A, E, R>(
       resourceId,
       resourceType,
     })),
-    effect
+    effect,
+    { actorId }
   )
 }

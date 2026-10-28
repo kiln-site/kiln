@@ -57,7 +57,7 @@ const startMoveAndKillDuringCopy = (moveId: string) =>
   )
 
 describeMysql("operations engine", () => {
-  layer(TestDatabase, { timeout: 60_000 })((it) => {
+  layer(TestDatabase, { timeout: 120_000 })((it) => {
     it.effect(
       "finishes a move whose Hearth died mid-step, without running its finished steps again",
       () =>
@@ -98,7 +98,8 @@ describeMysql("operations engine", () => {
           assert(Option.isSome(result) && result.value._tag === "Complete")
           assert.deepStrictEqual(result.value.exit, Exit.succeed("1-1-1"))
         }).pipe(TestClock.withLive),
-      60_000
+      // The dead Hearth's shard locks expire first.
+      120_000
     )
   })
 })

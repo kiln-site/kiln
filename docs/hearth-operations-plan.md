@@ -444,8 +444,9 @@ rule in the code.
   running beside it, and a dev reload closes the old engine first. Not MySQL
   named locks (`GET_LOCK`): those are shared by every database on the
   server, so two installs on one MySQL server would block each other. A
-  Hearth that stops releases its locks; after a crash they expire within 15
-  seconds, and the next Hearth resumes the work then.
+  Hearth that stops releases its locks; after a crash they expire within 45
+  seconds, and the next Hearth resumes the work then. Each lock write gets
+  15 seconds, so a busy MySQL doesn't cost the engine its shards.
 - **Stuck locks.** A platform administrator may release the locks of an
   operation marked as needing attention, from the operator view, with a
   reason that's kept with the operation.
@@ -483,16 +484,17 @@ On a development machine's MySQL 8, with the engine in Hearth's process
 - A Hearth killed mid-step (`SIGKILL`) has its workflow finished by the
   next one, which re-runs only the step that was cut off
   (`apps/web/src/operations/engine.test.ts`) once the dead process's shard
-  locks expire, within 15 seconds.
+  locks expire, within 45 seconds.
 - A one-step workflow takes 39 ms at the median, 50 ms at p95, 74 ms at
   p99; 200 at once finish in about 1.5 seconds. Fine for long work, too slow
   for every rename: quick changes go through the lanes and answer in the
   same request, without a workflow.
 - An idle engine adds under one MySQL query a second.
-- A quick operation costs about 22 ms of MySQL work at the median (admit,
-  start, end; 26 ms p95). Each decision reads what's held and what waits,
-  so a blocked backlog slows ordinary work linearly: with 1,000 operations
-  waiting behind one key, 37 ms (49 ms p95); with 5,000, 113 ms
+- A quick operation costs about 17 ms of MySQL work at the median (admit,
+  starting in the same transaction when granted at once, and end; 25 ms
+  p95). Each decision reads what's held and what waits, so a blocked
+  backlog slows ordinary work linearly: with 1,000 operations waiting
+  behind one key, 35 ms (44 ms p95); with 5,000, 103 ms
   (`apps/web/src/operations/test/lanes-bench.ts`). Real backlogs are tens.
 - Each run leaves about 6.6 KB in eight rows, kept until retention clears
   them with the operation after 30 days, by its execution ID. The engine's

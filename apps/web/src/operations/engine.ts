@@ -63,6 +63,10 @@ export const NodeCrypto = Layer.succeed(Crypto.Crypto)(
  * MySQL server would hold each other's. Each process is its own runner, so
  * no other can take the locks it holds. A Hearth that stops releases them;
  * one that crashes leaves them to expire, and the next resumes its work then.
+ *
+ * Each lock write must finish within a third of the expiry; one that doesn't
+ * gives up every shard, cutting off running steps. 15 seconds rides out a
+ * MySQL busy with other work, as a security sync after a deploy makes it.
  */
 export const OperationsEngine = ClusterWorkflowEngine.layer.pipe(
   Layer.provideMerge(Sharding.layer),
@@ -90,8 +94,8 @@ export const OperationsEngine = ClusterWorkflowEngine.layer.pipe(
         RunnerAddress.make(`hearth-${randomUUID()}`, 0)
       ),
       shardLockDisableAdvisory: true,
-      shardLockExpiration: Duration.seconds(15),
-      shardLockRefreshInterval: Duration.seconds(5),
+      shardLockExpiration: Duration.seconds(45),
+      shardLockRefreshInterval: Duration.seconds(15),
       shardsPerGroup: 16,
     })
   ),

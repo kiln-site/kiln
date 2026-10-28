@@ -400,7 +400,8 @@ export function saveWebRouteHostnamesEffect<A, E, R>(
       // So an app's generated address isn't deleted while a route uses it.
       yield* setWebHostnamesRoutedEffect(input.resource, [...wanted])
       return saved
-    })
+    }),
+    input.actor.id
   )
 }
 

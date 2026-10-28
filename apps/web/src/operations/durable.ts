@@ -227,6 +227,9 @@ setGrantedHandler((ids) =>
         ? Effect.void
         : dispatchDurableOperations(ids).pipe(
             Effect.provideService(OperationsEngineService, engine.value),
+            // Traced whatever granted it, such as an untraced background
+            // check that took over a stopped Hearth's work.
+            Effect.withTracerEnabled(true),
             Effect.forkDetach,
             Effect.asVoid
           )

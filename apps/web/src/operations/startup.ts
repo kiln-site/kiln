@@ -25,6 +25,9 @@ const SWEEP = "15 seconds"
 // Runs `effect` every `interval` for as long as Hearth runs, whatever one
 // run does short of Hearth stopping, so one failure, even a defect such as
 // the engine failing to build, stops none of the others.
+const untraced = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.withTracerEnabled(effect, false)
+
 const every = <E, R>(
   interval: Duration.Input,
   label: string,
@@ -52,19 +55,27 @@ export function startOperationsEngine(): void {
   forkAppWorker(
     Effect.all(
       [
+        // Checks that find nothing to do leave no trace; work they find
+        // does, and recovery logs what it took over.
         every(
           DRIVER_HEARTBEAT,
           "Operations heartbeat failed",
-          heartbeatDriver()
+          untraced(heartbeatDriver())
         ),
-        every(SWEEP, "Operations recovery failed", recoverOperations()),
+        every(
+          SWEEP,
+          "Operations recovery failed",
+          untraced(recoverOperations())
+        ),
         every(
           SWEEP,
           "Operations engine not started yet",
           Effect.gen(function* () {
             const { engine } = yield* OperationsEngineService
+            // Traced: workflows built with it keep the context it's built in.
             yield* engine
-            yield* dispatchDurableOperations(yield* undispatchedOperations())
+            const granted = yield* untraced(undispatchedOperations())
+            if (granted.length > 0) yield* dispatchDurableOperations(granted)
           })
         ),
         every(

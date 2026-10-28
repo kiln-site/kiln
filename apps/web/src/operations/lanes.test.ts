@@ -231,7 +231,8 @@ describeMysql("Hearth operation lanes", () => {
         Effect.gen(function* () {
           yield* resetDatabase
           const database = yield* Database
-          // Another Hearth takes it over just as it starts.
+          // Another Hearth takes it over just as it starts, after it waited
+          // its turn: one granted as it's admitted starts in that same step.
           const takenOver = Database.of({
             ...database,
             execute: (operation, statement, values) =>
@@ -240,7 +241,7 @@ describeMysql("Hearth operation lanes", () => {
                     .execute(
                       "test.takeOver",
                       `UPDATE ${databaseTable("operation")}
-                          SET state = 'interrupted'`
+                          SET state = 'interrupted' WHERE state = 'granted'`
                     )
                     .pipe(
                       Effect.andThen(
@@ -250,14 +251,29 @@ describeMysql("Hearth operation lanes", () => {
                 : database.execute(operation, statement, values),
           })
           const log: Array<string> = []
-          const refused = yield* runOperation(
+          const first = yield* hold(log, "server-a", "first")
+          yield* until(() => log.includes("first"))
+          const late = yield* runOperation(
             write,
             { key: "server-a", name: "late" },
             Effect.sync(() => log.push("late"))
-          ).pipe(Effect.provideService(Database, takenOver), Effect.flip)
+          ).pipe(
+            Effect.provideService(Database, takenOver),
+            Effect.flip,
+            Effect.forkChild
+          )
+          yield* states.pipe(
+            Effect.repeat({
+              schedule: Schedule.spaced("20 millis"),
+              until: (found) => found.includes("test.write:waiting"),
+            })
+          )
+          yield* Deferred.succeed(first.release, undefined)
+          yield* Fiber.join(first.fiber)
+          const refused = yield* Fiber.join(late)
 
           assert.instanceOf(refused, OperationEndedError)
-          assert.deepStrictEqual(log, [])
+          assert.deepStrictEqual(log, ["first"])
         }).pipe(TestClock.withLive)
     )
 
