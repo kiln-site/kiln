@@ -7,6 +7,7 @@ import { SqlClient } from "effect/sql"
 import { Database, databaseClientConfig, makeDatabase } from "@/effect/database"
 import { applyMigrations } from "@/effect/migrations"
 import { databaseTableName } from "@/lib/database-config"
+import { operationsTablePrefix } from "@/operations/engine"
 import { migrations } from "@/migrations"
 
 // Runs against real MySQL when KILN_TEST_MYSQL=1 and DB_* point at a server
@@ -35,15 +36,20 @@ const migratedClient = Layer.effectDiscard(applyMigrations(migrations)).pipe(
 // call `resetDatabase` at the start of each test.
 export const TestDatabase = Layer.effect(
   Database,
-  Effect.map(SqlClient.SqlClient, (sql) =>
-    makeDatabase(Effect.succeed(sql))
-  )
+  Effect.map(SqlClient.SqlClient, (sql) => makeDatabase(Effect.succeed(sql)))
 ).pipe(Layer.provideMerge(migratedClient))
 
-// Empties every table except the migration ledger.
+// Empties every table except the migration ledgers and the operations
+// engine's shard locks and runners, which a running engine holds: emptied
+// under it, it would stop until it took its shards back.
 export const resetDatabase = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
   const ledger = databaseTableName("schema_migration")
+  const engineState = new Set(
+    ["locks", "runners", "migrations"].map(
+      (name) => `${operationsTablePrefix()}_${name}`
+    )
+  )
   yield* sql.withTransaction(
     Effect.gen(function* () {
       const tables = yield* sql<{ name: string }>`
@@ -51,7 +57,10 @@ export const resetDatabase = Effect.gen(function* () {
         WHERE table_schema = DATABASE() AND table_name <> ${ledger}
       `
       yield* sql`SET FOREIGN_KEY_CHECKS = 0`
-      for (const table of tables) yield* sql`DELETE FROM ${sql(table.name)}`
+      for (const table of tables) {
+        if (engineState.has(table.name)) continue
+        yield* sql`DELETE FROM ${sql(table.name)}`
+      }
       yield* sql`SET FOREIGN_KEY_CHECKS = 1`
     })
   )
