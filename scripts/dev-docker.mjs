@@ -198,20 +198,16 @@ function destroyNamespaced(kind, appProjects) {
     "label=com.docker.compose.project",
     "--format",
     '{{.Label "com.docker.compose.project"}}',
-  ])
-    .split("\n")
-    .filter((project) => {
-      const prefix = `${namespace}-kiln-app-`
-      if (!project.startsWith(prefix)) return false
-      // Apps use 40 hex digits; rolling deployments append 14 digits.
-      return /^[a-f0-9]{40}(?:-[0-9]{14})?$/u.test(project.slice(prefix.length))
-    })
-  const projects = [...new Set([...appProjects, ...remainingProjects])]
+  ]).split("\n")
+  // A container's project label comes from its image as much as from the
+  // Relay, so every project, wherever it was found, must be one this
+  // Relay's Apps would name.
+  const projects = [...new Set([...appProjects, ...remainingProjects])].filter(
+    isAppProject
+  )
   const filters = [
     `label=kiln.relay.owner=${namespace}`,
-    ...projects.map(
-      (project) => `label=com.docker.compose.project=${project}`
-    ),
+    ...projects.map((project) => `label=com.docker.compose.project=${project}`),
   ]
   const ids = new Set(
     filters.flatMap((filter) =>
@@ -231,7 +227,10 @@ function destroyNamespaced(kind, appProjects) {
     // Database volumes may predate the owner label. Match the recovery
     // identity exactly, never a name prefix, and respect any other owner.
     const databaseVolumes = capture("docker", [
-      "volume", "ls", "--filter", "label=kiln.database.volume",
+      "volume",
+      "ls",
+      "--filter",
+      "label=kiln.database.volume",
       "--format",
       '{{.Name}}|{{.Label "kiln.database.volume"}}|{{.Label "kiln.database.id"}}|{{.Label "kiln.relay.owner"}}',
     ])
@@ -242,10 +241,21 @@ function destroyNamespaced(kind, appProjects) {
         (!owner || owner === namespace) &&
         name === volume &&
         name === `${namespace}-kiln-db-${databaseId}-data`
-      ) ids.add(name)
+      )
+        ids.add(name)
     }
   }
   if (ids.size > 0) run("docker", [kind, "rm", ...ids], process.env)
+}
+
+// Apps' Compose projects are named for this Relay's namespace and the App's
+// 40 hex digit ID; rolling deployments append 14 digits.
+function isAppProject(project) {
+  const prefix = `${namespace}-kiln-app-`
+  return (
+    project.startsWith(prefix) &&
+    /^[a-f0-9]{40}(?:-[0-9]{14})?$/u.test(project.slice(prefix.length))
+  )
 }
 
 function ensureSharedStore() {
