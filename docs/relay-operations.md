@@ -134,7 +134,8 @@ worker locks the work when it runs it:
   changes and nothing starts the server mid-restore.
   An App's folder or a volume backed up **stopped** also holds the
   lifecycle of each App it stops (for a volume, its owner and every App
-  that uses it), so nothing starts them meanwhile. A volume's restore holds
+  that uses it), so nothing starts them meanwhile, and holds a volume
+  exclusively, so no App that begins using it deploys or starts either. A volume's restore holds
   the volume exclusively with every such App's lifecycle; an App folder's
   restore replaces the App. A restore whose swap didn't finish keeps its
   target fenced: the lanes refuse every operation that locks it, and those

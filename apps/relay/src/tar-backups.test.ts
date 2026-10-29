@@ -362,6 +362,46 @@ it("stops the Apps that use a volume for a stopped backup, and starts again only
   expect(volume.files.get("pgdata/PG_VERSION")).toBe("16")
 })
 
+it("holds a volume alone through a stopped backup, so an App that begins using it deploys only after", async () => {
+  const { harness, volumes } = await relay()
+  const volume = kilnVolume()
+  await harness.apps.create({ id: otherAppId, name: "Worker" })
+  const manager = await backups(harness, volumes)
+  const mounted = () =>
+    [...fakeDocker.containers.values()].some(
+      (container) =>
+        container.labels["kiln.app.id"] === otherAppId &&
+        container.mounts.some((mount) => mount.source === volume.name)
+    )
+  const reading = fakeDocker.hold({ command: "archive get" })
+
+  const backingUp = runTask(
+    manager,
+    createInput({ id: volumeId, kind: "volume" }, { consistency: "stopped" })
+  )
+  await reading.reached
+  // Not one of the Apps the backup stopped: it starts using the volume now.
+  await harness.apps.deploy(
+    relayDeployAppSchema.parse({
+      appId: otherAppId,
+      config: { ...defaultAppConfig, image: "nginx:alpine", ...mountsVolume },
+      name: "Worker",
+    })
+  )
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  expect(mounted()).toBe(false)
+
+  reading.release()
+  expect(await backingUp).toMatchObject({
+    result: { consistency: "stopped" },
+    status: "succeeded",
+  })
+  for (let step = 0; step < 200 && !mounted(); step += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  expect(mounted()).toBe(true)
+})
+
 it("refuses a restore whose archive writes through a link it made or climbs out", async () => {
   const { harness, volumes } = await relay()
   const volume = kilnVolume()

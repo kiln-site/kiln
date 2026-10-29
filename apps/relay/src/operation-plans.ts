@@ -117,7 +117,8 @@ export function fileRootWriteLocks(
  * An App's folder or a volume backed up live is read beside other work. One
  * backed up stopped, as a final backup always is, also holds the lifecycle
  * of each App it stops, so nothing starts them meanwhile; a volume's are
- * the Apps that own or use it. A restore replaces the App, or holds the
+ * the Apps that own or use it, and it holds the volume alone, so no App
+ * that begins using it deploys or starts meanwhile. A restore replaces the App, or holds the
  * volume alone with every App that uses it, so none deploys or starts until
  * it's done.
  */
@@ -138,7 +139,11 @@ export function backupTaskLocks(
   }
   if (kind === "volume") {
     const locks = (apps: ReadonlyArray<string>) => [
-      restore ? exclusive(laneKeys.volume(id)) : shared(laneKeys.volume(id)),
+      // Stopped, nothing may mount it meanwhile, even an App that begins
+      // using it, so the backup's label holds.
+      restore || stopped
+        ? exclusive(laneKeys.volume(id))
+        : shared(laneKeys.volume(id)),
       ...(restore || stopped
         ? [...new Set(apps)].flatMap((appId) => appLifecycleLocks(appId))
         : []),
