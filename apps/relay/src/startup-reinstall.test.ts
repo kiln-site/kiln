@@ -257,9 +257,11 @@ describe("startup database connections", () => {
         [`kiln.instance.databases.${databaseId}`]: harness.config.nodeId,
         "kiln.instance.databases.version": "1",
       })
+      // The replacement keeps the name it answers to there.
       expect(
-        container.networks.has(`kiln-test-kiln-db-${databaseId}-network`)
-      ).toBe(!unavailable)
+        container.networks.get(`kiln-test-kiln-db-${databaseId}-network`)
+          ?.aliases ?? null
+      ).toEqual(unavailable ? null : expect.arrayContaining([`server-${id}`]))
       expect(replaced.databaseConnectionWarnings ?? []).toHaveLength(
         unavailable ? 1 : 0
       )

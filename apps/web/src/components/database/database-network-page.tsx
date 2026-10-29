@@ -1,13 +1,16 @@
 import * as React from "react"
-import { useQuery, useSuspenseQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import { Cable, LoaderCircle, Network, Unplug } from "lucide-react"
 
+import type { RelayDatabaseMember } from "@workspace/contracts"
 import { Button } from "@workspace/ui/components/button"
 
 import {
   DatabaseNetworkPicker,
+  databaseMemberKey,
+  useDatabaseMemberCandidates,
   useDatabaseNetworkToggle,
+  type DatabaseMemberCandidate,
 } from "@/components/database/database-network"
 import {
   databaseRelayAvailable,
@@ -17,13 +20,6 @@ import { useDatabaseWorkspace } from "@/components/database/database-workspace-c
 import { CopyMetaRow, InfoCard, InfoCardHeader } from "@/components/info-card"
 import { InstanceCard } from "@/components/instance-card"
 import { SettingsEmptyState } from "@/components/settings-panel"
-import { canAccessInstancePermission } from "@/lib/navigation-destinations"
-import {
-  accessCapabilitiesQueryOptions,
-  relaySnapshotQueryOptions,
-} from "@/lib/query-options"
-import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
-import { relayInstanceRouteIdentifier } from "@/lib/relay-selectors"
 
 export function DatabaseNetworkPage() {
   const { database } = useDatabaseWorkspace()
@@ -37,8 +33,10 @@ export function DatabaseNetworkPage() {
         <InfoCard>
           <InfoCardHeader icon={<Network />} title="Private network" />
           <p className="border-b px-4 py-3 text-sm text-muted-foreground">
-            {database.name} has no public port. Servers on {database.relayName}{" "}
-            reach it at this address once they are connected to its network.
+            {database.name} has no public port. Game servers, Apps, and other
+            databases on {database.relayName} reach it at this address once they
+            are connected to its network. There, each answers to the name listed
+            with it.
           </p>
           <CopyMetaRow
             label="Internal address"
@@ -49,62 +47,66 @@ export function DatabaseNetworkPage() {
         <InfoCard>
           <InfoCardHeader
             icon={<Cable />}
-            title="Connected game servers"
+            title="Connected"
             action={
               canWrite ? (
                 <DatabaseNetworkPicker database={database} variant="button" />
               ) : null
             }
           />
-          <ConnectedServers canWrite={canWrite} database={database} />
+          <ConnectedMembers canWrite={canWrite} database={database} />
         </InfoCard>
       </div>
     </section>
   )
 }
 
-function ConnectedServers({
+const kindNames = {
+  app: "App",
+  database: "Database",
+  instance: "Game server",
+} as const
+
+// Until its containers join, which happens when they're next made.
+const joinsWhen = {
+  app: "joins on its next deploy",
+  database: "joins when it next starts",
+  instance: "joins when it next starts",
+} as const
+
+const kindOrder = { instance: 0, app: 1, database: 2 } as const
+
+function ConnectedMembers({
   canWrite,
   database,
 }: {
   canWrite: boolean
   database: ManagedDatabase
 }) {
-  const selectServers = React.useCallback(
-    (snapshot: RelayFleetSnapshot) =>
-      database.connectedInstanceIds.map((instanceId) => {
-        const instance = snapshot.instances.find(
-          (candidate) =>
-            candidate.id === instanceId &&
-            candidate.relayId === database.relayId
-        )
-        return {
-          id: instanceId,
-          instance: instance ?? null,
-          routeId: instance
-            ? relayInstanceRouteIdentifier(snapshot.instances, instance)
-            : null,
-        }
-      }),
-    [database.connectedInstanceIds, database.relayId]
+  const candidates = useDatabaseMemberCandidates(database)
+  const { pendingKey, toggle } = useDatabaseNetworkToggle(database)
+  const members = React.useMemo(
+    () =>
+      [...database.members].sort(
+        (left, right) =>
+          kindOrder[left.kind] - kindOrder[right.kind] ||
+          (
+            candidates.get(databaseMemberKey(left))?.item.name ?? left.id
+          ).localeCompare(
+            candidates.get(databaseMemberKey(right))?.item.name ?? right.id
+          )
+      ),
+    [candidates, database.members]
   )
-  const { data: servers = [] } = useQuery({
-    ...relaySnapshotQueryOptions(),
-    select: selectServers,
-  })
-  const { data: capabilities } = useSuspenseQuery(
-    accessCapabilitiesQueryOptions()
-  )
-  const { pendingInstanceId, toggle } = useDatabaseNetworkToggle(database)
 
-  if (servers.length === 0) {
+  if (members.length === 0) {
     return (
       <SettingsEmptyState icon={<Unplug />}>
-        <p className="font-medium text-foreground">No game servers connected</p>
+        <p className="font-medium text-foreground">Nothing is connected</p>
         <p>
           {canWrite
-            ? "Connect a game server to let it reach this database."
-            : "Game servers connected to this database appear here."}
+            ? "Connect a game server, App, or database to let it reach this database."
+            : "Game servers, Apps, and databases connected to this database appear here."}
         </p>
       </SettingsEmptyState>
     )
@@ -112,61 +114,30 @@ function ConnectedServers({
 
   return (
     <ul>
-      {servers.map(({ id, instance, routeId }) => {
-        const canDisconnect =
-          canWrite &&
-          canAccessInstancePermission(
-            capabilities,
-            { id, relayId: database.relayId },
-            "instance.network.write"
-          )
-        const pending = pendingInstanceId === id
-        const name = instance ? (
-          <InstanceCard
-            className="min-w-0 flex-1"
-            instance={{
-              brickId: instance.brickId,
-              brickSource: instance.brickSource,
-              id: instance.id,
-              implementation: instance.implementation,
-              kind: "server",
-              relayId: instance.relayId,
-            }}
-            meta={`${instance.implementation} ${instance.version} · ${instance.shortId}`}
-            name={instance.name}
-          />
-        ) : (
-          <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
-            Server {id.slice(0, 8)}
-          </span>
-        )
+      {members.map((member) => {
+        const key = databaseMemberKey(member)
+        const candidate = candidates.get(key) ?? null
         return (
           <li
-            key={id}
+            key={key}
             className="flex min-h-16 items-center gap-3 border-b px-4 py-2.5 last:border-b-0"
           >
-            {routeId ? (
-              <Link
-                to="/server/$serverId/console"
-                params={{ serverId: routeId }}
-                preload="intent"
-                className="flex min-w-0 flex-1 items-center outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-              >
-                {name}
-              </Link>
-            ) : (
-              name
-            )}
-            {canDisconnect ? (
+            <MemberName candidate={candidate} member={member} />
+            {canWrite && candidate?.canChange ? (
               <Button
                 type="button"
                 size="sm"
                 variant="ghost"
                 className="shrink-0 text-muted-foreground hover:text-destructive"
-                disabled={pendingInstanceId !== null}
-                onClick={() => toggle({ connected: false, instanceId: id })}
+                disabled={pendingKey !== null}
+                onClick={() =>
+                  toggle({
+                    connected: false,
+                    member: { id: member.id, kind: member.kind },
+                  })
+                }
               >
-                {pending ? (
+                {pendingKey === key ? (
                   <LoaderCircle className="animate-spin" />
                 ) : (
                   <Unplug />
@@ -179,4 +150,73 @@ function ConnectedServers({
       })}
     </ul>
   )
+}
+
+function MemberName({
+  candidate,
+  member,
+}: {
+  candidate: DatabaseMemberCandidate | null
+  member: RelayDatabaseMember
+}) {
+  const reach = [
+    member.hostnames.length > 0
+      ? `Reachable as ${member.hostnames.join(", ")}`
+      : null,
+    member.saved && !member.attached ? joinsWhen[member.kind] : null,
+  ]
+    .filter(Boolean)
+    .join(" · ")
+  const name = candidate ? (
+    <InstanceCard
+      className="min-w-0 flex-1"
+      instance={candidate.item.identity}
+      meta={reach ? `${candidate.item.meta} · ${reach}` : candidate.item.meta}
+      name={candidate.item.name}
+    />
+  ) : (
+    <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+      {kindNames[member.kind]} {member.id.slice(0, 8)}
+      {reach ? ` · ${reach}` : ""}
+    </span>
+  )
+  const routeId = candidate?.routeId
+  if (!routeId) return name
+  const className =
+    "flex min-w-0 flex-1 items-center outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+  switch (member.kind) {
+    case "instance":
+      return (
+        <Link
+          to="/server/$serverId/console"
+          params={{ serverId: routeId }}
+          preload="intent"
+          className={className}
+        >
+          {name}
+        </Link>
+      )
+    case "app":
+      return (
+        <Link
+          to="/app/$appId/network"
+          params={{ appId: routeId }}
+          preload="intent"
+          className={className}
+        >
+          {name}
+        </Link>
+      )
+    case "database":
+      return (
+        <Link
+          to="/db/$databaseId/network"
+          params={{ databaseId: routeId }}
+          preload="intent"
+          className={className}
+        >
+          {name}
+        </Link>
+      )
+  }
 }

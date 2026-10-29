@@ -112,7 +112,6 @@ describe("provisioning worker", () => {
       input,
       instanceId,
       placeholder: relayManagedDatabaseSchema.parse({
-        connectedInstanceIds: [],
         containerId: null,
         createdAt: new Date().toISOString(),
         databaseName: input.databaseName,
@@ -122,6 +121,7 @@ describe("provisioning worker", () => {
         id: instanceId,
         image: "postgres:17",
         internalPort: 5432,
+        members: [],
         limits: { cpuMillis: null, diskBytes: null, memoryBytes: null },
         name: input.name,
         observedState: "provisioning",

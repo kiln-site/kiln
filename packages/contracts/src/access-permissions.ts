@@ -485,12 +485,13 @@ const permissionCopy: Record<
   },
   "database.network.read": {
     label: "View database network",
-    description: "See which servers can connect to the database.",
+    description:
+      "See which game servers, Apps, and databases are connected to the database.",
   },
   "database.network.write": {
     label: "Manage database network",
     description:
-      "Connect or disconnect servers. Also requires network access for each server.",
+      "Connect or disconnect game servers, Apps, and databases. Also requires each one's own network access: managing a game server's network, managing an App, or managing the other database's network.",
   },
   "database.dump.export": {
     label: "Export database data",

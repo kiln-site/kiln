@@ -161,9 +161,41 @@ export const databaseIdSchema = z.string().regex(/^[a-f0-9]{40}$/u)
 
 export const relayDatabaseNameSchema = z.string().trim().min(1).max(120)
 
+// What joins a database's network, by its kind's code name: a game server,
+// an App (every service of it), or another database.
+export const databaseConnectionMemberKindSchema = z.enum([
+  "instance",
+  "app",
+  "database",
+])
+
+export const databaseConnectionMemberSchema = z
+  .object({
+    // Game servers, Apps, and databases all have 40-character IDs.
+    id: z.string().regex(/^[a-f0-9]{40}$/u),
+    kind: databaseConnectionMemberKindSchema,
+  })
+  .strict()
+
+// One member of a database's network: what the Relay keeps connected to it,
+// what its network holds now, or both.
+export const relayDatabaseMemberSchema = z
+  .object({
+    // Whether its containers are on the database's network now.
+    attached: z.boolean(),
+    // The names its containers answer to there: `server-<id>` for a game
+    // server, `database-<id>` for a database, and each App service's alias.
+    hostnames: z.array(z.string().min(1).max(253)),
+    id: z.string().regex(/^[a-f0-9]{40}$/u),
+    kind: databaseConnectionMemberKindSchema,
+    // Whether the Relay keeps the connection, joining its containers
+    // whenever they change.
+    saved: z.boolean(),
+  })
+  .strict()
+
 export const relayManagedDatabaseSchema = z
   .object({
-    connectedInstanceIds: z.array(z.string().regex(/^[a-f0-9]{40}$/u)),
     containerId: z.string().nullable(),
     createdAt: z.string().datetime(),
     databaseName: z.string().regex(/^[a-z][a-z0-9_]{0,47}$/u),
@@ -172,6 +204,7 @@ export const relayManagedDatabaseSchema = z
     id: databaseIdSchema,
     image: z.string().min(1).max(512),
     internalPort: z.number().int().min(1).max(65_535),
+    members: z.array(relayDatabaseMemberSchema),
     // Relays before resource-limits-v1 report neither.
     limits: observedResourceLimitsSchema.default(NO_RESOURCE_LIMITS),
     /** The data volume's size when the Relay last measured it. */
@@ -238,22 +271,6 @@ export const relayRotateDatabaseCredentialsSchema = z
     databaseId: databaseIdSchema,
     nextPassword: z.string().min(24).max(256),
     username: z.string().regex(/^[a-z][a-z0-9_]{0,31}$/u),
-  })
-  .strict()
-
-// What joins a database's network, by its kind's code name: a game server,
-// an App (every service of it), or another database.
-export const databaseConnectionMemberKindSchema = z.enum([
-  "instance",
-  "app",
-  "database",
-])
-
-export const databaseConnectionMemberSchema = z
-  .object({
-    // Game servers, Apps, and databases all have 40-character IDs.
-    id: z.string().regex(/^[a-f0-9]{40}$/u),
-    kind: databaseConnectionMemberKindSchema,
   })
   .strict()
 
@@ -2902,6 +2919,7 @@ export type DatabaseConnectionMember = z.infer<
 export type DatabaseConnectionMemberKind = z.infer<
   typeof databaseConnectionMemberKindSchema
 >
+export type RelayDatabaseMember = z.infer<typeof relayDatabaseMemberSchema>
 export type RelayDatabaseNetwork = z.infer<typeof relayDatabaseNetworkSchema>
 export type RelayDatabaseNetworkImport = z.infer<
   typeof relayDatabaseNetworkImportSchema

@@ -180,10 +180,10 @@ function useDatabaseWorkspaceQuery(
         // Without a Relay record the workspace still opens, so the database
         // can be inspected and deleted.
         ...(detail ?? {
-          connectedInstanceIds: [],
           containerId: null,
           diskUsedBytes: null,
           limits: NO_RESOURCE_LIMITS,
+          members: [],
           observedState: "failed" as const,
           status: "Unavailable",
         }),

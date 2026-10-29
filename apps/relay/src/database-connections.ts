@@ -105,6 +105,25 @@ const memberKey = (member: DatabaseConnectionMember) =>
   `${member.kind}:${member.id}`
 
 /**
+ * The name a game server or database answers to on the networks of the
+ * databases it's connected to, by its full ID so no two share one: the
+ * name a database has on its own network, and its game server
+ * counterpart. An App's services keep their names on the App's network.
+ */
+export function databaseMemberAlias(
+  member: DatabaseConnectionMember
+): string | null {
+  switch (member.kind) {
+    case "instance":
+      return `server-${member.id}`
+    case "database":
+      return `database-${member.id}`
+    case "app":
+      return null
+  }
+}
+
+/**
  * The Relay's database connections, for every member kind: game servers,
  * Apps, and databases. The Relay is their one authority. A connection is
  * kept whether or not its network or member's containers exist now, and
@@ -270,6 +289,27 @@ export class DatabaseConnections {
     return Effect.runPromise(this.state.listMemberDatabaseConnections(member))
   }
 
+  /** The members connected to a database on this Relay. */
+  members(databaseId: string): Array<DatabaseConnectionMember> {
+    const members: Array<DatabaseConnectionMember> = []
+    for (const [key, connections] of this.#saved) {
+      if (
+        !connections.some(
+          (connection) =>
+            connection.databaseId === databaseId &&
+            connection.relayId === this.config.nodeId
+        )
+      )
+        continue
+      const separator = key.indexOf(":")
+      members.push({
+        id: key.slice(separator + 1),
+        kind: key.slice(0, separator) as DatabaseConnectionMemberKind,
+      })
+    }
+    return members
+  }
+
   async set(
     member: DatabaseConnectionMember,
     databaseId: string,
@@ -385,14 +425,15 @@ export class DatabaseConnections {
 
   /**
    * Joins each of the member's containers to the networks of the databases
-   * it's connected to on this Relay, and takes it off any other database's.
-   * A database member never leaves its own network.
+   * it's connected to on this Relay, under its alias, and takes it off any
+   * other database's. A database member never leaves its own network.
    */
   async reconcile(
     member: DatabaseConnectionMember,
     targets: ReadonlyArray<DatabaseConnectionTarget>
   ): Promise<Array<DatabaseConnectionIssue>> {
     const issues: Array<DatabaseConnectionIssue> = []
+    const alias = databaseMemberAlias(member)
     // Database attachments are optional to the container lifecycle. Report
     // discovery/inspection failures too, without discarding the saved intent.
     await recoverPromise(
@@ -414,6 +455,7 @@ export class DatabaseConnections {
         }
         if (networks.size === 0) return
         for (const target of targets) {
+          const name = target.alias ?? alias
           const container = await Effect.runPromise(
             this.#docker.inspectContainer(target.container)
           )
@@ -427,7 +469,7 @@ export class DatabaseConnections {
                 Effect.runPromise(
                   connect
                     ? this.#docker.connectNetwork(network, target.container, {
-                        aliases: target.alias ? [target.alias] : [],
+                        aliases: name ? [name] : [],
                       })
                     : this.#docker.disconnectNetwork(network, target.container)
                 ),

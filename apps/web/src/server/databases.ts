@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto"
 
 import { createServerFn } from "@tanstack/react-start"
 import {
+  databaseConnectionMemberSchema,
   databaseEngineSupportsBrowsing,
   databaseEngineSupportsLogicalBackups,
   databaseEngineSchema,
@@ -90,7 +91,7 @@ const databaseRenameInputSchema = databaseInputSchema.extend({
 })
 const databaseNetworkInputSchema = databaseInputSchema.extend({
   connected: z.boolean(),
-  instanceId: z.string().regex(/^[a-f0-9]{40}$/u),
+  member: databaseConnectionMemberSchema,
 })
 const databaseRowsRequestSchema = databaseInputSchema.extend({
   request: databaseRowsInputSchema,
@@ -494,34 +495,15 @@ export const rotateManagedDatabasePassword = createServerFn({ method: "POST" })
     return { rotated: true }
   })
 
+// Connects a game server, an App, or another database to the database, or
+// disconnects it. Both ends need their network permissions.
 export const updateManagedDatabaseNetwork = createServerFn({ method: "POST" })
   .validator(databaseNetworkInputSchema)
   .handler(async ({ data }) => {
-    const { relay, user } = await authorizedDatabase(
-      data,
-      "database.network.write"
-    )
-    await requireRelayPermission({
-      instanceId: data.instanceId,
-      permission: "instance.network.write",
-      relayId: data.relayId,
-      user,
-    })
-    const database = relayManagedDatabaseSchema.parse(
-      await databaseRpc(
-        relay,
-        "database.network.write",
-        {
-          connected: data.connected,
-          databaseId: data.databaseId,
-          member: { id: data.instanceId, kind: "instance" },
-        },
-        30_000,
-        user.id
-      )
-    )
-    publishDatabaseChange(relay.id, false)
-    return database
+    const user = await requireEligibleResourceUser()
+    const { writeDatabaseConnection } =
+      await import("@/server/database-connections.server")
+    return writeDatabaseConnection(user, data)
   })
 
 // Dumps travel as files in the database's dump folder on its Relay, which

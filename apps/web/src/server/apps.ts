@@ -17,7 +17,6 @@ import {
   relayAppWebRoutesWriteSchema,
   relayAppWebRouteStateSchema,
   relayIdSchema,
-  relayManagedDatabaseSchema,
   webRouteHostnames,
 } from "@workspace/contracts"
 import type { RelayApp } from "@workspace/contracts"
@@ -375,35 +374,14 @@ export const updateAppNetwork = createServerFn({ method: "POST" })
   .validator(appNetworkInputSchema)
   .handler(async ({ data }) => {
     const { relay, user } = await authorizedApp(data, "app.manage")
-    await requireRelayPermission({
+    const { writeDatabaseConnection } =
+      await import("@/server/database-connections.server")
+    return writeDatabaseConnection(user, {
+      connected: data.connected,
       databaseId: data.databaseId,
-      permission: "database.network.write",
+      member: { id: data.appId, kind: "app" },
       relayId: relay.id,
-      user,
     })
-    const { ensureAppDatabaseConnectionsImported } =
-      await import("@/lib/app-database-connections.server")
-    await ensureAppDatabaseConnectionsImported(relay)
-    const database = relayManagedDatabaseSchema.parse(
-      await databaseRpc(
-        relay,
-        "database.network.write",
-        {
-          connected: data.connected,
-          databaseId: data.databaseId,
-          member: { id: data.appId, kind: "app" },
-        },
-        30_000,
-        user.id
-      )
-    )
-    publishRealtimeChange({
-      audience: { kind: "relays", relayIds: [relay.id] },
-      scope: { relayId: relay.id },
-      topics: ["apps", "databases"],
-      type: "hearth.invalidate",
-    })
-    return database
   })
 
 export const getAppWebRoutes = createServerFn({ method: "GET" })

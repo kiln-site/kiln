@@ -30,7 +30,6 @@ const databaseId = "d".repeat(40)
 const GIBIBYTE = 1024 ** 3
 
 const relayDatabase = (usedBytes: number) => ({
-  connectedInstanceIds: [],
   containerId: "container",
   createdAt: new Date(0).toISOString(),
   databaseName: "kiln_main",
@@ -41,6 +40,7 @@ const relayDatabase = (usedBytes: number) => ({
   image: "postgres:17",
   internalPort: 5432,
   limits: { cpuMillis: null, diskBytes: GIBIBYTE, memoryBytes: null },
+  members: [],
   name: "Main",
   observedState: "running",
   shortId: databaseId.slice(0, 8),

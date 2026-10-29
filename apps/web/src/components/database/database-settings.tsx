@@ -471,8 +471,8 @@ export function SqlImportDropZone({
   )
 }
 
-// How game servers reach the database: only from inside the Relay, once
-// they're connected on its network.
+// How game servers, Apps, and other databases reach the database: only from
+// inside the Relay, once they're connected on its network.
 export function DatabaseConnectionSettings({
   canViewNetwork,
   database,
@@ -482,7 +482,7 @@ export function DatabaseConnectionSettings({
   database: ManagedDatabase
   routeId: string
 }) {
-  const connected = database.connectedInstanceIds.length
+  const connected = database.members.length
   return (
     <InfoSection
       icon={<Cable />}
@@ -504,9 +504,9 @@ export function DatabaseConnectionSettings({
           value={`${database.hostname}:${database.internalPort}`}
         />
       </InfoFact>
-      <InfoFact label="Game servers">
+      <InfoFact label="Connections">
         <span className={connected === 0 ? "text-muted-foreground" : undefined}>
-          {connected === 0 ? "None connected" : `${connected} connected`}
+          {connected === 0 ? "None" : connected}
         </span>
       </InfoFact>
     </InfoSection>

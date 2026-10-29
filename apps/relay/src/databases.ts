@@ -16,6 +16,8 @@ import type {
   RelayDatabaseWipe,
   RelayDeleteDatabase,
   RelayManagedDatabase,
+  RelayDatabaseMember,
+  DatabaseConnectionMemberKind,
   RelayRotateDatabaseCredentials,
   InstanceObservedState,
   ProvisioningWorkPhase,
@@ -38,7 +40,10 @@ import { ensuringPromise } from "./effect/promise.js"
 import { traceRelayEffect, traceRelayPromise } from "./effect/runtime.js"
 import { collectProcessErrors } from "./database-backups.js"
 import type { FileRoot } from "./files.js"
-import type { DatabaseConnections } from "./database-connections.js"
+import {
+  databaseMemberAlias,
+  type DatabaseConnections,
+} from "./database-connections.js"
 import type { RelayConfig } from "./config.js"
 import type { DockerDriver } from "./docker.js"
 import {
@@ -55,7 +60,11 @@ import {
   streamIntoProcess,
 } from "./docker-engine.js"
 import { provisioningStatus } from "./provisioning.js"
-import { relayOwnerLabel, relayOwnsLabels } from "./relay-resources.js"
+import {
+  relayOwnerLabel,
+  relayOwnsLabels,
+  relayResourceNames,
+} from "./relay-resources.js"
 import {
   assertResourceLimitsFit,
   containerLimitSpec,
@@ -260,7 +269,6 @@ export class DatabaseDriver {
   placeholder(input: RelayCreateDatabase): RelayManagedDatabase {
     const spec = engineSpecs[input.engine]
     return relayManagedDatabaseSchema.parse({
-      connectedInstanceIds: [],
       containerId: null,
       createdAt: new Date().toISOString(),
       databaseName: input.databaseName,
@@ -270,6 +278,7 @@ export class DatabaseDriver {
       id: input.id,
       image: spec.image,
       internalPort: spec.internalPort,
+      members: [],
       limits: NO_RESOURCE_LIMITS,
       name: input.name,
       observedState: "provisioning",
@@ -1172,13 +1181,11 @@ export class DatabaseDriver {
       requiredLabel(labels, "kiln.database.engine")
     )
     const network = requiredLabel(labels, "kiln.database.network")
-    const attached = await this.#attachedContainers(network, signal)
-    const connectedInstanceIds = attached.flatMap((candidate) => {
-      const instanceId = candidate.Labels?.[this.#config.serverIdLabel]
-      return instanceId?.match(/^[a-f0-9]{40}$/iu)
-        ? [instanceId.toLowerCase()]
-        : []
-    })
+    const members = this.#members(
+      id,
+      container.Id,
+      await this.#attachedContainers(network, signal)
+    )
     const observedState = databaseObservedState(container)
     const status = container.State.Running
       ? container.State.Health?.Status === "starting"
@@ -1191,7 +1198,6 @@ export class DatabaseDriver {
           ? "Stopped"
           : `Exited with code ${container.State.ExitCode}`)
     return relayManagedDatabaseSchema.parse({
-      connectedInstanceIds,
       containerId: container.Id,
       createdAt: requiredLabel(labels, "kiln.database.created-at"),
       databaseName: requiredLabel(labels, "kiln.database.database-name"),
@@ -1200,6 +1206,7 @@ export class DatabaseDriver {
       id,
       image: labels["kiln.database.image"] ?? container.Config.Image,
       internalPort: engineSpecs[engine].internalPort,
+      members,
       limits: {
         ...containerResourceLimits(container),
         diskBytes: diskLimits.get(id) ?? null,
@@ -1214,6 +1221,62 @@ export class DatabaseDriver {
       status,
       supportsImportExport: databaseEngineSupportsLogicalBackups(engine),
     })
+  }
+
+  // What the Relay keeps connected to the database, and what its network
+  // holds now: game servers, App services, and other databases.
+  #members(
+    databaseId: string,
+    ownContainer: string,
+    attached: ReadonlyArray<DockerContainerSummary>
+  ): Array<RelayDatabaseMember> {
+    const members = new Map<string, RelayDatabaseMember>()
+    const member = (kind: DatabaseConnectionMemberKind, id: string) => {
+      const key = `${kind}:${id}`
+      let found = members.get(key)
+      if (!found) {
+        const alias = databaseMemberAlias({ id, kind })
+        found = {
+          attached: false,
+          hostnames: alias ? [alias] : [],
+          id,
+          kind,
+          saved: false,
+        }
+        members.set(key, found)
+      }
+      return found
+    }
+    for (const saved of this.connections.members(databaseId)) {
+      member(saved.kind, saved.id).saved = true
+    }
+    const resources = relayResourceNames(this.#config)
+    for (const candidate of attached) {
+      if (candidate.Id === ownContainer) continue
+      const labels = candidate.Labels ?? {}
+      const instanceId = labels[this.#config.serverIdLabel]?.toLowerCase()
+      const appId = labels["kiln.app.id"]
+      const otherDatabase = labels["kiln.database.id"]
+      if (instanceId?.match(/^[a-f0-9]{40}$/u)) {
+        member("instance", instanceId).attached = true
+      } else if (
+        labels[DATABASE_KIND_LABEL] === "app" &&
+        appId?.match(/^[a-f0-9]{40}$/u)
+      ) {
+        const app = member("app", appId)
+        app.attached = true
+        const service = labels["kiln.app.service"]
+        const alias = service ? resources.appAlias(appId, service) : null
+        if (alias && !app.hostnames.includes(alias)) app.hostnames.push(alias)
+      } else if (
+        labels[DATABASE_KIND_LABEL] === DATABASE_KIND &&
+        otherDatabase?.match(/^[a-f0-9]{40}$/u) &&
+        otherDatabase !== databaseId
+      ) {
+        member("database", otherDatabase).attached = true
+      }
+    }
+    return [...members.values()]
   }
 
   // Listed containers carry their labels, so none is inspected.

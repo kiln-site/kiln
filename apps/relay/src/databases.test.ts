@@ -74,7 +74,7 @@ describe("managed database recovery metadata", () => {
         id,
         view: "detail",
         observedState: "running",
-        database: expect.objectContaining({ id, connectedInstanceIds: [] }),
+        database: expect.objectContaining({ id, members: [] }),
       },
     ])
   })
@@ -905,8 +905,18 @@ describe("explicit database connections", () => {
       member: { id: serverId, kind: "instance" },
     })
 
-    expect(updated.connectedInstanceIds).toEqual([serverId])
-    expect(server.networks.has(networkOf(id))).toBe(true)
+    expect(updated.members).toEqual([
+      {
+        attached: true,
+        hostnames: [`server-${serverId}`],
+        id: serverId,
+        kind: "instance",
+        saved: true,
+      },
+    ])
+    expect(server.networks.get(networkOf(id))?.aliases).toContain(
+      `server-${serverId}`
+    )
     expect(server.state).toMatchObject({ running: true, startedAt })
   })
 
@@ -1074,6 +1084,106 @@ describe("connections of every member kind", () => {
       networkOf(member!),
     ])
     expect((await harness.apps.get(appId)).savedDatabaseIds).toEqual([other])
+  })
+
+  it("lists a database's members of every kind, as connected and as they are, under their names", async () => {
+    const harness = await relayHarness()
+    const [target, member] = ["d", "e"].map((c) => c.repeat(40))
+    for (const id of [target!, member!]) await createDatabase(harness, id)
+    await harness.seedServer({ id: serverId, running: true })
+    const app = await runningApp(harness)
+    const undeployed = "f".repeat(40)
+    await harness.apps.create({ id: undeployed, name: "Docs" })
+    for (const to of [
+      { id: serverId, kind: "instance" },
+      { id: appId, kind: "app" },
+      { id: undeployed, kind: "app" },
+      { id: member!, kind: "database" },
+    ] as const) {
+      await harness.databases.updateNetwork({
+        connected: true,
+        databaseId: target!,
+        member: to,
+      })
+    }
+
+    const listed = (await harness.databases.list()).find(
+      (database) => database.id === target
+    )
+    expect(
+      [...(listed?.members ?? [])].sort((left, right) =>
+        `${left.kind}${left.id}`.localeCompare(`${right.kind}${right.id}`)
+      )
+    ).toEqual([
+      {
+        attached: true,
+        hostnames: [`web.app-${appId.slice(0, 8)}`],
+        id: appId,
+        kind: "app",
+        saved: true,
+      },
+      // An App joins once it has containers.
+      {
+        attached: false,
+        hostnames: [],
+        id: undeployed,
+        kind: "app",
+        saved: true,
+      },
+      {
+        attached: true,
+        hostnames: [`database-${member}`],
+        id: member,
+        kind: "database",
+        saved: true,
+      },
+      {
+        attached: true,
+        hostnames: [`server-${serverId}`],
+        id: serverId,
+        kind: "instance",
+        saved: true,
+      },
+    ])
+    expect(app.networks.get(networkOf(target!))?.aliases).toContain(
+      `web.app-${appId.slice(0, 8)}`
+    )
+    // A connection goes one way: the database doesn't join its member's
+    // network, nor does the member list it.
+    expect(databaseContainer(target!).networks.has(networkOf(member!))).toBe(
+      false
+    )
+    expect(
+      (await harness.databases.list()).find(
+        (database) => database.id === member
+      )?.members
+    ).toEqual([])
+  })
+
+  it("keeps a member database's name on the network when its container is replaced", async () => {
+    const harness = await relayHarness()
+    const [target, member] = ["d", "e"].map((c) => c.repeat(40))
+    for (const id of [target!, member!]) await createDatabase(harness, id)
+    await harness.databases.updateNetwork({
+      connected: true,
+      databaseId: target!,
+      member: { id: member!, kind: "database" },
+    })
+    const original = databaseContainer(member!).id
+    await harness.databases.setLimits({
+      databaseId: member!,
+      limits: { memoryBytes: 512 * 1024 ** 2 },
+    })
+    await harness.databases.setLimits({
+      databaseId: member!,
+      limits: { memoryBytes: null },
+    })
+
+    const replacement = databaseContainer(member!)
+    expect(replacement.id).not.toBe(original)
+    expect(replacement.networks.get(networkOf(target!))?.aliases).toContain(
+      `database-${member}`
+    )
   })
 
   it("joins a member database's replacement to its connections when a restart came first", async () => {
