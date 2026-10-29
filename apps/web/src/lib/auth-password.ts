@@ -47,21 +47,6 @@ export const requireAccountPasswordEffect = Effect.fn("auth.password.confirm")(
     }
 
     const database = yield* Database
-    const now = yield* Clock.currentTimeMillis
-    const [recent] = yield* database.queryRows<
-      RowDataPacket & { total: number | string }
-    >(
-      "auth.passwordFailures",
-      `SELECT COUNT(*) AS total FROM ${databaseTable("auth_audit")}
-        WHERE user_id = ? AND event = 'account.password.failed'
-          AND created_at >= ?`,
-      [user.id, now - FAILED_ATTEMPTS_WINDOW_MS]
-    )
-    if (Number(recent?.total ?? 0) >= FAILED_ATTEMPTS) {
-      return yield* PasswordAttemptsError.make({
-        message: "Too many wrong passwords. Wait 15 minutes, then try again.",
-      })
-    }
     const accounts = yield* database.queryRows<CredentialAccountRow>(
       "auth.passwordAccount",
       `SELECT password
@@ -80,6 +65,45 @@ export const requireAccountPasswordEffect = Effect.fn("auth.password.confirm")(
       })
     }
 
+    // An attempt is reserved before its password is checked, holding the
+    // account's row so reservations are counted one at a time: wrong
+    // passwords and attempts still being checked both count, so however
+    // many arrive at once, no more than the limit are ever checked. The
+    // check itself runs after, without the lock.
+    const now = yield* Clock.currentTimeMillis
+    const attempt = yield* database.transaction(
+      "auth.passwordAttempt",
+      (transaction) =>
+        Effect.gen(function* () {
+          yield* transaction.queryRows(
+            `SELECT id FROM ${databaseTable("user")} WHERE id = ? FOR UPDATE`,
+            [user.id]
+          )
+          const [recent] = yield* transaction.queryRows<
+            RowDataPacket & { total: number | string }
+          >(
+            `SELECT COUNT(*) AS total FROM ${databaseTable("auth_audit")}
+              WHERE user_id = ?
+                AND event IN ('account.password.failed',
+                              'account.password.checking')
+                AND created_at >= ?`,
+            [user.id, now - FAILED_ATTEMPTS_WINDOW_MS]
+          )
+          if (Number(recent?.total ?? 0) >= FAILED_ATTEMPTS) {
+            return yield* PasswordAttemptsError.make({
+              message:
+                "Too many wrong passwords. Wait 15 minutes, then try again.",
+            })
+          }
+          const reserved = yield* transaction.execute(
+            `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, created_at)
+             VALUES (?, 'account.password.checking', ?)`,
+            [user.id, now]
+          )
+          return reserved.insertId
+        })
+    )
+
     const matches = yield* Effect.tryPromise({
       try: async () => {
         const { auth } = await import("@/lib/auth")
@@ -92,14 +116,23 @@ export const requireAccountPasswordEffect = Effect.fn("auth.password.confirm")(
           cause,
         }),
     })
-    if (!matches) {
+    // A right password frees its attempt; a wrong one keeps it, as a
+    // failure. One whose check never finished keeps counting as checking.
+    if (matches) {
       yield* database.execute(
-        "auth.passwordFailed",
-        `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, created_at)
-         VALUES (?, 'account.password.failed', ?)`,
-        [user.id, now]
+        "auth.passwordAttempt.passed",
+        `DELETE FROM ${databaseTable("auth_audit")} WHERE id = ?`,
+        [attempt]
       )
-      return yield* passwordDidNotMatch()
+      return
     }
+    yield* database.execute(
+      "auth.passwordAttempt.failed",
+      `UPDATE ${databaseTable("auth_audit")}
+          SET event = 'account.password.failed'
+        WHERE id = ?`,
+      [attempt]
+    )
+    return yield* passwordDidNotMatch()
   }
 )

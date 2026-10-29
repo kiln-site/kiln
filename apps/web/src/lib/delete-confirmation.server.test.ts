@@ -104,6 +104,35 @@ describeMysql("deletion confirmation", () => {
     )
 
     it.effect(
+      "checks no more than five passwords when ten wrong ones arrive at once",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+
+          const refusals = yield* Effect.all(
+            Array.from({ length: 10 }, (_, attempt) =>
+              Effect.flip(confirm("Survival", `wrong ${attempt}`))
+            ),
+            { concurrency: "unbounded" }
+          )
+
+          assert.isAtMost(verified.count, 5)
+          assert.isTrue(
+            refusals.every(
+              (refused) =>
+                refused._tag === "AuthenticationError" ||
+                refused._tag === "PasswordAttemptsError"
+            )
+          )
+          // Spent: the right one waits too.
+          const after = yield* Effect.flip(
+            confirm("Survival", "correct horse battery")
+          )
+          assert.strictEqual(after._tag, "PasswordAttemptsError")
+        })
+    )
+
+    it.effect(
       "accepts the name, typed with stray spaces, and the password",
       () =>
         Effect.gen(function* () {
