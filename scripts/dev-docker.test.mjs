@@ -156,8 +156,10 @@ test("cleanup after a branch switch removes the original stack and only its Rela
 
 test("destroy removes the volumes and networks the Relay and its Apps' Compose projects made, and nobody else's", async () => {
   await command("up")
+  const appId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  const otherAppId = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
   const ours = { "kiln.relay.owner": "kiln-repo-cleanup" }
-  const app = "kiln-repo-cleanup-kiln-app-1234"
+  const app = `kiln-repo-cleanup-kiln-app-${appId}`
   resource("our-app-web", "container", {
     ...ours,
     "com.docker.compose.project": app,
@@ -170,21 +172,21 @@ test("destroy removes the volumes and networks the Relay and its Apps' Compose p
   resource("kiln-other-kiln-db-1234-data", "volume", {
     "kiln.relay.owner": "kiln-other",
   })
-  resource("kiln-other-kiln-app-1234_default", "network", {
-    "com.docker.compose.project": "kiln-other-kiln-app-1234",
+  resource(`kiln-other-kiln-app-${appId}_default`, "network", {
+    "com.docker.compose.project": `kiln-other-kiln-app-${appId}`,
   })
   resource("kiln-kiln-db-1234-data", "volume", {})
-  resource("kiln-repo-cleanup-kiln-app-5678_data", "volume", {
-    "com.docker.compose.project": "kiln-repo-cleanup-kiln-app-5678-other",
+  resource(`kiln-repo-cleanup-kiln-app-${otherAppId}_data`, "volume", {
+    "com.docker.compose.project": `kiln-repo-cleanup-kiln-app-${otherAppId}-other`,
   })
 
   await command("destroy")
 
   assert.deepEqual([...resources.keys()].sort(), [
     "kiln-kiln-db-1234-data",
-    "kiln-other-kiln-app-1234_default",
+    `kiln-other-kiln-app-${appId}_default`,
     "kiln-other-kiln-db-1234-data",
-    "kiln-repo-cleanup-kiln-app-5678_data",
+    `kiln-repo-cleanup-kiln-app-${otherAppId}_data`,
   ])
 })
 
