@@ -98,7 +98,6 @@ import {
   isActionAllowed,
 } from "./permissions.js"
 import { relayBuildLabel } from "./build-info.js"
-import { controlRequestContinues } from "./operation-plans.js"
 import { isSourceAllowed } from "./source-policy.js"
 import { createRelaySnapshotDelta } from "./snapshot-delta.js"
 import { requestUrl } from "./request-url.js"
@@ -175,6 +174,11 @@ export interface ControlSocketOptions {
   readonly requestLocks: (
     request: RelayControlRequest
   ) => ReadonlyArray<LaneLock> | Promise<ReadonlyArray<LaneLock>> | null
+  /**
+   * Whether a request waits only for what holds its locks, not for what
+   * waits in line, as work something running waits on does.
+   */
+  readonly requestContinues?: (request: RelayControlRequest) => boolean
   readonly subscribeSnapshots: (
     listener: (snapshot: unknown) => void
   ) => () => void
@@ -632,7 +636,7 @@ function authenticateSocket(
       locks === null
         ? null
         : options.lanes.admit({
-            continuation: controlRequestContinues(message.operation),
+            continuation: options.requestContinues?.(message) ?? false,
             label: message.operation,
             locks,
           })

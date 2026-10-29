@@ -226,16 +226,22 @@ function requestedTailscaleBindings(
 
 /**
  * Whether a request waits only for what holds its locks, not for what waits
- * in line. Hearth rewrites a network's DNS (`relay.tailscale.stack.dns`)
- * while a game server's, App's, or database's deletion holds it and waits
- * for that DNS; a change to the network queued behind the deletion, which
- * waits for it in turn, would otherwise hold the DNS back, and the deletion
- * with it, until both timed out.
+ * in line. A game server's or App's deletion holds it while it waits for
+ * Hearth to rewrite its Tailscale networks' DNS
+ * (`hearth.tailscale.instance.detach`), and Hearth does that with
+ * `relay.tailscale.stack.dns`. A change to the network queued behind the
+ * deletion waits for it in turn, so while the deletion waits on that
+ * network's DNS, its DNS goes ahead of the line; at any other time it takes
+ * its turn like any change.
  */
 export function controlRequestContinues(
-  operation: RelayControlOperation
+  operation: RelayControlOperation,
+  payload: Readonly<Record<string, unknown>>,
+  awaitedDns: (stackId: string) => boolean
 ): boolean {
-  return operation === "relay.tailscale.stack.dns"
+  if (operation !== "relay.tailscale.stack.dns") return false
+  const stackId = stringField(payload, "id")
+  return stackId !== null && awaitedDns(stackId)
 }
 
 /**

@@ -303,6 +303,28 @@ describe("operation lanes", () => {
       })
   )
 
+  it.effect("counts waiting continuations toward its waiting limit", () =>
+    Effect.gen(function* () {
+      const lanes = new OperationLanes({ maxWaiting: 1 })
+      const log: Array<string> = []
+      const holder = yield* start(lanes, log, "holder", [exclusive("a")])
+      yield* start(lanes, log, "dns", [exclusive("a")], { continuation: true })
+
+      const refused = yield* Effect.flip(
+        lanes.run(
+          { continuation: true, label: "more-dns", locks: [exclusive("a")] },
+          Effect.void
+        )
+      )
+      assert.strictEqual((refused as LaneRejectedError).reason, "busy")
+      const alsoRefused = yield* Effect.flip(
+        lanes.run({ label: "change", locks: [exclusive("a")] }, Effect.void)
+      )
+      assert.strictEqual((alsoRefused as LaneRejectedError).reason, "busy")
+      yield* holder.finish
+    })
+  )
+
   it.effect("counts an exclusive operation only once it starts", () =>
     Effect.gen(function* () {
       const lanes = new OperationLanes()

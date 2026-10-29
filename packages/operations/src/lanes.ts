@@ -246,7 +246,7 @@ export class OperationLanes {
     const queue = nested ? this.#nested : this.#waiting
     if (!inside && this.#paused) {
       this.#reject(waiter, this.#pausedError(waiter))
-    } else if (!inside && this.#waiting.length >= this.#maxWaiting) {
+    } else if (!inside && this.#waitingOnTheirOwn() >= this.#maxWaiting) {
       this.#reject(
         waiter,
         new LaneRejectedError({ message: this.#busyMessage, reason: "busy" })
@@ -282,6 +282,15 @@ export class OperationLanes {
       cancel: () => this.#cancel(waiter),
       run: (effect) => this.#run(waiter, effect),
     }
+  }
+
+  // What waits that arrived on its own, continuations included; nested work
+  // waits for the operation that runs it, which already counted.
+  #waitingOnTheirOwn(): number {
+    return (
+      this.#waiting.length +
+      this.#nested.filter((waiter) => waiter.continuation).length
+    )
   }
 
   #run<A, E>(

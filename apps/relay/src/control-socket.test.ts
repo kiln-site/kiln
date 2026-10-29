@@ -63,6 +63,7 @@ import type { RelayConfig } from "./config.js"
 import { sendRawRequest } from "./test/raw-http.js"
 import { OperationLanes } from "./operation-lanes.js"
 import {
+  controlRequestContinues,
   controlRequestLocks,
   type InstanceResolver,
   type TailscaleStackReader,
@@ -610,49 +611,84 @@ describe("Relay control socket", () => {
     releases.get("b:restart")!()
   })
 
-  it("rewrites a network's DNS for a deletion that waits on it, ahead of a change to the network queued behind the deletion", async () => {
+  describe("a network's DNS", () => {
     const serverId = "a".repeat(40)
     const stackId = "c".repeat(40)
-    const releases = new Map<string, () => void>()
-    const started: Array<string> = []
-    const relay = await startRelay({
-      execute: async (request) => {
-        started.push(request.operation)
-        if (request.operation === "instance.delete") {
-          await new Promise<void>((resolve) =>
-            releases.set(request.operation, resolve)
-          )
-        }
-        return { ok: true }
-      },
-      readTailscaleStack: async () => [],
-    })
-    const { inbox, socket } = await relay.connect(await relay.pair())
 
-    // The deletion runs, holding the server, and waits for Hearth's DNS.
-    const deletion = sendRequest(socket, "instance.delete", {
-      instanceId: serverId,
-    })
-    await vi.waitFor(() => expect(started).toEqual(["instance.delete"]))
-    // Someone adds the server to the network meanwhile: it waits for the
-    // deletion, holding back the network.
-    const apply = sendRequest(socket, "relay.tailscale.stack.apply", {
-      bindings: [{ hostname: "paper", memberId: `instance:${serverId}` }],
-      domain: "test",
-      hostname: "private-network",
-      id: stackId,
-      name: "Private Network",
-    })
-    const dns = sendRequest(socket, "relay.tailscale.stack.dns", {
-      id: stackId,
-      records: [],
+    // A deletion that runs, holding its server, until released, and a
+    // change adding the server to the network, queued behind it.
+    async function deletionAndQueuedChange(awaitedDns: ReadonlySet<string>) {
+      const releases = new Map<string, () => void>()
+      const started: Array<string> = []
+      const relay = await startRelay({
+        awaitedDns,
+        execute: async (request) => {
+          started.push(request.operation)
+          if (request.operation === "instance.delete") {
+            await new Promise<void>((resolve) =>
+              releases.set(request.operation, resolve)
+            )
+          }
+          return { ok: true }
+        },
+        readTailscaleStack: async () => [],
+      })
+      const { inbox, socket } = await relay.connect(await relay.pair())
+      const deletion = sendRequest(socket, "instance.delete", {
+        instanceId: serverId,
+      })
+      await vi.waitFor(() => expect(started).toEqual(["instance.delete"]))
+      const apply = sendRequest(socket, "relay.tailscale.stack.apply", {
+        bindings: [{ hostname: "paper", memberId: `instance:${serverId}` }],
+        domain: "test",
+        hostname: "private-network",
+        id: stackId,
+        name: "Private Network",
+      })
+      const dns = sendRequest(socket, "relay.tailscale.stack.dns", {
+        id: stackId,
+        records: [],
+      })
+      return {
+        apply,
+        deletion,
+        dns,
+        inbox,
+        release: () => releases.get("instance.delete")!(),
+        started,
+      }
+    }
+
+    it("goes ahead of a change queued behind the deletion that waits on it", async () => {
+      const { apply, deletion, dns, inbox, release, started } =
+        await deletionAndQueuedChange(new Set([stackId]))
+
+      expect(await inbox.next()).toMatchObject({
+        replyTo: dns,
+        type: "response",
+      })
+      expect(started).toEqual(["instance.delete", "relay.tailscale.stack.dns"])
+      release()
+      expect(await inbox.next()).toMatchObject({ replyTo: deletion })
+      expect(await inbox.next()).toMatchObject({ replyTo: apply })
     })
 
-    expect(await inbox.next()).toMatchObject({ replyTo: dns, type: "response" })
-    expect(started).toEqual(["instance.delete", "relay.tailscale.stack.dns"])
-    releases.get("instance.delete")!()
-    expect(await inbox.next()).toMatchObject({ replyTo: deletion })
-    expect(await inbox.next()).toMatchObject({ replyTo: apply })
+    it("takes its turn behind a queued change when no deletion waits on it", async () => {
+      const { apply, deletion, dns, inbox, release, started } =
+        await deletionAndQueuedChange(new Set())
+
+      await new Promise((resolve) => setImmediate(resolve))
+      expect(started).toEqual(["instance.delete"])
+      release()
+      expect(await inbox.next()).toMatchObject({ replyTo: deletion })
+      expect(await inbox.next()).toMatchObject({ replyTo: apply })
+      expect(await inbox.next()).toMatchObject({ replyTo: dns })
+      expect(started).toEqual([
+        "instance.delete",
+        "relay.tailscale.stack.apply",
+        "relay.tailscale.stack.dns",
+      ])
+    })
   })
 
   it("orders a change made by a server's short ID with one made by its full ID", async () => {
@@ -2078,6 +2114,8 @@ async function startRelay(
     readonly identifyHearth?: ControlSocketOptions["identifyHearth"]
     readonly resolveInstance?: InstanceResolver
     readonly readTailscaleStack?: TailscaleStackReader
+    /** The Tailscale networks whose DNS a deletion waits on Hearth for. */
+    readonly awaitedDns?: ReadonlySet<string>
     readonly beforeRun?: ControlSocketOptions["beforeRun"]
     /** Holds reads of the operation journal until it settles, as a slow disk would. */
     readonly journalReads?: Promise<void>
@@ -2119,6 +2157,12 @@ async function startRelay(
       : {}),
     execute: options.execute ?? (async () => ({ ok: true })),
     lanes,
+    requestContinues: (request) =>
+      controlRequestContinues(
+        request.operation,
+        request.payload as Record<string, unknown>,
+        (stackId) => options.awaitedDns?.has(stackId) ?? false
+      ),
     requestLocks: (request) =>
       controlRequestLocks(
         request.operation,
