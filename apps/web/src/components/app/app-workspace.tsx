@@ -16,6 +16,7 @@ import { Button } from "@workspace/ui/components/button"
 import { DeleteAppDialog } from "@/components/app/app-dialogs"
 import {
   appRelayAvailable,
+  appServices,
   showAppOperationError,
   type App,
 } from "@/components/app/app-presentation"
@@ -41,6 +42,7 @@ import {
   type ResourceWorkspaceQuery,
 } from "@/components/resource-workspace"
 import { WorkspaceFrame } from "@/components/workspace-frame"
+import { WorkloadResourceMeters } from "@/components/workload-resource-meters"
 import { WorkspacePowerControls } from "@/components/workspace-power-controls"
 import { recoverPromise } from "@/effect/promise"
 import { appRouteIdentifier, resolveAppRoute } from "@/lib/app-route"
@@ -250,6 +252,7 @@ const AppWorkspaceHeader = React.memo(function AppWorkspaceHeader({
           <AppHeaderAddress app={app} />
         </WorkspaceIdentity>
       }
+      center={<AppResourceMeters app={app} />}
       actions={
         <AppPowerControls
           key={`${app.relayId}:${app.id}`}
@@ -260,6 +263,33 @@ const AppWorkspaceHeader = React.memo(function AppWorkspaceHeader({
     />
   )
 })
+
+// The App's live usage, as a game server's header shows its own. It
+// re-renders only when the App's services or running state change; the
+// meters follow their samples themselves.
+function AppResourceMeters({ app }: { app: App }) {
+  const serviceList = appServices(app).join("\n")
+  const services = React.useMemo(
+    () => (serviceList ? serviceList.split("\n") : []),
+    [serviceList]
+  )
+  const running = app.containers.filter((container) => container.running)
+  const startedAt =
+    running
+      .flatMap((container) => (container.startedAt ? [container.startedAt] : []))
+      .sort()[0] ?? null
+  return (
+    <WorkloadResourceMeters
+      id={app.id}
+      kind="app"
+      relayConnected={appRelayAvailable(app)}
+      relayId={app.relayId}
+      running={running.length > 0}
+      services={services}
+      startedAt={startedAt}
+    />
+  )
+}
 
 // The app's primary domain, where people reach it, or its address inside
 // the Relay's network when it has none.

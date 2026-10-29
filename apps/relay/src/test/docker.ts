@@ -270,6 +270,8 @@ export class FakeDocker {
    * one-off container (`run --rm -i`), its image.
    */
   readonly streamErrors = new Map<string, string>()
+  /** Memory each container's processes use, by name, as its stats report. */
+  readonly memoryUsage = new Map<string, number>()
   /** Images whose registry cannot be reached; pulling them fails. */
   readonly unreachableImages = new Set<string>()
   /** What pulling an image prints before its final status, by image. */
@@ -380,6 +382,7 @@ export class FakeDocker {
     this.execGreeting = ""
     this.missingPrograms.clear()
     this.shellScripts.clear()
+    this.memoryUsage.clear()
     this.networks.clear()
     this.volumes.clear()
     this.images.clear()
@@ -2058,7 +2061,10 @@ export class FakeDocker {
           online_cpus: 1,
           system_cpu_usage: 0,
         },
-        memory_stats: { limit: container.memoryBytes, usage: 0 },
+        memory_stats: {
+          limit: container.memoryBytes,
+          usage: this.memoryUsage.get(container.name) ?? 0,
+        },
         networks: {},
         precpu_stats: { cpu_usage: { total_usage: 0 }, system_cpu_usage: 0 },
       })

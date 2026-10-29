@@ -165,6 +165,7 @@ interface DatabaseContainerInspect {
     ExitCode: number
     Health?: { Status: string }
     Running: boolean
+    StartedAt?: string
     Status: string
   }
 }
@@ -1256,6 +1257,10 @@ export class DatabaseDriver {
       name: requiredLabel(labels, "kiln.database.name"),
       observedState,
       shortId: id.slice(0, 8),
+      startedAt:
+        container.State.Running && container.State.StartedAt
+          ? new Date(container.State.StartedAt).toISOString()
+          : null,
       status,
       supportsImportExport: databaseEngineSupportsLogicalBackups(engine),
     })

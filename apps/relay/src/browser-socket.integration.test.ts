@@ -5,14 +5,23 @@ import { createServer, request as httpRequest } from "node:http"
 import type { Server } from "node:http"
 import type { Duplex } from "node:stream"
 import { Effect } from "effect"
-import { afterEach, describe, expect, it, vi } from "vite-plus/test"
+import {
+  afterEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vite-plus/test"
 import { WebSocket } from "ws"
 
 import {
   relayBrowserConsoleProtocol,
   relayBrowserProofTranscript,
+  relayConsoleReadActions,
   type RelayBrowserCapabilityV2,
   type RelayConsoleLine,
+  type RelayInstanceResources,
   type RelayManagedDatabase,
 } from "@workspace/contracts"
 
@@ -291,6 +300,99 @@ describe("relay browser socket integration", () => {
       instanceId: sharedId,
     })
   })
+
+  it("streams an App's usage, by service, to a capability for that App", async () => {
+    const relay = await startRelay({ actions: ["app.read"] })
+    const { messages, socket } = await authenticate(relay, appUsageCapability)
+
+    socket.send(
+      JSON.stringify({ instanceId: sharedId, type: "resource.subscribe", v: 1 })
+    )
+    // Samples arrive on the snapshot loop, once the Relay has subscribed it.
+    const sampling = setInterval(relay.reportRuns, 20)
+    onTestFinished(() => clearInterval(sampling))
+
+    const usage = await messages.next("resource.usage")
+    expect(usage).toMatchObject({
+      history: [{ memory: { usedBytes: `app:${sharedId}`.length } }],
+      id: sharedId,
+      kind: "app",
+      services: [
+        { history: [{}], service: "web" },
+        { history: [{}], service: "worker" },
+      ],
+    })
+    // The minutes before come once; later samples come alone.
+    await expect(messages.next("resource.usage")).resolves.toMatchObject({
+      history: [],
+      services: [{ history: [] }, { history: [] }],
+    })
+  })
+
+  for (const kind of ["instance", "app", "database"] as const) {
+    it(`refuses a ${kind}'s usage to a capability that can't read it`, async () => {
+      const relay = await startRelay({
+        actions: [
+          "instance.read",
+          "app.read",
+          "database.read",
+          ...Object.values(relayConsoleReadActions),
+        ],
+      })
+      const readAction = {
+        app: "app.read",
+        database: "database.read",
+        instance: "instance.read",
+      }[kind]
+      const usage = {
+        actions: [readAction],
+        operation: "resources",
+        resourceKind: kind,
+      } satisfies Partial<RelayBrowserCapabilityV2>
+
+      // Another resource's usage, of the same kind.
+      const other = await authenticate(relay, {
+        ...usage,
+        instanceId: sharedId,
+        loginSessionId: `${kind}-other`,
+      })
+      const otherClosed = other.messages.closed()
+      other.socket.send(
+        JSON.stringify({
+          instanceId: "f".repeat(40),
+          type: "resource.subscribe",
+          v: 1,
+        })
+      )
+      await expect(otherClosed).resolves.toMatchObject({ code: 4403 })
+
+      // A console capability for the resource itself.
+      const console = await authenticate(relay, {
+        actions: [relayConsoleReadActions[kind]],
+        instanceId: sharedId,
+        loginSessionId: `${kind}-console`,
+        operation: "console",
+        resourceKind: kind,
+      })
+      const consoleClosed = console.messages.closed()
+      console.socket.send(
+        JSON.stringify({ instanceId: sharedId, type: "resource.subscribe", v: 1 })
+      )
+      await expect(consoleClosed).resolves.toMatchObject({ code: 4403 })
+
+      // Another kind's read action, which the capability can't carry.
+      const borrowed = await attemptAuthentication(relay, {
+        capability: {
+          ...usage,
+          actions: [kind === "app" ? "database.read" : "app.read"],
+          instanceId: sharedId,
+          loginSessionId: `${kind}-borrowed`,
+        },
+      })
+      expect(borrowed.ready).toBe(false)
+      expect(borrowed.closed.code).toBe(4401)
+    })
+  }
 
   it("streams the Relay's own container to a capability for its logs", async () => {
     const relay = await startRelay({ actions: ["relay.logs.read"] })
@@ -835,6 +937,19 @@ async function startRelay(
       snapshotListeners.add(listener)
       return () => snapshotListeners.delete(listener)
     },
+    // Every App runs a web and a worker service; usage is one sample each.
+    workloadUsage: (kind, id) => ({
+      history: [usageSample(`${kind}:${id}`)],
+      resources: usageSample(`${kind}:${id}`),
+      services:
+        kind === "app"
+          ? ["web", "worker"].map((service) => ({
+              history: [usageSample(`${id}/${service}`)],
+              resources: usageSample(`${id}/${service}`),
+              service,
+            }))
+          : [],
+    }),
   })
   const attached = browserServer
   await new Promise<void>((resolve, reject) => {
@@ -964,6 +1079,30 @@ function sendAuth(
       ...extra,
     })
   )
+}
+
+const appUsageCapability = {
+  actions: ["app.read"],
+  instanceId: sharedId,
+  operation: "resources",
+  resourceKind: "app",
+} satisfies Partial<RelayBrowserCapabilityV2>
+
+// A sample whose memory use tells which resource it's of.
+function usageSample(of: string): RelayInstanceResources {
+  return {
+    cpu: { capacityPercent: 100, percent: 1 },
+    memory: { percent: 1, totalBytes: 1_000, usedBytes: of.length },
+    sampledAt: new Date().toISOString(),
+    storage: {
+      nodePercent: 0,
+      nodeTotalBytes: 0,
+      nodeUsedBytes: 0,
+      percent: null,
+      totalBytes: 0,
+      usedBytes: null,
+    },
+  }
 }
 
 const databaseCapability = {

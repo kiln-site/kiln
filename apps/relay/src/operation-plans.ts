@@ -470,8 +470,10 @@ export function controlRequestLocks(
     case "brick.recipe":
     case "database.list":
     case "database.inspect":
+    case "database.resources.read":
     case "database.data.read":
     case "app.list":
+    case "app.resources.read":
     case "app.network.routes.read":
     case "app.deployment.read":
     case "app.image.check":

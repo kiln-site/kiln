@@ -139,7 +139,6 @@ function validateCapabilityV2(
 }
 
 // The actions a v2 capability may carry, by resource kind and operation.
-// Other kinds only read console output.
 const browserCapabilityActions: Record<
   RelayBrowserResourceKind,
   Record<RelayBrowserCapabilityV2["operation"], ReadonlyArray<string>>
@@ -147,13 +146,13 @@ const browserCapabilityActions: Record<
   app: {
     console: [relayConsoleReadActions.app],
     file: ["app.files.download", "app.files.upload"],
-    resources: [],
+    resources: ["app.read"],
   },
   // A database's files are its dumps (`database:<databaseId>`).
   database: {
     console: [relayConsoleReadActions.database],
     file: ["database.dump.export", "database.dump.import"],
-    resources: [],
+    resources: ["database.read"],
   },
   instance: {
     console: [relayConsoleReadActions.instance, "instance.console.write"],

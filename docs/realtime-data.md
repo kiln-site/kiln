@@ -35,6 +35,7 @@ replace MySQL, Relay state, or high-frequency Relay streams.
 | Server definitions, names, startup, ports, routes, and power state | Relay     | Instance deltas plus exact route-query invalidation        |
 | Relay health, host facts, and resource observations                | Relay     | Incremental Relay snapshot deltas                          |
 | Containers, processes, console output, and host-local execution    | Relay     | Purpose-built Relay streams and commands                   |
+| Game servers', Apps', and databases' live usage and its history    | Relay     | One resource stream per resource, sampled on the snapshot loop |
 | Files, directory entries, file metadata, and file contents         | Relay     | Outside this rollout; never copied into Hearth collections |
 | Unsaved forms and open file editor buffers                         | Browser   | Local state until explicitly persisted                     |
 

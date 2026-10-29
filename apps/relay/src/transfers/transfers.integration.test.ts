@@ -277,6 +277,7 @@ async function startRelay(options: { instanceExists?: boolean } = {}) {
     server,
     state,
     subscribeSnapshots: () => () => undefined,
+    workloadUsage: () => ({ history: [], resources: null, services: [] }),
   })
   const attached = browser
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))

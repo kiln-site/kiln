@@ -33,6 +33,7 @@ import {
   type ResourceWorkspaceQuery,
 } from "@/components/resource-workspace"
 import { WorkspaceFrame } from "@/components/workspace-frame"
+import { WorkloadResourceMeters } from "@/components/workload-resource-meters"
 import { recoverPromise } from "@/effect/promise"
 import {
   WorkspaceCopyValueButton,
@@ -186,6 +187,7 @@ function useDatabaseWorkspaceQuery(
           limits: NO_RESOURCE_LIMITS,
           members: [],
           observedState: "failed" as const,
+          startedAt: null,
           status: "Unavailable",
         }),
         ...directory,
@@ -208,6 +210,9 @@ function useDatabaseWorkspaceQuery(
     isError: directory.isError,
   })
 }
+
+// A database runs one container, with no services to choose between.
+const noServices: ReadonlyArray<string> = []
 
 const DatabaseWorkspaceHeader = React.memo(function DatabaseWorkspaceHeader({
   workspace,
@@ -256,6 +261,17 @@ const DatabaseWorkspaceHeader = React.memo(function DatabaseWorkspaceHeader({
             value={`${database.hostname}:${database.internalPort}`}
           />
         </WorkspaceIdentity>
+      }
+      center={
+        <WorkloadResourceMeters
+          id={database.id}
+          kind="database"
+          relayConnected={databaseRelayAvailable(database)}
+          relayId={database.relayId}
+          running={database.observedState === "running"}
+          services={noServices}
+          startedAt={database.startedAt}
+        />
       }
       actions={
         <DatabasePowerControls

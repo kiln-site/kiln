@@ -36,6 +36,7 @@ import {
   relayAppsV1Feature,
   relayLogsV1Feature,
   relayProxyConfigurationV1Feature,
+  relayWorkloadUsageV1Feature,
   relayWebRouteOptionsV1Feature,
   relayHostFilesV1Feature,
   relayLinkedBackupsV1Feature,
@@ -1268,6 +1269,7 @@ function authenticateSocket(
           relayAppsV1Feature,
           relayLogsV1Feature,
           relayProxyConfigurationV1Feature,
+          relayWorkloadUsageV1Feature,
           relayHostFilesV1Feature,
           relayRestartV1Feature,
           relayResourcesV1Feature,
@@ -1745,6 +1747,7 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       return "brick.read"
     case "database.list":
     case "database.inspect":
+    case "database.resources.read":
       return "database.read"
     // Limits are part of what a database is created with, as a game
     // server's startup settings are.
@@ -1784,6 +1787,7 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "database.terminal.restart":
       return "database.dump.import"
     case "app.list":
+    case "app.resources.read":
     case "app.network.routes.read":
     case "app.image.check":
       return "app.read"

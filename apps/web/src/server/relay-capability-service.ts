@@ -5,6 +5,7 @@ import {
   relayBrowserLeaseRenewalV1Feature,
   relayConsoleReadActions,
   relayConsoleResourcesV1Feature,
+  relayWorkloadUsageV1Feature,
   relayAppsV1Feature,
   relayLogsV1Feature,
   relayPlatformV2Feature,
@@ -62,9 +63,11 @@ type BrowserAction =
   | "app.files.download"
   | "app.files.upload"
   | "app.logs.read"
+  | "app.read"
   | "database.dump.export"
   | "database.dump.import"
   | "database.logs.read"
+  | "database.read"
   | "instance.console.read"
   | "instance.console.write"
   | "instance.files.download"
@@ -154,7 +157,8 @@ export function issueBrowserCapabilitiesForRequest(input: {
           resourceVersion(
             input.resource,
             negotiatedVersion(request.kind, request.optInV2, features),
-            features
+            features,
+            request.kind
           ),
         ])
       )
@@ -408,7 +412,7 @@ const prepareBrowserCapabilityEffect = Effect.fn("relay.capability.prepare")(
         action.startsWith("database.dump.")
     )
       ? "file"
-      : input.actions.includes("instance.read")
+      : input.actions.some((action) => resourceUsageActions.has(action))
         ? "resources"
         : "console"
     const features = yield* Effect.promise(async () => {
@@ -719,6 +723,13 @@ function resourceVersion(
   }
 
   if (
+    operation === "resources" &&
+    resource.kind !== "instance" &&
+    (version !== 2 || !features.has(relayWorkloadUsageV1Feature))
+  ) {
+    throw new Error("Update this Relay to see live usage.")
+  }
+  if (
     resource.kind !== "instance" &&
     (version !== 2 ||
       !features.has(relayConsoleResourcesV1Feature) ||
@@ -731,12 +742,28 @@ function resourceVersion(
   return version
 }
 
+// The action that reads each kind's live usage.
+const resourceUsageReadActions = {
+  app: "app.read",
+  database: "database.read",
+  instance: "instance.read",
+} as const
+const resourceUsageActions: ReadonlySet<string> = new Set(
+  Object.values(resourceUsageReadActions)
+)
+
 // What a browser asks for: console output, with input for servers, or a
-// server's resource usage.
+// game server's, App's, or database's usage.
 function browserActions(
   resource: RelayConsoleResource,
   request: { kind: "console"; write: boolean } | { kind: "resources" }
 ): ReadonlyArray<BrowserAction> {
+  if (
+    request.kind === "resources" &&
+    (resource.kind === "app" || resource.kind === "database")
+  ) {
+    return [resourceUsageReadActions[resource.kind]]
+  }
   if (resource.kind !== "instance") {
     if (request.kind !== "console" || request.write) {
       throw new Error(`A ${resource.kind} only has console output to read`)

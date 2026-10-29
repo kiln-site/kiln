@@ -191,6 +191,7 @@ describeMysql("scoped instance inventory", () => {
                       name: "Main",
                       observedState: "running",
                       shortId: id.slice(0, 8),
+                      startedAt: null,
                       status: "Ready",
                       supportsImportExport: true,
                     },

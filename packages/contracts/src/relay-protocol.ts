@@ -24,6 +24,9 @@ export const relayFileRequestReplayV1Feature = "file-request-replay-v1"
 export const relayConsoleResourcesV1Feature = "console-resources-v1"
 // The Relay deploys apps: Docker images, Dockerfiles, and Compose projects.
 export const relayAppsV1Feature = "apps-v1"
+// The Relay samples Apps' and databases' usage as game servers', and streams
+// it to browsers (`resources` capabilities for those kinds).
+export const relayWorkloadUsageV1Feature = "workload-usage-v1"
 // The Relay serves its host's files under its own ID as a file root.
 export const relayHostFilesV1Feature = "relay-host-files-v1"
 // The Relay streams its own container's output as the `relay` console kind.
@@ -183,6 +186,7 @@ export const relayControlOperations = [
   "brick.recipe",
   "database.list",
   "database.inspect",
+  "database.resources.read",
   "database.create",
   "database.provision.prepare",
   "database.provision.claim",
@@ -205,6 +209,7 @@ export const relayControlOperations = [
   "database.terminal.claim",
   "database.terminal.restart",
   "app.list",
+  "app.resources.read",
   "app.create",
   "app.provision.prepare",
   "app.provision.claim",
@@ -414,9 +419,11 @@ export function relayControlOperationChanges(
     case "brick.recipe":
     case "database.list":
     case "database.inspect":
+    case "database.resources.read":
     case "database.data.read":
     case "database.dump.export":
     case "app.list":
+    case "app.resources.read":
     case "app.network.routes.read":
     case "app.deployment.read":
     case "app.image.check":

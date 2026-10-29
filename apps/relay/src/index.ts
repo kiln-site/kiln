@@ -72,6 +72,7 @@ import {
   relayDatabaseExportSchema,
   relayDatabaseImportSchema,
   relayDatabaseInspectRequestSchema,
+  relayWorkloadUsageReadSchema,
   relayDatabaseWipeSchema,
   relayDatabaseNetworkImportSchema,
   relayDatabaseNetworkSchema,
@@ -282,6 +283,7 @@ import type { RelayAction } from "./permissions.js"
 import { normalizeSourceCidrs } from "./source-policy.js"
 import { withRemoteFileSource } from "./remote-file-source.js"
 import { RelaySnapshotHub } from "./snapshot-hub.js"
+import { WorkloadResources } from "./workload-resources.js"
 import { retainProvisioningInstances } from "./instance-mutation-snapshot.js"
 import { RuntimeRecoveryManager } from "./runtime-recovery.js"
 import {
@@ -784,6 +786,10 @@ snapshotHub.subscribe(
   ({ snapshot }) => reportRelayMemoryMetrics(snapshot.node.relayMemory),
   false
 )
+// Apps' and databases' usage, sampled as game servers' are, on the same
+// loop, so their history covers the same minutes.
+const workloadResources = new WorkloadResources(config, relayEngine)
+snapshotHub.subscribe(() => workloadResources.tick(), false)
 const provisioningManager = await runRelayEffect(
   "relay.startup.provisioning",
   ProvisioningManager.make({
@@ -1454,6 +1460,7 @@ const browserSocket = attachBrowserSocket({
   server,
   state: startup.state,
   subscribeSnapshots: (listener) => snapshotHub.subscribe(listener),
+  workloadUsage: (kind, id) => workloadResources.usage(kind, id),
 })
 // How full the Relay's shared capacity is, for its metrics.
 const capacityMetricsFiber = forkRelayEffect(
@@ -2516,6 +2523,11 @@ async function executeControlRequest(
       return databases.inspect(
         relayDatabaseInspectRequestSchema.parse(request.payload).databaseId
       )
+    case "database.resources.read":
+      return workloadResources.usage(
+        "database",
+        relayDatabaseInspectRequestSchema.parse(request.payload).databaseId
+      )
     case "database.create":
       return databases.create(relayCreateDatabaseSchema.parse(request.payload))
     case "database.provision.prepare": {
@@ -2714,6 +2726,11 @@ async function executeControlRequest(
         input.cols
       )
     }
+    case "app.resources.read":
+      return workloadResources.usage(
+        "app",
+        relayWorkloadUsageReadSchema.parse(request.payload).appId
+      )
     case "app.list":
       // Hearth's tables ask for specific views; older Hearths, for the list.
       return "requests" in payload

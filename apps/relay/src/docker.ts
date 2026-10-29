@@ -41,11 +41,9 @@ import type {
   RelayInstanceLifecycleState,
   RelayInstanceResources,
   RelaySftpPublicationStatus,
-  ResourceLimits,
 } from "@workspace/contracts"
 import {
   builtinTailscaleBrickId,
-  CPU_LIMIT_MILLIS_PER_CORE,
   NO_RESOURCE_LIMITS,
   brickConsoleSchema,
   brickReadinessSchema,
@@ -88,6 +86,14 @@ import {
 import { procNetTcpHasListener } from "./docker-port-parsing.js"
 import { legacyDiskLimitAssignments } from "./resource-quotas.js"
 import { containerPower } from "./resource-power.js"
+import {
+  containerCpuAndMemory,
+  containerNetwork,
+  percentOf,
+  ResourceSamples,
+  roundPercent,
+  type DockerStats,
+} from "./resource-samples.js"
 import {
   containerResourceLimits,
   DISK_LIMIT_LABEL,
@@ -193,33 +199,6 @@ export interface DockerConsoleSession {
     signal: AbortSignal,
     limit?: number
   ) => AsyncIterable<RelayConsoleLine>
-}
-
-interface DockerStats {
-  cpu_stats?: {
-    cpu_usage?: { total_usage?: number }
-    online_cpus?: number
-    system_cpu_usage?: number
-  }
-  precpu_stats?: {
-    cpu_usage?: { total_usage?: number }
-    system_cpu_usage?: number
-  }
-  memory_stats?: {
-    limit?: number
-    stats?: {
-      inactive_file?: number
-      total_inactive_file?: number
-    }
-    usage?: number
-  }
-  networks?: Record<
-    string,
-    {
-      rx_bytes?: number
-      tx_bytes?: number
-    }
-  >
 }
 
 export type DockerPortBindings = Record<
@@ -393,12 +372,6 @@ function instanceConnectAddress(input: {
   return "Error: Relay did not report a published game port"
 }
 
-interface ResourceCacheEntry {
-  lastAttempt: number
-  pending: boolean
-  value: RelayInstanceResources | null
-}
-
 interface DiskUsageCacheEntry {
   // The folder measured, for the Relay's own total to reuse.
   directory?: string
@@ -421,7 +394,6 @@ export const MAX_CONSOLE_HISTORY_LINES = 5_000
 // truncated.
 export const MAX_CONSOLE_HISTORY_CHARACTERS = 16 * 1024 * 1024
 const STARTUP_READINESS_LOG_LINES = 1_000
-const RESOURCE_HISTORY_WINDOW_MS = 6 * 60_000
 const DISK_USAGE_REFRESH_MS = 60_000
 // The data directory holds every server, so it is totalled less often than
 // one server's folder is walked.
@@ -467,16 +439,10 @@ export class DockerDriver {
   readonly #diskUsageSemaphore = Semaphore.makeUnsafe(1)
   #relayStartedAt: Promise<string | null> | undefined
   #relaySftpPublication: Promise<RelaySftpPublication> | undefined
-  readonly #resourceCache = new Map<string, ResourceCacheEntry>()
-  readonly #resourceHistory = new Map<string, Array<RelayInstanceResources>>()
-  readonly #relayResourceCache: ResourceCacheEntry = {
-    lastAttempt: 0,
-    pending: false,
-    value: null,
-  }
+  readonly #resourceSamples = new ResourceSamples("instance")
+  readonly #relayResourceSamples = new ResourceSamples("relay")
   readonly #relayDiskUsage = initialDiskUsageCacheEntry()
   #relayProcessCpu: { at: number; usage: NodeJS.CpuUsage } | null = null
-  #relayResourceHistory: Array<RelayInstanceResources> = []
   readonly #state: RelayStateStore["Service"]
   readonly #lanes: OperationLanes
 
@@ -531,10 +497,7 @@ export class DockerDriver {
       discovered.map(({ container }) => container.Id)
     )
     const activeInstanceIds = new Set(discovered.map(({ config }) => config.id))
-    for (const containerId of this.#resourceCache.keys()) {
-      if (!activeContainerIds.has(containerId))
-        this.#resourceCache.delete(containerId)
-    }
+    this.#resourceSamples.retain(activeInstanceIds)
     for (const containerId of this.#consoleSizeStarts.keys()) {
       if (!activeContainerIds.has(containerId))
         this.#consoleSizeStarts.delete(containerId)
@@ -546,10 +509,6 @@ export class DockerDriver {
     for (const instanceId of this.#brickReadinessCache.keys()) {
       if (!activeInstanceIds.has(instanceId))
         this.#brickReadinessCache.delete(instanceId)
-    }
-    for (const instanceId of this.#resourceHistory.keys()) {
-      if (!activeInstanceIds.has(instanceId))
-        this.#resourceHistory.delete(instanceId)
     }
     for (const instanceId of this.#powerTransitions.keys()) {
       if (!activeInstanceIds.has(instanceId))
@@ -849,51 +808,20 @@ export class DockerDriver {
   }
 
   resourceHistory(instanceId: string): Array<RelayInstanceResources> {
-    const history = this.#resourceHistory.get(instanceId) ?? []
-    const cutoff = Date.now() - RESOURCE_HISTORY_WINDOW_MS
-    return history.filter((sample) => Date.parse(sample.sampledAt) >= cutoff)
+    return this.#resourceSamples.history(instanceId)
   }
 
   // The Relay's own usage, sampled like a server's: its container's CPU and
   // memory, and everything Kiln keeps in the data directory against the
   // node's disk. Null until the first sample lands, or outside Docker.
   relayResources(): RelayInstanceResources | null {
-    const cached = this.#relayResourceCache
-    if (!cached.pending && Date.now() - cached.lastAttempt >= 1_500) {
-      cached.lastAttempt = Date.now()
-      cached.pending = true
-      Effect.runFork(
-        promiseEffect(() => this.#sampleRelayResources()).pipe(
-          Effect.tap((resources) =>
-            Effect.sync(() => {
-              cached.value = resources
-              const cutoff =
-                Date.parse(resources.sampledAt) - RESOURCE_HISTORY_WINDOW_MS
-              this.#relayResourceHistory = [
-                ...this.#relayResourceHistory,
-                resources,
-              ].filter((sample) => Date.parse(sample.sampledAt) >= cutoff)
-            })
-          ),
-          // Observational, like server sampling: keep the last good value.
-          Effect.ignore,
-          Effect.ensuring(
-            Effect.sync(() => {
-              cached.lastAttempt = Date.now()
-              cached.pending = false
-            })
-          )
-        )
-      )
-    }
-    return cached.value
+    return this.#relayResourceSamples.observe("relay", "relay", () =>
+      this.#sampleRelayResources()
+    )
   }
 
   relayResourceHistory(): Array<RelayInstanceResources> {
-    const cutoff = Date.now() - RESOURCE_HISTORY_WINDOW_MS
-    return this.#relayResourceHistory.filter(
-      (sample) => Date.parse(sample.sampledAt) >= cutoff
-    )
+    return this.#relayResourceSamples.history("relay")
   }
 
   async recordProvisionedState(
@@ -2077,47 +2005,11 @@ export class DockerDriver {
   }
 
   #resourcesFor(instance: DiscoveredInstance): RelayInstanceResources | null {
-    const key = instance.container.Id
-    const now = Date.now()
-    const cached = this.#resourceCache.get(key) ?? {
-      lastAttempt: 0,
-      pending: false,
-      value: null,
-    }
-
-    if (
-      instance.container.State.Running &&
-      !cached.pending &&
-      now - cached.lastAttempt >= 1_500
-    ) {
-      cached.lastAttempt = now
-      cached.pending = true
-      this.#resourceCache.set(key, cached)
-      Effect.runFork(
-        promiseEffect(() => this.#sampleResources(instance, cached.value)).pipe(
-          Effect.tap((resources) =>
-            Effect.sync(() => {
-              cached.value = resources
-              this.#recordResourceHistory(instance.config.id, resources)
-            })
-          ),
-          // Resource sampling is observational. Keep the last healthy value so
-          // a slow Docker stats response can never take down the Relay snapshot.
-          Effect.ignore,
-          Effect.ensuring(
-            Effect.sync(() => {
-              cached.lastAttempt = Date.now()
-              cached.pending = false
-            })
-          )
-        )
-      )
-    } else if (!instance.container.State.Running) {
-      cached.value = null
-      this.#resourceCache.set(key, cached)
-    }
-
-    return cached.value
+    return this.#resourceSamples.observe(
+      instance.config.id,
+      instance.container.State.Running ? instance.container.Id : null,
+      (previous) => this.#sampleResources(instance, previous)
+    )
   }
 
   async #sampleResources(
@@ -2139,36 +2031,7 @@ export class DockerDriver {
     const nodeStorageUsed = Math.max(nodeStorageTotal - nodeStorageAvailable, 0)
     // Without a disk limit, the server can fill the node.
     const storageLimit = instance.config.limits.diskBytes ?? nodeStorageTotal
-    const network = Object.values(stats.networks ?? {}).reduce(
-      (total, current) => ({
-        receivedBytes: total.receivedBytes + (current.rx_bytes ?? 0),
-        sentBytes: total.sentBytes + (current.tx_bytes ?? 0),
-      }),
-      { receivedBytes: 0, sentBytes: 0 }
-    )
     const sampledAt = Date.now()
-    const previousSampledAt = previous
-      ? Date.parse(previous.sampledAt)
-      : Number.NaN
-    const elapsedSeconds = Number.isFinite(previousSampledAt)
-      ? Math.max((sampledAt - previousSampledAt) / 1_000, 0)
-      : 0
-    const receivedBytesPerSecond =
-      previous?.network && elapsedSeconds > 0
-        ? Math.max(
-            (network.receivedBytes - previous.network.receivedBytes) /
-              elapsedSeconds,
-            0
-          )
-        : 0
-    const sentBytesPerSecond =
-      previous?.network && elapsedSeconds > 0
-        ? Math.max(
-            (network.sentBytes - previous.network.sentBytes) / elapsedSeconds,
-            0
-          )
-        : 0
-
     return {
       sampledAt: new Date(sampledAt).toISOString(),
       cpu,
@@ -2184,11 +2047,7 @@ export class DockerDriver {
         nodeUsedBytes: nodeStorageUsed,
         nodePercent: roundPercent(percentOf(nodeStorageUsed, nodeStorageTotal)),
       },
-      network: {
-        ...network,
-        receivedBytesPerSecond,
-        sentBytesPerSecond,
-      },
+      network: containerNetwork(stats, previous, sampledAt),
     }
   }
 
@@ -2465,21 +2324,6 @@ export class DockerDriver {
       Effect.runFork(this.#diskUsageSemaphore.withPermits(1)(refresh))
     }
     return cached.usedBytes
-  }
-
-  #recordResourceHistory(
-    instanceId: string,
-    resources: RelayInstanceResources
-  ): void {
-    const timestamp = Date.parse(resources.sampledAt)
-    const cutoff = timestamp - RESOURCE_HISTORY_WINDOW_MS
-    const history = this.#resourceHistory.get(instanceId) ?? []
-    this.#resourceHistory.set(
-      instanceId,
-      [...history, resources].filter(
-        (sample) => Date.parse(sample.sampledAt) >= cutoff
-      )
-    )
   }
 
   async #dockerStats(containerId: string): Promise<DockerStats> {
@@ -2990,61 +2834,6 @@ function parseBrickReadinessLabel(value: string | undefined) {
 // A container's CPU over Docker's sampling interval, and its memory less
 // reclaimable page cache, against `memoryLimitBytes` or else the container's
 // own limit (the host's memory when it has none).
-function containerCpuAndMemory(
-  stats: DockerStats,
-  limits: ResourceLimits
-): Pick<RelayInstanceResources, "cpu" | "memory"> {
-  const cpuCurrent = stats.cpu_stats?.cpu_usage?.total_usage ?? 0
-  const cpuPrevious = stats.precpu_stats?.cpu_usage?.total_usage ?? 0
-  const systemCurrent = stats.cpu_stats?.system_cpu_usage ?? 0
-  const systemPrevious = stats.precpu_stats?.system_cpu_usage ?? 0
-  const cpuDelta = cpuCurrent - cpuPrevious
-  const systemDelta = systemCurrent - systemPrevious
-  const onlineCpus = Math.max(stats.cpu_stats?.online_cpus ?? 1, 1)
-  const cpuPercent =
-    cpuDelta > 0 && systemDelta > 0
-      ? (cpuDelta / systemDelta) * onlineCpus * 100
-      : 0
-
-  const memoryTotal = Math.max(
-    limits.memoryBytes ?? stats.memory_stats?.limit ?? 0,
-    0
-  )
-  const memoryCache = Math.max(
-    stats.memory_stats?.stats?.total_inactive_file ??
-      stats.memory_stats?.stats?.inactive_file ??
-      0,
-    0
-  )
-  const memoryUsed = Math.max(
-    Math.min((stats.memory_stats?.usage ?? 0) - memoryCache, memoryTotal),
-    0
-  )
-  return {
-    cpu: {
-      // A CPU limit of 1.5 cores lets the server use up to 150%.
-      capacityPercent:
-        limits.cpuMillis === null
-          ? onlineCpus * 100
-          : limits.cpuMillis / (CPU_LIMIT_MILLIS_PER_CORE / 100),
-      percent: roundPercent(cpuPercent),
-    },
-    memory: {
-      totalBytes: memoryTotal,
-      usedBytes: memoryUsed,
-      percent: roundPercent(percentOf(memoryUsed, memoryTotal)),
-    },
-  }
-}
-
-function percentOf(used: number, total: number): number {
-  return total > 0 ? (used / total) * 100 : 0
-}
-
-function roundPercent(value: number): number {
-  return Math.round(Math.max(value, 0) * 10) / 10
-}
-
 interface ConsoleStopCommandsInput {
   readonly configured: ReadonlyArray<string> | undefined
   readonly instanceId: string

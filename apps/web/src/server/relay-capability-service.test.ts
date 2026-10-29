@@ -461,6 +461,76 @@ describe("Relay capability issuance orchestration", () => {
     })
   })
 
+  describe("App and database usage", () => {
+    // Alice may read app-one and database-one, nothing else.
+    beforeEach(() => {
+      for (const feature of [
+        "browser-capability-v2",
+        "browser-lease-renewal-v1",
+        "console-resources-v1",
+        "apps-v1",
+        "workload-usage-v1",
+      ]) {
+        fakes.features.add(feature)
+      }
+      fakes.requirePermissions.mockImplementation(
+        (input: {
+          appId?: string
+          databaseId?: string
+          permissions: Array<string>
+        }) =>
+          (input.appId === "app-one" &&
+            input.permissions.every((permission) => permission === "app.read")) ||
+          (input.databaseId === "database-one" &&
+            input.permissions.every(
+              (permission) => permission === "database.read"
+            ))
+            ? Effect.void
+            : Effect.fail(new Error("Permission denied"))
+      )
+    })
+
+    const issueUsage = (kind: "app" | "database", id: string) =>
+      issueBrowserCapabilitiesForRequest({
+        authenticate: () => Promise.resolve({ sessionId: "session-one", user }),
+        publicKeyJwk,
+        relayId: "relay-one",
+        requests: [{ kind: "resources", optInV2: true }],
+        resource: { id, kind },
+      })
+
+    it("issues usage with the read permission of the App or database", async () => {
+      for (const [kind, id, action] of [
+        ["app", "app-one", "app.read"],
+        ["database", "database-one", "database.read"],
+      ] as const) {
+        const issued = await issueUsage(kind, id)
+        expect(
+          decodeCapabilityPayload(issued.capabilities[0]!.capability)
+        ).toMatchObject({
+          actions: [action],
+          instanceId: id,
+          operation: "resources",
+          resourceKind: kind,
+          version: 2,
+        })
+      }
+    })
+
+    it("refuses usage of an App or database the person can't read", async () => {
+      await expect(issueUsage("app", "app-two")).rejects.toThrow()
+      await expect(issueUsage("database", "database-two")).rejects.toThrow()
+    })
+
+    it("refuses Relays that don't sample Apps and databases", async () => {
+      fakes.features.delete("workload-usage-v1")
+
+      await expect(issueUsage("app", "app-one")).rejects.toThrow(
+        "Update this Relay to see live usage."
+      )
+    })
+  })
+
   describe("database dumps", () => {
     const databaseId = "d".repeat(40)
     // Alice holds these permissions on the database; `granted` lists them.
