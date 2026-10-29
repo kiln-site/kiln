@@ -43,7 +43,6 @@ import { promiseEffect, recoverPromise } from "@/effect/promise"
 import { requireEligibleResourceUser } from "@/server/auth"
 import {
   deploySchedule,
-  deploymentError,
   deployScheduleToRelay,
   errorMessage,
   groupRows,
@@ -53,7 +52,7 @@ import {
   loadSchedules,
   publishScheduleCollectionChange,
   scheduleReconciliationConcurrency,
-  upsertDeployment,
+  removeRelayProjections,
   type ScheduleActionRow,
   type ScheduleRow,
   type ScheduleTargetRow,
@@ -807,57 +806,6 @@ async function replaceSchedule(
   )
 }
 
-async function removeRelayProjections(
-  scheduleId: string,
-  revision: number,
-  relayIds: ReadonlyArray<string>,
-  subject?: string
-) {
-  const relays = new Map(
-    (await listPersistedRelays()).map((relay) => [relay.id, relay])
-  )
-  await Promise.all(
-    relayIds.map(async (relayId) => {
-      await upsertDeployment(scheduleId, relayId, revision, "pending")
-      const relay = relays.get(relayId)
-      if (!relay?.enabled) {
-        await deploymentError(
-          scheduleId,
-          relayId,
-          revision,
-          "Relay is unavailable"
-        )
-        return
-      }
-      const removed = await Effect.runPromise(
-        Effect.result(
-          promiseEffect(async () => {
-            await relayRpc(
-              relay,
-              "schedule.remove",
-              { revision, scheduleId },
-              15_000,
-              subject
-            )
-            await databasePool.execute(
-              `DELETE FROM ${databaseTable("schedule_deployment")}
-            WHERE schedule_id = ? AND relay_id = ?`,
-              [scheduleId, relayId]
-            )
-          })
-        )
-      )
-      if (Result.isFailure(removed)) {
-        await deploymentError(
-          scheduleId,
-          relayId,
-          revision,
-          errorMessage(removed.failure)
-        )
-      }
-    })
-  )
-}
 
 function requestScheduleReconciliation(
   schedules: ReadonlyArray<ScheduleDefinition>

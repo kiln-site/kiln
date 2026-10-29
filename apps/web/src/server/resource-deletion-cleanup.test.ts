@@ -22,7 +22,12 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
   relayRpc: async (
     relay: { id: string },
     operation: string,
-    payload: { id?: string; revision: number; scheduleId?: string }
+    payload: {
+      generation?: number
+      id?: string
+      revision: number
+      scheduleId?: string
+    }
   ) => {
     if (operation === "schedule.apply") {
       relays.applied.push({
@@ -31,6 +36,7 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
         revision: payload.revision,
       })
       return {
+        acknowledgedGeneration: payload.generation,
         acknowledgedRevision: payload.revision,
         nextRunAt: null,
         scheduleId: payload.id,
@@ -261,7 +267,10 @@ describeMysql("cleaning up after a deleted resource", () => {
           ).pipe(Effect.provide(disabledCache))
 
           assert.sameMembers(
-            ids(yield* selectRows<{ database_id: string }>("database"), "database_id"),
+            ids(
+              yield* selectRows<{ database_id: string }>("database"),
+              "database_id"
+            ),
             [otherDatabaseId]
           )
           assert.sameMembers(
@@ -328,7 +337,11 @@ describeMysql("cleaning up after a deleted resource", () => {
           }>("schedule")
           assert.deepStrictEqual(
             schedules
-              .map((row) => [row.id, Number(row.revision), row.deleted_at !== null])
+              .map((row) => [
+                row.id,
+                Number(row.revision),
+                row.deleted_at !== null,
+              ])
               .sort(byKey),
             [
               [sharedSchedule, 5, false],

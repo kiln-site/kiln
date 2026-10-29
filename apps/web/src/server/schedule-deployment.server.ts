@@ -802,13 +802,18 @@ export async function stopScheduleDeliveries(): Promise<void> {
  */
 export async function redeployUnacknowledgedSchedules(): Promise<void> {
   const [rows] = await databasePool.query<
-    Array<{ relay_id: string; schedule_id: string } & RowDataPacket>
+    Array<
+      {
+        relay_id: string
+        schedule_id: string
+        desired_revision: number
+      } & RowDataPacket
+    >
   >(
-    `SELECT deployment.schedule_id, deployment.relay_id
+    `SELECT deployment.schedule_id, deployment.relay_id, deployment.desired_revision
        FROM ${databaseTable("schedule_deployment")} deployment
        JOIN ${databaseTable("schedule")} schedule
          ON schedule.id = deployment.schedule_id
-        AND schedule.deleted_at IS NULL
       WHERE deployment.status <> 'applied'
          OR COALESCE(deployment.acknowledged_revision, 0)
               < deployment.desired_revision
@@ -827,12 +832,78 @@ export async function redeployUnacknowledgedSchedules(): Promise<void> {
   for (const row of rows) {
     const schedule = schedules.get(row.schedule_id)
     const relay = relays.get(row.relay_id)
-    if (!schedule || !relay?.enabled) continue
-    const targets = schedule.targets.filter(
+    if (!relay?.enabled) continue
+    const targets = (schedule?.targets ?? []).filter(
       (target) => target.relayId === row.relay_id
     )
-    if (targets.length > 0) {
+    if (schedule && targets.length > 0) {
       await deployScheduleToRelay(schedule, targets, relay)
+    } else {
+      await removeRelayProjections(row.schedule_id, row.desired_revision, [
+        row.relay_id,
+      ])
     }
   }
+}
+
+export async function removeRelayProjections(
+  scheduleId: string,
+  revision: number,
+  relayIds: ReadonlyArray<string>,
+  subject?: string
+) {
+  const relays = new Map(
+    (await listPersistedRelays()).map((relay) => [relay.id, relay])
+  )
+  await Promise.all(
+    relayIds.map(async (relayId) => {
+      await upsertDeployment(scheduleId, relayId, revision, "pending")
+      const [rows] = await databasePool.query<
+        Array<RowDataPacket & { desired_generation: number }>
+      >(
+        `SELECT desired_generation FROM ${databaseTable("schedule_deployment")}
+          WHERE schedule_id = ? AND relay_id = ? AND desired_revision = ?`,
+        [scheduleId, relayId, revision]
+      )
+      const generation = rows[0]?.desired_generation
+      if (generation === undefined) return
+      const relay = relays.get(relayId)
+      if (!relay?.enabled) {
+        await deploymentError(
+          scheduleId,
+          relayId,
+          revision,
+          "Relay is unavailable"
+        )
+        return
+      }
+      const removed = await Effect.runPromise(
+        Effect.result(
+          promiseEffect(async () => {
+            await relayRpc(
+              relay,
+              "schedule.remove",
+              { revision, scheduleId },
+              15_000,
+              subject
+            )
+            await databasePool.execute(
+              `DELETE FROM ${databaseTable("schedule_deployment")}
+            WHERE schedule_id = ? AND relay_id = ?
+              AND desired_revision = ? AND desired_generation = ?`,
+              [scheduleId, relayId, revision, generation]
+            )
+          })
+        )
+      )
+      if (Result.isFailure(removed)) {
+        await deploymentError(
+          scheduleId,
+          relayId,
+          revision,
+          errorMessage(removed.failure)
+        )
+      }
+    })
+  )
 }
