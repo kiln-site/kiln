@@ -1,6 +1,7 @@
 # One lifecycle for every resource (plan)
 
-Status: planned. Kiln began with game servers; Apps, databases, and volumes
+Status: built as a stack of 17 pull requests (`feat/unify-*`, listed under
+[Stacks](#stacks)), in review. Kiln began with game servers; Apps, databases, and volumes
 came later, and several features were never brought over or were built a
 second time beside the first. This plan makes database networks, Tailscale,
 deletion, backups, and automations work the same way for every resource,
@@ -84,6 +85,11 @@ engine, a volume is archived through Docker.
 - Cancelling a deletion before the Relay deletes anything unfreezes it and
   puts back what quieting changed (an App's restart policies); a stopped
   game server or App stays stopped, and ended terminal sessions stay ended.
+  Freezing an App also drops any restart an earlier stopped backup still
+  owed it, so a cancelled deletion leaves it stopped across Relay restarts.
+- A deletion that fails after the Relay took its resource off a Tailscale
+  network puts it back, unless an apply gave its hostname to another member
+  meanwhile; then it stays off, and finishing the deletion removes it.
 - Access is checked when the deletion is asked for and before the freeze.
   Once the Relay has deleted, cleanup always finishes, even if the person
   has lost access since.
@@ -131,6 +137,11 @@ engine, a volume is archived through Docker.
 - The backups page filters volumes by App, through ownership or use. Backing
   up an App backs up its folder and the volumes it owns, each as its own
   backup, started together; the App's page shows whether all succeeded.
+  It covers the volumes the App owns when the backups start: a deploy that
+  added one before then is included, or the whole backup fails. A batch
+  missing a part fails whole instead of running in pieces. A live backup
+  doesn't hold up the App's deploys or power; a stopped one holds the App
+  until it's started again.
 - A backup is taken live by default, as a game server's folder is, and the
   backup says so. It can instead stop the resource for the backup and start
   it again after, for data a live copy can't capture safely, such as a
@@ -191,42 +202,54 @@ engine, a volume is archived through Docker.
 
 Each layer is one reviewable PR with its own tests, a sanity check, and a
 review loop. A layer cuts over every caller of what it changes, so old and
-new never both drive the same work. The count is an estimate; a layer that
-turns out too large is split.
+new never both drive the same work.
+
+Bottom to top, one branch and pull request each:
 
 **Database networks and Tailscale**
 
-1. Connections: the Relay's store names every member kind; Hearth imports
-   Apps' `databaseIds` with an acknowledged migration, and App network changes
-   go through the Relay's store and lock the databases they touch.
-2. The database Network page: game servers, Apps, and other databases;
-   permissions on both ends; cleanup when either side is deleted.
-3. Tailscale member identities: typed IDs, migrated bindings, member locks.
-4. Tailscale for databases, and one membership component.
+1. `feat/unify-database-connections`: the Relay's store names every member
+   kind; Hearth hands over Apps' `databaseIds` once, acknowledged.
+2. `feat/unify-database-network-page`: the database Network page for game
+   servers, Apps, and other databases, with permissions on both ends.
+3. `feat/unify-tailscale-members`: typed member IDs, migrated bindings,
+   member locks.
+4. `feat/unify-tailscale-databases`: databases as members, and one
+   membership component.
 
 **Backups and deletion**
 
-5. Volume identity: Kiln and Compose volumes named stably, ownership and
-   use, configured references protecting a volume from deletion.
-6. Relay backups of volumes and App folders: create, restore, delete,
-   download, live or stopped.
-7. Hearth: the App and volume targets in every backup table, with
-   authorization.
-8. The backups UI: App filter, an App's Backups tab, live or stopped.
-9. Scheduled backups checked before they run, as manual ones are.
-10. One cleanup for every kind, used by today's deletions.
-11. `resource.delete` for game servers and databases: the Relay's freeze,
-    the durable operation, the final-delete tables carried over, their
-    worker removed.
-12. Apps and volumes on `resource.delete`, with their final backups.
-13. One confirmation for every kind, in the browser and the CLI.
+5. `feat/unify-volume-identity`: Kiln and Compose volumes named stably,
+   ownership and use, references protecting a volume from deletion.
+6. `feat/unify-volume-backups`: Relay backups of volumes and App folders,
+   live or stopped, with restore journals that fence an unfinished swap.
+7. `feat/unify-backup-targets`: the App and volume targets in Hearth's
+   backup tables, with authorization.
+8. `feat/unify-scheduled-backup-checks`: scheduled backups checked before
+   they run, as manual ones are.
+9. `feat/unify-deletion-cleanup`: one cleanup for every kind.
+10. `feat/unify-deletion-freeze`: the Relay's freeze.
+11. `feat/unify-deletion-operation`: `resource.delete` for game servers and
+    databases, carrying over the final-delete tables.
+12. `feat/unify-delete-confirmation`: name and password for every kind, in
+    the browser and the CLI.
+13. `feat/unify-delete-apps-volumes`: Apps and volumes on
+    `resource.delete`, with their final backups.
+14. `feat/unify-backups-ui`: the App filter, an App's Backups tab, live or
+    stopped.
 
 **Automations and stats**
 
-14. Relay: one-off commands in an App service or a database, and one power
-    path with its guard for every kind.
-15. Schedules: Apps as targets, App and database commands, App backups.
-16. Live stats for Apps and databases.
+15. `feat/unify-container-commands`: one-off commands in an App service or
+    a database, and one power path for every kind.
+16. `feat/unify-app-schedules`: Apps as schedule targets, App and database
+    commands, scheduled App backups.
+17. `feat/unify-live-stats`: live stats for Apps and databases.
+
+Hearth and every Relay must run the same release: the protocol changed
+freely. The Relay's state migrations were renumbered while the layers were
+combined, so a development Relay that ran an earlier build of them needs
+its state reset.
 
 Tests protect what the [testing rules](../AGENTS.md#testing) name:
 migrations of stored state (connections, bindings, final-delete rows,
