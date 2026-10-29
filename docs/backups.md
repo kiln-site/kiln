@@ -440,7 +440,12 @@ missing backup stops the deletion with nothing deleted and the resource still
 frozen; its page offers to try again, to delete it without a final backup, or
 to keep it. A game server keeps a final backup that finished for its next
 attempt, since it stayed stopped; a frozen database keeps serving what's
-connected to it, so a retry takes a new one. Final backups stay in the catalog
+connected to it, so a retry takes a new one. Keeping it is an operation of
+its own, `resource.delete.cancel`, in the deletion's lane: it's recorded,
+and its final backup dropped from reuse, before the resource is let go, so
+no retry starts meanwhile and none reuses a backup from before. Every
+attempt is recorded before its operation is admitted, and a reconciler admits
+any whose operation is missing, at startup and every half minute. Final backups stay in the catalog
 after the resource is gone, and retention never removes them. Relay-local
 final backups remain tied to Relay availability. No other backup, restore,
 copy, or export of a resource can start while its deletion runs.

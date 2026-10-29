@@ -3,6 +3,7 @@ const EXPECTED_ERROR_TAGS = new Set([
   "DomainConfigurationError",
   "PermissionDeniedError",
   "ResourceBeingDeletedError",
+  "ResourceDeletionConflictError",
   "ResourceNotFoundError",
 ])
 

@@ -392,7 +392,7 @@ export const deleteBackupStorageEffect = Effect.fn("backupStorage.delete")(
                   AND repository.target_id = deletion.resource_id
                 WHERE repository.storage_id = ?
                   AND deletion.resource_kind = 'instance'
-                  AND deletion.status IN ('pending', 'backing_up', 'deleting')
+                  AND deletion.status IN ('pending', 'backing_up', 'deleting', 'cancelling')
                 LIMIT 1
                 FOR UPDATE`,
             [storageId]

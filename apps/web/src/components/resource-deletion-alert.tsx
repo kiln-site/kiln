@@ -101,20 +101,24 @@ export const ResourceDeletionAlert = React.memo(function ResourceDeletionAlert({
         <p className="type-card-title">
           {failed
             ? `Deleting this ${subject} stopped`
-            : `This ${subject} is being deleted`}
+            : deletion.status === "cancelling"
+              ? `Keeping this ${subject}`
+              : `This ${subject} is being deleted`}
         </p>
         <p className="type-meta mt-0.5 text-muted-foreground">
           {failed
             ? deletion.deletedOnRelay
               ? `Its Relay deleted it, but cleaning up after it didn't finish: ${sentence(deletion.error ?? "an unknown error")}`
               : `${sentence(deletion.error ?? "It stopped for an unknown reason")} Until it's deleted or kept, it can't be changed${target.kind === "database" ? ", though game servers and Apps connected to it can still write to it. Trying again takes a new final backup" : ""}.`
-            : target.kind === "database"
-              ? deletion.status === "backing_up"
-                ? "Its final backup is running. Game servers and Apps connected to it can still write to it, but what they write after the backup started isn't in it."
-                : "Kiln can't change it meanwhile, though game servers and Apps connected to it can still write to it."
-              : deletion.status === "backing_up"
-                ? "Its final backup is running. Nothing can change it meanwhile."
-                : "Nothing can change it meanwhile."}
+            : deletion.status === "cancelling"
+              ? "Kiln is letting it go on its Relay. It can be changed again once that finishes."
+              : target.kind === "database"
+                ? deletion.status === "backing_up"
+                  ? "Its final backup is running. Game servers and Apps connected to it can still write to it, but what they write after the backup started isn't in it."
+                  : "Kiln can't change it meanwhile, though game servers and Apps connected to it can still write to it."
+                : deletion.status === "backing_up"
+                  ? "Its final backup is running. Nothing can change it meanwhile."
+                  : "Nothing can change it meanwhile."}
         </p>
         {failed && canDelete ? (
           <div className="mt-3 flex flex-wrap gap-2">

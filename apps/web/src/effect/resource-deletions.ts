@@ -7,10 +7,14 @@ import { Database, type DatabaseTransaction } from "@/effect/database"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { databaseTable } from "@/lib/database-config"
 
-// The rows behind `resource.delete` (lib/resource-deletion.server.ts): one
-// per resource, reset for each new attempt. Every write an attempt makes
-// names its attempt and leaves a finished row alone, so an older attempt
-// can't change a newer one's record.
+// The rows behind `resource.delete` and `resource.delete.cancel`
+// (lib/resource-deletion.server.ts): one per resource. Each change of plan,
+// a new attempt at deleting it or keeping it after a failure, starts a new
+// attempt number, which names the operation that carries it out. Every write
+// an operation makes names its attempt and the statuses it may move from, so
+// an older attempt can't change a newer one's record. Asking for a change is
+// one row transition, so a retry and a cancel asked at once are decided by
+// whichever commits first, and the other is refused.
 
 export type ResourceDeletionKind = "instance" | "database"
 
@@ -20,9 +24,10 @@ export type ResourceDeletionStatus =
   | "deleting"
   | "failed"
   | "completed"
+  | "cancelling"
   | "cancelled"
 
-/** A deletion still running: anything that would change the resource waits. */
+/** A deletion still running its steps. */
 export const unfinishedDeletionStatuses = [
   "pending",
   "backing_up",
@@ -65,9 +70,34 @@ interface ResourceDeletionRow extends RowDataPacket {
   updated_at: number | string
 }
 
-const select = `SELECT id, relay_id, resource_kind, resource_id, final_backup,
-       storage_id, backup_id, status, error, attempt, relay_deleted_at,
-       requested_by, actor, created_at, updated_at
+/** A change that would name a resource being deleted, or deleted. */
+export class ResourceBeingDeletedError extends Data.TaggedError(
+  "ResourceBeingDeletedError"
+)<{ readonly message: string }> {}
+
+/** A change of plan refused because another is under way or done. */
+export class ResourceDeletionConflictError extends Data.TaggedError(
+  "ResourceDeletionConflictError"
+)<{ readonly message: string }> {}
+
+const columns = [
+  "id",
+  "relay_id",
+  "resource_kind",
+  "resource_id",
+  "final_backup",
+  "storage_id",
+  "backup_id",
+  "status",
+  "error",
+  "attempt",
+  "relay_deleted_at",
+  "requested_by",
+  "actor",
+  "created_at",
+  "updated_at",
+]
+const select = `SELECT ${columns.join(", ")}
   FROM ${databaseTable("resource_deletion")}`
 
 export const loadResourceDeletionEffect = Effect.fn("resourceDeletions.load")(
@@ -97,26 +127,48 @@ export const findResourceDeletionEffect = Effect.fn("resourceDeletions.find")(
   }
 )
 
-/** Every deletion still running, as after a restart. */
-export const listUnfinishedResourceDeletionsEffect = Effect.fn(
-  "resourceDeletions.listUnfinished"
-)(function* () {
-  const database = yield* Database
-  const rows = yield* database.queryRows<ResourceDeletionRow>(
-    "resource_deletion_list_unfinished",
-    `${select}
-      WHERE status IN ('pending', 'backing_up', 'deleting')
-      ORDER BY created_at ASC, id ASC`
-  )
-  return rows.map(toResourceDeletion)
-})
+/**
+ * Deletions, and keeps after a failed one, whose current attempt has no
+ * operation carrying it out: never admitted, as when Hearth stopped between
+ * recording the attempt and admitting it, or ended without recording how,
+ * as one interrupted for good does. `operationEnded` tells them apart.
+ */
+export const listResourceDeletionsToReconcileEffect = Effect.fnUntraced(
+  function* () {
+    const database = yield* Database
+    const rows = yield* database.queryRows<
+      ResourceDeletionRow & { operation_state: string | null }
+    >(
+      "resource_deletion_reconcile",
+      `SELECT ${columns.map((column) => `deletion.${column}`).join(", ")},
+              operation.state AS operation_state
+         FROM ${databaseTable("resource_deletion")} deletion
+         LEFT JOIN ${databaseTable("operation")} operation
+           ON operation.kind = IF(deletion.status = 'cancelling',
+                                  'resource.delete.cancel', 'resource.delete')
+          AND operation.idempotency_key = CONCAT(deletion.id, ':', deletion.attempt)
+        WHERE deletion.status IN ('pending', 'backing_up', 'deleting', 'cancelling')
+          AND (operation.id IS NULL
+               OR operation.state IN ('succeeded', 'failed', 'cancelled', 'interrupted'))
+        ORDER BY deletion.created_at ASC, deletion.id ASC`
+    )
+    return rows.map((row) => ({
+      deletion: toResourceDeletion(row),
+      operationEnded: row.operation_state !== null,
+    }))
+  }
+)
 
 /**
  * Records that someone asked to delete a resource. A new one starts at its
  * first attempt. One that failed or was cancelled starts its next attempt
  * from the top, for whoever asked this time. A game server keeps a final
  * backup it already has while it stayed frozen, and so stopped, since: after
- * a failure, not a cancel. One still running, or done, is returned as it is.
+ * a failure, never after keeping it. One still running, or done, is returned
+ * as it is; one being kept is refused until that settles.
+ *
+ * The row is written before it's read: two first requests at once would
+ * otherwise each lock the gap where it goes and deadlock inserting it.
  */
 export const requestResourceDeletionRowEffect = Effect.fn(
   "resourceDeletions.request"
@@ -134,6 +186,29 @@ export const requestResourceDeletionRowEffect = Effect.fn(
     "resource_deletion_request",
     (transaction) =>
       Effect.gen(function* () {
+        const id = randomUUID()
+        const actor = JSON.stringify(input.user)
+        // On the resource's existing row, a no-op that locks it.
+        yield* transaction.execute(
+          `INSERT INTO ${databaseTable("resource_deletion")}
+          (id, relay_id, resource_kind, resource_id, final_backup,
+           storage_id, backup_id, status, error, attempt, relay_deleted_at,
+           requested_by, actor, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, NULL, 'pending', NULL, 1, NULL, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE id = id`,
+          [
+            id,
+            input.relayId,
+            input.kind,
+            input.resourceId,
+            input.finalBackup,
+            input.finalBackup ? input.storageId : null,
+            input.user.id,
+            actor,
+            now,
+            now,
+          ]
+        )
         const [existing] = yield* transaction.queryRows<ResourceDeletionRow>(
           `${select}
           WHERE relay_id = ? AND resource_kind = ? AND resource_id = ?
@@ -141,72 +216,51 @@ export const requestResourceDeletionRowEffect = Effect.fn(
           FOR UPDATE`,
           [input.relayId, input.kind, input.resourceId]
         )
-        const actor = JSON.stringify(input.user)
-        if (!existing) {
-          const id = randomUUID()
-          yield* transaction.execute(
-            `INSERT INTO ${databaseTable("resource_deletion")}
-            (id, relay_id, resource_kind, resource_id, final_backup,
-             storage_id, backup_id, status, error, attempt, relay_deleted_at,
-             requested_by, actor, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, NULL, 'pending', NULL, 1, NULL, ?, ?, ?, ?)`,
-            [
-              id,
-              input.relayId,
-              input.kind,
-              input.resourceId,
-              input.finalBackup,
-              input.finalBackup ? input.storageId : null,
-              input.user.id,
-              actor,
-              now,
-              now,
-            ]
-          )
-        } else if (
-          existing.status === "failed" ||
-          existing.status === "cancelled"
-        ) {
-          let backupId: string | null = null
-          // Only a game server's: a stopped server is as its backup left it,
-          // while a frozen database keeps taking writes from what's
-          // connected to it.
-          if (
-            existing.status === "failed" &&
-            existing.resource_kind === "instance" &&
-            input.finalBackup &&
-            existing.backup_id
-          ) {
-            const [backup] = yield* transaction.queryRows<
-              RowDataPacket & { status: string }
-            >(
-              `SELECT status FROM ${databaseTable("backup")} WHERE id = ? LIMIT 1`,
-              [existing.backup_id]
-            )
-            if (backup?.status === "available") backupId = existing.backup_id
-          }
-          yield* transaction.execute(
-            `UPDATE ${databaseTable("resource_deletion")}
-              SET attempt = attempt + 1, status = 'pending', error = NULL,
-                  final_backup = ?, storage_id = ?, backup_id = ?,
-                  requested_by = ?, actor = ?, updated_at = ?
-            WHERE id = ?`,
-            [
-              input.finalBackup,
-              input.finalBackup ? input.storageId : null,
-              backupId,
-              input.user.id,
-              actor,
-              now,
-              existing.id,
-            ]
-          )
+        if (!existing) return yield* Effect.die("The deletion was not recorded")
+        if (existing.id === id) return toResourceDeletion(existing)
+        if (existing.status === "cancelling") {
+          return yield* new ResourceDeletionConflictError({
+            message:
+              "It's still being kept after its last deletion stopped. Try again once that finishes.",
+          })
         }
+        if (existing.status !== "failed" && existing.status !== "cancelled") {
+          return toResourceDeletion(existing)
+        }
+        let backupId: string | null = null
+        if (
+          existing.status === "failed" &&
+          existing.resource_kind === "instance" &&
+          input.finalBackup &&
+          existing.backup_id
+        ) {
+          const [backup] = yield* transaction.queryRows<
+            RowDataPacket & { status: string }
+          >(
+            `SELECT status FROM ${databaseTable("backup")} WHERE id = ? LIMIT 1`,
+            [existing.backup_id]
+          )
+          if (backup?.status === "available") backupId = existing.backup_id
+        }
+        yield* transaction.execute(
+          `UPDATE ${databaseTable("resource_deletion")}
+            SET attempt = attempt + 1, status = 'pending', error = NULL,
+                final_backup = ?, storage_id = ?, backup_id = ?,
+                requested_by = ?, actor = ?, updated_at = ?
+          WHERE id = ?`,
+          [
+            input.finalBackup,
+            input.finalBackup ? input.storageId : null,
+            backupId,
+            input.user.id,
+            actor,
+            now,
+            existing.id,
+          ]
+        )
         const [row] = yield* transaction.queryRows<ResourceDeletionRow>(
-          `${select}
-          WHERE relay_id = ? AND resource_kind = ? AND resource_id = ?
-          LIMIT 1`,
-          [input.relayId, input.kind, input.resourceId]
+          `${select} WHERE id = ? LIMIT 1`,
+          [existing.id]
         )
         if (!row) return yield* Effect.die("The deletion was not recorded")
         return toResourceDeletion(row)
@@ -215,31 +269,75 @@ export const requestResourceDeletionRowEffect = Effect.fn(
 })
 
 /**
- * Moves an attempt that's still running to `status`. Returns whether it did:
- * a newer attempt, or one already finished, is left alone.
+ * Records that someone wants to keep a resource whose deletion failed
+ * before the Relay deleted it, as a new attempt, before anything is let go:
+ * from here no retry can start, and its final backup is no longer one a
+ * retry may reuse, since the resource changes once it's let go. Fails if
+ * the deletion isn't one that can be kept.
+ */
+export const requestResourceKeepRowEffect = Effect.fn(
+  "resourceDeletions.requestKeep"
+)(function* (relayId: string, kind: ResourceDeletionKind, resourceId: string) {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  return yield* database.transaction("resource_deletion_keep", (transaction) =>
+    Effect.gen(function* () {
+      const result = yield* transaction.execute(
+        `UPDATE ${databaseTable("resource_deletion")}
+            SET status = 'cancelling', attempt = attempt + 1, backup_id = NULL,
+                error = NULL, updated_at = ?
+          WHERE relay_id = ? AND resource_kind = ? AND resource_id = ?
+            AND status = 'failed' AND relay_deleted_at IS NULL`,
+        [now, relayId, kind, resourceId]
+      )
+      if (result.affectedRows !== 1) {
+        return yield* new ResourceDeletionConflictError({
+          message:
+            "Only a deletion that stopped before the Relay deleted anything can be cancelled",
+        })
+      }
+      const [row] = yield* transaction.queryRows<ResourceDeletionRow>(
+        `${select}
+          WHERE relay_id = ? AND resource_kind = ? AND resource_id = ?
+          LIMIT 1`,
+        [relayId, kind, resourceId]
+      )
+      if (!row) return yield* Effect.die("The deletion was not recorded")
+      return toResourceDeletion(row)
+    })
+  )
+})
+
+/**
+ * Moves an attempt to `status` from one of `from`, by default a deletion
+ * still running. Returns whether it did: a newer attempt, or one already
+ * elsewhere, is left alone.
  */
 export const recordResourceDeletionStatusEffect = Effect.fn(
   "resourceDeletions.recordStatus"
 )(function* (input: {
   attempt: number
   error?: string | null
+  from?: ReadonlyArray<ResourceDeletionStatus>
   id: string
   status: ResourceDeletionStatus
 }) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
+  const from = input.from ?? unfinishedDeletionStatuses
   const result = yield* database.execute(
     "resource_deletion_status",
     `UPDATE ${databaseTable("resource_deletion")}
         SET status = ?, error = ?, updated_at = ?
       WHERE id = ? AND attempt = ?
-        AND status IN ('pending', 'backing_up', 'deleting')`,
+        AND status IN (${from.map(() => "?").join(", ")})`,
     [
       input.status,
       input.error?.slice(0, 4_096) ?? null,
       now,
       input.id,
       input.attempt,
+      ...from,
     ]
   )
   return result.affectedRows > 0
@@ -261,37 +359,14 @@ export const recordRelayDeletedEffect = Effect.fn(
 })
 
 /**
- * Marks a failed deletion cancelled, if the Relay deleted nothing of it.
- * Returns whether it did.
- */
-export const recordResourceDeletionCancelledEffect = Effect.fn(
-  "resourceDeletions.recordCancelled"
-)(function* (id: string) {
-  const database = yield* Database
-  const now = yield* Clock.currentTimeMillis
-  const result = yield* database.execute(
-    "resource_deletion_cancel",
-    `UPDATE ${databaseTable("resource_deletion")}
-        SET status = 'cancelled', error = NULL, updated_at = ?
-      WHERE id = ? AND status = 'failed' AND relay_deleted_at IS NULL`,
-    [now, id]
-  )
-  return result.affectedRows > 0
-})
-
-/** A change that would name a resource being deleted, or deleted. */
-export class ResourceBeingDeletedError extends Data.TaggedError(
-  "ResourceBeingDeletedError"
-)<{ readonly message: string }> {}
-
-/**
  * Refuses, inside `transaction`, to let anything new point at a game server
- * or database whose deletion was asked for. Each check is a locking read of
- * the resource's deletion key, which under REPEATABLE READ also locks the
- * gap where a missing row would go: a deletion asked for meanwhile waits for
- * this transaction to commit, and its cleanup then finds what it wrote, and
- * one asked for before is seen here. A failed or cancelled deletion left the
- * resource in place, so it doesn't count.
+ * or database whose deletion was asked for, or that its Relay has deleted.
+ * Each check is a locking read of the resource's deletion key, which under
+ * REPEATABLE READ also locks the gap where a missing row would go: a
+ * deletion asked for meanwhile waits for this transaction to commit, and its
+ * cleanup then finds what it wrote, and one asked for before is seen here.
+ * Only a deletion that stopped, or was cancelled, before the Relay deleted
+ * anything left the resource in place.
  */
 export const refuseResourcesBeingDeleted = Effect.fnUntraced(function* (
   transaction: DatabaseTransaction,
@@ -305,23 +380,26 @@ export const refuseResourcesBeingDeleted = Effect.fnUntraced(function* (
   for (const resource of resources) {
     if (resource.kind !== "instance" && resource.kind !== "database") continue
     const [deletion] = yield* transaction.queryRows<
-      RowDataPacket & { status: ResourceDeletionStatus }
+      RowDataPacket & {
+        relay_deleted_at: number | string | null
+        status: ResourceDeletionStatus
+      }
     >(
-      `SELECT status FROM ${databaseTable("resource_deletion")}
+      `SELECT status, relay_deleted_at
+         FROM ${databaseTable("resource_deletion")}
         WHERE relay_id = ? AND resource_kind = ? AND resource_id = ?
         FOR SHARE`,
       [resource.relayId, resource.kind, resource.id]
     )
-    if (
-      deletion &&
-      deletion.status !== "failed" &&
-      deletion.status !== "cancelled"
-    ) {
+    if (!deletion) continue
+    if (deletion.relay_deleted_at !== null || deletion.status === "completed") {
       return yield* new ResourceBeingDeletedError({
-        message:
-          deletion.status === "completed"
-            ? `${resource.name} was deleted`
-            : `${resource.name} is being deleted`,
+        message: `${resource.name} was deleted`,
+      })
+    }
+    if (deletion.status !== "failed" && deletion.status !== "cancelled") {
+      return yield* new ResourceBeingDeletedError({
+        message: `${resource.name} is being deleted`,
       })
     }
   }

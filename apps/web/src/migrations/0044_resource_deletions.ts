@@ -33,7 +33,7 @@ export const resourceDeletions: Migration = {
   \`final_backup\` tinyint(1) NOT NULL,
   \`storage_id\` char(36) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,
   \`backup_id\` char(36) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,
-  \`status\` enum('pending','backing_up','deleting','failed','completed','cancelled') NOT NULL,
+  \`status\` enum('pending','backing_up','deleting','failed','completed','cancelling','cancelled') NOT NULL,
   \`error\` text,
   \`attempt\` int unsigned NOT NULL DEFAULT '1',
   \`relay_deleted_at\` bigint unsigned DEFAULT NULL,

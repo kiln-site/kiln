@@ -11,6 +11,7 @@ import { migrateDatabase } from "./effect/migrations"
 import {
   disposeAppRuntime,
   forkAppEffect,
+  forkAppWorker,
   reportAppError,
 } from "./effect/runtime"
 import { forkPromise } from "./effect/promise"
@@ -34,7 +35,7 @@ import {
   stopAppDeploymentPolling,
 } from "./lib/app-deployments.server"
 import { resumeTailscaleNetworkDeletion } from "./lib/tailscale-cleanup.server"
-import { resumeResourceDeletions } from "./lib/resource-deletion.server"
+import { reconcileResourceDeletions } from "./lib/resource-deletion.server"
 import {
   startAppImageUpdateChecks,
   stopAppImageUpdateChecks,
@@ -146,12 +147,15 @@ forkAppEffect(
 scheduleBackupCopyProcessing()
 scheduleInstancePostProvisionProcessing()
 // Deletions a previous Hearth, or the final-delete worker before it, left
-// running carry on, each as the operation it was.
-forkAppEffect(
-  "ResourceDeletions.resume",
-  resumeResourceDeletions().pipe(
-    Effect.retry(Schedule.spaced("30 seconds")),
-    Effect.ignore
+// running carry on, each as the operation it was, and any attempt recorded
+// but never admitted is admitted: now, then every half minute.
+forkAppWorker(
+  reconcileResourceDeletions().pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning("Resource deletions weren't reconciled", cause)
+    ),
+    Effect.repeat(Schedule.spaced("30 seconds")),
+    Effect.asVoid
   )
 )
 forkAppEffect(

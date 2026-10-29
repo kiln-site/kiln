@@ -1,136 +1,45 @@
 import { randomUUID } from "node:crypto"
 
 import { assert, layer } from "@effect/vitest"
-import { Effect, Layer, Schedule } from "effect"
+import { Effect, Layer } from "effect"
 import { TestClock } from "effect/testing"
 import { afterAll, vi } from "vite-plus/test"
 
 import { Database } from "@/effect/database"
+import { ResourceDeletionConflictError } from "@/effect/resource-deletions"
 import { disposeAppRuntime } from "@/effect/runtime"
-import type { AuthenticatedUser } from "@/lib/auth-session"
 import { testOperationsEngine } from "@/operations/test/engine"
 import { insertSchedule } from "@/server/schedule-deployment.server"
-import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
+import { TestDatabase, describeMysql } from "@/test/database"
 import {
-  insertBackup,
-  insertGrant,
-  insertInstance,
-  insertRelay,
-  insertRows,
-  insertUser,
-  selectRows,
-} from "@/test/seed"
+  allow,
+  at,
+  databaseId,
+  deletionRelay as relay,
+  deletionUntil as until,
+  insertDeletion,
+  owner,
+  relayId,
+  seedDeletion as seed,
+  serverId,
+  serverRecords,
+  stranger,
+} from "@/test/resource-deletion"
+import { insertBackup, insertRows, selectRows } from "@/test/seed"
 
 import {
   cancelResourceDeletionEffect,
   deleteResource,
+  keepResource,
+  reconcileResourceDeletions,
   requestResourceDeletionEffect,
-  resumeResourceDeletions,
 } from "./resource-deletion.server"
 
-// The Relay is the only fake: the game servers and databases it has, which
-// it has frozen and for which deletion, every change asked of it, and an
-// outcome journal by command ID, as its control socket keeps. Its next
-// delete can lose its reply or be refused.
-const relay = vi.hoisted(() => ({
-  changes: [] as Array<string>,
-  databases: new Set<string>(),
-  // Whether each database delete took its data volume too.
-  deletedData: [] as Array<boolean>,
-  frozen: new Map<string, string>(),
-  journal: new Map<string, unknown>(),
-  next: null as null | "loses-reply" | "refuses-delete",
-  servers: new Set<string>(),
+// The Relay is the only fake (test/resource-deletion.ts).
+vi.mock("@/lib/relay-connection", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/relay-connection")>()),
+  ...(await import("@/test/resource-deletion")).deletionRelayConnection,
 }))
-
-vi.mock("@/lib/relay-connection", async (importOriginal) => {
-  const { RelayUnavailableError } = await import("@/effect/errors")
-  return {
-    ...(await importOriginal<typeof import("@/lib/relay-connection")>()),
-    relayJournal: async () => ({
-      clientId: "hearth-one",
-      journalId: "journal-one",
-    }),
-    relayRpc: async (
-      _relay: unknown,
-      operation: string,
-      payload: Record<string, unknown>,
-      _timeout?: number,
-      _subject?: string,
-      _signal?: AbortSignal,
-      frame: { operationId?: string } = {}
-    ) => {
-      if (operation === "operation.get") {
-        return (
-          relay.journal.get(String(payload.operationId)) ?? {
-            status: "unknown",
-          }
-        )
-      }
-      if (operation === "relay.snapshot") return relaySnapshot()
-      if (operation === "database.list") {
-        const id = String(
-          (payload.requests as Array<{ id: string }>)[0]?.id ?? ""
-        )
-        return relay.databases.has(id) ? [{ id }] : []
-      }
-      // Backups are queued and followed by Hearth's own records here.
-      if (operation === "backup.task.list") return []
-      if (operation === "backup.task.enqueue") {
-        throw new Error("The Relay's backup queue is busy")
-      }
-      relay.changes.push(operation)
-      const id = String(payload.id ?? payload.instanceId ?? payload.databaseId)
-      let result: unknown
-      switch (operation) {
-        case "resource.freeze":
-          relay.frozen.set(id, String(payload.deletionId))
-          result = { frozen: true }
-          break
-        case "resource.unfreeze":
-          if (relay.frozen.get(id) === payload.deletionId) {
-            relay.frozen.delete(id)
-          }
-          result = { frozen: relay.frozen.has(id) }
-          break
-        case "instance.delete":
-        case "database.delete":
-          if (relay.next === "refuses-delete") {
-            relay.next = null
-            throw RelayUnavailableError.make({
-              code: "delete_failed",
-              message: "The Relay couldn't remove it",
-              retryable: false,
-            })
-          }
-          if (operation === "database.delete") {
-            relay.deletedData.push(Boolean(payload.deleteData))
-          }
-          relay.servers.delete(id)
-          relay.databases.delete(id)
-          relay.frozen.delete(id)
-          result =
-            operation === "instance.delete"
-              ? { deleted: true, instanceId: id }
-              : { databaseId: id, deleted: true }
-          break
-        default:
-          throw new Error(`Unexpected Relay operation ${operation}`)
-      }
-      if (frame.operationId) {
-        relay.journal.set(frame.operationId, { result, status: "succeeded" })
-      }
-      if (relay.next === "loses-reply") {
-        relay.next = null
-        throw RelayUnavailableError.make({
-          message: "The connection dropped before the Relay answered",
-          outcome: "unknown",
-        })
-      }
-      return result
-    },
-  }
-})
 vi.mock("@/lib/authorization-delivery", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/authorization-delivery")>()),
   wakeAuthorizationDelivery: () => undefined,
@@ -138,132 +47,62 @@ vi.mock("@/lib/authorization-delivery", async (importOriginal) => ({
 
 afterAll(() => disposeAppRuntime())
 
-const Lanes = testOperationsEngine(deleteResource.layer).pipe(
-  Layer.provideMerge(TestDatabase)
-)
+const Lanes = testOperationsEngine(
+  Layer.mergeAll(deleteResource.layer, keepResource.layer)
+).pipe(Layer.provideMerge(TestDatabase))
 
-const relayId = "r".repeat(43)
-const serverId = "a".repeat(40)
-const databaseId = "d".repeat(40)
-const at = 1_767_225_600_000
+const deleteServer = (user = owner, finalBackup = false) =>
+  requestResourceDeletionEffect({
+    finalBackup,
+    kind: "instance",
+    relayId,
+    resourceId: serverId,
+    user,
+  })
 
-const person = (id: string) =>
-  ({
-    email: `${id}@example.test`,
-    emailVerified: true,
-    emailVerifiedAt: "2026-01-01T00:00:00.000Z",
-    id,
-    isDevelopmentBypass: false,
-    name: id,
-    role: "user",
-    twoFactorEnabled: false,
-  }) satisfies AuthenticatedUser
-const owner = person("owner")
-// Signed in, verified, and without any access to the game server.
-const stranger = person("stranger")
+const keepServer = cancelResourceDeletionEffect({
+  kind: "instance",
+  relayId,
+  resourceId: serverId,
+  user: owner,
+})
 
-// The owner's grant on one resource, with just these permissions.
-const allow = (
-  resourceType: "database" | "instance",
-  resourceId: string,
-  permissions: ReadonlyArray<string>
-) =>
+// The Relay reports a final backup failed, as reconciling records it.
+const failBackup = (backupId: string) =>
   Effect.gen(function* () {
-    const id = randomUUID()
-    yield* insertGrant({
-      id,
-      relayId,
-      resourceId,
-      resourceType,
-      role: null,
-      userId: owner.id,
-    })
-    yield* insertRows(
-      "access_selection",
-      permissions.map((permission) => ({
-        access_id: id,
-        selection_key: permission,
-        selection_kind: "permission",
-      }))
+    const database = yield* Database
+    yield* database.execute(
+      "test.failBackup",
+      `UPDATE kiln_backup SET status = 'failed' WHERE id = ?`,
+      [backupId]
+    )
+    yield* database.execute(
+      "test.failBackupTask",
+      `UPDATE kiln_backup_task SET status = 'failed',
+              error = 'Relay disk is full'
+        WHERE backup_id = ?`,
+      [backupId]
     )
   })
 
-// Every operation an earlier test started has ended, its workflow's last
-// writes included, so emptying the tables doesn't wait on them.
-const operationsEnded = selectRows<{ state: string }>("operation").pipe(
-  Effect.repeat({
-    schedule: Schedule.spaced("100 millis"),
-    until: (rows) =>
-      rows.every((row) =>
-        ["cancelled", "failed", "interrupted", "succeeded"].includes(row.state)
-      ),
-  }),
-  Effect.timeout("45 seconds")
-)
-
-const seed = Effect.gen(function* () {
-  yield* operationsEnded
-  yield* resetDatabase
-  relay.changes.length = 0
-  relay.frozen.clear()
-  relay.journal.clear()
-  relay.next = null
-  relay.servers.clear()
-  relay.servers.add(serverId)
-  relay.databases.clear()
-  relay.deletedData.length = 0
-  yield* insertRelay(relayId)
-  for (const user of [owner, stranger]) {
-    yield* insertUser(user.id, { emailVerifiedAt: new Date(at) })
-  }
-  yield* allow("instance", serverId, ["instance.delete", "backup.create"])
-  yield* insertInstance(relayId, serverId, { display_name: "Survival" })
-})
-
-const deletions = selectRows<{
-  attempt: number
-  backup_id: string | null
-  error: string | null
-  relay_deleted_at: number | null
-  resource_id: string
-  status: string
-}>("resource_deletion")
-
-const deletionOf = (resourceId: string) =>
-  deletions.pipe(
-    Effect.map((rows) => rows.find((row) => row.resource_id === resourceId))
-  )
-
-const until = (resourceId: string, statuses: ReadonlyArray<string>) =>
-  deletionOf(resourceId).pipe(
-    Effect.repeat({
-      schedule: Schedule.spaced("100 millis"),
-      until: (row) => row !== undefined && statuses.includes(row.status),
-    }),
-    Effect.timeout("45 seconds")
-  )
-
-const serverRecords = selectRows<{ instance_id: string }>("instance").pipe(
-  Effect.map((rows) => rows.map((row) => row.instance_id))
-)
-
-// A deletion as an earlier Hearth, or the final-delete worker before it,
-// left it.
-const insertDeletion = (row: Record<string, unknown>) =>
-  insertRows("resource_deletion", {
-    actor: JSON.stringify(owner),
-    attempt: 1,
-    created_at: at,
-    final_backup: false,
-    id: randomUUID(),
+// A deletion stopped with the server frozen and a finished final backup.
+const seedStoppedWithBackup = Effect.gen(function* () {
+  yield* seed
+  yield* insertBackup("final-backup", {
+    reason: "final_delete",
     relay_id: relayId,
-    requested_by: owner.id,
-    resource_id: serverId,
-    resource_kind: "instance",
-    status: "pending",
-    updated_at: at,
-    ...row,
+    target_id: serverId,
   })
+  const id = randomUUID()
+  yield* insertDeletion({
+    backup_id: "final-backup",
+    error: "The Relay couldn't remove it",
+    final_backup: true,
+    id,
+    status: "failed",
+  })
+  relay.frozen.set(serverId, id)
+})
 
 describeMysql("Deleting a game server or database", () => {
   layer(Lanes, { timeout: 120_000 })((it) => {
@@ -272,25 +111,13 @@ describeMysql("Deleting a game server or database", () => {
       () =>
         Effect.gen(function* () {
           yield* seed
-          relay.next = "loses-reply"
+          relay.nextDelete = "loses-reply"
 
-          yield* requestResourceDeletionEffect({
-            finalBackup: false,
-            kind: "instance",
-            relayId,
-            resourceId: serverId,
-            user: owner,
-          })
+          yield* deleteServer()
           const done = yield* until(serverId, ["completed", "failed"])
           // As after a restart, and as someone asking again.
-          yield* resumeResourceDeletions()
-          yield* requestResourceDeletionEffect({
-            finalBackup: false,
-            kind: "instance",
-            relayId,
-            resourceId: serverId,
-            user: owner,
-          })
+          yield* reconcileResourceDeletions()
+          yield* deleteServer()
           yield* Effect.sleep("1 second")
 
           assert.strictEqual(done?.status, "completed")
@@ -321,8 +148,8 @@ describeMysql("Deleting a game server or database", () => {
             status: "deleting",
           })
 
-          yield* resumeResourceDeletions()
-          yield* resumeResourceDeletions()
+          yield* reconcileResourceDeletions()
+          yield* reconcileResourceDeletions()
           const done = yield* until(serverId, ["completed", "failed"])
 
           assert.strictEqual(done?.status, "completed")
@@ -342,33 +169,30 @@ describeMysql("Deleting a game server or database", () => {
     )
 
     it.effect(
+      "admits a deletion recorded without its operation, as after a stop between the two",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          yield* insertDeletion({ status: "pending" })
+
+          yield* reconcileResourceDeletions()
+          const done = yield* until(serverId, ["completed", "failed"])
+
+          assert.strictEqual(done?.status, "completed")
+          assert.deepStrictEqual(yield* serverRecords, [])
+        }).pipe(TestClock.withLive),
+      60_000
+    )
+
+    it.effect(
       "deletes nothing when the final backup fails, keeping the server frozen until it's kept",
       () =>
         Effect.gen(function* () {
           yield* seed
 
-          yield* requestResourceDeletionEffect({
-            finalBackup: true,
-            kind: "instance",
-            relayId,
-            resourceId: serverId,
-            user: owner,
-          })
+          yield* deleteServer(owner, true)
           const backingUp = yield* until(serverId, ["backing_up"])
-          // The Relay reports the backup failed, as reconciling records it.
-          const database = yield* Database
-          yield* database.execute(
-            "test.failBackup",
-            `UPDATE kiln_backup SET status = 'failed' WHERE id = ?`,
-            [backingUp?.backup_id ?? ""]
-          )
-          yield* database.execute(
-            "test.failBackupTask",
-            `UPDATE kiln_backup_task SET status = 'failed',
-                    error = 'Relay disk is full'
-              WHERE backup_id = ?`,
-            [backingUp?.backup_id ?? ""]
-          )
+          yield* failBackup(backingUp?.backup_id ?? "")
           const failed = yield* until(serverId, ["failed", "completed"])
 
           assert.strictEqual(failed?.status, "failed")
@@ -378,16 +202,80 @@ describeMysql("Deleting a game server or database", () => {
           assert.isTrue(relay.frozen.has(serverId))
           assert.deepStrictEqual(yield* serverRecords, [serverId])
 
-          yield* cancelResourceDeletionEffect({
-            kind: "instance",
-            relayId,
-            resourceId: serverId,
-            user: owner,
-          })
+          yield* keepServer
+          const kept = yield* until(serverId, ["cancelled", "failed"])
 
-          assert.strictEqual((yield* deletionOf(serverId))?.status, "cancelled")
+          assert.strictEqual(kept?.status, "cancelled")
           assert.isFalse(relay.frozen.has(serverId))
           assert.isTrue(relay.servers.has(serverId))
+        }).pipe(TestClock.withLive),
+      60_000
+    )
+
+    it.effect(
+      "keeps a server durably: its final backup can't be reused, nothing retries meanwhile, and a stop resumes it",
+      () =>
+        Effect.gen(function* () {
+          yield* seedStoppedWithBackup
+          // Hearth stopped right after recording the keep, before its
+          // operation was admitted.
+          const database = yield* Database
+          yield* database.execute(
+            "test.recordKeep",
+            `UPDATE kiln_resource_deletion
+                SET status = 'cancelling', attempt = attempt + 1,
+                    backup_id = NULL`
+          )
+
+          const refused = yield* Effect.flip(deleteServer(owner, true))
+          yield* reconcileResourceDeletions()
+          const kept = yield* until(serverId, ["cancelled", "failed"])
+
+          assert.instanceOf(refused, ResourceDeletionConflictError)
+          assert.include(refused.message, "still being kept")
+          assert.strictEqual(kept?.status, "cancelled")
+          assert.isFalse(relay.frozen.has(serverId))
+
+          // Running again, it may have changed: deleting it takes a new
+          // final backup, not the one from before.
+          yield* deleteServer(owner, true)
+          const backingUp = yield* until(serverId, ["backing_up"])
+
+          assert.isNotNull(backingUp?.backup_id)
+          assert.notStrictEqual(backingUp?.backup_id, "final-backup")
+
+          yield* failBackup(backingUp?.backup_id ?? "")
+          yield* until(serverId, ["failed"])
+        }).pipe(TestClock.withLive),
+      60_000
+    )
+
+    it.effect(
+      "settles a keep and a retry asked at once one way, and says so to both",
+      () =>
+        Effect.gen(function* () {
+          yield* seedStoppedWithBackup
+
+          const [kept, retried] = yield* Effect.all(
+            [Effect.result(keepServer), Effect.result(deleteServer())],
+            { concurrency: "unbounded" }
+          )
+          const settled = yield* until(serverId, [
+            "cancelled",
+            "completed",
+            "failed",
+          ])
+
+          // Exactly one went ahead, and the other was refused.
+          assert.notStrictEqual(kept._tag, retried._tag)
+          if (kept._tag === "Success") {
+            assert.strictEqual(settled?.status, "cancelled")
+            assert.isTrue(relay.servers.has(serverId))
+            assert.isFalse(relay.frozen.has(serverId))
+          } else {
+            assert.strictEqual(settled?.status, "completed")
+            assert.isFalse(relay.servers.has(serverId))
+          }
         }).pipe(TestClock.withLive),
       60_000
     )
@@ -397,16 +285,9 @@ describeMysql("Deleting a game server or database", () => {
       () =>
         Effect.gen(function* () {
           yield* seed
-          relay.next = "refuses-delete"
-          const request = requestResourceDeletionEffect({
-            finalBackup: false,
-            kind: "instance",
-            relayId,
-            resourceId: serverId,
-            user: owner,
-          })
+          relay.nextDelete = "refuses"
 
-          yield* request
+          yield* deleteServer()
           const failed = yield* until(serverId, ["failed", "completed"])
 
           assert.strictEqual(failed?.status, "failed")
@@ -414,7 +295,7 @@ describeMysql("Deleting a game server or database", () => {
           assert.isNull(failed?.relay_deleted_at)
           assert.deepStrictEqual(yield* serverRecords, [serverId])
 
-          yield* request
+          yield* deleteServer()
           const done = yield* until(serverId, ["completed"])
 
           assert.strictEqual(done?.attempt, 2)
@@ -436,13 +317,7 @@ describeMysql("Deleting a game server or database", () => {
             status: "failed",
           })
 
-          yield* requestResourceDeletionEffect({
-            finalBackup: true,
-            kind: "instance",
-            relayId,
-            resourceId: serverId,
-            user: stranger,
-          })
+          yield* deleteServer(stranger, true)
           const done = yield* until(serverId, ["completed", "failed"])
 
           assert.strictEqual(done?.status, "completed")
@@ -458,19 +333,35 @@ describeMysql("Deleting a game server or database", () => {
         Effect.gen(function* () {
           yield* seed
 
-          yield* requestResourceDeletionEffect({
-            finalBackup: false,
-            kind: "instance",
-            relayId,
-            resourceId: serverId,
-            user: stranger,
-          })
+          yield* deleteServer(stranger)
           const failed = yield* until(serverId, ["failed", "completed"])
 
           assert.strictEqual(failed?.status, "failed")
           assert.include(failed?.error ?? "", "Nothing was deleted")
           assert.deepStrictEqual(relay.changes, [])
           assert.deepStrictEqual(yield* serverRecords, [serverId])
+        }).pipe(TestClock.withLive),
+      60_000
+    )
+
+    it.effect(
+      "gives two first requests at once the one deletion",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+
+          const [first, second] = yield* Effect.all(
+            [deleteServer(), deleteServer()],
+            { concurrency: "unbounded" }
+          )
+          const done = yield* until(serverId, ["completed", "failed"])
+
+          assert.strictEqual(first.id, second.id)
+          assert.strictEqual(done?.status, "completed")
+          assert.deepStrictEqual(relay.changes, [
+            "resource.freeze",
+            "instance.delete",
+          ])
         }).pipe(TestClock.withLive),
       60_000
     )
@@ -514,13 +405,18 @@ describeMysql("Deleting a game server or database", () => {
     )
 
     it.effect(
-      "refuses a schedule naming a game server whose deletion is under way",
+      "refuses a schedule naming a game server being deleted, or one its Relay deleted",
       () =>
         Effect.gen(function* () {
           yield* seed
           yield* insertDeletion({ status: "backing_up" })
           const database = yield* Database
-          const save = (id: string) =>
+          const setDeletion = (set: string) =>
+            database.execute(
+              "test.setDeletion",
+              `UPDATE kiln_resource_deletion SET ${set}`
+            )
+          const save = () =>
             database.transaction("test.schedule", (transaction) =>
               insertSchedule(
                 transaction,
@@ -529,7 +425,7 @@ describeMysql("Deleting a game server or database", () => {
                   continueOnFailure: false,
                   cron: "0 0 * * *",
                   enabled: true,
-                  id,
+                  id: randomUUID(),
                   name: "Nightly",
                   revision: 1,
                   targets: [
@@ -547,53 +443,21 @@ describeMysql("Deleting a game server or database", () => {
               )
             )
 
-          const refused = yield* Effect.flip(save(randomUUID()))
+          const underWay = yield* Effect.flip(save())
+          // Stopped in cleanup, after the Relay deleted it.
+          yield* setDeletion(`status = 'failed', relay_deleted_at = ${at}`)
+          const gone = yield* Effect.flip(save())
 
-          assert.strictEqual(refused.message, "Survival is being deleted")
+          assert.strictEqual(underWay.message, "Survival is being deleted")
+          assert.strictEqual(gone.message, "Survival was deleted")
           assert.lengthOf(yield* selectRows("schedule"), 0)
 
           // Kept, it's a target like any other again.
-          yield* database.execute(
-            "test.cancelDeletion",
-            `UPDATE kiln_resource_deletion SET status = 'cancelled'`
-          )
-          yield* save(randomUUID())
+          yield* setDeletion(`status = 'cancelled', relay_deleted_at = NULL`)
+          yield* save()
           assert.lengthOf(yield* selectRows("schedule_target"), 1)
         }).pipe(TestClock.withLive),
       60_000
     )
   })
 })
-
-function relaySnapshot() {
-  return {
-    instances: [...relay.servers].map((id) => ({
-      connectAddress: "play.example.test:25565",
-      containerId: null,
-      desiredState: "stopped",
-      directory: "/data/survival",
-      game: "Minecraft",
-      id,
-      implementation: "paper",
-      javaVersion: "21",
-      name: "Survival",
-      observedState: "stopped",
-      service: "survival",
-      shortId: id.slice(0, 8),
-      status: "stopped",
-      version: "1.21",
-    })),
-    node: {
-      arch: "arm64",
-      connectedAt: "2026-01-01T00:00:00.000Z",
-      cpu: { cores: 4, loadPercent: 0 },
-      docker: { available: true, version: "test" },
-      id: relayId,
-      memory: { totalBytes: 1, usedBytes: 0 },
-      name: "Relay",
-      platform: "linux",
-      storage: { totalBytes: 1, usedBytes: 0 },
-      version: "test",
-    },
-  }
-}

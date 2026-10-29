@@ -2107,7 +2107,7 @@ export const reserveBackupRestoreEffect = Effect.fn("backups.reserveRestore")(
             `SELECT id
                  FROM ${databaseTable("resource_deletion")}
                 WHERE relay_id = ? AND resource_kind = ? AND resource_id = ?
-                  AND status IN ('pending', 'backing_up', 'deleting')
+                  AND status IN ('pending', 'backing_up', 'deleting', 'cancelling')
                 LIMIT 1`,
             [backup.relay_id, backup.target_kind, backup.target_id]
           )
@@ -3568,7 +3568,7 @@ const refuseIfFinalDeletionInProgress = Effect.fnUntraced(function* (
     `SELECT id
        FROM ${databaseTable("resource_deletion")}
       WHERE relay_id = ? AND resource_kind = ? AND resource_id = ?
-        AND status IN ('pending', 'backing_up', 'deleting')
+        AND status IN ('pending', 'backing_up', 'deleting', 'cancelling')
       LIMIT 1
       FOR UPDATE`,
     [input.relayId, input.targetKind, input.targetId]

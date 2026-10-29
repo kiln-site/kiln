@@ -21,7 +21,7 @@ export interface ResourceDeletionSummary {
   deletedOnRelay: boolean
   error: string | null
   finalBackup: boolean
-  status: "backing_up" | "deleting" | "failed" | "pending"
+  status: "backing_up" | "cancelling" | "deleting" | "failed" | "pending"
 }
 
 function permissionFor(
