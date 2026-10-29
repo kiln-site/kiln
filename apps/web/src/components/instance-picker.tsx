@@ -845,7 +845,7 @@ const groupPresentation: Record<
   { Icon: React.ComponentType<LucideProps>; label: string }
 > = {
   all: { Icon: Layers, label: "All instances" },
-  app: { Icon: AppKindIcon, label: "All apps" },
+  app: { Icon: AppKindIcon, label: "All Apps" },
   database: { Icon: DatabaseKindIcon, label: "All databases" },
   relay: { Icon: RelayKindIcon, label: "All Relays" },
   server: { Icon: ServerKindIcon, label: "All game servers" },

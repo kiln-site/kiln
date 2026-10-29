@@ -1016,13 +1016,11 @@ const ScheduleLastRun = React.memo(function ScheduleLastRun({
 })
 
 const latestRunResultClassName = {
-  Errored: "text-amber-700 dark:text-amber-300",
   Failed: "text-destructive",
   Success: "text-emerald-700 dark:text-emerald-300",
 } as const satisfies Record<ReturnType<typeof latestRunResult>, string>
 
 const latestRunResultDotClassName = {
-  Errored: "bg-amber-500 dark:bg-amber-400",
   Failed: "bg-destructive",
   Success: "bg-emerald-500 dark:bg-emerald-400",
 } as const satisfies Record<ReturnType<typeof latestRunResult>, string>
@@ -1039,7 +1037,7 @@ function latestRunResult(run: ScheduleRunWithRelay) {
     )
   )
   if (passed.length === 0) return "Failed" as const
-  if (failed.length > 0) return "Errored" as const
+  if (failed.length > 0) return "Failed" as const
   return "Success" as const
 }
 
@@ -2122,7 +2120,7 @@ function TargetRunAudit({
         <div className="min-w-0 flex-1">
           <p className="truncate text-xs font-semibold">{run.target.name}</p>
           <p className="type-meta truncate font-mono text-muted-foreground">
-            {run.target.kind} · {run.target.id}
+            {run.target.kind === "app" ? "App" : run.target.kind} · {run.target.id}
           </p>
         </div>
         <span className="type-meta text-muted-foreground">
@@ -3414,7 +3412,7 @@ const ScheduleActionTargetsButton = React.memo(
             <DrawerPopoverTrigger asChild>
               <Button
                 aria-expanded={open}
-                aria-label={`${selectedTargets.length} targets for ${actionLabel(action.type)}`}
+                aria-label={`${selectedTargets.length} ${selectedTargets.length === 1 ? "target" : "targets"} for ${actionLabel(action.type)}`}
                 size="icon-sm"
                 type="button"
                 variant="ghost"

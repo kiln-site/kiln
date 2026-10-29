@@ -132,7 +132,7 @@ export function TailscaleConnectedMembersTable({
   if (!stack) {
     return (
       <TailscaleEmptyTable
-        actionLabel="Setup Tailscale"
+        actionLabel="Set up Tailscale"
         description="Set up Tailscale before connecting game servers, Apps, or databases"
         icon="network"
         title="No Tailscale networks"

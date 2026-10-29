@@ -59,7 +59,7 @@ const scopeKindPresentation: Record<
   ScopeKind,
   { Icon: typeof ServerKindIcon; label: string; one: string; other: string }
 > = {
-  app: { Icon: AppKindIcon, label: "All apps", one: "app", other: "apps" },
+  app: { Icon: AppKindIcon, label: "All Apps", one: "App", other: "Apps" },
   database: {
     Icon: DatabaseKindIcon,
     label: "All databases",

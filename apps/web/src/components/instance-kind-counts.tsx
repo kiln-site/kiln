@@ -28,8 +28,8 @@ const instanceKinds = [
   {
     key: "apps",
     icon: instanceKindIcons.app,
-    one: "app",
-    other: "apps",
+    one: "App",
+    other: "Apps",
   },
   {
     key: "databases",

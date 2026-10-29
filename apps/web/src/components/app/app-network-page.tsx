@@ -387,7 +387,7 @@ function PublishedPorts({
       />
       {compose ? (
         <p className="border-b px-4 py-3 text-xs text-muted-foreground">
-          Compose apps publish the ports their Compose file lists.
+          Compose Apps publish the ports their Compose file lists.
         </p>
       ) : ports.length === 0 ? (
         <p className="border-b px-4 py-3 text-xs text-muted-foreground">

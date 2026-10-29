@@ -68,7 +68,7 @@ export const AppWorkspaceShell = React.memo(function AppWorkspaceShell({
         <ResourceWorkspaceBoundary
           context={AppWorkspaceContext}
           icon={<AppKindIcon />}
-          list={{ label: "All apps", to: "/infra/apps" }}
+          list={{ label: "All Apps", to: "/infra/apps" }}
           noun={{ one: "app", other: "apps" }}
           workspace={workspace}
         >
@@ -113,7 +113,7 @@ function DeleteFailedApp({ app }: { app: App }) {
         onClick={() => setOpen(true)}
       >
         <Trash2 />
-        Delete app
+        Delete App
       </Button>
       {open ? (
         <DeleteAppDialog

@@ -246,7 +246,7 @@ const TailscaleNetworkPicker = React.memo(function TailscaleNetworkPicker({
               ) : (
                 <Button type="button" size="sm" onClick={onAdd}>
                   <Plus />
-                  Setup Tailscale
+                  Set up Tailscale
                 </Button>
               )}
             </div>

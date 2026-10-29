@@ -754,7 +754,7 @@ function CreateAppDialog({
     <Dialog open onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[min(92dvh,56rem)] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Add app</DialogTitle>
+          <DialogTitle>Add App</DialogTitle>
           <DialogDescription>
             {kind === "github"
               ? "Hearth creates the app with its own network and data directory, then deploys the branch."
@@ -887,11 +887,11 @@ function EmptyAppTable({
               ? "Deploy a Docker image, a Dockerfile, or a Compose project."
               : awaitingFirstRelay
                 ? "Pair a Relay to start deploying apps."
-                : "No apps have been assigned to your account yet."}
+                : "No Apps have been assigned to your account yet."}
         </span>
       }
       icon={<AppKindIcon className="size-6" />}
-      title={searchActive ? "No apps match your search" : "No apps"}
+      title={searchActive ? "No Apps match your search" : "No Apps"}
     />
   )
 }

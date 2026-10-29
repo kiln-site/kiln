@@ -133,7 +133,7 @@ export function DeleteAppDialog({
               ) : (
                 <Trash2 />
               )}
-              Delete app
+              Delete App
             </Button>
           </DialogFooter>
         </form>

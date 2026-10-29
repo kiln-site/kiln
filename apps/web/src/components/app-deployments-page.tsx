@@ -195,11 +195,11 @@ const DeploymentsScopePicker = React.memo(function DeploymentsScopePicker({
   )
   return (
     <ServerScopePicker<ScopeKind>
-      allLabel="All apps"
+      allLabel="All Apps"
       ariaLabel="Apps and Relays"
       changeLabel="Change scope"
       chooseLabel="Choose app"
-      emptyMessage="No apps found."
+      emptyMessage="No Apps found."
       selectedServer={selected}
       servers={options}
       onSelect={select}

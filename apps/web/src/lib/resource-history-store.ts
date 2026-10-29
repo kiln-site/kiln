@@ -58,12 +58,9 @@ export function resourceHistoryStore(
       const next = [...byTimestamp.values()]
         .filter((point) => point.timestamp >= cutoff)
         .sort((left, right) => left.timestamp - right.timestamp)
-      if (
-        next.length === points.length &&
-        next.at(-1)?.timestamp === points.at(-1)?.timestamp
-      ) {
-        if (!currentChanged) return
-      }
+      // Delayed history can add a point while the window drops another, so
+      // compare every point's time, not just the count and the newest.
+      if (!currentChanged && sameTimestamps(next, points)) return
       const nextLatestSampleTimestamp = next.at(-1)?.timestamp ?? null
       if (nextLatestSampleTimestamp === null) {
         latestSampleSequence = 0
@@ -84,6 +81,35 @@ export function resourceHistoryStore(
   }
   stores.set(key, store)
   return store
+}
+
+// One recorder per connection: delayed history still warms the graph, while
+// only newer events can change the current sample and resource state.
+export function createResourceHistoryRecorder(store: ResourceHistoryStore) {
+  let lastSequence = -1
+  return (event: {
+    sequence: number
+    history: ReadonlyArray<RelayInstanceResources>
+    resources: RelayInstanceResources | null
+  }): boolean => {
+    const current = event.sequence > lastSequence
+    lastSequence = Math.max(lastSequence, event.sequence)
+    store.record(
+      event.history,
+      current ? event.resources : store.getCurrentSnapshot()
+    )
+    return current
+  }
+}
+
+function sameTimestamps(
+  left: ReadonlyArray<ResourceHistoryPoint>,
+  right: ReadonlyArray<ResourceHistoryPoint>
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((point, index) => point.timestamp === right[index]?.timestamp)
+  )
 }
 
 function historyPoint(

@@ -96,7 +96,7 @@ export const kindPresentation: Record<
     other: "game servers",
     label: "Game servers",
   },
-  app: { icon: AppKindIcon, one: "app", other: "apps", label: "Apps" },
+  app: { icon: AppKindIcon, one: "App", other: "Apps", label: "Apps" },
   database: {
     icon: DatabaseKindIcon,
     one: "database",

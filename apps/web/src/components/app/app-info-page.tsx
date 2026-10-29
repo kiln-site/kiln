@@ -134,7 +134,7 @@ function AppDangerZone({ app }: { app: App }) {
           />
         )}
       >
-        Delete app
+        Delete App
       </InfoDangerAction>
     </InfoDangerZone>
   )

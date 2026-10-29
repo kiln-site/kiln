@@ -58,6 +58,7 @@ import {
 } from "@/lib/instance-power-state"
 import { openRelayResourceStream } from "@/lib/relay-resource-stream"
 import {
+  createResourceHistoryRecorder,
   resourceHistoryStore,
   type ResourceHistoryStore,
 } from "@/lib/resource-history-store"
@@ -201,17 +202,22 @@ function RelayResourceStreamController({
         let retryDelay = 500
         for (;;) {
           const failed = yield* Effect.suspend(() => {
-            let lastSequence = -1
+            const record = createResourceHistoryRecorder(
+              resourceHistoryStore(instance.relayId, instance.id)
+            )
             return openRelayResourceStream(instance.relayId, instance.id).pipe(
               Stream.runForEach((event) =>
                 Effect.sync(() => {
                   retryDelay = 500
-                  if (event.sequence <= lastSequence) return
-                  lastSequence = event.sequence
-                  resourceHistoryStore(instance.relayId, instance.id).record(
-                    event.history,
-                    event.instance.resources
-                  )
+                  if (
+                    !record({
+                      sequence: event.sequence,
+                      history: event.history,
+                      resources: event.instance.resources,
+                    })
+                  ) {
+                    return
+                  }
                   const streamedInstance = reconcilePendingPowerInstance(
                     instance.relayId,
                     event.instance
