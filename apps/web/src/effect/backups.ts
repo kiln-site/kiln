@@ -3577,7 +3577,9 @@ const refuseIfFinalDeletionInProgress = Effect.fnUntraced(function* (
     `SELECT id
        FROM ${databaseTable("resource_deletion")}
       WHERE relay_id = ? AND resource_kind = ? AND resource_id = ?
-        AND status IN ('pending', 'backing_up', 'deleting', 'cancelling')
+        AND (status IN ('pending', 'backing_up', 'deleting', 'cancelling')
+          -- Its Relay began deleting it: what's left of it only goes.
+          OR (relay_deleting_at IS NOT NULL AND status <> 'completed'))
       LIMIT 1
       FOR UPDATE`,
     [input.relayId, input.targetKind, input.targetId]

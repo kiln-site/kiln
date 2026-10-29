@@ -102,6 +102,7 @@ export const deletionOf = (resourceId: string) =>
     error: string | null
     id: string
     relay_deleted_at: number | null
+    relay_deleting_at: number | null
     resource_id: string
     status: string
   }>("resource_deletion").pipe(
@@ -177,6 +178,9 @@ export const deletionRelay = {
   appFolders: new Set<string>(),
   // The volumes each App deletion was allowed to take.
   appDeletes: [] as Array<ReadonlyArray<string> | undefined>,
+  // How many App deletions to come delete its data, then fail, as when
+  // its routes can't be configured afterwards.
+  appDeletesFailingAfterData: 0,
   apps: new Set<string>(),
   changes: [] as Array<string>,
   databases: new Set<string>(),
@@ -237,6 +241,7 @@ export const appRecords = selectRows<{ app_id: string }>("app").pipe(
 
 export function resetDeletionRelay(servers: ReadonlyArray<string>): void {
   deletionRelay.appDeletes.length = 0
+  deletionRelay.appDeletesFailingAfterData = 0
   deletionRelay.appFolders.clear()
   deletionRelay.apps.clear()
   deletionRelay.changes.length = 0
@@ -338,6 +343,14 @@ export const deletionRelayConnection = {
               )
           )
           state.appFolders.delete(id)
+          if (state.appDeletesFailingAfterData > 0) {
+            state.appDeletesFailingAfterData -= 1
+            throw RelayUnavailableError.make({
+              code: "delete_failed",
+              message: "The App's routes couldn't be configured",
+              retryable: false,
+            })
+          }
         } else {
           state.volumes = state.volumes.filter((volume) => volume.id !== id)
         }

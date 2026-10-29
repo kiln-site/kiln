@@ -23,6 +23,7 @@ import {
   listResourceDeletionsToReconcileEffect,
   loadResourceDeletionEffect,
   recordRelayDeletedEffect,
+  recordRelayDeletingEffect,
   recordResourceDeletionStatusEffect,
   requestResourceDeletionRowEffect,
   requestResourceKeepRowEffect,
@@ -137,6 +138,10 @@ const Start = Schema.Struct({
   current: Schema.Boolean,
   finalBackup: Schema.Boolean,
   relayDeleted: Schema.Boolean,
+  // What an earlier attempt asked the Relay to delete, if it got that far.
+  relayDeleting: Schema.NullOr(
+    Schema.Struct({ volumeIds: Schema.Array(Schema.String) })
+  ),
 })
 
 const BackupCheck = Schema.Struct({
@@ -182,40 +187,33 @@ const deletionSteps = (input: DeletionInput) =>
             ),
           finalBackup: deletion?.finalBackup ?? false,
           relayDeleted: deletion?.relayDeletedAt != null,
+          relayDeleting:
+            deletion?.relayDeletingAt != null
+              ? { volumeIds: deletion.volumeIds ?? [] }
+              : null,
         })),
         Effect.orDie
       ),
     })
     if (!start.current) return
     if (!start.relayDeleted) {
-      yield* Activity.make({
-        name: "access",
-        error: ResourceDeletionError,
-        execute: checkAccess(input),
-      })
-      yield* relayCommand({
-        name: "freeze",
-        operation: "resource.freeze",
-        payload: {
-          deletionId: input.deletionId,
-          id: input.resourceId,
-          kind: input.kind,
-        },
-        relayId: input.relayId,
-        // It went through: the resource is frozen for this deletion.
-        recover: Effect.succeed({ frozen: true }),
-        timeoutMs: relayControlDeadlineMs("resource.freeze"),
-      }).pipe(Effect.mapError(asDeletionError))
-      const plan = yield* Activity.make({
-        name: "plan",
-        success: DeletionPlan,
-        error: ResourceDeletionError,
-        execute: deletionPlan(input),
-      })
-      if (start.finalBackup) yield* finalBackup(input, plan.parts)
+      // Once its Relay was asked to delete it, what's left of it can only be
+      // deleted: finished as it was asked, with the volumes it named, and no
+      // new final backup, which couldn't be of what's gone.
+      const plan = start.relayDeleting
+        ? { parts: [], volumeIds: start.relayDeleting.volumeIds }
+        : yield* prepare(input, start.finalBackup)
       yield* Activity.make({
         name: "deleting",
         execute: recordStatus(input, "deleting", null),
+      })
+      // Recorded before it's sent: from here it can't be kept.
+      yield* Activity.make({
+        name: "relay-deleting",
+        execute: recordRelayDeletingEffect({
+          id: input.deletionId,
+          volumeIds: plan.volumeIds,
+        }).pipe(Effect.orDie),
       })
       yield* deleteOnRelay(input, plan)
       yield* Activity.make({
@@ -247,6 +245,38 @@ const deletionSteps = (input: DeletionInput) =>
         Effect.tap(() => Effect.sync(() => publishDeleted(input)))
       ),
     })
+  })
+
+// Checks the person may still delete it, freezes it, decides what the
+// deletion takes, and takes its final backup if one was asked for.
+const prepare = (input: DeletionInput, takeFinalBackup: boolean) =>
+  Effect.gen(function* () {
+    yield* Activity.make({
+      name: "access",
+      error: ResourceDeletionError,
+      execute: checkAccess(input),
+    })
+    yield* relayCommand({
+      name: "freeze",
+      operation: "resource.freeze",
+      payload: {
+        deletionId: input.deletionId,
+        id: input.resourceId,
+        kind: input.kind,
+      },
+      relayId: input.relayId,
+      // It went through: the resource is frozen for this deletion.
+      recover: Effect.succeed({ frozen: true }),
+      timeoutMs: relayControlDeadlineMs("resource.freeze"),
+    }).pipe(Effect.mapError(asDeletionError))
+    const plan = yield* Activity.make({
+      name: "plan",
+      success: DeletionPlan,
+      error: ResourceDeletionError,
+      execute: deletionPlan(input),
+    })
+    if (takeFinalBackup) yield* finalBackup(input, plan.parts)
+    return plan
   })
 
 // The person who asked may still delete it, and back it up where they

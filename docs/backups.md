@@ -448,7 +448,11 @@ finds an App other than the one being deleted using what it backs up, as
 one deployed since. Deleting an App on its Relay is safe to send again, and
 says it's done only once the App's folder is gone, so a deletion the Relay
 stopped partway, after the App's containers went, is sent again rather than
-taken as done. A failed, cancelled, or missing backup, of any part, stops
+taken as done. Before any resource's Relay is asked to delete it, the
+deletion records that it's asking, with an App's volume list: from then on it
+can't be kept, since its data may be gone, and trying again finishes it with
+that list and no new final backup. A failed, cancelled, or missing backup, of
+any part, stops
 the deletion with nothing deleted and the resource still frozen; its page offers to try again, to delete it without a final backup, or
 to keep it. A game server keeps a final backup that finished for its next
 attempt, since it stayed stopped; a frozen database keeps serving what's

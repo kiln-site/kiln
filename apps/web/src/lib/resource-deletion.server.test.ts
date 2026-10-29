@@ -172,6 +172,64 @@ describeMysql("Deleting a game server or database", () => {
     )
 
     it.effect(
+      "won't keep an App its Relay began deleting, and finishes it on a retry without a new final backup",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          yield* seedApp()
+          // Its data goes, then both sends fail.
+          relay.appDeletesFailingAfterData = 2
+
+          yield* requestResourceDeletionEffect({
+            finalBackup: true,
+            kind: "app",
+            relayId,
+            resourceId: appId,
+            storageId: null,
+            user: owner,
+          })
+          yield* finishBackup(yield* nextBackup(appId, null))
+          const stopped = yield* until(appId, ["completed", "failed"])
+          const kept = yield* Effect.flip(
+            cancelResourceDeletionEffect({
+              kind: "app",
+              relayId,
+              resourceId: appId,
+              user: owner,
+            })
+          )
+          yield* requestResourceDeletionEffect({
+            finalBackup: true,
+            kind: "app",
+            relayId,
+            resourceId: appId,
+            ...(stopped ? { retryOf: Number(stopped.attempt) } : {}),
+            storageId: null,
+            user: owner,
+          })
+          const done = yield* until(appId, ["completed"])
+
+          assert.strictEqual(stopped?.status, "failed")
+          assert.isNotNull(stopped?.relay_deleting_at)
+          assert.strictEqual(
+            kept.message,
+            "Deleting it has already started; finish deleting it"
+          )
+          assert.strictEqual(done?.status, "completed")
+          // Finished, not frozen or backed up again.
+          assert.deepStrictEqual(relay.changes, [
+            "resource.freeze",
+            "app.delete",
+            "app.delete",
+            "app.delete",
+          ])
+          assert.lengthOf(yield* selectRows("backup"), 1)
+          assert.deepStrictEqual(yield* appRecords, [])
+        }).pipe(TestClock.withLive),
+      90_000
+    )
+
+    it.effect(
       "finishes an App's deletion its Relay stopped partway, rather than taking its missing containers as deleted",
       () =>
         Effect.gen(function* () {

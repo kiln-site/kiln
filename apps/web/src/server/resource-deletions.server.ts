@@ -34,6 +34,11 @@ export interface ResourceDeletionTarget {
 export interface ResourceDeletionSummary {
   /** Whether it stopped after the Relay deleted it, so only cleanup is left. */
   deletedOnRelay: boolean
+  /**
+   * Whether its Relay was asked to delete it, so it can only be finished:
+   * not kept, and without a new final backup.
+   */
+  deletionStarted: boolean
   error: string | null
   finalBackup: boolean
   status: "backing_up" | "cancelling" | "deleting" | "failed" | "pending"
@@ -105,6 +110,8 @@ function summarize(deletion: ResourceDeletion | null) {
   }
   return {
     deletedOnRelay: deletion.relayDeletedAt !== null,
+    deletionStarted:
+      deletion.relayDeletingAt !== null || deletion.relayDeletedAt !== null,
     error: deletion.status === "failed" ? deletion.error : null,
     finalBackup: deletion.finalBackup,
     status: deletion.status,
@@ -143,8 +150,9 @@ export async function listVolumeDeletionsHandler(input: {
 /**
  * Tries a deletion that stopped again, with its final backup or without
  * one. Dropping a final backup it was asked to take changes what was
- * confirmed, so it asks the deletion confirmation again; once the Relay has
- * deleted it, only its cleanup is left, and nothing more is asked.
+ * confirmed, so it asks the deletion confirmation again. Once its Relay was
+ * asked to delete it, it's finished as it was asked, with no new final
+ * backup, and nothing more is asked.
  */
 export async function retryResourceDeletionHandler(
   input: ResourceDeletionTarget & {
@@ -162,13 +170,11 @@ export async function retryResourceDeletionHandler(
   if (!deletion || deletion.status !== "failed") {
     throw new Error("Only a deletion that stopped can be tried again")
   }
-  const finalBackup = input.finalBackup && deletion.relayDeletedAt === null
+  const started =
+    deletion.relayDeletingAt !== null || deletion.relayDeletedAt !== null
+  const finalBackup = input.finalBackup && !started
   if (finalBackup) await requireFinalBackupPermission(input, user)
-  if (
-    !finalBackup &&
-    deletion.finalBackup &&
-    deletion.relayDeletedAt === null
-  ) {
+  if (!finalBackup && deletion.finalBackup && !started) {
     await requireDeleteConfirmation({
       confirmation: input.confirmation ?? "",
       name: await resourceName(input),

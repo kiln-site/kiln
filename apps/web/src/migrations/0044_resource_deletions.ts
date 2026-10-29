@@ -7,8 +7,10 @@ import { databaseTableName } from "@/lib/database-config"
 // One deletion per resource, of any kind, run as the durable operation
 // `resource.delete` (lib/resource-deletion.server.ts). Its row holds what was
 // asked for and how far it got: whether a final backup comes first and
-// which, when the Relay confirmed the resource gone (so a retry only cleans
-// up in Hearth), and each attempt's number, which names its operation.
+// which, when the Relay was first asked to delete it (from then on it can
+// only be finished, not kept) and with which of an App's volumes, when the
+// Relay confirmed it gone (so a retry only cleans up in Hearth), and each
+// attempt's number, which names its operation.
 // Finished rows stay, so a deletion is never revived.
 //
 // The final-delete tables game servers and databases kept are carried over:
@@ -37,6 +39,8 @@ export const resourceDeletions: Migration = {
   \`error\` text,
   \`attempt\` int unsigned NOT NULL DEFAULT '1',
   \`relay_deleted_at\` bigint unsigned DEFAULT NULL,
+  \`relay_deleting_at\` bigint unsigned DEFAULT NULL,
+  \`volume_ids\` json DEFAULT NULL,
   \`requested_by\` varchar(36) NOT NULL,
   \`actor\` json NOT NULL,
   \`created_at\` bigint unsigned NOT NULL,
@@ -48,6 +52,24 @@ export const resourceDeletions: Migration = {
   CONSTRAINT \`${table}_relay_fk\` FOREIGN KEY (\`relay_id\`) REFERENCES \`${relay}\` (\`id\`) ON DELETE CASCADE,
   CONSTRAINT \`${table}_backup_fk\` FOREIGN KEY (\`backup_id\`) REFERENCES \`${backup}\` (\`id\`) ON DELETE RESTRICT
 )`)
+    // A table a stopped run made before these columns.
+    const columns = yield* sql<{ columnName: string }>`
+      SELECT column_name AS columnName
+      FROM information_schema.columns
+      WHERE table_schema = DATABASE() AND table_name = ${table}
+    `
+    const has = (name: string) =>
+      columns.some((column) => column.columnName === name)
+    if (!has("relay_deleting_at")) {
+      yield* sql.unsafe(`ALTER TABLE \`${table}\`
+        ADD COLUMN \`relay_deleting_at\` bigint unsigned DEFAULT NULL
+        AFTER \`relay_deleted_at\``)
+    }
+    if (!has("volume_ids")) {
+      yield* sql.unsafe(`ALTER TABLE \`${table}\`
+        ADD COLUMN \`volume_ids\` json DEFAULT NULL
+        AFTER \`relay_deleting_at\``)
+    }
     for (const [legacy, kind] of [
       ["backup_final_delete", "instance"],
       ["backup_final_database_delete", "database"],
@@ -65,10 +87,12 @@ export const resourceDeletions: Migration = {
         `INSERT IGNORE INTO \`${table}\`
            (id, relay_id, resource_kind, resource_id, final_backup,
             storage_id, backup_id, status, error, attempt, relay_deleted_at,
-            requested_by, actor, created_at, updated_at)
+            relay_deleting_at, requested_by, actor, created_at, updated_at)
          SELECT UUID(), old.relay_id, ?, old.target_id, 1, NULL,
                 old.backup_id, old.status, old.error, 1,
                 IF(old.status = 'completed', old.updated_at, NULL),
+                IF(old.status IN ('deleting', 'completed'),
+                  old.updated_at, NULL),
                 old.requested_by,
                 JSON_OBJECT(
                   'id', old.requested_by,

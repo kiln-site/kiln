@@ -45,6 +45,13 @@ export interface ResourceDeletion {
   id: string
   kind: ResourceDeletionKind
   relayDeletedAt: number | null
+  /**
+   * When its Relay was first asked to delete it: from then on what's left
+   * of it can only be deleted, never kept.
+   */
+  relayDeletingAt: number | null
+  /** The App's own volumes its Relay was told it may take, once asked. */
+  volumeIds: ReadonlyArray<string> | null
   relayId: string
   requestedBy: string
   resourceId: string
@@ -62,6 +69,7 @@ interface ResourceDeletionRow extends RowDataPacket {
   final_backup: number
   id: string
   relay_deleted_at: number | string | null
+  relay_deleting_at: number | string | null
   relay_id: string
   requested_by: string
   resource_id: string
@@ -69,6 +77,7 @@ interface ResourceDeletionRow extends RowDataPacket {
   status: ResourceDeletionStatus
   storage_id: string | null
   updated_at: number | string
+  volume_ids: unknown
 }
 
 /** A change that would name a resource being deleted, or deleted. */
@@ -93,6 +102,8 @@ const columns = [
   "error",
   "attempt",
   "relay_deleted_at",
+  "relay_deleting_at",
+  "volume_ids",
   "requested_by",
   "actor",
   "created_at",
@@ -325,13 +336,23 @@ export const requestResourceKeepRowEffect = Effect.fn(
             SET status = 'cancelling', attempt = attempt + 1, backup_id = NULL,
                 error = NULL, updated_at = ?
           WHERE relay_id = ? AND resource_kind = ? AND resource_id = ?
-            AND status = 'failed' AND relay_deleted_at IS NULL`,
+            AND status = 'failed' AND relay_deleted_at IS NULL
+            AND relay_deleting_at IS NULL`,
         [now, relayId, kind, resourceId]
       )
       if (result.affectedRows !== 1) {
+        const [current] = yield* transaction.queryRows<ResourceDeletionRow>(
+          `${select}
+            WHERE relay_id = ? AND resource_kind = ? AND resource_id = ?
+            LIMIT 1`,
+          [relayId, kind, resourceId]
+        )
         return yield* new ResourceDeletionConflictError({
           message:
-            "Only a deletion that stopped before the Relay deleted anything can be cancelled",
+            current?.relay_deleting_at != null ||
+            current?.relay_deleted_at != null
+              ? "Deleting it has already started; finish deleting it"
+              : "Only a deletion that stopped before the Relay deleted anything can be cancelled",
         })
       }
       const [row] = yield* transaction.queryRows<ResourceDeletionRow>(
@@ -415,6 +436,28 @@ const invalidateSchedulesOf = (
     target: { id: row.resource_id, kind: row.resource_kind },
   })
 
+/**
+ * Records, before the Relay is asked to delete the resource, that it's
+ * being asked, and which of an App's own volumes it may take. Its first
+ * record stays: a retry finishes that deletion, with those volumes, and is
+ * never kept instead.
+ */
+export const recordRelayDeletingEffect = Effect.fn(
+  "resourceDeletions.recordRelayDeleting"
+)(function* (input: { id: string; volumeIds: ReadonlyArray<string> }) {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  yield* database.execute(
+    "resource_deletion_relay_deleting",
+    `UPDATE ${databaseTable("resource_deletion")}
+        SET relay_deleting_at = COALESCE(relay_deleting_at, ?),
+            volume_ids = COALESCE(volume_ids, CAST(? AS JSON)),
+            updated_at = ?
+      WHERE id = ?`,
+    [now, JSON.stringify(input.volumeIds), now, input.id]
+  )
+})
+
 /** Records that the Relay no longer has the resource: a retry only cleans up. */
 export const recordRelayDeletedEffect = Effect.fn(
   "resourceDeletions.recordRelayDeleted"
@@ -437,8 +480,8 @@ export const recordRelayDeletedEffect = Effect.fn(
  * REPEATABLE READ also locks the gap where a missing row would go: a
  * deletion asked for meanwhile waits for this transaction to commit, and its
  * cleanup then finds what it wrote, and one asked for before is seen here.
- * Only a deletion that stopped, or was cancelled, before the Relay deleted
- * anything left the resource in place.
+ * Only a deletion that stopped, or was cancelled, before the Relay was
+ * asked to delete anything left the resource in place.
  */
 export const refuseResourcesBeingDeleted = Effect.fnUntraced(function* (
   transaction: DatabaseTransaction,
@@ -454,10 +497,11 @@ export const refuseResourcesBeingDeleted = Effect.fnUntraced(function* (
     const [deletion] = yield* transaction.queryRows<
       RowDataPacket & {
         relay_deleted_at: number | string | null
+        relay_deleting_at: number | string | null
         status: ResourceDeletionStatus
       }
     >(
-      `SELECT status, relay_deleted_at
+      `SELECT status, relay_deleted_at, relay_deleting_at
          FROM ${databaseTable("resource_deletion")}
         WHERE relay_id = ? AND resource_kind = ? AND resource_id = ?
         FOR SHARE`,
@@ -469,7 +513,10 @@ export const refuseResourcesBeingDeleted = Effect.fnUntraced(function* (
         message: `${resource.name} was deleted`,
       })
     }
-    if (deletion.status !== "failed" && deletion.status !== "cancelled") {
+    if (
+      deletion.relay_deleting_at !== null ||
+      (deletion.status !== "failed" && deletion.status !== "cancelled")
+    ) {
       return yield* new ResourceBeingDeletedError({
         message: `${resource.name} is being deleted`,
       })
@@ -519,6 +566,11 @@ function toResourceDeletion(row: ResourceDeletionRow): ResourceDeletion {
     kind: row.resource_kind,
     relayDeletedAt:
       row.relay_deleted_at === null ? null : Number(row.relay_deleted_at),
+    relayDeletingAt:
+      row.relay_deleting_at === null ? null : Number(row.relay_deleting_at),
+    volumeIds: Array.isArray(row.volume_ids)
+      ? row.volume_ids.filter((id): id is string => typeof id === "string")
+      : null,
     relayId: row.relay_id,
     requestedBy: row.requested_by,
     resourceId: row.resource_id,

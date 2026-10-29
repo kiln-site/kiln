@@ -113,7 +113,9 @@ export const ResourceDeletionAlert = React.memo(function ResourceDeletionAlert({
           {failed
             ? deletion.deletedOnRelay
               ? `Its Relay deleted it, but cleaning up after it didn't finish: ${sentence(deletion.error ?? "an unknown error")}`
-              : `${sentence(deletion.error ?? "It stopped for an unknown reason")} Until it's deleted or kept, it can't be changed${target.kind === "database" ? ", though game servers and Apps connected to it can still write to it. Trying again takes a new final backup" : ""}.`
+              : deletion.deletionStarted
+                ? `Its Relay began deleting it, but didn't finish: ${sentence(deletion.error ?? "an unknown error")} It can only be finished now. Final backups already taken stay.`
+                : `${sentence(deletion.error ?? "It stopped for an unknown reason")} Until it's deleted or kept, it can't be changed${target.kind === "database" ? ", though game servers and Apps connected to it can still write to it. Trying again takes a new final backup" : ""}.`
             : deletion.status === "cancelling"
               ? "Kiln is letting it go on its Relay. It can be changed again once that finishes."
               : target.kind === "database"
@@ -133,7 +135,11 @@ export const ResourceDeletionAlert = React.memo(function ResourceDeletionAlert({
               size="sm"
               variant="outline"
               onClick={() =>
-                retry.mutate({ finalBackup: deletion.finalBackup })
+                retry.mutate({
+                  finalBackup: deletion.deletionStarted
+                    ? false
+                    : deletion.finalBackup,
+                })
               }
             >
               {retry.isPending && !skipping ? (
@@ -141,9 +147,9 @@ export const ResourceDeletionAlert = React.memo(function ResourceDeletionAlert({
               ) : (
                 <RotateCcw />
               )}
-              Try again
+              {deletion.deletionStarted ? "Finish deletion" : "Try again"}
             </Button>
-            {deletion.deletedOnRelay ? null : (
+            {deletion.deletionStarted ? null : (
               <>
                 {deletion.finalBackup ? (
                   <Button
