@@ -108,6 +108,26 @@ describeMysql("Hearth operation lanes", () => {
     )
 
     it.effect(
+      "admits operations that arrive together before any was ever admitted",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          const names = Array.from({ length: 8 }, (_, index) => `w${index}`)
+          yield* Effect.all(
+            names.map((name) =>
+              runOperation(write, { key: name, name }, Effect.void)
+            ),
+            { concurrency: "unbounded" }
+          )
+
+          assert.deepStrictEqual(
+            yield* states,
+            names.map(() => "test.write:succeeded")
+          )
+        }).pipe(TestClock.withLive)
+    )
+
+    it.effect(
       "frees the locks of work a stopped Hearth was running, for what waits behind it",
       () =>
         Effect.gen(function* () {

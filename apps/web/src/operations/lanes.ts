@@ -721,28 +721,21 @@ function isOpen(state: OperationState): boolean {
 /**
  * Locks the scheduler row for this transaction, so decisions are made one at
  * a time, and returns the next place in line. The row is put back if a
- * database reset removed it.
+ * database reset removed it. Taking the place in one upsert locks the row
+ * exclusively from the start: reading a missing row first would leave two
+ * first admissions each holding a gap lock the other's insert waits on.
  */
 const takeSchedulerTurn = Effect.fnUntraced(function* (
   transaction: DatabaseTransaction
 ) {
-  const read = () =>
-    transaction.queryRows<RowDataPacket & { next_sequence: number }>(
-      `SELECT next_sequence FROM ${schedulerTable} WHERE id = 1 FOR UPDATE`
-    )
-  let [row] = yield* read()
-  if (!row) {
-    yield* transaction.execute(
-      `INSERT IGNORE INTO ${schedulerTable} (id, next_sequence) VALUES (1, 1)`
-    )
-    ;[row] = yield* read()
-  }
-  const sequence = Number(row?.next_sequence ?? 1)
   yield* transaction.execute(
-    `UPDATE ${schedulerTable} SET next_sequence = ? WHERE id = 1`,
-    [sequence + 1]
+    `INSERT INTO ${schedulerTable} (id, next_sequence) VALUES (1, 2)
+     ON DUPLICATE KEY UPDATE next_sequence = next_sequence + 1`
   )
-  return sequence
+  const [row] = yield* transaction.queryRows<
+    RowDataPacket & { next_sequence: number }
+  >(`SELECT next_sequence FROM ${schedulerTable} WHERE id = 1 FOR UPDATE`)
+  return Number(row?.next_sequence ?? 2) - 1
 })
 
 /**
