@@ -19,6 +19,7 @@ import {
   deployScheduleToRelay,
   insertSchedule,
   redeployUnacknowledgedSchedules,
+  stopScheduleDeliveries,
   upsertDeployment,
 } from "@/server/schedule-deployment.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
@@ -90,7 +91,11 @@ vi.mock("@/backups/destinations/s3/client", async (importOriginal) => {
 })
 vi.stubEnv("BETTER_AUTH_SECRETS", `1:${"s".repeat(32)}`)
 
-afterAll(() => disposeAppRuntime())
+// Sends a test set off in the background finish before the database closes.
+afterAll(async () => {
+  await stopScheduleDeliveries()
+  await disposeAppRuntime()
+})
 
 const relayId = "relay-one"
 const at = 1_767_225_600_000
@@ -160,7 +165,8 @@ const seed = Effect.gen(function* () {
 })
 
 describeMysql("Scheduled backups, checked before they run", () => {
-  layer(TestDatabase)((it) => {
+  // Migrating a fresh database can take a while on a busy host.
+  layer(TestDatabase, { timeout: 120_000 })((it) => {
     it.effect(
       "refuses, in the schedule it sends, a backup Hearth would refuse by hand",
       () =>

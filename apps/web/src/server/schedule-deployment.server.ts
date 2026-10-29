@@ -28,7 +28,7 @@ import {
 } from "@/effect/backups"
 import { Database, type DatabaseTransaction } from "@/effect/database"
 import { kilnInstallationId } from "@/effect/installation"
-import { forkPromise, promiseEffect } from "@/effect/promise"
+import { promiseEffect } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
 import { databasePool } from "@/lib/database"
 import { databaseTable } from "@/lib/database-config"
@@ -757,15 +757,32 @@ export async function loadSchedules() {
   })
 }
 
+// Sends under way, which Hearth waits for as it stops rather than closing
+// its database under them.
+const deliveries = new Set<Promise<void>>()
+
 /**
  * Sends the schedules a change marked as owed, in the background, after the
  * change committed (`invalidateScheduleDeploymentsEffect`). One whose Relay
  * is away, or whose send fails, stays owed for the sweep.
  */
 export function deliverPendingSchedules(): void {
-  forkPromise(redeployUnacknowledgedSchedules, (cause) =>
-    console.warn("[Kiln Schedules] Couldn't send schedules again:", cause)
+  const delivery: Promise<void> = Effect.runPromise(
+    promiseEffect(redeployUnacknowledgedSchedules).pipe(
+      Effect.catch((cause) =>
+        Effect.sync(() =>
+          console.warn("[Kiln Schedules] Couldn't send schedules again:", cause)
+        )
+      ),
+      Effect.ensuring(Effect.sync(() => deliveries.delete(delivery)))
+    )
   )
+  deliveries.add(delivery)
+}
+
+/** Waits for the schedule sends under way to end, as Hearth stops. */
+export async function stopScheduleDeliveries(): Promise<void> {
+  await Promise.all(deliveries)
 }
 
 /**

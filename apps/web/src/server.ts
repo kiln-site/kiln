@@ -63,6 +63,7 @@ import {
 } from "./lib/security-scans.server"
 import { startRelayMetrics, stopRelayMetrics } from "./lib/relay-metrics"
 import { relayPassthroughUsages } from "./lib/relay-passthrough-limits.server"
+import { stopScheduleDeliveries } from "./server/schedule-deployment.server"
 
 await migrateDatabase()
 // Before the app runtime starts, so telemetry carries the ID, and before
@@ -189,6 +190,7 @@ export function shutdownHearth(): Promise<void> {
     stopPollingWorkers(),
     stopSecurityScans(),
     stopRelayMetrics(),
+    stopScheduleDeliveries(),
   ])
     .then(() => Effect.runPromise(stopWarmCacheRefreshes))
     .then(disposeAppRuntime)

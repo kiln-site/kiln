@@ -28,6 +28,7 @@ import {
   insertRows,
   selectRows,
 } from "@/test/seed"
+import { stopScheduleDeliveries } from "@/server/schedule-deployment.server"
 
 // The Relay is the only network boundary these handlers cross: it answers
 // snapshots and is offline for everything else, so dispatch never succeeds.
@@ -45,7 +46,12 @@ vi.mock("@/lib/backup-copy", () => ({
   scheduleBackupCopyProcessing: () => undefined,
 }))
 
-afterAll(() => disposeAppRuntime())
+// Schedule sends a test set off in the background finish before the
+// database closes.
+afterAll(async () => {
+  await stopScheduleDeliveries()
+  await disposeAppRuntime()
+})
 
 const at = Date.UTC(2026, 0, 1)
 const relayId = "r".repeat(43)
