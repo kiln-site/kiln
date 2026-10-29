@@ -614,7 +614,11 @@ describe("Tailscale databases", () => {
       })
     )
     const network = harness.resources.tailscaleStackNetwork(stackId)
-    fakeDocker.addNetwork({ labels: owner, name: network, subnet: "10.165.57.0/24" })
+    fakeDocker.addNetwork({
+      labels: owner,
+      name: network,
+      subnet: "10.165.57.0/24",
+    })
     const directory = join(harness.config.rootDirectory, stackId)
     await mkdir(directory, { recursive: true })
     await writeFile(
@@ -655,6 +659,29 @@ describe("Tailscale databases", () => {
     })
   })
 
+  it("puts a database back at its Tailscale address when the Relay starts, if it lost it meanwhile", async () => {
+    const harness = await relayHarness()
+    const { container, network } = await databaseOnStack(harness)
+    // Taken off behind the Relay's back, as a crash between replacing its
+    // container and reattaching it leaves it.
+    await Effect.runPromise(
+      new DockerEngine(harness.config.dockerSocket).disconnectNetwork(
+        network,
+        container
+      )
+    )
+    expect(fakeDocker.container(container)!.networks.has(network)).toBe(false)
+
+    const restarted = await harness.restart()
+    await restarted.lifecycle.reattachTailscaleMembers(
+      (memberId) => memberId === member
+    )
+
+    expect(
+      fakeDocker.container(container)!.networks.get(network)
+    ).toMatchObject({ ipAddress: address })
+  })
+
   it("takes a deleted database off its networks once Hearth has prepared their DNS", async () => {
     const harness = await relayHarness()
     const { container, network } = await databaseOnStack(harness)
@@ -672,8 +699,6 @@ describe("Tailscale databases", () => {
 
     expect(steps).toEqual([`prepare ${member} ${stackId} attached=true`])
     expect(fakeDocker.container(container)!.networks.has(network)).toBe(false)
-    expect(await harness.lifecycle.tailscaleMemberships(() => true)).toEqual(
-      []
-    )
+    expect(await harness.lifecycle.tailscaleMemberships(() => true)).toEqual([])
   })
 })

@@ -4733,7 +4733,9 @@ export class LifecycleDriver {
   #databaseContainer: ((databaseId: string) => Promise<string | null>) | null =
     null
 
-  useDatabaseContainers(resolve: (databaseId: string) => Promise<string | null>) {
+  useDatabaseContainers(
+    resolve: (databaseId: string) => Promise<string | null>
+  ) {
     this.#databaseContainer = resolve
   }
 
@@ -4748,7 +4750,9 @@ export class LifecycleDriver {
     }
     const databaseId = databaseTailscaleMember(memberId)
     if (databaseId) {
-      return this.#databaseContainer ? this.#databaseContainer(databaseId) : null
+      return this.#databaseContainer
+        ? this.#databaseContainer(databaseId)
+        : null
     }
     const instanceId = instanceTailscaleMember(memberId)
     if (!instanceId) return null
@@ -4769,6 +4773,32 @@ export class LifecycleDriver {
           network: this.#resources.tailscaleStackNetwork(config.id),
         }))
     )
+  }
+
+  /**
+   * Puts every matching member's container back at its addresses, as at
+   * startup after a crash between replacing a container and reattaching
+   * it. A member that can't be reattached is logged and skipped.
+   */
+  async reattachTailscaleMembers(
+    matches: (memberId: string) => boolean
+  ): Promise<void> {
+    const memberIds = new Set(
+      (await this.tailscaleMemberships(matches)).map(
+        (membership) => membership.memberId
+      )
+    )
+    for (const memberId of memberIds) {
+      await recoverPromise(
+        () => this.reattachTailscaleMember(memberId),
+        (cause) => {
+          console.warn(
+            `Could not put ${memberId} back on its Tailscale networks:`,
+            cause
+          )
+        }
+      )
+    }
   }
 
   // Puts a member's container back at its address on each of its Tailscale

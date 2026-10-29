@@ -47,6 +47,7 @@ import {
   RelayTransferSourcePrepareSchema,
   appIdSchema,
   appTailscaleMember,
+  databaseTailscaleMember,
   databaseTailscaleMemberId,
   instanceTailscaleMemberId,
   relayAppWebRouteStateSchema,
@@ -496,6 +497,11 @@ databases.afterContainerReplaced((databaseId) =>
 )
 // Before anything reads the databases, so none shows twice.
 await databases.recoverReplacements()
+// A database whose container the Relay replaced but stopped before putting
+// back on its Tailscale networks takes its addresses again.
+await lifecycle.reattachTailscaleMembers(
+  (memberId) => databaseTailscaleMember(memberId) !== null
+)
 // What each queued change to a Tailscale stack planned its locks from, so it
 // can tell, once it runs, whether the stack changed meanwhile.
 const tailscaleStackPlans = new WeakMap<object, string>()
