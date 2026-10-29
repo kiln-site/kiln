@@ -165,17 +165,25 @@ paired Hearth says. Each message replaces an app's whole set: before saving
 a configuration that mounts a new volume, Hearth sends the old and new
 configurations' volumes together, and a Relay that can't take them keeps
 the configuration from saving; after every save it sends the saved one's.
-Whenever Hearth connects to the Relay it sends every app's again, so a
-message a save couldn't deliver arrives. An app whose configuration Hearth
-can't read, as when the secret it was saved with is gone, is sent as
-unresolved.
+Whenever Hearth connects to the Relay it sends every app's again, retrying
+with backoff until the Relay takes them, so a message a save couldn't
+deliver arrives. An app whose configuration Hearth can't read, as when the
+secret it was saved with is gone, is sent as unresolved. Any paired Hearth
+may send these, whatever its grant: they only add protection, and a Hearth's
+message replaces only what it sent itself. A read-only Hearth may still keep
+configurations from before its grant changed.
 
 A Kiln volume can't be deleted while any container mounts it or any app's
 configuration names it, nor while the Relay can't tell: until every paired
-Hearth that may configure apps there (`app.manage`) has sent its apps'
-configurations, with none unresolved. A Hearth paired since owes them before
-deletion works again; a revoked one no longer counts, nor does what it sent.
-The volumes page says what the Relay waits for.
+Hearth has sent its apps' configurations on its current control connection,
+with none unresolved. What a Hearth sent counts only for the connection it
+sent it on, so its database changing under it, as a restore does, can't
+leave the Relay counting configurations it no longer holds: a Hearth
+restored offline connects anew, and one that imports a Kiln database while
+running reconnects to every Relay. After the Relay restarts, every Hearth
+owes them again. A Hearth paired since owes them before deletion works
+again; a revoked one no longer counts, nor does what it sent. The volumes
+page says what the Relay waits for.
 
 Deleting an app with its data removes only the volumes its own Compose
 projects made, never a Kiln volume, and never one of its volumes another

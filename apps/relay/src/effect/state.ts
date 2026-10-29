@@ -171,10 +171,12 @@ export interface RelayAppVolumeReference {
 
 /**
  * That a Hearth has sent every App configuration it keeps for this Relay,
- * but for those it couldn't read, which it still owes.
+ * but for those it couldn't read, which it still owes, on one of its
+ * control connections.
  */
 export interface RelayVolumeReferenceImport {
   readonly clientId: string
+  readonly connectionId: string
   readonly importedAt: number
   readonly unresolvedAppIds: ReadonlyArray<string>
 }
@@ -828,6 +830,7 @@ export class RelayStateStore extends Context.Service<
      */
     readonly importAppVolumeReferences: (
       clientId: string,
+      connectionId: string,
       apps: ReadonlyArray<{
         readonly appId: string
         readonly volumeIds: ReadonlyArray<string>
@@ -1507,6 +1510,7 @@ const migrations = SqliteMigrator.fromRecord({
     ) STRICT`
     yield* sql`CREATE TABLE IF NOT EXISTS relay_volume_reference_imports (
       client_id TEXT PRIMARY KEY NOT NULL,
+      connection_id TEXT NOT NULL,
       imported_at INTEGER NOT NULL,
       unresolved_json TEXT NOT NULL DEFAULT '[]'
     ) STRICT`
@@ -3780,15 +3784,21 @@ const makeRelayStateStore = Effect.gen(function* () {
     listVolumeReferenceImports: () =>
       run(
         "list_volume_reference_imports",
-        sql<{ clientId: string; importedAt: number; unresolvedJson: string }>`
-          SELECT client_id AS clientId, imported_at AS importedAt,
-            unresolved_json AS unresolvedJson
+        sql<{
+          clientId: string
+          connectionId: string
+          importedAt: number
+          unresolvedJson: string
+        }>`
+          SELECT client_id AS clientId, connection_id AS connectionId,
+            imported_at AS importedAt, unresolved_json AS unresolvedJson
           FROM relay_volume_reference_imports
           ORDER BY client_id ASC
         `.pipe(
           Effect.map((rows) =>
             rows.map((row): RelayVolumeReferenceImport => ({
               clientId: row.clientId,
+              connectionId: row.connectionId,
               importedAt: row.importedAt,
               unresolvedAppIds: decodeUnresolved(row.unresolvedJson),
             }))
@@ -3809,7 +3819,12 @@ const makeRelayStateStore = Effect.gen(function* () {
           })
         )
       ),
-    importAppVolumeReferences: (clientId, apps, unresolvedAppIds) =>
+    importAppVolumeReferences: (
+      clientId,
+      connectionId,
+      apps,
+      unresolvedAppIds
+    ) =>
       run(
         "import_app_volume_references",
         sql.withTransaction(
@@ -3828,10 +3843,13 @@ const makeRelayStateStore = Effect.gen(function* () {
             const unresolved = JSON.stringify([...new Set(unresolvedAppIds)])
             yield* sql`
               INSERT INTO relay_volume_reference_imports (
-                client_id, imported_at, unresolved_json
-              ) VALUES (${clientId}, ${Date.now()}, ${unresolved})
+                client_id, connection_id, imported_at, unresolved_json
+              ) VALUES (
+                ${clientId}, ${connectionId}, ${Date.now()}, ${unresolved}
+              )
               ON CONFLICT (client_id) DO UPDATE
-              SET imported_at = excluded.imported_at,
+              SET connection_id = excluded.connection_id,
+                  imported_at = excluded.imported_at,
                   unresolved_json = excluded.unresolved_json
             `
           })

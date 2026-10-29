@@ -342,7 +342,9 @@ function VolumesTable({
   // Why the Relay can't tell yet which Apps' configurations use a volume.
   const protectionPending =
     volumes.data?.protection.ready === false
-      ? (volumes.data.protection.reason ?? "")
+      ? volumes.data.protection.retrying
+        ? "protection pending: retrying"
+        : (volumes.data.protection.reason ?? "")
       : null
   const source = React.useMemo<DataTableSource<RelayVolume>>(
     () =>

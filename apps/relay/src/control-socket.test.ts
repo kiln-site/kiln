@@ -265,6 +265,44 @@ describe("Relay control socket", () => {
     }
   )
 
+  it("takes which volumes a read-only Hearth's Apps name, counted for the connection that sent them", async () => {
+    const connected: Array<string> = []
+    const relay = await startRelay({
+      clientConnected: (_clientId, connectionId) => {
+        connected.push(connectionId)
+      },
+      execute: async (
+        _request,
+        _client,
+        _signal,
+        _ask,
+        _features,
+        connection
+      ) => ({
+        connection,
+      }),
+    })
+    const hearth = await relay.pair({ role: "read_only" })
+
+    for (const _ of [0, 1]) {
+      const { inbox, socket } = await relay.connect(hearth)
+      for (const operation of [
+        "relay.volumes.references.import",
+        "app.volumes.write",
+      ] as const) {
+        const id = sendRequest(socket, operation, {})
+        expect(await inbox.next()).toMatchObject({
+          payload: { connection: connected.at(-1) },
+          replyTo: id,
+          type: "response",
+        })
+      }
+      socket.close()
+    }
+    // Each connection is one the Relay hasn't seen.
+    expect(new Set(connected).size).toBe(2)
+  })
+
   it.each(["relay.restart", "relay.host.restart"] as const)(
     "refuses %s for read-only clients",
     async (operation) => {
@@ -2123,6 +2161,7 @@ async function startRelay(
     readonly clientLookups?: Array<Promise<void>>
     /** Dials the Hearths that ask it to, as the Relay does. */
     readonly dials?: boolean
+    readonly clientConnected?: ControlSocketOptions["clientConnected"]
   } = {}
 ) {
   const directory = mkdtempSync(join(tmpdir(), "kiln-relay-control-"))
@@ -2152,6 +2191,9 @@ async function startRelay(
         }
       : {}),
     ...(options.beforeRun ? { beforeRun: options.beforeRun } : {}),
+    ...(options.clientConnected
+      ? { clientConnected: options.clientConnected }
+      : {}),
     ...(options.identifyHearth
       ? { identifyHearth: options.identifyHearth }
       : {}),

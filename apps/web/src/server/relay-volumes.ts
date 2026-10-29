@@ -34,7 +34,7 @@ export const getRelayVolumes = createServerFn({ method: "GET" })
     if (!(await relayHasVolumes(relay.id))) {
       return {
         measuring: false,
-        protection: { ready: true, reason: null },
+        protection: { ready: true, reason: null, retrying: false },
         supported: false,
         uncovered: [],
         volumes: [],
@@ -44,7 +44,18 @@ export const getRelayVolumes = createServerFn({ method: "GET" })
       relayVolumesSchema.parse(
         await databaseRpc(relay, "relay.volumes.read", {}, 30_000)
       )
-    return { measuring, protection, supported: true, uncovered, volumes }
+    // This Hearth's own import failed and is being sent again.
+    const { relayVolumeReferencesState } =
+      await import("@/lib/relay-connection")
+    const retrying =
+      !protection.ready && relayVolumeReferencesState(relay.id) === "retrying"
+    return {
+      measuring,
+      protection: { ...protection, retrying },
+      supported: true,
+      uncovered,
+      volumes,
+    }
   })
 
 export const createRelayVolume = createServerFn({ method: "POST" })

@@ -1298,6 +1298,10 @@ const controlSocket = attachControlSocket({
     }
   },
   execute: executeControlRequest,
+  // Which import each Hearth's protection of volumes counts is its current
+  // connection's.
+  clientConnected: (clientId, connectionId) =>
+    volumes.clientConnected(clientId, connectionId),
   identity: relayIdentity,
   journalId: startup.journalId,
   initialSnapshot: () => snapshotHub.read(),
@@ -1871,7 +1875,8 @@ async function executeControlRequest(
     payload: unknown,
     timeoutMs: number
   ) => Promise<unknown>,
-  hearthFeatures: ReadonlySet<string>
+  hearthFeatures: ReadonlySet<string>,
+  connectionId: string
 ): Promise<unknown> {
   if (signal.aborted) throw new Error("Relay request was cancelled")
   const sendBackupTask = (task: RelayBackupTask) =>
@@ -2213,6 +2218,7 @@ async function executeControlRequest(
         "relay.volumes.references.import",
         volumes.importAppReferences(
           client.id,
+          connectionId,
           input.apps,
           input.unresolvedAppIds
         )

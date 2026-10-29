@@ -32,6 +32,14 @@ function run<A, E>(effect: Effect.Effect<A, E>): Promise<A> {
   return Effect.runPromise(effect)
 }
 
+// A Hearth's control connection, as the control socket reports one; each
+// call is a new connection.
+function connect(volumes: RelayVolumes, clientId: string): string {
+  const connectionId = `${clientId}-${Math.random().toString(16).slice(2)}`
+  volumes.clientConnected(clientId, connectionId)
+  return connectionId
+}
+
 // A Hearth paired with the Relay, as the control socket pairs one.
 async function pairHearth(
   harness: RelayHarness,
@@ -311,6 +319,7 @@ describe("Relay volumes", () => {
     await run(
       volumes.importAppReferences(
         "hearth-a",
+        connect(volumes, "hearth-a"),
         [{ appId, volumeIds: [volumeId] }],
         []
       )
@@ -326,25 +335,32 @@ describe("Relay volumes", () => {
     expect(fakeDocker.volumes.has(created.dockerName)).toBe(false)
   })
 
-  it("waits for every Hearth that configures Apps here, and forgets a revoked one", async () => {
+  it("waits for every paired Hearth, even a read-only one, and forgets a revoked one", async () => {
     const harness = await relayHarness()
     const volumes = await relayVolumes(harness)
     await pairHearth(harness, "hearth-a")
-    await pairHearth(harness, "hearth-b")
-    // One that can't configure Apps here has no configurations to send.
-    await pairHearth(harness, "hearth-viewer", "read_only")
+    // Read-only now, it may still keep configurations from before.
+    await pairHearth(harness, "hearth-b", "read_only")
     await harness.apps.create({ id: appId, name: "Website" })
     const created = await run(volumes.create(volumeId, "media"))
 
     // Hearth A's import says nothing about Hearth B's Apps.
-    await run(volumes.importAppReferences("hearth-a", [], []))
+    await run(
+      volumes.importAppReferences(
+        "hearth-a",
+        connect(volumes, "hearth-a"),
+        [],
+        []
+      )
+    )
     await expect(run(volumes.delete(volumeId))).rejects.toThrow(
-      "waiting for hearth-b"
+      "waiting for hearth-b to connect"
     )
     // Hearth B's undeployed App names the volume.
     await run(
       volumes.importAppReferences(
         "hearth-b",
+        connect(volumes, "hearth-b"),
         [{ appId, volumeIds: [volumeId] }],
         []
       )
@@ -356,14 +372,53 @@ describe("Relay volumes", () => {
     // A Hearth paired since owes its configurations before anything goes.
     await pairHearth(harness, "hearth-c")
     await run(harness.state.revokeClient("hearth-b", Date.now()))
+    const hearthC = connect(volumes, "hearth-c")
     await expect(run(volumes.delete(volumeId))).rejects.toThrow(
-      "waiting for hearth-c"
+      "waiting for hearth-c to send"
     )
-    await run(volumes.importAppReferences("hearth-c", [], []))
+    await run(volumes.importAppReferences("hearth-c", hearthC, [], []))
 
     // What revoked Hearth B said no longer keeps the volume.
     await run(volumes.delete(volumeId))
     expect(fakeDocker.volumes.has(created.dockerName)).toBe(false)
+  })
+
+  it("counts a Hearth's import only on the connection that sent it, as after its database is restored", async () => {
+    const harness = await relayHarness()
+    const volumes = await relayVolumes(harness)
+    await pairHearth(harness, "hearth-a")
+    await harness.apps.create({ id: appId, name: "Website" })
+    await run(volumes.create(volumeId, "media"))
+    await run(
+      volumes.importAppReferences(
+        "hearth-a",
+        connect(volumes, "hearth-a"),
+        [],
+        []
+      )
+    )
+
+    // Its restored database names the volume again; it connects anew, and
+    // an import from the old connection, arriving late, doesn't count.
+    const stale = "hearth-a-before-restore"
+    const current = connect(volumes, "hearth-a")
+    await expect(
+      run(volumes.importAppReferences("hearth-a", stale, [], []))
+    ).rejects.toThrow("no longer the Hearth's current one")
+    await expect(run(volumes.delete(volumeId))).rejects.toThrow(
+      "waiting for hearth-a to send"
+    )
+    await run(
+      volumes.importAppReferences(
+        "hearth-a",
+        current,
+        [{ appId, volumeIds: [volumeId] }],
+        []
+      )
+    )
+    await expect(run(volumes.delete(volumeId))).rejects.toThrow(
+      "An App's configuration mounts this volume"
+    )
   })
 
   it("keeps waiting for a configuration its Hearth couldn't read until it can", async () => {
@@ -373,7 +428,14 @@ describe("Relay volumes", () => {
     await harness.apps.create({ id: appId, name: "Website" })
     const created = await run(volumes.create(volumeId, "media"))
 
-    await run(volumes.importAppReferences("hearth-a", [], [appId]))
+    await run(
+      volumes.importAppReferences(
+        "hearth-a",
+        connect(volumes, "hearth-a"),
+        [],
+        [appId]
+      )
+    )
     await expect(run(volumes.delete(volumeId))).rejects.toThrow(
       "hearth-a couldn't read an App's configuration"
     )
@@ -394,6 +456,7 @@ describe("Relay volumes", () => {
     await run(
       volumes.importAppReferences(
         "hearth-a",
+        connect(volumes, "hearth-a"),
         [{ appId, volumeIds: [volumeId] }],
         []
       )
@@ -427,6 +490,7 @@ describe("Relay volumes", () => {
     await run(
       volumes.importAppReferences(
         "hearth-a",
+        connect(volumes, "hearth-a"),
         [{ appId: configuring, volumeIds: [volumeId] }],
         []
       )

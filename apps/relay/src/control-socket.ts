@@ -149,6 +149,12 @@ export interface ControlSocketOptions {
    * wait for the build it is about to remove.
    */
   readonly beforeRun?: (request: RelayControlRequest) => void
+  /**
+   * Runs as a Hearth's control connection authenticates, before it takes
+   * requests, with an ID that connection alone has; `execute` gets it with
+   * each request the connection sent.
+   */
+  readonly clientConnected?: (clientId: string, connectionId: string) => void
   readonly execute: (
     request: RelayControlRequest,
     client: RelayClientGrant,
@@ -159,7 +165,9 @@ export interface ControlSocketOptions {
       timeoutMs: number
     ) => Promise<unknown>,
     /** What the connected Hearth announced it understands. */
-    hearthFeatures: ReadonlySet<string>
+    hearthFeatures: ReadonlySet<string>,
+    /** The control connection the request came on (`clientConnected`). */
+    connectionId: string
   ) => Promise<unknown>
   readonly identity: RelayIdentity
   readonly initialSnapshot: () => Promise<unknown>
@@ -471,6 +479,7 @@ function authenticateSocket(
   send(socket, challenge)
 
   let authenticatedClient: RelayClientGrant | null = null
+  const connectionId = randomUUID()
   let unsubscribeSnapshots: (() => void) | null = null
   let eventSequence = 0
   let previousSnapshot: RelaySnapshot | null = null
@@ -828,8 +837,7 @@ function authenticateSocket(
             yield* Effect.sync(() => sendResponse(request, lookup))
             return
           }
-          const issuerInternal =
-            request.operation === "browser.authorization.revise"
+          const issuerInternal = anyClientOperations.has(request.operation)
           const memberActions = memberActionsForRequest(request)
           if (
             !issuerInternal &&
@@ -865,7 +873,8 @@ function authenticateSocket(
                       timeoutMs,
                       request.subject
                     ),
-                  hearthFeatures
+                  hearthFeatures,
+                  connectionId
                 ),
               { "relay.operation": request.operation }
             )
@@ -1292,6 +1301,7 @@ function authenticateSocket(
         type: "auth.ready",
         v: 1,
       }
+      options.clientConnected?.(client.id, connectionId)
       send(socket, ready)
       const initialSnapshot = (yield* promiseOperation(
         options.initialSnapshot
@@ -1595,6 +1605,15 @@ function memberActionsForRequest(
   }
 }
 
+// Requests any paired Hearth may send, whatever its grant: revising browser
+// authority it issued, and saying which volumes its own Apps' configurations
+// name, which only adds protection or replaces what it said before.
+const anyClientOperations = new Set<RelayControlOperation>([
+  "browser.authorization.revise",
+  "relay.volumes.references.import",
+  "app.volumes.write",
+])
+
 function actionForRequest(request: RelayControlRequest): RelayAction | null {
   if (
     request.operation.startsWith("instance.files.") &&
@@ -1686,9 +1705,8 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "relay.volumes.rename":
     case "relay.volumes.delete":
       return "relay.configure"
-    // What Apps' configurations mount, which only configuring them changes.
     case "relay.volumes.references.import":
-      return "app.manage"
+      return null
     case "relay.pairing.create":
       return "relay.pairing.create"
     case "relay.pairing.list":
@@ -1778,9 +1796,10 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "app.deploy":
     case "app.action":
     case "app.limits.write":
-    case "app.volumes.write":
     case "app.network.routes.write":
       return "app.manage"
+    case "app.volumes.write":
+      return null
     case "app.terminal.attach":
     case "app.terminal.heartbeat":
     case "app.terminal.detach":

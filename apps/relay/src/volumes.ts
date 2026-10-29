@@ -20,7 +20,6 @@ import type {
   DockerVolume,
 } from "./docker-engine.js"
 import type { RelayStateStore } from "./effect/state.js"
-import { actionsForRole } from "./permissions.js"
 import { traceRelayEffect } from "./effect/runtime.js"
 import {
   relayOwnerLabels,
@@ -99,6 +98,9 @@ export class RelayVolumes {
     values: ReadonlyMap<string, number>
   } = { covered: new Set(), measuredAt: 0, values: new Map() }
   #measureFailedAt = 0
+  // Each Hearth's latest authenticated control connection, since the Relay
+  // started. Only an import that connection sent counts.
+  readonly #connections = new Map<string, string>()
   #measuring: Promise<void> | null = null
 
   constructor(
@@ -321,16 +323,23 @@ export class RelayVolumes {
     }).pipe(Effect.withSpan("RelayVolumes.delete"))
   }
 
+  /** Notes a Hearth's new control connection, which owes a fresh import. */
+  clientConnected(clientId: string, connectionId: string) {
+    this.#connections.set(clientId, connectionId)
+  }
+
   /**
-   * Whether every Hearth that can configure Apps here has said which Kiln
-   * volumes its Apps' configurations name, so deletion knows what they use;
-   * if not, who it waits for. A Hearth newly paired owes them too, and
-   * deletion waits for it; one revoked no longer counts, nor do the
-   * references it sent.
+   * Whether every paired Hearth has said which Kiln volumes its Apps'
+   * configurations name, on its current control connection, so deletion
+   * knows what they use; if not, who it waits for. An import counts only
+   * for the connection that sent it: a Hearth whose database changed, as
+   * by a restore, connects again and sends what it holds now. A Hearth
+   * newly paired, or not connected since the Relay started, owes one too;
+   * one revoked no longer counts, nor do the references it sent.
    */
   protection() {
     return Effect.all(
-      [this.#configuringClients(), this.#state.listVolumeReferenceImports()],
+      [this.#state.listClients(), this.#state.listVolumeReferenceImports()],
       { concurrency: "unbounded" }
     ).pipe(
       Effect.map(([clients, imports]) => {
@@ -338,8 +347,12 @@ export class RelayVolumes {
           imports.map((entry) => [entry.clientId, entry])
         )
         const reasons = clients.flatMap((client) => {
+          const connection = this.#connections.get(client.id)
+          if (connection === undefined) {
+            return [`waiting for ${client.name} to connect`]
+          }
           const entry = imported.get(client.id)
-          if (!entry) {
+          if (entry?.connectionId !== connection) {
             return [
               `waiting for ${client.name} to send its Apps' configurations`,
             ]
@@ -393,23 +406,36 @@ export class RelayVolumes {
   }
 
   /**
-   * Records every App configuration's volumes one Hearth keeps, in place of
-   * all it sent before, and those it couldn't read, which keep deletion
-   * waiting until it reads them. Volumes that no longer exist are kept as
+   * Records every App configuration's volumes one Hearth keeps, sent on its
+   * current control connection, in place of all it sent before, and those
+   * it couldn't read, which keep deletion waiting until it reads them. Volumes that no longer exist are kept as
    * named: they protect nothing, and the App's next deployment says
    * they're gone.
    */
   importAppReferences(
     clientId: string,
+    connectionId: string,
     apps: ReadonlyArray<{
       readonly appId: string
       readonly volumeIds: ReadonlyArray<string>
     }>,
     unresolvedAppIds: ReadonlyArray<string>
   ) {
-    return this.#state
-      .importAppVolumeReferences(clientId, apps, unresolvedAppIds)
-      .pipe(Effect.withSpan("RelayVolumes.importAppReferences"))
+    return Effect.gen({ self: this }, function* () {
+      // One a connection since replaced sent holds what Hearth knew then, as
+      // before its database was restored; it mustn't replace newer ones.
+      if (this.#connections.get(clientId) !== connectionId) {
+        return yield* new RelayVolumeError({
+          message: "This connection is no longer the Hearth's current one",
+        })
+      }
+      yield* this.#state.importAppVolumeReferences(
+        clientId,
+        connectionId,
+        apps,
+        unresolvedAppIds
+      )
+    }).pipe(Effect.withSpan("RelayVolumes.importAppReferences"))
   }
 
   /** Forgets what a deleted App's configuration named. */
@@ -535,20 +561,6 @@ export class RelayVolumes {
       taken.add(id)
       return { ...candidate, id }
     })
-  }
-
-  // Paired Hearths that may configure Apps here; one that can't can neither
-  // save nor deploy a configuration on this Relay.
-  #configuringClients() {
-    return this.#state
-      .listClients()
-      .pipe(
-        Effect.map((clients) =>
-          clients.filter((client) =>
-            actionsForRole(client.role, client.actions).includes("app.manage")
-          )
-        )
-      )
   }
 
   // The Kiln volumes Apps' configurations name, as paired Hearths sent

@@ -879,8 +879,14 @@ export function relayVolumesQueryOptions(relayId: string) {
   return queryOptions({
     queryFn: () => getRelayVolumes({ data: { relayId } }),
     queryKey: queryKeys.relayVolumes(relayId),
-    // Docker measures sizes in the background; check back until it's done.
-    refetchInterval: (query) => (query.state.data?.measuring ? 2_000 : false),
+    // Docker measures sizes in the background, and other Hearths send which
+    // volumes their Apps name; check back until both are done.
+    refetchInterval: (query) =>
+      query.state.data?.measuring
+        ? 2_000
+        : query.state.data?.protection.ready === false
+          ? 10_000
+          : false,
     retry: false,
     staleTime: 30_000,
   })
