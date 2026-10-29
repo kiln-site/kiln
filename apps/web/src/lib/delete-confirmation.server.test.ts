@@ -133,6 +133,21 @@ describeMysql("deletion confirmation", () => {
     )
 
     it.effect(
+      "accepts more right passwords in a row than the wrong ones allowed",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+
+          // A right password frees its attempt, so none of these counts.
+          for (let attempt = 0; attempt < 6; attempt += 1) {
+            yield* confirm("Survival", "correct horse battery")
+          }
+
+          assert.strictEqual(verified.count, 6)
+        })
+    )
+
+    it.effect(
       "accepts the name, typed with stray spaces, and the password",
       () =>
         Effect.gen(function* () {
