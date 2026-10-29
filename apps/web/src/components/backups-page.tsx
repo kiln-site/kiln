@@ -1693,6 +1693,7 @@ function kilnVolumesScopeOption(relay: {
     description: `Kiln volumes · ${relay.relayName}`,
     id: KILN_VOLUMES_OPTION_ID,
     kind: "relay",
+    meta: relay.relayId,
     name: `Kiln volumes on ${relay.relayName}`,
     relayId: relay.relayId,
     relayName: relay.relayName,

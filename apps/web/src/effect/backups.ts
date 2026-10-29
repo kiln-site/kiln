@@ -415,69 +415,97 @@ export type BackupDispatch =
   | BackupExportDispatch
   | BackupRestoreDispatch
 
-const reserveBackupCreateEffect = Effect.fn("backups.reserveCreate")(
-  function* (input: {
-    artifactKind: BackupCreateTaskInput["artifactKind"]
-    backupId: string
-    /** Backups started together with it, as an App's are. */
-    batchId?: string
-    /** How many; stopped, they share one stopped window on the Relay. */
-    batchSize?: number
-    /** An App's folder or a volume's; absent is live. */
-    consistency?: BackupConsistency
-    createdBy: string
-    /** The deletion a final-delete backup is for, which records it. */
-    deletionId?: string
-    exclude: ReadonlyArray<string>
-    /**
-     * The final backup the deletion took before this one, of an App's
-     * folder or one of its volumes; null or absent for its first.
-     */
-    previousFinalBackupId?: string | null
-    mode?: BackupCreateTaskInput["mode"]
-    name: string
-    reason?: BackupCreateTaskInput["reason"]
-    relayId: string
-    requestedMaxBytes: number | null
-    storageId?: string | null
-    storageIds?: ReadonlyArray<string | null>
-    targetId: string
-    targetKind: BackupRow["target_kind"]
-    taskId: string
-  }) {
+export interface BackupCreateReservation {
+  artifactKind: BackupCreateTaskInput["artifactKind"]
+  backupId: string
+  /** Backups started together with it, as an App's are. */
+  batchId?: string
+  /** How many; stopped, they share one stopped window on the Relay. */
+  batchSize?: number
+  /** An App's folder or a volume's; absent is live. */
+  consistency?: BackupConsistency
+  createdBy: string
+  /** The deletion a final-delete backup is for, which records it. */
+  deletionId?: string
+  exclude: ReadonlyArray<string>
+  mode?: BackupCreateTaskInput["mode"]
+  name: string
+  /**
+   * The final backup the deletion took before this one, of an App's
+   * folder or one of its volumes; null or absent for its first.
+   */
+  previousFinalBackupId?: string | null
+  reason?: BackupCreateTaskInput["reason"]
+  relayId: string
+  requestedMaxBytes: number | null
+  storageId?: string | null
+  storageIds?: ReadonlyArray<string | null>
+  targetId: string
+  targetKind: BackupRow["target_kind"]
+  taskId: string
+}
+
+const reserveBackupCreateEffect = Effect.fn("backups.reserveCreate")(function* (
+  input: BackupCreateReservation
+) {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  return yield* database.transaction("backup_reserve", (transaction) =>
+    reserveBackupCreateIn(transaction, input, now)
+  )
+})
+
+/**
+ * Reserves backups started together, as backing up an App reserves its
+ * folder's and each owned volume's, in one transaction: all of them, or,
+ * if any is refused, none, so no batch runs short of a member.
+ */
+export const reserveBackupBatchEffect = Effect.fn("backups.reserveBatch")(
+  function* (inputs: ReadonlyArray<BackupCreateReservation>) {
     const database = yield* Database
     const now = yield* Clock.currentTimeMillis
-    return yield* database.transaction("backup_reserve", (transaction) =>
-      Effect.gen(function* () {
-        yield* transaction.execute(
-          `INSERT IGNORE INTO ${databaseTable("backup_policy")}
+    return yield* database.transaction("backup_reserve_batch", (transaction) =>
+      Effect.forEach(inputs, (input) =>
+        reserveBackupCreateIn(transaction, input, now)
+      )
+    )
+  }
+)
+
+// Reserves one backup inside a transaction the caller holds.
+const reserveBackupCreateIn = Effect.fnUntraced(function* (
+  transaction: DatabaseTransaction,
+  input: BackupCreateReservation,
+  now: number
+) {
+  yield* transaction.execute(
+    `INSERT IGNORE INTO ${databaseTable("backup_policy")}
             (relay_id, target_kind, target_id, exclude_patterns, created_at,
              updated_at)
            VALUES (?, ?, ?, ?, ?, ?)`,
-          [
-            input.relayId,
-            input.targetKind,
-            input.targetId,
-            JSON.stringify(input.exclude),
-            now,
-            now,
-          ]
-        )
-        const policies = yield* transaction.queryRows<BackupPolicyRow>(
-          `SELECT exclude_patterns, quantity_limit, size_limit_bytes, storage_id,
+    [
+      input.relayId,
+      input.targetKind,
+      input.targetId,
+      JSON.stringify(input.exclude),
+      now,
+      now,
+    ]
+  )
+  const policies = yield* transaction.queryRows<BackupPolicyRow>(
+    `SELECT exclude_patterns, quantity_limit, size_limit_bytes, storage_id,
                   admin_quantity_limit, admin_size_limit_bytes,
             retention_days, admin_retention_days
              FROM ${databaseTable("backup_policy")}
             WHERE relay_id = ? AND target_kind = ? AND target_id = ?
             FOR UPDATE`,
-          [input.relayId, input.targetKind, input.targetId]
-        )
-        const policy = policies[0]
-        if (!policy) return yield* Effect.die("Backup policy was not created")
-        if (input.reason === "final_delete") {
-          const activeRestores =
-            yield* transaction.queryRows<KnownBackupTaskRow>(
-              `SELECT task.id
+    [input.relayId, input.targetKind, input.targetId]
+  )
+  const policy = policies[0]
+  if (!policy) return yield* Effect.die("Backup policy was not created")
+  if (input.reason === "final_delete") {
+    const activeRestores = yield* transaction.queryRows<KnownBackupTaskRow>(
+      `SELECT task.id
                  FROM ${databaseTable("backup_task")} task
                  JOIN ${databaseTable("backup")} backup ON backup.id = task.backup_id
                 WHERE backup.relay_id = ?
@@ -486,267 +514,255 @@ const reserveBackupCreateEffect = Effect.fn("backups.reserveCreate")(
                   AND task.task_kind = 'restore'
                   AND task.status IN ('queued', 'running')
                 LIMIT 1`,
-              [input.relayId, input.targetKind, input.targetId]
-            )
-          if (activeRestores[0]) {
-            return yield* BackupStorageError.make({
-              code: "restore_in_progress",
-              operation: "backup.finalDelete",
-              reason:
-                "Wait for the active restore before deleting this resource",
-            })
-          }
-        } else {
-          yield* refuseIfFinalDeletionInProgress(transaction, {
-            operation: "backup.reserve",
-            relayId: input.relayId,
-            targetId: input.targetId,
-            targetKind: input.targetKind,
-          })
-        }
-        const mode =
-          input.reason === "pre_restore" ||
-          input.reason === "final_delete" ||
-          input.targetKind !== "instance"
-            ? "full"
-            : (input.mode ?? "incremental")
-        const artifactKind =
-          mode === "incremental" ? "restic_snapshot" : input.artifactKind
-        const requestedStorageIds = deduplicateStorageIds(
-          input.storageIds ?? [
-            input.storageId === undefined ? policy.storage_id : input.storageId,
-          ]
-        )
-        if (mode === "incremental" && requestedStorageIds.length !== 1) {
-          return yield* BackupStorageError.make({
-            code: "storage_unavailable",
-            operation: "backup.reserve",
-            reason: "Incremental backups require exactly one destination",
-          })
-        }
-        const selectedStorageIds = requestedStorageIds
-        if (selectedStorageIds.length === 0) {
-          return yield* BackupStorageError.make({
-            code: "storage_unavailable",
-            operation: "backup.reserve",
-            reason: "Choose at least one backup destination",
-          })
-        }
-        const lockedStorage = yield* lockBackupStorageRows(
-          transaction,
-          selectedStorageIds.filter(
-            (storageId): storageId is string => storageId !== null
-          )
-        )
-        const artifacts: Array<BackupDispatchArtifact> = []
-        for (const storageId of selectedStorageIds) {
-          const storage = storageId ? lockedStorage.get(storageId) : undefined
-          if (
-            storageId &&
-            (!storage ||
-              !storage.enabled ||
-              Boolean(storage.deleting) ||
-              (storage.owner_user_id !== null &&
-                storage.owner_user_id !== input.createdBy))
-          ) {
-            return yield* BackupStorageError.make({
-              code: "storage_unavailable",
-              operation: "backup.reserve",
-              reason: "A selected backup destination is unavailable",
-            })
-          }
-          if (mode === "incremental" && storage) {
-            const incrementalLocationError =
-              incrementalStorageLocationError(storage)
-            if (incrementalLocationError) {
-              return yield* BackupStorageError.make({
-                code: "storage_unavailable",
-                operation: "backup.reserve",
-                reason: incrementalLocationError,
-              })
-            }
-          }
-          artifacts.push({
-            artifactId: randomUUID(),
-            objectKey:
-              storage && mode !== "incremental"
-                ? backupObjectKey({
-                    artifactKind,
-                    backupId: input.backupId,
-                    installationId: kilnInstallationId(),
-                    objectPrefix: storage.object_prefix,
-                    relayId: input.relayId,
-                    targetId: input.targetId,
-                    targetKind: input.targetKind,
-                  })
-                : null,
-            storageId,
-          })
-        }
-        const primaryArtifact = artifacts[0]
-        if (!primaryArtifact) return yield* Effect.die("Backup has no artifact")
-        let repositoryId: string | null = null
-        let repositoryPassword: string | undefined
-        if (mode === "incremental") {
-          const repository = yield* loadOrCreateBackupRepository(transaction, {
-            destinationObjectPrefix: primaryArtifact.storageId
-              ? (lockedStorage.get(primaryArtifact.storageId)?.object_prefix ??
-                "")
-              : "",
-            now,
-            relayId: input.relayId,
-            storageId: primaryArtifact.storageId,
-            targetId: input.targetId,
-            targetKind: input.targetKind,
-          })
-          repositoryId = repository.id
-          repositoryPassword = repository.password
-        }
-        // Retention makes room by deleting older backups once this one is
-        // kept, so a new backup is refused only where backups are turned off
-        // (a ceiling of none), and can't outgrow all the space kept.
-        // Final-deletion backups pass the owner's own limits.
-        const quantityLimit = effectiveBackupLimit(
-          input.reason === "final_delete" ? null : policy.quantity_limit,
-          policy.admin_quantity_limit
-        )
-        const sizeLimit = effectiveBackupLimit(
-          input.reason === "final_delete"
-            ? null
-            : nullableDatabaseNumber(
-                policy.size_limit_bytes,
-                "backup size limit"
-              ),
-          nullableDatabaseNumber(
-            policy.admin_size_limit_bytes,
-            "admin backup size limit"
-          )
-        )
-        const reservation = yield* Effect.try({
-          try: () =>
-            backupReservation({
-              quantityLimit,
-              requestedMaxBytes: input.requestedMaxBytes,
-              sizeLimit,
-            }),
-          catch: (cause) =>
-            cause instanceof BackupLimitError
-              ? cause
-              : BackupStorageError.make({
-                  cause,
-                  code: "reservation_failed",
-                  operation: "backup.reserve",
-                  reason: "The backup reservation could not be calculated",
-                }),
+      [input.relayId, input.targetKind, input.targetId]
+    )
+    if (activeRestores[0]) {
+      return yield* BackupStorageError.make({
+        code: "restore_in_progress",
+        operation: "backup.finalDelete",
+        reason: "Wait for the active restore before deleting this resource",
+      })
+    }
+  } else {
+    yield* refuseIfFinalDeletionInProgress(transaction, {
+      operation: "backup.reserve",
+      relayId: input.relayId,
+      targetId: input.targetId,
+      targetKind: input.targetKind,
+    })
+  }
+  const mode =
+    input.reason === "pre_restore" ||
+    input.reason === "final_delete" ||
+    input.targetKind !== "instance"
+      ? "full"
+      : (input.mode ?? "incremental")
+  const artifactKind =
+    mode === "incremental" ? "restic_snapshot" : input.artifactKind
+  const requestedStorageIds = deduplicateStorageIds(
+    input.storageIds ?? [
+      input.storageId === undefined ? policy.storage_id : input.storageId,
+    ]
+  )
+  if (mode === "incremental" && requestedStorageIds.length !== 1) {
+    return yield* BackupStorageError.make({
+      code: "storage_unavailable",
+      operation: "backup.reserve",
+      reason: "Incremental backups require exactly one destination",
+    })
+  }
+  const selectedStorageIds = requestedStorageIds
+  if (selectedStorageIds.length === 0) {
+    return yield* BackupStorageError.make({
+      code: "storage_unavailable",
+      operation: "backup.reserve",
+      reason: "Choose at least one backup destination",
+    })
+  }
+  const lockedStorage = yield* lockBackupStorageRows(
+    transaction,
+    selectedStorageIds.filter(
+      (storageId): storageId is string => storageId !== null
+    )
+  )
+  const artifacts: Array<BackupDispatchArtifact> = []
+  for (const storageId of selectedStorageIds) {
+    const storage = storageId ? lockedStorage.get(storageId) : undefined
+    if (
+      storageId &&
+      (!storage ||
+        !storage.enabled ||
+        Boolean(storage.deleting) ||
+        (storage.owner_user_id !== null &&
+          storage.owner_user_id !== input.createdBy))
+    ) {
+      return yield* BackupStorageError.make({
+        code: "storage_unavailable",
+        operation: "backup.reserve",
+        reason: "A selected backup destination is unavailable",
+      })
+    }
+    if (mode === "incremental" && storage) {
+      const incrementalLocationError = incrementalStorageLocationError(storage)
+      if (incrementalLocationError) {
+        return yield* BackupStorageError.make({
+          code: "storage_unavailable",
+          operation: "backup.reserve",
+          reason: incrementalLocationError,
         })
+      }
+    }
+    artifacts.push({
+      artifactId: randomUUID(),
+      objectKey:
+        storage && mode !== "incremental"
+          ? backupObjectKey({
+              artifactKind,
+              backupId: input.backupId,
+              installationId: kilnInstallationId(),
+              objectPrefix: storage.object_prefix,
+              relayId: input.relayId,
+              targetId: input.targetId,
+              targetKind: input.targetKind,
+            })
+          : null,
+      storageId,
+    })
+  }
+  const primaryArtifact = artifacts[0]
+  if (!primaryArtifact) return yield* Effect.die("Backup has no artifact")
+  let repositoryId: string | null = null
+  let repositoryPassword: string | undefined
+  if (mode === "incremental") {
+    const repository = yield* loadOrCreateBackupRepository(transaction, {
+      destinationObjectPrefix: primaryArtifact.storageId
+        ? (lockedStorage.get(primaryArtifact.storageId)?.object_prefix ?? "")
+        : "",
+      now,
+      relayId: input.relayId,
+      storageId: primaryArtifact.storageId,
+      targetId: input.targetId,
+      targetKind: input.targetKind,
+    })
+    repositoryId = repository.id
+    repositoryPassword = repository.password
+  }
+  // Retention makes room by deleting older backups once this one is
+  // kept, so a new backup is refused only where backups are turned off
+  // (a ceiling of none), and can't outgrow all the space kept.
+  // Final-deletion backups pass the owner's own limits.
+  const quantityLimit = effectiveBackupLimit(
+    input.reason === "final_delete" ? null : policy.quantity_limit,
+    policy.admin_quantity_limit
+  )
+  const sizeLimit = effectiveBackupLimit(
+    input.reason === "final_delete"
+      ? null
+      : nullableDatabaseNumber(policy.size_limit_bytes, "backup size limit"),
+    nullableDatabaseNumber(
+      policy.admin_size_limit_bytes,
+      "admin backup size limit"
+    )
+  )
+  const reservation = yield* Effect.try({
+    try: () =>
+      backupReservation({
+        quantityLimit,
+        requestedMaxBytes: input.requestedMaxBytes,
+        sizeLimit,
+      }),
+    catch: (cause) =>
+      cause instanceof BackupLimitError
+        ? cause
+        : BackupStorageError.make({
+            cause,
+            code: "reservation_failed",
+            operation: "backup.reserve",
+            reason: "The backup reservation could not be calculated",
+          }),
+  })
 
-        yield* transaction.execute(
-          `INSERT INTO ${databaseTable("backup")}
+  yield* transaction.execute(
+    `INSERT INTO ${databaseTable("backup")}
             (id, relay_id, target_kind, target_id, storage_id, artifact_kind,
              backup_mode, reason, status, name, object_key, repository_id,
              consistency, batch_id, warnings, created_by, created_at,
              updated_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?,
                    'queued', ?, ?, ?, ?, ?, JSON_ARRAY(), ?, ?, ?)`,
-          [
-            input.backupId,
-            input.relayId,
-            input.targetKind,
-            input.targetId,
-            primaryArtifact.storageId,
-            artifactKind,
-            mode,
-            input.reason ?? "manual",
-            input.name,
-            primaryArtifact.objectKey,
-            repositoryId,
-            input.consistency ?? null,
-            input.batchId ?? null,
-            input.createdBy,
-            now,
-            now,
-          ]
-        )
-        for (const artifact of artifacts) {
-          yield* transaction.execute(
-            `INSERT INTO ${databaseTable("backup_artifact")}
+    [
+      input.backupId,
+      input.relayId,
+      input.targetKind,
+      input.targetId,
+      primaryArtifact.storageId,
+      artifactKind,
+      mode,
+      input.reason ?? "manual",
+      input.name,
+      primaryArtifact.objectKey,
+      repositoryId,
+      input.consistency ?? null,
+      input.batchId ?? null,
+      input.createdBy,
+      now,
+      now,
+    ]
+  )
+  for (const artifact of artifacts) {
+    yield* transaction.execute(
+      `INSERT INTO ${databaseTable("backup_artifact")}
               (id, backup_id, destination_key, storage_id, status, object_key,
                created_at, updated_at)
              VALUES (?, ?, ?, ?, 'queued', ?, ?, ?)`,
-            [
-              artifact.artifactId,
-              input.backupId,
-              mode === "incremental"
-                ? "restic"
-                : (artifact.storageId ?? "local"),
-              artifact.storageId,
-              artifact.objectKey,
-              now,
-              now,
-            ]
-          )
-        }
-        yield* transaction.execute(
-          `INSERT INTO ${databaseTable("backup_task")}
+      [
+        artifact.artifactId,
+        input.backupId,
+        mode === "incremental" ? "restic" : (artifact.storageId ?? "local"),
+        artifact.storageId,
+        artifact.objectKey,
+        now,
+        now,
+      ]
+    )
+  }
+  yield* transaction.execute(
+    `INSERT INTO ${databaseTable("backup_task")}
             (id, backup_id, task_kind, status, reserved_bytes, requested_by,
              created_at, updated_at)
            VALUES (?, ?, 'create', 'queued', ?, ?, ?, ?)`,
+    [
+      input.taskId,
+      input.backupId,
+      reservation.maxBytes,
+      input.createdBy,
+      now,
+      now,
+    ]
+  )
+  if (input.reason === "final_delete") {
+    // Recorded on its deletion in the same transaction, so the deletion
+    // follows this backup by its ID and never takes two. An App's parts are
+    // taken one after another, each replacing the one before, which it names.
+    const recorded = input.deletionId
+      ? yield* transaction.execute(
+          `UPDATE ${databaseTable("resource_deletion")}
+              SET backup_id = ?, status = 'backing_up', updated_at = ?
+            WHERE id = ? AND relay_id = ? AND backup_id <=> ?
+              AND status IN ('pending', 'backing_up')`,
           [
-            input.taskId,
             input.backupId,
-            reservation.maxBytes,
-            input.createdBy,
             now,
-            now,
+            input.deletionId,
+            input.relayId,
+            input.previousFinalBackupId ?? null,
           ]
         )
-        if (input.reason === "final_delete") {
-          // Recorded on its deletion in the same transaction, so the
-          // deletion follows this backup by its ID and never takes two. An
-          // App's parts are taken one after another, each replacing the one
-          // before, which it names.
-          const recorded = input.deletionId
-            ? yield* transaction.execute(
-                `UPDATE ${databaseTable("resource_deletion")}
-                    SET backup_id = ?, status = 'backing_up', updated_at = ?
-                  WHERE id = ? AND relay_id = ? AND backup_id <=> ?
-                    AND status IN ('pending', 'backing_up')`,
-                [
-                  input.backupId,
-                  now,
-                  input.deletionId,
-                  input.relayId,
-                  input.previousFinalBackupId ?? null,
-                ]
-              )
-            : null
-          if (!recorded || recorded.affectedRows !== 1) {
-            return yield* BackupStorageError.make({
-              code: "reservation_failed",
-              operation: "backup.finalDelete",
-              reason: "This deletion isn't waiting for a final backup",
-            })
-          }
-        }
-        return {
-          artifacts,
-          artifactKind,
-          backupId: input.backupId,
-          ...(input.consistency ? { consistency: input.consistency } : {}),
-          ...stoppedBatch(input.consistency, input.batchId, input.batchSize),
-          exclude: parseExcludes(policy.exclude_patterns),
-          kind: "create",
-          maxBytes: reservation.maxBytes,
-          mode,
-          reason: input.reason ?? "manual",
-          ...(repositoryPassword ? { repositoryPassword } : {}),
-          target: { id: input.targetId, kind: input.targetKind },
-          taskId: input.taskId,
-        } satisfies BackupCreateDispatch
+      : null
+    if (!recorded || recorded.affectedRows !== 1) {
+      return yield* BackupStorageError.make({
+        code: "reservation_failed",
+        operation: "backup.finalDelete",
+        reason: "This deletion isn't waiting for a final backup",
       })
-    )
+    }
   }
-)
+  return {
+    artifacts,
+    artifactKind,
+    backupId: input.backupId,
+    ...(input.consistency ? { consistency: input.consistency } : {}),
+    ...stoppedBatch(input.consistency, input.batchId, input.batchSize),
+    exclude: parseExcludes(policy.exclude_patterns),
+    kind: "create",
+    maxBytes: reservation.maxBytes,
+    mode,
+    reason: input.reason ?? "manual",
+    ...(repositoryPassword ? { repositoryPassword } : {}),
+    target: { id: input.targetId, kind: input.targetKind },
+    taskId: input.taskId,
+  } satisfies BackupCreateDispatch
+})
 
 export const reserveInstanceBackupEffect = Effect.fn("backups.reserve")(
   (input: {

@@ -41,6 +41,8 @@ export interface ServerPickerOption<
   disabled?: boolean
   id: string
   kind?: K
+  /** Shown in place of its ID, for an option whose ID means nothing to read. */
+  meta?: string
   name: string
   /** A Relay option that stands for Kiln itself, on that Relay's host. */
   platform?: boolean
@@ -48,9 +50,7 @@ export interface ServerPickerOption<
   relayName: string
 }
 
-export const serverPickerOptionKey = (
-  server: ServerPickerOption<ScopeKind>
-) =>
+export const serverPickerOptionKey = (server: ServerPickerOption<ScopeKind>) =>
   server.kind
     ? `${server.kind}:${server.relayId}:${server.id}`
     : `${server.relayId}:${server.id}`
@@ -168,7 +168,7 @@ function ServerScopePickerView<K extends ScopeKind>({
         .length
     : 0
   const selectionMetadata = selectedServer
-    ? selectedServer.id
+    ? (selectedServer.meta ?? selectedServer.id)
     : kindScope
       ? `${kindCount} accessible ${kindCount === 1 ? kindScope.one : kindScope.other}, including new ones`
       : `${servers.length} accessible ${servers.length === 1 ? "instance" : "instances"}`
@@ -268,11 +268,13 @@ function serverScopePickerItem(
           }
         : { id: server.id, kind, relayId: server.relayId },
     key: serverPickerOptionKey(server),
-    meta: server.platform
-      ? `On ${server.relayName}`
-      : kind === "relay"
-        ? server.relayId.slice(0, 8)
-        : `${server.relayName} · ${server.id.slice(0, 8)}`,
+    meta: server.meta
+      ? server.meta
+      : server.platform
+        ? `On ${server.relayName}`
+        : kind === "relay"
+          ? server.relayId.slice(0, 8)
+          : `${server.relayName} · ${server.id.slice(0, 8)}`,
     name: server.name,
     searchText: `${server.id} ${server.relayName} ${server.relayId}`,
   }

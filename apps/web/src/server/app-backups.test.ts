@@ -225,6 +225,45 @@ describeMysql("App backups", () => {
     )
 
     it.effect(
+      "reserves none of an App's backups when one of them is refused",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          yield* createAppRecordEffect({
+            appId,
+            createdBy: "someone-else",
+            name: "Website",
+            relayId,
+          })
+          yield* grant(["app.files.read"])
+          // Backups of its volume are turned off: a ceiling of none.
+          yield* insertRows("backup_policy", {
+            admin_quantity_limit: 0,
+            created_at: Date.UTC(2026, 0, 1),
+            exclude_patterns: "[]",
+            relay_id: relayId,
+            target_id: `${appId}/pgdata`,
+            target_kind: "volume",
+            updated_at: Date.UTC(2026, 0, 1),
+          })
+
+          const message = yield* rejection(() =>
+            createAppBackupsHandler(user, {
+              appId,
+              consistency: "live",
+              name: "Before the upgrade",
+              relayId,
+            })
+          )
+
+          assert.include(message.toLowerCase(), "backup")
+          assert.deepStrictEqual(yield* selectRows("backup"), [])
+          assert.deepStrictEqual(yield* selectRows("backup_task"), [])
+          assert.deepStrictEqual(relay.dispatched, [])
+        })
+    )
+
+    it.effect(
       "finishes an unfinished restore only for someone who may change every App that uses its volume",
       () =>
         Effect.gen(function* () {

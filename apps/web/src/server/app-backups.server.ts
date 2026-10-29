@@ -13,7 +13,7 @@ import { loadBackupStorageEffect } from "@/backups/destinations/s3"
 import {
   getBackupForTaskEffect,
   listTargetBackupsEffect,
-  reserveResourceBackupEffect,
+  reserveBackupBatchEffect,
   type BackupCatalogRecord,
 } from "@/effect/backups"
 import { loadAppConfigEffect } from "@/effect/managed-apps"
@@ -156,28 +156,30 @@ export async function createAppBackupsHandler(
   })
   await requirePersonalStorage(storageIds, user, relay.id, app)
   const batchId = randomUUID()
-  const reserved = []
-  for (const target of targets) {
-    reserved.push(
-      await runAppEffect(
-        "backups.reserveAppBatch",
-        reserveResourceBackupEffect({
-          backupId: randomUUID(),
-          batchId,
-          batchSize: targets.length,
-          consistency: data.consistency,
-          createdBy: user.id,
-          name: data.name,
-          relayId: relay.id,
-          requestedMaxBytes: null,
-          storageIds,
-          targetId: target.id,
-          targetKind: target.kind,
-          taskId: randomUUID(),
-        })
-      )
+  // All of the App's backups, or none: one refused, as by a ceiling of no
+  // backups, refuses the batch rather than leave it short of a member.
+  const reserved = await runAppEffect(
+    "backups.reserveAppBatch",
+    reserveBackupBatchEffect(
+      targets.map((target) => ({
+        artifactKind: "tar_archive" as const,
+        backupId: randomUUID(),
+        batchId,
+        batchSize: targets.length,
+        consistency: data.consistency,
+        createdBy: user.id,
+        exclude: [],
+        mode: "full" as const,
+        name: data.name,
+        relayId: relay.id,
+        requestedMaxBytes: null,
+        storageIds,
+        targetId: target.id,
+        targetKind: target.kind,
+        taskId: randomUUID(),
+      }))
     )
-  }
+  )
   for (const input of reserved) publishBackupChange(relay.id, input.backupId)
   const dispatched = await Promise.allSettled(
     reserved.map((input) => dispatchBackupTask(relay, input, user.id))
