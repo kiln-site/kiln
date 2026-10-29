@@ -7,6 +7,7 @@ import { z } from "zod"
 import {
   relayScheduleDeploymentSchema,
   scheduleActionAppliesToTarget,
+  scheduleTargetKey,
   scheduleActionSchema,
   scheduleDefinitionSchema,
   scheduleRunSchema,
@@ -401,7 +402,7 @@ async function prepareRelayScheduleActions(
 ): Promise<Array<RelayScheduleAction>> {
   return Effect.runPromise(
     Effect.forEach(
-      actions,
+      actions.map((action) => forRelayTargets(action, targets)),
       (action): Effect.Effect<RelayScheduleAction, unknown> => {
         if (action.type !== "backup") return Effect.succeed(action)
         return Effect.forEach(
@@ -493,6 +494,33 @@ async function scheduleOwner(scheduleId: string): Promise<string | null> {
     [scheduleId]
   )
   return rows[0]?.created_by ?? null
+}
+
+/**
+ * A step as one Relay runs it: the targets it names and the App services it
+ * runs in, of that Relay's targets only. A Relay refuses a step naming
+ * targets it doesn't have. A list emptied here stays empty, since no list
+ * would mean every target.
+ */
+function forRelayTargets(
+  action: ScheduleAction,
+  targets: ReadonlyArray<ScheduleTarget>
+): ScheduleAction {
+  if (action.type === "wait") return action
+  const keys = new Set(targets.map(scheduleTargetKey))
+  const scoped =
+    action.targetKeys === undefined
+      ? action
+      : {
+          ...action,
+          targetKeys: action.targetKeys.filter((key) => keys.has(key)),
+        }
+  if (scoped.type !== "console_command" || !scoped.services) return scoped
+  const services = Object.fromEntries(
+    Object.entries(scoped.services).filter(([key]) => keys.has(key))
+  )
+  const { services: _all, ...rest } = scoped
+  return Object.keys(services).length > 0 ? { ...rest, services } : rest
 }
 
 type BackupScheduleTarget = ScheduleTarget & {
