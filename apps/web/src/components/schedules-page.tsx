@@ -3053,14 +3053,26 @@ const ActionEditor = React.memo(function ActionEditor({
       ),
     [action, onChange, permissionKey, selectedOptions]
   )
-  const selectedActionTargets = eligibleTargets.filter((target) =>
-    actionTargetKeys.has(targetKey(target))
-  )
+  // Targets a saved step names that this person can't run it on, as when it
+  // was saved before commands reached databases. They show as chosen so
+  // they can be removed, and can't be chosen again.
+  const namedRestrictedTargets =
+    action.type === null || action.type === "wait"
+      ? []
+      : restrictedTargets.filter(
+          (target) => action.targetKeys?.includes(targetKey(target)) === true
+        )
+  const selectedActionTargets = [
+    ...eligibleTargets.filter((target) =>
+      actionTargetKeys.has(targetKey(target))
+    ),
+    ...namedRestrictedTargets,
+  ]
 
   return (
     <div
       data-schedule-action-row
-      className={`${action.type === "wait" ? "h-20" : "h-12"} rounded-lg border bg-background/45 p-1 transition-[border-color,opacity] sm:h-16 sm:p-2 ${dragging ? "border-primary/40 opacity-55" : ""}`}
+      className={`${namedRestrictedTargets.length > 0 ? "space-y-2" : action.type === "wait" ? "h-20 sm:h-16" : "h-12 sm:h-16"} rounded-lg border bg-background/45 p-1 transition-[border-color,opacity] sm:p-2 ${dragging ? "border-primary/40 opacity-55" : ""}`}
       onDragOver={(event) => {
         event.preventDefault()
         onDragOver(action.id)
@@ -3068,7 +3080,7 @@ const ActionEditor = React.memo(function ActionEditor({
       onDrop={(event) => event.preventDefault()}
     >
       <div
-        className={`grid h-full items-center gap-0.5 sm:grid-cols-[2rem_9rem_minmax(0,1fr)_auto] sm:grid-rows-1 sm:gap-2 ${action.type === "wait" ? "grid-cols-[1.25rem_minmax(0,1fr)_auto] grid-rows-2" : "grid-cols-[1.25rem_8rem_minmax(0,1fr)_auto]"}`}
+        className={`grid items-center gap-0.5 sm:grid-cols-[2rem_9rem_minmax(0,1fr)_auto] sm:grid-rows-1 sm:gap-2 ${namedRestrictedTargets.length > 0 ? "h-10 sm:h-12" : "h-full"} ${action.type === "wait" ? "grid-cols-[1.25rem_minmax(0,1fr)_auto] grid-rows-2" : "grid-cols-[1.25rem_8rem_minmax(0,1fr)_auto]"}`}
       >
         <Tooltip>
           <TooltipTrigger asChild>
@@ -3170,10 +3182,16 @@ const ActionEditor = React.memo(function ActionEditor({
                 selectedTargets={selectedActionTargets}
                 onToggle={(targetKeyValues, checked) => {
                   if (action.type === null) return
-                  const next = new Set(actionTargetKeys)
+                  const eligibleKeys = new Set(eligibleTargets.map(targetKey))
+                  const next = new Set([
+                    ...actionTargetKeys,
+                    ...namedRestrictedTargets.map(targetKey),
+                  ])
                   for (const targetKeyValue of targetKeyValues) {
-                    if (checked) next.add(targetKeyValue)
-                    else next.delete(targetKeyValue)
+                    // Only targets this person may run it on can be added.
+                    if (checked && eligibleKeys.has(targetKeyValue))
+                      next.add(targetKeyValue)
+                    else if (!checked) next.delete(targetKeyValue)
                   }
                   onChange({ ...action, targetKeys: [...next] })
                 }}
@@ -3239,9 +3257,41 @@ const ActionEditor = React.memo(function ActionEditor({
           title="Configure Backup"
         />
       ) : null}
+      {action.type !== null && namedRestrictedTargets.length > 0 ? (
+        <NamedRestrictedTargetsNote
+          action={action}
+          targets={namedRestrictedTargets}
+        />
+      ) : null}
     </div>
   )
 })
+
+// Why a step that names targets this person can't run it on can't be saved,
+// and what to do about it.
+function NamedRestrictedTargetsNote({
+  action,
+  targets,
+}: {
+  action: ScheduleAction
+  targets: ReadonlyArray<ScheduleOption>
+}) {
+  const shell = (target: ScheduleOption) =>
+    action.type === "console_command" && target.kind === "database"
+  const databases = targets.filter(shell)
+  const others = targets.filter((target) => !shell(target))
+  return (
+    <p className="type-meta rounded-md border border-amber-400/30 bg-amber-400/5 px-2.5 py-2 text-pretty text-amber-300 light:text-amber-700">
+      {databases.length > 0
+        ? `Saving runs this command in ${targetList(databases)}'s shell, which needs Relay terminal permission. `
+        : null}
+      {others.length > 0
+        ? `You don't have permission to run this action on ${targetList(others)}. `
+        : null}
+      Remove {targetList(targets)} from this step to save.
+    </p>
+  )
+}
 
 const ScheduleActionTargetsButton = React.memo(
   function ScheduleActionTargetsButton({
@@ -3258,17 +3308,20 @@ const ScheduleActionTargetsButton = React.memo(
     targets: ReadonlyArray<ScheduleOption>
   }) {
     const [open, setOpen] = React.useState(false)
-    const items = React.useMemo(() => {
-      const eligibleKeys = new Set(eligibleTargets.map(targetKey))
-      return targets.map((target): InstancePickerItem => ({
-        ...scheduleTargetPickerItem(target),
-        disabled: !eligibleKeys.has(targetKey(target)),
-      }))
-    }, [eligibleTargets, targets])
     const selectedKeys = React.useMemo(
       () => new Set(selectedTargets.map(targetKey)),
       [selectedTargets]
     )
+    // A target it can't run on stays removable while the step names it.
+    const items = React.useMemo(() => {
+      const eligibleKeys = new Set(eligibleTargets.map(targetKey))
+      return targets.map((target): InstancePickerItem => ({
+        ...scheduleTargetPickerItem(target),
+        disabled:
+          !eligibleKeys.has(targetKey(target)) &&
+          !selectedKeys.has(targetKey(target)),
+      }))
+    }, [eligibleTargets, selectedKeys, targets])
     const toggleTarget = React.useCallback(
       (item: InstancePickerItem) =>
         onToggle([item.key], !selectedKeys.has(item.key)),
