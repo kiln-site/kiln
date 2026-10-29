@@ -318,6 +318,38 @@ describe("Relay control socket", () => {
     }
   )
 
+  it("lets a Hearth freeze, and let go of, only what it may delete", async () => {
+    const relay = await startRelay()
+    const databaseDeleter = await relay.pair({
+      actions: ["database.delete"],
+      role: "custom",
+    })
+    const { inbox, socket } = await relay.connect(databaseDeleter)
+    const freeze = (
+      operation: "resource.freeze" | "resource.unfreeze",
+      kind: string
+    ) =>
+      sendRequest(socket, operation, {
+        deletionId: "00000000-0000-4000-8000-000000000001",
+        id: "d".repeat(40),
+        kind,
+      })
+
+    for (const operation of ["resource.freeze", "resource.unfreeze"] as const) {
+      const database = freeze(operation, "database")
+      expect(await inbox.next()).toMatchObject({
+        replyTo: database,
+        type: "response",
+      })
+      const server = freeze(operation, "instance")
+      expect(await inbox.next()).toMatchObject({
+        code: "forbidden",
+        replyTo: server,
+        type: "error",
+      })
+    }
+  })
+
   it("keeps an app's files behind app file actions, apart from servers'", async () => {
     const relay = await startRelay()
     const appFiles = `app:${"a".repeat(40)}`
