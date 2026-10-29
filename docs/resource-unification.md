@@ -1,7 +1,7 @@
 # One lifecycle for every resource (plan)
 
-Status: built as a stack of 17 pull requests (`feat/unify-*`, listed under
-[Stacks](#stacks)), in review. Kiln began with game servers; Apps, databases, and volumes
+Status: built and merged as a stack of 17 pull requests (#629–#645, listed
+under [Stacks](#stacks)), and running in production. Kiln began with game servers; Apps, databases, and volumes
 came later, and several features were never brought over or were built a
 second time beside the first. This plan makes database networks, Tailscale,
 deletion, backups, and automations work the same way for every resource,
