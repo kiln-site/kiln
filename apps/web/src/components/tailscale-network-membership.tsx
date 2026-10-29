@@ -3,8 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import {
   appTailscaleMember,
-  instanceTailscaleMember,
-  instanceTailscaleMemberId,
+  databaseTailscaleMember,
 } from "@workspace/contracts"
 import {
   Check,
@@ -63,6 +62,11 @@ import {
   type InstancePickerItem,
 } from "@/components/instance-picker"
 import { StatusIndicator } from "@/components/status-indicator"
+import {
+  tailscaleMemberKey,
+  useTailscaleMemberDirectory,
+  type TailscaleMemberListing,
+} from "@/components/tailscale-member-directory"
 import { TailscaleRelayUpdateHint } from "@/components/tailscale-relay-update-hint"
 import { WorkspaceCopyValueButton } from "@/components/workspace-header"
 import {
@@ -72,18 +76,9 @@ import {
 } from "@/lib/data-table"
 import type { DataTableSearchStore } from "@/lib/data-table-search"
 import type { DataTableSource } from "@/lib/data-table-source"
-import {
-  queryKeys,
-  relaySnapshotQueryOptions,
-  tailscaleStacksQueryOptions,
-} from "@/lib/query-options"
+import { queryKeys, tailscaleStacksQueryOptions } from "@/lib/query-options"
 import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
-import {
-  defaultTailscaleHostname,
-  selectTailscaleServers,
-  tailscaleServerKey,
-} from "@/lib/tailscale-selectors"
-import type { TailscaleServer } from "@/lib/tailscale-selectors"
+import { defaultTailscaleHostname } from "@/lib/tailscale-selectors"
 import {
   showTailscaleOperationError,
   showTailscaleOperationProgress,
@@ -106,15 +101,16 @@ const noTailscaleStacks: TailscaleStacksResult = {
 }
 type SaveStackInput = Parameters<typeof saveTailscaleStack>[0]["data"]
 
-const emptyServers: Array<TailscaleServer> = []
-const emptyServerKeys = new Set<string>()
+const emptyMembers: Array<TailscaleMemberListing> = []
+const emptyMemberKeys = new Set<string>()
 
-// A game server on the selected tailnet: the row the table shows.
+// A member of the selected tailnet: a game server, an App's service, or a
+// database, as the table shows it.
 type TailscaleMemberRow = {
   binding: StackBinding
   deployment: TailscaleStackOverview["deployments"][number] | undefined
   domain: string
-  server: TailscaleServer
+  member: TailscaleMemberListing
   stackId: string
 }
 
@@ -122,7 +118,7 @@ type MemberDialog =
   | { kind: "configure"; row: TailscaleMemberRow }
   | { kind: "disconnect"; row: TailscaleMemberRow }
 
-export function TailscaleConnectedServersTable({
+export function TailscaleConnectedMembersTable({
   searchStore,
   stack,
   onAddServers,
@@ -137,7 +133,7 @@ export function TailscaleConnectedServersTable({
     return (
       <TailscaleEmptyTable
         actionLabel="Setup Tailscale"
-        description="Set up Tailscale before connecting game servers"
+        description="Set up Tailscale before connecting game servers, Apps, or databases"
         icon="network"
         title="No Tailscale networks"
         onAction={onSetup}
@@ -148,7 +144,7 @@ export function TailscaleConnectedServersTable({
     return <TailscaleCleanupState stack={stack} />
   }
   return (
-    <ConnectedServersTableContent
+    <ConnectedMembersTableContent
       searchStore={searchStore}
       stack={stack}
       onAddServers={onAddServers}
@@ -156,8 +152,8 @@ export function TailscaleConnectedServersTable({
   )
 }
 
-const ConnectedServersTableContent = React.memo(
-  function ConnectedServersTableContent({
+const ConnectedMembersTableContent = React.memo(
+  function ConnectedMembersTableContent({
     searchStore,
     stack,
     onAddServers,
@@ -166,13 +162,8 @@ const ConnectedServersTableContent = React.memo(
     stack: TailscaleStackOverview
     onAddServers: () => void
   }) {
-    const { data: servers = emptyServers, isPending: serversPending } =
-      useQuery({
-        ...relaySnapshotQueryOptions(),
-        notifyOnChangeProps: ["data", "isPending"],
-        select: selectTailscaleServers,
-      })
-    // Reuse a row while its server, binding, and deployment are unchanged, so
+    const directory = useTailscaleMemberDirectory()
+    // Reuse a row while its member, binding, and deployment are unchanged, so
     // a save or snapshot update repaints only the rows it touched.
     const [rowCache] = React.useState(
       () => new Map<string, TailscaleMemberRow>()
@@ -180,22 +171,17 @@ const ConnectedServersTableContent = React.memo(
     const rows = React.useMemo(() => {
       const next: Array<TailscaleMemberRow> = []
       const seen = new Set<string>()
-      for (const server of servers) {
-        const binding = findBinding(
-          stack,
-          server.relayId,
-          instanceTailscaleMemberId(server.id)
-        )
-        if (!binding) continue
+      for (const binding of stack.bindings) {
+        const member = directory.listing(binding)
         const deployment = stack.deployments.find(
-          (candidate) => candidate.relayId === server.relayId
+          (candidate) => candidate.relayId === binding.relayId
         )
-        const key = serverRowKey(server)
+        const key = stackBindingKey(binding)
         seen.add(key)
         const cached = rowCache.get(key)
         if (
           cached &&
-          cached.server === server &&
+          cached.member === member &&
           cached.binding === binding &&
           cached.deployment === deployment &&
           cached.domain === stack.domain &&
@@ -208,7 +194,7 @@ const ConnectedServersTableContent = React.memo(
           binding,
           deployment,
           domain: stack.domain,
-          server,
+          member,
           stackId: stack.id,
         }
         rowCache.set(key, row)
@@ -218,7 +204,7 @@ const ConnectedServersTableContent = React.memo(
         if (!seen.has(key)) rowCache.delete(key)
       }
       return next
-    }, [rowCache, servers, stack])
+    }, [directory, rowCache, stack])
     const save = useStackMembershipMutation()
     const [dialog, setDialog] = React.useState<MemberDialog | null>(null)
     const openConfigure = React.useCallback(
@@ -276,7 +262,7 @@ const ConnectedServersTableContent = React.memo(
       )
     // A dialog belongs to the network it was opened on.
     if (dialog && dialog.row.stackId !== stack.id) setDialog(null)
-    // Hide a dialog whose game server left the tailnet since it opened.
+    // Hide a dialog whose member left the tailnet since it opened.
     const dialogBound = dialog
       ? dialog.row.stackId === stack.id &&
         stack.bindings.some(
@@ -298,7 +284,7 @@ const ConnectedServersTableContent = React.memo(
         <TailscaleMembersTable
           rows={rows}
           searchStore={searchStore}
-          serversPending={serversPending}
+          membersPending={directory.pending}
           onAddServers={onAddServers}
           onConfigure={openConfigure}
           onDisconnect={openDisconnect}
@@ -325,8 +311,8 @@ const ConnectedServersTableContent = React.memo(
   }
 )
 
-export const TailscaleConnectServersPopover = React.memo(
-  function TailscaleConnectServersPopover({
+export const TailscaleConnectMembersPopover = React.memo(
+  function TailscaleConnectMembersPopover({
     open,
     stack,
     onOpenChange,
@@ -335,44 +321,31 @@ export const TailscaleConnectServersPopover = React.memo(
     stack: TailscaleStackOverview | null
     onOpenChange: (open: boolean) => void
   }) {
-    const { data: servers = emptyServers, isPending: serversPending } =
-      useQuery({
-        ...relaySnapshotQueryOptions(),
-        notifyOnChangeProps: ["data", "isPending"],
-        select: selectTailscaleServers,
-      })
-    const availableServers = React.useMemo(
+    const directory = useTailscaleMemberDirectory()
+    const available = React.useMemo(
       () =>
         stack
-          ? servers.filter(
-              (server) =>
-                !findBinding(
-                  stack,
-                  server.relayId,
-                  instanceTailscaleMemberId(server.id)
-                )
+          ? [...directory.joinable.values()].filter(
+              (member) => !findBinding(stack, member.relayId, member.memberId)
             )
-          : emptyServers,
-      [servers, stack]
+          : emptyMembers,
+      [directory.joinable, stack]
     )
     const options = React.useMemo(
       () =>
-        availableServers.map((server): InstancePickerItem => ({
-          disabled: !server.tailscaleSupported,
-          identity: {
-            id: server.id,
-            implementation: server.implementation,
-            kind: "server",
-            relayId: server.relayId,
-          },
-          key: `${server.relayId}:${server.id}`,
-          meta: server.tailscaleSupported
-            ? `${server.relayName} · ${server.shortId}`
-            : `${server.relayName} · Relay update needed`,
-          name: server.name,
-          searchText: `${server.id} ${server.relayName}`,
-        })),
-      [availableServers]
+        available
+          .map((member): InstancePickerItem => ({
+            disabled: !member.tailscaleSupported,
+            identity: member.identity,
+            key: tailscaleMemberKey(member.relayId, member.memberId),
+            meta: member.tailscaleSupported
+              ? `${member.relayName} · ${member.meta}`
+              : `${member.relayName} · Relay update needed`,
+            name: member.name,
+            searchText: `${member.identity.id} ${member.relayName}`,
+          }))
+          .sort((left, right) => left.name.localeCompare(right.name)),
+      [available]
     )
     const save = useStackMembershipMutation()
     const pendingBinding =
@@ -385,38 +358,32 @@ export const TailscaleConnectServersPopover = React.memo(
               )
           )
         : undefined
-    // The picker's key for the game server it adds.
     const pendingKey = pendingBinding
-      ? `${pendingBinding.relayId}:${instanceTailscaleMember(pendingBinding.memberId) ?? pendingBinding.memberId}`
+      ? tailscaleMemberKey(pendingBinding.relayId, pendingBinding.memberId)
       : undefined
 
-    const connectServer = React.useCallback(
+    const connectMember = React.useCallback(
       (option: InstancePickerItem) => {
         if (!stack) return
-        const server = availableServers.find(
-          (candidate) =>
-            candidate.id === option.identity.id &&
-            candidate.relayId === option.identity.relayId
-        )
-        if (!server) return
-        const hostname = uniqueHostname(stack, server)
+        const member = directory.joinable.get(option.key)
+        if (!member) return
         save.mutate({
           bindings: [
             ...stack.bindings,
             {
               address: "",
               enabled: true,
-              hostname,
-              memberId: instanceTailscaleMemberId(server.id),
-              relayId: server.relayId,
-              relayName: server.relayName,
+              hostname: uniqueHostname(stack, member),
+              memberId: member.memberId,
+              relayId: member.relayId,
+              relayName: member.relayName,
             },
           ],
           stack,
         })
         onOpenChange(false)
       },
-      [availableServers, onOpenChange, save, stack]
+      [directory.joinable, onOpenChange, save, stack]
     )
 
     return (
@@ -432,26 +399,29 @@ export const TailscaleConnectServersPopover = React.memo(
             ) : (
               <Plus />
             )}
-            Connect Game Servers
+            Connect
           </Button>
         </DrawerPopoverTrigger>
         <DrawerPopoverContent
-          title="Connect game servers"
+          title="Connect game servers and databases"
           align="end"
           className="w-[min(28rem,calc(100vw-2rem))] overflow-hidden p-0"
         >
           <InstancePickerContent
-            ariaLabel="Game Servers"
+            ariaLabel="Game servers and databases"
             emptyMessage={
-              serversPending
-                ? "Loading game servers…"
-                : "Every available game server is already connected."
+              directory.pending
+                ? "Loading…"
+                : "Every available game server and database is already connected."
             }
             items={options}
             pendingKey={pendingKey}
-            selectedKeys={emptyServerKeys}
-            onSelect={connectServer}
+            selectedKeys={emptyMemberKeys}
+            onSelect={connectMember}
           />
+          <p className="border-t border-border/70 px-3.5 py-2 text-xs text-muted-foreground">
+            An App's services join from the App's Network page.
+          </p>
           {save.error ? (
             <p
               className="border-t border-border/70 px-3.5 py-2 text-xs text-destructive"
@@ -466,10 +436,10 @@ export const TailscaleConnectServersPopover = React.memo(
   }
 )
 
-// A server's, or an app service's, Tailscale networks: which it has joined,
-// under what hostname, and joining or leaving others.
-// A game server or an App's service, by its member ID
-// (`instanceTailscaleMemberId`, `appTailscaleMemberId`).
+// A game server's, an App service's, or a database's Tailscale networks:
+// which it has joined, under what hostname, and joining or leaving others.
+// The member is named by its member ID (`instanceTailscaleMemberId`,
+// `appTailscaleMemberId`, `databaseTailscaleMemberId`).
 export type TailscaleMember = Pick<
   InstanceWorkspaceInstance,
   "name" | "relayId" | "relayName" | "shortId"
@@ -644,30 +614,30 @@ const memberTableInitialState = {
 const TailscaleMembersTable = React.memo(function TailscaleMembersTable({
   rows,
   searchStore,
-  serversPending,
+  membersPending,
   onAddServers,
   onConfigure,
   onDisconnect,
 }: {
   rows: Array<TailscaleMemberRow>
   searchStore: DataTableSearchStore
-  serversPending: boolean
+  membersPending: boolean
   onAddServers: () => void
   onConfigure: (row: TailscaleMemberRow) => void
   onDisconnect: (row: TailscaleMemberRow) => void
 }) {
   const source = React.useMemo(
     (): DataTableSource<TailscaleMemberRow> => ({
-      body: serversPending ? { kind: "loading" } : { kind: "ready" },
+      body: membersPending ? { kind: "loading" } : { kind: "ready" },
       refreshing: false,
       rows,
     }),
-    [rows, serversPending]
+    [rows, membersPending]
   )
   const definition = React.useMemo(
     () =>
       defineDataTable({
-        ariaLabel: "Connected game servers",
+        ariaLabel: "Connected instances",
         columns: memberColumnHelper.columns([
           memberColumnHelper.accessor((row) => memberStatus(row).label, {
             id: "status",
@@ -687,7 +657,7 @@ const TailscaleMembersTable = React.memo(function TailscaleMembersTable({
               }
             ),
           }),
-          memberColumnHelper.accessor((row) => row.server.name, {
+          memberColumnHelper.accessor((row) => row.member.name, {
             id: "instance",
             header: "Instance",
             sortFn: "text",
@@ -697,11 +667,11 @@ const TailscaleMembersTable = React.memo(function TailscaleMembersTable({
               { cellClassName: "px-0" }
             ),
           }),
-          memberColumnHelper.accessor((row) => row.server.relayName, {
+          memberColumnHelper.accessor((row) => row.member.relayName, {
             id: "relay",
             header: "Relay",
             sortFn: "text",
-            cell: ({ row }) => <MemberRelay server={row.original.server} />,
+            cell: ({ row }) => <MemberRelay member={row.original.member} />,
             meta: dataTableColumnMeta({
               hideBelow: "md",
               width: "minmax(0,0.8fr)",
@@ -757,24 +727,22 @@ const TailscaleMembersTable = React.memo(function TailscaleMembersTable({
         action={
           searchActive ? undefined : (
             <Button type="button" size="sm" onClick={onAddServers}>
-              <Plus /> Connect Game Servers
+              <Plus /> Connect
             </Button>
           )
         }
         description={
           <span className="block max-w-sm">
             {searchActive
-              ? "Try a game server name, short ID, Relay, or hostname."
-              : "Connect a game server to reach it through this tailnet."}
+              ? "Try a name, short ID, Relay, or hostname."
+              : "Connect a game server, App service, or database to reach it through this tailnet."}
           </span>
         }
         icon={
           <ServerKindIcon className="size-6 text-muted-foreground/45 light:text-muted-foreground/72" />
         }
         title={
-          searchActive
-            ? "No game servers match your search"
-            : "No connected game servers"
+          searchActive ? "Nothing matches your search" : "Nothing is connected"
         }
       />
     ),
@@ -796,55 +764,77 @@ const MemberInstance = React.memo(function MemberInstance({
 }: {
   row: TailscaleMemberRow
 }) {
-  const { server } = row
-  const release =
-    [server.implementation, server.version].filter(Boolean).join(" ") ||
-    server.shortId
-  return (
-    <Link
-      to="/server/$serverId/console"
-      params={{ serverId: server.routeId }}
-      preload="intent"
-      className="group/server-link flex min-h-14 w-full min-w-0 items-center px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
-    >
-      <InstanceCard
-        className="min-w-0 flex-1"
-        instance={{
-          brickId: server.brickId,
-          id: server.id,
-          implementation: server.implementation,
-          kind: "server",
-          relayId: server.relayId,
-        }}
-        // Narrow screens hide the Relay and hostname columns; show them here.
-        meta={
-          <>
-            <span className="sm:hidden">{memberHostname(row)} · </span>
-            <span className="md:hidden">{server.relayName}</span>
-            <span className="hidden sm:inline md:hidden"> · </span>
-            <span className="hidden sm:inline">{release}</span>
-          </>
-        }
-        metaClassName="font-mono"
-        name={server.name}
-        nameAccessory={
-          server.tailscaleSupported ? undefined : (
-            <span className="flex md:hidden">
-              <TailscaleRelayUpdateHint relayName={server.relayName} />
-            </span>
-          )
-        }
-        nameClassName="transition-colors group-hover/server-link:text-primary-ink"
-        showFavorite={false}
-      />
-    </Link>
+  const { member } = row
+  const card = (
+    <InstanceCard
+      className="min-w-0 flex-1"
+      instance={member.identity}
+      // Narrow screens hide the Relay and hostname columns; show them here.
+      meta={
+        <>
+          <span className="sm:hidden">{memberHostname(row)} · </span>
+          <span className="md:hidden">{member.relayName}</span>
+          <span className="hidden sm:inline md:hidden"> · </span>
+          <span className="hidden sm:inline">{member.meta}</span>
+        </>
+      }
+      metaClassName="font-mono"
+      name={member.name}
+      nameAccessory={
+        member.tailscaleSupported ? undefined : (
+          <span className="flex md:hidden">
+            <TailscaleRelayUpdateHint relayName={member.relayName} />
+          </span>
+        )
+      }
+      nameClassName="transition-colors group-hover/member-link:text-primary-ink"
+      showFavorite={false}
+    />
   )
+  const className =
+    "group/member-link flex min-h-14 w-full min-w-0 items-center px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
+  if (!member.routeId) return <div className={className}>{card}</div>
+  switch (member.kind) {
+    case "server":
+      return (
+        <Link
+          to="/server/$serverId/console"
+          params={{ serverId: member.routeId }}
+          preload="intent"
+          className={className}
+        >
+          {card}
+        </Link>
+      )
+    case "app":
+      return (
+        <Link
+          to="/app/$appId/network"
+          params={{ appId: member.routeId }}
+          preload="intent"
+          className={className}
+        >
+          {card}
+        </Link>
+      )
+    case "database":
+      return (
+        <Link
+          to="/db/$databaseId/network"
+          params={{ databaseId: member.routeId }}
+          preload="intent"
+          className={className}
+        >
+          {card}
+        </Link>
+      )
+  }
 })
 
 const MemberRelay = React.memo(function MemberRelay({
-  server,
+  member: server,
 }: {
-  server: TailscaleServer
+  member: TailscaleMemberListing
 }) {
   return (
     <Link
@@ -882,9 +872,9 @@ const MemberActions = React.memo(function MemberActions({
   onConfigure: (row: TailscaleMemberRow) => void
   onDisconnect: (row: TailscaleMemberRow) => void
 }) {
-  const { server } = row
+  const { member } = row
   // A Relay that predates staged removal can't change its memberships.
-  const disabled = !server.tailscaleSupported
+  const disabled = !member.tailscaleSupported
   return (
     <DataTableActionGroup>
       <Tooltip>
@@ -893,7 +883,7 @@ const MemberActions = React.memo(function MemberActions({
             type="button"
             size="icon-sm"
             variant="ghost"
-            aria-label={`Configure ${server.name}`}
+            aria-label={`Configure ${member.name}`}
             disabled={disabled}
             onClick={() => onConfigure(row)}
           >
@@ -911,7 +901,7 @@ const MemberActions = React.memo(function MemberActions({
             size="icon-sm"
             variant="ghost"
             className="text-destructive hover:bg-destructive/10 hover:text-destructive light:hover:bg-destructive/20"
-            aria-label={`Disconnect ${server.name}`}
+            aria-label={`Disconnect ${member.name}`}
             disabled={disabled}
             onClick={() => onDisconnect(row)}
           >
@@ -928,14 +918,17 @@ const MemberActions = React.memo(function MemberActions({
             type="button"
             size="icon-sm"
             variant="ghost"
-            aria-label={`More actions for ${server.name}`}
+            aria-label={`More actions for ${member.name}`}
           >
             <EllipsisVertical />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-48">
-          <CopyIdentifierMenuItem label="Instance ID" value={server.id} />
-          <CopyIdentifierMenuItem label="Relay ID" value={server.relayId} />
+          <CopyIdentifierMenuItem
+            label={memberIdLabels[member.kind]}
+            value={member.identity.id}
+          />
+          <CopyIdentifierMenuItem label="Relay ID" value={member.relayId} />
           <CopyIdentifierMenuItem label="Tailnet ID" value={row.stackId} />
         </DropdownMenuContent>
       </DropdownMenu>
@@ -956,7 +949,7 @@ const ConfigureMemberDialog = React.memo(function ConfigureMemberDialog({
     next: Partial<Pick<StackBinding, "enabled" | "hostname">>
   ) => Promise<unknown>
 }) {
-  const { binding, domain, server } = row
+  const { binding, domain, member } = row
   const [hostname, setHostname] = React.useState(binding.hostname)
   const [enabled, setEnabled] = React.useState(binding.enabled)
   const nextHostname = hostname.trim()
@@ -988,7 +981,7 @@ const ConfigureMemberDialog = React.memo(function ConfigureMemberDialog({
           }}
         >
           <DialogHeader>
-            <DialogTitle>Configure {server.name}</DialogTitle>
+            <DialogTitle>Configure {member.name}</DialogTitle>
           </DialogHeader>
           <label className="block">
             <span className="mb-2 block text-xs font-medium">Hostname</span>
@@ -1050,9 +1043,9 @@ const DisconnectMemberDialog = React.memo(function DisconnectMemberDialog({
   onClose: () => void
   onDisconnect: () => Promise<unknown>
 }) {
-  const { server } = row
+  const { member } = row
   const onlyBindingOnRelay =
-    stack.bindings.filter((candidate) => candidate.relayId === server.relayId)
+    stack.bindings.filter((candidate) => candidate.relayId === member.relayId)
       .length === 1
 
   return (
@@ -1064,11 +1057,11 @@ const DisconnectMemberDialog = React.memo(function DisconnectMemberDialog({
     >
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Disconnect {server.name}?</DialogTitle>
+          <DialogTitle>Disconnect {member.name}?</DialogTitle>
           <DialogDescription>
             {onlyBindingOnRelay
-              ? `This removes the game server from ${stack.name}. Because it is the last connected game server on ${server.relayName}, Tailscale will also be removed from that Relay in the background.`
-              : `This removes the game server from ${stack.name}. Tailscale will stay installed on ${server.relayName} for its other connected game servers.`}
+              ? `This removes ${member.name} from ${stack.name}. Because nothing else on ${member.relayName} is connected, Tailscale will also be removed from that Relay in the background.`
+              : `This removes ${member.name} from ${stack.name}. Tailscale will stay installed on ${member.relayName} for what else is connected there.`}
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
@@ -1087,7 +1080,7 @@ const DisconnectMemberDialog = React.memo(function DisconnectMemberDialog({
             onClick={() => forkPromise(onDisconnect)}
           >
             {pending ? <LoaderCircle className="animate-spin" /> : <Unplug />}
-            Disconnect Server
+            Disconnect
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -1454,10 +1447,13 @@ function membershipOperationToast(
 
   return {
     id: tailscaleOperationToastId(stack.id),
-    memberKind:
-      changedBinding && appTailscaleMember(changedBinding.memberId)
+    memberKind: !changedBinding
+      ? "server"
+      : appTailscaleMember(changedBinding.memberId)
         ? "app"
-        : "server",
+        : databaseTailscaleMember(changedBinding.memberId)
+          ? "database"
+          : "server",
     networkName: stack.name,
     nodeCount: operation === "install" ? newRelayIds.size : undefined,
     operation,
@@ -1512,7 +1508,7 @@ function findBinding(
 
 function uniqueHostname(
   stack: TailscaleStackOverview,
-  server: TailscaleServer
+  server: { name: string; shortId: string }
 ): string {
   const base = defaultTailscaleHostname(server)
   const hostnames = new Set(
@@ -1532,7 +1528,7 @@ function uniqueHostname(
 function memberStatus({
   binding,
   deployment,
-  server,
+  member: server,
 }: TailscaleMemberRow): IdentityStatusPresentation {
   if (!binding.enabled) return { label: "Paused", tone: "neutral" }
   if (!server.tailscaleSupported) {
@@ -1564,17 +1560,19 @@ function memberHostname({ binding, domain }: TailscaleMemberRow) {
   return `${binding.hostname}.${domain}`
 }
 
-function memberRowKey({ server }: TailscaleMemberRow) {
-  return serverRowKey(server)
+function memberRowKey({ binding }: TailscaleMemberRow) {
+  return stackBindingKey(binding)
 }
 
-function serverRowKey(server: TailscaleServer) {
-  return tailscaleServerKey(server.relayId, server.id)
-}
+const memberIdLabels = {
+  app: "App ID",
+  database: "Database ID",
+  server: "Game server ID",
+} as const
 
 function memberSearchText(row: TailscaleMemberRow) {
-  const { server } = row
-  return `${server.name} ${server.shortId} ${server.relayName} ${memberHostname(row)} ${memberStatus(row).label}`
+  const { member } = row
+  return `${member.name} ${member.shortId} ${member.meta} ${member.relayName} ${memberHostname(row)} ${memberStatus(row).label}`
 }
 
 const cleanupRetryFormatter = new Intl.DateTimeFormat(undefined, {

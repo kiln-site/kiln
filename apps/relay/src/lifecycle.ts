@@ -46,6 +46,7 @@ import type {
 } from "@workspace/contracts"
 import {
   appTailscaleMember,
+  databaseTailscaleMember,
   instanceTailscaleMember,
   instanceTailscaleMemberId,
   builtinTailscaleBrickId,
@@ -751,6 +752,13 @@ export class LifecycleDriver {
         // Throws for an app that isn't on this Relay. One not deployed yet
         // joins when it deploys.
         await this.#appServiceContainer?.(app.appId, app.service)
+        continue
+      }
+      const databaseId = databaseTailscaleMember(binding.memberId)
+      if (databaseId) {
+        if (!(await this.#databaseContainer?.(databaseId))) {
+          throw new Error(`Database ${binding.memberId} was not found`)
+        }
         continue
       }
       const instanceId = instanceTailscaleMember(binding.memberId)
@@ -4720,14 +4728,27 @@ export class LifecycleDriver {
     this.#appServiceContainer = resolve
   }
 
-  // The container a Tailscale member runs in: a game server's, or an App
-  // service's newest. Null when it has none yet.
+  // A database's container, or null when there's no such database. Set
+  // once the database driver exists.
+  #databaseContainer: ((databaseId: string) => Promise<string | null>) | null =
+    null
+
+  useDatabaseContainers(resolve: (databaseId: string) => Promise<string | null>) {
+    this.#databaseContainer = resolve
+  }
+
+  // The container a Tailscale member runs in: a game server's, an App
+  // service's newest, or a database's. Null when it has none yet.
   async #tailscaleMemberContainer(memberId: string): Promise<string | null> {
     const app = appTailscaleMember(memberId)
     if (app) {
       return this.#appServiceContainer
         ? this.#appServiceContainer(app.appId, app.service)
         : null
+    }
+    const databaseId = databaseTailscaleMember(memberId)
+    if (databaseId) {
+      return this.#databaseContainer ? this.#databaseContainer(databaseId) : null
     }
     const instanceId = instanceTailscaleMember(memberId)
     if (!instanceId) return null
@@ -4767,11 +4788,11 @@ export class LifecycleDriver {
     }
   }
 
-  // Takes an app's services off their Tailscale networks before the app is
-  // deleted. Hearth drops their DNS records from every node first, and puts
-  // them back if the detach fails.
-  async detachAppFromTailscale(
-    appId: string,
+  // Takes members off their Tailscale networks before what they run in is
+  // deleted: an App's services, or a database. Hearth drops their DNS
+  // records from every node first, and puts them back if the detach fails.
+  async detachFromTailscale(
+    matches: (memberId: string) => boolean,
     synchronize: (input: {
       memberId: string
       mode: "prepare" | "rollback"
@@ -4784,7 +4805,7 @@ export class LifecycleDriver {
         configs.flatMap((config) =>
           config.bindings
             .map((binding) => binding.memberId)
-            .filter((memberId) => appTailscaleMember(memberId)?.appId === appId)
+            .filter((memberId) => matches(memberId))
         )
       ),
     ]

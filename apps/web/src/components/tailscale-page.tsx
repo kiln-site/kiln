@@ -41,6 +41,7 @@ import {
 } from "@workspace/ui/components/tooltip"
 import {
   appTailscaleMember,
+  databaseTailscaleMember,
   MAXIMUM_INSTANCE_NAME_LENGTH,
 } from "@workspace/contracts"
 
@@ -50,8 +51,8 @@ import {
 } from "@/components/data-table-workspace"
 import { InfraSyncButton } from "@/components/infra-sync-button"
 import {
-  TailscaleConnectServersPopover,
-  TailscaleConnectedServersTable,
+  TailscaleConnectMembersPopover,
+  TailscaleConnectedMembersTable,
 } from "@/components/tailscale-network-membership"
 import { WorkspaceSummaryCard } from "@/components/workspace-summary-card"
 import {
@@ -121,20 +122,20 @@ export const TailscalePage = React.memo(function TailscalePage({
 
   return (
     <div className="mx-auto flex h-full min-h-[34rem] w-full max-w-[90rem] flex-col px-2 pb-3 sm:px-5 sm:pb-5">
-      <TailscaleNetworkPicker
+      {stacks.length > 0 ? <TailscaleNetworkPicker
         selectedStack={selectedStack}
         stacks={stacks}
         onAdd={openCreate}
         onConfigure={setEditingId}
         onSelect={selectNetwork}
-      />
+      /> : null}
 
       <DataTableWorkspace
         toolbar={
           <TailscaleToolbar
             searchStore={searchStore}
             serverPicker={
-              <TailscaleConnectServersPopover
+              <TailscaleConnectMembersPopover
                 open={serverPickerOpen}
                 stack={selectedStack}
                 onOpenChange={setServerPickerOpen}
@@ -143,7 +144,7 @@ export const TailscalePage = React.memo(function TailscalePage({
           />
         }
       >
-        <TailscaleConnectedServersTable
+        <TailscaleConnectedMembersTable
           searchStore={searchStore}
           stack={selectedStack}
           onAddServers={openServerPicker}
@@ -272,7 +273,7 @@ const TailscaleNetworkPicker = React.memo(function TailscaleNetworkPicker({
               ? `${bindingSummary(selectedStack)} · ${selectedStack.deployments.length} ${selectedStack.deployments.length === 1 ? "node" : "nodes"}`
               : stacks.length > 0
                 ? `${stacks.length} networks available`
-                : "Add a network before connecting game servers"}
+                : "Add a network before connecting anything"}
           </p>
         </WorkspaceSummaryCard>
         <PopoverContent
@@ -348,10 +349,10 @@ const TailscaleToolbar = React.memo(function TailscaleToolbar({
 }) {
   const search = React.useMemo(
     () => ({
-      ariaLabel: "Search connected game servers",
+      ariaLabel: "Search connected instances",
       closeMobileWhenEmpty: true,
       id: "tailscale-search",
-      placeholder: "Search connected game servers",
+      placeholder: "Search connected instances",
       store: searchStore,
     }),
     [searchStore]
@@ -372,10 +373,14 @@ const TailscaleRefreshButton = React.memo(function TailscaleRefreshButton() {
       Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.tailscaleStacks }),
         queryClient.invalidateQueries({ queryKey: queryKeys.relay.snapshot }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.apps.directory }),
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.databases.directory,
+        }),
       ]),
     [queryClient]
   )
-  return <InfraSyncButton label="Refresh game servers" sync={refresh} />
+  return <InfraSyncButton label="Refresh members" sync={refresh} />
 })
 
 const EditNetworkDialog = React.memo(function EditNetworkDialog({
@@ -552,7 +557,7 @@ const NetworkForm = React.memo(function NetworkForm({
       showToast({
         message: stack
           ? `${name.trim()} was updated`
-          : `${name.trim()} is ready for game servers`,
+          : `${name.trim()} is ready for game servers, Apps, and databases`,
         type: "success",
       })
       onDone()
@@ -791,10 +796,12 @@ function stackSaveInput(
 }
 
 function bindingSummary(stack: TailscaleStackOverview): string {
-  const appServiceCount = stack.bindings.filter(({ memberId }) =>
-    appTailscaleMember(memberId)
-  ).length
-  const gameServerCount = stack.bindings.length - appServiceCount
+  const count = (matches: (memberId: string) => boolean) =>
+    stack.bindings.filter(({ memberId }) => matches(memberId)).length
+  const appServiceCount = count((memberId) => !!appTailscaleMember(memberId))
+  const databaseCount = count((memberId) => !!databaseTailscaleMember(memberId))
+  const gameServerCount =
+    stack.bindings.length - appServiceCount - databaseCount
   const counts: Array<string> = []
   if (gameServerCount > 0) {
     counts.push(
@@ -803,7 +810,12 @@ function bindingSummary(stack: TailscaleStackOverview): string {
   }
   if (appServiceCount > 0) {
     counts.push(
-      `${appServiceCount} ${appServiceCount === 1 ? "app service" : "app services"}`
+      `${appServiceCount} ${appServiceCount === 1 ? "App service" : "App services"}`
+    )
+  }
+  if (databaseCount > 0) {
+    counts.push(
+      `${databaseCount} ${databaseCount === 1 ? "database" : "databases"}`
     )
   }
   return counts.length > 0 ? counts.join(" · ") : "0 instances"

@@ -7,6 +7,7 @@ import {
   appIdFromFileRoot,
   appTailscaleMember,
   databaseIdFromFileRoot,
+  databaseTailscaleMember,
   instanceTailscaleMember,
   isRelayFileRoot,
   type BackupTaskInput,
@@ -202,6 +203,12 @@ export function tailscaleMemberLocks(
         ? appLifecycleLocks(app.appId)
         : [shared(laneKeys.app(app.appId))]
     }
+    const databaseId = databaseTailscaleMember(memberId)
+    if (databaseId) {
+      return changes
+        ? databaseLocks(databaseId)
+        : [shared(laneKeys.database(databaseId))]
+    }
     const instanceId = instanceTailscaleMember(memberId)
     if (instanceId) {
       return changes
@@ -226,9 +233,9 @@ function requestedTailscaleBindings(
 
 /**
  * Whether a request waits only for what holds its locks, not for what waits
- * in line. A game server's or App's deletion holds it while it waits for
- * Hearth to rewrite its Tailscale networks' DNS
- * (`hearth.tailscale.instance.detach`), and Hearth does that with
+ * in line. A game server's, App's, or database's deletion holds it while it
+ * waits for Hearth to rewrite its Tailscale networks' DNS
+ * (`hearth.tailscale.member.detach`), and Hearth does that with
  * `relay.tailscale.stack.dns`. A change to the network queued behind the
  * deletion waits for it in turn, so while the deletion waits on that
  * network's DNS, its DNS goes ahead of the line; at any other time it takes
@@ -436,7 +443,7 @@ export function controlRequestLocks(
       return null
 
     // Requests the Relay sends Hearth, never the other way.
-    case "hearth.tailscale.instance.detach":
+    case "hearth.tailscale.member.detach":
     case "hearth.database.terminal.output":
     case "sftp.authorization.resolve":
       return null

@@ -3,8 +3,7 @@ import { createHash, randomBytes } from "node:crypto"
 import { createServerFn } from "@tanstack/react-start"
 import {
   appTailscaleMember,
-  builtinTailscaleBrickId,
-  instanceTailscaleMember,
+  databaseTailscaleMember,
   MAXIMUM_TAILSCALE_STACK_BINDINGS,
   relayIdSchema,
   relayInstanceNameSchema,
@@ -44,12 +43,14 @@ import {
   type TailscaleOAuthCredential,
 } from "@/effect/tailscale-networks"
 import { listAppRecordsEffect } from "@/effect/managed-apps"
+import { listManagedDatabaseRecordsEffect } from "@/effect/managed-databases"
 import { runAppEffect } from "@/effect/runtime"
 import { isPlatformAdmin } from "@/lib/access-control"
 import { invalidateRelayCache, relayCachePolicy } from "@/lib/relay-client"
 import { relayRpc } from "@/lib/relay-connection"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { startTailscaleNetworkDeletion } from "@/lib/tailscale-cleanup.server"
+import { tailscaleMemberProblem } from "@/lib/tailscale-members"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { requireEligibleResourceUser } from "@/server/auth"
@@ -375,11 +376,19 @@ export const saveTailscaleStack = createServerFn({ method: "POST" })
       )
     }
     requireCompleteTailscaleDeploymentList(currentResult.unavailableRelays)
-    const appRecords = data.bindings.some((binding) =>
-      appTailscaleMember(binding.memberId)
-    )
-      ? await runAppEffect("tailscale.appMembers", listAppRecordsEffect())
-      : []
+    const [appRecords, databaseRecords] = await Promise.all([
+      data.bindings.some((binding) => appTailscaleMember(binding.memberId))
+        ? runAppEffect("tailscale.appMembers", listAppRecordsEffect())
+        : [],
+      data.bindings.some((binding) =>
+        databaseTailscaleMember(binding.memberId)
+      )
+        ? runAppEffect(
+            "tailscale.databaseMembers",
+            listManagedDatabaseRecordsEffect()
+          )
+        : [],
+    ])
     for (const binding of data.bindings) {
       const snapshot = currentResult.snapshots.get(binding.relayId)
       if (!snapshot) {
@@ -400,28 +409,12 @@ export const saveTailscaleStack = createServerFn({ method: "POST" })
           `${relay?.name ?? "This Relay"} must be updated before its servers can join a Tailscale network`
         )
       }
-      const app = appTailscaleMember(binding.memberId)
-      if (app) {
-        if (
-          !appRecords.some(
-            (record) =>
-              record.appId === app.appId && record.relayId === binding.relayId
-          )
-        ) {
-          throw new Error(`App ${app.appId.slice(0, 8)} is unavailable`)
-        }
-        continue
-      }
-      const instanceId = instanceTailscaleMember(binding.memberId)
-      const instance = snapshot.instances.find(
-        (candidate) => candidate.id === instanceId
-      )
-      if (!instanceId || !instance || !instance.managedByRelay) {
-        throw new Error(`Game server ${binding.memberId} is unavailable`)
-      }
-      if (instance.brickId === builtinTailscaleBrickId) {
-        throw new Error("A Tailscale deployment cannot attach to itself")
-      }
+      const problem = tailscaleMemberProblem(binding, {
+        apps: appRecords,
+        databases: databaseRecords,
+        instances: snapshot.instances,
+      })
+      if (problem) throw new Error(problem)
     }
 
     const nextDefinition = {

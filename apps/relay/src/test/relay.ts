@@ -16,6 +16,7 @@ import { pathToFileURL } from "node:url"
 import {
   appTailscaleMember,
   brickRecipeSchema,
+  databaseTailscaleMemberId,
   relayCreateInstanceSchema,
   type BrickRecipe,
   type RelayInstance,
@@ -161,6 +162,12 @@ export async function relayHarness(
       return (await apps.serviceContainer(appId, service))?.name ?? null
     })
     const databases = new DatabaseDriver(config, docker, databaseConnections)
+    lifecycle.useDatabaseContainers((databaseId) =>
+      databases.containerOf(databaseId)
+    )
+    databases.afterContainerReplaced((databaseId) =>
+      lifecycle.reattachTailscaleMember(databaseTailscaleMemberId(databaseId))
+    )
     return {
       apps,
       bricks,

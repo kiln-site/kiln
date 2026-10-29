@@ -1379,7 +1379,8 @@ export const relayTailscaleStackBindingInputSchema = z
   .object({
     enabled: z.boolean().default(true),
     hostname: relayTailscaleSubdomainSchema,
-    // A game server or an App's service (see `tailscaleMemberIdSchema`).
+    // A game server, an App's service, or a database (see
+    // `tailscaleMemberIdSchema`).
     memberId: tailscaleMemberIdSchema,
   })
   .strict()

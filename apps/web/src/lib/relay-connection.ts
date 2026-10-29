@@ -91,8 +91,8 @@ export { relayControlEndpoint }
 export type { RelayEndpoint }
 
 const MAX_BACKOFF_MS = 30_000
-const tailscaleInstanceDetachSchema = z.strictObject({
-  // The game server or App service being deleted.
+const tailscaleMemberDetachSchema = z.strictObject({
+  // The game server, App service, or database being deleted.
   memberId: tailscaleMemberIdSchema,
   mode: z.enum(["prepare", "rollback"]),
   stackIds: z.array(relayTailscaleStackIdSchema).min(1).max(4_096),
@@ -1851,10 +1851,10 @@ class RelayConnection {
     controller: AbortController,
     socket: WebSocket
   ): Effect.Effect<void, Error> {
-    if (request.operation === "hearth.tailscale.instance.detach") {
+    if (request.operation === "hearth.tailscale.member.detach") {
       return Effect.gen({ self: this }, function* () {
         const input = yield* Effect.try({
-          try: () => tailscaleInstanceDetachSchema.parse(request.payload),
+          try: () => tailscaleMemberDetachSchema.parse(request.payload),
           catch: asError,
         })
         const { synchronizeTailscaleInstanceDeletion } =

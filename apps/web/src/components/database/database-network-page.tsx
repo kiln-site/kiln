@@ -2,7 +2,11 @@ import * as React from "react"
 import { Link } from "@tanstack/react-router"
 import { Cable, LoaderCircle, Network, Unplug } from "lucide-react"
 
-import type { RelayDatabaseMember } from "@workspace/contracts"
+import { useQuery } from "@tanstack/react-query"
+import {
+  databaseTailscaleMemberId,
+  type RelayDatabaseMember,
+} from "@workspace/contracts"
 import { Button } from "@workspace/ui/components/button"
 
 import {
@@ -20,6 +24,8 @@ import { useDatabaseWorkspace } from "@/components/database/database-workspace-c
 import { CopyMetaRow, InfoCard, InfoCardHeader } from "@/components/info-card"
 import { InstanceCard } from "@/components/instance-card"
 import { SettingsEmptyState } from "@/components/settings-panel"
+import { TailscaleMembershipSection } from "@/components/tailscale-network-membership"
+import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
 
 export function DatabaseNetworkPage() {
   const { database } = useDatabaseWorkspace()
@@ -56,8 +62,40 @@ export function DatabaseNetworkPage() {
           />
           <ConnectedMembers canWrite={canWrite} database={database} />
         </InfoCard>
+
+        <DatabaseTailscale database={database} />
       </div>
     </section>
+  )
+}
+
+// The database can join Tailscale networks like a game server, keeping its
+// address when its container is replaced. Managing Tailscale is for
+// platform admins.
+function DatabaseTailscale({
+  database: { id, name, relayId, relayName, shortId },
+}: {
+  database: ManagedDatabase
+}) {
+  const { data: isPlatformAdmin } = useQuery({
+    ...accessCapabilitiesQueryOptions(),
+    select: (capabilities) => capabilities.isPlatformAdmin,
+  })
+  const member = React.useMemo(
+    () => ({
+      memberId: databaseTailscaleMemberId(id),
+      name,
+      relayId,
+      relayName,
+      shortId,
+    }),
+    [id, name, relayId, relayName, shortId]
+  )
+  if (!isPlatformAdmin) return null
+  return (
+    <React.Suspense fallback={null}>
+      <TailscaleMembershipSection member={member} noun="database" />
+    </React.Suspense>
   )
 }
 

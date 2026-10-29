@@ -4,7 +4,7 @@ export type TailscaleOperation = "connect" | "disconnect" | "install" | "update"
 
 export interface TailscaleOperationToast {
   id: string
-  memberKind: "app" | "server"
+  memberKind: "app" | "database" | "server"
   networkName: string
   nodeCount?: number
   operation: TailscaleOperation
@@ -57,7 +57,7 @@ export function showTailscaleOperationError(
     id: toast.id,
     message:
       toast.operation === "disconnect"
-        ? `Could not disconnect ${toast.memberKind === "app" ? "app service" : "game server"}`
+        ? `Could not disconnect ${memberNouns[toast.memberKind].toLowerCase()}`
         : "Could not connect Tailscale",
     description:
       cause instanceof Error
@@ -73,7 +73,7 @@ function progressContent(
   nodeCount: number,
   memberKind: TailscaleOperationToast["memberKind"]
 ) {
-  const noun = memberKind === "app" ? "app service" : "game server"
+  const noun = memberNouns[memberKind].toLowerCase()
   switch (operation) {
     case "install":
       return {
@@ -104,7 +104,7 @@ function successContent(
   nodeCount: number,
   memberKind: TailscaleOperationToast["memberKind"]
 ) {
-  const label = memberKind === "app" ? "App service" : "Game server"
+  const label = memberNouns[memberKind]
   const noun = label.toLowerCase()
   switch (operation) {
     case "install":
@@ -133,3 +133,9 @@ function successContent(
 function nodeLabel(count: number): string {
   return `${count} ${count === 1 ? "node" : "nodes"}`
 }
+
+const memberNouns = {
+  app: "App service",
+  database: "Database",
+  server: "Game server",
+} as const satisfies Record<TailscaleOperationToast["memberKind"], string>

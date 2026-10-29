@@ -1817,7 +1817,7 @@ describe("Relay control socket", () => {
     const { inbox, socket } = await relay.connect(await relay.pair())
 
     const result = relay.control.requestClients(
-      "hearth.tailscale.instance.detach",
+      "hearth.tailscale.member.detach",
       { mode: "prepare" },
       10
     )

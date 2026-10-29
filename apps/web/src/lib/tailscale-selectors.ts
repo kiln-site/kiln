@@ -17,17 +17,24 @@ export type TailscaleServer = Pick<
   tailscaleSupported: boolean
 }
 
-export function selectTailscaleServers(
+/** The Relays that can change their Tailscale memberships, by ID. */
+export function tailscaleSupportedRelayIds(
   snapshot: RelayFleetSnapshot
-): Array<TailscaleServer> {
-  const supportedRelayIds = new Set(
-    snapshot.nodes.flatMap((node) =>
+): Array<string> {
+  return snapshot.nodes
+    .flatMap((node) =>
       node.capabilities.includes("tailscale-stacks") &&
       node.capabilities.includes("tailscale-staged-removal")
         ? [node.relayId]
         : []
     )
-  )
+    .sort()
+}
+
+export function selectTailscaleServers(
+  snapshot: RelayFleetSnapshot
+): Array<TailscaleServer> {
+  const supportedRelayIds = new Set(tailscaleSupportedRelayIds(snapshot))
   return snapshot.instances
     .flatMap((instance) =>
       instance.brickId === builtinTailscaleBrickId

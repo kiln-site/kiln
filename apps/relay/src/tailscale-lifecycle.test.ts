@@ -3,6 +3,7 @@ import { join } from "node:path"
 
 import {
   builtinTailscaleBrickId,
+  relayCreateDatabaseSchema,
   relayTailscaleStackApplySchema,
   relayTailscaleStackConfigSchema,
   relayTailscaleStackSchema,
@@ -592,5 +593,87 @@ describe("Tailscale member identities", () => {
         harness.lifecycle.applyTailscaleStack(apply([]), planned)
       ).rejects.toThrow("changed while the change waited its turn")
     })
+  })
+})
+
+describe("Tailscale databases", () => {
+  const stackId = "c".repeat(40)
+  const databaseId = "d".repeat(40)
+  const address = "10.165.57.10"
+  const member = `database:${databaseId}`
+
+  async function databaseOnStack(harness: RelayHarness) {
+    await harness.databases.create(
+      relayCreateDatabaseSchema.parse({
+        databaseName: "kiln_app",
+        engine: "postgres",
+        id: databaseId,
+        name: "Main database",
+        password: "correct-horse-battery-staple-1",
+        username: "kiln_user",
+      })
+    )
+    const network = harness.resources.tailscaleStackNetwork(stackId)
+    fakeDocker.addNetwork({ labels: owner, name: network, subnet: "10.165.57.0/24" })
+    const directory = join(harness.config.rootDirectory, stackId)
+    await mkdir(directory, { recursive: true })
+    await writeFile(
+      join(directory, "stack.json"),
+      JSON.stringify(
+        stackConfig(stackId, {
+          bindings: [
+            { address, enabled: true, hostname: "orders", memberId: member },
+          ],
+          subnet: "10.165.57.0/24",
+        })
+      )
+    )
+    const container = `${TEST_NAMESPACE}-kiln-db-${databaseId}-database`
+    fakeDocker.connect(container, network, address)
+    return { container, network }
+  }
+
+  it("keeps a database at its Tailscale address when its container is replaced", async () => {
+    const harness = await relayHarness()
+    const { container, network } = await databaseOnStack(harness)
+    const original = fakeDocker.container(container)!.id
+    await harness.databases.setLimits({
+      databaseId,
+      limits: { memoryBytes: 512 * 1024 ** 2 },
+    })
+
+    // Removing the limit replaces the container.
+    await harness.databases.setLimits({
+      databaseId,
+      limits: { memoryBytes: null },
+    })
+
+    const replacement = fakeDocker.container(container)!
+    expect(replacement.id).not.toBe(original)
+    expect(replacement.networks.get(network)).toMatchObject({
+      ipAddress: address,
+    })
+  })
+
+  it("takes a deleted database off its networks once Hearth has prepared their DNS", async () => {
+    const harness = await relayHarness()
+    const { container, network } = await databaseOnStack(harness)
+    stackContainer(harness, stackId, true)
+    const steps: Array<string> = []
+
+    await harness.lifecycle.detachFromTailscale(
+      (memberId) => memberId === member,
+      async ({ memberId, mode, stackIds }) => {
+        steps.push(
+          `${mode} ${memberId} ${stackIds.join(",")} attached=${fakeDocker.container(container)!.networks.has(network)}`
+        )
+      }
+    )
+
+    expect(steps).toEqual([`prepare ${member} ${stackId} attached=true`])
+    expect(fakeDocker.container(container)!.networks.has(network)).toBe(false)
+    expect(await harness.lifecycle.tailscaleMemberships(() => true)).toEqual(
+      []
+    )
   })
 })

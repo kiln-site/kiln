@@ -230,6 +230,30 @@ export class DatabaseDriver {
     })
   }
 
+  /** The database's container, or null when there's no such database. */
+  async containerOf(databaseId: string): Promise<string | null> {
+    const [container] = await this.#discover([databaseId])
+    return container?.Id ?? null
+  }
+
+  // Called once a database's container was replaced and the old one is gone.
+  // What it does is beside the replacement, which succeeded either way.
+  #replacedListener: (databaseId: string) => Promise<void> = async () => {}
+
+  afterContainerReplaced(listener: (databaseId: string) => Promise<void>) {
+    this.#replacedListener = listener
+  }
+
+  async #afterContainerReplaced(databaseId: string): Promise<void> {
+    const done = await promiseResult(() => this.#replacedListener(databaseId))
+    if (Result.isFailure(done)) {
+      console.warn(
+        `Database ${databaseId.slice(0, 8)}'s new container couldn't take its place on its Tailscale networks:`,
+        done.failure
+      )
+    }
+  }
+
   /** Every database, with the placeholders of those still provisioning. */
   async list(): Promise<Array<RelayManagedDatabase>> {
     const [databases, provisioning] = await Promise.all([
@@ -651,6 +675,7 @@ export class DatabaseDriver {
     await Effect.runPromise(
       docker.removeContainer(container.Id, { force: true }).pipe(Effect.ignore)
     )
+    await this.#afterContainerReplaced(id)
   }
 
   /**
@@ -665,6 +690,8 @@ export class DatabaseDriver {
     const config = this.#config
     // A restart can come between creating the replacement and joining it to
     // the databases this one is connected to.
+    const replaced = (databaseId: string) =>
+      Effect.promise(() => this.#afterContainerReplaced(databaseId))
     const reconnect = (databaseId: string, container: string) =>
       Effect.promise(() =>
         this.connections.reconcile({ id: databaseId, kind: "database" }, [
@@ -728,6 +755,7 @@ export class DatabaseDriver {
           yield* engine
             .removeContainer(container.Id, { force: true })
             .pipe(Effect.ignore)
+          if (databaseId) yield* replaced(databaseId)
         }
       }).pipe(
         Effect.catch((cause) =>

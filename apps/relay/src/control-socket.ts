@@ -1416,7 +1416,7 @@ function reverseRequestCancellationGraceMs(
   operation: RelayControlOperation,
   duration: number
 ): number {
-  if (operation === "hearth.tailscale.instance.detach") {
+  if (operation === "hearth.tailscale.member.detach") {
     // A cancelled prepare may be inside one 60s peer RPC, then needs one
     // additional peer-RPC window to restore every node already changed.
     return Math.min(130_000, duration * 2 + 1_000)
@@ -1903,7 +1903,7 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "instance.network.databases.remove":
     case "instance.network.routes.write":
       return "instance.network.write"
-    case "hearth.tailscale.instance.detach":
+    case "hearth.tailscale.member.detach":
       return null
     case "sftp.authorization.resolve":
       return "instance.sftp.connect"

@@ -270,7 +270,7 @@ export const relayControlOperations = [
   "instance.network.routes.read",
   "instance.network.routes.write",
   "instance.network.databases.remove",
-  "hearth.tailscale.instance.detach",
+  "hearth.tailscale.member.detach",
   "hearth.database.terminal.output",
   "sftp.authorization.resolve",
   "operation.get",
@@ -449,7 +449,7 @@ export function relayControlOperationChanges(
     case "app.terminal.write":
     case "app.terminal.claim":
     case "app.terminal.restart":
-    case "hearth.tailscale.instance.detach":
+    case "hearth.tailscale.member.detach":
     case "hearth.database.terminal.output":
     case "sftp.authorization.resolve":
     case "operation.get":
@@ -600,7 +600,7 @@ export function relayControlDeadlineMs(
   // An inventory may first wait for the host to be less busy, then reads a
   // whole image through Docker at the lowest priority.
   if (operation === "relay.security.inventory") return 15 * 60_000
-  if (operation === "hearth.tailscale.instance.detach") return 60_000
+  if (operation === "hearth.tailscale.member.detach") return 60_000
   if (operation === "instance.delete") return 360_000
   if (operation === "database.create") return 360_000
   if (operation === "database.delete") return 180_000
