@@ -78,6 +78,33 @@ export class RuntimeRecoveryManager {
     this.#beforeStart = prepare
   }
 
+  // Puts a game server back at its saved Tailscale addresses. Every start
+  // takes them first, the Relay's own recovery starts and power actions
+  // alike, so one it lost or couldn't take is retried each time.
+  #tailscaleAddresses: (instanceId: string) => Promise<void> = async () => {}
+
+  useTailscaleAddresses(take: (instanceId: string) => Promise<void>) {
+    this.#tailscaleAddresses = take
+  }
+
+  /**
+   * Has a game server about to start take its saved Tailscale addresses.
+   * The start goes ahead either way; a failure is logged.
+   */
+  takeTailscaleAddresses(instanceId: string): Effect.Effect<void> {
+    return Effect.tryPromise({
+      try: () => this.#tailscaleAddresses(instanceId),
+      catch: (cause) => cause,
+    }).pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning(
+          "Server could not take its place on its Tailscale networks",
+          { cause, instanceId }
+        )
+      )
+    )
+  }
+
   initialize(): Effect.Effect<void, unknown> {
     return this.#state.listRuntimeRecoveries().pipe(
       Effect.tap((records) =>
@@ -529,6 +556,7 @@ export class RuntimeRecoveryManager {
           catch: (cause) => cause,
         })
           .pipe(
+            Effect.andThen(this.takeTailscaleAddresses(observation.instanceId)),
             Effect.andThen(
               this.#docker.startContainer(observation.service, {
                 timeout: 120_000,

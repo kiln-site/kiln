@@ -17,6 +17,7 @@ import {
   appTailscaleMember,
   brickRecipeSchema,
   databaseTailscaleMemberId,
+  instanceTailscaleMemberId,
   relayCreateInstanceSchema,
   type BrickRecipe,
   type RelayInstance,
@@ -168,6 +169,9 @@ export async function relayHarness(
     const databases = new DatabaseDriver(config, docker, databaseConnections)
     lifecycle.useDatabaseContainers((databaseId) =>
       databases.containerOf(databaseId)
+    )
+    runtimeRecovery.useTailscaleAddresses((instanceId) =>
+      lifecycle.reattachTailscaleMember(instanceTailscaleMemberId(instanceId))
     )
     databases.useTailscaleAddresses((databaseId) =>
       lifecycle.reattachTailscaleMember(databaseTailscaleMemberId(databaseId))

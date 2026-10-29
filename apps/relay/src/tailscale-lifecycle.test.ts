@@ -331,11 +331,11 @@ describe("Tailscale members", () => {
   const stackId = "c".repeat(40)
   const address = "10.165.57.10"
 
-  async function serverOnStack(harness: RelayHarness) {
-    await harness.createServer({ id: serverId })
+  async function serverOnStack(harness: RelayHarness, start = false) {
+    await harness.createServer({ id: serverId, start })
     const network = harness.resources.tailscaleStackNetwork(stackId)
     fakeDocker.addNetwork({
-      labels: owner,
+      labels: { ...owner, "kiln.relay.network": `tailscale:${stackId}` },
       name: network,
       subnet: "10.165.57.0/24",
     })
@@ -384,6 +384,81 @@ describe("Tailscale members", () => {
     ).toMatchObject({
       ipAddress: address,
     })
+  })
+
+  it("keeps an apply that finds its member already attached by the time it connects it", async () => {
+    const harness = await relayHarness()
+    const { container, network } = await serverOnStack(harness)
+    // The stack's container as installing it labels it.
+    const stack = harness.resources.tailscaleStackContainer(stackId)
+    fakeDocker.tailscale.machines.set(stack, {
+      ipv4: "100.64.0.9",
+      loggedIn: true,
+    })
+    await harness.seedServer({
+      id: stackId,
+      image: "tailscale/tailscale:stable",
+      labels: {
+        "kiln.brick.format": "kiln.brick/v1",
+        "kiln.brick.id": builtinTailscaleBrickId,
+        "kiln.instance.mount": "/config",
+        "kiln.instance.name": "Private Network",
+      },
+      mounts: [
+        {
+          destination: "/config",
+          source: join(harness.config.rootDirectory, stackId),
+          type: "bind",
+        },
+      ],
+      name: stack,
+      running: true,
+    })
+    const connect = fakeDocker.hold({
+      command: "network connect",
+      target: network,
+    })
+
+    const applied = harness.lifecycle.applyTailscaleStack(
+      relayTailscaleStackApplySchema.parse({
+        bindings: [{ hostname: "paper", memberId: `instance:${serverId}` }],
+        domain: "test",
+        hostname: "private-network",
+        id: stackId,
+        name: "Private Network",
+      })
+    )
+    await connect.reached
+    // The server's start puts it there first.
+    fakeDocker.connect(container, network, address)
+    connect.release()
+
+    await expect(applied).resolves.toBeDefined()
+    expect(
+      fakeDocker.container(container)!.networks.get(network)
+    ).toMatchObject({ ipAddress: address })
+    expect(await harness.lifecycle.tailscaleMemberships(() => true)).toEqual([
+      { address, memberId: `instance:${serverId}`, network },
+    ])
+  })
+
+  it("puts a crashed server back at its Tailscale address as recovery starts it", async () => {
+    const harness = await relayHarness({
+      KILN_RELAY_CRASH_RETRY_DELAY_SECONDS: "0",
+    })
+    const { container, network } = await serverOnStack(harness, true)
+    fakeDocker.exit(container, { exitCode: 1 })
+
+    // Recovery schedules a start for the crash, then makes it.
+    await harness.docker.inspectInstances()
+    await harness.docker.inspectInstances()
+    await vi.waitFor(() =>
+      expect(fakeDocker.container(container)!.state.running).toBe(true)
+    )
+
+    expect(
+      fakeDocker.container(container)!.networks.get(network)
+    ).toMatchObject({ ipAddress: address })
   })
 
   it("puts a server back at its Tailscale address when it starts, if it lost it", async () => {

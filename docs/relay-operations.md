@@ -73,9 +73,12 @@ repeated, or sent by another Hearth, overrules nobody.
 A Tailscale network's members are named by kind: `instance:<id>` for a game
 server, `app:<id>:<service>` for an App's service, and `database:<id>` for a
 database, which keeps its address when its container is replaced. Every
-member takes its addresses again as it starts, and all of them do when the
-Relay starts, so one its container lost, as when the Relay stopped between
-replacing a container and reattaching it, comes back. Deleting any of them
+member takes its addresses again as it starts, a game server's crash
+recovery included, and all of them do when the Relay starts, so one its
+container lost, as when the Relay stopped between replacing a container and
+reattaching it, comes back. A start can attach a member at the same time as
+an apply that keeps it, since that apply holds the member only shared; each
+accepts the endpoint the other put there. Deleting any of them
 asks Hearth to rewrite its networks' DNS on every node first
 (`hearth.tailscale.member.detach`), then takes it off them, and puts the DNS
 back if that fails. Applying a network (`relay.tailscale.stack.apply`) holds

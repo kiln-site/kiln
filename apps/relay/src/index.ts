@@ -489,6 +489,11 @@ await lifecycle.migrateTailscaleStackMembers()
 lifecycle.useDatabaseContainers((databaseId) =>
   databases.containerOf(databaseId)
 )
+// A game server's container takes its addresses on its Tailscale networks
+// whenever it starts, its recovery starts included.
+runtimeRecovery.useTailscaleAddresses((instanceId) =>
+  lifecycle.reattachTailscaleMember(instanceTailscaleMemberId(instanceId))
+)
 // A database's container takes its addresses on its Tailscale networks once
 // a replacement's old one has let them go, and whenever it starts.
 databases.useTailscaleAddresses((databaseId) =>

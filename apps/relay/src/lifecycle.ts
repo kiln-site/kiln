@@ -1883,13 +1883,6 @@ export class LifecycleDriver {
       )
       if (recreated) return recreated
     }
-    // A game server that lost its Tailscale address takes it again as it
-    // starts.
-    if (action === "start" || action === "restart") {
-      await this.reattachTailscaleMembers(
-        (memberId) => memberId === instanceTailscaleMemberId(instance.id)
-      )
-    }
     return this.#docker.runAction(instance, action)
   }
 
@@ -4920,15 +4913,32 @@ async function attachTailscaleMember(
   network: string,
   address: string
 ): Promise<void> {
-  const endpoint = (await containerNetworks(docker, container))[network]
-  if (endpoint && endpointAddress(endpoint) === address) return
-  if (endpoint) {
+  const attached = async () => {
+    const endpoint = (await containerNetworks(docker, container))[network]
+    return endpoint ? endpointAddress(endpoint) === address : null
+  }
+  // Something else can move it meanwhile, as a member's start does beside
+  // an apply that keeps its membership: a step that fails is fine if the
+  // endpoint is where that step was taking it.
+  const unless = (done: (now: boolean | null) => boolean) =>
+    Effect.catch((cause: unknown) =>
+      Effect.promise(attached).pipe(
+        Effect.flatMap((now) => (done(now) ? Effect.void : Effect.fail(cause)))
+      )
+    )
+  const before = await attached()
+  if (before) return
+  if (before === false) {
     await runLifecycle(
-      docker.disconnectNetwork(network, container, { force: true })
+      docker
+        .disconnectNetwork(network, container, { force: true })
+        .pipe(unless((now) => now !== false))
     )
   }
   await runLifecycle(
-    docker.connectNetwork(network, container, { ipv4Address: address })
+    docker
+      .connectNetwork(network, container, { ipv4Address: address })
+      .pipe(unless((now) => now === true))
   )
 }
 

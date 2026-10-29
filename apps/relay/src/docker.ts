@@ -992,6 +992,9 @@ export class DockerDriver {
               ? (INSTANCE_STOP_TIMEOUT_SECONDS + 60) * 1_000
               : (INSTANCE_STOP_TIMEOUT_SECONDS + 15) * 1_000
         const engine = this.#engine
+        const tailscaleAddresses = this.#runtimeRecovery.takeTailscaleAddresses(
+          instance.id
+        )
         // Instances Relay doesn't own keep their restart policy, and are
         // addressed by the container discovery found for them.
         const container = instance.managedByRelay
@@ -1011,8 +1014,12 @@ export class DockerDriver {
               // while it's down.
               yield* engine.stopContainer(container, options)
               yield* connectDatabases(true)
+              yield* tailscaleAddresses
               yield* engine.startContainer(container, { timeout })
               return
+            }
+            if (action === "start" || action === "restart") {
+              yield* tailscaleAddresses
             }
             yield* action === "start"
               ? engine.startContainer(container, { timeout })
