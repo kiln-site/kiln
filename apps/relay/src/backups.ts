@@ -699,11 +699,23 @@ export class BackupManager {
       let stopped: ReadonlyArray<StoppedApp> = []
       const begin = yield* Effect.cached(
         Effect.gen({ self: this }, function* () {
+          // Checked again now the batch holds its locks, before anything
+          // stops: an App that began using one of its targets since they
+          // were looked up holds no lock here, so stopping it could race
+          // its own start or deployment. The whole window fails instead.
           const consumers = new Set<string>()
           for (const member of members) {
             if (member.input.kind !== "create") continue
+            yield* this.#requireLockedApps(member.input.target, lockedApps)
             const source = yield* this.#tarSource(member.input.target, true)
             for (const appId of source.consumers) consumers.add(appId)
+          }
+          if ([...consumers].some((appId) => !lockedApps.has(appId))) {
+            return yield* backupFailure(
+              "volume_users_changed",
+              "lookup",
+              "The Apps using what this backup covers changed while it waited its turn; run it again"
+            )
           }
           stopped = yield* this.#stopApps(leader.taskId, [...consumers], true)
         })

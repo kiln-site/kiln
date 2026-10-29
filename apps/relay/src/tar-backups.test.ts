@@ -33,6 +33,7 @@ import { backupArchivePath } from "./backups/destinations/index.js"
 import { TarRestoreFences } from "./backups/tar-restore-journal.js"
 import { DockerEngine } from "./docker-engine.js"
 import { RelayStateStore } from "./effect/state.js"
+import { exclusive, laneKeys } from "./operation-lanes.js"
 import { appLifecycleLocks } from "./operation-plans.js"
 import { fakeDocker } from "./test/docker.js"
 import {
@@ -467,6 +468,72 @@ it("stops an App once for a stopped batch of its folder and volume, and starts i
   }
   expect(container().state.running).toBe(true)
   expect(container().starts - startsBefore).toBe(1)
+})
+
+it("fails a stopped batch, stopping nothing, when an App begins using its volume while it waits its turn", async () => {
+  const { harness, volumes } = await relay()
+  const volume = kilnVolume()
+  await harness.apps.create({ id: appId, name: "Website" })
+  const app = await deploy(harness, mountsVolume)
+  const manager = await backups(harness, volumes)
+  // Something holds the volume, so the batch waits for its turn.
+  let release = () => undefined as void
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const occupant = Effect.runPromise(
+    harness.lanes.run(
+      { label: "test.hold", locks: [exclusive(laneKeys.volume(volumeId))] },
+      Effect.promise(() => held)
+    )
+  )
+  const batch = { id: randomUUID(), size: 2 }
+  const folder = createInput(
+    { id: appId, kind: "app" },
+    { batch, consistency: "stopped" }
+  )
+  const shared = createInput(
+    { id: volumeId, kind: "volume" },
+    { batch, consistency: "stopped" }
+  )
+  const running = Effect.runPromise(
+    Effect.gen(function* () {
+      yield* manager.enqueue(folder)
+      yield* manager.enqueue(shared)
+      yield* manager.runPending()
+    })
+  )
+  const waiting = () =>
+    harness.lanes
+      .describe()
+      .waiting.some((waiter) => waiter.label === "backup.batch")
+  for (let tick = 0; tick < 1_000 && !waiting(); tick += 1) {
+    await new Promise((resolve) => setImmediate(resolve))
+  }
+  expect(waiting()).toBe(true)
+
+  // Another App's container starts using it, as Docker might start one.
+  const joiner = fakeDocker.addContainer({
+    image: "nginx:alpine",
+    labels: { "kiln.app.id": otherAppId, "kiln.resource.kind": "app" },
+    mounts: [{ destination: "/data", source: volume.name, type: "volume" }],
+    name: "worker-1",
+    running: true,
+  })
+  release()
+  await occupant
+  await running
+
+  for (const input of [folder, shared]) {
+    expect(await Effect.runPromise(manager.get(input.taskId))).toMatchObject({
+      error: expect.stringContaining("waited its turn"),
+      status: "failed",
+    })
+  }
+  expect(joiner.state.running).toBe(true)
+  expect(fakeDocker.containers.get(app.containers[0]!.id)!.state.running).toBe(
+    true
+  )
 })
 
 it("refuses a restore whose archive writes through a link it made or climbs out", async () => {
