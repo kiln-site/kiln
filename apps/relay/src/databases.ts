@@ -742,30 +742,33 @@ export class DatabaseDriver {
   async action(input: RelayDatabaseAction): Promise<RelayManagedDatabase> {
     const database = await this.#required(input.databaseId)
     const container = requiredContainerId(database)
-    if (input.action !== "stop") {
-      // The databases it's connected to, whatever changed while it was down,
-      // under its name there, as its connections drop now anyway.
-      await this.connections.reconcile(
+    // The databases it's connected to, joined before it starts. Only while
+    // it's stopped does an attachment without its name there join again
+    // with it: a running database keeps its connections until it stops.
+    const connect = (repairNames: boolean) =>
+      this.connections.reconcile(
         { id: database.id, kind: "database" },
         [{ container }],
-        { repairNames: true }
+        { repairNames }
       )
-    }
     if (input.action === "stop") {
       await Effect.runPromise(
         this.#engine.stopContainer(container, { seconds: 30, timeout: 45_000 })
       )
     } else if (input.action === "start") {
+      await connect(!database.observedState.match(/^(?:running|starting)$/u))
       await Effect.runPromise(
         this.#engine.startContainer(container, { timeout: 120_000 })
       )
       await waitUntilReady(this.#engine, container)
     } else {
+      // As Docker restarts it, with its names put right while it's down.
       await Effect.runPromise(
-        this.#engine.restartContainer(container, {
-          seconds: 30,
-          timeout: 150_000,
-        })
+        this.#engine.stopContainer(container, { seconds: 30, timeout: 45_000 })
+      )
+      await connect(true)
+      await Effect.runPromise(
+        this.#engine.startContainer(container, { timeout: 120_000 })
       )
       await waitUntilReady(this.#engine, container)
     }

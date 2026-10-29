@@ -928,19 +928,22 @@ export class DockerDriver {
     instance: RelayInstanceConfig,
     action: InstancePowerAction
   ): Promise<RelayInstance> {
-    if (
-      instance.managedByRelay &&
-      (action === "start" || action === "restart")
-    ) {
-      // Its connections drop as it starts anyway, so an attachment without
-      // its name there joins again with it.
-      await this.databaseConnections.reconcile(
-        { id: instance.id, kind: "instance" },
-        [{ container: instance.service }],
-        { repairNames: true }
-      )
-    }
     const discovered = await this.#findDiscovered(instance.id)
+    // The databases it's connected to, joined before it starts. Only while
+    // it's stopped does an attachment without its name there join again
+    // with it: a running server keeps its connections until it stops.
+    const member = { id: instance.id, kind: "instance" } as const
+    const connectDatabases = (repairNames: boolean) =>
+      promiseEffect(() =>
+        this.databaseConnections.reconcile(
+          member,
+          [{ container: instance.service }],
+          { repairNames }
+        )
+      )
+    if (instance.managedByRelay && action === "start") {
+      await runEffect(connectDatabases(!discovered.container.State.Running))
+    }
     await this.#initializeLifecycleSessions()
     const lifecycleSessionBeforeTransition = this.#lifecycleSessions.get(
       instance.id
@@ -989,6 +992,14 @@ export class DockerDriver {
             const options = {
               seconds: INSTANCE_STOP_TIMEOUT_SECONDS,
               timeout,
+            }
+            if (action === "restart" && instance.managedByRelay) {
+              // As Docker restarts it, with its database names put right
+              // while it's down.
+              yield* engine.stopContainer(container, options)
+              yield* connectDatabases(true)
+              yield* engine.startContainer(container, { timeout })
+              return
             }
             yield* action === "start"
               ? engine.startContainer(container, { timeout })

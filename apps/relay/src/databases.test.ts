@@ -1239,6 +1239,90 @@ describe("connections of every member kind", () => {
     }
   )
 
+  it("keeps a member database on the network while it shuts down for a restart, and only then gives it its name", async () => {
+    const harness = await relayHarness()
+    const [target, member] = ["d", "e"].map((c) => c.repeat(40))
+    for (const id of [target!, member!]) await createDatabase(harness, id)
+    await harness.databaseConnections.set(
+      { id: member!, kind: "database" },
+      target!,
+      true
+    )
+    fakeDocker.connect(databaseContainer(member!).name, networkOf(target!))
+    const stopping = fakeDocker.hold({
+      command: "stop",
+      target: databaseContainer(member!).id,
+    })
+
+    const restarted = harness.databases.action({
+      action: "restart",
+      databaseId: member!,
+    })
+    await stopping.reached
+    // Still reaching the database while it shuts down.
+    expect(
+      databaseContainer(member!).networks.get(networkOf(target!))?.aliases
+    ).not.toContain(`database-${member}`)
+    expect(databaseContainer(member!).networks.has(networkOf(target!))).toBe(
+      true
+    )
+    stopping.release()
+    await restarted
+
+    expect(
+      databaseContainer(member!).networks.get(networkOf(target!))?.aliases
+    ).toContain(`database-${member}`)
+  })
+
+  it("leaves a running member database's attachment alone when asked to start", async () => {
+    const harness = await relayHarness()
+    const [target, member] = ["d", "e"].map((c) => c.repeat(40))
+    for (const id of [target!, member!]) await createDatabase(harness, id)
+    await harness.databaseConnections.set(
+      { id: member!, kind: "database" },
+      target!,
+      true
+    )
+    fakeDocker.connect(databaseContainer(member!).name, networkOf(target!))
+    const before = databaseContainer(member!).networks.get(networkOf(target!))
+
+    await harness.databases.action({ action: "start", databaseId: member! })
+
+    // The same attachment, not one made again.
+    expect(databaseContainer(member!).networks.get(networkOf(target!))).toBe(
+      before
+    )
+  })
+
+  it("keeps a game server on the network while it shuts down for a restart", async () => {
+    const harness = await relayHarness()
+    const id = "d".repeat(40)
+    await createDatabase(harness, id)
+    await harness.createServer({ id: serverId, start: true })
+    await harness.databaseConnections.set(
+      { id: serverId, kind: "instance" },
+      id,
+      true
+    )
+    const container = harness.resources.instanceContainer(serverId)
+    fakeDocker.connect(container, networkOf(id))
+    const instance = await harness.docker.findInstance(serverId)
+    if (!instance) throw new Error("The server was not discovered")
+    const stopping = fakeDocker.hold({ command: "stop" })
+
+    const restarted = harness.docker.runAction(instance, "restart")
+    await stopping.reached
+    expect(fakeDocker.container(container)?.networks.has(networkOf(id))).toBe(
+      true
+    )
+    stopping.release()
+    await restarted
+
+    expect(
+      fakeDocker.container(container)?.networks.get(networkOf(id))?.aliases
+    ).toContain(`server-${serverId}`)
+  })
+
   it.each(["start", "restart"] as const)(
     "gives a game server that joined without its name the name when it %ss",
     async (action) => {
