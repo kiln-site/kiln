@@ -2,6 +2,7 @@ import { assert, layer } from "@effect/vitest"
 import type { RelayBackupTask } from "@workspace/contracts"
 import type { ScheduleDefinition } from "@workspace/contracts/schedules"
 import { Effect } from "effect"
+import { SqlClient } from "effect/sql"
 import { afterAll, vi } from "vite-plus/test"
 
 import {
@@ -13,6 +14,7 @@ import { reconcileBackupTaskEffect } from "@/effect/backups"
 import { disposeAppRuntime } from "@/effect/runtime"
 import { invalidateScheduleDeploymentsEffect } from "@/effect/schedule-invalidation"
 import { listPersistedRelays } from "@/lib/relay-registry"
+import { scheduleProjectionGenerations } from "@/migrations/0043_schedule_projection_generations"
 import {
   deployScheduleToRelay,
   insertSchedule,
@@ -209,6 +211,59 @@ describeMysql("Scheduled backups, checked before they run", () => {
           assert.isNull(sent[capped]?.refusal ?? null)
           assert.deepStrictEqual(sent[capped]?.destination, { kind: "local" })
           assert.strictEqual(sent[capped]?.maxBytes, 2_048)
+        })
+    )
+
+    it.effect(
+      "sends a schedule deployed before the upgrade again, with what it may back up now",
+      () =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* seed
+          yield* deploy(backupSchedule({ kind: "local" }, [capped]))
+          // As a Hearth from before generations left it: applied, and sent
+          // without admission, while a size ceiling was set since.
+          yield* sql.unsafe(
+            `ALTER TABLE kiln_schedule_deployment
+               DROP COLUMN desired_generation,
+               DROP COLUMN acknowledged_generation`
+          )
+          yield* insertRows("backup_policy", {
+            created_at: at,
+            exclude_patterns: "[]",
+            relay_id: relayId,
+            size_limit_bytes: 2_048,
+            target_id: capped,
+            target_kind: "instance",
+            updated_at: at,
+          })
+          const sent = relay.applied.length
+
+          // Upgraded, the upgrade run twice, as after one stopped partway.
+          yield* scheduleProjectionGenerations.run
+          yield* scheduleProjectionGenerations.run
+          const [upgraded] = yield* selectRows<{
+            acknowledged_generation: number | null
+            desired_generation: number
+            status: string
+          }>("schedule_deployment")
+          yield* Effect.promise(redeployUnacknowledgedSchedules)
+          const [resent] = yield* selectRows<{
+            acknowledged_generation: number | null
+            desired_generation: number
+            status: string
+          }>("schedule_deployment")
+
+          assert.strictEqual(upgraded?.status, "applied")
+          assert.strictEqual(Number(upgraded?.desired_generation), 1)
+          assert.isNull(upgraded?.acknowledged_generation ?? null)
+          assert.strictEqual(relay.applied.length, sent + 1)
+          assert.strictEqual(executions()[capped]?.maxBytes, 2_048)
+          assert.strictEqual(resent?.status, "applied")
+          assert.strictEqual(
+            Number(resent?.acknowledged_generation),
+            Number(resent?.desired_generation)
+          )
         })
     )
 

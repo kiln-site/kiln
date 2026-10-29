@@ -10,7 +10,10 @@ import { databaseTableName } from "@/lib/database-config"
 // version of it gets a generation, raised whenever one is sent or something
 // it depends on changes; the Relay keeps the newest it has had, and Hearth
 // counts a schedule delivered only once the Relay has the newest generation
-// Hearth issued. Safe to run again: each column is added once.
+// Hearth issued. A deployment from before starts owed one, at generation 1
+// with none acknowledged, so the sweep sends every schedule again with its
+// admission; new ones start at 0 and are given theirs as they're sent. Safe
+// to run again: each column is added once, and the default set each time.
 export const scheduleProjectionGenerations: Migration = {
   id: 43,
   name: "schedule_projection_generations",
@@ -27,9 +30,13 @@ export const scheduleProjectionGenerations: Migration = {
     if (!has("desired_generation")) {
       yield* sql.unsafe(
         `ALTER TABLE \`${deployment}\`
-           ADD COLUMN \`desired_generation\` bigint unsigned NOT NULL DEFAULT '0'`
+           ADD COLUMN \`desired_generation\` bigint unsigned NOT NULL DEFAULT '1'`
       )
     }
+    yield* sql.unsafe(
+      `ALTER TABLE \`${deployment}\`
+         ALTER COLUMN \`desired_generation\` SET DEFAULT '0'`
+    )
     if (!has("acknowledged_generation")) {
       yield* sql.unsafe(
         `ALTER TABLE \`${deployment}\`

@@ -1642,6 +1642,10 @@ describe("Relay schedule persistence", () => {
     await runNow(schedules)
 
     expect(late.acknowledgedGeneration).toBe(2)
+    // Its overview, which Hearth imports, says so too.
+    expect(
+      (await schedules.overview()).deployments[0]?.acknowledgedGeneration
+    ).toBe(2)
     await advanceUntil(async () => {
       expect(
         (await latestRun(schedules))?.targetRuns[0]?.attempts[0]?.status

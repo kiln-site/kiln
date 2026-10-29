@@ -747,11 +747,15 @@ async function reconcileScheduleState(
                     deployment.acknowledgedRevision,
                   ])
                 )
+                // Those the Relay has the revision of, but an older
+                // generation, are owed their admission too.
+                const behind = await schedulesBehindOnRelay(relayId)
                 await Effect.runPromise(
                   Effect.forEach(
                     projections,
                     ({ schedule, targets }) =>
-                      revisions.get(schedule.id) === schedule.revision
+                      revisions.get(schedule.id) === schedule.revision &&
+                      !behind.has(schedule.id)
                         ? Effect.void
                         : promiseEffect(() =>
                             deployScheduleToRelay(
@@ -841,25 +845,38 @@ async function importRelayScheduleOverview(
   for (const deployment of overview.deployments) {
     // updated_at is assigned first so it compares against the stored row and
     // only moves when something changes, keeping affectedRows meaningful.
+    // Counted applied by the same rule as a reply to sending it: only
+    // once the Relay has the newest revision and generation Hearth issued.
+    // A Relay that names no generation has none.
     const [result] = await databasePool.execute<ResultSetHeader>(
       `INSERT INTO ${databaseTable("schedule_deployment")}
          (schedule_id, relay_id, desired_revision, acknowledged_revision,
-          status, next_run_at, last_error, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 'applied', ?, NULL, ?, ?)
+          acknowledged_generation, status, next_run_at, last_error,
+          created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'applied', ?, NULL, ?, ?)
        ON DUPLICATE KEY UPDATE
          updated_at = IF(
            VALUES(acknowledged_revision) > COALESCE(acknowledged_revision, 0)
+             OR VALUES(acknowledged_generation)
+               > COALESCE(acknowledged_generation, 0)
              OR (VALUES(acknowledged_revision) >= desired_revision
+               AND VALUES(acknowledged_generation) >= desired_generation
                AND NOT (status <=> 'applied'
                  AND next_run_at <=> VALUES(next_run_at)
                  AND last_error IS NULL)),
            VALUES(updated_at), updated_at),
-         status = IF(VALUES(acknowledged_revision) >= desired_revision,
+         status = IF(VALUES(acknowledged_revision) >= desired_revision
+             AND VALUES(acknowledged_generation) >= desired_generation,
            'applied', status),
-         next_run_at = IF(VALUES(acknowledged_revision) >= desired_revision,
+         next_run_at = IF(VALUES(acknowledged_revision) >= desired_revision
+             AND VALUES(acknowledged_generation) >= desired_generation,
            VALUES(next_run_at), next_run_at),
-         last_error = IF(VALUES(acknowledged_revision) >= desired_revision,
+         last_error = IF(VALUES(acknowledged_revision) >= desired_revision
+             AND VALUES(acknowledged_generation) >= desired_generation,
            NULL, last_error),
+         acknowledged_generation = GREATEST(
+           COALESCE(acknowledged_generation, 0),
+           VALUES(acknowledged_generation)),
          acknowledged_revision = GREATEST(
            COALESCE(acknowledged_revision, 0),
            VALUES(acknowledged_revision))`,
@@ -868,6 +885,7 @@ async function importRelayScheduleOverview(
         relayId,
         deployment.acknowledgedRevision,
         deployment.acknowledgedRevision,
+        deployment.acknowledgedGeneration ?? 0,
         deployment.nextRunAt,
         now,
         now,
@@ -930,4 +948,18 @@ async function importScheduleRun(
     ]
   )
   return result
+}
+
+// The schedules a Relay hasn't acknowledged the newest generation of.
+async function schedulesBehindOnRelay(relayId: string): Promise<Set<string>> {
+  const [rows] = await databasePool.query<
+    Array<{ schedule_id: string } & RowDataPacket>
+  >(
+    `SELECT schedule_id
+       FROM ${databaseTable("schedule_deployment")}
+      WHERE relay_id = ?
+        AND COALESCE(acknowledged_generation, 0) < desired_generation`,
+    [relayId]
+  )
+  return new Set(rows.map((row) => row.schedule_id))
 }

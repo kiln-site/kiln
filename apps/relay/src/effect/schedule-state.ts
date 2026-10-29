@@ -424,9 +424,18 @@ export function makeRelayScheduleState(sql: SqlClient) {
         sql.withTransaction(
           Effect.gen(function* () {
             const ids = scheduleIds ? JSON.stringify(scheduleIds) : null
+            // With the generation Hearth last sent each, which Hearth's
+            // import acknowledges as a reply to sending it would; an
+            // unreadable definition has none.
             const schedules = yield* sql<
-              Omit<ScheduleRow, "definition_json">
-            >`SELECT schedule_id, revision, next_run_at FROM relay_schedules
+              Omit<ScheduleRow, "definition_json"> & {
+                generation: number | null
+              }
+            >`SELECT schedule_id, revision, next_run_at,
+          CASE WHEN json_valid(definition_json)
+            THEN json_extract(definition_json, '$.generation') END
+            AS generation
+        FROM relay_schedules
         WHERE ${ids} IS NULL OR schedule_id IN (SELECT value FROM json_each(${ids}))`
             const rows = yield* sql<RunRow>`SELECT * FROM relay_schedule_runs
         WHERE ${ids} IS NULL OR schedule_id IN (SELECT value FROM json_each(${ids}))
@@ -444,7 +453,14 @@ export function makeRelayScheduleState(sql: SqlClient) {
             }
             return {
               deployments: schedules.map((row) =>
-                deployment(row.schedule_id, row.revision, row.next_run_at)
+                deployment(
+                  row.schedule_id,
+                  row.revision,
+                  row.next_run_at,
+                  typeof row.generation === "number"
+                    ? row.generation
+                    : undefined
+                )
               ),
               runs,
             }
