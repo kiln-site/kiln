@@ -129,9 +129,9 @@ engine, a volume is archived through Docker.
   Kiln made is named by its Kiln ID. A volume an App's Compose project
   declares is owned by that App and named by the App and the volume's name
   in Compose, which survives redeploys. Anonymous volumes and host paths
-  outside the App's folder aren't backed up; the App's Backups tab lists
-  them so nobody assumes they are. The Relay's own data volume is the
-  platform backup's.
+  outside the App's folder aren't backed up; in the App's Volumes table on
+  its Info page, only volumes that are backed up get a Backups button. The
+  Relay's own data volume is the platform backup's.
 - Ownership and use are separate: an App owns its Compose volumes; a Kiln
   volume is owned by no App, and any App's configuration may use it.
 - The backups page filters volumes by App, through ownership or use. Backing
@@ -235,8 +235,8 @@ Bottom to top, one branch and pull request each:
     the browser and the CLI.
 13. `feat/unify-delete-apps-volumes`: Apps and volumes on
     `resource.delete`, with their final backups.
-14. `feat/unify-backups-ui`: the App filter, an App's Backups tab, live or
-    stopped.
+14. `feat/unify-backups-ui`: App and volume backups on the Backups page,
+    reached from App Info's rail and its Volumes table, live or stopped.
 
 **Automations and stats**
 
