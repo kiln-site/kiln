@@ -227,6 +227,24 @@ function destroyNamespaced(kind, appProjects) {
         .filter(Boolean)
     )
   )
+  if (kind === "volume") {
+    // Database volumes may predate the owner label. Match the recovery
+    // identity exactly, never a name prefix, and respect any other owner.
+    const databaseVolumes = capture("docker", [
+      "volume", "ls", "--filter", "label=kiln.database.volume",
+      "--format",
+      '{{.Name}}|{{.Label "kiln.database.volume"}}|{{.Label "kiln.database.id"}}|{{.Label "kiln.relay.owner"}}',
+    ])
+    for (const line of databaseVolumes.split("\n").filter(Boolean)) {
+      const [name, volume, databaseId, owner] = line.split("|")
+      if (
+        /^[a-f0-9]{40}$/u.test(databaseId ?? "") &&
+        (!owner || owner === namespace) &&
+        name === volume &&
+        name === `${namespace}-kiln-db-${databaseId}-data`
+      ) ids.add(name)
+    }
+  }
   if (ids.size > 0) run("docker", [kind, "rm", ...ids], process.env)
 }
 
