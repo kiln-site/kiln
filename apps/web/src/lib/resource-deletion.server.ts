@@ -621,6 +621,8 @@ export const requestResourceDeletionEffect = Effect.fn(
   kind: ResourceDeletionKind
   relayId: string
   resourceId: string
+  /** The failed attempt a retry read: it goes ahead only from that one. */
+  retryOf?: number
   storageId?: string | null
   user: AuthenticatedUser
 }) {
@@ -642,6 +644,7 @@ export const requestResourceDeletionEffect = Effect.fn(
     kind: input.kind,
     relayId: input.relayId,
     resourceId: input.resourceId,
+    ...(input.retryOf === undefined ? {} : { retryOf: input.retryOf }),
     storageId,
     user: input.user,
   })

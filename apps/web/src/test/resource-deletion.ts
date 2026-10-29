@@ -63,8 +63,9 @@ export const allow = (
     )
   })
 
-// Every operation an earlier test started has ended, its workflow's last
-// writes included, so emptying the tables doesn't wait on them.
+// Waits a while for every operation an earlier test started to end, its
+// workflow's last writes included, so emptying the tables doesn't wait on
+// them. One a stopped test run left running never ends; it's emptied anyway.
 const operationsEnded = selectRows<{ state: string }>("operation").pipe(
   Effect.repeat({
     schedule: Schedule.spaced("100 millis"),
@@ -73,7 +74,7 @@ const operationsEnded = selectRows<{ state: string }>("operation").pipe(
         ["cancelled", "failed", "interrupted", "succeeded"].includes(row.state)
       ),
   }),
-  Effect.timeout("45 seconds")
+  Effect.timeoutOption("15 seconds")
 )
 
 /** A fresh database with the owner's game server, on a fresh Relay. */

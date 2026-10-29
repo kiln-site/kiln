@@ -167,6 +167,11 @@ export const listResourceDeletionsToReconcileEffect = Effect.fnUntraced(
  * a failure, never after keeping it. One still running, or done, is returned
  * as it is; one being kept is refused until that settles.
  *
+ * A retry names the failed attempt it read (`retryOf`) and goes ahead only
+ * while the deletion is still that attempt, failed: one kept, or retried by
+ * someone else, since it looked is refused, rather than deleting a resource
+ * someone chose to keep. A refused request writes nothing.
+ *
  * The row is written before it's read: two first requests at once would
  * otherwise each lock the gap where it goes and deadlock inserting it.
  */
@@ -177,6 +182,7 @@ export const requestResourceDeletionRowEffect = Effect.fn(
   kind: ResourceDeletionKind
   relayId: string
   resourceId: string
+  retryOf?: number
   storageId: string | null
   user: AuthenticatedUser
 }) {
@@ -217,6 +223,17 @@ export const requestResourceDeletionRowEffect = Effect.fn(
           [input.relayId, input.kind, input.resourceId]
         )
         if (!existing) return yield* Effect.die("The deletion was not recorded")
+        if (
+          input.retryOf !== undefined &&
+          (existing.id === id ||
+            existing.status !== "failed" ||
+            Number(existing.attempt) !== input.retryOf)
+        ) {
+          return yield* new ResourceDeletionConflictError({
+            message:
+              "Its deletion changed since you looked, as when someone kept it. Reload to see where it is now.",
+          })
+        }
         if (existing.id === id) return toResourceDeletion(existing)
         if (existing.status === "cancelling") {
           return yield* new ResourceDeletionConflictError({

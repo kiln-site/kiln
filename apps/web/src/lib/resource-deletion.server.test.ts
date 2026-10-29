@@ -15,6 +15,7 @@ import {
   allow,
   at,
   databaseId,
+  deletionOf,
   deletionRelay as relay,
   deletionUntil as until,
   insertDeletion,
@@ -51,12 +52,13 @@ const Lanes = testOperationsEngine(
   Layer.mergeAll(deleteResource.layer, keepResource.layer)
 ).pipe(Layer.provideMerge(TestDatabase))
 
-const deleteServer = (user = owner, finalBackup = false) =>
+const deleteServer = (user = owner, finalBackup = false, retryOf?: number) =>
   requestResourceDeletionEffect({
     finalBackup,
     kind: "instance",
     relayId,
     resourceId: serverId,
+    ...(retryOf === undefined ? {} : { retryOf }),
     user,
   })
 
@@ -251,13 +253,42 @@ describeMysql("Deleting a game server or database", () => {
     )
 
     it.effect(
+      "refuses a retry that read the deletion before someone kept it",
+      () =>
+        Effect.gen(function* () {
+          yield* seedStoppedWithBackup
+          // The retry reads attempt 1, failed, then waits on its checks
+          // while someone keeps the server.
+          const read = yield* until(serverId, ["failed"])
+          yield* keepServer
+          yield* until(serverId, ["cancelled"])
+
+          const refused = yield* Effect.flip(
+            deleteServer(owner, false, Number(read?.attempt))
+          )
+          yield* Effect.sleep("500 millis")
+
+          assert.instanceOf(refused, ResourceDeletionConflictError)
+          assert.strictEqual((yield* deletionOf(serverId))?.status, "cancelled")
+          assert.isTrue(relay.servers.has(serverId))
+          assert.isFalse(relay.frozen.has(serverId))
+          assert.deepStrictEqual(relay.changes, ["resource.unfreeze"])
+        }).pipe(TestClock.withLive),
+      60_000
+    )
+
+    it.effect(
       "settles a keep and a retry asked at once one way, and says so to both",
       () =>
         Effect.gen(function* () {
           yield* seedStoppedWithBackup
 
           const [kept, retried] = yield* Effect.all(
-            [Effect.result(keepServer), Effect.result(deleteServer())],
+            [
+              Effect.result(keepServer),
+              // As the page's "Try again" asks: from the attempt it showed.
+              Effect.result(deleteServer(owner, false, 1)),
+            ],
             { concurrency: "unbounded" }
           )
           const settled = yield* until(serverId, [

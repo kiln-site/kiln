@@ -104,11 +104,14 @@ export async function retryResourceDeletionHandler(
     const { requireAccountPassword } = await import("@/lib/auth-password")
     await requireAccountPassword(user, input.password ?? "")
   }
+  // Only from the attempt read above: one kept or retried meanwhile, while
+  // this request was checking, is refused.
   await requestResourceDeletion({
     finalBackup,
     kind: input.kind,
     relayId: input.relayId,
     resourceId: input.resourceId,
+    retryOf: deletion.attempt,
     user,
     ...(finalBackup ? { storageId: deletion.storageId } : {}),
   })
