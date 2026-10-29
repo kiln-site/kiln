@@ -427,10 +427,16 @@ export class DatabaseConnections {
    * Joins each of the member's containers to the networks of the databases
    * it's connected to on this Relay, under its alias, and takes it off any
    * other database's. A database member never leaves its own network.
+   *
+   * With `repairNames`, as when the member is about to start or restart and
+   * its connections drop anyway, a container that joined before members had
+   * names joins again under its name. Otherwise it keeps its attachment as
+   * it is, and takes the name when its container is next recreated.
    */
   async reconcile(
     member: DatabaseConnectionMember,
-    targets: ReadonlyArray<DatabaseConnectionTarget>
+    targets: ReadonlyArray<DatabaseConnectionTarget>,
+    options: { readonly repairNames?: boolean } = {}
   ): Promise<Array<DatabaseConnectionIssue>> {
     const issues: Array<DatabaseConnectionIssue> = []
     const alias = databaseMemberAlias(member)
@@ -463,14 +469,33 @@ export class DatabaseConnections {
           for (const [databaseId, network] of networks) {
             if (member.kind === "database" && databaseId === member.id) continue
             const connect = desired.has(network)
-            if (connect === Object.hasOwn(attached, network)) continue
+            const joined = Object.hasOwn(attached, network)
+            const unnamed =
+              connect &&
+              joined &&
+              options.repairNames === true &&
+              name !== null &&
+              !(attached[network]?.Aliases ?? []).includes(name)
+            if (!unnamed && connect === joined) continue
             await recoverPromise(
               () =>
                 Effect.runPromise(
                   connect
-                    ? this.#docker.connectNetwork(network, target.container, {
-                        aliases: name ? [name] : [],
-                      })
+                    ? (unnamed
+                        ? this.#docker.disconnectNetwork(
+                            network,
+                            target.container
+                          )
+                        : Effect.void
+                      ).pipe(
+                        Effect.andThen(
+                          this.#docker.connectNetwork(
+                            network,
+                            target.container,
+                            { aliases: name ? [name] : [] }
+                          )
+                        )
+                      )
                     : this.#docker.disconnectNetwork(network, target.container)
                 ),
               (cause) => {

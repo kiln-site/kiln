@@ -1214,6 +1214,56 @@ describe("connections of every member kind", () => {
     ])
   })
 
+  it.each(["start", "restart"] as const)(
+    "gives a member database that joined without its name the name when it %ss",
+    async (action) => {
+      const harness = await relayHarness()
+      const [target, member] = ["d", "e"].map((c) => c.repeat(40))
+      for (const id of [target!, member!]) await createDatabase(harness, id)
+      // Joined by a Relay that gave members no name there.
+      await harness.databaseConnections.set(
+        { id: member!, kind: "database" },
+        target!,
+        true
+      )
+      fakeDocker.connect(databaseContainer(member!).name, networkOf(target!))
+      if (action === "start") {
+        await harness.databases.action({ action: "stop", databaseId: member! })
+      }
+
+      await harness.databases.action({ action, databaseId: member! })
+
+      expect(
+        databaseContainer(member!).networks.get(networkOf(target!))?.aliases
+      ).toContain(`database-${member}`)
+    }
+  )
+
+  it.each(["start", "restart"] as const)(
+    "gives a game server that joined without its name the name when it %ss",
+    async (action) => {
+      const harness = await relayHarness()
+      const id = "d".repeat(40)
+      await createDatabase(harness, id)
+      await harness.createServer({ id: serverId, start: action === "restart" })
+      await harness.databaseConnections.set(
+        { id: serverId, kind: "instance" },
+        id,
+        true
+      )
+      const container = harness.resources.instanceContainer(serverId)
+      fakeDocker.connect(container, networkOf(id))
+      const instance = await harness.docker.findInstance(serverId)
+      if (!instance) throw new Error("The server was not discovered")
+
+      await harness.docker.runAction(instance, action)
+
+      expect(
+        fakeDocker.container(container)?.networks.get(networkOf(id))?.aliases
+      ).toContain(`server-${serverId}`)
+    }
+  )
+
   it("names a saved member that hasn't joined as pending, not as reachable", async () => {
     const harness = await relayHarness()
     const id = "d".repeat(40)

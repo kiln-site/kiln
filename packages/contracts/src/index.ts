@@ -190,8 +190,8 @@ export const relayDatabaseMemberSchema = z
     id: z.string().regex(/^[a-f0-9]{40}$/u),
     kind: databaseConnectionMemberKindSchema,
     // Names it doesn't answer to yet: it takes them when its containers
-    // join, or, for one that joined before members had names, when they're
-    // next recreated.
+    // join, or, for one that joined before members had names, when it next
+    // starts, restarts, or deploys.
     pendingHostnames: z.array(z.string().min(1).max(253)),
     // Whether the Relay keeps the connection, joining its containers
     // whenever they change.

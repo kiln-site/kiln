@@ -743,10 +743,13 @@ export class DatabaseDriver {
     const database = await this.#required(input.databaseId)
     const container = requiredContainerId(database)
     if (input.action !== "stop") {
-      // The databases it's connected to, whatever changed while it was down.
-      await this.connections.reconcile({ id: database.id, kind: "database" }, [
-        { container },
-      ])
+      // The databases it's connected to, whatever changed while it was down,
+      // under its name there, as its connections drop now anyway.
+      await this.connections.reconcile(
+        { id: database.id, kind: "database" },
+        [{ container }],
+        { repairNames: true }
+      )
     }
     if (input.action === "stop") {
       await Effect.runPromise(
@@ -1227,8 +1230,9 @@ export class DatabaseDriver {
   // What the Relay keeps connected to the database, and what its network
   // holds now: game servers, App services, and other databases, with the
   // names each answers to there. A container that joined before members had
-  // names takes its name only when it's next recreated, so the names come
-  // from its attachment, and a name it lacks is reported as pending.
+  // names takes its name when it next starts, restarts, or deploys, so the
+  // names come from its attachment, and a name it lacks is reported as
+  // pending.
   async #members(
     databaseId: string,
     ownContainer: string,

@@ -51,9 +51,10 @@ game server and `database-<id>` for a database (the name a database has on
 its own network too), by full ID, and each App service to its alias on the
 App's own network (`app-<short id>`, or `<service>.app-<short id>`). Each
 member is reported with the database (`members`): the names its containers
-answer to there now, and those it gets when they next change, since one that
-joined before members had names takes its name only when it's recreated,
-rather than being reconnected under people using it. Hearth shows a member
+answer to there now, and those it gets when they next change: one that
+joined before members had names takes its name when it next starts,
+restarts, or deploys, when its connections drop anyway, rather than being
+reconnected under people using it. Hearth shows a member
 only to someone who may read it and the database's network. Deleting a
 database forgets every connection to it and its own; deleting a game server
 or an App forgets its own. A client needs the database's

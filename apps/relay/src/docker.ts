@@ -932,9 +932,12 @@ export class DockerDriver {
       instance.managedByRelay &&
       (action === "start" || action === "restart")
     ) {
+      // Its connections drop as it starts anyway, so an attachment without
+      // its name there joins again with it.
       await this.databaseConnections.reconcile(
         { id: instance.id, kind: "instance" },
-        [{ container: instance.service }]
+        [{ container: instance.service }],
+        { repairNames: true }
       )
     }
     const discovered = await this.#findDiscovered(instance.id)

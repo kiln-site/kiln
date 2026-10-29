@@ -67,12 +67,12 @@ const kindNames = {
   instance: "Game server",
 } as const
 
-// When its containers next change, which is when they join the network or
-// take a name there: an App's on its next deploy, others' when they start.
+// When its containers next join the network or take their name there: an
+// App's on its next deploy, others' when they next start or restart.
 const nextChange = {
   app: "on its next deploy",
-  database: "when it next starts",
-  instance: "when it next starts",
+  database: "when it next starts or restarts",
+  instance: "when it next starts or restarts",
 } as const
 
 // What the member's names there are, now and once its containers change.
