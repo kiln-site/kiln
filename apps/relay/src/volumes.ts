@@ -1,6 +1,6 @@
 import { join } from "node:path"
 
-import { Effect, Schema } from "effect"
+import { Effect, Schema, Semaphore } from "effect"
 import {
   appVolumeId,
   composeVolumeNameSchema,
@@ -41,6 +41,7 @@ const COMPOSE_VOLUME_LABEL = "com.docker.compose.volume"
 // How often Docker measures every volume, and how long a failed measure
 // waits before the next.
 const SIZE_REFRESH_MS = 60_000
+const REFERENCE_PERMITS = 1_024
 
 export class RelayVolumeError extends Schema.TaggedError<RelayVolumeError>()(
   "RelayVolumeError",
@@ -101,6 +102,12 @@ export class RelayVolumes {
   // Each Hearth's latest authenticated control connection, since the Relay
   // started. Only an import that connection sent counts.
   readonly #connections = new Map<string, string>()
+  // Deletions and imports each take one permit; holding a Hearth's import
+  // takes them all, so it waits for those already under way.
+  readonly #references = Semaphore.makeUnsafe(REFERENCE_PERMITS)
+  // The connection each Hearth held its import on, whose imports, sent
+  // before its database changed, no longer count.
+  readonly #held = new Map<string, string>()
   #measuring: Promise<void> | null = null
 
   constructor(
@@ -320,7 +327,10 @@ export class RelayVolumes {
       }
       yield* this.#engine.removeVolume(volume.Name)
       yield* this.#state.deleteVolumeName(id)
-    }).pipe(Effect.withSpan("RelayVolumes.delete"))
+    }).pipe(
+      this.#references.withPermits(1),
+      Effect.withSpan("RelayVolumes.delete")
+    )
   }
 
   /** Notes a Hearth's new control connection, which owes a fresh import. */
@@ -429,18 +439,48 @@ export class RelayVolumes {
           message: "This connection is no longer the Hearth's current one",
         })
       }
+      if (this.#held.get(clientId) === connectionId) {
+        return yield* new RelayVolumeError({
+          message:
+            "This Hearth held its Apps' configurations on this connection; send them on a new one",
+        })
+      }
       yield* this.#state.importAppVolumeReferences(
         clientId,
         connectionId,
         apps,
         unresolvedAppIds
       )
-    }).pipe(Effect.withSpan("RelayVolumes.importAppReferences"))
+    }).pipe(
+      this.#references.withPermits(1),
+      Effect.withSpan("RelayVolumes.importAppReferences")
+    )
   }
 
-  /** Forgets what a deleted App's configuration named. */
-  forgetApp(appId: string) {
-    return this.#state.deleteAppVolumeReferences(appId)
+  /**
+   * Stops counting what a Hearth sent of its Apps' configurations until it
+   * sends them again, as before its database is restored: what it holds
+   * now may not be what it will. Waits for deletions and imports already
+   * under way, so none of them decides on what it sent before.
+   */
+  holdAppReferences(clientId: string, connectionId: string) {
+    return this.#state.holdVolumeReferenceImport(clientId).pipe(
+      Effect.tap(() =>
+        Effect.sync(() => {
+          this.#held.set(clientId, connectionId)
+        })
+      ),
+      this.#references.withPermits(REFERENCE_PERMITS),
+      Effect.withSpan("RelayVolumes.holdAppReferences")
+    )
+  }
+
+  /**
+   * Forgets what a deleted App's configuration named, as the Hearth that
+   * deleted it said; other Hearths' records go when they next send theirs.
+   */
+  forgetApp(clientId: string, appId: string) {
+    return this.#state.deleteAppVolumeReferences(clientId, appId)
   }
 
   /**

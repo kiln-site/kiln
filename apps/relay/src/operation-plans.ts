@@ -460,6 +460,10 @@ export function controlRequestLocks(
     // Recording that configurations name volumes waits for a deletion of
     // one to finish, and a deletion waits for the record, so neither misses
     // the other.
+    // Waits for deletions and imports itself (RelayVolumes), even while the
+    // Relay is paused.
+    case "relay.volumes.references.hold":
+      return null
     case "relay.volumes.references.import": {
       const apps = Array.isArray(payload.apps) ? payload.apps : []
       return volumeReferenceLocks(

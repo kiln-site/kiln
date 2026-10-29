@@ -107,23 +107,23 @@ export const importKilnDatabase = createServerFn({ method: "POST" })
       { importKilnDatabaseSql },
       { runAppEffect },
       { kilnInstallationId },
-      { reconnectRelayConnections },
+      { holdingRelayVolumeReferences },
     ] = await Promise.all([
       import("@/server/kiln-database-dump.server"),
       import("@/effect/runtime"),
       import("@/effect/installation"),
-      import("@/lib/relay-connection"),
+      import("@/lib/volume-reference-hold.server"),
     ])
-    await runAppEffect(
-      "kilnDatabase.import",
-      importKilnDatabaseSql(data.content, {
-        installationId: kilnInstallationId(),
-        now: Date.now(),
-      })
+    // The App configurations it brings may name volumes these don't, so
+    // every Relay stops counting what this Hearth sent before it commits.
+    await holdingRelayVolumeReferences(() =>
+      runAppEffect(
+        "kilnDatabase.import",
+        importKilnDatabaseSql(data.content, {
+          installationId: kilnInstallationId(),
+          now: Date.now(),
+        })
+      )
     )
-    // Each Relay still counts the App configurations this Hearth sent before
-    // the import, which may no longer name the volumes these do; on a new
-    // connection it counts none until Hearth sends what it holds now.
-    reconnectRelayConnections()
     return { imported: true }
   })

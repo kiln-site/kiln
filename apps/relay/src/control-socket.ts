@@ -1607,10 +1607,12 @@ function memberActionsForRequest(
 
 // Requests any paired Hearth may send, whatever its grant: revising browser
 // authority it issued, and saying which volumes its own Apps' configurations
-// name, which only adds protection or replaces what it said before.
+// name, or that what it said no longer counts, which only adds protection
+// or replaces what it said before.
 const anyClientOperations = new Set<RelayControlOperation>([
   "browser.authorization.revise",
   "relay.volumes.references.import",
+  "relay.volumes.references.hold",
   "app.volumes.write",
 ])
 
@@ -1706,6 +1708,7 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "relay.volumes.delete":
       return "relay.configure"
     case "relay.volumes.references.import":
+    case "relay.volumes.references.hold":
       return null
     case "relay.pairing.create":
       return "relay.pairing.create"

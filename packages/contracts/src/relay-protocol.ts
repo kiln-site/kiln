@@ -162,6 +162,7 @@ export const relayControlOperations = [
   "relay.volumes.rename",
   "relay.volumes.delete",
   "relay.volumes.references.import",
+  "relay.volumes.references.hold",
   "relay.pairing.create",
   "relay.pairing.list",
   "relay.pairing.revoke",
@@ -295,6 +296,7 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "relay.volumes.rename",
   "relay.volumes.delete",
   "relay.volumes.references.import",
+  "relay.volumes.references.hold",
   "relay.tailscale.install",
   "relay.tailscale.stack.apply",
   "relay.tailscale.stack.dns",
@@ -475,6 +477,7 @@ export function relayControlOperationChanges(
     case "relay.volumes.rename":
     case "relay.volumes.delete":
     case "relay.volumes.references.import":
+    case "relay.volumes.references.hold":
     case "relay.pairing.create":
     case "relay.pairing.revoke":
     case "relay.clients.update":
@@ -574,6 +577,8 @@ export function relayControlOperationRefusedWhilePaused(
   if (
     operation === "relay.pause.write" ||
     operation === "browser.authorization.revise" ||
+    // Only adds protection, which restoring Hearth's database needs.
+    operation === "relay.volumes.references.hold" ||
     operation === "relay.clients.revoke" ||
     operation === "relay.pairing.revoke"
   ) {

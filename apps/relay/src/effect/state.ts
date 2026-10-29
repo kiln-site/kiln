@@ -837,9 +837,21 @@ export class RelayStateStore extends Context.Service<
       }>,
       unresolvedAppIds: ReadonlyArray<string>
     ) => Effect.Effect<void, RelayStateError>
-    /** Forgets what any Hearth said a deleted App's configuration named. */
+    /**
+     * Forgets what one Hearth said a deleted App's configuration named, and
+     * that it couldn't read it; other Hearths' keep theirs until they send
+     * their configurations again.
+     */
     readonly deleteAppVolumeReferences: (
+      clientId: string,
       appId: string
+    ) => Effect.Effect<void, RelayStateError>
+    /**
+     * Forgets that a Hearth has sent its Apps' configurations, so deletion
+     * waits until it sends them again; what it named stays.
+     */
+    readonly holdVolumeReferenceImport: (
+      clientId: string
     ) => Effect.Effect<void, RelayStateError>
     readonly deletePendingPrimaryPort: (
       instanceId: string
@@ -3855,17 +3867,26 @@ const makeRelayStateStore = Effect.gen(function* () {
           })
         )
       ),
-    deleteAppVolumeReferences: (appId) =>
+    deleteAppVolumeReferences: (clientId, appId) =>
       run(
         "delete_app_volume_references",
         sql.withTransaction(
           Effect.gen(function* () {
             yield* sql`
-              DELETE FROM relay_app_volume_references WHERE app_id = ${appId}
+              DELETE FROM relay_app_volume_references
+              WHERE client_id = ${clientId} AND app_id = ${appId}
             `
-            yield* resolveAppVolumeReferences(null, new Set([appId]))
+            yield* resolveAppVolumeReferences(clientId, new Set([appId]))
           })
         )
+      ),
+    holdVolumeReferenceImport: (clientId) =>
+      run(
+        "hold_volume_reference_import",
+        sql`
+          DELETE FROM relay_volume_reference_imports
+          WHERE client_id = ${clientId}
+        `.pipe(Effect.asVoid)
       ),
     deleteRuntimeRecovery: (instanceId) =>
       run(

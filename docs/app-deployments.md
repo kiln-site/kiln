@@ -179,8 +179,13 @@ Hearth has sent its apps' configurations on its current control connection,
 with none unresolved. What a Hearth sent counts only for the connection it
 sent it on, so its database changing under it, as a restore does, can't
 leave the Relay counting configurations it no longer holds: a Hearth
-restored offline connects anew, and one that imports a Kiln database while
-running reconnects to every Relay. After the Relay restarts, every Hearth
+restored offline connects anew. One that imports a Kiln database while
+running first tells every Relay to stop counting what it sent
+(`relay.volumes.references.hold`, which waits for deletions under way and
+works while the Relay is paused), refuses the import if any Relay can't be
+told, sends nothing while the import runs, and then reconnects to every
+Relay, which counts its configurations again once a new connection sends
+them. Deleting an App forgets only what its own Hearth said of it. After the Relay restarts, every Hearth
 owes them again. A Hearth paired since owes them before deletion works
 again; a revoked one no longer counts, nor does what it sent. The volumes
 page says what the Relay waits for.

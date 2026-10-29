@@ -2212,6 +2212,12 @@ async function executeControlRequest(
       await runRelayEffect("relay.volumes.delete", volumes.delete(input.id))
       return { id: input.id }
     }
+    case "relay.volumes.references.hold":
+      await runRelayEffect(
+        "relay.volumes.references.hold",
+        volumes.holdAppReferences(client.id, connectionId)
+      )
+      return { held: true }
     case "relay.volumes.references.import": {
       const input = relayAppVolumesImportSchema.parse(request.payload)
       await runRelayEffect(
@@ -2636,7 +2642,7 @@ async function executeControlRequest(
       if (discarded) {
         await runRelayEffect(
           "relay.apps.volumes.forget",
-          volumes.forgetApp(input.appId)
+          volumes.forgetApp(client.id, input.appId)
         )
         return { appId: input.appId, deleted: true }
       }
@@ -2657,7 +2663,7 @@ async function executeControlRequest(
       // What its configuration mounted no longer keeps those volumes.
       await runRelayEffect(
         "relay.apps.volumes.forget",
-        volumes.forgetApp(input.appId)
+        volumes.forgetApp(client.id, input.appId)
       )
       // Its routes go with it, so their hostnames are free again.
       await withRoutesLock("app.delete.routes", async () => {

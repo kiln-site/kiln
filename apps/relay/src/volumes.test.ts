@@ -421,6 +421,92 @@ describe("Relay volumes", () => {
     )
   })
 
+  it("holds a Hearth's configurations once deletions under way finish, until it sends them on a new connection", async () => {
+    const harness = await relayHarness()
+    const volumes = await relayVolumes(harness)
+    await pairHearth(harness, "hearth-a")
+    await harness.apps.create({ id: appId, name: "Website" })
+    const first = await run(volumes.create(volumeId, "media"))
+    const otherId = "4e0b31d5".padEnd(40, "0")
+    const other = await run(volumes.create(otherId, "cache"))
+    const before = connect(volumes, "hearth-a")
+    await run(volumes.importAppReferences("hearth-a", before, [], []))
+
+    // A deletion that decided on what Hearth sent before finishes first.
+    const removing = fakeDocker.hold({ command: "volume rm" })
+    const deleting = run(volumes.delete(volumeId))
+    await removing.reached
+    let held = false
+    const holding = run(volumes.holdAppReferences("hearth-a", before)).then(
+      () => {
+        held = true
+      }
+    )
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(held).toBe(false)
+    removing.release()
+    await deleting
+    await holding
+    expect(fakeDocker.volumes.has(first.dockerName)).toBe(false)
+
+    // Then nothing is deleted until Hearth sends what it holds now, and
+    // the connection it held on can't send what it held before.
+    await expect(run(volumes.delete(otherId))).rejects.toThrow(
+      "waiting for hearth-a to send"
+    )
+    await expect(
+      run(volumes.importAppReferences("hearth-a", before, [], []))
+    ).rejects.toThrow("send them on a new one")
+    const after = connect(volumes, "hearth-a")
+    await run(
+      volumes.importAppReferences(
+        "hearth-a",
+        after,
+        [{ appId, volumeIds: [otherId] }],
+        []
+      )
+    )
+    await expect(run(volumes.delete(otherId))).rejects.toThrow(
+      "An App's configuration mounts this volume"
+    )
+    expect(fakeDocker.volumes.has(other.dockerName)).toBe(true)
+  })
+
+  it("forgets only what the Hearth that deleted an App said of it", async () => {
+    const harness = await relayHarness()
+    const volumes = await relayVolumes(harness)
+    await pairHearth(harness, "hearth-a")
+    await pairHearth(harness, "hearth-b")
+    await harness.apps.create({ id: appId, name: "Website" })
+    await run(volumes.create(volumeId, "media"))
+    await run(
+      volumes.importAppReferences(
+        "hearth-a",
+        connect(volumes, "hearth-a"),
+        [],
+        [appId]
+      )
+    )
+    await run(
+      volumes.importAppReferences(
+        "hearth-b",
+        connect(volumes, "hearth-b"),
+        [],
+        [appId]
+      )
+    )
+
+    await run(volumes.forgetApp("hearth-a", appId))
+
+    // Hearth B still owes the configuration it couldn't read.
+    await expect(run(volumes.delete(volumeId))).rejects.toThrow(
+      "hearth-b couldn't read an App's configuration"
+    )
+    await expect(run(volumes.delete(volumeId))).rejects.not.toThrow(
+      "hearth-a couldn't read"
+    )
+  })
+
   it("keeps waiting for a configuration its Hearth couldn't read until it can", async () => {
     const harness = await relayHarness()
     const volumes = await relayVolumes(harness)

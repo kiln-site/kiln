@@ -19,6 +19,7 @@ import {
   sendAppVolumeReferencesEffect,
 } from "@/lib/app-volume-references.server"
 import { databaseTable } from "@/lib/database-config"
+import { volumeReferencesHeld } from "@/lib/volume-reference-gate"
 import { betterAuthSecrets } from "@/lib/environment"
 
 const APP_CONFIG_PURPOSE = "kiln-app-config"
@@ -258,6 +259,10 @@ const sendSavedAppVolumeReferencesEffect = Effect.fn(
 export const importRelayAppVolumeReferencesEffect = Effect.fn(
   "apps.volumeReferences.importRelay"
 )(function* (relayId: string) {
+  // Not while the database is replaced: what it reads may be gone after.
+  for (let held = volumeReferencesHeld(); held; held = volumeReferencesHeld()) {
+    yield* Effect.promise(() => held!)
+  }
   const database = yield* Database
   return yield* database.transaction(
     "app_volume_references_import",
