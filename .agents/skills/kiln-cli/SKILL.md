@@ -15,8 +15,11 @@ available; do not stop at providing command examples.
   console commands, file writes, and uploads as remote mutations. Verify an
   ambiguous target or destination before running them. An explicit user
   request naming the Relay/server, action, and path is sufficient
-  authorization. Server deletion additionally requires the exact server
-  reference through `--confirm`.
+  authorization. Server deletion additionally requires the server's exact
+  name through `--confirm` and the account password, as deleting in Hearth
+  does. Never type, store, or echo a user's password yourself: let them enter
+  it at the prompt, or pipe it from where they keep it with
+  `--password-stdin`.
 - Never print, copy, or commit a Kiln token. Prefer saved profiles. Use
   `KILN_TOKEN` or `--token` only when the user deliberately provides an
   ephemeral credential, and keep it out of reported command output.
@@ -210,10 +213,13 @@ read commands still accept legacy stored names up to 120 characters.
 Permanently delete a server and its data only after verifying the full target:
 
 ```sh
-kiln server delete <server> --confirm <server>
+kiln server delete <server> --confirm <name>
 ```
 
-The confirmation must exactly match `<relay-id>:<instance-id>`. Deletion
+`--confirm` takes the server's name exactly as `kiln server info <server>`
+shows it, the same confirmation Hearth asks for. The CLI then asks for the
+account password without echoing it; pipe it with `--password-stdin` when
+there's no terminal. A wrong name or password deletes nothing. Deletion
 requires full CLI access and the `instance.delete` and `backup.create`
 permissions: the server is frozen and backed up in full first, then deleted.
 A deletion that outlasts the request carries on in the background; one that

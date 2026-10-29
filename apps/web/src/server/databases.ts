@@ -50,6 +50,8 @@ import {
 } from "@/lib/access-control"
 import type { AccessGrant } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
+import { deleteConfirmationSchema } from "@/lib/delete-confirmation"
+import { requireDeleteConfirmation } from "@/lib/delete-confirmation.server"
 import {
   awaitResourceDeletion,
   requestResourceDeletion,
@@ -716,7 +718,7 @@ export const restartDatabaseTerminal = createServerFn({ method: "POST" })
   })
 
 export const deleteManagedDatabase = createServerFn({ method: "POST" })
-  .validator(databaseInputSchema)
+  .validator(databaseInputSchema.extend(deleteConfirmationSchema.shape))
   .handler(async ({ data }) => {
     const { relay, user } = await authorizedDatabase(data, "database.delete")
     const database = (
@@ -729,6 +731,12 @@ export const deleteManagedDatabase = createServerFn({ method: "POST" })
         record.relayId === relay.id && record.databaseId === data.databaseId
     )
     if (!database) throw new Error("Database not found on this Relay")
+    await requireDeleteConfirmation({
+      confirmation: data.confirmation,
+      name: database.name,
+      password: data.password,
+      user,
+    })
     const onRelay = await databaseOnRelay(relay, data.databaseId, user.id)
     // Backed up first when it holds data a dump can reach: not one that
     // never finished provisioning, nor one the Relay lists nothing of, as

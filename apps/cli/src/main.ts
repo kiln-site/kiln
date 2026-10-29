@@ -66,6 +66,7 @@ import {
   remoteFileBasename,
 } from "./inputs.js"
 import { formatBytes, writeLine, writeTable, writeText } from "./output.js"
+import { promptPasswordEffect } from "./password.js"
 import { formatPowerResponse } from "./power.js"
 import { downloadSftpFileEffect, uploadSftpFileEffect } from "./sftp.js"
 import { runCliProgram } from "./runtime.js"
@@ -496,25 +497,27 @@ const runCommandEffect = Effect.fn("cli.command")(function* (
     return
   }
   if (group === "server" && action === "delete") {
-    const serverReference = rest[0]
-    const target = yield* parseServerReferenceEffect(serverReference)
+    const target = yield* parseServerReferenceEffect(rest[0])
+    // What deleting asks in the browser too: its name, and the password.
     if (!args.confirm) {
       return yield* invalidUsage(
-        `Deletion permanently removes server data. Repeat the server reference with --confirm ${serverReference}.`
+        "Deletion permanently removes server data. Type the server's name with --confirm <name>."
       )
     }
-    if (args.confirm !== serverReference) {
-      return yield* invalidUsage(
-        `Deletion confirmation must exactly match ${serverReference}.`
-      )
-    }
+    const password = args.passwordStdin
+      ? (yield* readStdinEffect()).replace(/\r?\n$/u, "")
+      : process.stdin.isTTY
+        ? yield* promptPasswordEffect("Account password: ")
+        : yield* invalidUsage(
+            "Deletion asks for your account password. Pipe it with --password-stdin."
+          )
     const result = yield* apiJsonEffect(
       session,
       "/api/cli/v1/server",
       cliDeleteServerResponseSchema,
       jsonRequest(
         "DELETE",
-        { ...target, confirmation: args.confirm },
+        { ...target, confirmation: args.confirm, password },
         CLI_LONG_OPERATION_TIMEOUT_MS
       )
     )
@@ -1228,8 +1231,9 @@ Commands:
   server info <server>                    Show server metadata and resources
   server startup <server> [options]       Change startup settings
   server brick <server> <brick>           Change a server's Brick
-  server delete <server> --confirm <server>
-                                          Permanently delete a server
+  server delete <server> --confirm <name> [--password-stdin]
+                                          Permanently delete a server, after a
+                                          final backup; asks for your password
   server power <server> <action>          Start, stop, restart, or kill a server
   server logs <server>                    Show server logs
   server console <server> [command]       Send a console command
@@ -1242,7 +1246,8 @@ Commands:
 
 Options:
       --brick <id|url> Change the Brick recipe
-      --confirm <id>   Confirm a destructive server or backup deletion
+      --confirm <name|id>
+                       Confirm a deletion: a server's name, or a backup's ID
       --cpu <cores|none>
                        Set the CPU limit in cores, for example 1.5
       --disk <size|none>
@@ -1263,6 +1268,8 @@ Options:
       --no-safety-backup
                        Restore without taking a full backup first
       --no-start      Leave a created or reconfigured server stopped
+      --password-stdin
+                       Read your account password from standard input
       --profile <id>  Use a named profile
       --storage <default|local|id>
                        Select a backup destination

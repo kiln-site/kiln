@@ -11,10 +11,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@workspace/ui/components/dialog"
-import { Input } from "@workspace/ui/components/input"
 import { showToast } from "@workspace/ui/components/sonner"
 import { cn } from "@workspace/ui/lib/utils"
 
+import {
+  DeleteConfirmationFields,
+  useDeleteConfirmation,
+} from "@/components/delete-confirmation-fields"
+import type { DeleteConfirmation } from "@/lib/delete-confirmation"
 import {
   resourceDeletionQueryOptions,
   type ResourceDeletionTarget,
@@ -33,14 +37,12 @@ export const ResourceDeletionAlert = React.memo(function ResourceDeletionAlert({
   canDelete,
   kind,
   name,
-  passwordRequired = false,
   relayId,
   resourceId,
 }: {
   canDelete: boolean
   kind: ResourceDeletionTarget["kind"]
   name: string
-  passwordRequired?: boolean
   relayId: string
   resourceId: string
 }) {
@@ -52,8 +54,9 @@ export const ResourceDeletionAlert = React.memo(function ResourceDeletionAlert({
   const refresh = () =>
     queryClient.invalidateQueries({ exact: true, queryKey: options.queryKey })
   const retry = useMutation({
-    mutationFn: (input: { finalBackup: boolean; password?: string }) =>
-      retryResourceDeletion({ data: { ...target, ...input } }),
+    mutationFn: (
+      input: { finalBackup: boolean } & Partial<DeleteConfirmation>
+    ) => retryResourceDeletion({ data: { ...target, ...input } }),
     onError: (error) => showToast({ message: error.message, type: "error" }),
     onSuccess: () => {
       setSkipping(false)
@@ -169,14 +172,10 @@ export const ResourceDeletionAlert = React.memo(function ResourceDeletionAlert({
       {skipping ? (
         <SkipFinalBackupDialog
           name={name}
-          passwordRequired={passwordRequired && target.kind === "instance"}
           pending={retry.isPending}
           subject={subject}
-          onConfirm={(password) =>
-            retry.mutate({
-              finalBackup: false,
-              ...(password === undefined ? {} : { password }),
-            })
+          onConfirm={(confirmation) =>
+            retry.mutate({ ...confirmation, finalBackup: false })
           }
           onOpenChange={(open) => {
             if (!open && !retry.isPending) setSkipping(false)
@@ -191,48 +190,39 @@ function SkipFinalBackupDialog({
   name,
   onConfirm,
   onOpenChange,
-  passwordRequired,
   pending,
   subject,
 }: {
   name: string
-  onConfirm: (password?: string) => void
+  onConfirm: (confirmation: DeleteConfirmation) => void
   onOpenChange: (open: boolean) => void
-  passwordRequired: boolean
   pending: boolean
   subject: string
 }) {
-  const [password, setPassword] = React.useState("")
+  const confirmation = useDeleteConfirmation(name)
   return (
     <Dialog open onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <form
-          className="contents"
+          className="grid gap-4"
           onSubmit={(event) => {
             event.preventDefault()
-            if (pending || (passwordRequired && !password)) return
-            onConfirm(passwordRequired ? password : undefined)
+            if (pending || !confirmation.ready) return
+            onConfirm(confirmation.input)
           }}
         >
           <DialogHeader>
             <DialogTitle>Delete {name} without a final backup?</DialogTitle>
             <DialogDescription>
               Without a final backup, this {subject} and its data are gone for
-              good. Backups made before stay.
+              good. Backups made before stay. Schedules left with nothing else
+              to run on are deleted too.
             </DialogDescription>
           </DialogHeader>
-          {passwordRequired ? (
-            <label className="grid gap-1.5 text-sm">
-              Your account password
-              <Input
-                autoComplete="current-password"
-                autoFocus
-                type="password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-              />
-            </label>
-          ) : null}
+          <DeleteConfirmationFields
+            confirmation={confirmation}
+            disabled={pending}
+          />
           <DialogFooter>
             <Button
               disabled={pending}
@@ -243,7 +233,7 @@ function SkipFinalBackupDialog({
               Cancel
             </Button>
             <Button
-              disabled={pending || (passwordRequired && !password)}
+              disabled={pending || !confirmation.ready}
               type="submit"
               variant="destructive"
             >

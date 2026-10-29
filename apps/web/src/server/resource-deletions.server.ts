@@ -1,7 +1,14 @@
 import type { AccessPermission } from "@workspace/contracts"
 
+import { listManagedDatabaseRecordsEffect } from "@/effect/managed-databases"
+import { runAppEffect } from "@/effect/runtime"
 import { requireRelayPermission } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
+import {
+  instanceDeletionName,
+  requireDeleteConfirmation,
+} from "@/lib/delete-confirmation.server"
+import { activeRelay } from "@/lib/relay-registry"
 import {
   cancelResourceDeletion,
   findResourceDeletion,
@@ -77,12 +84,16 @@ export async function getResourceDeletionHandler(
 
 /**
  * Tries a deletion that stopped again, with its final backup or without
- * one. Deleting a game server without one asks for the account password, as
- * deleting it does; once the Relay has deleted it, only its cleanup is
- * left, and nothing more is asked.
+ * one. Dropping a final backup it was asked to take changes what was
+ * confirmed, so it asks the deletion confirmation again; once the Relay has
+ * deleted it, only its cleanup is left, and nothing more is asked.
  */
 export async function retryResourceDeletionHandler(
-  input: ResourceDeletionTarget & { finalBackup: boolean; password?: string }
+  input: ResourceDeletionTarget & {
+    confirmation?: string
+    finalBackup: boolean
+    password?: string
+  }
 ): Promise<void> {
   const user = await authorize(input, [permissionFor(input, "delete")])
   const deletion = await findResourceDeletion(
@@ -96,13 +107,16 @@ export async function retryResourceDeletionHandler(
   const finalBackup = input.finalBackup && deletion.relayDeletedAt === null
   if (finalBackup) await authorize(input, ["backup.create"])
   if (
-    input.kind === "instance" &&
     !finalBackup &&
     deletion.finalBackup &&
     deletion.relayDeletedAt === null
   ) {
-    const { requireAccountPassword } = await import("@/lib/auth-password")
-    await requireAccountPassword(user, input.password ?? "")
+    await requireDeleteConfirmation({
+      confirmation: input.confirmation ?? "",
+      name: await resourceName(input),
+      password: input.password ?? "",
+      user,
+    })
   }
   // Only from the attempt read above: one kept or retried meanwhile, while
   // this request was checking, is refused.
@@ -123,4 +137,25 @@ export async function cancelResourceDeletionHandler(
 ): Promise<void> {
   const user = await authorize(target, [permissionFor(target, "delete")])
   await cancelResourceDeletion({ ...target, user })
+}
+
+// The name its pages show, which its deletion confirmation asks for.
+async function resourceName(target: ResourceDeletionTarget): Promise<string> {
+  if (target.kind === "instance") {
+    return instanceDeletionName(
+      await activeRelay(target.relayId),
+      target.resourceId
+    )
+  }
+  const record = (
+    await runAppEffect(
+      "managedDatabases.deletionName",
+      listManagedDatabaseRecordsEffect()
+    )
+  ).find(
+    (candidate) =>
+      candidate.relayId === target.relayId &&
+      candidate.databaseId === target.resourceId
+  )
+  return record?.name ?? target.resourceId
 }

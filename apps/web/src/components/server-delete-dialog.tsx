@@ -1,14 +1,7 @@
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Effect } from "effect"
-import {
-  Archive,
-  Check,
-  Copy,
-  LoaderCircle,
-  Trash2,
-  TriangleAlert,
-} from "lucide-react"
+import { Archive, LoaderCircle, Trash2, TriangleAlert } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import {
@@ -19,7 +12,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@workspace/ui/components/dialog"
-import { Input } from "@workspace/ui/components/input"
 import {
   Select,
   SelectContent,
@@ -29,6 +21,10 @@ import {
 } from "@workspace/ui/components/select"
 import { showToast } from "@workspace/ui/components/sonner"
 
+import {
+  DeleteConfirmationFields,
+  useDeleteConfirmation,
+} from "@/components/delete-confirmation-fields"
 import { backupStorageQueryOptions } from "@/lib/query-options"
 import { applyDeletedInstance } from "@/lib/realtime-client"
 import { deleteInstance } from "@/server/relay"
@@ -45,18 +41,14 @@ export const ServerDeleteDialog = React.memo(function ServerDeleteDialog({
   target,
   onDeleted,
   onOpenChange,
-  passwordRequired = true,
 }: {
   open: boolean
   target: ServerDeleteTarget
   onDeleted?: () => Promise<void> | void
   onOpenChange: (open: boolean) => void
-  passwordRequired?: boolean
 }) {
   const queryClient = useQueryClient()
-  const [confirmation, setConfirmation] = React.useState("")
-  const [password, setPassword] = React.useState("")
-  const [copied, setCopied] = React.useState(false)
+  const confirmation = useDeleteConfirmation(target.name)
   const [error, setError] = React.useState<string | null>(null)
   const [createBackup, setCreateBackup] = React.useState(target.backupAvailable)
   const [backupDestination, setBackupDestination] = React.useState("default")
@@ -69,7 +61,6 @@ export const ServerDeleteDialog = React.memo(function ServerDeleteDialog({
       }),
   })
   const pending = deletion.isPending
-  const confirmed = confirmation === target.id
   const changeCreateBackup = React.useCallback((nextCreateBackup: boolean) => {
     setCreateBackup(nextCreateBackup)
     setError(null)
@@ -83,39 +74,18 @@ export const ServerDeleteDialog = React.memo(function ServerDeleteDialog({
     [onOpenChange, pending]
   )
 
-  async function copyServerId() {
-    await Effect.runPromise(
-      Effect.tryPromise({
-        try: () => navigator.clipboard.writeText(target.id),
-        catch: (cause) => cause,
-      }).pipe(
-        Effect.match({
-          onFailure: () =>
-            setError(
-              "Could not copy the server ID. Select and copy it manually."
-            ),
-          onSuccess: () => {
-            setCopied(true)
-            setError(null)
-          },
-        })
-      )
-    )
-  }
-
   async function removeServer(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!confirmed || (passwordRequired && !password) || pending) return
+    if (!confirmation.ready || pending) return
     setError(null)
     const deleted = await Effect.runPromise(
       Effect.tryPromise({
         try: () =>
           deletion.mutateAsync({
             data: {
-              confirmation,
+              ...confirmation.input,
               createBackup,
               instanceId: target.id,
-              password,
               relayId: target.relayId,
               ...(createBackup && backupDestination !== "default"
                 ? {
@@ -182,58 +152,6 @@ export const ServerDeleteDialog = React.memo(function ServerDeleteDialog({
           className="grid gap-4"
           onSubmit={(event) => void removeServer(event)}
         >
-          <div className="grid gap-2">
-            <span className="type-technical-label text-muted-foreground">
-              Server ID
-            </span>
-            <button
-              type="button"
-              className="group flex min-w-0 items-center gap-3 rounded-lg border border-border/80 bg-background/55 px-3 py-2.5 text-left transition-colors outline-none hover:border-destructive/30 hover:bg-destructive/5 focus-visible:border-ring/70 focus-visible:ring-2 focus-visible:ring-ring/35 light:hover:bg-destructive/10"
-              aria-label="Copy server ID"
-              onClick={() => void copyServerId()}
-            >
-              <code className="type-code min-w-0 flex-1 break-all text-foreground">
-                {target.id}
-              </code>
-              <span className="grid size-7 shrink-0 place-items-center rounded-md border bg-background text-muted-foreground group-hover:text-foreground">
-                {copied ? (
-                  <Check className="size-3.5 text-emerald-400 light:text-emerald-700" />
-                ) : (
-                  <Copy className="size-3.5" />
-                )}
-              </span>
-            </button>
-            <p className="type-meta text-muted-foreground">
-              {copied
-                ? "Copied. Paste the full ID below to continue."
-                : "Click the ID to copy it, then paste it below."}
-            </p>
-          </div>
-
-          <div className="grid gap-1.5">
-            <label
-              htmlFor="delete-server-id-confirmation"
-              className="type-technical-label text-muted-foreground"
-            >
-              Paste server ID
-            </label>
-            <Input
-              id="delete-server-id-confirmation"
-              aria-label="Paste server ID"
-              value={confirmation}
-              onChange={(event) => {
-                setConfirmation(event.currentTarget.value)
-                setError(null)
-              }}
-              autoComplete="off"
-              spellCheck={false}
-              aria-invalid={confirmation.length > 0 && !confirmed}
-              className="bg-background font-mono text-xs"
-              disabled={pending}
-              required
-            />
-          </div>
-
           <FinalBackupFields
             available={target.backupAvailable}
             createBackup={createBackup}
@@ -244,38 +162,14 @@ export const ServerDeleteDialog = React.memo(function ServerDeleteDialog({
             onDestinationChange={setBackupDestination}
           />
 
-          {passwordRequired ? (
-            <div className="grid gap-1.5">
-              <label
-                htmlFor="delete-server-password"
-                className="type-technical-label text-muted-foreground"
-              >
-                Account password
-              </label>
-              <Input
-                id="delete-server-password"
-                aria-label="Account password"
-                type="password"
-                value={password}
-                onChange={(event) => {
-                  setPassword(event.currentTarget.value)
-                  setError(null)
-                }}
-                autoComplete="current-password"
-                placeholder="Enter your account password"
-                className="bg-background"
-                disabled={pending}
-                required
-              />
-            </div>
-          ) : null}
+          <DeleteConfirmationFields
+            confirmation={confirmation}
+            disabled={pending}
+          />
 
-          {error || (confirmation.length > 0 && !confirmed) ? (
-            <p
-              role={error ? "alert" : undefined}
-              className="type-meta text-destructive"
-            >
-              {error ?? "The pasted server ID does not match."}
+          {error ? (
+            <p role="alert" className="type-meta text-destructive">
+              {error}
             </p>
           ) : null}
 
@@ -291,9 +185,7 @@ export const ServerDeleteDialog = React.memo(function ServerDeleteDialog({
             <Button
               type="submit"
               variant="destructive"
-              disabled={
-                !confirmed || (passwordRequired && !password) || pending
-              }
+              disabled={!confirmation.ready || pending}
             >
               {pending ? <LoaderCircle className="animate-spin" /> : <Trash2 />}
               {pending ? "Deleting server…" : "Delete server"}

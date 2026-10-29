@@ -19,6 +19,10 @@ import {
 import { Input } from "@workspace/ui/components/input"
 import { showToast } from "@workspace/ui/components/sonner"
 
+import {
+  DeleteConfirmationFields,
+  useDeleteConfirmation,
+} from "@/components/delete-confirmation-fields"
 import { queryKeys } from "@/lib/query-options"
 import {
   createRelayVolume,
@@ -207,9 +211,12 @@ export function DeleteVolumeDialog({
   onClose: () => void
 }) {
   const refresh = useRefreshVolumes(relayId)
+  const confirmation = useDeleteConfirmation(volume.name)
   const remove = useMutation({
     mutationFn: () =>
-      deleteRelayVolume({ data: { relayId, volumeId: volume.id! } }),
+      deleteRelayVolume({
+        data: { ...confirmation.input, relayId, volumeId: volume.id! },
+      }),
     onSuccess: async () => {
       await refresh()
       showToast({ message: `${volume.name} deleted`, type: "success" })
@@ -224,41 +231,52 @@ export function DeleteVolumeDialog({
       }}
     >
       <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Delete {volume.name}?</DialogTitle>
-          <DialogDescription>
-            The volume{" "}
-            <span className="font-mono text-foreground">
-              {volume.dockerName}
-            </span>{" "}
-            and every file in it will be permanently removed.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs light:bg-destructive/10">
-          <CircleAlert className="mt-0.5 size-4 shrink-0 text-destructive" />
-          This action cannot be undone.
-        </div>
-        {remove.error ? (
-          <p className="text-xs text-destructive">{remove.error.message}</p>
-        ) : null}
-        <DialogFooter>
-          <Button type="button" variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
+        <form
+          className="grid gap-4"
+          onSubmit={(event) => {
+            event.preventDefault()
+            if (confirmation.ready && !remove.isPending) remove.mutate()
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>Delete {volume.name}?</DialogTitle>
+            <DialogDescription>
+              The volume{" "}
+              <span className="font-mono text-foreground">
+                {volume.dockerName}
+              </span>{" "}
+              and every file in it will be permanently removed.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs light:bg-destructive/10">
+            <CircleAlert className="mt-0.5 size-4 shrink-0 text-destructive" />
+            This action cannot be undone.
+          </div>
+          <DeleteConfirmationFields
+            confirmation={confirmation}
             disabled={remove.isPending}
-            type="button"
-            variant="destructive"
-            onClick={() => remove.mutate()}
-          >
-            {remove.isPending ? (
-              <LoaderCircle className="animate-spin" />
-            ) : (
-              <Trash2 />
-            )}
-            Delete volume
-          </Button>
-        </DialogFooter>
+          />
+          {remove.error ? (
+            <p className="text-xs text-destructive">{remove.error.message}</p>
+          ) : null}
+          <DialogFooter>
+            <Button type="button" variant="ghost" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button
+              disabled={remove.isPending || !confirmation.ready}
+              type="submit"
+              variant="destructive"
+            >
+              {remove.isPending ? (
+                <LoaderCircle className="animate-spin" />
+              ) : (
+                <Trash2 />
+              )}
+              Delete volume
+            </Button>
+          </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
   )

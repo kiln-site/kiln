@@ -39,6 +39,18 @@ const readOnlyCliCalls: Record<string, string> = {
   revokeCliCredentialEffect: "Signs this CLI out",
 }
 
+// Deleting a game server, database, App, or volume asks its name and the
+// account password, from the browser and the CLI alike: each of these must
+// reach the one check that does.
+const confirmedDeletions = [
+  "relay.ts:deleteInstance",
+  "databases.ts:deleteManagedDatabase",
+  "apps.ts:deleteApp",
+  "relay-volumes.ts:deleteRelayVolume",
+  "resource-deletions.ts:retryResourceDeletion",
+]
+const confirmedCliDeletions = ["deleteCliServerEffect"]
+
 // The session checks every handler must reach.
 const sessionChecks = new Set([
   "getCurrentUser",
@@ -53,6 +65,10 @@ const webRoot = resolve(import.meta.dirname, "../..")
 const authFile = resolve(webRoot, "src/server/auth.ts")
 const cliAccessFile = resolve(webRoot, "src/effect/cli-access.ts")
 const cliRouteFile = resolve(webRoot, "src/routes/api.cli.v1.$.ts")
+const deleteConfirmationFile = resolve(
+  webRoot,
+  "src/lib/delete-confirmation.server.ts"
+)
 
 describe("API authentication", () => {
   const { program, checker } = loadProgram()
@@ -145,6 +161,27 @@ describe("API authentication", () => {
       .map(({ name }) => name)
     expect(unchecked).toEqual([])
   })
+
+  it(
+    "asks the same confirmation before every deletion",
+    { timeout: 60_000 },
+    () => {
+      const reaches = reachabilityChecker(checker, isDeleteConfirmation)
+      const handlers = serverFunctionHandlers(program)
+      const unconfirmed = confirmedDeletions.filter((id) => {
+        const handler = handlers.find((candidate) => candidate.id === id)
+        return !handler || !reaches(handler.handler)
+      })
+      expect(unconfirmed).toEqual([])
+
+      const cliCalls = mutatingCliCalls(program, checker)
+      const unconfirmedCli = confirmedCliDeletions.filter((name) => {
+        const call = cliCalls.find((candidate) => candidate.name === name)
+        return !call || !reaches(call.declaration)
+      })
+      expect(unconfirmedCli).toEqual([])
+    }
+  )
 })
 
 // Programs in this file share parsed (and bound) source files, as the language
@@ -436,5 +473,14 @@ function isCliWriteCheck(declaration: ts.Node) {
     declaration.getSourceFile().fileName === cliAccessFile &&
     ts.isFunctionDeclaration(declaration) &&
     declaration.name?.text === "requireCliWrite"
+  )
+}
+
+function isDeleteConfirmation(declaration: ts.Node) {
+  return (
+    declaration.getSourceFile().fileName === deleteConfirmationFile &&
+    ts.isVariableDeclaration(declaration) &&
+    ts.isIdentifier(declaration.name) &&
+    declaration.name.text === "requireDeleteConfirmationEffect"
   )
 }

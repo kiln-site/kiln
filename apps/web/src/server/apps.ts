@@ -44,6 +44,8 @@ import {
   abandonPreparedProvisioning,
   claimPreparedProvisioning,
 } from "@/lib/provisioning.server"
+import { deleteConfirmationSchema } from "@/lib/delete-confirmation"
+import { requireDeleteConfirmation } from "@/lib/delete-confirmation.server"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { webRoutesForRelay } from "@/server/web-route-compatibility.server"
 import { listPersistedRelays } from "@/lib/relay-registry"
@@ -444,9 +446,15 @@ export const updateAppWebRoutes = createServerFn({ method: "POST" })
   })
 
 export const deleteApp = createServerFn({ method: "POST" })
-  .validator(appInputSchema)
+  .validator(appInputSchema.extend(deleteConfirmationSchema.shape))
   .handler(async ({ data }) => {
-    const { relay, user } = await authorizedApp(data, "app.delete")
+    const { app, relay, user } = await authorizedApp(data, "app.delete")
+    await requireDeleteConfirmation({
+      confirmation: data.confirmation,
+      name: app.name,
+      password: data.password,
+      user,
+    })
     const removed = await promiseResult(() =>
       databaseRpc(
         relay,

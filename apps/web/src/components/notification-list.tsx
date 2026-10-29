@@ -1,7 +1,7 @@
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type { QueryClient } from "@tanstack/react-query"
-import { Link, useNavigate, useRouteContext } from "@tanstack/react-router"
+import { Link, useNavigate } from "@tanstack/react-router"
 import {
   ArrowRightLeft,
   ChevronDown,
@@ -33,7 +33,6 @@ import {
   useResourceInvitationDecision,
 } from "@/components/resource-invitation-dialog"
 import { appRouteIdentifier } from "@/lib/app-route"
-import { isDevelopmentBypassIdentity } from "@/lib/development-bypass"
 import {
   clearNotificationsMutationOptions,
   dismissNotificationMutationOptions,
@@ -295,10 +294,6 @@ function NotificationActions({
 // is up to the person, and permanent, as the dialog says.
 function DeleteMovedServerButton({ server }: { server: NotificationResource }) {
   const [open, setOpen] = React.useState(false)
-  const user = useRouteContext({
-    from: "/_app",
-    select: (context) => context.user,
-  })
   return (
     <>
       <Button variant="destructive" size="xs" onClick={() => setOpen(true)}>
@@ -307,7 +302,6 @@ function DeleteMovedServerButton({ server }: { server: NotificationResource }) {
       {open ? (
         <ServerDeleteDialog
           open
-          passwordRequired={!isDevelopmentBypassIdentity(user)}
           target={{
             backupAvailable: true,
             id: server.id,

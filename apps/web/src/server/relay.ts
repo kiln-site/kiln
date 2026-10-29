@@ -87,6 +87,11 @@ import {
 } from "@/server/domains.server"
 import { syncInstanceDomainAfterPortUpdateBestEffort } from "@/server/relay-port-update.server"
 import { webRoutesForRelay } from "@/server/web-route-compatibility.server"
+import { deleteConfirmationSchema } from "@/lib/delete-confirmation"
+import {
+  instanceDeletionName,
+  requireDeleteConfirmation,
+} from "@/lib/delete-confirmation.server"
 import {
   awaitResourceDeletion,
   requestResourceDeletion,
@@ -159,12 +164,12 @@ const instanceNameInputSchema = instanceInputSchema.extend({
   name: relayInstanceNameSchema,
 })
 
-const deleteInstanceInputSchema = instanceInputSchema.extend({
-  confirmation: z.string().max(64),
-  createBackup: z.boolean().default(true),
-  password: z.string().max(128),
-  storageId: z.uuid().nullable().optional(),
-})
+const deleteInstanceInputSchema = instanceInputSchema
+  .extend(deleteConfirmationSchema.shape)
+  .extend({
+    createBackup: z.boolean().default(true),
+    storageId: z.uuid().nullable().optional(),
+  })
 
 const deleteInstanceResultSchema = z.object({
   deleted: z.literal(true),
@@ -547,13 +552,12 @@ export const deleteInstance = createServerFn({ method: "POST" })
       user,
     })
     authorization.require("instance.delete")
-    if (data.confirmation !== data.instanceId) {
-      throw AuthenticationError.make({
-        message: "The server ID confirmation did not match.",
-      })
-    }
-    const { requireAccountPassword } = await import("@/lib/auth-password")
-    await requireAccountPassword(user, data.password)
+    await requireDeleteConfirmation({
+      confirmation: data.confirmation,
+      name: await instanceDeletionName(relay, data.instanceId),
+      password: data.password,
+      user,
+    })
 
     if (data.createBackup) authorization.require("backup.create")
     // Frozen, backed up if asked, then deleted, as one operation that goes

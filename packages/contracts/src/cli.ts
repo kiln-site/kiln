@@ -293,8 +293,13 @@ export const cliUpdateServerStartupRequestSchema = cliTargetSchema
     "Provide a Brick, resource limit, or startup variable"
   )
 
+// What deleting asks in the browser too: the server's name, typed, and the
+// account password.
 export const cliDeleteServerRequestSchema = cliTargetSchema
-  .extend({ confirmation: cliServerReferenceSchema })
+  .extend({
+    confirmation: z.string().min(1).max(256),
+    password: z.string().max(128),
+  })
   .strict()
 
 export const cliServerMutationResponseSchema = z

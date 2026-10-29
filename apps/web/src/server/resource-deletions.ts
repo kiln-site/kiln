@@ -2,6 +2,8 @@ import { relayIdSchema } from "@workspace/contracts"
 import { createServerFn } from "@tanstack/react-start"
 import { z } from "zod"
 
+import { deleteConfirmationSchema } from "@/lib/delete-confirmation"
+
 import {
   cancelResourceDeletionHandler,
   getResourceDeletionHandler,
@@ -24,8 +26,9 @@ export const getResourceDeletion = createServerFn({ method: "GET" })
 export const retryResourceDeletion = createServerFn({ method: "POST" })
   .validator(
     targetSchema.extend({
+      confirmation: deleteConfirmationSchema.shape.confirmation.optional(),
       finalBackup: z.boolean(),
-      password: z.string().max(128).optional(),
+      password: deleteConfirmationSchema.shape.password.optional(),
     })
   )
   .handler(({ data }) => retryResourceDeletionHandler(data))

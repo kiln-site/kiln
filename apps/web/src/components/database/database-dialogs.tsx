@@ -33,6 +33,10 @@ import {
   showDatabaseOperationError,
   type ManagedDatabase,
 } from "@/components/database/database-presentation"
+import {
+  DeleteConfirmationFields,
+  useDeleteConfirmation,
+} from "@/components/delete-confirmation-fields"
 import { downloadRelayFile, uploadRelayFile } from "@/lib/relay-file-transfer"
 import {
   managedDatabaseCredentialQueryOptions,
@@ -542,10 +546,15 @@ export function DeleteDatabaseDialog({
   onOpenChange: (open: boolean) => void
 }) {
   const queryClient = useQueryClient()
+  const confirmation = useDeleteConfirmation(database.name)
   const remove = useMutation({
     mutationFn: () =>
       deleteManagedDatabase({
-        data: { databaseId: database.id, relayId: database.relayId },
+        data: {
+          ...confirmation.input,
+          databaseId: database.id,
+          relayId: database.relayId,
+        },
       }),
     onSuccess: async () => {
       onDeleted?.()
@@ -561,47 +570,63 @@ export function DeleteDatabaseDialog({
   })
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!remove.isPending) onOpenChange(next)
+      }}
+    >
       <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Delete {database.name}?</DialogTitle>
-          <DialogDescription>
-            The container, isolated network, persistent data volume,
-            credentials, and access grants will be permanently removed.
-            Schedules left with nothing else to run on are deleted too.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs light:bg-destructive/10">
-          <CircleAlert className="mt-0.5 size-4 shrink-0 text-destructive" />
-          {databaseEngineSupportsLogicalBackups(database.engine)
-            ? "This action cannot be undone. While it's running, Kiln backs it up one last time first. Game servers and Apps connected to it can still write to it until it's deleted, and what they write after that backup starts isn't in it."
-            : "This action cannot be undone. Export a SQL dump first if you need a recovery copy."}
-        </div>
-        {remove.error ? (
-          <p className="text-xs text-destructive">{remove.error.message}</p>
-        ) : null}
-        <DialogFooter>
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => onOpenChange(false)}
-          >
-            Cancel
-          </Button>
-          <Button
+        <form
+          className="grid gap-4"
+          onSubmit={(event) => {
+            event.preventDefault()
+            if (confirmation.ready && !remove.isPending) remove.mutate()
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>Delete {database.name}?</DialogTitle>
+            <DialogDescription>
+              The container, isolated network, persistent data volume,
+              credentials, and access grants will be permanently removed.
+              Schedules left with nothing else to run on are deleted too.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs light:bg-destructive/10">
+            <CircleAlert className="mt-0.5 size-4 shrink-0 text-destructive" />
+            {databaseEngineSupportsLogicalBackups(database.engine)
+              ? "This action cannot be undone. While it's running, Kiln backs it up one last time first. Game servers and Apps connected to it can still write to it until it's deleted, and what they write after that backup starts isn't in it."
+              : "This action cannot be undone. Export a SQL dump first if you need a recovery copy."}
+          </div>
+          <DeleteConfirmationFields
+            confirmation={confirmation}
             disabled={remove.isPending}
-            type="button"
-            variant="destructive"
-            onClick={() => remove.mutate()}
-          >
-            {remove.isPending ? (
-              <LoaderCircle className="animate-spin" />
-            ) : (
-              <Trash2 />
-            )}
-            Delete database
-          </Button>
-        </DialogFooter>
+          />
+          {remove.error ? (
+            <p className="text-xs text-destructive">{remove.error.message}</p>
+          ) : null}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => onOpenChange(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              disabled={remove.isPending || !confirmation.ready}
+              type="submit"
+              variant="destructive"
+            >
+              {remove.isPending ? (
+                <LoaderCircle className="animate-spin" />
+              ) : (
+                <Trash2 />
+              )}
+              Delete database
+            </Button>
+          </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
   )

@@ -7,7 +7,6 @@ import {
   DATA_TABLE_SEARCH_MAX_LENGTH,
   useDataTableSearchStore,
 } from "@/lib/data-table-search"
-import { isDevelopmentBypassIdentity } from "@/lib/development-bypass"
 import { pageTitle } from "@/lib/page-title"
 import { requireInfrastructureDestinationAccess } from "@/lib/route-access"
 
@@ -32,13 +31,9 @@ export const Route = createFileRoute("/_app/infra/servers")({
 
 function ServersRoute() {
   const { search = "" } = Route.useSearch()
-  const { user } = Route.useRouteContext()
   const searchStore = useDataTableSearchStore(search)
 
   return (
-    <ServersPage
-      passwordRequired={!isDevelopmentBypassIdentity(user)}
-      searchStore={searchStore}
-    />
+    <ServersPage searchStore={searchStore} />
   )
 }

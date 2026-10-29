@@ -15,6 +15,8 @@ import { z } from "zod"
 import { importRelayAppVolumeReferencesEffect } from "@/effect/managed-apps"
 import { promiseEffect } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
+import { deleteConfirmationSchema } from "@/lib/delete-confirmation"
+import { requireDeleteConfirmation } from "@/lib/delete-confirmation.server"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { databaseRpc } from "@/server/managed-database-access"
 import { authorizedRelay } from "@/server/relay-access"
@@ -99,13 +101,23 @@ export const renameRelayVolume = createServerFn({ method: "POST" })
   })
 
 export const deleteRelayVolume = createServerFn({ method: "POST" })
-  .validator(volumeSchema)
+  .validator(volumeSchema.extend(deleteConfirmationSchema.shape))
   .handler(async ({ data }) => {
     const { relay, user } = await authorizedRelay(
       data.relayId,
       "relay.configure"
     )
     await requireRelayVolumes(relay.id)
+    const volume = relayVolumesSchema
+      .parse(await databaseRpc(relay, "relay.volumes.read", {}, 30_000))
+      .volumes.find((candidate) => candidate.id === data.volumeId)
+    if (!volume) throw new Error("Volume not found on this Relay")
+    await requireDeleteConfirmation({
+      confirmation: data.confirmation,
+      name: volume.name,
+      password: data.password,
+      user,
+    })
     const remove = () =>
       databaseRpc(
         relay,

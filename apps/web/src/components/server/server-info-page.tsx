@@ -38,14 +38,12 @@ export function ServerInfoPage({
   instance,
   node,
   onDeleted,
-  passwordRequired,
   permissions,
   relayConnected,
 }: {
   instance: InstanceSettingsInstance
   node: RelayNodeSummary
   onDeleted: () => Promise<void> | void
-  passwordRequired: boolean
   permissions: {
     configurationRead: boolean
     configurationWrite: boolean
@@ -62,7 +60,6 @@ export function ServerInfoPage({
       <ResourceDeletionAlert
         canDelete={permissions.deleteServer}
         name={instance.name}
-        passwordRequired={passwordRequired}
         kind="instance"
         relayId={instance.relayId}
         resourceId={instance.id}
@@ -99,7 +96,6 @@ export function ServerInfoPage({
         <ServerDangerZone
           instance={instance}
           onDeleted={onDeleted}
-          passwordRequired={passwordRequired}
           relayConnected={relayConnected}
         />
       ) : null}
@@ -110,12 +106,10 @@ export function ServerInfoPage({
 function ServerDangerZone({
   instance,
   onDeleted,
-  passwordRequired,
   relayConnected,
 }: {
   instance: InstanceSettingsInstance
   onDeleted: () => Promise<void> | void
-  passwordRequired: boolean
   relayConnected: boolean
 }) {
   return (
@@ -136,7 +130,6 @@ function ServerDangerZone({
               relayId: instance.relayId,
             }}
             onDeleted={onDeleted}
-            passwordRequired={passwordRequired}
             onOpenChange={onOpenChange}
           />
         )}

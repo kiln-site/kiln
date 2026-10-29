@@ -143,10 +143,8 @@ interface ServerDeleteAccess {
 export type ServerSearchStore = DataTableSearchStore
 
 export const ServersPage = React.memo(function ServersPage({
-  passwordRequired,
   searchStore,
 }: {
-  passwordRequired: boolean
   searchStore: ServerSearchStore
 }) {
   const [dialogStore] = React.useState(createAddServerDialogStore)
@@ -240,7 +238,6 @@ export const ServersPage = React.memo(function ServersPage({
           key={`${deleteTarget.relayId}:${deleteTarget.id}`}
           open
           target={deleteTarget}
-          passwordRequired={passwordRequired}
           onOpenChange={(open) => {
             if (!open) setDeleteTarget(null)
           }}
