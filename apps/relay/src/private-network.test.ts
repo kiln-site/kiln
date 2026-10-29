@@ -11,7 +11,7 @@ import {
   tailscaleCoreDnsConfiguration,
   tailscaleStackCoreDnsConfiguration,
   tailscaleStackCoreDnsRecords,
-  tailscaleStackWithoutInstance,
+  tailscaleStackWithoutMember,
 } from "./private-network.js"
 
 /** The hostname regex CoreDNS will apply, taken from a rendered Corefile. */
@@ -83,11 +83,11 @@ describe("Tailscale stack addressing", () => {
     const existing = Array.from({ length: 245 }, (_, index) => ({
       address: `10.165.55.${index + 10}`,
       hostname: `old-${index}`,
-      instanceId: `old-${index}`,
+      memberId: `old-${index}`,
     }))
     const desired = Array.from({ length: 245 }, (_, index) => ({
       hostname: `new-${index}`,
-      instanceId: `new-${index}`,
+      memberId: `new-${index}`,
     }))
 
     const assigned = assignTailscaleBindingAddresses(
@@ -105,19 +105,19 @@ describe("Tailscale stack addressing", () => {
     const assigned = assignTailscaleBindingAddresses(
       "10.165.55.0/24",
       [
-        { address: "10.165.55.10", hostname: "removed", instanceId: "removed" },
+        { address: "10.165.55.10", hostname: "removed", memberId: "removed" },
         {
           address: "10.165.55.11",
           hostname: "retained",
-          instanceId: "retained",
+          memberId: "retained",
         },
       ],
       [
-        { hostname: "replacement", instanceId: "replacement" },
+        { hostname: "replacement", memberId: "replacement" },
         {
           enabled: false,
           hostname: "retained-new-name",
-          instanceId: "retained",
+          memberId: "retained",
         },
       ]
     )
@@ -127,13 +127,13 @@ describe("Tailscale stack addressing", () => {
         address: "10.165.55.10",
         enabled: true,
         hostname: "replacement",
-        instanceId: "replacement",
+        memberId: "replacement",
       },
       {
         address: "10.165.55.11",
         enabled: false,
         hostname: "retained-new-name",
-        instanceId: "retained",
+        memberId: "retained",
       },
     ])
   })
@@ -155,15 +155,15 @@ describe("Tailscale stack DNS records", () => {
   })
 
   it("removes a deleted server's binding and only its replicated record", () => {
-    const removedId = "b".repeat(40)
-    const retainedId = "c".repeat(40)
+    const removedId = `instance:${"b".repeat(40)}`
+    const retainedId = `instance:${"c".repeat(40)}`
     const config = relayTailscaleStackConfigSchema.parse({
       bindings: [
-        { address: "10.165.55.10", hostname: "paper", instanceId: removedId },
+        { address: "10.165.55.10", hostname: "paper", memberId: removedId },
         {
           address: "10.165.55.11",
           hostname: "survival",
-          instanceId: retainedId,
+          memberId: retainedId,
         },
       ],
       domain: "test",
@@ -173,7 +173,7 @@ describe("Tailscale stack DNS records", () => {
       subnet: "10.165.55.0/24",
     })
 
-    const detached = tailscaleStackWithoutInstance(
+    const detached = tailscaleStackWithoutMember(
       config,
       [
         { address: "10.165.55.10", hostname: "paper" },
@@ -183,9 +183,9 @@ describe("Tailscale stack DNS records", () => {
       removedId
     )
 
-    expect(
-      detached.config.bindings.map(({ instanceId }) => instanceId)
-    ).toEqual([retainedId])
+    expect(detached.config.bindings.map(({ memberId }) => memberId)).toEqual([
+      retainedId,
+    ])
     expect(detached.records).toEqual([
       { address: "10.165.55.11", hostname: "survival" },
       { address: "10.140.2.10", hostname: "remote" },

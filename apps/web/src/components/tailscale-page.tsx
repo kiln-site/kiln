@@ -777,10 +777,10 @@ function stackSaveInput(
 ): SaveStackInput {
   return {
     bindings: stack.bindings.map(
-      ({ enabled, hostname, instanceId, relayId }) => ({
+      ({ enabled, hostname, memberId, relayId }) => ({
         enabled,
         hostname,
-        instanceId,
+        memberId,
         relayId,
       })
     ),
@@ -791,8 +791,8 @@ function stackSaveInput(
 }
 
 function bindingSummary(stack: TailscaleStackOverview): string {
-  const appServiceCount = stack.bindings.filter(({ instanceId }) =>
-    appTailscaleMember(instanceId)
+  const appServiceCount = stack.bindings.filter(({ memberId }) =>
+    appTailscaleMember(memberId)
   ).length
   const gameServerCount = stack.bindings.length - appServiceCount
   const counts: Array<string> = []

@@ -140,33 +140,31 @@ export function assignTailscaleBindingAddresses(
     address: string
     enabled?: boolean
     hostname: string
-    instanceId: string
+    memberId: string
   }>,
   desired: ReadonlyArray<{
     enabled?: boolean
     hostname: string
-    instanceId: string
+    memberId: string
   }>
 ): Array<{
   address: string
   enabled: boolean
   hostname: string
-  instanceId: string
+  memberId: string
 }> {
-  const desiredInstanceIds = new Set(
-    desired.map(({ instanceId }) => instanceId)
-  )
-  const previousByInstance = new Map(
-    existing.map((binding) => [binding.instanceId, binding])
+  const desiredMemberIds = new Set(desired.map(({ memberId }) => memberId))
+  const previousByMember = new Map(
+    existing.map((binding) => [binding.memberId, binding])
   )
   const reserved = new Set(
     existing
-      .filter(({ instanceId }) => desiredInstanceIds.has(instanceId))
+      .filter(({ memberId }) => desiredMemberIds.has(memberId))
       .map(({ address }) => address)
   )
 
   return desired.map((binding) => {
-    const previous = previousByInstance.get(binding.instanceId)
+    const previous = previousByMember.get(binding.memberId)
     return {
       ...binding,
       address:
@@ -182,24 +180,24 @@ export function activeTailscaleStackBindings<
   return bindings.filter((binding) => binding.enabled)
 }
 
-export function tailscaleStackWithoutInstance(
+export function tailscaleStackWithoutMember(
   config: RelayTailscaleStackConfig,
   records: ReadonlyArray<{ address: string; hostname: string }>,
-  instanceId: string
+  memberId: string
 ): {
   config: RelayTailscaleStackConfig
   records: Array<{ address: string; hostname: string }>
 } {
   const removedAddresses = new Set(
     config.bindings
-      .filter((binding) => binding.instanceId === instanceId)
+      .filter((binding) => binding.memberId === memberId)
       .map(({ address }) => address)
   )
   return {
     config: relayTailscaleStackConfigSchema.parse({
       ...config,
       bindings: config.bindings.filter(
-        (binding) => binding.instanceId !== instanceId
+        (binding) => binding.memberId !== memberId
       ),
     }),
     records: records.filter((record) => !removedAddresses.has(record.address)),

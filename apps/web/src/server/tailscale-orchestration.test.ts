@@ -128,12 +128,12 @@ describe("Tailscale deployment orchestration", () => {
         {
           enabled: true,
           hostname: "paper",
-          instanceId: "active",
+          memberId: "active",
         },
         {
           enabled: false,
           hostname: "paused",
-          instanceId: "paused",
+          memberId: "paused",
         },
       ],
     }
@@ -521,7 +521,7 @@ describe("Tailscale deployment orchestration", () => {
 
     await synchronizeInstanceDeletionDns({
       current,
-      instanceId: "relay-a",
+      memberId: "relay-a",
       mode: "prepare",
       operations: {
         syncDns: async (value, records) => {
@@ -549,7 +549,7 @@ describe("Tailscale deployment orchestration", () => {
     await expect(
       synchronizeInstanceDeletionDns({
         current,
-        instanceId: "relay-a",
+        memberId: "relay-a",
         mode: "prepare",
         operations: {
           syncDns: async (value, records) => {
@@ -596,7 +596,7 @@ describe("Tailscale deployment orchestration", () => {
     await expect(
       synchronizeInstanceDeletionDns({
         current,
-        instanceId: "relay-a",
+        memberId: "relay-a",
         mode: "prepare",
         operations: {
           syncDns: async (value, records) => {
@@ -630,7 +630,7 @@ describe("Tailscale deployment orchestration", () => {
 function target(relayId: string): DesiredTailscaleDeployment {
   return {
     bindings: [
-      { enabled: true, hostname: `new-${relayId}`, instanceId: relayId },
+      { enabled: true, hostname: `new-${relayId}`, memberId: relayId },
     ],
     hostname: `network-${relayId}`,
     relayId,
@@ -649,7 +649,7 @@ function deployment(
         address,
         enabled: true,
         hostname: revision === "old" ? "old" : `new-${relayId}`,
-        instanceId: relayId,
+        memberId: relayId,
       },
     ],
     domain: "test",

@@ -16,6 +16,7 @@ import { Effect, Fiber, Schedule, Semaphore } from "effect"
 import type { DatabaseConnections } from "./database-connections.js"
 import { resolveBrick, resolveBrickForProvisioning } from "./bricks.js"
 import { directoryApparentSizeEffect } from "./disk-usage.js"
+import { writeFileAtomic } from "./effect/atomic-file.js"
 import { recoverPromise, tapPromiseError } from "./effect/promise.js"
 import type {
   BrickRecipe,
@@ -45,6 +46,8 @@ import type {
 } from "@workspace/contracts"
 import {
   appTailscaleMember,
+  instanceTailscaleMember,
+  instanceTailscaleMemberId,
   builtinTailscaleBrickId,
   builtinTailscaleBrickSource,
   relayProxySettingsSchema,
@@ -52,6 +55,7 @@ import {
   resolveResourceLimits,
   relayTailscaleOverviewSchema,
   relayTailscaleSettingsSchema,
+  migrateLegacyTailscaleBindings,
   relayTailscaleStackConfigSchema,
   relayTailscaleStackDnsSchema,
   relayTailscaleStackSchema,
@@ -109,7 +113,7 @@ import {
   tailscaleStackFirewallIsCurrent,
   tailscaleStackFirewallRules,
   tailscaleStackServiceAddress,
-  tailscaleStackWithoutInstance,
+  tailscaleStackWithoutMember,
   TAILSCALE_STACK_FORWARD_CHAIN,
 } from "./private-network.js"
 import {
@@ -168,6 +172,20 @@ function lifecycleOperation<A>(
     try: run,
     catch: (cause) => cause,
   })
+}
+
+// What a stack's members are, to tell whether they changed.
+function tailscaleStackBasis(config: RelayTailscaleStackConfig | null): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify(
+        (config?.bindings ?? []).map(({ enabled, memberId }) => [
+          memberId,
+          enabled,
+        ])
+      )
+    )
+    .digest("hex")
 }
 
 function runLifecycle<A>(effect: Effect.Effect<A, unknown>): Promise<A> {
@@ -687,8 +705,37 @@ export class LifecycleDriver {
     }
   }
 
+  /**
+   * A stack's members as saved now, for planning the locks a change to it
+   * takes, and what they were planned from, which the change checks once
+   * it runs (`planned` on `applyTailscaleStack`, `removeTailscaleStack`).
+   */
+  async tailscaleStackPlan(stackId: string): Promise<{
+    basis: string
+    bindings: ReadonlyArray<{ enabled: boolean; memberId: string }>
+  }> {
+    const config = await this.#readTailscaleStackConfig(stackId)
+    return {
+      basis: tailscaleStackBasis(config),
+      bindings: config?.bindings ?? [],
+    }
+  }
+
+  // A change planned from other members than the stack has once it runs
+  // may join or leave members it didn't lock.
+  #assertTailscaleStackPlanned(
+    config: RelayTailscaleStackConfig | null,
+    planned: string | undefined
+  ): void {
+    if (planned === undefined || planned === tailscaleStackBasis(config)) return
+    throw new Error(
+      "This Tailscale network changed while the change waited its turn. Send it again."
+    )
+  }
+
   async applyTailscaleStack(
-    rawInput: RelayTailscaleStackApply
+    rawInput: RelayTailscaleStackApply,
+    planned?: string
   ): Promise<RelayTailscaleStack> {
     const input = rawInput
     await this.#assertTailscaleStackRemovalNotPending(
@@ -696,22 +743,22 @@ export class LifecycleDriver {
       "apply changes to"
     )
     const existing = await this.#readTailscaleStackConfig(input.id)
+    this.#assertTailscaleStackPlanned(existing, planned)
     const instances = await this.#docker.inspectInstances()
     for (const binding of input.bindings) {
-      const app = appTailscaleMember(binding.instanceId)
+      const app = appTailscaleMember(binding.memberId)
       if (app) {
         // Throws for an app that isn't on this Relay. One not deployed yet
         // joins when it deploys.
         await this.#appServiceContainer?.(app.appId, app.service)
         continue
       }
+      const instanceId = instanceTailscaleMember(binding.memberId)
       const instance = instances.find(
-        (candidate) => candidate.id === binding.instanceId
+        (candidate) => candidate.id === instanceId
       )
-      if (!instance || !instance.managedByRelay) {
-        throw new Error(
-          `Server ${binding.instanceId.slice(0, 8)} was not found`
-        )
+      if (!instanceId || !instance || !instance.managedByRelay) {
+        throw new Error(`Game server ${binding.memberId} was not found`)
       }
       if (instance.brickId === builtinTailscaleBrickId) {
         throw new Error("A Tailscale deployment cannot attach to itself")
@@ -859,8 +906,13 @@ export class LifecycleDriver {
   async removeTailscaleStack(
     id: string,
     mode: "commit" | "prepare" | "rollback" = "commit",
-    controlPlaneDeviceRemoved = false
+    controlPlaneDeviceRemoved = false,
+    planned?: string
   ): Promise<void> {
+    this.#assertTailscaleStackPlanned(
+      await this.#readTailscaleStackConfig(id),
+      planned
+    )
     if (mode === "prepare") {
       await this.#prepareTailscaleStackRemoval(id)
       return
@@ -892,11 +944,13 @@ export class LifecycleDriver {
     await runLifecycle(
       lifecycleOperation(async () => {
         for (const binding of config.bindings) {
-          const instance = await this.#docker.findInstance(binding.instanceId)
-          if (instance) {
+          const container = await this.#tailscaleMemberContainer(
+            binding.memberId
+          )
+          if (container) {
             await runLifecycle(
               this.#engine
-                .disconnectNetwork(network, instance.service, { force: true })
+                .disconnectNetwork(network, container, { force: true })
                 .pipe(Effect.ignore)
             )
           }
@@ -1790,7 +1844,9 @@ export class LifecycleDriver {
               action,
               portConfiguration
             )
-            await this.reattachTailscaleMember(instance.id)
+            await this.reattachTailscaleMember(
+              instanceTailscaleMemberId(instance.id)
+            )
             if (pendingExternalPort) {
               const networking = await this.networking()
               if (networking?.enabled) {
@@ -2012,7 +2068,9 @@ export class LifecycleDriver {
             },
           }
         )
-        await this.reattachTailscaleMember(instance.id)
+        await this.reattachTailscaleMember(
+          instanceTailscaleMemberId(instance.id)
+        )
         const networking = await this.networking()
         if (networking?.enabled) {
           await this.#refreshCoreDnsConfiguration(networking)
@@ -2370,7 +2428,9 @@ export class LifecycleDriver {
             })
             // The new container joins its Tailscale networks where the old one
             // was.
-            await this.reattachTailscaleMember(existing.id)
+            await this.reattachTailscaleMember(
+              instanceTailscaleMemberId(existing.id)
+            )
             return reconfigured
           }).pipe(
             Effect.mapError(
@@ -3076,7 +3136,10 @@ export class LifecycleDriver {
     }
     const affectedStackIds = (await this.#tailscaleStackConfigs())
       .filter((config) =>
-        config.bindings.some((binding) => binding.instanceId === instance.id)
+        config.bindings.some(
+          (binding) =>
+            binding.memberId === instanceTailscaleMemberId(instance.id)
+        )
       )
       .map(({ id: stackId }) => stackId)
     if (affectedStackIds.length > 0 && !synchronizeTailscaleDns) {
@@ -3100,7 +3163,7 @@ export class LifecycleDriver {
           })
         }
         detachedStacks = await this.#detachMemberFromTailscaleStacks(
-          instance.id
+          instanceTailscaleMemberId(instance.id)
         )
         await runLifecycle(
           this.#engine
@@ -3700,6 +3763,76 @@ export class LifecycleDriver {
     )
   }
 
+  /**
+   * Rewrites the stacks saved before Tailscale members were typed, each
+   * stack's `stack.json` and a pending removal's snapshot, so everything
+   * after reads typed member IDs. Runs at startup before anything reads a
+   * stack. Safe to repeat: a file already rewritten is left alone, and each
+   * is replaced whole, so a restart midway leaves it old or new.
+   */
+  async migrateTailscaleStackMembers(): Promise<number> {
+    const entries = await recoverPromise(
+      () =>
+        readdir(this.#config.rootDirectory, {
+          encoding: "utf8",
+          withFileTypes: true,
+        }),
+      (cause) => {
+        if (hasErrorCode(cause, "ENOENT")) return []
+        throw cause
+      }
+    )
+    let migrated = 0
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !/^[a-f0-9]{40}$/u.test(entry.name)) continue
+      for (const [path, schema] of [
+        [
+          join(this.#config.rootDirectory, entry.name, "stack.json"),
+          relayTailscaleStackConfigSchema,
+        ],
+        [
+          this.#tailscaleStackRemovalSnapshot(entry.name),
+          relayTailscaleStackSchema,
+        ],
+      ] as const) {
+        const saved = await recoverPromise(
+          () => readFile(path, "utf8"),
+          (cause) => {
+            if (hasErrorCode(cause, "ENOENT")) return null
+            throw cause
+          }
+        )
+        if (saved === null) continue
+        const rewritten = await recoverPromise(
+          async () => {
+            const legacy = migrateLegacyTailscaleBindings(JSON.parse(saved))
+            return legacy ? schema.parse(legacy) : null
+          },
+          (cause) => {
+            // Read as it is, it fails as any unreadable stack does.
+            console.warn(
+              `Could not migrate Tailscale members in ${path}:`,
+              cause
+            )
+            return null
+          }
+        )
+        if (!rewritten) continue
+        await runLifecycle(
+          writeFileAtomic(
+            path,
+            `${JSON.stringify(rewritten, null, 2)}\n`,
+            0o600
+          )
+        )
+        migrated += 1
+      }
+    }
+    this.#tailscaleConfigs.clear()
+    this.#tailscaleConfigsDiscovered = false
+    return migrated
+  }
+
   async #readTailscaleStackConfig(
     id: string
   ): Promise<RelayTailscaleStackConfig | null> {
@@ -3803,20 +3936,20 @@ export class LifecycleDriver {
     const network = this.#resources.tailscaleStackNetwork(stackId)
     const previousById = new Map(
       activeTailscaleStackBindings(previous).map((binding) => [
-        binding.instanceId,
+        binding.memberId,
         binding,
       ])
     )
     const desiredById = new Map(
       activeTailscaleStackBindings(desired).map((binding) => [
-        binding.instanceId,
+        binding.memberId,
         binding,
       ])
     )
     for (const binding of previousById.values()) {
-      const replacement = desiredById.get(binding.instanceId)
+      const replacement = desiredById.get(binding.memberId)
       if (replacement?.address === binding.address) continue
-      const container = await this.#tailscaleMemberContainer(binding.instanceId)
+      const container = await this.#tailscaleMemberContainer(binding.memberId)
       if (!container) continue
       await runLifecycle(
         this.#engine
@@ -3825,7 +3958,7 @@ export class LifecycleDriver {
       )
     }
     for (const binding of desiredById.values()) {
-      const container = await this.#tailscaleMemberContainer(binding.instanceId)
+      const container = await this.#tailscaleMemberContainer(binding.memberId)
       if (!container) continue
       await attachTailscaleMember(
         this.#engine,
@@ -4224,7 +4357,7 @@ export class LifecycleDriver {
     }>
   > {
     const configs = (await this.#tailscaleStackConfigs()).filter((config) =>
-      config.bindings.some((binding) => binding.instanceId === memberId)
+      config.bindings.some((binding) => binding.memberId === memberId)
     )
     const completed: Array<{
       next: RelayTailscaleStackConfig
@@ -4240,7 +4373,7 @@ export class LifecycleDriver {
             )
           }
           const records = await this.#readTailscaleStackDnsRecords(previous)
-          const detached = tailscaleStackWithoutInstance(
+          const detached = tailscaleStackWithoutMember(
             previous,
             records,
             memberId
@@ -4587,7 +4720,7 @@ export class LifecycleDriver {
     this.#appServiceContainer = resolve
   }
 
-  // The container a Tailscale member runs in: a server's, or an app
+  // The container a Tailscale member runs in: a game server's, or an App
   // service's newest. Null when it has none yet.
   async #tailscaleMemberContainer(memberId: string): Promise<string | null> {
     const app = appTailscaleMember(memberId)
@@ -4596,7 +4729,9 @@ export class LifecycleDriver {
         ? this.#appServiceContainer(app.appId, app.service)
         : null
     }
-    return (await this.#docker.findInstance(memberId))?.service ?? null
+    const instanceId = instanceTailscaleMember(memberId)
+    if (!instanceId) return null
+    return (await this.#docker.findInstance(instanceId))?.service ?? null
   }
 
   // Every enabled membership whose member matches, with the network and the
@@ -4606,10 +4741,10 @@ export class LifecycleDriver {
   ): Promise<Array<{ address: string; memberId: string; network: string }>> {
     return (await this.#tailscaleStackConfigs()).flatMap((config) =>
       activeTailscaleStackBindings(config.bindings)
-        .filter((binding) => matches(binding.instanceId))
+        .filter((binding) => matches(binding.memberId))
         .map((binding) => ({
           address: binding.address,
-          memberId: binding.instanceId,
+          memberId: binding.memberId,
           network: this.#resources.tailscaleStackNetwork(config.id),
         }))
     )
@@ -4648,7 +4783,7 @@ export class LifecycleDriver {
       ...new Set(
         configs.flatMap((config) =>
           config.bindings
-            .map((binding) => binding.instanceId)
+            .map((binding) => binding.memberId)
             .filter((memberId) => appTailscaleMember(memberId)?.appId === appId)
         )
       ),
@@ -4656,7 +4791,7 @@ export class LifecycleDriver {
     for (const memberId of memberIds) {
       const stackIds = configs
         .filter((config) =>
-          config.bindings.some((binding) => binding.instanceId === memberId)
+          config.bindings.some((binding) => binding.memberId === memberId)
         )
         .map((config) => config.id)
       await synchronize({ memberId, mode: "prepare", stackIds })

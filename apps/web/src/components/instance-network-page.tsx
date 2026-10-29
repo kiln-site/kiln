@@ -21,7 +21,10 @@ import {
   RotateCw,
   Trash2,
 } from "lucide-react"
-import { relayInstancePortInputSchema } from "@workspace/contracts"
+import {
+  instanceTailscaleMemberId,
+  relayInstancePortInputSchema,
+} from "@workspace/contracts"
 import type {
   RelayInstancePendingPrimaryPort,
   RelayInstancePortAllocation,
@@ -64,7 +67,10 @@ import {
   useInstanceRelayConnected,
 } from "@/components/instance-workspace-context"
 import { ServerDomainsSection } from "@/components/server-domains-section"
-import { TailscaleMembershipSection } from "@/components/tailscale-network-membership"
+import {
+  TailscaleMembershipSection,
+  type TailscaleMember,
+} from "@/components/tailscale-network-membership"
 import type { IdentityStatusPresentation } from "@/components/identity-name"
 import {
   WebRoutesSection,
@@ -248,9 +254,7 @@ function WebRoutesNetworkPage({
           }
           onSave={saveWebRoutes}
         />
-        {showTailscale ? (
-          <TailscaleMembershipSection member={instance} />
-        ) : null}
+        {showTailscale ? <GameServerTailscale instance={instance} /> : null}
       </div>
     </main>
   )
@@ -2439,4 +2443,23 @@ async function copyToClipboard(value: string) {
       )
     )
   )
+}
+
+// The game server's Tailscale networks, as a member of each.
+function GameServerTailscale({
+  instance: { id, name, relayId, relayName, shortId },
+}: {
+  instance: Omit<TailscaleMember, "memberId"> & { id: string }
+}) {
+  const member = React.useMemo(
+    () => ({
+      memberId: instanceTailscaleMemberId(id),
+      name,
+      relayId,
+      relayName,
+      shortId,
+    }),
+    [id, name, relayId, relayName, shortId]
+  )
+  return <TailscaleMembershipSection member={member} />
 }

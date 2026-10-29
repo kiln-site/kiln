@@ -92,8 +92,8 @@ export type { RelayEndpoint }
 
 const MAX_BACKOFF_MS = 30_000
 const tailscaleInstanceDetachSchema = z.strictObject({
-  // A server, or an app's service being deleted.
-  instanceId: tailscaleMemberIdSchema,
+  // The game server or App service being deleted.
+  memberId: tailscaleMemberIdSchema,
   mode: z.enum(["prepare", "rollback"]),
   stackIds: z.array(relayTailscaleStackIdSchema).min(1).max(4_096),
 })

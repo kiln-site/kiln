@@ -1,7 +1,11 @@
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
-import { appTailscaleMember } from "@workspace/contracts"
+import {
+  appTailscaleMember,
+  instanceTailscaleMember,
+  instanceTailscaleMemberId,
+} from "@workspace/contracts"
 import {
   Check,
   CircleAlert,
@@ -177,7 +181,11 @@ const ConnectedServersTableContent = React.memo(
       const next: Array<TailscaleMemberRow> = []
       const seen = new Set<string>()
       for (const server of servers) {
-        const binding = findBinding(stack, server)
+        const binding = findBinding(
+          stack,
+          server.relayId,
+          instanceTailscaleMemberId(server.id)
+        )
         if (!binding) continue
         const deployment = stack.deployments.find(
           (candidate) => candidate.relayId === server.relayId
@@ -336,7 +344,14 @@ export const TailscaleConnectServersPopover = React.memo(
     const availableServers = React.useMemo(
       () =>
         stack
-          ? servers.filter((server) => !findBinding(stack, server))
+          ? servers.filter(
+              (server) =>
+                !findBinding(
+                  stack,
+                  server.relayId,
+                  instanceTailscaleMemberId(server.id)
+                )
+            )
           : emptyServers,
       [servers, stack]
     )
@@ -370,8 +385,9 @@ export const TailscaleConnectServersPopover = React.memo(
               )
           )
         : undefined
+    // The picker's key for the game server it adds.
     const pendingKey = pendingBinding
-      ? `${pendingBinding.relayId}:${pendingBinding.instanceId}`
+      ? `${pendingBinding.relayId}:${instanceTailscaleMember(pendingBinding.memberId) ?? pendingBinding.memberId}`
       : undefined
 
     const connectServer = React.useCallback(
@@ -391,7 +407,7 @@ export const TailscaleConnectServersPopover = React.memo(
               address: "",
               enabled: true,
               hostname,
-              instanceId: server.id,
+              memberId: instanceTailscaleMemberId(server.id),
               relayId: server.relayId,
               relayName: server.relayName,
             },
@@ -452,10 +468,12 @@ export const TailscaleConnectServersPopover = React.memo(
 
 // A server's, or an app service's, Tailscale networks: which it has joined,
 // under what hostname, and joining or leaving others.
+// A game server or an App's service, by its member ID
+// (`instanceTailscaleMemberId`, `appTailscaleMemberId`).
 export type TailscaleMember = Pick<
   InstanceWorkspaceInstance,
-  "id" | "name" | "relayId" | "relayName" | "shortId"
->
+  "name" | "relayId" | "relayName" | "shortId"
+> & { memberId: string }
 
 export function TailscaleMembershipSection({
   member: server,
@@ -486,7 +504,7 @@ export function TailscaleMembershipSection({
   }, [])
   const joiningStack = stacks.find(({ id }) => id === joiningStackId)
   const joiningBinding = joiningStack
-    ? findBinding(joiningStack, server)
+    ? findBinding(joiningStack, server.relayId, server.memberId)
     : undefined
   const closeJoinDialog = React.useCallback((open: boolean) => {
     if (!open) setJoiningStackId(null)
@@ -499,7 +517,7 @@ export function TailscaleMembershipSection({
         bindings: joiningBinding
           ? joiningStack.bindings.map((binding) =>
               binding.relayId === server.relayId &&
-              binding.instanceId === server.id
+              binding.memberId === server.memberId
                 ? { ...binding, hostname }
                 : binding
             )
@@ -509,7 +527,7 @@ export function TailscaleMembershipSection({
                 address: "",
                 enabled: true,
                 hostname,
-                instanceId: server.id,
+                memberId: server.memberId,
                 relayId: server.relayId,
                 relayName: server.relayName,
               },
@@ -566,7 +584,7 @@ export function TailscaleMembershipSection({
       ) : availableStacks.length ? (
         <div className="divide-y divide-border/65">
           {availableStacks.map((stack) => {
-            const binding = findBinding(stack, server)
+            const binding = findBinding(stack, server.relayId, server.memberId)
             return (
               <MembershipRow
                 key={stack.id}
@@ -581,7 +599,7 @@ export function TailscaleMembershipSection({
                 }
                 stack={stack}
                 relayId={server.relayId}
-                serverId={server.id}
+                memberId={server.memberId}
                 onJoin={openJoinDialog}
                 onSave={save.mutateAsync}
               />
@@ -1081,10 +1099,10 @@ const MembershipRow = React.memo(function MembershipRow({
   binding,
   disabled,
   joinDisabled,
+  memberId,
   noun,
   pending,
   relayId,
-  serverId,
   stack,
   onJoin,
   onSave,
@@ -1092,10 +1110,10 @@ const MembershipRow = React.memo(function MembershipRow({
   binding?: StackBinding
   disabled: boolean
   joinDisabled: boolean
+  memberId: string
   noun: string
   pending: boolean
   relayId: string
-  serverId: string
   stack: TailscaleStackOverview
   onJoin: (stackId: string) => void
   onSave: ReturnType<typeof useStackMembershipMutation>["mutateAsync"]
@@ -1109,11 +1127,11 @@ const MembershipRow = React.memo(function MembershipRow({
       onSave({
         bindings: stack.bindings.filter(
           (candidate) =>
-            candidate.relayId !== relayId || candidate.instanceId !== serverId
+            candidate.relayId !== relayId || candidate.memberId !== memberId
         ),
         stack,
       }),
-    [onSave, relayId, serverId, stack]
+    [memberId, onSave, relayId, stack]
   )
 
   return (
@@ -1437,7 +1455,7 @@ function membershipOperationToast(
   return {
     id: tailscaleOperationToastId(stack.id),
     memberKind:
-      changedBinding && appTailscaleMember(changedBinding.instanceId)
+      changedBinding && appTailscaleMember(changedBinding.memberId)
         ? "app"
         : "server",
     networkName: stack.name,
@@ -1447,10 +1465,10 @@ function membershipOperationToast(
 }
 
 function stackBindingKey({
-  instanceId,
+  memberId,
   relayId,
-}: Pick<StackBinding, "instanceId" | "relayId">): string {
-  return `${relayId}:${instanceId}`
+}: Pick<StackBinding, "memberId" | "relayId">): string {
+  return `${relayId}:${memberId}`
 }
 
 function isFailedFetch(cause: unknown): boolean {
@@ -1470,10 +1488,10 @@ function stackSaveInput(
 ): SaveStackInput {
   return {
     ...(authKey ? { authKey } : {}),
-    bindings: bindings.map(({ enabled, hostname, instanceId, relayId }) => ({
+    bindings: bindings.map(({ enabled, hostname, memberId, relayId }) => ({
       enabled,
       hostname,
-      instanceId,
+      memberId,
       relayId,
     })),
     domain,
@@ -1484,11 +1502,11 @@ function stackSaveInput(
 
 function findBinding(
   stack: TailscaleStackOverview,
-  server: Pick<TailscaleServer, "id" | "relayId">
+  relayId: string,
+  memberId: string
 ) {
   return stack.bindings.find(
-    (binding) =>
-      binding.relayId === server.relayId && binding.instanceId === server.id
+    (binding) => binding.relayId === relayId && binding.memberId === memberId
   )
 }
 

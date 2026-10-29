@@ -70,6 +70,18 @@ has, and never one someone connected or disconnected on it: every such
 change leaves a record (`relay_database_connection_choices`), so a handover
 repeated, or sent by another Hearth, overrules nobody.
 
+A Tailscale network's members are named by kind: `instance:<id>` for a game
+server and `app:<id>:<service>` for an App's service. Applying a network
+(`relay.tailscale.stack.apply`) holds the network's own stack exclusively and
+takes the lifecycle lock of each member it joins or takes off, so it waits
+for that member's power changes as they wait for it; a member it leaves as it
+is is held shared, so it isn't deleted or replaced meanwhile. Removing a
+network does the same for all its members. The locks are planned from the
+members the network has when the change is admitted, and the change refuses
+to run if they've changed by its turn. Relays rewrite bindings saved with a
+game server's bare ID when they start, and Hearth its copies of them in a
+migration.
+
 `apps/relay/src/operation-plans.ts` maps each control operation to its keys.
 Its switch is exhaustive, so a new operation can't compile until it declares
 what it locks, or that it locks nothing.

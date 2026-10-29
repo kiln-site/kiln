@@ -47,6 +47,7 @@ import {
   RelayTransferSourcePrepareSchema,
   appIdSchema,
   appTailscaleMember,
+  instanceTailscaleMemberId,
   relayAppWebRouteStateSchema,
   relayAppWebRoutesWriteSchema,
   relayDeleteAppSchema,
@@ -478,6 +479,11 @@ const lifecycle = new LifecycleDriver(
   databaseConnections,
   lanes
 )
+// Before anything reads a Tailscale stack.
+await lifecycle.migrateTailscaleStackMembers()
+// What each queued change to a Tailscale stack planned its locks from, so it
+// can tell, once it runs, whether the stack changed meanwhile.
+const tailscaleStackPlans = new WeakMap<object, string>()
 const volumes = new RelayVolumes(
   config,
   new DockerEngine(config.dockerSocket),
@@ -1252,7 +1258,12 @@ const controlSocket = attachControlSocket({
     controlRequestLocks(
       request.operation,
       lockFields(request.payload),
-      resolveInstanceReference
+      resolveInstanceReference,
+      async (stackId) => {
+        const plan = await lifecycle.tailscaleStackPlan(stackId)
+        tailscaleStackPlans.set(request, plan.basis)
+        return plan.bindings
+      }
     ),
   runEffect: (effect) => runRelayEffect("relay.control.state", effect),
   saveDial: (clientId, url) => {
@@ -1952,7 +1963,10 @@ async function executeControlRequest(
       return lifecycle.tailscaleStacks()
     case "relay.tailscale.stack.apply": {
       const input = relayTailscaleStackApplySchema.parse(request.payload)
-      const stack = await lifecycle.applyTailscaleStack(input)
+      const stack = await lifecycle.applyTailscaleStack(
+        input,
+        tailscaleStackPlans.get(request)
+      )
       await snapshotHub.refresh()
       return stack
     }
@@ -1963,7 +1977,12 @@ async function executeControlRequest(
     case "relay.tailscale.stack.remove": {
       const { controlPlaneDeviceRemoved, id, mode } =
         relayTailscaleStackRemoveSchema.parse(request.payload)
-      await lifecycle.removeTailscaleStack(id, mode, controlPlaneDeviceRemoved)
+      await lifecycle.removeTailscaleStack(
+        id,
+        mode,
+        controlPlaneDeviceRemoved,
+        tailscaleStackPlans.get(request)
+      )
       if (mode === "commit") {
         await runRelayEffect(
           "relay.tailscale.stack.deleteName",
@@ -2535,7 +2554,7 @@ async function executeControlRequest(
         async ({ memberId, mode, stackIds }) => {
           await requestHearth(
             "hearth.tailscale.instance.detach",
-            { instanceId: memberId, mode, stackIds },
+            { memberId, mode, stackIds },
             60_000
           )
         }
@@ -2965,7 +2984,7 @@ async function executeControlRequest(
         async ({ mode, stackIds }) => {
           await requestHearth(
             "hearth.tailscale.instance.detach",
-            { instanceId, mode, stackIds },
+            { memberId: instanceTailscaleMemberId(instanceId), mode, stackIds },
             60_000
           )
         }

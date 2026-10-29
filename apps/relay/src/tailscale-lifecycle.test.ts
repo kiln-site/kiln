@@ -1,4 +1,4 @@
-import { access, mkdir, writeFile } from "node:fs/promises"
+import { access, mkdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 
 import {
@@ -8,11 +8,14 @@ import {
   relayTailscaleStackSchema,
   type RelayTailscaleStackConfig,
 } from "@workspace/contracts"
+import { Effect } from "effect"
 import { describe, expect, it, vi } from "vite-plus/test"
 
 vi.mock("./command.js", () => import("./test/docker.js"))
 
 import type { RelayInstanceConfig } from "./config.js"
+import { DockerEngine } from "./docker-engine.js"
+import { controlRequestLocks } from "./operation-plans.js"
 import { fakeDocker } from "./test/docker.js"
 import {
   relayHarness,
@@ -262,13 +265,13 @@ describe("Tailscale stack forwarding", () => {
               address: bound,
               enabled: true,
               hostname: "paper",
-              instanceId: "d".repeat(40),
+              memberId: `instance:${"d".repeat(40)}`,
             },
             {
               address: "10.165.57.11",
               enabled: false,
               hostname: "paused",
-              instanceId: "e".repeat(40),
+              memberId: `instance:${"e".repeat(40)}`,
             },
           ],
           subnet: "10.165.57.0/24",
@@ -342,7 +345,12 @@ describe("Tailscale members", () => {
       JSON.stringify(
         stackConfig(stackId, {
           bindings: [
-            { address, enabled: true, hostname: "paper", instanceId: serverId },
+            {
+              address,
+              enabled: true,
+              hostname: "paper",
+              memberId: `instance:${serverId}`,
+            },
           ],
           subnet: "10.165.57.0/24",
         })
@@ -369,6 +377,220 @@ describe("Tailscale members", () => {
       fakeDocker.container(container)?.networks.get(network)
     ).toMatchObject({
       ipAddress: address,
+    })
+  })
+})
+
+describe("Tailscale member identities", () => {
+  const stackId = "c".repeat(40)
+  const serverId = "a".repeat(40)
+  const appMember = `app:${"b".repeat(40)}:web`
+
+  async function savedStack(harness: RelayHarness, bindings: unknown) {
+    const directory = join(harness.config.rootDirectory, stackId)
+    await mkdir(directory, { recursive: true })
+    const path = join(directory, "stack.json")
+    await writeFile(
+      path,
+      JSON.stringify({
+        bindings,
+        domain: "test",
+        hostname: "private-network",
+        id: stackId,
+        name: "Private Network",
+        subnet: "10.165.57.0/24",
+      })
+    )
+    return path
+  }
+
+  it("rewrites bindings saved with bare game server IDs as typed members, once", async () => {
+    const harness = await relayHarness()
+    const path = await savedStack(harness, [
+      // As Relays before typed members saved them.
+      {
+        address: "10.165.57.10",
+        enabled: true,
+        hostname: "paper",
+        instanceId: serverId,
+      },
+      {
+        address: "10.165.57.11",
+        enabled: false,
+        hostname: "web",
+        instanceId: appMember,
+      },
+    ])
+
+    expect(await harness.lifecycle.migrateTailscaleStackMembers()).toBe(1)
+    const rewritten = await readFile(path, "utf8")
+    expect(JSON.parse(rewritten).bindings).toEqual([
+      {
+        address: "10.165.57.10",
+        enabled: true,
+        hostname: "paper",
+        memberId: `instance:${serverId}`,
+      },
+      {
+        address: "10.165.57.11",
+        enabled: false,
+        hostname: "web",
+        memberId: appMember,
+      },
+    ])
+    // A Relay restarted after it changes nothing more, and reads them.
+    const restarted = await harness.restart()
+    expect(await restarted.lifecycle.migrateTailscaleStackMembers()).toBe(0)
+    expect(await readFile(path, "utf8")).toBe(rewritten)
+    expect(await restarted.lifecycle.tailscaleMemberships(() => true)).toEqual([
+      {
+        address: "10.165.57.10",
+        memberId: `instance:${serverId}`,
+        network: harness.resources.tailscaleStackNetwork(stackId),
+      },
+    ])
+  })
+
+  describe("applying a stack", () => {
+    const apply = (bindings: Array<{ hostname: string; memberId: string }>) =>
+      relayTailscaleStackApplySchema.parse({
+        bindings,
+        domain: "test",
+        hostname: "private-network",
+        id: stackId,
+        name: "Private Network",
+      })
+
+    // Runs work in the lanes as the control socket would, its locks planned
+    // from the stack as saved.
+    function inLane(
+      harness: RelayHarness,
+      operation: "instance.action" | "relay.tailscale.stack.apply",
+      payload: Record<string, unknown>,
+      run: () => Promise<unknown>,
+      onPlanned = () => {}
+    ) {
+      return Effect.runPromise(
+        harness.lanes.run(
+          {
+            label: operation,
+            locks: controlRequestLocks(
+              operation,
+              payload,
+              (reference) => reference,
+              async (id) => {
+                const { bindings } =
+                  await harness.lifecycle.tailscaleStackPlan(id)
+                onPlanned()
+                return bindings
+              }
+            )!,
+          },
+          Effect.promise(run)
+        )
+      )
+    }
+
+    // Lets everything that can run now run.
+    async function settle() {
+      for (let turn = 0; turn < 20; turn += 1)
+        await new Promise((resolve) => setImmediate(resolve))
+    }
+
+    async function stopping(harness: RelayHarness) {
+      await harness.createServer({ id: serverId, start: true })
+      const stop = fakeDocker.hold({ command: "stop" })
+      const order: Array<string> = []
+      const stopped = inLane(
+        harness,
+        "instance.action",
+        { action: "stop", instanceId: serverId },
+        async () => {
+          await new DockerEngine(harness.config.dockerSocket)
+            .stopContainer(harness.resources.instanceContainer(serverId))
+            .pipe(Effect.runPromise)
+          order.push("stopped")
+        }
+      )
+      await stop.reached
+      return { order, stop, stopped }
+    }
+
+    it("joins a game server only after its power change finishes", async () => {
+      const harness = await relayHarness()
+      await savedStack(harness, [])
+      const { order, stop, stopped } = await stopping(harness)
+
+      let planned!: () => void
+      const plannedLocks = new Promise<void>((resolve) => {
+        planned = resolve
+      })
+      const applied = inLane(
+        harness,
+        "relay.tailscale.stack.apply",
+        apply([{ hostname: "paper", memberId: `instance:${serverId}` }]),
+        async () => {
+          order.push("applied")
+        },
+        () => planned()
+      )
+      await plannedLocks
+      await settle()
+      // It waits its turn while the server stops.
+      expect(order).toEqual([])
+      stop.release()
+
+      await Promise.all([stopped, applied])
+      expect(order).toEqual(["stopped", "applied"])
+    })
+
+    it("doesn't wait for the power changes of a member it leaves as it is", async () => {
+      const harness = await relayHarness()
+      await savedStack(harness, [
+        {
+          address: "10.165.57.10",
+          enabled: true,
+          hostname: "paper",
+          memberId: `instance:${serverId}`,
+        },
+      ])
+      const { order, stop, stopped } = await stopping(harness)
+
+      await inLane(
+        harness,
+        "relay.tailscale.stack.apply",
+        apply([
+          { hostname: "paper", memberId: `instance:${serverId}` },
+          { hostname: "web", memberId: appMember },
+        ]),
+        async () => {
+          order.push("applied")
+        }
+      )
+      stop.release()
+      await stopped
+
+      expect(order).toEqual(["applied", "stopped"])
+    })
+
+    it("refuses a change planned from members the stack no longer has", async () => {
+      const harness = await relayHarness()
+      await savedStack(harness, [])
+      const planned = (await harness.lifecycle.tailscaleStackPlan(stackId))
+        .basis
+      // Another change to the stack ran meanwhile.
+      await savedStack(harness, [
+        {
+          address: "10.165.57.10",
+          enabled: true,
+          hostname: "paper",
+          memberId: `instance:${serverId}`,
+        },
+      ])
+
+      await expect(
+        harness.lifecycle.applyTailscaleStack(apply([]), planned)
+      ).rejects.toThrow("changed while the change waited its turn")
     })
   })
 })

@@ -774,7 +774,7 @@ describe("apps", () => {
               address,
               enabled: true,
               hostname: "website",
-              instanceId: appTailscaleMemberId(appId, "app"),
+              memberId: appTailscaleMemberId(appId, "app"),
             },
           ],
           domain: "test",

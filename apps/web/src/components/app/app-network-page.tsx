@@ -300,7 +300,7 @@ function AppTailscale({ app, compose }: { app: App; compose: boolean }) {
         <TailscaleMembershipSection
           key={service}
           member={{
-            id: appTailscaleMemberId(app.id, service),
+            memberId: appTailscaleMemberId(app.id, service),
             name: members.length > 1 ? `${service}-${app.name}` : app.name,
             relayId: app.relayId,
             relayName: app.relayName,

@@ -38,6 +38,7 @@ import { cloudflareConnections } from "./0035_cloudflare_connections"
 import { operations } from "./0036_operations"
 import { operationProgress } from "./0037_operation_progress"
 import { relayDatabaseConnectionImport } from "./0038_relay_database_connection_import"
+import { tailscaleMemberIds } from "./0039_tailscale_member_ids"
 
 // Append new migrations with the next id. Never edit or reorder applied ones.
 export const migrations: ReadonlyArray<Migration> = [
@@ -79,4 +80,5 @@ export const migrations: ReadonlyArray<Migration> = [
   operations,
   operationProgress,
   relayDatabaseConnectionImport,
+  tailscaleMemberIds,
 ]

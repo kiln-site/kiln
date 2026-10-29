@@ -10,6 +10,7 @@ import { incrementalBackupArtifacts } from "@/migrations/0013_incremental_backup
 import { domainZones } from "@/migrations/0015_domain_zones"
 import { securityReports } from "@/migrations/0031_security_reports"
 import { cloudflareConnections } from "@/migrations/0035_cloudflare_connections"
+import { tailscaleMemberIds } from "@/migrations/0039_tailscale_member_ids"
 import { baselineTables } from "@/migrations/baseline-schema"
 import { describeMysql, testDatabaseClient } from "@/test/database"
 import {
@@ -659,6 +660,112 @@ describeMysql("database migrations", () => {
               integration_id: "cloudflare",
             },
           ])
+          expect(yield* ledger).toEqual(migrationIds)
+        }),
+      120_000
+    )
+
+    it.effect(
+      "rewrites Tailscale deployments' bindings with typed members, once, and leaves what it can't read",
+      () =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* dropAllTables
+          yield* applyMigrations(
+            migrations.filter(
+              (migration) => migration.id < tailscaleMemberIds.id
+            )
+          )
+          const networkId = "c".repeat(40)
+          const server = "a".repeat(40)
+          const appMember = `app:${"b".repeat(40)}:web`
+          const deployment = (bindings: unknown) =>
+            JSON.stringify({
+              bindings,
+              domain: "test",
+              hostname: "private-network",
+              id: networkId,
+              name: "Private Network",
+              relayName: "K100",
+              subnet: "10.165.57.0/24",
+            })
+          const binding = (member: Record<string, string>) => ({
+            address: "10.165.57.10",
+            enabled: true,
+            hostname: "paper",
+            ...member,
+          })
+          yield* insertRows("tailscale_network", {
+            id: networkId,
+            name: "Private Network",
+            domain: "test",
+            created_at: 0,
+            updated_at: 0,
+          })
+          const saved = {
+            legacy: deployment([
+              binding({ instanceId: server }),
+              binding({ instanceId: appMember, hostname: "web" }),
+            ]),
+            typed: deployment([binding({ memberId: `instance:${server}` })]),
+            unreadable: "{not json",
+          }
+          for (const [relay, value] of Object.entries(saved)) {
+            yield* sql`
+              INSERT INTO ${sql("kiln_tailscale_network_deployment")}
+                (network_id, relay_id, deployment, cleanup_next_attempt_at,
+                 observed_at, updated_at)
+              VALUES (${networkId}, ${relay.padEnd(43, "r")}, ${value}, 1, 1, 1234)
+            `.pipe(
+              // An unreadable row only gets past MySQL's own JSON check as
+              // a valid string.
+              Effect.catch(
+                () =>
+                  sql`
+                  INSERT INTO ${sql("kiln_tailscale_network_deployment")}
+                    (network_id, relay_id, deployment, cleanup_next_attempt_at,
+                     observed_at, updated_at)
+                  VALUES (${networkId}, ${relay.padEnd(43, "r")}, ${JSON.stringify(value)}, 1, 1, 1234)
+                `
+              )
+            )
+          }
+          const deployments = Effect.map(
+            selectRows<{
+              deployment: unknown
+              relay_id: string
+              updated_at: unknown
+            }>("tailscale_network_deployment"),
+            (rows) =>
+              Object.fromEntries(
+                rows.map((row) => [
+                  row.relay_id.slice(0, row.relay_id.indexOf("r")),
+                  { deployment: row.deployment, updatedAt: row.updated_at },
+                ])
+              )
+          )
+          const before = yield* deployments
+
+          yield* applyMigrations(migrations)
+          const after = yield* deployments
+          const legacy = after.legacy?.deployment
+          expect(
+            (
+              (typeof legacy === "string" ? JSON.parse(legacy) : legacy) as {
+                bindings: unknown
+              }
+            ).bindings
+          ).toEqual([
+            binding({ memberId: `instance:${server}` }),
+            binding({ memberId: appMember, hostname: "web" }),
+          ])
+          expect(after.legacy?.updatedAt).toEqual(before.legacy?.updatedAt)
+          expect(after.typed).toEqual(before.typed)
+          expect(after.unreadable).toEqual(before.unreadable)
+
+          // A retry after a crash changes nothing more.
+          yield* tailscaleMemberIds.run
+          expect(yield* deployments).toEqual(after)
           expect(yield* ledger).toEqual(migrationIds)
         }),
       120_000

@@ -26,7 +26,8 @@ type RelayRpc = (
 
 export async function synchronizeTailscaleInstanceDeletion(
   input: {
-    instanceId: string
+    // The game server or App service being deleted.
+    memberId: string
     mode: "prepare" | "rollback"
     relayId: string
     stackIds: ReadonlyArray<string>
@@ -100,7 +101,7 @@ export async function synchronizeTailscaleInstanceDeletion(
     "tailscale.instanceDeletion.synchronizeDns",
     synchronizeInstanceDeletionDnsEffect({
       current,
-      instanceId: input.instanceId,
+      memberId: input.memberId,
       mode: input.mode,
       operations,
       relayId: input.relayId,

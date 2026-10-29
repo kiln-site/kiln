@@ -11,7 +11,7 @@ interface TailscaleBindingState {
   address: string
   enabled: boolean
   hostname: string
-  instanceId: string
+  memberId: string
 }
 
 export interface TailscaleDeploymentState {
@@ -29,7 +29,7 @@ export interface DesiredTailscaleDeployment {
   bindings: Array<{
     enabled: boolean
     hostname: string
-    instanceId: string
+    memberId: string
   }>
   hostname: string
   relayId: string
@@ -56,7 +56,7 @@ export const synchronizeInstanceDeletionDnsEffect = Effect.fn(
   "tailscale.instanceDeletion.synchronizeDns"
 )(function* <TDeployment extends TailscaleDeploymentState>({
   current,
-  instanceId,
+  memberId,
   mode,
   operations,
   relayId,
@@ -64,7 +64,7 @@ export const synchronizeInstanceDeletionDnsEffect = Effect.fn(
   stackIds,
 }: {
   current: ReadonlyArray<TDeployment>
-  instanceId: string
+  memberId: string
   mode: "prepare" | "rollback"
   operations: Pick<TailscaleDeploymentOperations<TDeployment>, "syncDns">
   relayId: string
@@ -100,14 +100,12 @@ export const synchronizeInstanceDeletionDnsEffect = Effect.fn(
       !deployments.some(
         (deployment) =>
           deployment.relayId === relayId &&
-          deployment.bindings.some(
-            (binding) => binding.instanceId === instanceId
-          )
+          deployment.bindings.some((binding) => binding.memberId === memberId)
       )
     ) {
       return yield* orchestrationFailure(
         "validation",
-        `Tailscale network ${deploymentLabel(deployments)} no longer contains this server`
+        `Tailscale network ${deploymentLabel(deployments)} no longer contains it`
       )
     }
 
@@ -115,8 +113,8 @@ export const synchronizeInstanceDeletionDnsEffect = Effect.fn(
     const nextRecords =
       mode === "prepare"
         ? previousRecordsWithSource.filter(
-            ({ instanceId: recordInstanceId, relayId: recordRelayId }) =>
-              recordInstanceId !== instanceId || recordRelayId !== relayId
+            ({ memberId: recordMemberId, relayId: recordRelayId }) =>
+              recordMemberId !== memberId || recordRelayId !== relayId
           )
         : previousRecordsWithSource
     plans.push({
@@ -415,10 +413,10 @@ const rollbackTailscaleDeploymentPlanEffect = Effect.fn(
         ? promiseOperation("rollback", () =>
             operations.apply(deploymentTarget(previous), {
               bindings: previous.bindings.map(
-                ({ enabled, hostname, instanceId }) => ({
+                ({ enabled, hostname, memberId }) => ({
                   enabled,
                   hostname,
-                  instanceId,
+                  memberId,
                 })
               ),
               domain: previous.domain,
@@ -509,10 +507,10 @@ function deploymentTarget(
   deployment: TailscaleDeploymentState
 ): DesiredTailscaleDeployment {
   return {
-    bindings: deployment.bindings.map(({ enabled, hostname, instanceId }) => ({
+    bindings: deployment.bindings.map(({ enabled, hostname, memberId }) => ({
       enabled,
       hostname,
-      instanceId,
+      memberId,
     })),
     hostname: deployment.hostname,
     relayId: deployment.relayId,
@@ -539,7 +537,7 @@ function deploymentRecords(
 ): Array<{
   address: string
   hostname: string
-  instanceId: string
+  memberId: string
   relayId: string
 }> {
   return deployments.flatMap((deployment) =>

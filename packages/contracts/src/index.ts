@@ -23,7 +23,11 @@ import {
   databaseReadRequestSchema,
   databaseWriteRequestSchema,
 } from "./database-browser.js"
-import { fileRootIdSchema, tailscaleMemberIdSchema } from "./app-keys.js"
+import {
+  fileRootIdSchema,
+  legacyTailscaleMemberId,
+  tailscaleMemberIdSchema,
+} from "./app-keys.js"
 import {
   relayTailscaleDomainSchema,
   relayTailscaleHostnameSchema,
@@ -1375,8 +1379,8 @@ export const relayTailscaleStackBindingInputSchema = z
   .object({
     enabled: z.boolean().default(true),
     hostname: relayTailscaleSubdomainSchema,
-    // A server, or an app's service (see `appTailscaleMemberId`).
-    instanceId: tailscaleMemberIdSchema,
+    // A game server or an App's service (see `tailscaleMemberIdSchema`).
+    memberId: tailscaleMemberIdSchema,
   })
   .strict()
 
@@ -2010,6 +2014,46 @@ export const relayTailscaleStackBindingSchema =
   relayTailscaleStackBindingInputSchema.extend({
     address: z.ipv4(),
   })
+
+/**
+ * Rewrites a stack saved before members were typed: its bindings named the
+ * member `instanceId`, a game server by its bare ID. Returns the stack with
+ * `memberId` in their place, or null when it has nothing to rewrite. The
+ * Relay's `stack.json` and removal snapshots and Hearth's deployments
+ * share this shape. Migrations only; everything else reads typed IDs.
+ */
+export function migrateLegacyTailscaleBindings(
+  stack: unknown
+): Record<string, unknown> | null {
+  if (!stack || typeof stack !== "object" || Array.isArray(stack)) return null
+  const { bindings } = stack as { bindings?: unknown }
+  if (!Array.isArray(bindings)) return null
+  if (
+    !bindings.some(
+      (binding) =>
+        binding && typeof binding === "object" && "instanceId" in binding
+    )
+  )
+    return null
+  return {
+    ...stack,
+    bindings: bindings.map((binding: unknown) => {
+      if (!binding || typeof binding !== "object" || !("instanceId" in binding))
+        return binding
+      const { instanceId, ...rest } = binding as Record<string, unknown>
+      const memberId =
+        typeof instanceId === "string"
+          ? legacyTailscaleMemberId(instanceId)
+          : null
+      if (!memberId) {
+        throw new Error(
+          `Tailscale binding names an unknown member: ${String(instanceId)}`
+        )
+      }
+      return { ...rest, memberId }
+    }),
+  }
+}
 
 export const relayTailscaleStackConfigSchema = z
   .object({

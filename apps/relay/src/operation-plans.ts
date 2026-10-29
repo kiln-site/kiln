@@ -5,7 +5,9 @@
  */
 import {
   appIdFromFileRoot,
+  appTailscaleMember,
   databaseIdFromFileRoot,
+  instanceTailscaleMember,
   isRelayFileRoot,
   type BackupTaskInput,
   type RelayControlOperation,
@@ -153,6 +155,76 @@ export function transferInstallLocks(rootId: string): Array<LaneLock> {
 }
 
 /**
+ * A Tailscale stack's members as saved now, for planning a change to it.
+ * The change checks, once it runs, that they're still what it planned for.
+ */
+export type TailscaleStackReader = (
+  stackId: string
+) => Promise<
+  ReadonlyArray<{ readonly enabled: boolean; readonly memberId: string }>
+>
+
+/**
+ * The locks of a stack's members, from those saved and, for an apply, those
+ * it asks for. One that joins or leaves the stack takes its lifecycle lock,
+ * as its power changes do; one that stays as it is is only held, so it's
+ * neither deleted nor replaced meanwhile, without waiting for its power
+ * changes.
+ */
+export function tailscaleMemberLocks(
+  saved: ReadonlyArray<{
+    readonly enabled: boolean
+    readonly memberId: string
+  }>,
+  requested: ReadonlyArray<{
+    readonly enabled: boolean
+    readonly memberId: string
+  }> | null
+): Array<LaneLock> {
+  const active = (
+    bindings: ReadonlyArray<{ enabled: boolean; memberId: string }>
+  ) =>
+    new Set(
+      bindings.flatMap(({ enabled, memberId }) => (enabled ? [memberId] : []))
+    )
+  const before = active(saved)
+  // Removing a stack takes every member off it.
+  const after = requested ? active(requested) : new Set<string>()
+  const named = new Set([
+    ...saved.map(({ memberId }) => memberId),
+    ...(requested ?? []).map(({ memberId }) => memberId),
+  ])
+  return [...named].flatMap((memberId) => {
+    const changes = before.has(memberId) !== after.has(memberId)
+    const app = appTailscaleMember(memberId)
+    if (app) {
+      return changes
+        ? appLifecycleLocks(app.appId)
+        : [shared(laneKeys.app(app.appId))]
+    }
+    const instanceId = instanceTailscaleMember(memberId)
+    if (instanceId) {
+      return changes
+        ? instanceLifecycleLocks(instanceId)
+        : [shared(laneKeys.instance(instanceId))]
+    }
+    return []
+  })
+}
+
+function requestedTailscaleBindings(
+  payload: Readonly<Record<string, unknown>>
+): Array<{ enabled: boolean; memberId: string }> {
+  const bindings = Array.isArray(payload.bindings) ? payload.bindings : []
+  return bindings.flatMap((binding: unknown) => {
+    if (!Predicate.isObject(binding)) return []
+    const entry = binding as Readonly<Record<string, unknown>>
+    const memberId = stringField(entry, "memberId")
+    return memberId ? [{ enabled: entry.enabled !== false, memberId }] : []
+  })
+}
+
+/**
  * Resolves a game server reference to its full ID. Requests normally carry
  * the full ID, which needs no lookup; a short ID or name is looked up.
  */
@@ -167,7 +239,8 @@ export type InstanceResolver = (reference: string) => string | Promise<string>
 export function controlRequestLocks(
   operation: RelayControlOperation,
   payload: Readonly<Record<string, unknown>>,
-  resolveInstance: InstanceResolver
+  resolveInstance: InstanceResolver,
+  readTailscaleStack?: TailscaleStackReader
 ): ReadonlyArray<LaneLock> | Promise<ReadonlyArray<LaneLock>> | null {
   const instance = (
     locks: (id: string) => Array<LaneLock>,
@@ -360,14 +433,30 @@ export function controlRequestLocks(
     case "relay.tailscale.install":
     case "relay.tailscale.write":
       return [exclusive(laneKeys.tailscale)]
-    case "relay.tailscale.stack.apply":
+    // DNS records change nothing of a stack's members.
     case "relay.tailscale.stack.dns":
-    case "relay.tailscale.stack.remove": {
-      const locks = instance(
+      return instance(
         (id) => [...instanceReplaceLocks(id), shared(laneKeys.tailscale)],
         "id"
       )
-      return locks
+    // Applying a stack joins and leaves members, and removing one leaves
+    // them all, so each waits for those members' power changes, as theirs
+    // wait for it. A stack runs as a game server of its own.
+    case "relay.tailscale.stack.apply":
+    case "relay.tailscale.stack.remove": {
+      const reference = stringField(payload, "id")
+      if (reference === null) return null
+      const resolved = resolveInstance(reference)
+      return Promise.resolve(resolved).then(async (stackId) => [
+        ...instanceReplaceLocks(stackId),
+        shared(laneKeys.tailscale),
+        ...tailscaleMemberLocks(
+          (await readTailscaleStack?.(stackId)) ?? [],
+          operation === "relay.tailscale.stack.apply"
+            ? requestedTailscaleBindings(payload)
+            : null
+        ),
+      ])
     }
 
     case "database.create":
