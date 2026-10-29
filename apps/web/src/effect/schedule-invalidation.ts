@@ -10,7 +10,11 @@ import { databaseTable } from "@/lib/database-config"
  */
 export type ScheduleInvalidationScope =
   | { storageId: string }
-  | { relayId: string; target: { id: string; kind: BackupTargetKind } }
+  | {
+      backupOnly?: boolean
+      relayId: string
+      target: { id: string; kind: BackupTargetKind }
+    }
 
 /**
  * Marks the schedules a change affects as owed to their Relays, in the
@@ -41,14 +45,16 @@ export const invalidateScheduleDeploymentsEffect = Effect.fnUntraced(function* (
     )
     return
   }
-  // Kiln's own backups are scheduled on its Relay; Apps and volumes
-  // aren't schedule targets yet.
+  // Compose volume IDs are <owning App ID>/<volume name>. Kiln volumes
+  // have no owner and aren't schedule targets.
   const target =
     scope.target.kind === "platform"
       ? { id: scope.relayId, kind: "relay" }
-      : scope.target.kind === "instance" || scope.target.kind === "database"
-        ? scope.target
-        : null
+      : scope.target.kind === "volume"
+        ? scope.target.id.includes("/")
+          ? { id: scope.target.id.split("/")[0]!, kind: "app" }
+          : null
+        : scope.target
   if (!target) return
   yield* transaction.execute(
     `UPDATE ${databaseTable("schedule_deployment")} deployment
@@ -59,7 +65,16 @@ export const invalidateScheduleDeploymentsEffect = Effect.fnUntraced(function* (
               deployment.desired_generation = deployment.desired_generation + 1,
               deployment.updated_at = ?
         WHERE target.relay_id = ? AND target.target_kind = ?
-          AND target.target_id = ?`,
+          AND target.target_id = ?
+          ${
+            scope.backupOnly
+              ? `AND EXISTS (
+            SELECT 1 FROM ${databaseTable("schedule_action")} action
+             WHERE action.schedule_id = deployment.schedule_id
+               AND action.action_type = 'backup'
+          )`
+              : ""
+          }`,
     [now, scope.relayId, target.kind, target.id]
   )
 })

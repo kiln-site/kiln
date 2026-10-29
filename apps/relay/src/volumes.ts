@@ -450,6 +450,17 @@ export class RelayVolumes {
     )
   }
 
+  /** Only volumes owned by the Compose project, excluding shared mounts. */
+  ownedAppVolumeIds(appId: string) {
+    return this.#inventory().pipe(
+      Effect.map(({ volumes }) =>
+        volumes.flatMap((volume) =>
+          volume.id !== null && volume.owner?.appId === appId ? [volume.id] : []
+        )
+      )
+    )
+  }
+
   /** The managed volumes with these Docker names, by ID. */
   idsByDockerName(dockerNames: ReadonlyArray<string>) {
     const names = new Set(dockerNames)

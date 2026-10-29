@@ -71,6 +71,7 @@ export function BackupConfigurationDialog({
   consistencyChoice: fixedConsistencyChoice,
   description = "Relay runs this job in its single durable queue. Servers remain online while their data is archived.",
   error,
+  initialConsistency = "live",
   initialDestinationKeys,
   initialMode = "incremental",
   initialName,
@@ -100,6 +101,7 @@ export function BackupConfigurationDialog({
   }
   description?: React.ReactNode
   error?: string
+  initialConsistency?: "live" | "stopped"
   initialDestinationKeys?: ReadonlyArray<string>
   initialMode?: "full" | "incremental"
   initialName?: string
@@ -133,7 +135,7 @@ export function BackupConfigurationDialog({
   )
   const [mode, setMode] = React.useState<"full" | "incremental">(initialMode)
   const [consistency, setConsistency] = React.useState<"live" | "stopped">(
-    "live"
+    initialConsistency
   )
   const target = showTarget
     ? targets.find((candidate) => candidate.key === targetKeyValue)

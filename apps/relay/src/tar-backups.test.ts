@@ -41,6 +41,7 @@ import {
   TEST_NAMESPACE,
   type RelayHarness,
 } from "./test/relay.js"
+import { relayResourceNames } from "./relay-resources.js"
 import { RelayVolumes } from "./volumes.js"
 
 const volumeId = "3f9a21c4".padEnd(40, "0")
@@ -494,6 +495,190 @@ it("stops an App once for a stopped batch of its folder and volume, and starts i
   expect(container().state.running).toBe(true)
   expect(container().starts - startsBefore).toBe(1)
 })
+
+for (const consistency of ["live", "stopped"] as const) {
+  it(`fails the whole ${consistency} App batch if deployment adds a volume while it waits`, async () => {
+    const { harness, volumes } = await relay()
+    await harness.apps.create({ id: appId, name: "Website" })
+    const project = relayResourceNames(harness.config).appComposeProject(appId)
+    fakeDocker.addVolume({
+      name: "data",
+      labels: {
+        "com.docker.compose.project": project,
+        "com.docker.compose.volume": "data",
+      },
+    })
+    expect(await Effect.runPromise(volumes.ownedAppVolumeIds(appId))).toEqual([
+      `${appId}/data`,
+    ])
+    const manager = await backups(harness, volumes)
+    let release = () => undefined as void
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const occupant = Effect.runPromise(
+      harness.lanes.run(
+        { label: "test.deploy", locks: appLifecycleLocks(appId) },
+        Effect.promise(() => held)
+      )
+    )
+    const batch = { id: randomUUID(), size: 2 }
+    const appCoverage = { appId, volumeIds: [`${appId}/data`] }
+    const inputs = [
+      createInput(
+        { id: appId, kind: "app" },
+        { batch, consistency, appCoverage }
+      ),
+      createInput(
+        { id: `${appId}/data`, kind: "volume" },
+        { batch, consistency, appCoverage }
+      ),
+    ]
+    const running = Effect.runPromise(
+      Effect.gen(function* () {
+        for (const input of inputs) yield* manager.enqueue(input)
+        yield* manager.runPending()
+      })
+    )
+    const waiting = () =>
+      harness.lanes
+        .describe()
+        .waiting.some(
+          (entry) =>
+            entry.label === "backup.batch" || entry.label === "backup.coverage"
+        )
+    for (let tick = 0; tick < 1000 && !waiting(); tick++)
+      await new Promise((resolve) => setImmediate(resolve))
+    expect(waiting()).toBe(true)
+    // Compose creates its volumes before releasing the deployment lane.
+    fakeDocker.addVolume({
+      name: "new-compose-volume",
+      labels: {
+        "com.docker.compose.project": project,
+        "com.docker.compose.volume": "new",
+      },
+    })
+    release()
+    await occupant
+    await running
+    for (const input of inputs)
+      expect(await Effect.runPromise(manager.get(input.taskId))).toMatchObject({
+        status: "failed",
+        error: expect.stringContaining("coverage changed"),
+      })
+  })
+}
+
+it("fails incomplete App batch fragments without making any backup, including late members", async () => {
+  const { harness, volumes } = await relay()
+  await harness.apps.create({ id: appId, name: "Website" })
+  const project = relayResourceNames(harness.config).appComposeProject(appId)
+  fakeDocker.addVolume({
+    name: "data",
+    labels: {
+      "com.docker.compose.project": project,
+      "com.docker.compose.volume": "data",
+    },
+  })
+  const manager = await backups(harness, volumes)
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+  const batch = { id: randomUUID(), size: 2 }
+  const appCoverage = { appId, volumeIds: [`${appId}/data`] }
+  const inputs = [
+    createInput(
+      { id: `${appId}/data`, kind: "volume" },
+      { batch, appCoverage }
+    ),
+    createInput({ id: appId, kind: "app" }, { batch, appCoverage }),
+  ]
+  for (const input of inputs) {
+    const running = runTask(manager, input)
+    // Let the state-store I/O settle between timer advances.
+    for (let tick = 0; tick < 100; tick++) {
+      await new Promise((resolve) => setImmediate(resolve))
+      await vi.advanceTimersByTimeAsync(250)
+      if (
+        (await Effect.runPromise(manager.get(input.taskId)))?.status ===
+        "failed"
+      )
+        break
+    }
+    expect(await running).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("batch is incomplete"),
+    })
+    await expect(
+      access(backupArchivePath(harness.config, input.backupId))
+    ).rejects.toThrow()
+  }
+})
+
+for (const change of ["power", "deploy"] as const) {
+  it(`allows App ${change} to finish while its live scheduled batch is archiving`, async () => {
+    const { harness, volumes } = await relay()
+    await harness.apps.create({ id: appId, name: "Website" })
+    await deploy(harness, {})
+    const project = relayResourceNames(harness.config).appComposeProject(appId)
+    fakeDocker.addVolume({
+      name: "data",
+      labels: {
+        "com.docker.compose.project": project,
+        "com.docker.compose.volume": "data",
+      },
+    })
+    const manager = await backups(harness, volumes)
+    const batch = { id: randomUUID(), size: 2 }
+    const appCoverage = { appId, volumeIds: [`${appId}/data`] }
+    const inputs = [
+      createInput({ id: appId, kind: "app" }, { batch, appCoverage }),
+      createInput(
+        { id: `${appId}/data`, kind: "volume" },
+        { batch, appCoverage }
+      ),
+    ]
+    for (const input of inputs) await Effect.runPromise(manager.enqueue(input))
+    const reading = fakeDocker.hold({ command: "archive get" })
+    const running = Effect.runPromise(manager.runPending())
+    await reading.reached
+    let changed = false
+    const changing =
+      change === "power"
+        ? Effect.runPromise(
+            harness.lanes.run(
+              { label: "app.action", locks: appLifecycleLocks(appId) },
+              Effect.promise(() =>
+                harness.apps.action({ action: "stop", appId })
+              )
+            )
+          ).then(() => {
+            changed = true
+          })
+        : startDeployment(harness, {}, appId)
+            .then(() => deployed(harness, appId))
+            .then(() => {
+              changed = true
+            })
+    for (let tick = 0; tick < 1000 && !changed; tick++) {
+      await new Promise((resolve) => setImmediate(resolve))
+    }
+    // Release even on regression so the test leaves no worker behind.
+    const completedDuringBackup = changed
+    reading.release()
+    await running
+    await changing
+    expect(completedDuringBackup).toBe(true)
+    for (const input of inputs) {
+      expect(await Effect.runPromise(manager.get(input.taskId))).toMatchObject({
+        status: "succeeded",
+      })
+    }
+    expect(
+      (await harness.apps.get(appId)).containers.some(
+        (container) => container.running
+      )
+    ).toBe(change === "deploy")
+  })
+}
 
 it("fails a stopped batch, stopping nothing, when an App begins using its volume while it waits its turn", async () => {
   const { harness, volumes } = await relay()

@@ -62,6 +62,7 @@ export interface RelayDrivers {
   readonly commands: ContainerCommands
   readonly databaseConnections: DatabaseConnections
   readonly databases: DatabaseDriver
+  readonly volumes: RelayVolumes
   readonly docker: DockerDriver
   readonly freezes: ResourceFreezes
   readonly lanes: OperationLanes
@@ -201,6 +202,7 @@ export async function relayHarness(
       lifecycle.reattachTailscaleMember(databaseTailscaleMemberId(databaseId))
     )
     return {
+      volumes,
       apps,
       bricks,
       commands: new ContainerCommands({
@@ -396,6 +398,8 @@ export async function scheduleWorker(harness: RelayHarness) {
     findInstance: (instanceId) => harness.docker.findInstance(instanceId),
     getBackup: async () => null,
     isPaused: () => harness.lanes.paused,
+    listAppOwnedVolumeIds: (appId) =>
+      Effect.runPromise(harness.volumes.ownedAppVolumeIds(appId)),
     listAppIds: async () =>
       new Set((await harness.apps.list()).map(({ id }) => id)),
     listDatabaseIds: async () =>

@@ -70,6 +70,7 @@ import {
   appReplaceLocks,
   appStartLocks,
   backupTaskLocks,
+  backupCoverageLocks,
 } from "./operation-plans.js"
 import { backupPathIsExcluded } from "./backups/exclude.js"
 import {
@@ -184,6 +185,9 @@ export interface BackupApps {
 
 /** A managed volume as backups find it, by its ID. */
 export interface BackupVolumes {
+  ownedAppVolumeIds(
+    appId: string
+  ): Effect.Effect<ReadonlyArray<string>, unknown>
   find(
     id: string
   ): Effect.Effect<
@@ -620,8 +624,8 @@ export class BackupManager {
    * owned volume's: every backup in it within one stopped window, holding
    * all their locks, so the copies agree. The Apps that use any of them stop
    * once, journaled as a single stopped backup's are, and those that ran
-   * start again once every archive is taken. Backups of it still on their
-   * way join within moments; any later run in a window of their own.
+   * start again once every archive is taken. Coverage-bearing batches must
+   * arrive completely: no fragment may succeed before coverage is checked.
    */
   #runBatch(leader: RelayBackupTask, batch: { id: string; size: number }) {
     return Effect.gen({ self: this }, function* () {
@@ -631,6 +635,21 @@ export class BackupManager {
           ...(yield* this.#state.claimBatchBackupTasks(batch.id, Date.now()))
         )
         if (members.length < batch.size) yield* Effect.sleep("250 millis")
+      }
+      if (
+        members.length !== batch.size &&
+        members.some(
+          (member) => member.input.kind === "create" && member.input.appCoverage
+        )
+      ) {
+        for (const member of members) {
+          yield* this.#state.failBackupTask(
+            member.taskId,
+            "App backup batch is incomplete; no backups were started",
+            Date.now()
+          )
+        }
+        return undefined
       }
       const prepared = yield* Effect.result(this.#batchLocks(members))
       if (Result.isFailure(prepared)) {
@@ -648,9 +667,19 @@ export class BackupManager {
       const run = yield* Effect.result(
         this.#lanes.run(
           { label: "backup.batch", locks },
-          Effect.forEach(members, (member) => this.#runTask(member, window), {
-            concurrency: "unbounded",
-            discard: true,
+          Effect.gen({ self: this }, function* () {
+            yield* this.#admitAppCoverage(
+              members.map((member) => member.input),
+              locks
+            )
+            yield* Effect.forEach(
+              members,
+              (member) => this.#runTask(member, window),
+              {
+                concurrency: "unbounded",
+                discard: true,
+              }
+            )
           })
         )
       )
@@ -1513,6 +1542,61 @@ export class BackupManager {
     })
   }
 
+  // The batch's target locks are already held. Take only the missing
+  // lifecycle locks as a nested operation, so a queued replacement waiting
+  // on this batch cannot deadlock admission. Release them before copying or
+  // uploading: later deployments may change the inventory after this start.
+  #admitAppCoverage(
+    inputs: ReadonlyArray<BackupTaskInput>,
+    held: ReadonlyArray<LaneLock>
+  ) {
+    const byApp = new Map<string, BackupTaskInput>()
+    for (const input of inputs) {
+      if (input.kind === "create" && input.appCoverage) {
+        byApp.set(input.appCoverage.appId, input)
+      }
+    }
+    const locks = [...byApp.values()]
+      .flatMap(backupCoverageLocks)
+      .filter(
+        (lock) =>
+          !held.some(
+            (current) =>
+              current.key === lock.key && current.mode === "exclusive"
+          )
+      )
+    const validate = Effect.forEach(
+      byApp.values(),
+      (input) => this.#validateAppCoverage(input),
+      { discard: true }
+    )
+    return locks.length === 0
+      ? validate
+      : this.#lanes.runNested({ label: "backup.coverage", locks }, validate)
+  }
+
+  #validateAppCoverage(input: BackupTaskInput) {
+    return Effect.gen({ self: this }, function* () {
+      if (input.kind !== "create" || !input.appCoverage) return
+      const { appId, volumeIds } = input.appCoverage
+      const owned = this.#volumes
+        ? yield* this.#volumes.ownedAppVolumeIds(appId)
+        : null
+      const projected = new Set(volumeIds)
+      if (
+        !owned ||
+        owned.length !== projected.size ||
+        owned.some((id) => !projected.has(id))
+      ) {
+        return yield* backupFailure(
+          "volume_users_changed",
+          "lookup",
+          "App backup coverage changed; waiting for Hearth to refresh the schedule"
+        )
+      }
+    })
+  }
+
   #execute(
     task: RelayBackupTask,
     signal: AbortSignal,
@@ -1521,6 +1605,7 @@ export class BackupManager {
     window: StoppedWindow | null
   ) {
     return Effect.gen({ self: this }, function* () {
+      if (!window) yield* this.#admitAppCoverage([task.input], [])
       const createSignal = signal
       if (task.input.kind === "export") {
         const result = yield* runResticExport(
@@ -2228,7 +2313,7 @@ function stoppedBatch(
   task: RelayBackupTask
 ): { id: string; size: number } | null {
   return task.input.kind === "create" &&
-    task.input.consistency === "stopped" &&
+    (task.input.consistency === "stopped" || task.input.appCoverage) &&
     task.input.batch
     ? task.input.batch
     : null

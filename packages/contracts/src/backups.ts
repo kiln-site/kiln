@@ -375,6 +375,9 @@ const backupCreateTaskInputObjectSchema = z
     catalog: z
       .object({
         name: z.string().trim().min(1).max(120),
+        // The App's batch a scheduled backup of its folder or a volume it
+        // owns belongs to, which Hearth catalogs it under.
+        batchId: z.uuid().optional(),
         // The repository an incremental scheduled backup goes to.
         repositoryId: z.uuid().optional(),
         storageId: z.uuid().nullable(),
@@ -388,6 +391,11 @@ const backupCreateTaskInputObjectSchema = z
      */
     batch: z
       .object({ id: z.uuid(), size: z.number().int().min(2).max(64) })
+      .strict()
+      .optional(),
+    // The complete volume inventory projected for a scheduled App backup.
+    appCoverage: z
+      .object({ appId: z.string(), volumeIds: z.array(z.string()) })
       .strict()
       .optional(),
     // Absent is live.
@@ -426,7 +434,7 @@ function refineResticCreateInput(
       path: ["consistency"],
     })
   }
-  if (input.batch && input.consistency !== "stopped") {
+  if (input.batch && input.consistency !== "stopped" && !input.appCoverage) {
     context.addIssue({
       code: "custom",
       message: "Only stopped backups share a stopped window",

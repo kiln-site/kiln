@@ -80,6 +80,8 @@ async function manager(
     sendConsoleCommand: (instanceId: string, command: string) => Promise<void>
     powerIntent: ScheduleManagerOptions["powerIntent"]
     isPaused: () => boolean
+    listAppOwnedVolumeIds: ScheduleManagerOptions["listAppOwnedVolumeIds"]
+    listAppIds: ScheduleManagerOptions["listAppIds"]
     listDatabaseIds: ScheduleManagerOptions["listDatabaseIds"]
     runContainerCommand: ScheduleManagerOptions["runContainerCommand"]
     runPower: ScheduleManagerOptions["runPower"]
@@ -100,7 +102,8 @@ async function manager(
       }),
     findInstance: overrides.findInstance ?? (async () => null),
     getBackup: overrides.getBackup ?? (async () => null),
-    listAppIds: async () => new Set(),
+    listAppOwnedVolumeIds: overrides.listAppOwnedVolumeIds ?? (async () => []),
+    listAppIds: overrides.listAppIds ?? (async () => new Set()),
     listDatabaseIds: overrides.listDatabaseIds ?? (async () => new Set()),
     platformTargetId: () => "platform",
     relayId: "relay-a",
@@ -1609,6 +1612,139 @@ describe("Relay schedule persistence", () => {
     expect(enqueued).toEqual([])
   })
 
+  describe("an App's backup", () => {
+    const appId = "a".repeat(40)
+    const appProjection = (
+      executions: Array<Record<string, unknown>>
+    ): RelayScheduleProjection => ({
+      ...projection,
+      actions: [
+        {
+          consistency: "stopped",
+          destination: { kind: "local" },
+          executions: executions.map((execution) => ({
+            destination: { kind: "local" as const },
+            mode: "full" as const,
+            ...execution,
+          })) as never,
+          id: "6cc00681-a2cd-40c7-a036-7c9bd09b269b",
+          mode: "full",
+          name: "Scheduled archive",
+          type: "backup",
+        },
+      ],
+      targets: [{ id: appId, kind: "app", name: "Site", relayId: "relay-a" }],
+    })
+    const folderAndVolumes = [
+      { targetId: appId, targetKind: "app" },
+      { appId, targetId: "volume-data", targetKind: "volume" },
+      { appId, targetId: "volume-cache", targetKind: "volume" },
+    ]
+
+    it("queues its folder and each volume as one stopped batch", async () => {
+      const enqueued: Array<BackupTaskInput> = []
+      const { schedules } = await manager({
+        enqueueBackup: async (input) => {
+          enqueued.push(input)
+          return {
+            status: "succeeded",
+            taskId: input.taskId,
+          } as RelayBackupTask
+        },
+        listAppOwnedVolumeIds: async () => ["volume-data", "volume-cache"],
+        listAppIds: async () => new Set([appId]),
+      })
+      await schedules.apply(appProjection(folderAndVolumes))
+
+      await runNow(schedules)
+
+      await advanceUntil(async () => {
+        expect((await latestRun(schedules))?.status).toBe("succeeded")
+      })
+      expect(
+        enqueued.map((input) => input.kind === "create" && input.target)
+      ).toEqual([
+        { id: appId, kind: "app" },
+        { id: "volume-data", kind: "volume" },
+        { id: "volume-cache", kind: "volume" },
+      ])
+      const [first] = enqueued
+      if (first?.kind !== "create") throw new Error("expected a backup")
+      for (const input of enqueued) {
+        expect(input).toMatchObject({
+          artifactKind: "tar_archive",
+          batch: { id: first.batch?.id, size: 3 },
+          catalog: { batchId: first.batch?.id },
+          consistency: "stopped",
+          appCoverage: { appId, volumeIds: ["volume-data", "volume-cache"] },
+          reason: "scheduled",
+        })
+      }
+      expect(new Set(enqueued.map((input) => input.taskId)).size).toBe(3)
+    })
+
+    it("fails visibly before queuing a backup when deployment added an owned volume", async () => {
+      const enqueued: Array<unknown> = []
+      const { schedules } = await manager({
+        listAppIds: async () => new Set([appId]),
+        listAppOwnedVolumeIds: async () => ["volume-new"],
+        enqueueBackup: async (input) => {
+          enqueued.push(input)
+          return {
+            status: "succeeded",
+            taskId: input.taskId,
+          } as RelayBackupTask
+        },
+      })
+      await schedules.apply(appProjection([folderAndVolumes[0]!]))
+      await runNow(schedules)
+      await advanceUntil(async () => {
+        expect((await latestRun(schedules))?.status).toBe("failed")
+      })
+      expect(
+        (await latestRun(schedules))?.targetRuns[0]?.attempts[0]?.error
+      ).toContain("coverage changed")
+      expect(enqueued).toEqual([])
+    })
+
+    it("backs up none of it when Hearth refused any part", async () => {
+      const enqueued: Array<unknown> = []
+      const { schedules } = await manager({
+        enqueueBackup: async (input) => {
+          enqueued.push(input)
+          return {
+            status: "succeeded",
+            taskId: input.taskId,
+          } as RelayBackupTask
+        },
+        listAppOwnedVolumeIds: async () => ["volume-data", "volume-cache"],
+        listAppIds: async () => new Set([appId]),
+      })
+      await schedules.apply(
+        appProjection([
+          folderAndVolumes[0]!,
+          {
+            ...folderAndVolumes[1],
+            destination: null,
+            refusal: "backups are turned off for it",
+          },
+        ])
+      )
+
+      await runNow(schedules)
+
+      await advanceUntil(async () => {
+        expect(
+          (await latestRun(schedules))?.targetRuns[0]?.attempts[0]
+        ).toMatchObject({
+          error: "Not run: backups are turned off for it",
+          status: "not_run",
+        })
+      })
+      expect(enqueued).toEqual([])
+    })
+  })
+
   it("keeps the newest generation Hearth sent when an older one arrives late", async () => {
     const enqueued: Array<unknown> = []
     const { schedules } = await manager({
@@ -1898,7 +2034,12 @@ describe("Relay schedule commands in containers", () => {
         expect(target).toEqual({ id: databaseId, kind: "database" })
         commands.push(command)
         return command === "./migrate"
-          ? { exitCode: 0, output: "migrated\n", truncated: false, unknown: null }
+          ? {
+              exitCode: 0,
+              output: "migrated\n",
+              truncated: false,
+              unknown: null,
+            }
           : {
               exitCode: null,
               output: "vacuuming",
@@ -1957,9 +2098,10 @@ describe("Relay schedule commands in containers", () => {
 
     await runNow(schedules)
 
-    await advanceUntil(async () =>
-      expect((await latestRun(schedules))?.status).toBe("failed")
-    , 1_000)
+    await advanceUntil(
+      async () => expect((await latestRun(schedules))?.status).toBe("failed"),
+      1_000
+    )
     expect(commands).toEqual([])
     expect(reported).toContain("Relay schedule progress write failed")
     expect((await latestRun(schedules))?.targetRuns[0]?.attempts).toMatchObject(

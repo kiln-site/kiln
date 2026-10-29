@@ -4,6 +4,7 @@ import { z } from "zod"
 
 import { appServiceNameSchema } from "./app-keys.js"
 import {
+  backupConsistencySchema,
   backupLocalDestinationSchema,
   backupModeSchema,
   backupObjectKeySchema,
@@ -56,6 +57,12 @@ export const scheduleConsoleCommandActionSchema = z
 
 export const scheduleBackupActionSchema = z
   .object({
+    /**
+     * Whether an App is backed up live or stopped, its folder and each
+     * volume it owns within one stopped window. Other kinds are always
+     * backed up live; absent is live.
+     */
+    consistency: backupConsistencySchema.optional(),
     destination: z
       .discriminatedUnion("kind", [
         z.object({ kind: z.literal("local") }).strict(),
@@ -322,8 +329,13 @@ const relayScheduleBackupExecutionSchema = z
     refusal: z.string().min(1).max(300).nullable().optional(),
     /** An incremental backup's repository, which catalogs it. */
     repositoryId: z.uuid().nullable().optional(),
+    /**
+     * The App target an App's backup is of. Its folder's and each owned
+     * volume's backups are executions of their own, run together.
+     */
+    appId: z.string().min(1).max(120).optional(),
     targetId: z.string().min(1).max(120),
-    targetKind: z.enum(["instance", "database", "relay"]),
+    targetKind: z.enum(["instance", "database", "relay", "app", "volume"]),
   })
   .strict()
 
@@ -537,9 +549,7 @@ export function scheduleActionSupportsTarget(
   // container's shell, and an App's in one of its services'.
   if (action.type === "console_command") return target.kind !== "relay"
   if (action.type === "power") return target.kind !== "relay"
-  // Apps can't be backed up yet; their backups arrive as backup targets of
-  // their own, and this is where schedules start offering them.
-  if (target.kind === "app") return false
+  // An App's folder and owned volumes are archives, never restic snapshots.
   if (action.mode === "incremental") return target.kind === "instance"
   return true
 }

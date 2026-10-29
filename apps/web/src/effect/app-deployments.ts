@@ -3,6 +3,7 @@ import { Clock, Effect } from "effect"
 
 import type { AppGitHubBuild, AppSourceType } from "@workspace/contracts"
 
+import { invalidateScheduleDeploymentsEffect } from "@/effect/schedule-invalidation"
 import { Database } from "@/effect/database"
 import { databaseTable } from "@/lib/database-config"
 
@@ -274,20 +275,39 @@ export const finishAppDeploymentEffect = Effect.fn("apps.deployment.finish")(
     }
   ) {
     const database = yield* Database
-    const result = yield* database.execute(
+    return yield* database.transaction(
       "apps.deployment.finish",
-      `UPDATE ${databaseTable("app_deployment")}
+      (transaction) =>
+        Effect.gen(function* () {
+          const [record] = yield* transaction.queryRows<
+            RowDataPacket & { app_id: string; relay_id: string }
+          >(
+            `SELECT app_id, relay_id FROM ${databaseTable("app_deployment")} WHERE id = ? FOR UPDATE`,
+            [id]
+          )
+          const result = yield* transaction.execute(
+            `UPDATE ${databaseTable("app_deployment")}
           SET status = ?, error = ?, rolling = ?, finished_at = ?
         WHERE id = ? AND status = 'running'`,
-      [
-        outcome.status,
-        outcome.error?.slice(0, 2_000) ?? null,
-        outcome.rolling,
-        Date.parse(outcome.finishedAt),
-        id,
-      ]
+            [
+              outcome.status,
+              outcome.error?.slice(0, 2_000) ?? null,
+              outcome.rolling,
+              Date.parse(outcome.finishedAt),
+              id,
+            ]
+          )
+          if (result.affectedRows === 1 && record) {
+            // Even a failed deploy can have created volumes before it ended.
+            yield* invalidateScheduleDeploymentsEffect(transaction, {
+              backupOnly: true,
+              relayId: record.relay_id,
+              target: { id: record.app_id, kind: "app" },
+            })
+          }
+          return result.affectedRows === 1
+        })
     )
-    return result.affectedRows === 1
   }
 )
 

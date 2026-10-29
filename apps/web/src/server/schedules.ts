@@ -39,6 +39,7 @@ import {
 import { relayRpc } from "@/lib/relay-connection"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { requireScheduleBackupDestinations } from "@/lib/schedule-backup-destinations.server"
+import { requireScheduleAppBackups } from "@/lib/schedule-app-backups.server"
 import { requireScheduleAppServices } from "@/lib/schedule-app-services.server"
 import { scheduleTargetsWithAvailability } from "@/lib/schedule-target-options"
 import { promiseEffect, recoverPromise } from "@/effect/promise"
@@ -218,6 +219,7 @@ export const createSchedule = createServerFn({ method: "POST" })
     })
     await requireContinueOnFailureSupport(definition)
     await requireScheduleAppServices(definition)
+    await requireScheduleAppBackups({ ...definition, user })
     await saveNewSchedule(definition, user.id)
     await deploySchedule(definition, user.id)
     const created = (await loadSchedules()).find(
@@ -284,6 +286,7 @@ export const updateSchedule = createServerFn({ method: "POST" })
     })
     await requireContinueOnFailureSupport(definition, existing)
     await requireScheduleAppServices({ ...definition, existing })
+    await requireScheduleAppBackups({ ...definition, existing, user })
     const previousRelayIds = new Set(
       existing.targets.map((target) => target.relayId)
     )

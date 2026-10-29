@@ -8,6 +8,7 @@ import type { AuthenticatedUser } from "@/lib/auth-session"
 import type { AccessGrant } from "@/lib/access-control"
 import { isPlatformAdmin } from "@/lib/access-control"
 import type { AccessPermission } from "@/lib/permissions"
+import { appBackupPermission } from "@/lib/backup-target-permissions"
 import { grantHasPermission } from "@/lib/permissions"
 
 type SchedulePowerAction = Extract<ScheduleAction, { type: "power" }>
@@ -45,6 +46,9 @@ export function scheduleActionPermission(
     if (target.kind === "app") return "app.manage"
     return null
   }
+  // An App's backups follow its files' permissions, as manual ones do;
+  // stopping it for one takes more, which the server checks.
+  if (target.kind === "app") return appBackupPermission("backup.create")
   return "backup.create"
 }
 

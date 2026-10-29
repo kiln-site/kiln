@@ -196,7 +196,9 @@ interface BackupTableRow {
   id: string
   artifact_kind: string
   backup_mode: string
+  batch_id: string | null
   bytes: number | string | null
+  consistency: string | null
   created_at: number | string
   created_by: string | null
   deleted_at: number | string | null
@@ -877,6 +879,75 @@ describeMysql("backup reconciliation", () => {
           [["task-one", "succeeded"]]
         )
       })
+    )
+
+    it.effect(
+      "adopts an App's scheduled stopped backup with its batch and consistency",
+      () =>
+        Effect.gen(function* () {
+          yield* fresh
+          const backupId = "10000000-0000-4000-8000-000000000002"
+          const batchId = "20000000-0000-4000-8000-000000000002"
+          const volumeId = `${"a".repeat(40)}/data`
+          const changed = yield* reconcileBackupTaskEffect(
+            {
+              backupId,
+              bytesCompleted: 256,
+              bytesTotal: 256,
+              createdAt: Date.UTC(2026, 7, 21, 10, 29, 15),
+              currentArtifactId: null,
+              currentPath: null,
+              error: null,
+              errorCode: null,
+              finishedAt: Date.UTC(2026, 7, 21, 10, 29, 20),
+              input: {
+                artifactKind: "tar_archive",
+                backupId,
+                batch: { id: batchId, size: 2 },
+                catalog: {
+                  batchId,
+                  name: "scheduled-2026.08.21-10.29.15Z",
+                  storageId: null,
+                },
+                consistency: "stopped",
+                destination: {
+                  artifactId: "00000000-0000-4000-8000-000000000002",
+                  kind: "local",
+                },
+                exclude: [],
+                kind: "create",
+                maxBytes: null,
+                mode: "full",
+                reason: "scheduled",
+                target: { id: volumeId, kind: "volume" },
+                taskId: "task-two",
+              },
+              inputRefreshRequired: false,
+              kind: "create",
+              phase: null,
+              result: {
+                bytes: 256,
+                checksumSha256: "a".repeat(64),
+                filename: "backup-two.tar.zst",
+                warnings: [],
+              },
+              startedAt: Date.UTC(2026, 7, 21, 10, 29, 15),
+              status: "succeeded",
+              taskId: "task-two",
+              updatedAt: Date.UTC(2026, 7, 21, 10, 29, 20),
+            } satisfies RelayBackupTask,
+            "relay-a"
+          )
+
+          assert.isTrue(changed)
+          assert.deepInclude((yield* backups).get(backupId), {
+            batch_id: batchId,
+            consistency: "stopped",
+            reason: "scheduled",
+            target_id: volumeId,
+            target_kind: "volume",
+          })
+        })
     )
 
     it.effect(

@@ -284,9 +284,10 @@ export async function resolveUnfinishedRestoreHandler(
   return { resolved: true as const }
 }
 
-async function readRelayVolumes(
+export async function readRelayVolumes(
   relay: PersistedRelay,
-  userId: string
+  // Who asks, for the Relay's audit; none when Hearth asks for itself.
+  userId?: string
 ): Promise<RelayVolumes> {
   return relayVolumesSchema.parse(
     await relayRpc(relay, "relay.volumes.read", {}, 30_000, userId)
@@ -312,8 +313,11 @@ async function unfinishedRestores(
   return required ? read() : recoverPromise(read, () => [])
 }
 
-// An App's folder, then each volume its Compose project owns that has an ID.
-function appTargets(
+/**
+ * What backing up an App backs up: its folder, then each volume its Compose
+ * project owns that has an ID, as manual and scheduled backups both do.
+ */
+export function appTargets(
   appId: string,
   listing: RelayVolumes | null
 ): Array<ResourceTarget & { name: string | null }> {

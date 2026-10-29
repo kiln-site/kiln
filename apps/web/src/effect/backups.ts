@@ -1060,12 +1060,14 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
   const objectKey =
     input.destination.kind === "s3" ? input.destination.objectKey : null
 
+  // An App's scheduled backups are cataloged as one batch, live or stopped,
+  // as its manual ones are.
   yield* transaction.execute(
     `INSERT IGNORE INTO ${databaseTable("backup")}
       (id, relay_id, target_kind, target_id, storage_id, artifact_kind,
        backup_mode, reason, status, name, object_key, repository_id,
-       warnings, created_by, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'scheduled', ?, ?, ?, ?,
+       consistency, batch_id, warnings, created_by, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'scheduled', ?, ?, ?, ?, ?, ?,
              JSON_ARRAY(), NULL, ?, ?)`,
     [
       input.backupId,
@@ -1079,6 +1081,10 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
       catalog.name,
       objectKey,
       repositoryId,
+      input.target.kind === "app" || input.target.kind === "volume"
+        ? (input.consistency ?? "live")
+        : null,
+      catalog.batchId ?? input.batch?.id ?? null,
       task.createdAt,
       now,
     ]

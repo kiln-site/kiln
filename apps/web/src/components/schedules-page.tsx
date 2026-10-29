@@ -3084,6 +3084,10 @@ const ActionEditor = React.memo(function ActionEditor({
       ),
     }
   }, [action, permissionKey, selectedOptions])
+  const backsUpAppsOnly =
+    action.type === "backup" &&
+    selectedActionTargets.length > 0 &&
+    selectedActionTargets.every((target) => target.kind === "app")
   const changeAction = React.useCallback(
     (next: ScheduleActionDraft) =>
       onChange(
@@ -3274,6 +3278,25 @@ const ActionEditor = React.memo(function ActionEditor({
         <BackupConfigurationDialog
           allowDefaultDestination={false}
           allowIncremental
+          // A step that backs up only Apps takes them live or stopped, each
+          // App's folder and owned volumes together; Hearth checks stopping
+          // them as it saves.
+          consistencyChoice={
+            backsUpAppsOnly
+              ? {
+                  stoppedDescription:
+                    "Stops each App once for its folder and every volume it owns",
+                  stoppedUnavailable: null,
+                }
+              : undefined
+          }
+          {...(backsUpAppsOnly
+            ? {
+                description:
+                  "Relay runs this job in its single durable queue. Each App's folder and every volume it owns are backed up together.",
+              }
+            : {})}
+          initialConsistency={action.consistency ?? "live"}
           initialDestinationKeys={
             action.destination.kind === "storage"
               ? [action.destination.storageId]
@@ -3283,12 +3306,16 @@ const ActionEditor = React.memo(function ActionEditor({
           initialName={action.name}
           onOpenChange={setBackupConfigOpen}
           onSubmit={(configuration) => {
+            const { consistency: _consistency, ...rest } = action
             onChange({
-              ...action,
+              ...rest,
+              ...(backsUpAppsOnly && configuration.consistency === "stopped"
+                ? { consistency: "stopped" as const }
+                : {}),
               destination: scheduleBackupDestination(
                 configuration.destinationKeys[0]
               ),
-              mode: configuration.mode,
+              mode: backsUpAppsOnly ? "full" : configuration.mode,
               name: configuration.name,
             })
             setBackupConfigOpen(false)
@@ -3457,7 +3484,9 @@ function scheduleTargetPickerItem(option: ScheduleOption): InstancePickerItem {
   }
 }
 
-// Apps aren't backup targets yet; schedules offer them none.
+// The targets the backup dialog lists. It names game servers, databases,
+// and Kiln; an App's backups are of its folder and volumes, set live or
+// stopped there instead.
 function isBackupOption(
   target: ScheduleOption
 ): target is ScheduleOption & { kind: Exclude<ScheduleOption["kind"], "app"> } {

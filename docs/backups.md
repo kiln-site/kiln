@@ -332,6 +332,13 @@ why, and the Relay records it as not run instead of running it. A
 destination Hearth can't use no longer fails the schedule's deploy, which
 left the Relay running what it had before.
 
+A step that backs up an App backs up its folder and each volume only it
+uses, as a manual App backup does, each admitted on its own. It's taken live,
+or stopped once for all of them as a batch; saving a stopped one takes
+`app.manage` on the App and every App using those volumes, and while their
+Relay can't say which those are, only a stopped step the schedule already had
+is kept.
+
 Hearth sends the schedule again when any of that changes: a target's backup
 limits, a destination saved or marked for deletion, a deletion starting or
 stopping. The change marks the schedule unsent in its own transaction, so

@@ -9,8 +9,15 @@ import {
   deleteBackupStorageEffect,
   saveBackupStorageEffect,
 } from "@/backups/destinations/s3"
+import {
+  insertAppDeploymentEffect,
+  finishAppDeploymentEffect,
+} from "@/effect/app-deployments"
 import { Database } from "@/effect/database"
-import { reconcileBackupTaskEffect } from "@/effect/backups"
+import {
+  updateBackupLimitsEffect,
+  reconcileBackupTaskEffect,
+} from "@/effect/backups"
 import { disposeAppRuntime } from "@/effect/runtime"
 import {
   recordResourceDeletionStatusEffect,
@@ -45,14 +52,18 @@ const relay = vi.hoisted(() => ({
       executions?: Array<{
         destination: unknown
         maxBytes?: number | null
+        appId?: string
         refusal?: string | null
         repositoryId?: string | null
         targetId: string
+        targetKind: string
       }>
     }>
     generation?: number
   }>,
   meanwhile: null as null | (() => Promise<void>),
+  // The volumes it reports, for an App's backup.
+  volumes: [] as Array<Record<string, unknown>>,
 }))
 vi.mock("@/lib/relay-connection", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/relay-connection")>()),
@@ -61,6 +72,14 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
     operation: string,
     payload: { generation?: number; id: string; revision: number }
   ) => {
+    if (operation === "relay.volumes.read") {
+      return {
+        measuring: false,
+        protection: { ready: true, reason: null },
+        uncovered: [],
+        volumes: relay.volumes,
+      }
+    }
     if (operation !== "schedule.apply") {
       throw new Error(`Unexpected Relay operation ${operation}`)
     }
@@ -175,6 +194,7 @@ const seed = Effect.gen(function* () {
   yield* resetDatabase
   relay.applied.length = 0
   relay.meanwhile = null
+  relay.volumes = []
   yield* insertRelay(relayId)
 })
 
@@ -302,6 +322,177 @@ describeMysql("Scheduled backups, checked before they run", () => {
     )
 
     it.effect(
+      "sends an App's folder and each volume it owns, each checked as by hand",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          const appId = "d".repeat(40)
+          const otherAppId = "e".repeat(40)
+          const volume = (owner: string, name: string) => ({
+            createdAt: null,
+            dockerName: `kiln-app-${owner.slice(0, 8)}_${name}`,
+            id: `${owner}/${name}`,
+            kind: "app",
+            mountpoint: null,
+            mounts: [],
+            name,
+            owner: { appId: owner, volume: name },
+            sizeBytes: null,
+            users: [{ appId: owner, configured: true, mounted: true }],
+          })
+          relay.volumes = [
+            volume(appId, "data"),
+            volume(appId, "cache"),
+            volume(otherAppId, "data"),
+          ]
+          // Backups are off for the App's cache volume.
+          yield* insertRows("backup_policy", {
+            admin_quantity_limit: 0,
+            created_at: at,
+            exclude_patterns: "[]",
+            relay_id: relayId,
+            target_id: `${appId}/cache`,
+            target_kind: "volume",
+            updated_at: at,
+          })
+          const schedule = backupSchedule({ kind: "local" }, [])
+          yield* deploy({
+            ...schedule,
+            targets: [{ id: appId, kind: "app", name: "Site", relayId }],
+          })
+
+          const sent = relay.applied.at(-1)?.actions[0]?.executions ?? []
+          assert.deepStrictEqual(
+            sent.map((execution) => [
+              execution.targetKind,
+              execution.targetId,
+              execution.appId ?? null,
+              execution.refusal ?? null,
+            ]),
+            [
+              ["app", appId, null, null],
+              ["volume", `${appId}/data`, appId, null],
+              [
+                "volume",
+                `${appId}/cache`,
+                appId,
+                "backups are turned off for it",
+              ],
+            ]
+          )
+        })
+    )
+
+    it.effect("refreshes volume coverage after an App's first deployment", () =>
+      Effect.gen(function* () {
+        yield* seed
+        const appId = "d".repeat(40)
+        yield* deploy({
+          ...backupSchedule({ kind: "local" }, []),
+          targets: [{ id: appId, kind: "app", name: "Site", relayId }],
+        })
+        assert.deepStrictEqual(Object.keys(executions()), [appId])
+        relay.volumes = [
+          {
+            createdAt: null,
+            dockerName: "data",
+            id: `${appId}/data`,
+            kind: "app",
+            mountpoint: null,
+            mounts: [],
+            name: "data",
+            owner: { appId, volume: "data" },
+            sizeBytes: null,
+            users: [],
+          },
+        ]
+        const id = "44444444-4444-4444-8444-444444444444"
+        yield* insertRows("app", { app_id: appId, relay_id: relayId, name: "Site", config_ciphertext: "unused", created_by: "owner", created_at: at, updated_at: at })
+        yield* insertAppDeploymentEffect({
+          id,
+          appId,
+          relayId,
+          branch: null,
+          commitAuthor: null,
+          commitMessage: null,
+          commitSha: null,
+          error: null,
+          finishedAt: null,
+          imageDigest: null,
+          relayDeploymentId: "first",
+          repository: null,
+          rolling: null,
+          sourceType: "compose",
+          startedAt: new Date(at).toISOString(),
+          status: "running",
+          trigger: "manual",
+          triggeredBy: "owner",
+        })
+        yield* finishAppDeploymentEffect(id, {
+          error: null,
+          finishedAt: new Date(at + 1000).toISOString(),
+          rolling: false,
+          status: "succeeded",
+        })
+        yield* Effect.promise(redeployUnacknowledgedSchedules)
+        assert.deepStrictEqual(Object.keys(executions()), [
+          appId,
+          `${appId}/data`,
+        ])
+      })
+    )
+
+    for (const kind of ["app", "volume"] as const) {
+      it.effect(
+        `refreshes App backup admission when ${kind} policy changes`,
+        () =>
+          Effect.gen(function* () {
+            yield* seed
+            const appId = "d".repeat(40)
+            const volumeId = `${appId}/data`
+            relay.volumes = [
+              {
+                createdAt: null,
+                dockerName: "data",
+                id: volumeId,
+                kind: "app",
+                mountpoint: null,
+                mounts: [],
+                name: "data",
+                owner: { appId, volume: "data" },
+                sizeBytes: null,
+                users: [],
+              },
+            ]
+            yield* deploy({
+              ...backupSchedule({ kind: "local" }, []),
+              targets: [{ id: appId, kind: "app", name: "Site", relayId }],
+            })
+            const before = relay.applied.at(-1)?.generation ?? 0
+            yield* updateBackupLimitsEffect({ admin: true, quantityLimit: null, relayId, retentionDays: null, sizeLimitBytes: 1024,
+              targetId: kind === "app" ? appId : volumeId, targetKind: kind })
+            yield* Effect.promise(redeployUnacknowledgedSchedules)
+            assert.strictEqual(executions()[kind === "app" ? appId : volumeId]?.maxBytes, 1024)
+            yield* updateBackupLimitsEffect({
+              admin: true,
+              quantityLimit: 0,
+              relayId,
+              retentionDays: null,
+              sizeLimitBytes: 1024,
+              targetId: kind === "app" ? appId : volumeId,
+              targetKind: kind,
+            })
+            yield* Effect.promise(redeployUnacknowledgedSchedules)
+            assert.isAbove(relay.applied.at(-1)?.generation ?? 0, before)
+            assert.strictEqual(
+              executions()[kind === "app" ? appId : volumeId]?.refusal,
+              "backups are turned off for it"
+            )
+          })
+      )
+    }
+
+    it.effect(
       "sends a schedule deployed before the upgrade again, with what it may back up now",
       () =>
         Effect.gen(function* () {
@@ -365,6 +556,48 @@ describeMysql("Scheduled backups, checked before they run", () => {
           const deletion = yield* requestResourceDeletionRowEffect({
             finalBackup: false,
             kind: "instance",
+            relayId,
+            resourceId: capped,
+            storageId: null,
+            user: owner,
+          })
+          const [owed] = yield* selectRows<{ status: string }>(
+            "schedule_deployment"
+          )
+          yield* Effect.promise(redeployUnacknowledgedSchedules)
+          const during = executions()[capped]
+
+          yield* recordResourceDeletionStatusEffect({
+            attempt: deletion.attempt,
+            error: "The Relay is unreachable",
+            id: deletion.id,
+            status: "failed",
+          })
+          const [owedAgain] = yield* selectRows<{ status: string }>(
+            "schedule_deployment"
+          )
+          yield* Effect.promise(redeployUnacknowledgedSchedules)
+          const after = executions()[capped]
+
+          assert.isNull(before?.refusal ?? null)
+          assert.strictEqual(owed?.status, "pending")
+          assert.strictEqual(during?.refusal, "it's being permanently deleted")
+          assert.strictEqual(owedAgain?.status, "pending")
+          assert.isNull(after?.refusal ?? null)
+        })
+    )
+
+    it.effect(
+      "stops an App's scheduled backups while its deletion runs, and resumes them once it stops",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          yield* deploy({ ...backupSchedule({ kind: "local" }, []), targets: [{ id: capped, kind: "app", name: "Site", relayId }] })
+          const before = executions()[capped]
+
+          const deletion = yield* requestResourceDeletionRowEffect({
+            finalBackup: false,
+            kind: "app",
             relayId,
             resourceId: capped,
             storageId: null,
