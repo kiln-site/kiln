@@ -208,7 +208,11 @@ began replacing its containers. A later power step runs only
 if neither has moved, checked at the moment the step's turn comes. So a
 person who stops a game server, App, or database during a schedule's Wait
 isn't overruled by the schedule's Start, and the step is recorded as not
-run. A schedule's own steps don't move the intent.
+run. A schedule's own steps don't move the intent. A power step takes the
+locks the same request from Hearth would, an App's start the volumes it
+mounts too, and moves the App's power revision as a person's change does,
+so a stopped backup's restart gives way to it. A step on a resource being
+deleted is refused as every change to it is, and recorded as not run.
 
 A Command step sends a game server's command to its console. For a
 database, it runs `sh -c <command>` as a Docker exec in its current

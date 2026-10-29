@@ -145,7 +145,8 @@ describe("one power path", () => {
     const locks = await controlRequestLocks(
       "database.action",
       { action: "stop", databaseId: id },
-      (reference) => reference
+      (reference) => reference,
+      () => []
     )
     await Effect.runPromise(
       harness.lanes.run(
@@ -170,6 +171,71 @@ describe("one power path", () => {
     expect(container.state.running).toBe(false)
   })
 
+  it("leaves a database being deleted alone, recording each step as not run", async () => {
+    const harness = await relayHarness()
+    const id = "d".repeat(40)
+    await harness.databases.create(
+      relayCreateDatabaseSchema.parse({
+        databaseName: "kiln_app",
+        engine: "postgres",
+        id,
+        name: "Main database",
+        password: "correct-horse-battery-staple-1",
+        username: "kiln_user",
+      })
+    )
+    const container = fakeDocker.container(
+      `${TEST_NAMESPACE}-kiln-db-${id}-database`
+    )!
+    // As a freeze for its deletion does: the lanes refuse every change to it.
+    harness.lanes.addRefusal((_label, locks) =>
+      locks.some((lock) => lock.key.split("/", 1)[0] === `database:${id}`)
+        ? "This database is being deleted"
+        : null
+    )
+    const key = `relay-a:database:${id}`
+    const schedules = await scheduleManager(harness)
+    await schedules.apply({
+      ...stopWaitStart({
+        id,
+        kind: "database",
+        name: "Main database",
+        relayId: "relay-a",
+      }),
+      actions: [
+        {
+          action: "stop",
+          id: "0e9a7f5c-77e8-4b39-8c1a-6d5bb9c0b3a1",
+          type: "power",
+        },
+        {
+          authorizedTargets: 2,
+          command: "./vacuum",
+          id: "6c1d2a9e-5f6b-4b0e-9d57-2a7c4f1e8b33",
+          targetKeys: [key],
+          type: "console_command",
+        },
+      ],
+      continueOnFailure: true,
+    })
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] })
+
+    await schedules.runNow({ revision: 1, scheduleId })
+
+    let run: Awaited<ReturnType<typeof schedules.overview>>["runs"][number]
+    await until(async () => {
+      run = (await schedules.overview([scheduleId])).runs[0]!
+      return run.status !== "running"
+    }, 10)
+    expect(run!.targetRuns[0]?.attempts).toMatchObject([
+      { error: "Not run: This database is being deleted", status: "not_run" },
+      { error: "Not run: This database is being deleted", status: "not_run" },
+    ])
+    expect(container.state.running).toBe(true)
+    expect(container.processes.some(({ argv }) => argv.includes("./vacuum")))
+      .toBe(false)
+  })
+
   it("lets a person's App stop during a schedule stand", async () => {
     const harness = await relayHarness()
     const appId = "a".repeat(40)
@@ -190,7 +256,8 @@ describe("one power path", () => {
     const locks = await controlRequestLocks(
       "app.action",
       { action: "stop", appId },
-      (reference) => reference
+      (reference) => reference,
+      () => []
     )
     await Effect.runPromise(
       harness.lanes.run(

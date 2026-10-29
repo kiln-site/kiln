@@ -12,7 +12,7 @@ import { Effect } from "effect"
 
 import type { DockerEngine } from "./docker-engine.js"
 import type { DockerEngineError } from "./effect/errors.js"
-import type { OperationLanes } from "./operation-lanes.js"
+import type { LaneLock, OperationLanes } from "./operation-lanes.js"
 import {
   resourceLaneKey,
   resourcePowerLocks,
@@ -57,6 +57,12 @@ export function containerPower(
   }
 }
 
+export type PowerLocks = (
+  kind: PowerResourceKind,
+  id: string,
+  action: PowerAction
+) => ReadonlyArray<LaneLock> | Promise<ReadonlyArray<LaneLock>>
+
 /** How many times each kind's resources were replaced outside the lanes. */
 export type ResourceReplacements = Partial<
   Record<PowerResourceKind, (id: string) => number>
@@ -77,6 +83,7 @@ export class ResourcePower<
   readonly #adapters: PowerAdapters<Results>
   readonly #intents = new PowerIntents()
   readonly #lanes: OperationLanes
+  readonly #locks: PowerLocks
   readonly #replacements: ResourceReplacements
 
   constructor(options: {
@@ -87,9 +94,15 @@ export class ResourcePower<
      * swaps its containers in its lifecycle lane.
      */
     readonly replacements?: ResourceReplacements
+    /**
+     * The locks a power action takes, as its control request's do: an
+     * App's also hold the volumes it mounts.
+     */
+    readonly locks?: PowerLocks
   }) {
     this.#adapters = options.adapters
     this.#lanes = options.lanes
+    this.#locks = options.locks ?? resourcePowerLocks
     this.#replacements = options.replacements ?? {}
   }
 
@@ -138,30 +151,35 @@ export class ResourcePower<
     action: PowerAction,
     intent: string
   ): Promise<void> {
+    const failure = (cause: unknown) =>
+      cause instanceof Error ? cause : new Error("Power change failed")
     return Effect.runPromise(
-      this.#lanes
-        .run(
-          {
-            label: `schedule.${kind}.power`,
-            locks: resourcePowerLocks(kind, id, action),
-            precondition: () => this.intent(kind, id) === intent,
-          },
-          Effect.tryPromise({
-            try: () => this.#adapters[kind](id, action),
-            catch: (cause) =>
-              cause instanceof Error ? cause : new Error("Power change failed"),
-          })
-        )
-        .pipe(
-          Effect.asVoid,
-          Effect.withSpan("relay.schedules.power", {
-            attributes: {
-              "relay.resource.id": id,
-              "relay.resource.kind": kind,
-              "relay.power.action": action,
+      Effect.tryPromise({
+        try: async () => this.#locks(kind, id, action),
+        catch: failure,
+      }).pipe(
+        Effect.flatMap((locks) =>
+          this.#lanes.run(
+            {
+              label: `schedule.${kind}.power`,
+              locks,
+              precondition: () => this.intent(kind, id) === intent,
             },
-          })
-        )
+            Effect.tryPromise({
+              try: () => this.#adapters[kind](id, action),
+              catch: failure,
+            })
+          )
+        ),
+        Effect.asVoid,
+        Effect.withSpan("relay.schedules.power", {
+          attributes: {
+            "relay.resource.id": id,
+            "relay.resource.kind": kind,
+            "relay.power.action": action,
+          },
+        })
+      )
     )
   }
 }

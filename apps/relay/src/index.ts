@@ -270,7 +270,6 @@ import {
 import {
   controlRequestContinues,
   controlRequestLocks,
-  databaseLocks,
   databaseReadLocks,
   instanceLifecycleLocks,
   transferInstallLocks,
@@ -652,7 +651,7 @@ if (cliArguments.length === 0)
 // frozen, and its deletion freezing it again tries once more.
 await resourceFreezes.reapply((freeze, record) =>
   recoverPromise(
-    () => quietFrozenResource(freeze, record),
+    () => quietFrozenResource(freeze, record, true),
     (error) => {
       console.warn(`Could not quiet ${freeze.kind} ${freeze.id}:`, error)
     }
@@ -923,6 +922,25 @@ const power = new ResourcePower({
     instance: runInstancePower,
   },
   lanes,
+  // A schedule's power step takes what the same request from Hearth would:
+  // an App's start also holds the volumes it mounts.
+  locks: async (kind, id, action) =>
+    (await controlRequestLocks(
+      kind === "instance" ? "instance.action" : `${kind}.action`,
+      {
+        action,
+        ...(kind === "app"
+          ? { appId: id }
+          : kind === "database"
+            ? { databaseId: id }
+            : { instanceId: id }),
+      },
+      resolveInstanceReference,
+      (appId) =>
+        runRelayEffect("relay.apps.volumes", volumes.appVolumeIds(appId)),
+      undefined,
+      (frozenKind, frozenId) => lanes.isFrozen(frozenKind, frozenId)
+    )) ?? [],
   replacements: { app: (appId) => apps.replacements(appId) },
 })
 // One-off commands in an App's service or a database's container.
@@ -4226,7 +4244,8 @@ async function requiredFileRoot(instanceId: string) {
 // again as the Relay starts. What it changes goes to `record` first.
 async function quietFrozenResource(
   freeze: RelayResourceFreeze,
-  record: (undo: RelayResourceFreezeUndo) => Promise<void>
+  record: (undo: RelayResourceFreezeUndo) => Promise<void>,
+  recovering = false
 ): Promise<void> {
   switch (freeze.kind) {
     case "instance": {
@@ -4236,10 +4255,12 @@ async function quietFrozenResource(
       if (instance.id !== freeze.id) {
         throw new Error("Freezing a game server needs its full ID")
       }
-      powerIntents.advance(instance.id)
+      // Startup has no in-memory power intents or schedules yet, and the
+      // power coordinator isn't constructed until recovery has finished.
+      if (!recovering) power.changed("instance", instance.id)
       const routes = await runRelayEffect(
         "relay.network.routes.forFreeze",
-        startup.state.listInstanceRoutes(instance.id)
+        startupCore.state.listInstanceRoutes(instance.id)
       )
       await lifecycle.runInstanceAction(instance, "stop", routes)
       return

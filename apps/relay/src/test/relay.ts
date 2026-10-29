@@ -29,7 +29,6 @@ import { Effect, Fiber, ManagedRuntime } from "effect"
 import { onTestFinished } from "vite-plus/test"
 
 import { appProvisioning } from "../app-provisioning.js"
-import { DockerEngine } from "../docker-engine.js"
 import { RelayVolumes } from "../volumes.js"
 import { AppDriver } from "../apps.js"
 import { BrickCatalog } from "../bricks.js"
