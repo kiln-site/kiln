@@ -363,6 +363,32 @@ describe("operation lanes", () => {
       })
   )
 
+  it.effect(
+    "refuses a continuation as its turn comes, as it would any arrival",
+    () =>
+      Effect.gen(function* () {
+        const frozen = new Set<string>()
+        const lanes = new OperationLanes({
+          refuse: (_label, locks) =>
+            locks.some((lock) => frozen.has(lock.key))
+              ? "It's being deleted"
+              : null,
+        })
+        const log: Array<string> = []
+        const holder = yield* start(lanes, log, "holder", [exclusive("a")])
+        const dns = yield* start(lanes, log, "dns", [exclusive("a")], {
+          continuation: true,
+        })
+        frozen.add("a")
+        yield* holder.finish
+
+        const refused = yield* Effect.flip(Fiber.join(dns.fiber))
+        assert.strictEqual((refused as LaneRejectedError).reason, "refused")
+        assert.strictEqual(refused.message, "It's being deleted")
+        assert.deepStrictEqual(log, ["holder"])
+      })
+  )
+
   it.effect("counts an exclusive operation only once it starts", () =>
     Effect.gen(function* () {
       const lanes = new OperationLanes()

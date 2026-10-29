@@ -114,6 +114,7 @@ export interface OperationLanesOptions {
    * Checked as an operation would be granted, so it sees everything that ran
    * before: why the operation may not run, or null when it may. Nested
    * operations aren't checked; they belong to one already granted.
+   * Continuations are, since they arrive on their own.
    */
   readonly refuse?: (
     label: string,
@@ -428,6 +429,16 @@ export class OperationLanes {
         continue
       }
       this.#nested.splice(index, 1)
+      const refused = waiter.continuation
+        ? this.#refuse?.(waiter.label, waiter.locks)
+        : null
+      if (refused) {
+        this.#reject(
+          waiter,
+          new LaneRejectedError({ message: refused, reason: "refused" })
+        )
+        continue
+      }
       if (waiter.precondition && !waiter.precondition()) {
         this.#reject(
           waiter,

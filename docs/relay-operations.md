@@ -95,7 +95,8 @@ and a change to the network queued behind the deletion waits for it in turn.
 So while a deletion
 waits on a network's DNS, rewriting that DNS (`relay.tailscale.stack.dns`)
 waits only for what holds its locks, not for what waits in line, and counts
-toward the lanes' waiting limit like any request; at any other time it takes
+toward the lanes' waiting limit and is refused, as by an unfinished
+restore's fence, like any request; at any other time it takes
 its turn like any change. Relays rewrite bindings saved with a
 game server's bare ID when they start, and Hearth its copies of them in a
 migration.
