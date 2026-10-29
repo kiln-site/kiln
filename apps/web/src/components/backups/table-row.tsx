@@ -417,7 +417,9 @@ export const BackupRowActions = React.memo(function BackupRowActions({
     (backup.targetKind === "instance" ||
       backup.targetKind === "database" ||
       (backup.targetKind === "platform" &&
-        backup.artifactKind === "platform_bundle"))
+        backup.artifactKind === "platform_bundle") ||
+      ((backup.targetKind === "app" || backup.targetKind === "volume") &&
+        backup.artifactKind === "tar_archive"))
   const restore = (
     <Button
       aria-label={`Restore ${backup.name}`}
@@ -938,6 +940,8 @@ export const BackupTargetLink = React.memo(function BackupTargetLink({
     <InstanceCard
       className="w-full"
       instance={instance ?? fallback}
+      // A volume has no live state of its own to show.
+      showStatus={targetKind !== "volume"}
       name={target.name}
       nameClassName={
         available
@@ -1013,6 +1017,39 @@ const BackupTargetAnchor = React.memo(function BackupTargetAnchor({
         preload="intent"
         search={{ search: searchId }}
         to="/infra/databases"
+      >
+        {children}
+      </Link>
+    )
+  }
+
+  // An App's folder and its own volumes are on its Backups tab; a Kiln
+  // volume is on its Relay's volumes.
+  const owner =
+    targetKind === "app"
+      ? targetId
+      : targetKind === "volume"
+        ? /^([a-f0-9]{40})\//u.exec(targetId)?.[1]
+        : undefined
+  if (owner) {
+    return (
+      <Link
+        className={className}
+        params={{ appId: owner }}
+        preload="intent"
+        to="/app/$appId/backups"
+      >
+        {children}
+      </Link>
+    )
+  }
+  if (targetKind === "volume") {
+    return (
+      <Link
+        className={className}
+        params={{ relayId }}
+        preload="intent"
+        to="/relay/$relayId/volumes"
       >
         {children}
       </Link>
@@ -1117,23 +1154,33 @@ export function backupMatchesStatusFilter(
 }
 
 const BackupModeBadge = React.memo(function BackupModeBadge({
+  consistency,
   mode,
 }: {
+  consistency: Backup["consistency"]
   mode: Backup["backupMode"]
 }) {
   return (
     <Badge variant="outline" className="type-meta shrink-0 px-1.5 py-0">
       {mode === "incremental" ? "Incremental" : "Full"}
+      {consistency === "stopped"
+        ? " · Stopped"
+        : consistency === "live"
+          ? " · Live"
+          : ""}
     </Badge>
   )
 })
 
 export const BackupSizeDetails = React.memo(function BackupSizeDetails({
   bytes,
+  consistency = null,
   mode,
   warnings,
 }: {
   bytes: number | null
+  /** An App's folder or a volume: taken live, or with what uses it stopped. */
+  consistency?: Backup["consistency"]
   mode: Backup["backupMode"]
   warnings: ReadonlyArray<string>
 }) {
@@ -1142,7 +1189,7 @@ export const BackupSizeDetails = React.memo(function BackupSizeDetails({
       <span className="whitespace-nowrap">
         {bytes === null ? "—" : formatBytes(bytes)}
       </span>
-      <BackupModeBadge mode={mode} />
+      <BackupModeBadge consistency={consistency} mode={mode} />
       {warnings.length > 0 ? <BackupWarnings warnings={warnings} /> : null}
     </div>
   )
@@ -1203,12 +1250,38 @@ function backupTargetPresentation(
       name: "Kiln",
     }
   }
-  const shortId = backup.targetId.slice(0, 8)
+  // An App's own volume is named by the App and its name in Compose.
+  const ownVolume =
+    backup.targetKind === "volume"
+      ? /^[a-f0-9]{40}\/(.+)$/u.exec(backup.targetId)?.[1]
+      : undefined
+  const shortId = ownVolume ?? backup.targetId.slice(0, 8)
   return {
     id: backup.targetId,
     kindLabel: targetKindLabels[backup.targetKind],
     name: targetName === backup.targetId ? shortId : targetName,
   }
+}
+
+/**
+ * Compose volume identities include their owning App. Once it is gone,
+ * its volumes cannot be restored in place. Kiln volumes follow the Relay.
+ */
+export function backupTargetAvailable(
+  backup: Pick<Backup, "relayId" | "targetId" | "targetKind">,
+  availableRelayIds: ReadonlySet<string>,
+  availableTargetKeys: ReadonlySet<string>
+): boolean {
+  if (backup.targetKind === "volume" && backup.targetId.includes("/")) {
+    return availableTargetKeys.has(
+      targetKey("app", backup.relayId, backup.targetId.split("/")[0]!)
+    )
+  }
+  return backup.targetKind === "platform" || backup.targetKind === "volume"
+    ? availableRelayIds.has(backup.relayId)
+    : availableTargetKeys.has(
+        targetKey(backup.targetKind, backup.relayId, backup.targetId)
+      )
 }
 
 const targetKindLabels: Record<Backup["targetKind"], string> = {

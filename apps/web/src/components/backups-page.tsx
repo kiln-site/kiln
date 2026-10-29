@@ -49,6 +49,8 @@ import { showToast } from "@workspace/ui/components/sonner"
 import { Switch } from "@workspace/ui/components/switch"
 import type { BackupTarget } from "@workspace/contracts"
 import { KilnRestoreDialog } from "@/components/backups/kiln-restore-dialog"
+import { ResourceRestoreDialog } from "@/components/backups/resource-backup-dialogs"
+import { UnfinishedRestores } from "@/components/backups/unfinished-restores"
 import { BackupTargetSettings } from "@/components/backups/target-settings"
 import {
   useKilnBackupHost,
@@ -56,6 +58,10 @@ import {
 } from "@/components/kiln/kiln-presentation"
 import { ServerScopePicker } from "@/components/server-scope-picker"
 import type { ServerPickerOption } from "@/components/server-scope-picker"
+
+// The runs page also scopes to an App: what it owns or uses.
+type BackupScopeKind = "app" | "database" | "relay" | "server"
+type BackupScopeOption = ServerPickerOption<BackupScopeKind>
 import { backupHasReportedDeleteArtifactProgress } from "@/lib/backup-progress-presentation"
 import {
   readFileDownloadPreferences,
@@ -91,6 +97,7 @@ import { BackupToolbar } from "@/components/backups/toolbar"
 import { grantsAllowBackup } from "@/lib/backup-target-permissions"
 import {
   accessCapabilitiesQueryOptions,
+  appDirectoryQueryOptions,
   backupRunsInfiniteQueryOptions,
   backupStorageQueryOptions,
   backupPolicyQueryOptions,
@@ -119,6 +126,7 @@ import {
   type BackupConfiguration,
   type BackupConfigurationTarget,
 } from "@/components/backup-configuration-dialog"
+import type { getAppDirectory } from "@/server/apps"
 import type { getManagedDatabaseDirectory } from "@/server/databases"
 import type { getRelaySnapshot } from "@/server/relay"
 import {
@@ -348,6 +356,7 @@ export const BackupsPage = React.memo(function BackupsPage({
   const { data: capabilities } = useSuspenseQuery(
     accessCapabilitiesQueryOptions()
   )
+  const { data: apps } = useSuspenseQuery(appDirectoryQueryOptions())
   const [dialogStore] = React.useState(createBackupDialogStore)
   const [deleteFeedbackStore] = React.useState(createBackupDeleteFeedbackStore)
   const [selectionStore] = React.useState(createBackupSelectionStore)
@@ -355,7 +364,7 @@ export const BackupsPage = React.memo(function BackupsPage({
   const [statusFilterStore] = React.useState(() =>
     createBackupStatusFilterStore(filters.status)
   )
-  const selectedServer = React.useMemo((): ServerPickerOption | null => {
+  const selectedServer = React.useMemo((): BackupScopeOption | null => {
     if (!filters.relay || !filters.server) return null
     const kind = filters.kind ?? "server"
     const exists =
@@ -364,12 +373,17 @@ export const BackupsPage = React.memo(function BackupsPage({
             (item) =>
               item.id === filters.server && item.relayId === filters.relay
           )
-        : kind === "relay"
-          ? topology.nodes.some((item) => item.relayId === filters.relay)
-          : topology.servers.some(
+        : kind === "app"
+          ? apps.some(
               (item) =>
                 item.id === filters.server && item.relayId === filters.relay
             )
+          : kind === "relay"
+            ? topology.nodes.some((item) => item.relayId === filters.relay)
+            : topology.servers.some(
+                (item) =>
+                  item.id === filters.server && item.relayId === filters.relay
+              )
     return exists
       ? {
           id: filters.server,
@@ -379,7 +393,7 @@ export const BackupsPage = React.memo(function BackupsPage({
           relayName: filters.relay,
         }
       : null
-  }, [databases, filters.kind, filters.relay, filters.server, topology])
+  }, [apps, databases, filters.kind, filters.relay, filters.server, topology])
   const selectedKind = filters.kind && !filters.server ? filters.kind : null
   const availableTargetKeys = React.useMemo(() => {
     const keys = new Set<string>()
@@ -389,8 +403,9 @@ export const BackupsPage = React.memo(function BackupsPage({
     for (const database of databases) {
       keys.add(targetKey("database", database.relayId, database.id))
     }
+    for (const app of apps) keys.add(targetKey("app", app.relayId, app.id))
     return keys
-  }, [databases, topology.servers])
+  }, [apps, databases, topology.servers])
   const targetInstances = React.useMemo(() => {
     const instances = new Map<string, BackupTargetIdentity>()
     for (const server of topology.servers) {
@@ -407,6 +422,14 @@ export const BackupsPage = React.memo(function BackupsPage({
         relayId: database.relayId,
       })
     }
+    for (const app of apps) {
+      instances.set(targetKey("app", app.relayId, app.id), {
+        id: app.id,
+        kind: "app",
+        name: app.name,
+        relayId: app.relayId,
+      })
+    }
     for (const relay of topology.nodes) {
       instances.set(targetKey("platform", relay.relayId, "kiln"), {
         id: relay.relayId,
@@ -417,7 +440,7 @@ export const BackupsPage = React.memo(function BackupsPage({
       })
     }
     return instances
-  }, [databases, topology.nodes, topology.servers])
+  }, [apps, databases, topology.nodes, topology.servers])
   const availableRelayIds = React.useMemo(
     () =>
       new Set(
@@ -507,6 +530,7 @@ export const BackupsPage = React.memo(function BackupsPage({
         onFiltersChange={onFiltersChange}
         storage={storage}
       />
+      <UnfinishedRestores />
 
       <DataTableWorkspace
         before={<BackupRunsSyncKick />}
@@ -565,15 +589,17 @@ const BackupScopeControls = React.memo(function BackupScopeControls({
   const { data: capabilities } = useSuspenseQuery(
     accessCapabilitiesQueryOptions()
   )
+  const { data: apps } = useSuspenseQuery(appDirectoryQueryOptions())
   const kiln = useKilnBackupHost(capabilities.isPlatformAdmin)
   const scopeOptions = React.useMemo(
     () =>
       backupScopeOptions({
+        apps,
         databases,
         kiln: capabilities.isPlatformAdmin ? kiln : null,
         servers: backupScope.servers,
       }),
-    [backupScope.servers, capabilities.isPlatformAdmin, databases, kiln]
+    [apps, backupScope.servers, capabilities.isPlatformAdmin, databases, kiln]
   )
   const selectedServer = React.useMemo(
     () =>
@@ -606,8 +632,11 @@ const BackupScopeControls = React.memo(function BackupScopeControls({
         database.name
       )
     }
+    for (const app of apps) {
+      names.set(targetKey("app", app.relayId, app.id), app.name)
+    }
     return names
-  }, [backupScope.servers, databases])
+  }, [apps, backupScope.servers, databases])
   const storageNames = React.useMemo(
     () =>
       new Map(storage.map((destination) => [destination.id, destination.name])),
@@ -628,7 +657,7 @@ const BackupScopeControls = React.memo(function BackupScopeControls({
     )
   )
   const selectServer = React.useCallback(
-    (server: ServerPickerOption | null) => {
+    (server: BackupScopeOption | null) => {
       onFiltersChange({
         kind: server?.kind,
         relay: server?.relayId,
@@ -646,7 +675,7 @@ const BackupScopeControls = React.memo(function BackupScopeControls({
 
   return (
     <>
-      <ServerScopePicker
+      <ServerScopePicker<BackupScopeKind>
         allLabel="All instances"
         ariaLabel="Accessible instances"
         changeLabel="Change instance"
@@ -762,7 +791,7 @@ const BackupDataSurface = React.memo(function BackupDataSurface({
   nameStore: BackupNameStore
   searchStore: BackupSearchStore
   selectedKind: BackupFilters["kind"] | null
-  selectedServer: ServerPickerOption | null
+  selectedServer: BackupScopeOption | null
   selectionStore: BackupSelectionStore
   statusFilterStore: BackupStatusFilterStore
 }) {
@@ -785,7 +814,16 @@ const BackupDataSurface = React.memo(function BackupDataSurface({
     const timer = window.setTimeout(() => setDebouncedSearch(search), 250)
     return () => window.clearTimeout(timer)
   }, [search])
+  const app = React.useMemo(
+    () =>
+      selectedServer?.kind === "app"
+        ? { appId: selectedServer.id, relayId: selectedServer.relayId }
+        : null,
+    [selectedServer]
+  )
   const scope = React.useMemo((): BackupRunScope | null => {
+    // An App's backups are those of what it owns or uses (`app`).
+    if (selectedServer?.kind === "app") return null
     if (selectedServer) {
       return {
         kind: backupRunTargetKind(selectedServer.kind),
@@ -797,6 +835,7 @@ const BackupDataSurface = React.memo(function BackupDataSurface({
   }, [selectedKind, selectedServer])
   const queryInput = React.useMemo(
     () => ({
+      app,
       cursor: null,
       direction: sorting.direction,
       scope,
@@ -804,7 +843,7 @@ const BackupDataSurface = React.memo(function BackupDataSurface({
       sort: sorting.sort,
       status: status ?? null,
     }),
-    [debouncedSearch, scope, sorting.direction, sorting.sort, status]
+    [app, debouncedSearch, scope, sorting.direction, sorting.sort, status]
   )
   const queryClient = useQueryClient()
   const queryOptions = React.useMemo(
@@ -953,6 +992,20 @@ const BackupDialogHost = React.memo(function BackupDialogHost({
   if (dialog.kind === "restore" && dialog.backup.targetKind === "platform") {
     return (
       <KilnRestoreDialog backup={dialog.backup} open onOpenChange={close} />
+    )
+  }
+  if (
+    dialog.kind === "restore" &&
+    (dialog.backup.targetKind === "app" ||
+      dialog.backup.targetKind === "volume")
+  ) {
+    return (
+      <ResourceRestoreDialog
+        backup={dialog.backup}
+        open
+        targetName={backupTargetName(dialog.backup, targetNames)}
+        onOpenChange={close}
+      />
     )
   }
   if (dialog.kind === "restore") {
@@ -1347,6 +1400,7 @@ export const BackupSettingsPage = React.memo(function BackupSettingsPage({
     })
     const targetKeys = new Set(targets.map((target) => target.key))
     return backupScopeOptions({
+      apps: [],
       databases,
       kiln: capabilities.isPlatformAdmin ? kiln : null,
       servers: backupScope.servers,
@@ -1363,7 +1417,7 @@ export const BackupSettingsPage = React.memo(function BackupSettingsPage({
     [configurableOptions, filters.kind, filters.relay, filters.server]
   )
   const selectTarget = React.useCallback(
-    (target: ServerPickerOption | null) => {
+    (target: BackupScopeOption | null) => {
       onFiltersChange({
         kind: target?.kind,
         relay: target?.relayId,
@@ -1375,7 +1429,7 @@ export const BackupSettingsPage = React.memo(function BackupSettingsPage({
 
   return (
     <div className="mx-auto w-full max-w-[90rem] px-3 pb-10 sm:px-5">
-      <ServerScopePicker
+      <ServerScopePicker<BackupScopeKind>
         allLabel="No instance selected"
         allowAll={false}
         ariaLabel="Configurable backup targets"
@@ -1412,7 +1466,7 @@ function BackupSettingsSurface({
   storage,
 }: {
   isPlatformAdmin: boolean
-  target: ServerPickerOption
+  target: BackupScopeOption
   storage: Array<BackupStorage>
 }) {
   const policyTarget = React.useMemo(() => backupPolicyTarget(target), [target])
@@ -2108,15 +2162,17 @@ function DeleteBackupDialog({
 }
 
 function backupScopeOptions({
+  apps,
   databases,
   kiln,
   servers,
 }: {
+  apps: Awaited<ReturnType<typeof getAppDirectory>>
   databases: Awaited<ReturnType<typeof getManagedDatabaseDirectory>>
   kiln: KilnBackupHost | null
   servers: ReturnType<typeof selectBackupScope>["servers"]
-}): Array<ServerPickerOption> {
-  const options: Array<ServerPickerOption> = []
+}): Array<BackupScopeOption> {
+  const options: Array<BackupScopeOption> = []
   for (const server of servers) {
     options.push({
       description: `Game Server · ${server.relayName} · ${server.id}`,
@@ -2137,6 +2193,16 @@ function backupScopeOptions({
       relayName: database.relayName,
     })
   }
+  for (const app of apps) {
+    options.push({
+      description: `App · ${app.relayName} · its folder and the volumes it owns or uses`,
+      id: app.id,
+      kind: "app",
+      name: app.name,
+      relayId: app.relayId,
+      relayName: app.relayName,
+    })
+  }
   if (kiln) options.push(kilnScopeOption(kiln))
   return options
 }
@@ -2154,7 +2220,7 @@ function kilnScopeOption(kiln: KilnBackupHost): ServerPickerOption {
   }
 }
 
-function backupPolicyTarget(target: ServerPickerOption): BackupTarget {
+function backupPolicyTarget(target: BackupScopeOption): BackupTarget {
   const kind = target.kind ?? "server"
   return {
     id: target.id,
@@ -2162,7 +2228,7 @@ function backupPolicyTarget(target: ServerPickerOption): BackupTarget {
   }
 }
 
-function selectedBackupCreateTargetKey(selected: ServerPickerOption): string {
+function selectedBackupCreateTargetKey(selected: BackupScopeOption): string {
   const kind = selected.kind ?? "server"
   if (kind === "database") {
     return targetKey("database", selected.relayId, selected.id)
@@ -2253,9 +2319,10 @@ function hasBackupResourcePermission(
 }
 
 function backupRunTargetKind(
-  kind: ServerPickerOption["kind"]
+  kind: BackupScopeOption["kind"]
 ): BackupRunScope["kind"] {
   if (kind === "database") return "database"
+  if (kind === "app") return "app"
   if (kind === "relay") return "platform"
   return "instance"
 }

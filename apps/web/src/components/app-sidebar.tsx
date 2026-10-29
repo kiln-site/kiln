@@ -721,6 +721,8 @@ const AppTabNavigation = React.memo(function AppTabNavigation({
 
 function appTabRoute(tab: AppDestinationId) {
   switch (tab) {
+    case "backups":
+      return "/app/$appId/backups" as const
     case "files":
       return "/app/$appId/files/$" as const
     case "info":

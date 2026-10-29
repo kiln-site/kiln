@@ -42,6 +42,7 @@ import { tailscaleMemberIds } from "./0039_tailscale_member_ids"
 import { backupResourceTargets } from "./0042_backup_resource_targets"
 import { scheduleProjectionGenerations } from "./0043_schedule_projection_generations"
 import { resourceDeletions } from "./0044_resource_deletions"
+import { backupBatches } from "./0045_backup_batches"
 
 // Append new migrations with the next id. Never edit or reorder applied ones.
 export const migrations: ReadonlyArray<Migration> = [
@@ -87,4 +88,5 @@ export const migrations: ReadonlyArray<Migration> = [
   backupResourceTargets,
   scheduleProjectionGenerations,
   resourceDeletions,
+  backupBatches,
 ]

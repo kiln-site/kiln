@@ -5,6 +5,7 @@ import { queryKeys } from "@/lib/query-options"
 import { refreshHearthRealtimeTopics } from "./hearth-realtime"
 
 const backupRunsKey = queryKeys.backups.runs({
+  app: null,
   direction: "desc",
   scope: null,
   search: "",
@@ -12,6 +13,7 @@ const backupRunsKey = queryKeys.backups.runs({
   status: null,
 })
 const searchedBackupRunsKey = queryKeys.backups.runs({
+  app: null,
   direction: "desc",
   scope: null,
   search: "alpha",
@@ -19,6 +21,7 @@ const searchedBackupRunsKey = queryKeys.backups.runs({
   status: null,
 })
 const targetSortedBackupRunsKey = queryKeys.backups.runs({
+  app: null,
   direction: "asc",
   scope: null,
   search: "",

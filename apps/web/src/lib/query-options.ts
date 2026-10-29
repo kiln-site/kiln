@@ -15,9 +15,11 @@ import type { BackupTarget } from "@workspace/contracts"
 import { getAccessCapabilities, getInvitationPreview } from "@/server/access"
 import { getActivity } from "@/server/activity"
 import {
+  getAppBackups,
   getBackupPolicy,
   getBackupRunsPage,
   getBackupUsage,
+  getUnfinishedRestores,
 } from "@/server/backups"
 import { getBackupStorage } from "@/server/backup-storage"
 import { getKilnPlatform, getKilnPlatformLogs } from "@/server/platform"
@@ -156,6 +158,11 @@ export const queryKeys = {
     policy: (relayId: string, target: BackupTarget) =>
       ["backups", "policy", relayId, target.kind, target.id] as const,
     storage: ["backups", "storage"] as const,
+    /** An App's Backups tab. */
+    app: (relayId: string, appId: string) =>
+      ["backups", "app", relayId, appId] as const,
+    /** Restores whose swap didn't finish, on every Relay. */
+    unfinished: ["backups", "unfinished"] as const,
     usage: (relayId: string, target: BackupTarget) =>
       ["backups", "usage", relayId, target.kind, target.id] as const,
   },
@@ -875,6 +882,34 @@ export function relayWebRoutesQueryOptions(relayId: string) {
 
 // Sizes are Docker's last measure, taken in the background; changes
 // refresh the list through the `relay-volumes` topic.
+// An App's Backups tab: what's backed up and what isn't. Checked often while
+// a backup of it runs.
+export function appBackupsQueryOptions(relayId: string, appId: string) {
+  return queryOptions({
+    queryFn: () => getAppBackups({ data: { appId, relayId } }),
+    queryKey: queryKeys.backups.app(relayId, appId),
+    refetchInterval: (query) =>
+      query.state.data?.targets.some(
+        (target) =>
+          target.latest?.taskStatus === "queued" ||
+          target.latest?.taskStatus === "running"
+      )
+        ? 3_000
+        : false,
+    staleTime: 15_000,
+  })
+}
+
+// Restores whose swap didn't finish, each fencing its App's folder or
+// volume until someone finishes or abandons it.
+export function unfinishedRestoresQueryOptions() {
+  return queryOptions({
+    queryFn: () => getUnfinishedRestores(),
+    queryKey: queryKeys.backups.unfinished,
+    staleTime: 30_000,
+  })
+}
+
 export function relayVolumesQueryOptions(relayId: string) {
   return queryOptions({
     queryFn: () => getRelayVolumes({ data: { relayId } }),

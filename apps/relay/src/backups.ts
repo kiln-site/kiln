@@ -37,6 +37,7 @@ import {
   type BackupResticCreateTaskResult,
   type BackupRestoreTaskInput,
   type BackupTarget,
+  type BackupUnfinishedRestore,
   type BackupTaskInput,
   type BackupTaskPhase,
   type BackupTaskResult,
@@ -366,6 +367,21 @@ export class BackupManager {
       }
       yield* this.#settleTarRestore(journal, action, true)
     }).pipe(Effect.withSpan("Backups.resolveTarRestore"))
+  }
+
+  /** The restores of Apps' folders and volumes fencing their targets. */
+  unfinishedTarRestores(): Array<BackupUnfinishedRestore> {
+    return this.#fences.list().flatMap((journal) =>
+      journal.phase === "staging"
+        ? []
+        : [
+            {
+              phase: journal.phase,
+              target: journal.target,
+              taskId: journal.taskId,
+            },
+          ]
+    )
   }
 
   run() {

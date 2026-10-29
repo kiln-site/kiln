@@ -4,6 +4,7 @@ import { Link, useNavigate } from "@tanstack/react-router"
 import { sortFn_basic } from "@tanstack/react-table"
 import type { RelayVolume, RelayVolumeMount } from "@workspace/contracts"
 import {
+  Archive,
   Container,
   EllipsisVertical,
   FolderOpen,
@@ -69,7 +70,9 @@ import {
 } from "@/lib/data-table-search"
 import type { DataTableSource } from "@/lib/data-table-source"
 import type { InstancePickerItem } from "@/lib/instance-picker-filters"
+import { grantsAllowBackup } from "@/lib/backup-target-permissions"
 import {
+  accessCapabilitiesQueryOptions,
   appDirectoryQueryOptions,
   queryKeys,
   relayVolumesQueryOptions,
@@ -77,6 +80,7 @@ import {
 import { volumeDeletionsQueryOptions } from "@/lib/resource-deletion-queries"
 
 type VolumeDialog =
+  | { kind: "back-up"; volume: RelayVolume }
   | { kind: "create" }
   | { kind: "delete"; volume: RelayVolume }
   | { kind: "rename"; volume: RelayVolume }
@@ -101,6 +105,12 @@ const DeleteVolumeDialog = React.lazy(() =>
   }))
 )
 
+const ResourceBackupDialog = React.lazy(() =>
+  import("@/components/backups/resource-backup-dialogs").then((module) => ({
+    default: module.ResourceBackupDialog,
+  }))
+)
+
 const volumeColumnHelper = createDataTableColumnHelper<RelayVolume>()
 
 const volumeSearchFields = [
@@ -114,6 +124,8 @@ const volumeSearchFields = [
 export function RelayVolumesPage() {
   const { relay, routeId } = useRelayWorkspace()
   const canManage = useRelayPermission(relay.id, "relay.configure")
+  // A stopped backup stops and starts the Apps that use the volume.
+  const canManageApps = useRelayPermission(relay.id, "app.manage")
   const [searchStore] = React.useState(() => createDataTableSearchStore())
   const [dialog, setDialog] = React.useState<VolumeDialog>(null)
   // The App whose volumes are shown, those it owns or uses, or null for all.
@@ -163,6 +175,23 @@ export function RelayVolumesPage() {
             relayId={relay.id}
             volume={dialog.volume}
             onClose={closeDialog}
+          />
+        ) : null}
+        {dialog?.kind === "back-up" && dialog.volume.id ? (
+          <ResourceBackupDialog
+            description="A full archive of the volume, read through Docker with each file’s owner and mode."
+            open
+            relayId={relay.id}
+            stoppedUnavailable={
+              canManageApps
+                ? null
+                : "Stopping it takes permission to manage the Apps that use it"
+            }
+            target={{ id: dialog.volume.id, kind: "volume" }}
+            title={`Back up ${dialog.volume.name}`}
+            onOpenChange={(open) => {
+              if (!open) closeDialog()
+            }}
           />
         ) : null}
       </React.Suspense>
@@ -386,6 +415,7 @@ function VolumesTable({
 }) {
   const volumes = useQuery(relayVolumesQueryOptions(relayId))
   const canBrowse = useVolumeBrowsing(relayId)
+  const canBackUp = useVolumeBackups(relayId)
   // Why the Relay can't tell yet which Apps' configurations use a volume.
   const protectionPending =
     volumes.data?.protection.ready === false
@@ -458,6 +488,7 @@ function VolumesTable({
         enableSorting: false,
         cell: ({ row }) => (
           <VolumeActions
+            canBackUp={canBackUp(row.original)}
             canBrowse={canBrowse}
             canManage={canManage}
             protectionPending={protectionPending}
@@ -480,6 +511,7 @@ function VolumesTable({
       search: { fields: volumeSearchFields },
     })
   }, [
+    canBackUp,
     canBrowse,
     canManage,
     onDialog,
@@ -541,6 +573,27 @@ function VolumesTable({
 
 // Whether the volume's folder opens in the Relay's Files: with host files
 // mounted and permission to read them.
+// Who may back up which volume: a Kiln volume takes the Relay's backup
+// permission, an App's own volume the App's file permission.
+function useVolumeBackups(relayId: string) {
+  const { data: capabilities } = useQuery(accessCapabilitiesQueryOptions())
+  return React.useCallback(
+    (volume: RelayVolume) =>
+      volume.id !== null &&
+      volume.kind !== "relay" &&
+      Boolean(
+        capabilities &&
+        (capabilities.isPlatformAdmin ||
+          grantsAllowBackup(
+            capabilities.grants,
+            { id: volume.id, kind: "volume", relayId },
+            "backup.create"
+          ))
+      ),
+    [capabilities, relayId]
+  )
+}
+
 function useVolumeBrowsing(relayId: string): boolean {
   const canReadFiles = useRelayPermission(relayId, "relay.files.read")
   const { data: ready = false } = useQuery({
@@ -859,6 +912,7 @@ function mountHref(identity: InstancePickerItem["identity"]): string {
 }
 
 const VolumeActions = React.memo(function VolumeActions({
+  canBackUp,
   canBrowse,
   canManage,
   protectionPending,
@@ -867,6 +921,7 @@ const VolumeActions = React.memo(function VolumeActions({
   volume,
   onDialog,
 }: {
+  canBackUp: boolean
   canBrowse: boolean
   canManage: boolean
   protectionPending: string | null
@@ -972,6 +1027,16 @@ const VolumeActions = React.memo(function VolumeActions({
           <TooltipContent side="bottom">More actions</TooltipContent>
         </Tooltip>
         <DropdownMenuContent align="end" className="min-w-44">
+          {canBackUp ? (
+            <>
+              <DropdownMenuItem
+                onSelect={() => onDialog({ kind: "back-up", volume })}
+              >
+                <Archive /> Back up
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+            </>
+          ) : null}
           {canManage && kiln ? (
             <>
               <DropdownMenuItem

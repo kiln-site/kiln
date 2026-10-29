@@ -155,6 +155,11 @@ export class TarRestoreFences {
     }
   }
 
+  /** Every unfinished restore fencing a target. */
+  list(): Array<TarRestoreJournal> {
+    return [...this.#fences.values()]
+  }
+
   /** The unfinished restore fencing a target, if one is. */
   find(kind: "app" | "volume", id: string): TarRestoreJournal | null {
     return this.#fences.get(targetKey({ id, kind })) ?? null

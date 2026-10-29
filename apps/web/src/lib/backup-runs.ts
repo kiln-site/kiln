@@ -25,7 +25,14 @@ export const backupRunScopeSchema = z.union([
   z.strictObject({ kind: backupRunTargetKindSchema }),
 ])
 
+/** What one App owns or uses: its folder, its own volumes, and Kiln volumes. */
+export const backupRunAppSchema = z.strictObject({
+  appId: z.string().regex(/^[a-f0-9]{40}$/u),
+  relayId: z.string().min(1).max(43),
+})
+
 export const backupRunsQuerySchema = z.strictObject({
+  app: backupRunAppSchema.nullable().optional(),
   cursor: z.string().min(1).max(2_048).nullable().optional(),
   direction: z.enum(["asc", "desc"]).default("desc"),
   scope: backupRunScopeSchema.nullable().optional(),
@@ -63,9 +70,13 @@ export interface BackupRun {
     | "restic_snapshot"
     | "tar_archive"
   backupMode: "full" | "incremental"
+  /** The backups started with it, as an App's folder's and volumes' are. */
+  batchId: string | null
   bytes: number | null
   checksumSha256: string | null
   completedAt: string | null
+  /** An App's folder or a volume: taken live, or with what uses it stopped. */
+  consistency: "live" | "stopped" | null
   createdAt: string
   filename: string | null
   id: string
@@ -106,6 +117,7 @@ export type BackupRunsPage = CursorPage<BackupRun>
 
 export function normalizeBackupRunsQuery(input: BackupRunsQuery) {
   return {
+    app: input.app ?? null,
     cursor: input.cursor ?? null,
     direction: input.direction,
     scope: input.scope ?? null,
@@ -119,6 +131,7 @@ export function backupRunsQueryFingerprint(
   input: Omit<ReturnType<typeof normalizeBackupRunsQuery>, "cursor">
 ): string {
   return JSON.stringify({
+    app: input.app,
     direction: input.direction,
     scope: input.scope,
     search: input.search,

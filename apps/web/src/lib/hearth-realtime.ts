@@ -65,7 +65,11 @@ const hearthRealtimeQueryScopes = {
     prefix(["backups", "usage"]),
   ],
   "backup-storage": [exact(queryKeys.backups.storage)],
-  backups: [prefix(["backups", "usage"])],
+  backups: [
+    prefix(["backups", "usage"]),
+    prefix(["backups", "app"]),
+    exact(queryKeys.backups.unfinished),
+  ],
   "database-credentials": [prefix(["databases"])],
   "database-directory": [
     exact(queryKeys.databases.directory),

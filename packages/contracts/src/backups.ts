@@ -214,6 +214,24 @@ export const backupTargetSchema = z
   })
   .strict()
 
+/**
+ * A restore of an App's folder or a volume whose swap began and didn't
+ * finish, fencing its target until it's finished or abandoned.
+ */
+export const backupUnfinishedRestoreSchema = z.strictObject({
+  phase: z.enum(["clearing", "installing"]),
+  target: backupTargetSchema.refine(
+    (target) => target.kind === "app" || target.kind === "volume"
+  ),
+  taskId: backupTaskIdSchema,
+})
+export const backupUnfinishedRestoresSchema = z.array(
+  backupUnfinishedRestoreSchema
+)
+export type BackupUnfinishedRestore = z.infer<
+  typeof backupUnfinishedRestoreSchema
+>
+
 export const backupLocalDestinationSchema = z
   .object({
     artifactId: z.uuid().optional(),

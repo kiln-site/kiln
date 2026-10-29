@@ -129,9 +129,11 @@ interface BackupRow extends RowDataPacket {
     | "restic_snapshot"
     | "tar_archive"
   backup_mode: "full" | "incremental"
+  batch_id: string | null
   bytes: number | string | null
   checksum_sha256: string | null
   completed_at_ms: number | null
+  consistency: BackupConsistency | null
   created_by: string | null
   created_at_ms: number
   filename: string | null
@@ -180,6 +182,15 @@ export interface BackupCatalogPageInput {
    * follow them: every App on a Relay, when `appId` is null.
    */
   appScopes: ReadonlyArray<{ appId: string | null; relayId: string }>
+  /**
+   * Only backups of what an App owns or uses: its folder, the volumes its
+   * Compose project owns, and the Kiln volumes it uses.
+   */
+  app?: {
+    appId: string
+    relayId: string
+    volumeIds: ReadonlyArray<string>
+  } | null
   backupId?: string
   cursor: { id: string; value: number | string | null } | null
   direction: "asc" | "desc"
@@ -255,9 +266,13 @@ export interface BackupCatalogRecord {
   artifacts: Array<BackupArtifactRecord>
   artifactKind: BackupRow["artifact_kind"]
   backupMode: BackupRow["backup_mode"]
+  /** The backups started with it, as an App's folder's and volumes' are. */
+  batchId: string | null
   bytes: number | null
   checksumSha256: string | null
   completedAt: string | null
+  /** An App's folder or a volume: taken live, or with what uses it stopped. */
+  consistency: BackupConsistency | null
   createdBy: string | null
   createdAt: string
   filename: string | null
@@ -402,6 +417,8 @@ const reserveBackupCreateEffect = Effect.fn("backups.reserveCreate")(
   function* (input: {
     artifactKind: BackupCreateTaskInput["artifactKind"]
     backupId: string
+    /** Backups started together with it, as an App's are. */
+    batchId?: string
     /** An App's folder or a volume's; absent is live. */
     consistency?: BackupConsistency
     createdBy: string
@@ -623,9 +640,10 @@ const reserveBackupCreateEffect = Effect.fn("backups.reserveCreate")(
           `INSERT INTO ${databaseTable("backup")}
             (id, relay_id, target_kind, target_id, storage_id, artifact_kind,
              backup_mode, reason, status, name, object_key, repository_id,
-             consistency, warnings, created_by, created_at, updated_at)
+             consistency, batch_id, warnings, created_by, created_at,
+             updated_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?,
-                   'queued', ?, ?, ?, ?, JSON_ARRAY(), ?, ?, ?)`,
+                   'queued', ?, ?, ?, ?, ?, JSON_ARRAY(), ?, ?, ?)`,
           [
             input.backupId,
             input.relayId,
@@ -639,6 +657,7 @@ const reserveBackupCreateEffect = Effect.fn("backups.reserveCreate")(
             primaryArtifact.objectKey,
             repositoryId,
             input.consistency ?? null,
+            input.batchId ?? null,
             input.createdBy,
             now,
             now,
@@ -798,6 +817,7 @@ export const reservePlatformBackupEffect = Effect.fn("backups.reservePlatform")(
 export const reserveResourceBackupEffect = Effect.fn("backups.reserveResource")(
   (input: {
     backupId: string
+    batchId?: string
     consistency: BackupConsistency
     createdBy: string
     /** The deletion a final-delete backup is for. */
@@ -1389,6 +1409,7 @@ const backupCatalogColumns = `backup.id, backup.relay_id, backup.target_kind, ba
             backup.checksum_sha256, backup.restic_snapshot_id, backup.warnings,
             backup.created_by, backup.storage_id, backup.object_key,
             backup.linked_from_backup_id, backup.linked_from_target_id,
+            backup.consistency, backup.batch_id,
             backup.completed_at AS completed_at_ms,
             backup.created_at AS created_at_ms,
             task.id AS task_id, task.task_kind AS task_kind,
@@ -1500,9 +1521,11 @@ function backupCatalogRecordFromRow(
     artifacts,
     artifactKind: row.artifact_kind,
     backupMode: row.backup_mode,
+    batchId: row.batch_id,
     bytes: nullableDatabaseNumber(row.bytes, "backup bytes"),
     checksumSha256: row.checksum_sha256,
     completedAt: timestampIso(row.completed_at_ms, "backup completed at"),
+    consistency: row.consistency,
     createdBy: row.created_by,
     createdAt: requiredTimestampIso(row.created_at_ms, "backup created at"),
     filename: row.filename,
@@ -1550,6 +1573,92 @@ function backupCatalogRecordFromRow(
     warnings: parseWarnings(row.warnings),
   }
 }
+
+// The catalog records of the backups `where` names, with their artifacts.
+const catalogRecordsWhere = Effect.fnUntraced(function* (
+  where: string,
+  values: ReadonlyArray<string>,
+  limit: number
+) {
+  const database = yield* Database
+  const rows = yield* database.queryRows<BackupRow>(
+    "backup_catalog_where",
+    `SELECT ${backupCatalogColumns}
+       FROM ${databaseTable("backup")} backup
+       ${latestBackupTaskJoin}
+      WHERE backup.status <> 'deleted' AND ${where}
+      ORDER BY backup.created_at DESC, backup.id DESC
+      LIMIT ${Math.max(1, Math.floor(limit))}`,
+    [...values]
+  )
+  if (rows.length === 0) return []
+  const artifacts = yield* database.queryRows<BackupArtifactRow>(
+    "backup_artifact_catalog_where",
+    `SELECT id, backup_id, storage_id, status, filename, object_key,
+            bytes, checksum_sha256, error, error_code
+       FROM ${databaseTable("backup_artifact")}
+      WHERE backup_id IN (${rows.map(() => "?").join(", ")})
+        AND status <> 'deleted'
+      ORDER BY created_at ASC, id ASC`,
+    rows.map((row) => row.id)
+  )
+  const byBackup = new Map<string, Array<BackupArtifactRecord>>()
+  for (const artifact of artifacts) {
+    byBackup.set(artifact.backup_id, [
+      ...(byBackup.get(artifact.backup_id) ?? []),
+      backupArtifactFromRow(artifact),
+    ])
+  }
+  return rows.map((row) =>
+    backupCatalogRecordFromRow(row, byBackup.get(row.id) ?? [])
+  )
+})
+
+/**
+ * The newest backup of each of a Relay's targets, and every backup of the
+ * newest batch among them, as an App's page shows its folder and volumes.
+ */
+export const listTargetBackupsEffect = Effect.fn("backups.targets")(function* (
+  relayId: string,
+  targets: ReadonlyArray<{ id: string; kind: BackupTargetKind }>
+) {
+  if (targets.length === 0) return { batch: [], latest: [] }
+  const recent = yield* catalogRecordsWhere(
+    `backup.relay_id = ? AND (${targets
+      .map(() => "(backup.target_kind = ? AND backup.target_id = ?)")
+      .join(" OR ")})`,
+    [relayId, ...targets.flatMap((target) => [target.kind, target.id])],
+    500
+  )
+  const latest = new Map<string, BackupCatalogRecord>()
+  for (const record of recent) {
+    const key = `${record.targetKind}:${record.targetId}`
+    if (!latest.has(key)) latest.set(key, record)
+  }
+  const batchId = recent.find((record) => record.batchId !== null)?.batchId
+  const batch = batchId
+    ? yield* catalogRecordsWhere(
+        "backup.relay_id = ? AND backup.batch_id = ?",
+        [relayId, batchId],
+        100
+      )
+    : []
+  return { batch, latest: [...latest.values()] }
+})
+
+/** The backup a backup task belongs to, by the task's ID. */
+export const getBackupForTaskEffect = Effect.fn("backups.forTask")(function* (
+  taskId: string
+) {
+  const [record] = yield* catalogRecordsWhere(
+    `backup.id = (SELECT task_lookup.backup_id
+       FROM ${databaseTable("backup_task")} task_lookup
+      WHERE task_lookup.id = ?)`,
+    [taskId],
+    1
+  )
+  return record ?? null
+})
 
 export const getBackupCatalogRecordEffect = Effect.fn("backups.get")(function* (
   backupId: string
@@ -1646,6 +1755,22 @@ export const listBackupCatalogPageEffect = Effect.fn("backups.page")(function* (
   if (input.backupId) {
     clauses.push("backup.id = ?")
     values.push(input.backupId)
+  }
+  if (input.app) {
+    const used = input.app.volumeIds
+    clauses.push(`backup.relay_id = ? AND (
+        (backup.target_kind = 'app' AND backup.target_id = ?)
+        OR (backup.target_kind = 'volume' AND (backup.target_id LIKE ?${
+          used.length > 0
+            ? ` OR backup.target_id IN (${used.map(() => "?").join(", ")})`
+            : ""
+        })))`)
+    values.push(
+      input.app.relayId,
+      input.app.appId,
+      `${input.app.appId}/%`,
+      ...used
+    )
   }
   if (input.scope) {
     clauses.push("backup.target_kind = ?")

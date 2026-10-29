@@ -2984,6 +2984,8 @@ async function executeControlRequest(
       )
       return { resolved: true, taskId: input.taskId }
     }
+    case "backup.restore.unfinished":
+      return backupManager.unfinishedTarRestores()
     case "backup.task.get":
       return runRelayEffect(
         "relay.backups.get",

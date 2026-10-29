@@ -142,7 +142,8 @@ const AutomationsNavigation = React.memo(function AutomationsNavigation() {
           to={tab.to}
           activeOptions={{ exact: false }}
           search={(previous) => ({
-            kind: previous.kind,
+            // Backups' search can scope to an App, which automations don't.
+            kind: previous.kind === "app" ? undefined : previous.kind,
             relay: previous.relay,
             target: previous.target,
           })}

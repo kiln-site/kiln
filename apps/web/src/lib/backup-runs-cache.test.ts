@@ -252,6 +252,8 @@ function backupRun(
     artifacts: [],
     artifactKind: "archive",
     backupMode: "full",
+    batchId: null,
+    consistency: null,
     bytes: typeof orderValue === "number" ? orderValue : null,
     checksumSha256: null,
     completedAt: null,

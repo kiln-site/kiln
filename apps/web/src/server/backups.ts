@@ -99,6 +99,25 @@ const resourceBackupInputSchema = z.strictObject({
   target: backupTargetSchema.extend({ kind: z.enum(["app", "volume"]) }),
 })
 
+const appIdSchema = z.string().regex(/^[a-f0-9]{40}$/u)
+
+const appBackupsInputSchema = z.strictObject({
+  appId: appIdSchema,
+  relayId: relayIdSchema,
+})
+
+const createAppBackupsInputSchema = appBackupsInputSchema.extend({
+  consistency: backupConsistencySchema.default("live"),
+  name: z.string().trim().min(1).max(120),
+  storageIds: z.array(z.uuid().nullable()).min(1).max(16).optional(),
+})
+
+const resolveRestoreInputSchema = z.strictObject({
+  action: z.enum(["abandon", "finish"]),
+  relayId: relayIdSchema,
+  taskId: z.uuid(),
+})
+
 const backupIdInputSchema = z.strictObject({ backupId: z.uuid() })
 const backupRunForQuerySchema = backupRunsQuerySchema.extend({
   backupId: z.uuid(),
@@ -212,6 +231,45 @@ export const createResourceBackup = createServerFn({ method: "POST" })
   .handler(async ({ data }) =>
     createResourceBackupHandler(await requireEligibleResourceUser(), data)
   )
+
+// An App's Backups tab: its folder and the volumes its Compose project
+// owns, each with its newest backup, and what it mounts that isn't covered.
+export const getAppBackups = createServerFn({ method: "GET" })
+  .validator(appBackupsInputSchema)
+  .handler(async ({ data }) => {
+    const user = await requireEligibleResourceUser()
+    const { getAppBackupsHandler } = await import("@/server/app-backups.server")
+    return getAppBackupsHandler(user, data)
+  })
+
+// Backs up an App's folder and owned volumes together.
+export const createAppBackups = createServerFn({ method: "POST" })
+  .validator(createAppBackupsInputSchema)
+  .handler(async ({ data }) => {
+    const user = await requireEligibleResourceUser()
+    const { createAppBackupsHandler } =
+      await import("@/server/app-backups.server")
+    return createAppBackupsHandler(user, data)
+  })
+
+// Restores whose swap didn't finish, which fence their targets.
+export const getUnfinishedRestores = createServerFn({ method: "GET" }).handler(
+  async () => {
+    const user = await requireEligibleResourceUser()
+    const { listUnfinishedRestoresHandler } =
+      await import("@/server/app-backups.server")
+    return listUnfinishedRestoresHandler(user)
+  }
+)
+
+export const resolveUnfinishedRestore = createServerFn({ method: "POST" })
+  .validator(resolveRestoreInputSchema)
+  .handler(async ({ data }) => {
+    const user = await requireEligibleResourceUser()
+    const { resolveUnfinishedRestoreHandler } =
+      await import("@/server/app-backups.server")
+    return resolveUnfinishedRestoreHandler(user, data)
+  })
 
 export const getBackupRunsPage = createServerFn({ method: "GET" })
   .validator(backupRunsQuerySchema)

@@ -16,6 +16,7 @@ import type { BackupRun } from "@/lib/backup-runs"
 import { relayFleetInstance } from "@/lib/relay-fleet"
 import {
   accessCapabilitiesQueryOptions,
+  appDirectoryQueryOptions,
   backupRunsInfiniteQueryOptions,
   backupStorageQueryOptions,
   managedDatabaseDirectoryQueryOptions,
@@ -51,6 +52,7 @@ it("resolves backup identity cards by target kind and Relay, keeping missing tar
     },
   })
   client.setQueryData(backupStorageQueryOptions().queryKey, [])
+  client.setQueryData(appDirectoryQueryOptions().queryKey, [])
   client.setQueryData(relaySnapshotQueryOptions().queryKey, {
     nodes: [],
     instances: [
@@ -162,6 +164,8 @@ function backupRun(
     artifacts: [],
     artifactKind: "archive",
     backupMode: "full",
+    batchId: null,
+    consistency: null,
     bytes: 1024,
     checksumSha256: null,
     completedAt: "2026-10-23T12:00:00.000Z",

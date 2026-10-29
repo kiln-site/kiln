@@ -61,6 +61,8 @@ const backup = {
   taskStatus: "succeeded",
   taskUpdatedAt: "2026-08-10T00:00:00.000Z",
   warnings: [],
+  batchId: null,
+  consistency: null,
 } satisfies BackupCatalogRecord
 
 describe("backup access", () => {

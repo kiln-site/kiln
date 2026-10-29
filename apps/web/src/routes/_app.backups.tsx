@@ -5,7 +5,7 @@ import { BackupsRouteOutlet } from "@/components/backups-layout"
 import { requireGlobalDestinationAccess } from "@/lib/route-access"
 
 const backupSearchSchema = z.object({
-  kind: z.enum(["database", "relay", "server"]).optional(),
+  kind: z.enum(["app", "database", "relay", "server"]).optional(),
   relay: z.string().max(120).optional(),
   search: z.string().max(160).optional(),
   server: z.string().max(120).optional(),

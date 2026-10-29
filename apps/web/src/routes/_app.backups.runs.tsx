@@ -7,6 +7,7 @@ import {
   type BackupFilters,
 } from "@/components/backups/state"
 import {
+  appDirectoryQueryOptions,
   backupStorageQueryOptions,
   accessCapabilitiesQueryOptions,
   managedDatabaseDirectoryQueryOptions,
@@ -20,6 +21,7 @@ export const Route = createFileRoute("/_app/backups/runs")({
       context.queryClient.ensureQueryData(backupStorageQueryOptions()),
       context.queryClient.ensureQueryData(accessCapabilitiesQueryOptions()),
       context.queryClient.ensureQueryData(relaySnapshotQueryOptions()),
+      context.queryClient.ensureQueryData(appDirectoryQueryOptions()),
       context.queryClient.ensureQueryData(
         managedDatabaseDirectoryQueryOptions()
       ),

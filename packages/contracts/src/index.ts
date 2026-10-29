@@ -751,6 +751,7 @@ export const relayAppVolumesImportSchema = z.strictObject({
 export const RELAY_VOLUME_REFERENCES_PENDING =
   "The Relay doesn't know yet which Apps use its volumes"
 export type RelayVolume = z.infer<typeof relayVolumeSchema>
+export type RelayVolumes = z.infer<typeof relayVolumesSchema>
 export type RelayVolumeMount = z.infer<typeof relayVolumeMountSchema>
 export type RelayVolumeUser = z.infer<typeof relayVolumeUserSchema>
 export type RelayUncoveredMount = z.infer<typeof relayUncoveredMountSchema>

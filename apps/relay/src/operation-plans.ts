@@ -477,6 +477,7 @@ export function controlRequestLocks(
     case "backup.task.cancel":
     // It takes the locks its restore held, in its own step.
     case "backup.restore.resolve":
+    case "backup.restore.unfinished":
     case "backup.task.get":
     case "backup.task.list":
     // A transfer packs its source and installs its pull in lanes of its own.

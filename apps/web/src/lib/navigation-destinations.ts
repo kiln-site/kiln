@@ -1,5 +1,6 @@
 import type { ComponentType } from "react"
 import {
+  Archive,
   Bell,
   CalendarDays,
   CircleUserRound,
@@ -452,6 +453,7 @@ export function databaseDestinationHref(
 }
 
 export type AppDestinationId =
+  | "backups"
   | "files"
   | "info"
   | "logs"
@@ -506,6 +508,14 @@ export const appDestinations = [
     label: "Files",
     permission: "app.files.read",
     to: "/app/$appId/files/$",
+  },
+  {
+    icon: Archive,
+    id: "backups",
+    keywords: ["restore", "volumes", "snapshots"],
+    label: "Backups",
+    permission: "app.read",
+    to: "/app/$appId/backups",
   },
   {
     icon: ScrollText,

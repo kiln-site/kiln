@@ -509,6 +509,28 @@ the target must be stopped and defaults to "Take a safety backup first."
 Storage configuration clearly separates platform destinations from "My S3"
 destinations and never redisplays a saved secret.
 
+The picker also scopes to an App, showing the backups of what it owns or
+uses: its folder, the volumes its Compose project owns, and the Kiln volumes
+its configuration names or its containers mount. A row of an App's folder
+or a volume says whether it was taken live or stopped, and its restore
+dialog says what must be stopped (the App, or every container that mounts
+the volume, listing those running and the Apps that use it).
+
+An App's Backups tab lists its folder and each volume it owns, each with its
+newest backup, a Back up action, and a Restore from it. "Back up App" starts
+a backup of each together, recording them as one batch (`batch_id`), and the
+tab says whether all of the newest batch succeeded. Below, it lists what the
+App mounts that its backups don't cover: Kiln volumes it uses, which are
+backed up on their own from their Relay's volumes page, and the mounts the
+Relay reports as uncovered. Every backup dialog for an App's folder or a
+volume offers live (the default) or stopped; stopped needs `app.manage`.
+
+A restore whose swap didn't finish shows on the Backups page and on its
+App's tab as "A restore didn't finish", with Finish and Abandon for those
+who may restore its target (`backup.restore.unfinished` lists them; Hearth
+calls `backup.restore.resolve`, checking authority over every App that uses
+the target).
+
 ## CLI
 
 The CLI mirrors the same authorization and task APIs:

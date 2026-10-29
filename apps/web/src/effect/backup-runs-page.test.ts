@@ -128,6 +128,52 @@ describeMysql("backup runs page", () => {
         })
     )
 
+    it.effect(
+      "filters by an App: its folder, the volumes it owns, and the Kiln volumes it uses",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          const website = "a".repeat(40)
+          const tar = { artifact_kind: "tar_archive", relay_id: "relay-a" }
+          yield* insertCatalogBackup("folder", {
+            ...tar,
+            target_id: website,
+            target_kind: "app",
+          })
+          yield* insertCatalogBackup("own", {
+            ...tar,
+            target_id: `${website}/pgdata`,
+            target_kind: "volume",
+          })
+          yield* insertCatalogBackup("used", {
+            ...tar,
+            target_id: "c".repeat(40),
+            target_kind: "volume",
+          })
+          yield* insertCatalogBackup("unused", {
+            ...tar,
+            target_id: "d".repeat(40),
+            target_kind: "volume",
+          })
+          yield* insertCatalogBackup("other-app", {
+            ...tar,
+            target_id: "b".repeat(40),
+            target_kind: "app",
+          })
+
+          assert.sameMembers(
+            yield* pageIds({
+              app: {
+                appId: website,
+                relayId: "relay-a",
+                volumeIds: ["c".repeat(40)],
+              },
+            }),
+            ["folder", "own", "used"]
+          )
+        })
+    )
+
     it.effect("shows non-admins only backups their grants cover", () =>
       Effect.gen(function* () {
         yield* resetDatabase

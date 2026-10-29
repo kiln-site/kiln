@@ -4,6 +4,7 @@ import {
   databaseEngineSupportsLogicalBackups,
   relayBackupTaskSchema,
   relaySnapshotSchema,
+  relayVolumesSchema,
   type AccessGrantScopeType,
   type BackupTarget,
   relayLinkedBackupsV1Feature,
@@ -59,6 +60,8 @@ import {
   requireBackupTargetRestore,
 } from "@/server/backup-target-access.server"
 import { loadAppConfigEffect } from "@/effect/managed-apps"
+import { recoverPromise } from "@/effect/promise"
+import { configuredVolumeIds } from "@/lib/app-volume-references.server"
 import {
   resolveAuthorizedBackupStorageSelection,
   resolveBackupStorageSelection,
@@ -354,6 +357,7 @@ export async function getBackupRunsPageHandler(
       ...(isPlatformAdmin(user)
         ? { allowedScopes: [], appScopes: [] }
         : backupReadableScopes(await listUserGrants(user.id))),
+      app: query.app ? await appBackupFilter(query.app, user.id) : null,
       cursor,
       direction: query.direction,
       isAdmin: isPlatformAdmin(user),
@@ -393,6 +397,7 @@ export async function getBackupRunForQueryHandler(
       ...(isPlatformAdmin(user)
         ? { allowedScopes: [], appScopes: [] }
         : backupReadableScopes(await listUserGrants(user.id))),
+      app: query.app ? await appBackupFilter(query.app, user.id) : null,
       backupId: data.backupId,
       cursor: null,
       direction: query.direction,
@@ -1190,6 +1195,47 @@ async function validateRequestedStorage(
         }
       })
   )
+}
+
+/**
+ * What one App owns or uses, to filter backups by: its folder, the volumes
+ * its Compose project owns (by ID), and the Kiln volumes its configuration
+ * names or, as its Relay says, its containers mount.
+ */
+async function appBackupFilter(
+  app: { appId: string; relayId: string },
+  userId: string
+) {
+  const [config, listing] = await Promise.all([
+    runAppEffect(
+      "backups.appFilter.config",
+      loadAppConfigEffect(app.relayId, app.appId)
+    ),
+    recoverPromise(
+      async () => {
+        const relay = (await listPersistedRelays()).find(
+          (candidate) => candidate.id === app.relayId && candidate.enabled
+        )
+        return relay
+          ? relayVolumesSchema.parse(
+              await relayRpc(relay, "relay.volumes.read", {}, 10_000, userId)
+            )
+          : null
+      },
+      () => null
+    ),
+  ])
+  const used = new Set(config ? configuredVolumeIds(config.config) : [])
+  for (const volume of listing?.volumes ?? []) {
+    if (
+      volume.kind === "kiln" &&
+      volume.id !== null &&
+      volume.users.some((user) => user.appId === app.appId)
+    ) {
+      used.add(volume.id)
+    }
+  }
+  return { ...app, volumeIds: [...used] }
 }
 
 async function requireBackupRelay(relayId: string): Promise<PersistedRelay> {

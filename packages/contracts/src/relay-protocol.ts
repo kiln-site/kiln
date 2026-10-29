@@ -227,6 +227,7 @@ export const relayControlOperations = [
   "backup.task.enqueue",
   "backup.task.cancel",
   "backup.restore.resolve",
+  "backup.restore.unfinished",
   "backup.task.get",
   "backup.task.list",
   "transfer.source.prepare",
@@ -421,6 +422,7 @@ export function relayControlOperationChanges(
     case "app.image.check":
     case "backup.task.get":
     case "backup.task.list":
+    case "backup.restore.unfinished":
     case "transfer.source.get":
     case "transfer.pull.get":
     case "transfer.space":
@@ -640,6 +642,8 @@ export function relayControlDeadlineMs(
   if (operation === "database.network.import") return 120_000
   // Dumps take as long as the database's data does.
   if (operation === "database.dump.export") return 60 * 60_000
+  // Finishing a restore stops what runs on its target and moves its files.
+  if (operation === "backup.restore.resolve") return 30 * 60_000
   // Docker walks every volume to measure them.
   if (operation === "database.inspect") return 75_000
   // Measuring a root walks every file in it.

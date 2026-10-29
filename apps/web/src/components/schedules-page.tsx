@@ -1336,12 +1336,13 @@ const syncTriggerLabel = {
 
 // Leaving history keeps the scope picker's choice and drops the run.
 function automationScope(previous: {
-  kind?: "database" | "relay" | "server"
+  kind?: "app" | "database" | "relay" | "server"
   relay?: string
   target?: string
 }) {
+  // Backups' search can scope to an App, which automations don't.
   return {
-    kind: previous.kind,
+    kind: previous.kind === "app" ? undefined : previous.kind,
     relay: previous.relay,
     target: previous.target,
   }

@@ -39,6 +39,7 @@ import {
   BackupTaskFeedback,
   DesktopBackupTaskFeedback,
   backupCanBeRemoved,
+  backupTargetAvailable,
   targetKey,
 } from "@/components/backups/table-row"
 import type {
@@ -149,13 +150,11 @@ export const BackupTable = React.memo(function BackupTable({
         )}
         nameStore={nameStore}
         selectionStore={selectionStore}
-        targetAvailable={
-          backup.targetKind === "platform"
-            ? availableRelayIds.has(backup.relayId)
-            : availableTargetKeys.has(
-                targetKey(backup.targetKind, backup.relayId, backup.targetId)
-              )
-        }
+        targetAvailable={backupTargetAvailable(
+          backup,
+          availableRelayIds,
+          availableTargetKeys
+        )}
       />
     ),
     [
@@ -345,12 +344,11 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
         sortFn: "text",
         cell: ({ row }) => {
           const backup = row.original
-          const targetAvailable =
-            backup.targetKind === "platform"
-              ? availableRelayIds.has(backup.relayId)
-              : availableTargetKeys.has(
-                  targetKey(backup.targetKind, backup.relayId, backup.targetId)
-                )
+          const targetAvailable = backupTargetAvailable(
+            backup,
+            availableRelayIds,
+            availableTargetKeys
+          )
 
           return (
             <BackupTargetLink
@@ -390,6 +388,7 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
             ) : (
               <BackupSizeDetails
                 bytes={backupDisplayBytes(backup)}
+                consistency={backup.consistency}
                 mode={backup.backupMode}
                 warnings={backup.warnings}
               />
@@ -436,12 +435,11 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
         enableSorting: false,
         cell: ({ row }) => {
           const backup = row.original
-          const targetAvailable =
-            backup.targetKind === "platform"
-              ? availableRelayIds.has(backup.relayId)
-              : availableTargetKeys.has(
-                  targetKey(backup.targetKind, backup.relayId, backup.targetId)
-                )
+          const targetAvailable = backupTargetAvailable(
+            backup,
+            availableRelayIds,
+            availableTargetKeys
+          )
           return (
             <BackupRowActions
               backup={backup}
@@ -782,6 +780,7 @@ const BackupMobileRow = React.memo(function BackupMobileRow({
         <div className="mt-2.5 grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-end gap-x-3 text-xs text-muted-foreground">
           <BackupSizeDetails
             bytes={displayBytes}
+            consistency={backup.consistency}
             mode={backup.backupMode}
             warnings={backup.warnings}
           />

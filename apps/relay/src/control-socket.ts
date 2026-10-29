@@ -1840,6 +1840,7 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       return "backup.restore"
     case "backup.task.get":
     case "backup.task.list":
+    case "backup.restore.unfinished":
       return "backup.read"
     // Copying files between Relays is downloading them from the source and
     // uploading them to the destination.
