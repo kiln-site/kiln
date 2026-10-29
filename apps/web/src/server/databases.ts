@@ -718,7 +718,10 @@ export const restartDatabaseTerminal = createServerFn({ method: "POST" })
   })
 
 export const deleteManagedDatabase = createServerFn({ method: "POST" })
-  .validator(databaseInputSchema.extend(deleteConfirmationSchema.shape))
+  .validator(databaseInputSchema.extend(deleteConfirmationSchema.shape).extend({
+    createBackup: z.boolean().default(true),
+    storageId: z.uuid().nullable().optional(),
+  }))
   .handler(async ({ data }) => {
     const { relay, user } = await authorizedDatabase(data, "database.delete")
     const database = (
@@ -743,6 +746,7 @@ export const deleteManagedDatabase = createServerFn({ method: "POST" })
     // when an earlier delete stopped partway, whose leftover data volume
     // the Relay keeps.
     const finalBackup =
+      data.createBackup &&
       onRelay === "running" &&
       databaseEngineSupportsLogicalBackups(database.engine)
     if (finalBackup) {
@@ -758,6 +762,7 @@ export const deleteManagedDatabase = createServerFn({ method: "POST" })
       kind: "database",
       relayId: relay.id,
       resourceId: data.databaseId,
+      storageId: data.storageId,
       user,
     })
     await awaitResourceDeletion(deletion)

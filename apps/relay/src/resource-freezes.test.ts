@@ -301,6 +301,57 @@ describe("resources frozen for deletion", () => {
     expect(container!.state.running).toBe(false)
   })
 
+  it("refuses every change to a frozen volume, even an App starting that mounts it, but its final backup and deletion", async () => {
+    const harness = await relayHarness()
+    const volumeId = "f".repeat(40)
+    await harness.freezes.freeze(
+      { deletionId: deletion, id: volumeId, kind: "volume" },
+      quiet
+    )
+    // The App's configuration names the volume, so starting it reads it.
+    const usesVolume = () => [volumeId]
+    const startApp = () =>
+      attempt(
+        harness,
+        "app.action",
+        controlRequestLocks(
+          "app.action",
+          { action: "start", appId },
+          resolve,
+          usesVolume
+        )!
+      )
+    const volumeBackup = backupTaskLocks(
+      {
+        kind: "create",
+        target: { id: volumeId, kind: "volume" },
+      } as Parameters<typeof backupTaskLocks>[0],
+      resolve,
+      none
+    )
+
+    const refused = "This volume is being deleted"
+    expect(await startApp()).toBe(refused)
+    expect(
+      await attempt(
+        harness,
+        "relay.volumes.rename",
+        control("relay.volumes.rename", { id: volumeId })
+      )
+    ).toBe(refused)
+    expect(await attempt(harness, "backup.create", volumeBackup)).toBe("ran")
+    expect(
+      await attempt(
+        harness,
+        "relay.volumes.delete",
+        control("relay.volumes.delete", { id: volumeId })
+      )
+    ).toBe("ran")
+
+    await harness.freezes.forget("volume", volumeId)
+    expect(await startApp()).toBe("ran")
+  })
+
   it("forgets the freeze of a resource the Relay deleted", async () => {
     const harness = await relayHarness()
     await harness.freezes.freeze(

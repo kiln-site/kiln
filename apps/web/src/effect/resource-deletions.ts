@@ -17,7 +17,7 @@ import { databaseTable } from "@/lib/database-config"
 // one row transition, so a retry and a cancel asked at once are decided by
 // whichever commits first, and the other is refused.
 
-export type ResourceDeletionKind = "instance" | "database"
+export type ResourceDeletionKind = "instance" | "database" | "app" | "volume"
 
 export type ResourceDeletionStatus =
   | "pending"
@@ -127,6 +127,22 @@ export const findResourceDeletionEffect = Effect.fn("resourceDeletions.find")(
     return rows[0] ? toResourceDeletion(rows[0]) : null
   }
 )
+
+/** A Relay's deletions of one kind that are running or stopped. */
+export const listResourceDeletionsOfKindEffect = Effect.fn(
+  "resourceDeletions.listOfKind"
+)(function* (relayId: string, kind: ResourceDeletionKind) {
+  const database = yield* Database
+  const rows = yield* database.queryRows<ResourceDeletionRow>(
+    "resource_deletion_list_of_kind",
+    `${select}
+      WHERE relay_id = ? AND resource_kind = ?
+        AND status NOT IN ('completed', 'cancelled')
+      ORDER BY created_at ASC, id ASC`,
+    [relayId, kind]
+  )
+  return rows.map(toResourceDeletion)
+})
 
 /**
  * Deletions, and keeps after a failed one, whose current attempt has no

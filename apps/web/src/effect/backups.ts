@@ -407,6 +407,11 @@ const reserveBackupCreateEffect = Effect.fn("backups.reserveCreate")(
     /** The deletion a final-delete backup is for, which records it. */
     deletionId?: string
     exclude: ReadonlyArray<string>
+    /**
+     * The final backup the deletion took before this one, of an App's
+     * folder or one of its volumes; null or absent for its first.
+     */
+    previousFinalBackupId?: string | null
     mode?: BackupCreateTaskInput["mode"]
     name: string
     reason?: BackupCreateTaskInput["reason"]
@@ -673,21 +678,21 @@ const reserveBackupCreateEffect = Effect.fn("backups.reserveCreate")(
         )
         if (input.reason === "final_delete") {
           // Recorded on its deletion in the same transaction, so the
-          // deletion follows this backup by its ID and never takes two.
+          // deletion follows this backup by its ID and never takes two. An
+          // App's parts are taken one after another, each replacing the one
+          // before, which it names.
           const recorded = input.deletionId
             ? yield* transaction.execute(
                 `UPDATE ${databaseTable("resource_deletion")}
                     SET backup_id = ?, status = 'backing_up', updated_at = ?
-                  WHERE id = ? AND relay_id = ? AND resource_kind = ?
-                    AND resource_id = ? AND backup_id IS NULL
-                    AND status = 'pending'`,
+                  WHERE id = ? AND relay_id = ? AND backup_id <=> ?
+                    AND status IN ('pending', 'backing_up')`,
                 [
                   input.backupId,
                   now,
                   input.deletionId,
                   input.relayId,
-                  input.targetKind,
-                  input.targetId,
+                  input.previousFinalBackupId ?? null,
                 ]
               )
             : null
@@ -794,7 +799,11 @@ export const reserveResourceBackupEffect = Effect.fn("backups.reserveResource")(
     backupId: string
     consistency: BackupConsistency
     createdBy: string
+    /** The deletion a final-delete backup is for. */
+    deletionId?: string
     name: string
+    /** The final backup of the same deletion before this one. */
+    previousFinalBackupId?: string | null
     reason?: BackupCreateTaskInput["reason"]
     relayId: string
     requestedMaxBytes: number | null

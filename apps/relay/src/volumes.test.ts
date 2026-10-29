@@ -278,6 +278,25 @@ describe("Relay volumes", () => {
     expect(await listed(volumes)).toEqual([])
   })
 
+  it("says whether a volume could be deleted without deleting it, as freezing it for its deletion asks", async () => {
+    const volumes = await relayVolumes()
+    const created = await run(volumes.create(volumeId, "data"))
+    const container = fakeDocker.addContainer({
+      mounts: [
+        { destination: "/data", source: created.dockerName, type: "volume" },
+      ],
+      name: "worker",
+    })
+
+    await expect(run(volumes.requireDeletable(volumeId))).rejects.toThrow(
+      "worker mounts this volume"
+    )
+    fakeDocker.containers.delete(container.id)
+    await run(volumes.requireDeletable(volumeId))
+
+    expect(fakeDocker.volumes.has(created.dockerName)).toBe(true)
+  })
+
   it("lists the Relay's own data volume, which no request can name to delete", async () => {
     const harness = await relayHarness()
     const volumes = await relayVolumes(harness)
@@ -325,6 +344,10 @@ describe("Relay volumes", () => {
       )
     )
     await expect(run(volumes.delete(volumeId))).rejects.toThrow(
+      "An App's configuration mounts this volume"
+    )
+    // Nor frozen for its deletion.
+    await expect(run(volumes.requireDeletable(volumeId))).rejects.toThrow(
       "An App's configuration mounts this volume"
     )
     expect(fakeDocker.volumes.has(created.dockerName)).toBe(true)

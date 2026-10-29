@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto"
 import {
   relayControlDeadlineMs,
   relaySnapshotSchema,
+  relayVolumesSchema,
 } from "@workspace/contracts"
 import { exclusive, shared } from "@workspace/operations"
 import { Cause, Duration, Effect, Schema } from "effect"
@@ -13,6 +14,7 @@ import {
   purgeInstanceBackupRepositoriesEffect,
   reserveDatabaseBackupEffect,
   reserveInstanceBackupEffect,
+  reserveResourceBackupEffect,
 } from "@/effect/backups"
 import { promiseEffect } from "@/effect/promise"
 import {
@@ -41,13 +43,15 @@ import { activeRelay } from "@/lib/relay-registry"
 import { currentActingUser } from "@/operations/acting-user"
 import { durableOperation, startDurableOperation } from "@/operations/durable"
 import { RelayCommandError, relayCommand } from "@/operations/relay-command"
+import { requireBackupTargetPermission } from "@/server/backup-target-access.server"
 import { cleanUpDeletedResourceEffect } from "@/server/resource-deletion-cleanup"
 import { deliverPendingSchedules } from "@/server/schedule-deployment.server"
 
-// Deleting a game server or database, as one durable operation per attempt
-// (docs/resource-unification.md, Deletion): check the person who asked may
-// still delete it, freeze it on its Relay, take its final backup if one was
-// asked for, delete it on the Relay, then clean up after it in Hearth. Each
+// Deleting a game server, database, App, or Kiln volume, as one durable
+// operation per attempt (docs/resource-unification.md, Deletion): check the
+// person who asked may still delete it, freeze it on its Relay, take its
+// final backup if one was asked for, delete it on the Relay, then clean up
+// after it in Hearth. Each
 // step is safe to run again after a restart, and a finished one doesn't run
 // again. Its row (`resource_deletion`) says how far it got; a failure stops
 // there with the resource still frozen, for its person to try again, delete
@@ -67,7 +71,8 @@ import { deliverPendingSchedules } from "@/server/schedule-deployment.server"
 // in: a deletion must never wait on a child operation that needs the whole
 // resource exclusively (an App's volumes, say), since it holds the resource
 // shared and the child would wait for it forever. Do such work as steps of
-// this operation instead.
+// this operation instead, as an App's final backups are: its folder, then
+// each of its volumes, one after another.
 
 /** A step of a deletion that stopped it, with what to tell its person. */
 export class ResourceDeletionError extends Schema.TaggedError<ResourceDeletionError>()(
@@ -78,11 +83,18 @@ export class ResourceDeletionError extends Schema.TaggedError<ResourceDeletionEr
 const DeletionInput = Schema.Struct({
   attempt: Schema.Number,
   deletionId: Schema.String,
-  kind: Schema.Literals(["instance", "database"]),
+  kind: Schema.Literals(["instance", "database", "app", "volume"]),
   relayId: Schema.String,
   resourceId: Schema.String,
 })
 type DeletionInput = typeof DeletionInput.Type
+
+/** One backup a deletion's final backup is made of. */
+const FinalBackupPart = Schema.Struct({
+  id: Schema.String,
+  kind: Schema.Literals(["instance", "database", "app", "volume"]),
+})
+type FinalBackupPart = typeof FinalBackupPart.Type
 
 const deletionLocks = (resource: {
   kind: ResourceDeletionKind
@@ -224,17 +236,38 @@ const checkAccess = (input: DeletionInput) =>
     const deletion = yield* loadResourceDeletionEffect(input.deletionId)
     if (!deletion) return yield* Effect.die("The deletion is gone")
     const user = yield* currentActingUser(deletion.requestedBy, deletion.actor)
-    yield* requireRelayPermissionsEffect({
-      permissions: [
-        input.kind === "instance" ? "instance.delete" : "database.delete",
-        ...(deletion.finalBackup ? (["backup.create"] as const) : []),
-      ],
-      relayId: input.relayId,
-      user,
-      ...(input.kind === "instance"
-        ? { instanceId: input.resourceId }
-        : { databaseId: input.resourceId }),
-    })
+    if (input.kind === "instance" || input.kind === "database") {
+      yield* requireRelayPermissionsEffect({
+        permissions: [
+          input.kind === "instance" ? "instance.delete" : "database.delete",
+          ...(deletion.finalBackup ? (["backup.create"] as const) : []),
+        ],
+        relayId: input.relayId,
+        user,
+        ...(input.kind === "instance"
+          ? { instanceId: input.resourceId }
+          : { databaseId: input.resourceId }),
+      })
+    } else {
+      // A Kiln volume is the Relay's, shared by design. An App's own
+      // volumes are backed up as the App is.
+      yield* requireRelayPermissionsEffect({
+        permissions: [input.kind === "app" ? "app.delete" : "relay.configure"],
+        relayId: input.relayId,
+        user,
+        ...(input.kind === "app" ? { appId: input.resourceId } : {}),
+      })
+      if (deletion.finalBackup) {
+        yield* promiseEffect(() =>
+          requireBackupTargetPermission(
+            user,
+            input.relayId,
+            { id: input.resourceId, kind: input.kind },
+            "backup.create"
+          )
+        )
+      }
+    }
     if (deletion.finalBackup && deletion.storageId !== null) {
       yield* promiseEffect(() =>
         resolveAuthorizedBackupStorageSelection({
@@ -255,41 +288,95 @@ const checkAccess = (input: DeletionInput) =>
     )
   )
 
-// Reserves the final backup once, recording it on the deletion, and follows
-// it to its end by its ID. One that fails, or goes, stops the deletion with
-// the resource frozen.
+// Takes the final backup, part by part, and follows each to its end by its
+// ID: one that fails, or goes, stops the deletion with the resource frozen,
+// and nothing deleted. Each part is reserved once, recording it on the
+// deletion.
 const finalBackup = (input: DeletionInput) =>
   Effect.gen(function* () {
-    const backupId = yield* Activity.make({
-      name: "backup/reserve",
-      success: Schema.String,
+    const parts = yield* Activity.make({
+      name: "backup/parts",
+      success: Schema.Array(FinalBackupPart),
       error: ResourceDeletionError,
-      execute: reserveFinalBackup(input),
+      execute: finalBackupParts(input),
     })
-    for (let check = 1; ; check++) {
-      const state = yield* Activity.make({
-        name: `backup/check/${check}`,
-        success: BackupCheck,
-        execute: checkFinalBackup(input, backupId),
+    let previous: string | null = null
+    for (const [index, part] of parts.entries()) {
+      const backupId: string = yield* Activity.make({
+        name: `backup/${index}/reserve`,
+        success: Schema.String,
+        error: ResourceDeletionError,
+        execute: reserveFinalBackup(input, part, previous),
       })
-      if (state.state === "available") return
-      if (state.state !== "running") {
-        return yield* new ResourceDeletionError({
-          message:
-            state.error ??
-            (state.state === "missing"
-              ? `The final backup is gone; the ${noun(input.kind)} was not deleted`
-              : `The final backup failed; the ${noun(input.kind)} was not deleted`),
+      for (let check = 1; ; check++) {
+        const state = yield* Activity.make({
+          name: `backup/${index}/check/${check}`,
+          success: BackupCheck,
+          execute: checkFinalBackup(input, backupId),
+        })
+        if (state.state === "available") break
+        if (state.state !== "running") {
+          return yield* new ResourceDeletionError({
+            message:
+              state.error ??
+              (state.state === "missing"
+                ? `The final backup is gone; the ${noun(input.kind)} was not deleted`
+                : `The final backup failed; the ${noun(input.kind)} was not deleted`),
+          })
+        }
+        yield* DurableClock.sleep({
+          duration: backupCheckDelay(check),
+          name: `backup/${index}/wait/${check}`,
         })
       }
-      yield* DurableClock.sleep({
-        duration: backupCheckDelay(check),
-        name: `backup/wait/${check}`,
-      })
+      previous = backupId
     }
   })
 
-const reserveFinalBackup = (input: DeletionInput) =>
+// What a final backup is made of: the resource itself, or for an App, its
+// folder and each volume its Compose project made that nothing else uses.
+// One another App or container also mounts stays when the App goes, and
+// backing it up would stop what else uses it for good, as a final backup
+// doesn't start what it stopped again.
+const finalBackupParts = (
+  input: DeletionInput
+): Effect.Effect<ReadonlyArray<FinalBackupPart>, ResourceDeletionError> =>
+  input.kind !== "app"
+    ? Effect.succeed([{ id: input.resourceId, kind: input.kind }])
+    : promiseEffect(async () => {
+        const relay = await activeRelay(input.relayId)
+        const { volumes } = relayVolumesSchema.parse(
+          await relayRpc(relay, "relay.volumes.read", {}, 30_000)
+        )
+        const ownOnly = (volume: (typeof volumes)[number]) =>
+          volume.owner?.appId === input.resourceId &&
+          volume.users.every((user) => user.appId === input.resourceId) &&
+          volume.mounts.every(
+            (mount) =>
+              mount.kind === "app" && mount.resourceId === input.resourceId
+          )
+        return [
+          { id: input.resourceId, kind: "app" as const },
+          ...volumes.flatMap((volume) =>
+            volume.id !== null && ownOnly(volume)
+              ? [{ id: volume.id, kind: "volume" as const }]
+              : []
+          ),
+        ]
+      }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ResourceDeletionError({
+              message: `The App's volumes couldn't be read, so nothing was deleted: ${messageOf(cause)}`,
+            })
+        )
+      )
+
+const reserveFinalBackup = (
+  input: DeletionInput,
+  part: FinalBackupPart,
+  previous: string | null
+) =>
   Effect.gen(function* () {
     const deletion = yield* loadResourceDeletionEffect(input.deletionId).pipe(
       Effect.orDie
@@ -297,25 +384,35 @@ const reserveFinalBackup = (input: DeletionInput) =>
     if (!deletion) return yield* Effect.die("The deletion is gone")
     // Reserved before, by this attempt or one before it while the resource
     // stayed frozen: followed, not taken again.
-    if (deletion.backupId) return deletion.backupId
+    if (deletion.backupId !== null && deletion.backupId !== previous) {
+      return deletion.backupId
+    }
     const reservation = {
       backupId: randomUUID(),
       createdBy: deletion.requestedBy,
       deletionId: deletion.id,
       name: timestampedBackupName("final"),
+      previousFinalBackupId: previous,
       reason: "final_delete" as const,
       relayId: input.relayId,
       requestedMaxBytes: null,
       storageIds: [deletion.storageId],
-      targetId: input.resourceId,
+      targetId: part.id,
       taskId: randomUUID(),
     }
     const dispatch = yield* promiseEffect(() =>
       runAppEffect(
         "resourceDeletions.reserveBackup",
-        input.kind === "instance"
+        part.kind === "instance"
           ? reserveInstanceBackupEffect(reservation)
-          : reserveDatabaseBackupEffect(reservation)
+          : part.kind === "database"
+            ? reserveDatabaseBackupEffect(reservation)
+            : // Taken of the frozen resource, stopped as freezing left it.
+              reserveResourceBackupEffect({
+                ...reservation,
+                consistency: "stopped",
+                targetKind: part.kind,
+              })
       )
     ).pipe(
       Effect.mapError(
@@ -363,7 +460,7 @@ const deleteOnRelay = (input: DeletionInput) =>
     // stopped partway, keeps what's left of its data: nothing could back it
     // up.
     const deleteData =
-      input.kind === "instance" ||
+      input.kind !== "database" ||
       (yield* Activity.make({
         name: "delete/inspect",
         success: Schema.Boolean,
@@ -383,20 +480,33 @@ const deleteOnRelay = (input: DeletionInput) =>
           : Effect.void
       )
     )
-    yield* relayCommand({
-      name: "delete",
-      relayId: input.relayId,
-      ...(input.kind === "instance"
+    const command =
+      input.kind === "instance"
         ? {
             operation: "instance.delete" as const,
             payload: { deleteData: true, instanceId: input.resourceId },
-            timeoutMs: relayControlDeadlineMs("instance.delete"),
           }
-        : {
-            operation: "database.delete" as const,
-            payload: { databaseId: input.resourceId, deleteData },
-            timeoutMs: relayControlDeadlineMs("database.delete"),
-          }),
+        : input.kind === "database"
+          ? {
+              operation: "database.delete" as const,
+              payload: { databaseId: input.resourceId, deleteData },
+            }
+          : input.kind === "app"
+            ? {
+                // Its folder and the volumes only it uses, never a Kiln
+                // volume or one something else mounts.
+                operation: "app.delete" as const,
+                payload: { appId: input.resourceId, deleteData: true },
+              }
+            : {
+                operation: "relay.volumes.delete" as const,
+                payload: { id: input.resourceId },
+              }
+    yield* relayCommand({
+      name: "delete",
+      relayId: input.relayId,
+      ...command,
+      timeoutMs: relayControlDeadlineMs(command.operation),
       recover: gone,
     }).pipe(
       Effect.catchTag("RelayCommandError", (refused) =>
@@ -429,16 +539,27 @@ const resourceOnRelay = (input: DeletionInput) =>
         (instance) => instance.id === input.resourceId
       )
     }
-    const [item] = z
-      .array(z.unknown())
-      .parse(
-        await relayRpc(
-          relay,
-          "database.list",
-          { requests: [{ id: input.resourceId, view: "detail" }] },
-          30_000
-        )
+    if (input.kind === "volume") {
+      const { volumes } = relayVolumesSchema.parse(
+        await relayRpc(relay, "relay.volumes.read", {}, 30_000)
       )
+      return volumes.some((volume) => volume.id === input.resourceId)
+    }
+    const [item] = z.array(z.unknown()).parse(
+      await relayRpc(
+        relay,
+        input.kind === "app" ? "app.list" : "database.list",
+        {
+          requests: [
+            {
+              id: input.resourceId,
+              view: input.kind === "app" ? "status" : "detail",
+            },
+          ],
+        },
+        30_000
+      )
+    )
     return item !== undefined
   }).pipe(
     Effect.mapError(
@@ -467,15 +588,20 @@ const cleanUp = (input: DeletionInput) =>
         )
       )
     }
-    yield* promiseEffect(() =>
-      runAppEffect(
-        "resourceDeletions.cleanUp",
-        cleanUpDeletedResourceEffect(
-          { id: input.resourceId, kind: input.kind, relayId: input.relayId },
-          subject
+    // Hearth keeps nothing of a Kiln volume but its backups, which stay.
+    if (input.kind !== "volume") {
+      const resource = {
+        id: input.resourceId,
+        kind: input.kind,
+        relayId: input.relayId,
+      }
+      yield* promiseEffect(() =>
+        runAppEffect(
+          "resourceDeletions.cleanUp",
+          cleanUpDeletedResourceEffect(resource, subject)
         )
       )
-    )
+    }
     return null
   }).pipe(Effect.catch((cause) => Effect.succeed(messageOf(cause))))
 
@@ -775,7 +901,9 @@ function publishDeletionChange(resource: {
     scope:
       resource.kind === "instance"
         ? { instanceId: resource.resourceId, relayId: resource.relayId }
-        : { databaseId: resource.resourceId, relayId: resource.relayId },
+        : resource.kind === "database"
+          ? { databaseId: resource.resourceId, relayId: resource.relayId }
+          : { relayId: resource.relayId },
     topics: ["resource-deletions"],
     type: "hearth.invalidate",
   })
@@ -794,14 +922,28 @@ function publishDeleted(input: DeletionInput): void {
   }
   publishRealtimeChange({
     audience: { kind: "relays", relayIds: [input.relayId] },
-    scope: { databaseId: input.resourceId, relayId: input.relayId },
-    topics: ["databases", "database-directory", "database-credentials"],
+    ...(input.kind === "database"
+      ? { scope: { databaseId: input.resourceId, relayId: input.relayId } }
+      : { scope: { relayId: input.relayId } }),
+    topics:
+      input.kind === "database"
+        ? ["databases", "database-directory", "database-credentials"]
+        : input.kind === "app"
+          ? // Its own volumes went with it.
+            ["apps", "app-directory", "relay-volumes"]
+          : ["relay-volumes"],
     type: "hearth.invalidate",
   })
 }
 
 function noun(kind: ResourceDeletionKind): string {
-  return kind === "instance" ? "game server" : "database"
+  return kind === "instance"
+    ? "game server"
+    : kind === "database"
+      ? "database"
+      : kind === "app"
+        ? "App"
+        : "volume"
 }
 
 function asDeletionError(error: { readonly message: string }) {

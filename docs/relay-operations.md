@@ -343,8 +343,9 @@ the same way for a paused one and as not found for a missing one.
 
 ## Resources being deleted
 
-Deleting a game server, App, or database first freezes it on its Relay
-with `resource.freeze`, naming the deletion and the resource's full ID. The
+Deleting a game server, App, database, or Kiln volume first freezes it on
+its Relay with `resource.freeze`, naming the deletion and the resource's full
+ID. The
 freeze takes the resource whole, as replacing it does, so it waits for
 everything running on it. It records the freeze in SQLite, then quiets the
 resource so nothing Kiln starts writes to it but its final backup:
@@ -352,6 +353,9 @@ resource so nothing Kiln starts writes to it but its final backup:
 - A game server is stopped.
 - An App is stopped, and its containers' restart policies are set to `no`
   so Docker doesn't start them again.
+- A Kiln volume has nothing to quiet: it's frozen only while no container
+  mounts it and no App's configuration names it, the checks its deletion
+  makes, and from then on an App that would start with it is refused.
 - A database keeps running, since its final backup is a live dump of it.
   Everyone's terminal sessions on it end, its terminal clients are hung up,
   and new sessions and input are refused; attaching takes the database's

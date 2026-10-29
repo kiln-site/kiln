@@ -23,6 +23,7 @@ import {
   DeleteConfirmationFields,
   useDeleteConfirmation,
 } from "@/components/delete-confirmation-fields"
+import { FinalBackupFields } from "@/components/final-backup-fields"
 import { queryKeys } from "@/lib/query-options"
 import {
   createRelayVolume,
@@ -212,14 +213,33 @@ export function DeleteVolumeDialog({
 }) {
   const refresh = useRefreshVolumes(relayId)
   const confirmation = useDeleteConfirmation(volume.name)
+  const [createBackup, setCreateBackup] = React.useState(true)
+  const [backupDestination, setBackupDestination] = React.useState("default")
   const remove = useMutation({
     mutationFn: () =>
       deleteRelayVolume({
-        data: { ...confirmation.input, relayId, volumeId: volume.id! },
+        data: {
+          ...confirmation.input,
+          createBackup,
+          relayId,
+          volumeId: volume.id!,
+          ...(createBackup && backupDestination !== "default"
+            ? {
+                storageId:
+                  backupDestination === "local" ? null : backupDestination,
+              }
+            : {}),
+        },
       }),
     onSuccess: async () => {
       await refresh()
-      showToast({ message: `${volume.name} deleted`, type: "success" })
+      showToast({
+        description: createBackup
+          ? "Its final backup was saved and the volume was removed."
+          : "The volume and its files were removed without a final backup.",
+        message: `${volume.name} deleted`,
+        type: "success",
+      })
       onClose()
     },
   })
@@ -248,6 +268,15 @@ export function DeleteVolumeDialog({
               and every file in it will be permanently removed.
             </DialogDescription>
           </DialogHeader>
+          <FinalBackupFields
+            createBackup={createBackup}
+            destination={backupDestination}
+            label="Back up volume before deleting"
+            open
+            pending={remove.isPending}
+            onCreateBackupChange={setCreateBackup}
+            onDestinationChange={setBackupDestination}
+          />
           <div className="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs light:bg-destructive/10">
             <CircleAlert className="mt-0.5 size-4 shrink-0 text-destructive" />
             This action cannot be undone.

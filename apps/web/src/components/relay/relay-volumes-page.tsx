@@ -56,6 +56,7 @@ import { AppKindIcon, RelayKindIcon } from "@/components/instance-kind-icon"
 import { relayHostAccessQueryOptions } from "@/components/relay/relay-host-access"
 import { useRelayPermission } from "@/components/relay/relay-settings"
 import { useRelayWorkspace } from "@/components/relay/relay-workspace-context"
+import { ResourceDeletionAlert } from "@/components/resource-deletion-alert"
 import { formatBytes } from "@/lib/format-bytes"
 import {
   createDataTableColumnHelper,
@@ -73,6 +74,7 @@ import {
   queryKeys,
   relayVolumesQueryOptions,
 } from "@/lib/query-options"
+import { volumeDeletionsQueryOptions } from "@/lib/resource-deletion-queries"
 
 type VolumeDialog =
   | { kind: "create" }
@@ -121,6 +123,7 @@ export function RelayVolumesPage() {
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col p-3 sm:p-4">
+      <VolumeDeletionAlerts canManage={canManage} relayId={relay.id} />
       <DataTableWorkspace
         toolbar={
           <VolumesToolbar
@@ -164,6 +167,50 @@ export function RelayVolumesPage() {
         ) : null}
       </React.Suspense>
     </div>
+  )
+}
+
+// Volumes have no page of their own, so a deletion running, or stopped for
+// someone to try again or keep the volume, shows above the list.
+const VolumeDeletionAlerts = React.memo(function VolumeDeletionAlerts({
+  canManage,
+  relayId,
+}: {
+  canManage: boolean
+  relayId: string
+}) {
+  const { data: deletions = [] } = useQuery(
+    volumeDeletionsQueryOptions(relayId)
+  )
+  const { data: names } = useQuery({
+    ...relayVolumesQueryOptions(relayId),
+    enabled: deletions.length > 0,
+    select: selectVolumeNames,
+  })
+  if (deletions.length === 0) return null
+  return (
+    <div className="mb-3 grid gap-2">
+      {deletions.map(({ volumeId }) => (
+        <ResourceDeletionAlert
+          key={volumeId}
+          canDelete={canManage}
+          kind="volume"
+          name={names?.get(volumeId) ?? "This volume"}
+          relayId={relayId}
+          resourceId={volumeId}
+        />
+      ))}
+    </div>
+  )
+})
+
+function selectVolumeNames(data: {
+  volumes: ReadonlyArray<{ id: string | null; name: string }>
+}): ReadonlyMap<string, string> {
+  return new Map(
+    data.volumes.flatMap((volume) =>
+      volume.id === null ? [] : [[volume.id, volume.name] as const]
+    )
   )
 }
 

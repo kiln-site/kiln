@@ -1657,3 +1657,73 @@ describe("database connection members migration", () => {
       )
   )
 })
+
+describe("resource freeze volumes migration", () => {
+  it.effect("keeps the freezes a Relay held, and takes a volume's", () =>
+    withTemporaryDirectory((directory) =>
+      Effect.gen(function* () {
+        const filename = join(directory, "relay.sqlite")
+        const layer = makeRelayStateLayer(filename)
+        yield* Effect.provide(Effect.asVoid(RelayStateStore), layer)
+        const app = "a".repeat(40)
+        const volume = "b".repeat(40)
+        const deletionId = "11111111-1111-4111-8111-111111111111"
+        // As a Relay that froze an App before volumes could be frozen.
+        yield* Effect.sync(() => {
+          const database = new DatabaseSync(filename)
+          try {
+            database.exec(
+              `DROP TABLE relay_resource_freezes;
+               CREATE TABLE relay_resource_freezes (
+                 kind TEXT NOT NULL CHECK (kind IN ('app', 'database', 'instance')),
+                 resource_id TEXT NOT NULL,
+                 deletion_id TEXT NOT NULL,
+                 frozen_at INTEGER NOT NULL,
+                 undo TEXT NOT NULL DEFAULT '{}',
+                 PRIMARY KEY (kind, resource_id)
+               ) STRICT;
+               INSERT INTO relay_resource_freezes
+                 (kind, resource_id, deletion_id, frozen_at, undo)
+               VALUES
+                 ('app', '${app}', '${deletionId}', 1,
+                  '{"restartPolicies":{"web":{"maximumRetryCount":0,"name":"always"}}}');
+               DELETE FROM effect_sql_migrations WHERE migration_id >= 32`
+            )
+          } finally {
+            database.close()
+          }
+        })
+
+        const freezes = yield* Effect.provide(
+          Effect.gen(function* () {
+            const state = yield* RelayStateStore
+            const holder = yield* state.freezeResource(
+              { deletionId, id: volume, kind: "volume" },
+              2
+            )
+            assert.strictEqual(holder, deletionId)
+            return yield* state.listResourceFreezes()
+          }),
+          layer
+        )
+
+        assert.deepStrictEqual(
+          [...freezes].sort((a, b) => a.kind.localeCompare(b.kind)),
+          [
+            {
+              deletionId,
+              id: app,
+              kind: "app",
+              undo: {
+                restartPolicies: {
+                  web: { maximumRetryCount: 0, name: "always" },
+                },
+              },
+            },
+            { deletionId, id: volume, kind: "volume", undo: {} },
+          ]
+        )
+      })
+    )
+  )
+})

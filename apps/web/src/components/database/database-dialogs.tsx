@@ -1,3 +1,4 @@
+import { FinalBackupFields } from "@/components/final-backup-fields"
 import { instanceInventoryScope } from "@/lib/instance-inventory"
 import { useInstanceState } from "@/lib/instance-state"
 import * as React from "react"
@@ -547,11 +548,18 @@ export function DeleteDatabaseDialog({
 }) {
   const queryClient = useQueryClient()
   const confirmation = useDeleteConfirmation(database.name)
+  const supportsBackup = databaseEngineSupportsLogicalBackups(database.engine)
+  const [createBackup, setCreateBackup] = React.useState(supportsBackup)
+  const [backupDestination, setBackupDestination] = React.useState("default")
   const remove = useMutation({
     mutationFn: () =>
       deleteManagedDatabase({
         data: {
           ...confirmation.input,
+          createBackup: supportsBackup && createBackup,
+          ...(createBackup && backupDestination !== "default"
+            ? { storageId: backupDestination === "local" ? null : backupDestination }
+            : {}),
           databaseId: database.id,
           relayId: database.relayId,
         },
@@ -594,10 +602,20 @@ export function DeleteDatabaseDialog({
           </DialogHeader>
           <div className="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs light:bg-destructive/10">
             <CircleAlert className="mt-0.5 size-4 shrink-0 text-destructive" />
-            {databaseEngineSupportsLogicalBackups(database.engine)
-              ? "This action cannot be undone. While it's running, Kiln backs it up one last time first. Game servers and Apps connected to it can still write to it until it's deleted, and what they write after that backup starts isn't in it."
-              : "This action cannot be undone. Export a SQL dump first if you need a recovery copy."}
+            This action cannot be undone.
           </div>
+          <FinalBackupFields
+            available={supportsBackup}
+            createBackup={createBackup}
+            destination={backupDestination}
+            hint="A live dump, while the database is running. Connected Apps and game servers can still write until it is deleted; later writes may not be backed up."
+            label="Back up database before deleting"
+            open={open}
+            pending={remove.isPending}
+            unavailable="This database engine does not support logical backups."
+            onCreateBackupChange={setCreateBackup}
+            onDestinationChange={setBackupDestination}
+          />
           <DeleteConfirmationFields
             confirmation={confirmation}
             disabled={remove.isPending}

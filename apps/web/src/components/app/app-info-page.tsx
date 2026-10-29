@@ -17,6 +17,7 @@ import {
   AppWebRouteSettings,
 } from "@/components/app/app-settings"
 import { AppVolumesSection } from "@/components/app/app-volumes-section"
+import { ResourceDeletionAlert } from "@/components/resource-deletion-alert"
 import { ResourceSecurityAlert } from "@/components/resource-security-alert"
 import { useAppWorkspace } from "@/components/app/app-workspace-context"
 import {
@@ -52,6 +53,13 @@ function AppInfoContent({ app, routeId }: { app: App; routeId: string }) {
   return (
     <AppContainerSelectionContext.Provider value={selection}>
       <InfoPage rail={<AppInfoRail app={app} routeId={routeId} />}>
+        <ResourceDeletionAlert
+          canDelete={app.permissions.includes("app.delete")}
+          kind="app"
+          name={app.name}
+          relayId={app.relayId}
+          resourceId={app.id}
+        />
         <ResourceSecurityAlert
           relayId={app.relayId}
           resourceId={app.id}

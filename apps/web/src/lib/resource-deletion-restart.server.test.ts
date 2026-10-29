@@ -14,14 +14,21 @@ import {
 import { stopScheduleDeliveries } from "@/server/schedule-deployment.server"
 import { TestDatabase, describeMysql } from "@/test/database"
 import {
+  appId,
+  appRecords,
   deletionRelay as relay,
   deletionUntil as until,
+  finishBackup,
+  nextBackup,
   owner,
   relayId,
+  seedApp,
   seedDeletion as seed,
   serverId,
   serverRecords,
+  volumeId,
 } from "@/test/resource-deletion"
+import { selectRows } from "@/test/seed"
 
 import {
   deleteResource,
@@ -47,37 +54,46 @@ afterAll(async () => {
   await disposeAppRuntime()
 })
 
+// Hearths that run one after another on one database: each start builds a
+// new engine, which Hearth's engine service then hands out.
+const hearths = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  const database = yield* Database
+  const current = yield* Ref.make<OperationsEngineContext | null>(null)
+  const service = OperationsEngineService.of({
+    engine: Ref.get(current).pipe(
+      Effect.flatMap((engine) =>
+        engine ? Effect.succeed(engine) : Effect.never
+      )
+    ),
+  })
+  const startHearth = Effect.gen(function* () {
+    const scope = yield* Scope.make()
+    const engine = yield* Layer.buildWithScope(
+      Layer.mergeAll(deleteResource.layer, keepResource.layer).pipe(
+        Layer.provideMerge(OperationsEngine),
+        Layer.provide(Layer.succeed(SqlClient.SqlClient)(sql)),
+        Layer.provide(Layer.succeed(Database)(database)),
+        Layer.provide(Layer.succeed(OperationsEngineService)(service))
+      ),
+      scope
+    )
+    yield* Ref.set(current, engine)
+    return scope
+  })
+  return { service, startHearth }
+})
+
+const stopHearth = (scope: Scope.Closeable) =>
+  Scope.close(scope, Exit.void).pipe(Effect.timeoutOption("10 seconds"))
+
 describeMysql("A deletion across a Hearth restart", () => {
   layer(TestDatabase, { timeout: 120_000 })((it) => {
     it.effect(
       "finishes a deletion whose Hearth stopped while the Relay deleted it, deleting once",
       () =>
         Effect.gen(function* () {
-          const sql = yield* SqlClient.SqlClient
-          const database = yield* Database
-          // The engine running now, as Hearth's engine service hands it out.
-          const current = yield* Ref.make<OperationsEngineContext | null>(null)
-          const service = OperationsEngineService.of({
-            engine: Ref.get(current).pipe(
-              Effect.flatMap((engine) =>
-                engine ? Effect.succeed(engine) : Effect.never
-              )
-            ),
-          })
-          const startHearth = Effect.gen(function* () {
-            const scope = yield* Scope.make()
-            const engine = yield* Layer.buildWithScope(
-              Layer.mergeAll(deleteResource.layer, keepResource.layer).pipe(
-                Layer.provideMerge(OperationsEngine),
-                Layer.provide(Layer.succeed(SqlClient.SqlClient)(sql)),
-                Layer.provide(Layer.succeed(Database)(database)),
-                Layer.provide(Layer.succeed(OperationsEngineService)(service))
-              ),
-              scope
-            )
-            yield* Ref.set(current, engine)
-            return scope
-          })
+          const { service, startHearth } = yield* hearths
 
           yield* seed
           // The Relay deletes it, but Hearth stops before the answer comes.
@@ -97,16 +113,12 @@ describeMysql("A deletion across a Hearth restart", () => {
             }),
             Effect.timeout("30 seconds")
           )
-          yield* Scope.close(first, Exit.void).pipe(
-            Effect.timeoutOption("10 seconds")
-          )
+          yield* stopHearth(first)
           const stopped = yield* until(serverId, ["deleting"])
 
           const second = yield* startHearth
           const done = yield* until(serverId, ["completed", "failed"])
-          yield* Scope.close(second, Exit.void).pipe(
-            Effect.timeoutOption("10 seconds")
-          )
+          yield* stopHearth(second)
 
           assert.strictEqual(stopped?.status, "deleting")
           assert.strictEqual(done?.status, "completed")
@@ -116,6 +128,83 @@ describeMysql("A deletion across a Hearth restart", () => {
             "instance.delete",
           ])
           assert.deepStrictEqual(yield* serverRecords, [])
+        }).pipe(TestClock.withLive),
+      120_000
+    )
+
+    it.effect(
+      "takes an App's final backups across a restart, each once, then deletes it",
+      () =>
+        Effect.gen(function* () {
+          const { service, startHearth } = yield* hearths
+          const otherApp = "c".repeat(40)
+          yield* seed
+          yield* seedApp([
+            // Its own, which only it uses: backed up, then deleted with it.
+            {
+              id: `${appId}/data`,
+              owner: appId,
+              users: [{ appId, configured: false }],
+            },
+            // Its own, but another App mounts it too: it stays.
+            {
+              id: `${appId}/shared`,
+              owner: appId,
+              users: [
+                { appId, configured: false },
+                { appId: otherApp, configured: false },
+              ],
+            },
+            // A Kiln volume its configuration mounts: it stays.
+            { id: volumeId, users: [{ appId, configured: true }] },
+          ])
+
+          const first = yield* startHearth
+          yield* requestResourceDeletionEffect({
+            finalBackup: true,
+            kind: "app",
+            relayId,
+            resourceId: appId,
+            storageId: null,
+            user: owner,
+          }).pipe(Effect.provideService(OperationsEngineService, service))
+          const folder = yield* nextBackup(appId, null)
+          yield* finishBackup(folder)
+          const data = yield* nextBackup(appId, folder)
+          // Hearth stops while the volume's backup runs.
+          yield* stopHearth(first)
+
+          const second = yield* startHearth
+          yield* finishBackup(data)
+          const done = yield* until(appId, ["completed", "failed"])
+          yield* stopHearth(second)
+
+          assert.strictEqual(done?.status, "completed")
+          const backups = yield* selectRows<{
+            reason: string
+            target_id: string
+            target_kind: string
+          }>("backup")
+          assert.sameDeepMembers(
+            backups.map((backup) => [
+              backup.target_kind,
+              backup.target_id,
+              backup.reason,
+            ]),
+            [
+              ["app", appId, "final_delete"],
+              ["volume", `${appId}/data`, "final_delete"],
+            ]
+          )
+          assert.deepStrictEqual(relay.changes, [
+            "resource.freeze",
+            "app.delete",
+          ])
+          assert.sameMembers(
+            relay.volumes.map((volume) => volume.id),
+            [`${appId}/shared`, volumeId]
+          )
+          assert.deepStrictEqual(yield* appRecords, [])
         }).pipe(TestClock.withLive),
       120_000
     )

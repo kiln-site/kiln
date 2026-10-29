@@ -7,21 +7,26 @@ import { deleteConfirmationSchema } from "@/lib/delete-confirmation"
 import {
   cancelResourceDeletionHandler,
   getResourceDeletionHandler,
+  listVolumeDeletionsHandler,
   retryResourceDeletionHandler,
 } from "@/server/resource-deletions.server"
 
-// A game server's or database's deletion that's running, or that stopped
-// for someone to try again or keep it.
+// A game server's, database's, App's, or Kiln volume's deletion that's
+// running, or that stopped for someone to try again or keep it.
 const targetSchema = z.strictObject({
-  kind: z.enum(["instance", "database"]),
+  kind: z.enum(["instance", "database", "app", "volume"]),
   relayId: relayIdSchema,
-  // Game servers and databases both have 40-hex IDs.
+  // Each has a 40-hex ID; an App's own volumes go with it.
   resourceId: z.string().regex(/^[a-f0-9]{40}$/u),
 })
 
 export const getResourceDeletion = createServerFn({ method: "GET" })
   .validator(targetSchema)
   .handler(({ data }) => getResourceDeletionHandler(data))
+
+export const listVolumeDeletions = createServerFn({ method: "GET" })
+  .validator(z.strictObject({ relayId: relayIdSchema }))
+  .handler(({ data }) => listVolumeDeletionsHandler(data))
 
 export const retryResourceDeletion = createServerFn({ method: "POST" })
   .validator(

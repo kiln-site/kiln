@@ -15,6 +15,7 @@ const allowed: Record<FrozenKind, ReadonlySet<string>> = {
   app: new Set(["app.delete"]),
   database: new Set(["database.delete"]),
   instance: new Set(["instance.delete"]),
+  volume: new Set(["relay.volumes.delete"]),
 }
 const allowedForEvery = new Set([
   "backup.create",
@@ -26,6 +27,7 @@ const refusals: Record<FrozenKind, string> = {
   app: "This App is being deleted",
   database: "This database is being deleted",
   instance: "This game server is being deleted",
+  volume: "This volume is being deleted",
 }
 // A Tailscale network's change is refused for one of its members, so it
 // says which.
@@ -33,6 +35,7 @@ const memberNouns: Record<FrozenKind, string> = {
   app: "App",
   database: "Database",
   instance: "Game server",
+  volume: "Volume",
 }
 
 interface Frozen {

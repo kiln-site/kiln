@@ -152,7 +152,7 @@ export const DATABASE_CONNECTION_RECOVERY_KEY = "database_connections_recovered"
 export interface RelayResourceFreezeRecord {
   readonly deletionId: string
   readonly id: string
-  readonly kind: "app" | "database" | "instance"
+  readonly kind: "app" | "database" | "instance" | "volume"
 }
 
 /**
@@ -1634,6 +1634,37 @@ const migrations = SqliteMigrator.fromRecord({
       undo TEXT NOT NULL DEFAULT '{}',
       PRIMARY KEY (kind, resource_id)
     ) STRICT`
+  }),
+  // Kiln volumes are frozen for their deletion too. The table is rebuilt to
+  // take the kind, keeping its rows; one that already takes it is left be.
+  "32_resource_freeze_volumes": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    const [table] = yield* sql<{ sql: string }>`
+      SELECT sql FROM sqlite_master
+      WHERE type = 'table' AND name = 'relay_resource_freezes'
+    `
+    if (table?.sql.includes("'volume'")) return
+    yield* sql`DROP TABLE IF EXISTS relay_resource_freezes_next`
+    yield* sql`CREATE TABLE relay_resource_freezes_next (
+      kind TEXT NOT NULL
+        CHECK (kind IN ('app', 'database', 'instance', 'volume')),
+      resource_id TEXT NOT NULL,
+      deletion_id TEXT NOT NULL,
+      frozen_at INTEGER NOT NULL,
+      undo TEXT NOT NULL DEFAULT '{}',
+      PRIMARY KEY (kind, resource_id)
+    ) STRICT`
+    yield* sql`
+      INSERT INTO relay_resource_freezes_next
+        (kind, resource_id, deletion_id, frozen_at, undo)
+      SELECT kind, resource_id, deletion_id, frozen_at, undo
+      FROM relay_resource_freezes
+    `
+    yield* sql`DROP TABLE relay_resource_freezes`
+    yield* sql`
+      ALTER TABLE relay_resource_freezes_next
+      RENAME TO relay_resource_freezes
+    `
   }),
 })
 

@@ -371,6 +371,29 @@ export class RelayVolumes {
   delete(id: string) {
     return Effect.gen({ self: this }, function* () {
       yield* Effect.annotateCurrentSpan({ "kiln.volume_id": id })
+      const volume = yield* this.#deletable(id)
+      yield* this.#engine.removeVolume(volume.Name)
+      yield* this.#state.deleteVolumeName(id)
+    }).pipe(this.#references.shared, Effect.withSpan("RelayVolumes.delete"))
+  }
+
+  /**
+   * Refuses unless a volume could be deleted now, as `delete` checks: what
+   * freezing it for its deletion checks first, so a volume in use is never
+   * frozen.
+   */
+  requireDeletable(id: string) {
+    return Effect.gen({ self: this }, function* () {
+      yield* Effect.annotateCurrentSpan({ "kiln.volume_id": id })
+      yield* this.#deletable(id)
+    }).pipe(
+      this.#references.shared,
+      Effect.withSpan("RelayVolumes.requireDeletable")
+    )
+  }
+
+  #deletable(id: string) {
+    return Effect.gen({ self: this }, function* () {
       const volume = yield* this.#required(id)
       const protection = yield* this.protection()
       if (!protection.ready) {
@@ -401,9 +424,8 @@ export class RelayVolumes {
               : `${users.length} containers mount this volume; remove them first`,
         })
       }
-      yield* this.#engine.removeVolume(volume.Name)
-      yield* this.#state.deleteVolumeName(id)
-    }).pipe(this.#references.shared, Effect.withSpan("RelayVolumes.delete"))
+      return volume
+    })
   }
 
   /**

@@ -14,18 +14,24 @@ import { stopScheduleDeliveries } from "@/server/schedule-deployment.server"
 import { TestDatabase, describeMysql } from "@/test/database"
 import {
   allow,
+  appId,
+  appRecords,
   at,
   databaseId,
   deletionOf,
   deletionRelay as relay,
   deletionUntil as until,
+  finishBackup,
   insertDeletion,
+  nextBackup,
   owner,
   relayId,
+  seedApp,
   seedDeletion as seed,
   serverId,
   serverRecords,
   stranger,
+  volumeId,
 } from "@/test/resource-deletion"
 import { insertBackup, insertRows, selectRows } from "@/test/seed"
 
@@ -114,6 +120,63 @@ const seedStoppedWithBackup = Effect.gen(function* () {
 
 describeMysql("Deleting a game server or database", () => {
   layer(Lanes, { timeout: 120_000 })((it) => {
+    it.effect(
+      "deletes nothing of an App or a volume when any of its final backups fails",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          yield* seedApp([
+            {
+              id: `${appId}/data`,
+              owner: appId,
+              users: [{ appId, configured: false }],
+            },
+            { id: volumeId },
+          ])
+
+          // The App's folder is backed up, then its volume's backup fails.
+          yield* requestResourceDeletionEffect({
+            finalBackup: true,
+            kind: "app",
+            relayId,
+            resourceId: appId,
+            storageId: null,
+            user: owner,
+          })
+          const folder = yield* nextBackup(appId, null)
+          yield* finishBackup(folder)
+          yield* failBackup(yield* nextBackup(appId, folder))
+          const app = yield* until(appId, ["completed", "failed"])
+          // A Kiln volume's only backup fails.
+          yield* requestResourceDeletionEffect({
+            finalBackup: true,
+            kind: "volume",
+            relayId,
+            resourceId: volumeId,
+            storageId: null,
+            user: owner,
+          })
+          yield* failBackup(yield* nextBackup(volumeId, null))
+          const volume = yield* until(volumeId, ["completed", "failed"])
+
+          assert.strictEqual(app?.status, "failed")
+          assert.strictEqual(volume?.status, "failed")
+          assert.include(app?.error ?? "", "Relay disk is full")
+          // Frozen, and nothing deleted, on the Relay or in Hearth.
+          assert.deepStrictEqual(relay.changes, [
+            "resource.freeze",
+            "resource.freeze",
+          ])
+          assert.isTrue(relay.apps.has(appId))
+          assert.deepStrictEqual(
+            relay.volumes.map((candidate) => candidate.id),
+            [`${appId}/data`, volumeId]
+          )
+          assert.deepStrictEqual(yield* appRecords, [appId])
+        }).pipe(TestClock.withLive),
+      90_000
+    )
+
     it.effect(
       "freezes then deletes once, even when the delete's reply is lost, and not again when started again",
       () =>

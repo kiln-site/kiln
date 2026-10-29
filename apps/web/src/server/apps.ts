@@ -46,6 +46,10 @@ import {
 } from "@/lib/provisioning.server"
 import { deleteConfirmationSchema } from "@/lib/delete-confirmation"
 import { requireDeleteConfirmation } from "@/lib/delete-confirmation.server"
+import {
+  awaitResourceDeletion,
+  requestResourceDeletion,
+} from "@/lib/resource-deletion.server"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { webRoutesForRelay } from "@/server/web-route-compatibility.server"
 import { listPersistedRelays } from "@/lib/relay-registry"
@@ -58,7 +62,7 @@ import {
   updateAppConfigHandler,
 } from "@/server/app-access"
 import { requireEligibleResourceUser } from "@/server/auth"
-import { cleanUpDeletedResourceEffect } from "@/server/resource-deletion-cleanup"
+import { requireBackupTargetPermission } from "@/server/backup-target-access.server"
 import { databaseRpc, requiredRelay } from "@/server/managed-database-access"
 
 const appInputSchema = z.strictObject({
@@ -446,7 +450,12 @@ export const updateAppWebRoutes = createServerFn({ method: "POST" })
   })
 
 export const deleteApp = createServerFn({ method: "POST" })
-  .validator(appInputSchema.extend(deleteConfirmationSchema.shape))
+  .validator(
+    appInputSchema.extend(deleteConfirmationSchema.shape).extend({
+      createBackup: z.boolean().default(true),
+      storageId: z.uuid().nullable().optional(),
+    })
+  )
   .handler(async ({ data }) => {
     const { app, relay, user } = await authorizedApp(data, "app.delete")
     await requireDeleteConfirmation({
@@ -455,38 +464,28 @@ export const deleteApp = createServerFn({ method: "POST" })
       password: data.password,
       user,
     })
-    const removed = await promiseResult(() =>
-      databaseRpc(
-        relay,
-        "app.delete",
-        { appId: data.appId, deleteData: true },
-        180_000,
-        user.id
+    if (data.createBackup) {
+      await requireBackupTargetPermission(
+        user,
+        relay.id,
+        { id: data.appId, kind: "app" },
+        "backup.create"
       )
-    )
-    // An app already gone from the Relay still loses its record.
-    if (
-      Result.isFailure(removed) &&
-      !(
-        removed.failure instanceof Error &&
-        removed.failure.message.includes("App not found")
-      )
-    ) {
-      throw removed.failure
     }
-    // Its hostnames are marked for deletion before its record goes, so a
-    // Hearth that stops in between leaves them to the DNS worker, or to
-    // deleting it again, rather than to nothing.
-    await runAppEffect(
-      "apps.delete.cleanUp",
-      cleanUpDeletedResourceEffect(
-        { id: data.appId, kind: "app", relayId: relay.id },
-        user.id
-      )
-    )
-    publishAppChange(relay.id, true)
-    // Its own volumes went with it.
-    publishRelayVolumesChange(relay.id)
+    // Frozen, its folder and the volumes only it uses backed up if asked,
+    // then deleted, as one operation that goes on in the background if it
+    // outlasts this request.
+    const deletion = await requestResourceDeletion({
+      finalBackup: data.createBackup,
+      kind: "app",
+      relayId: relay.id,
+      resourceId: data.appId,
+      user,
+      ...(data.createBackup && data.storageId !== undefined
+        ? { storageId: data.storageId }
+        : {}),
+    })
+    await awaitResourceDeletion(deletion)
     return { deleted: true }
   })
 

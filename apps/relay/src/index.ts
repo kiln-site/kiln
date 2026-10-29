@@ -2278,6 +2278,7 @@ async function executeControlRequest(
     case "relay.volumes.delete": {
       const input = relayVolumeDeleteSchema.parse(request.payload)
       await runRelayEffect("relay.volumes.delete", volumes.delete(input.id))
+      await resourceFreezes.forget("volume", input.id)
       return { id: input.id }
     }
     case "relay.volumes.references.hold":
@@ -2400,6 +2401,13 @@ async function executeControlRequest(
     }
     case "resource.freeze": {
       const freeze = relayResourceFreezeSchema.parse(payload)
+      // A volume anything uses isn't frozen: its deletion would be refused.
+      if (freeze.kind === "volume") {
+        await runRelayEffect(
+          "relay.volumes.requireDeletable",
+          volumes.requireDeletable(freeze.id)
+        )
+      }
       await resourceFreezes.freeze(freeze, (record) =>
         quietFrozenResource(freeze, record)
       )
@@ -4295,6 +4303,10 @@ async function quietFrozenResource(
       await terminals.endTarget(freeze.id, database?.containerId ?? null)
       return
     }
+    // Nothing mounts it, or it wouldn't have been frozen, and the lanes
+    // refuse whatever would start to.
+    case "volume":
+      return
   }
 }
 

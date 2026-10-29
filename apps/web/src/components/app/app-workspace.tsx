@@ -1,3 +1,4 @@
+import { resourceDeletionQueryOptions } from "@/lib/resource-deletion-queries"
 import { AppKindIcon } from "@/components/instance-kind-icon"
 import { instanceInventoryScope } from "@/lib/instance-inventory"
 import { instanceInventoryQueryOptions } from "@/lib/instance-inventory"
@@ -291,7 +292,12 @@ function AppPowerControls({
   const { app, routeId } = workspace
   const queryClient = useQueryClient()
   const navigate = useNavigate()
-  const canManage = app.permissions.includes("app.manage")
+  const { data: deletion } = useQuery(resourceDeletionQueryOptions({
+    kind: "app",
+    relayId: app.relayId,
+    resourceId: app.id,
+  }))
+  const canManage = !deletion && app.permissions.includes("app.manage")
   const deployed = app.containers.length > 0
   const powerPermissions = React.useMemo(
     () => ({

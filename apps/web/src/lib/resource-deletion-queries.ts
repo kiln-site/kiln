@@ -1,9 +1,12 @@
 import { queryOptions } from "@tanstack/react-query"
 
-import { getResourceDeletion } from "@/server/resource-deletions"
+import {
+  getResourceDeletion,
+  listVolumeDeletions,
+} from "@/server/resource-deletions"
 
 export interface ResourceDeletionTarget {
-  kind: "database" | "instance"
+  kind: "app" | "database" | "instance" | "volume"
   relayId: string
   resourceId: string
 }
@@ -21,6 +24,19 @@ export function resourceDeletionQueryOptions(target: ResourceDeletionTarget) {
       target.resourceId,
     ] as const,
     queryFn: ({ signal }) => getResourceDeletion({ data: target, signal }),
+    refetchOnWindowFocus: false,
+    staleTime: 5 * 60_000,
+  })
+}
+
+/**
+ * The deletions of a Relay's Kiln volumes that are running or stopped,
+ * under the same realtime topic.
+ */
+export function volumeDeletionsQueryOptions(relayId: string) {
+  return queryOptions({
+    queryKey: ["resource-deletion", "volumes", relayId] as const,
+    queryFn: ({ signal }) => listVolumeDeletions({ data: { relayId }, signal }),
     refetchOnWindowFocus: false,
     staleTime: 5 * 60_000,
   })
