@@ -27,7 +27,9 @@ import {
   BackupTaskFeedback,
 } from "@/components/backups/table-row"
 import { InfoCard, InfoCardHeader } from "@/components/info-card"
+import { ResourceDeletionAlert } from "@/components/resource-deletion-alert"
 import { appBackupsQueryOptions } from "@/lib/query-options"
+import { resourceDeletionQueryOptions } from "@/lib/resource-deletion-queries"
 import type { getAppBackups } from "@/server/backups"
 
 type AppBackupsDialog =
@@ -46,6 +48,20 @@ const noBackups: ReadonlyArray<never> = []
 export function AppBackupsPage() {
   const { app } = useAppWorkspace()
   const backups = useQuery(appBackupsQueryOptions(app.relayId, app.id))
+  // Its deletion's final backups show here as they run. Until it's deleted
+  // or kept, it's frozen, so nothing restores it. It takes no backup but
+  // them while its deletion runs, or once its Relay began deleting it and
+  // the deletion can only be finished; one that stopped before may be.
+  const { data: deletion } = useQuery(
+    resourceDeletionQueryOptions({
+      kind: "app",
+      relayId: app.relayId,
+      resourceId: app.id,
+    })
+  )
+  const frozen = deletion != null
+  const backUpRefused =
+    frozen && (deletion.status !== "failed" || deletion.deletionStarted)
   const [dialog, setDialog] = React.useState<AppBackupsDialog>({
     kind: "closed",
   })
@@ -55,9 +71,13 @@ export function AppBackupsPage() {
   const relayAvailable = appRelayAvailable(app)
   // App backups follow its file permissions: reading them makes one,
   // writing them restores one; stopping it is managing it.
-  const canBackUp = relayAvailable && app.permissions.includes("app.files.read")
-  const canRestore =
+  const canResolve =
     relayAvailable && app.permissions.includes("app.files.write")
+  const canBackUp =
+    relayAvailable &&
+    !backUpRefused &&
+    app.permissions.includes("app.files.read")
+  const canRestore = canResolve && !frozen
   const stoppedUnavailable = app.permissions.includes("app.manage")
     ? null
     : "Stopping it takes permission to manage the App"
@@ -68,6 +88,13 @@ export function AppBackupsPage() {
   return (
     <section className="min-h-0 flex-1 overflow-y-auto bg-card">
       <div className="mx-auto grid max-w-5xl gap-4 px-5 py-6 sm:px-8 sm:py-8">
+        <ResourceDeletionAlert
+          canDelete={app.permissions.includes("app.delete")}
+          kind="app"
+          name={app.name}
+          relayId={app.relayId}
+          resourceId={app.id}
+        />
         <InfoCard>
           <InfoCardHeader
             icon={<Archive />}
@@ -125,6 +152,7 @@ export function AppBackupsPage() {
                   <BackupTargetRow
                     key={`${target.kind}:${target.id}`}
                     canBackUp={canBackUp}
+                    canResolve={canResolve}
                     canRestore={canRestore}
                     relayId={app.relayId}
                     target={target}
@@ -221,6 +249,7 @@ const BatchSummary = React.memo(function BatchSummary({
 
 const BackupTargetRow = React.memo(function BackupTargetRow({
   canBackUp,
+  canResolve,
   canRestore,
   onBackUp,
   onRestore,
@@ -228,6 +257,7 @@ const BackupTargetRow = React.memo(function BackupTargetRow({
   target,
 }: {
   canBackUp: boolean
+  canResolve: boolean
   canRestore: boolean
   onBackUp: (name: string) => void
   onRestore: (backup: Backup, name: string) => void
@@ -304,7 +334,7 @@ const BackupTargetRow = React.memo(function BackupTargetRow({
       {target.unfinished ? (
         <UnfinishedRestoreNotice
           backupName={null}
-          canResolve={canRestore}
+          canResolve={canResolve}
           relayId={relayId}
           targetName={
             target.kind === "app"
