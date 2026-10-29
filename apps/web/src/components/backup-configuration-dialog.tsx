@@ -88,6 +88,8 @@ export function BackupConfigurationDialog({
    * live or with what uses it stopped, in place of the mode.
    */
   consistencyChoice?: {
+    /** What stopping it does, when it's more than one target's. */
+    stoppedDescription?: string
     /** Why it can't be stopped, as without permission to manage its Apps. */
     stoppedUnavailable: string | null
   }
@@ -253,6 +255,7 @@ export function BackupConfigurationDialog({
           {consistencyChoice ? (
             <BackupConsistencyChoices
               consistency={effectiveConsistency}
+              stoppedDescription={consistencyChoice.stoppedDescription}
               stoppedUnavailable={consistencyChoice.stoppedUnavailable}
               onConsistencyChange={setConsistency}
             />
@@ -347,10 +350,12 @@ function BackupModeChoices({
 function BackupConsistencyChoices({
   consistency,
   onConsistencyChange,
+  stoppedDescription = "Stops the Apps that use it, then starts them again",
   stoppedUnavailable,
 }: {
   consistency: "live" | "stopped"
   onConsistencyChange: (consistency: "live" | "stopped") => void
+  stoppedDescription?: string | undefined
   stoppedUnavailable: string | null
 }) {
   return (
@@ -368,10 +373,7 @@ function BackupConsistencyChoices({
         />
         <BackupDestinationChoice
           checked={consistency === "stopped"}
-          description={
-            stoppedUnavailable ??
-            "Stops the Apps that use it, then starts them again"
-          }
+          description={stoppedUnavailable ?? stoppedDescription}
           disabled={stoppedUnavailable !== null}
           icon={CirclePause}
           label="Stopped"

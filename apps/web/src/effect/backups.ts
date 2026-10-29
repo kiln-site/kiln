@@ -221,6 +221,8 @@ interface DispatchableBackupRow extends RowDataPacket {
   backup_id: string
   backup_mode: BackupRow["backup_mode"]
   bytes: number | string | null
+  batch_id: string | null
+  batch_size: number | string
   checksum_sha256: string | null
   consistency: BackupConsistency | null
   create_task_id: string | null
@@ -419,6 +421,8 @@ const reserveBackupCreateEffect = Effect.fn("backups.reserveCreate")(
     backupId: string
     /** Backups started together with it, as an App's are. */
     batchId?: string
+    /** How many; stopped, they share one stopped window on the Relay. */
+    batchSize?: number
     /** An App's folder or a volume's; absent is live. */
     consistency?: BackupConsistency
     createdBy: string
@@ -729,6 +733,7 @@ const reserveBackupCreateEffect = Effect.fn("backups.reserveCreate")(
           artifactKind,
           backupId: input.backupId,
           ...(input.consistency ? { consistency: input.consistency } : {}),
+          ...stoppedBatch(input.consistency, input.batchId, input.batchSize),
           exclude: parseExcludes(policy.exclude_patterns),
           kind: "create",
           maxBytes: reservation.maxBytes,
@@ -818,6 +823,7 @@ export const reserveResourceBackupEffect = Effect.fn("backups.reserveResource")(
   (input: {
     backupId: string
     batchId?: string
+    batchSize?: number
     consistency: BackupConsistency
     createdBy: string
     /** The deletion a final-delete backup is for. */
@@ -1978,7 +1984,14 @@ export const listDispatchableBackupTasksEffect = Effect.fn(
             task.created_at AS task_created_at_ms,
             backup.storage_id, backup.object_key,
             backup.linked_from_backup_id, backup.linked_from_target_id,
-            backup.consistency,
+            backup.consistency, backup.batch_id,
+            (
+              SELECT COUNT(*)
+                FROM ${databaseTable("backup")} batch_member
+               WHERE backup.batch_id IS NOT NULL
+                 AND batch_member.relay_id = backup.relay_id
+                 AND batch_member.batch_id = backup.batch_id
+            ) AS batch_size,
             COALESCE(policy.exclude_patterns, JSON_ARRAY()) AS exclude_patterns
        FROM ${databaseTable("backup")} backup
        JOIN ${databaseTable("backup_task")} task
@@ -2112,6 +2125,11 @@ export const listDispatchableBackupTasksEffect = Effect.fn(
       artifactKind: row.artifact_kind,
       backupId: row.backup_id,
       ...(row.consistency ? { consistency: row.consistency } : {}),
+      ...stoppedBatch(
+        row.consistency ?? undefined,
+        row.batch_id ?? undefined,
+        Number(row.batch_size)
+      ),
       exclude: parseExcludes(row.exclude_patterns),
       kind: "create",
       maxBytes: nullableDatabaseNumber(
@@ -2125,6 +2143,18 @@ export const listDispatchableBackupTasksEffect = Effect.fn(
     }
   })
 })
+
+// A stopped batch's backups share one stopped window on the Relay, so an
+// App's folder and volumes are copied from the same quiet moment.
+function stoppedBatch(
+  consistency: BackupConsistency | undefined,
+  batchId: string | undefined,
+  size: number | undefined
+) {
+  return consistency === "stopped" && batchId && size !== undefined && size >= 2
+    ? { batch: { id: batchId, size } }
+    : {}
+}
 
 // The archive identity a linked backup's tasks name, so the Relay finds and
 // checks the archive it shares with the backup it was made as.

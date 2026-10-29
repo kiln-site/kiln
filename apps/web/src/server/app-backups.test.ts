@@ -26,6 +26,7 @@ const taskId = "0b7c9d2e-4f1a-4c3b-9d8e-7f6a5b4c3d2e"
 // restores, and finishes or abandons one; dispatching a backup fails, as
 // to a Relay that's offline.
 const relay = vi.hoisted(() => ({
+  dispatched: [] as Array<{ batch?: { id: string; size: number } }>,
   resolved: [] as Array<string>,
   unfinished: [] as Array<{ kind: "app" | "volume"; id: string }>,
 }))
@@ -89,7 +90,11 @@ vi.mock("@/lib/relay-registry", async (importOriginal) => ({
   ],
 }))
 vi.mock("@/lib/backup-reconciliation", () => ({
-  dispatchBackupTask: async () => {
+  dispatchBackupTask: async (
+    _relay: unknown,
+    input: { batch?: { id: string; size: number } }
+  ) => {
+    relay.dispatched.push(input)
     throw new Error("Relay is offline")
   },
   reconcileRelayBackups: async () => undefined,
@@ -137,6 +142,7 @@ const grant = (permissions: ReadonlyArray<AccessPermission>) =>
 const seed = Effect.gen(function* () {
   yield* resetDatabase
   yield* insertRelay(relayId)
+  relay.dispatched = []
   relay.resolved = []
   relay.unfinished = []
 })
@@ -184,6 +190,38 @@ describeMysql("App backups", () => {
         assert.strictEqual(new Set(backups.map((row) => row.batch_id)).size, 1)
         assert.isNotNull(backups[0]?.batch_id)
       })
+    )
+
+    it.effect(
+      "asks the Relay to copy a stopped App backup's folder and volumes in one stopped window",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          yield* createAppRecordEffect({
+            appId,
+            createdBy: "someone-else",
+            name: "Website",
+            relayId,
+          })
+          yield* grant(["app.files.read", "app.manage"])
+
+          const { batchId } = yield* Effect.promise(() =>
+            createAppBackupsHandler(user, {
+              appId,
+              consistency: "stopped",
+              name: "Before the upgrade",
+              relayId,
+            })
+          )
+
+          assert.deepStrictEqual(
+            relay.dispatched.map((input) => input.batch),
+            [
+              { id: batchId, size: 2 },
+              { id: batchId, size: 2 },
+            ]
+          )
+        })
     )
 
     it.effect(

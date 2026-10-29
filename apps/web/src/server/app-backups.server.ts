@@ -164,6 +164,7 @@ export async function createAppBackupsHandler(
         reserveResourceBackupEffect({
           backupId: randomUUID(),
           batchId,
+          batchSize: targets.length,
           consistency: data.consistency,
           createdBy: user.id,
           name: data.name,

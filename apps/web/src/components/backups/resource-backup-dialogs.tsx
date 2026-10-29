@@ -110,7 +110,13 @@ export function ResourceBackupDialog({
   })
   return (
     <BackupConfigurationDialog
-      consistencyChoice={{ stoppedUnavailable }}
+      consistencyChoice={{
+        stoppedDescription:
+          target.kind === "whole-app"
+            ? "Stops it once for its folder and every volume"
+            : undefined,
+        stoppedUnavailable,
+      }}
       description={description}
       error={create.error?.message}
       onOpenChange={onOpenChange}

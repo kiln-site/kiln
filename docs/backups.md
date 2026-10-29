@@ -524,6 +524,14 @@ App mounts that its backups don't cover: Kiln volumes it uses, which are
 backed up on their own from their Relay's volumes page, and the mounts the
 Relay reports as uncovered. Every backup dialog for an App's folder or a
 volume offers live (the default) or stopped; stopped needs `app.manage`.
+Stopped, "Back up App" sends its backups as one batch, so the Relay copies
+the folder and every owned volume within one stopped window.
+
+The Settings page configures an App's folder and each volume it owns
+(choosing the App) and each Kiln volume on a Relay ("Kiln volumes on …"),
+with the same permissions as backing them up: retention, the platform
+ceiling, the destination, and exclusions, which apply to an App's folder
+and a volume as to a game server's, relative to their roots.
 
 A restore whose swap didn't finish shows on the Backups page and on its
 App's tab as "A restore didn't finish", with Finish and Abandon for those

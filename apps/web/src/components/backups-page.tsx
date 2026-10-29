@@ -97,6 +97,7 @@ import { BackupToolbar } from "@/components/backups/toolbar"
 import { grantsAllowBackup } from "@/lib/backup-target-permissions"
 import {
   accessCapabilitiesQueryOptions,
+  appBackupsQueryOptions,
   appDirectoryQueryOptions,
   backupRunsInfiniteQueryOptions,
   backupStorageQueryOptions,
@@ -104,6 +105,7 @@ import {
   managedDatabaseDirectoryQueryOptions,
   queryKeys,
   relaySnapshotQueryOptions,
+  relayVolumesQueryOptions,
 } from "@/lib/query-options"
 import {
   createDatabaseBackup,
@@ -652,9 +654,21 @@ const BackupScopeControls = React.memo(function BackupScopeControls({
     : undefined
   const canManageSelectedTarget = Boolean(
     selectedServer &&
-    createTargets.some(
-      (target) => target.key === selectedBackupCreateTargetKey(selectedServer)
-    )
+    (selectedServer.kind === "app"
+      ? capabilities.isPlatformAdmin ||
+        grantsAllowBackup(
+          capabilities.grants,
+          {
+            id: selectedServer.id,
+            kind: "app",
+            relayId: selectedServer.relayId,
+          },
+          "backup.create"
+        )
+      : createTargets.some(
+          (target) =>
+            target.key === selectedBackupCreateTargetKey(selectedServer)
+        ))
   )
   const selectServer = React.useCallback(
     (server: BackupScopeOption | null) => {
@@ -1390,6 +1404,12 @@ export const BackupSettingsPage = React.memo(function BackupSettingsPage({
   const { data: capabilities } = useSuspenseQuery(
     accessCapabilitiesQueryOptions()
   )
+  const { data: apps } = useSuspenseQuery(appDirectoryQueryOptions())
+  const { data: relays } = useSuspenseQuery({
+    ...relaySnapshotQueryOptions(),
+    notifyOnChangeProps: ["data"],
+    select: selectBackupRelays,
+  })
   const kiln = useKilnBackupHost(capabilities.isPlatformAdmin)
   const configurableOptions = React.useMemo(() => {
     const targets = availableCreateTargets({
@@ -1399,13 +1419,34 @@ export const BackupSettingsPage = React.memo(function BackupSettingsPage({
       servers: backupScope.servers,
     })
     const targetKeys = new Set(targets.map((target) => target.key))
-    return backupScopeOptions({
-      apps: [],
-      databases,
-      kiln: capabilities.isPlatformAdmin ? kiln : null,
-      servers: backupScope.servers,
-    }).filter((option) => targetKeys.has(selectedBackupCreateTargetKey(option)))
-  }, [backupScope.servers, capabilities, databases, kiln])
+    const allowed = (target: {
+      id: string
+      kind: "app" | "volume"
+      relayId: string
+    }) =>
+      capabilities.isPlatformAdmin ||
+      grantsAllowBackup(capabilities.grants, target, "backup.create")
+    return [
+      ...backupScopeOptions({
+        apps: apps.filter((app) =>
+          allowed({ id: app.id, kind: "app", relayId: app.relayId })
+        ),
+        databases,
+        kiln: capabilities.isPlatformAdmin ? kiln : null,
+        servers: backupScope.servers,
+      }).filter(
+        (option) =>
+          option.kind === "app" ||
+          targetKeys.has(selectedBackupCreateTargetKey(option))
+      ),
+      // A Relay's Kiln volumes, which its backup permissions cover.
+      ...relays.flatMap((relay) =>
+        allowed({ id: "0".repeat(40), kind: "volume", relayId: relay.relayId })
+          ? [kilnVolumesScopeOption(relay)]
+          : []
+      ),
+    ]
+  }, [apps, backupScope.servers, capabilities, databases, kiln, relays])
   const selectedTarget = React.useMemo(
     () =>
       configurableOptions.find(
@@ -1469,22 +1510,69 @@ function BackupSettingsSurface({
   target: BackupScopeOption
   storage: Array<BackupStorage>
 }) {
-  const policyTarget = React.useMemo(() => backupPolicyTarget(target), [target])
-  const policy = useQuery(
-    backupPolicyQueryOptions(target.relayId, policyTarget)
+  if (target.kind === "app") {
+    return (
+      <AppTargetsSettings
+        appId={target.id}
+        isPlatformAdmin={isPlatformAdmin}
+        relayId={target.relayId}
+        storage={storage}
+      />
+    )
+  }
+  if (target.kind === "relay" && target.id === KILN_VOLUMES_OPTION_ID) {
+    return (
+      <KilnVolumesSettings
+        isPlatformAdmin={isPlatformAdmin}
+        relayId={target.relayId}
+        storage={storage}
+      />
+    )
+  }
+  return (
+    <TargetSettings
+      isPlatformAdmin={isPlatformAdmin}
+      name={target.name}
+      relayId={target.relayId}
+      storage={storage}
+      target={backupPolicyTarget(target)}
+    />
   )
+}
+
+// One target's settings, once its policy loads; titled when it's one of
+// several, as an App's folder and volumes are.
+function TargetSettings({
+  isPlatformAdmin,
+  name,
+  relayId,
+  storage,
+  target,
+  titled = false,
+}: {
+  isPlatformAdmin: boolean
+  name: string
+  relayId: string
+  storage: Array<BackupStorage>
+  target: BackupTarget
+  titled?: boolean
+}) {
+  const policy = useQuery(backupPolicyQueryOptions(relayId, target))
 
   return (
     <section className="[contain:paint]">
+      {titled ? (
+        <h2 className="mb-3 font-heading text-sm font-semibold">{name}</h2>
+      ) : null}
       {policy.data ? (
         <BackupTargetSettings
-          key={`${target.relayId}:${policyTarget.kind}:${policyTarget.id}`}
+          key={`${relayId}:${target.kind}:${target.id}`}
           isPlatformAdmin={isPlatformAdmin}
-          name={target.name}
+          name={name}
           policy={policy.data}
-          relayId={target.relayId}
+          relayId={relayId}
           storage={storage}
-          target={policyTarget}
+          target={target}
         />
       ) : policy.error ? (
         <p className="p-5 text-xs text-destructive">{policy.error.message}</p>
@@ -1495,6 +1583,129 @@ function BackupSettingsSurface({
       )}
     </section>
   )
+}
+
+// An App's folder and each volume its Compose project owns, each with
+// settings of its own.
+function AppTargetsSettings({
+  appId,
+  isPlatformAdmin,
+  relayId,
+  storage,
+}: {
+  appId: string
+  isPlatformAdmin: boolean
+  relayId: string
+  storage: Array<BackupStorage>
+}) {
+  const targets = useQuery(appBackupsQueryOptions(relayId, appId))
+  if (!targets.data) {
+    return targets.error ? (
+      <p className="p-5 text-xs text-destructive">{targets.error.message}</p>
+    ) : (
+      <div className="grid h-40 place-items-center text-muted-foreground">
+        <LoaderCircle className="size-5 animate-spin" />
+      </div>
+    )
+  }
+  return (
+    <div className="grid gap-6">
+      {targets.data.targets.map((target) => (
+        <TargetSettings
+          key={`${target.kind}:${target.id}`}
+          isPlatformAdmin={isPlatformAdmin}
+          name={
+            target.kind === "app"
+              ? "Folder"
+              : `Volume ${target.name ?? target.id}`
+          }
+          relayId={relayId}
+          storage={storage}
+          target={{ id: target.id, kind: target.kind }}
+          titled
+        />
+      ))}
+    </div>
+  )
+}
+
+// A Relay's Kiln volumes, each with settings of its own.
+function KilnVolumesSettings({
+  isPlatformAdmin,
+  relayId,
+  storage,
+}: {
+  isPlatformAdmin: boolean
+  relayId: string
+  storage: Array<BackupStorage>
+}) {
+  const volumes = useQuery(relayVolumesQueryOptions(relayId))
+  const kilnVolumes = React.useMemo(
+    () =>
+      (volumes.data?.volumes ?? []).flatMap((volume) =>
+        volume.kind === "kiln" && volume.id !== null
+          ? [{ id: volume.id, name: volume.name }]
+          : []
+      ),
+    [volumes.data]
+  )
+  if (!volumes.data) {
+    return volumes.error ? (
+      <p className="p-5 text-xs text-destructive">{volumes.error.message}</p>
+    ) : (
+      <div className="grid h-40 place-items-center text-muted-foreground">
+        <LoaderCircle className="size-5 animate-spin" />
+      </div>
+    )
+  }
+  if (kilnVolumes.length === 0) {
+    return (
+      <p className="rounded-xl border border-dashed p-5 text-center text-xs text-muted-foreground">
+        This Relay has no Kiln volumes.
+      </p>
+    )
+  }
+  return (
+    <div className="grid gap-6">
+      {kilnVolumes.map((volume) => (
+        <TargetSettings
+          key={volume.id}
+          isPlatformAdmin={isPlatformAdmin}
+          name={`Volume ${volume.name}`}
+          relayId={relayId}
+          storage={storage}
+          target={{ id: volume.id, kind: "volume" }}
+          titled
+        />
+      ))}
+    </div>
+  )
+}
+
+// The settings page's entry for a Relay's Kiln volumes, beside Kiln's own.
+const KILN_VOLUMES_OPTION_ID = "kiln-volumes"
+
+function kilnVolumesScopeOption(relay: {
+  relayId: string
+  relayName: string
+}): BackupScopeOption {
+  return {
+    description: `Kiln volumes · ${relay.relayName}`,
+    id: KILN_VOLUMES_OPTION_ID,
+    kind: "relay",
+    name: `Kiln volumes on ${relay.relayName}`,
+    relayId: relay.relayId,
+    relayName: relay.relayName,
+  }
+}
+
+function selectBackupRelays(
+  snapshot: Awaited<ReturnType<typeof getRelaySnapshot>>
+) {
+  return snapshot.nodes.map(({ relayId, relayName }) => ({
+    relayId,
+    relayName,
+  }))
 }
 
 export const BackupDestinationsPage = React.memo(
