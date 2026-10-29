@@ -226,6 +226,7 @@ export const relayControlOperations = [
   "app.terminal.restart",
   "backup.task.enqueue",
   "backup.task.cancel",
+  "backup.restore.resolve",
   "backup.task.get",
   "backup.task.list",
   "transfer.source.prepare",
@@ -357,6 +358,7 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "app.terminal.restart",
   "backup.task.enqueue",
   "backup.task.cancel",
+  "backup.restore.resolve",
   "transfer.source.prepare",
   "transfer.source.discard",
   "transfer.pull.start",
@@ -511,6 +513,7 @@ export function relayControlOperationChanges(
     case "app.network.routes.write":
     case "backup.task.enqueue":
     case "backup.task.cancel":
+    case "backup.restore.resolve":
     case "transfer.source.prepare":
     case "transfer.source.discard":
     case "transfer.pull.start":

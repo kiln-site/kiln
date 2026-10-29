@@ -325,6 +325,44 @@ describe("operation lanes", () => {
     })
   )
 
+  it.effect(
+    "refuses work its turn comes for once refusal applies, but not nested work",
+    () =>
+      Effect.gen(function* () {
+        const frozen = new Set<string>()
+        const lanes = new OperationLanes({
+          refuse: (label, locks) =>
+            label !== "delete" && locks.some((lock) => frozen.has(lock.key))
+              ? "It's being deleted"
+              : null,
+        })
+        const log: Array<string> = []
+        const freeze = yield* start(lanes, log, "freeze", [exclusive("a")])
+        // Arrived before the freeze took hold, so it waits behind it.
+        const queued = yield* start(lanes, log, "restart", [shared("a")])
+        frozen.add("a")
+        frozen.add("c")
+        yield* freeze.finish
+
+        const refused = yield* Effect.flip(Fiber.join(queued.fiber))
+        assert.strictEqual((refused as LaneRejectedError).reason, "refused")
+        assert.strictEqual(refused.message, "It's being deleted")
+        const nested = yield* lanes.run(
+          { label: "delete", locks: [exclusive("a")] },
+          lanes.runNested(
+            { label: "delete.volume", locks: [exclusive("c")] },
+            Effect.sync(() => "nested ran")
+          )
+        )
+        assert.strictEqual(nested, "nested ran")
+        yield* lanes.run(
+          { label: "other", locks: [exclusive("b")] },
+          Effect.void
+        )
+        assert.deepStrictEqual(log, ["freeze"])
+      })
+  )
+
   it.effect("counts an exclusive operation only once it starts", () =>
     Effect.gen(function* () {
       const lanes = new OperationLanes()

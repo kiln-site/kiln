@@ -30,8 +30,10 @@ vi.mock("./command.js", () => import("./test/docker.js"))
 
 import { BackupManager } from "./backups.js"
 import { backupArchivePath } from "./backups/destinations/index.js"
+import { TarRestoreFences } from "./backups/tar-restore-journal.js"
 import { DockerEngine } from "./docker-engine.js"
 import { RelayStateStore } from "./effect/state.js"
+import { appLifecycleLocks } from "./operation-plans.js"
 import { fakeDocker } from "./test/docker.js"
 import {
   relayHarness,
@@ -62,8 +64,15 @@ async function relay() {
     harness.state,
     () => harness.lifecycle.hostDataDirectory()
   )
+  // As the Relay does, read before any work and kept across the managers a
+  // test starts, which stand for the Relay starting again.
+  const fences = await TarRestoreFences.load(harness.config)
+  harness.lanes.addRefusal((label, locks) => fences.refusal(label, locks))
+  fencesOf.set(harness, fences)
   return { harness, volumes }
 }
+
+const fencesOf = new WeakMap<RelayHarness, TarRestoreFences>()
 
 function backups(harness: RelayHarness, volumes: RelayVolumes) {
   return Effect.runPromise(
@@ -85,6 +94,7 @@ function backups(harness: RelayHarness, volumes: RelayVolumes) {
         },
       },
       config: harness.config,
+      fences: fencesOf.get(harness)!,
       findInstance: async () => null,
       isInstanceStopped: async () => true,
       lanes: harness.lanes,
@@ -398,7 +408,7 @@ it("leaves a volume as it was when a restore fails before swapping, and finishes
   fakeDocker.failNext({ command: "restore install" }, "killed")
   const cut = await runTask(manager, restoreInput(created))
   expect(cut).toMatchObject({
-    error: expect.stringContaining("finishes the restore when it next starts"),
+    error: expect.stringContaining("tries again when it next starts"),
     status: "failed",
   })
   expect(volume.files.has("stray")).toBe(false)
@@ -413,6 +423,205 @@ it("leaves a volume as it was when a restore fails before swapping, and finishes
   })
   expect(
     await readdir(join(harness.config.dataDirectory, "restores", "tar"))
+  ).toEqual([])
+})
+
+it("resumes the current install when concurrent resolutions waited on a clearing journal", async () => {
+  const { harness, volumes } = await relay()
+  const volume = kilnVolume()
+  volume.files.set("first", "already moved")
+  volume.files.set("second", "still staged")
+  const before = snapshot(volume)
+  const manager = await backups(harness, volumes)
+  const created = await runTask(
+    manager,
+    createInput({ id: volumeId, kind: "volume" })
+  )
+  fakeDocker.failNext({ command: "restore clear" }, "interrupted")
+  const cut = await runTask(manager, restoreInput(created))
+  expect(cut.status).toBe("failed")
+
+  const clearing = fakeDocker.hold({ command: "restore clear" })
+  const installing = fakeDocker.hold({ command: "restore install" })
+  const first = Effect.runPromise(
+    Effect.result(manager.resolveTarRestore(cut.taskId, "finish"))
+  )
+  await clearing.reached
+  const second = Effect.runPromise(
+    Effect.result(manager.resolveTarRestore(cut.taskId, "finish"))
+  )
+  const third = Effect.runPromise(
+    Effect.result(manager.resolveTarRestore(cut.taskId, "finish"))
+  )
+  // Both requests must have discovered the clearing journal before the
+  // first recovery advances it. No clock or scheduling delay is assumed.
+  while (harness.lanes.pending.waiting < 2) {
+    await new Promise((resolve) => setImmediate(resolve))
+  }
+  clearing.release()
+  await installing.reached
+  // Docker moved one entry before its install helper failed. The fake is
+  // held at that external boundary, so model the partial filesystem change.
+  const staged = `.kiln-restore-${cut.taskId}/first`
+  volume.files.set("first", volume.files.get(staged)!)
+  volume.files.delete(staged)
+  installing.fail("interrupted after moving the first entry")
+  expect((await first)._tag).toBe("Failure")
+  expect((await second)._tag).toBe("Success")
+  expect(snapshot(volume)).toEqual(before)
+  expect((await third)._tag).toBe("Success")
+  expect(await Effect.runPromise(manager.get(cut.taskId))).toMatchObject({
+    status: "succeeded",
+  })
+  expect(
+    await readdir(join(harness.config.dataDirectory, "restores", "tar"))
+  ).toEqual([])
+})
+
+it("keeps a volume whose swap failed fenced, even across a restart, and finishes its restore only with nothing running on it", async () => {
+  const { harness, volumes } = await relay()
+  const volume = kilnVolume()
+  const before = snapshot(volume)
+  await harness.apps.create({ id: appId, name: "Website" })
+  await deploy(harness, mountsVolume)
+  const manager = await backups(harness, volumes)
+  const created = await runTask(
+    manager,
+    createInput({ id: volumeId, kind: "volume" })
+  )
+  await harness.apps.action({ action: "stop", appId })
+  fakeDocker.failNext({ command: "restore install" }, "killed")
+  const cut = await runTask(manager, restoreInput(created))
+  expect(cut).toMatchObject({
+    error: expect.stringContaining("until the restore finishes"),
+    status: "failed",
+  })
+
+  // Nothing Kiln runs may change it or start what uses it meanwhile.
+  expect(
+    await runTask(manager, createInput({ id: volumeId, kind: "volume" }))
+  ).toMatchObject({
+    error: expect.stringContaining("the restore must finish first"),
+    status: "failed",
+  })
+  await expect(
+    Effect.runPromise(
+      harness.lanes.run(
+        { label: "app.action", locks: appLifecycleLocks(appId) },
+        Effect.void
+      )
+    )
+  ).rejects.toThrow("can't start until the restore finishes")
+  expect(
+    (await TarRestoreFences.load(harness.config)).find("volume", volumeId)
+  ).not.toBeNull()
+
+  // Docker starts the App anyway, as a restart policy would, and it writes.
+  await harness.apps.action({ action: "start", appId })
+  volume.files.set("pgdata/PG_VERSION", "17")
+  const restarted = await backups(harness, volumes)
+  expect(volume.files.get("pgdata/PG_VERSION")).toBe("17")
+  expect(await Effect.runPromise(restarted.get(cut.taskId))).toMatchObject({
+    status: "failed",
+  })
+
+  // Asked to finish, it stops the App and swaps the restore in.
+  await Effect.runPromise(restarted.resolveTarRestore(cut.taskId, "finish"))
+  expect(snapshot(volume)).toEqual(before)
+  expect(await Effect.runPromise(restarted.get(cut.taskId))).toMatchObject({
+    status: "succeeded",
+  })
+  expect(
+    await readdir(join(harness.config.dataDirectory, "restores", "tar"))
+  ).toEqual([])
+  expect(
+    await runTask(restarted, createInput({ id: volumeId, kind: "volume" }))
+  ).toMatchObject({ status: "succeeded" })
+})
+
+it("refuses an archive that names a restore's staging folder, and never stages into a folder already there", async () => {
+  const { harness, volumes } = await relay()
+  const volume = kilnVolume()
+  const before = snapshot(volume)
+  const manager = await backups(harness, volumes)
+
+  const taskId = randomUUID()
+  const crafted = await writeArchive(harness, randomUUID(), [
+    { body: "x", name: `data/.kiln-restore-${taskId}/rows`, type: "file" },
+  ])
+  expect(await runTask(manager, { ...crafted, taskId })).toMatchObject({
+    error: expect.stringContaining("restores keep for their staging folders"),
+    status: "failed",
+  })
+  expect(snapshot(volume)).toEqual(before)
+
+  // A folder with the staging folder's name, which the restore didn't make.
+  const created = await runTask(
+    manager,
+    createInput({ id: volumeId, kind: "volume" })
+  )
+  const restore = restoreInput(created)
+  volume.files.set(`.kiln-restore-${restore.taskId}/keep`, "not the restore's")
+  const blocked = snapshot(volume)
+  expect(await runTask(manager, restore)).toMatchObject({
+    error: expect.stringContaining("couldn't make its staging folder"),
+    status: "failed",
+  })
+  expect(snapshot(volume)).toEqual(blocked)
+})
+
+it("keeps a hard link whose file was left out, so the backup restores", async () => {
+  const { harness, volumes } = await relay()
+  const volume = kilnVolume()
+  volume.files.set("cache/blob", "shared")
+  volume.hardlinks.set("data/keep", "cache/blob")
+  volume.hardlinks.set("data/keep-too", "cache/blob")
+  const manager = await backups(harness, volumes)
+
+  const created = await runTask(
+    manager,
+    createInput({ id: volumeId, kind: "volume" }, { exclude: ["cache/"] })
+  )
+  expect(created.status).toBe("succeeded")
+  volume.hardlinks.clear()
+  volume.files.delete("cache/blob")
+  const restored = await runTask(manager, restoreInput(created))
+
+  expect(restored.status).toBe("succeeded")
+  expect(volume.files.get("data/keep")).toBe("shared")
+  expect(volume.files.get("data/keep-too")).toBe("shared")
+  expect(volume.files.has("cache/blob")).toBe(false)
+})
+
+it("starts again an App whose stop failed partway, and still owes the start when that fails too", async () => {
+  const { harness, volumes } = await relay()
+  kilnVolume()
+  await harness.apps.create({ id: appId, name: "Website" })
+  const app = await deploy(harness, mountsVolume)
+  const container = app.containers[0]!.id
+  const running = async () =>
+    (await harness.apps.get(appId)).containers.some(
+      (candidate) => candidate.running
+    )
+  const manager = await backups(harness, volumes)
+
+  // Docker stops it but the answer is lost; starting it again fails.
+  fakeDocker.failAfterNext({ command: "stop", target: container }, "timeout")
+  fakeDocker.failNext({ command: "start", target: container }, "busy")
+  const failed = await runTask(
+    manager,
+    createInput({ id: volumeId, kind: "volume" }, { consistency: "stopped" })
+  )
+  expect(failed).toMatchObject({
+    error: expect.stringContaining("couldn't be stopped for the backup"),
+    status: "failed",
+  })
+  expect(await running()).toBe(false)
+
+  await backups(harness, volumes)
+  expect(await running()).toBe(true)
+  expect(
+    await readdir(join(harness.config.dataDirectory, "backup-state", "stopped"))
   ).toEqual([])
 })
 

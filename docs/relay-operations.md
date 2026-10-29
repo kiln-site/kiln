@@ -136,7 +136,10 @@ worker locks the work when it runs it:
   lifecycle of each App it stops (for a volume, its owner and every App
   that uses it), so nothing starts them meanwhile. A volume's restore holds
   the volume exclusively with every such App's lifecycle; an App folder's
-  restore replaces the App.
+  restore replaces the App. A restore whose swap didn't finish keeps its
+  target fenced: the lanes refuse every operation that locks it, and those
+  that start, deploy, or replace an App using the volume, until its
+  recovery (`backup.restore.recover`) finishes or abandons it.
 - **Provisioning** holds the new server exclusively while it's created.
   Jobs for different instances run at once, up to half the host's cores
   (two to four), so a slow image download or install doesn't hold up the

@@ -1820,6 +1820,9 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     }
     case "backup.task.cancel":
       return "backup.create"
+    // Finishing a restore writes its target as the restore would.
+    case "backup.restore.resolve":
+      return "backup.restore"
     case "backup.task.get":
     case "backup.task.list":
       return "backup.read"
@@ -2228,6 +2231,15 @@ function controlFailureFor(
   }
   if (cause instanceof LaneRejectedError && cause.reason === "paused") {
     return { code: "relay_paused", message: cause.message, retryable: false }
+  }
+  // Refused while something the Relay keeps, such as an unfinished restore,
+  // says it mustn't run: expected, not an error to report.
+  if (cause instanceof LaneRejectedError && cause.reason === "refused") {
+    return {
+      code: "operation_refused",
+      message: cause.message,
+      retryable: false,
+    }
   }
   // Withdrawn from its lane before it ran, as when Hearth disconnected.
   if (cause instanceof LaneRejectedError && cause.reason === "cancelled") {

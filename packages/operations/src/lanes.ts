@@ -16,7 +16,13 @@ import { LockTable, normalizeLocks, type LaneLock } from "./locks.js"
 export class LaneRejectedError extends Schema.TaggedError<LaneRejectedError>()(
   "LaneRejectedError",
   {
-    reason: Schema.Literals(["busy", "cancelled", "paused", "superseded"]),
+    reason: Schema.Literals([
+      "busy",
+      "cancelled",
+      "paused",
+      "refused",
+      "superseded",
+    ]),
     message: Schema.String,
   }
 ) {}
@@ -86,6 +92,8 @@ interface Waiter {
   readonly granted: Deferred.Deferred<void, LaneRejectedError>
   /** Why a granted operation was withdrawn before it started. */
   refusal?: LaneRejectedError
+  /** Why `refuse` turned it away when it would have been granted. */
+  refused?: string
   state: WaiterState
 }
 
@@ -102,6 +110,15 @@ export interface OperationLanesOptions {
    * stable for each home's dashboards.
    */
   readonly waitAttribute?: string
+  /**
+   * Checked as an operation would be granted, so it sees everything that ran
+   * before: why the operation may not run, or null when it may. Nested
+   * operations aren't checked; they belong to one already granted.
+   */
+  readonly refuse?: (
+    label: string,
+    locks: ReadonlyArray<LaneLock>
+  ) => string | null
 }
 
 const DEFAULT_MAX_WAITING = 512
@@ -111,6 +128,7 @@ export class OperationLanes {
   readonly #busyMessage: string
   readonly #pausedMessage: (label: string) => string
   readonly #waitAttribute: string
+  readonly #refuse: OperationLanesOptions["refuse"]
   readonly #waiting: Array<Waiter> = []
   readonly #nested: Array<Waiter> = []
   readonly #active = new Set<Waiter>()
@@ -127,6 +145,7 @@ export class OperationLanes {
       options.messages?.paused ??
       ((label) => `${label} didn't run: operations are paused`)
     this.#waitAttribute = options.waitAttribute ?? "lanes.wait_ms"
+    this.#refuse = options.refuse
   }
 
   /**
@@ -423,7 +442,14 @@ export class OperationLanes {
       this.#start(waiter)
     }
     const { dropped, granted } = selectGrants(this.#held, this.#waiting, {
-      admit: (waiter) => !waiter.precondition || waiter.precondition(),
+      admit: (waiter) => {
+        const refused = this.#refuse?.(waiter.label, waiter.locks ?? [])
+        if (refused) {
+          waiter.refused = refused
+          return false
+        }
+        return !waiter.precondition || waiter.precondition()
+      },
       blocked,
       locksOf: (waiter) => waiter.locks,
     })
@@ -431,10 +457,15 @@ export class OperationLanes {
     for (const waiter of dropped) {
       this.#reject(
         waiter,
-        new LaneRejectedError({
-          message: `${waiter.label} no longer applies`,
-          reason: "superseded",
-        })
+        waiter.refused === undefined
+          ? new LaneRejectedError({
+              message: `${waiter.label} no longer applies`,
+              reason: "superseded",
+            })
+          : new LaneRejectedError({
+              message: waiter.refused,
+              reason: "refused",
+            })
       )
     }
     for (const waiter of granted) this.#start(waiter)

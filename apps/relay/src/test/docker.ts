@@ -176,6 +176,11 @@ export interface FakeVolume {
   driver?: string
   /** File contents written into the volume, keyed by path inside it. */
   readonly files: Map<string, string>
+  /**
+   * Hard links to its files, by path, to the file each shares contents
+   * with; Docker archives each after that file, as a link to it.
+   */
+  readonly hardlinks: Map<string, string>
 }
 
 export interface ContainerSeed {
@@ -499,6 +504,7 @@ export class FakeDocker {
     const volume: FakeVolume = {
       directories: new Set(),
       files: new Map(),
+      hardlinks: new Map(),
       labels: { ...input.labels },
       name: input.name,
       owners: new Map(),
@@ -1358,6 +1364,30 @@ export class FakeDocker {
     this.#stop(container, Result.isFailure(ran) ? 1 : 0)
   }
 
+  async #archiveFile(mount: FakeMount, path: string): Promise<Buffer> {
+    const content =
+      mount.type === "bind"
+        ? await readFile(join(mount.source, path))
+        : (() => {
+            const volume = this.volumes.get(mount.source)
+            const file = volume?.files.get(volume.hardlinks.get(path) ?? path)
+            if (file === undefined) {
+              throw new DockerFailure(`no such file: ${path}`, 404)
+            }
+            return Buffer.from(file)
+          })()
+    const pack = tarPack()
+    const done = new Promise<Buffer>((resolve, reject) => {
+      const chunks: Array<Buffer> = []
+      pack.on("data", (chunk) => chunks.push(chunk as Buffer))
+      pack.on("end", () => resolve(Buffer.concat(chunks)))
+      pack.on("error", reject)
+    })
+    pack.entry({ name: posix.basename(path), type: "file" }, content)
+    pack.finalize()
+    return done
+  }
+
   // A mount's files as Docker archives them: a tar under the mount's base
   // name, with owners, modes, and links.
   async #archiveMount(mount: FakeMount): Promise<Buffer> {
@@ -1450,6 +1480,16 @@ export class FakeDocker {
           Buffer.from(volume.files.get(path) ?? "")
         )
       }
+    }
+    for (const [path, linked] of [...volume.hardlinks].sort(([left], [right]) =>
+      left.localeCompare(right)
+    )) {
+      await entry({
+        ...owner(path, 0o644),
+        linkname: `${base}/${linked}`,
+        name: `${base}/${path}`,
+        type: "link",
+      })
     }
     pack.finalize()
     return done
@@ -1880,6 +1920,25 @@ export class FakeDocker {
       const target = this.#requiredContainer(parameters[0] ?? "")
       const path = url.searchParams.get("path") ?? ""
       const mount = target.mounts.find((entry) => entry.destination === path)
+      // One file under a mount, as Docker archives a single path: a
+      // regular file, even one hard-linked elsewhere.
+      const under = target.mounts.find((entry) =>
+        path.startsWith(`${entry.destination}/`)
+      )
+      if (!mount && method === "GET" && under) {
+        await this.#checkpoint("archive get", target.name)
+        const archive = await this.#archiveFile(
+          under,
+          path.slice(under.destination.length + 1)
+        )
+        return {
+          kind: "stream",
+          write: (response) => {
+            response.writeHead(200, { "Content-Type": "application/x-tar" })
+            response.end(archive)
+          },
+        }
+      }
       if (!mount) return this.#unsupported(`${method} archive ${path}`)
       if (method === "GET") {
         await this.#checkpoint("archive get", target.name)
@@ -3017,7 +3076,12 @@ function fakeTarRestoreStep(
 ): void {
   const inStaging = (path: string) =>
     path === staging || path.startsWith(`${staging}/`)
-  const maps = [volume.files, volume.symlinks, volume.owners] as const
+  const maps = [
+    volume.files,
+    volume.symlinks,
+    volume.owners,
+    volume.hardlinks,
+  ] as const
   const each = (visit: (path: string) => void) => {
     for (const map of maps)
       for (const path of Array.from(map.keys())) visit(path)
@@ -3026,6 +3090,16 @@ function fakeTarRestoreStep(
   const remove = (path: string) => {
     for (const map of maps) map.delete(path)
     volume.directories.delete(path)
+  }
+  if (step === "reserve") {
+    let taken = false
+    each((path) => {
+      if (inStaging(path)) taken = true
+    })
+    if (taken)
+      throw new Error(`EEXIST: file already exists, mkdir '${staging}'`)
+    volume.directories.add(staging)
+    return
   }
   if (step === "discard") {
     each((path) => inStaging(path) && remove(path))
@@ -3049,6 +3123,7 @@ function fakeTarRestoreStep(
   move(volume.files)
   move(volume.symlinks)
   move(volume.owners)
+  move(volume.hardlinks)
   for (const path of Array.from(volume.directories)) {
     if (!path.startsWith(prefix)) continue
     volume.directories.delete(path)

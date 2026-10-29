@@ -220,7 +220,13 @@ were running, before uploading. A stopped volume backup is refused while a
 container that isn't an App's mounts it, since Kiln can't stop and start it
 as its owner would. Apps it stopped are journaled first, so a Relay that
 stops midway starts them again when it starts; one that won't start again
-is a warning on the backup, which still succeeds. A final backup is always
+is a warning on the backup, which still succeeds, and stays journaled for
+the Relay's next start. If an App can't be stopped, the backup fails and
+every App it stopped starts again, the one whose stop failed included,
+since it may be partly stopped. The Apps a stopped backup or a restore of a
+volume locks are looked up before it waits its turn and checked again once
+it has it; if they changed meanwhile, or can't be looked up, the task fails
+rather than run beside an App it doesn't hold. A final backup is always
 stopped, and nothing starts again. Game servers, databases, and Kiln are
 backed up live only for now.
 
@@ -296,14 +302,33 @@ or roll back deterministically.
 Restoring a volume requires every container that mounts it to be stopped,
 and restoring an App's folder requires the App to be stopped; the Relay
 checks both. The Relay checks the archive's manifest and every entry, so
-nothing lands outside the target or through a symlink the archive made, and
-Docker extracts it (`PUT /containers/{id}/archive`) into a staging folder
-inside the target, keeping the old files until the copy is whole. Two
-helper steps then clear the old files and move the restored ones in. A
-journal records each phase: a restore that fails or stops while staging
-leaves the target as it was, and one that stops while clearing or moving
-is finished when the Relay next starts. A restore needs room for both
-copies in the target's filesystem.
+nothing lands outside the target or through a symlink the archive made,
+and nothing takes a name restores keep for their staging folders
+(`.kiln-restore-*` at the target's root). A backup checks every entry it
+writes by the same rules, so one that succeeds can be restored: a hard
+link whose file an exclusion left out holds the file's contents instead.
+
+A helper step makes the restore's staging folder inside the target, and
+the restore stops, changing nothing, if anything already has its name.
+Docker extracts the archive (`PUT /containers/{id}/archive`) into it,
+keeping the old files until the copy is whole. Two more steps then clear
+the old files and move the restored ones in, and Docker sets the root's
+extended attributes, which the steps can't, by extracting its entry over
+the mount. A journal records each phase: a restore that fails or stops
+while staging leaves the target as it was.
+
+One that fails or stops while clearing or moving leaves the target holding
+neither copy, so its journal **fences** the target until the restore
+finishes: the Relay's lanes refuse every other change to it, starting,
+deploying, or replacing an App that uses the volume, and new backups and
+restores of it, saying the restore must finish first. The Relay tries to
+finish it when it next starts, under the restore's own locks, unless
+something runs on the target, as when Docker's restart policy started an
+App, since moving the restored files in would overwrite what it wrote.
+`backup.restore.resolve` finishes it on request, stopping the Apps running
+on it first (another container mounting a volume still refuses), or
+abandons it, leaving the target as it is and dropping the staging folder.
+A restore needs room for both copies in the target's filesystem.
 
 Database restore requires the database to be running. The logical import is a
 tracked task and its output is bounded and redacted. A pre-restore dump is the

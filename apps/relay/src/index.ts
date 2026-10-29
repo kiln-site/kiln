@@ -14,6 +14,7 @@ import { Effect, Predicate, Schema } from "effect"
 
 import {
   RelayInventoryLookupSchema,
+  backupRestoreResolveSchema,
   backupTaskIdSchema,
   decodeRelayJoinLink,
   relayInstallationReplaceInputSchema,
@@ -156,6 +157,7 @@ import { transferSpace } from "./transfers/peer/space.js"
 import type { TransferRootResolver } from "./transfers/peer/roots.js"
 import { TransferSources } from "./transfers/peer/sources.js"
 import { BackupManager } from "./backups.js"
+import { TarRestoreFences } from "./backups/tar-restore-journal.js"
 import { attachBrowserSocket } from "./browser-socket.js"
 import {
   discoverRelayAdvertisedHost,
@@ -379,6 +381,10 @@ const bricks = new BrickCatalog(config.brickCatalogUrl, config.dataDirectory)
 // Every change to a game server, App, or database waits its turn here,
 // whichever actor asks for it. See operation-plans.ts.
 const lanes = new OperationLanes()
+// Restores of Apps' folders and volumes that began swapping and didn't
+// finish fence their targets: read before any work is admitted.
+const restoreFences = await TarRestoreFences.load(config)
+lanes.addRefusal((label, locks) => restoreFences.refusal(label, locks))
 // A Relay a Hearth paused stays paused across restarts: nothing starts until
 // it's resumed, so this is read before any worker runs.
 lanes.setPaused(
@@ -801,6 +807,7 @@ const backupManager = await runRelayEffect(
     },
     config,
     databases,
+    fences: restoreFences,
     lanes,
     volumes,
     findInstance: (instanceId) => docker.findInstance(instanceId),
@@ -2877,6 +2884,14 @@ async function executeControlRequest(
           .cancel(backupTaskIdSchema.parse(requiredString(payload, "taskId")))
           .pipe(Effect.map((task) => (task ? sendBackupTask(task) : task)))
       )
+    case "backup.restore.resolve": {
+      const input = backupRestoreResolveSchema.parse(request.payload)
+      await runRelayEffect(
+        "relay.backups.resolveRestore",
+        backupManager.resolveTarRestore(input.taskId, input.action)
+      )
+      return { resolved: true, taskId: input.taskId }
+    }
     case "backup.task.get":
       return runRelayEffect(
         "relay.backups.get",

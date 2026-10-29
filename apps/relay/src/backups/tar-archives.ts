@@ -1,12 +1,11 @@
 import { createHash, randomUUID } from "node:crypto"
 import { createReadStream, createWriteStream } from "node:fs"
-import { mkdir, readdir, readFile, rm } from "node:fs/promises"
 import { hostname } from "node:os"
-import { dirname, extname, join, resolve } from "node:path"
+import { dirname, extname, join } from "node:path"
 import { Readable, Transform } from "node:stream"
 import { pipeline } from "node:stream/promises"
 import { constants as zlibConstants, createGunzip, createGzip } from "node:zlib"
-import { Effect, Fiber, Predicate, Result, Schema } from "effect"
+import { Effect, Fiber, Predicate, Result } from "effect"
 import { extract as tarExtract, type Header, pack as tarPack } from "tar-stream"
 
 import {
@@ -17,11 +16,17 @@ import {
 
 import type { RelayConfig } from "../config.js"
 import type { DockerEngine } from "../docker-engine.js"
-import { writeFileAtomic } from "../effect/atomic-file.js"
 import { RelayBackupError } from "../effect/errors.js"
 import { relayOwnerLabels, relayOwnsLabels } from "../relay-resources.js"
 import { backupPathIsExcluded } from "./exclude.js"
 import {
+  removeTarRestoreJournal,
+  type TarRestoreFences,
+  type TarRestoreJournal,
+  writeTarRestoreJournal,
+} from "./tar-restore-journal.js"
+import {
+  TAR_RESTORE_STAGING_PREFIX,
   type TarRestoreRoot,
   type TarRestoreStep,
   tarRestoreStagingName,
@@ -39,9 +44,10 @@ import {
  * code (`../tar-restore-helper.ts`). It has no network.
  *
  * An archive is `.kiln-backup/manifest.json`, then the files under `data/`,
- * gzipped. Creating one validates every path Docker sends; restoring one
- * validates every entry again before Docker sees it, so nothing lands
- * outside the staging folder or through a symlink the archive made.
+ * gzipped. Creating one checks every entry it writes by the same rules a
+ * restore checks them by before Docker sees them (`ArchiveRules`), so a
+ * backup that succeeds can be restored, and nothing lands outside the
+ * staging folder or through a symlink the archive made.
  */
 
 const MOUNT = "/volume"
@@ -51,6 +57,7 @@ const MANIFEST_PATH = ".kiln-backup/manifest.json"
 const MAX_MANIFEST_BYTES = 1024 * 1024
 const MAX_ENTRIES = 1_000_000
 const HELPER_LABEL = "kiln.backup.helper"
+const XATTR_PREFIX = "SCHILY.xattr."
 const HELPER_MEMORY_BYTES = 256 * 1024 * 1024
 const STEP_TIMEOUT_MS = 30 * 60_000
 
@@ -93,31 +100,37 @@ export async function createTarBackup(options: {
       const archive = await Effect.runPromise(
         engine.containerArchive(helper, MOUNT)
       )
-      return repack(archive, options)
+      return repack(archive, options, (path, use) =>
+        readOneFile(engine, helper, path, options.signal, use)
+      )
     }
   )
 }
 
 /**
  * Restores an archive over what a source holds. Docker extracts it into a
- * staging folder inside the source, so the old files stay until the copy is
- * whole; `beginInstall` then commits to swapping it in, clearing the old
- * files and moving the restored ones up. A journal records each phase, so a
- * Relay that stops midway finishes or undoes it when it starts again
- * (`recoverInterruptedTarRestores`).
+ * staging folder the restore makes inside the source, so the old files stay
+ * until the copy is whole; `beginInstall` then commits to swapping it in,
+ * clearing the old files and moving the restored ones up. A journal records
+ * each phase, so a swap that fails, or a Relay that stops midway, is
+ * finished or undone later (`finishTarRestore`), and fences the target
+ * meanwhile.
  */
 export async function restoreTarBackup(options: {
   readonly archive: string
   readonly backupId: string
   readonly beginInstall: () => void
   readonly config: RelayConfig
+  /** Apps using the target, which can't start while it's partway swapped. */
+  readonly consumers: ReadonlyArray<string>
   readonly engine: DockerEngine
+  readonly fences: TarRestoreFences
   readonly signal: AbortSignal
   readonly source: TarSource
-  readonly target: BackupTarget
+  readonly target: BackupTarget & { readonly kind: "app" | "volume" }
   readonly taskId: string
 }): Promise<{ warnings: Array<string> }> {
-  const { config, engine, source, taskId } = options
+  const { config, engine, fences, source, taskId } = options
   const manifest = await readTarManifest(options.archive)
   if (
     manifest.backupId !== options.backupId ||
@@ -131,14 +144,29 @@ export async function restoreTarBackup(options: {
     )
   }
   const staging = tarRestoreStagingName(taskId)
+  // Made here, or the restore stops: what has its name already isn't the
+  // restore's to stage into or remove.
+  await Effect.runPromise(
+    Effect.tryPromise({
+      try: () => runStep(config, engine, source, "reserve", staging, null),
+      catch: (cause) =>
+        tarError(
+          "restore_staging_unavailable",
+          "restore.reserve",
+          `The restore couldn't make its staging folder, so nothing was changed: ${errorMessage(cause)}`
+        ),
+    })
+  )
   const journal: TarRestoreJournal = {
+    consumers: [...options.consumers],
     phase: "staging",
     root: null,
     source,
+    target: { id: options.target.id, kind: options.target.kind },
     taskId,
     version: 1,
   }
-  await writeJournal(config, journal)
+  await writeTarRestoreJournal(config, journal)
   const root = await Effect.runPromise(
     Effect.tryPromise({
       try: () =>
@@ -159,7 +187,7 @@ export async function restoreTarBackup(options: {
       Effect.tapError(() =>
         Effect.tryPromise(async () => {
           await runStep(config, engine, source, "discard", staging, null)
-          await removeJournal(config, taskId)
+          await removeTarRestoreJournal(config, taskId)
         }).pipe(Effect.ignore)
       )
     )
@@ -167,7 +195,7 @@ export async function restoreTarBackup(options: {
   const installed = await Effect.runPromise(
     Effect.result(
       Effect.tryPromise(() =>
-        installRestore(config, engine, { ...journal, root })
+        installRestore(config, engine, { ...journal, root }, fences)
       )
     )
   )
@@ -175,67 +203,68 @@ export async function restoreTarBackup(options: {
     throw tarError(
       "restore_install_failed",
       "restore.install",
-      `The restored files couldn't all be moved in, and some of the old ones may be gone; the Relay finishes the restore when it next starts. ${errorMessage(installed.failure)}`
+      `The restored files couldn't all be moved in, and some of the old ones may be gone. Nothing else can change it, or start an App that uses it, until the restore finishes: the Relay tries again when it next starts, or finish or abandon the restore. ${errorMessage(installed.failure)}`
     )
   }
   return { warnings: [] }
 }
 
 /**
- * Settles restores a stopped Relay left midway: one still staging is
- * undone, leaving the files as they were; one that had begun clearing or
- * installing is finished. Answers the tasks it finished. A restore that
- * can't be settled yet, as when Docker is down, keeps its journal for the
- * next start.
+ * Settles a restore a stopped Relay or a failed swap left midway, as its
+ * journal records it. One still staging is undone, leaving the files as they
+ * were; one that had begun clearing or installing is finished, and its
+ * target's fence lifted. Answers whether it finished a restore. The caller
+ * holds the restore's locks and has checked nothing runs on the target.
  */
-export async function recoverInterruptedTarRestores(
+export async function finishTarRestore(
   config: RelayConfig,
-  engine: DockerEngine
-): Promise<Array<string>> {
-  const directory = journalDirectory(config)
-  await mkdir(directory, { mode: 0o700, recursive: true })
-  await removeLeftoverHelpers(config, engine)
-  const completed: Array<string> = []
-  for (const name of await readdir(directory)) {
-    if (!name.endsWith(".json")) continue
-    const path = join(directory, name)
-    const journal = decodeJournal(await readFile(path, "utf8"))
-    if (!journal || `${journal.taskId}.json` !== name) {
-      await rm(path, { force: true })
-      continue
-    }
-    const settled = await Effect.runPromise(
-      Effect.result(
-        Effect.tryPromise(async () => {
-          if (journal.phase === "staging") {
-            await runStep(
-              config,
-              engine,
-              journal.source,
-              "discard",
-              tarRestoreStagingName(journal.taskId),
-              null
-            )
-            await removeJournal(config, journal.taskId)
-            return false
-          }
-          await installRestore(config, engine, journal)
-          return true
-        })
-      )
-    )
-    if (Result.isSuccess(settled) && settled.success) {
-      completed.push(journal.taskId)
-    }
+  engine: DockerEngine,
+  journal: TarRestoreJournal,
+  fences: TarRestoreFences
+): Promise<boolean> {
+  if (journal.phase === "staging") {
+    await abandonTarRestore(config, engine, journal, fences)
+    return false
   }
-  return completed
+  await installRestore(config, engine, journal, fences)
+  return true
+}
+
+/**
+ * Gives up an unfinished restore: its staging folder goes, and its target
+ * keeps what it holds now, which may be partly old files and partly
+ * restored ones, and the fence on it is lifted.
+ */
+export async function abandonTarRestore(
+  config: RelayConfig,
+  engine: DockerEngine,
+  journal: TarRestoreJournal,
+  fences: TarRestoreFences
+): Promise<void> {
+  await runStep(
+    config,
+    engine,
+    journal.source,
+    "discard",
+    tarRestoreStagingName(journal.taskId),
+    null
+  )
+  await removeTarRestoreJournal(config, journal.taskId)
+  fences.lift(journal.taskId)
 }
 
 // ------------------------------------------------------------- archiving
 
+// Reads one file from the source, whole, as a regular file.
+type FileReader = (
+  path: string,
+  use: (header: Header, body: EntryBody) => Promise<void>
+) => Promise<void>
+
 async function repack(
   archive: Readable,
-  options: Parameters<typeof createTarBackup>[0]
+  options: Parameters<typeof createTarBackup>[0],
+  readFile: FileReader
 ): Promise<{ bytes: number; checksumSha256: string; warnings: Array<string> }> {
   const { maxBytes, progress } = options
   const controller = new AbortController()
@@ -279,6 +308,10 @@ async function repack(
     // loop's, which this mustn't report again.
     const feeding = settle(() => pipeline(archive, extract, { signal }))
     const excluded: Array<string> = []
+    const rules = new ArchiveRules("create.validate")
+    // Files left out whose hard links stay in, by the path their first link
+    // was archived at with the file's contents.
+    const materialized = new Map<string, string>()
     let entries = 0
     for await (const entry of extract) {
       const header = entry.header
@@ -314,14 +347,51 @@ async function repack(
           progress.completed += (chunk as Buffer).byteLength
         })
       }
+      if (header.type === "link") {
+        const linked = sourcePath(header.linkname ?? "")
+        const target = rules.isFile(linked)
+          ? linked
+          : (materialized.get(linked) ?? null)
+        if (target === null) {
+          // The file it links to was left out, so this link holds its
+          // contents instead; later links to it link here.
+          entry.resume()
+          await readFile(path, async (file, body) => {
+            rules.check(path, "file", null)
+            await addEntry(
+              pack,
+              {
+                ...header,
+                linkname: undefined,
+                name: dataName(path),
+                pax: entryPax(header.pax),
+                size: file.size,
+                type: "file",
+              },
+              body
+            )
+          })
+          materialized.set(linked, path)
+          continue
+        }
+        rules.check(path, "link", target)
+        await addEntry(
+          pack,
+          {
+            ...header,
+            linkname: dataName(target),
+            name: dataName(path),
+            pax: entryPax(header.pax),
+          },
+          entry
+        )
+        continue
+      }
+      rules.check(path, header.type, null)
       await addEntry(
         pack,
         {
           ...header,
-          linkname:
-            header.type === "link"
-              ? dataName(sourcePath(header.linkname ?? ""))
-              : header.linkname,
           name: dataName(path, directory),
           pax: entryPax(header.pax),
         },
@@ -329,6 +399,7 @@ async function repack(
       )
     }
     await requireSettled(feeding)
+    rules.finish()
     pack.finalize()
   }
   // Each side stops the other when it fails.
@@ -347,6 +418,90 @@ async function repack(
 }
 
 const ARCHIVED_TYPES = new Set(["directory", "file", "link", "symlink"])
+
+/**
+ * The rules an archive's entries keep, checked as a backup writes them and
+ * again as a restore reads them, so no backup succeeds that its restore
+ * would refuse: each path once, a folder at the root, nothing written
+ * through a symlink it holds, no special files, hard links only to files it
+ * holds before them, and nothing under a name restores keep for their
+ * staging folders.
+ */
+class ArchiveRules {
+  readonly #operation: string
+  readonly #seen = new Map<string, Header["type"]>()
+  readonly #symlinks = new Set<string>()
+
+  constructor(operation: string) {
+    this.#operation = operation
+  }
+
+  isFile(path: string): boolean {
+    return this.#seen.get(path) === "file"
+  }
+
+  check(path: string, type: Header["type"], linkTarget: string | null): void {
+    if (this.#seen.has(path) || this.#seen.size >= MAX_ENTRIES) {
+      throw this.#fail(
+        "duplicate_archive_path",
+        "The backup contains duplicate paths"
+      )
+    }
+    if (path.split("/", 1)[0]!.startsWith(TAR_RESTORE_STAGING_PREFIX)) {
+      throw this.#fail(
+        "unsafe_archive_path",
+        "The backup contains a path restores keep for their staging folders"
+      )
+    }
+    const parents = path.split("/").slice(0, -1)
+    for (let index = 1; index <= parents.length; index += 1) {
+      if (this.#symlinks.has(parents.slice(0, index).join("/"))) {
+        throw this.#fail(
+          "unsafe_archive_path",
+          "The backup writes through a symbolic link"
+        )
+      }
+    }
+    if (!ARCHIVED_TYPES.has(type ?? "file")) {
+      throw this.#fail(
+        "unsupported_archive_entry",
+        "The backup contains a special file"
+      )
+    }
+    if (type === "link" && (linkTarget === null || !this.isFile(linkTarget))) {
+      throw this.#fail(
+        "unsafe_archive_path",
+        "The backup links to a file it doesn't hold"
+      )
+    }
+    if (path === "" && type !== "directory") {
+      throw this.#fail("invalid_archive", "The backup's root isn't a folder")
+    }
+    this.#seen.set(path, type ?? "file")
+    if (type === "symlink") this.#symlinks.add(path)
+  }
+
+  finish(): void {
+    if (!this.#seen.has("")) {
+      throw this.#fail("invalid_archive", "The backup holds no files")
+    }
+  }
+
+  #fail(code: string, reason: string) {
+    return tarError(code, this.#operation, reason)
+  }
+}
+
+// The extended attributes an entry's PAX records carry, or undefined.
+function rootXattrs(pax: Header["pax"]): Record<string, string> | undefined {
+  if (!Predicate.isObject(pax)) return undefined
+  const xattrs = Object.fromEntries(
+    Object.entries(pax as Record<string, string>).filter(([key]) =>
+      key.startsWith(XATTR_PREFIX)
+    )
+  )
+  return Object.keys(xattrs).length > 0 ? xattrs : undefined
+}
 
 // A path Docker archived under the mount, relative to it: "" for the mount
 // itself. Anything else, or a path that climbs out, isn't the source's.
@@ -408,8 +563,7 @@ async function stage(
         signal,
       })
     )
-    const seen = new Map<string, Header["type"]>()
-    const links = new Set<string>()
+    const rules = new ArchiveRules("restore.validate")
     let first = true
     for await (const entry of extract) {
       const header = entry.header
@@ -426,57 +580,18 @@ async function stage(
         continue
       }
       const path = archivedDataPath(header.name)
-      if (seen.has(path) || seen.size >= MAX_ENTRIES) {
-        throw tarError(
-          "duplicate_archive_path",
-          "restore.validate",
-          "The backup contains duplicate paths"
-        )
-      }
-      // Nothing may be written through a link the archive made.
-      const parents = path.split("/").slice(0, -1)
-      for (let index = 1; index <= parents.length; index += 1) {
-        if (links.has(parents.slice(0, index).join("/"))) {
-          throw tarError(
-            "unsafe_archive_path",
-            "restore.validate",
-            "The backup writes through a symbolic link"
-          )
-        }
-      }
-      if (!ARCHIVED_TYPES.has(header.type ?? "file")) {
-        throw tarError(
-          "unsupported_archive_entry",
-          "restore.validate",
-          "The backup contains a special file"
-        )
-      }
-      let linkname = header.linkname
-      if (header.type === "link") {
-        const target = archivedDataPath(header.linkname ?? "")
-        if (seen.get(target) !== "file") {
-          throw tarError(
-            "unsafe_archive_path",
-            "restore.validate",
-            "The backup links to a file it doesn't hold"
-          )
-        }
-        linkname = `${staging}/${target}`
-      }
-      seen.set(path, header.type)
-      if (header.type === "symlink") links.add(path)
+      const target =
+        header.type === "link" ? archivedDataPath(header.linkname ?? "") : null
+      rules.check(path, header.type, target)
+      const linkname =
+        target === null ? header.linkname : `${staging}/${target}`
       if (path === "") {
-        if (header.type !== "directory") {
-          throw tarError(
-            "invalid_archive",
-            "restore.validate",
-            "The backup's root isn't a folder"
-          )
-        }
+        const xattrs = rootXattrs(header.pax)
         root = {
           gid: header.gid ?? 0,
           mode: header.mode ?? 0o755,
           uid: header.uid ?? 0,
+          ...(xattrs && { xattrs }),
         }
       }
       await addEntry(
@@ -496,13 +611,7 @@ async function stage(
       )
     }
     await requireSettled(reading)
-    if (root === null) {
-      throw tarError(
-        "invalid_archive",
-        "restore.validate",
-        "The backup holds no files"
-      )
-    }
+    rules.finish()
     pack.finalize()
   }
   const settled = await Promise.all([
@@ -532,17 +641,24 @@ function archivedDataPath(name: string): string {
   return path
 }
 
+// Swaps a staged restore in. From clearing on, the target is fenced until
+// the restore finishes, even across a stop.
 async function installRestore(
   config: RelayConfig,
   engine: DockerEngine,
-  journal: TarRestoreJournal
+  journal: TarRestoreJournal,
+  fences: TarRestoreFences
 ): Promise<void> {
   const staging = tarRestoreStagingName(journal.taskId)
   if (journal.phase !== "installing") {
-    await writeJournal(config, { ...journal, phase: "clearing" })
+    const clearing = { ...journal, phase: "clearing" as const }
+    await writeTarRestoreJournal(config, clearing)
+    fences.fence(clearing)
     await runStep(config, engine, journal.source, "clear", staging, null)
   }
-  await writeJournal(config, { ...journal, phase: "installing" })
+  const installing = { ...journal, phase: "installing" as const }
+  await writeTarRestoreJournal(config, installing)
+  fences.fence(installing)
   await runStep(
     config,
     engine,
@@ -551,7 +667,37 @@ async function installRestore(
     staging,
     journal.root
   )
-  await removeJournal(config, journal.taskId)
+  if (journal.root?.xattrs) {
+    await restoreRootXattrs(config, engine, journal.source, journal.root)
+  }
+  await removeTarRestoreJournal(config, journal.taskId)
+  fences.lift(journal.taskId)
+}
+
+// The root's own extended attributes, which the install step can't set,
+// Node having no call for them. Docker sets them as it extracts the root's
+// entry over the mount from its parent, where it's an ordinary folder.
+async function restoreRootXattrs(
+  config: RelayConfig,
+  engine: DockerEngine,
+  source: TarSource,
+  root: TarRestoreRoot
+): Promise<void> {
+  const pack = tarPack()
+  pack.entry({
+    gid: root.gid,
+    mode: root.mode & 0o7777,
+    name: `${MOUNT.slice(1)}/`,
+    pax: { ...root.xattrs },
+    type: "directory",
+    uid: root.uid,
+  })
+  pack.finalize()
+  await withHelper(config, engine, source, { readOnly: false }, (helper) =>
+    Effect.runPromise(
+      engine.putContainerArchive(helper, "/", Readable.from(pack))
+    )
+  )
 }
 
 /** Reads and checks the manifest an archive begins with. */
@@ -630,6 +776,39 @@ async function withHelper<A>(
       )
     )
   )
+}
+
+// Reads one file from a helper's source as Docker archives a single path:
+// a regular file, even one hard-linked elsewhere.
+async function readOneFile(
+  engine: DockerEngine,
+  helper: string,
+  path: string,
+  signal: AbortSignal,
+  use: (header: Header, body: EntryBody) => Promise<void>
+): Promise<void> {
+  const archive = await Effect.runPromise(
+    engine.containerArchive(helper, `${MOUNT}/${path}`)
+  )
+  const extract = tarExtract()
+  const reading = settle(() => pipeline(archive, extract, { signal }))
+  let found = false
+  for await (const entry of extract) {
+    if (found || entry.header.type !== "file") {
+      entry.resume()
+      continue
+    }
+    found = true
+    await use(entry.header, entry)
+  }
+  await requireSettled(reading)
+  if (!found) {
+    throw tarError(
+      "archive_failed",
+      "create.collect",
+      "A hard-linked file changed while it was backed up"
+    )
+  }
 }
 
 // Runs one step of swapping a restore in, in a helper of its own.
@@ -770,7 +949,7 @@ function helperName(config: RelayConfig): string {
 }
 
 // Helpers a stopped Relay left, which nothing uses any more.
-async function removeLeftoverHelpers(
+export async function removeLeftoverTarHelpers(
   config: RelayConfig,
   engine: DockerEngine
 ): Promise<void> {
@@ -844,61 +1023,6 @@ function requireSafePath(path: string, operation: string): void {
       "The backup contains an unsafe path"
     )
   }
-}
-
-// ------------------------------------------------------------- journal
-
-const TarSourceSchema = Schema.Union([
-  Schema.Struct({ kind: Schema.Literal("volume"), name: Schema.String }),
-  Schema.Struct({ kind: Schema.Literal("bind"), path: Schema.String }),
-])
-
-const TarRestoreJournalSchema = Schema.Struct({
-  phase: Schema.Literals(["staging", "clearing", "installing"]),
-  root: Schema.NullOr(
-    Schema.Struct({
-      gid: Schema.Number,
-      mode: Schema.Number,
-      uid: Schema.Number,
-    })
-  ),
-  source: TarSourceSchema,
-  taskId: Schema.String.check(
-    Schema.isPattern(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u
-    )
-  ),
-  version: Schema.Literal(1),
-})
-
-type TarRestoreJournal = typeof TarRestoreJournalSchema.Type
-
-function decodeJournal(text: string): TarRestoreJournal | null {
-  return Schema.decodeUnknownOption(TarRestoreJournalSchema)(
-    safeJson(text)
-  ).pipe((option) => (option._tag === "Some" ? option.value : null))
-}
-
-function journalDirectory(config: RelayConfig): string {
-  return resolve(config.dataDirectory, "restores", "tar")
-}
-
-async function writeJournal(
-  config: RelayConfig,
-  journal: TarRestoreJournal
-): Promise<void> {
-  await mkdir(journalDirectory(config), { mode: 0o700, recursive: true })
-  await Effect.runPromise(
-    writeFileAtomic(
-      join(journalDirectory(config), `${journal.taskId}.json`),
-      `${JSON.stringify(journal)}\n`,
-      0o600
-    )
-  )
-}
-
-async function removeJournal(config: RelayConfig, taskId: string) {
-  await rm(join(journalDirectory(config), `${taskId}.json`), { force: true })
 }
 
 // Runs a side of a stream, settling instead of rejecting; a failure aborts

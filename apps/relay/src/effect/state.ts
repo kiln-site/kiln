@@ -632,7 +632,9 @@ export class RelayStateStore extends Context.Service<
      */
     readonly completeRecoveredRestore: (
       taskId: string,
-      now: number
+      now: number,
+      /** Its warning, when it's not the one for finishing at startup. */
+      warning?: string | null
     ) => Effect.Effect<boolean, RelayStateError>
     readonly completeBackupTask: (
       taskId: string,
@@ -2795,7 +2797,7 @@ const makeRelayStateStore = Effect.gen(function* () {
           })
         )
       ),
-    completeRecoveredRestore: (taskId, now) =>
+    completeRecoveredRestore: (taskId, now, warning) =>
       run(
         "complete_recovered_restore",
         sql.withTransaction(
@@ -2811,9 +2813,10 @@ const makeRelayStateStore = Effect.gen(function* () {
             if (!row) return false
             const result = {
               warnings: [
-                row.status === "failed"
-                  ? "Finished after the Relay restarted"
-                  : "Restore completed during Relay recovery",
+                warning ??
+                  (row.status === "failed"
+                    ? "Finished after the Relay restarted"
+                    : "Restore completed during Relay recovery"),
               ],
             }
             yield* sql`

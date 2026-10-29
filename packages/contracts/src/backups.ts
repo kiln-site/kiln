@@ -32,6 +32,15 @@ export const backupObjectKeySchema = z
 export const backupIdSchema = z.uuid()
 export const backupTaskIdSchema = z.uuid()
 
+/**
+ * Finishes or abandons a restore of an App's folder or a volume whose swap
+ * didn't finish, which keeps its target fenced until then.
+ */
+export const backupRestoreResolveSchema = z.strictObject({
+  action: z.enum(["abandon", "finish"]),
+  taskId: backupTaskIdSchema,
+})
+
 export const backupChecksumSha256Schema = z.string().regex(/^[a-f0-9]{64}$/u)
 
 export const resticSnapshotIdSchema = z.string().regex(/^[a-f0-9]{8,64}$/u)
