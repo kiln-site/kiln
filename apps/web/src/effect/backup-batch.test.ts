@@ -89,7 +89,9 @@ describeMysql("App backup batch reservation", () => {
               reservation(storageId, { id: volumeId, kind: "volume" }),
             ])
           )
-          // The batch waits on a lock before the volume's reservation goes on.
+          // The batch waits on a backup policy lock in this test's database
+          // before the volume's reservation goes on; waits elsewhere on the
+          // server don't count.
           let waiting = 0
           for (
             let attempt = 0;
@@ -98,7 +100,13 @@ describeMysql("App backup batch reservation", () => {
           ) {
             yield* Effect.yieldNow
             const [row] = yield* sql<{ count: number }>`
-              SELECT COUNT(*) AS count FROM performance_schema.data_lock_waits`
+              SELECT COUNT(*) AS count
+                FROM performance_schema.data_lock_waits waits
+                JOIN performance_schema.data_locks requested
+                  ON requested.ENGINE = waits.ENGINE
+                 AND requested.ENGINE_LOCK_ID = waits.REQUESTING_ENGINE_LOCK_ID
+               WHERE requested.OBJECT_SCHEMA = DATABASE()
+                 AND requested.OBJECT_NAME = ${policy}`
             waiting = Number(row?.count ?? 0)
           }
           assert.isAbove(waiting, 0)
