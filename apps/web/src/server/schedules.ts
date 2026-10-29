@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 
-import { createServerFn } from "@tanstack/react-start"
+import { createServerFn, createServerOnlyFn } from "@tanstack/react-start"
 import { Clock, Data, Effect, Result } from "effect"
 import type { ResultSetHeader, RowDataPacket } from "mysql2/promise"
 import { z } from "zod"
@@ -343,10 +343,10 @@ export const deleteSchedule = createServerFn({ method: "POST" })
  * to the Relays; one that doesn't take it is sent again by
  * `redeployUnacknowledgedSchedules`.
  */
-export async function removeDeletedResourceFromSchedules(
+export const removeDeletedResourceFromSchedules = createServerOnlyFn(async (
   resource: Pick<ScheduleTarget, "id" | "kind" | "relayId">,
   subject: string
-) {
+) => {
   const deletedKey = targetKey({ ...resource, name: "" })
   const changed = await runAppEffect(
     "schedules.removeDeletedTarget",
@@ -523,7 +523,7 @@ export async function removeDeletedResourceFromSchedules(
     )
     publishScheduleCollectionChange(change.relayIds)
   }
-}
+})
 
 export const runScheduleNow = createServerFn({ method: "POST" })
   .validator(scheduleIdSchema)
