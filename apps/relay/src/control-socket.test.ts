@@ -65,6 +65,7 @@ import { OperationLanes } from "./operation-lanes.js"
 import {
   controlRequestLocks,
   type InstanceResolver,
+  type TailscaleStackReader,
 } from "./operation-plans.js"
 import { DatabaseSync } from "node:sqlite"
 import { exclusive } from "./operation-lanes.js"
@@ -609,6 +610,51 @@ describe("Relay control socket", () => {
     releases.get("b:restart")!()
   })
 
+  it("rewrites a network's DNS for a deletion that waits on it, ahead of a change to the network queued behind the deletion", async () => {
+    const serverId = "a".repeat(40)
+    const stackId = "c".repeat(40)
+    const releases = new Map<string, () => void>()
+    const started: Array<string> = []
+    const relay = await startRelay({
+      execute: async (request) => {
+        started.push(request.operation)
+        if (request.operation === "instance.delete") {
+          await new Promise<void>((resolve) =>
+            releases.set(request.operation, resolve)
+          )
+        }
+        return { ok: true }
+      },
+      readTailscaleStack: async () => [],
+    })
+    const { inbox, socket } = await relay.connect(await relay.pair())
+
+    // The deletion runs, holding the server, and waits for Hearth's DNS.
+    const deletion = sendRequest(socket, "instance.delete", {
+      instanceId: serverId,
+    })
+    await vi.waitFor(() => expect(started).toEqual(["instance.delete"]))
+    // Someone adds the server to the network meanwhile: it waits for the
+    // deletion, holding back the network.
+    const apply = sendRequest(socket, "relay.tailscale.stack.apply", {
+      bindings: [{ hostname: "paper", memberId: `instance:${serverId}` }],
+      domain: "test",
+      hostname: "private-network",
+      id: stackId,
+      name: "Private Network",
+    })
+    const dns = sendRequest(socket, "relay.tailscale.stack.dns", {
+      id: stackId,
+      records: [],
+    })
+
+    expect(await inbox.next()).toMatchObject({ replyTo: dns, type: "response" })
+    expect(started).toEqual(["instance.delete", "relay.tailscale.stack.dns"])
+    releases.get("instance.delete")!()
+    expect(await inbox.next()).toMatchObject({ replyTo: deletion })
+    expect(await inbox.next()).toMatchObject({ replyTo: apply })
+  })
+
   it("orders a change made by a server's short ID with one made by its full ID", async () => {
     const instanceId = "c".repeat(40)
     const release = deferred<void>()
@@ -739,7 +785,9 @@ describe("Relay control socket", () => {
         const refused = sendRequest(
           socket,
           operation,
-          operation === "operation.get" ? { operationId: randomUUID() } : payload,
+          operation === "operation.get"
+            ? { operationId: randomUUID() }
+            : payload,
           { journalId: randomUUID(), operationId: randomUUID() }
         )
         expect(await inbox.next()).toMatchObject({
@@ -2029,6 +2077,7 @@ async function startRelay(
     readonly installation?: InstallationConfig
     readonly identifyHearth?: ControlSocketOptions["identifyHearth"]
     readonly resolveInstance?: InstanceResolver
+    readonly readTailscaleStack?: TailscaleStackReader
     readonly beforeRun?: ControlSocketOptions["beforeRun"]
     /** Holds reads of the operation journal until it settles, as a slow disk would. */
     readonly journalReads?: Promise<void>
@@ -2074,7 +2123,8 @@ async function startRelay(
       controlRequestLocks(
         request.operation,
         request.payload as Record<string, unknown>,
-        options.resolveInstance ?? ((reference) => reference)
+        options.resolveInstance ?? ((reference) => reference),
+        options.readTailscaleStack
       ),
     identity: {
       fingerprint: fingerprint(relayKeys.public),

@@ -34,6 +34,14 @@ export interface LaneAdmission {
    * before. Returning false ends the operation as superseded.
    */
   readonly precondition?: () => boolean
+  /**
+   * Waits only for operations holding its locks, not for those waiting in
+   * line, as nested work does, but arrives on its own and is refused like
+   * any other while paused or busy. For work that something holding locks
+   * waits on, from outside it, while what queued behind that holder waits
+   * for it in turn.
+   */
+  readonly continuation?: boolean
 }
 
 export interface LaneTicket {
@@ -68,7 +76,11 @@ type WaiterState = "done" | "granted" | "running" | "waiting"
 
 interface Waiter {
   readonly label: string
+  // Waits only for holders, in the nested queue: nested work, and
+  // continuations.
   readonly nested: boolean
+  // Arrived on its own, so a pause withdraws it while it waits.
+  readonly continuation: boolean
   locks: ReadonlyArray<LaneLock> | null
   readonly precondition: (() => boolean) | undefined
   readonly granted: Deferred.Deferred<void, LaneRejectedError>
@@ -157,12 +169,15 @@ export class OperationLanes {
   setPaused(paused: boolean): void {
     this.#paused = paused
     if (!paused) return
-    for (const waiter of this.#waiting.splice(0)) {
+    const continuations = this.#nested.filter((waiter) => waiter.continuation)
+    for (const waiter of continuations) this.#remove(waiter)
+    for (const waiter of [...this.#waiting.splice(0), ...continuations]) {
       waiter.state = "done"
       Deferred.doneUnsafe(waiter.granted, Exit.fail(this.#pausedError(waiter)))
     }
     for (const waiter of this.#active) {
-      if (waiter.nested || waiter.state !== "granted") continue
+      if ((waiter.nested && !waiter.continuation) || waiter.state !== "granted")
+        continue
       waiter.refusal = this.#pausedError(waiter)
       this.#release(waiter)
     }
@@ -216,8 +231,11 @@ export class OperationLanes {
     }
   }
 
-  #admit(admission: LaneAdmission, nested: boolean): LaneTicket {
+  #admit(admission: LaneAdmission, inside: boolean): LaneTicket {
+    const continuation = !inside && admission.continuation === true
+    const nested = inside || continuation
     const waiter: Waiter = {
+      continuation,
       granted: Deferred.makeUnsafe<void, LaneRejectedError>(),
       label: admission.label,
       locks: null,
@@ -226,9 +244,9 @@ export class OperationLanes {
       state: "waiting",
     }
     const queue = nested ? this.#nested : this.#waiting
-    if (!nested && this.#paused) {
+    if (!inside && this.#paused) {
       this.#reject(waiter, this.#pausedError(waiter))
-    } else if (!nested && this.#waiting.length >= this.#maxWaiting) {
+    } else if (!inside && this.#waiting.length >= this.#maxWaiting) {
       this.#reject(
         waiter,
         new LaneRejectedError({ message: this.#busyMessage, reason: "busy" })
@@ -382,6 +400,16 @@ export class OperationLanes {
         continue
       }
       this.#nested.splice(index, 1)
+      if (waiter.precondition && !waiter.precondition()) {
+        this.#reject(
+          waiter,
+          new LaneRejectedError({
+            message: `${waiter.label} no longer applies`,
+            reason: "superseded",
+          })
+        )
+        continue
+      }
       this.#held.take(waiter.locks)
       this.#start(waiter)
     }

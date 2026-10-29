@@ -225,6 +225,20 @@ function requestedTailscaleBindings(
 }
 
 /**
+ * Whether a request waits only for what holds its locks, not for what waits
+ * in line. Hearth rewrites a network's DNS (`relay.tailscale.stack.dns`)
+ * while a game server's, App's, or database's deletion holds it and waits
+ * for that DNS; a change to the network queued behind the deletion, which
+ * waits for it in turn, would otherwise hold the DNS back, and the deletion
+ * with it, until both timed out.
+ */
+export function controlRequestContinues(
+  operation: RelayControlOperation
+): boolean {
+  return operation === "relay.tailscale.stack.dns"
+}
+
+/**
  * Resolves a game server reference to its full ID. Requests normally carry
  * the full ID, which needs no lookup; a short ID or name is looked up.
  */

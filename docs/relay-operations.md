@@ -78,7 +78,12 @@ for that member's power changes as they wait for it; a member it leaves as it
 is is held shared, so it isn't deleted or replaced meanwhile. Removing a
 network does the same for all its members. The locks are planned from the
 members the network has when the change is admitted, and the change refuses
-to run if they've changed by its turn. Relays rewrite bindings saved with a
+to run if they've changed by its turn. Rewriting a network's DNS
+(`relay.tailscale.stack.dns`) waits only for what holds its locks, not for
+what waits in line: a game server's, App's, or database's deletion holds the
+member while Hearth rewrites its networks' DNS for it, and a change to the
+network queued behind the deletion would otherwise hold that DNS back, and
+the deletion with it. Relays rewrite bindings saved with a
 game server's bare ID when they start, and Hearth its copies of them in a
 migration.
 

@@ -98,6 +98,7 @@ import {
   isActionAllowed,
 } from "./permissions.js"
 import { relayBuildLabel } from "./build-info.js"
+import { controlRequestContinues } from "./operation-plans.js"
 import { isSourceAllowed } from "./source-policy.js"
 import { createRelaySnapshotDelta } from "./snapshot-delta.js"
 import { requestUrl } from "./request-url.js"
@@ -630,7 +631,11 @@ function authenticateSocket(
     const ticket =
       locks === null
         ? null
-        : options.lanes.admit({ label: message.operation, locks })
+        : options.lanes.admit({
+            continuation: controlRequestContinues(message.operation),
+            label: message.operation,
+            locks,
+          })
     const request: InFlightRequest = {
       controller,
       fiber: null,
