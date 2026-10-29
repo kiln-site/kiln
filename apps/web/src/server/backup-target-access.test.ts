@@ -4,6 +4,7 @@ import { assert, layer } from "@effect/vitest"
 import { Effect } from "effect"
 import { afterAll, vi } from "vite-plus/test"
 
+import { createAppRecordEffect } from "@/effect/managed-apps"
 import { disposeAppRuntime } from "@/effect/runtime"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import type { AccessPermission } from "@/lib/permissions"
@@ -23,14 +24,19 @@ import {
 // The Relay is the only network boundary these handlers cross: it says which
 // Apps use a volume and is offline for everything else, so dispatch never
 // succeeds.
-const relay = vi.hoisted(() => ({ volumeUsers: [] as Array<string> }))
+const relay = vi.hoisted(() => ({
+  protectionReady: true,
+  volumeUsers: [] as Array<string>,
+}))
 vi.mock("@/lib/relay-connection", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/relay-connection")>()),
   relayRpc: async (_relay: unknown, operation: string) => {
     if (operation !== "relay.volumes.read") throw new Error("Relay is offline")
     return {
       measuring: false,
-      protection: { ready: true, reason: null },
+      protection: relay.protectionReady
+        ? { ready: true, reason: null }
+        : { ready: false, reason: "waiting for Hearth B to connect" },
       uncovered: [],
       volumes: [
         {
@@ -53,6 +59,9 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
     }
   },
 }))
+
+// App configurations are kept encrypted.
+vi.stubEnv("BETTER_AUTH_SECRETS", `1:${"x".repeat(32)}`)
 
 afterAll(() => disposeAppRuntime())
 
@@ -135,6 +144,7 @@ const seed = Effect.gen(function* () {
   yield* resetDatabase
   yield* insertRelay(relayId)
   relay.volumeUsers = [appId]
+  relay.protectionReady = true
 })
 
 const rejection = (run: () => Promise<unknown>) =>
@@ -145,6 +155,20 @@ const rejection = (run: () => Promise<unknown>) =>
 
 const count = (table: string) =>
   selectRows(table).pipe(Effect.map((rows) => rows.length))
+
+const backups = selectRows<{
+  artifact_kind: string
+  consistency: string | null
+  target_id: string
+  target_kind: string
+}>("backup")
+
+const addPermission = (access: string, permission: AccessPermission) =>
+  insertRows("access_selection", {
+    access_id: access,
+    selection_kind: "permission",
+    selection_key: permission,
+  })
 
 const restoreTasks = selectRows<{ task_kind: string }>("backup_task").pipe(
   Effect.map((tasks) => tasks.filter((task) => task.task_kind === "restore"))
@@ -173,6 +197,85 @@ describeMysql("App and volume backup authorization", () => {
             assert.include(message, "do not have permission to back up")
           }
           assert.strictEqual(yield* count("backup"), 0)
+        })
+    )
+
+    it.effect(
+      "someone who can read an App's files backs it up, as a tar archive taken live",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          yield* createAppRecordEffect({
+            appId,
+            createdBy: "someone-else",
+            name: "Website",
+            relayId,
+          })
+          yield* grant(["app.files.read"])
+
+          const created = yield* Effect.promise(() =>
+            createResourceBackupHandler(user, {
+              name: "Before the upgrade",
+              relayId,
+              target: { id: appId, kind: "app" },
+            })
+          )
+
+          assert.strictEqual(created.backup.targetKind, "app")
+          assert.deepStrictEqual(yield* backups, [
+            {
+              ...(yield* backups)[0]!,
+              artifact_kind: "tar_archive",
+              consistency: "live",
+              target_id: appId,
+              target_kind: "app",
+            },
+          ])
+        })
+    )
+
+    it.effect(
+      "a stopped backup takes permission to manage every App it stops",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          const access = yield* grant(["backup.create"])
+          const stopped = () =>
+            createResourceBackupHandler(user, {
+              consistency: "stopped",
+              name: "Media",
+              relayId,
+              target: { id: kilnVolumeId, kind: "volume" },
+            })
+
+          const message = yield* rejection(stopped)
+          assert.include(message, "permission to manage each")
+          assert.strictEqual(yield* count("backup"), 0)
+
+          yield* addPermission(access, "app.manage")
+          yield* Effect.promise(stopped)
+          assert.strictEqual((yield* backups)[0]?.consistency, "stopped")
+        })
+    )
+
+    it.effect(
+      "a volume isn't restored while the Relay can't tell which Apps use it",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          const backupId = yield* seedVolumeBackup
+          yield* grant(["backup.restore", "app.files.write"])
+          relay.protectionReady = false
+
+          const message = yield* rejection(() =>
+            restoreResourceBackupHandler(user, {
+              backupId,
+              safetyBackup: false,
+            })
+          )
+
+          assert.include(message, "doesn't know yet which Apps use this volume")
+          assert.deepStrictEqual(yield* restoreTasks, [])
         })
     )
 
@@ -214,11 +317,7 @@ describeMysql("App and volume backup authorization", () => {
           assert.deepStrictEqual(yield* restoreTasks, [])
 
           // With it, the restore is queued.
-          yield* insertRows("access_selection", {
-            access_id: access,
-            selection_kind: "permission",
-            selection_key: "app.files.write",
-          })
+          yield* addPermission(access, "app.files.write")
           yield* Effect.promise(() =>
             restoreResourceBackupHandler(user, {
               backupId,

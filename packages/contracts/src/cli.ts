@@ -7,6 +7,7 @@ import {
   backupModeSchema,
   backupStatusSchema,
   backupTargetKindSchema,
+  backupTargetSchema,
   backupTaskStatusSchema,
 } from "./backups.js"
 import {
@@ -323,7 +324,7 @@ export const cliBackupSchema = z
     name: z.string().min(1).max(120),
     relayId: z.string().regex(/^[A-Za-z\d_-]{43}$/u),
     status: backupStatusSchema,
-    targetId: z.string().min(1).max(120),
+    targetId: backupTargetSchema.shape.id,
     targetKind: backupTargetKindSchema,
     taskError: z.string().nullable(),
     taskStatus: backupTaskStatusSchema,

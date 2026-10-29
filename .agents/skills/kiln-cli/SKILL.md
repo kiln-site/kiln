@@ -231,10 +231,16 @@ List visible backups and copy the complete UUID from the `ID` column:
 kiln backups list --limit 200
 ```
 
+The `TARGET` column is `kind:id`: `instance`, `database`, `platform`, `app`
+(an App's folder), or `volume`, whose ID is a Kiln volume's or
+`<App ID>/<name>` for one an App's Compose project declares, up to 200
+characters. The CLI lists App and volume backups but doesn't create or
+restore them yet.
+
 The `DEST` column consolidates the logical backup's destinations, such as
 `local+s3`; it does not repeat a backup once per destination. The `MODE`
 column is `incremental` (restic snapshots, the server default) or `full`
-(portable zip archives). Below the table, each backup whose latest task failed
+(portable zip archives, or gzipped tar archives for Apps and volumes). Below the table, each backup whose latest task failed
 gets a line with the reason. When the cause is known, such as a storage
 provider's cap being reached, the line says what happened and where to fix it,
 followed by the Relay's own message.

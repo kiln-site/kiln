@@ -502,7 +502,7 @@ export const backupResticSourceSchema = z
 export const backupArchiveIdentitySchema = z
   .object({
     backupId: backupIdSchema,
-    targetId: z.string().min(1).max(120),
+    targetId: backupTargetSchema.shape.id,
   })
   .strict()
 
