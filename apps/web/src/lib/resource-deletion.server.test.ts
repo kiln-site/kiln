@@ -10,6 +10,7 @@ import { ResourceDeletionConflictError } from "@/effect/resource-deletions"
 import { disposeAppRuntime } from "@/effect/runtime"
 import { testOperationsEngine } from "@/operations/test/engine"
 import { insertSchedule } from "@/server/schedule-deployment.server"
+import { stopScheduleDeliveries } from "@/server/schedule-deployment.server"
 import { TestDatabase, describeMysql } from "@/test/database"
 import {
   allow,
@@ -46,7 +47,12 @@ vi.mock("@/lib/authorization-delivery", async (importOriginal) => ({
   wakeAuthorizationDelivery: () => undefined,
 }))
 
-afterAll(() => disposeAppRuntime())
+// Schedule sends its deletions set off in the background finish before
+// the database closes.
+afterAll(async () => {
+  await stopScheduleDeliveries()
+  await disposeAppRuntime()
+})
 
 const Lanes = testOperationsEngine(
   Layer.mergeAll(deleteResource.layer, keepResource.layer)

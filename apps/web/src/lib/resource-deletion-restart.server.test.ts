@@ -11,6 +11,7 @@ import {
   OperationsEngineService,
   type OperationsEngineContext,
 } from "@/operations/engine-service"
+import { stopScheduleDeliveries } from "@/server/schedule-deployment.server"
 import { TestDatabase, describeMysql } from "@/test/database"
 import {
   deletionRelay as relay,
@@ -39,7 +40,12 @@ vi.mock("@/lib/authorization-delivery", async (importOriginal) => ({
   wakeAuthorizationDelivery: () => undefined,
 }))
 
-afterAll(() => disposeAppRuntime())
+// Schedule sends its deletions set off in the background finish before
+// the database closes.
+afterAll(async () => {
+  await stopScheduleDeliveries()
+  await disposeAppRuntime()
+})
 
 describeMysql("A deletion across a Hearth restart", () => {
   layer(TestDatabase, { timeout: 120_000 })((it) => {
