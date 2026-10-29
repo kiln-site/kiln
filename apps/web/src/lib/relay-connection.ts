@@ -2499,7 +2499,7 @@ function auditFailure(error: unknown): {
     error.code === "forbidden" ||
     error.code === "operation_withdrawn" ||
     error.code === "relay_paused" ||
-    error.code === "resource_frozen" ||
+    error.code === "operation_refused" ||
     error.code === "too_many_requests"
   ) {
     return {

@@ -4,6 +4,7 @@ import { Clock, Data, Effect } from "effect"
 import type { RowDataPacket } from "mysql2/promise"
 
 import { Database, type DatabaseTransaction } from "@/effect/database"
+import { invalidateScheduleDeploymentsEffect } from "@/effect/schedule-invalidation"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { databaseTable } from "@/lib/database-config"
 
@@ -234,7 +235,10 @@ export const requestResourceDeletionRowEffect = Effect.fn(
               "Its deletion changed since you looked, as when someone kept it. Reload to see where it is now.",
           })
         }
-        if (existing.id === id) return toResourceDeletion(existing)
+        if (existing.id === id) {
+          yield* invalidateSchedulesOf(transaction, existing)
+          return toResourceDeletion(existing)
+        }
         if (existing.status === "cancelling") {
           return yield* new ResourceDeletionConflictError({
             message:
@@ -275,6 +279,7 @@ export const requestResourceDeletionRowEffect = Effect.fn(
             existing.id,
           ]
         )
+        yield* invalidateSchedulesOf(transaction, existing)
         const [row] = yield* transaction.queryRows<ResourceDeletionRow>(
           `${select} WHERE id = ? LIMIT 1`,
           [existing.id]
@@ -342,23 +347,57 @@ export const recordResourceDeletionStatusEffect = Effect.fn(
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
   const from = input.from ?? unfinishedDeletionStatuses
-  const result = yield* database.execute(
+  return yield* database.transaction(
     "resource_deletion_status",
-    `UPDATE ${databaseTable("resource_deletion")}
-        SET status = ?, error = ?, updated_at = ?
-      WHERE id = ? AND attempt = ?
-        AND status IN (${from.map(() => "?").join(", ")})`,
-    [
-      input.status,
-      input.error?.slice(0, 4_096) ?? null,
-      now,
-      input.id,
-      input.attempt,
-      ...from,
-    ]
+    (transaction) =>
+      Effect.gen(function* () {
+        const result = yield* transaction.execute(
+          `UPDATE ${databaseTable("resource_deletion")}
+            SET status = ?, error = ?, updated_at = ?
+          WHERE id = ? AND attempt = ?
+            AND status IN (${from.map(() => "?").join(", ")})`,
+          [
+            input.status,
+            input.error?.slice(0, 4_096) ?? null,
+            now,
+            input.id,
+            input.attempt,
+            ...from,
+          ]
+        )
+        if (result.affectedRows === 0) return false
+        // Stopped or done: its scheduled backups run again, or find it gone.
+        if (!isUnfinished(input.status)) {
+          const [row] = yield* transaction.queryRows<ResourceDeletionRow>(
+            `${select} WHERE id = ? LIMIT 1`,
+            [input.id]
+          )
+          if (row) yield* invalidateSchedulesOf(transaction, row)
+        }
+        return true
+      })
   )
-  return result.affectedRows > 0
 })
+
+const isUnfinished = (status: ResourceDeletionStatus) =>
+  (
+    unfinishedDeletionStatuses as ReadonlyArray<ResourceDeletionStatus>
+  ).includes(status)
+
+/**
+ * Marks the schedules backing up a resource owed to its Relay, in the
+ * transaction that starts or ends its deletion: a resource being deleted
+ * isn't backed up on schedule (`scheduledBackupAdmissionEffect`).
+ * `deliverPendingSchedules` sends them once it commits.
+ */
+const invalidateSchedulesOf = (
+  transaction: DatabaseTransaction,
+  row: Pick<ResourceDeletionRow, "relay_id" | "resource_id" | "resource_kind">
+) =>
+  invalidateScheduleDeploymentsEffect(transaction, {
+    relayId: row.relay_id,
+    target: { id: row.resource_id, kind: row.resource_kind },
+  })
 
 /** Records that the Relay no longer has the resource: a retry only cleans up. */
 export const recordRelayDeletedEffect = Effect.fn(

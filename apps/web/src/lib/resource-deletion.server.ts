@@ -42,6 +42,7 @@ import { currentActingUser } from "@/operations/acting-user"
 import { durableOperation, startDurableOperation } from "@/operations/durable"
 import { RelayCommandError, relayCommand } from "@/operations/relay-command"
 import { cleanUpDeletedResourceEffect } from "@/server/resource-deletion-cleanup"
+import { deliverPendingSchedules } from "@/server/schedule-deployment.server"
 
 // Deleting a game server or database, as one durable operation per attempt
 // (docs/resource-unification.md, Deletion): check the person who asked may
@@ -478,6 +479,11 @@ const cleanUp = (input: DeletionInput) =>
     return null
   }).pipe(Effect.catch((cause) => Effect.succeed(messageOf(cause))))
 
+// Starting or ending a deletion marked the schedules backing the resource
+// up as owed to its Relay, in its own transaction; this sends them now.
+// Whatever doesn't arrive, the sweep sends again.
+const deliverSchedules = Effect.sync(() => deliverPendingSchedules())
+
 const recordStatus = (
   input: DeletionInput,
   status: ResourceDeletionStatus,
@@ -492,6 +498,7 @@ const recordStatus = (
     status,
   }).pipe(
     Effect.tap(() => Effect.sync(() => publishDeletionChange(input))),
+    Effect.tap(deliverSchedules),
     Effect.orDie,
     Effect.asVoid
   )
@@ -596,6 +603,7 @@ export const reconcileResourceDeletions = Effect.fnUntraced(function* () {
             Effect.tap(() =>
               Effect.sync(() => publishDeletionChange(deletion))
             ),
+            Effect.tap(deliverSchedules),
             Effect.asVoid
           )
         : startAttempt(deletion).pipe(Effect.asVoid),
@@ -648,6 +656,7 @@ export const requestResourceDeletionEffect = Effect.fn(
     storageId,
     user: input.user,
   })
+  yield* deliverSchedules
   if (unfinishedDeletionStatuses.some((status) => status === deletion.status)) {
     yield* startAttempt(deletion)
   }

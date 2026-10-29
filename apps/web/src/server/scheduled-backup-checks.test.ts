@@ -12,7 +12,12 @@ import {
 import { Database } from "@/effect/database"
 import { reconcileBackupTaskEffect } from "@/effect/backups"
 import { disposeAppRuntime } from "@/effect/runtime"
+import {
+  recordResourceDeletionStatusEffect,
+  requestResourceDeletionRowEffect,
+} from "@/effect/resource-deletions"
 import { invalidateScheduleDeploymentsEffect } from "@/effect/schedule-invalidation"
+import type { AuthenticatedUser } from "@/lib/auth-session"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { scheduleProjectionGenerations } from "@/migrations/0043_schedule_projection_generations"
 import {
@@ -24,7 +29,6 @@ import {
 } from "@/server/schedule-deployment.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import {
-  insertBackup,
   insertBackupStorage,
   insertRelay,
   insertRows,
@@ -98,6 +102,16 @@ afterAll(async () => {
 })
 
 const relayId = "relay-one"
+const owner = {
+  email: "owner@example.test",
+  emailVerified: true,
+  emailVerifiedAt: "2026-01-01T00:00:00.000Z",
+  id: "owner",
+  isDevelopmentBypass: false,
+  name: "Owner",
+  role: "user",
+  twoFactorEnabled: false,
+} satisfies AuthenticatedUser
 const at = 1_767_225_600_000
 const turnedOff = "a".repeat(40)
 const beingDeleted = "b".repeat(40)
@@ -259,24 +273,18 @@ describeMysql("Scheduled backups, checked before they run", () => {
           // being deleted, and a third may write at most 2 KiB.
           yield* policy(turnedOff, { admin_quantity_limit: 0 })
           yield* policy(capped, { size_limit_bytes: 2_048 })
-          yield* insertBackup("final-backup", {
-            reason: "final_delete",
-            relay_id: relayId,
-            target_id: beingDeleted,
-          })
-          yield* insertRows("backup_final_delete", {
-            backup_id: "final-backup",
-            created_at: at,
-            relay_id: relayId,
-            requested_by: "owner",
-            status: "backing_up",
-            target_id: beingDeleted,
-            updated_at: at,
-          })
-
           yield* deploy(
             backupSchedule({ kind: "local" }, [turnedOff, beingDeleted, capped])
           )
+          yield* requestResourceDeletionRowEffect({
+            finalBackup: false,
+            kind: "instance",
+            relayId,
+            resourceId: beingDeleted,
+            storageId: null,
+            user: owner,
+          })
+          yield* Effect.promise(redeployUnacknowledgedSchedules)
 
           const sent = executions()
           assert.strictEqual(
@@ -343,6 +351,48 @@ describeMysql("Scheduled backups, checked before they run", () => {
             Number(resent?.acknowledged_generation),
             Number(resent?.desired_generation)
           )
+        })
+    )
+
+    it.effect(
+      "stops a target's scheduled backups while its deletion runs, and resumes them once it stops",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          yield* deploy(backupSchedule({ kind: "local" }, [capped]))
+          const before = executions()[capped]
+
+          const deletion = yield* requestResourceDeletionRowEffect({
+            finalBackup: false,
+            kind: "instance",
+            relayId,
+            resourceId: capped,
+            storageId: null,
+            user: owner,
+          })
+          const [owed] = yield* selectRows<{ status: string }>(
+            "schedule_deployment"
+          )
+          yield* Effect.promise(redeployUnacknowledgedSchedules)
+          const during = executions()[capped]
+
+          yield* recordResourceDeletionStatusEffect({
+            attempt: deletion.attempt,
+            error: "The Relay is unreachable",
+            id: deletion.id,
+            status: "failed",
+          })
+          const [owedAgain] = yield* selectRows<{ status: string }>(
+            "schedule_deployment"
+          )
+          yield* Effect.promise(redeployUnacknowledgedSchedules)
+          const after = executions()[capped]
+
+          assert.isNull(before?.refusal ?? null)
+          assert.strictEqual(owed?.status, "pending")
+          assert.strictEqual(during?.refusal, "it's being permanently deleted")
+          assert.strictEqual(owedAgain?.status, "pending")
+          assert.isNull(after?.refusal ?? null)
         })
     )
 
