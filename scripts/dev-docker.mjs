@@ -90,12 +90,14 @@ switch (command) {
   case "down":
     compose(["down"], composeEnvironment)
     break
-  case "destroy":
-    destroyNamespacedContainers()
+  case "destroy": {
+    const appProjects = destroyNamespacedContainers()
     compose(["down"], composeEnvironment)
-    destroyNamespacedNetworks()
+    destroyNamespaced("network", appProjects)
+    destroyNamespaced("volume", appProjects)
     compose(["down", "--volumes", "--remove-orphans"], composeEnvironment)
     break
+  }
   case "logs":
     compose(["logs", "--follow", "hearth", "relay"], composeEnvironment)
     break
@@ -157,6 +159,8 @@ function requireNamespaceForDestroy() {
   }
 }
 
+// Removes the Relay's containers, and returns the Compose projects its Apps
+// ran them in.
 function destroyNamespacedContainers() {
   requireNamespaceForDestroy()
   const containers = capture("docker", [
@@ -166,30 +170,46 @@ function destroyNamespacedContainers() {
     "--filter",
     `label=kiln.relay.owner=${namespace}`,
     "--format",
-    "{{.ID}}",
+    '{{.ID}} {{.Label "com.docker.compose.project"}}',
   ])
     .split("\n")
     .filter(Boolean)
+    .map((line) => line.split(" "))
   if (containers.length > 0) {
-    run("docker", ["container", "rm", "--force", ...containers], process.env)
+    run(
+      "docker",
+      ["container", "rm", "--force", ...containers.map(([id]) => id)],
+      process.env
+    )
   }
+  return [...new Set(containers.map(([, project]) => project).filter(Boolean))]
 }
 
-function destroyNamespacedNetworks() {
+// Removes the Relay's networks or volumes: those it labelled, and those
+// Compose made for its Apps' projects, which carry only the project's label.
+function destroyNamespaced(kind, appProjects) {
   requireNamespaceForDestroy()
-  const networks = capture("docker", [
-    "network",
-    "ls",
-    "--filter",
+  const filters = [
     `label=kiln.relay.owner=${namespace}`,
-    "--format",
-    "{{.ID}}",
-  ])
-    .split("\n")
-    .filter(Boolean)
-  if (networks.length > 0) {
-    run("docker", ["network", "rm", ...networks], process.env)
-  }
+    ...appProjects.map(
+      (project) => `label=com.docker.compose.project=${project}`
+    ),
+  ]
+  const ids = new Set(
+    filters.flatMap((filter) =>
+      capture("docker", [
+        kind,
+        "ls",
+        "--filter",
+        filter,
+        "--format",
+        kind === "volume" ? "{{.Name}}" : "{{.ID}}",
+      ])
+        .split("\n")
+        .filter(Boolean)
+    )
+  )
+  if (ids.size > 0) run("docker", [kind, "rm", ...ids], process.env)
 }
 
 function ensureSharedStore() {

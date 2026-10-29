@@ -59,7 +59,9 @@ beforeEach(() => {
   boundary.docker = (args, options) => {
     const success = (stdout = "") => ({ status: 0, stdout, stderr: "" })
     if (args[0] === "info") return success(engine)
-    if (args[0] === "volume") return success()
+    if (args[0] === "volume" && ["inspect", "create"].includes(args[1])) {
+      return success()
+    }
     if (args[0] === "compose") {
       const project = args[args.indexOf("--project-name") + 1]
       if (args.includes("up")) projects.set(project, options.cwd)
@@ -72,19 +74,46 @@ beforeEach(() => {
       if (filter.startsWith("label=com.docker.compose.project=")) {
         return success(projects.get(project) ?? "")
       }
-      const owner = filter.replace("label=kiln.relay.owner=", "")
-      return success(
-        [...resources]
-          .filter(([, value]) => value === owner)
-          .map(([id]) => id)
-          .join("\n")
-      )
     }
-    if (args[0] === "container" && args[1] === "rm") {
-      for (const id of args.slice(3)) resources.delete(id)
-      return success()
+    if (["container", "network", "volume"].includes(args[0])) {
+      if (args[1] === "ls") {
+        const [label, value] = args[args.indexOf("--filter") + 1]
+          .replace(/^label=/u, "")
+          .split("=")
+        const format = args[args.indexOf("--format") + 1]
+        return success(
+          [...resources]
+            .filter(
+              ([, resource]) =>
+                resource.kind === args[0] && resource.labels[label] === value
+            )
+            .map(([id, resource]) =>
+              format
+                .replace("{{.ID}}", id)
+                .replace("{{.Name}}", id)
+                .replace(
+                  '{{.Label "com.docker.compose.project"}}',
+                  resource.labels["com.docker.compose.project"] ?? ""
+                )
+                .trim()
+            )
+            .join("\n")
+        )
+      }
+      if (args[1] === "rm") {
+        for (const id of args.slice(2).filter((arg) => !arg.startsWith("-"))) {
+          if (resources.get(id)?.kind !== args[0]) {
+            return {
+              status: 1,
+              stdout: "",
+              stderr: `No such ${args[0]}: ${id}`,
+            }
+          }
+          resources.delete(id)
+        }
+        return success()
+      }
     }
-    if (args[0] === "network" && args[1] === "ls") return success()
     throw new Error(`Unexpected Docker operation: ${args.join(" ")}`)
   }
   vi.spyOn(process, "cwd").mockReturnValue(worktree)
@@ -117,17 +146,53 @@ afterEach(() => {
 test("cleanup after a branch switch removes the original stack and only its Relay resources", async () => {
   await command("up")
   assert.ok(projects.has("kiln-repo-cleanup"))
-  resources.set("our-game", "kiln-repo-cleanup")
-  resources.set("other-game", "kiln-other")
+  resource("our-game", "container", { "kiln.relay.owner": "kiln-repo-cleanup" })
+  resource("other-game", "container", { "kiln.relay.owner": "kiln-other" })
   git(worktree, "switch", "-c", "fix/another-task")
   await command("destroy")
   assert.equal(projects.size, 0)
   assert.deepEqual([...resources.keys()], ["other-game"])
 })
 
+test("destroy removes the volumes and networks the Relay and its Apps' Compose projects made, and nobody else's", async () => {
+  await command("up")
+  const ours = { "kiln.relay.owner": "kiln-repo-cleanup" }
+  const app = "kiln-repo-cleanup-kiln-app-1234"
+  resource("our-app-web", "container", {
+    ...ours,
+    "com.docker.compose.project": app,
+  })
+  resource("kiln-repo-cleanup-kiln-db-1234-data", "volume", ours)
+  resource("kiln-repo-cleanup-kiln-db-1234-network", "network", ours)
+  resource(`${app}_data`, "volume", { "com.docker.compose.project": app })
+  resource(`${app}_default`, "network", { "com.docker.compose.project": app })
+  // Another stack's, a real Relay's, and Compose projects of their own.
+  resource("kiln-other-kiln-db-1234-data", "volume", {
+    "kiln.relay.owner": "kiln-other",
+  })
+  resource("kiln-other-kiln-app-1234_default", "network", {
+    "com.docker.compose.project": "kiln-other-kiln-app-1234",
+  })
+  resource("kiln-kiln-db-1234-data", "volume", {})
+  resource("kiln-repo-cleanup-kiln-app-5678_data", "volume", {
+    "com.docker.compose.project": "kiln-repo-cleanup-kiln-app-5678-other",
+  })
+
+  await command("destroy")
+
+  assert.deepEqual([...resources.keys()].sort(), [
+    "kiln-kiln-db-1234-data",
+    "kiln-other-kiln-app-1234_default",
+    "kiln-other-kiln-db-1234-data",
+    "kiln-repo-cleanup-kiln-app-5678_data",
+  ])
+})
+
 test("a colliding checkout cannot start or destroy another checkout's project", async () => {
   projects.set("kiln-repo-cleanup", root)
-  resources.set("other-game", "kiln-repo-cleanup")
+  resource("other-game", "container", {
+    "kiln.relay.owner": "kiln-repo-cleanup",
+  })
   for (const action of ["up", "destroy"]) {
     await assert.rejects(command(action), /exit 1/u)
     assert.equal(projects.get("kiln-repo-cleanup"), root)
@@ -142,12 +207,17 @@ test("a colliding checkout cannot start or destroy another checkout's project", 
 test("primary checkout destroy preserves unscoped Relay resources", async () => {
   vi.mocked(process.cwd).mockReturnValue(root)
   projects.set("kiln", root)
-  resources.set("primary-game", "")
+  resource("primary-game", "container", {})
   await assert.rejects(command("destroy"), /exit 1/u)
   assert.equal(projects.get("kiln"), root)
   assert.ok(resources.has("primary-game"))
   assert.match(output.join("\n"), /Refusing to destroy unscoped/u)
 })
+
+// Something on the Docker host, with its labels.
+function resource(id, kind, labels) {
+  resources.set(id, { kind, labels })
+}
 
 async function command(action) {
   vi.resetModules()

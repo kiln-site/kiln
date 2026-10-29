@@ -193,5 +193,8 @@ Before updating an existing checkout, stop its stack with the old script's
 `dev:docker:down`, or use `dev:docker:destroy` for a disposable worktree.
 
 After merge, run `pnpm dev:docker:destroy` before removing the worktree and
-merged branches, then update `main` with `git pull --ff-only`. Destroy refuses
-to remove the primary checkout's unscoped Relay resources; use `down` there.
+merged branches, then update `main` with `git pull --ff-only`. Destroy removes
+everything the worktree's Relay made, found by its namespace label: game
+servers, databases and their volumes, Apps and the volumes and networks their
+Compose projects made. It refuses to remove the primary checkout's unscoped
+Relay resources; use `down` there.
