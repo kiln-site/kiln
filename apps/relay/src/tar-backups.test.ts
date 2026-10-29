@@ -201,13 +201,32 @@ async function deploy(
     now: Math.max(Date.now(), clock),
     toFake: ["Date", "setTimeout", "clearTimeout"],
   })
-  await harness.apps.deploy(
+  await startDeployment(harness, config, id)
+  return deployed(harness, id)
+}
+
+function startDeployment(
+  harness: RelayHarness,
+  config: Partial<AppConfig>,
+  id: string
+) {
+  return harness.apps.deploy(
     relayDeployAppSchema.parse({
       appId: id,
       config: { ...defaultAppConfig, image: "nginx:alpine", ...config },
       name: "Website",
     })
   )
+}
+
+// Runs a deployment to its end on fake timers, as its health checks wait.
+async function deployed(harness: RelayHarness, id: string) {
+  if (!vi.isFakeTimers()) {
+    vi.useFakeTimers({
+      now: Math.max(Date.now(), clock),
+      toFake: ["Date", "setTimeout", "clearTimeout"],
+    })
+  }
   for (let step = 0; step < 10_000; step += 1) {
     const app = await harness.apps.get(id)
     if (app.deployment?.state !== "running") {
@@ -380,15 +399,24 @@ it("holds a volume alone through a stopped backup, so an App that begins using i
     createInput({ id: volumeId, kind: "volume" }, { consistency: "stopped" })
   )
   await reading.reached
-  // Not one of the Apps the backup stopped: it starts using the volume now.
-  await harness.apps.deploy(
-    relayDeployAppSchema.parse({
-      appId: otherAppId,
-      config: { ...defaultAppConfig, image: "nginx:alpine", ...mountsVolume },
-      name: "Worker",
-    })
-  )
-  await new Promise((resolve) => setTimeout(resolve, 100))
+  // Not one of the Apps the backup stopped: it starts using the volume now,
+  // and its deployment waits in the lanes behind the backup.
+  await startDeployment(harness, mountsVolume, otherAppId)
+  for (
+    let tick = 0;
+    tick < 1_000 &&
+    !harness.lanes
+      .describe()
+      .waiting.some((waiter) => waiter.label === "app.deployment");
+    tick += 1
+  ) {
+    await new Promise((resolve) => setImmediate(resolve))
+  }
+  expect(
+    harness.lanes
+      .describe()
+      .waiting.some((waiter) => waiter.label === "app.deployment")
+  ).toBe(true)
   expect(mounted()).toBe(false)
 
   reading.release()
@@ -396,9 +424,7 @@ it("holds a volume alone through a stopped backup, so an App that begins using i
     result: { consistency: "stopped" },
     status: "succeeded",
   })
-  for (let step = 0; step < 200 && !mounted(); step += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 25))
-  }
+  await deployed(harness, otherAppId)
   expect(mounted()).toBe(true)
 })
 

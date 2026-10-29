@@ -442,7 +442,10 @@ describe("Relay volumes", () => {
         held = true
       }
     )
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    // However long the event loop runs, the deletion holds it back.
+    for (let tick = 0; tick < 50; tick += 1) {
+      await new Promise((resolve) => setImmediate(resolve))
+    }
     expect(held).toBe(false)
     removing.release()
     await deleting
