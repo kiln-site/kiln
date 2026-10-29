@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process"
 import {
+  lstat,
   mkdir,
   readdir,
   readFile,
@@ -34,6 +35,7 @@ import type {
 } from "@workspace/contracts"
 import {
   appServiceNameSchema,
+  appVolumeId,
   CPU_LIMIT_MILLIS_PER_CORE,
   NO_RESOURCE_LIMITS,
   relayAppSchema,
@@ -574,7 +576,10 @@ export class AppDriver {
    */
   async restoreRestartPolicies(
     policies: Readonly<
-      Record<string, { readonly maximumRetryCount: number; readonly name: string }>
+      Record<
+        string,
+        { readonly maximumRetryCount: number; readonly name: string }
+      >
     >
   ): Promise<void> {
     for (const [container, policy] of Object.entries(policies)) {
@@ -815,15 +820,15 @@ export class AppDriver {
     await rm(this.#appDirectory(appId), { force: true, recursive: true })
   }
 
+  /**
+   * Deletes an App: its containers, networks, the volumes of its own it may
+   * take, built images, and its folder. Safe to run again after it stopped
+   * partway, as when the Relay stopped after its containers went: each step
+   * finds what's left. Says it's deleted only once its folder is gone.
+   */
   async delete(input: RelayDeleteApp) {
     this.abortDeployment(input.appId)
     const containers = await this.#appContainers(input.appId)
-    if (
-      containers.length === 0 &&
-      !(await this.#networks()).includes(input.appId)
-    ) {
-      throw new Error("App not found")
-    }
     const engine = this.#engine
     await docker(
       Effect.forEach(
@@ -842,7 +847,10 @@ export class AppDriver {
     if (input.deleteData) {
       // Only the volumes the App's own Compose projects made, never a Kiln
       // volume it mounted. One another App's containers mount, as a file
-      // that names it can, stays: it's that App's data now too.
+      // that names it can, stays: it's that App's data now too. With a
+      // list, only those on it go, as its deletion planned and backed them
+      // up; the list never adds one.
+      const allowed = input.volumeIds ? new Set(input.volumeIds) : null
       const [volumes, remaining] = await docker(
         Effect.all([
           engine.listVolumes({ filters: { label: [COMPOSE_PROJECT_LABEL] } }),
@@ -857,9 +865,11 @@ export class AppDriver {
         )
       )
       for (const volume of volumes) {
+        const owner = appVolumeOwner(this.#config, volume.Labels)
         if (
-          appVolumeOwner(this.#config, volume.Labels)?.appId !== input.appId ||
-          mounted.has(volume.Name)
+          owner?.appId !== input.appId ||
+          mounted.has(volume.Name) ||
+          (allowed && !allowed.has(appVolumeId(owner.appId, owner.volume)))
         ) {
           continue
         }
@@ -894,6 +904,9 @@ export class AppDriver {
         force: true,
         recursive: true,
       })
+      if (await pathExists(this.#appDirectory(input.appId))) {
+        throw new Error("The App's folder is still there; delete it again")
+      }
     }
     await rm(this.#deploymentDirectory(input.appId), {
       force: true,
@@ -3535,4 +3548,19 @@ function withProvisioning(
     }
   })
   return [...listed, ...pending.values()]
+}
+
+// Only a path that isn't there counts as gone; anything else unreadable
+// fails.
+async function pathExists(path: string): Promise<boolean> {
+  return Effect.runPromise(
+    Effect.tryPromise({ try: () => lstat(path), catch: (cause) => cause }).pipe(
+      Effect.as(true),
+      Effect.catchIf(
+        (cause) =>
+          cause instanceof Error && "code" in cause && cause.code === "ENOENT",
+        () => Effect.succeed(false)
+      )
+    )
+  )
 }

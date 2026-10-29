@@ -1099,7 +1099,14 @@ export const relayAppActionSchema = z
   .strict()
 
 export const relayDeleteAppSchema = z
-  .object({ appId: appIdSchema, deleteData: z.boolean().default(true) })
+  .object({
+    appId: appIdSchema,
+    deleteData: z.boolean().default(true),
+    // The App's own volumes its deletion may take, by ID: those it planned
+    // to, and backed up if asked. Any other stays. Left out, every volume
+    // only the App's own Compose projects made and nothing mounts goes.
+    volumeIds: z.array(appVolumeIdSchema).max(256).optional(),
+  })
   .strict()
 
 // App terminals are full shells in one of the app's services, sessions kept

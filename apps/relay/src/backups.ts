@@ -774,6 +774,21 @@ export class BackupManager {
         input.target,
         consistency === "stopped"
       )
+      // A final backup is of the resource being deleted, which its freeze
+      // already stopped, and it never starts what it stopped again: one that
+      // finds another App using what it backs up, as one deployed since the
+      // deletion planned it, is refused before it stops anything.
+      if (final) {
+        const deleting = finalBackupOwner(input.target)
+        const other = consumers.find((appId) => appId !== deleting)
+        if (other !== undefined) {
+          return yield* backupFailure(
+            "volume_users_changed",
+            "lookup",
+            "Another App began using this volume after its deletion planned to back it up; nothing was stopped or deleted. Try the deletion again."
+          )
+        }
+      }
       const progress: BackupProgress = {
         completed: 0,
         currentArtifactId: null,
@@ -3953,4 +3968,13 @@ function isSkippableFilesystemChange(cause: unknown): boolean {
   return ["EACCES", "ELOOP", "ENOENT", "ENOTDIR", "EPERM"].includes(
     String(cause.code)
   )
+}
+
+// The resource a final backup's deletion is of, the only App it may find
+// using what it backs up: the App itself, or the App whose Compose project
+// made the volume. A Kiln volume being deleted has none.
+function finalBackupOwner(target: BackupTarget): string | null {
+  if (target.kind === "app") return target.id
+  if (target.kind !== "volume") return null
+  return /^([a-f0-9]{40})\//u.exec(target.id)?.[1] ?? null
 }

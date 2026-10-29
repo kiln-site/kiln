@@ -382,6 +382,31 @@ it("stops the Apps that use a volume for a stopped backup, and starts again only
   expect(volume.files.get("pgdata/PG_VERSION")).toBe("16")
 })
 
+it("refuses a final backup of a volume another App began using, stopping nothing", async () => {
+  const { harness, volumes } = await relay()
+  kilnVolume()
+  await harness.apps.create({ id: appId, name: "Website" })
+  // Deployed after the volume's deletion planned its final backup.
+  await deploy(harness, mountsVolume)
+  const manager = await backups(harness, volumes)
+
+  const refused = await runTask(
+    manager,
+    createInput({ id: volumeId, kind: "volume" }, { reason: "final_delete" })
+  )
+
+  expect(refused).toMatchObject({
+    error: expect.stringContaining("Another App began using this volume"),
+    status: "failed",
+  })
+  // It would never have been started again.
+  expect(
+    (await harness.apps.get(appId)).containers.some(
+      (container) => container.running
+    )
+  ).toBe(true)
+})
+
 it("holds a volume alone through a stopped backup, so an App that begins using it deploys only after", async () => {
   const { harness, volumes } = await relay()
   const volume = kilnVolume()

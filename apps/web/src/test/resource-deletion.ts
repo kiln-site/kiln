@@ -169,9 +169,14 @@ export const insertDeletion = (row: Record<string, unknown>) =>
  * servers and databases it has, which it froze and for which deletion,
  * every change asked of it, and an outcome journal by command ID, as its
  * control socket keeps. Its next delete can lose its reply, be refused, or
- * apply and then never answer, as when Hearth stops while waiting for it.
+ * apply and then never answer, as when Hearth stops while waiting for it;
+ * an App's can stop partway, its containers gone and its folder not.
  */
 export const deletionRelay = {
+  // Each App's folder, while the Relay has it.
+  appFolders: new Set<string>(),
+  // The volumes each App deletion was allowed to take.
+  appDeletes: [] as Array<ReadonlyArray<string> | undefined>,
   apps: new Set<string>(),
   changes: [] as Array<string>,
   databases: new Set<string>(),
@@ -179,7 +184,12 @@ export const deletionRelay = {
   deletedData: [] as Array<boolean>,
   frozen: new Map<string, string>(),
   journal: new Map<string, unknown>(),
-  nextDelete: null as null | "loses-reply" | "refuses" | "stalls",
+  nextDelete: null as
+    | null
+    | "loses-reply"
+    | "refuses"
+    | "stalls"
+    | "stops-partway",
   servers: new Set<string>(),
   volumes: [] as Array<FakeVolume>,
 }
@@ -200,6 +210,7 @@ export interface FakeVolume {
 export const seedApp = (volumes: ReadonlyArray<FakeVolume> = []) =>
   Effect.gen(function* () {
     deletionRelay.apps.add(appId)
+    deletionRelay.appFolders.add(appId)
     deletionRelay.volumes.push(...volumes)
     yield* insertRows("app", {
       app_id: appId,
@@ -225,6 +236,8 @@ export const appRecords = selectRows<{ app_id: string }>("app").pipe(
 )
 
 export function resetDeletionRelay(servers: ReadonlyArray<string>): void {
+  deletionRelay.appDeletes.length = 0
+  deletionRelay.appFolders.clear()
   deletionRelay.apps.clear()
   deletionRelay.changes.length = 0
   deletionRelay.databases.clear()
@@ -303,13 +316,31 @@ export const deletionRelayConnection = {
             retryable: false,
           })
         }
-        // An App takes the volumes only it uses.
-        state.volumes = state.volumes.filter((volume) =>
-          operation === "app.delete"
-            ? !(volume.owner === id && onlyUsedBy(volume, id))
-            : volume.id !== id
-        )
-        state.apps.delete(id)
+        if (operation === "app.delete") {
+          const allowed = payload.volumeIds as ReadonlyArray<string> | undefined
+          state.appDeletes.push(allowed)
+          // Its containers and network go first.
+          state.apps.delete(id)
+          if (outcome === "stops-partway") {
+            throw RelayUnavailableError.make({
+              code: "operation_interrupted",
+              message: "The Relay stopped before it finished",
+              retryable: false,
+            })
+          }
+          // It takes the volumes only it uses that its deletion names.
+          state.volumes = state.volumes.filter(
+            (volume) =>
+              !(
+                volume.owner === id &&
+                onlyUsedBy(volume, id) &&
+                (allowed ?? [volume.id]).includes(volume.id)
+              )
+          )
+          state.appFolders.delete(id)
+        } else {
+          state.volumes = state.volumes.filter((volume) => volume.id !== id)
+        }
         state.frozen.delete(id)
         result =
           operation === "app.delete" ? { appId: id, deleted: true } : { id }

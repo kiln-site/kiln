@@ -16,6 +16,7 @@ import { gzipSync } from "node:zlib"
 
 import {
   appTailscaleMemberId,
+  appVolumeId,
   defaultAppConfig,
   relayCreateDatabaseSchema,
   relayTailscaleStackConfigSchema,
@@ -1302,6 +1303,30 @@ describe("apps", () => {
     await expect(access(data)).rejects.toThrow()
     await expect(harness.apps.get(appId)).rejects.toThrow("App not found")
   })
+
+  it("finishes a deletion that stopped after the App's containers and network went", async () => {
+    const harness = await createdApp()
+    await deploy(harness, {})
+    const data = join(harness.config.dataDirectory, "apps", appId)
+    await writeFile(join(data, "notes.txt"), "still here")
+    // The Relay stopped partway: its runtime is gone, its folder isn't.
+    for (const container of appContainers()) {
+      fakeDocker.containers.delete(container.id)
+    }
+    for (const [id, network] of fakeDocker.networks) {
+      if (network.labels["kiln.app.id"] === appId) {
+        fakeDocker.networks.delete(id)
+      }
+    }
+
+    const finished = await harness.apps.delete({ appId, deleteData: true })
+    // And again, as when its reply was lost.
+    const again = await harness.apps.delete({ appId, deleteData: true })
+
+    expect(finished).toEqual({ appId, deleted: true })
+    expect(again).toEqual({ appId, deleted: true })
+    await expect(access(data)).rejects.toThrow()
+  })
 })
 
 describe("database connections", () => {
@@ -2261,7 +2286,7 @@ describe("App volumes", () => {
     await removeCompose()
   })
 
-  it("deletes only the volumes its own Compose project made, never one another App mounts", async () => {
+  it("deletes only the volumes its own Compose project made that its deletion names, never one another App mounts", async () => {
     const removeCompose = await composeConfigCommand()
     const harness = await createdApp()
     const otherId = "d".repeat(40)
@@ -2333,10 +2358,25 @@ describe("App volumes", () => {
     )
     expect(fakeDocker.volumes.has(`${project}_data`)).toBe(true)
 
-    await harness.apps.delete({ appId, deleteData: true })
+    // Its deletion planned to take only `data`; `cache` came since.
+    fakeDocker.addVolume({
+      labels: {
+        "com.docker.compose.project": project,
+        "com.docker.compose.volume": "cache",
+      },
+      name: `${project}_cache`,
+    })
+    await harness.apps.delete({
+      appId,
+      deleteData: true,
+      volumeIds: [appVolumeId(appId, "data"), appVolumeId(appId, "shared")],
+    })
 
     expect(fakeDocker.volumes.has(`${project}_data`)).toBe(false)
+    // On the list, but another App mounts it.
     expect(fakeDocker.volumes.has(`${project}_shared`)).toBe(true)
+    // Its own and unmounted, but not on the list.
+    expect(fakeDocker.volumes.has(`${project}_cache`)).toBe(true)
     expect(fakeDocker.volumes.has(kilnVolume)).toBe(true)
     expect(
       fakeDocker.volumes.has(`${TEST_NAMESPACE}-kiln-app-${otherId}_cache`)

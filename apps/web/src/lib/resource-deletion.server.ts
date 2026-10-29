@@ -96,6 +96,20 @@ const FinalBackupPart = Schema.Struct({
 })
 type FinalBackupPart = typeof FinalBackupPart.Type
 
+/**
+ * What a deletion takes, decided once, after the freeze, and kept in its
+ * journal: what its final backup is made of, if it takes one, and the
+ * volumes of an App's own its Relay may delete. Nothing that comes to use
+ * them later adds to either; a volume something else came to use stays.
+ */
+const DeletionPlan = Schema.Struct({
+  parts: Schema.Array(FinalBackupPart),
+  volumeIds: Schema.Array(Schema.String),
+})
+type DeletionPlan = typeof DeletionPlan.Type
+
+const AppDeleted = Schema.Struct({ deleted: Schema.Literal(true) })
+
 const deletionLocks = (resource: {
   kind: ResourceDeletionKind
   relayId: string
@@ -192,12 +206,18 @@ const deletionSteps = (input: DeletionInput) =>
         recover: Effect.succeed({ frozen: true }),
         timeoutMs: relayControlDeadlineMs("resource.freeze"),
       }).pipe(Effect.mapError(asDeletionError))
-      if (start.finalBackup) yield* finalBackup(input)
+      const plan = yield* Activity.make({
+        name: "plan",
+        success: DeletionPlan,
+        error: ResourceDeletionError,
+        execute: deletionPlan(input),
+      })
+      if (start.finalBackup) yield* finalBackup(input, plan.parts)
       yield* Activity.make({
         name: "deleting",
         execute: recordStatus(input, "deleting", null),
       })
-      yield* deleteOnRelay(input)
+      yield* deleteOnRelay(input, plan)
       yield* Activity.make({
         name: "relay-deleted",
         execute: recordRelayDeletedEffect(input.deletionId).pipe(Effect.orDie),
@@ -292,14 +312,11 @@ const checkAccess = (input: DeletionInput) =>
 // ID: one that fails, or goes, stops the deletion with the resource frozen,
 // and nothing deleted. Each part is reserved once, recording it on the
 // deletion.
-const finalBackup = (input: DeletionInput) =>
+const finalBackup = (
+  input: DeletionInput,
+  parts: ReadonlyArray<FinalBackupPart>
+) =>
   Effect.gen(function* () {
-    const parts = yield* Activity.make({
-      name: "backup/parts",
-      success: Schema.Array(FinalBackupPart),
-      error: ResourceDeletionError,
-      execute: finalBackupParts(input),
-    })
     let previous: string | null = null
     for (const [index, part] of parts.entries()) {
       const backupId: string = yield* Activity.make({
@@ -333,16 +350,19 @@ const finalBackup = (input: DeletionInput) =>
     }
   })
 
-// What a final backup is made of: the resource itself, or for an App, its
-// folder and each volume its Compose project made that nothing else uses.
-// One another App or container also mounts stays when the App goes, and
-// backing it up would stop what else uses it for good, as a final backup
-// doesn't start what it stopped again.
-const finalBackupParts = (
+// What a deletion takes: the resource itself, or for an App, its folder and
+// each volume its Compose project made that nothing else uses, which its
+// Relay may delete with it. One another App or container also mounts stays
+// when the App goes; backing it up would stop what else uses it for good,
+// as a final backup doesn't start what it stopped again.
+const deletionPlan = (
   input: DeletionInput
-): Effect.Effect<ReadonlyArray<FinalBackupPart>, ResourceDeletionError> =>
+): Effect.Effect<DeletionPlan, ResourceDeletionError> =>
   input.kind !== "app"
-    ? Effect.succeed([{ id: input.resourceId, kind: input.kind }])
+    ? Effect.succeed({
+        parts: [{ id: input.resourceId, kind: input.kind }],
+        volumeIds: [],
+      })
     : promiseEffect(async () => {
         const relay = await activeRelay(input.relayId)
         const { volumes } = relayVolumesSchema.parse(
@@ -355,14 +375,16 @@ const finalBackupParts = (
             (mount) =>
               mount.kind === "app" && mount.resourceId === input.resourceId
           )
-        return [
-          { id: input.resourceId, kind: "app" as const },
-          ...volumes.flatMap((volume) =>
-            volume.id !== null && ownOnly(volume)
-              ? [{ id: volume.id, kind: "volume" as const }]
-              : []
-          ),
-        ]
+        const volumeIds = volumes.flatMap((volume) =>
+          volume.id !== null && ownOnly(volume) ? [volume.id] : []
+        )
+        return {
+          parts: [
+            { id: input.resourceId, kind: "app" as const },
+            ...volumeIds.map((id) => ({ id, kind: "volume" as const })),
+          ],
+          volumeIds,
+        }
       }).pipe(
         Effect.mapError(
           (cause) =>
@@ -454,8 +476,9 @@ const checkFinalBackup = (input: DeletionInput, backupId: string) =>
 // Deletes the resource on its Relay. A refusal where the Relay in fact no
 // longer has it, as when an earlier delete's reply was lost, counts as
 // deleted; anything else stops the deletion with the resource frozen.
-const deleteOnRelay = (input: DeletionInput) =>
+const deleteOnRelay = (input: DeletionInput, plan: DeletionPlan) =>
   Effect.gen(function* () {
+    if (input.kind === "app") return yield* deleteAppOnRelay(input, plan)
     // A database the Relay lists nothing of, as when an earlier delete
     // stopped partway, keeps what's left of its data: nothing could back it
     // up.
@@ -491,17 +514,10 @@ const deleteOnRelay = (input: DeletionInput) =>
               operation: "database.delete" as const,
               payload: { databaseId: input.resourceId, deleteData },
             }
-          : input.kind === "app"
-            ? {
-                // Its folder and the volumes only it uses, never a Kiln
-                // volume or one something else mounts.
-                operation: "app.delete" as const,
-                payload: { appId: input.resourceId, deleteData: true },
-              }
-            : {
-                operation: "relay.volumes.delete" as const,
-                payload: { id: input.resourceId },
-              }
+          : {
+              operation: "relay.volumes.delete" as const,
+              payload: { id: input.resourceId },
+            }
     yield* relayCommand({
       name: "delete",
       relayId: input.relayId,
@@ -526,6 +542,36 @@ const deleteOnRelay = (input: DeletionInput) =>
     )
   })
 
+// Deletes an App on its Relay: its folder and the volumes its plan names,
+// never a Kiln volume or one something else mounts. An App whose containers
+// and network are gone may still have its folder and the Relay's records of
+// it, as when the Relay stopped partway, so its absence from the Relay's
+// Apps isn't taken as deleted. Deleting it is safe to send again, and the
+// Relay says it's deleted only once its folder is gone, so one that failed,
+// or whose outcome is lost, is sent again once.
+const deleteAppOnRelay = (input: DeletionInput, plan: DeletionPlan) => {
+  const send = (name: string) =>
+    relayCommand({
+      name,
+      operation: "app.delete",
+      payload: {
+        appId: input.resourceId,
+        deleteData: true,
+        volumeIds: plan.volumeIds,
+      },
+      relayId: input.relayId,
+      // It went through: the Relay said it's deleted.
+      recover: Effect.succeed({ deleted: true as const }),
+      success: AppDeleted,
+      timeoutMs: relayControlDeadlineMs("app.delete"),
+    })
+  return send("delete").pipe(
+    Effect.catchTag("RelayCommandError", () => send("delete/again")),
+    Effect.mapError(asDeletionError),
+    Effect.asVoid
+  )
+}
+
 // Whether the Relay still has anything of the resource. Asked again while
 // the Relay is away; an answer is final.
 const resourceOnRelay = (input: DeletionInput) =>
@@ -545,21 +591,17 @@ const resourceOnRelay = (input: DeletionInput) =>
       )
       return volumes.some((volume) => volume.id === input.resourceId)
     }
-    const [item] = z.array(z.unknown()).parse(
-      await relayRpc(
-        relay,
-        input.kind === "app" ? "app.list" : "database.list",
-        {
-          requests: [
-            {
-              id: input.resourceId,
-              view: input.kind === "app" ? "status" : "detail",
-            },
-          ],
-        },
-        30_000
+    // An App is never asked after: see deleteAppOnRelay.
+    const [item] = z
+      .array(z.unknown())
+      .parse(
+        await relayRpc(
+          relay,
+          "database.list",
+          { requests: [{ id: input.resourceId, view: "detail" }] },
+          30_000
+        )
       )
-    )
     return item !== undefined
   }).pipe(
     Effect.mapError(
