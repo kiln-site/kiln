@@ -347,7 +347,29 @@ describe("Relay control socket", () => {
         replyTo: server,
         type: "error",
       })
+      const volume = freeze(operation, "volume")
+      expect(await inbox.next()).toMatchObject({
+        code: "forbidden",
+        replyTo: volume,
+        type: "error",
+      })
     }
+
+    // A Kiln volume is frozen by whoever may configure the Relay, as
+    // deleting it takes; this one is missing, which the freeze says.
+    const configurer = await relay.pair({
+      actions: ["relay.configure"],
+      role: "custom",
+    })
+    const asConfigurer = await relay.connect(configurer)
+    const volume = sendRequest(asConfigurer.socket, "resource.freeze", {
+      deletionId: "00000000-0000-4000-8000-000000000001",
+      id: "f".repeat(40),
+      kind: "volume",
+    })
+    const answer = await asConfigurer.inbox.next()
+    expect(answer).toMatchObject({ replyTo: volume })
+    expect(answer).not.toMatchObject({ code: "forbidden" })
   })
 
   it("keeps an app's files behind app file actions, apart from servers'", async () => {

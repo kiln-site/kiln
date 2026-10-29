@@ -1806,7 +1806,10 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
           ? "database.delete"
           : kind === "app"
             ? "app.delete"
-            : null
+            : // A Kiln volume, as deleting it takes.
+              kind === "volume"
+              ? "relay.configure"
+              : null
     }
     case "app.deploy":
     case "app.action":
