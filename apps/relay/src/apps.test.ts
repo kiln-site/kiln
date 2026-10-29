@@ -724,58 +724,65 @@ describe("apps", () => {
     )
   })
 
-  it("refuses to deploy a Compose file naming a volume whose restore didn't finish as external", async () => {
-    const harness = await relayHarness({ KILN_RELAY_PROXY: "none" })
-    await harness.apps.create({ id: appId, name: "Website" })
-    const removeCompose = await composeConfigCommand()
-    fakeDocker.images.set("nginx:alpine", {})
-    const volumes = relayVolumes(harness)
-    const volumeId = "3f9a21c4".padEnd(40, "0")
-    const volume = await Effect.runPromise(volumes.create(volumeId, "media"))
-    // A restore of it stopped while swapping its files in.
-    const taskId = "0b7c9d2e-4f1a-4c3b-9d8e-7f6a5b4c3d2e"
-    await writeTarRestoreJournal(harness.config, {
-      consumers: [],
-      phase: "installing",
-      root: null,
-      source: { kind: "volume", name: volume.dockerName },
-      target: { id: volumeId, kind: "volume" },
-      taskId,
-      version: 1,
-    })
-    const fences = await TarRestoreFences.load(harness.config)
-    harness.lanes.addRefusal((label, locks) => fences.refusal(label, locks))
-    const compose = [
-      "services:",
-      "  web:",
-      "    image: nginx:alpine",
-      "    volumes:",
-      "      - media:/srv/media",
-      "volumes:",
-      "  media:",
-      "    external: true",
-      `    name: ${volume.dockerName}`,
-      "",
-    ].join("\n")
+  it.each([
+    ["as external", ["    external: true"]],
+    // Compose reuses a volume already there under the name, with a warning.
+    ["by its name alone", []],
+  ])(
+    "refuses to deploy a Compose file naming a volume whose restore didn't finish %s",
+    async (_, declaration) => {
+      const harness = await relayHarness({ KILN_RELAY_PROXY: "none" })
+      await harness.apps.create({ id: appId, name: "Website" })
+      const removeCompose = await composeConfigCommand()
+      fakeDocker.images.set("nginx:alpine", {})
+      const volumes = relayVolumes(harness)
+      const volumeId = "3f9a21c4".padEnd(40, "0")
+      const volume = await Effect.runPromise(volumes.create(volumeId, "media"))
+      // A restore of it stopped while swapping its files in.
+      const taskId = "0b7c9d2e-4f1a-4c3b-9d8e-7f6a5b4c3d2e"
+      await writeTarRestoreJournal(harness.config, {
+        consumers: [],
+        phase: "installing",
+        root: null,
+        source: { kind: "volume", name: volume.dockerName },
+        target: { id: volumeId, kind: "volume" },
+        taskId,
+        version: 1,
+      })
+      const fences = await TarRestoreFences.load(harness.config)
+      harness.lanes.addRefusal((label, locks) => fences.refusal(label, locks))
+      const compose = [
+        "services:",
+        "  web:",
+        "    image: nginx:alpine",
+        "    volumes:",
+        "      - media:/srv/media",
+        "volumes:",
+        "  media:",
+        ...declaration,
+        `    name: ${volume.dockerName}`,
+        "",
+      ].join("\n")
 
-    const refused = await deploy(harness, { compose, sourceType: "compose" })
+      const refused = await deploy(harness, { compose, sourceType: "compose" })
 
-    expect(refused.deployment).toMatchObject({
-      error: expect.stringContaining("the restore must finish first"),
-      state: "failed",
-    })
-    expect(
-      appContainers().some((container) =>
-        container.mounts.some((mount) => mount.source === volume.dockerName)
-      )
-    ).toBe(false)
+      expect(refused.deployment).toMatchObject({
+        error: expect.stringContaining("the restore must finish first"),
+        state: "failed",
+      })
+      expect(
+        appContainers().some((container) =>
+          container.mounts.some((mount) => mount.source === volume.dockerName)
+        )
+      ).toBe(false)
 
-    // Once it finishes, the same file deploys.
-    fences.lift(taskId)
-    const deployed = await deploy(harness, { compose, sourceType: "compose" })
-    await removeCompose()
-    expect(deployed.deployment?.state).toBe("succeeded")
-  })
+      // Once it finishes, the same file deploys.
+      fences.lift(taskId)
+      const deployed = await deploy(harness, { compose, sourceType: "compose" })
+      await removeCompose()
+      expect(deployed.deployment?.state).toBe("succeeded")
+    }
+  )
 
   it("deploys a Compose app whose redirect labels Compose must not expand", async () => {
     const harness = await relayHarness({ KILN_RELAY_PROXY: "none" })

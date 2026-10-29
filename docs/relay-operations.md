@@ -141,7 +141,7 @@ worker locks the work when it runs it:
   that start, deploy, or replace an App using the volume, until its
   recovery (`backup.restore.recover`) finishes or abandons it. Starting
   or deleting an App holds every managed volume it mounts shared, and a
-  deployment holds those its Compose file names as `external` too, in a
+  deployment holds every one its Compose file declares too, by Docker name, in a
   nested step before it makes containers, checked against the same fences.
 - **Provisioning** holds the new server exclusively while it's created.
   Jobs for different instances run at once, up to half the host's cores

@@ -331,8 +331,9 @@ App, since moving the restored files in would overwrite what it wrote.
 Starting, deploying, or deleting an App holds every managed volume it
 mounts shared: a start or deletion those its containers mount or its
 configuration names, and a deployment also every volume its Compose file
-names as `external`, by Docker name, held from before its containers are
-made. So a restore, which holds the volume alone, comes wholly before or
+declares, by the Docker name Compose gives it (external, named, or after
+the project, since Compose reuses one already there), held from before
+its containers are made. So a restore, which holds the volume alone, comes wholly before or
 after, and an unfinished one refuses them.
 `backup.restore.resolve` finishes it on request, stopping the Apps running
 on it first (another container mounting a volume still refuses), or
