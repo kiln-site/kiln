@@ -168,6 +168,79 @@ describeMysql("Scheduled backups, checked before they run", () => {
   // Migrating a fresh database can take a while on a busy host.
   layer(TestDatabase, { timeout: 120_000 })((it) => {
     it.effect(
+      "waits for the sends under way as Hearth stops, and starts none after",
+      () =>
+        Effect.gen(function* () {
+          // This module owns a one-way shutdown gate. Give this test its own
+          // lifetime so other tests can still deliver schedules in any order.
+          vi.resetModules()
+          const isolated = yield* Effect.promise(
+            () => import("@/server/schedule-deployment.server")
+          )
+          const runtime = yield* Effect.promise(() => import("@/effect/runtime"))
+          yield* Effect.addFinalizer(() =>
+            Effect.promise(async () => {
+              await isolated.stopScheduleDeliveries()
+              await runtime.disposeAppRuntime()
+            })
+          )
+          const database = yield* Database
+          const owe = database.transaction("test.owe", (transaction) =>
+            invalidateScheduleDeploymentsEffect(transaction, {
+              relayId,
+              target: { id: capped, kind: "instance" },
+            })
+          )
+          yield* seed
+          yield* deploy(backupSchedule({ kind: "local" }, [capped]))
+          let release!: () => void
+          let started!: () => void
+          const sending = new Promise<void>((resolve) => {
+            started = resolve
+          })
+          const blocked = new Promise<void>((resolve) => {
+            release = resolve
+          })
+          relay.meanwhile = () => {
+            started()
+            return blocked
+          }
+          yield* Effect.addFinalizer(() => Effect.sync(release))
+          yield* owe
+
+          isolated.deliverPendingSchedules()
+          yield* Effect.promise(() => sending)
+          let stopped = false
+          const stopping = isolated.stopScheduleDeliveries().then(() => {
+            stopped = true
+          })
+          // The Relay has not acknowledged this send yet. Reading its owed
+          // deployment synchronizes with real I/O without waiting on a timer.
+          const [inFlight] = yield* selectRows<{ status: string }>(
+            "schedule_deployment"
+          )
+          assert.strictEqual(inFlight?.status, "pending")
+          assert.isFalse(stopped)
+          release()
+          yield* Effect.promise(() => stopping)
+          const [delivered] = yield* selectRows<{ status: string }>(
+            "schedule_deployment"
+          )
+          assert.strictEqual(delivered?.status, "applied")
+          // Owed again while stopping, as a deletion still running can.
+          yield* owe
+          isolated.deliverPendingSchedules()
+          yield* Effect.promise(() => isolated.stopScheduleDeliveries())
+          const [owed] = yield* selectRows<{ status: string }>(
+            "schedule_deployment"
+          )
+
+          // Left for the next Hearth's sweep.
+          assert.strictEqual(owed?.status, "pending")
+        }).pipe(Effect.scoped)
+    )
+
+    it.effect(
       "refuses, in the schedule it sends, a backup Hearth would refuse by hand",
       () =>
         Effect.gen(function* () {

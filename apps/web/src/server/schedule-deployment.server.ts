@@ -760,13 +760,19 @@ export async function loadSchedules() {
 // Sends under way, which Hearth waits for as it stops rather than closing
 // its database under them.
 const deliveries = new Set<Promise<void>>()
+// Once Hearth starts stopping, nothing new is sent: work still running, as
+// a deletion is, may mark schedules owed after that, and they stay owed for
+// the next Hearth's sweep.
+let deliveriesStopped = false
 
 /**
  * Sends the schedules a change marked as owed, in the background, after the
  * change committed (`invalidateScheduleDeploymentsEffect`). One whose Relay
- * is away, or whose send fails, stays owed for the sweep.
+ * is away, or whose send fails, stays owed for the sweep, as does one asked
+ * for once Hearth is stopping.
  */
 export function deliverPendingSchedules(): void {
+  if (deliveriesStopped) return
   const delivery: Promise<void> = Effect.runPromise(
     promiseEffect(redeployUnacknowledgedSchedules).pipe(
       Effect.catch((cause) =>
@@ -780,8 +786,12 @@ export function deliverPendingSchedules(): void {
   deliveries.add(delivery)
 }
 
-/** Waits for the schedule sends under way to end, as Hearth stops. */
+/**
+ * Stops sending schedules in the background, as Hearth stops, then waits for
+ * the sends under way to end.
+ */
 export async function stopScheduleDeliveries(): Promise<void> {
+  deliveriesStopped = true
   await Promise.all(deliveries)
 }
 
