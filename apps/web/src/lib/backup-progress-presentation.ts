@@ -67,6 +67,11 @@ export function backupHasPrimaryTaskFeedback(
   backup: BackupTaskFeedbackPresentation
 ): boolean {
   if (backup.taskKind === null) return false
+  // A settled restore or export does not change the backup's own outcome.
+  if (
+    (backup.taskKind === "restore" || backup.taskKind === "export") &&
+    backup.taskStatus !== "queued" && backup.taskStatus !== "running"
+  ) return false
   // A failed delete leaves the backup in place; say why it wasn't deleted.
   if (backup.taskKind === "delete") {
     if (backup.taskStatus === "failed") return Boolean(backup.taskError)

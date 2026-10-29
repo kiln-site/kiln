@@ -190,10 +190,10 @@ const BatchSummary = React.memo(function BatchSummary({
 }) {
   const active = batch.filter(
     (backup) =>
-      backup.taskStatus === "queued" || backup.taskStatus === "running"
+      backup.status === "queued" || backup.status === "running"
   ).length
   const failed = batch.filter(
-    (backup) => backup.status === "failed" || backup.taskStatus === "failed"
+    (backup) => backup.status === "failed"
   ).length
   const newest = batch.reduce((latest, backup) =>
     backup.createdAt > latest.createdAt ? backup : latest
@@ -292,7 +292,15 @@ const BackupTargetRow = React.memo(function BackupTargetRow({
           </Button>
         </div>
       </div>
-      {latest ? <BackupTaskFeedback backup={latest} destinations={[]} /> : null}
+      {latest && latest.taskKind !== "restore" ? (
+        <BackupTaskFeedback backup={latest} destinations={[]} />
+      ) : null}
+      {target.restore && target.restore.taskStatus !== "succeeded" ? (
+        <div>
+          <p className="text-xs text-muted-foreground">Latest restore</p>
+          <BackupTaskFeedback backup={target.restore} destinations={[]} />
+        </div>
+      ) : null}
       {target.unfinished ? (
         <UnfinishedRestoreNotice
           backupName={null}

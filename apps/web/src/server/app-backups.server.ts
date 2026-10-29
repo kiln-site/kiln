@@ -66,7 +66,7 @@ export async function getAppBackupsHandler(
     unfinishedRestores(relay, user.id),
   ])
   const targets = appTargets(data.appId, listing)
-  const { batch, latest } = await runAppEffect(
+  const { batch, latest, restores } = await runAppEffect(
     "backups.appTargets",
     listTargetBackupsEffect(relay.id, targets)
   )
@@ -83,6 +83,12 @@ export async function getAppBackupsHandler(
       return {
         ...target,
         latest: backup ? publicBackup(backup) : null,
+        restore: (() => {
+          const restore = restores.find((record) =>
+            same(target, { id: record.targetId, kind: record.targetKind })
+          )
+          return restore ? publicBackup(restore) : null
+        })(),
         unfinished:
           unfinished.find((restore) => same(target, restore.target)) ?? null,
       }

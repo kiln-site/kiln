@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto"
 import type { RowDataPacket } from "mysql2/promise"
-import { Clock, Effect, Result } from "effect"
+import { Clock, Effect, Predicate, Result } from "effect"
 
 import type {
   BackupConsistency,
@@ -464,16 +464,59 @@ export const reserveBackupBatchEffect = Effect.fn("backups.reserveBatch")(
   function* (inputs: ReadonlyArray<BackupCreateReservation>) {
     const database = yield* Database
     const now = yield* Clock.currentTimeMillis
-    return yield* database.transaction("backup_reserve_batch", (transaction) =>
-      Effect.forEach(inputs, (input) =>
-        reserveBackupCreateIn(transaction, input, now)
-      )
+    // One backup locks its policy, then its destinations. The batch locks
+    // every member's policy first, in one order, so it never holds a
+    // destination while waiting for a policy another reservation holds
+    // while it waits for that destination.
+    const ordered = [...inputs].sort((left, right) =>
+      policyOrder(left).localeCompare(policyOrder(right))
     )
+    const reserve = database.transaction(
+      "backup_reserve_batch",
+      (transaction) =>
+        Effect.gen(function* () {
+          for (const input of ordered) {
+            yield* lockBackupPolicy(transaction, input, now)
+          }
+          return yield* Effect.forEach(inputs, (input) =>
+            reserveBackupCreateIn(transaction, input, now)
+          )
+        })
+    )
+    // Should MySQL still end it for a deadlock, it runs once more.
+    return yield* reserve.pipe(Effect.catchIf(isDeadlock, () => reserve))
   }
 )
 
-// Reserves one backup inside a transaction the caller holds.
-const reserveBackupCreateIn = Effect.fnUntraced(function* (
+function policyOrder(input: BackupCreateReservation): string {
+  return [input.relayId, input.targetKind, input.targetId].join("\u0000")
+}
+
+// MySQL's answer to a transaction it ended to break a deadlock (1213), in
+// the error or anything it wraps.
+function isDeadlock(error: unknown): boolean {
+  for (
+    let current: unknown = error, depth = 0;
+    current != null && depth < 6;
+    depth += 1
+  ) {
+    if (Predicate.hasProperty(current, "errno") && current.errno === 1213) {
+      return true
+    }
+    if (
+      Predicate.hasProperty(current, "code") &&
+      current.code === "ER_LOCK_DEADLOCK"
+    ) {
+      return true
+    }
+    current = Predicate.hasProperty(current, "cause") ? current.cause : null
+  }
+  return false
+}
+
+// A target's backup policy, made if it's missing, locked for the rest of
+// the transaction.
+const lockBackupPolicy = Effect.fnUntraced(function* (
   transaction: DatabaseTransaction,
   input: BackupCreateReservation,
   now: number
@@ -492,7 +535,7 @@ const reserveBackupCreateIn = Effect.fnUntraced(function* (
       now,
     ]
   )
-  const policies = yield* transaction.queryRows<BackupPolicyRow>(
+  return yield* transaction.queryRows<BackupPolicyRow>(
     `SELECT exclude_patterns, quantity_limit, size_limit_bytes, storage_id,
                   admin_quantity_limit, admin_size_limit_bytes,
             retention_days, admin_retention_days
@@ -501,6 +544,15 @@ const reserveBackupCreateIn = Effect.fnUntraced(function* (
             FOR UPDATE`,
     [input.relayId, input.targetKind, input.targetId]
   )
+})
+
+// Reserves one backup inside a transaction the caller holds.
+const reserveBackupCreateIn = Effect.fnUntraced(function* (
+  transaction: DatabaseTransaction,
+  input: BackupCreateReservation,
+  now: number
+) {
+  const policies = yield* lockBackupPolicy(transaction, input, now)
   const policy = policies[0]
   if (!policy) return yield* Effect.die("Backup policy was not created")
   if (input.reason === "final_delete") {
@@ -1451,6 +1503,15 @@ const latestBackupTaskJoin = `JOIN ${databaseTable("backup_task")} task ON task.
           LIMIT 1
        )`
 
+// A backup's newest restore, whatever ran on it since, such as an export.
+const latestRestoreTaskJoin = `JOIN ${databaseTable("backup_task")} task ON task.id = (
+         SELECT latest.id
+           FROM ${databaseTable("backup_task")} latest
+          WHERE latest.backup_id = backup.id AND latest.task_kind = 'restore'
+          ORDER BY latest.created_at DESC, latest.id DESC
+          LIMIT 1
+       )`
+
 const backupActiveSql = `(backup.status IN ('queued', 'running', 'deleting')
   OR (backup.status = 'available' AND task.status IN ('queued', 'running'))
   OR EXISTS (
@@ -1600,14 +1661,15 @@ function backupCatalogRecordFromRow(
 const catalogRecordsWhere = Effect.fnUntraced(function* (
   where: string,
   values: ReadonlyArray<string>,
-  limit: number
+  limit: number,
+  taskJoin = latestBackupTaskJoin
 ) {
   const database = yield* Database
   const rows = yield* database.queryRows<BackupRow>(
     "backup_catalog_where",
     `SELECT ${backupCatalogColumns}
        FROM ${databaseTable("backup")} backup
-       ${latestBackupTaskJoin}
+       ${taskJoin}
       WHERE backup.status <> 'deleted' AND ${where}
       ORDER BY backup.created_at DESC, backup.id DESC
       LIMIT ${Math.max(1, Math.floor(limit))}`,
@@ -1644,14 +1706,15 @@ export const listTargetBackupsEffect = Effect.fn("backups.targets")(function* (
   relayId: string,
   targets: ReadonlyArray<{ id: string; kind: BackupTargetKind }>
 ) {
-  if (targets.length === 0) return { batch: [], latest: [] }
-  const recent = yield* catalogRecordsWhere(
-    `backup.relay_id = ? AND (${targets
-      .map(() => "(backup.target_kind = ? AND backup.target_id = ?)")
-      .join(" OR ")})`,
-    [relayId, ...targets.flatMap((target) => [target.kind, target.id])],
-    500
-  )
+  if (targets.length === 0) return { batch: [], latest: [], restores: [] }
+  const where = `backup.relay_id = ? AND (${targets
+    .map(() => "(backup.target_kind = ? AND backup.target_id = ?)")
+    .join(" OR ")})`
+  const values = [
+    relayId,
+    ...targets.flatMap((target) => [target.kind, target.id]),
+  ]
+  const recent = yield* catalogRecordsWhere(where, values, 500)
   const latest = new Map<string, BackupCatalogRecord>()
   for (const record of recent) {
     const key = `${record.targetKind}:${record.targetId}`
@@ -1665,7 +1728,26 @@ export const listTargetBackupsEffect = Effect.fn("backups.targets")(function* (
         100
       )
     : []
-  return { batch, latest: [...latest.values()] }
+  // Each target's newest restore, even on a backup something else ran on
+  // since, so its outcome stays shown.
+  const restores = new Map<string, BackupCatalogRecord>()
+  for (const record of yield* catalogRecordsWhere(
+    where,
+    values,
+    500,
+    latestRestoreTaskJoin
+  )) {
+    const key = `${record.targetKind}:${record.targetId}`
+    const previous = restores.get(key)
+    if (!previous || record.taskUpdatedAt > previous.taskUpdatedAt) {
+      restores.set(key, record)
+    }
+  }
+  return {
+    batch,
+    latest: [...latest.values()],
+    restores: [...restores.values()],
+  }
 })
 
 /** The backup a backup task belongs to, by the task's ID. */

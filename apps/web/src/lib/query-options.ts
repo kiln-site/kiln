@@ -892,7 +892,9 @@ export function appBackupsQueryOptions(relayId: string, appId: string) {
       query.state.data?.targets.some(
         (target) =>
           target.latest?.taskStatus === "queued" ||
-          target.latest?.taskStatus === "running"
+          target.latest?.taskStatus === "running" ||
+          target.restore?.taskStatus === "queued" ||
+          target.restore?.taskStatus === "running"
       )
         ? 3_000
         : false,
