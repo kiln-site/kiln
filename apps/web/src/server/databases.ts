@@ -65,6 +65,7 @@ import { listPersistedRelays } from "@/lib/relay-registry"
 import { requireEligibleResourceUser } from "@/server/auth"
 import {
   authorizedDatabase,
+  databaseForViewer,
   databaseRpc,
   requiredCredential,
   requiredRelay,
@@ -267,7 +268,7 @@ export const wipeManagedDatabase = createServerFn({ method: "POST" })
       )
     )
     publishDatabaseChange(relay.id, false)
-    return database
+    return databaseForViewer(user, relay.id, database)
   })
 
 // Renaming is managing the database as a whole, so it takes the permission
@@ -416,7 +417,7 @@ export const runManagedDatabaseAction = createServerFn({ method: "POST" })
       )
     )
     publishDatabaseChange(relay.id, false)
-    return database
+    return databaseForViewer(user, relay.id, database)
   })
 
 export const updateManagedDatabaseLimits = createServerFn({ method: "POST" })
@@ -440,7 +441,7 @@ export const updateManagedDatabaseLimits = createServerFn({ method: "POST" })
       )
     )
     publishDatabaseChange(relay.id, false)
-    return database
+    return databaseForViewer(user, relay.id, database)
   })
 
 export const rotateManagedDatabasePassword = createServerFn({ method: "POST" })

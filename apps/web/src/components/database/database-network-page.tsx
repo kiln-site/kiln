@@ -67,12 +67,34 @@ const kindNames = {
   instance: "Game server",
 } as const
 
-// Until its containers join, which happens when they're next made.
-const joinsWhen = {
-  app: "joins on its next deploy",
-  database: "joins when it next starts",
-  instance: "joins when it next starts",
+// When its containers next change, which is when they join the network or
+// take a name there: an App's on its next deploy, others' when they start.
+const nextChange = {
+  app: "on its next deploy",
+  database: "when it next starts",
+  instance: "when it next starts",
 } as const
+
+// What the member's names there are, now and once its containers change.
+function memberReach(member: RelayDatabaseMember): string | null {
+  const pending = member.pendingHostnames.join(", ")
+  if (!member.attached) {
+    if (!member.saved) return null
+    return pending
+      ? `Joins as ${pending} ${nextChange[member.kind]}`
+      : `Joins ${nextChange[member.kind]}`
+  }
+  return (
+    [
+      member.hostnames.length > 0
+        ? `Reachable as ${member.hostnames.join(", ")}`
+        : null,
+      pending ? `Gets ${pending} ${nextChange[member.kind]}` : null,
+    ]
+      .filter(Boolean)
+      .join(" · ") || null
+  )
+}
 
 const kindOrder = { instance: 0, app: 1, database: 2 } as const
 
@@ -159,14 +181,7 @@ function MemberName({
   candidate: DatabaseMemberCandidate | null
   member: RelayDatabaseMember
 }) {
-  const reach = [
-    member.hostnames.length > 0
-      ? `Reachable as ${member.hostnames.join(", ")}`
-      : null,
-    member.saved && !member.attached ? joinsWhen[member.kind] : null,
-  ]
-    .filter(Boolean)
-    .join(" · ")
+  const reach = memberReach(member)
   const name = candidate ? (
     <InstanceCard
       className="min-w-0 flex-1"

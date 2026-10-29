@@ -1,8 +1,17 @@
-import type { RelayControlOperation } from "@workspace/contracts"
+import type {
+  RelayControlOperation,
+  RelayManagedDatabase,
+} from "@workspace/contracts"
 
 import { loadManagedDatabaseCredentialEffect } from "@/effect/managed-databases"
 import { runAppEffect } from "@/effect/runtime"
-import { requireRelayPermission } from "@/lib/access-control"
+import {
+  isPlatformAdmin,
+  listUserGrants,
+  requireRelayPermission,
+} from "@/lib/access-control"
+import type { AuthenticatedUser } from "@/lib/auth-session"
+import { withVisibleDatabaseMembers } from "@/lib/database-member-visibility"
 import type { AccessPermission } from "@/lib/permissions"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { activeRelay } from "@/lib/relay-registry"
@@ -50,4 +59,18 @@ export async function databaseRpc(
 ): Promise<unknown> {
   const { relayRpc } = await import("@/lib/relay-connection")
   return relayRpc(relay, operation, payload, timeoutMs, subject, signal)
+}
+
+/** The database as the user may see it: only members they may read. */
+export async function databaseForViewer(
+  user: AuthenticatedUser,
+  relayId: string,
+  database: RelayManagedDatabase
+): Promise<RelayManagedDatabase> {
+  const admin = isPlatformAdmin(user)
+  return withVisibleDatabaseMembers(database, {
+    admin,
+    grants: admin ? [] : await listUserGrants(user.id, relayId),
+    relayId,
+  })
 }

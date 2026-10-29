@@ -8,7 +8,11 @@ import { requireRelayPermission } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import type { AccessPermission } from "@/lib/permissions"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
-import { databaseRpc, requiredRelay } from "@/server/managed-database-access"
+import {
+  databaseForViewer,
+  databaseRpc,
+  requiredRelay,
+} from "@/server/managed-database-access"
 
 // What changing a member's connections takes of the member itself.
 const memberPermission = {
@@ -76,5 +80,5 @@ export async function writeDatabaseConnection(
     topics: kind === "app" ? ["apps", "databases"] : ["databases"],
     type: "hearth.invalidate",
   })
-  return database
+  return databaseForViewer(user, relay.id, database)
 }

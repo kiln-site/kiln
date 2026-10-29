@@ -183,11 +183,16 @@ export const relayDatabaseMemberSchema = z
   .object({
     // Whether its containers are on the database's network now.
     attached: z.boolean(),
-    // The names its containers answer to there: `server-<id>` for a game
-    // server, `database-<id>` for a database, and each App service's alias.
+    // The names its containers answer to there now: `server-<id>` for a
+    // game server, `database-<id>` for a database, and each App service's
+    // alias.
     hostnames: z.array(z.string().min(1).max(253)),
     id: z.string().regex(/^[a-f0-9]{40}$/u),
     kind: databaseConnectionMemberKindSchema,
+    // Names it doesn't answer to yet: it takes them when its containers
+    // join, or, for one that joined before members had names, when they're
+    // next recreated.
+    pendingHostnames: z.array(z.string().min(1).max(253)),
     // Whether the Relay keeps the connection, joining its containers
     // whenever they change.
     saved: z.boolean(),

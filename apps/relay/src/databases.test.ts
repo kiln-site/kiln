@@ -911,6 +911,7 @@ describe("explicit database connections", () => {
         hostnames: [`server-${serverId}`],
         id: serverId,
         kind: "instance",
+        pendingHostnames: [],
         saved: true,
       },
     ])
@@ -1120,14 +1121,16 @@ describe("connections of every member kind", () => {
         hostnames: [`web.app-${appId.slice(0, 8)}`],
         id: appId,
         kind: "app",
+        pendingHostnames: [],
         saved: true,
       },
-      // An App joins once it has containers.
+      // An App joins once it has containers, under its services' names.
       {
         attached: false,
         hostnames: [],
         id: undeployed,
         kind: "app",
+        pendingHostnames: [],
         saved: true,
       },
       {
@@ -1135,6 +1138,7 @@ describe("connections of every member kind", () => {
         hostnames: [`database-${member}`],
         id: member,
         kind: "database",
+        pendingHostnames: [],
         saved: true,
       },
       {
@@ -1142,6 +1146,7 @@ describe("connections of every member kind", () => {
         hostnames: [`server-${serverId}`],
         id: serverId,
         kind: "instance",
+        pendingHostnames: [],
         saved: true,
       },
     ])
@@ -1158,6 +1163,80 @@ describe("connections of every member kind", () => {
         (database) => database.id === member
       )?.members
     ).toEqual([])
+  })
+
+  it("reports a name a member that joined before names lacks as pending, until it's recreated", async () => {
+    const harness = await relayHarness()
+    const id = "d".repeat(40)
+    await createDatabase(harness, id)
+    await harness.createServer({ id: serverId })
+    // Joined by a Relay that gave members no name there.
+    await harness.databaseConnections.set(
+      { id: serverId, kind: "instance" },
+      id,
+      true
+    )
+    fakeDocker.connect(
+      harness.resources.instanceContainer(serverId),
+      networkOf(id)
+    )
+    const membersOf = async () =>
+      (await harness.databases.list()).find((database) => database.id === id)
+        ?.members
+    expect(await membersOf()).toEqual([
+      expect.objectContaining({
+        attached: true,
+        hostnames: [],
+        pendingHostnames: [`server-${serverId}`],
+      }),
+    ])
+
+    // A port change recreates the server's container.
+    await harness.lifecycle.updateInstancePorts(
+      serverId,
+      [
+        {
+          id: "primary",
+          internalPort: 25_566,
+          name: "Default Server",
+          protocol: "tcp",
+        },
+      ],
+      []
+    )
+
+    expect(await membersOf()).toEqual([
+      expect.objectContaining({
+        attached: true,
+        hostnames: [`server-${serverId}`],
+        pendingHostnames: [],
+      }),
+    ])
+  })
+
+  it("names a saved member that hasn't joined as pending, not as reachable", async () => {
+    const harness = await relayHarness()
+    const id = "d".repeat(40)
+    await createDatabase(harness, id)
+    await harness.databaseConnections.set(
+      { id: serverId, kind: "instance" },
+      id,
+      true
+    )
+
+    expect(
+      (await harness.databases.list()).find((database) => database.id === id)
+        ?.members
+    ).toEqual([
+      {
+        attached: false,
+        hostnames: [],
+        id: serverId,
+        kind: "instance",
+        pendingHostnames: [`server-${serverId}`],
+        saved: true,
+      },
+    ])
   })
 
   it("keeps a member database's name on the network when its container is replaced", async () => {

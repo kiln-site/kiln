@@ -71,6 +71,57 @@ const grant = (
     )
   })
 
+// Permissions on one game server.
+const grantServer = (
+  userId: string,
+  instanceId: string,
+  permissions: ReadonlyArray<AccessPermission>
+) =>
+  Effect.gen(function* () {
+    const id = randomUUID()
+    yield* insertGrant({
+      id,
+      relayId,
+      resourceId: instanceId,
+      resourceType: "instance",
+      state: "active",
+      userId,
+    })
+    yield* insertRows(
+      "access_selection",
+      permissions.map((permission) => ({
+        access_id: id,
+        selection_kind: "permission",
+        selection_key: permission,
+      }))
+    )
+  })
+
+const relayDatabase = (members: ReadonlyArray<DatabaseConnectionMember>) => ({
+  containerId: "container",
+  createdAt: new Date(0).toISOString(),
+  databaseName: "kiln_main",
+  diskUsedBytes: null,
+  engine: "postgres",
+  hostname: `database-${database}`,
+  id: database,
+  image: "postgres:17",
+  internalPort: 5432,
+  limits: { cpuMillis: null, diskBytes: null, memoryBytes: null },
+  members: members.map((member) => ({
+    ...member,
+    attached: true,
+    hostnames: [],
+    pendingHostnames: [],
+    saved: true,
+  })),
+  name: "Main",
+  observedState: "running",
+  shortId: database.slice(0, 8),
+  status: "Ready",
+  supportsImportExport: true,
+})
+
 const seed = Effect.gen(function* () {
   yield* resetDatabase
   yield* insertRelay(relayId, { enabled: 1 })
@@ -196,6 +247,44 @@ describeMysql("database connections in Hearth", () => {
             [toApp, toServer, toDatabase]
           )
         })
+    )
+
+    it.effect("answers with only the members the person may read", () =>
+      Effect.gen(function* () {
+        yield* seed
+        const hidden = "c".repeat(40)
+        yield* insertUser("one-server")
+        yield* grant("one-server", ["database.network.write"], {
+          resourceId: database,
+          resourceType: "database",
+        })
+        yield* grantServer("one-server", server, [
+          "instance.network.write",
+          "instance.read",
+        ])
+        relay.rpc.mockResolvedValue(
+          relayDatabase([
+            { id: server, kind: "instance" },
+            { id: hidden, kind: "instance" },
+            { id: app, kind: "app" },
+            { id: otherDatabase, kind: "database" },
+          ])
+        )
+
+        const answered = yield* Effect.promise(() =>
+          writeDatabaseConnection(sessionUser("one-server"), {
+            connected: true,
+            databaseId: database,
+            member: { id: server, kind: "instance" },
+            relayId,
+          })
+        )
+
+        assert.deepStrictEqual(
+          answered.members.map((member) => member.id),
+          [server]
+        )
+      })
     )
   })
 })

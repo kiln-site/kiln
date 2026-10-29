@@ -18,6 +18,7 @@ import { ExternalServiceError } from "@/effect/errors"
 import { isPlatformAdmin, listUserGrantsEffect } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import type { AccessPermission } from "@/lib/permissions"
+import { withVisibleDatabaseMembers } from "@/lib/database-member-visibility"
 import { effectiveScopePermissions } from "@/lib/resource-permissions"
 import {
   listPersistedRelaysEffect,
@@ -128,7 +129,28 @@ export const readInstanceInventory = Effect.fnUntraced(function* (
       ),
     { concurrency: 4 }
   )
-  return [...denied, ...results.flat()]
+  // A database's members are shown only to those who may read them.
+  const visible = results.flat().map((result): InstanceInventoryResult => {
+    if (
+      !("value" in result) ||
+      result.value.kind !== "database" ||
+      result.value.view !== "detail" ||
+      !result.value.data
+    )
+      return result
+    return {
+      ...result,
+      value: {
+        ...result.value,
+        data: withVisibleDatabaseMembers(result.value.data, {
+          admin,
+          grants,
+          relayId: result.request.reference.relayId,
+        }),
+      },
+    }
+  })
+  return [...denied, ...visible]
 })
 
 type ReportedItem = {

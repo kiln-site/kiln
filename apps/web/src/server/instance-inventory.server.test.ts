@@ -95,6 +95,134 @@ describeMysql("scoped instance inventory", () => {
         })
     )
 
+    it.effect(
+      "shows a database's members only to those who may read each, and its network",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          const readable = "b".repeat(40)
+          const member = (
+            kind: "app" | "database" | "instance",
+            id: string
+          ) => ({
+            attached: true,
+            hostnames: [],
+            id,
+            kind,
+            pendingHostnames: [],
+            saved: true,
+          })
+          const members = [
+            member("instance", readable),
+            member("instance", "c".repeat(40)),
+            member("app", "d".repeat(40)),
+            member("database", "e".repeat(40)),
+          ]
+          yield* insertRelay(relayId)
+          const grant = (
+            userId: string,
+            grantId: string,
+            resourceType: "database" | "instance",
+            resourceId: string,
+            permissions: ReadonlyArray<string>
+          ) =>
+            Effect.gen(function* () {
+              yield* insertGrant({
+                id: grantId,
+                userId,
+                relayId,
+                resourceType,
+                resourceId,
+              })
+              yield* insertRows(
+                "access_selection",
+                permissions.map((permission) => ({
+                  access_id: grantId,
+                  selection_kind: "permission",
+                  selection_key: permission,
+                }))
+              )
+            })
+          const networkReader = { ...user, id: "network-reader" }
+          const databaseReader = { ...user, id: "database-reader" }
+          for (const { id: userId } of [networkReader, databaseReader])
+            yield* insertUser(userId)
+          yield* grant(networkReader.id, "network", "database", id, [
+            "database.read",
+            "database.network.read",
+          ])
+          yield* grant(networkReader.id, "server", "instance", readable, [
+            "instance.read",
+          ])
+          yield* grant(databaseReader.id, "database", "database", id, [
+            "database.read",
+          ])
+          const request: InstanceInventoryRequest = {
+            reference: { kind: "database", relayId, id },
+            view: "detail",
+          }
+          const source = {
+            read: (
+              _: unknown,
+              requests: ReadonlyArray<InstanceInventoryRequest>
+            ) =>
+              Effect.succeed(
+                requests.map((request): InstanceInventoryResult => ({
+                  request,
+                  value: {
+                    kind: "database",
+                    view: "detail",
+                    data: {
+                      containerId: "container",
+                      createdAt: new Date(0).toISOString(),
+                      databaseName: "kiln_main",
+                      diskUsedBytes: null,
+                      engine: "postgres",
+                      hostname: `database-${id}`,
+                      id,
+                      image: "postgres:17",
+                      internalPort: 5432,
+                      limits: {
+                        cpuMillis: null,
+                        diskBytes: null,
+                        memoryBytes: null,
+                      },
+                      members,
+                      name: "Main",
+                      observedState: "running",
+                      shortId: id.slice(0, 8),
+                      status: "Ready",
+                      supportsImportExport: true,
+                    },
+                    observation: {
+                      ...request.reference,
+                      inventory: "available",
+                      reachability: "connected",
+                      runtime: "running",
+                      updating: false,
+                    },
+                  },
+                }))
+              ),
+          }
+          const membersSeenBy = (viewer: AuthenticatedUser) =>
+            readInstanceInventory(viewer, [request]).pipe(
+              Effect.provideService(InstanceInventorySource, source),
+              Effect.map(([result]) =>
+                result && "value" in result && result.value.kind === "database"
+                  ? result.value.data?.members.map((member) => member.id)
+                  : undefined
+              )
+            )
+
+          assert.deepStrictEqual(yield* membersSeenBy(networkReader), [
+            readable,
+          ])
+          // Without the database's network permission, none.
+          assert.deepStrictEqual(yield* membersSeenBy(databaseReader), [])
+        })
+    )
+
     it.effect("never answers for a server through its Relay's reference", () =>
       Effect.gen(function* () {
         yield* resetDatabase

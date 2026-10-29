@@ -1181,9 +1181,10 @@ export class DatabaseDriver {
       requiredLabel(labels, "kiln.database.engine")
     )
     const network = requiredLabel(labels, "kiln.database.network")
-    const members = this.#members(
+    const members = await this.#members(
       id,
       container.Id,
+      network,
       await this.#attachedContainers(network, signal)
     )
     const observedState = databaseObservedState(container)
@@ -1224,23 +1225,27 @@ export class DatabaseDriver {
   }
 
   // What the Relay keeps connected to the database, and what its network
-  // holds now: game servers, App services, and other databases.
-  #members(
+  // holds now: game servers, App services, and other databases, with the
+  // names each answers to there. A container that joined before members had
+  // names takes its name only when it's next recreated, so the names come
+  // from its attachment, and a name it lacks is reported as pending.
+  async #members(
     databaseId: string,
     ownContainer: string,
+    network: string,
     attached: ReadonlyArray<DockerContainerSummary>
-  ): Array<RelayDatabaseMember> {
+  ): Promise<Array<RelayDatabaseMember>> {
     const members = new Map<string, RelayDatabaseMember>()
     const member = (kind: DatabaseConnectionMemberKind, id: string) => {
       const key = `${kind}:${id}`
       let found = members.get(key)
       if (!found) {
-        const alias = databaseMemberAlias({ id, kind })
         found = {
           attached: false,
-          hostnames: alias ? [alias] : [],
+          hostnames: [],
           id,
           kind,
+          pendingHostnames: [],
           saved: false,
         }
         members.set(key, found)
@@ -1251,30 +1256,71 @@ export class DatabaseDriver {
       member(saved.kind, saved.id).saved = true
     }
     const resources = relayResourceNames(this.#config)
+    // Each attached member container, with the name it should have there.
+    const named: Array<{
+      container: string
+      name: string | null
+      to: RelayDatabaseMember
+    }> = []
     for (const candidate of attached) {
       if (candidate.Id === ownContainer) continue
       const labels = candidate.Labels ?? {}
       const instanceId = labels[this.#config.serverIdLabel]?.toLowerCase()
       const appId = labels["kiln.app.id"]
       const otherDatabase = labels["kiln.database.id"]
+      let to: RelayDatabaseMember | null = null
+      let name: string | null = null
       if (instanceId?.match(/^[a-f0-9]{40}$/u)) {
-        member("instance", instanceId).attached = true
+        to = member("instance", instanceId)
+        name = databaseMemberAlias(to)
       } else if (
         labels[DATABASE_KIND_LABEL] === "app" &&
         appId?.match(/^[a-f0-9]{40}$/u)
       ) {
-        const app = member("app", appId)
-        app.attached = true
+        to = member("app", appId)
         const service = labels["kiln.app.service"]
-        const alias = service ? resources.appAlias(appId, service) : null
-        if (alias && !app.hostnames.includes(alias)) app.hostnames.push(alias)
+        name = service ? resources.appAlias(appId, service) : null
       } else if (
         labels[DATABASE_KIND_LABEL] === DATABASE_KIND &&
         otherDatabase?.match(/^[a-f0-9]{40}$/u) &&
         otherDatabase !== databaseId
       ) {
-        member("database", otherDatabase).attached = true
+        to = member("database", otherDatabase)
+        name = databaseMemberAlias(to)
       }
+      if (!to) continue
+      to.attached = true
+      named.push({ container: candidate.Id, name, to })
+    }
+    const inspected = new Map(
+      named.length === 0
+        ? []
+        : (
+            await Effect.runPromise(
+              this.#engine.inspectContainers(
+                named.map(({ container }) => container)
+              )
+            )
+          ).map((container) => [
+            container.Id,
+            container.NetworkSettings?.Networks?.[network]?.Aliases ?? [],
+          ])
+    )
+    for (const { container, name, to } of named) {
+      if (!name) continue
+      if (inspected.get(container)?.includes(name)) {
+        if (!to.hostnames.includes(name)) to.hostnames.push(name)
+      } else if (!to.pendingHostnames.includes(name)) {
+        to.pendingHostnames.push(name)
+      }
+    }
+    for (const found of members.values()) {
+      // Not on the network now, it joins under its name.
+      const alias = databaseMemberAlias(found)
+      if (!found.attached && alias) found.pendingHostnames.push(alias)
+      found.pendingHostnames = found.pendingHostnames.filter(
+        (name) => !found.hostnames.includes(name)
+      )
     }
     return [...members.values()]
   }
