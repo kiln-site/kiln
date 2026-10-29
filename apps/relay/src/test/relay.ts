@@ -137,6 +137,10 @@ export async function relayHarness(
       config,
       () => lifecycle.hostDataDirectory(),
       {
+        reattachTailscale: (appId) =>
+          lifecycle.reattachTailscaleMembers(
+            (memberId) => appTailscaleMember(memberId)?.appId === appId
+          ),
         routes: async (appId) =>
           lifecycle.appRoutePlan(
             await Effect.runPromise(
@@ -165,7 +169,7 @@ export async function relayHarness(
     lifecycle.useDatabaseContainers((databaseId) =>
       databases.containerOf(databaseId)
     )
-    databases.afterContainerReplaced((databaseId) =>
+    databases.useTailscaleAddresses((databaseId) =>
       lifecycle.reattachTailscaleMember(databaseTailscaleMemberId(databaseId))
     )
     return {

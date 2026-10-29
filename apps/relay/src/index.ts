@@ -47,7 +47,6 @@ import {
   RelayTransferSourcePrepareSchema,
   appIdSchema,
   appTailscaleMember,
-  databaseTailscaleMember,
   databaseTailscaleMemberId,
   instanceTailscaleMemberId,
   relayAppWebRouteStateSchema,
@@ -490,18 +489,13 @@ await lifecycle.migrateTailscaleStackMembers()
 lifecycle.useDatabaseContainers((databaseId) =>
   databases.containerOf(databaseId)
 )
-// A database's new container takes its addresses on its Tailscale networks
-// once the old one has let them go.
-databases.afterContainerReplaced((databaseId) =>
+// A database's container takes its addresses on its Tailscale networks once
+// a replacement's old one has let them go, and whenever it starts.
+databases.useTailscaleAddresses((databaseId) =>
   lifecycle.reattachTailscaleMember(databaseTailscaleMemberId(databaseId))
 )
 // Before anything reads the databases, so none shows twice.
 await databases.recoverReplacements()
-// A database whose container the Relay replaced but stopped before putting
-// back on its Tailscale networks takes its addresses again.
-await lifecycle.reattachTailscaleMembers(
-  (memberId) => databaseTailscaleMember(memberId) !== null
-)
 // What each queued change to a Tailscale stack planned its locks from, so it
 // can tell, once it runs, whether the stack changed meanwhile.
 const tailscaleStackPlans = new WeakMap<object, string>()
@@ -538,6 +532,10 @@ const apps = new AppDriver(
           startupCore.state.listInstanceRoutes(appRouteOwner(appId))
         )
       ),
+    reattachTailscale: (appId) =>
+      lifecycle.reattachTailscaleMembers(
+        (memberId) => appTailscaleMember(memberId)?.appId === appId
+      ),
     tailscale: async (appId) =>
       (
         await lifecycle.tailscaleMemberships(
@@ -556,6 +554,10 @@ lifecycle.useAppServiceContainers(async (appId, service) => {
   await apps.get(appId)
   return (await apps.serviceContainer(appId, service))?.name ?? null
 })
+// Every member whose container lost an address on its Tailscale networks
+// takes it again: a container the Relay replaced but stopped before
+// reattaching, or one Docker disconnected while the Relay was down.
+await lifecycle.reattachTailscaleMembers(() => true)
 const appFilesystem = new FilesystemDriver({
   ...config,
   rootDirectory: apps.rootDirectory,

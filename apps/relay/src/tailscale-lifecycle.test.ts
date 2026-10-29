@@ -327,11 +327,11 @@ describe("Tailscale stack forwarding", () => {
 })
 
 describe("Tailscale members", () => {
-  it("keeps a server at its Tailscale address when its container is recreated", async () => {
-    const harness = await relayHarness()
-    const serverId = "a".repeat(40)
-    const stackId = "c".repeat(40)
-    const address = "10.165.57.10"
+  const serverId = "a".repeat(40)
+  const stackId = "c".repeat(40)
+  const address = "10.165.57.10"
+
+  async function serverOnStack(harness: RelayHarness) {
     await harness.createServer({ id: serverId })
     const network = harness.resources.tailscaleStackNetwork(stackId)
     fakeDocker.addNetwork({
@@ -357,7 +357,12 @@ describe("Tailscale members", () => {
         })
       )
     )
-    const container = harness.resources.instanceContainer(serverId)
+    return { container: harness.resources.instanceContainer(serverId), network }
+  }
+
+  it("keeps a server at its Tailscale address when its container is recreated", async () => {
+    const harness = await relayHarness()
+    const { container, network } = await serverOnStack(harness)
     fakeDocker.connect(container, network, address)
 
     // A port change recreates the server's container.
@@ -379,6 +384,19 @@ describe("Tailscale members", () => {
     ).toMatchObject({
       ipAddress: address,
     })
+  })
+
+  it("puts a server back at its Tailscale address when it starts, if it lost it", async () => {
+    const harness = await relayHarness()
+    const { container, network } = await serverOnStack(harness)
+    expect(fakeDocker.container(container)!.networks.has(network)).toBe(false)
+
+    const instance = await harness.docker.findInstance(serverId)
+    await harness.lifecycle.runInstanceAction(instance!, "start", [])
+
+    expect(
+      fakeDocker.container(container)!.networks.get(network)
+    ).toMatchObject({ ipAddress: address })
   })
 })
 
@@ -673,9 +691,33 @@ describe("Tailscale databases", () => {
     expect(fakeDocker.container(container)!.networks.has(network)).toBe(false)
 
     const restarted = await harness.restart()
-    await restarted.lifecycle.reattachTailscaleMembers(
-      (memberId) => memberId === member
+    await restarted.lifecycle.reattachTailscaleMembers(() => true)
+
+    expect(
+      fakeDocker.container(container)!.networks.get(network)
+    ).toMatchObject({ ipAddress: address })
+  })
+
+  it("puts a replaced database back at its Tailscale address when it restarts, if taking it failed", async () => {
+    const harness = await relayHarness()
+    const { container, network } = await databaseOnStack(harness)
+    await harness.databases.setLimits({
+      databaseId,
+      limits: { memoryBytes: 512 * 1024 ** 2 },
+    })
+    // The old container is gone by the time the new one takes its address,
+    // so nothing is left to recover from when that fails.
+    fakeDocker.failNext(
+      { command: "network connect", target: network },
+      "Network unavailable"
     )
+    await harness.databases.setLimits({
+      databaseId,
+      limits: { memoryBytes: null },
+    })
+    expect(fakeDocker.container(container)!.networks.has(network)).toBe(false)
+
+    await harness.databases.action({ action: "restart", databaseId })
 
     expect(
       fakeDocker.container(container)!.networks.get(network)

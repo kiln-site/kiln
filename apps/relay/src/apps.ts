@@ -212,6 +212,11 @@ export interface AppLimitStores {
 }
 
 export interface AppNetworking {
+  /**
+   * Puts an app's services back at their addresses on their Tailscale
+   * networks, logging any it can't.
+   */
+  readonly reattachTailscale: (appId: string) => Promise<void>
   readonly routes: (appId: string) => Promise<AppRoutePlan>
   readonly tailscale: (
     appId: string
@@ -522,6 +527,10 @@ export class AppDriver {
   async action(input: RelayAppAction): Promise<RelayApp> {
     const containers = await this.#appContainers(input.appId)
     if (containers.length === 0) throw new Error("Deploy the app first")
+    // A service that lost its Tailscale address takes it again as it starts.
+    if (input.action !== "stop") {
+      await this.#networking.reattachTailscale(input.appId)
+    }
     const engine = this.#engine
     await docker(
       Effect.forEach(

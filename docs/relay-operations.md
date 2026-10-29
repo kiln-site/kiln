@@ -72,19 +72,23 @@ repeated, or sent by another Hearth, overrules nobody.
 
 A Tailscale network's members are named by kind: `instance:<id>` for a game
 server, `app:<id>:<service>` for an App's service, and `database:<id>` for a
-database, which keeps its address when its container is replaced. Deleting
-any of them asks Hearth to rewrite its networks' DNS on every node first
+database, which keeps its address when its container is replaced. Every
+member takes its addresses again as it starts, and all of them do when the
+Relay starts, so one its container lost, as when the Relay stopped between
+replacing a container and reattaching it, comes back. Deleting any of them
+asks Hearth to rewrite its networks' DNS on every node first
 (`hearth.tailscale.member.detach`), then takes it off them, and puts the DNS
-back if that fails. Applying a network
-(`relay.tailscale.stack.apply`) holds the network's own stack exclusively and
+back if that fails. Applying a network (`relay.tailscale.stack.apply`) holds
+the network's own stack exclusively and
 takes the lifecycle lock of each member it joins or takes off, so it waits
 for that member's power changes as they wait for it; a member it leaves as it
 is is held shared, so it isn't deleted or replaced meanwhile. Removing a
 network does the same for all its members. The locks are planned from the
 members the network has when the change is admitted, and the change refuses
 to run if they've changed by its turn. A game server's, App's, or
-database's deletion holds it while Hearth rewrites its networks' DNS for it, and a change to the
-network queued behind the deletion waits for it in turn. So while a deletion
+database's deletion holds it while Hearth rewrites its networks' DNS for it,
+and a change to the network queued behind the deletion waits for it in turn.
+So while a deletion
 waits on a network's DNS, rewriting that DNS (`relay.tailscale.stack.dns`)
 waits only for what holds its locks, not for what waits in line, and counts
 toward the lanes' waiting limit like any request; at any other time it takes

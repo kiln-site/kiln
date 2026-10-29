@@ -1883,6 +1883,13 @@ export class LifecycleDriver {
       )
       if (recreated) return recreated
     }
+    // A game server that lost its Tailscale address takes it again as it
+    // starts.
+    if (action === "start" || action === "restart") {
+      await this.reattachTailscaleMembers(
+        (memberId) => memberId === instanceTailscaleMemberId(instance.id)
+      )
+    }
     return this.#docker.runAction(instance, action)
   }
 
@@ -4776,9 +4783,10 @@ export class LifecycleDriver {
   }
 
   /**
-   * Puts every matching member's container back at its addresses, as at
-   * startup after a crash between replacing a container and reattaching
-   * it. A member that can't be reattached is logged and skipped.
+   * Puts every matching member's container back at its addresses: at
+   * startup, after a crash between replacing a container and reattaching
+   * it, and as a member starts. A member that can't be reattached is logged
+   * and skipped, and tried again when it next starts.
    */
   async reattachTailscaleMembers(
     matches: (memberId: string) => boolean
@@ -4802,7 +4810,7 @@ export class LifecycleDriver {
   }
 
   // Puts a member's container back at its address on each of its Tailscale
-  // networks, after the container was recreated.
+  // networks: after the container was recreated, or as it starts.
   async reattachTailscaleMember(memberId: string): Promise<void> {
     const container = await this.#tailscaleMemberContainer(memberId)
     if (!container) return
