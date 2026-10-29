@@ -584,6 +584,27 @@ export class ScheduleManager {
       )
       return
     }
+    // Hearth refuses a scheduled backup where it would refuse a manual
+    // one, as when backups are off for the target, its destination is
+    // disabled, or it's being deleted, and says so in the schedule it sends.
+    const refusal =
+      action.type === "backup"
+        ? (backupExecution(action, state.target)?.refusal ?? null)
+        : null
+    if (refusal) {
+      state.attempts.push(
+        attempt({
+          action,
+          error: `Not run: ${refusal}`,
+          scheduledAt,
+          scheduleId: schedule.id,
+          startedAt: actionStartedAt,
+          status: "not_run",
+          target: state.target,
+        })
+      )
+      return
+    }
     const executed = await Effect.runPromise(
       Effect.result(
         promiseEffect(() =>
@@ -682,11 +703,7 @@ export class ScheduleManager {
       }
     }
     if (action.type === "backup") {
-      const execution = action.executions.find(
-        (candidate) =>
-          candidate.targetId === target.id &&
-          candidate.targetKind === target.kind
-      )
+      const execution = backupExecution(action, target)
       const deployedDestination =
         execution?.destination ??
         (action.mode === "full" && action.destination.kind === "local"
@@ -746,6 +763,9 @@ export class ScheduleManager {
             scheduleName: schedule.name,
             timestamp: scheduledAt,
           }),
+          ...(action.mode === "incremental" && execution?.repositoryId
+            ? { repositoryId: execution.repositoryId }
+            : {}),
           storageId:
             action.destination.kind === "storage"
               ? action.destination.storageId
@@ -754,7 +774,7 @@ export class ScheduleManager {
         destination,
         exclude: [],
         kind: "create",
-        maxBytes: null,
+        maxBytes: execution?.maxBytes ?? null,
         mode: action.mode,
         reason: "scheduled",
         target: {
@@ -985,4 +1005,15 @@ function hasErrorCode(cause: unknown, code: string) {
 
 function errorMessage(cause: unknown) {
   return cause instanceof Error ? cause.message : "Unknown schedule error"
+}
+
+// What Hearth admitted of a backup step for one target.
+function backupExecution(
+  action: Extract<TargetScheduleAction, { type: "backup" }>,
+  target: ScheduleTarget
+) {
+  return action.executions.find(
+    (candidate) =>
+      candidate.targetId === target.id && candidate.targetKind === target.kind
+  )
 }

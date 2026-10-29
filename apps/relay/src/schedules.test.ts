@@ -1553,6 +1553,50 @@ describe("Relay schedule persistence", () => {
     })
   })
 
+  it("doesn't run a backup step Hearth refused, and says why", async () => {
+    const enqueued: Array<unknown> = []
+    const { schedules } = await manager({
+      enqueueBackup: async (input) => {
+        enqueued.push(input)
+        return { status: "succeeded", taskId: input.taskId } as RelayBackupTask
+      },
+      findInstance: async () => ({}),
+    })
+    await schedules.apply({
+      ...projection,
+      actions: [
+        {
+          destination: { kind: "local" },
+          executions: [
+            {
+              destination: null,
+              mode: "full",
+              refusal: "backups are turned off for it",
+              targetId: "server-a",
+              targetKind: "instance",
+            },
+          ],
+          id: "6cc00681-a2cd-40c7-a036-7c9bd09b269b",
+          mode: "full",
+          name: "Scheduled archive",
+          type: "backup",
+        },
+      ],
+    })
+
+    await runNow(schedules)
+
+    await advanceUntil(async () => {
+      expect(
+        (await latestRun(schedules))?.targetRuns[0]?.attempts[0]
+      ).toMatchObject({
+        error: "Not run: backups are turned off for it",
+        status: "not_run",
+      })
+    })
+    expect(enqueued).toEqual([])
+  })
+
   it("fails a scheduled backup that never finishes", async () => {
     const { schedules } = await manager({
       enqueueBackup: async (input) =>

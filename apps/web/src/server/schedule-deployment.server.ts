@@ -4,6 +4,7 @@ import { Clock, Effect, Result } from "effect"
 import type { RowDataPacket } from "mysql2/promise"
 import { z } from "zod"
 
+import type { BackupTargetKind } from "@workspace/contracts"
 import {
   scheduleActionAppliesToTarget,
   scheduleActionSchema,
@@ -21,10 +22,13 @@ import {
   backupObjectKeyPrefix,
   loadBackupStorageCredentialEffect,
 } from "@/backups/destinations/s3"
-import { ensureBackupRepositoryEffect } from "@/effect/backups"
+import {
+  ensureBackupRepositoryEffect,
+  scheduledBackupAdmissionEffect,
+} from "@/effect/backups"
 import { Database, type DatabaseTransaction } from "@/effect/database"
 import { kilnInstallationId } from "@/effect/installation"
-import { promiseEffect } from "@/effect/promise"
+import { forkPromise, promiseEffect } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
 import { databasePool } from "@/lib/database"
 import { databaseTable } from "@/lib/database-config"
@@ -292,7 +296,11 @@ export async function deployScheduleToRelay(
         // Field by field: callers can pass a loaded schedule, with Hearth's
         // own fields, and Relays reject keys they don't know.
         const projection: RelayScheduleProjection = {
-          actions: await prepareRelayScheduleActions(schedule.actions, targets),
+          actions: await prepareRelayScheduleActions(
+            schedule.actions,
+            targets,
+            await scheduleOwner(schedule.id)
+          ),
           // Older Relays reject unknown keys, so only send the option when on.
           ...(schedule.continueOnFailure ? { continueOnFailure: true } : {}),
           cron: schedule.cron,
@@ -345,9 +353,14 @@ export async function deployScheduleToRelay(
   }
 }
 
+// Each backup step's execution on each target, admitted as a manual backup
+// would be (`scheduledBackupAdmissionEffect`): where it goes, or why it
+// doesn't run. A refused one is still sent, so the Relay stops running it
+// rather than keeping the last projection that let it.
 async function prepareRelayScheduleActions(
   actions: ReadonlyArray<ScheduleAction>,
-  targets: ReadonlyArray<ScheduleTarget>
+  targets: ReadonlyArray<ScheduleTarget>,
+  owner: string | null
 ): Promise<Array<RelayScheduleAction>> {
   return Effect.runPromise(
     Effect.forEach(
@@ -359,15 +372,9 @@ async function prepareRelayScheduleActions(
           (target) =>
             !scheduleActionAppliesToTarget(action, target)
               ? Effect.succeed(null)
-              : promiseEffect(async () => ({
-                  destination:
-                    action.mode === "full"
-                      ? await scheduledFullBackupDestination(action, target)
-                      : await scheduledResticDestination(action, target),
-                  mode: action.mode,
-                  targetId: target.id,
-                  targetKind: target.kind,
-                })),
+              : promiseEffect(() =>
+                  scheduledBackupExecution(action, target, owner)
+                ),
           { concurrency: scheduleReconciliationConcurrency }
         ).pipe(
           Effect.map((executions) => ({
@@ -381,6 +388,72 @@ async function prepareRelayScheduleActions(
       { concurrency: 1 }
     )
   )
+}
+
+async function scheduledBackupExecution(
+  action: Extract<ScheduleAction, { type: "backup" }>,
+  target: ScheduleTarget,
+  owner: string | null
+) {
+  const targetKind = target.kind === "relay" ? "platform" : target.kind
+  const execution = {
+    mode: action.mode,
+    targetId: target.id,
+    targetKind: target.kind,
+  }
+  const admission = await runAppEffect(
+    "schedules.backupAdmission",
+    scheduledBackupAdmissionEffect({
+      mode: action.mode,
+      owner,
+      relayId: target.relayId,
+      storageId:
+        action.destination.kind === "storage"
+          ? action.destination.storageId
+          : null,
+      targetId: targetKind === "platform" ? kilnInstallationId() : target.id,
+      targetKind,
+    })
+  )
+  if (admission.refusal) {
+    return {
+      ...execution,
+      destination: null,
+      maxBytes: null,
+      refusal: admission.refusal,
+      repositoryId: null,
+    }
+  }
+  if (action.mode === "full") {
+    return {
+      ...execution,
+      destination: await scheduledFullBackupDestination(action, target),
+      maxBytes: admission.maxBytes,
+      refusal: null,
+      repositoryId: null,
+    }
+  }
+  const { repositoryId, ...destination } = await scheduledResticDestination(
+    action,
+    target
+  )
+  return {
+    ...execution,
+    destination,
+    maxBytes: admission.maxBytes,
+    refusal: null,
+    repositoryId,
+  }
+}
+
+async function scheduleOwner(scheduleId: string): Promise<string | null> {
+  const [rows] = await databasePool.query<
+    Array<{ created_by: string | null } & RowDataPacket>
+  >(
+    `SELECT created_by FROM ${databaseTable("schedule")} WHERE id = ? LIMIT 1`,
+    [scheduleId]
+  )
+  return rows[0]?.created_by ?? null
 }
 
 async function scheduledFullBackupDestination(
@@ -445,6 +518,7 @@ async function scheduledResticDestination(
   return {
     kind: "restic" as const,
     repository: location,
+    repositoryId: repository.id,
     repositoryPassword: repository.password,
   }
 }
@@ -641,6 +715,57 @@ export async function loadSchedules() {
       updatedAt: new Date(row.updated_at).toISOString(),
     }
   })
+}
+
+/**
+ * Sends again every schedule whose backups on `scope` Hearth admits, after
+ * something that decides whether they may run changed: a target's backup
+ * limits, a destination's state, a deletion starting or stopping. Each is
+ * marked unsent, then sent now, or by the sweep if its Relay is away; until
+ * it arrives, the Relay runs what it last had.
+ */
+export async function requestScheduleRedeployment(
+  scope:
+    | { storageId: string }
+    | { relayId: string; target: { id: string; kind: BackupTargetKind } }
+): Promise<void> {
+  const now = Date.now()
+  if ("storageId" in scope) {
+    await databasePool.execute(
+      `UPDATE ${databaseTable("schedule_deployment")} deployment
+         JOIN ${databaseTable("schedule_action")} action
+           ON action.schedule_id = deployment.schedule_id
+          SET deployment.status = 'pending', deployment.updated_at = ?
+        WHERE action.action_type = 'backup'
+          AND JSON_UNQUOTE(
+                JSON_EXTRACT(action.action_config, '$.destination.storageId')
+              ) = ?`,
+      [now, scope.storageId]
+    )
+  } else {
+    // Kiln's own backups are scheduled on its Relay; Apps and volumes
+    // aren't schedule targets yet.
+    const target =
+      scope.target.kind === "platform"
+        ? { id: scope.relayId, kind: "relay" }
+        : scope.target.kind === "instance" || scope.target.kind === "database"
+          ? scope.target
+          : null
+    if (!target) return
+    await databasePool.execute(
+      `UPDATE ${databaseTable("schedule_deployment")} deployment
+         JOIN ${databaseTable("schedule_target")} target
+           ON target.schedule_id = deployment.schedule_id
+          AND target.relay_id = deployment.relay_id
+          SET deployment.status = 'pending', deployment.updated_at = ?
+        WHERE target.relay_id = ? AND target.target_kind = ?
+          AND target.target_id = ?`,
+      [now, scope.relayId, target.kind, target.id]
+    )
+  }
+  forkPromise(redeployUnacknowledgedSchedules, (cause) =>
+    console.warn("[Kiln Schedules] Couldn't send schedules again:", cause)
+  )
 }
 
 /**

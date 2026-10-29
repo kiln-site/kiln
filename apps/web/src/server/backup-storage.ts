@@ -151,6 +151,8 @@ export const saveBackupStorage = createServerFn({ method: "POST" })
       })
     )
     publishBackupStorageChange(ownerUserId)
+    // Schedules carry its credentials and whether it may be used.
+    await requestStorageScheduleRedeployment(id)
     return { id, verified: true }
   })
 
@@ -174,6 +176,8 @@ export const deleteBackupStorage = createServerFn({ method: "POST" })
       deleteBackupStorageEffect(data.id)
     )
     publishBackupStorageChange(existing.ownerUserId)
+    // Scheduled backups to it stop where it's being deleted.
+    await requestStorageScheduleRedeployment(data.id)
     return { deleted: true }
   })
 
@@ -256,4 +260,10 @@ function canUseStorage(
   userId: string
 ): boolean {
   return storage.ownerUserId === null || storage.ownerUserId === userId
+}
+
+async function requestStorageScheduleRedeployment(storageId: string) {
+  const { requestScheduleRedeployment } =
+    await import("@/server/schedule-deployment.server")
+  await requestScheduleRedeployment({ storageId })
 }

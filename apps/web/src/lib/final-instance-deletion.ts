@@ -88,6 +88,7 @@ export async function ensureFinalInstanceDeletion(input: {
   publishBackupChange(input.relay.id, backup.backupId)
   const { dispatchBackupTask } = await import("@/lib/backup-reconciliation")
   await dispatchBackupTask(input.relay, backup, input.requestedBy)
+  await redeployTargetSchedules(input.relay.id, input.instanceId)
   const created = await finalDeletion(input.relay.id, input.instanceId)
   if (!created) throw new Error("Final server deletion was not persisted")
   return created
@@ -217,6 +218,7 @@ async function processFinalInstanceDeletion(
         from: ["backing_up"],
         status: "failed",
       })
+      await redeployTargetSchedules(deletion.relayId, deletion.targetId)
       return
     }
     if (deletion.backupStatus !== "available") return
@@ -336,4 +338,16 @@ function finalBackupFailure(deletion: FinalInstanceDeletion): Error {
   return new Error(
     deletion.error ?? "The final backup failed; the server was not deleted"
   )
+}
+
+// Scheduled backups of a server stop while it's being deleted, and resume
+// if its deletion stops (`scheduledBackupAdmissionEffect`). Where deletion
+// runs as `resource.delete`, its status changes ask this instead.
+async function redeployTargetSchedules(relayId: string, instanceId: string) {
+  const { requestScheduleRedeployment } =
+    await import("@/server/schedule-deployment.server")
+  await requestScheduleRedeployment({
+    relayId,
+    target: { id: instanceId, kind: "instance" },
+  })
 }

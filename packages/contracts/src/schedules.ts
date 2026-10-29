@@ -249,14 +249,25 @@ export const relayScheduleS3DestinationSchema = backupS3CredentialSchema
   })
   .strict()
 
+// One target's scheduled backup, as Hearth admitted it when it last sent
+// the schedule: where it goes, or, when Hearth would refuse it as it would
+// a manual one, why not, in which case the Relay doesn't run it.
 const relayScheduleBackupExecutionSchema = z
   .object({
-    destination: z.discriminatedUnion("kind", [
-      backupLocalDestinationSchema,
-      backupResticDestinationSchema,
-      relayScheduleS3DestinationSchema,
-    ]),
+    destination: z
+      .discriminatedUnion("kind", [
+        backupLocalDestinationSchema,
+        backupResticDestinationSchema,
+        relayScheduleS3DestinationSchema,
+      ])
+      .nullable(),
+    /** The most it may write, from the target's size ceilings. */
+    maxBytes: z.number().int().positive().nullable().optional(),
     mode: backupModeSchema,
+    /** Why it may not run; null when it may. */
+    refusal: z.string().min(1).max(300).nullable().optional(),
+    /** An incremental backup's repository, which catalogs it. */
+    repositoryId: z.uuid().nullable().optional(),
     targetId: z.string().min(1).max(120),
     targetKind: z.enum(["instance", "database", "relay"]),
   })

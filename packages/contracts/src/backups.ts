@@ -357,6 +357,8 @@ const backupCreateTaskInputObjectSchema = z
     catalog: z
       .object({
         name: z.string().trim().min(1).max(120),
+        // The repository an incremental scheduled backup goes to.
+        repositoryId: z.uuid().optional(),
         storageId: z.uuid().nullable(),
       })
       .strict()

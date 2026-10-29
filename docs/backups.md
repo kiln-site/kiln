@@ -316,6 +316,29 @@ the Relay's host and, where the Relay installed Kiln, opens that Relay's
 terminal with `stop-hearth`, the restore, and `start-hearth` typed for the
 operator to send.
 
+## Scheduled backups
+
+A Relay runs its schedules on its own, so scheduled backups go on while
+Hearth is away. Hearth decides whether each one may run as it decides a
+manual backup's reservation, and puts the answer in the schedule it sends
+the Relay, per backup step and target: not while the target is being
+deleted, not where its backups are turned off (a quantity or size ceiling of
+none), and only to a destination that's enabled, not being deleted, and
+shared or the schedule owner's. An admitted step carries its size ceiling
+and, for an incremental one, the repository it goes to; a refused one carries
+why, and the Relay records it as not run instead of running it. A
+destination Hearth can't use no longer fails the schedule's deploy, which
+left the Relay running what it had before.
+
+Hearth sends the schedule again when any of that changes: a target's backup
+limits, a destination saved or marked for deletion, a deletion starting or
+stopping. It's marked unsent and resent then, or by the ten-minute sweep if
+its Relay is away. Until it arrives, the Relay runs what it last had, so a
+change made while a Relay is unreachable takes effect when it's back.
+Hearth catalogs what the Relay ran as before, an incremental one in the
+repository its schedule named; one whose repository is gone by then is
+cataloged as failed, since it can't be restored.
+
 ## Retention
 
 A resource's backup policy is its retention. Hearth keeps its newest
