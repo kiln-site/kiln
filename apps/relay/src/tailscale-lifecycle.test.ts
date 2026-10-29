@@ -16,6 +16,7 @@ vi.mock("./command.js", () => import("./test/docker.js"))
 
 import type { RelayInstanceConfig } from "./config.js"
 import { DockerEngine } from "./docker-engine.js"
+import { exclusive, laneKeys } from "./operation-lanes.js"
 import { controlRequestLocks } from "./operation-plans.js"
 import { fakeDocker } from "./test/docker.js"
 import {
@@ -360,6 +361,311 @@ describe("Tailscale members", () => {
     return { container: harness.resources.instanceContainer(serverId), network }
   }
 
+  // The stack's container as installing it labels it.
+  async function installedStack(harness: RelayHarness) {
+    const stack = harness.resources.tailscaleStackContainer(stackId)
+    fakeDocker.tailscale.machines.set(stack, {
+      ipv4: "100.64.0.9",
+      loggedIn: true,
+    })
+    await harness.seedServer({
+      id: stackId,
+      image: "tailscale/tailscale:stable",
+      labels: {
+        "kiln.brick.format": "kiln.brick/v1",
+        "kiln.brick.id": builtinTailscaleBrickId,
+        "kiln.instance.mount": "/config",
+        "kiln.instance.name": "Private Network",
+      },
+      mounts: [
+        {
+          destination: "/config",
+          source: join(harness.config.rootDirectory, stackId),
+          type: "bind",
+        },
+      ],
+      name: stack,
+      running: true,
+    })
+  }
+
+  function deleting(
+    harness: RelayHarness,
+    id: string,
+    prepare = async () => {}
+  ) {
+    return Effect.runPromise(
+      harness.lanes.run(
+        { label: "instance.delete", locks: [exclusive(laneKeys.instance(id))] },
+        Effect.promise(() =>
+          harness.lifecycle.deleteInstance(id, false, async ({ mode }) => {
+            if (mode === "prepare") await prepare()
+          })
+        )
+      )
+    )
+  }
+
+  it("removes both members when two deletions detach from one stack concurrently", async () => {
+    const harness = await relayHarness()
+    const { container, network } = await serverOnStack(harness)
+    await installedStack(harness)
+    const secondId = "b".repeat(40)
+    await harness.createServer({ id: secondId })
+    const second = harness.resources.instanceContainer(secondId)
+    fakeDocker.connect(container, network, address)
+    fakeDocker.connect(second, network, "10.165.57.11")
+    const path = join(harness.config.rootDirectory, stackId, "stack.json")
+    const config = JSON.parse(await readFile(path, "utf8"))
+    config.bindings.push({
+      address: "10.165.57.11",
+      enabled: true,
+      hostname: "second",
+      memberId: `instance:${secondId}`,
+    })
+    await writeFile(path, JSON.stringify(config))
+
+    const detach = fakeDocker.hold({
+      command: "network disconnect",
+      target: network,
+    })
+    const first = deleting(harness, serverId)
+    await detach.reached
+    let prepared!: () => void
+    const ready = new Promise<void>((resolve) => {
+      prepared = resolve
+    })
+    const other = deleting(harness, secondId, async () => prepared())
+    await ready
+    // Let the second deletion reach its local detach while the first is
+    // paused at Docker, before it has saved its configuration.
+    await vi.waitUntil(() =>
+      harness.lanes
+        .describe()
+        .waiting.some(({ label }) => label === "tailscale.member.detach")
+    )
+    detach.release()
+    await Promise.all([first, other])
+
+    expect(JSON.parse(await readFile(path, "utf8")).bindings).toEqual([])
+    expect(await harness.lifecycle.tailscaleMemberships(() => true)).toEqual([])
+  })
+
+  it("rolls back a failed deletion without restoring another member deleted meanwhile", async () => {
+    const harness = await relayHarness()
+    const { container, network } = await serverOnStack(harness)
+    await installedStack(harness)
+    const secondId = "b".repeat(40)
+    await harness.createServer({ id: secondId })
+    const second = harness.resources.instanceContainer(secondId)
+    fakeDocker.connect(container, network, address)
+    fakeDocker.connect(second, network, "10.165.57.11")
+    const path = join(harness.config.rootDirectory, stackId, "stack.json")
+    const config = JSON.parse(await readFile(path, "utf8"))
+    config.bindings.push({
+      address: "10.165.57.11",
+      enabled: true,
+      hostname: "second",
+      memberId: `instance:${secondId}`,
+    })
+    await writeFile(path, JSON.stringify(config))
+
+    const removal = fakeDocker.hold({ command: "rm", target: container })
+    const first = deleting(harness, serverId)
+    // Attach the failure handler before making Docker fail.
+    const failed = expect(first).rejects.toThrow()
+    await removal.reached
+    await deleting(harness, secondId)
+    removal.fail("Docker refused the removal")
+    await failed
+
+    expect(
+      JSON.parse(await readFile(path, "utf8")).bindings.map(
+        (binding: { memberId: string }) => binding.memberId
+      )
+    ).toEqual([`instance:${serverId}`])
+    expect(await harness.lifecycle.tailscaleMemberships(() => true)).toEqual([
+      { address, memberId: `instance:${serverId}`, network },
+    ])
+  })
+
+  it.each(["binding conflict", "DNS conflict", "no conflict"])(
+    "preserves an apply between detach and rollback with %s",
+    async (scenario) => {
+      const hostname = scenario === "binding conflict" ? "paper" : "renamed"
+      const conflicting = scenario !== "no conflict"
+      const harness = await relayHarness()
+      const { container, network } = await serverOnStack(harness)
+      await installedStack(harness)
+      const secondId = "b".repeat(40)
+      await harness.createServer({ id: secondId })
+      const second = harness.resources.instanceContainer(secondId)
+      fakeDocker.connect(container, network, address)
+      const path = join(harness.config.rootDirectory, stackId, "stack.json")
+      const secondBinding = {
+        address: "10.165.57.11",
+        enabled: true,
+        hostname: "second",
+        memberId: `instance:${secondId}`,
+      }
+      const config = JSON.parse(await readFile(path, "utf8"))
+      config.bindings.push(secondBinding)
+      await writeFile(path, JSON.stringify(config))
+      fakeDocker.connect(second, network, secondBinding.address)
+
+      const removal = fakeDocker.hold({ command: "rm", target: container })
+      const deleted = deleting(harness, serverId)
+      const failed = expect(deleted).rejects.toThrow(
+        conflicting
+          ? /Tailscale rollback also failed:.*Hostname paper.test.*stay off the network; finishing the deletion removes them/
+          : "Docker refused the removal"
+      )
+      await removal.reached
+      const input = relayTailscaleStackApplySchema.parse({
+        bindings: [{ hostname, memberId: secondBinding.memberId }],
+        domain: "test",
+        hostname: "private-network",
+        id: stackId,
+        name: "Private Network",
+      })
+      let basis: string | undefined
+      const locks = await controlRequestLocks(
+        "relay.tailscale.stack.apply",
+        input,
+        (id) => id,
+        () => [],
+        async (id) => {
+          const plan = await harness.lifecycle.tailscaleStackPlan(id)
+          basis = plan.basis
+          return plan.bindings
+        },
+        (kind, id) => harness.lanes.isFrozen(kind, id)
+      )!
+      await Effect.runPromise(
+        harness.lanes.run(
+          { label: "relay.tailscale.stack.apply", locks },
+          Effect.promise(() =>
+            harness.lifecycle.applyTailscaleStack(input, basis)
+          )
+        )
+      )
+      const directory = join(harness.config.rootDirectory, stackId)
+      if (scenario === "DNS conflict") {
+        await harness.lifecycle.syncTailscaleStackDns({
+          id: stackId,
+          records: [
+            { address: secondBinding.address, hostname },
+            { address: "10.165.58.10", hostname: "paper" },
+          ],
+        })
+      }
+      const appliedDns = await readFile(join(directory, "Corefile"), "utf8")
+      const appliedRecords = await readFile(
+        join(directory, "dns-records.json"),
+        "utf8"
+      )
+      removal.fail("Docker refused the removal")
+      await failed
+
+      const bindings = JSON.parse(await readFile(path, "utf8")).bindings
+      expect(bindings).toContainEqual({ ...secondBinding, hostname })
+      expect(fakeDocker.container(second)?.networks.get(network)).toMatchObject(
+        {
+          ipAddress: secondBinding.address,
+        }
+      )
+      if (conflicting) {
+        expect(bindings).toEqual([{ ...secondBinding, hostname }])
+        expect(await readFile(join(directory, "Corefile"), "utf8")).toBe(
+          appliedDns
+        )
+        expect(
+          await readFile(join(directory, "dns-records.json"), "utf8")
+        ).toBe(appliedRecords)
+        expect(fakeDocker.container(container)?.networks.has(network)).toBe(
+          false
+        )
+        expect(
+          await harness.lifecycle.tailscaleMemberships(() => true)
+        ).toEqual([
+          {
+            address: secondBinding.address,
+            memberId: secondBinding.memberId,
+            network,
+          },
+        ])
+      } else {
+        expect(bindings).toContainEqual(config.bindings[0])
+        expect(
+          fakeDocker.container(container)?.networks.get(network)
+        ).toMatchObject({
+          ipAddress: address,
+        })
+      }
+    }
+  )
+
+  it("cannot restore a frozen member when an apply overlaps its deletion", async () => {
+    const harness = await relayHarness()
+    const { network } = await serverOnStack(harness)
+    await installedStack(harness)
+    await harness.freezes.freeze(
+      { deletionId: "d".repeat(36), id: serverId, kind: "instance" },
+      async () => {}
+    )
+    const input = relayTailscaleStackApplySchema.parse({
+      bindings: [{ hostname: "paper", memberId: `instance:${serverId}` }],
+      domain: "test",
+      hostname: "private-network",
+      id: stackId,
+      name: "Private Network",
+    })
+    let basis: string | undefined
+    const locks = await controlRequestLocks(
+      "relay.tailscale.stack.apply",
+      input,
+      (id) => id,
+      () => [],
+      async (id) => {
+        const plan = await harness.lifecycle.tailscaleStackPlan(id)
+        basis = plan.basis
+        return plan.bindings
+      },
+      (kind, id) => harness.lanes.isFrozen(kind, id)
+    )!
+    const applying = fakeDocker.hold({
+      command: "network inspect",
+      target: network,
+    })
+    const applied = Effect.runPromise(
+      harness.lanes.run(
+        { label: "relay.tailscale.stack.apply", locks },
+        Effect.promise(() =>
+          harness.lifecycle.applyTailscaleStack(input, basis)
+        )
+      )
+    )
+    await applying.reached
+    const deleted = deleting(harness, serverId)
+    await vi.waitUntil(() =>
+      harness.lanes
+        .describe()
+        .waiting.some(({ label }) => label === "tailscale.member.detach")
+    )
+    applying.release()
+    await Promise.all([applied, deleted])
+
+    expect(await harness.lifecycle.tailscaleMemberships(() => true)).toEqual([])
+    expect(
+      JSON.parse(
+        await readFile(
+          join(harness.config.rootDirectory, stackId, "stack.json"),
+          "utf8"
+        )
+      ).bindings
+    ).toEqual([])
+  })
+
   it("keeps a server at its Tailscale address when its container is recreated", async () => {
     const harness = await relayHarness()
     const { container, network } = await serverOnStack(harness)
@@ -389,31 +695,7 @@ describe("Tailscale members", () => {
   it("keeps an apply that finds its member already attached by the time it connects it", async () => {
     const harness = await relayHarness()
     const { container, network } = await serverOnStack(harness)
-    // The stack's container as installing it labels it.
-    const stack = harness.resources.tailscaleStackContainer(stackId)
-    fakeDocker.tailscale.machines.set(stack, {
-      ipv4: "100.64.0.9",
-      loggedIn: true,
-    })
-    await harness.seedServer({
-      id: stackId,
-      image: "tailscale/tailscale:stable",
-      labels: {
-        "kiln.brick.format": "kiln.brick/v1",
-        "kiln.brick.id": builtinTailscaleBrickId,
-        "kiln.instance.mount": "/config",
-        "kiln.instance.name": "Private Network",
-      },
-      mounts: [
-        {
-          destination: "/config",
-          source: join(harness.config.rootDirectory, stackId),
-          type: "bind",
-        },
-      ],
-      name: stack,
-      running: true,
-    })
+    await installedStack(harness)
     const connect = fakeDocker.hold({
       command: "network connect",
       target: network,
@@ -437,6 +719,55 @@ describe("Tailscale members", () => {
     expect(
       fakeDocker.container(container)!.networks.get(network)
     ).toMatchObject({ ipAddress: address })
+    expect(await harness.lifecycle.tailscaleMemberships(() => true)).toEqual([
+      { address, memberId: `instance:${serverId}`, network },
+    ])
+  })
+
+  it("applies a network beside a member being deleted that it leaves as it is, and leaves it alone", async () => {
+    const harness = await relayHarness()
+    const { container, network } = await serverOnStack(harness)
+    await installedStack(harness)
+    await harness.freezes.freeze(
+      { deletionId: "d".repeat(36), id: serverId, kind: "instance" },
+      async () => {}
+    )
+    const input = relayTailscaleStackApplySchema.parse({
+      bindings: [{ hostname: "paper", memberId: `instance:${serverId}` }],
+      domain: "test",
+      hostname: "private-network",
+      id: stackId,
+      name: "Private Network",
+    })
+
+    // As the control socket admits it, its locks planned from the stack.
+    let basis: string | undefined
+    const applied = await Effect.runPromise(
+      harness.lanes.run(
+        {
+          label: "relay.tailscale.stack.apply",
+          locks: await controlRequestLocks(
+            "relay.tailscale.stack.apply",
+            input,
+            (reference) => reference,
+            () => [],
+            async (id) => {
+              const plan = await harness.lifecycle.tailscaleStackPlan(id)
+              basis = plan.basis
+              return plan.bindings
+            },
+            (kind, id) => harness.lanes.isFrozen(kind, id)
+          )!,
+        },
+        Effect.promise(() =>
+          harness.lifecycle.applyTailscaleStack(input, basis)
+        )
+      )
+    )
+
+    expect(applied).toBeDefined()
+    // Not joined to the network it was missing from, and still a member.
+    expect(fakeDocker.container(container)!.networks.has(network)).toBe(false)
     expect(await harness.lifecycle.tailscaleMemberships(() => true)).toEqual([
       { address, memberId: `instance:${serverId}`, network },
     ])

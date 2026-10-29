@@ -208,12 +208,20 @@ export type TailscaleStackReader = (
   ReadonlyArray<{ readonly enabled: boolean; readonly memberId: string }>
 >
 
+/** Whether a resource is frozen for its deletion. */
+export type FrozenResourceCheck = (
+  kind: "app" | "database" | "instance",
+  id: string
+) => boolean
+
 /**
  * The locks of a stack's members, from those saved and, for an apply, those
  * it asks for. One that joins or leaves the stack takes its lifecycle lock,
  * as its power changes do; one that stays as it is is only held, so it's
  * neither deleted nor replaced meanwhile, without waiting for its power
- * changes.
+ * changes. One that stays as it is while it's frozen for its deletion isn't
+ * held at all: the apply leaves it alone, and holding it would refuse every
+ * change to the stack until it's gone.
  */
 export function tailscaleMemberLocks(
   saved: ReadonlyArray<{
@@ -223,7 +231,8 @@ export function tailscaleMemberLocks(
   requested: ReadonlyArray<{
     readonly enabled: boolean
     readonly memberId: string
-  }> | null
+  }> | null,
+  isFrozen: FrozenResourceCheck = () => false
 ): Array<LaneLock> {
   const active = (
     bindings: ReadonlyArray<{ enabled: boolean; memberId: string }>
@@ -242,20 +251,21 @@ export function tailscaleMemberLocks(
     const changes = before.has(memberId) !== after.has(memberId)
     const app = appTailscaleMember(memberId)
     if (app) {
-      return changes
-        ? appLifecycleLocks(app.appId)
-        : [shared(laneKeys.app(app.appId))]
+      if (changes) return appLifecycleLocks(app.appId)
+      return isFrozen("app", app.appId) ? [] : [shared(laneKeys.app(app.appId))]
     }
     const databaseId = databaseTailscaleMember(memberId)
     if (databaseId) {
-      return changes
-        ? databaseLocks(databaseId)
+      if (changes) return databaseLocks(databaseId)
+      return isFrozen("database", databaseId)
+        ? []
         : [shared(laneKeys.database(databaseId))]
     }
     const instanceId = instanceTailscaleMember(memberId)
     if (instanceId) {
-      return changes
-        ? instanceLifecycleLocks(instanceId)
+      if (changes) return instanceLifecycleLocks(instanceId)
+      return isFrozen("instance", instanceId)
+        ? []
         : [shared(laneKeys.instance(instanceId))]
     }
     return []
@@ -321,7 +331,8 @@ export function controlRequestLocks(
   payload: Readonly<Record<string, unknown>>,
   resolveInstance: InstanceResolver,
   resolveAppVolumes: AppVolumesResolver,
-  readTailscaleStack?: TailscaleStackReader
+  readTailscaleStack?: TailscaleStackReader,
+  isFrozen?: FrozenResourceCheck
 ): ReadonlyArray<LaneLock> | Promise<ReadonlyArray<LaneLock>> | null {
   const instance = (
     locks: (id: string) => Array<LaneLock>,
@@ -561,7 +572,8 @@ export function controlRequestLocks(
           (await readTailscaleStack?.(stackId)) ?? [],
           operation === "relay.tailscale.stack.apply"
             ? requestedTailscaleBindings(payload)
-            : null
+            : null,
+          isFrozen
         ),
       ])
     }

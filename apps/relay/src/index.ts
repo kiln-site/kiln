@@ -1379,7 +1379,8 @@ const controlSocket = attachControlSocket({
         const plan = await lifecycle.tailscaleStackPlan(stackId)
         tailscaleStackPlans.set(request, plan.basis)
         return plan.bindings
-      }
+      },
+      (kind, id) => lanes.isFrozen(kind, id)
     ),
   runEffect: (effect) => runRelayEffect("relay.control.state", effect),
   saveDial: (clientId, url) => {

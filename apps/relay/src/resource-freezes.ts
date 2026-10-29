@@ -27,6 +27,13 @@ const refusals: Record<FrozenKind, string> = {
   database: "This database is being deleted",
   instance: "This game server is being deleted",
 }
+// A Tailscale network's change is refused for one of its members, so it
+// says which.
+const memberNouns: Record<FrozenKind, string> = {
+  app: "App",
+  database: "Database",
+  instance: "Game server",
+}
 
 interface Frozen {
   readonly deletionId: string
@@ -75,10 +82,7 @@ export class ResourceFreezes implements FrozenResources {
    * an operation holding the resource whole. Freezing again for the same
    * deletion applies it again; another deletion's freeze is refused.
    */
-  async freeze(
-    freeze: RelayResourceFreezeRecord,
-    apply: Quiet
-  ): Promise<void> {
+  async freeze(freeze: RelayResourceFreezeRecord, apply: Quiet): Promise<void> {
     const holder = await Effect.runPromise(
       this.#state.freezeResource(freeze, Date.now())
     )
@@ -148,8 +152,12 @@ export class ResourceFreezes implements FrozenResources {
     for (const lock of locks) {
       const resource = lock.key.split("/", 1)[0]!
       if (!this.#frozen.has(resource)) continue
-      const kind = resource.slice(0, resource.indexOf(":")) as FrozenKind
-      if (!allowed[kind]?.has(label)) return refusals[kind]
+      const separator = resource.indexOf(":")
+      const kind = resource.slice(0, separator) as FrozenKind
+      if (allowed[kind]?.has(label)) continue
+      return label.startsWith("relay.tailscale.stack.")
+        ? `${memberNouns[kind]} ${resource.slice(separator + 1, separator + 9)} on this network is being deleted`
+        : refusals[kind]
     }
     return null
   }

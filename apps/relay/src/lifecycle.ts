@@ -734,6 +734,23 @@ export class LifecycleDriver {
     )
   }
 
+  #assertUniqueTailscaleHostnames(
+    domain: string,
+    bindings: ReadonlyArray<{ hostname: string }>
+  ): void {
+    const duplicateHostname = bindings.find(
+      (binding, index, bindings) =>
+        bindings.findIndex(
+          (candidate) => candidate.hostname === binding.hostname
+        ) !== index
+    )
+    if (duplicateHostname) {
+      throw new Error(
+        `Hostname ${duplicateHostname.hostname}.${domain} is selected more than once`
+      )
+    }
+  }
+
   async applyTailscaleStack(
     rawInput: RelayTailscaleStackApply,
     planned?: string
@@ -773,17 +790,7 @@ export class LifecycleDriver {
       }
     }
 
-    const duplicateHostname = input.bindings.find(
-      (binding, index, bindings) =>
-        bindings.findIndex(
-          (candidate) => candidate.hostname === binding.hostname
-        ) !== index
-    )
-    if (duplicateHostname) {
-      throw new Error(
-        `Hostname ${duplicateHostname.hostname}.${input.domain} is selected more than once`
-      )
-    }
+    this.#assertUniqueTailscaleHostnames(input.domain, input.bindings)
 
     const reservedSubnets = new Set(
       (await this.#tailscaleStackConfigs())
@@ -4386,28 +4393,49 @@ export class LifecycleDriver {
     }> = []
     return runLifecycle(
       lifecycleOperation(async () => {
-        for (const previous of configs) {
-          if (await this.#tailscaleStackRemovalPending(previous.id)) {
-            throw new Error(
-              `Finish removing ${previous.name} from Tailscale before deleting this`
+        for (const candidate of configs) {
+          await runLifecycle(
+            this.#lanes.runNested(
+              {
+                label: "tailscale.member.detach",
+                locks: [exclusive(laneKeys.instance(candidate.id))],
+              },
+              lifecycleOperation(async () => {
+                const previous = await this.#readTailscaleStackConfig(
+                  candidate.id
+                )
+                if (
+                  !previous ||
+                  !previous.bindings.some(
+                    (binding) => binding.memberId === memberId
+                  )
+                )
+                  return
+                if (await this.#tailscaleStackRemovalPending(previous.id)) {
+                  throw new Error(
+                    `Finish removing ${previous.name} from Tailscale before deleting this`
+                  )
+                }
+                const records =
+                  await this.#readTailscaleStackDnsRecords(previous)
+                const detached = tailscaleStackWithoutMember(
+                  previous,
+                  records,
+                  memberId
+                )
+                const next = detached.config
+                completed.push({ next, previous, records })
+                await this.#reconcileTailscaleStackBindings(
+                  previous.id,
+                  previous.bindings,
+                  next.bindings
+                )
+                await this.#writeTailscaleStackConfig(next)
+                await this.#configureTailscaleStackRouting(next)
+                await this.#ensureTailscaleStackDns(next, detached.records)
+              })
             )
-          }
-          const records = await this.#readTailscaleStackDnsRecords(previous)
-          const detached = tailscaleStackWithoutMember(
-            previous,
-            records,
-            memberId
           )
-          const next = detached.config
-          completed.push({ next, previous, records })
-          await this.#reconcileTailscaleStackBindings(
-            previous.id,
-            previous.bindings,
-            next.bindings
-          )
-          await this.#writeTailscaleStackConfig(next)
-          await this.#configureTailscaleStackRouting(next)
-          await this.#ensureTailscaleStackDns(next, detached.records)
         }
         return completed
       }).pipe(
@@ -4441,26 +4469,96 @@ export class LifecycleDriver {
     const failures: Array<string> = []
     for (const change of [...changes].reverse()) {
       await runLifecycle(
-        lifecycleOperation(async () => {
-          await this.#writeTailscaleStackConfig(change.previous)
-          await this.#reconcileTailscaleStackBindings(
-            change.previous.id,
-            change.next.bindings,
-            change.previous.bindings
-          )
-          await this.#configureTailscaleStackRouting(change.previous)
-          await this.#ensureTailscaleStackDns(change.previous, change.records)
-        }).pipe(
-          Effect.catch((cause) =>
-            Effect.sync(() => {
-              failures.push(
-                cause instanceof Error
-                  ? cause.message
-                  : "unknown rollback error"
+        this.#lanes
+          .runNested(
+            {
+              label: "tailscale.member.rollback",
+              locks: [exclusive(laneKeys.instance(change.previous.id))],
+            },
+            lifecycleOperation(async () => {
+              const current = await this.#readTailscaleStackConfig(
+                change.previous.id
               )
+              if (!current) return
+              // Restore only this detach's members. Other deletions or applies
+              // may have changed the stack while Docker removed the resource.
+              const removed = change.previous.bindings.filter(
+                (binding) =>
+                  !change.next.bindings.some(
+                    (next) => next.memberId === binding.memberId
+                  )
+              )
+              const restored = removed.filter(
+                (binding) =>
+                  !current.bindings.some(
+                    (saved) => saved.memberId === binding.memberId
+                  )
+              )
+              const previous = {
+                ...current,
+                bindings: [...current.bindings, ...restored],
+              }
+              const records = await this.#readTailscaleStackDnsRecords(current)
+              const restoredAddresses = new Set(
+                restored.map((binding) => binding.address)
+              )
+              const mergedRecords = [
+                ...records,
+                ...change.records.filter((record) =>
+                  restoredAddresses.has(record.address)
+                ),
+              ]
+              // Validate before writing or reconnecting: an apply may have
+              // claimed a detached member's hostname meanwhile.
+              Effect.runSync(
+                Effect.try({
+                  try: () => {
+                    relayTailscaleStackConfigSchema.parse(previous)
+                    this.#assertUniqueTailscaleHostnames(
+                      previous.domain,
+                      previous.bindings
+                    )
+                    relayTailscaleStackDnsSchema.parse({
+                      id: previous.id,
+                      records: mergedRecords,
+                    })
+                    this.#assertUniqueTailscaleHostnames(
+                      previous.domain,
+                      mergedRecords
+                    )
+                  },
+                  catch: (cause) =>
+                    new Error(
+                      `Could not restore Tailscale membership on ${current.name}: ${
+                        cause instanceof Error
+                          ? cause.message
+                          : "invalid configuration"
+                      }. The removed members stay off the network; finishing the deletion removes them for good`,
+                      { cause }
+                    ),
+                })
+              )
+              await this.#writeTailscaleStackConfig(previous)
+              await this.#reconcileTailscaleStackBindings(
+                change.previous.id,
+                current.bindings,
+                previous.bindings
+              )
+              await this.#configureTailscaleStackRouting(previous)
+              await this.#ensureTailscaleStackDns(previous, mergedRecords)
             })
           )
-        )
+          .pipe(
+            Effect.catch((cause) =>
+              Effect.sync(() => {
+                failures.push(
+                  cause instanceof Error
+                    ? cause.message
+                    : "unknown rollback error"
+                )
+              })
+            )
+          )
       )
     }
     return failures

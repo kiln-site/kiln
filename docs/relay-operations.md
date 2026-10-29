@@ -97,7 +97,15 @@ waits on a network's DNS, rewriting that DNS (`relay.tailscale.stack.dns`)
 waits only for what holds its locks, not for what waits in line, and counts
 toward the lanes' waiting limit and is refused, as by an unfinished
 restore's fence, like any request; at any other time it takes
-its turn like any change. Relays rewrite bindings saved with a
+its turn like any change.
+
+A deletion asks Hearth for DNS before taking the stack's own exclusive
+lane, so that its DNS continuation can finish. The local detach then
+rereads the configuration inside that lane, shared with apply and removal,
+so concurrent deletions cannot overwrite each other's bindings. A rollback
+takes the same lane and restores only the members its detach removed into
+the current configuration, preserving other deletions and applies.
+Relays rewrite bindings saved with a
 game server's bare ID when they start, and Hearth its copies of them in a
 migration.
 
@@ -360,8 +368,11 @@ uploads, SFTP, restores, deploys, schedules, and crash recovery. They answer
 backup (`backup.create`), its deletion, and `resource.freeze` /
 `resource.unfreeze` still run. Nested work inside an
 operation already granted isn't checked, and Tailscale changes leave a
-frozen member's network as it was. Terminals need a running container, so a
-stopped resource has none.
+frozen member's network as it was. Applying a network doesn't hold a frozen
+member it leaves as it is, so a deletion that stops partway never keeps the
+rest of the network from changing; joining or removing a frozen member, or
+removing the whole network, is refused, naming the member. Terminals need a
+running container, so a stopped resource has none.
 
 A freeze belongs to the deletion that made it: another deletion of the same
 resource is refused, and only its own deletion can let it go. Letting it go
