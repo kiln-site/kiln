@@ -361,6 +361,15 @@ const backupCreateTaskInputObjectSchema = z
       })
       .strict()
       .optional(),
+    /**
+     * A stopped backup of an App's folder or a volume started with others,
+     * as backing up an App starts its folder's and each owned volume's: the
+     * Relay copies them all within one stopped window, so they agree.
+     */
+    batch: z
+      .object({ id: z.uuid(), size: z.number().int().min(2).max(64) })
+      .strict()
+      .optional(),
     // Absent is live.
     consistency: backupConsistencySchema.optional(),
     destination: z.union([
@@ -395,6 +404,13 @@ function refineResticCreateInput(
       code: "custom",
       message: "Only Apps and volumes can be stopped for a backup",
       path: ["consistency"],
+    })
+  }
+  if (input.batch && input.consistency !== "stopped") {
+    context.addIssue({
+      code: "custom",
+      message: "Only stopped backups share a stopped window",
+      path: ["batch"],
     })
   }
   const restic = input.destination.kind === "restic"

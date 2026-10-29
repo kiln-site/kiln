@@ -229,7 +229,15 @@ every App it stopped starts again, the one whose stop failed included,
 since it may be partly stopped. The Apps a stopped backup or a restore of a
 volume locks are looked up before it waits its turn and checked again once
 it has it; if they changed meanwhile, or can't be looked up, the task fails
-rather than run beside an App it doesn't hold. A final backup is always
+rather than run beside an App it doesn't hold. Stopped backups started together as a batch (`batch: {id, size}`, as
+backing up an App starts its folder's and each owned volume's) share one
+stopped window: the Relay claims the batch's queued backups together, waiting
+a few moments for any still arriving, holds all their locks at once, stops
+every App that uses any of them once (journaled under the first backup, as a
+single stopped backup's are, so a Relay that stops midway starts them again
+and the backups rerun), takes every archive, and only then starts again those
+that ran, so the copies agree. A backup of the batch that arrives later runs
+in a window of its own. Live batches are independent backups. A final backup is always
 stopped, and nothing starts again. Game servers, databases, and Kiln are
 backed up live only for now.
 

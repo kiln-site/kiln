@@ -630,6 +630,14 @@ export class RelayStateStore extends Context.Service<
      * stop cut off while running, or one that failed while swapping its
      * files in, which recovery finished, saying so.
      */
+    /**
+     * Claims the queued backups of a stopped batch, which run in the stopped
+     * window its first claimed backup opened, oldest first.
+     */
+    readonly claimBatchBackupTasks: (
+      batchId: string,
+      now: number
+    ) => Effect.Effect<ReadonlyArray<RelayBackupTask>, RelayStateError>
     readonly completeRecoveredRestore: (
       taskId: string,
       now: number,
@@ -2648,6 +2656,44 @@ const makeRelayStateStore = Effect.gen(function* () {
               `
               return (yield* backupTasks({ taskId: row.taskId }))[0] ?? null
             }
+          })
+        )
+      ),
+    claimBatchBackupTasks: (batchId, now) =>
+      run(
+        "claim_batch_backup_tasks",
+        sql.withTransaction(
+          Effect.gen(function* () {
+            const rows = yield* sql<{ taskId: string }>`
+              SELECT task_id AS taskId
+              FROM relay_backup_tasks
+              WHERE status = 'queued' AND input_refresh_required = 0
+                AND kind = 'create'
+                AND json_extract(input_json, '$.batch.id') = ${batchId}
+              ORDER BY created_at ASC, task_id ASC
+            `
+            const claimed: Array<RelayBackupTask> = []
+            for (const row of rows) {
+              yield* sql`
+                UPDATE relay_backup_tasks
+                SET status = 'running',
+                    started_at = COALESCE(started_at, ${now}),
+                    updated_at = ${now},
+                    error = NULL,
+                    error_code = NULL,
+                    phase = 'preparing',
+                    current_artifact_id = NULL,
+                    current_path = NULL,
+                    finished_at = NULL
+                WHERE task_id = ${row.taskId} AND status = 'queued'
+              `
+              const task = yield* backupTasks({ taskId: row.taskId }).pipe(
+                Effect.map((tasks) => tasks[0] ?? null),
+                Effect.orElseSucceed(() => null)
+              )
+              if (task) claimed.push(task)
+            }
+            return claimed
           })
         )
       ),

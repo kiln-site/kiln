@@ -402,6 +402,47 @@ it("holds a volume alone through a stopped backup, so an App that begins using i
   expect(mounted()).toBe(true)
 })
 
+it("stops an App once for a stopped batch of its folder and volume, and starts it again once", async () => {
+  const { harness, volumes } = await relay()
+  kilnVolume()
+  await harness.apps.create({ id: appId, name: "Website" })
+  const app = await deploy(harness, mountsVolume)
+  const container = () => fakeDocker.containers.get(app.containers[0]!.id)!
+  const startsBefore = container().starts
+  const manager = await backups(harness, volumes)
+  const batch = { id: randomUUID(), size: 2 }
+  const folder = createInput(
+    { id: appId, kind: "app" },
+    { batch, consistency: "stopped" }
+  )
+  const volume = createInput(
+    { id: volumeId, kind: "volume" },
+    { batch, consistency: "stopped" }
+  )
+  const reading = fakeDocker.hold({ command: "archive get" })
+
+  const running = Effect.runPromise(
+    Effect.gen(function* () {
+      yield* manager.enqueue(folder)
+      yield* manager.enqueue(volume)
+      yield* manager.runPending()
+    })
+  )
+  await reading.reached
+  expect(container().state.running).toBe(false)
+  reading.release()
+  await running
+
+  for (const input of [folder, volume]) {
+    expect(await Effect.runPromise(manager.get(input.taskId))).toMatchObject({
+      result: { consistency: "stopped", warnings: [] },
+      status: "succeeded",
+    })
+  }
+  expect(container().state.running).toBe(true)
+  expect(container().starts - startsBefore).toBe(1)
+})
+
 it("refuses a restore whose archive writes through a link it made or climbs out", async () => {
   const { harness, volumes } = await relay()
   const volume = kilnVolume()
