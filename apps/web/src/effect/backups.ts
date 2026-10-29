@@ -26,6 +26,7 @@ import {
 import { decryptWithKeyring, encryptWithKeyring } from "../../keyring.mjs"
 import { Database } from "@/effect/database"
 import type { DatabaseTransaction } from "@/effect/database"
+import { invalidateScheduleDeploymentsEffect } from "@/effect/schedule-invalidation"
 import { kilnInstallationId } from "@/effect/installation"
 import {
   BackupLimitError,
@@ -732,6 +733,15 @@ const reserveBackupCreateEffect = Effect.fn("backups.reserveCreate")(
             ]
           )
         }
+        // Its scheduled backups stop while it's being deleted. The seam with
+        // deletion: where it runs as `resource.delete`, its own transitions
+        // do this.
+        if (input.reason === "final_delete") {
+          yield* invalidateScheduleDeploymentsEffect(transaction, {
+            relayId: input.relayId,
+            target: { id: input.targetId, kind: input.targetKind },
+          })
+        }
         return {
           artifacts,
           artifactKind,
@@ -847,7 +857,7 @@ export const reserveResourceBackupEffect = Effect.fn("backups.reserveResource")(
  * none), and only to a destination that's enabled, not being deleted, and
  * shared or the schedule owner's. The Relay runs scheduled backups on its
  * own, so Hearth decides this when it sends the schedule, and sends it again
- * when any of it changes (`requestScheduleRedeployment`). Also the most an
+ * when any of it changes (`invalidateScheduleDeploymentsEffect`). Also the most an
  * admitted one may write.
  */
 export const scheduledBackupAdmissionEffect = Effect.fn(
@@ -3197,9 +3207,10 @@ export const updateBackupLimitsEffect = Effect.fn("backups.updateLimits")(
     const quantityColumn = `${prefix}quantity_limit`
     const sizeColumn = `${prefix}size_limit_bytes`
     const daysColumn = `${prefix}retention_days`
-    yield* database.execute(
-      "backup_limits_update",
-      `INSERT INTO ${databaseTable("backup_policy")}
+    yield* database.transaction("backup_limits_update", (transaction) =>
+      Effect.gen(function* () {
+        yield* transaction.execute(
+          `INSERT INTO ${databaseTable("backup_policy")}
         (relay_id, target_kind, target_id, exclude_patterns,
          ${quantityColumn}, ${sizeColumn}, ${daysColumn}, created_at,
          updated_at)
@@ -3209,16 +3220,24 @@ export const updateBackupLimitsEffect = Effect.fn("backups.updateLimits")(
          ${sizeColumn} = VALUES(${sizeColumn}),
          ${daysColumn} = VALUES(${daysColumn}),
          updated_at = VALUES(updated_at)`,
-      [
-        input.relayId,
-        input.targetKind,
-        input.targetId,
-        input.quantityLimit,
-        input.sizeLimitBytes,
-        input.retentionDays,
-        now,
-        now,
-      ]
+          [
+            input.relayId,
+            input.targetKind,
+            input.targetId,
+            input.quantityLimit,
+            input.sizeLimitBytes,
+            input.retentionDays,
+            now,
+            now,
+          ]
+        )
+        // Turning backups off, or on, or capping their size decides what
+        // the target's scheduled backups may do.
+        yield* invalidateScheduleDeploymentsEffect(transaction, {
+          relayId: input.relayId,
+          target: { id: input.targetId, kind: input.targetKind },
+        })
+      })
     )
   }
 )
@@ -3390,22 +3409,34 @@ export const updateFinalInstanceDeletionEffect = Effect.fn(
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
   const placeholders = input.from.map(() => "?").join(", ")
-  const result = yield* database.execute(
+  return yield* database.transaction(
     "backup_final_delete_update",
-    `UPDATE ${databaseTable("backup_final_delete")}
-        SET status = ?, error = ?, updated_at = ?
-      WHERE relay_id = ? AND target_id = ?
-        AND status IN (${placeholders})`,
-    [
-      input.status,
-      input.error,
-      now,
-      input.relayId,
-      input.targetId,
-      ...input.from,
-    ]
+    (transaction) =>
+      Effect.gen(function* () {
+        const result = yield* transaction.execute(
+          `UPDATE ${databaseTable("backup_final_delete")}
+            SET status = ?, error = ?, updated_at = ?
+          WHERE relay_id = ? AND target_id = ?
+            AND status IN (${placeholders})`,
+          [
+            input.status,
+            input.error,
+            now,
+            input.relayId,
+            input.targetId,
+            ...input.from,
+          ]
+        )
+        // Stopped, it may be backed up on schedule again.
+        if (result.affectedRows > 0 && input.status === "failed") {
+          yield* invalidateScheduleDeploymentsEffect(transaction, {
+            relayId: input.relayId,
+            target: { id: input.targetId, kind: "instance" },
+          })
+        }
+        return result.affectedRows > 0
+      })
   )
-  return result.affectedRows > 0
 })
 
 export const getFinalDatabaseDeletionEffect = Effect.fn(
@@ -3462,22 +3493,34 @@ export const updateFinalDatabaseDeletionEffect = Effect.fn(
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
   const placeholders = input.from.map(() => "?").join(", ")
-  const result = yield* database.execute(
+  return yield* database.transaction(
     "backup_final_database_delete_update",
-    `UPDATE ${databaseTable("backup_final_database_delete")}
-        SET status = ?, error = ?, updated_at = ?
-      WHERE relay_id = ? AND target_id = ?
-        AND status IN (${placeholders})`,
-    [
-      input.status,
-      input.error,
-      now,
-      input.relayId,
-      input.targetId,
-      ...input.from,
-    ]
+    (transaction) =>
+      Effect.gen(function* () {
+        const result = yield* transaction.execute(
+          `UPDATE ${databaseTable("backup_final_database_delete")}
+            SET status = ?, error = ?, updated_at = ?
+          WHERE relay_id = ? AND target_id = ?
+            AND status IN (${placeholders})`,
+          [
+            input.status,
+            input.error,
+            now,
+            input.relayId,
+            input.targetId,
+            ...input.from,
+          ]
+        )
+        // Stopped, it may be backed up on schedule again.
+        if (result.affectedRows > 0 && input.status === "failed") {
+          yield* invalidateScheduleDeploymentsEffect(transaction, {
+            relayId: input.relayId,
+            target: { id: input.targetId, kind: "database" },
+          })
+        }
+        return result.affectedRows > 0
+      })
   )
-  return result.affectedRows > 0
 })
 
 const finalInstanceDeletionSelect = `SELECT final_delete.relay_id,

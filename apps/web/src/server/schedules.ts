@@ -203,6 +203,7 @@ export const createSchedule = createServerFn({ method: "POST" })
     })
     await requireScheduleBackupDestinations({
       actions: definition.actions,
+      owner: user.id,
       targets: definition.targets,
       grants,
       user,
@@ -265,6 +266,7 @@ export const updateSchedule = createServerFn({ method: "POST" })
     })
     await requireScheduleBackupDestinations({
       actions: definition.actions,
+      owner: existing.createdBy,
       targets: definition.targets,
       grants,
       user,

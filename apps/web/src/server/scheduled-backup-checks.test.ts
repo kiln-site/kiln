@@ -1,18 +1,22 @@
 import { assert, layer } from "@effect/vitest"
 import type { RelayBackupTask } from "@workspace/contracts"
 import type { ScheduleDefinition } from "@workspace/contracts/schedules"
-import { Effect, Schedule } from "effect"
-import { TestClock } from "effect/testing"
+import { Effect } from "effect"
 import { afterAll, vi } from "vite-plus/test"
 
+import {
+  deleteBackupStorageEffect,
+  saveBackupStorageEffect,
+} from "@/backups/destinations/s3"
 import { Database } from "@/effect/database"
 import { reconcileBackupTaskEffect } from "@/effect/backups"
 import { disposeAppRuntime } from "@/effect/runtime"
+import { invalidateScheduleDeploymentsEffect } from "@/effect/schedule-invalidation"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import {
   deployScheduleToRelay,
   insertSchedule,
-  requestScheduleRedeployment,
+  redeployUnacknowledgedSchedules,
   upsertDeployment,
 } from "@/server/schedule-deployment.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
@@ -24,8 +28,10 @@ import {
   selectRows,
 } from "@/test/seed"
 
-// The Relay is the only fake: the schedules Hearth sends it, as it would
-// store and run them.
+// The Relay and S3 are the fakes: the schedules Hearth sends the Relay,
+// which it takes as it would and acknowledges by the generation it now has,
+// with something that may happen while one is on its way; and a bucket whose
+// purge fails.
 const relay = vi.hoisted(() => ({
   applied: [] as Array<{
     actions: Array<{
@@ -33,29 +39,54 @@ const relay = vi.hoisted(() => ({
         destination: unknown
         maxBytes?: number | null
         refusal?: string | null
+        repositoryId?: string | null
         targetId: string
       }>
     }>
+    generation?: number
   }>,
+  meanwhile: null as null | (() => Promise<void>),
 }))
 vi.mock("@/lib/relay-connection", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/relay-connection")>()),
   relayRpc: async (
     _relay: unknown,
     operation: string,
-    payload: { id: string; revision: number }
+    payload: { generation?: number; id: string; revision: number }
   ) => {
     if (operation !== "schedule.apply") {
       throw new Error(`Unexpected Relay operation ${operation}`)
     }
     relay.applied.push(payload as unknown as (typeof relay.applied)[number])
+    const meanwhile = relay.meanwhile
+    relay.meanwhile = null
+    await meanwhile?.()
     return {
+      acknowledgedGeneration: payload.generation,
       acknowledgedRevision: payload.revision,
       nextRunAt: null,
       scheduleId: payload.id,
     }
   },
 }))
+vi.mock("@/backups/destinations/s3/client", async (importOriginal) => {
+  const { Effect } = await import("effect")
+  const { BackupStorageError } = await import("@/effect/errors")
+  return {
+    ...(await importOriginal<
+      typeof import("@/backups/destinations/s3/client")
+    >()),
+    deleteS3BackupPrefix: () =>
+      Effect.fail(
+        new BackupStorageError({
+          code: "access_denied",
+          operation: "storage.deletePrefix",
+          reason: "The bucket refused the purge",
+        })
+      ),
+  }
+})
+vi.stubEnv("BETTER_AUTH_SECRETS", `1:${"s".repeat(32)}`)
 
 afterAll(() => disposeAppRuntime())
 
@@ -122,6 +153,7 @@ const executions = () =>
 const seed = Effect.gen(function* () {
   yield* resetDatabase
   relay.applied.length = 0
+  relay.meanwhile = null
   yield* insertRelay(relayId)
 })
 
@@ -180,48 +212,153 @@ describeMysql("Scheduled backups, checked before they run", () => {
         })
     )
 
+    it.effect("refuses a backup to a disabled destination", () =>
+      Effect.gen(function* () {
+        yield* seed
+        yield* insertBackupStorage(storageId, { enabled: false })
+
+        yield* deploy(backupSchedule({ kind: "storage", storageId }, [capped]))
+        const disabled = executions()[capped]
+
+        assert.strictEqual(
+          disabled?.refusal,
+          "its backup destination is disabled"
+        )
+        assert.isNull(disabled?.destination ?? null)
+      })
+    )
+
     it.effect(
-      "refuses a backup to a destination that's disabled or being deleted, and sends it again when that changes",
+      "stops backups to a destination being deleted, even when purging it then fails",
       () =>
         Effect.gen(function* () {
           yield* seed
-          yield* insertBackupStorage(storageId, { enabled: false })
-
+          yield* saveBackupStorageEffect({
+            accessKeyId: "access-key",
+            allowPrivateNetwork: false,
+            bucket: "kiln-backups",
+            enabled: true,
+            endpoint: "https://s3.example.test",
+            forcePathStyle: false,
+            id: storageId,
+            name: "Team",
+            objectPrefix: "team",
+            ownerUserId: null,
+            region: "us-east-1",
+            secretAccessKey: "secret-key",
+          })
+          // Something stored there to purge, which the bucket refuses.
+          yield* insertRows("backup_repository", {
+            created_at: at,
+            id: repositoryId,
+            object_prefix: "team/restic/old",
+            password_ciphertext: "repository-password",
+            relay_id: relayId,
+            storage_id: storageId,
+            storage_key: storageId,
+            target_id: capped,
+            target_kind: "instance",
+          })
           yield* deploy(
             backupSchedule({ kind: "storage", storageId }, [capped])
           )
-          const disabled = executions()[capped]
+          const before = executions()[capped]
 
-          // Enabled again, but now being deleted: the schedule goes out
-          // again without anyone editing it.
-          const database = yield* Database
-          yield* database.execute(
-            "test.storageDeleting",
-            `UPDATE kiln_backup_storage SET enabled = 1, deleting = 1`
+          const failed = yield* Effect.flip(
+            deleteBackupStorageEffect(storageId)
           )
-          const sentBefore = relay.applied.length
-          yield* Effect.promise(() =>
-            requestScheduleRedeployment({ storageId })
+          const [owed] = yield* selectRows<{ status: string }>(
+            "schedule_deployment"
           )
-          yield* Effect.sync(() => relay.applied.length).pipe(
-            Effect.repeat({
-              schedule: Schedule.spaced("100 millis"),
-              until: (count) => count > sentBefore,
-            }),
-            Effect.timeout("20 seconds")
-          )
+          yield* Effect.promise(redeployUnacknowledgedSchedules)
 
-          assert.strictEqual(
-            disabled?.refusal,
-            "its backup destination is disabled"
-          )
-          assert.isNull(disabled?.destination ?? null)
+          assert.isNull(before?.refusal ?? null)
+          assert.strictEqual(failed._tag, "BackupStorageError")
+          assert.strictEqual(owed?.status, "pending")
           assert.strictEqual(
             executions()[capped]?.refusal,
             "its backup destination is being deleted"
           )
-        }).pipe(TestClock.withLive),
+        }),
       30_000
+    )
+
+    it.effect(
+      "counts a schedule delivered only once the Relay has the newest generation",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          const database = yield* Database
+          // Backups are turned off for the server while the schedule that
+          // still allows them is on its way to the Relay.
+          relay.meanwhile = () =>
+            Effect.runPromise(
+              database
+                .transaction("test.turnOff", (transaction) =>
+                  Effect.gen(function* () {
+                    yield* transaction.execute(
+                      `INSERT INTO kiln_backup_policy
+                         (relay_id, target_kind, target_id, exclude_patterns,
+                          admin_quantity_limit, created_at, updated_at)
+                       VALUES (?, 'instance', ?, '[]', 0, ?, ?)`,
+                      [relayId, capped, at, at]
+                    )
+                    yield* invalidateScheduleDeploymentsEffect(transaction, {
+                      relayId,
+                      target: { id: capped, kind: "instance" },
+                    })
+                  })
+                )
+                .pipe(Effect.asVoid)
+            )
+
+          yield* deploy(backupSchedule({ kind: "local" }, [capped]))
+          const [afterOldAnswer] = yield* selectRows<{ status: string }>(
+            "schedule_deployment"
+          )
+          yield* Effect.promise(redeployUnacknowledgedSchedules)
+          const [afterResend] = yield* selectRows<{ status: string }>(
+            "schedule_deployment"
+          )
+
+          // The first answer was for a generation the change superseded.
+          assert.strictEqual(afterOldAnswer?.status, "pending")
+          assert.strictEqual(relay.applied.length, 2)
+          assert.isAbove(
+            relay.applied[1]?.generation ?? 0,
+            relay.applied[0]?.generation ?? 0
+          )
+          assert.strictEqual(
+            executions()[capped]?.refusal,
+            "backups are turned off for it"
+          )
+          assert.strictEqual(afterResend?.status, "applied")
+        })
+    )
+
+    it.effect(
+      "sends an incremental backup's repository with its schedule",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          const schedule = backupSchedule({ kind: "local" }, [capped])
+          const incremental: ScheduleDefinition = {
+            ...schedule,
+            actions: schedule.actions.map((action) =>
+              action.type === "backup"
+                ? { ...action, mode: "incremental" as const }
+                : action
+            ),
+          }
+
+          yield* deploy(incremental)
+          const [repository] = yield* selectRows<{ id: string }>(
+            "backup_repository"
+          )
+
+          assert.isDefined(repository)
+          assert.strictEqual(executions()[capped]?.repositoryId, repository?.id)
+        })
     )
 
     it.effect(

@@ -61,8 +61,22 @@ export const relayTimezone =
 const deployment = (
   scheduleId: string,
   acknowledgedRevision: number,
-  nextRunAt: number | null
-): RelayScheduleDeployment => ({ scheduleId, acknowledgedRevision, nextRunAt })
+  nextRunAt: number | null,
+  acknowledgedGeneration?: number
+): RelayScheduleDeployment => ({
+  ...(acknowledgedGeneration === undefined ? {} : { acknowledgedGeneration }),
+  acknowledgedRevision,
+  nextRunAt,
+  scheduleId,
+})
+
+// The generation of what Hearth last sent for a schedule, if it sent one.
+const storedGeneration = (row: ScheduleRow): number | undefined => {
+  const generation = (
+    JSON.parse(row.definition_json) as { generation?: unknown }
+  ).generation
+  return typeof generation === "number" ? generation : undefined
+}
 
 const readDefinition = (row: ScheduleRow) =>
   relayScheduleProjectionSchema.parse(JSON.parse(row.definition_json))
@@ -203,8 +217,11 @@ export function makeRelayScheduleState(sql: SqlClient) {
           })
         )
       ),
-    // Revisions only move forward. A stale apply or remove acknowledges the
-    // newer revision this Relay already holds instead of failing.
+    // Revisions only move forward, and within one revision so do
+    // generations: Hearth resends a schedule when what decides it changes,
+    // such as a destination being disabled, and an older send arriving late
+    // mustn't undo that. A stale apply or remove acknowledges what this
+    // Relay already holds instead of failing.
     apply: (definition: RelayScheduleProjection, nextRunAt: number | null) =>
       run(
         "apply",
@@ -219,11 +236,18 @@ export function makeRelayScheduleState(sql: SqlClient) {
             const current = yield* sql<ScheduleRow>`
               SELECT schedule_id, revision, next_run_at, definition_json
               FROM relay_schedules WHERE schedule_id = ${definition.id}`
-            if (current[0] && current[0].revision > definition.revision) {
+            if (
+              current[0] &&
+              (current[0].revision > definition.revision ||
+                (current[0].revision === definition.revision &&
+                  (storedGeneration(current[0]) ?? 0) >
+                    (definition.generation ?? 0)))
+            ) {
               return deployment(
                 definition.id,
                 current[0].revision,
-                current[0].next_run_at
+                current[0].next_run_at,
+                storedGeneration(current[0])
               )
             }
             yield* sql`INSERT INTO relay_schedules (schedule_id, revision, enabled, next_run_at, definition_json)
@@ -231,7 +255,12 @@ export function makeRelayScheduleState(sql: SqlClient) {
         ON CONFLICT(schedule_id) DO UPDATE SET revision = excluded.revision, enabled = excluded.enabled,
           next_run_at = excluded.next_run_at, definition_json = excluded.definition_json`
             yield* sql`DELETE FROM relay_schedule_tombstones WHERE schedule_id = ${definition.id}`
-            return deployment(definition.id, definition.revision, nextRunAt)
+            return deployment(
+              definition.id,
+              definition.revision,
+              nextRunAt,
+              definition.generation
+            )
           })
         )
       ),

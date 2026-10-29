@@ -1597,6 +1597,107 @@ describe("Relay schedule persistence", () => {
     expect(enqueued).toEqual([])
   })
 
+  it("keeps the newest generation Hearth sent when an older one arrives late", async () => {
+    const enqueued: Array<unknown> = []
+    const { schedules } = await manager({
+      enqueueBackup: async (input) => {
+        enqueued.push(input)
+        return { status: "succeeded", taskId: input.taskId } as RelayBackupTask
+      },
+      findInstance: async () => ({}),
+    })
+    const backup = (execution: Record<string, unknown>) => ({
+      ...projection,
+      actions: [
+        {
+          destination: { kind: "local" as const },
+          executions: [
+            {
+              destination: { kind: "local" as const },
+              mode: "full" as const,
+              targetId: "server-a",
+              targetKind: "instance" as const,
+              ...execution,
+            },
+          ],
+          id: "6cc00681-a2cd-40c7-a036-7c9bd09b269b",
+          mode: "full" as const,
+          name: "Scheduled archive",
+          type: "backup" as const,
+        },
+      ],
+    })
+
+    // Backups were turned off (generation 2) after Hearth had started
+    // sending the schedule that allowed them (generation 1), which arrives
+    // second.
+    await schedules.apply({
+      ...backup({
+        destination: null,
+        refusal: "backups are turned off for it",
+      }),
+      generation: 2,
+    })
+    const late = await schedules.apply({ ...backup({}), generation: 1 })
+    await runNow(schedules)
+
+    expect(late.acknowledgedGeneration).toBe(2)
+    await advanceUntil(async () => {
+      expect(
+        (await latestRun(schedules))?.targetRuns[0]?.attempts[0]?.status
+      ).toBe("not_run")
+    })
+    expect(enqueued).toEqual([])
+  })
+
+  it("queues a scheduled backup with the size ceiling and repository Hearth admitted", async () => {
+    const enqueued: Array<BackupTaskInput> = []
+    const { schedules } = await manager({
+      enqueueBackup: async (input) => {
+        enqueued.push(input)
+        return { status: "succeeded", taskId: input.taskId } as RelayBackupTask
+      },
+      findInstance: async () => ({}),
+    })
+    await schedules.apply({
+      ...projection,
+      actions: [
+        {
+          destination: { kind: "local" },
+          executions: [
+            {
+              destination: {
+                kind: "restic",
+                repository: { kind: "local" },
+                repositoryPassword: "repository-password",
+              },
+              maxBytes: 4_096,
+              mode: "incremental",
+              repositoryId: "44444444-4444-4444-8444-444444444444",
+              targetId: "server-a",
+              targetKind: "instance",
+            },
+          ],
+          id: "6cc00681-a2cd-40c7-a036-7c9bd09b269b",
+          mode: "incremental",
+          name: "Scheduled snapshot",
+          type: "backup",
+        },
+      ],
+    })
+
+    await runNow(schedules)
+
+    await advanceUntil(() => {
+      expect(enqueued).toHaveLength(1)
+    })
+    expect(enqueued[0]).toMatchObject({
+      catalog: { repositoryId: "44444444-4444-4444-8444-444444444444" },
+      maxBytes: 4_096,
+      mode: "incremental",
+    })
+  })
+
   it("fails a scheduled backup that never finishes", async () => {
     const { schedules } = await manager({
       enqueueBackup: async (input) =>

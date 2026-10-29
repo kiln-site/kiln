@@ -324,7 +324,9 @@ manual backup's reservation, and puts the answer in the schedule it sends
 the Relay, per backup step and target: not while the target is being
 deleted, not where its backups are turned off (a quantity or size ceiling of
 none), and only to a destination that's enabled, not being deleted, and
-shared or the schedule owner's. An admitted step carries its size ceiling
+shared or the schedule owner's. Scheduled backups run as the schedule's
+owner whoever last edited it, so saving a schedule refuses a personal
+destination that isn't its owner's. An admitted step carries its size ceiling
 and, for an incremental one, the repository it goes to; a refused one carries
 why, and the Relay records it as not run instead of running it. A
 destination Hearth can't use no longer fails the schedule's deploy, which
@@ -332,9 +334,18 @@ left the Relay running what it had before.
 
 Hearth sends the schedule again when any of that changes: a target's backup
 limits, a destination saved or marked for deletion, a deletion starting or
-stopping. It's marked unsent and resent then, or by the ten-minute sweep if
-its Relay is away. Until it arrives, the Relay runs what it last had, so a
-change made while a Relay is unreachable takes effect when it's back.
+stopping. The change marks the schedule unsent in its own transaction, so
+work after it that fails, like purging a deleted destination, can't lose the
+resend; it's sent right after, or by the ten-minute sweep if its Relay is
+away. Until it arrives, the Relay runs what it last had, so a change made
+while a Relay is unreachable takes effect when it's back.
+
+What Hearth sends a Relay for a schedule can change without the schedule's
+revision changing, so each send also carries a generation, counted per
+schedule and Relay and raised on every send and every change it depends on.
+The Relay keeps the newest generation of the newest revision and ignores an
+older one that arrives late, and Hearth counts the schedule delivered only
+once the Relay acknowledges the newest generation Hearth issued.
 Hearth catalogs what the Relay ran as before, an incremental one in the
 repository its schedule named; one whose repository is gone by then is
 cataloged as failed, since it can't be restored.

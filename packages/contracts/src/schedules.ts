@@ -294,6 +294,13 @@ export type RelayScheduleAction = z.infer<typeof relayScheduleActionSchema>
 export const relayScheduleProjectionSchema = scheduleDefinitionSchema
   .safeExtend({
     actions: z.array(relayScheduleActionSchema).min(1).max(32),
+    /**
+     * Which version of what Hearth sends for this schedule and Relay: it
+     * rises with every send and every change to what decides it, such as a
+     * destination being disabled, without the schedule's revision changing.
+     * A Relay keeps the newest and turns away older ones arriving late.
+     */
+    generation: z.number().int().nonnegative().optional(),
   })
   .strict()
 
@@ -373,6 +380,8 @@ export type ScheduleRun = z.infer<typeof scheduleRunSchema>
 
 export const relayScheduleDeploymentSchema = z
   .object({
+    /** The generation the Relay now holds, which may be newer than sent. */
+    acknowledgedGeneration: z.number().int().nonnegative().optional(),
     acknowledgedRevision: z.number().int().positive(),
     nextRunAt: z.number().int().nonnegative().nullable(),
     scheduleId: z.uuid(),

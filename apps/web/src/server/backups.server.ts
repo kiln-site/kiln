@@ -1041,10 +1041,11 @@ export async function updateBackupLimitsHandler(
   )
   publishBackupSettingsChange(data.relayId)
   requestBackupRetention()
-  // Turning backups off, or on, decides whether scheduled ones run.
-  const { requestScheduleRedeployment } =
+  // Turning backups off, or on, decides whether scheduled ones run; the
+  // update marked the target's schedules owed.
+  const { deliverPendingSchedules } =
     await import("@/server/schedule-deployment.server")
-  await requestScheduleRedeployment({ relayId: data.relayId, target })
+  deliverPendingSchedules()
   return { updated: true }
 }
 

@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto"
 
 import { Clock, Effect, Result } from "effect"
-import type { RowDataPacket } from "mysql2/promise"
+import type { ResultSetHeader, RowDataPacket } from "mysql2/promise"
 import { z } from "zod"
 
-import type { BackupTargetKind } from "@workspace/contracts"
 import {
+  relayScheduleDeploymentSchema,
   scheduleActionAppliesToTarget,
   scheduleActionSchema,
   scheduleDefinitionSchema,
@@ -281,12 +281,17 @@ export async function deployScheduleToRelay(
   const relayId = targets[0]?.relayId
   if (!relayId) return
   await upsertDeployment(schedule.id, relayId, schedule.revision, "pending")
+  // Claimed before anything it sends is read, so a change committed after
+  // this, which raises the generation too, is never undone by it arriving
+  // late.
+  const generation = await claimProjectionGeneration(schedule.id, relayId)
   if (!relay?.enabled) {
     await deploymentError(
       schedule.id,
       relayId,
       schedule.revision,
-      "Relay is unavailable"
+      "Relay is unavailable",
+      generation
     )
     return
   }
@@ -305,36 +310,42 @@ export async function deployScheduleToRelay(
           ...(schedule.continueOnFailure ? { continueOnFailure: true } : {}),
           cron: schedule.cron,
           enabled: schedule.enabled,
+          generation,
           id: schedule.id,
           name: schedule.name,
           revision: schedule.revision,
           targets: [...targets],
           timezone: schedule.timezone,
         }
-        const result = z
-          .object({
-            acknowledgedRevision: z.number().int().positive(),
-            nextRunAt: z.number().int().nonnegative().nullable(),
-            scheduleId: z.uuid(),
-          })
-          .parse(
-            await relayRpc(relay, "schedule.apply", projection, 15_000, subject)
-          )
+        const result = relayScheduleDeploymentSchema.parse(
+          await relayRpc(relay, "schedule.apply", projection, 15_000, subject)
+        )
+        // Delivered only once the Relay holds the newest revision and
+        // generation Hearth has issued: an answer for an older send, or one
+        // overtaken by a change since, leaves it owed.
+        const acknowledgedGeneration = result.acknowledgedGeneration ?? 0
         await databasePool.execute(
           `UPDATE ${databaseTable("schedule_deployment")}
-          SET status = IF(? >= desired_revision, 'applied', status),
+          SET status = IF(? >= desired_revision AND ? >= desired_generation,
+                'applied', status),
               next_run_at = IF(? >= desired_revision, ?, next_run_at),
-              last_error = IF(? >= desired_revision, NULL, last_error),
+              last_error = IF(? >= desired_revision AND ? >= desired_generation,
+                NULL, last_error),
               acknowledged_revision = GREATEST(
                 COALESCE(acknowledged_revision, 0), ?),
+              acknowledged_generation = GREATEST(
+                COALESCE(acknowledged_generation, 0), ?),
               updated_at = ?
         WHERE schedule_id = ? AND relay_id = ?`,
           [
             result.acknowledgedRevision,
+            acknowledgedGeneration,
             result.acknowledgedRevision,
             result.nextRunAt,
             result.acknowledgedRevision,
+            acknowledgedGeneration,
             result.acknowledgedRevision,
+            acknowledgedGeneration,
             Date.now(),
             schedule.id,
             relayId,
@@ -348,9 +359,24 @@ export async function deployScheduleToRelay(
       schedule.id,
       relayId,
       schedule.revision,
-      errorMessage(deployed.failure)
+      errorMessage(deployed.failure),
+      generation
     )
   }
+}
+
+// The next generation of what's sent for a schedule to one Relay.
+async function claimProjectionGeneration(
+  scheduleId: string,
+  relayId: string
+): Promise<number> {
+  const [result] = await databasePool.execute<ResultSetHeader>(
+    `UPDATE ${databaseTable("schedule_deployment")}
+        SET desired_generation = LAST_INSERT_ID(desired_generation + 1)
+      WHERE schedule_id = ? AND relay_id = ?`,
+    [scheduleId, relayId]
+  )
+  return Number(result.insertId)
 }
 
 // Each backup step's execution on each target, admitted as a manual backup
@@ -563,7 +589,10 @@ export async function deploymentError(
   scheduleId: string,
   relayId: string,
   revision: number,
-  error: string
+  error: string,
+  // The generation that failed; a failure of an older send than the newest
+  // issued says nothing about the newest.
+  generation?: number
 ) {
   const now = Date.now()
   await databasePool.execute(
@@ -572,14 +601,25 @@ export async function deploymentError(
         created_at, updated_at)
      VALUES (?, ?, ?, 'error', ?, ?, ?)
      ON DUPLICATE KEY UPDATE
-       status = IF(VALUES(desired_revision) >= desired_revision,
+       status = IF(VALUES(desired_revision) >= desired_revision
+           AND ? >= desired_generation,
          'error', status),
-       last_error = IF(VALUES(desired_revision) >= desired_revision,
+       last_error = IF(VALUES(desired_revision) >= desired_revision
+           AND ? >= desired_generation,
          VALUES(last_error), last_error),
        desired_revision = GREATEST(desired_revision,
          VALUES(desired_revision)),
        updated_at = VALUES(updated_at)`,
-    [scheduleId, relayId, revision, error.slice(0, 2_000), now, now]
+    [
+      scheduleId,
+      relayId,
+      revision,
+      error.slice(0, 2_000),
+      now,
+      now,
+      generation ?? Number.MAX_SAFE_INTEGER,
+      generation ?? Number.MAX_SAFE_INTEGER,
+    ]
   )
 }
 
@@ -718,51 +758,11 @@ export async function loadSchedules() {
 }
 
 /**
- * Sends again every schedule whose backups on `scope` Hearth admits, after
- * something that decides whether they may run changed: a target's backup
- * limits, a destination's state, a deletion starting or stopping. Each is
- * marked unsent, then sent now, or by the sweep if its Relay is away; until
- * it arrives, the Relay runs what it last had.
+ * Sends the schedules a change marked as owed, in the background, after the
+ * change committed (`invalidateScheduleDeploymentsEffect`). One whose Relay
+ * is away, or whose send fails, stays owed for the sweep.
  */
-export async function requestScheduleRedeployment(
-  scope:
-    | { storageId: string }
-    | { relayId: string; target: { id: string; kind: BackupTargetKind } }
-): Promise<void> {
-  const now = Date.now()
-  if ("storageId" in scope) {
-    await databasePool.execute(
-      `UPDATE ${databaseTable("schedule_deployment")} deployment
-         JOIN ${databaseTable("schedule_action")} action
-           ON action.schedule_id = deployment.schedule_id
-          SET deployment.status = 'pending', deployment.updated_at = ?
-        WHERE action.action_type = 'backup'
-          AND JSON_UNQUOTE(
-                JSON_EXTRACT(action.action_config, '$.destination.storageId')
-              ) = ?`,
-      [now, scope.storageId]
-    )
-  } else {
-    // Kiln's own backups are scheduled on its Relay; Apps and volumes
-    // aren't schedule targets yet.
-    const target =
-      scope.target.kind === "platform"
-        ? { id: scope.relayId, kind: "relay" }
-        : scope.target.kind === "instance" || scope.target.kind === "database"
-          ? scope.target
-          : null
-    if (!target) return
-    await databasePool.execute(
-      `UPDATE ${databaseTable("schedule_deployment")} deployment
-         JOIN ${databaseTable("schedule_target")} target
-           ON target.schedule_id = deployment.schedule_id
-          AND target.relay_id = deployment.relay_id
-          SET deployment.status = 'pending', deployment.updated_at = ?
-        WHERE target.relay_id = ? AND target.target_kind = ?
-          AND target.target_id = ?`,
-      [now, scope.relayId, target.kind, target.id]
-    )
-  }
+export function deliverPendingSchedules(): void {
   forkPromise(redeployUnacknowledgedSchedules, (cause) =>
     console.warn("[Kiln Schedules] Couldn't send schedules again:", cause)
   )
@@ -784,7 +784,9 @@ export async function redeployUnacknowledgedSchedules(): Promise<void> {
         AND schedule.deleted_at IS NULL
       WHERE deployment.status <> 'applied'
          OR COALESCE(deployment.acknowledged_revision, 0)
-              < deployment.desired_revision`
+              < deployment.desired_revision
+         OR COALESCE(deployment.acknowledged_generation, 0)
+              < deployment.desired_generation`
   )
   if (rows.length === 0) return
   const [schedules, relays] = await Promise.all([

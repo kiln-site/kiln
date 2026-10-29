@@ -12,6 +12,12 @@ import { hasScheduleTargetPermission } from "@/lib/schedule-permissions"
 
 export async function requireScheduleBackupDestinations(input: {
   checkStorageOwnership?: boolean
+  /**
+   * Who the schedule belongs to, once saved. Its scheduled backups run as
+   * theirs, so a personal destination must be theirs: one belonging to
+   * whoever edits it would be refused every time it runs.
+   */
+  owner?: string
   actions: ReadonlyArray<ScheduleAction>
   targets: ReadonlyArray<ScheduleTarget>
   grants: ReadonlyArray<AccessGrant>
@@ -46,6 +52,15 @@ export async function requireScheduleBackupDestinations(input: {
           !hasPlatformPermission(input.user, "platform.backups.manage-storage"))
       ) {
         throw new Error("Backup destination is unavailable")
+      }
+      if (
+        input.owner !== undefined &&
+        storage.ownerUserId !== null &&
+        storage.ownerUserId !== input.owner
+      ) {
+        throw new Error(
+          `${storage.name} is a personal backup destination, and this schedule belongs to someone else. Choose a shared destination.`
+        )
       }
       if (storage.ownerUserId === null) return
       for (const action of backupActions) {

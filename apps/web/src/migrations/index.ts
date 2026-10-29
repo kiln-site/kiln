@@ -40,6 +40,7 @@ import { operationProgress } from "./0037_operation_progress"
 import { relayDatabaseConnectionImport } from "./0038_relay_database_connection_import"
 import { tailscaleMemberIds } from "./0039_tailscale_member_ids"
 import { backupResourceTargets } from "./0042_backup_resource_targets"
+import { scheduleProjectionGenerations } from "./0043_schedule_projection_generations"
 
 // Append new migrations with the next id. Never edit or reorder applied ones.
 export const migrations: ReadonlyArray<Migration> = [
@@ -83,4 +84,5 @@ export const migrations: ReadonlyArray<Migration> = [
   relayDatabaseConnectionImport,
   tailscaleMemberIds,
   backupResourceTargets,
+  scheduleProjectionGenerations,
 ]

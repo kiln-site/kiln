@@ -5,6 +5,7 @@ import { Clock, Effect, Result } from "effect"
 import { decryptWithKeyring, encryptWithKeyring } from "../../../../keyring.mjs"
 import { Database } from "@/effect/database"
 import { BackupStorageError, CredentialError } from "@/effect/errors"
+import { invalidateScheduleDeploymentsEffect } from "@/effect/schedule-invalidation"
 import { databaseTable } from "@/lib/database-config"
 import { betterAuthSecrets } from "@/lib/environment"
 import {
@@ -282,6 +283,11 @@ export const saveBackupStorageEffect = Effect.fn("backupStorage.save")(
               WHERE id = ?`,
             [...values, now, now, input.id]
           )
+          // Schedules backing up to it carry its credentials and whether
+          // it's enabled.
+          yield* invalidateScheduleDeploymentsEffect(transaction, {
+            storageId: input.id,
+          })
           return
         }
         yield* transaction.execute(
@@ -455,6 +461,8 @@ export const deleteBackupStorageEffect = Effect.fn("backupStorage.delete")(
               WHERE storage_id = ?`,
             [now, storageId]
           )
+          // Scheduled backups to it stop from here, however its purge goes.
+          yield* invalidateScheduleDeploymentsEffect(transaction, { storageId })
           return {
             ...toRecord(existing),
             accessKeyId: accessKey.plaintext,

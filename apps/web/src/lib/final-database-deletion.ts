@@ -160,8 +160,8 @@ export async function ensureFinalDatabaseDeletion(input: {
   }
   publishBackupChange(input.relay.id, reserved.success.backupId)
   const { dispatchBackupTask } = await import("@/lib/backup-reconciliation")
+  await deliverSchedules()
   await dispatchBackupTask(input.relay, reserved.success, input.requestedBy)
-  await redeployTargetSchedules(input.relay.id, input.databaseId)
   const created = await finalDatabaseDeletion(input.relay.id, input.databaseId)
   if (!created) throw new Error("Final database deletion was not persisted")
   return created
@@ -180,7 +180,7 @@ async function processFinalDatabaseDeletion(
         deletion.taskError ??
           "The final backup failed; the database was not deleted"
       )
-      await redeployTargetSchedules(deletion.relayId, deletion.targetId)
+      await deliverSchedules()
       return
     }
     if (deletion.backupStatus !== "available") return
@@ -292,14 +292,11 @@ function finalBackupFailure(deletion: FinalDatabaseDeletion): Error {
   )
 }
 
-// Scheduled backups of a database stop while it's being deleted, and
-// resume if its deletion stops (`scheduledBackupAdmissionEffect`). Where
-// deletion runs as `resource.delete`, its status changes ask this instead.
-async function redeployTargetSchedules(relayId: string, databaseId: string) {
-  const { requestScheduleRedeployment } =
+// Scheduled backups stop while it's being deleted, and resume if its
+// deletion stops: reserving its final backup, or recording it failed, marked
+// its schedules owed (`invalidateScheduleDeploymentsEffect`).
+async function deliverSchedules() {
+  const { deliverPendingSchedules } =
     await import("@/server/schedule-deployment.server")
-  await requestScheduleRedeployment({
-    relayId,
-    target: { id: databaseId, kind: "database" },
-  })
+  deliverPendingSchedules()
 }

@@ -179,6 +179,21 @@ describeMysql("scheduled backup export authorization", () => {
     )
 
     it.effect(
+      "keeps a schedule's backups on destinations its owner can use, whoever edits it",
+      () =>
+        Effect.gen(function* () {
+          const admin = { ...user, id: "admin", role: "admin" } as const
+          yield* seedStorage(admin.id)
+          expect(
+            yield* failure(authorize({ owner: user.id, user: admin }))
+          ).toContain("Choose a shared destination")
+
+          yield* seedStorage(user.id)
+          yield* authorize({ owner: user.id, user: admin })
+        })
+    )
+
+    it.effect(
       "requires export for manual execution while retaining the approved destination's owner",
       () =>
         Effect.gen(function* () {
