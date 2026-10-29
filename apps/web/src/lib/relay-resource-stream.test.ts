@@ -7,6 +7,7 @@ import { beforeEach, vi } from "vite-plus/test"
 const fakes = vi.hoisted(() => ({
   open: vi.fn(),
   poll: vi.fn(),
+  pollUsage: vi.fn(),
   release: vi.fn(),
   send: vi.fn(),
   close: vi.fn(),
@@ -17,6 +18,9 @@ vi.mock("@/lib/authenticated-relay-socket", async (importOriginal) => ({
 }))
 vi.mock("@/server/relay", () => ({
   getRelayInstanceResources: (...args: unknown[]) => fakes.poll(...args),
+}))
+vi.mock("@/server/workload-usage", () => ({
+  getWorkloadUsage: (...args: unknown[]) => fakes.pollUsage(...args),
 }))
 vi.mock("@/lib/relay-browser-credentials", () => ({
   acquireRelayBrowserCredentials: () => ({
@@ -33,7 +37,10 @@ vi.mock("@/lib/relay-browser-credentials", () => ({
   }),
 }))
 
-import { openRelayResourceStream } from "./relay-resource-stream"
+import {
+  openRelayResourceStream,
+  openRelayWorkloadUsageStream,
+} from "./relay-resource-stream"
 import { RelayBrowserReconnectError } from "./authenticated-relay-socket"
 
 beforeEach(() => vi.clearAllMocks())
@@ -186,6 +193,61 @@ describe("Hearth resource polling", () => {
       assert.deepStrictEqual(
         events.map((event) => event.history.length),
         [2, 0]
+      )
+    })
+  )
+})
+
+describe("Hearth App usage polling", () => {
+  it.effect("asks for one history at a time: the App's, then each service's", () =>
+    Effect.gen(function* () {
+      fakes.open.mockReturnValue(
+        Effect.fail(new Error("Direct endpoint unavailable"))
+      )
+      const services = ["web", "worker"]
+      // As the Relay answers: only the history each read asks for.
+      fakes.pollUsage.mockImplementation(
+        ({ data }: { data: { history: unknown } }) =>
+          Promise.resolve({
+            history: data.history === "resource" ? [sample, sample] : [],
+            resources: sample,
+            services: services.map((service) => ({
+              history:
+                typeof data.history === "object" &&
+                (data.history as { service: string }).service === service
+                  ? [sample]
+                  : [],
+              resources: sample,
+              service,
+            })),
+          })
+      )
+
+      const fiber = yield* openRelayWorkloadUsageStream(
+        "relay",
+        "app",
+        "a".repeat(40)
+      ).pipe(Stream.take(4), Stream.runCollect, Effect.forkChild)
+      yield* advanceUntil(() => fiber.pollUnsafe() !== undefined)
+      const events = yield* Fiber.join(fiber)
+
+      assert.deepStrictEqual(
+        fakes.pollUsage.mock.calls.map(
+          ([request]) => (request as { data: { history: unknown } }).data.history
+        ),
+        ["resource", { service: "web" }, { service: "worker" }, "none"]
+      )
+      assert.deepStrictEqual(
+        events.map((event) => [
+          event.history.length,
+          ...event.services.map((service) => service.history.length),
+        ]),
+        [
+          [2, 0, 0],
+          [0, 1, 0],
+          [0, 0, 1],
+          [0, 0, 0],
+        ]
       )
     })
   )

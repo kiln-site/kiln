@@ -2964,8 +2964,25 @@ export const relayWorkloadUsageSchema = relayResourceUsageSchema.extend({
     .default([]),
 })
 
+// Which history a read of an App's or database's usage carries: the
+// resource's, one service's, or none, so no answer holds more than one
+// window of it.
+export const relayWorkloadUsageHistorySchema = z
+  .union([
+    z.enum(["none", "resource"]),
+    z.object({ service: appServiceNameSchema }).strict(),
+  ])
+  .default("resource")
+
 export const relayWorkloadUsageReadSchema = z
-  .object({ appId: appIdSchema })
+  .object({ appId: appIdSchema, history: relayWorkloadUsageHistorySchema })
+  .strict()
+
+export const relayDatabaseUsageReadSchema = z
+  .object({
+    databaseId: databaseIdSchema,
+    history: z.enum(["none", "resource"]).default("resource"),
+  })
   .strict()
 
 // What a browser following an App's or database's usage receives: history
@@ -3488,6 +3505,9 @@ export type RelayWorkloadResourceKind = z.infer<
   typeof relayWorkloadResourceKindSchema
 >
 export type RelayWorkloadUsage = z.infer<typeof relayWorkloadUsageSchema>
+export type RelayWorkloadUsageHistory = z.infer<
+  typeof relayWorkloadUsageHistorySchema
+>
 export type RelayWorkloadUsageEvent = z.infer<
   typeof relayWorkloadUsageEventSchema
 >

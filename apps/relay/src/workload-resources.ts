@@ -13,6 +13,7 @@ import type {
   RelayInstanceResources,
   RelayWorkloadResourceKind,
   RelayWorkloadUsage,
+  RelayWorkloadUsageHistory,
   ResourceLimits,
 } from "@workspace/contracts"
 import { Effect } from "effect"
@@ -108,8 +109,16 @@ export class WorkloadResources {
     )
   }
 
-  /** A resource's usage now and over the last minutes; an App's by service too. */
-  usage(kind: WorkloadKind, id: string): RelayWorkloadUsage {
+  /**
+   * A resource's usage now; an App's by service too. History comes for the
+   * resource or for one service at a time, as `history` asks, so no answer
+   * carries more than one window of it.
+   */
+  usage(
+    kind: WorkloadKind,
+    id: string,
+    history: RelayWorkloadUsageHistory = "resource"
+  ): RelayWorkloadUsage {
     const samples = this.#samples[kind]
     const services =
       kind === "app"
@@ -126,10 +135,13 @@ export class WorkloadResources {
           ].sort()
         : []
     return {
-      history: samples.history(id),
+      history: history === "resource" ? samples.history(id) : [],
       resources: samples.latest(id),
       services: services.map((service) => ({
-        history: samples.history(serviceKey(id, service)),
+        history:
+          typeof history === "object" && history.service === service
+            ? samples.history(serviceKey(id, service))
+            : [],
         resources: samples.latest(serviceKey(id, service)),
         service,
       })),
@@ -166,6 +178,11 @@ export class WorkloadResources {
   // Samples each container, then records each resource's usage from its
   // containers' latest samples.
   #sample(): void {
+    // What the node has, which no resource's containers use more than.
+    const node = {
+      cpuPercent: Math.max(cpus().length, 1) * 100,
+      memoryBytes: totalmem(),
+    }
     for (const kind of ["app", "database"] as const) {
       const samples = this.#samples[kind]
       const keep = new Set<string>()
@@ -191,17 +208,15 @@ export class WorkloadResources {
         }
       }
       for (const [owner, values] of latest) {
-        samples.record(owner, combined(values))
+        samples.record(owner, combined(values, node))
       }
       samples.retain(keep)
     }
+    const present = new Set(
+      this.#containers.map((container) => container.containerId)
+    )
     for (const containerId of this.#limits.keys()) {
-      if (
-        !this.#containers.some(
-          (container) => container.containerId === containerId
-        )
-      )
-        this.#limits.delete(containerId)
+      if (!present.has(containerId)) this.#limits.delete(containerId)
     }
   }
 
@@ -250,12 +265,13 @@ function serviceKey(appId: string, service: string): string {
  * up, against no more than the node has. Null when none is running.
  */
 function combined(
-  values: ReadonlyArray<RelayInstanceResources>
+  values: ReadonlyArray<RelayInstanceResources>,
+  node: { readonly cpuPercent: number; readonly memoryBytes: number }
 ): RelayInstanceResources | null {
   if (values.length === 0) return null
   if (values.length === 1) return values[0] ?? null
-  const nodeCpu = Math.max(cpus().length, 1) * 100
-  const nodeMemory = totalmem()
+  const nodeCpu = node.cpuPercent
+  const nodeMemory = node.memoryBytes
   const sum = (read: (value: RelayInstanceResources) => number) =>
     values.reduce((total, value) => total + read(value), 0)
   const memoryTotal = Math.min(

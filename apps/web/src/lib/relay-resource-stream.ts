@@ -9,6 +9,7 @@ import type {
   RelayWorkloadResourceKind,
   RelayWorkloadUsage,
   RelayWorkloadUsageEvent,
+  RelayWorkloadUsageHistory,
 } from "@workspace/contracts"
 import { Effect, Stream } from "effect"
 
@@ -254,7 +255,8 @@ function openHearthResourceStream(
   })
 }
 
-// Polls Hearth for an App's or database's usage, with its history once.
+// Polls Hearth for an App's or database's usage. Its history comes first,
+// one window to a request: the resource's, then each service's.
 function openHearthWorkloadUsageStream(
   relayId: string,
   kind: RelayWorkloadResourceKind,
@@ -262,32 +264,46 @@ function openHearthWorkloadUsageStream(
 ): Stream.Stream<RelayWorkloadUsageEvent, Error> {
   return Stream.suspend(() => {
     let sequence = Date.now()
-    let first = true
+    let pending: Array<RelayWorkloadUsageHistory> | null = null
+    const read = (history: RelayWorkloadUsageHistory) =>
+      Effect.tryPromise({
+        try: (signal): Promise<RelayWorkloadUsage> =>
+          getWorkloadUsage({
+            data:
+              kind === "app"
+                ? { history, id, kind, relayId }
+                : {
+                    history: typeof history === "object" ? "none" : history,
+                    id,
+                    kind,
+                    relayId,
+                  },
+            signal,
+          }),
+        catch: asError,
+      })
     return Stream.fromEffectRepeat(
       Effect.gen(function* () {
-        if (!first) yield* Effect.sleep(RELAY_RESOURCE_POLL_INTERVAL_MS)
-        const withHistory = first
-        first = false
-        const usage: RelayWorkloadUsage = yield* Effect.tryPromise({
-          try: (signal) =>
-            getWorkloadUsage({
-              data: { id, kind, relayId },
-              signal,
-            }),
-          catch: asError,
-        })
+        let history: RelayWorkloadUsageHistory
+        if (pending === null) {
+          history = "resource"
+        } else if (pending.length > 0) {
+          history = pending.shift()!
+        } else {
+          yield* Effect.sleep(RELAY_RESOURCE_POLL_INTERVAL_MS)
+          history = "none"
+        }
+        const usage = yield* read(history)
+        if (pending === null) {
+          pending = usage.services.map(({ service }) => ({ service }))
+        }
         return yield* Effect.try({
           try: () =>
             relayWorkloadUsageEventSchema.parse({
-              history: withHistory ? usage.history : [],
+              ...usage,
               id,
               kind,
-              resources: usage.resources,
               sequence: sequence++,
-              services: usage.services.map((service) => ({
-                ...service,
-                history: withHistory ? service.history : [],
-              })),
               type: "resource.usage",
             }),
           catch: asError,

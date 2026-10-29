@@ -3,13 +3,20 @@ import {
   appIdSchema,
   databaseIdSchema,
   relayIdSchema,
+  relayWorkloadUsageHistorySchema,
   relayWorkloadUsageSchema,
 } from "@workspace/contracts"
 import { z } from "zod"
 
 const workloadUsageInputSchema = z.discriminatedUnion("kind", [
-  z.object({ id: appIdSchema, kind: z.literal("app"), relayId: relayIdSchema }),
   z.object({
+    history: relayWorkloadUsageHistorySchema,
+    id: appIdSchema,
+    kind: z.literal("app"),
+    relayId: relayIdSchema,
+  }),
+  z.object({
+    history: z.enum(["none", "resource"]).default("resource"),
     id: databaseIdSchema,
     kind: z.literal("database"),
     relayId: relayIdSchema,
@@ -44,7 +51,7 @@ export const getWorkloadUsage = createServerFn({ method: "GET" })
         await databaseRpc(
           relay,
           "app.resources.read",
-          { appId: data.id },
+          { appId: data.id, history: data.history },
           10_000,
           user.id
         )
@@ -60,7 +67,7 @@ export const getWorkloadUsage = createServerFn({ method: "GET" })
       await databaseRpc(
         relay,
         "database.resources.read",
-        { databaseId: data.id },
+        { databaseId: data.id, history: data.history },
         10_000,
         user.id
       )

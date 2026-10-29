@@ -148,15 +148,24 @@ function workloadHistoryStore(
   )
 }
 
-function recordUsage(relayId: string, event: RelayWorkloadUsageEvent): void {
-  workloadHistoryStore(relayId, event.kind, event.id, null).record(
-    event.history,
-    event.resources
-  )
+function recordUsage(
+  relayId: string,
+  event: RelayWorkloadUsageEvent,
+  current: boolean
+): void {
+  const record = (
+    store: ResourceHistoryStore,
+    usage: Pick<RelayWorkloadUsageEvent, "history" | "resources">
+  ) =>
+    store.record(
+      usage.history,
+      current ? usage.resources : store.getCurrentSnapshot()
+    )
+  record(workloadHistoryStore(relayId, event.kind, event.id, null), event)
   for (const service of event.services) {
-    workloadHistoryStore(relayId, event.kind, event.id, service.service).record(
-      service.history,
-      service.resources
+    record(
+      workloadHistoryStore(relayId, event.kind, event.id, service.service),
+      service
     )
   }
 }
@@ -186,9 +195,11 @@ function useWorkloadUsageStream(
               Stream.runForEach((event) =>
                 Effect.sync(() => {
                   retryDelay = 500
-                  if (event.sequence <= lastSequence) return
-                  lastSequence = event.sequence
-                  recordUsage(relayId, event)
+                  // Histories can arrive after newer samples: each is kept,
+                  // and only a newer event's samples replace the latest.
+                  const current = event.sequence >= lastSequence
+                  lastSequence = Math.max(lastSequence, event.sequence)
+                  recordUsage(relayId, event, current)
                 })
               ),
               Effect.andThen(

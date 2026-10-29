@@ -72,6 +72,7 @@ import {
   relayDatabaseExportSchema,
   relayDatabaseImportSchema,
   relayDatabaseInspectRequestSchema,
+  relayDatabaseUsageReadSchema,
   relayWorkloadUsageReadSchema,
   relayDatabaseWipeSchema,
   relayDatabaseNetworkImportSchema,
@@ -1460,7 +1461,8 @@ const browserSocket = attachBrowserSocket({
   server,
   state: startup.state,
   subscribeSnapshots: (listener) => snapshotHub.subscribe(listener),
-  workloadUsage: (kind, id) => workloadResources.usage(kind, id),
+  workloadUsage: (kind, id, history) =>
+    workloadResources.usage(kind, id, history),
 })
 // How full the Relay's shared capacity is, for its metrics.
 const capacityMetricsFiber = forkRelayEffect(
@@ -2523,11 +2525,10 @@ async function executeControlRequest(
       return databases.inspect(
         relayDatabaseInspectRequestSchema.parse(request.payload).databaseId
       )
-    case "database.resources.read":
-      return workloadResources.usage(
-        "database",
-        relayDatabaseInspectRequestSchema.parse(request.payload).databaseId
-      )
+    case "database.resources.read": {
+      const input = relayDatabaseUsageReadSchema.parse(request.payload)
+      return workloadResources.usage("database", input.databaseId, input.history)
+    }
     case "database.create":
       return databases.create(relayCreateDatabaseSchema.parse(request.payload))
     case "database.provision.prepare": {
@@ -2726,11 +2727,10 @@ async function executeControlRequest(
         input.cols
       )
     }
-    case "app.resources.read":
-      return workloadResources.usage(
-        "app",
-        relayWorkloadUsageReadSchema.parse(request.payload).appId
-      )
+    case "app.resources.read": {
+      const input = relayWorkloadUsageReadSchema.parse(request.payload)
+      return workloadResources.usage("app", input.appId, input.history)
+    }
     case "app.list":
       // Hearth's tables ask for specific views; older Hearths, for the list.
       return "requests" in payload

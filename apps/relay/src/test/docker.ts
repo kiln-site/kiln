@@ -193,6 +193,18 @@ export interface FakeVolume {
   readonly hardlinks: Map<string, string>
 }
 
+/**
+ * What a container's processes use, as its stats report: CPU as a percent of
+ * one core, and the bytes its network has moved since it started.
+ */
+export interface FakeContainerUsage {
+  readonly cpuPercent?: number
+  readonly memoryBytes?: number
+  readonly onlineCpus?: number
+  readonly receivedBytes?: number
+  readonly sentBytes?: number
+}
+
 export interface ContainerSeed {
   name: string
   hostname?: string
@@ -270,8 +282,8 @@ export class FakeDocker {
    * one-off container (`run --rm -i`), its image.
    */
   readonly streamErrors = new Map<string, string>()
-  /** Memory each container's processes use, by name, as its stats report. */
-  readonly memoryUsage = new Map<string, number>()
+  /** What each container's processes use, by name, as its stats report. */
+  readonly usage = new Map<string, FakeContainerUsage>()
   /** Images whose registry cannot be reached; pulling them fails. */
   readonly unreachableImages = new Set<string>()
   /** What pulling an image prints before its final status, by image. */
@@ -382,7 +394,7 @@ export class FakeDocker {
     this.execGreeting = ""
     this.missingPrograms.clear()
     this.shellScripts.clear()
-    this.memoryUsage.clear()
+    this.usage.clear()
     this.networks.clear()
     this.volumes.clear()
     this.images.clear()
@@ -2055,18 +2067,35 @@ export class FakeDocker {
       (parameters = route(/^\/containers\/([^/]+)\/stats$/u))
     ) {
       const container = this.#requiredContainer(parameters[0] ?? "")
+      const usage = this.usage.get(container.name) ?? {}
+      // Docker reads CPU over the second before: the container's share of
+      // what every CPU did, which `cpuPercent` sets.
+      const onlineCpus = usage.onlineCpus ?? 1
+      const systemDelta = 1_000_000_000
+      const cpuDelta = (((usage.cpuPercent ?? 0) / 100) * systemDelta) / onlineCpus
       return json(200, {
         cpu_stats: {
-          cpu_usage: { total_usage: 0 },
-          online_cpus: 1,
-          system_cpu_usage: 0,
+          cpu_usage: { total_usage: 5_000_000_000 + cpuDelta },
+          online_cpus: onlineCpus,
+          system_cpu_usage: 90_000_000_000 + systemDelta,
         },
         memory_stats: {
           limit: container.memoryBytes,
-          usage: this.memoryUsage.get(container.name) ?? 0,
+          usage: usage.memoryBytes ?? 0,
         },
-        networks: {},
-        precpu_stats: { cpu_usage: { total_usage: 0 }, system_cpu_usage: 0 },
+        networks:
+          usage.receivedBytes === undefined && usage.sentBytes === undefined
+            ? {}
+            : {
+                eth0: {
+                  rx_bytes: usage.receivedBytes ?? 0,
+                  tx_bytes: usage.sentBytes ?? 0,
+                },
+              },
+        precpu_stats: {
+          cpu_usage: { total_usage: 5_000_000_000 },
+          system_cpu_usage: 90_000_000_000,
+        },
       })
     }
     if (
