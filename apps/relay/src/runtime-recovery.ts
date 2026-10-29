@@ -67,6 +67,17 @@ export class RuntimeRecoveryManager {
     this.#state = state
   }
 
+  // Puts right what a game server needs before recovery starts it, as any
+  // start does first: its database connections.
+  #beforeStart: (instanceId: string, container: string) => Promise<void> =
+    async () => {}
+
+  useBeforeStart(
+    prepare: (instanceId: string, container: string) => Promise<void>
+  ) {
+    this.#beforeStart = prepare
+  }
+
   initialize(): Effect.Effect<void, unknown> {
     return this.#state.listRuntimeRecoveries().pipe(
       Effect.tap((records) =>
@@ -512,8 +523,18 @@ export class RuntimeRecoveryManager {
           locks: instanceStartLocks(observation.instanceId),
           precondition: stillWanted,
         },
-        this.#docker
-          .startContainer(observation.service, { timeout: 120_000 })
+        Effect.tryPromise({
+          try: () =>
+            this.#beforeStart(observation.instanceId, observation.service),
+          catch: (cause) => cause,
+        })
+          .pipe(
+            Effect.andThen(
+              this.#docker.startContainer(observation.service, {
+                timeout: 120_000,
+              })
+            )
+          )
           .pipe(
             Effect.tap(() =>
               Effect.logInfo("Docker accepted the server recovery start", {

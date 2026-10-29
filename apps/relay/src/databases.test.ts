@@ -1323,6 +1323,34 @@ describe("connections of every member kind", () => {
     ).toContain(`server-${serverId}`)
   })
 
+  it("gives a crashed game server that joined without its name the name as recovery starts it", async () => {
+    const harness = await relayHarness({
+      KILN_RELAY_CRASH_RETRY_DELAY_SECONDS: "0",
+    })
+    const id = "d".repeat(40)
+    await createDatabase(harness, id)
+    await harness.createServer({ id: serverId, start: true })
+    await harness.databaseConnections.set(
+      { id: serverId, kind: "instance" },
+      id,
+      true
+    )
+    const container = harness.resources.instanceContainer(serverId)
+    fakeDocker.connect(container, networkOf(id))
+    fakeDocker.exit(container, { exitCode: 1 })
+
+    // Recovery schedules a start for the crash, then makes it.
+    await harness.docker.inspectInstances()
+    await harness.docker.inspectInstances()
+    await vi.waitFor(() =>
+      expect(fakeDocker.container(container)?.state.running).toBe(true)
+    )
+
+    expect(
+      fakeDocker.container(container)?.networks.get(networkOf(id))?.aliases
+    ).toContain(`server-${serverId}`)
+  })
+
   it.each(["start", "restart"] as const)(
     "gives a game server that joined without its name the name when it %ss",
     async (action) => {

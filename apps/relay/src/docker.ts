@@ -498,6 +498,19 @@ export class DockerDriver {
       const instance = await this.findInstance(id)
       return instance ? [{ container: instance.service }] : null
     })
+    // Recovery starts a server through Docker itself, joining it to its
+    // databases first as any start does: its names put right only while
+    // it's stopped.
+    runtimeRecovery.useBeforeStart(async (id, container) => {
+      const running = (
+        await runEffect(this.#engine.inspectContainer(container))
+      ).State.Running
+      await databaseConnections.reconcile(
+        { id, kind: "instance" },
+        [{ container }],
+        { repairNames: !running }
+      )
+    })
     this.allocations.register("server", async () =>
       (await this.#discover()).map(({ config }) => ({
         id: config.id,
