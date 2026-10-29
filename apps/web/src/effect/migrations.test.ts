@@ -981,6 +981,38 @@ describeMysql("database migrations", () => {
                                  'kiln_backup_final_database_delete')
           `
           expect(Number(count)).toBe(0)
+
+          // As an earlier run of it left them, before it took the Relay
+          // deletion's start, and with one start recorded since.
+          yield* sql`
+            UPDATE kiln_resource_deletion SET relay_deleting_at = NULL
+            WHERE resource_id = ${"d".repeat(40)}
+          `
+          yield* sql`
+            UPDATE kiln_resource_deletion SET relay_deleting_at = 5
+            WHERE resource_id = ${"b".repeat(40)}
+          `
+          yield* resourceDeletions.run
+          const starts = yield* sql<{
+            relay_deleting_at: number | null
+            resource_id: string
+          }>`
+            SELECT resource_id, relay_deleting_at
+            FROM kiln_resource_deletion ORDER BY resource_id
+          `
+          expect(
+            starts.map((row) => [
+              row.resource_id.slice(0, 1),
+              row.relay_deleting_at === null
+                ? null
+                : Number(row.relay_deleting_at),
+            ])
+          ).toEqual([
+            ["a", null],
+            ["b", 5],
+            ["c", null],
+            ["d", 2_000],
+          ])
           expect(yield* ledger).toEqual(migrationIds)
         }),
       120_000

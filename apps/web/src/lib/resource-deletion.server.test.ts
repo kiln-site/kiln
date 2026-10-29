@@ -5,6 +5,7 @@ import { Effect, Layer } from "effect"
 import { TestClock } from "effect/testing"
 import { afterAll, vi } from "vite-plus/test"
 
+import { reserveBackupRestoreEffect } from "@/effect/backups"
 import { Database } from "@/effect/database"
 import { ResourceDeletionConflictError } from "@/effect/resource-deletions"
 import { disposeAppRuntime } from "@/effect/runtime"
@@ -118,8 +119,86 @@ const seedStoppedWithBackup = Effect.gen(function* () {
   relay.frozen.set(serverId, id)
 })
 
+// A finished archive of a target, kept on the Relay's disk.
+const completeBackup = (target: { id: string; kind: string }) =>
+  Effect.gen(function* () {
+    const backupId = randomUUID()
+    const archive = {
+      bytes: 1024,
+      checksum_sha256: "0".repeat(64),
+      filename: "final.tar.gz",
+    }
+    yield* insertBackup(backupId, {
+      ...archive,
+      artifact_kind: target.kind === "instance" ? "archive" : "tar_archive",
+      reason: "final_delete",
+      relay_id: relayId,
+      target_id: target.id,
+      target_kind: target.kind,
+    })
+    yield* insertRows("backup_artifact", {
+      ...archive,
+      backup_id: backupId,
+      created_at: at,
+      destination_key: "local",
+      id: randomUUID(),
+      status: "available",
+      updated_at: at,
+    })
+    return backupId
+  })
+
 describeMysql("Deleting a game server or database", () => {
   layer(Lanes, { timeout: 120_000 })((it) => {
+    it.effect(
+      "restores nothing of a resource its Relay began deleting, though its deletion stopped",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          yield* seedApp()
+          const server = yield* completeBackup({
+            id: serverId,
+            kind: "instance",
+          })
+          const volume = yield* completeBackup({
+            id: `${appId}/data`,
+            kind: "volume",
+          })
+          // Both stopped after their Relay was asked to delete them.
+          for (const [resourceKind, resourceId] of [
+            ["instance", serverId],
+            ["app", appId],
+          ]) {
+            yield* insertDeletion({
+              error: "The Relay couldn't remove it",
+              relay_deleting_at: at,
+              resource_id: resourceId,
+              resource_kind: resourceKind,
+              status: "failed",
+            })
+          }
+
+          const refusals = yield* Effect.forEach([server, volume], (backupId) =>
+            Effect.flip(
+              reserveBackupRestoreEffect({
+                backupId,
+                dependsOnTaskId: null,
+                requestedBy: owner.id,
+                taskId: randomUUID(),
+              })
+            )
+          )
+
+          // An App's own volume goes with its App.
+          assert.deepStrictEqual(
+            refusals.map((refusal) =>
+              "code" in refusal ? refusal.code : refusal._tag
+            ),
+            ["final_delete_in_progress", "final_delete_in_progress"]
+          )
+        })
+    )
+
     it.effect(
       "keeps an App's volume its deletion didn't plan to take, though nothing else uses it any more",
       () =>

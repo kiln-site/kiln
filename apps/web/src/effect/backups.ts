@@ -33,6 +33,7 @@ import {
   BackupStorageError,
   CredentialError,
 } from "@/effect/errors"
+import { backupTargetApp } from "@/lib/backup-target-permissions"
 import { databaseTable } from "@/lib/database-config"
 import { betterAuthSecrets } from "@/lib/environment"
 import {
@@ -2112,22 +2113,19 @@ export const reserveBackupRestoreEffect = Effect.fn("backups.reserveRestore")(
                 LIMIT 1`,
               [backup.relay_id, backup.target_kind, backup.target_id]
             )
-          const finalDeletions = yield* transaction.queryRows<RowDataPacket>(
-            `SELECT id
-                 FROM ${databaseTable("resource_deletion")}
-                WHERE relay_id = ? AND resource_kind = ? AND resource_id = ?
-                  AND status IN ('pending', 'backing_up', 'deleting', 'cancelling')
-                LIMIT 1`,
-            [backup.relay_id, backup.target_kind, backup.target_id]
-          )
-          if (conflictingTasks[0] || finalDeletions[0]) {
+          if (conflictingTasks[0]) {
             return yield* BackupStorageError.make({
               code: "restore_in_progress",
               operation: "backup.restore",
-              reason:
-                "Another restore or final resource deletion is already in progress",
+              reason: "Another restore is already in progress",
             })
           }
+          yield* refuseIfFinalDeletionInProgress(transaction, {
+            operation: "backup.restore",
+            relayId: backup.relay_id,
+            targetId: backup.target_id,
+            targetKind: backup.target_kind,
+          })
           if (input.dependsOnTaskId) {
             const dependencies =
               yield* transaction.queryRows<KnownBackupTaskRow>(
@@ -3573,16 +3571,23 @@ const refuseIfFinalDeletionInProgress = Effect.fnUntraced(function* (
   }
 ) {
   if (input.targetKind === "platform") return
+  // An App's own volume is deleted with its App.
+  const owner =
+    input.targetKind === "volume"
+      ? backupTargetApp({ id: input.targetId, kind: input.targetKind })
+      : null
   const rows = yield* transaction.queryRows<RowDataPacket>(
     `SELECT id
        FROM ${databaseTable("resource_deletion")}
-      WHERE relay_id = ? AND resource_kind = ? AND resource_id = ?
+      WHERE relay_id = ?
+        AND ((resource_kind = ? AND resource_id = ?)
+          OR (resource_kind = 'app' AND resource_id = ?))
         AND (status IN ('pending', 'backing_up', 'deleting', 'cancelling')
           -- Its Relay began deleting it: what's left of it only goes.
           OR (relay_deleting_at IS NOT NULL AND status <> 'completed'))
       LIMIT 1
       FOR UPDATE`,
-    [input.relayId, input.targetKind, input.targetId]
+    [input.relayId, input.targetKind, input.targetId, owner ?? ""]
   )
   if (rows[0]) {
     return yield* BackupStorageError.make({

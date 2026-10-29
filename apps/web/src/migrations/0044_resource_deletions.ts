@@ -111,5 +111,15 @@ export const resourceDeletions: Migration = {
       )
       yield* sql.unsafe(`DROP TABLE \`${old}\``)
     }
+    // Rows an earlier run of this migration carried over before it took
+    // the Relay deletion's start: one deleting, or done, had its Relay
+    // asked. Only carried-over rows exist until it finishes, and a start
+    // already recorded stays.
+    yield* sql.unsafe(
+      `UPDATE \`${table}\`
+          SET relay_deleting_at = updated_at
+        WHERE relay_deleting_at IS NULL
+          AND status IN ('deleting', 'completed')`
+    )
   }),
 }
