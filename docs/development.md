@@ -196,5 +196,8 @@ After merge, run `pnpm dev:docker:destroy` before removing the worktree and
 merged branches, then update `main` with `git pull --ff-only`. Destroy removes
 everything the worktree's Relay made, found by its namespace label: game
 servers, databases and their volumes, Apps and the volumes and networks their
-Compose projects made. It refuses to remove the primary checkout's unscoped
+Compose projects made. Destroy can also find those Compose projects by their
+exact project labels on remaining volumes and networks: the Relay namespace,
+App ID, and optional rolling deployment ID. Retrying after containers are gone
+therefore still removes their resources. It refuses to remove the primary checkout's unscoped
 Relay resources; use `down` there.

@@ -189,9 +189,27 @@ function destroyNamespacedContainers() {
 // Compose made for its Apps' projects, which carry only the project's label.
 function destroyNamespaced(kind, appProjects) {
   requireNamespaceForDestroy()
+  // Containers may already be gone after an interrupted destroy. Compose
+  // keeps the project label on its volumes and networks too.
+  const remainingProjects = capture("docker", [
+    kind,
+    "ls",
+    "--filter",
+    "label=com.docker.compose.project",
+    "--format",
+    '{{.Label "com.docker.compose.project"}}',
+  ])
+    .split("\n")
+    .filter((project) => {
+      const prefix = `${namespace}-kiln-app-`
+      if (!project.startsWith(prefix)) return false
+      // Apps use 40 hex digits; rolling deployments append 14 digits.
+      return /^[a-f0-9]{40}(?:-[0-9]{14})?$/u.test(project.slice(prefix.length))
+    })
+  const projects = [...new Set([...appProjects, ...remainingProjects])]
   const filters = [
     `label=kiln.relay.owner=${namespace}`,
-    ...appProjects.map(
+    ...projects.map(
       (project) => `label=com.docker.compose.project=${project}`
     ),
   ]
