@@ -472,6 +472,42 @@ describe("Relay volumes", () => {
     expect(fakeDocker.volumes.has(other.dockerName)).toBe(true)
   })
 
+  it("holds a Hearth's configurations behind a deletion under way, ahead of deletions asked for since", async () => {
+    const harness = await relayHarness()
+    const volumes = await relayVolumes(harness)
+    await pairHearth(harness, "hearth-a")
+    const connection = connect(volumes, "hearth-a")
+    await run(volumes.importAppReferences("hearth-a", connection, [], []))
+    const ids = ["4e0b31d5", "5f1c42e6", "6a2d53f7"].map((prefix) =>
+      prefix.padEnd(40, "0")
+    )
+    const made = await Promise.all(
+      ids.map((id, index) => run(volumes.create(id, `cache-${index}`)))
+    )
+
+    const removing = fakeDocker.hold({ command: "volume rm" })
+    const first = run(volumes.delete(ids[0]!))
+    await removing.reached
+    const holding = run(volumes.holdAppReferences("hearth-a", connection))
+    // Deletions keep arriving while the hold waits.
+    const later = ids.slice(1).map((id) =>
+      run(volumes.delete(id)).then(
+        () => null,
+        (error: unknown) => (error as Error).message
+      )
+    )
+    removing.release()
+    await first
+    await holding
+
+    // They waited behind it, so they see what it held.
+    for (const message of await Promise.all(later)) {
+      expect(message).toContain("waiting for hearth-a to send")
+    }
+    expect(fakeDocker.volumes.has(made[1]!.dockerName)).toBe(true)
+    expect(fakeDocker.volumes.has(made[2]!.dockerName)).toBe(true)
+  })
+
   it("forgets only what the Hearth that deleted an App said of it", async () => {
     const harness = await relayHarness()
     const volumes = await relayVolumes(harness)

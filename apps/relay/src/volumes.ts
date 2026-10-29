@@ -86,6 +86,61 @@ export function appVolumeOwner(
 // Docker can't rename a volume or change its labels, so a Kiln volume's
 // name is fixed when it's made and the name it's shown by lives in the
 // Relay's state. Callers hold the volume's lane lock for each change.
+/**
+ * Orders deletions and imports, which run beside each other, with holds of
+ * a Hearth's import, which wait for those under way and run alone. It's
+ * fair to holds: once one is waiting, new deletions and imports wait behind
+ * it, so a steady stream of them can't keep it waiting. It runs apart from
+ * the lanes, so a hold still runs while the Relay is paused.
+ */
+class ReferenceGate {
+  readonly #permits = Semaphore.makeUnsafe(REFERENCE_PERMITS)
+  // Holds waiting or running; while any are, nothing new shares the gate.
+  #holds = 0
+  readonly #waiting = new Set<() => void>()
+
+  /** Runs `effect` beside other shared work, once no hold waits. */
+  readonly shared = <A, E, R>(
+    effect: Effect.Effect<A, E, R>
+  ): Effect.Effect<A, E, R> => {
+    const attempt: Effect.Effect<A, E, R> = Effect.suspend(() =>
+      this.#holds > 0
+        ? Effect.callback<void>((resume) => {
+            const open = () => resume(Effect.void)
+            this.#waiting.add(open)
+            return Effect.sync(() => {
+              this.#waiting.delete(open)
+            })
+          }).pipe(Effect.andThen(attempt))
+        : this.#permits.withPermits(1)(effect)
+    )
+    return attempt
+  }
+
+  /** Runs `effect` alone, after shared work already under way. */
+  readonly alone = <A, E, R>(
+    effect: Effect.Effect<A, E, R>
+  ): Effect.Effect<A, E, R> =>
+    Effect.uninterruptibleMask((restore) =>
+      Effect.suspend(() => {
+        this.#holds += 1
+        return restore(
+          this.#permits.withPermits(REFERENCE_PERMITS)(effect)
+        ).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              this.#holds -= 1
+              if (this.#holds > 0) return
+              const waiting = [...this.#waiting]
+              this.#waiting.clear()
+              for (const open of waiting) open()
+            })
+          )
+        )
+      })
+    )
+}
+
 export class RelayVolumes {
   readonly #config: RelayConfig
   readonly #engine: DockerEngine
@@ -102,9 +157,9 @@ export class RelayVolumes {
   // Each Hearth's latest authenticated control connection, since the Relay
   // started. Only an import that connection sent counts.
   readonly #connections = new Map<string, string>()
-  // Deletions and imports each take one permit; holding a Hearth's import
-  // takes them all, so it waits for those already under way.
-  readonly #references = Semaphore.makeUnsafe(REFERENCE_PERMITS)
+  // Deletions and imports share it; holding a Hearth's import takes it
+  // alone, after those already under way.
+  readonly #references = new ReferenceGate()
   // The connection each Hearth held its import on, whose imports, sent
   // before its database changed, no longer count.
   readonly #held = new Map<string, string>()
@@ -327,10 +382,7 @@ export class RelayVolumes {
       }
       yield* this.#engine.removeVolume(volume.Name)
       yield* this.#state.deleteVolumeName(id)
-    }).pipe(
-      this.#references.withPermits(1),
-      Effect.withSpan("RelayVolumes.delete")
-    )
+    }).pipe(this.#references.shared, Effect.withSpan("RelayVolumes.delete"))
   }
 
   /** Notes a Hearth's new control connection, which owes a fresh import. */
@@ -452,7 +504,7 @@ export class RelayVolumes {
         unresolvedAppIds
       )
     }).pipe(
-      this.#references.withPermits(1),
+      this.#references.shared,
       Effect.withSpan("RelayVolumes.importAppReferences")
     )
   }
@@ -470,7 +522,7 @@ export class RelayVolumes {
           this.#held.set(clientId, connectionId)
         })
       ),
-      this.#references.withPermits(REFERENCE_PERMITS),
+      this.#references.alone,
       Effect.withSpan("RelayVolumes.holdAppReferences")
     )
   }
